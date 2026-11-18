@@ -239,6 +239,48 @@ if (!noTest) {
 }
 
 // ---------------------------------------------------------------------------------------------
+// 3. Concordance
+// ---------------------------------------------------------------------------------------------
+const lint = run('concordance', ['lint', '--config', 'concordance.toml']);
+check('concordance lint (strict)', lint.ok, lint.ok ? lastLine(lint.out) : `${exitText(lint)}: ${lastLine(lint.out)}`);
+
+const scan = run('concordance', ['scan', '--config', 'concordance.toml', '--json', '--fail-on', 'proven', '--exegra-results', 'var/concordance-results.json', '--no-generated-at']);
+let report = null;
+try {
+  report = JSON.parse(scan.stdout);
+} catch {
+  report = null;
+}
+if (!report || !Array.isArray(report.findings) || !report.counts) {
+  check('concordance scan', false, `no report; ${exitText(scan)}: ${lastLine(scan.out)}`);
+} else {
+  writeFileSync(resolve(root, 'var/scan.json'), scan.stdout);
+  const provenOk = scan.ok && report.gate?.failed === false;
+  check('concordance scan (fail-on proven)', provenOk, provenOk ? `${report.counts.violated} violated` : `${exitText(scan)}, gate.failed ${report.gate?.failed}`);
+
+  let results = null;
+  try {
+    results = JSON.parse(readFileSync(resolve(root, 'var/concordance-results.json'), 'utf8'));
+  } catch (error) {
+    check('concordance results file', false, `unreadable: ${error.message}`);
+  }
+  const proofless = results
+    ? gated.filter((claim) => results.claims?.[claim.id]?.status !== 'verified' || results.claims[claim.id].outcome !== 'pass')
+    : gated;
+  check('every started requirement has a passing proof', results !== null && proofless.length === 0, `${gated.length - proofless.length} of ${gated.length} requirements of the started milestones (${[...started].sort((a, b) => a - b).join(', ')})`);
+  detail(proofless.slice(0, 20).map((claim) => `${claim.id}: ${results?.claims?.[claim.id]?.status ?? 'no entry'}`));
+
+  const gatedFindings = report.findings.filter((finding) => started.has(finding.milestone));
+  const openGated = gatedFindings.filter((finding) => finding.status !== 'verified');
+  check('no open finding on a started milestone', openGated.length === 0, `${gatedFindings.length} findings on started milestones`);
+  detail(openGated.slice(0, 20).map((finding) => `${finding.status}: ${finding.title.slice(0, 120)}`));
+
+  const violatedFindings = report.findings.filter((finding) => finding.status === 'violated');
+  check('no violated finding anywhere', violatedFindings.length === 0, `${violatedFindings.length} violated`);
+  detail(violatedFindings.slice(0, 20).map((finding) => `${finding.title.slice(0, 120)}`));
+}
+
+// ---------------------------------------------------------------------------------------------
 // 2. Exegra
 // ---------------------------------------------------------------------------------------------
 const exegraCli = resolve(exegraHome, 'cli/exegra.js');
@@ -284,48 +326,6 @@ if (!exegraFound) {
     check('exegra shows started requirements as supported', unsupported.length === 0, `${gated.length - unsupported.length} of ${gated.length}`);
     detail(unsupported.slice(0, 20).map((claim) => `${claim.id}: ${byId.get(claim.id)?.status ?? 'missing'}`));
   }
-}
-
-// ---------------------------------------------------------------------------------------------
-// 3. Concordance
-// ---------------------------------------------------------------------------------------------
-const lint = run('concordance', ['lint', '--config', 'concordance.toml']);
-check('concordance lint (strict)', lint.ok, lint.ok ? lastLine(lint.out) : `${exitText(lint)}: ${lastLine(lint.out)}`);
-
-const scan = run('concordance', ['scan', '--config', 'concordance.toml', '--json', '--fail-on', 'proven', '--exegra-results', 'var/concordance-results.json', '--no-generated-at']);
-let report = null;
-try {
-  report = JSON.parse(scan.stdout);
-} catch {
-  report = null;
-}
-if (!report || !Array.isArray(report.findings) || !report.counts) {
-  check('concordance scan', false, `no report; ${exitText(scan)}: ${lastLine(scan.out)}`);
-} else {
-  writeFileSync(resolve(root, 'var/scan.json'), scan.stdout);
-  const provenOk = scan.ok && report.gate?.failed === false;
-  check('concordance scan (fail-on proven)', provenOk, provenOk ? `${report.counts.violated} violated` : `${exitText(scan)}, gate.failed ${report.gate?.failed}`);
-
-  let results = null;
-  try {
-    results = JSON.parse(readFileSync(resolve(root, 'var/concordance-results.json'), 'utf8'));
-  } catch (error) {
-    check('concordance results file', false, `unreadable: ${error.message}`);
-  }
-  const proofless = results
-    ? gated.filter((claim) => results.claims?.[claim.id]?.status !== 'verified' || results.claims[claim.id].outcome !== 'pass')
-    : gated;
-  check('every started requirement has a passing proof', results !== null && proofless.length === 0, `${gated.length - proofless.length} of ${gated.length} requirements of the started milestones (${[...started].sort((a, b) => a - b).join(', ')})`);
-  detail(proofless.slice(0, 20).map((claim) => `${claim.id}: ${results?.claims?.[claim.id]?.status ?? 'no entry'}`));
-
-  const gatedFindings = report.findings.filter((finding) => started.has(finding.milestone));
-  const openGated = gatedFindings.filter((finding) => finding.status !== 'verified');
-  check('no open finding on a started milestone', openGated.length === 0, `${gatedFindings.length} findings on started milestones`);
-  detail(openGated.slice(0, 20).map((finding) => `${finding.status}: ${finding.title.slice(0, 120)}`));
-
-  const violatedFindings = report.findings.filter((finding) => finding.status === 'violated');
-  check('no violated finding anywhere', violatedFindings.length === 0, `${violatedFindings.length} violated`);
-  detail(violatedFindings.slice(0, 20).map((finding) => `${finding.title.slice(0, 120)}`));
 }
 
 // ---------------------------------------------------------------------------------------------
