@@ -355,6 +355,13 @@ const heldPct = requirements.length ? ((gated.length / requirements.length) * 10
 console.log('');
 console.log(`held to code: ${gated.length} of ${requirements.length} requirements (${heldPct}%). The other ${requirements.length - gated.length} are planned: the gate does not check them against the code.`);
 console.log(`model claims: ${counts.model} in the specification; requirements of started milestones: ${gated.length}.`);
+// A behaviour claim states whether a listed scenario injects a real fault (fault) or the claim fails only under a defect
+// built to negate it (restatement). See specifications/README.md, "Fault basis of a behaviour claim".
+const behaviourClaims = modelClaims.filter((claim) => Array.isArray(claim.evaluate?.scenarios));
+const faultBased = behaviourClaims.filter((claim) => claim.faultBasis === 'fault');
+const restatements = behaviourClaims.filter((claim) => claim.faultBasis === 'restatement');
+const unmarked = behaviourClaims.filter((claim) => claim.faultBasis !== 'fault' && claim.faultBasis !== 'restatement');
+console.log(`behaviour claims: ${behaviourClaims.length}; ${faultBased.length} hold under a modelled fault, ${restatements.length} are restatements${unmarked.length ? `; ${unmarked.length} carry no fault basis (${unmarked.map((claim) => claim.id).join(', ')})` : ''}.`);
 if (noTest) console.log('RECORDED TEST RESULTS, NOT A RUN OF THE TESTS ON THIS CODE. Accepted only because --allow-recorded was given.');
 for (const note of notes) console.log(`note: ${note}`);
 console.log(passed ? 'GATE PASSED' : `GATE FAILED: ${failures.join('; ') || 'recorded test results not accepted'}`);
