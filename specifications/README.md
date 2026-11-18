@@ -93,7 +93,7 @@ A passing gate establishes these, and only these:
 2. Every requirement of a started milestone has a passing proof in Concordance's results file,
    and no Concordance finding on a started milestone is open. Concordance runs with
    `--fail-on unverified`, so a started requirement with no accepted proof fails the scan itself. The count of such requirements is
-   taken from the specification. Currently that is 37 of the 737 requirements.
+   taken from the specification. Currently that is 37 of the 738 requirements.
 3. Every `m-` claim is verified by Exegra, with no violated claim. The count is taken from the
    specification, and every `models` link names a requirement that exists.
 4. Exegra validates the file with no errors, warnings, gaps or Concordance warnings.
@@ -105,7 +105,7 @@ A passing gate does not establish these:
 
 - **The planned requirements.** Requirements of milestones that are not started are reported as
   planned and are not checked against the code. They cannot fail the gate. At present that is
-  700 of 737 requirements. The gate holds the code to 37 of 737 (5.0%).
+  701 of 738 requirements. The gate holds the code to 37 of 738 (5.0%).
 - **That a proof tests the requirement.** A `Verifies:` line is written by hand, and nothing checks
   that the test asserts the statement it is tagged with. A passing test that carries the line is
   evidence that the test passes, not that the
