@@ -70,7 +70,6 @@ fn create_applies_defaults_and_allocates_the_next_id() {
         .any(|c| c.rule == "policy:writers_read_notes" && c.passed));
 }
 
-/// Verifies: KRN-007
 #[test]
 fn a_rejection_explains_itself() {
     let world = notes_world();
@@ -241,7 +240,6 @@ fn writers_edit_only_their_own_notes() {
     assert_eq!(note(&world, "alpha", 1).version, 2);
 }
 
-/// Verifies: KRN-008
 #[test]
 fn workflow_guards_the_status_field_and_sets_fields_when_it_fires() {
     let world = must(

@@ -205,8 +205,8 @@ if (!noTest) {
 
   const web = run(process.execPath, ['--test', 'web/test/kernel.test.js']);
   writeFileSync(join(resultsDir, 'web-test.txt'), web.out);
-  const webPass = Number((web.out.match(/^# pass (\d+)/m) ?? [])[1]);
-  const webFail = Number((web.out.match(/^# fail (\d+)/m) ?? [])[1]);
+  const webPass = Number((web.out.match(/^(?:#|ℹ) pass (\d+)/m) ?? [])[1]);
+  const webFail = Number((web.out.match(/^(?:#|ℹ) fail (\d+)/m) ?? [])[1]);
   const webOk = web.ok && webPass > 0 && webFail === 0;
   check('web kernel tests (node --test)', webOk, webOk ? `${webPass} passed` : `${exitText(web)}, pass ${webPass}, fail ${webFail}`);
 

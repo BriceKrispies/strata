@@ -141,7 +141,6 @@ fn readers_see_published_posts_and_authors_also_see_their_own_drafts() {
     );
 }
 
-/// Verifies: CMS-002
 #[test]
 fn a_dependent_section_reads_through_the_single_row_it_depends_on() {
     let world = world();
