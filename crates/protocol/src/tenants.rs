@@ -34,7 +34,14 @@ pub struct LoadedTenant {
     pub dev_accounts: Vec<DevAccount>,
 }
 
-const TEMPLATE_SECTIONS: [&str; 6] = ["roles", "objects", "workflows", "policies", "queries", "views"];
+const TEMPLATE_SECTIONS: [&str; 6] = [
+    "roles",
+    "objects",
+    "workflows",
+    "policies",
+    "queries",
+    "views",
+];
 
 fn read(path: &Path) -> Result<String, String> {
     fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))
@@ -65,22 +72,36 @@ pub fn load_tenant(dir: &Path) -> Result<LoadedTenant, String> {
                 continue;
             };
             for value in fields.values_mut() {
-                let file = value.as_object().filter(|o| o.len() == 1).and_then(|o| o.get("$file")).and_then(Json::as_str);
+                let file = value
+                    .as_object()
+                    .filter(|o| o.len() == 1)
+                    .and_then(|o| o.get("$file"))
+                    .and_then(Json::as_str);
                 if let Some(relative) = file {
-                    *value = Json::String(read(&dir.join(relative))?.replace("\r\n", "\n").trim().to_string());
+                    *value = Json::String(
+                        read(&dir.join(relative))?
+                            .replace("\r\n", "\n")
+                            .trim()
+                            .to_string(),
+                    );
                 }
             }
         }
     }
 
-    let bundle = Bundle::from_json(&doc.to_string()).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let bundle =
+        Bundle::from_json(&doc.to_string()).map_err(|e| format!("{}: {e}", dir.display()))?;
     let accounts_path = dir.join("accounts.dev.json");
     let dev_accounts = if accounts_path.exists() {
-        serde_json::from_str(&read(&accounts_path)?).map_err(|e| format!("{}: {e}", accounts_path.display()))?
+        serde_json::from_str(&read(&accounts_path)?)
+            .map_err(|e| format!("{}: {e}", accounts_path.display()))?
     } else {
         Vec::new()
     };
-    Ok(LoadedTenant { bundle, dev_accounts })
+    Ok(LoadedTenant {
+        bundle,
+        dev_accounts,
+    })
 }
 
 /// Load every tenant directory under `root`, in name order. Directories whose name starts with
@@ -91,7 +112,11 @@ pub fn load_all(root: &Path) -> Result<Vec<LoadedTenant>, String> {
         .filter_map(Result::ok)
         .map(|entry| entry.path())
         .filter(|path| path.join("tenant.json").is_file())
-        .filter(|path| !path.file_name().is_some_and(|name| name.to_string_lossy().starts_with('_')))
+        .filter(|path| {
+            !path
+                .file_name()
+                .is_some_and(|name| name.to_string_lossy().starts_with('_'))
+        })
         .collect();
     dirs.sort();
     dirs.iter().map(|dir| load_tenant(dir)).collect()

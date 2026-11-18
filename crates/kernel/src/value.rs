@@ -59,7 +59,10 @@ pub enum FieldType {
     Bool,
     Time,
     /// A relationship to a record of `target`.
-    Ref { target: ObjectTypeId, on_delete: OnDelete },
+    Ref {
+        target: ObjectTypeId,
+        on_delete: OnDelete,
+    },
     /// A list whose elements are non-null values of the inner type.
     List(Box<FieldType>),
 }

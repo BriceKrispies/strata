@@ -12,5 +12,5 @@
     "skipLibCheck": true,
     "types": []
   },
-  "include": ["src/**/*.js", "test/**/*.js"]
+  "include": ["src/**/*.js"]
 }

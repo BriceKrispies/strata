@@ -5,13 +5,15 @@
 //! record and field by field, query results per observer, events by what they were about.
 //! Every finding carries its evidence class; nothing is scored.
 
-use crate::engine::{run_with, Cancelled, EventSummary, Injection, Outcome, Scenario, Scheduled, Trace};
+use crate::engine::{
+    run_with, Cancelled, EventSummary, Injection, Outcome, Scenario, Scheduled, Trace,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use strata_kernel::rules::Lookup;
 use strata_kernel::{
-    plan_migration, Check, Context, Coverage, ErrorKind, ExistingData, Intent, Principal, ReadRequest,
-    Record, SchemaChange, TenantId, TenantState, Timestamp, Value, World,
+    plan_migration, Check, Context, Coverage, ErrorKind, ExistingData, Intent, Principal,
+    ReadRequest, Record, SchemaChange, TenantId, TenantState, Timestamp, Value, World,
 };
 use strata_verification::evidence::{unmodelled, Class};
 
@@ -174,7 +176,11 @@ fn diff_records(tenant: &TenantId, baseline: &World, branch: &World) -> Vec<Reco
             .get(tenant)
             .map_or(&empty, |t| &t.records)
             .iter()
-            .flat_map(|(object, records)| records.values().map(move |r| ((object.to_string(), r.id.0), r.clone())))
+            .flat_map(|(object, records)| {
+                records
+                    .values()
+                    .map(move |r| ((object.to_string(), r.id.0), r.clone()))
+            })
             .collect()
     };
     let (a, b) = (records(baseline), records(branch));
@@ -196,14 +202,28 @@ fn diff_records(tenant: &TenantId, baseline: &World, branch: &World) -> Vec<Reco
                 if differing.is_empty() {
                     continue;
                 }
-                RecordChange { object: key.0.clone(), id: key.1, kind: "modified".into(), title: title_of(right), fields: differing }
+                RecordChange {
+                    object: key.0.clone(),
+                    id: key.1,
+                    kind: "modified".into(),
+                    title: title_of(right),
+                    fields: differing,
+                }
             }
-            (Some(left), None) => {
-                RecordChange { object: key.0.clone(), id: key.1, kind: "only_in_baseline".into(), title: title_of(left), fields: vec![] }
-            }
-            (None, Some(right)) => {
-                RecordChange { object: key.0.clone(), id: key.1, kind: "only_in_branch".into(), title: title_of(right), fields: vec![] }
-            }
+            (Some(left), None) => RecordChange {
+                object: key.0.clone(),
+                id: key.1,
+                kind: "only_in_baseline".into(),
+                title: title_of(left),
+                fields: vec![],
+            },
+            (None, Some(right)) => RecordChange {
+                object: key.0.clone(),
+                id: key.1,
+                kind: "only_in_branch".into(),
+                title: title_of(right),
+                fields: vec![],
+            },
             (None, None) => continue,
         };
         changes.push(change);
@@ -212,7 +232,12 @@ fn diff_records(tenant: &TenantId, baseline: &World, branch: &World) -> Vec<Reco
 }
 
 /// Run every parameterless named query as every kind of observer on both final worlds.
-fn diff_queries(tenant: &TenantId, baseline: &World, branch: &World, at: Timestamp) -> (Vec<QueryChange>, usize) {
+fn diff_queries(
+    tenant: &TenantId,
+    baseline: &World,
+    branch: &World,
+    at: Timestamp,
+) -> (Vec<QueryChange>, usize) {
     let Some(state) = baseline.tenants.get(tenant) else {
         return (Vec::new(), 0);
     };
@@ -220,24 +245,46 @@ fn diff_queries(tenant: &TenantId, baseline: &World, branch: &World, at: Timesta
     observers.extend(state.members.keys().cloned().map(Principal::User));
     let mut changes = Vec::new();
     let mut compared = 0;
-    for (id, query) in state.schema.queries.iter().filter(|(_, q)| q.params.is_empty()) {
+    for (id, query) in state
+        .schema
+        .queries
+        .iter()
+        .filter(|(_, q)| q.params.is_empty())
+    {
         // A query the branch's schema no longer has, or has changed, is a schema difference, not
         // a difference in results; only queries present on both sides are compared.
-        if branch.tenants.get(tenant).is_none_or(|t| !t.schema.queries.contains_key(id)) {
+        if branch
+            .tenants
+            .get(tenant)
+            .is_none_or(|t| !t.schema.queries.contains_key(id))
+        {
             continue;
         }
         for observer in &observers {
-            let ctx = Context { tenant: tenant.clone(), principal: observer.clone(), session: None, now: at, correlation: "compare".into() };
-            let request = ReadRequest::Named { query: query.id.clone(), params: BTreeMap::new() };
+            let ctx = Context {
+                tenant: tenant.clone(),
+                principal: observer.clone(),
+                session: None,
+                now: at,
+                correlation: "compare".into(),
+            };
+            let request = ReadRequest::Named {
+                query: query.id.clone(),
+                params: BTreeMap::new(),
+            };
             let ids = |world: &World| -> Vec<u64> {
-                world.read(&request, &ctx).map(|result| result.rows.iter().map(|r| r.id.0).collect()).unwrap_or_default()
+                world
+                    .read(&request, &ctx)
+                    .map(|result| result.rows.iter().map(|r| r.id.0).collect())
+                    .unwrap_or_default()
             };
             let (a, b) = (ids(baseline), ids(branch));
             compared += 1;
             if a == b {
                 continue;
             }
-            let (set_a, set_b): (BTreeSet<u64>, BTreeSet<u64>) = (a.iter().copied().collect(), b.iter().copied().collect());
+            let (set_a, set_b): (BTreeSet<u64>, BTreeSet<u64>) =
+                (a.iter().copied().collect(), b.iter().copied().collect());
             changes.push(QueryChange {
                 query: id.as_str().to_string(),
                 observer: principal_name(observer),
@@ -265,9 +312,17 @@ fn events_of(trace: &Trace) -> Vec<EventSummary> {
 }
 
 /// Compare two executions of the same schedule.
-pub fn compare(tenant: &TenantId, baseline: (&Trace, &World), branch: (&Trace, &World)) -> Comparison {
+pub fn compare(
+    tenant: &TenantId,
+    baseline: (&Trace, &World),
+    branch: (&Trace, &World),
+) -> Comparison {
     let by_index = |trace: &Trace| -> BTreeMap<usize, crate::engine::Step> {
-        trace.steps.iter().filter_map(|step| step.index.map(|i| (i, step.clone()))).collect()
+        trace
+            .steps
+            .iter()
+            .filter_map(|step| step.index.map(|i| (i, step.clone())))
+            .collect()
     };
     let (a, b) = (by_index(baseline.0), by_index(branch.0));
     let mut outcome_changes = Vec::new();
@@ -288,7 +343,11 @@ pub fn compare(tenant: &TenantId, baseline: (&Trace, &World), branch: (&Trace, &
             _ => false,
         };
         if !same {
-            let rejecting = if right.outcome.accepted() { &left.outcome } else { &right.outcome };
+            let rejecting = if right.outcome.accepted() {
+                &left.outcome
+            } else {
+                &right.outcome
+            };
             outcome_changes.push(OutcomeChange {
                 step: *index,
                 at: left.at,
@@ -306,8 +365,12 @@ pub fn compare(tenant: &TenantId, baseline: (&Trace, &World), branch: (&Trace, &
     // extra schema event or loses a write.
     let key = |e: &EventSummary| (e.kind.clone(), e.object.clone(), e.id);
     let mut counts: BTreeMap<_, i64> = BTreeMap::new();
-    events_a.iter().for_each(|e| *counts.entry(key(e)).or_default() += 1);
-    events_b.iter().for_each(|e| *counts.entry(key(e)).or_default() -= 1);
+    events_a
+        .iter()
+        .for_each(|e| *counts.entry(key(e)).or_default() += 1);
+    events_b
+        .iter()
+        .for_each(|e| *counts.entry(key(e)).or_default() -= 1);
     let surplus = |events: &[EventSummary], sign: i64| -> Vec<EventSummary> {
         let mut remaining = counts.clone();
         events
@@ -361,7 +424,11 @@ pub fn compare(tenant: &TenantId, baseline: (&Trace, &World), branch: (&Trace, &
             && baseline.1.hash() == branch.1.hash(),
         first_divergence: outcome_changes.first().map(|change| change.step),
         outcome_changes,
-        new_failures: new_failures.into_iter().filter(|(_, n)| *n > 0).map(|(rule, n)| (rule, n as u64)).collect(),
+        new_failures: new_failures
+            .into_iter()
+            .filter(|(_, n)| *n > 0)
+            .map(|(rule, n)| (rule, n as u64))
+            .collect(),
         record_changes,
         query_changes,
         queries_compared,
@@ -401,8 +468,15 @@ fn injection(scenario: &Scenario, proposal: &Proposal) -> Injection {
 
 /// Records of the snapshot that would not conform to the proposed schema. Exact for the
 /// snapshot: it is the kernel's own migration planning.
-pub fn affected_existing(tenant: &TenantState, proposal: &Proposal, now: Timestamp) -> Vec<Affected> {
-    let lookup = Lookup { tenant, coverage: &Coverage::Complete };
+pub fn affected_existing(
+    tenant: &TenantState,
+    proposal: &Proposal,
+    now: Timestamp,
+) -> Vec<Affected> {
+    let lookup = Lookup {
+        tenant,
+        coverage: &Coverage::Complete,
+    };
     let Ok(migration) = plan_migration(lookup, &proposal.changes, now) else {
         return Vec::new();
     };
@@ -410,7 +484,9 @@ pub fn affected_existing(tenant: &TenantState, proposal: &Proposal, now: Timesta
         .violations
         .into_iter()
         .map(|violation| Affected {
-            title: tenant.record(&violation.object, violation.id).map_or_else(String::new, |r| title_of(r)),
+            title: tenant
+                .record(&violation.object, violation.id)
+                .map_or_else(String::new, |r| title_of(r)),
             object: violation.object.as_str().to_string(),
             id: violation.id.0,
             rule: violation.check.rule,
@@ -423,7 +499,12 @@ pub fn affected_existing(tenant: &TenantState, proposal: &Proposal, now: Timesta
 ///
 /// Greedy one-at-a-time removal: sound (what it returns does diverge) but not guaranteed to be
 /// the smallest possible.
-fn minimise(scenario: &Scenario, proposal: &Proposal, diverging: usize, expected: (&str, &str)) -> Option<Counterexample> {
+fn minimise(
+    scenario: &Scenario,
+    proposal: &Proposal,
+    diverging: usize,
+    expected: (&str, &str),
+) -> Option<Counterexample> {
     let shows = |kept: &[usize]| -> Option<(String, String, Vec<Check>)> {
         let position = kept.iter().position(|i| *i == diverging)?;
         let sub = Scenario {
@@ -432,10 +513,22 @@ fn minimise(scenario: &Scenario, proposal: &Proposal, diverging: usize, expected
             ..scenario.clone()
         };
         let before = kept.iter().filter(|i| **i < proposal.before_step).count();
-        let sub_proposal = Proposal { before_step: before, ..proposal.clone() };
+        let sub_proposal = Proposal {
+            before_step: before,
+            ..proposal.clone()
+        };
         let (base, _) = run_with(&sub, None, &mut |_, _| true).ok()?;
-        let (branch, _) = run_with(&sub, Some(&injection(&sub, &sub_proposal)), &mut |_, _| true).ok()?;
-        let find = |trace: &Trace| trace.steps.iter().find(|s| s.index == Some(position)).map(|s| s.outcome.clone());
+        let (branch, _) = run_with(&sub, Some(&injection(&sub, &sub_proposal)), &mut |_, _| {
+            true
+        })
+        .ok()?;
+        let find = |trace: &Trace| {
+            trace
+                .steps
+                .iter()
+                .find(|s| s.index == Some(position))
+                .map(|s| s.outcome.clone())
+        };
         let (a, b) = (find(&base)?, find(&branch)?);
         (a.verdict() == expected.0 && b.verdict() == expected.1).then(|| {
             let because = failed_checks(if b.accepted() { &a } else { &b });
@@ -462,7 +555,10 @@ fn minimise(scenario: &Scenario, proposal: &Proposal, diverging: usize, expected
     }
     let (baseline, branch, because) = shows(&kept)?;
     Some(Counterexample {
-        labels: kept.iter().map(|i| scenario.schedule[*i].label.clone()).collect(),
+        labels: kept
+            .iter()
+            .map(|i| scenario.schedule[*i].label.clone())
+            .collect(),
         steps: kept,
         baseline,
         branch,
@@ -475,7 +571,12 @@ fn findings(projection: &Projection) -> Vec<Finding> {
     let c = &projection.comparison;
     let n = projection.baseline.steps.len();
     let mut out = Vec::new();
-    let both_hold: Vec<&str> = c.invariants.iter().filter(|i| i.baseline_holds && i.branch_holds).map(|i| i.id.as_str()).collect();
+    let both_hold: Vec<&str> = c
+        .invariants
+        .iter()
+        .filter(|i| i.baseline_holds && i.branch_holds)
+        .map(|i| i.id.as_str())
+        .collect();
     out.push(Finding {
         class: Class::Proven,
         title: "Tenant isolation, authorization and determinism of a step".into(),
@@ -511,7 +612,11 @@ fn findings(projection: &Projection) -> Vec<Finding> {
         ),
     });
     if !projection.affected_existing.is_empty() {
-        let records: BTreeSet<(&str, u64)> = projection.affected_existing.iter().map(|a| (a.object.as_str(), a.id)).collect();
+        let records: BTreeSet<(&str, u64)> = projection
+            .affected_existing
+            .iter()
+            .map(|a| (a.object.as_str(), a.id))
+            .collect();
         out.push(Finding {
             class: Class::SoundApproximation,
             title: format!("{} existing record(s) could be refused on their next write", records.len()),
@@ -553,21 +658,37 @@ pub fn project(
     proposal: &Proposal,
     progress: &mut dyn FnMut(u8, usize, usize) -> bool,
 ) -> Result<Projection, Cancelled> {
-    let (baseline, baseline_world) = run_with(scenario, None, &mut |done, total| progress(0, done, total))?;
+    let (baseline, baseline_world) =
+        run_with(scenario, None, &mut |done, total| progress(0, done, total))?;
     let inject = injection(scenario, proposal);
-    let (branch, branch_world) = run_with(scenario, Some(&inject), &mut |done, total| progress(1, done, total))?;
+    let (branch, branch_world) = run_with(scenario, Some(&inject), &mut |done, total| {
+        progress(1, done, total)
+    })?;
     let change_outcome = branch
         .steps
         .iter()
         .find(|step| step.index.is_none())
         .map(|step| step.outcome.clone())
-        .unwrap_or(Outcome::Rejected { kind: ErrorKind::InvalidIntent, message: "the change was never applied".into(), failed: vec![] });
-    let comparison = compare(&proposal.tenant, (&baseline, &baseline_world), (&branch, &branch_world));
+        .unwrap_or(Outcome::Rejected {
+            kind: ErrorKind::InvalidIntent,
+            message: "the change was never applied".into(),
+            failed: vec![],
+        });
+    let comparison = compare(
+        &proposal.tenant,
+        (&baseline, &baseline_world),
+        (&branch, &branch_world),
+    );
     if !progress(2, 0, 1) {
         return Err(Cancelled);
     }
     let counterexample = comparison.outcome_changes.first().and_then(|first| {
-        minimise(scenario, proposal, first.step, (&first.baseline, &first.branch))
+        minimise(
+            scenario,
+            proposal,
+            first.step,
+            (&first.baseline, &first.branch),
+        )
     });
     progress(2, 1, 1);
     let affected = scenario

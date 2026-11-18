@@ -56,12 +56,19 @@ impl Identity {
 }
 
 fn header<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
-    headers.get(name).and_then(|value| value.to_str().ok()).filter(|value| !value.is_empty())
+    headers
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| !value.is_empty())
 }
 
 /// Compare two secrets without stopping at the first difference.
 pub fn same_secret(a: &str, b: &str) -> bool {
-    a.len() == b.len() && a.bytes().zip(b.bytes()).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+    a.len() == b.len()
+        && a.bytes()
+            .zip(b.bytes())
+            .fold(0u8, |acc, (x, y)| acc | (x ^ y))
+            == 0
 }
 
 pub fn has_service_token(app: &App, headers: &HeaderMap) -> bool {
@@ -82,8 +89,14 @@ pub fn caller(headers: &HeaderMap) -> Result<Caller, ApiError> {
         .unwrap_or_else(|| format!("b-{}", random_hex(6).unwrap_or_default()));
     let site = header(headers, HEADER_SITE)
         .and_then(|site| TenantId::new(site).ok())
-        .ok_or_else(|| ApiError::new(ErrorCode::Invalid, "missing site").with_correlation(&correlation))?;
-    Ok(Caller { site, token: header(headers, HEADER_SESSION).map(str::to_string), correlation })
+        .ok_or_else(|| {
+            ApiError::new(ErrorCode::Invalid, "missing site").with_correlation(&correlation)
+        })?;
+    Ok(Caller {
+        site,
+        token: header(headers, HEADER_SESSION).map(str::to_string),
+        correlation,
+    })
 }
 
 pub fn token_hash(token: &str) -> String {
@@ -94,7 +107,8 @@ pub fn token_hash(token: &str) -> String {
 pub fn session_state(app: &App, session: &SessionRecord, now: i64) -> SessionState {
     if session.revoked_at.is_some() {
         SessionState::Revoked
-    } else if now >= session.expires_at.0 || now - session.last_seen_at.0 >= app.cfg.session_idle_ms {
+    } else if now >= session.expires_at.0 || now - session.last_seen_at.0 >= app.cfg.session_idle_ms
+    {
         SessionState::Expired
     } else {
         SessionState::Active
@@ -171,14 +185,21 @@ pub fn session_view(tenant: &TenantState, identity: &Identity) -> SessionView {
         csrf_token: session.map(|s| s.csrf_token.clone()),
         expires_at: session.map(|s| s.expires_at.0),
         may,
-        may_manage_schema: may_attempt(tenant, &identity.principal, Action::Manage, &Resource::Schema),
+        may_manage_schema: may_attempt(
+            tenant,
+            &identity.principal,
+            Action::Manage,
+            &Resource::Schema,
+        ),
     }
 }
 
 pub fn hash_password(password: &str) -> Result<String, ApiError> {
     let mut salt = [0u8; 16];
-    getrandom::getrandom(&mut salt).map_err(|e| ApiError::new(ErrorCode::Unavailable, e.to_string()))?;
-    let salt = SaltString::encode_b64(&salt).map_err(|e| ApiError::new(ErrorCode::Internal, e.to_string()))?;
+    getrandom::getrandom(&mut salt)
+        .map_err(|e| ApiError::new(ErrorCode::Unavailable, e.to_string()))?;
+    let salt = SaltString::encode_b64(&salt)
+        .map_err(|e| ApiError::new(ErrorCode::Internal, e.to_string()))?;
     // `Argon2::default()` is Argon2id, version 19.
     Argon2::default()
         .hash_password(password.as_bytes(), &salt)
@@ -188,7 +209,11 @@ pub fn hash_password(password: &str) -> Result<String, ApiError> {
 
 fn verify_password(password: &str, stored: &str) -> bool {
     PasswordHash::new(stored)
-        .map(|hash| Argon2::default().verify_password(password.as_bytes(), &hash).is_ok())
+        .map(|hash| {
+            Argon2::default()
+                .verify_password(password.as_bytes(), &hash)
+                .is_ok()
+        })
         .unwrap_or(false)
 }
 
@@ -206,15 +231,26 @@ const LOCKOUT_MS: i64 = 30_000;
 /// session identifier changes on every authentication.
 pub fn login(app: &App, caller: &Caller, request: &LoginRequest) -> Result<LoginReply, ApiError> {
     let now = app.now();
-    let refused = || ApiError::new(ErrorCode::Unauthenticated, "The name or password is not right.");
+    let refused = || {
+        ApiError::new(
+            ErrorCode::Unauthenticated,
+            "The name or password is not right.",
+        )
+    };
     let login = request.login.trim().to_lowercase();
     if login.is_empty() || login.len() > 64 || request.password.len() > 256 {
         return Err(refused());
     }
     let key = format!("{}/{login}", caller.site);
     if let Ok(throttle) = app.throttle.lock() {
-        if throttle.get(&key).is_some_and(|(count, until)| *count >= MAX_FAILURES && now.0 < *until) {
-            return Err(ApiError::new(ErrorCode::Throttled, "Too many attempts. Wait half a minute and try again."));
+        if throttle
+            .get(&key)
+            .is_some_and(|(count, until)| *count >= MAX_FAILURES && now.0 < *until)
+        {
+            return Err(ApiError::new(
+                ErrorCode::Throttled,
+                "Too many attempts. Wait half a minute and try again.",
+            ));
         }
     }
 
@@ -232,10 +268,18 @@ pub fn login(app: &App, caller: &Caller, request: &LoginRequest) -> Result<Login
     let Some(account) = account.filter(|_| verified) else {
         if let Ok(mut throttle) = app.throttle.lock() {
             let entry = throttle.entry(key).or_insert((0, 0));
-            entry.0 = if now.0 >= entry.1 && entry.0 >= MAX_FAILURES { 1 } else { entry.0 + 1 };
+            entry.0 = if now.0 >= entry.1 && entry.0 >= MAX_FAILURES {
+                1
+            } else {
+                entry.0 + 1
+            };
             entry.1 = now.0 + LOCKOUT_MS;
         }
-        LOG.warn("login.refused", &caller.correlation, json!({ "tenant": caller.site.as_str() }));
+        LOG.warn(
+            "login.refused",
+            &caller.correlation,
+            json!({ "tenant": caller.site.as_str() }),
+        );
         return Err(refused());
     };
     if let Ok(mut throttle) = app.throttle.lock() {
@@ -272,7 +316,10 @@ pub fn login(app: &App, caller: &Caller, request: &LoginRequest) -> Result<Login
         state: SessionState::Active,
         correlation: caller.correlation.clone(),
     };
-    Ok(LoginReply { token, session: session_view(&tenant, &identity) })
+    Ok(LoginReply {
+        token,
+        session: session_view(&tenant, &identity),
+    })
 }
 
 /// End the session behind a token, if there is one, and tell its connections.
@@ -281,7 +328,11 @@ pub fn end_session(app: &App, token: &str, correlation: &str) -> Result<(), ApiE
         if session.revoked_at.is_none() {
             session.revoked_at = Some(app.now());
             app.store.put_session(&session)?;
-            LOG.info("session.ended", correlation, json!({ "session": session.id.as_str() }));
+            LOG.info(
+                "session.ended",
+                correlation,
+                json!({ "session": session.id.as_str() }),
+            );
         }
         let _ = app.hub.sessions.send((session.id, SessionState::Revoked));
     }
@@ -290,7 +341,9 @@ pub fn end_session(app: &App, token: &str, correlation: &str) -> Result<(), ApiE
 
 pub async fn identify_async(app: &Shared, caller: Caller) -> Result<Identity, ApiError> {
     let correlation = caller.correlation.clone();
-    app.blocking(move |app| identify(app, &caller)).await?.map_err(|e| e.with_correlation(&correlation))
+    app.blocking(move |app| identify(app, &caller))
+        .await?
+        .map_err(|e| e.with_correlation(&correlation))
 }
 
 /// Create or replace a development login. Used by seeding only.

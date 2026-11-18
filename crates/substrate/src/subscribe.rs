@@ -19,7 +19,11 @@ pub struct Selector {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Notice {
     /// A record the subscriber can read was created or changed.
-    Upsert { object: ObjectTypeId, id: RecordId, version: u64 },
+    Upsert {
+        object: ObjectTypeId,
+        id: RecordId,
+        version: u64,
+    },
     /// A record the subscriber could read is gone, or is no longer readable by them.
     Remove { object: ObjectTypeId, id: RecordId },
     /// The tenant's schema changed.
@@ -42,35 +46,55 @@ pub fn notice(
     if event.tenant != tenant.id {
         return None;
     }
-    let wants = |object: &ObjectTypeId| selector.objects.as_ref().is_none_or(|set| set.contains(object));
+    let wants = |object: &ObjectTypeId| {
+        selector
+            .objects
+            .as_ref()
+            .is_none_or(|set| set.contains(object))
+    };
     let sees = |record| visible(tenant, principal, record, event.at);
     match &event.body {
         EventBody::TenantCreated { .. } => None,
         EventBody::SchemaChanged { version, .. } => Some(Notice::Schema { version: version.0 }),
-        EventBody::MemberChanged { principal: changed, .. } => {
+        EventBody::MemberChanged {
+            principal: changed, ..
+        } => {
             let is_owner = matches!(principal, Principal::User(id)
                 if tenant.members.get(id).is_some_and(|roles| roles.contains(&owner_role())));
             let is_subject = matches!(principal, Principal::User(id) if id == changed);
             (is_owner || is_subject).then_some(Notice::Membership)
         }
-        EventBody::RecordCreated { record } => (wants(&record.object) && sees(record)).then(|| Notice::Upsert {
-            object: record.object.clone(),
-            id: record.id,
-            version: record.version,
-        }),
+        EventBody::RecordCreated { record } => {
+            (wants(&record.object) && sees(record)).then(|| Notice::Upsert {
+                object: record.object.clone(),
+                id: record.id,
+                version: record.version,
+            })
+        }
         EventBody::RecordUpdated { before, after } => {
             if !wants(&after.object) {
                 None
             } else if sees(after) {
-                Some(Notice::Upsert { object: after.object.clone(), id: after.id, version: after.version })
+                Some(Notice::Upsert {
+                    object: after.object.clone(),
+                    id: after.id,
+                    version: after.version,
+                })
             } else if sees(before) {
-                Some(Notice::Remove { object: after.object.clone(), id: after.id })
+                Some(Notice::Remove {
+                    object: after.object.clone(),
+                    id: after.id,
+                })
             } else {
                 None
             }
         }
-        EventBody::RecordDeleted { before } => (wants(&before.object) && sees(before))
-            .then(|| Notice::Remove { object: before.object.clone(), id: before.id }),
+        EventBody::RecordDeleted { before } => {
+            (wants(&before.object) && sees(before)).then(|| Notice::Remove {
+                object: before.object.clone(),
+                id: before.id,
+            })
+        }
     }
 }
 
@@ -105,22 +129,36 @@ mod tests {
         let (world, events) = published_then_withdrawn();
         let tenant = &world.tenants[&tenant_id("alpha")];
         let all = Selector { objects: None };
-        let public: Vec<_> = events.iter().map(|e| notice(tenant, &Principal::Anonymous, &all, e)).collect();
+        let public: Vec<_> = events
+            .iter()
+            .map(|e| notice(tenant, &Principal::Anonymous, &all, e))
+            .collect();
         assert_eq!(public[0], None, "creating a draft is invisible");
         assert!(matches!(public[1], Some(Notice::Upsert { version: 2, .. })));
         assert!(matches!(public[2], Some(Notice::Remove { .. })));
-        let writer: Vec<_> = events.iter().map(|e| notice(tenant, &user("alpha:writer2"), &all, e)).collect();
-        assert!(writer.iter().all(|n| matches!(n, Some(Notice::Upsert { .. }))));
+        let writer: Vec<_> = events
+            .iter()
+            .map(|e| notice(tenant, &user("alpha:writer2"), &all, e))
+            .collect();
+        assert!(writer
+            .iter()
+            .all(|n| matches!(n, Some(Notice::Upsert { .. }))));
     }
 
     #[test]
     fn selectors_filter_by_object_type_and_other_tenants_hear_nothing() {
         let (world, events) = published_then_withdrawn();
-        let people_only = Selector { objects: Some([object("person")].into()) };
+        let people_only = Selector {
+            objects: Some([object("person")].into()),
+        };
         let alpha = &world.tenants[&tenant_id("alpha")];
-        assert!(events.iter().all(|e| notice(alpha, &user("alpha:editor"), &people_only, e).is_none()));
+        assert!(events
+            .iter()
+            .all(|e| notice(alpha, &user("alpha:editor"), &people_only, e).is_none()));
         let beta = &world.tenants[&tenant_id("beta")];
         let all = Selector { objects: None };
-        assert!(events.iter().all(|e| notice(beta, &user("beta:owner"), &all, e).is_none()));
+        assert!(events
+            .iter()
+            .all(|e| notice(beta, &user("beta:owner"), &all, e).is_none()));
     }
 }

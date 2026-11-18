@@ -59,11 +59,16 @@ pub struct TenantState {
 
 impl TenantState {
     pub fn record(&self, object: &ObjectTypeId, id: RecordId) -> Option<&Arc<Record>> {
-        self.records.get(object).and_then(|records| records.get(&id))
+        self.records
+            .get(object)
+            .and_then(|records| records.get(&id))
     }
 
     pub fn records_of(&self, object: &ObjectTypeId) -> impl Iterator<Item = &Arc<Record>> {
-        self.records.get(object).into_iter().flat_map(|m| m.values())
+        self.records
+            .get(object)
+            .into_iter()
+            .flat_map(|m| m.values())
     }
 
     pub fn record_count(&self) -> usize {
@@ -77,7 +82,11 @@ pub enum Need {
     /// One record, if it exists.
     Record { object: ObjectTypeId, id: RecordId },
     /// Every record of `object` whose `field` equals `value` (or, for a list field, contains it).
-    ByField { object: ObjectTypeId, field: FieldId, value: Value },
+    ByField {
+        object: ObjectTypeId,
+        field: FieldId,
+        value: Value,
+    },
     /// Every record of `object`.
     AllOf(ObjectTypeId),
 }
@@ -120,10 +129,18 @@ pub struct State {
 
 impl State {
     pub fn complete(tenant: Arc<TenantState>) -> Self {
-        State { tenant_id: tenant.id.clone(), tenant: Some(tenant), coverage: Coverage::Complete }
+        State {
+            tenant_id: tenant.id.clone(),
+            tenant: Some(tenant),
+            coverage: Coverage::Complete,
+        }
     }
 
     pub fn absent(tenant_id: TenantId) -> Self {
-        State { tenant_id, tenant: None, coverage: Coverage::Complete }
+        State {
+            tenant_id,
+            tenant: None,
+            coverage: Coverage::Complete,
+        }
     }
 }

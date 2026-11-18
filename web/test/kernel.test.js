@@ -200,3 +200,13 @@ test('a guarded page shows a sign-in prompt to a visitor, whatever the server se
   const { state } = boot({ path: '/', session: { session: anonymous }, view: model });
   assert.equal(view(state).page.kind, 'signin_required');
 });
+
+test('a message on screen is given a timer and leaves when it fires', () => {
+  const { state } = boot({ path: '/', session: { session: anonymous }, view: homeModel() });
+  const shown = update(state, { type: 'action', name: 'logout', ...stamp });
+  const replied = update(shown.state, { type: 'http_result', id: shown.effects[0].id, ok: false, status: 0, body: null, ...stamp });
+  assert.equal(replied.state.toasts.length, 1);
+  const timer = replied.effects.find((e) => e.type === 'timer' && e.name === 'toast');
+  assert.equal(timer.token, replied.state.toasts[0].id);
+  assert.equal(update(replied.state, { type: 'timer', name: 'toast', token: timer.token, ...stamp }).state.toasts.length, 0);
+});

@@ -16,7 +16,10 @@ use strata_kernel::{
 
 /// Find the view whose route pattern matches a path, with the values of its `:name` segments.
 /// When several match, the one with the most literal segments wins.
-pub fn match_route<'a>(schema: &'a TenantSchema, path: &str) -> Option<(&'a ViewDef, BTreeMap<String, String>)> {
+pub fn match_route<'a>(
+    schema: &'a TenantSchema,
+    path: &str,
+) -> Option<(&'a ViewDef, BTreeMap<String, String>)> {
     let wanted: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
     let mut best: Option<(usize, &ViewDef, BTreeMap<String, String>)> = None;
     for view in schema.views.values() {
@@ -26,16 +29,19 @@ pub fn match_route<'a>(schema: &'a TenantSchema, path: &str) -> Option<(&'a View
         }
         let mut params = BTreeMap::new();
         let mut literal = 0;
-        let matched = pattern.iter().zip(&wanted).all(|(p, w)| match p.strip_prefix(':') {
-            Some(name) => {
-                params.insert(name.to_string(), (*w).to_string());
-                true
-            }
-            None => {
-                literal += 1;
-                p == w
-            }
-        });
+        let matched = pattern
+            .iter()
+            .zip(&wanted)
+            .all(|(p, w)| match p.strip_prefix(':') {
+                Some(name) => {
+                    params.insert(name.to_string(), (*w).to_string());
+                    true
+                }
+                None => {
+                    literal += 1;
+                    p == w
+                }
+            });
         if matched && best.as_ref().is_none_or(|(score, _, _)| literal > *score) {
             best = Some((literal, view, params));
         }
@@ -68,9 +74,21 @@ pub struct ViewData {
 
 /// Section names in evaluation order: sections that feed others come first.
 pub fn section_order(view: &ViewDef) -> Vec<&String> {
-    let depends = |section: &ViewSection| section.args.values().any(|a| matches!(a, ArgSource::Section { .. }));
-    let (late, early): (Vec<_>, Vec<_>) = view.sections.iter().partition(|(_, section)| depends(section));
-    early.into_iter().chain(late).map(|(name, _)| name).collect()
+    let depends = |section: &ViewSection| {
+        section
+            .args
+            .values()
+            .any(|a| matches!(a, ArgSource::Section { .. }))
+    };
+    let (late, early): (Vec<_>, Vec<_>) = view
+        .sections
+        .iter()
+        .partition(|(_, section)| depends(section));
+    early
+        .into_iter()
+        .chain(late)
+        .map(|(name, _)| name)
+        .collect()
 }
 
 /// The read request for one section, given the route and request parameters and the single rows
@@ -90,7 +108,10 @@ pub fn section_request(
                 ArgSource::Route(key) => text(route.get(key)),
                 ArgSource::Request(key) => text(request.get(key)),
                 ArgSource::Const(value) => value.clone(),
-                ArgSource::Section { section, attribute: name } => done
+                ArgSource::Section {
+                    section,
+                    attribute: name,
+                } => done
                     .get(section)
                     .and_then(|row| row.as_deref())
                     .and_then(|row| attribute(Some(row), name).ok())
@@ -99,7 +120,10 @@ pub fn section_request(
             (name.clone(), value)
         })
         .collect();
-    ReadRequest::Named { query: section.query.clone(), params }
+    ReadRequest::Named {
+        query: section.query.clone(),
+        params,
+    }
 }
 
 /// The record ids a section's rows refer to through its included fields, by target object.
@@ -117,7 +141,10 @@ pub fn included_refs(
         let Some((target, _, _)) = def.fields.get(field).and_then(|f| f.ty.ref_target()) else {
             continue;
         };
-        let ids: BTreeSet<RecordId> = rows.iter().flat_map(|row| refs_in(row.get(field))).collect();
+        let ids: BTreeSet<RecordId> = rows
+            .iter()
+            .flat_map(|row| refs_in(row.get(field)))
+            .collect();
         out.insert(field.clone(), (target.clone(), ids.into_iter().collect()));
     }
     out
@@ -130,9 +157,15 @@ fn project_record(record: &Record) -> Map<String, Json> {
     out.insert("version".into(), json!(record.version));
     out.insert("created_at".into(), json!(record.created_at.0));
     out.insert("updated_at".into(), json!(record.updated_at.0));
-    out.insert("created_by".into(), json!(record.created_by.as_ref().map(|p| p.as_str())));
-    let fields: Map<String, Json> =
-        record.fields.iter().map(|(field, value)| (field.as_str().to_string(), to_plain(value))).collect();
+    out.insert(
+        "created_by".into(),
+        json!(record.created_by.as_ref().map(|p| p.as_str())),
+    );
+    let fields: Map<String, Json> = record
+        .fields
+        .iter()
+        .map(|(field, value)| (field.as_str().to_string(), to_plain(value)))
+        .collect();
     out.insert("fields".into(), Json::Object(fields));
     out
 }
@@ -145,7 +178,16 @@ fn project_row(record: &Record, section: &SectionData) -> Json {
         let projected = match record.get(field) {
             Value::Ref(id) => resolve(id).unwrap_or(Json::Null),
             Value::List(items) => Json::Array(
-                items.iter().filter_map(|item| if let Value::Ref(id) = item { resolve(id) } else { None }).collect(),
+                items
+                    .iter()
+                    .filter_map(|item| {
+                        if let Value::Ref(id) = item {
+                            resolve(id)
+                        } else {
+                            None
+                        }
+                    })
+                    .collect(),
             ),
             _ => continue,
         };
@@ -158,7 +200,10 @@ fn project_row(record: &Record, section: &SectionData) -> Json {
         if let Value::Str(source) = record.get(field) {
             let parsed = markdown::parse(source);
             words += markdown::word_count(&parsed);
-            blocks.insert(field.as_str().to_string(), serde_json::to_value(parsed).expect("blocks serialise"));
+            blocks.insert(
+                field.as_str().to_string(),
+                serde_json::to_value(parsed).expect("blocks serialise"),
+            );
         }
     }
     if !section.markdown.is_empty() {
@@ -177,9 +222,18 @@ pub fn project(data: &ViewData) -> Json {
         .iter()
         .map(|(name, section)| {
             let value = if section.single {
-                section.rows.first().map_or(Json::Null, |row| project_row(row, section))
+                section
+                    .rows
+                    .first()
+                    .map_or(Json::Null, |row| project_row(row, section))
             } else {
-                Json::Array(section.rows.iter().map(|row| project_row(row, section)).collect())
+                Json::Array(
+                    section
+                        .rows
+                        .iter()
+                        .map(|row| project_row(row, section))
+                        .collect(),
+                )
             };
             (name.clone(), value)
         })

@@ -78,7 +78,6 @@
   body {
     min-block-size: 100dvb;
     font-size: var(--text-md);
-    transition: background-color var(--dur-quick) var(--ease), color var(--dur-quick) var(--ease);
   }
 
   #app {
@@ -110,7 +109,9 @@
     text-decoration-color: var(--rule-strong);
     text-decoration-thickness: 1px;
     text-underline-offset: 0.18em;
-    transition: text-decoration-color var(--dur-quick) var(--ease), color var(--dur-quick) var(--ease);
+    /* Colour is inherited and deliberately not transitioned: transitions on inherited colour
+       compound down the tree and make a theme change ripple instead of switch. */
+    transition: text-decoration-color var(--dur-quick) var(--ease);
   }
 
   a:hover {

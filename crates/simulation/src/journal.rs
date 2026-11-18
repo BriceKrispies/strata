@@ -11,7 +11,9 @@
 //! timing, lost races that were retried, or the delivery of events.
 
 use serde::{Deserialize, Serialize};
-use strata_kernel::{canon, Context, Intent, StateRevision, TenantId, TenantState, World, KERNEL_VERSION};
+use strata_kernel::{
+    canon, Context, Intent, StateRevision, TenantId, TenantState, World, KERNEL_VERSION,
+};
 
 /// The part of a journal entry a replay needs. Mirrors `strata_storage_api::JournalEntry`
 /// without depending on the storage crate.
@@ -44,13 +46,18 @@ pub struct JournalReplay {
 }
 
 /// Replay one tenant's journal from nothing and compare with the live state.
-pub fn replay_journal(tenant: &TenantId, entries: &[Recorded], live: Option<&TenantState>) -> JournalReplay {
+pub fn replay_journal(
+    tenant: &TenantId,
+    entries: &[Recorded],
+    live: Option<&TenantState>,
+) -> JournalReplay {
     let mut world = World::default();
     let mut agreed = 0;
     let mut first_mismatch = None;
     let mut other_versions = Vec::new();
     for entry in entries {
-        if entry.kernel_version != KERNEL_VERSION && !other_versions.contains(&entry.kernel_version) {
+        if entry.kernel_version != KERNEL_VERSION && !other_versions.contains(&entry.kernel_version)
+        {
             other_versions.push(entry.kernel_version.clone());
         }
         let problem = match world.step(&entry.intent, &entry.context) {
@@ -70,7 +77,9 @@ pub fn replay_journal(tenant: &TenantId, entries: &[Recorded], live: Option<&Ten
         };
         match problem {
             None => agreed += 1,
-            Some(problem) if first_mismatch.is_none() => first_mismatch = Some((entry.revision.0, problem)),
+            Some(problem) if first_mismatch.is_none() => {
+                first_mismatch = Some((entry.revision.0, problem))
+            }
             Some(_) => {}
         }
     }

@@ -93,7 +93,9 @@ impl Lab {
     pub fn result(&self, id: &str, identity: &Identity) -> Option<Json> {
         let runs = self.runs.lock().ok()?;
         let run = runs.get(id).filter(|run| run.tenant == identity.tenant)?;
-        Some(json!({ "id": id, "status": run.status, "summary": run.summary, "result": run.result }))
+        Some(
+            json!({ "id": id, "status": run.status, "summary": run.summary, "result": run.result }),
+        )
     }
 
     fn insert(&self, id: &str, run: Run) {
@@ -121,7 +123,10 @@ impl Lab {
 fn principal_of(identity: &Identity) -> Result<PrincipalId, ApiError> {
     match &identity.principal {
         Principal::User(id) => Ok(id.clone()),
-        _ => Err(ApiError::new(ErrorCode::Unauthenticated, "Sign in to use the Impact Lab.")),
+        _ => Err(ApiError::new(
+            ErrorCode::Unauthenticated,
+            "Sign in to use the Impact Lab.",
+        )),
     }
 }
 
@@ -225,10 +230,16 @@ pub fn overview(app: &App, identity: &Identity) -> Result<Json, ApiError> {
         .map(|q| json!({ "id": q.id.as_str(), "object": q.object.as_str(), "where": q.filter.as_ref().map(|f| f.to_string()), "params": q.params, "limit": q.limit }))
         .collect();
     let journal = app.store.journal_after(&identity.tenant, 0, 100_000)?.len();
-    let classes: Vec<Json> = [Class::Proven, Class::Reproduced, Class::SoundApproximation, Class::Empirical, Class::Unknown]
-        .iter()
-        .map(|c| json!({ "id": c, "label": c.label(), "meaning": c.meaning() }))
-        .collect();
+    let classes: Vec<Json> = [
+        Class::Proven,
+        Class::Reproduced,
+        Class::SoundApproximation,
+        Class::Empirical,
+        Class::Unknown,
+    ]
+    .iter()
+    .map(|c| json!({ "id": c, "label": c.label(), "meaning": c.meaning() }))
+    .collect();
     Ok(json!({
         "tenant": {
             "id": tenant.id.as_str(),
@@ -257,9 +268,18 @@ pub fn overview(app: &App, identity: &Identity) -> Result<Json, ApiError> {
 }
 
 /// The projection as the Lab shows it: the comparison in full, the traces as a timeline.
-fn present(projection: &Projection, scenario: &Scenario, request: &RunRequest, snapshot: Json) -> Json {
-    let branch: BTreeMap<usize, &strata_simulation::engine::Step> =
-        projection.branch.steps.iter().filter_map(|s| s.index.map(|i| (i, s))).collect();
+fn present(
+    projection: &Projection,
+    scenario: &Scenario,
+    request: &RunRequest,
+    snapshot: Json,
+) -> Json {
+    let branch: BTreeMap<usize, &strata_simulation::engine::Step> = projection
+        .branch
+        .steps
+        .iter()
+        .filter_map(|s| s.index.map(|i| (i, s)))
+        .collect();
     let who = |principal: &Principal| match principal {
         Principal::User(id) => id.as_str().to_string(),
         other => format!("{other:?}").to_lowercase(),
@@ -271,7 +291,10 @@ fn present(projection: &Projection, scenario: &Scenario, request: &RunRequest, s
         .filter_map(|step| step.index.map(|i| (i, step)))
         .map(|(index, step)| {
             let other = branch.get(&index);
-            let (a, b) = (step.outcome.verdict(), other.map_or_else(String::new, |s| s.outcome.verdict()));
+            let (a, b) = (
+                step.outcome.verdict(),
+                other.map_or_else(String::new, |s| s.outcome.verdict()),
+            );
             json!({
                 "step": index,
                 "at": step.at,
@@ -322,9 +345,21 @@ fn present(projection: &Projection, scenario: &Scenario, request: &RunRequest, s
     })
 }
 
-fn build_scenario(app: &App, identity: &Identity, request: &RunRequest, live: &Arc<TenantState>) -> Result<Scenario, ApiError> {
+fn build_scenario(
+    app: &App,
+    identity: &Identity,
+    request: &RunRequest,
+    live: &Arc<TenantState>,
+) -> Result<Scenario, ApiError> {
     let seed = request.seed.unwrap_or(1);
-    let faults = if request.faults { Faults { commit_conflict: 100_000, delivery_drop: 200_000 } } else { Faults::default() };
+    let faults = if request.faults {
+        Faults {
+            commit_conflict: 100_000,
+            delivery_drop: 200_000,
+        }
+    } else {
+        Faults::default()
+    };
     match request.source.as_str() {
         "generated" => {
             // Every tenant is copied into the simulated world, so that the comparison can show
@@ -338,7 +373,13 @@ fn build_scenario(app: &App, identity: &Identity, request: &RunRequest, live: &A
             world.tenants.insert(identity.tenant.clone(), live.clone());
             let steps = request.steps.unwrap_or(60).clamp(5, 300);
             let schedule = generate(&world, &identity.tenant, seed, steps, app.now().0, 60_000);
-            Ok(Scenario { name: format!("generated-{seed}"), seed, initial: world, schedule, faults })
+            Ok(Scenario {
+                name: format!("generated-{seed}"),
+                seed,
+                initial: world,
+                schedule,
+                faults,
+            })
         }
         "journal" => {
             let schedule: Vec<Scheduled> = app
@@ -346,34 +387,67 @@ fn build_scenario(app: &App, identity: &Identity, request: &RunRequest, live: &A
                 .journal_after(&identity.tenant, 0, 100_000)?
                 .into_iter()
                 .map(|entry| Scheduled {
-                    label: format!("{} (revision {})", entry.intent.name().replace('_', " "), entry.revision.0),
+                    label: format!(
+                        "{} (revision {})",
+                        entry.intent.name().replace('_', " "),
+                        entry.revision.0
+                    ),
                     context: entry.context,
                     intent: entry.intent,
                 })
                 .collect();
-            Ok(Scenario { name: "journal".into(), seed, initial: World::default(), schedule, faults })
+            Ok(Scenario {
+                name: "journal".into(),
+                seed,
+                initial: World::default(),
+                schedule,
+                faults,
+            })
         }
-        other => Err(ApiError::new(ErrorCode::Invalid, format!("unknown schedule source {other:?}"))),
+        other => Err(ApiError::new(
+            ErrorCode::Invalid,
+            format!("unknown schedule source {other:?}"),
+        )),
     }
 }
 
 /// Start a projection in the background and return its id. Progress and the result are sent to
 /// the caller's WebSocket connections; the result can also be fetched by id.
-pub fn start(shared: &Shared, app: &App, identity: &Identity, request: RunRequest) -> Result<Json, ApiError> {
+pub fn start(
+    shared: &Shared,
+    app: &App,
+    identity: &Identity,
+    request: RunRequest,
+) -> Result<Json, ApiError> {
     let principal = principal_of(identity)?;
     let live = complete(app, &identity.tenant)?;
-    let changes = proposal::parse(&live.schema, &request.change).map_err(|problem| ApiError::new(ErrorCode::Invalid, problem))?;
+    let changes = proposal::parse(&live.schema, &request.change)
+        .map_err(|problem| ApiError::new(ErrorCode::Invalid, problem))?;
     let existing = match request.existing.as_str() {
         "reject" => ExistingData::Reject,
         "grandfather" => ExistingData::Grandfather,
-        other => return Err(ApiError::new(ErrorCode::Invalid, format!("unknown handling of existing records {other:?}"))),
+        other => {
+            return Err(ApiError::new(
+                ErrorCode::Invalid,
+                format!("unknown handling of existing records {other:?}"),
+            ))
+        }
     };
     let scenario = build_scenario(app, identity, &request, &live)?;
     // A recorded journal starts from nothing, so the change can only apply once the tenant and
     // its schema exist: after the first two entries.
     let earliest = if request.source == "journal" { 2 } else { 0 };
-    let before_step = request.apply_at.unwrap_or(earliest).clamp(earliest, scenario.schedule.len());
-    let proposal = Proposal { tenant: identity.tenant.clone(), principal: Principal::User(principal.clone()), changes, existing, before_step };
+    let before_step = request
+        .apply_at
+        .unwrap_or(earliest)
+        .clamp(earliest, scenario.schedule.len());
+    let proposal = Proposal {
+        tenant: identity.tenant.clone(),
+        principal: Principal::User(principal.clone()),
+        changes,
+        existing,
+        before_step,
+    };
     let snapshot = json!({
         "revision": live.revision.0,
         "schema_version": live.schema.version.0,
@@ -387,23 +461,45 @@ pub fn start(shared: &Shared, app: &App, identity: &Identity, request: RunReques
     let summary = json!({ "change": request.change, "source": request.source, "steps": scenario.schedule.len() });
     app.lab.insert(
         &id,
-        Run { tenant: identity.tenant.clone(), principal: principal.clone(), status: "running", started_at: app.now().0, summary: summary.clone(), result: None, cancel: cancel.clone() },
+        Run {
+            tenant: identity.tenant.clone(),
+            principal: principal.clone(),
+            status: "running",
+            started_at: app.now().0,
+            summary: summary.clone(),
+            result: None,
+            cancel: cancel.clone(),
+        },
     );
     LOG.info("lab.started", &identity.correlation, json!({ "run": id, "tenant": identity.tenant.as_str(), "source": request.source, "steps": scenario.schedule.len() }));
 
-    let (shared, run_id, tenant, correlation) = (shared.clone(), id.clone(), identity.tenant.clone(), identity.correlation.clone());
+    let (shared, run_id, tenant, correlation) = (
+        shared.clone(),
+        id.clone(),
+        identity.tenant.clone(),
+        identity.correlation.clone(),
+    );
     std::thread::spawn(move || {
         let send = |kind: &str, payload: Json| {
-            let _ = shared.hub.runs.send(RunMessage { tenant: tenant.clone(), principal: principal.clone(), run: run_id.clone(), kind: kind.to_string(), payload });
+            let _ = shared.hub.runs.send(RunMessage {
+                tenant: tenant.clone(),
+                principal: principal.clone(),
+                run: run_id.clone(),
+                kind: kind.to_string(),
+                payload,
+            });
         };
         let mut last = (9u8, 0usize);
         let outcome = project(&scenario, &proposal, &mut |phase, done, total| {
             // One message per twentieth of a phase is plenty for a progress bar.
-            let slot = if total == 0 { 0 } else { done * 20 / total };
+            let slot = (done * 20).checked_div(total).unwrap_or(0);
             if (phase, slot) != last {
                 last = (phase, slot);
                 let name = ["baseline", "branch", "counterexample"][phase as usize % 3];
-                send("progress", json!({ "phase": name, "done": done, "total": total }));
+                send(
+                    "progress",
+                    json!({ "phase": name, "done": done, "total": total }),
+                );
             }
             !cancel.load(Ordering::Relaxed)
         });
@@ -418,12 +514,20 @@ pub fn start(shared: &Shared, app: &App, identity: &Identity, request: RunReques
                     "baseline_hash": projection.baseline_hash,
                     "branch_hash": projection.branch_hash,
                 });
-                shared.lab.finish(&run_id, "finished", summary.clone(), Some(result));
-                LOG.info("lab.finished", &correlation, json!({ "run": run_id, "summary": summary }));
+                shared
+                    .lab
+                    .finish(&run_id, "finished", summary.clone(), Some(result));
+                LOG.info(
+                    "lab.finished",
+                    &correlation,
+                    json!({ "run": run_id, "summary": summary }),
+                );
                 send("finished", summary);
             }
             Err(_) => {
-                shared.lab.finish(&run_id, "cancelled", summary.clone(), None);
+                shared
+                    .lab
+                    .finish(&run_id, "cancelled", summary.clone(), None);
                 LOG.info("lab.cancelled", &correlation, json!({ "run": run_id }));
                 send("cancelled", json!({}));
             }
@@ -440,7 +544,14 @@ pub fn replay_live(app: &App, identity: &Identity) -> Result<Json, ApiError> {
         .store
         .journal_after(&identity.tenant, 0, 100_000)?
         .into_iter()
-        .map(|e| Recorded { revision: e.revision, kernel_version: e.kernel_version, intent: e.intent, context: e.context, delta_hash: e.delta_hash, events_hash: e.events_hash })
+        .map(|e| Recorded {
+            revision: e.revision,
+            kernel_version: e.kernel_version,
+            intent: e.intent,
+            context: e.context,
+            delta_hash: e.delta_hash,
+            events_hash: e.events_hash,
+        })
         .collect();
     let report = replay_journal(&identity.tenant, &entries, Some(&live));
     LOG.info(
@@ -468,7 +579,13 @@ pub use replay_live as replay;
 pub fn verify(shared: &Shared, app: &App, identity: &Identity) -> Result<Json, ApiError> {
     let principal = principal_of(identity)?;
     let id = format!("verify_{}", crate::auth::random_hex(4)?);
-    let (shared, run, tenant, lean_dir, now) = (shared.clone(), id.clone(), identity.tenant.clone(), app.cfg.lean_dir.clone(), app.now().0);
+    let (shared, run, tenant, lean_dir, now) = (
+        shared.clone(),
+        id.clone(),
+        identity.tenant.clone(),
+        app.cfg.lean_dir.clone(),
+        app.now().0,
+    );
     let correlation = identity.correlation.clone();
     std::thread::spawn(move || {
         let report = strata_verification::lean::verify(&lean_dir, now);
@@ -477,7 +594,13 @@ pub fn verify(shared: &Shared, app: &App, identity: &Identity) -> Result<Json, A
         if let Ok(mut slot) = shared.lab.verification.lock() {
             *slot = Some(payload.clone());
         }
-        let _ = shared.hub.runs.send(RunMessage { tenant, principal, run, kind: "verification".into(), payload });
+        let _ = shared.hub.runs.send(RunMessage {
+            tenant,
+            principal,
+            run,
+            kind: "verification".into(),
+            payload,
+        });
     });
     Ok(json!({ "run": id }))
 }

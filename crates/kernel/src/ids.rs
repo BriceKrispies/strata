@@ -101,9 +101,7 @@ string_id!(
 );
 
 /// A record. Allocated from the tenant's counter, so creation is deterministic.
-#[derive(
-    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
-)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct RecordId(pub u64);
 
@@ -114,23 +112,17 @@ impl fmt::Display for RecordId {
 }
 
 /// Version of a tenant's schema. Rises by one per accepted schema change.
-#[derive(
-    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
-)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct SchemaVersion(pub u64);
 
 /// Revision of a tenant's logical state. Rises by one per accepted mutating transition.
-#[derive(
-    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
-)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct StateRevision(pub u64);
 
 /// Milliseconds since the Unix epoch. Always supplied by the caller.
-#[derive(
-    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
-)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct Timestamp(pub i64);
 
@@ -155,7 +147,12 @@ mod tests {
         assert!(ObjectTypeId::new("").is_err());
         assert!(ObjectTypeId::new("a-b").is_err());
         assert!(serde_json::from_str::<FieldId>("\"1x\"").is_err());
-        assert_eq!(serde_json::from_str::<FieldId>("\"title\"").unwrap().as_str(), "title");
+        assert_eq!(
+            serde_json::from_str::<FieldId>("\"title\"")
+                .unwrap()
+                .as_str(),
+            "title"
+        );
         assert!(PrincipalId::new("user:ines").is_ok());
         assert!(PrincipalId::new("has space").is_err());
     }

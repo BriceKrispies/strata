@@ -19,7 +19,9 @@ enum Token {
 }
 
 fn tokenize(source: &str) -> Result<Vec<Token>, String> {
-    const SYMBOLS: [&str; 12] = ["==", "!=", "<=", ">=", "<", ">", "(", ")", "[", "]", ",", "."];
+    const SYMBOLS: [&str; 12] = [
+        "==", "!=", "<=", ">=", "<", ">", "(", ")", "[", "]", ",", ".",
+    ];
     let chars: Vec<char> = source.chars().collect();
     let mut tokens = Vec::new();
     let mut i = 0;
@@ -29,18 +31,25 @@ fn tokenize(source: &str) -> Result<Vec<Token>, String> {
             i += 1;
         } else if c.is_ascii_alphabetic() || c == '_' || c == '$' {
             let start = i;
-            while i < chars.len() && (chars[i].is_ascii_alphanumeric() || chars[i] == '_' || chars[i] == '$') {
+            while i < chars.len()
+                && (chars[i].is_ascii_alphanumeric() || chars[i] == '_' || chars[i] == '$')
+            {
                 i += 1;
             }
             tokens.push(Token::Ident(chars[start..i].iter().collect()));
-        } else if c.is_ascii_digit() || (c == '-' && chars.get(i + 1).is_some_and(char::is_ascii_digit)) {
+        } else if c.is_ascii_digit()
+            || (c == '-' && chars.get(i + 1).is_some_and(char::is_ascii_digit))
+        {
             let start = i;
             i += 1;
             while i < chars.len() && chars[i].is_ascii_digit() {
                 i += 1;
             }
             let text: String = chars[start..i].iter().collect();
-            tokens.push(Token::Int(text.parse().map_err(|_| format!("number out of range: {text}"))?));
+            tokens.push(Token::Int(
+                text.parse()
+                    .map_err(|_| format!("number out of range: {text}"))?,
+            ));
         } else if c == '\'' {
             let mut text = String::new();
             i += 1;
@@ -129,7 +138,11 @@ impl Parser {
         while self.word("or") {
             items.push(self.and()?);
         }
-        Ok(if items.len() == 1 { items.remove(0) } else { Expr::Or(items) })
+        Ok(if items.len() == 1 {
+            items.remove(0)
+        } else {
+            Expr::Or(items)
+        })
     }
 
     fn and(&mut self) -> Result<Expr, String> {
@@ -137,7 +150,11 @@ impl Parser {
         while self.word("and") {
             items.push(self.not()?);
         }
-        Ok(if items.len() == 1 { items.remove(0) } else { Expr::And(items) })
+        Ok(if items.len() == 1 {
+            items.remove(0)
+        } else {
+            Expr::And(items)
+        })
     }
 
     fn not(&mut self) -> Result<Expr, String> {
@@ -150,7 +167,14 @@ impl Parser {
 
     fn comparison(&mut self) -> Result<Expr, String> {
         let left = self.primary()?;
-        let ops = [("==", CmpOp::Eq), ("!=", CmpOp::Ne), ("<=", CmpOp::Le), (">=", CmpOp::Ge), ("<", CmpOp::Lt), (">", CmpOp::Gt)];
+        let ops = [
+            ("==", CmpOp::Eq),
+            ("!=", CmpOp::Ne),
+            ("<=", CmpOp::Le),
+            (">=", CmpOp::Ge),
+            ("<", CmpOp::Lt),
+            (">", CmpOp::Gt),
+        ];
         for (symbol, op) in ops {
             if self.sym(symbol) {
                 return Ok(Expr::Cmp(op, Box::new(left), Box::new(self.primary()?)));
@@ -235,7 +259,8 @@ impl Parser {
                 }
                 "time" => Ok(Expr::Lit(Value::Time(self.int_arg()?))),
                 "ref" => {
-                    let id = u64::try_from(self.int_arg()?).map_err(|_| "a record id is not negative")?;
+                    let id = u64::try_from(self.int_arg()?)
+                        .map_err(|_| "a record id is not negative")?;
                     Ok(Expr::Lit(Value::Ref(RecordId(id))))
                 }
                 "is_null" => Ok(Expr::IsNull(boxed(self.args(1)?))),
@@ -245,7 +270,11 @@ impl Parser {
                 "contains" | "starts_with" => {
                     let mut args = self.args(2)?;
                     let (second, first) = (Box::new(args.remove(1)), Box::new(args.remove(0)));
-                    Ok(if name == "contains" { Expr::Contains(first, second) } else { Expr::StartsWith(first, second) })
+                    Ok(if name == "contains" {
+                        Expr::Contains(first, second)
+                    } else {
+                        Expr::StartsWith(first, second)
+                    })
                 }
                 "if" => {
                     let mut args = self.args(3)?;
@@ -261,11 +290,16 @@ impl Parser {
 
 /// Parse an expression from its authoring syntax.
 pub fn parse(source: &str) -> Result<Expr, String> {
-    let mut parser = Parser { tokens: tokenize(source)?, at: 0 };
+    let mut parser = Parser {
+        tokens: tokenize(source)?,
+        at: 0,
+    };
     let expr = parser.or().map_err(|e| format!("{e} in {source:?}"))?;
     match parser.peek() {
         None => Ok(expr),
-        Some(extra) => Err(format!("unexpected {extra:?} after the expression in {source:?}")),
+        Some(extra) => Err(format!(
+            "unexpected {extra:?} after the expression in {source:?}"
+        )),
     }
 }
 
@@ -275,8 +309,12 @@ mod tests {
 
     #[test]
     fn parses_precedence_and_calls() {
-        let expr = parse("len(new.title) <= 120 and not is_null(new.slug) or has_role(editor)").unwrap();
-        assert_eq!(expr.to_string(), "(((len(new.title) <= 120) and not(is_null(new.slug))) or has_role(editor))");
+        let expr =
+            parse("len(new.title) <= 120 and not is_null(new.slug) or has_role(editor)").unwrap();
+        assert_eq!(
+            expr.to_string(),
+            "(((len(new.title) <= 120) and not(is_null(new.slug))) or has_role(editor))"
+        );
     }
 
     #[test]

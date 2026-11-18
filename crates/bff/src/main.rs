@@ -19,11 +19,16 @@ use std::path::PathBuf;
 use strata_bff::Config;
 
 fn var(name: &str, default: &str) -> String {
-    std::env::var(name).ok().filter(|v| !v.is_empty()).unwrap_or_else(|| default.to_string())
+    std::env::var(name)
+        .ok()
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| default.to_string())
 }
 
 fn config() -> Result<Config, String> {
-    let addr: SocketAddr = var("STRATA_BFF_ADDR", "127.0.0.1:4100").parse().map_err(|e| format!("STRATA_BFF_ADDR: {e}"))?;
+    let addr: SocketAddr = var("STRATA_BFF_ADDR", "127.0.0.1:4100")
+        .parse()
+        .map_err(|e| format!("STRATA_BFF_ADDR: {e}"))?;
     let service_token = var("STRATA_SERVICE_TOKEN", "");
     if service_token.len() < 24 {
         return Err("STRATA_SERVICE_TOKEN must be set to at least 24 characters".into());
@@ -35,13 +40,23 @@ fn config() -> Result<Config, String> {
     let origins = match var("STRATA_ORIGINS", "").as_str() {
         "" => sites
             .keys()
-            .flat_map(|host| [format!("http://{host}:{}", addr.port()), format!("http://{host}:5173")])
+            .flat_map(|host| {
+                [
+                    format!("http://{host}:{}", addr.port()),
+                    format!("http://{host}:5173"),
+                ]
+            })
             .collect(),
-        given => given.split(',').map(|origin| origin.trim().to_string()).collect(),
+        given => given
+            .split(',')
+            .map(|origin| origin.trim().to_string())
+            .collect(),
     };
     Ok(Config {
         addr,
-        backend: var("STRATA_BACKEND_URL", "http://127.0.0.1:4101").trim_end_matches('/').to_string(),
+        backend: var("STRATA_BACKEND_URL", "http://127.0.0.1:4101")
+            .trim_end_matches('/')
+            .to_string(),
         service_token,
         sites,
         origins,
@@ -55,7 +70,9 @@ fn config() -> Result<Config, String> {
 async fn main() {
     let result = async {
         let cfg = config()?;
-        let listener = tokio::net::TcpListener::bind(cfg.addr).await.map_err(|e| format!("{}: {e}", cfg.addr))?;
+        let listener = tokio::net::TcpListener::bind(cfg.addr)
+            .await
+            .map_err(|e| format!("{}: {e}", cfg.addr))?;
         let shutdown = async {
             let _ = tokio::signal::ctrl_c().await;
         };

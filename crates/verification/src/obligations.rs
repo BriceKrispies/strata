@@ -19,7 +19,14 @@ pub struct Obligation {
     pub class: Class,
 }
 
-fn obligation(id: &str, property: &str, statement: &str, theorems: &[&str], rust_tests: &[&str], limits: &str) -> Obligation {
+fn obligation(
+    id: &str,
+    property: &str,
+    statement: &str,
+    theorems: &[&str],
+    rust_tests: &[&str],
+    limits: &str,
+) -> Obligation {
     Obligation {
         id: id.to_string(),
         property: property.to_string(),

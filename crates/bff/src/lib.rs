@@ -55,8 +55,14 @@ impl Config {
         text.split(',')
             .filter(|entry| !entry.trim().is_empty())
             .map(|entry| {
-                let (host, tenant) = entry.trim().split_once('=').ok_or_else(|| format!("bad site entry {entry:?}"))?;
-                Ok((host.to_lowercase(), TenantId::new(tenant).map_err(|e| e.to_string())?))
+                let (host, tenant) = entry
+                    .trim()
+                    .split_once('=')
+                    .ok_or_else(|| format!("bad site entry {entry:?}"))?;
+                Ok((
+                    host.to_lowercase(),
+                    TenantId::new(tenant).map_err(|e| e.to_string())?,
+                ))
             })
             .collect()
     }
@@ -74,7 +80,11 @@ pub struct Bff {
 pub type Shared = Arc<Bff>;
 
 /// Serve until `shutdown` resolves.
-pub async fn run(cfg: Config, listener: TcpListener, shutdown: impl Future<Output = ()> + Send + 'static) -> Result<(), String> {
+pub async fn run(
+    cfg: Config,
+    listener: TcpListener,
+    shutdown: impl Future<Output = ()> + Send + 'static,
+) -> Result<(), String> {
     let index = std::fs::read_to_string(cfg.dist.join("index.html")).ok();
     let address = listener.local_addr().map_err(|e| e.to_string())?;
     LOG.info(
@@ -89,10 +99,15 @@ pub async fn run(cfg: Config, listener: TcpListener, shutdown: impl Future<Outpu
     );
     let bff = Arc::new(Bff {
         cfg,
-        http: reqwest::Client::builder().build().map_err(|e| e.to_string())?,
+        http: reqwest::Client::builder()
+            .build()
+            .map_err(|e| e.to_string())?,
         sockets: AtomicI64::new(0),
         in_flight: AtomicI64::new(0),
         index,
     });
-    axum::serve(listener, routes::router(bff)).with_graceful_shutdown(shutdown).await.map_err(|e| e.to_string())
+    axum::serve(listener, routes::router(bff))
+        .with_graceful_shutdown(shutdown)
+        .await
+        .map_err(|e| e.to_string())
 }

@@ -42,7 +42,10 @@ pub struct Recent<T> {
 
 impl<T: Clone> Recent<T> {
     pub fn new(capacity: usize) -> Self {
-        Recent { items: Mutex::new(VecDeque::with_capacity(capacity)), capacity }
+        Recent {
+            items: Mutex::new(VecDeque::with_capacity(capacity)),
+            capacity,
+        }
     }
 
     pub fn push(&self, item: T) {
@@ -55,7 +58,10 @@ impl<T: Clone> Recent<T> {
     }
 
     pub fn list(&self) -> Vec<T> {
-        self.items.lock().map(|items| items.iter().cloned().collect()).unwrap_or_default()
+        self.items
+            .lock()
+            .map(|items| items.iter().cloned().collect())
+            .unwrap_or_default()
     }
 }
 
@@ -95,7 +101,8 @@ impl Stats {
         if let (Some(kind), Ok(mut rejections)) = (rejected, self.rejections.lock()) {
             *rejections.entry(format!("{kind:?}")).or_default() += 1;
         }
-        self.conflicts_retried.fetch_add(conflicts as i64, Ordering::Relaxed);
+        self.conflicts_retried
+            .fetch_add(conflicts as i64, Ordering::Relaxed);
     }
 }
 
@@ -149,7 +156,13 @@ pub struct ApiError(pub ErrorReply);
 
 impl ApiError {
     pub fn new(code: ErrorCode, message: impl Into<String>) -> Self {
-        ApiError(ErrorReply { code, message: message.into(), kind: None, failed: Vec::new(), correlation: String::new() })
+        ApiError(ErrorReply {
+            code,
+            message: message.into(),
+            kind: None,
+            failed: Vec::new(),
+            correlation: String::new(),
+        })
     }
 
     pub fn with_correlation(mut self, correlation: &str) -> Self {
@@ -174,7 +187,11 @@ impl ApiError {
             code,
             message: error.message,
             kind: Some(format!("{:?}", error.kind)),
-            failed: error.evidence.into_iter().filter(|check| !check.passed).collect(),
+            failed: error
+                .evidence
+                .into_iter()
+                .filter(|check| !check.passed)
+                .collect(),
             correlation: String::new(),
         })
     }
@@ -202,7 +219,8 @@ impl From<StoreError> for ApiError {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        let status = StatusCode::from_u16(self.0.code.status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+        let status =
+            StatusCode::from_u16(self.0.code.status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
         (status, Json(json!(self.0))).into_response()
     }
 }

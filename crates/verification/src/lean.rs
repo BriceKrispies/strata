@@ -35,7 +35,10 @@ struct Lcg(u64);
 
 impl Lcg {
     fn below(&mut self, bound: u64) -> u64 {
-        self.0 = self.0.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
+        self.0 = self
+            .0
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
         (self.0 >> 33) % bound
     }
 
@@ -65,7 +68,11 @@ fn field_tokens(rng: &mut Lcg) -> String {
     let mut tokens = Vec::new();
     for field in [1u64, 2, 3] {
         // Field 1 is required, so it is usually given.
-        let include = if field == 1 { rng.below(8) != 0 } else { rng.below(2) == 0 };
+        let include = if field == 1 {
+            rng.below(8) != 0
+        } else {
+            rng.below(2) == 0
+        };
         if include {
             tokens.push(format!("{field}={}", value_token(rng, field)));
         }
@@ -91,7 +98,13 @@ pub fn scenarios(seed: u64, count: usize) -> String {
             let home = if tenant == 2 { 200 } else { 100 };
             let principal = match rng.below(14) {
                 0 => 999,
-                1 => if home == 100 { 201 } else { 101 },
+                1 => {
+                    if home == 100 {
+                        201
+                    } else {
+                        101
+                    }
+                }
                 2 | 3 => home,
                 4 | 5 => home + 1,
                 6..=9 => home + 2,
@@ -105,7 +118,11 @@ pub fn scenarios(seed: u64, count: usize) -> String {
                 _ => format!("require {} lax", 1 + rng.below(3)),
             };
             // Schema changes are mostly attempted by the owner, so that both strict outcomes occur.
-            let principal = if op.starts_with("require") && rng.below(4) != 0 { home } else { principal };
+            let principal = if op.starts_with("require") && rng.below(4) != 0 {
+                home
+            } else {
+                principal
+            };
             out.push_str(format!("op {tenant} {principal} {op}").trim_end());
             out.push('\n');
         }
@@ -138,7 +155,14 @@ fn field_type(n: u64) -> FieldType {
 }
 
 fn field_def(n: u64, required: bool) -> FieldDef {
-    FieldDef { id: field_id(n), label: format!("f{n}"), ty: field_type(n), required, unique: false, default: None }
+    FieldDef {
+        id: field_id(n),
+        label: format!("f{n}"),
+        ty: field_type(n),
+        required,
+        unique: false,
+        default: None,
+    }
 }
 
 fn principal(n: u64) -> Principal {
@@ -154,11 +178,30 @@ fn initial_world() -> World {
         let owner = n * 100;
         let mut run = |world: &World, who: Principal, intent: Intent| {
             at += 1;
-            let ctx = Context { tenant: tenant.clone(), principal: who, session: None, now: Timestamp(at), correlation: "fixture".into() };
-            world.step(&intent, &ctx).expect("the fixture world installs").0
+            let ctx = Context {
+                tenant: tenant.clone(),
+                principal: who,
+                session: None,
+                now: Timestamp(at),
+                correlation: "fixture".into(),
+            };
+            world
+                .step(&intent, &ctx)
+                .expect("the fixture world installs")
+                .0
         };
-        world = run(&world, Principal::System, Intent::CreateTenant { name: format!("t{n}"), owner: id(format!("p{owner}")) });
-        let role = |name: &str| RoleDef { id: id(name.to_string()), label: name.to_string() };
+        world = run(
+            &world,
+            Principal::System,
+            Intent::CreateTenant {
+                name: format!("t{n}"),
+                owner: id(format!("p{owner}")),
+            },
+        );
+        let role = |name: &str| RoleDef {
+            id: id(name.to_string()),
+            label: name.to_string(),
+        };
         let policy = |name: &str, role: &str, actions: &[Action], condition: Option<Expr>| {
             SchemaChange::DefinePolicy(PolicyDef {
                 id: id(name.to_string()),
@@ -168,21 +211,71 @@ fn initial_world() -> World {
                 condition,
             })
         };
-        let own = Expr::Cmp(CmpOp::Eq, Box::new(Expr::Var(Scope::Record, "$created_by".into())), Box::new(Expr::Principal));
+        let own = Expr::Cmp(
+            CmpOp::Eq,
+            Box::new(Expr::Var(Scope::Record, "$created_by".into())),
+            Box::new(Expr::Principal),
+        );
         let changes = vec![
             SchemaChange::DefineRole(role("editor")),
             SchemaChange::DefineRole(role("writer")),
-            SchemaChange::DefineObject { id: item(), label: "Item".into() },
-            SchemaChange::DefineField { object: item(), field: field_def(1, true) },
-            SchemaChange::DefineField { object: item(), field: field_def(2, false) },
-            SchemaChange::DefineField { object: item(), field: field_def(3, false) },
-            policy("editors_all", "editor", &[Action::Read, Action::Create, Action::Update, Action::Delete], None),
-            policy("writers_create", "writer", &[Action::Read, Action::Create], None),
-            policy("writers_own", "writer", &[Action::Update, Action::Delete], Some(own)),
+            SchemaChange::DefineObject {
+                id: item(),
+                label: "Item".into(),
+            },
+            SchemaChange::DefineField {
+                object: item(),
+                field: field_def(1, true),
+            },
+            SchemaChange::DefineField {
+                object: item(),
+                field: field_def(2, false),
+            },
+            SchemaChange::DefineField {
+                object: item(),
+                field: field_def(3, false),
+            },
+            policy(
+                "editors_all",
+                "editor",
+                &[Action::Read, Action::Create, Action::Update, Action::Delete],
+                None,
+            ),
+            policy(
+                "writers_create",
+                "writer",
+                &[Action::Read, Action::Create],
+                None,
+            ),
+            policy(
+                "writers_own",
+                "writer",
+                &[Action::Update, Action::Delete],
+                Some(own),
+            ),
         ];
-        world = run(&world, principal(owner), Intent::ChangeSchema { changes, expected_version: None, existing: ExistingData::Reject });
-        for (member, role_name) in [(owner + 1, "editor"), (owner + 2, "writer"), (owner + 3, "writer")] {
-            world = run(&world, principal(owner), Intent::AssignRole { principal: id(format!("p{member}")), role: id(role_name.to_string()) });
+        world = run(
+            &world,
+            principal(owner),
+            Intent::ChangeSchema {
+                changes,
+                expected_version: None,
+                existing: ExistingData::Reject,
+            },
+        );
+        for (member, role_name) in [
+            (owner + 1, "editor"),
+            (owner + 2, "writer"),
+            (owner + 3, "writer"),
+        ] {
+            world = run(
+                &world,
+                principal(owner),
+                Intent::AssignRole {
+                    principal: id(format!("p{member}")),
+                    role: id(role_name.to_string()),
+                },
+            );
         }
     }
     world
@@ -201,7 +294,12 @@ fn parse_fields(tokens: &[&str]) -> BTreeMap<FieldId, Value> {
     tokens
         .iter()
         .filter_map(|token| token.split_once('='))
-        .map(|(field, value)| (field_id(field.parse().expect("fixture field")), parse_value(value)))
+        .map(|(field, value)| {
+            (
+                field_id(field.parse().expect("fixture field")),
+                parse_value(value),
+            )
+        })
         .collect()
 }
 
@@ -238,12 +336,27 @@ fn show_world(world: &World) -> Vec<String> {
             .filter(|f| f.required)
             .map(|f| f.id.as_str()[1..].to_string())
             .collect();
-        out.push(format!("tenant {n} next={} required={}", tenant.next_record, required.join(",")));
+        out.push(format!(
+            "tenant {n} next={} required={}",
+            tenant.next_record,
+            required.join(",")
+        ));
         for record in tenant.records_of(&item()) {
-            let owner = record.created_by.as_ref().map_or("0", |p| &p.as_str()[1..]).to_string();
-            let fields: Vec<String> =
-                record.fields.iter().map(|(field, value)| format!("{}={}", &field.as_str()[1..], show_value(value))).collect();
-            out.push(format!("record {} owner={owner} {}", record.id, fields.join(" ")).trim_end().to_string());
+            let owner = record
+                .created_by
+                .as_ref()
+                .map_or("0", |p| &p.as_str()[1..])
+                .to_string();
+            let fields: Vec<String> = record
+                .fields
+                .iter()
+                .map(|(field, value)| format!("{}={}", &field.as_str()[1..], show_value(value)))
+                .collect();
+            out.push(
+                format!("record {} owner={owner} {}", record.id, fields.join(" "))
+                    .trim_end()
+                    .to_string(),
+            );
         }
     }
     out
@@ -279,22 +392,40 @@ pub fn kernel_output(scenarios: &str) -> String {
                     correlation: "fixture".into(),
                 };
                 let intent = match rest {
-                    ["create", fields @ ..] => Intent::CreateRecord { object: item(), fields: parse_fields(fields) },
+                    ["create", fields @ ..] => Intent::CreateRecord {
+                        object: item(),
+                        fields: parse_fields(fields),
+                    },
                     ["update", record, fields @ ..] => {
                         // The model replaces a record; a patch that names every field does too.
-                        let mut all: BTreeMap<FieldId, Value> = (1..=3).map(|n| (field_id(n), Value::Null)).collect();
+                        let mut all: BTreeMap<FieldId, Value> =
+                            (1..=3).map(|n| (field_id(n), Value::Null)).collect();
                         all.extend(parse_fields(fields));
-                        Intent::UpdateRecord { object: item(), id: RecordId(record.parse().expect("id")), fields: all, expected_version: None }
+                        Intent::UpdateRecord {
+                            object: item(),
+                            id: RecordId(record.parse().expect("id")),
+                            fields: all,
+                            expected_version: None,
+                        }
                     }
-                    ["delete", record] => {
-                        Intent::DeleteRecord { object: item(), id: RecordId(record.parse().expect("id")), expected_version: None }
-                    }
+                    ["delete", record] => Intent::DeleteRecord {
+                        object: item(),
+                        id: RecordId(record.parse().expect("id")),
+                        expected_version: None,
+                    },
                     ["require", field, mode] => {
                         let n: u64 = field.parse().expect("field");
                         Intent::ChangeSchema {
-                            changes: vec![SchemaChange::DefineField { object: item(), field: field_def(n, true) }],
+                            changes: vec![SchemaChange::DefineField {
+                                object: item(),
+                                field: field_def(n, true),
+                            }],
                             expected_version: None,
-                            existing: if *mode == "strict" { ExistingData::Reject } else { ExistingData::Grandfather },
+                            existing: if *mode == "strict" {
+                                ExistingData::Reject
+                            } else {
+                                ExistingData::Grandfather
+                            },
                         }
                     }
                     _ => {
@@ -324,7 +455,11 @@ fn lake(lean_dir: &Path, args: &[&str]) -> Result<(bool, String), String> {
         .current_dir(lean_dir)
         .output()
         .map_err(|e| format!("could not run lake (is Lean installed and on PATH?): {e}"))?;
-    let text = format!("{}{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
     Ok((output.status.success(), text.replace("\r\n", "\n")))
 }
 
@@ -357,11 +492,22 @@ pub fn parse_audit(output: &str) -> Vec<Checked> {
             let rest = line.strip_prefix('\'')?;
             let (name, tail) = rest.split_once('\'')?;
             let axioms: Vec<String> = match tail.split_once('[') {
-                Some((_, list)) => list.trim_end_matches(']').split(',').map(|a| a.trim().to_string()).filter(|a| !a.is_empty()).collect(),
+                Some((_, list)) => list
+                    .trim_end_matches(']')
+                    .split(',')
+                    .map(|a| a.trim().to_string())
+                    .filter(|a| !a.is_empty())
+                    .collect(),
                 None => Vec::new(),
             };
-            let clean = axioms.iter().all(|axiom| STANDARD_AXIOMS.contains(&axiom.as_str()));
-            Some(Checked { theorem: name.to_string(), axioms, clean })
+            let clean = axioms
+                .iter()
+                .all(|axiom| STANDARD_AXIOMS.contains(&axiom.as_str()));
+            Some(Checked {
+                theorem: name.to_string(),
+                axioms,
+                clean,
+            })
         })
         .collect()
 }
@@ -380,9 +526,18 @@ pub fn compare_outputs(scenarios: &str, lean: &str, rust: &str) -> Correspondenc
     let (a, b): (Vec<&str>, Vec<&str>) = (lean.lines().collect(), rust.lines().collect());
     let first_difference = (0..a.len().max(b.len()))
         .find(|i| a.get(*i) != b.get(*i))
-        .map(|i| (i + 1, a.get(i).unwrap_or(&"<missing>").to_string(), b.get(i).unwrap_or(&"<missing>").to_string()));
+        .map(|i| {
+            (
+                i + 1,
+                a.get(i).unwrap_or(&"<missing>").to_string(),
+                b.get(i).unwrap_or(&"<missing>").to_string(),
+            )
+        });
     Correspondence {
-        scenarios: scenarios.lines().filter(|l| l.starts_with("scenario")).count(),
+        scenarios: scenarios
+            .lines()
+            .filter(|l| l.starts_with("scenario"))
+            .count(),
         operations: scenarios.lines().filter(|l| l.starts_with("op ")).count(),
         agree: first_difference.is_none(),
         first_difference,
@@ -418,7 +573,10 @@ pub const FIXTURE_COUNT: usize = 60;
 /// the caller; this crate does not read the clock.
 pub fn verify(lean_dir: &Path, checked_at: i64) -> Report {
     let obligations = crate::obligations::all();
-    let assumptions = crate::obligations::assumptions().into_iter().map(str::to_string).collect();
+    let assumptions = crate::obligations::assumptions()
+        .into_iter()
+        .map(str::to_string)
+        .collect();
     let mut report = Report {
         checked_at,
         lean_version: String::new(),

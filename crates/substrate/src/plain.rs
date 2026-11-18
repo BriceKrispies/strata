@@ -38,7 +38,11 @@ pub fn parse_time(text: &str) -> Result<i64, String> {
             return Err(bad());
         }
         let (hour, minute) = (number(parts[0])?, number(parts[1])?);
-        let second = if parts.len() == 3 { number(parts[2])? } else { 0 };
+        let second = if parts.len() == 3 {
+            number(parts[2])?
+        } else {
+            0
+        };
         if !(0..24).contains(&hour) || !(0..60).contains(&minute) || !(0..60).contains(&second) {
             return Err(bad());
         }
@@ -64,13 +68,18 @@ pub fn coerce(
         (FieldType::Bool, Json::Bool(b)) => Value::Bool(*b),
         (FieldType::Time, Json::Number(n)) => Value::Time(n.as_i64().ok_or_else(mismatch)?),
         (FieldType::Time, Json::String(s)) => Value::Time(parse_time(s)?),
-        (FieldType::Ref { .. }, Json::Number(n)) => Value::Ref(RecordId(n.as_u64().ok_or_else(mismatch)?)),
+        (FieldType::Ref { .. }, Json::Number(n)) => {
+            Value::Ref(RecordId(n.as_u64().ok_or_else(mismatch)?))
+        }
         (FieldType::Ref { .. }, Json::String(s)) => {
             let key = s.strip_prefix('@').ok_or_else(mismatch)?;
             Value::Ref(resolve(key).ok_or_else(|| format!("unknown record key @{key}"))?)
         }
         (FieldType::List(inner), Json::Array(items)) => Value::List(
-            items.iter().map(|item| coerce(inner, item, resolve)).collect::<Result<_, _>>()?,
+            items
+                .iter()
+                .map(|item| coerce(inner, item, resolve))
+                .collect::<Result<_, _>>()?,
         ),
         _ => return Err(mismatch()),
     })
@@ -86,8 +95,14 @@ pub fn coerce_fields(
     let mut out = BTreeMap::new();
     for (name, json) in fields {
         let id = FieldId::new(name.clone()).map_err(|e| e.to_string())?;
-        let def = object.fields.get(&id).ok_or_else(|| format!("{} has no field {name}", object.id))?;
-        out.insert(id, coerce(&def.ty, json, resolve).map_err(|e| format!("{name}: {e}"))?);
+        let def = object
+            .fields
+            .get(&id)
+            .ok_or_else(|| format!("{} has no field {name}", object.id))?;
+        out.insert(
+            id,
+            coerce(&def.ty, json, resolve).map_err(|e| format!("{name}: {e}"))?,
+        );
     }
     Ok(out)
 }
@@ -114,7 +129,10 @@ mod tests {
         assert_eq!(parse_time("1970-01-01"), Ok(0));
         assert_eq!(parse_time("2000-03-01T00:00:00Z"), Ok(951_868_800_000));
         assert_eq!(parse_time("2026-11-18T09:30Z"), Ok(1_794_994_200_000));
-        assert!(parse_time("2026-11-18T09:30").is_err(), "a time needs its Z");
+        assert!(
+            parse_time("2026-11-18T09:30").is_err(),
+            "a time needs its Z"
+        );
         assert!(parse_time("18/11/2026").is_err());
     }
 
@@ -122,9 +140,21 @@ mod tests {
     fn coerces_by_field_type() {
         let none = |_: &str| None;
         let list = FieldType::List(Box::new(FieldType::Str));
-        assert_eq!(coerce(&list, &json!(["a", "b"]), &none), Ok(Value::List(vec![Value::Str("a".into()), Value::Str("b".into())])));
+        assert_eq!(
+            coerce(&list, &json!(["a", "b"]), &none),
+            Ok(Value::List(vec![
+                Value::Str("a".into()),
+                Value::Str("b".into())
+            ]))
+        );
         assert!(coerce(&FieldType::Int, &json!("3"), &none).is_err());
-        assert_eq!(coerce(&FieldType::Time, &json!("1970-01-02"), &none), Ok(Value::Time(86_400_000)));
-        assert_eq!(coerce(&FieldType::Bool, &Json::Null, &none), Ok(Value::Null));
+        assert_eq!(
+            coerce(&FieldType::Time, &json!("1970-01-02"), &none),
+            Ok(Value::Time(86_400_000))
+        );
+        assert_eq!(
+            coerce(&FieldType::Bool, &Json::Null, &none),
+            Ok(Value::Null)
+        );
     }
 }

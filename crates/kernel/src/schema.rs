@@ -101,7 +101,11 @@ impl WorkflowDef {
         self.initial
             .iter()
             .map(String::as_str)
-            .chain(self.transitions.iter().flat_map(|t| [t.from.as_str(), t.to.as_str()]))
+            .chain(
+                self.transitions
+                    .iter()
+                    .flat_map(|t| [t.from.as_str(), t.to.as_str()]),
+            )
             .collect()
     }
 }
@@ -132,7 +136,10 @@ pub enum ArgSource {
     Request(String),
     Const(Value),
     /// An attribute of the single row of another section of the same view.
-    Section { section: String, attribute: String },
+    Section {
+        section: String,
+        attribute: String,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -173,7 +180,15 @@ impl TenantSchema {
     pub fn genesis() -> Self {
         let roles = [(public_role(), "Everyone"), (owner_role(), "Owner")]
             .into_iter()
-            .map(|(id, label)| (id.clone(), RoleDef { id, label: label.to_string() }))
+            .map(|(id, label)| {
+                (
+                    id.clone(),
+                    RoleDef {
+                        id,
+                        label: label.to_string(),
+                    },
+                )
+            })
             .collect();
         TenantSchema {
             version: SchemaVersion(1),
@@ -217,7 +232,11 @@ impl TenantSchema {
         let no_fields = BTreeMap::new();
 
         for object in self.objects.values() {
-            let env = TypeEnv { fields: &object.fields, params: &no_params, roles: &roles };
+            let env = TypeEnv {
+                fields: &object.fields,
+                params: &no_params,
+                roles: &roles,
+            };
             for field in object.fields.values() {
                 let at = format!("{}.{}", object.id, field.id);
                 if let Some((target, _, _)) = field.ty.ref_target() {
@@ -235,7 +254,11 @@ impl TenantSchema {
                 }
                 if let Some(default) = &field.default {
                     // A default may not read the record it is helping to build.
-                    let env = TypeEnv { fields: &no_fields, params: &no_params, roles: &roles };
+                    let env = TypeEnv {
+                        fields: &no_fields,
+                        params: &no_params,
+                        roles: &roles,
+                    };
                     if let Err(e) = expr::check(default, &env) {
                         problems.push(format!("{at}: default: {e}"));
                     }
@@ -305,7 +328,11 @@ impl TenantSchema {
             if workflow.initial.is_empty() {
                 problems.push(format!("{at}: no initial state"));
             }
-            let env = TypeEnv { fields: &object.fields, params: &no_params, roles: &roles };
+            let env = TypeEnv {
+                fields: &object.fields,
+                params: &no_params,
+                roles: &roles,
+            };
             for transition in &workflow.transitions {
                 if let Some(guard) = &transition.guard {
                     if let Err(e) = expr::check(guard, &env) {
@@ -314,7 +341,10 @@ impl TenantSchema {
                 }
                 for (field, value) in &transition.set {
                     if !object.fields.contains_key(field) {
-                        problems.push(format!("{at}.{}: sets unknown field {field}", transition.name));
+                        problems.push(format!(
+                            "{at}.{}: sets unknown field {field}",
+                            transition.name
+                        ));
                     }
                     if let Err(e) = expr::check(value, &env) {
                         problems.push(format!("{at}.{}: set {field}: {e}", transition.name));
@@ -329,7 +359,11 @@ impl TenantSchema {
                 problems.push(format!("{at}: unknown object type {}", query.object));
                 continue;
             };
-            let env = TypeEnv { fields: &object.fields, params: &query.params, roles: &roles };
+            let env = TypeEnv {
+                fields: &object.fields,
+                params: &query.params,
+                roles: &roles,
+            };
             if let Some(filter) = &query.filter {
                 if let Err(e) = expr::check(filter, &env) {
                     problems.push(format!("{at}: filter: {e}"));
@@ -363,8 +397,9 @@ impl TenantSchema {
                     }
                     if let ArgSource::Section { section: other, .. } = source {
                         match view.sections.get(other) {
-                            Some(dep) if !dep.single => problems
-                                .push(format!("{at}.{name}: section {other} is not single")),
+                            Some(dep) if !dep.single => {
+                                problems.push(format!("{at}.{name}: section {other} is not single"))
+                            }
                             Some(dep) => {
                                 let nested = dep
                                     .args
@@ -391,8 +426,10 @@ impl TenantSchema {
                         }
                     }
                     for field in &section.markdown {
-                        let is_text =
-                            object.fields.get(field).is_some_and(|f| f.ty == FieldType::Str);
+                        let is_text = object
+                            .fields
+                            .get(field)
+                            .is_some_and(|f| f.ty == FieldType::Str);
                         if !is_text {
                             problems.push(format!("{at}.{name}: {field} is not a string field"));
                         }

@@ -75,9 +75,21 @@ fn describe(event: &DomainEvent) -> Json {
         EventBody::TenantCreated { .. } => ("tenant_created", None, None),
         EventBody::SchemaChanged { .. } => ("schema_changed", None, None),
         EventBody::MemberChanged { .. } => ("member_changed", None, None),
-        EventBody::RecordCreated { record } => ("record_created", Some(record.object.as_str()), Some(record.id.0)),
-        EventBody::RecordUpdated { after, .. } => ("record_updated", Some(after.object.as_str()), Some(after.id.0)),
-        EventBody::RecordDeleted { before } => ("record_deleted", Some(before.object.as_str()), Some(before.id.0)),
+        EventBody::RecordCreated { record } => (
+            "record_created",
+            Some(record.object.as_str()),
+            Some(record.id.0),
+        ),
+        EventBody::RecordUpdated { after, .. } => (
+            "record_updated",
+            Some(after.object.as_str()),
+            Some(after.id.0),
+        ),
+        EventBody::RecordDeleted { before } => (
+            "record_deleted",
+            Some(before.object.as_str()),
+            Some(before.id.0),
+        ),
     };
     json!({
         "tenant": event.tenant.as_str(),
@@ -114,7 +126,10 @@ pub fn publish_pending(app: &crate::app::App) -> Result<usize, strata_storage_ap
         LOG.info("event.published", &entry.event.correlation, summary.clone());
         app.stats.recent_events.push(summary);
         // No receivers is fine: the event stays in the durable log for later replay.
-        let _ = app.hub.events.send(Arc::new(Published { event: entry.event.clone(), tenant: header }));
+        let _ = app.hub.events.send(Arc::new(Published {
+            event: entry.event.clone(),
+            tenant: header,
+        }));
     }
     app.store.mark_published(last)?;
     Ok(pending.len())

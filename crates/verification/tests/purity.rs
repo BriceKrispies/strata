@@ -75,7 +75,11 @@ fn violations(crate_dir: &str) -> Vec<String> {
             let code = code_of(line);
             for (token, what) in FORBIDDEN {
                 if code.contains(token) {
-                    found.push(format!("{}:{}: `{token}` ({what})", file.display(), number + 1));
+                    found.push(format!(
+                        "{}:{}: `{token}` ({what})",
+                        file.display(),
+                        number + 1
+                    ));
                 }
             }
         }
@@ -85,7 +89,13 @@ fn violations(crate_dir: &str) -> Vec<String> {
 
 fn dependencies(crate_dir: &str) -> Vec<String> {
     let manifest = std::fs::read_to_string(root().join(crate_dir).join("Cargo.toml")).unwrap();
-    let section = manifest.split("[dependencies]").nth(1).unwrap_or("").split("\n[").next().unwrap_or("");
+    let section = manifest
+        .split("[dependencies]")
+        .nth(1)
+        .unwrap_or("")
+        .split("\n[")
+        .next()
+        .unwrap_or("");
     section
         .lines()
         .filter_map(|line| line.split(['.', '=', ' ']).next())
@@ -97,24 +107,40 @@ fn dependencies(crate_dir: &str) -> Vec<String> {
 #[test]
 fn the_kernel_names_no_ambient_capability() {
     let found = violations("kernel");
-    assert!(found.is_empty(), "the kernel must stay pure:\n{}", found.join("\n"));
+    assert!(
+        found.is_empty(),
+        "the kernel must stay pure:\n{}",
+        found.join("\n")
+    );
 }
 
 #[test]
 fn the_substrate_names_no_ambient_capability() {
     let found = violations("substrate");
-    assert!(found.is_empty(), "the substrate must stay pure:\n{}", found.join("\n"));
+    assert!(
+        found.is_empty(),
+        "the substrate must stay pure:\n{}",
+        found.join("\n")
+    );
 }
 
 #[test]
 fn the_kernel_depends_only_on_serialisation_and_hashing() {
     assert_eq!(dependencies("kernel"), ["serde", "serde_json", "sha2"]);
-    assert_eq!(dependencies("substrate"), ["strata-kernel", "serde", "serde_json"]);
+    assert_eq!(
+        dependencies("substrate"),
+        ["strata-kernel", "serde", "serde_json"]
+    );
 }
 
 #[test]
 fn the_scan_would_catch_a_violation() {
-    assert_eq!(code_of("    let now = std::time::SystemTime::now(); // why"), "    let now = std::time::SystemTime::now(); ");
+    assert_eq!(
+        code_of("    let now = std::time::SystemTime::now(); // why"),
+        "    let now = std::time::SystemTime::now(); "
+    );
     assert_eq!(code_of("    /// reads no clock (std::time)"), "");
-    assert!(FORBIDDEN.iter().any(|(token, _)| "std::time::SystemTime::now()".contains(token)));
+    assert!(FORBIDDEN
+        .iter()
+        .any(|(token, _)| "std::time::SystemTime::now()".contains(token)));
 }

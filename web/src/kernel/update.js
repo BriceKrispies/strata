@@ -29,6 +29,7 @@ export function initialState() {
     optimistic: {},
     confirmDelete: null,
     lab: labInit(),
+    /** @type {{ id: number, kind: string, text: string }[]} */
     toasts: [],
     announce: '',
     menuOpen: false,
@@ -650,6 +651,25 @@ function onSubmit(state, msg) {
  * @returns {{ state: any, effects: Effect[] }}
  */
 export function update(state, msg) {
+  if (msg.type === 'timer' && msg.name === 'toast') {
+    return { state: { ...state, toasts: state.toasts.filter((t) => t.id !== msg.token) }, effects: [] };
+  }
+  const result = step(state, msg);
+  // Every message that appears is given a time to go away again by itself.
+  const known = new Set(state.toasts.map((t) => t.id));
+  const fresh = result.state.toasts.filter((t) => !known.has(t.id));
+  if (!fresh.length) return result;
+  /** @type {Effect[]} */
+  const timers = fresh.map((t) => ({ type: 'timer', name: 'toast', token: t.id, ms: t.kind === 'warn' ? 9000 : 5000 }));
+  return { state: result.state, effects: [...result.effects, ...timers] };
+}
+
+/**
+ * @param {ReturnType<typeof initialState>} state
+ * @param {Message} msg
+ * @returns {{ state: any, effects: Effect[] }}
+ */
+function step(state, msg) {
   switch (msg.type) {
     case 'init': {
       const route = parseHref(msg.path + msg.search);

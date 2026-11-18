@@ -23,16 +23,22 @@ use strata_storage_api::Store;
 use strata_storage_sqlite::SqliteStore;
 
 fn var(name: &str, default: &str) -> String {
-    std::env::var(name).ok().filter(|v| !v.is_empty()).unwrap_or_else(|| default.to_string())
+    std::env::var(name)
+        .ok()
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| default.to_string())
 }
 
 fn number(name: &str, default: i64) -> Result<i64, String> {
-    var(name, &default.to_string()).parse().map_err(|_| format!("{name} must be a number"))
+    var(name, &default.to_string())
+        .parse()
+        .map_err(|_| format!("{name} must be a number"))
 }
 
 fn start() -> Result<(Config, Arc<dyn Store>), String> {
-    let addr: SocketAddr =
-        var("STRATA_BACKEND_ADDR", "127.0.0.1:4101").parse().map_err(|e| format!("STRATA_BACKEND_ADDR: {e}"))?;
+    let addr: SocketAddr = var("STRATA_BACKEND_ADDR", "127.0.0.1:4101")
+        .parse()
+        .map_err(|e| format!("STRATA_BACKEND_ADDR: {e}"))?;
     if !addr.ip().is_loopback() {
         return Err(format!("the backend only listens on loopback, not {addr}"));
     }
@@ -45,7 +51,8 @@ fn start() -> Result<(Config, Arc<dyn Store>), String> {
         "sqlite" => {
             let path = PathBuf::from(var("STRATA_DB", "var/strata.db"));
             if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
-                std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| format!("{}: {e}", parent.display()))?;
             }
             Arc::new(SqliteStore::open(&path, Timestamp(now_ms())).map_err(|e| e.to_string())?)
         }
@@ -67,7 +74,9 @@ fn start() -> Result<(Config, Arc<dyn Store>), String> {
 async fn main() {
     let result = async {
         let (cfg, store) = start()?;
-        let listener = tokio::net::TcpListener::bind(cfg.addr).await.map_err(|e| format!("{}: {e}", cfg.addr))?;
+        let listener = tokio::net::TcpListener::bind(cfg.addr)
+            .await
+            .map_err(|e| format!("{}: {e}", cfg.addr))?;
         let shutdown = async {
             let _ = tokio::signal::ctrl_c().await;
         };

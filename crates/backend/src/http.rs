@@ -14,7 +14,8 @@ use serde::Serialize;
 use serde_json::{json, Value as Json_};
 use std::time::Instant;
 use strata_protocol::api::{
-    Empty, ErrorCode, IdRequest, LoginRequest, Mutation, SessionReply, ViewRequest, HEADER_CORRELATION,
+    Empty, ErrorCode, IdRequest, LoginRequest, Mutation, SessionReply, ViewRequest,
+    HEADER_CORRELATION,
 };
 use strata_protocol::ws::{SessionState, MAX_FRAME};
 
@@ -45,10 +46,16 @@ async fn health(State(app): State<Shared>) -> Result<Json<Json_>, ApiError> {
     })))
 }
 
-async fn session(State(app): State<Shared>, headers: HeaderMap) -> Result<Json<SessionReply>, ApiError> {
+async fn session(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+) -> Result<Json<SessionReply>, ApiError> {
     as_caller(&app, &headers, |app, identity| {
         let tenant = ops::header(app, identity)?;
-        Ok(SessionReply { session: auth::session_view(&tenant, identity), state: identity.state })
+        Ok(SessionReply {
+            session: auth::session_view(&tenant, identity),
+            state: identity.state,
+        })
     })
     .await
 }
@@ -81,7 +88,10 @@ async fn view(
     headers: HeaderMap,
     Json(request): Json<ViewRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    as_caller(&app, &headers, move |app, identity| ops::view(app, identity, &request)).await
+    as_caller(&app, &headers, move |app, identity| {
+        ops::view(app, identity, &request)
+    })
+    .await
 }
 
 async fn mutate(
@@ -89,7 +99,10 @@ async fn mutate(
     headers: HeaderMap,
     Json(mutation): Json<Mutation>,
 ) -> Result<impl IntoResponse, ApiError> {
-    as_caller(&app, &headers, move |app, identity| ops::mutate(app, identity, &mutation)).await
+    as_caller(&app, &headers, move |app, identity| {
+        ops::mutate(app, identity, &mutation)
+    })
+    .await
 }
 
 /// Operations for people who may change the schema: the Impact Lab and diagnostics.
@@ -98,13 +111,22 @@ fn require_schema_manager(app: &App, identity: &Identity) -> Result<(), ApiError
     if auth::session_view(&tenant, identity).may_manage_schema {
         Ok(())
     } else if identity.anonymous() {
-        Err(ApiError::new(ErrorCode::Unauthenticated, "Sign in to use this."))
+        Err(ApiError::new(
+            ErrorCode::Unauthenticated,
+            "Sign in to use this.",
+        ))
     } else {
-        Err(ApiError::new(ErrorCode::Forbidden, "Only someone who can change the schema may use this."))
+        Err(ApiError::new(
+            ErrorCode::Forbidden,
+            "Only someone who can change the schema may use this.",
+        ))
     }
 }
 
-async fn diagnostics(State(app): State<Shared>, headers: HeaderMap) -> Result<impl IntoResponse, ApiError> {
+async fn diagnostics(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, ApiError> {
     as_caller(&app, &headers, |app, identity| {
         require_schema_manager(app, identity)?;
         ops::diagnostics(app)
@@ -112,7 +134,10 @@ async fn diagnostics(State(app): State<Shared>, headers: HeaderMap) -> Result<im
     .await
 }
 
-async fn lab_overview(State(app): State<Shared>, headers: HeaderMap) -> Result<impl IntoResponse, ApiError> {
+async fn lab_overview(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, ApiError> {
     as_caller(&app, &headers, |app, identity| {
         require_schema_manager(app, identity)?;
         lab::overview(app, identity)
@@ -147,7 +172,10 @@ async fn lab_result(
     .await
 }
 
-async fn lab_replay(State(app): State<Shared>, headers: HeaderMap) -> Result<impl IntoResponse, ApiError> {
+async fn lab_replay(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, ApiError> {
     as_caller(&app, &headers, |app, identity| {
         require_schema_manager(app, identity)?;
         lab::replay(app, identity)
@@ -155,7 +183,10 @@ async fn lab_replay(State(app): State<Shared>, headers: HeaderMap) -> Result<imp
     .await
 }
 
-async fn lab_verify(State(app): State<Shared>, headers: HeaderMap) -> Result<impl IntoResponse, ApiError> {
+async fn lab_verify(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, ApiError> {
     let shared = app.clone();
     as_caller(&app, &headers, move |app, identity| {
         require_schema_manager(app, identity)?;
@@ -169,7 +200,7 @@ async fn dev_reset(State(app): State<Shared>) -> Result<Json<Json_>, ApiError> {
         return Err(ApiError::new(ErrorCode::NotFound, "not available"));
     }
     let created = app
-        .blocking(|app| seed::reset(app))
+        .blocking(seed::reset)
         .await?
         .map_err(|problem| ApiError::new(ErrorCode::Internal, problem))?;
     app.hub.kick.notify_one();
@@ -177,7 +208,10 @@ async fn dev_reset(State(app): State<Shared>) -> Result<Json<Json_>, ApiError> {
 }
 
 /// Development only: end the caller's session as if its time had run out.
-async fn dev_expire(State(app): State<Shared>, headers: HeaderMap) -> Result<Json<Json_>, ApiError> {
+async fn dev_expire(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+) -> Result<Json<Json_>, ApiError> {
     if !app.cfg.dev {
         return Err(ApiError::new(ErrorCode::NotFound, "not available"));
     }
@@ -193,10 +227,16 @@ async fn dev_expire(State(app): State<Shared>, headers: HeaderMap) -> Result<Jso
     .await
 }
 
-async fn socket(State(app): State<Shared>, headers: HeaderMap, upgrade: WebSocketUpgrade) -> Result<Response, ApiError> {
+async fn socket(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    upgrade: WebSocketUpgrade,
+) -> Result<Response, ApiError> {
     let caller = auth::caller(&headers)?;
     let identity = auth::identify_async(&app, caller).await?;
-    Ok(upgrade.max_message_size(MAX_FRAME).on_upgrade(move |socket| ws::serve(app, identity, socket)))
+    Ok(upgrade
+        .max_message_size(MAX_FRAME)
+        .on_upgrade(move |socket| ws::serve(app, identity, socket)))
 }
 
 /// Refuse anything that does not carry the service token. The backend listens on loopback, and

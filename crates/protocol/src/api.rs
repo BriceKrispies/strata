@@ -21,7 +21,9 @@ pub const HEADER_CORRELATION: &str = "x-correlation-id";
 pub fn valid_correlation(id: &str) -> bool {
     !id.is_empty()
         && id.len() <= 64
-        && id.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | ':' | '-'))
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | ':' | '-'))
 }
 
 /// The machine-readable class of a failure. Maps one-to-one onto an HTTP status.
@@ -122,7 +124,10 @@ pub struct ViewRequest {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum Mutation {
-    Create { object: String, fields: serde_json::Map<String, Json> },
+    Create {
+        object: String,
+        fields: serde_json::Map<String, Json>,
+    },
     Update {
         object: String,
         id: u64,

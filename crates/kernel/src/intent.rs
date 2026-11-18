@@ -28,8 +28,14 @@ pub struct Context {
 /// One edit to a tenant's schema. Every `Define*` is define-or-replace.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SchemaChange {
-    DefineObject { id: ObjectTypeId, label: String },
-    DefineField { object: ObjectTypeId, field: FieldDef },
+    DefineObject {
+        id: ObjectTypeId,
+        label: String,
+    },
+    DefineField {
+        object: ObjectTypeId,
+        field: FieldDef,
+    },
     /// A reference field. Equivalent to `DefineField` with a `Ref` type; kept separate so a
     /// relationship reads as one in a change list.
     DefineRelationship {
@@ -40,9 +46,18 @@ pub enum SchemaChange {
         on_delete: crate::value::OnDelete,
         required: bool,
     },
-    RemoveField { object: ObjectTypeId, field: FieldId },
-    DefineConstraint { object: ObjectTypeId, constraint: ConstraintDef },
-    RemoveConstraint { object: ObjectTypeId, constraint: ConstraintId },
+    RemoveField {
+        object: ObjectTypeId,
+        field: FieldId,
+    },
+    DefineConstraint {
+        object: ObjectTypeId,
+        constraint: ConstraintDef,
+    },
+    RemoveConstraint {
+        object: ObjectTypeId,
+        constraint: ConstraintId,
+    },
     DefineRole(RoleDef),
     DefinePolicy(PolicyDef),
     RemovePolicy(PolicyId),
@@ -66,15 +81,27 @@ pub enum ExistingData {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Intent {
-    CreateTenant { name: String, owner: PrincipalId },
+    CreateTenant {
+        name: String,
+        owner: PrincipalId,
+    },
     ChangeSchema {
         changes: Vec<SchemaChange>,
         expected_version: Option<SchemaVersion>,
         existing: ExistingData,
     },
-    AssignRole { principal: PrincipalId, role: RoleId },
-    RevokeRole { principal: PrincipalId, role: RoleId },
-    CreateRecord { object: ObjectTypeId, fields: BTreeMap<FieldId, Value> },
+    AssignRole {
+        principal: PrincipalId,
+        role: RoleId,
+    },
+    RevokeRole {
+        principal: PrincipalId,
+        role: RoleId,
+    },
+    CreateRecord {
+        object: ObjectTypeId,
+        fields: BTreeMap<FieldId, Value>,
+    },
     /// A patch: listed fields are replaced, `null` clears a field, other fields are kept.
     UpdateRecord {
         object: ObjectTypeId,
@@ -82,7 +109,11 @@ pub enum Intent {
         fields: BTreeMap<FieldId, Value>,
         expected_version: Option<u64>,
     },
-    DeleteRecord { object: ObjectTypeId, id: RecordId, expected_version: Option<u64> },
+    DeleteRecord {
+        object: ObjectTypeId,
+        id: RecordId,
+        expected_version: Option<u64>,
+    },
 }
 
 impl Intent {
@@ -110,11 +141,19 @@ pub struct Check {
 
 impl Check {
     pub fn pass(rule: impl Into<String>, detail: impl Into<String>) -> Self {
-        Check { rule: rule.into(), passed: true, detail: detail.into() }
+        Check {
+            rule: rule.into(),
+            passed: true,
+            detail: detail.into(),
+        }
     }
 
     pub fn fail(rule: impl Into<String>, detail: impl Into<String>) -> Self {
-        Check { rule: rule.into(), passed: false, detail: detail.into() }
+        Check {
+            rule: rule.into(),
+            passed: false,
+            detail: detail.into(),
+        }
     }
 }
 
@@ -157,7 +196,12 @@ pub struct DomainError {
 
 impl DomainError {
     pub fn new(kind: ErrorKind, message: impl Into<String>) -> Self {
-        DomainError { kind, message: message.into(), evidence: Vec::new(), missing: None }
+        DomainError {
+            kind,
+            message: message.into(),
+            evidence: Vec::new(),
+            missing: None,
+        }
     }
 
     pub fn with(mut self, evidence: Vec<Check>) -> Self {
@@ -175,12 +219,20 @@ impl fmt::Display for DomainError {
 /// One change to a tenant's state.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DeltaOp {
-    CreateTenant { name: String },
+    CreateTenant {
+        name: String,
+    },
     PutSchema(Arc<TenantSchema>),
     /// Set a principal's roles. An empty set removes the member.
-    PutMember { principal: PrincipalId, roles: BTreeSet<RoleId> },
+    PutMember {
+        principal: PrincipalId,
+        roles: BTreeSet<RoleId>,
+    },
     PutRecord(Arc<Record>),
-    DeleteRecord { object: ObjectTypeId, id: RecordId },
+    DeleteRecord {
+        object: ObjectTypeId,
+        id: RecordId,
+    },
 }
 
 /// The logical change of one accepted transition.
@@ -197,12 +249,28 @@ pub struct StateDelta {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum EventBody {
-    TenantCreated { name: String },
-    SchemaChanged { version: SchemaVersion, summary: Vec<String>, grandfathered: u64 },
-    MemberChanged { principal: PrincipalId, roles: BTreeSet<RoleId> },
-    RecordCreated { record: Arc<Record> },
-    RecordUpdated { before: Arc<Record>, after: Arc<Record> },
-    RecordDeleted { before: Arc<Record> },
+    TenantCreated {
+        name: String,
+    },
+    SchemaChanged {
+        version: SchemaVersion,
+        summary: Vec<String>,
+        grandfathered: u64,
+    },
+    MemberChanged {
+        principal: PrincipalId,
+        roles: BTreeSet<RoleId>,
+    },
+    RecordCreated {
+        record: Arc<Record>,
+    },
+    RecordUpdated {
+        before: Arc<Record>,
+        after: Arc<Record>,
+    },
+    RecordDeleted {
+        before: Arc<Record>,
+    },
 }
 
 /// A fact about an accepted transition.
@@ -231,10 +299,19 @@ pub enum Effect {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Output {
     Tenant,
-    Schema { version: SchemaVersion },
+    Schema {
+        version: SchemaVersion,
+    },
     Member,
-    Record { object: ObjectTypeId, id: RecordId, version: u64 },
-    Deleted { object: ObjectTypeId, id: RecordId },
+    Record {
+        object: ObjectTypeId,
+        id: RecordId,
+        version: u64,
+    },
+    Deleted {
+        object: ObjectTypeId,
+        id: RecordId,
+    },
 }
 
 /// The result of an accepted transition.
@@ -250,8 +327,14 @@ pub struct Transition {
 /// A read request.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ReadRequest {
-    Named { query: QueryId, params: BTreeMap<String, Value> },
-    Records { object: ObjectTypeId, ids: Vec<RecordId> },
+    Named {
+        query: QueryId,
+        params: BTreeMap<String, Value>,
+    },
+    Records {
+        object: ObjectTypeId,
+        ids: Vec<RecordId>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

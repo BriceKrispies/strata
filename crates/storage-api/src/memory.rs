@@ -36,7 +36,9 @@ impl MemoryStore {
     }
 
     fn lock(&self) -> StoreResult<MutexGuard<'_, Inner>> {
-        self.inner.lock().map_err(|_| StoreError::Unavailable("a writer panicked".into()))
+        self.inner
+            .lock()
+            .map_err(|_| StoreError::Unavailable("a writer panicked".into()))
     }
 }
 
@@ -57,7 +59,11 @@ impl Store for MemoryStore {
             ok: true,
             detail: "in memory".into(),
             tenants: inner.tenants.len() as u64,
-            outbox_pending: inner.events.iter().filter(|(_, _, published)| !published).count() as u64,
+            outbox_pending: inner
+                .events
+                .iter()
+                .filter(|(_, _, published)| !published)
+                .count() as u64,
         })
     }
 
@@ -101,7 +107,10 @@ impl Store for MemoryStore {
         let current = inner.tenants.get(tenant).cloned();
         let found = current.as_ref().map(|t| t.revision);
         if found != commit.delta.base_revision {
-            return Err(StoreError::Conflict { expected: commit.delta.base_revision, found });
+            return Err(StoreError::Conflict {
+                expected: commit.delta.base_revision,
+                found,
+            });
         }
         check_event_sequence(commit, current.as_ref().map_or(0, |t| t.event_seq))?;
         let next = apply_delta(current.as_deref(), &commit.delta)
@@ -126,10 +135,18 @@ impl Store for MemoryStore {
                 session.revoked_at = Some(now);
             }
         }
-        Ok(Receipt { revision: commit.delta.new_revision, last_position })
+        Ok(Receipt {
+            revision: commit.delta.new_revision,
+            last_position,
+        })
     }
 
-    fn events_after(&self, tenant: &TenantId, after: u64, limit: usize) -> StoreResult<Vec<DomainEvent>> {
+    fn events_after(
+        &self,
+        tenant: &TenantId,
+        after: u64,
+        limit: usize,
+    ) -> StoreResult<Vec<DomainEvent>> {
         Ok(self
             .lock()?
             .events
@@ -147,18 +164,31 @@ impl Store for MemoryStore {
             .iter()
             .filter(|(_, _, published)| !published)
             .take(limit)
-            .map(|(position, event, _)| OutboxEntry { position: *position, event: event.clone() })
+            .map(|(position, event, _)| OutboxEntry {
+                position: *position,
+                event: event.clone(),
+            })
             .collect())
     }
 
     fn mark_published(&self, position: u64) -> StoreResult<()> {
-        for entry in self.lock()?.events.iter_mut().filter(|(p, _, _)| *p <= position) {
+        for entry in self
+            .lock()?
+            .events
+            .iter_mut()
+            .filter(|(p, _, _)| *p <= position)
+        {
             entry.2 = true;
         }
         Ok(())
     }
 
-    fn journal_after(&self, tenant: &TenantId, after: u64, limit: usize) -> StoreResult<Vec<JournalEntry>> {
+    fn journal_after(
+        &self,
+        tenant: &TenantId,
+        after: u64,
+        limit: usize,
+    ) -> StoreResult<Vec<JournalEntry>> {
         Ok(self
             .lock()?
             .journal
@@ -174,16 +204,26 @@ impl Store for MemoryStore {
         if !inner.tenants.contains_key(&session.tenant) {
             return Err(StoreError::NotFound(format!("tenant {}", session.tenant)));
         }
-        let clash = inner.sessions.values().any(|s| s.token_hash == session.token_hash && s.id != session.id);
+        let clash = inner
+            .sessions
+            .values()
+            .any(|s| s.token_hash == session.token_hash && s.id != session.id);
         if clash {
-            return Err(StoreError::Invalid("session token is already in use".into()));
+            return Err(StoreError::Invalid(
+                "session token is already in use".into(),
+            ));
         }
         inner.sessions.insert(session.id.clone(), session.clone());
         Ok(())
     }
 
     fn session_by_token(&self, token_hash: &str) -> StoreResult<Option<SessionRecord>> {
-        Ok(self.lock()?.sessions.values().find(|s| s.token_hash == token_hash).cloned())
+        Ok(self
+            .lock()?
+            .sessions
+            .values()
+            .find(|s| s.token_hash == token_hash)
+            .cloned())
     }
 
     fn session(&self, id: &SessionId) -> StoreResult<Option<SessionRecord>> {
@@ -214,19 +254,41 @@ impl Store for MemoryStore {
         if !inner.tenants.contains_key(&account.tenant) {
             return Err(StoreError::NotFound(format!("tenant {}", account.tenant)));
         }
-        inner.accounts.insert((account.tenant.clone(), account.login.clone()), account.clone());
+        inner.accounts.insert(
+            (account.tenant.clone(), account.login.clone()),
+            account.clone(),
+        );
         Ok(())
     }
 
     fn account(&self, tenant: &TenantId, login: &str) -> StoreResult<Option<Account>> {
-        Ok(self.lock()?.accounts.get(&(tenant.clone(), login.to_string())).cloned())
+        Ok(self
+            .lock()?
+            .accounts
+            .get(&(tenant.clone(), login.to_string()))
+            .cloned())
     }
 
-    fn create_snapshot(&self, tenant: &TenantId, label: &str, at: Timestamp) -> StoreResult<SnapshotInfo> {
+    fn create_snapshot(
+        &self,
+        tenant: &TenantId,
+        label: &str,
+        at: Timestamp,
+    ) -> StoreResult<SnapshotInfo> {
         let mut inner = self.lock()?;
-        let state =
-            inner.tenants.get(tenant).cloned().ok_or_else(|| StoreError::NotFound(format!("tenant {tenant}")))?;
-        let id = inner.snapshots.keys().filter(|(t, _)| t == tenant).map(|(_, id)| *id).max().unwrap_or(0) + 1;
+        let state = inner
+            .tenants
+            .get(tenant)
+            .cloned()
+            .ok_or_else(|| StoreError::NotFound(format!("tenant {tenant}")))?;
+        let id = inner
+            .snapshots
+            .keys()
+            .filter(|(t, _)| t == tenant)
+            .map(|(_, id)| *id)
+            .max()
+            .unwrap_or(0)
+            + 1;
         let info = SnapshotInfo {
             tenant: tenant.clone(),
             id,
@@ -235,7 +297,9 @@ impl Store for MemoryStore {
             hash: canon::hash_of(&*state),
             created_at: at,
         };
-        inner.snapshots.insert((tenant.clone(), id), (info.clone(), state));
+        inner
+            .snapshots
+            .insert((tenant.clone(), id), (info.clone(), state));
         Ok(info)
     }
 
@@ -264,8 +328,12 @@ impl Store for MemoryStore {
             .get(&(tenant.clone(), id))
             .map(|(_, state)| state.clone())
             .ok_or_else(|| StoreError::NotFound(format!("snapshot {id} of {tenant}")))?;
-        inner.events.retain(|(_, event, _)| event.tenant != *tenant || event.seq <= state.event_seq);
-        inner.journal.retain(|entry| entry.tenant != *tenant || entry.revision <= state.revision);
+        inner
+            .events
+            .retain(|(_, event, _)| event.tenant != *tenant || event.seq <= state.event_seq);
+        inner
+            .journal
+            .retain(|entry| entry.tenant != *tenant || entry.revision <= state.revision);
         inner.tenants.insert(tenant.clone(), state);
         Ok(())
     }

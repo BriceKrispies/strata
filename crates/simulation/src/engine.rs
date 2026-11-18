@@ -39,7 +39,10 @@ impl Rng {
 /// decision is about. Because it does not depend on how many decisions came before, a branch
 /// that runs one extra intent still sees the same faults at the same places as its baseline.
 fn decide(seed: u64, kind: u64, subject: u64, attempt: u64, per_million: u32) -> bool {
-    let mut rng = Rng(seed ^ kind.wrapping_mul(0xa24b_aed4_963e_e407) ^ subject.wrapping_mul(0x9fb2_1c65_1e98_df25) ^ attempt.wrapping_mul(0xd6e8_feb8_6659_fd93));
+    let mut rng = Rng(seed
+        ^ kind.wrapping_mul(0xa24b_aed4_963e_e407)
+        ^ subject.wrapping_mul(0x9fb2_1c65_1e98_df25)
+        ^ attempt.wrapping_mul(0xd6e8_feb8_6659_fd93));
     rng.next_u64();
     rng.chance(per_million)
 }
@@ -85,11 +88,29 @@ pub fn summarise(event: &DomainEvent) -> EventSummary {
         EventBody::TenantCreated { .. } => ("tenant_created", None, None),
         EventBody::SchemaChanged { .. } => ("schema_changed", None, None),
         EventBody::MemberChanged { .. } => ("member_changed", None, None),
-        EventBody::RecordCreated { record } => ("record_created", Some(record.object.to_string()), Some(record.id.0)),
-        EventBody::RecordUpdated { after, .. } => ("record_updated", Some(after.object.to_string()), Some(after.id.0)),
-        EventBody::RecordDeleted { before } => ("record_deleted", Some(before.object.to_string()), Some(before.id.0)),
+        EventBody::RecordCreated { record } => (
+            "record_created",
+            Some(record.object.to_string()),
+            Some(record.id.0),
+        ),
+        EventBody::RecordUpdated { after, .. } => (
+            "record_updated",
+            Some(after.object.to_string()),
+            Some(after.id.0),
+        ),
+        EventBody::RecordDeleted { before } => (
+            "record_deleted",
+            Some(before.object.to_string()),
+            Some(before.id.0),
+        ),
     };
-    EventSummary { tenant: event.tenant.clone(), seq: event.seq, kind: kind.to_string(), object, id }
+    EventSummary {
+        tenant: event.tenant.clone(),
+        seq: event.seq,
+        kind: kind.to_string(),
+        object,
+        id,
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -105,7 +126,11 @@ pub enum Outcome {
         /// Checks that failed without stopping the transition (grandfathered records).
         warnings: Vec<Check>,
     },
-    Rejected { kind: ErrorKind, message: String, failed: Vec<Check> },
+    Rejected {
+        kind: ErrorKind,
+        message: String,
+        failed: Vec<Check>,
+    },
 }
 
 impl Outcome {
@@ -177,16 +202,26 @@ impl Trace {
     }
 
     pub fn accepted(&self) -> usize {
-        self.steps.iter().filter(|s| s.index.is_some() && s.outcome.accepted()).count()
+        self.steps
+            .iter()
+            .filter(|s| s.index.is_some() && s.outcome.accepted())
+            .count()
     }
 
     pub fn rejected(&self) -> usize {
-        self.steps.iter().filter(|s| s.index.is_some() && !s.outcome.accepted()).count()
+        self.steps
+            .iter()
+            .filter(|s| s.index.is_some() && !s.outcome.accepted())
+            .count()
     }
 }
 
 fn versions(world: &World) -> BTreeMap<TenantId, u64> {
-    world.tenants.iter().map(|(id, tenant)| (id.clone(), tenant.schema.version.0)).collect()
+    world
+        .tenants
+        .iter()
+        .map(|(id, tenant)| (id.clone(), tenant.schema.version.0))
+        .collect()
 }
 
 /// An intent the caller inserts into a run without it being part of the scenario: the proposed
@@ -236,9 +271,26 @@ pub fn run_with(
         for (tenant, queue) in outbox.iter_mut() {
             while let Some((seq, attempt)) = queue.front().copied() {
                 let subject = seq ^ (tenant.as_str().len() as u64) << 48;
-                let dropped = attempt < 5 && decide(scenario.seed, 2, subject, u64::from(attempt), scenario.faults.delivery_drop);
-                let result = if dropped { DeliveryResult::Dropped } else { DeliveryResult::Delivered };
-                deliveries.push(Delivery { at, tenant: tenant.clone(), seq, attempt, result: result.clone() });
+                let dropped = attempt < 5
+                    && decide(
+                        scenario.seed,
+                        2,
+                        subject,
+                        u64::from(attempt),
+                        scenario.faults.delivery_drop,
+                    );
+                let result = if dropped {
+                    DeliveryResult::Dropped
+                } else {
+                    DeliveryResult::Delivered
+                };
+                deliveries.push(Delivery {
+                    at,
+                    tenant: tenant.clone(),
+                    seq,
+                    attempt,
+                    result: result.clone(),
+                });
                 if dropped {
                     queue.front_mut().expect("front exists").1 += 1;
                     if !final_pass {
@@ -252,52 +304,73 @@ pub fn run_with(
         }
     };
 
-    let mut execute = |index: Option<usize>, scheduled: &Scheduled, world: &mut World, steps: &mut Vec<Step>| {
-        let subject = index.map_or(u64::MAX, |i| i as u64);
-        let mut conflicts = 0u32;
-        // A simulated lost race: the decision is discarded and made again. With one writer the
-        // state has not changed, so the second decision equals the first; what the fault shows
-        // is that a retry is harmless.
-        while conflicts < 3 && index.is_some() && decide(scenario.seed, 1, subject, u64::from(conflicts), scenario.faults.commit_conflict) {
-            let _ = world.step(&scheduled.intent, &scheduled.context);
-            conflicts += 1;
-        }
-        let outcome = match world.step(&scheduled.intent, &scheduled.context) {
-            Ok((next, transition)) => {
-                *world = next;
-                let queue = outbox.entry(scheduled.context.tenant.clone()).or_default();
-                for effect in &transition.effects {
-                    if let Effect::Publish { seq } = effect {
-                        queue.push_back((*seq, 0));
+    let mut execute =
+        |index: Option<usize>, scheduled: &Scheduled, world: &mut World, steps: &mut Vec<Step>| {
+            let subject = index.map_or(u64::MAX, |i| i as u64);
+            let mut conflicts = 0u32;
+            // A simulated lost race: the decision is discarded and made again. With one writer the
+            // state has not changed, so the second decision equals the first; what the fault shows
+            // is that a retry is harmless.
+            while conflicts < 3
+                && index.is_some()
+                && decide(
+                    scenario.seed,
+                    1,
+                    subject,
+                    u64::from(conflicts),
+                    scenario.faults.commit_conflict,
+                )
+            {
+                let _ = world.step(&scheduled.intent, &scheduled.context);
+                conflicts += 1;
+            }
+            let outcome = match world.step(&scheduled.intent, &scheduled.context) {
+                Ok((next, transition)) => {
+                    *world = next;
+                    let queue = outbox.entry(scheduled.context.tenant.clone()).or_default();
+                    for effect in &transition.effects {
+                        if let Effect::Publish { seq } = effect {
+                            queue.push_back((*seq, 0));
+                        }
+                    }
+                    Outcome::Accepted {
+                        revision: transition.delta.new_revision.0,
+                        delta_hash: canon::hash_of(&transition.delta),
+                        events: transition.events.iter().map(summarise).collect(),
+                        effects: transition.effects.clone(),
+                        output: transition.output.clone(),
+                        checks_passed: transition.evidence.iter().filter(|c| c.passed).count(),
+                        warnings: transition
+                            .evidence
+                            .iter()
+                            .filter(|c| !c.passed)
+                            .cloned()
+                            .collect(),
                     }
                 }
-                Outcome::Accepted {
-                    revision: transition.delta.new_revision.0,
-                    delta_hash: canon::hash_of(&transition.delta),
-                    events: transition.events.iter().map(summarise).collect(),
-                    effects: transition.effects.clone(),
-                    output: transition.output.clone(),
-                    checks_passed: transition.evidence.iter().filter(|c| c.passed).count(),
-                    warnings: transition.evidence.iter().filter(|c| !c.passed).cloned().collect(),
-                }
-            }
-            Err(error) => Outcome::Rejected {
-                kind: error.kind,
-                message: error.message,
-                failed: error.evidence.into_iter().filter(|c| !c.passed).collect(),
-            },
+                Err(error) => Outcome::Rejected {
+                    kind: error.kind,
+                    message: error.message,
+                    failed: error.evidence.into_iter().filter(|c| !c.passed).collect(),
+                },
+            };
+            steps.push(Step {
+                index,
+                at: scheduled.context.now.0,
+                label: scheduled.label.clone(),
+                context: scheduled.context.clone(),
+                intent: scheduled.intent.clone(),
+                conflicts,
+                outcome,
+            });
+            pump(
+                scheduled.context.now.0,
+                false,
+                &mut outbox,
+                &mut delivered,
+                &mut deliveries,
+            );
         };
-        steps.push(Step {
-            index,
-            at: scheduled.context.now.0,
-            label: scheduled.label.clone(),
-            context: scheduled.context.clone(),
-            intent: scheduled.intent.clone(),
-            conflicts,
-            outcome,
-        });
-        pump(scheduled.context.now.0, false, &mut outbox, &mut delivered, &mut deliveries);
-    };
 
     for (done, index) in order.iter().enumerate() {
         if !progress(done, total) {
@@ -306,11 +379,18 @@ pub fn run_with(
         if let Some(injection) = injection.filter(|injection| injection.before == *index) {
             execute(None, &injection.scheduled, &mut world, &mut steps);
         }
-        execute(Some(*index), &scenario.schedule[*index], &mut world, &mut steps);
+        execute(
+            Some(*index),
+            &scenario.schedule[*index],
+            &mut world,
+            &mut steps,
+        );
     }
     if let Some(injection) = injection.filter(|injection| injection.before >= total) {
         execute(None, &injection.scheduled, &mut world, &mut steps);
     }
+    // End the closure's borrows of the outbox and the delivery log.
+    #[allow(clippy::drop_non_drop)]
     drop(execute);
     let end = steps.last().map_or(0, |step| step.at) + 1;
     pump(end, true, &mut outbox, &mut delivered, &mut deliveries);
@@ -327,19 +407,29 @@ pub fn run_with(
             .map(|d| d.seq)
             .collect();
         if !queue.is_empty() {
-            delivery_problems.push(format!("{tenant}: {} event(s) never delivered", queue.len()));
+            delivery_problems.push(format!(
+                "{tenant}: {} event(s) never delivered",
+                queue.len()
+            ));
         }
         if got.windows(2).any(|pair| pair[1] != pair[0] + 1) {
-            delivery_problems.push(format!("{tenant}: delivered out of order or with a gap: {got:?}"));
+            delivery_problems.push(format!(
+                "{tenant}: delivered out of order or with a gap: {got:?}"
+            ));
         }
         let committed = world.tenants.get(tenant).map_or(0, |t| t.event_seq);
         if got.last().copied().unwrap_or(committed) != committed {
-            delivery_problems.push(format!("{tenant}: last delivered {:?}, last committed {committed}", got.last()));
+            delivery_problems.push(format!(
+                "{tenant}: last delivered {:?}, last committed {committed}",
+                got.last()
+            ));
         }
     }
     invariants.push(InvariantResult {
         id: "events_delivered_once_in_order".into(),
-        statement: "Every committed event is delivered to the subscriber exactly once, in sequence order".into(),
+        statement:
+            "Every committed event is delivered to the subscriber exactly once, in sequence order"
+                .into(),
         holds: delivery_problems.is_empty(),
         violation_count: delivery_problems.len(),
         violations: delivery_problems,
@@ -357,7 +447,11 @@ pub fn run_with(
         deliveries,
         final_hash: world.hash(),
         final_schema_versions: versions(&world),
-        final_revisions: world.tenants.iter().map(|(id, t)| (id.clone(), t.revision.0)).collect(),
+        final_revisions: world
+            .tenants
+            .iter()
+            .map(|(id, t)| (id.clone(), t.revision.0))
+            .collect(),
         invariants,
     };
     Ok((trace, world))

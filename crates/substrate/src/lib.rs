@@ -15,8 +15,8 @@
 pub mod bundle;
 pub mod markdown;
 pub mod plain;
-pub mod proposal;
 pub mod project;
+pub mod proposal;
 pub mod subscribe;
 pub mod syntax;
 pub mod theme;

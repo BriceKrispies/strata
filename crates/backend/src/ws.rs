@@ -16,7 +16,8 @@ use std::time::{Duration, Instant};
 use strata_kernel::{ObjectTypeId, Principal};
 use strata_protocol::log::now_ms;
 use strata_protocol::ws::{
-    parse_client, ClientMessage, ServerMessage, SessionState, HEARTBEAT_MS, MAX_REPLAY, MAX_UNACKED, VERSION,
+    parse_client, ClientMessage, ServerMessage, SessionState, HEARTBEAT_MS, MAX_REPLAY,
+    MAX_UNACKED, VERSION,
 };
 use strata_substrate::subscribe::{notice, Selector};
 use tokio::sync::broadcast::error::RecvError;
@@ -59,13 +60,19 @@ impl Conn {
 
     fn register(&self) {
         if let Ok(mut connections) = self.app.hub.connections.lock() {
-            let opened_at = connections.get(&self.id).map_or_else(now_ms, |c| c.opened_at);
+            let opened_at = connections
+                .get(&self.id)
+                .map_or_else(now_ms, |c| c.opened_at);
             connections.insert(
                 self.id.clone(),
                 Connection {
                     tenant: self.identity.tenant.as_str().to_string(),
                     principal: self.principal_name(),
-                    session: self.identity.session.as_ref().map(|s| s.id.as_str().to_string()),
+                    session: self
+                        .identity
+                        .session
+                        .as_ref()
+                        .map(|s| s.id.as_str().to_string()),
                     opened_at,
                     subscriptions: self.subs.keys().cloned().collect(),
                     delivered: self.delivered,
@@ -86,7 +93,12 @@ impl Conn {
                 continue;
             }
             sub.cursor = seq;
-            if let Some(found) = notice(&published.tenant, &self.identity.principal, &sub.selector, &published.event) {
+            if let Some(found) = notice(
+                &published.tenant,
+                &self.identity.principal,
+                &sub.selector,
+                &published.event,
+            ) {
                 outgoing.push((name.clone(), found));
             }
         }
@@ -101,7 +113,10 @@ impl Conn {
             })?;
         }
         if self.delivered - self.acknowledged > MAX_UNACKED {
-            self.send(ServerMessage::Resync { reason: "too many unacknowledged events".into(), head: seq })?;
+            self.send(ServerMessage::Resync {
+                reason: "too many unacknowledged events".into(),
+                head: seq,
+            })?;
             return Err(Closed);
         }
         Ok(())
@@ -110,7 +125,13 @@ impl Conn {
     async fn head(&self) -> u64 {
         let tenant = self.identity.tenant.clone();
         self.app
-            .blocking(move |app| app.store.load(&tenant, &[]).ok().and_then(|s| s.tenant).map_or(0, |t| t.event_seq))
+            .blocking(move |app| {
+                app.store
+                    .load(&tenant, &[])
+                    .ok()
+                    .and_then(|s| s.tenant)
+                    .map_or(0, |t| t.event_seq)
+            })
             .await
             .unwrap_or(0)
     }
@@ -122,11 +143,20 @@ impl Conn {
         objects: Option<Vec<String>>,
         after: Option<u64>,
     ) -> Result<(), Closed> {
-        let selector = match objects.map(|names| names.into_iter().map(ObjectTypeId::new).collect::<Result<_, _>>()) {
+        let selector = match objects.map(|names| {
+            names
+                .into_iter()
+                .map(ObjectTypeId::new)
+                .collect::<Result<_, _>>()
+        }) {
             None => Selector { objects: None },
             Some(Ok(set)) => Selector { objects: Some(set) },
             Some(Err(e)) => {
-                return self.send(ServerMessage::Error { req: Some(req), code: "invalid".into(), message: e.to_string() })
+                return self.send(ServerMessage::Error {
+                    req: Some(req),
+                    code: "invalid".into(),
+                    message: e.to_string(),
+                })
             }
         };
         if self.subs.len() >= 16 && !self.subs.contains_key(&name) {
@@ -143,7 +173,9 @@ impl Conn {
             .blocking(move |app: &App| {
                 let header = app.store.load(&tenant, &[])?.tenant;
                 let missed = match (from, &header) {
-                    (Some(after), Some(_)) => app.store.events_after(&tenant, after, MAX_REPLAY + 1)?,
+                    (Some(after), Some(_)) => {
+                        app.store.events_after(&tenant, after, MAX_REPLAY + 1)?
+                    }
                     _ => Vec::new(),
                 };
                 Ok::<_, strata_storage_api::StoreError>((header, missed))
@@ -159,15 +191,22 @@ impl Conn {
         self.send(ServerMessage::Ok { req })?;
         let head = header.event_seq;
         let cursor = after.unwrap_or(head).min(head);
-        self.subs.insert(name.clone(), Subscription { selector, cursor });
+        self.subs
+            .insert(name.clone(), Subscription { selector, cursor });
         if missed.len() > MAX_REPLAY {
             if let Some(sub) = self.subs.get_mut(&name) {
                 sub.cursor = head;
             }
-            self.send(ServerMessage::Resync { reason: "too far behind to replay".into(), head })?;
+            self.send(ServerMessage::Resync {
+                reason: "too far behind to replay".into(),
+                head,
+            })?;
         } else {
             for event in missed {
-                self.deliver(&Published { event, tenant: header.clone() })?;
+                self.deliver(&Published {
+                    event,
+                    tenant: header.clone(),
+                })?;
             }
         }
         self.register();
@@ -176,7 +215,12 @@ impl Conn {
 
     async fn handle(&mut self, message: ClientMessage) -> Result<(), Closed> {
         match message {
-            ClientMessage::Subscribe { req, sub, objects, after } => self.subscribe(req, sub, objects, after).await,
+            ClientMessage::Subscribe {
+                req,
+                sub,
+                objects,
+                after,
+            } => self.subscribe(req, sub, objects, after).await,
             ClientMessage::Unsubscribe { req, sub } => {
                 self.subs.remove(&sub);
                 self.register();
@@ -195,14 +239,27 @@ impl Conn {
                 if cancelled {
                     self.send(ServerMessage::Ok { req })
                 } else {
-                    self.send(ServerMessage::Error { req: Some(req), code: "not_found".into(), message: "no such run".into() })
+                    self.send(ServerMessage::Error {
+                        req: Some(req),
+                        code: "not_found".into(),
+                        message: "no such run".into(),
+                    })
                 }
             }
-            ClientMessage::Diag { level, event, correlation, detail } => {
+            ClientMessage::Diag {
+                level,
+                event,
+                correlation,
+                detail,
+            } => {
                 if self.app.cfg.dev && self.diag_budget > 0 {
                     self.diag_budget -= 1;
                     let line = json!({ "conn": self.id, "browser_level": level, "detail": detail });
-                    strata_protocol::log::Logger { service: "browser" }.info(&event, &correlation, line);
+                    strata_protocol::log::Logger { service: "browser" }.info(
+                        &event,
+                        &correlation,
+                        line,
+                    );
                 }
                 Ok(())
             }
@@ -251,9 +308,19 @@ pub async fn serve(app: Shared, identity: Identity, socket: WebSocket) {
     );
     conn.register();
     let head = conn.head().await;
-    let state = if conn.identity.session.is_some() { SessionState::Active } else { conn.identity.state };
+    let state = if conn.identity.session.is_some() {
+        SessionState::Active
+    } else {
+        conn.identity.state
+    };
     let mut alive = conn
-        .send(ServerMessage::Welcome { v: VERSION, conn: id.clone(), head, session: state, heartbeat_ms: HEARTBEAT_MS })
+        .send(ServerMessage::Welcome {
+            v: VERSION,
+            conn: id.clone(),
+            head,
+            session: state,
+            heartbeat_ms: HEARTBEAT_MS,
+        })
         .is_ok();
 
     let mut last_heard = Instant::now();
@@ -338,7 +405,11 @@ pub async fn serve(app: Shared, identity: Identity, socket: WebSocket) {
     if let Ok(mut connections) = app.hub.connections.lock() {
         connections.remove(&id);
     }
-    LOG.info("ws.closed", &correlation, json!({ "conn": id, "reason": reason, "delivered": conn.delivered }));
+    LOG.info(
+        "ws.closed",
+        &correlation,
+        json!({ "conn": id, "reason": reason, "delivered": conn.delivered }),
+    );
     // Dropping the connection drops the sender; the writer flushes what is queued and closes.
     drop(conn);
     let _ = tokio::time::timeout(Duration::from_secs(2), writer).await;

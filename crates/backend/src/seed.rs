@@ -17,25 +17,52 @@ pub fn seed(app: &App) -> Result<Vec<String>, String> {
     let mut created = Vec::new();
     for loaded in load_all(&app.cfg.tenants_dir)? {
         let tenant = loaded.bundle.id.clone();
-        let exists = app.store.load(&tenant, &[]).map_err(|e| e.to_string())?.tenant.is_some();
+        let exists = app
+            .store
+            .load(&tenant, &[])
+            .map_err(|e| e.to_string())?
+            .tenant
+            .is_some();
         if !exists {
             let steps = install(&loaded.bundle, &mut |ctx, intent| {
-                run_intent(app, &ctx, &intent, false).map(|done| done.transition.output).map_err(|e| e.0.message)
+                run_intent(app, &ctx, &intent, false)
+                    .map(|done| done.transition.output)
+                    .map_err(|e| e.0.message)
             })
             .map_err(|e| format!("installing {tenant}: {e}"))?;
-            LOG.info("seed.installed", "", json!({ "tenant": tenant.as_str(), "intents": steps }));
+            LOG.info(
+                "seed.installed",
+                "",
+                json!({ "tenant": tenant.as_str(), "intents": steps }),
+            );
             created.push(tenant.as_str().to_string());
         }
         if app.cfg.dev {
             for account in &loaded.dev_accounts {
-                let known = app.store.account(&tenant, &account.login).map_err(|e| e.to_string())?.is_some();
+                let known = app
+                    .store
+                    .account(&tenant, &account.login)
+                    .map_err(|e| e.to_string())?
+                    .is_some();
                 if known {
                     continue;
                 }
-                let principal = PrincipalId::new(account.principal.clone()).map_err(|e| e.to_string())?;
-                put_dev_account(app, &tenant, &account.login, &account.password, principal, &account.display_name)
-                    .map_err(|e| e.0.message)?;
-                LOG.info("seed.dev_account", "", json!({ "tenant": tenant.as_str(), "login": account.login }));
+                let principal =
+                    PrincipalId::new(account.principal.clone()).map_err(|e| e.to_string())?;
+                put_dev_account(
+                    app,
+                    &tenant,
+                    &account.login,
+                    &account.password,
+                    principal,
+                    &account.display_name,
+                )
+                .map_err(|e| e.0.message)?;
+                LOG.info(
+                    "seed.dev_account",
+                    "",
+                    json!({ "tenant": tenant.as_str(), "login": account.login }),
+                );
             }
         }
     }

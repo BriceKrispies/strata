@@ -190,7 +190,10 @@ fn parse_type(text: &str, on_delete: OnDelete) -> Result<FieldType, String> {
         "timestamp" => FieldType::Time,
         other => {
             if let Some(target) = other.strip_prefix("ref:") {
-                FieldType::Ref { target: ObjectTypeId::new(target).map_err(|e| e.to_string())?, on_delete }
+                FieldType::Ref {
+                    target: ObjectTypeId::new(target).map_err(|e| e.to_string())?,
+                    on_delete,
+                }
             } else if let Some(inner) = other.strip_prefix("list:") {
                 FieldType::List(Box::new(parse_type(inner, on_delete)?))
             } else {
@@ -221,13 +224,19 @@ fn parse_arg(text: &str) -> Result<ArgSource, String> {
     } else if let Some(name) = text.strip_prefix("request:") {
         Ok(ArgSource::Request(name.to_string()))
     } else if let Some(path) = text.strip_prefix("section:") {
-        let (section, attribute) =
-            path.split_once('.').ok_or_else(|| format!("expected section:<name>.<attribute>, got {text:?}"))?;
-        Ok(ArgSource::Section { section: section.to_string(), attribute: attribute.to_string() })
+        let (section, attribute) = path
+            .split_once('.')
+            .ok_or_else(|| format!("expected section:<name>.<attribute>, got {text:?}"))?;
+        Ok(ArgSource::Section {
+            section: section.to_string(),
+            attribute: attribute.to_string(),
+        })
     } else {
         match parse(text)? {
             Expr::Lit(value) => Ok(ArgSource::Const(value)),
-            other => Err(format!("a view argument is a source or a literal, got {other}")),
+            other => Err(format!(
+                "a view argument is a source or a literal, got {other}"
+            )),
         }
     }
 }
@@ -244,7 +253,10 @@ impl Bundle {
             changes.push(SchemaChange::DefineRole(role.clone()));
         }
         for object in &self.objects {
-            changes.push(SchemaChange::DefineObject { id: object.id.clone(), label: object.label.clone() });
+            changes.push(SchemaChange::DefineObject {
+                id: object.id.clone(),
+                label: object.label.clone(),
+            });
         }
         for object in &self.objects {
             for field in &object.fields {
@@ -271,7 +283,8 @@ impl Bundle {
                     object: object.id.clone(),
                     constraint: ConstraintDef {
                         id: constraint.id.clone(),
-                        expr: parse(&constraint.check).map_err(|e| format!("{}.{}: {e}", object.id, constraint.id))?,
+                        expr: parse(&constraint.check)
+                            .map_err(|e| format!("{}.{}: {e}", object.id, constraint.id))?,
                         message: constraint.message.clone(),
                     },
                 });
@@ -283,7 +296,10 @@ impl Bundle {
                 let at = format!("workflow {}.{}", workflow.id, step.name);
                 let mut set = BTreeMap::new();
                 for (field, value) in &step.set {
-                    set.insert(field.clone(), parse(value).map_err(|e| format!("{at}: {e}"))?);
+                    set.insert(
+                        field.clone(),
+                        parse(value).map_err(|e| format!("{at}: {e}"))?,
+                    );
                 }
                 transitions.push(WorkflowTransition {
                     name: step.name.clone(),
@@ -307,7 +323,9 @@ impl Bundle {
                 "*" => Resource::AnyObject,
                 "$schema" => Resource::Schema,
                 "$members" => Resource::Members,
-                object => Resource::Object(ObjectTypeId::new(object).map_err(|e| format!("{at}: {e}"))?),
+                object => {
+                    Resource::Object(ObjectTypeId::new(object).map_err(|e| format!("{at}: {e}"))?)
+                }
             };
             changes.push(SchemaChange::DefinePolicy(PolicyDef {
                 id: policy.id.clone(),
@@ -332,8 +350,14 @@ impl Bundle {
                     .order
                     .iter()
                     .map(|key| match key.strip_prefix('-') {
-                        Some(field) => OrderKey { field: field.to_string(), descending: true },
-                        None => OrderKey { field: key.clone(), descending: false },
+                        Some(field) => OrderKey {
+                            field: field.to_string(),
+                            descending: true,
+                        },
+                        None => OrderKey {
+                            field: key.clone(),
+                            descending: false,
+                        },
                     })
                     .collect(),
                 limit: query.limit,
@@ -344,7 +368,10 @@ impl Bundle {
             for (name, section) in &view.sections {
                 let mut args = BTreeMap::new();
                 for (param, source) in &section.args {
-                    args.insert(param.clone(), parse_arg(source).map_err(|e| format!("view {}.{name}: {e}", view.id))?);
+                    args.insert(
+                        param.clone(),
+                        parse_arg(source).map_err(|e| format!("view {}.{name}: {e}", view.id))?,
+                    );
                 }
                 sections.insert(
                     name.clone(),
@@ -413,13 +440,20 @@ pub fn install<E>(
         Principal::System,
         created_at,
         "create tenant".into(),
-        Intent::CreateTenant { name: bundle.name.clone(), owner: bundle.owner.clone() },
+        Intent::CreateTenant {
+            name: bundle.name.clone(),
+            owner: bundle.owner.clone(),
+        },
     )?;
     run(
         owner.clone(),
         created_at + 1,
         "define schema".into(),
-        Intent::ChangeSchema { changes: changes.clone(), expected_version: None, existing: ExistingData::Reject },
+        Intent::ChangeSchema {
+            changes: changes.clone(),
+            expected_version: None,
+            existing: ExistingData::Reject,
+        },
     )?;
     let mut at = created_at + 1;
     for member in &bundle.members {
@@ -429,7 +463,10 @@ pub fn install<E>(
                 owner.clone(),
                 at,
                 format!("assign {role} to {}", member.principal),
-                Intent::AssignRole { principal: member.principal.clone(), role: role.clone() },
+                Intent::AssignRole {
+                    principal: member.principal.clone(),
+                    role: role.clone(),
+                },
             )?;
         }
     }
@@ -441,7 +478,12 @@ pub fn install<E>(
             SchemaChange::DefineObject { id, label } => {
                 objects.insert(
                     id.clone(),
-                    ObjectTypeDef { id: id.clone(), label: label.clone(), fields: BTreeMap::new(), constraints: BTreeMap::new() },
+                    ObjectTypeDef {
+                        id: id.clone(),
+                        label: label.clone(),
+                        fields: BTreeMap::new(),
+                        constraints: BTreeMap::new(),
+                    },
                 );
             }
             SchemaChange::DefineField { object, field } => {
@@ -461,15 +503,21 @@ pub fn install<E>(
             .ok_or_else(|| InstallError::Bundle(format!("{step}: unknown object type")))?;
         let fields = coerce_fields(def, &record.fields, &|key| keys.get(key).copied())
             .map_err(|e| InstallError::Bundle(format!("{step}: {e}")))?;
-        let at = parse_time(&record.at).map_err(|e| InstallError::Bundle(format!("{step}: {e}")))?;
+        let at =
+            parse_time(&record.at).map_err(|e| InstallError::Bundle(format!("{step}: {e}")))?;
         let output = run(
             Principal::User(record.principal.clone()),
             at,
             step.clone(),
-            Intent::CreateRecord { object: record.object.clone(), fields },
+            Intent::CreateRecord {
+                object: record.object.clone(),
+                fields,
+            },
         )?;
         let Output::Record { id, .. } = output else {
-            return Err(InstallError::Bundle(format!("{step}: executor returned {output:?}")));
+            return Err(InstallError::Bundle(format!(
+                "{step}: executor returned {output:?}"
+            )));
         };
         if let Some(key) = &record.key {
             keys.insert(key.clone(), id);
@@ -478,12 +526,18 @@ pub fn install<E>(
             let step = format!("update {} {label}", record.object);
             let fields = coerce_fields(def, &follow.set, &|key| keys.get(key).copied())
                 .map_err(|e| InstallError::Bundle(format!("{step}: {e}")))?;
-            let at = parse_time(&follow.at).map_err(|e| InstallError::Bundle(format!("{step}: {e}")))?;
+            let at =
+                parse_time(&follow.at).map_err(|e| InstallError::Bundle(format!("{step}: {e}")))?;
             run(
                 Principal::User(follow.principal.clone()),
                 at,
                 step,
-                Intent::UpdateRecord { object: record.object.clone(), id, fields, expected_version: None },
+                Intent::UpdateRecord {
+                    object: record.object.clone(),
+                    id,
+                    fields,
+                    expected_version: None,
+                },
             )?;
         }
     }

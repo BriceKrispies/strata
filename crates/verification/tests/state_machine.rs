@@ -9,10 +9,24 @@ use strata_verification::invariants::check_world;
 
 #[derive(Clone, Debug)]
 enum Op {
-    Note { title: String, slug: u8, rank: Option<i64>, author: Option<u64> },
+    Note {
+        title: String,
+        slug: u8,
+        rank: Option<i64>,
+        author: Option<u64>,
+    },
     Person(String),
-    Edit { id: u64, title: Option<String>, status: Option<&'static str>, author: Option<u64>, clear_rank: bool },
-    Delete { object: &'static str, id: u64 },
+    Edit {
+        id: u64,
+        title: Option<String>,
+        status: Option<&'static str>,
+        author: Option<u64>,
+        clear_rank: bool,
+    },
+    Delete {
+        object: &'static str,
+        id: u64,
+    },
     RequireRank,
     TightenTitle(i64),
     Revoke(usize),
@@ -36,20 +50,38 @@ fn op() -> impl Strategy<Value = (usize, usize, Op)> {
 
 fn intent(tenant: &str, op: &Op) -> Intent {
     match op {
-        Op::Note { title, slug, rank, author } => {
-            let mut fields = BTreeMap::from([(field("title"), text(title)), (field("slug"), text(&format!("s{slug}")))]);
+        Op::Note {
+            title,
+            slug,
+            rank,
+            author,
+        } => {
+            let mut fields = BTreeMap::from([
+                (field("title"), text(title)),
+                (field("slug"), text(&format!("s{slug}"))),
+            ]);
             if let Some(rank) = rank {
                 fields.insert(field("rank"), Value::Int(*rank));
             }
             if let Some(author) = author {
                 fields.insert(field("author"), Value::Ref(RecordId(*author)));
             }
-            Intent::CreateRecord { object: object("note"), fields }
+            Intent::CreateRecord {
+                object: object("note"),
+                fields,
+            }
         }
-        Op::Person(name) => {
-            Intent::CreateRecord { object: object("person"), fields: BTreeMap::from([(field("name"), text(name))]) }
-        }
-        Op::Edit { id, title, status, author, clear_rank } => {
+        Op::Person(name) => Intent::CreateRecord {
+            object: object("person"),
+            fields: BTreeMap::from([(field("name"), text(name))]),
+        },
+        Op::Edit {
+            id,
+            title,
+            status,
+            author,
+            clear_rank,
+        } => {
             let mut fields = BTreeMap::new();
             if let Some(title) = title {
                 fields.insert(field("title"), text(title));
@@ -63,14 +95,24 @@ fn intent(tenant: &str, op: &Op) -> Intent {
             if *clear_rank {
                 fields.insert(field("rank"), Value::Null);
             }
-            Intent::UpdateRecord { object: object("note"), id: RecordId(*id), fields, expected_version: None }
+            Intent::UpdateRecord {
+                object: object("note"),
+                id: RecordId(*id),
+                fields,
+                expected_version: None,
+            }
         }
-        Op::Delete { object: name, id } => {
-            Intent::DeleteRecord { object: object(name), id: RecordId(*id), expected_version: None }
-        }
+        Op::Delete { object: name, id } => Intent::DeleteRecord {
+            object: object(name),
+            id: RecordId(*id),
+            expected_version: None,
+        },
         // Strict migrations only: a grandfathered one is allowed to leave non-conforming records.
         Op::RequireRank => Intent::ChangeSchema {
-            changes: vec![SchemaChange::DefineField { object: object("note"), field: field_def("rank", FieldType::Int, true) }],
+            changes: vec![SchemaChange::DefineField {
+                object: object("note"),
+                field: field_def("rank", FieldType::Int, true),
+            }],
             expected_version: None,
             existing: ExistingData::Reject,
         },
@@ -79,7 +121,11 @@ fn intent(tenant: &str, op: &Op) -> Intent {
                 object: object("note"),
                 constraint: ConstraintDef {
                     id: ConstraintId::new("title_length").unwrap(),
-                    expr: Expr::Cmp(CmpOp::Le, Box::new(Expr::Len(Box::new(var(Scope::New, "title")))), Box::new(Expr::Lit(Value::Int(*limit)))),
+                    expr: Expr::Cmp(
+                        CmpOp::Le,
+                        Box::new(Expr::Len(Box::new(var(Scope::New, "title")))),
+                        Box::new(Expr::Lit(Value::Int(*limit))),
+                    ),
                     message: "shorter".into(),
                 },
             }],
@@ -89,7 +135,10 @@ fn intent(tenant: &str, op: &Op) -> Intent {
         Op::Revoke(who) => {
             let names = ["owner", "editor", "writer1", "writer2"];
             let roles = ["owner", "editor", "writer", "writer"];
-            Intent::RevokeRole { principal: principal_id(&format!("{tenant}:{}", names[*who])), role: role(roles[*who]) }
+            Intent::RevokeRole {
+                principal: principal_id(&format!("{tenant}:{}", names[*who])),
+                role: role(roles[*who]),
+            }
         }
     }
 }
@@ -119,15 +168,31 @@ proptest! {
 #[test]
 fn a_grandfathered_migration_is_reported_as_a_broken_invariant() {
     let world = notes_world();
-    let (world, _) = world.step(&new_note("First", "first"), &ctx("alpha", user("alpha:writer1"), 5_000)).unwrap();
+    let (world, _) = world
+        .step(
+            &new_note("First", "first"),
+            &ctx("alpha", user("alpha:writer1"), 5_000),
+        )
+        .unwrap();
     let grandfather = Intent::ChangeSchema {
-        changes: vec![SchemaChange::DefineField { object: object("note"), field: field_def("rank", FieldType::Int, true) }],
+        changes: vec![SchemaChange::DefineField {
+            object: object("note"),
+            field: field_def("rank", FieldType::Int, true),
+        }],
         expected_version: None,
         existing: ExistingData::Grandfather,
     };
-    let (world, _) = world.step(&grandfather, &ctx("alpha", user("alpha:owner"), 5_001)).unwrap();
-    let broken: Vec<_> = check_world(&world).into_iter().filter(|i| !i.holds).collect();
+    let (world, _) = world
+        .step(&grandfather, &ctx("alpha", user("alpha:owner"), 5_001))
+        .unwrap();
+    let broken: Vec<_> = check_world(&world)
+        .into_iter()
+        .filter(|i| !i.holds)
+        .collect();
     assert_eq!(broken.len(), 1);
     assert_eq!(broken[0].id, "records_conform");
-    assert_eq!(broken[0].violations, ["alpha: note/1: required:note.rank (a value is required)"]);
+    assert_eq!(
+        broken[0].violations,
+        ["alpha: note/1: required:note.rank (a value is required)"]
+    );
 }

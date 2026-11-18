@@ -13,7 +13,9 @@ use strata_kernel::{
 use strata_protocol::api::{ErrorCode, Mutation, MutationReply, ViewRequest};
 use strata_storage_api::{execute, ExecuteError, Executed};
 use strata_substrate::plain::coerce_fields;
-use strata_substrate::project::{included_refs, match_route, section_order, section_request, SectionData, ViewData};
+use strata_substrate::project::{
+    included_refs, match_route, section_order, section_request, SectionData, ViewData,
+};
 
 /// The tenant's schema, members and counters, without records.
 pub fn header(app: &App, identity: &Identity) -> Result<Arc<TenantState>, ApiError> {
@@ -24,7 +26,12 @@ pub fn header(app: &App, identity: &Identity) -> Result<Arc<TenantState>, ApiErr
 }
 
 /// Decide and commit one intent, with logging and counters around it.
-pub fn run_intent(app: &App, ctx: &Context, intent: &Intent, anonymous: bool) -> Result<Executed, ApiError> {
+pub fn run_intent(
+    app: &App,
+    ctx: &Context,
+    intent: &Intent,
+    anonymous: bool,
+) -> Result<Executed, ApiError> {
     app.stats.in_flight.fetch_add(1, Ordering::Relaxed);
     let result = execute(app.store.as_ref(), intent, ctx);
     app.stats.in_flight.fetch_sub(1, Ordering::Relaxed);
@@ -47,8 +54,12 @@ pub fn run_intent(app: &App, ctx: &Context, intent: &Intent, anonymous: bool) ->
         }
         Err(ExecuteError::Domain(error)) => {
             app.stats.record(intent.name(), Some(error.kind), 0);
-            let failed: Vec<&str> =
-                error.evidence.iter().filter(|c| !c.passed).map(|c| c.rule.as_str()).collect();
+            let failed: Vec<&str> = error
+                .evidence
+                .iter()
+                .filter(|c| !c.passed)
+                .map(|c| c.rule.as_str())
+                .collect();
             let line = json!({
                 "at": ctx.now.0,
                 "tenant": ctx.tenant.as_str(),
@@ -61,38 +72,56 @@ pub fn run_intent(app: &App, ctx: &Context, intent: &Intent, anonymous: bool) ->
             app.stats.recent_rejections.push(line);
         }
         Err(ExecuteError::Store(error)) => {
-            LOG.error("store.failed", &ctx.correlation, json!({ "intent": intent.name(), "error": error.to_string() }));
+            LOG.error(
+                "store.failed",
+                &ctx.correlation,
+                json!({ "intent": intent.name(), "error": error.to_string() }),
+            );
         }
     }
     result.map_err(|error| ApiError::execute(error, anonymous))
 }
 
 fn object_id(name: &str) -> Result<ObjectTypeId, ApiError> {
-    ObjectTypeId::new(name).map_err(|_| ApiError::new(ErrorCode::NotFound, format!("no object type {name}")))
+    ObjectTypeId::new(name)
+        .map_err(|_| ApiError::new(ErrorCode::NotFound, format!("no object type {name}")))
 }
 
 /// Apply a record mutation given as plain JSON.
-pub fn mutate(app: &App, identity: &Identity, mutation: &Mutation) -> Result<MutationReply, ApiError> {
+pub fn mutate(
+    app: &App,
+    identity: &Identity,
+    mutation: &Mutation,
+) -> Result<MutationReply, ApiError> {
     let tenant = header(app, identity)?;
     let fields_of = |object: &ObjectTypeId, fields: &serde_json::Map<String, Json>| {
-        let def = tenant
-            .schema
-            .objects
-            .get(object)
-            .ok_or_else(|| ApiError::new(ErrorCode::NotFound, format!("no object type {object}")))?;
+        let def = tenant.schema.objects.get(object).ok_or_else(|| {
+            ApiError::new(ErrorCode::NotFound, format!("no object type {object}"))
+        })?;
         coerce_fields(def, fields, &|_| None).map_err(|problem| {
             let mut error = ApiError::new(ErrorCode::Invalid, problem.clone());
             let field = problem.split(':').next().unwrap_or("").trim().to_string();
-            error.0.failed.push(strata_kernel::Check::fail(format!("input:{object}.{field}"), problem));
+            error.0.failed.push(strata_kernel::Check::fail(
+                format!("input:{object}.{field}"),
+                problem,
+            ));
             error
         })
     };
     let intent = match mutation {
         Mutation::Create { object, fields } => {
             let object = object_id(object)?;
-            Intent::CreateRecord { fields: fields_of(&object, fields)?, object }
+            Intent::CreateRecord {
+                fields: fields_of(&object, fields)?,
+                object,
+            }
         }
-        Mutation::Update { object, id, fields, expected_version } => {
+        Mutation::Update {
+            object,
+            id,
+            fields,
+            expected_version,
+        } => {
             let object = object_id(object)?;
             Intent::UpdateRecord {
                 fields: fields_of(&object, fields)?,
@@ -101,16 +130,31 @@ pub fn mutate(app: &App, identity: &Identity, mutation: &Mutation) -> Result<Mut
                 expected_version: *expected_version,
             }
         }
-        Mutation::Delete { object, id, expected_version } => {
-            Intent::DeleteRecord { object: object_id(object)?, id: RecordId(*id), expected_version: *expected_version }
-        }
+        Mutation::Delete {
+            object,
+            id,
+            expected_version,
+        } => Intent::DeleteRecord {
+            object: object_id(object)?,
+            id: RecordId(*id),
+            expected_version: *expected_version,
+        },
     };
     let ctx = identity.context(app);
     let done = run_intent(app, &ctx, &intent, identity.anonymous())?;
     let (object, id, version) = match &done.transition.output {
-        Output::Record { object, id, version } => (object, id, Some(*version)),
+        Output::Record {
+            object,
+            id,
+            version,
+        } => (object, id, Some(*version)),
         Output::Deleted { object, id } => (object, id, None),
-        other => return Err(ApiError::new(ErrorCode::Internal, format!("unexpected output {other:?}"))),
+        other => {
+            return Err(ApiError::new(
+                ErrorCode::Internal,
+                format!("unexpected output {other:?}"),
+            ))
+        }
     };
     Ok(MutationReply {
         object: object.as_str().to_string(),
@@ -127,8 +171,9 @@ pub fn mutate(app: &App, identity: &Identity, mutation: &Mutation) -> Result<Mut
 pub fn view(app: &App, identity: &Identity, request: &ViewRequest) -> Result<ViewData, ApiError> {
     let tenant = header(app, identity)?;
     let schema = &tenant.schema;
-    let (def, route) = match_route(schema, &request.path)
-        .ok_or_else(|| ApiError::new(ErrorCode::NotFound, format!("nothing at {}", request.path)))?;
+    let (def, route) = match_route(schema, &request.path).ok_or_else(|| {
+        ApiError::new(ErrorCode::NotFound, format!("nothing at {}", request.path))
+    })?;
 
     let mut depends_on = BTreeSet::new();
     for section in def.sections.values() {
@@ -138,7 +183,9 @@ pub fn view(app: &App, identity: &Identity, request: &ViewRequest) -> Result<Vie
         depends_on.insert(query.object.clone());
         if let Some(object) = schema.objects.get(&query.object) {
             for field in &section.include {
-                if let Some((target, _, _)) = object.fields.get(field).and_then(|f| f.ty.ref_target()) {
+                if let Some((target, _, _)) =
+                    object.fields.get(field).and_then(|f| f.ty.ref_target())
+                {
                     depends_on.insert(target.clone());
                 }
             }
@@ -155,20 +202,45 @@ pub fn view(app: &App, identity: &Identity, request: &ViewRequest) -> Result<Vie
     let mut revision = tenant.revision;
     for name in section_order(def) {
         let section = &def.sections[name];
-        let result = read(&state, &section_request(section, &route, &request.request, &done), &ctx).map_err(fail)?;
+        let result = read(
+            &state,
+            &section_request(section, &route, &request.request, &done),
+            &ctx,
+        )
+        .map_err(fail)?;
         revision = result.revision;
         let object = &schema.queries[&section.query].object;
         let mut included = BTreeMap::new();
         for (field, (target, ids)) in included_refs(schema, object, section, &result.rows) {
-            let found = read(&state, &ReadRequest::Records { object: target, ids }, &ctx).map_err(fail)?;
-            included.insert(field, found.rows.into_iter().map(|record| (record.id, record)).collect());
+            let found = read(
+                &state,
+                &ReadRequest::Records {
+                    object: target,
+                    ids,
+                },
+                &ctx,
+            )
+            .map_err(fail)?;
+            included.insert(
+                field,
+                found
+                    .rows
+                    .into_iter()
+                    .map(|record| (record.id, record))
+                    .collect(),
+            );
         }
         if section.single {
             done.insert(name.clone(), result.rows.first().cloned());
         }
         sections.insert(
             name.clone(),
-            SectionData { single: section.single, rows: result.rows, included, markdown: section.markdown.clone() },
+            SectionData {
+                single: section.single,
+                rows: result.rows,
+                included,
+                markdown: section.markdown.clone(),
+            },
         );
     }
     Ok(ViewData {
@@ -200,7 +272,12 @@ pub fn diagnostics(app: &App) -> Result<Json, ApiError> {
             })
         })
         .collect();
-    let connections = app.hub.connections.lock().map(|c| json!(*c)).unwrap_or(Json::Null);
+    let connections = app
+        .hub
+        .connections
+        .lock()
+        .map(|c| json!(*c))
+        .unwrap_or(Json::Null);
     Ok(json!({
         "service": "backend",
         "kernel_version": strata_kernel::KERNEL_VERSION,

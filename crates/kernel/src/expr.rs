@@ -121,7 +121,11 @@ fn tri_and(values: impl Iterator<Item = Result<Value, EvalError>>) -> Result<Val
             other => return Err(type_error("and", &other)),
         }
     }
-    Ok(if saw_null { Value::Null } else { Value::Bool(true) })
+    Ok(if saw_null {
+        Value::Null
+    } else {
+        Value::Bool(true)
+    })
 }
 
 fn tri_or(values: impl Iterator<Item = Result<Value, EvalError>>) -> Result<Value, EvalError> {
@@ -134,7 +138,11 @@ fn tri_or(values: impl Iterator<Item = Result<Value, EvalError>>) -> Result<Valu
             other => return Err(type_error("or", &other)),
         }
     }
-    Ok(if saw_null { Value::Null } else { Value::Bool(false) })
+    Ok(if saw_null {
+        Value::Null
+    } else {
+        Value::Bool(false)
+    })
 }
 
 fn compare(op: CmpOp, left: Value, right: Value) -> Result<Value, EvalError> {

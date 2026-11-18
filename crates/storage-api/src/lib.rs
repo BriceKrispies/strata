@@ -59,7 +59,10 @@ pub struct Capabilities {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum StoreError {
     /// The tenant was not at the revision the commit was based on. Nothing was changed.
-    Conflict { expected: Option<StateRevision>, found: Option<StateRevision> },
+    Conflict {
+        expected: Option<StateRevision>,
+        found: Option<StateRevision>,
+    },
     NotFound(String),
     /// The commit is malformed. Nothing was changed.
     Invalid(String),
@@ -73,7 +76,10 @@ impl fmt::Display for StoreError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             StoreError::Conflict { expected, found } => {
-                write!(f, "revision conflict: commit based on {expected:?}, store is at {found:?}")
+                write!(
+                    f,
+                    "revision conflict: commit based on {expected:?}, store is at {found:?}"
+                )
             }
             StoreError::NotFound(what) => write!(f, "not found: {what}"),
             StoreError::Invalid(why) => write!(f, "invalid commit: {why}"),
@@ -242,7 +248,12 @@ pub trait Store: Send + Sync {
     fn commit(&self, commit: &Commit) -> StoreResult<Receipt>;
 
     /// Events of a tenant with a sequence number above `after`, oldest first.
-    fn events_after(&self, tenant: &TenantId, after: u64, limit: usize) -> StoreResult<Vec<DomainEvent>>;
+    fn events_after(
+        &self,
+        tenant: &TenantId,
+        after: u64,
+        limit: usize,
+    ) -> StoreResult<Vec<DomainEvent>>;
 
     /// Events not yet marked published, in commit order across all tenants.
     fn outbox(&self, limit: usize) -> StoreResult<Vec<OutboxEntry>>;
@@ -251,7 +262,12 @@ pub trait Store: Send + Sync {
     fn mark_published(&self, position: u64) -> StoreResult<()>;
 
     /// Journal entries of a tenant with a revision above `after`, oldest first.
-    fn journal_after(&self, tenant: &TenantId, after: u64, limit: usize) -> StoreResult<Vec<JournalEntry>>;
+    fn journal_after(
+        &self,
+        tenant: &TenantId,
+        after: u64,
+        limit: usize,
+    ) -> StoreResult<Vec<JournalEntry>>;
 
     fn put_session(&self, session: &SessionRecord) -> StoreResult<()>;
     fn session_by_token(&self, token_hash: &str) -> StoreResult<Option<SessionRecord>>;
@@ -265,7 +281,12 @@ pub trait Store: Send + Sync {
     fn account(&self, tenant: &TenantId, login: &str) -> StoreResult<Option<Account>>;
 
     /// Keep a copy of the tenant's complete state as it is now.
-    fn create_snapshot(&self, tenant: &TenantId, label: &str, at: Timestamp) -> StoreResult<SnapshotInfo>;
+    fn create_snapshot(
+        &self,
+        tenant: &TenantId,
+        label: &str,
+        at: Timestamp,
+    ) -> StoreResult<SnapshotInfo>;
     fn snapshots(&self, tenant: &TenantId) -> StoreResult<Vec<SnapshotInfo>>;
     fn load_snapshot(&self, tenant: &TenantId, id: u64) -> StoreResult<TenantState>;
     /// Put the tenant back exactly as the snapshot holds it, discarding events and journal
@@ -288,10 +309,16 @@ pub fn check_event_sequence(commit: &Commit, stored_event_seq: u64) -> StoreResu
         }
     }
     if commit.delta.event_seq != stored_event_seq + commit.events.len() as u64 {
-        return Err(StoreError::Invalid("delta event counter does not match its events".into()));
+        return Err(StoreError::Invalid(
+            "delta event counter does not match its events".into(),
+        ));
     }
-    if commit.journal.tenant != commit.delta.tenant || commit.journal.revision != commit.delta.new_revision {
-        return Err(StoreError::Invalid("journal entry does not describe this delta".into()));
+    if commit.journal.tenant != commit.delta.tenant
+        || commit.journal.revision != commit.delta.new_revision
+    {
+        return Err(StoreError::Invalid(
+            "journal entry does not describe this delta".into(),
+        ));
     }
     Ok(())
 }
@@ -306,17 +333,28 @@ pub fn field_matches(record: &Record, field: &strata_kernel::FieldId, value: &Va
 
 /// Cut a complete tenant state down to the records that answer `needs`.
 pub fn partial_state(tenant: &TenantState, needs: &[Need]) -> State {
-    let mut thin = TenantState { records: Default::default(), ..tenant.clone() };
+    let mut thin = TenantState {
+        records: Default::default(),
+        ..tenant.clone()
+    };
     for need in needs {
         let found: Vec<&Arc<Record>> = match need {
             Need::Record { object, id } => tenant.record(object, *id).into_iter().collect(),
             Need::AllOf(object) => tenant.records_of(object).collect(),
-            Need::ByField { object, field, value } => {
-                tenant.records_of(object).filter(|record| field_matches(record, field, value)).collect()
-            }
+            Need::ByField {
+                object,
+                field,
+                value,
+            } => tenant
+                .records_of(object)
+                .filter(|record| field_matches(record, field, value))
+                .collect(),
         };
         for record in found {
-            thin.records.entry(record.object.clone()).or_default().insert(record.id, record.clone());
+            thin.records
+                .entry(record.object.clone())
+                .or_default()
+                .insert(record.id, record.clone());
         }
     }
     State {
@@ -368,18 +406,25 @@ pub struct Executed {
 /// This is the whole of production command handling: load what the kernel says it needs, run
 /// `transition`, commit atomically, and start over if another commit got there first. It holds
 /// no domain logic of its own.
-pub fn execute(store: &dyn Store, intent: &Intent, ctx: &Context) -> Result<Executed, ExecuteError> {
+pub fn execute(
+    store: &dyn Store,
+    intent: &Intent,
+    ctx: &Context,
+) -> Result<Executed, ExecuteError> {
     let mut conflicts = 0;
     loop {
         let header = store.load(&ctx.tenant, &[])?;
-        let mut needs = strata_kernel::needs(header.tenant.as_deref().map(|t| t.schema.as_ref()), intent);
+        let mut needs =
+            strata_kernel::needs(header.tenant.as_deref().map(|t| t.schema.as_ref()), intent);
         let mut rounds = 0;
         let transition = loop {
             let state = store.load(&ctx.tenant, &needs)?;
             match strata_kernel::transition(&state, intent, ctx) {
-                Err(DomainError { kind: ErrorKind::InsufficientState, missing: Some(need), .. })
-                    if rounds < MAX_NEED_ROUNDS && !needs.contains(&need) =>
-                {
+                Err(DomainError {
+                    kind: ErrorKind::InsufficientState,
+                    missing: Some(need),
+                    ..
+                }) if rounds < MAX_NEED_ROUNDS && !needs.contains(&need) => {
                     needs.push(need);
                     rounds += 1;
                 }
@@ -388,7 +433,13 @@ pub fn execute(store: &dyn Store, intent: &Intent, ctx: &Context) -> Result<Exec
             }
         };
         match store.commit(&Commit::of(intent, ctx, &transition)) {
-            Ok(receipt) => return Ok(Executed { transition, receipt, conflicts }),
+            Ok(receipt) => {
+                return Ok(Executed {
+                    transition,
+                    receipt,
+                    conflicts,
+                })
+            }
             Err(StoreError::Conflict { .. }) if conflicts < MAX_CONFLICT_RETRIES => conflicts += 1,
             Err(error) => return Err(error.into()),
         }
@@ -396,7 +447,11 @@ pub fn execute(store: &dyn Store, intent: &Intent, ctx: &Context) -> Result<Exec
 }
 
 /// Answer a read with the kernel against a snapshot loaded from the store.
-pub fn query(store: &dyn Store, request: &ReadRequest, ctx: &Context) -> Result<ReadResult, ExecuteError> {
+pub fn query(
+    store: &dyn Store,
+    request: &ReadRequest,
+    ctx: &Context,
+) -> Result<ReadResult, ExecuteError> {
     let header = store.load(&ctx.tenant, &[])?;
     let Some(tenant) = header.tenant.as_deref() else {
         return strata_kernel::read(&header, request, ctx).map_err(ExecuteError::Domain);

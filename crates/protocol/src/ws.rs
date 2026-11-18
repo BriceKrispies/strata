@@ -53,13 +53,28 @@ pub enum ClientMessage {
         #[serde(default)]
         after: Option<u64>,
     },
-    Unsubscribe { req: String, sub: String },
-    Ack { n: u64 },
-    Ping { nonce: u64 },
+    Unsubscribe {
+        req: String,
+        sub: String,
+    },
+    Ack {
+        n: u64,
+    },
+    Ping {
+        nonce: u64,
+    },
     /// Stop a running simulation.
-    Cancel { req: String, run: String },
+    Cancel {
+        req: String,
+        run: String,
+    },
     /// A diagnostic line from the browser, for the development log.
-    Diag { level: String, event: String, correlation: String, detail: String },
+    Diag {
+        level: String,
+        event: String,
+        correlation: String,
+        detail: String,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -74,9 +89,21 @@ pub enum SessionState {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ServerMessage {
-    Welcome { v: u32, conn: String, head: u64, session: SessionState, heartbeat_ms: u64 },
-    Ok { req: String },
-    Error { req: Option<String>, code: String, message: String },
+    Welcome {
+        v: u32,
+        conn: String,
+        head: u64,
+        session: SessionState,
+        heartbeat_ms: u64,
+    },
+    Ok {
+        req: String,
+    },
+    Error {
+        req: Option<String>,
+        code: String,
+        message: String,
+    },
     Event {
         sub: String,
         n: u64,
@@ -86,29 +113,47 @@ pub enum ServerMessage {
         notice: Notice,
     },
     /// The client can no longer be brought up to date event by event and must read again.
-    Resync { reason: String, head: u64 },
-    Pong { nonce: u64, head: u64 },
-    Session { state: SessionState },
+    Resync {
+        reason: String,
+        head: u64,
+    },
+    Pong {
+        nonce: u64,
+        head: u64,
+    },
+    Session {
+        state: SessionState,
+    },
     /// Progress or the result of a simulation or verification run.
-    Run { run: String, kind: String, payload: Json },
+    Run {
+        run: String,
+        kind: String,
+        payload: Json,
+    },
 }
 
 /// Parse a client frame, refusing oversized or malformed ones.
 pub fn parse_client(frame: &str) -> Result<ClientMessage, String> {
     if frame.len() > MAX_FRAME {
-        return Err(format!("frame of {} bytes exceeds {MAX_FRAME}", frame.len()));
+        return Err(format!(
+            "frame of {} bytes exceeds {MAX_FRAME}",
+            frame.len()
+        ));
     }
     let message: ClientMessage = serde_json::from_str(frame).map_err(|e| e.to_string())?;
     let short = |s: &str| !s.is_empty() && s.len() <= 64;
     let ok = match &message {
-        ClientMessage::Subscribe { req, sub, objects, .. } => {
-            short(req) && short(sub) && objects.as_ref().is_none_or(|o| o.len() <= 32)
-        }
+        ClientMessage::Subscribe {
+            req, sub, objects, ..
+        } => short(req) && short(sub) && objects.as_ref().is_none_or(|o| o.len() <= 32),
         ClientMessage::Unsubscribe { req, sub } => short(req) && short(sub),
         ClientMessage::Cancel { req, run } => short(req) && short(run),
-        ClientMessage::Diag { level, event, correlation, detail } => {
-            short(level) && short(event) && correlation.len() <= 64 && detail.len() <= 2_000
-        }
+        ClientMessage::Diag {
+            level,
+            event,
+            correlation,
+            detail,
+        } => short(level) && short(event) && correlation.len() <= 64 && detail.len() <= 2_000,
         ClientMessage::Ack { .. } | ClientMessage::Ping { .. } => true,
     };
     if ok {
@@ -126,12 +171,24 @@ mod tests {
     fn client_frames_are_validated() {
         assert_eq!(
             parse_client(r#"{"type":"subscribe","req":"r1","sub":"s1","after":7}"#),
-            Ok(ClientMessage::Subscribe { req: "r1".into(), sub: "s1".into(), objects: None, after: Some(7) })
+            Ok(ClientMessage::Subscribe {
+                req: "r1".into(),
+                sub: "s1".into(),
+                objects: None,
+                after: Some(7)
+            })
         );
         assert!(parse_client(r#"{"type":"subscribe","req":"","sub":"s1"}"#).is_err());
         assert!(parse_client(r#"{"type":"become_admin"}"#).is_err());
-        assert!(parse_client(r#"{"type":"ping","nonce":1,"tenant":"other"}"#).is_err(), "unknown fields are refused");
-        assert!(parse_client(&format!(r#"{{"type":"ping","nonce":1}}{}"#, " ".repeat(MAX_FRAME))).is_err());
+        assert!(
+            parse_client(r#"{"type":"ping","nonce":1,"tenant":"other"}"#).is_err(),
+            "unknown fields are refused"
+        );
+        assert!(parse_client(&format!(
+            r#"{{"type":"ping","nonce":1}}{}"#,
+            " ".repeat(MAX_FRAME)
+        ))
+        .is_err());
     }
 
     #[test]

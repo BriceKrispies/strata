@@ -19,27 +19,50 @@ struct Pair<'a> {
 impl<'a> Pair<'a> {
     /// A store loaded with the two-tenant notes fixture.
     fn new(store: &'a dyn Store) -> Self {
-        let mut pair = Pair { store, world: World::default(), clock: 1_000 };
+        let mut pair = Pair {
+            store,
+            world: World::default(),
+            clock: 1_000,
+        };
         for tenant in TENANTS {
             let owner = principal_id(&format!("{tenant}:owner"));
-            pair.ok(tenant, Principal::System, Intent::CreateTenant { name: tenant.to_string(), owner: owner.clone() });
+            pair.ok(
+                tenant,
+                Principal::System,
+                Intent::CreateTenant {
+                    name: tenant.to_string(),
+                    owner: owner.clone(),
+                },
+            );
             pair.ok(
                 tenant,
                 Principal::User(owner.clone()),
-                Intent::ChangeSchema { changes: notes_schema(), expected_version: None, existing: ExistingData::Reject },
+                Intent::ChangeSchema {
+                    changes: notes_schema(),
+                    expected_version: None,
+                    existing: ExistingData::Reject,
+                },
             );
             for (name, role_name) in [("editor", "editor"), ("writer1", "writer")] {
                 pair.ok(
                     tenant,
                     Principal::User(owner.clone()),
-                    Intent::AssignRole { principal: principal_id(&format!("{tenant}:{name}")), role: role(role_name) },
+                    Intent::AssignRole {
+                        principal: principal_id(&format!("{tenant}:{name}")),
+                        role: role(role_name),
+                    },
                 );
             }
         }
         pair
     }
 
-    fn run(&mut self, tenant: &str, principal: Principal, intent: Intent) -> Result<Transition, ExecuteError> {
+    fn run(
+        &mut self,
+        tenant: &str,
+        principal: Principal,
+        intent: Intent,
+    ) -> Result<Transition, ExecuteError> {
         self.clock += 1;
         let context = ctx(tenant, principal, self.clock);
         let from_world = self.world.step(&intent, &context);
@@ -73,7 +96,14 @@ impl<'a> Pair<'a> {
     }
 
     fn note(&mut self, tenant: &str, title: &str, slug: &str) -> RecordId {
-        match self.ok(tenant, user(&format!("{tenant}:writer1")), new_note(title, slug)).output {
+        match self
+            .ok(
+                tenant,
+                user(&format!("{tenant}:writer1")),
+                new_note(title, slug),
+            )
+            .output
+        {
             Output::Record { id, .. } => id,
             other => panic!("unexpected output {other:?}"),
         }
@@ -110,9 +140,16 @@ fn session(id: &str, tenant: &str, principal: &str, expires: i64) -> SessionReco
 fn absent_tenant_loads_as_absent(store: &dyn Store) {
     let state = store.load(&tenant_id("nowhere"), &[]).unwrap();
     assert!(state.tenant.is_none());
-    assert!(store.load_complete(&tenant_id("nowhere")).unwrap().tenant.is_none());
+    assert!(store
+        .load_complete(&tenant_id("nowhere"))
+        .unwrap()
+        .tenant
+        .is_none());
     assert!(store.tenants().unwrap().is_empty());
-    assert!(store.events_after(&tenant_id("nowhere"), 0, 10).unwrap().is_empty());
+    assert!(store
+        .events_after(&tenant_id("nowhere"), 0, 10)
+        .unwrap()
+        .is_empty());
 }
 
 fn stored_state_equals_kernel_state(store: &dyn Store) {
@@ -120,48 +157,91 @@ fn stored_state_equals_kernel_state(store: &dyn Store) {
     let first = pair.note("alpha", "First", "first");
     pair.note("alpha", "Second", "second");
     pair.note("beta", "Other", "first");
-    let person = Intent::CreateRecord { object: object("person"), fields: BTreeMap::from([(field("name"), text("Ada"))]) };
+    let person = Intent::CreateRecord {
+        object: object("person"),
+        fields: BTreeMap::from([(field("name"), text("Ada"))]),
+    };
     pair.ok("alpha", user("alpha:editor"), person);
     let patch = Intent::UpdateRecord {
         object: object("note"),
         id: first,
-        fields: BTreeMap::from([(field("status"), text("published")), (field("author"), Value::Ref(RecordId(3)))]),
+        fields: BTreeMap::from([
+            (field("status"), text("published")),
+            (field("author"), Value::Ref(RecordId(3))),
+        ]),
         expected_version: Some(1),
     };
     pair.ok("alpha", user("alpha:editor"), patch);
-    let delete = Intent::DeleteRecord { object: object("person"), id: RecordId(3), expected_version: None };
+    let delete = Intent::DeleteRecord {
+        object: object("person"),
+        id: RecordId(3),
+        expected_version: None,
+    };
     pair.ok("alpha", user("alpha:editor"), delete);
-    assert!(pair.run("alpha", user("alpha:writer1"), new_note("Clash", "second")).is_err());
+    assert!(pair
+        .run("alpha", user("alpha:writer1"), new_note("Clash", "second"))
+        .is_err());
     let summaries = store.tenants().unwrap();
     assert_eq!(summaries.len(), 2);
     assert_eq!(summaries[0].id, tenant_id("alpha"));
     assert_eq!(summaries[0].records, 2);
-    assert_eq!(summaries[0].revision, pair.world.tenants[&tenant_id("alpha")].revision);
+    assert_eq!(
+        summaries[0].revision,
+        pair.world.tenants[&tenant_id("alpha")].revision
+    );
 }
 
 fn a_stale_commit_conflicts_and_changes_nothing(store: &dyn Store) {
     let mut pair = Pair::new(store);
     let alpha = tenant_id("alpha");
-    let schema = store.load(&alpha, &[]).unwrap().tenant.unwrap().schema.clone();
-    let stale_state = store.load(&alpha, &needs(Some(&schema), &new_note("Stale", "stale"))).unwrap();
+    let schema = store
+        .load(&alpha, &[])
+        .unwrap()
+        .tenant
+        .unwrap()
+        .schema
+        .clone();
+    let stale_state = store
+        .load(&alpha, &needs(Some(&schema), &new_note("Stale", "stale")))
+        .unwrap();
     let context = ctx("alpha", user("alpha:writer1"), 9_000);
     let stale = transition(&stale_state, &new_note("Stale", "stale"), &context).unwrap();
     pair.note("alpha", "Winner", "winner");
     let events_before = store.events_after(&alpha, 0, 1_000).unwrap().len();
-    let error = store.commit(&Commit::of(&new_note("Stale", "stale"), &context, &stale)).unwrap_err();
-    assert!(matches!(error, StoreError::Conflict { .. }), "got {error:?}");
+    let error = store
+        .commit(&Commit::of(&new_note("Stale", "stale"), &context, &stale))
+        .unwrap_err();
+    assert!(
+        matches!(error, StoreError::Conflict { .. }),
+        "got {error:?}"
+    );
     pair.agree("alpha");
-    assert_eq!(store.events_after(&alpha, 0, 1_000).unwrap().len(), events_before);
+    assert_eq!(
+        store.events_after(&alpha, 0, 1_000).unwrap().len(),
+        events_before
+    );
 
     // Creating a tenant that already exists is the same conflict.
     let again = transition(
         &State::absent(alpha.clone()),
-        &Intent::CreateTenant { name: "alpha".into(), owner: principal_id("alpha:owner") },
+        &Intent::CreateTenant {
+            name: "alpha".into(),
+            owner: principal_id("alpha:owner"),
+        },
         &ctx("alpha", Principal::System, 9_001),
     )
     .unwrap();
-    let create = Intent::CreateTenant { name: "alpha".into(), owner: principal_id("alpha:owner") };
-    let error = store.commit(&Commit::of(&create, &ctx("alpha", Principal::System, 9_001), &again)).unwrap_err();
+    let create = Intent::CreateTenant {
+        name: "alpha".into(),
+        owner: principal_id("alpha:owner"),
+    };
+    let error = store
+        .commit(&Commit::of(
+            &create,
+            &ctx("alpha", Principal::System, 9_001),
+            &again,
+        ))
+        .unwrap_err();
     assert!(matches!(error, StoreError::Conflict { .. }));
     pair.agree("alpha");
 }
@@ -172,7 +252,13 @@ fn a_malformed_commit_is_refused_whole(store: &dyn Store) {
     pair.note("alpha", "First", "first");
     let intent = new_note("Second", "second");
     let context = ctx("alpha", user("alpha:writer1"), 9_000);
-    let schema = store.load(&alpha, &[]).unwrap().tenant.unwrap().schema.clone();
+    let schema = store
+        .load(&alpha, &[])
+        .unwrap()
+        .tenant
+        .unwrap()
+        .schema
+        .clone();
     let state = store.load(&alpha, &needs(Some(&schema), &intent)).unwrap();
     let good = transition(&state, &intent, &context).unwrap();
     let journal_before = store.journal_after(&alpha, 0, 1_000).unwrap().len();
@@ -184,12 +270,26 @@ fn a_malformed_commit_is_refused_whole(store: &dyn Store) {
     // An event addressed to another tenant.
     let mut foreign = Commit::of(&intent, &context, &good);
     foreign.events[0].tenant = tenant_id("beta");
-    assert!(matches!(store.commit(&foreign), Err(StoreError::Invalid(_))));
+    assert!(matches!(
+        store.commit(&foreign),
+        Err(StoreError::Invalid(_))
+    ));
 
     pair.agree("alpha");
     pair.agree("beta");
-    assert_eq!(store.journal_after(&alpha, 0, 1_000).unwrap().len(), journal_before);
-    assert!(store.load(&alpha, &[Need::AllOf(object("note"))]).unwrap().tenant.unwrap().record_count() == 1);
+    assert_eq!(
+        store.journal_after(&alpha, 0, 1_000).unwrap().len(),
+        journal_before
+    );
+    assert!(
+        store
+            .load(&alpha, &[Need::AllOf(object("note"))])
+            .unwrap()
+            .tenant
+            .unwrap()
+            .record_count()
+            == 1
+    );
     // The untouched commit still applies.
     store.commit(&Commit::of(&intent, &context, &good)).unwrap();
 }
@@ -202,21 +302,50 @@ fn partial_loads_hold_what_the_needs_name(store: &dyn Store) {
     let alpha = tenant_id("alpha");
     let ids = |needs: &[Need]| -> Vec<RecordId> {
         let state = store.load(&alpha, needs).unwrap();
-        assert_eq!(state.coverage, Coverage::Partial(needs.iter().cloned().collect()));
+        assert_eq!(
+            state.coverage,
+            Coverage::Partial(needs.iter().cloned().collect())
+        );
         let tenant = state.tenant.unwrap();
-        assert_eq!(tenant.revision, pair.world.tenants[&alpha].revision, "header is always loaded");
+        assert_eq!(
+            tenant.revision, pair.world.tenants[&alpha].revision,
+            "header is always loaded"
+        );
         tenant.records_of(&object("note")).map(|r| r.id).collect()
     };
     assert_eq!(ids(&[]), vec![]);
-    assert_eq!(ids(&[Need::Record { object: object("note"), id: second }]), vec![second]);
-    assert_eq!(ids(&[Need::Record { object: object("note"), id: RecordId(999) }]), vec![]);
+    assert_eq!(
+        ids(&[Need::Record {
+            object: object("note"),
+            id: second
+        }]),
+        vec![second]
+    );
+    assert_eq!(
+        ids(&[Need::Record {
+            object: object("note"),
+            id: RecordId(999)
+        }]),
+        vec![]
+    );
     assert_eq!(ids(&[Need::AllOf(object("note"))]), vec![first, second]);
     assert_eq!(
-        ids(&[Need::ByField { object: object("note"), field: field("slug"), value: text("first") }]),
+        ids(&[Need::ByField {
+            object: object("note"),
+            field: field("slug"),
+            value: text("first")
+        }]),
         vec![first],
         "a field lookup returns this tenant's match only"
     );
-    assert_eq!(ids(&[Need::ByField { object: object("note"), field: field("slug"), value: text("nope") }]), vec![]);
+    assert_eq!(
+        ids(&[Need::ByField {
+            object: object("note"),
+            field: field("slug"),
+            value: text("nope")
+        }]),
+        vec![]
+    );
 }
 
 fn list_fields_answer_field_lookups_by_containment(store: &dyn Store) {
@@ -240,8 +369,16 @@ fn list_fields_answer_field_lookups_by_containment(store: &dyn Store) {
     };
     pair.ok("alpha", user("alpha:writer1"), tagged);
     pair.note("alpha", "Plain", "plain");
-    let need = Need::ByField { object: object("note"), field: field("tags"), value: text("glue") };
-    let found = store.load(&tenant_id("alpha"), &[need]).unwrap().tenant.unwrap();
+    let need = Need::ByField {
+        object: object("note"),
+        field: field("tags"),
+        value: text("glue"),
+    };
+    let found = store
+        .load(&tenant_id("alpha"), &[need])
+        .unwrap()
+        .tenant
+        .unwrap();
     assert_eq!(found.record_count(), 1);
 }
 
@@ -249,24 +386,42 @@ fn tenants_are_isolated(store: &dyn Store) {
     let mut pair = Pair::new(store);
     let alpha_note = pair.note("alpha", "Alpha only", "shared-slug");
     let beta_note = pair.note("beta", "Beta only", "shared-slug");
-    assert_eq!(alpha_note, beta_note, "record ids are per tenant, so they collide on purpose");
-    let read = ReadRequest::Records { object: object("note"), ids: vec![alpha_note] };
+    assert_eq!(
+        alpha_note, beta_note,
+        "record ids are per tenant, so they collide on purpose"
+    );
+    let read = ReadRequest::Records {
+        object: object("note"),
+        ids: vec![alpha_note],
+    };
     let as_beta_owner = query(store, &read, &ctx("beta", user("beta:owner"), 9_000)).unwrap();
-    assert_eq!(as_beta_owner.rows[0].get(&field("title")), &text("Beta only"));
+    assert_eq!(
+        as_beta_owner.rows[0].get(&field("title")),
+        &text("Beta only")
+    );
     // A member of alpha addressing beta is a stranger there and sees no draft.
     let as_alpha_owner = query(store, &read, &ctx("beta", user("alpha:owner"), 9_000)).unwrap();
     assert!(as_alpha_owner.rows.is_empty());
     let before = canon::hash_of(&store.load_complete(&tenant_id("beta")).unwrap().tenant);
     pair.note("alpha", "More", "more");
-    assert_eq!(canon::hash_of(&store.load_complete(&tenant_id("beta")).unwrap().tenant), before);
-    assert!(store.events_after(&tenant_id("beta"), 0, 1_000).unwrap().iter().all(|e| e.tenant == tenant_id("beta")));
+    assert_eq!(
+        canon::hash_of(&store.load_complete(&tenant_id("beta")).unwrap().tenant),
+        before
+    );
+    assert!(store
+        .events_after(&tenant_id("beta"), 0, 1_000)
+        .unwrap()
+        .iter()
+        .all(|e| e.tenant == tenant_id("beta")));
 }
 
 fn events_are_ordered_and_stay_in_the_outbox_until_published(store: &dyn Store) {
     let mut pair = Pair::new(store);
     let setup = store.outbox(1_000).unwrap();
     assert!(setup.windows(2).all(|w| w[0].position < w[1].position));
-    store.mark_published(setup.last().unwrap().position).unwrap();
+    store
+        .mark_published(setup.last().unwrap().position)
+        .unwrap();
     assert!(store.outbox(10).unwrap().is_empty());
 
     pair.note("alpha", "A", "a");
@@ -274,7 +429,11 @@ fn events_are_ordered_and_stay_in_the_outbox_until_published(store: &dyn Store) 
     pair.note("alpha", "C", "c");
     let pending = store.outbox(10).unwrap();
     let order: Vec<&str> = pending.iter().map(|e| e.event.tenant.as_str()).collect();
-    assert_eq!(order, ["alpha", "beta", "alpha"], "the outbox follows commit order across tenants");
+    assert_eq!(
+        order,
+        ["alpha", "beta", "alpha"],
+        "the outbox follows commit order across tenants"
+    );
     assert_eq!(store.outbox(2).unwrap().len(), 2);
     store.mark_published(pending[1].position).unwrap();
     assert_eq!(store.outbox(10).unwrap(), pending[2..].to_vec());
@@ -283,8 +442,18 @@ fn events_are_ordered_and_stay_in_the_outbox_until_published(store: &dyn Store) 
     let alpha = tenant_id("alpha");
     let all = store.events_after(&alpha, 0, 1_000).unwrap();
     let seqs: Vec<u64> = all.iter().map(|e| e.seq).collect();
-    assert_eq!(seqs, (1..=all.len() as u64).collect::<Vec<_>>(), "sequence numbers are gapless");
-    assert_eq!(store.events_after(&alpha, seqs[seqs.len() - 2], 1_000).unwrap().len(), 1);
+    assert_eq!(
+        seqs,
+        (1..=all.len() as u64).collect::<Vec<_>>(),
+        "sequence numbers are gapless"
+    );
+    assert_eq!(
+        store
+            .events_after(&alpha, seqs[seqs.len() - 2], 1_000)
+            .unwrap()
+            .len(),
+        1
+    );
     assert_eq!(store.events_after(&alpha, 0, 2).unwrap().len(), 2);
 }
 
@@ -307,9 +476,15 @@ fn the_journal_replays_to_the_stored_state(store: &dyn Store) {
             break;
         }
         for entry in page {
-            assert_eq!(entry.revision.0, after + 1, "journal revisions are contiguous");
+            assert_eq!(
+                entry.revision.0,
+                after + 1,
+                "journal revisions are contiguous"
+            );
             assert_eq!(entry.kernel_version, KERNEL_VERSION);
-            let (next, outcome) = replayed.step(&entry.intent, &entry.context).expect("journalled intent replays");
+            let (next, outcome) = replayed
+                .step(&entry.intent, &entry.context)
+                .expect("journalled intent replays");
             assert_eq!(canon::hash_of(&outcome.delta), entry.delta_hash);
             assert_eq!(canon::hash_of(&outcome.events), entry.events_hash);
             replayed = next;
@@ -321,12 +496,32 @@ fn the_journal_replays_to_the_stored_state(store: &dyn Store) {
 
 fn sessions_are_stored_revoked_and_purged(store: &dyn Store) {
     let mut pair = Pair::new(store);
-    assert!(matches!(store.put_session(&session("s0", "nowhere", "x", 100)), Err(StoreError::NotFound(_))));
-    store.put_session(&session("s1", "alpha", "alpha:writer1", 5_000)).unwrap();
-    store.put_session(&session("s2", "alpha", "alpha:editor", 5_000)).unwrap();
-    store.put_session(&session("s3", "beta", "alpha:writer1", 50)).unwrap();
-    assert_eq!(store.session_by_token("hash-of-s1").unwrap().unwrap().id.as_str(), "s1");
-    assert!(store.session_by_token("s1").unwrap().is_none(), "lookup is by hash, never by id");
+    assert!(matches!(
+        store.put_session(&session("s0", "nowhere", "x", 100)),
+        Err(StoreError::NotFound(_))
+    ));
+    store
+        .put_session(&session("s1", "alpha", "alpha:writer1", 5_000))
+        .unwrap();
+    store
+        .put_session(&session("s2", "alpha", "alpha:editor", 5_000))
+        .unwrap();
+    store
+        .put_session(&session("s3", "beta", "alpha:writer1", 50))
+        .unwrap();
+    assert_eq!(
+        store
+            .session_by_token("hash-of-s1")
+            .unwrap()
+            .unwrap()
+            .id
+            .as_str(),
+        "s1"
+    );
+    assert!(
+        store.session_by_token("s1").unwrap().is_none(),
+        "lookup is by hash, never by id"
+    );
     let mut clash = session("s9", "alpha", "alpha:editor", 5_000);
     clash.token_hash = "hash-of-s1".into();
     assert!(store.put_session(&clash).is_err());
@@ -334,19 +529,55 @@ fn sessions_are_stored_revoked_and_purged(store: &dyn Store) {
     let mut seen = session("s1", "alpha", "alpha:writer1", 5_000);
     seen.last_seen_at = Timestamp(77);
     store.put_session(&seen).unwrap();
-    assert_eq!(store.session(&SessionId::new("s1").unwrap()).unwrap().unwrap().last_seen_at, Timestamp(77));
+    assert_eq!(
+        store
+            .session(&SessionId::new("s1").unwrap())
+            .unwrap()
+            .unwrap()
+            .last_seen_at,
+        Timestamp(77)
+    );
 
     // Losing the last role in alpha ends that principal's alpha sessions, in the same commit.
-    let revoke = Intent::RevokeRole { principal: principal_id("alpha:writer1"), role: role("writer") };
+    let revoke = Intent::RevokeRole {
+        principal: principal_id("alpha:writer1"),
+        role: role("writer"),
+    };
     pair.ok("alpha", user("alpha:owner"), revoke);
-    assert!(store.session(&SessionId::new("s1").unwrap()).unwrap().unwrap().revoked_at.is_some());
-    assert!(store.session(&SessionId::new("s2").unwrap()).unwrap().unwrap().revoked_at.is_none());
-    assert!(store.session(&SessionId::new("s3").unwrap()).unwrap().unwrap().revoked_at.is_none(), "beta is untouched");
+    assert!(store
+        .session(&SessionId::new("s1").unwrap())
+        .unwrap()
+        .unwrap()
+        .revoked_at
+        .is_some());
+    assert!(store
+        .session(&SessionId::new("s2").unwrap())
+        .unwrap()
+        .unwrap()
+        .revoked_at
+        .is_none());
+    assert!(
+        store
+            .session(&SessionId::new("s3").unwrap())
+            .unwrap()
+            .unwrap()
+            .revoked_at
+            .is_none(),
+        "beta is untouched"
+    );
 
-    let live: Vec<String> = store.live_sessions(Timestamp(100)).unwrap().iter().map(|s| s.id.to_string()).collect();
+    let live: Vec<String> = store
+        .live_sessions(Timestamp(100))
+        .unwrap()
+        .iter()
+        .map(|s| s.id.to_string())
+        .collect();
     assert_eq!(live, ["s2"], "s1 is revoked and s3 has expired");
     assert_eq!(store.purge_sessions(Timestamp(100)).unwrap(), 1);
-    assert!(store.session(&SessionId::new("s3").unwrap()).unwrap().is_none());
+    assert!(store
+        .session(&SessionId::new("s3").unwrap())
+        .unwrap()
+        .is_none());
 }
 
 fn accounts_are_scoped_to_their_tenant(store: &dyn Store) {
@@ -359,12 +590,21 @@ fn accounts_are_scoped_to_their_tenant(store: &dyn Store) {
         password_hash: "$argon2id$placeholder".into(),
     };
     store.put_account(&account).unwrap();
-    assert_eq!(store.account(&tenant_id("alpha"), "ines").unwrap(), Some(account.clone()));
+    assert_eq!(
+        store.account(&tenant_id("alpha"), "ines").unwrap(),
+        Some(account.clone())
+    );
     assert_eq!(store.account(&tenant_id("beta"), "ines").unwrap(), None);
     assert_eq!(store.account(&tenant_id("alpha"), "INES").unwrap(), None);
-    let changed = Account { display_name: "Inès".into(), ..account };
+    let changed = Account {
+        display_name: "Inès".into(),
+        ..account
+    };
     store.put_account(&changed).unwrap();
-    assert_eq!(store.account(&tenant_id("alpha"), "ines").unwrap(), Some(changed));
+    assert_eq!(
+        store.account(&tenant_id("alpha"), "ines").unwrap(),
+        Some(changed)
+    );
 }
 
 fn snapshots_restore_to_the_same_hash(store: &dyn Store) {
@@ -372,24 +612,45 @@ fn snapshots_restore_to_the_same_hash(store: &dyn Store) {
     let alpha = tenant_id("alpha");
     pair.note("alpha", "Kept", "kept");
     let kept_world = pair.world.clone();
-    let info = store.create_snapshot(&alpha, "before", Timestamp(42)).unwrap();
+    let info = store
+        .create_snapshot(&alpha, "before", Timestamp(42))
+        .unwrap();
     assert_eq!(info.hash, kept_world.tenant_hash(&alpha));
     assert_eq!(info.revision, kept_world.tenants[&alpha].revision);
     pair.note("alpha", "Discarded", "discarded");
     pair.note("beta", "Unrelated", "unrelated");
     let beta_before = canon::hash_of(&store.load_complete(&tenant_id("beta")).unwrap().tenant);
 
-    assert_eq!(canon::hash_of(&store.load_snapshot(&alpha, info.id).unwrap()), info.hash);
+    assert_eq!(
+        canon::hash_of(&store.load_snapshot(&alpha, info.id).unwrap()),
+        info.hash
+    );
     assert_eq!(store.snapshots(&alpha).unwrap(), vec![info.clone()]);
     assert!(store.snapshots(&tenant_id("beta")).unwrap().is_empty());
-    assert!(matches!(store.load_snapshot(&tenant_id("beta"), info.id), Err(StoreError::NotFound(_))));
+    assert!(matches!(
+        store.load_snapshot(&tenant_id("beta"), info.id),
+        Err(StoreError::NotFound(_))
+    ));
 
     store.restore_snapshot(&alpha, info.id).unwrap();
-    pair.world.tenants.insert(alpha.clone(), kept_world.tenants[&alpha].clone());
+    pair.world
+        .tenants
+        .insert(alpha.clone(), kept_world.tenants[&alpha].clone());
     pair.agree("alpha");
-    assert_eq!(canon::hash_of(&store.load_complete(&tenant_id("beta")).unwrap().tenant), beta_before);
+    assert_eq!(
+        canon::hash_of(&store.load_complete(&tenant_id("beta")).unwrap().tenant),
+        beta_before
+    );
     let kept_seq = kept_world.tenants[&alpha].event_seq;
-    assert_eq!(store.events_after(&alpha, 0, 1_000).unwrap().last().unwrap().seq, kept_seq);
+    assert_eq!(
+        store
+            .events_after(&alpha, 0, 1_000)
+            .unwrap()
+            .last()
+            .unwrap()
+            .seq,
+        kept_seq
+    );
     // Life goes on from the restored state.
     pair.note("alpha", "After", "after");
 }
@@ -397,12 +658,18 @@ fn snapshots_restore_to_the_same_hash(store: &dyn Store) {
 fn reset_removes_everything(store: &dyn Store) {
     let mut pair = Pair::new(store);
     pair.note("alpha", "Gone", "gone");
-    store.put_session(&session("s1", "alpha", "alpha:editor", 5_000)).unwrap();
+    store
+        .put_session(&session("s1", "alpha", "alpha:editor", 5_000))
+        .unwrap();
     store.reset().unwrap();
     assert!(store.tenants().unwrap().is_empty());
     assert!(store.outbox(10).unwrap().is_empty());
     assert!(store.session_by_token("hash-of-s1").unwrap().is_none());
-    assert!(store.load(&tenant_id("alpha"), &[]).unwrap().tenant.is_none());
+    assert!(store
+        .load(&tenant_id("alpha"), &[])
+        .unwrap()
+        .tenant
+        .is_none());
     Pair::new(store);
 }
 
@@ -410,18 +677,51 @@ type Check = (&'static str, fn(&dyn Store));
 
 /// Every check, by name.
 pub const CHECKS: &[Check] = &[
-    ("absent_tenant_loads_as_absent", absent_tenant_loads_as_absent),
-    ("stored_state_equals_kernel_state", stored_state_equals_kernel_state),
-    ("a_stale_commit_conflicts_and_changes_nothing", a_stale_commit_conflicts_and_changes_nothing),
-    ("a_malformed_commit_is_refused_whole", a_malformed_commit_is_refused_whole),
-    ("partial_loads_hold_what_the_needs_name", partial_loads_hold_what_the_needs_name),
-    ("list_fields_answer_field_lookups_by_containment", list_fields_answer_field_lookups_by_containment),
+    (
+        "absent_tenant_loads_as_absent",
+        absent_tenant_loads_as_absent,
+    ),
+    (
+        "stored_state_equals_kernel_state",
+        stored_state_equals_kernel_state,
+    ),
+    (
+        "a_stale_commit_conflicts_and_changes_nothing",
+        a_stale_commit_conflicts_and_changes_nothing,
+    ),
+    (
+        "a_malformed_commit_is_refused_whole",
+        a_malformed_commit_is_refused_whole,
+    ),
+    (
+        "partial_loads_hold_what_the_needs_name",
+        partial_loads_hold_what_the_needs_name,
+    ),
+    (
+        "list_fields_answer_field_lookups_by_containment",
+        list_fields_answer_field_lookups_by_containment,
+    ),
     ("tenants_are_isolated", tenants_are_isolated),
-    ("events_are_ordered_and_stay_in_the_outbox_until_published", events_are_ordered_and_stay_in_the_outbox_until_published),
-    ("the_journal_replays_to_the_stored_state", the_journal_replays_to_the_stored_state),
-    ("sessions_are_stored_revoked_and_purged", sessions_are_stored_revoked_and_purged),
-    ("accounts_are_scoped_to_their_tenant", accounts_are_scoped_to_their_tenant),
-    ("snapshots_restore_to_the_same_hash", snapshots_restore_to_the_same_hash),
+    (
+        "events_are_ordered_and_stay_in_the_outbox_until_published",
+        events_are_ordered_and_stay_in_the_outbox_until_published,
+    ),
+    (
+        "the_journal_replays_to_the_stored_state",
+        the_journal_replays_to_the_stored_state,
+    ),
+    (
+        "sessions_are_stored_revoked_and_purged",
+        sessions_are_stored_revoked_and_purged,
+    ),
+    (
+        "accounts_are_scoped_to_their_tenant",
+        accounts_are_scoped_to_their_tenant,
+    ),
+    (
+        "snapshots_restore_to_the_same_hash",
+        snapshots_restore_to_the_same_hash,
+    ),
     ("reset_removes_everything", reset_removes_everything),
 ];
 

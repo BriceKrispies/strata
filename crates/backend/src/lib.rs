@@ -30,7 +30,7 @@ pub async fn run(
 ) -> Result<(), String> {
     let app: Shared = App::new(cfg, store);
     let created = app
-        .blocking(|app| seed::seed(app))
+        .blocking(seed::seed)
         .await
         .map_err(|e| e.0.message)?
         .map_err(|e| format!("seeding failed: {e}"))?;
@@ -51,7 +51,12 @@ pub async fn run(
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(Duration::from_secs(600)).await;
-            let _ = janitor.blocking(|app| app.store.purge_sessions(strata_kernel::Timestamp(app.now().0 - 86_400_000))).await;
+            let _ = janitor
+                .blocking(|app| {
+                    app.store
+                        .purge_sessions(strata_kernel::Timestamp(app.now().0 - 86_400_000))
+                })
+                .await;
         }
     });
 

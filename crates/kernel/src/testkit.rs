@@ -52,10 +52,23 @@ pub fn eq(a: Expr, b: Expr) -> Expr {
 }
 
 pub fn field_def(id: &str, ty: FieldType, required: bool) -> FieldDef {
-    FieldDef { id: field(id), label: id.to_string(), ty, required, unique: false, default: None }
+    FieldDef {
+        id: field(id),
+        label: id.to_string(),
+        ty,
+        required,
+        unique: false,
+        default: None,
+    }
 }
 
-fn policy(id: &str, role_name: &str, object_name: &str, actions: &[Action], condition: Option<Expr>) -> SchemaChange {
+fn policy(
+    id: &str,
+    role_name: &str,
+    object_name: &str,
+    actions: &[Action],
+    condition: Option<Expr>,
+) -> SchemaChange {
     SchemaChange::DefinePolicy(PolicyDef {
         id: PolicyId::new(id).expect("policy id"),
         role: role(role_name),
@@ -70,23 +83,56 @@ pub fn notes_schema() -> Vec<SchemaChange> {
     let own = eq(var(Scope::Record, "$created_by"), Expr::Principal);
     let all = [Action::Read, Action::Create, Action::Update, Action::Delete];
     vec![
-        SchemaChange::DefineRole(RoleDef { id: role("writer"), label: "Writer".into() }),
-        SchemaChange::DefineRole(RoleDef { id: role("editor"), label: "Editor".into() }),
-        SchemaChange::DefineObject { id: object("person"), label: "Person".into() },
-        SchemaChange::DefineField { object: object("person"), field: field_def("name", FieldType::Str, true) },
-        SchemaChange::DefineObject { id: object("note"), label: "Note".into() },
-        SchemaChange::DefineField { object: object("note"), field: field_def("title", FieldType::Str, true) },
+        SchemaChange::DefineRole(RoleDef {
+            id: role("writer"),
+            label: "Writer".into(),
+        }),
+        SchemaChange::DefineRole(RoleDef {
+            id: role("editor"),
+            label: "Editor".into(),
+        }),
+        SchemaChange::DefineObject {
+            id: object("person"),
+            label: "Person".into(),
+        },
+        SchemaChange::DefineField {
+            object: object("person"),
+            field: field_def("name", FieldType::Str, true),
+        },
+        SchemaChange::DefineObject {
+            id: object("note"),
+            label: "Note".into(),
+        },
         SchemaChange::DefineField {
             object: object("note"),
-            field: FieldDef { unique: true, ..field_def("slug", FieldType::Str, true) },
+            field: field_def("title", FieldType::Str, true),
         },
-        SchemaChange::DefineField { object: object("note"), field: field_def("body", FieldType::Str, false) },
-        SchemaChange::DefineField { object: object("note"), field: field_def("rank", FieldType::Int, false) },
         SchemaChange::DefineField {
             object: object("note"),
-            field: FieldDef { default: Some(lit("draft")), ..field_def("status", FieldType::Str, true) },
+            field: FieldDef {
+                unique: true,
+                ..field_def("slug", FieldType::Str, true)
+            },
         },
-        SchemaChange::DefineField { object: object("note"), field: field_def("published_at", FieldType::Time, false) },
+        SchemaChange::DefineField {
+            object: object("note"),
+            field: field_def("body", FieldType::Str, false),
+        },
+        SchemaChange::DefineField {
+            object: object("note"),
+            field: field_def("rank", FieldType::Int, false),
+        },
+        SchemaChange::DefineField {
+            object: object("note"),
+            field: FieldDef {
+                default: Some(lit("draft")),
+                ..field_def("status", FieldType::Str, true)
+            },
+        },
+        SchemaChange::DefineField {
+            object: object("note"),
+            field: field_def("published_at", FieldType::Time, false),
+        },
         SchemaChange::DefineRelationship {
             object: object("note"),
             field: field("author"),
@@ -129,11 +175,41 @@ pub fn notes_schema() -> Vec<SchemaChange> {
                 },
             ],
         }),
-        policy("public_reads_published", "public", "note", &[Action::Read], Some(eq(var(Scope::Record, "status"), lit("published")))),
-        policy("public_reads_people", "public", "person", &[Action::Read], None),
-        policy("writers_read_notes", "writer", "note", &[Action::Read, Action::Create], None),
-        policy("writers_edit_own", "writer", "note", &[Action::Update, Action::Delete], Some(own)),
-        policy("writers_add_people", "writer", "person", &[Action::Create], None),
+        policy(
+            "public_reads_published",
+            "public",
+            "note",
+            &[Action::Read],
+            Some(eq(var(Scope::Record, "status"), lit("published"))),
+        ),
+        policy(
+            "public_reads_people",
+            "public",
+            "person",
+            &[Action::Read],
+            None,
+        ),
+        policy(
+            "writers_read_notes",
+            "writer",
+            "note",
+            &[Action::Read, Action::Create],
+            None,
+        ),
+        policy(
+            "writers_edit_own",
+            "writer",
+            "note",
+            &[Action::Update, Action::Delete],
+            Some(own),
+        ),
+        policy(
+            "writers_add_people",
+            "writer",
+            "person",
+            &[Action::Create],
+            None,
+        ),
         policy("editors_manage_notes", "editor", "note", &all, None),
         policy("editors_manage_people", "editor", "person", &all, None),
         SchemaChange::DefineQuery(QueryDef {
@@ -141,7 +217,10 @@ pub fn notes_schema() -> Vec<SchemaChange> {
             object: object("note"),
             filter: None,
             params: BTreeSet::new(),
-            order: vec![OrderKey { field: "rank".into(), descending: true }],
+            order: vec![OrderKey {
+                field: "rank".into(),
+                descending: true,
+            }],
             limit: None,
         }),
         SchemaChange::DefineQuery(QueryDef {
@@ -175,20 +254,41 @@ pub fn notes_world() -> World {
         let mut now = 1_000 + i as i64 * 100;
         let mut run = |world: &World, principal: Principal, intent: Intent| {
             now += 1;
-            world.step(&intent, &ctx(tenant, principal, now)).expect("fixture intent is accepted").0
+            world
+                .step(&intent, &ctx(tenant, principal, now))
+                .expect("fixture intent is accepted")
+                .0
         };
-        world = run(&world, Principal::System, Intent::CreateTenant { name: tenant.to_string(), owner: owner.clone() });
+        world = run(
+            &world,
+            Principal::System,
+            Intent::CreateTenant {
+                name: tenant.to_string(),
+                owner: owner.clone(),
+            },
+        );
         let owner = Principal::User(owner);
         world = run(
             &world,
             owner.clone(),
-            Intent::ChangeSchema { changes: notes_schema(), expected_version: None, existing: ExistingData::Reject },
+            Intent::ChangeSchema {
+                changes: notes_schema(),
+                expected_version: None,
+                existing: ExistingData::Reject,
+            },
         );
-        for (name, role_name) in [("editor", "editor"), ("writer1", "writer"), ("writer2", "writer")] {
+        for (name, role_name) in [
+            ("editor", "editor"),
+            ("writer1", "writer"),
+            ("writer2", "writer"),
+        ] {
             world = run(
                 &world,
                 owner.clone(),
-                Intent::AssignRole { principal: principal_id(&format!("{tenant}:{name}")), role: role(role_name) },
+                Intent::AssignRole {
+                    principal: principal_id(&format!("{tenant}:{name}")),
+                    role: role(role_name),
+                },
             );
         }
     }

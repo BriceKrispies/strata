@@ -25,7 +25,9 @@ fn insufficient(need: Need) -> DomainError {
         ErrorKind::InsufficientState,
         format!("the snapshot does not cover {need:?}"),
     );
-    error.evidence.push(Check::fail("coverage", format!("{need:?}")));
+    error
+        .evidence
+        .push(Check::fail("coverage", format!("{need:?}")));
     error.missing = Some(need);
     error
 }
@@ -36,7 +38,10 @@ impl<'a> Lookup<'a> {
         object: &ObjectTypeId,
         id: RecordId,
     ) -> Result<Option<&'a Arc<Record>>, DomainError> {
-        let need = Need::Record { object: object.clone(), id };
+        let need = Need::Record {
+            object: object.clone(),
+            id,
+        };
         if !self.coverage.covers(&need) {
             return Err(insufficient(need));
         }
@@ -50,8 +55,11 @@ impl<'a> Lookup<'a> {
         field: &FieldId,
         value: &Value,
     ) -> Result<Vec<&'a Arc<Record>>, DomainError> {
-        let need =
-            Need::ByField { object: object.clone(), field: field.clone(), value: value.clone() };
+        let need = Need::ByField {
+            object: object.clone(),
+            field: field.clone(),
+            value: value.clone(),
+        };
         if !self.coverage.covers(&need) {
             return Err(insufficient(need));
         }
@@ -96,7 +104,10 @@ pub struct Subject<'a> {
 
 impl<'a> Subject<'a> {
     pub fn stored(record: &'a Record) -> Self {
-        Subject { old: Some(record), new: Some(record) }
+        Subject {
+            old: Some(record),
+            new: Some(record),
+        }
     }
 
     fn record(&self) -> Option<&'a Record> {
@@ -149,18 +160,27 @@ pub fn authorize(
             None => return (true, vec![Check::pass(rule, what)]),
             Some(condition) => match expr::eval(condition, &env) {
                 Ok(Value::Bool(true)) => {
-                    return (true, vec![Check::pass(rule, format!("{what} where {condition}"))])
+                    return (
+                        true,
+                        vec![Check::pass(rule, format!("{what} where {condition}"))],
+                    )
                 }
                 Ok(other) => checks.push(Check::fail(
                     rule,
-                    format!("{condition} is {}", if other.is_null() { "null" } else { "false" }),
+                    format!(
+                        "{condition} is {}",
+                        if other.is_null() { "null" } else { "false" }
+                    ),
                 )),
                 Err(e) => checks.push(Check::fail(rule, format!("{condition}: {e}"))),
             },
         }
     }
     if checks.is_empty() {
-        checks.push(Check::fail("policy:none", format!("no policy grants {what}")));
+        checks.push(Check::fail(
+            "policy:none",
+            format!("no policy grants {what}"),
+        ));
     }
     (false, checks)
 }
@@ -205,7 +225,10 @@ impl Validation {
     }
 
     fn fail(&mut self, kind: ErrorKind, rule: String, detail: impl Into<String>) {
-        self.failed.push(Failure { check: Check::fail(rule, detail), kind });
+        self.failed.push(Failure {
+            check: Check::fail(rule, detail),
+            kind,
+        });
     }
 
     /// Turn the outcome into an error if anything failed. The first failure names the kind.
@@ -240,7 +263,11 @@ pub fn validate_record(
 
     for field in candidate.fields.keys() {
         if !object.fields.contains_key(field) {
-            out.fail(ErrorKind::UnknownField, format!("field:{name}.{field}"), "no such field");
+            out.fail(
+                ErrorKind::UnknownField,
+                format!("field:{name}.{field}"),
+                "no such field",
+            );
         }
     }
 
@@ -249,7 +276,11 @@ pub fn validate_record(
         let at = format!("{name}.{}", field.id);
         if value.is_null() {
             if field.required {
-                out.fail(ErrorKind::MissingRequired, format!("required:{at}"), "a value is required");
+                out.fail(
+                    ErrorKind::MissingRequired,
+                    format!("required:{at}"),
+                    "a value is required",
+                );
             }
             continue;
         }
@@ -302,7 +333,11 @@ pub fn validate_record(
             if workflow.states().contains(state.as_str()) {
                 out.pass(rule, format!("{state} is a state"));
             } else {
-                out.fail(ErrorKind::WorkflowViolation, rule, format!("{state} is not a state"));
+                out.fail(
+                    ErrorKind::WorkflowViolation,
+                    rule,
+                    format!("{state} is not a state"),
+                );
             }
         }
     }
@@ -330,7 +365,11 @@ pub fn validate_record(
                     format!("{} [{}]", constraint.message, constraint.expr),
                 ),
                 Ok(_) => out.pass(rule, constraint.expr.to_string()),
-                Err(e) => out.fail(ErrorKind::Evaluation, rule, format!("{}: {e}", constraint.expr)),
+                Err(e) => out.fail(
+                    ErrorKind::Evaluation,
+                    rule,
+                    format!("{}: {e}", constraint.expr),
+                ),
             }
         }
     }

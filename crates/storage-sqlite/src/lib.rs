@@ -125,7 +125,9 @@ pub struct SqliteStore {
 
 fn db(error: rusqlite::Error) -> StoreError {
     match &error {
-        rusqlite::Error::SqliteFailure(code, _) if code.code == rusqlite::ErrorCode::ConstraintViolation => {
+        rusqlite::Error::SqliteFailure(code, _)
+            if code.code == rusqlite::ErrorCode::ConstraintViolation =>
+        {
             StoreError::Invalid(error.to_string())
         }
         _ => StoreError::Unavailable(error.to_string()),
@@ -202,14 +204,24 @@ fn header(tx: &Connection, tenant: &TenantId) -> StoreResult<Option<Header>> {
 fn put_records(state: &mut TenantState, rows: Vec<String>) -> StoreResult<()> {
     for data in rows {
         let record: Record = decode(&data, "record")?;
-        state.records.entry(record.object.clone()).or_default().insert(record.id, Arc::new(record));
+        state
+            .records
+            .entry(record.object.clone())
+            .or_default()
+            .insert(record.id, Arc::new(record));
     }
     Ok(())
 }
 
-fn select_strings(tx: &Connection, sql: &str, args: &[&dyn rusqlite::ToSql]) -> StoreResult<Vec<String>> {
+fn select_strings(
+    tx: &Connection,
+    sql: &str,
+    args: &[&dyn rusqlite::ToSql],
+) -> StoreResult<Vec<String>> {
     let mut statement = tx.prepare_cached(sql).map_err(db)?;
-    let rows = statement.query_map(args, |row| row.get::<_, String>(0)).map_err(db)?;
+    let rows = statement
+        .query_map(args, |row| row.get::<_, String>(0))
+        .map_err(db)?;
     rows.collect::<Result<Vec<_>, _>>().map_err(db)
 }
 
@@ -229,18 +241,36 @@ fn write_record(tx: &Transaction<'_>, tenant: &TenantId, record: &Record) -> Sto
         params![tenant, object, id, record.version as i64, encode(record)],
     )
     .map_err(db)?;
-    tx.execute("DELETE FROM record_index WHERE tenant = ?1 AND object = ?2 AND id = ?3", params![tenant, object, id])
-        .map_err(db)?;
+    tx.execute(
+        "DELETE FROM record_index WHERE tenant = ?1 AND object = ?2 AND id = ?3",
+        params![tenant, object, id],
+    )
+    .map_err(db)?;
     let mut insert = tx
         .prepare_cached("INSERT INTO record_index (tenant, object, field, value, id) VALUES (?1, ?2, ?3, ?4, ?5)")
         .map_err(db)?;
     for (field, value) in index_rows(record) {
-        insert.execute(params![tenant, object, field, value, id]).map_err(db)?;
+        insert
+            .execute(params![tenant, object, field, value, id])
+            .map_err(db)?;
     }
     Ok(())
 }
 
-fn session_from(row: &rusqlite::Row<'_>) -> rusqlite::Result<(String, String, String, String, String, String, i64, i64, i64, Option<i64>)> {
+fn session_from(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<(
+    String,
+    String,
+    String,
+    String,
+    String,
+    String,
+    i64,
+    i64,
+    i64,
+    Option<i64>,
+)> {
     Ok((
         row.get(0)?,
         row.get(1)?,
@@ -258,26 +288,47 @@ fn session_from(row: &rusqlite::Row<'_>) -> rusqlite::Result<(String, String, St
 const SESSION_COLUMNS: &str =
     "id, token_hash, csrf_token, tenant, principal, display_name, created_at, last_seen_at, expires_at, revoked_at";
 
-fn sessions_where(conn: &Connection, clause: &str, args: &[&dyn rusqlite::ToSql]) -> StoreResult<Vec<SessionRecord>> {
+fn sessions_where(
+    conn: &Connection,
+    clause: &str,
+    args: &[&dyn rusqlite::ToSql],
+) -> StoreResult<Vec<SessionRecord>> {
     let sql = format!("SELECT {SESSION_COLUMNS} FROM sessions WHERE {clause} ORDER BY id");
     let mut statement = conn.prepare_cached(&sql).map_err(db)?;
-    let rows = statement.query_map(args, session_from).map_err(db)?.collect::<Result<Vec<_>, _>>().map_err(db)?;
+    let rows = statement
+        .query_map(args, session_from)
+        .map_err(db)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(db)?;
     rows.into_iter()
-        .map(|(id, token_hash, csrf_token, tenant, principal, display_name, created, seen, expires, revoked)| {
-            let bad = |e: strata_kernel::IdError| StoreError::Corrupt(e.to_string());
-            Ok(SessionRecord {
-                id: SessionId::new(id).map_err(bad)?,
+        .map(
+            |(
+                id,
                 token_hash,
                 csrf_token,
-                tenant: TenantId::new(tenant).map_err(bad)?,
-                principal: PrincipalId::new(principal).map_err(bad)?,
+                tenant,
+                principal,
                 display_name,
-                created_at: Timestamp(created),
-                last_seen_at: Timestamp(seen),
-                expires_at: Timestamp(expires),
-                revoked_at: revoked.map(Timestamp),
-            })
-        })
+                created,
+                seen,
+                expires,
+                revoked,
+            )| {
+                let bad = |e: strata_kernel::IdError| StoreError::Corrupt(e.to_string());
+                Ok(SessionRecord {
+                    id: SessionId::new(id).map_err(bad)?,
+                    token_hash,
+                    csrf_token,
+                    tenant: TenantId::new(tenant).map_err(bad)?,
+                    principal: PrincipalId::new(principal).map_err(bad)?,
+                    display_name,
+                    created_at: Timestamp(created),
+                    last_seen_at: Timestamp(seen),
+                    expires_at: Timestamp(expires),
+                    revoked_at: revoked.map(Timestamp),
+                })
+            },
+        )
         .collect()
 }
 
@@ -296,8 +347,10 @@ impl SqliteStore {
 
     fn prepare(mut conn: Connection, location: String, now: Timestamp) -> StoreResult<Self> {
         conn.busy_timeout(Duration::from_secs(5)).map_err(db)?;
-        conn.pragma_update(None, "journal_mode", "WAL").map_err(db)?;
-        conn.pragma_update(None, "synchronous", "FULL").map_err(db)?;
+        conn.pragma_update(None, "journal_mode", "WAL")
+            .map_err(db)?;
+        conn.pragma_update(None, "synchronous", "FULL")
+            .map_err(db)?;
         conn.pragma_update(None, "foreign_keys", "ON").map_err(db)?;
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS storage_migrations (
@@ -305,10 +358,20 @@ impl SqliteStore {
             );",
         )
         .map_err(db)?;
-        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate).map_err(db)?;
-        let applied: u32 =
-            tx.query_row("SELECT COALESCE(MAX(version), 0) FROM storage_migrations", [], |r| r.get(0)).map_err(db)?;
-        for (version, name, sql) in MIGRATIONS.iter().filter(|(version, _, _)| *version > applied) {
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(db)?;
+        let applied: u32 = tx
+            .query_row(
+                "SELECT COALESCE(MAX(version), 0) FROM storage_migrations",
+                [],
+                |r| r.get(0),
+            )
+            .map_err(db)?;
+        for (version, name, sql) in MIGRATIONS
+            .iter()
+            .filter(|(version, _, _)| *version > applied)
+        {
             tx.execute_batch(sql).map_err(db)?;
             tx.execute(
                 "INSERT INTO storage_migrations (version, name, applied_at) VALUES (?1, ?2, ?3)",
@@ -317,11 +380,16 @@ impl SqliteStore {
             .map_err(db)?;
         }
         tx.commit().map_err(db)?;
-        Ok(SqliteStore { conn: Mutex::new(conn), location })
+        Ok(SqliteStore {
+            conn: Mutex::new(conn),
+            location,
+        })
     }
 
     fn lock(&self) -> StoreResult<MutexGuard<'_, Connection>> {
-        self.conn.lock().map_err(|_| StoreError::Unavailable("a writer panicked".into()))
+        self.conn
+            .lock()
+            .map_err(|_| StoreError::Unavailable("a writer panicked".into()))
     }
 
     fn complete(conn: &Connection, tenant: &TenantId) -> StoreResult<Option<TenantState>> {
@@ -355,11 +423,20 @@ impl Store for SqliteStore {
 
     fn health(&self) -> StoreResult<Health> {
         let conn = self.lock()?;
-        let check: String = conn.query_row("PRAGMA quick_check", [], |r| r.get(0)).map_err(db)?;
-        let mode: String = conn.query_row("PRAGMA journal_mode", [], |r| r.get(0)).map_err(db)?;
-        let tenants: i64 = conn.query_row("SELECT COUNT(*) FROM tenants", [], |r| r.get(0)).map_err(db)?;
-        let pending: i64 =
-            conn.query_row("SELECT COUNT(*) FROM events WHERE published = 0", [], |r| r.get(0)).map_err(db)?;
+        let check: String = conn
+            .query_row("PRAGMA quick_check", [], |r| r.get(0))
+            .map_err(db)?;
+        let mode: String = conn
+            .query_row("PRAGMA journal_mode", [], |r| r.get(0))
+            .map_err(db)?;
+        let tenants: i64 = conn
+            .query_row("SELECT COUNT(*) FROM tenants", [], |r| r.get(0))
+            .map_err(db)?;
+        let pending: i64 = conn
+            .query_row("SELECT COUNT(*) FROM events WHERE published = 0", [], |r| {
+                r.get(0)
+            })
+            .map_err(db)?;
         Ok(Health {
             ok: check == "ok",
             detail: format!("quick_check {check}, journal {mode}"),
@@ -370,11 +447,16 @@ impl Store for SqliteStore {
 
     fn migrations(&self) -> StoreResult<Vec<StorageMigration>> {
         let conn = self.lock()?;
-        let mut statement =
-            conn.prepare("SELECT version, name, applied_at FROM storage_migrations ORDER BY version").map_err(db)?;
+        let mut statement = conn
+            .prepare("SELECT version, name, applied_at FROM storage_migrations ORDER BY version")
+            .map_err(db)?;
         let rows = statement
             .query_map([], |row| {
-                Ok(StorageMigration { version: row.get(0)?, name: row.get(1)?, applied_at: Timestamp(row.get(2)?) })
+                Ok(StorageMigration {
+                    version: row.get(0)?,
+                    name: row.get(1)?,
+                    applied_at: Timestamp(row.get(2)?),
+                })
             })
             .map_err(db)?;
         rows.collect::<Result<Vec<_>, _>>().map_err(db)
@@ -432,7 +514,11 @@ impl Store for SqliteStore {
                     &[&tenant.as_str(), &object.as_str(), &(id.0 as i64)],
                 )?,
                 Need::AllOf(object) => all_of(&tx, tenant, object)?,
-                Need::ByField { object, field, value } => {
+                Need::ByField {
+                    object,
+                    field,
+                    value,
+                } => {
                     let key = encode(value);
                     if key.len() <= MAX_INDEXED {
                         select_strings(
@@ -474,17 +560,25 @@ impl Store for SqliteStore {
 
     fn commit(&self, commit: &Commit) -> StoreResult<Receipt> {
         let mut conn = self.lock()?;
-        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate).map_err(db)?;
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(db)?;
         let delta = &commit.delta;
         let tenant = delta.tenant.as_str();
         let current = header(&tx, &delta.tenant)?;
         let found = current.as_ref().map(|h| h.state.revision);
         if found != delta.base_revision {
-            return Err(StoreError::Conflict { expected: delta.base_revision, found });
+            return Err(StoreError::Conflict {
+                expected: delta.base_revision,
+                found,
+            });
         }
         check_event_sequence(commit, current.as_ref().map_or(0, |h| h.state.event_seq))?;
 
-        let mut members = current.as_ref().map(|h| h.state.members.clone()).unwrap_or_default();
+        let mut members = current
+            .as_ref()
+            .map(|h| h.state.members.clone())
+            .unwrap_or_default();
         let mut members_changed = false;
         let mut schema: Option<Arc<TenantSchema>> = None;
         let mut created: Option<&str> = None;
@@ -503,10 +597,17 @@ impl Store for SqliteStore {
                 DeltaOp::PutRecord(_) | DeltaOp::DeleteRecord { .. } => {}
             }
         }
-        let counters = params![delta.new_revision.0 as i64, delta.next_record as i64, delta.event_seq as i64, tenant];
+        let counters = params![
+            delta.new_revision.0 as i64,
+            delta.next_record as i64,
+            delta.event_seq as i64,
+            tenant
+        ];
         match (current.is_some(), created) {
             (false, Some(name)) => {
-                let schema = schema.clone().unwrap_or_else(|| Arc::new(TenantSchema::genesis()));
+                let schema = schema
+                    .clone()
+                    .unwrap_or_else(|| Arc::new(TenantSchema::genesis()));
                 tx.execute(
                     "INSERT INTO tenants (id, name, revision, next_record, event_seq, schema, members)
                      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
@@ -526,15 +627,25 @@ impl Store for SqliteStore {
                 tx.execute("UPDATE tenants SET revision = ?1, next_record = ?2, event_seq = ?3 WHERE id = ?4", counters)
                     .map_err(db)?;
                 if let Some(schema) = &schema {
-                    tx.execute("UPDATE tenants SET schema = ?1 WHERE id = ?2", params![encode(&**schema), tenant])
-                        .map_err(db)?;
+                    tx.execute(
+                        "UPDATE tenants SET schema = ?1 WHERE id = ?2",
+                        params![encode(&**schema), tenant],
+                    )
+                    .map_err(db)?;
                 }
                 if members_changed {
-                    tx.execute("UPDATE tenants SET members = ?1 WHERE id = ?2", params![encode(&members), tenant])
-                        .map_err(db)?;
+                    tx.execute(
+                        "UPDATE tenants SET members = ?1 WHERE id = ?2",
+                        params![encode(&members), tenant],
+                    )
+                    .map_err(db)?;
                 }
             }
-            _ => return Err(StoreError::Invalid("delta does not fit the tenant's existence".into())),
+            _ => {
+                return Err(StoreError::Invalid(
+                    "delta does not fit the tenant's existence".into(),
+                ))
+            }
         }
         if let Some(schema) = &schema {
             tx.execute(
@@ -560,14 +671,23 @@ impl Store for SqliteStore {
         for event in &commit.events {
             tx.execute(
                 "INSERT INTO events (tenant, seq, revision, data) VALUES (?1, ?2, ?3, ?4)",
-                params![tenant, event.seq as i64, event.revision.0 as i64, encode(event)],
+                params![
+                    tenant,
+                    event.seq as i64,
+                    event.revision.0 as i64,
+                    encode(event)
+                ],
             )
             .map_err(db)?;
             last_position = Some(tx.last_insert_rowid() as u64);
         }
         tx.execute(
             "INSERT INTO journal (tenant, revision, data) VALUES (?1, ?2, ?3)",
-            params![tenant, commit.journal.revision.0 as i64, encode(&commit.journal)],
+            params![
+                tenant,
+                commit.journal.revision.0 as i64,
+                encode(&commit.journal)
+            ],
         )
         .map_err(db)?;
         for principal in &commit.revoke_sessions {
@@ -578,10 +698,18 @@ impl Store for SqliteStore {
             .map_err(db)?;
         }
         tx.commit().map_err(db)?;
-        Ok(Receipt { revision: delta.new_revision, last_position })
+        Ok(Receipt {
+            revision: delta.new_revision,
+            last_position,
+        })
     }
 
-    fn events_after(&self, tenant: &TenantId, after: u64, limit: usize) -> StoreResult<Vec<DomainEvent>> {
+    fn events_after(
+        &self,
+        tenant: &TenantId,
+        after: u64,
+        limit: usize,
+    ) -> StoreResult<Vec<DomainEvent>> {
         let conn = self.lock()?;
         select_strings(
             &conn,
@@ -596,26 +724,43 @@ impl Store for SqliteStore {
     fn outbox(&self, limit: usize) -> StoreResult<Vec<OutboxEntry>> {
         let conn = self.lock()?;
         let mut statement = conn
-            .prepare_cached("SELECT position, data FROM events WHERE published = 0 ORDER BY position LIMIT ?1")
+            .prepare_cached(
+                "SELECT position, data FROM events WHERE published = 0 ORDER BY position LIMIT ?1",
+            )
             .map_err(db)?;
         let rows = statement
-            .query_map(params![limit as i64], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)))
+            .query_map(params![limit as i64], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            })
             .map_err(db)?
             .collect::<Result<Vec<_>, _>>()
             .map_err(db)?;
         rows.into_iter()
-            .map(|(position, data)| Ok(OutboxEntry { position: position as u64, event: decode(&data, "event")? }))
+            .map(|(position, data)| {
+                Ok(OutboxEntry {
+                    position: position as u64,
+                    event: decode(&data, "event")?,
+                })
+            })
             .collect()
     }
 
     fn mark_published(&self, position: u64) -> StoreResult<()> {
         self.lock()?
-            .execute("UPDATE events SET published = 1 WHERE published = 0 AND position <= ?1", params![position as i64])
+            .execute(
+                "UPDATE events SET published = 1 WHERE published = 0 AND position <= ?1",
+                params![position as i64],
+            )
             .map_err(db)?;
         Ok(())
     }
 
-    fn journal_after(&self, tenant: &TenantId, after: u64, limit: usize) -> StoreResult<Vec<JournalEntry>> {
+    fn journal_after(
+        &self,
+        tenant: &TenantId,
+        after: u64,
+        limit: usize,
+    ) -> StoreResult<Vec<JournalEntry>> {
         let conn = self.lock()?;
         select_strings(
             &conn,
@@ -630,7 +775,11 @@ impl Store for SqliteStore {
     fn put_session(&self, session: &SessionRecord) -> StoreResult<()> {
         let conn = self.lock()?;
         let known: Option<i64> = conn
-            .query_row("SELECT 1 FROM tenants WHERE id = ?1", params![session.tenant.as_str()], |r| r.get(0))
+            .query_row(
+                "SELECT 1 FROM tenants WHERE id = ?1",
+                params![session.tenant.as_str()],
+                |r| r.get(0),
+            )
             .optional()
             .map_err(db)?;
         if known.is_none() {
@@ -669,7 +818,11 @@ impl Store for SqliteStore {
     }
 
     fn live_sessions(&self, now: Timestamp) -> StoreResult<Vec<SessionRecord>> {
-        sessions_where(&*self.lock()?, "revoked_at IS NULL AND expires_at > ?1", &[&now.0])
+        sessions_where(
+            &*self.lock()?,
+            "revoked_at IS NULL AND expires_at > ?1",
+            &[&now.0],
+        )
     }
 
     fn purge_sessions(&self, before: Timestamp) -> StoreResult<u64> {
@@ -686,7 +839,11 @@ impl Store for SqliteStore {
     fn put_account(&self, account: &Account) -> StoreResult<()> {
         let conn = self.lock()?;
         let known: Option<i64> = conn
-            .query_row("SELECT 1 FROM tenants WHERE id = ?1", params![account.tenant.as_str()], |r| r.get(0))
+            .query_row(
+                "SELECT 1 FROM tenants WHERE id = ?1",
+                params![account.tenant.as_str()],
+                |r| r.get(0),
+            )
             .optional()
             .map_err(db)?;
         if known.is_none() {
@@ -722,7 +879,8 @@ impl Store for SqliteStore {
             Ok(Account {
                 tenant: tenant.clone(),
                 login: login.to_string(),
-                principal: PrincipalId::new(principal).map_err(|e| StoreError::Corrupt(e.to_string()))?,
+                principal: PrincipalId::new(principal)
+                    .map_err(|e| StoreError::Corrupt(e.to_string()))?,
                 display_name,
                 password_hash,
             })
@@ -730,15 +888,24 @@ impl Store for SqliteStore {
         .transpose()
     }
 
-    fn create_snapshot(&self, tenant: &TenantId, label: &str, at: Timestamp) -> StoreResult<SnapshotInfo> {
+    fn create_snapshot(
+        &self,
+        tenant: &TenantId,
+        label: &str,
+        at: Timestamp,
+    ) -> StoreResult<SnapshotInfo> {
         let mut conn = self.lock()?;
-        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate).map_err(db)?;
-        let state =
-            Self::complete(&tx, tenant)?.ok_or_else(|| StoreError::NotFound(format!("tenant {tenant}")))?;
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(db)?;
+        let state = Self::complete(&tx, tenant)?
+            .ok_or_else(|| StoreError::NotFound(format!("tenant {tenant}")))?;
         let id: i64 = tx
-            .query_row("SELECT COALESCE(MAX(id), 0) + 1 FROM snapshots WHERE tenant = ?1", params![tenant.as_str()], |r| {
-                r.get(0)
-            })
+            .query_row(
+                "SELECT COALESCE(MAX(id), 0) + 1 FROM snapshots WHERE tenant = ?1",
+                params![tenant.as_str()],
+                |r| r.get(0),
+            )
             .map_err(db)?;
         let info = SnapshotInfo {
             tenant: tenant.clone(),
@@ -787,15 +954,21 @@ impl Store for SqliteStore {
             )
             .optional()
             .map_err(db)?;
-        decode(&data.ok_or_else(|| StoreError::NotFound(format!("snapshot {id} of {tenant}")))?, "snapshot")
+        decode(
+            &data.ok_or_else(|| StoreError::NotFound(format!("snapshot {id} of {tenant}")))?,
+            "snapshot",
+        )
     }
 
     fn restore_snapshot(&self, tenant: &TenantId, id: u64) -> StoreResult<()> {
         let state = self.load_snapshot(tenant, id)?;
         let mut conn = self.lock()?;
-        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate).map_err(db)?;
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(db)?;
         let name = tenant.as_str();
-        tx.execute("DELETE FROM records WHERE tenant = ?1", params![name]).map_err(db)?;
+        tx.execute("DELETE FROM records WHERE tenant = ?1", params![name])
+            .map_err(db)?;
         tx.execute(
             "UPDATE tenants SET name = ?1, revision = ?2, next_record = ?3, event_seq = ?4, schema = ?5, members = ?6
              WHERE id = ?7",
@@ -813,10 +986,16 @@ impl Store for SqliteStore {
         for record in state.records.values().flat_map(|records| records.values()) {
             write_record(&tx, tenant, record)?;
         }
-        tx.execute("DELETE FROM events WHERE tenant = ?1 AND seq > ?2", params![name, state.event_seq as i64])
-            .map_err(db)?;
-        tx.execute("DELETE FROM journal WHERE tenant = ?1 AND revision > ?2", params![name, state.revision.0 as i64])
-            .map_err(db)?;
+        tx.execute(
+            "DELETE FROM events WHERE tenant = ?1 AND seq > ?2",
+            params![name, state.event_seq as i64],
+        )
+        .map_err(db)?;
+        tx.execute(
+            "DELETE FROM journal WHERE tenant = ?1 AND revision > ?2",
+            params![name, state.revision.0 as i64],
+        )
+        .map_err(db)?;
         tx.execute(
             "DELETE FROM schema_history WHERE tenant = ?1 AND version > ?2",
             params![name, state.schema.version.0 as i64],
@@ -828,6 +1007,9 @@ impl Store for SqliteStore {
     fn reset(&self) -> StoreResult<()> {
         let conn = self.lock()?;
         // Every other table hangs off `tenants` with ON DELETE CASCADE.
-        conn.execute_batch("DELETE FROM tenants; DELETE FROM sqlite_sequence WHERE name = 'events';").map_err(db)
+        conn.execute_batch(
+            "DELETE FROM tenants; DELETE FROM sqlite_sequence WHERE name = 'events';",
+        )
+        .map_err(db)
     }
 }

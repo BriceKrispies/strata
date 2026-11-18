@@ -56,7 +56,9 @@ fn collect_hints(expr: &Expr, hints: &mut BTreeMap<String, Hints>) {
             }
         }
         Expr::Not(inner) | Expr::IsNull(inner) => collect_hints(inner, hints),
-        Expr::And(items) | Expr::Or(items) => items.iter().for_each(|item| collect_hints(item, hints)),
+        Expr::And(items) | Expr::Or(items) => {
+            items.iter().for_each(|item| collect_hints(item, hints))
+        }
         Expr::If(a, b, c) => [a, b, c].iter().for_each(|item| collect_hints(item, hints)),
         _ => {}
     }
@@ -71,8 +73,8 @@ fn hints_for(object: &ObjectTypeDef) -> BTreeMap<String, Hints> {
 }
 
 const WORDS: [&str; 16] = [
-    "grain", "ledger", "margin", "kiln", "draft", "joint", "ember", "plane", "thread", "glaze", "measure", "bench",
-    "proof", "ink", "copper", "linen",
+    "grain", "ledger", "margin", "kiln", "draft", "joint", "ember", "plane", "thread", "glaze",
+    "measure", "bench", "proof", "ink", "copper", "linen",
 ];
 
 fn phrase(rng: &mut Rng, words: u64) -> String {
@@ -84,7 +86,9 @@ fn phrase(rng: &mut Rng, words: u64) -> String {
         out.push_str(WORDS[rng.below(WORDS.len() as u64) as usize]);
     }
     let mut chars = out.chars();
-    chars.next().map_or(String::new(), |first| first.to_uppercase().chain(chars).collect())
+    chars.next().map_or(String::new(), |first| {
+        first.to_uppercase().chain(chars).collect()
+    })
 }
 
 /// A value for a field, or `None` to leave it out.
@@ -99,18 +103,24 @@ fn synthesise(
     now: i64,
 ) -> Option<Value> {
     let hint = hints.get(field.id.as_str());
-    let workflow = schema.workflows_of(&object.id).find(|w| w.field == field.id);
+    let workflow = schema
+        .workflows_of(&object.id)
+        .find(|w| w.field == field.id);
     Some(match &field.ty {
         FieldType::Str => {
             if let Some(workflow) = workflow {
                 let initial: Vec<&String> = workflow.initial.iter().collect();
                 Value::Str(initial[rng.below(initial.len() as u64) as usize].clone())
-            } else if let Some(choices) = hint.filter(|h| !h.choices.is_empty()).map(|h| &h.choices) {
+            } else if let Some(choices) = hint.filter(|h| !h.choices.is_empty()).map(|h| &h.choices)
+            {
                 choices[rng.below(choices.len() as u64) as usize].clone()
             } else if hint.is_some_and(|h| h.opaque) {
                 return None;
             } else if field.unique || hint.is_some_and(|h| h.slug) {
-                Value::Str(format!("{}-{serial}", WORDS[rng.below(WORDS.len() as u64) as usize]))
+                Value::Str(format!(
+                    "{}-{serial}",
+                    WORDS[rng.below(WORDS.len() as u64) as usize]
+                ))
             } else {
                 let words = 2 + rng.below(4);
                 Value::Str(phrase(rng, words))
@@ -128,7 +138,9 @@ fn synthesise(
         }
         FieldType::List(inner) => match inner.as_ref() {
             FieldType::Str => Value::List(
-                (0..rng.below(3)).map(|_| Value::Str(WORDS[rng.below(WORDS.len() as u64) as usize].to_string())).collect(),
+                (0..rng.below(3))
+                    .map(|_| Value::Str(WORDS[rng.below(WORDS.len() as u64) as usize].to_string()))
+                    .collect(),
             ),
             _ => return None,
         },
@@ -144,7 +156,12 @@ fn pick<'a, T>(rng: &mut Rng, items: &'a [T]) -> Option<&'a T> {
 }
 
 fn actor_for(rng: &mut Rng, tenant: &TenantState, record: Option<&Record>) -> Principal {
-    let members: Vec<Principal> = tenant.members.keys().cloned().map(Principal::User).collect();
+    let members: Vec<Principal> = tenant
+        .members
+        .keys()
+        .cloned()
+        .map(Principal::User)
+        .collect();
     if rng.below(12) == 0 {
         return Principal::Anonymous;
     }
@@ -159,7 +176,14 @@ fn actor_for(rng: &mut Rng, tenant: &TenantState, record: Option<&Record>) -> Pr
 }
 
 /// Generate `count` operations against `tenant`, one every `spacing_ms` starting at `start`.
-pub fn generate(world: &World, tenant: &TenantId, seed: u64, count: usize, start: i64, spacing_ms: i64) -> Vec<Scheduled> {
+pub fn generate(
+    world: &World,
+    tenant: &TenantId,
+    seed: u64,
+    count: usize,
+    start: i64,
+    spacing_ms: i64,
+) -> Vec<Scheduled> {
     let mut rng = Rng(seed);
     let mut scratch = world.clone();
     let mut schedule = Vec::with_capacity(count);
@@ -173,8 +197,12 @@ pub fn generate(world: &World, tenant: &TenantId, seed: u64, count: usize, start
         // activity resembles the tenant's existing proportions.
         let mut weighted: Vec<&ObjectTypeDef> = Vec::new();
         for object in schema.objects.values() {
-            let weight = 1 + state.records.get(&object.id).map_or(0, BTreeMap::len).min(12);
-            weighted.extend(std::iter::repeat(object).take(weight));
+            let weight = 1 + state
+                .records
+                .get(&object.id)
+                .map_or(0, BTreeMap::len)
+                .min(12);
+            weighted.extend(std::iter::repeat_n(object, weight));
         }
         let Some(object) = pick(&mut rng, &weighted).copied() else {
             break;
@@ -192,28 +220,49 @@ pub fn generate(world: &World, tenant: &TenantId, seed: u64, count: usize, start
                 if !wanted || field.default.is_some() {
                     continue;
                 }
-                if let Some(value) = synthesise(&mut rng, &state, schema, object, field, &hints, serial, now) {
+                if let Some(value) =
+                    synthesise(&mut rng, &state, schema, object, field, &hints, serial, now)
+                {
                     fields.insert(field.id.clone(), value);
                 }
             }
             (
                 format!("create a {}", object.label.to_lowercase()),
                 actor_for(&mut rng, &state, None),
-                Intent::CreateRecord { object: object.id.clone(), fields },
+                Intent::CreateRecord {
+                    object: object.id.clone(),
+                    fields,
+                },
             )
         } else if roll < 50 && !workflows.is_empty() {
             let record = *pick(&mut rng, &existing).expect("non-empty");
             let workflow = *pick(&mut rng, &workflows).expect("non-empty");
-            let current = record.get(&workflow.field).as_str().unwrap_or("").to_string();
-            let moves: Vec<_> = workflow.transitions.iter().filter(|t| t.from == current).collect();
+            let current = record
+                .get(&workflow.field)
+                .as_str()
+                .unwrap_or("")
+                .to_string();
+            let moves: Vec<_> = workflow
+                .transitions
+                .iter()
+                .filter(|t| t.from == current)
+                .collect();
             match pick(&mut rng, &moves) {
                 Some(step) => (
-                    format!("{} {} {}", step.name, object.label.to_lowercase(), record.id),
+                    format!(
+                        "{} {} {}",
+                        step.name,
+                        object.label.to_lowercase(),
+                        record.id
+                    ),
                     actor_for(&mut rng, &state, Some(record)),
                     Intent::UpdateRecord {
                         object: object.id.clone(),
                         id: record.id,
-                        fields: BTreeMap::from([(workflow.field.clone(), Value::Str(step.to.clone()))]),
+                        fields: BTreeMap::from([(
+                            workflow.field.clone(),
+                            Value::Str(step.to.clone()),
+                        )]),
                         expected_version: None,
                     },
                 ),
@@ -227,7 +276,11 @@ pub fn generate(world: &World, tenant: &TenantId, seed: u64, count: usize, start
                 .values()
                 .filter(|f| matches!(f.ty, FieldType::Str | FieldType::Int | FieldType::Bool))
                 .filter(|f| !f.unique && workflows.iter().all(|w| w.field != f.id))
-                .filter(|f| hints.get(f.id.as_str()).is_none_or(|h| !h.opaque && !h.slug))
+                .filter(|f| {
+                    hints
+                        .get(f.id.as_str())
+                        .is_none_or(|h| !h.opaque && !h.slug)
+                })
                 .collect();
             let Some(field) = pick(&mut rng, &editable).copied() else {
                 continue;
@@ -236,10 +289,16 @@ pub fn generate(world: &World, tenant: &TenantId, seed: u64, count: usize, start
             let value = if clear {
                 Value::Null
             } else {
-                synthesise(&mut rng, &state, schema, object, field, &hints, serial, now).unwrap_or(Value::Null)
+                synthesise(&mut rng, &state, schema, object, field, &hints, serial, now)
+                    .unwrap_or(Value::Null)
             };
             (
-                format!("edit {} of {} {}", field.label.to_lowercase(), object.label.to_lowercase(), record.id),
+                format!(
+                    "edit {} of {} {}",
+                    field.label.to_lowercase(),
+                    object.label.to_lowercase(),
+                    record.id
+                ),
                 actor_for(&mut rng, &state, Some(record)),
                 Intent::UpdateRecord {
                     object: object.id.clone(),
@@ -253,7 +312,11 @@ pub fn generate(world: &World, tenant: &TenantId, seed: u64, count: usize, start
             (
                 format!("delete {} {}", object.label.to_lowercase(), record.id),
                 actor_for(&mut rng, &state, Some(record)),
-                Intent::DeleteRecord { object: object.id.clone(), id: record.id, expected_version: None },
+                Intent::DeleteRecord {
+                    object: object.id.clone(),
+                    id: record.id,
+                    expected_version: None,
+                },
             )
         };
 
@@ -267,7 +330,11 @@ pub fn generate(world: &World, tenant: &TenantId, seed: u64, count: usize, start
         if let Ok((next, _)) = scratch.step(&intent, &context) {
             scratch = next;
         }
-        schedule.push(Scheduled { label, context, intent });
+        schedule.push(Scheduled {
+            label,
+            context,
+            intent,
+        });
     }
     schedule
 }
@@ -275,7 +342,9 @@ pub fn generate(world: &World, tenant: &TenantId, seed: u64, count: usize, start
 /// The field ids a generated or recorded intent writes, for reports.
 pub fn written_fields(intent: &Intent) -> Vec<FieldId> {
     match intent {
-        Intent::CreateRecord { fields, .. } | Intent::UpdateRecord { fields, .. } => fields.keys().cloned().collect(),
+        Intent::CreateRecord { fields, .. } | Intent::UpdateRecord { fields, .. } => {
+            fields.keys().cloned().collect()
+        }
         _ => Vec::new(),
     }
 }

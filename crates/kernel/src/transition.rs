@@ -22,46 +22,72 @@ use std::sync::Arc;
 /// delta, the events, the requested effects and the checks that passed. A rejected intent
 /// yields the error and the checks that led to it. Nothing is changed either way; the caller
 /// commits the delta.
-pub fn transition(state: &State, intent: &Intent, ctx: &Context) -> Result<Transition, DomainError> {
+pub fn transition(
+    state: &State,
+    intent: &Intent,
+    ctx: &Context,
+) -> Result<Transition, DomainError> {
     if state.tenant_id != ctx.tenant {
         return Err(DomainError::new(
             ErrorKind::TenantMismatch,
-            format!("snapshot is of {}, context names {}", state.tenant_id, ctx.tenant),
+            format!(
+                "snapshot is of {}, context names {}",
+                state.tenant_id, ctx.tenant
+            ),
         ));
     }
     let tenant = match (intent, state.tenant.as_deref()) {
         (Intent::CreateTenant { name, owner }, None) => return create_tenant(ctx, name, owner),
         (Intent::CreateTenant { .. }, Some(_)) => {
-            return Err(DomainError::new(ErrorKind::TenantExists, "the tenant already exists"))
+            return Err(DomainError::new(
+                ErrorKind::TenantExists,
+                "the tenant already exists",
+            ))
         }
         (_, None) => {
-            return Err(DomainError::new(ErrorKind::TenantNotFound, "no such tenant"));
+            return Err(DomainError::new(
+                ErrorKind::TenantNotFound,
+                "no such tenant",
+            ));
         }
         (_, Some(tenant)) => tenant,
     };
     if tenant.id != ctx.tenant {
-        return Err(DomainError::new(ErrorKind::TenantMismatch, "snapshot holds another tenant"));
+        return Err(DomainError::new(
+            ErrorKind::TenantMismatch,
+            "snapshot holds another tenant",
+        ));
     }
-    let lookup = Lookup { tenant, coverage: &state.coverage };
+    let lookup = Lookup {
+        tenant,
+        coverage: &state.coverage,
+    };
     let mut draft = Draft::new(tenant, ctx);
     let output = match intent {
         Intent::CreateTenant { .. } => unreachable!("handled above"),
-        Intent::ChangeSchema { changes, expected_version, existing } => {
-            change_schema(&mut draft, lookup, changes, *expected_version, *existing)?
-        }
-        Intent::AssignRole { principal, role } => {
-            change_member(&mut draft, principal, role, true)?
-        }
+        Intent::ChangeSchema {
+            changes,
+            expected_version,
+            existing,
+        } => change_schema(&mut draft, lookup, changes, *expected_version, *existing)?,
+        Intent::AssignRole { principal, role } => change_member(&mut draft, principal, role, true)?,
         Intent::RevokeRole { principal, role } => {
             change_member(&mut draft, principal, role, false)?
         }
-        Intent::CreateRecord { object, fields } => create_record(&mut draft, lookup, object, fields)?,
-        Intent::UpdateRecord { object, id, fields, expected_version } => {
-            update_record(&mut draft, lookup, object, *id, fields, *expected_version)?
+        Intent::CreateRecord { object, fields } => {
+            create_record(&mut draft, lookup, object, fields)?
         }
-        Intent::DeleteRecord { object, id, expected_version } => {
-            delete_record(&mut draft, lookup, object, *id, *expected_version)?
-        }
+        Intent::UpdateRecord {
+            object,
+            id,
+            fields,
+            expected_version,
+        } => update_record(&mut draft, lookup, object, *id, fields, *expected_version)?,
+        Intent::DeleteRecord {
+            object,
+            id,
+            expected_version,
+        } => delete_record(&mut draft, lookup, object, *id, *expected_version)?,
     };
     Ok(draft.finish(output))
 }
@@ -75,39 +101,49 @@ pub fn needs(schema: Option<&TenantSchema>, intent: &Intent) -> Vec<Need> {
         return Vec::new();
     };
     let mut out = BTreeSet::new();
-    let field_needs = |out: &mut BTreeSet<Need>,
-                       object: &ObjectTypeId,
-                       fields: &BTreeMap<FieldId, Value>| {
-        let Some(def) = schema.objects.get(object) else {
-            return;
-        };
-        for (id, value) in fields {
-            let Some(field) = def.fields.get(id) else {
-                continue;
+    let field_needs =
+        |out: &mut BTreeSet<Need>, object: &ObjectTypeId, fields: &BTreeMap<FieldId, Value>| {
+            let Some(def) = schema.objects.get(object) else {
+                return;
             };
-            if field.unique && !value.is_null() {
-                out.insert(Need::ByField {
-                    object: object.clone(),
-                    field: id.clone(),
-                    value: value.clone(),
-                });
-            }
-            if let Some((target, _, _)) = field.ty.ref_target() {
-                for id in refs_in(value) {
-                    out.insert(Need::Record { object: target.clone(), id });
+            for (id, value) in fields {
+                let Some(field) = def.fields.get(id) else {
+                    continue;
+                };
+                if field.unique && !value.is_null() {
+                    out.insert(Need::ByField {
+                        object: object.clone(),
+                        field: id.clone(),
+                        value: value.clone(),
+                    });
+                }
+                if let Some((target, _, _)) = field.ty.ref_target() {
+                    for id in refs_in(value) {
+                        out.insert(Need::Record {
+                            object: target.clone(),
+                            id,
+                        });
+                    }
                 }
             }
-        }
-    };
+        };
     match intent {
         Intent::CreateTenant { .. } | Intent::AssignRole { .. } | Intent::RevokeRole { .. } => {}
         Intent::CreateRecord { object, fields } => field_needs(&mut out, object, fields),
-        Intent::UpdateRecord { object, id, fields, .. } => {
-            out.insert(Need::Record { object: object.clone(), id: *id });
+        Intent::UpdateRecord {
+            object, id, fields, ..
+        } => {
+            out.insert(Need::Record {
+                object: object.clone(),
+                id: *id,
+            });
             field_needs(&mut out, object, fields);
         }
         Intent::DeleteRecord { object, id, .. } => {
-            out.insert(Need::Record { object: object.clone(), id: *id });
+            out.insert(Need::Record {
+                object: object.clone(),
+                id: *id,
+            });
             for (from, field, _) in schema.referrers(object) {
                 out.insert(Need::ByField {
                     object: from.id.clone(),
@@ -226,8 +262,10 @@ impl<'a> Draft<'a> {
                 body,
             })
             .collect();
-        let mut effects: Vec<Effect> =
-            events.iter().map(|event| Effect::Publish { seq: event.seq }).collect();
+        let mut effects: Vec<Effect> = events
+            .iter()
+            .map(|event| Effect::Publish { seq: event.seq })
+            .collect();
         effects.extend(self.effects);
         Transition {
             delta: StateDelta {
@@ -252,11 +290,16 @@ fn create_tenant(
     owner: &crate::ids::PrincipalId,
 ) -> Result<Transition, DomainError> {
     if ctx.principal != Principal::System {
-        return Err(DomainError::new(ErrorKind::Unauthorized, "only the system creates tenants")
-            .with(vec![Check::fail("policy:builtin_system", "CreateTenant")]));
+        return Err(
+            DomainError::new(ErrorKind::Unauthorized, "only the system creates tenants")
+                .with(vec![Check::fail("policy:builtin_system", "CreateTenant")]),
+        );
     }
     if name.trim().is_empty() {
-        return Err(DomainError::new(ErrorKind::InvalidIntent, "a tenant needs a name"));
+        return Err(DomainError::new(
+            ErrorKind::InvalidIntent,
+            "a tenant needs a name",
+        ));
     }
     let revision = StateRevision(1);
     let event = DomainEvent {
@@ -266,7 +309,9 @@ fn create_tenant(
         at: ctx.now,
         principal: ctx.principal.clone(),
         correlation: ctx.correlation.clone(),
-        body: EventBody::TenantCreated { name: name.to_string() },
+        body: EventBody::TenantCreated {
+            name: name.to_string(),
+        },
     };
     Ok(Transition {
         delta: StateDelta {
@@ -276,7 +321,9 @@ fn create_tenant(
             next_record: 1,
             event_seq: 1,
             ops: vec![
-                DeltaOp::CreateTenant { name: name.to_string() },
+                DeltaOp::CreateTenant {
+                    name: name.to_string(),
+                },
                 DeltaOp::PutSchema(Arc::new(TenantSchema::genesis())),
                 DeltaOp::PutMember {
                     principal: owner.clone(),
@@ -303,11 +350,18 @@ fn object_def<'a>(
         .ok_or_else(|| draft.reject(ErrorKind::UnknownObject, format!("no object type {object}")))
 }
 
-fn check_version(draft: &Draft<'_>, record: &Record, expected: Option<u64>) -> Result<(), DomainError> {
+fn check_version(
+    draft: &Draft<'_>,
+    record: &Record,
+    expected: Option<u64>,
+) -> Result<(), DomainError> {
     match expected {
         Some(version) if version != record.version => Err(draft.reject(
             ErrorKind::VersionConflict,
-            format!("record is at version {}, expected {version}", record.version),
+            format!(
+                "record is at version {}, expected {version}",
+                record.version
+            ),
         )),
         _ => Ok(()),
     }
@@ -324,8 +378,11 @@ fn create_record(
     let roles = roles_of(draft.tenant, &ctx.principal);
     let no_params = BTreeMap::new();
 
-    let mut values: BTreeMap<FieldId, Value> =
-        fields.iter().filter(|(_, v)| !v.is_null()).map(|(k, v)| (k.clone(), v.clone())).collect();
+    let mut values: BTreeMap<FieldId, Value> = fields
+        .iter()
+        .filter(|(_, v)| !v.is_null())
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
     for field in def.fields.values() {
         if fields.contains_key(&field.id) {
             continue;
@@ -341,7 +398,10 @@ fn create_record(
                 roles: &roles,
             };
             let value = expr::eval(default, &env).map_err(|e| {
-                draft.reject(ErrorKind::Evaluation, format!("default of {}: {e}", field.id))
+                draft.reject(
+                    ErrorKind::Evaluation,
+                    format!("default of {}: {e}", field.id),
+                )
             })?;
             if !value.is_null() {
                 draft.evidence.push(Check::pass(
@@ -369,14 +429,19 @@ fn create_record(
     draft.require(
         Action::Create,
         &Resource::Object(object.clone()),
-        Subject { old: None, new: Some(&candidate) },
+        Subject {
+            old: None,
+            new: Some(&candidate),
+        },
     )?;
 
     for workflow in draft.tenant.schema.workflows_of(object) {
         let rule = format!("workflow:{}:initial", workflow.id);
         match candidate.get(&workflow.field) {
             Value::Str(state) if workflow.initial.contains(state) => {
-                draft.evidence.push(Check::pass(rule, format!("starts in {state}")));
+                draft
+                    .evidence
+                    .push(Check::pass(rule, format!("starts in {state}")));
             }
             other => {
                 draft.evidence.push(Check::fail(
@@ -391,14 +456,28 @@ fn create_record(
         }
     }
 
-    validate_record(lookup, &draft.tenant.schema, def, &candidate, None, &ctx.principal, ctx.now)?
-        .into_result(&mut draft.evidence)?;
+    validate_record(
+        lookup,
+        &draft.tenant.schema,
+        def,
+        &candidate,
+        None,
+        &ctx.principal,
+        ctx.now,
+    )?
+    .into_result(&mut draft.evidence)?;
 
     let record = Arc::new(candidate);
     draft.next_record += 1;
     draft.ops.push(DeltaOp::PutRecord(record.clone()));
-    draft.events.push(EventBody::RecordCreated { record: record.clone() });
-    Ok(Output::Record { object: object.clone(), id: record.id, version: 1 })
+    draft.events.push(EventBody::RecordCreated {
+        record: record.clone(),
+    });
+    Ok(Output::Record {
+        object: object.clone(),
+        id: record.id,
+        version: 1,
+    })
 }
 
 fn stored<'a>(
@@ -439,14 +518,20 @@ fn update_record(
     draft.require(
         Action::Update,
         &Resource::Object(object.clone()),
-        Subject { old: Some(old), new: Some(&candidate) },
+        Subject {
+            old: Some(old),
+            new: Some(&candidate),
+        },
     )?;
     check_version(draft, old, expected_version)?;
 
     let roles = roles_of(draft.tenant, &ctx.principal);
     let no_params = BTreeMap::new();
     for workflow in draft.tenant.schema.workflows_of(object) {
-        let (from, to) = (old.get(&workflow.field), candidate.get(&workflow.field).clone());
+        let (from, to) = (
+            old.get(&workflow.field),
+            candidate.get(&workflow.field).clone(),
+        );
         if from == &to {
             continue;
         }
@@ -491,7 +576,10 @@ fn update_record(
         let mut assigned = Vec::new();
         for (field, value) in &step.set {
             let value = expr::eval(value, &env).map_err(|e| {
-                draft.reject(ErrorKind::Evaluation, format!("{}: set {field}: {e}", step.name))
+                draft.reject(
+                    ErrorKind::Evaluation,
+                    format!("{}: set {field}: {e}", step.name),
+                )
             })?;
             assigned.push((field.clone(), value));
         }
@@ -522,8 +610,15 @@ fn update_record(
     let version = candidate.version;
     let after = Arc::new(candidate);
     draft.ops.push(DeltaOp::PutRecord(after.clone()));
-    draft.events.push(EventBody::RecordUpdated { before: old.clone(), after });
-    Ok(Output::Record { object: object.clone(), id, version })
+    draft.events.push(EventBody::RecordUpdated {
+        before: old.clone(),
+        after,
+    });
+    Ok(Output::Record {
+        object: object.clone(),
+        id,
+        version,
+    })
 }
 
 fn delete_record(
@@ -536,12 +631,19 @@ fn delete_record(
     object_def(draft, object)?;
     let ctx = draft.ctx;
     let old = stored(draft, lookup, object, id)?;
-    draft.require(Action::Delete, &Resource::Object(object.clone()), Subject::stored(old))?;
+    draft.require(
+        Action::Delete,
+        &Resource::Object(object.clone()),
+        Subject::stored(old),
+    )?;
     check_version(draft, old, expected_version)?;
 
     let target = Value::Ref(id);
     for (from, field, is_list) in draft.tenant.schema.referrers(object) {
-        let (_, on_delete, _) = field.ty.ref_target().expect("referrers are reference fields");
+        let (_, on_delete, _) = field
+            .ty
+            .ref_target()
+            .expect("referrers are reference fields");
         for referrer in lookup.by_field(&from.id, &field.id, &target)? {
             if referrer.id == id && from.id == *object {
                 continue;
@@ -561,7 +663,8 @@ fn delete_record(
             let mut cleared = Record::clone(referrer);
             match cleared.fields.get(&field.id) {
                 Some(Value::List(items)) => {
-                    let kept: Vec<Value> = items.iter().filter(|v| **v != target).cloned().collect();
+                    let kept: Vec<Value> =
+                        items.iter().filter(|v| **v != target).cloned().collect();
                     cleared.fields.insert(field.id.clone(), Value::List(kept));
                 }
                 _ => {
@@ -571,15 +674,29 @@ fn delete_record(
             cleared.version += 1;
             cleared.updated_at = ctx.now;
             let after = Arc::new(cleared);
-            draft.evidence.push(Check::pass(rule, format!("cleared on {} {}", from.id, referrer.id)));
+            draft.evidence.push(Check::pass(
+                rule,
+                format!("cleared on {} {}", from.id, referrer.id),
+            ));
             draft.ops.push(DeltaOp::PutRecord(after.clone()));
-            draft.events.push(EventBody::RecordUpdated { before: referrer.clone(), after });
+            draft.events.push(EventBody::RecordUpdated {
+                before: referrer.clone(),
+                after,
+            });
         }
     }
 
-    draft.ops.push(DeltaOp::DeleteRecord { object: object.clone(), id });
-    draft.events.push(EventBody::RecordDeleted { before: old.clone() });
-    Ok(Output::Deleted { object: object.clone(), id })
+    draft.ops.push(DeltaOp::DeleteRecord {
+        object: object.clone(),
+        id,
+    });
+    draft.events.push(EventBody::RecordDeleted {
+        before: old.clone(),
+    });
+    Ok(Output::Deleted {
+        object: object.clone(),
+        id,
+    })
 }
 
 fn change_member(
@@ -595,7 +712,12 @@ fn change_member(
     if *role == public_role() {
         return Err(draft.reject(ErrorKind::InvalidIntent, "everyone already holds public"));
     }
-    let mut roles = draft.tenant.members.get(principal).cloned().unwrap_or_default();
+    let mut roles = draft
+        .tenant
+        .members
+        .get(principal)
+        .cloned()
+        .unwrap_or_default();
     if grant {
         roles.insert(role.clone());
     } else {
@@ -607,14 +729,25 @@ fn change_member(
             .filter(|(p, r)| *p != principal && r.contains(&owner_role()))
             .count();
         if *role == owner_role() && owners == 0 {
-            return Err(draft.reject(ErrorKind::InvalidIntent, "a tenant keeps at least one owner"));
+            return Err(draft.reject(
+                ErrorKind::InvalidIntent,
+                "a tenant keeps at least one owner",
+            ));
         }
     }
     if roles.is_empty() {
-        draft.effects.push(Effect::RevokeSessions { principal: principal.clone() });
+        draft.effects.push(Effect::RevokeSessions {
+            principal: principal.clone(),
+        });
     }
-    draft.ops.push(DeltaOp::PutMember { principal: principal.clone(), roles: roles.clone() });
-    draft.events.push(EventBody::MemberChanged { principal: principal.clone(), roles });
+    draft.ops.push(DeltaOp::PutMember {
+        principal: principal.clone(),
+        roles: roles.clone(),
+    });
+    draft.events.push(EventBody::MemberChanged {
+        principal: principal.clone(),
+        roles,
+    });
     Ok(Output::Member)
 }
 
@@ -624,7 +757,10 @@ fn apply_change(schema: &mut TenantSchema, change: &SchemaChange) -> Result<Stri
         schema: &'a mut TenantSchema,
         id: &ObjectTypeId,
     ) -> Result<&'a mut ObjectTypeDef, String> {
-        schema.objects.get_mut(id).ok_or_else(|| format!("no object type {id}"))
+        schema
+            .objects
+            .get_mut(id)
+            .ok_or_else(|| format!("no object type {id}"))
     }
     Ok(match change {
         SchemaChange::DefineObject { id, label } => {
@@ -641,17 +777,29 @@ fn apply_change(schema: &mut TenantSchema, change: &SchemaChange) -> Result<Stri
             format!("define object {id}")
         }
         SchemaChange::DefineField { object: id, field } => {
-            let previous = object(schema, id)?.fields.insert(field.id.clone(), field.clone());
+            let previous = object(schema, id)?
+                .fields
+                .insert(field.id.clone(), field.clone());
             match previous {
                 Some(_) => format!("redefine field {id}.{}", field.id),
                 None => format!("define field {id}.{}", field.id),
             }
         }
-        SchemaChange::DefineRelationship { object: id, field, label, target, on_delete, required } => {
+        SchemaChange::DefineRelationship {
+            object: id,
+            field,
+            label,
+            target,
+            on_delete,
+            required,
+        } => {
             let def = FieldDef {
                 id: field.clone(),
                 label: label.clone(),
-                ty: FieldType::Ref { target: target.clone(), on_delete: *on_delete },
+                ty: FieldType::Ref {
+                    target: target.clone(),
+                    on_delete: *on_delete,
+                },
                 required: *required,
                 unique: false,
                 default: None,
@@ -666,11 +814,19 @@ fn apply_change(schema: &mut TenantSchema, change: &SchemaChange) -> Result<Stri
                 .ok_or_else(|| format!("no field {id}.{field}"))?;
             format!("remove field {id}.{field}")
         }
-        SchemaChange::DefineConstraint { object: id, constraint } => {
-            object(schema, id)?.constraints.insert(constraint.id.clone(), constraint.clone());
+        SchemaChange::DefineConstraint {
+            object: id,
+            constraint,
+        } => {
+            object(schema, id)?
+                .constraints
+                .insert(constraint.id.clone(), constraint.clone());
             format!("define constraint {id}.{}", constraint.id)
         }
-        SchemaChange::RemoveConstraint { object: id, constraint } => {
+        SchemaChange::RemoveConstraint {
+            object: id,
+            constraint,
+        } => {
             object(schema, id)?
                 .constraints
                 .remove(constraint)
@@ -689,15 +845,23 @@ fn apply_change(schema: &mut TenantSchema, change: &SchemaChange) -> Result<Stri
             format!("define policy {}", policy.id)
         }
         SchemaChange::RemovePolicy(id) => {
-            schema.policies.remove(id).ok_or_else(|| format!("no policy {id}"))?;
+            schema
+                .policies
+                .remove(id)
+                .ok_or_else(|| format!("no policy {id}"))?;
             format!("remove policy {id}")
         }
         SchemaChange::DefineWorkflow(workflow) => {
-            schema.workflows.insert(workflow.id.clone(), workflow.clone());
+            schema
+                .workflows
+                .insert(workflow.id.clone(), workflow.clone());
             format!("define workflow {}", workflow.id)
         }
         SchemaChange::RemoveWorkflow(id) => {
-            schema.workflows.remove(id).ok_or_else(|| format!("no workflow {id}"))?;
+            schema
+                .workflows
+                .remove(id)
+                .ok_or_else(|| format!("no workflow {id}"))?;
             format!("remove workflow {id}")
         }
         SchemaChange::DefineQuery(query) => {
@@ -705,7 +869,10 @@ fn apply_change(schema: &mut TenantSchema, change: &SchemaChange) -> Result<Stri
             format!("define query {}", query.id)
         }
         SchemaChange::RemoveQuery(id) => {
-            schema.queries.remove(id).ok_or_else(|| format!("no query {id}"))?;
+            schema
+                .queries
+                .remove(id)
+                .ok_or_else(|| format!("no query {id}"))?;
             format!("remove query {id}")
         }
         SchemaChange::DefineView(view) => {
@@ -713,7 +880,10 @@ fn apply_change(schema: &mut TenantSchema, change: &SchemaChange) -> Result<Stri
             format!("define view {}", view.id)
         }
         SchemaChange::RemoveView(id) => {
-            schema.views.remove(id).ok_or_else(|| format!("no view {id}"))?;
+            schema
+                .views
+                .remove(id)
+                .ok_or_else(|| format!("no view {id}"))?;
             format!("remove view {id}")
         }
     })
@@ -765,7 +935,11 @@ pub fn plan_migration(
     let problems = schema.problems();
     if !problems.is_empty() {
         let message = problems[0].clone();
-        evidence.extend(problems.into_iter().map(|p| Check::fail("schema:consistency", p)));
+        evidence.extend(
+            problems
+                .into_iter()
+                .map(|p| Check::fail("schema:consistency", p)),
+        );
         return Err(DomainError::new(ErrorKind::InvalidSchema, message).with(evidence));
     }
     schema.version = SchemaVersion(current.version.0 + 1);
@@ -773,8 +947,10 @@ pub fn plan_migration(
     let mut rewritten = Vec::new();
     let mut violations = Vec::new();
     for object in touched_objects(changes) {
-        let (Some(def), true) = (schema.objects.get(&object), current.objects.contains_key(&object))
-        else {
+        let (Some(def), true) = (
+            schema.objects.get(&object),
+            current.objects.contains_key(&object),
+        ) else {
             continue;
         };
         for record in lookup.all_of(&object)? {
@@ -787,12 +963,22 @@ pub fn plan_migration(
             let candidate = if stripped.len() == record.fields.len() {
                 record.clone()
             } else {
-                let rewritten_record = Arc::new(Record { fields: stripped, ..Record::clone(record) });
+                let rewritten_record = Arc::new(Record {
+                    fields: stripped,
+                    ..Record::clone(record)
+                });
                 rewritten.push(rewritten_record.clone());
                 rewritten_record
             };
-            let outcome =
-                validate_record(lookup, &schema, def, &candidate, None, &Principal::System, now)?;
+            let outcome = validate_record(
+                lookup,
+                &schema,
+                def,
+                &candidate,
+                None,
+                &Principal::System,
+                now,
+            )?;
             violations.extend(outcome.failed.into_iter().map(|failure| Violation {
                 object: object.clone(),
                 id: record.id,
@@ -801,7 +987,12 @@ pub fn plan_migration(
             }));
         }
     }
-    Ok(Migration { schema, summary, rewritten, violations })
+    Ok(Migration {
+        schema,
+        summary,
+        rewritten,
+        violations,
+    })
 }
 
 fn change_schema(
@@ -817,7 +1008,10 @@ fn change_schema(
         if expected != current {
             return Err(draft.reject(
                 ErrorKind::SchemaConflict,
-                format!("schema is at version {}, expected {}", current.0, expected.0),
+                format!(
+                    "schema is at version {}, expected {}",
+                    current.0, expected.0
+                ),
             ));
         }
     }
@@ -830,28 +1024,44 @@ fn change_schema(
         e.evidence = evidence;
         e
     })?;
-    draft
-        .evidence
-        .extend(migration.summary.iter().map(|line| Check::pass("schema:change", line.clone())));
+    draft.evidence.extend(
+        migration
+            .summary
+            .iter()
+            .map(|line| Check::pass("schema:change", line.clone())),
+    );
 
-    let affected: BTreeSet<(ObjectTypeId, RecordId)> =
-        migration.violations.iter().map(|v| (v.object.clone(), v.id)).collect();
+    let affected: BTreeSet<(ObjectTypeId, RecordId)> = migration
+        .violations
+        .iter()
+        .map(|v| (v.object.clone(), v.id))
+        .collect();
     for violation in &migration.violations {
         draft.evidence.push(Check::fail(
-            format!("existing:{}/{}:{}", violation.object, violation.id, violation.check.rule),
+            format!(
+                "existing:{}/{}:{}",
+                violation.object, violation.id, violation.check.rule
+            ),
             violation.check.detail.clone(),
         ));
     }
     if existing == ExistingData::Reject && !affected.is_empty() {
         return Err(draft.reject(
             ErrorKind::MigrationRejected,
-            format!("{} existing record(s) would not conform to the new schema", affected.len()),
+            format!(
+                "{} existing record(s) would not conform to the new schema",
+                affected.len()
+            ),
         ));
     }
 
     let version = migration.schema.version;
-    draft.ops.push(DeltaOp::PutSchema(Arc::new(migration.schema)));
-    draft.ops.extend(migration.rewritten.into_iter().map(DeltaOp::PutRecord));
+    draft
+        .ops
+        .push(DeltaOp::PutSchema(Arc::new(migration.schema)));
+    draft
+        .ops
+        .extend(migration.rewritten.into_iter().map(DeltaOp::PutRecord));
     draft.events.push(EventBody::SchemaChanged {
         version,
         summary: migration.summary,
@@ -870,7 +1080,10 @@ pub fn apply_delta(
     let conflict = |found: Option<StateRevision>| {
         DomainError::new(
             ErrorKind::VersionConflict,
-            format!("delta is based on {:?}, state is at {found:?}", delta.base_revision),
+            format!(
+                "delta is based on {:?}, state is at {found:?}",
+                delta.base_revision
+            ),
         )
     };
     let mut next = match (tenant, delta.base_revision) {
@@ -882,7 +1095,9 @@ pub fn apply_delta(
                     DeltaOp::CreateTenant { name } => Some(name.clone()),
                     _ => None,
                 })
-                .ok_or_else(|| DomainError::new(ErrorKind::InvalidIntent, "delta creates no tenant"))?;
+                .ok_or_else(|| {
+                    DomainError::new(ErrorKind::InvalidIntent, "delta creates no tenant")
+                })?;
             TenantState {
                 id: delta.tenant.clone(),
                 name,

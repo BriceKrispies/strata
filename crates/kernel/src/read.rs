@@ -11,7 +11,12 @@ use std::sync::Arc;
 
 /// Whether a principal may read a record. The same decision `read` makes per row; the shell
 /// uses it to decide who receives an event about the record.
-pub fn visible(tenant: &TenantState, principal: &Principal, record: &Record, now: Timestamp) -> bool {
+pub fn visible(
+    tenant: &TenantState,
+    principal: &Principal,
+    record: &Record,
+    now: Timestamp,
+) -> bool {
     authorize(
         tenant,
         &tenant.schema,
@@ -32,23 +37,37 @@ pub fn read_needs(schema: &TenantSchema, request: &ReadRequest) -> Vec<Need> {
             .get(query)
             .map(|def| vec![Need::AllOf(def.object.clone())])
             .unwrap_or_default(),
-        ReadRequest::Records { object, ids } => {
-            ids.iter().map(|id| Need::Record { object: object.clone(), id: *id }).collect()
-        }
+        ReadRequest::Records { object, ids } => ids
+            .iter()
+            .map(|id| Need::Record {
+                object: object.clone(),
+                id: *id,
+            })
+            .collect(),
     }
 }
 
 /// Answer a read request against a snapshot.
-pub fn read(state: &State, request: &ReadRequest, ctx: &Context) -> Result<ReadResult, DomainError> {
+pub fn read(
+    state: &State,
+    request: &ReadRequest,
+    ctx: &Context,
+) -> Result<ReadResult, DomainError> {
     if state.tenant_id != ctx.tenant {
-        return Err(DomainError::new(ErrorKind::TenantMismatch, "snapshot is of another tenant"));
+        return Err(DomainError::new(
+            ErrorKind::TenantMismatch,
+            "snapshot is of another tenant",
+        ));
     }
     let tenant = state
         .tenant
         .as_deref()
         .filter(|tenant| tenant.id == ctx.tenant)
         .ok_or_else(|| DomainError::new(ErrorKind::TenantNotFound, "no such tenant"))?;
-    let lookup = Lookup { tenant, coverage: &state.coverage };
+    let lookup = Lookup {
+        tenant,
+        coverage: &state.coverage,
+    };
     let schema = &tenant.schema;
 
     let rows: Vec<Arc<Record>> = match request {
@@ -96,8 +115,9 @@ pub fn read(state: &State, request: &ReadRequest, ctx: &Context) -> Result<ReadR
                         roles: &roles,
                     };
                     let keep = expr::holds(filter, &env).map_err(|e| {
-                        DomainError::new(ErrorKind::Evaluation, format!("query {query}: {e}"))
-                            .with(vec![Check::fail(format!("query:{query}"), filter.to_string())])
+                        DomainError::new(ErrorKind::Evaluation, format!("query {query}: {e}")).with(
+                            vec![Check::fail(format!("query:{query}"), filter.to_string())],
+                        )
                     })?;
                     if !keep {
                         continue;
@@ -114,7 +134,11 @@ pub fn read(state: &State, request: &ReadRequest, ctx: &Context) -> Result<ReadR
             keyed.sort_by(|(a, ra), (b, rb)| {
                 for (i, order) in def.order.iter().enumerate() {
                     let ordering = a[i].cmp(&b[i]);
-                    let ordering = if order.descending { ordering.reverse() } else { ordering };
+                    let ordering = if order.descending {
+                        ordering.reverse()
+                    } else {
+                        ordering
+                    };
                     if ordering.is_ne() {
                         return ordering;
                     }
@@ -122,8 +146,16 @@ pub fn read(state: &State, request: &ReadRequest, ctx: &Context) -> Result<ReadR
                 ra.id.cmp(&rb.id)
             });
             let limit = def.limit.map_or(usize::MAX, |n| n as usize);
-            keyed.into_iter().take(limit).map(|(_, record)| record).collect()
+            keyed
+                .into_iter()
+                .take(limit)
+                .map(|(_, record)| record)
+                .collect()
         }
     };
-    Ok(ReadResult { rows, revision: tenant.revision, schema_version: schema.version })
+    Ok(ReadResult {
+        rows,
+        revision: tenant.revision,
+        schema_version: schema.version,
+    })
 }

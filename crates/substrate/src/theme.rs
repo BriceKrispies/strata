@@ -20,7 +20,10 @@ pub struct Theme {
 
 impl Default for Theme {
     fn default() -> Self {
-        Theme { accent: ACCENTS[0], paper: PAPERS[0] }
+        Theme {
+            accent: ACCENTS[0],
+            paper: PAPERS[0],
+        }
     }
 }
 
@@ -44,7 +47,10 @@ pub fn resolve(fields: &BTreeMap<FieldId, Value>) -> (Theme, Vec<&'static str>) 
             _ => fallback,
         }
     };
-    let theme = Theme { accent: choose("accent", &ACCENTS, ACCENTS[0]), paper: choose("paper", &PAPERS, PAPERS[0]) };
+    let theme = Theme {
+        accent: choose("accent", &ACCENTS, ACCENTS[0]),
+        paper: choose("paper", &PAPERS, PAPERS[0]),
+    };
     (theme, rejected)
 }
 
@@ -53,12 +59,21 @@ mod tests {
     use super::*;
 
     fn fields(pairs: &[(&str, &str)]) -> BTreeMap<FieldId, Value> {
-        pairs.iter().map(|(k, v)| (FieldId::new(*k).unwrap(), Value::Str((*v).to_string()))).collect()
+        pairs
+            .iter()
+            .map(|(k, v)| (FieldId::new(*k).unwrap(), Value::Str((*v).to_string())))
+            .collect()
     }
 
     #[test]
     fn known_tokens_are_selected_and_anything_else_falls_back() {
-        assert_eq!(resolve(&fields(&[("accent", "clay"), ("paper", "stone")])).0, Theme { accent: "clay", paper: "stone" });
+        assert_eq!(
+            resolve(&fields(&[("accent", "clay"), ("paper", "stone")])).0,
+            Theme {
+                accent: "clay",
+                paper: "stone"
+            }
+        );
         let (theme, rejected) = resolve(&fields(&[("accent", "red; background: url(//evil)")]));
         assert_eq!(theme, Theme::default());
         assert_eq!(rejected, vec!["accent"]);

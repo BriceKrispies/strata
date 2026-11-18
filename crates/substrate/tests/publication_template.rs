@@ -1,3 +1,4 @@
+#![allow(clippy::err_expect)] // `unwrap_err` would print a whole world when it fails.
 //! The publication template is tenant metadata only. These tests install it through the kernel
 //! and check that the blog's behaviour follows from that metadata.
 
@@ -35,7 +36,9 @@ fn bundle() -> Bundle {
             }
         ]
     });
-    doc.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+    doc.as_object_mut()
+        .unwrap()
+        .extend(extra.as_object().unwrap().clone());
     Bundle::from_json(&doc.to_string()).unwrap()
 }
 
@@ -72,7 +75,12 @@ fn slugs(world: &World, principal: Principal, path: &str, section: &str) -> Vec<
         if name == section {
             found = rows
                 .iter()
-                .map(|r| r.get(&FieldId::new("slug").unwrap()).as_str().unwrap_or("").to_string())
+                .map(|r| {
+                    r.get(&FieldId::new("slug").unwrap())
+                        .as_str()
+                        .unwrap_or("")
+                        .to_string()
+                })
                 .collect();
         }
     }
@@ -84,29 +92,68 @@ fn the_template_installs_and_publishing_stamps_the_time() {
     let world = world();
     let tenant = &world.tenants[&TenantId::new("gazette").unwrap()];
     assert!(tenant.schema.problems().is_empty());
-    let post = tenant.records_of(&ObjectTypeId::new("post").unwrap()).next().unwrap();
-    assert_eq!(post.get(&FieldId::new("status").unwrap()), &Value::Str("published".into()));
-    assert_eq!(post.get(&FieldId::new("published_at").unwrap()), &Value::Time(1_767_513_600_000));
+    let post = tenant
+        .records_of(&ObjectTypeId::new("post").unwrap())
+        .next()
+        .unwrap();
+    assert_eq!(
+        post.get(&FieldId::new("status").unwrap()),
+        &Value::Str("published".into())
+    );
+    assert_eq!(
+        post.get(&FieldId::new("published_at").unwrap()),
+        &Value::Time(1_767_513_600_000)
+    );
 }
 
 #[test]
 fn readers_see_published_posts_and_authors_also_see_their_own_drafts() {
     let world = world();
-    assert_eq!(slugs(&world, Principal::Anonymous, "/", "recent"), ["first"]);
-    assert_eq!(slugs(&world, Principal::Anonymous, "/posts/unfinished", "post"), Vec::<String>::new());
-    assert_eq!(slugs(&world, user("ann"), "/posts/unfinished", "post"), ["unfinished"]);
-    assert_eq!(slugs(&world, user("bob"), "/posts/unfinished", "post"), Vec::<String>::new());
-    assert_eq!(slugs(&world, user("ann"), "/desk", "posts"), ["unfinished", "first"]);
-    assert_eq!(slugs(&world, user("ed"), "/desk", "posts"), ["unfinished", "first"]);
-    assert_eq!(slugs(&world, Principal::Anonymous, "/desk", "posts"), Vec::<String>::new());
+    assert_eq!(
+        slugs(&world, Principal::Anonymous, "/", "recent"),
+        ["first"]
+    );
+    assert_eq!(
+        slugs(&world, Principal::Anonymous, "/posts/unfinished", "post"),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        slugs(&world, user("ann"), "/posts/unfinished", "post"),
+        ["unfinished"]
+    );
+    assert_eq!(
+        slugs(&world, user("bob"), "/posts/unfinished", "post"),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        slugs(&world, user("ann"), "/desk", "posts"),
+        ["unfinished", "first"]
+    );
+    assert_eq!(
+        slugs(&world, user("ed"), "/desk", "posts"),
+        ["unfinished", "first"]
+    );
+    assert_eq!(
+        slugs(&world, Principal::Anonymous, "/desk", "posts"),
+        Vec::<String>::new()
+    );
 }
 
 #[test]
 fn a_dependent_section_reads_through_the_single_row_it_depends_on() {
     let world = world();
-    assert_eq!(slugs(&world, Principal::Anonymous, "/topics/craft", "posts"), ["first"]);
-    assert_eq!(slugs(&world, Principal::Anonymous, "/topics/nowhere", "posts"), Vec::<String>::new());
-    assert_eq!(slugs(&world, Principal::Anonymous, "/authors/ann", "posts"), ["first"]);
+    assert_eq!(
+        slugs(&world, Principal::Anonymous, "/topics/craft", "posts"),
+        ["first"]
+    );
+    assert_eq!(
+        slugs(&world, Principal::Anonymous, "/topics/nowhere", "posts"),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        slugs(&world, Principal::Anonymous, "/authors/ann", "posts"),
+        ["first"]
+    );
 }
 
 #[test]
@@ -118,17 +165,49 @@ fn the_theme_and_cover_rules_are_constraints_in_the_metadata() {
         fields: BTreeMap::from([(FieldId::new(field).unwrap(), Value::Str(value.into()))]),
         expected_version: None,
     };
-    let bad_accent = world.step(&update("publication", 1, "accent", "url(evil)"), &ctx(user("ed"))).err().expect("rejected");
+    let bad_accent = world
+        .step(
+            &update("publication", 1, "accent", "url(evil)"),
+            &ctx(user("ed")),
+        )
+        .expect_err("rejected");
     assert_eq!(bad_accent.kind, ErrorKind::ConstraintViolated);
-    assert!(world.step(&update("publication", 1, "accent", "clay"), &ctx(user("ed"))).is_ok());
+    assert!(world
+        .step(
+            &update("publication", 1, "accent", "clay"),
+            &ctx(user("ed"))
+        )
+        .is_ok());
     assert_eq!(
-        world.step(&update("publication", 1, "accent", "clay"), &ctx(user("ann"))).err().expect("rejected").kind,
+        world
+            .step(
+                &update("publication", 1, "accent", "clay"),
+                &ctx(user("ann"))
+            )
+            .expect_err("rejected")
+            .kind,
         ErrorKind::Unauthorized
     );
-    let remote_cover = world.step(&update("post", 4, "cover", "https://example.com/x.png"), &ctx(user("ann"))).err().expect("rejected");
-    assert!(remote_cover.evidence.iter().any(|c| c.rule == "constraint:post.cover_is_local" && !c.passed));
-    let undescribed = world.step(&update("post", 4, "cover", "/media/kiln.svg"), &ctx(user("ann"))).err().expect("rejected");
-    assert!(undescribed.evidence.iter().any(|c| c.rule == "constraint:post.cover_is_described" && !c.passed));
+    let remote_cover = world
+        .step(
+            &update("post", 4, "cover", "https://example.com/x.png"),
+            &ctx(user("ann")),
+        )
+        .expect_err("rejected");
+    assert!(remote_cover
+        .evidence
+        .iter()
+        .any(|c| c.rule == "constraint:post.cover_is_local" && !c.passed));
+    let undescribed = world
+        .step(
+            &update("post", 4, "cover", "/media/kiln.svg"),
+            &ctx(user("ann")),
+        )
+        .expect_err("rejected");
+    assert!(undescribed
+        .evidence
+        .iter()
+        .any(|c| c.rule == "constraint:post.cover_is_described" && !c.passed));
 }
 
 #[test]
@@ -137,10 +216,19 @@ fn an_author_cannot_touch_another_authors_post() {
     let edit = Intent::UpdateRecord {
         object: ObjectTypeId::new("post").unwrap(),
         id: RecordId(4),
-        fields: BTreeMap::from([(FieldId::new("title").unwrap(), Value::Str("Hijacked".into()))]),
+        fields: BTreeMap::from([(
+            FieldId::new("title").unwrap(),
+            Value::Str("Hijacked".into()),
+        )]),
         expected_version: None,
     };
-    assert_eq!(world.step(&edit, &ctx(user("bob"))).err().expect("rejected").kind, ErrorKind::Unauthorized);
+    assert_eq!(
+        world
+            .step(&edit, &ctx(user("bob")))
+            .expect_err("rejected")
+            .kind,
+        ErrorKind::Unauthorized
+    );
     assert!(world.step(&edit, &ctx(user("ann"))).is_ok());
     assert!(world.step(&edit, &ctx(user("ed"))).is_ok());
 }

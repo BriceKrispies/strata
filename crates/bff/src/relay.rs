@@ -24,7 +24,11 @@ pub async fn relay(bff: Shared, visit: Visit, browser: WebSocket) {
     bff.sockets.fetch_add(1, Ordering::Relaxed);
     let reason = pump(&bff, &visit, browser).await;
     bff.sockets.fetch_sub(1, Ordering::Relaxed);
-    LOG.info("ws.relay_closed", &visit.correlation, json!({ "reason": reason }));
+    LOG.info(
+        "ws.relay_closed",
+        &visit.correlation,
+        json!({ "reason": reason }),
+    );
 }
 
 async fn pump(bff: &Shared, visit: &Visit, browser: WebSocket) -> &'static str {
@@ -49,15 +53,26 @@ async fn pump(bff: &Shared, visit: &Visit, browser: WebSocket) -> &'static str {
     let upstream = match tokio_tungstenite::connect_async(request).await {
         Ok((upstream, _)) => upstream,
         Err(error) => {
-            LOG.error("ws.upstream_failed", &visit.correlation, json!({ "error": error.to_string() }));
+            LOG.error(
+                "ws.upstream_failed",
+                &visit.correlation,
+                json!({ "error": error.to_string() }),
+            );
             let _ = to_browser
-                .send(BrowserMessage::Close(Some(CloseFrame { code: 1013, reason: "backend unavailable".into() })))
+                .send(BrowserMessage::Close(Some(CloseFrame {
+                    code: 1013,
+                    reason: "backend unavailable".into(),
+                })))
                 .await;
             return "backend unavailable";
         }
     };
     let (mut to_upstream, mut from_upstream) = upstream.split();
-    LOG.info("ws.relay_opened", &visit.correlation, json!({ "site": visit.site.as_str() }));
+    LOG.info(
+        "ws.relay_opened",
+        &visit.correlation,
+        json!({ "site": visit.site.as_str() }),
+    );
 
     // Everything bound for the browser goes through one bounded queue and one writer.
     let (outbound, mut queue) = mpsc::channel::<String>(QUEUE);
@@ -67,7 +82,12 @@ async fn pump(bff: &Shared, visit: &Visit, browser: WebSocket) -> &'static str {
                 return;
             }
         }
-        let _ = to_browser.send(BrowserMessage::Close(Some(CloseFrame { code: 1001, reason: "closing".into() }))).await;
+        let _ = to_browser
+            .send(BrowserMessage::Close(Some(CloseFrame {
+                code: 1001,
+                reason: "closing".into(),
+            })))
+            .await;
     });
 
     let reason = loop {

@@ -36,13 +36,20 @@ fn result(id: &str, statement: &str, mut violations: Vec<String>) -> InvariantRe
 
 /// Every invariant of one tenant's state.
 pub fn check_tenant(tenant: &TenantState) -> Vec<InvariantResult> {
-    let lookup = Lookup { tenant, coverage: &Coverage::Complete };
+    let lookup = Lookup {
+        tenant,
+        coverage: &Coverage::Complete,
+    };
     let schema = &tenant.schema;
-    let (mut shape, mut unique, mut refs, mut workflow, mut placement) = (vec![], vec![], vec![], vec![], vec![]);
+    let (mut shape, mut unique, mut refs, mut workflow, mut placement) =
+        (vec![], vec![], vec![], vec![], vec![]);
 
     for (object, records) in &tenant.records {
         let Some(def) = schema.objects.get(object) else {
-            placement.push(format!("{} record(s) of undefined object type {object}", records.len()));
+            placement.push(format!(
+                "{} record(s) of undefined object type {object}",
+                records.len()
+            ));
             continue;
         };
         for (id, record) in records {
@@ -51,10 +58,21 @@ pub fn check_tenant(tenant: &TenantState) -> Vec<InvariantResult> {
                 placement.push(format!("{at} is stored under the wrong key"));
             }
             if id.0 >= tenant.next_record {
-                placement.push(format!("{at} has an id the counter has not reached ({})", tenant.next_record));
+                placement.push(format!(
+                    "{at} has an id the counter has not reached ({})",
+                    tenant.next_record
+                ));
             }
             // Re-validate as the kernel would on a write, at the time the record was last written.
-            let outcome = validate_record(lookup, schema, def, record, None, &Principal::System, record.updated_at);
+            let outcome = validate_record(
+                lookup,
+                schema,
+                def,
+                record,
+                None,
+                &Principal::System,
+                record.updated_at,
+            );
             let failures = match outcome {
                 Ok(outcome) => outcome.failed,
                 Err(error) => {
@@ -75,14 +93,21 @@ pub fn check_tenant(tenant: &TenantState) -> Vec<InvariantResult> {
     }
 
     let mut membership = Vec::new();
-    if !tenant.members.values().any(|roles| roles.contains(&owner_role())) {
+    if !tenant
+        .members
+        .values()
+        .any(|roles| roles.contains(&owner_role()))
+    {
         membership.push("the tenant has no owner".to_string());
     }
     for (principal, roles) in &tenant.members {
         if roles.is_empty() {
             membership.push(format!("{principal} is a member with no role"));
         }
-        for role in roles.iter().filter(|role| !schema.roles.contains_key(*role)) {
+        for role in roles
+            .iter()
+            .filter(|role| !schema.roles.contains_key(*role))
+        {
             membership.push(format!("{principal} holds undefined role {role}"));
         }
     }
@@ -119,10 +144,17 @@ pub fn check_world(world: &World) -> Vec<InvariantResult> {
                     existing.violations.extend(prefixed);
                     existing.violations.truncate(20);
                 }
-                None => merged.push(InvariantResult { violations: prefixed.collect(), ..found }),
+                None => merged.push(InvariantResult {
+                    violations: prefixed.collect(),
+                    ..found
+                }),
             }
         }
     }
-    merged.push(result("tenant_ownership", "Every tenant's state is stored under that tenant's id", keys));
+    merged.push(result(
+        "tenant_ownership",
+        "Every tenant's state is stored under that tenant's id",
+        keys,
+    ));
     merged
 }

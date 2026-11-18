@@ -27,7 +27,10 @@ impl World {
     /// Run one intent and return the world after it. `self` is untouched.
     pub fn step(&self, intent: &Intent, ctx: &Context) -> Result<(World, Transition), DomainError> {
         let outcome = transition(&self.state(&ctx.tenant), intent, ctx)?;
-        let next = apply_delta(self.tenants.get(&ctx.tenant).map(Arc::as_ref), &outcome.delta)?;
+        let next = apply_delta(
+            self.tenants.get(&ctx.tenant).map(Arc::as_ref),
+            &outcome.delta,
+        )?;
         let mut tenants = self.tenants.clone();
         tenants.insert(ctx.tenant.clone(), Arc::new(next));
         Ok((World { tenants }, outcome))

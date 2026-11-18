@@ -18,12 +18,31 @@ struct Op {
 
 #[derive(Clone, Debug)]
 enum OpKind {
-    Create { title: String, slug: u8, rank: Option<i64>, author: Option<u64> },
-    Person { name: String },
-    Update { id: u64, title: Option<String>, status: Option<&'static str>, rank: Option<i64> },
-    Delete { object: &'static str, id: u64 },
-    RequireRank { grandfather: bool },
-    Revoke { who: usize },
+    Create {
+        title: String,
+        slug: u8,
+        rank: Option<i64>,
+        author: Option<u64>,
+    },
+    Person {
+        name: String,
+    },
+    Update {
+        id: u64,
+        title: Option<String>,
+        status: Option<&'static str>,
+        rank: Option<i64>,
+    },
+    Delete {
+        object: &'static str,
+        id: u64,
+    },
+    RequireRank {
+        grandfather: bool,
+    },
+    Revoke {
+        who: usize,
+    },
 }
 
 fn op_strategy() -> impl Strategy<Value = Op> {
@@ -39,30 +58,49 @@ fn op_strategy() -> impl Strategy<Value = Op> {
         1 => (0usize..5).prop_map(|who| OpKind::Revoke { who }),
     ];
     // Most actors belong to the tenant they act on; some come from the other tenant.
-    (0usize..2, 0usize..2, 0usize..6, kind, 0u8..10).prop_map(|(tenant, other, actor, kind, cross)| Op {
-        tenant,
-        actor_tenant: if cross == 0 { other } else { tenant },
-        actor,
-        kind,
-    })
+    (0usize..2, 0usize..2, 0usize..6, kind, 0u8..10).prop_map(
+        |(tenant, other, actor, kind, cross)| Op {
+            tenant,
+            actor_tenant: if cross == 0 { other } else { tenant },
+            actor,
+            kind,
+        },
+    )
 }
 
 fn intent_of(op: &Op) -> Intent {
     match &op.kind {
-        OpKind::Create { title, slug, rank, author } => {
-            let mut fields = BTreeMap::from([(field("title"), text(title)), (field("slug"), text(&format!("s{slug}")))]);
+        OpKind::Create {
+            title,
+            slug,
+            rank,
+            author,
+        } => {
+            let mut fields = BTreeMap::from([
+                (field("title"), text(title)),
+                (field("slug"), text(&format!("s{slug}"))),
+            ]);
             if let Some(rank) = rank {
                 fields.insert(field("rank"), Value::Int(*rank));
             }
             if let Some(author) = author {
                 fields.insert(field("author"), Value::Ref(RecordId(*author)));
             }
-            Intent::CreateRecord { object: object("note"), fields }
+            Intent::CreateRecord {
+                object: object("note"),
+                fields,
+            }
         }
-        OpKind::Person { name } => {
-            Intent::CreateRecord { object: object("person"), fields: BTreeMap::from([(field("name"), text(name))]) }
-        }
-        OpKind::Update { id, title, status, rank } => {
+        OpKind::Person { name } => Intent::CreateRecord {
+            object: object("person"),
+            fields: BTreeMap::from([(field("name"), text(name))]),
+        },
+        OpKind::Update {
+            id,
+            title,
+            status,
+            rank,
+        } => {
             let mut fields = BTreeMap::new();
             if let Some(title) = title {
                 fields.insert(field("title"), text(title));
@@ -73,15 +111,29 @@ fn intent_of(op: &Op) -> Intent {
             if let Some(rank) = rank {
                 fields.insert(field("rank"), Value::Int(*rank));
             }
-            Intent::UpdateRecord { object: object("note"), id: RecordId(*id), fields, expected_version: None }
+            Intent::UpdateRecord {
+                object: object("note"),
+                id: RecordId(*id),
+                fields,
+                expected_version: None,
+            }
         }
-        OpKind::Delete { object: name, id } => {
-            Intent::DeleteRecord { object: object(name), id: RecordId(*id), expected_version: None }
-        }
-        OpKind::RequireRank { grandfather } => Intent::ChangeSchema {
-            changes: vec![SchemaChange::DefineField { object: object("note"), field: field_def("rank", FieldType::Int, true) }],
+        OpKind::Delete { object: name, id } => Intent::DeleteRecord {
+            object: object(name),
+            id: RecordId(*id),
             expected_version: None,
-            existing: if *grandfather { ExistingData::Grandfather } else { ExistingData::Reject },
+        },
+        OpKind::RequireRank { grandfather } => Intent::ChangeSchema {
+            changes: vec![SchemaChange::DefineField {
+                object: object("note"),
+                field: field_def("rank", FieldType::Int, true),
+            }],
+            expected_version: None,
+            existing: if *grandfather {
+                ExistingData::Grandfather
+            } else {
+                ExistingData::Reject
+            },
         },
         OpKind::Revoke { who } => {
             let names = ["owner", "editor", "writer1", "writer2", "stranger"];
@@ -105,9 +157,15 @@ fn partial(tenant: &Arc<TenantState>, wanted: &BTreeSet<Need>) -> State {
     thin.records.clear();
     for need in wanted {
         let matching: Vec<Arc<Record>> = match need {
-            Need::Record { object, id } => tenant.record(object, *id).into_iter().cloned().collect(),
+            Need::Record { object, id } => {
+                tenant.record(object, *id).into_iter().cloned().collect()
+            }
             Need::AllOf(object) => tenant.records_of(object).cloned().collect(),
-            Need::ByField { object, field, value } => tenant
+            Need::ByField {
+                object,
+                field,
+                value,
+            } => tenant
                 .records_of(object)
                 .filter(|r| match r.get(field) {
                     Value::List(items) => items.contains(value),
@@ -117,10 +175,17 @@ fn partial(tenant: &Arc<TenantState>, wanted: &BTreeSet<Need>) -> State {
                 .collect(),
         };
         for record in matching {
-            thin.records.entry(record.object.clone()).or_default().insert(record.id, record);
+            thin.records
+                .entry(record.object.clone())
+                .or_default()
+                .insert(record.id, record);
         }
     }
-    State { tenant_id: tenant.id.clone(), tenant: Some(Arc::new(thin)), coverage: Coverage::Partial(wanted.clone()) }
+    State {
+        tenant_id: tenant.id.clone(),
+        tenant: Some(Arc::new(thin)),
+        coverage: Coverage::Partial(wanted.clone()),
+    }
 }
 
 proptest! {
