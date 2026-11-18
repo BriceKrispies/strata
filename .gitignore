@@ -1,0 +1,11 @@
+/target
+/var
+node_modules
+/web/dist
+/lean/.lake
+/tests/e2e/test-results
+/tests/e2e/playwright-report
+/tests/e2e/screenshots
+*.db
+*.db-wal
+*.db-shm

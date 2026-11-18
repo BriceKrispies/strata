@@ -1,0 +1,52 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/kernel",
+    "crates/substrate",
+    "crates/storage-api",
+    "crates/storage-sqlite",
+    "crates/protocol",
+    "crates/backend",
+    "crates/bff",
+    "crates/simulation",
+    "crates/verification",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+license = "MIT"
+publish = false
+
+[workspace.dependencies]
+strata-kernel = { path = "crates/kernel" }
+strata-substrate = { path = "crates/substrate" }
+strata-storage-api = { path = "crates/storage-api" }
+strata-storage-sqlite = { path = "crates/storage-sqlite" }
+strata-protocol = { path = "crates/protocol" }
+strata-simulation = { path = "crates/simulation" }
+strata-verification = { path = "crates/verification" }
+
+serde = { version = "1.0.228", features = ["derive", "rc"] }
+serde_json = "1.0.146"
+sha2 = "0.10.9"
+proptest = "1.12.0"
+rusqlite = { version = "0.32.1", features = ["bundled"] }
+tokio = { version = "1.52", features = ["rt-multi-thread", "macros", "net", "sync", "time", "signal"] }
+axum = { version = "0.7.9", features = ["ws", "macros"] }
+tokio-tungstenite = "0.24.0"
+futures-util = "0.3.31"
+reqwest = { version = "0.12", default-features = false, features = ["json"] }
+argon2 = "0.5.3"
+getrandom = "0.2.16"
+tower-http = { version = "0.6.8", features = ["fs"] }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+opt-level = 2
