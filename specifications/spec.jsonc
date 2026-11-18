@@ -891,6 +891,35 @@
         ],
         "label": "Checks requirement",
         "doc": "For a check over the behavior model (not a requirement itself): the requirement it restates as a condition on simulated traces."
+      },
+      {
+        "entity": "claim",
+        "name": "faultBasis",
+        "type": "enum",
+        "values": [
+          "fault",
+          "restatement"
+        ],
+        "label": "Fault basis",
+        "doc": "For a check over the behavior model: fault when a listed scenario injects a real fault (a lost, late or repeated message, a stop, a concurrent actor) and the check holds because of the modelled mechanism and fails when that mechanism is removed; restatement when it fails only under a defect built to negate the claim. See specifications/README.md."
+      },
+      {
+        "entity": "failureMode",
+        "name": "modelling",
+        "type": "enum",
+        "values": [
+          "exercised",
+          "not-modelled"
+        ],
+        "label": "Modelling",
+        "doc": "exercised: a fault of a scenario realises this failure mode and a model claim lists that scenario. not-modelled: no behaviour model exercises it; the design answers it by other means (see modellingNote)."
+      },
+      {
+        "entity": "failureMode",
+        "name": "modellingNote",
+        "type": "text",
+        "label": "Modelling note",
+        "doc": "Why the failure mode is not modelled, and what answers it instead."
       }
     ],
     "verificationMethods": {
