@@ -1,11 +1,12 @@
 //! Determinism, branch equivalence, divergence discovery and minimisation, on the real
 //! Fieldnotes tenant installed from its bundle.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use strata_kernel::*;
 use strata_protocol::tenants::load_all;
 use strata_simulation::engine::{
-    replay, run, DeliveryResult, Faults, Outcome, Scenario, Scheduled,
+    replay, run, DeliveryResult, Faults, Outcome, Scenario, Scheduled, Trace,
 };
 use strata_simulation::journal::{replay_journal, Recorded};
 use strata_simulation::project::{project, Proposal};
@@ -68,6 +69,32 @@ fn require_excerpt(existing: ExistingData, before_step: usize) -> Proposal {
 /// Verifies: SIM-001
 #[test]
 fn the_same_scenario_gives_the_same_trace() {
+    // Two runs of each of several scenarios: different seeds, lengths and fault rates, none of
+    // them and heavy ones. Each pair has equal trace hashes and equal final worlds.
+    let rough = Faults {
+        commit_conflict: 300_000,
+        delivery_drop: 400_000,
+    };
+    let mut hashes = BTreeSet::new();
+    for (seed, steps, faults) in [
+        (1, 30, Faults::default()),
+        (2, 80, Faults::default()),
+        (21, 50, rough),
+        (34, 70, rough),
+    ] {
+        let (first, world_a) = run(&scenario(seed, steps, faults));
+        let (second, world_b) = run(&scenario(seed, steps, faults));
+        assert_eq!(first.hash(), second.hash(), "seed {seed}");
+        assert_eq!(world_a.hash(), world_b.hash(), "seed {seed}");
+        assert_eq!(first, second, "seed {seed}: the traces themselves differ");
+        hashes.insert(first.hash());
+    }
+    assert_eq!(
+        hashes.len(),
+        4,
+        "four different scenarios, four different traces"
+    );
+
     let faults = Faults {
         commit_conflict: 150_000,
         delivery_drop: 250_000,
@@ -172,7 +199,106 @@ fn faults_change_the_path_but_not_the_result() {
     );
 }
 
+/// Changes that alter no behaviour, one of each kind of schema content: a definition restated
+/// exactly, a new definition nothing uses, and a rename.
+fn neutral_changes(schema: &TenantSchema) -> Vec<(&'static str, Vec<SchemaChange>)> {
+    let post = ObjectTypeId::new("post").unwrap();
+    let query = schema.queries.values().next().unwrap().clone();
+    let policy = schema.policies.values().next().unwrap().clone();
+    let field = schema.objects[&post]
+        .fields
+        .values()
+        .next()
+        .unwrap()
+        .clone();
+    let unused_query = QueryDef {
+        id: QueryId::new("unused_query").unwrap(),
+        object: post.clone(),
+        filter: None,
+        params: Default::default(),
+        order: vec![],
+        limit: Some(5),
+    };
+    vec![
+        ("a query restated", vec![SchemaChange::DefineQuery(query)]),
+        (
+            "every query restated",
+            schema
+                .queries
+                .values()
+                .cloned()
+                .map(SchemaChange::DefineQuery)
+                .collect(),
+        ),
+        (
+            "a policy restated",
+            vec![SchemaChange::DefinePolicy(policy)],
+        ),
+        (
+            "a field restated",
+            vec![SchemaChange::DefineField {
+                object: post.clone(),
+                field,
+            }],
+        ),
+        (
+            "a query nothing uses",
+            vec![SchemaChange::DefineQuery(unused_query.clone())],
+        ),
+        (
+            "a view nothing links to",
+            vec![
+                SchemaChange::DefineQuery(unused_query),
+                SchemaChange::DefineView(ViewDef {
+                    id: ViewId::new("unused").unwrap(),
+                    route: "/unused-page".into(),
+                    title: "Unused".into(),
+                    sections: [(
+                        "posts".to_string(),
+                        ViewSection {
+                            query: QueryId::new("unused_query").unwrap(),
+                            args: Default::default(),
+                            include: vec![],
+                            markdown: vec![],
+                            single: false,
+                        },
+                    )]
+                    .into(),
+                }),
+            ],
+        ),
+        (
+            "a role no policy names",
+            vec![SchemaChange::DefineRole(RoleDef {
+                id: RoleId::new("reviewer").unwrap(),
+                label: "Reviewer".into(),
+            })],
+        ),
+        (
+            "an object renamed",
+            vec![SchemaChange::DefineObject {
+                id: post,
+                label: "Essay".into(),
+            }],
+        ),
+        (
+            "a constraint that always holds",
+            vec![SchemaChange::DefineConstraint {
+                object: ObjectTypeId::new("post").unwrap(),
+                constraint: ConstraintDef {
+                    id: ConstraintId::new("always").unwrap(),
+                    expr: Expr::Lit(Value::Bool(true)),
+                    message: "never refused".into(),
+                },
+            }],
+        ),
+    ]
+}
+
 /// Verifies: SIM-002
+///
+/// A change that alters no behaviour reports no divergence, for each kind of such change and
+/// whether it lands before the first step or in the middle of the schedule.
 #[test]
 fn a_branch_with_a_change_that_changes_nothing_equals_its_baseline() {
     let scenario = scenario(
@@ -183,28 +309,36 @@ fn a_branch_with_a_change_that_changes_nothing_equals_its_baseline() {
             delivery_drop: 100_000,
         },
     );
-    // Redefining a query exactly as it is: a schema change with no behavioural content.
-    let same_query = scenario.initial.tenants[&tenant()]
-        .schema
-        .queries
-        .values()
-        .next()
-        .unwrap()
-        .clone();
-    let proposal = Proposal {
-        changes: vec![SchemaChange::DefineQuery(same_query)],
-        ..require_excerpt(ExistingData::Reject, 0)
-    };
-    let projection = project(&scenario, &proposal, &mut |_, _, _| true).unwrap();
-    assert!(projection.change_outcome.accepted());
-    let c = &projection.comparison;
-    assert!(
-        c.outcome_changes.is_empty() && c.record_changes.is_empty() && c.query_changes.is_empty()
-    );
-    assert!(c.events_only_in_baseline.is_empty() && c.events_only_in_branch.is_empty());
-    assert_eq!(c.first_divergence, None);
-    assert!(projection.counterexample.is_none());
-    assert!(c.queries_compared > 0);
+    let changes = neutral_changes(&scenario.initial.tenants[&tenant()].schema);
+    assert!(changes.len() >= 8);
+    for (what, changes) in changes {
+        for before_step in [0, 20] {
+            let proposal = Proposal {
+                changes: changes.clone(),
+                before_step,
+                ..require_excerpt(ExistingData::Reject, 0)
+            };
+            let projection = project(&scenario, &proposal, &mut |_, _, _| true).unwrap();
+            let at = format!("{what}, before step {before_step}");
+            assert!(projection.change_outcome.accepted(), "{at}");
+            let c = &projection.comparison;
+            assert!(
+                c.outcome_changes.is_empty()
+                    && c.record_changes.is_empty()
+                    && c.query_changes.is_empty(),
+                "{at}: {:?}",
+                c.outcome_changes.first()
+            );
+            assert!(
+                c.events_only_in_baseline.is_empty() && c.events_only_in_branch.is_empty(),
+                "{at}"
+            );
+            assert_eq!(c.first_divergence, None, "{at}");
+            assert!(projection.counterexample.is_none(), "{at}");
+            assert!(c.queries_compared > 0, "{at}");
+            assert!(projection.affected_existing.is_empty(), "{at}");
+        }
+    }
 }
 
 #[test]
@@ -245,9 +379,87 @@ fn requiring_the_excerpt_strictly_is_refused_because_of_existing_posts() {
     assert_eq!(projection.baseline.final_hash, projection.branch.final_hash);
 }
 
+/// Run an intent and, when the kernel accepts it, add it to the journal the way the store does.
+fn record(
+    world: &mut World,
+    journal: &mut Vec<Recorded>,
+    context: Context,
+    intent: Intent,
+) -> bool {
+    let Ok((next, transition)) = world.step(&intent, &context) else {
+        return false;
+    };
+    *world = next;
+    journal.push(Recorded {
+        revision: transition.delta.new_revision,
+        kernel_version: KERNEL_VERSION.into(),
+        intent,
+        context,
+        delta_hash: canon::hash_of(&transition.delta),
+        events_hash: canon::hash_of(&transition.events),
+    });
+    true
+}
+
+/// The first step whose outcome differs between two traces, worked out here from the traces
+/// and not read from the comparison: the same step of the schedule, accepted with another
+/// result or refused for another reason.
+fn first_difference(baseline: &Trace, branch: &Trace) -> Option<usize> {
+    let by_index = |trace: &Trace| -> BTreeMap<usize, Outcome> {
+        trace
+            .steps
+            .iter()
+            .filter_map(|step| step.index.map(|i| (i, step.outcome.clone())))
+            .collect()
+    };
+    let (a, b) = (by_index(baseline), by_index(branch));
+    a.iter()
+        .find(|(index, left)| !match (left, &b[index]) {
+            (Outcome::Accepted { output: x, .. }, Outcome::Accepted { output: y, .. }) => x == y,
+            (Outcome::Rejected { kind: x, .. }, Outcome::Rejected { kind: y, .. }) => x == y,
+            _ => false,
+        })
+        .map(|(index, _)| *index)
+}
+
 /// Verifies: SIM-003
 #[test]
 fn grandfathering_the_requirement_diverges_and_the_divergence_is_explained() {
+    // For several schedules and several places to apply the change, the reported first divergence
+    // is the first step at which the two executions' outcomes really differ.
+    let mut diverged = 0;
+    for seed in [5, 9, 14] {
+        for before_step in [0, 25] {
+            let scenario = scenario(seed, 80, Faults::default());
+            let projection = project(
+                &scenario,
+                &require_excerpt(ExistingData::Grandfather, before_step),
+                &mut |_, _, _| true,
+            )
+            .unwrap();
+            let by_hand = first_difference(&projection.baseline, &projection.branch);
+            assert_eq!(
+                projection.comparison.first_divergence, by_hand,
+                "seed {seed}, change before step {before_step}"
+            );
+            assert!(
+                by_hand.is_none_or(|step| step >= before_step),
+                "seed {seed}, change before step {before_step}: {by_hand:?}"
+            );
+            diverged += usize::from(by_hand.is_some());
+        }
+    }
+    assert!(diverged >= 2, "the change diverged only {diverged} times");
+    // A change that is refused diverges nowhere, and says so.
+    let refused = project(
+        &scenario(5, 80, Faults::default()),
+        &require_excerpt(ExistingData::Reject, 0),
+        &mut |_, _, _| true,
+    )
+    .unwrap();
+    assert_eq!(first_difference(&refused.baseline, &refused.branch), None);
+    assert_eq!(refused.comparison.first_divergence, None);
+
     let scenario = scenario(5, 80, Faults::default());
     let proposal = require_excerpt(ExistingData::Grandfather, 0);
     let projection = project(&scenario, &proposal, &mut |_, _, _| true).unwrap();
@@ -382,6 +594,95 @@ fn a_journal_of_real_commits_replays_to_the_live_state() {
         Ok::<_, DomainError>(transition.output)
     })
     .unwrap();
+    // Then the tenant lives: a generated editorial workload and role and schema changes, all
+    // recorded the way the store records them, so the journal holds every kind of intent.
+    let admin = |now: i64| Context {
+        tenant: tenant(),
+        principal: Principal::User(PrincipalId::new("user:admin").unwrap()),
+        session: None,
+        now: Timestamp(now),
+        correlation: format!("t-{now}"),
+    };
+    let role_of = |name: &str| RoleId::new(name).unwrap();
+    let mut work: Vec<(Context, Intent)> =
+        generate(&world, &tenant(), 17, 80, 1_800_000_000_000, 60_000)
+            .into_iter()
+            .map(|s| (s.context, s.intent))
+            .collect();
+    let mirela = PrincipalId::new("user:mirela").unwrap();
+    work.push((
+        admin(1_900_000_000_000),
+        Intent::RevokeRole {
+            principal: mirela.clone(),
+            role: role_of("author"),
+        },
+    ));
+    work.push((
+        admin(1_900_000_000_001),
+        Intent::AssignRole {
+            principal: mirela,
+            role: role_of("author"),
+        },
+    ));
+    work.push((
+        admin(1_900_000_000_002),
+        Intent::ChangeSchema {
+            changes: vec![SchemaChange::DefineRole(RoleDef {
+                id: role_of("reviewer"),
+                label: "Reviewer".into(),
+            })],
+            expected_version: None,
+            existing: ExistingData::Reject,
+        },
+    ));
+    for (context, intent) in work {
+        record(&mut world, &mut journal, context, intent);
+    }
+    // A record made and deleted again, so that a delete is in the journal whatever the workload
+    // happened to do.
+    let category = ObjectTypeId::new("category").unwrap();
+    let scratch = Intent::CreateRecord {
+        object: category.clone(),
+        fields: BTreeMap::from([
+            (FieldId::new("name").unwrap(), Value::Str("Scratch".into())),
+            (
+                FieldId::new("slug").unwrap(),
+                Value::Str("scratch-journal".into()),
+            ),
+        ]),
+    };
+    let id = RecordId(world.tenants[&tenant()].next_record);
+    assert!(record(
+        &mut world,
+        &mut journal,
+        admin(1_900_000_000_003),
+        scratch
+    ));
+    let delete = Intent::DeleteRecord {
+        object: category,
+        id,
+        expected_version: None,
+    };
+    assert!(record(
+        &mut world,
+        &mut journal,
+        admin(1_900_000_000_004),
+        delete
+    ));
+    let kinds: BTreeSet<&str> = journal.iter().map(|e| e.intent.name()).collect();
+    assert_eq!(
+        kinds,
+        BTreeSet::from([
+            "create_tenant",
+            "change_schema",
+            "assign_role",
+            "revoke_role",
+            "create_record",
+            "update_record",
+            "delete_record"
+        ]),
+        "the journal does not hold every kind of intent"
+    );
     let live = world.tenants[&tenant()].clone();
     let report = replay_journal(&tenant(), &journal, Some(&live));
     assert_eq!(
@@ -398,14 +699,31 @@ fn a_journal_of_real_commits_replays_to_the_live_state() {
     let mut drifted = TenantState::clone(&live);
     drifted.records.values_mut().next().unwrap().clear();
     assert!(!replay_journal(&tenant(), &journal, Some(&drifted)).matches_live);
-    // So is a journal entry whose recorded hash does not match what the kernel does.
-    journal[5].delta_hash = "0".repeat(64);
-    assert_eq!(
-        replay_journal(&tenant(), &journal, Some(&live))
-            .first_mismatch
-            .map(|m| m.0),
-        Some(6)
-    );
+    // So is a journal entry whose recorded hash does not match what the kernel does, whichever
+    // hash it is and wherever in the journal it sits.
+    let late = journal.len() - 4;
+    for (what, tamper) in [
+        (
+            "delta hash",
+            (|e: &mut Recorded| e.delta_hash = "0".repeat(64)) as fn(&mut Recorded),
+        ),
+        ("events hash", |e| e.events_hash = "0".repeat(64)),
+        ("revision", |e| e.revision = StateRevision(e.revision.0 + 9)),
+    ] {
+        for position in [5, late] {
+            let mut forged = journal.clone();
+            tamper(&mut forged[position]);
+            // The mismatch is reported under the revision the entry now claims.
+            let revision = forged[position].revision.0;
+            let found = replay_journal(&tenant(), &forged, Some(&live));
+            assert_eq!(
+                found.first_mismatch.map(|m| m.0),
+                Some(revision),
+                "{what} at entry {position}"
+            );
+            assert!(found.agreed < found.entries, "{what} at entry {position}");
+        }
+    }
 }
 
 #[test]

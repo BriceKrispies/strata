@@ -424,7 +424,8 @@ mod tests {
         ));
     }
 
-    /// Verifies: CMS-004
+    /// The parser's half of CMS-004; the proof of the requirement itself is the gateway test
+    /// `tenant_rich_text_reaches_the_browser_as_blocks_with_markup_as_text`.
     #[test]
     fn html_is_text_and_unsafe_links_lose_their_target() {
         let blocks = parse("<script>alert(1)</script> and [click](javascript:alert(1)) and [ok](https://example.com)");

@@ -5,18 +5,21 @@
 //!
 //! - **Site.** The tenant is looked up from the request's host name in this process's own
 //!   configuration. No request parameter, header or body field can name a tenant.
-//! - **Session.** The session token lives in an `HttpOnly`, `SameSite=Strict` cookie. This
-//!   process forwards it; the backend holds the session.
-//! - **CSRF.** A state-changing request must come from an allowed origin and carry the
-//!   session's CSRF token in `x-csrf-token`. Login, which has no session yet, must come from an
-//!   allowed origin and carry `x-strata-request: 1`, which a cross-site form cannot send.
+//! - **Session.** The session token lives in an `__Host-` prefixed, `Secure`, `HttpOnly`,
+//!   `SameSite=Strict` cookie. This process forwards it; the backend holds the session.
+//! - **CSRF.** A state-changing request, sign-in and sign-out included, must come from an
+//!   allowed origin and carry the request token of its session in `x-csrf-token`. A browser
+//!   that has no session yet is given a request token by this process with its session reply
+//!   (see `token`), and presents that.
 //! - **Views.** The backend returns kernel-typed, already authorized rows; this process projects
 //!   them into the plain view model the browser renders.
-//! - **WebSocket.** The origin is checked at upgrade, frames from the browser are validated
-//!   against protocol v1, and both directions go through bounded queues.
+//! - **WebSocket.** The origin and the request token (`?csrf=`) are checked at upgrade, frames
+//!   from the browser are validated against protocol v1, and both directions go through bounded
+//!   queues.
 
 pub mod relay;
 pub mod routes;
+pub mod token;
 
 use serde_json::json;
 use std::collections::BTreeMap;
@@ -30,7 +33,9 @@ use strata_protocol::log::Logger;
 use tokio::net::TcpListener;
 
 pub const LOG: Logger = Logger { service: "bff" };
-pub const COOKIE: &str = "strata_sid";
+/// The session cookie. The `__Host-` prefix makes a browser accept it only with `Secure`,
+/// `Path=/` and no `Domain`, and keeps another host from setting a cookie of this name.
+pub const COOKIE: &str = "__Host-strata_sid";
 
 #[derive(Clone, Debug)]
 pub struct Config {
@@ -45,8 +50,6 @@ pub struct Config {
     /// The built frontend: `index.html`, `assets/`, `media/`.
     pub dist: PathBuf,
     pub dev: bool,
-    /// Mark cookies `Secure`. Set when the BFF is reached over HTTPS.
-    pub secure_cookies: bool,
 }
 
 impl Config {
@@ -75,6 +78,8 @@ pub struct Bff {
     pub in_flight: AtomicI64,
     /// `index.html` as built, read once at start.
     pub index: Option<String>,
+    /// Issues and checks the request tokens of browsers that have no session.
+    pub tokens: token::Issuer,
 }
 
 pub type Shared = Arc<Bff>;
@@ -105,6 +110,7 @@ pub async fn run(
         sockets: AtomicI64::new(0),
         in_flight: AtomicI64::new(0),
         index,
+        tokens: token::Issuer::new()?,
     });
     axum::serve(listener, routes::router(bff))
         .with_graceful_shutdown(shutdown)

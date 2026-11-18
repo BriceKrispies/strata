@@ -3,10 +3,11 @@
 //! and check that the blog's behaviour follows from that metadata.
 
 use serde_json::json;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use strata_kernel::*;
 use strata_substrate::bundle::{install_into, Bundle};
 use strata_substrate::project::{match_route, section_order, section_request};
+use strata_substrate::theme;
 
 fn bundle() -> Bundle {
     let mut doc: serde_json::Value =
@@ -88,11 +89,64 @@ fn slugs(world: &World, principal: Principal, path: &str, section: &str) -> Vec<
 }
 
 /// Verifies: CMS-001
+///
+/// The tenant that results from installing the template holds, in its own metadata, every role,
+/// object type with its fields and constraints, workflow, policy, query and view the template
+/// defines, and it got there by kernel intents: the journal of the install is nothing but those.
 #[test]
 fn the_template_installs_and_publishing_stamps_the_time() {
     let world = world();
     let tenant = &world.tenants[&TenantId::new("gazette").unwrap()];
     assert!(tenant.schema.problems().is_empty());
+    let bundle = bundle();
+    let schema = &tenant.schema;
+    let ids = |names: Vec<String>| -> BTreeSet<String> { names.into_iter().collect() };
+    assert!(!bundle.objects.is_empty() && !bundle.views.is_empty());
+    for object in &bundle.objects {
+        let def = schema
+            .objects
+            .get(&object.id)
+            .unwrap_or_else(|| panic!("object {} was not installed", object.id));
+        assert_eq!(
+            ids(def.fields.keys().map(|f| f.to_string()).collect()),
+            ids(object.fields.iter().map(|f| f.id.to_string()).collect()),
+            "fields of {}",
+            object.id
+        );
+        assert_eq!(
+            ids(def.constraints.keys().map(|c| c.to_string()).collect()),
+            ids(object
+                .constraints
+                .iter()
+                .map(|c| c.id.to_string())
+                .collect()),
+            "constraints of {}",
+            object.id
+        );
+    }
+    assert_eq!(
+        ids(schema.objects.keys().map(|o| o.to_string()).collect()),
+        ids(bundle.objects.iter().map(|o| o.id.to_string()).collect())
+    );
+    assert_eq!(
+        ids(schema.workflows.keys().map(|w| w.to_string()).collect()),
+        ids(bundle.workflows.iter().map(|w| w.id.to_string()).collect())
+    );
+    assert_eq!(
+        ids(schema.policies.keys().map(|p| p.to_string()).collect()),
+        ids(bundle.policies.iter().map(|p| p.id.to_string()).collect())
+    );
+    assert_eq!(
+        ids(schema.queries.keys().map(|q| q.to_string()).collect()),
+        ids(bundle.queries.iter().map(|q| q.id.to_string()).collect())
+    );
+    assert_eq!(
+        ids(schema.views.keys().map(|v| v.to_string()).collect()),
+        ids(bundle.views.iter().map(|v| v.id.to_string()).collect())
+    );
+    for role in &bundle.roles {
+        assert!(schema.roles.contains_key(&role.id), "role {}", role.id);
+    }
     let post = tenant
         .records_of(&ObjectTypeId::new("post").unwrap())
         .next()
@@ -139,6 +193,92 @@ fn readers_see_published_posts_and_authors_also_see_their_own_drafts() {
         slugs(&world, Principal::Anonymous, "/desk", "posts"),
         Vec::<String>::new()
     );
+
+    // Not only through the views: by every named query the template defines, with every value it
+    // could be asked about, and by a direct read of the draft, a principal whose policies permit
+    // published content alone never gets a draft back.
+    let tenant = &world.tenants[&TenantId::new("gazette").unwrap()];
+    let post = ObjectTypeId::new("post").unwrap();
+    let status = FieldId::new("status").unwrap();
+    let published = Value::Str("published".into());
+    let drafts: Vec<RecordId> = tenant
+        .records_of(&post)
+        .filter(|r| r.get(&status) != &published)
+        .map(|r| r.id)
+        .collect();
+    assert!(!drafts.is_empty(), "the world holds a draft");
+    let mut values: Vec<Value> = vec![Value::Str("Unfinished".into())];
+    for record in tenant.records.values().flat_map(|records| records.values()) {
+        values.push(Value::Ref(record.id));
+        values.extend(
+            record
+                .fields
+                .values()
+                .filter(|v| v.as_str().is_some())
+                .cloned(),
+        );
+    }
+    let mut asked = 0;
+    for principal in [Principal::Anonymous, user("bob"), user("nobody-at-all")] {
+        let direct = ReadRequest::Records {
+            object: post.clone(),
+            ids: drafts.clone(),
+        };
+        assert!(
+            world
+                .read(&direct, &ctx(principal.clone()))
+                .unwrap()
+                .rows
+                .is_empty(),
+            "{principal:?} read a draft directly"
+        );
+        for query in tenant.schema.queries.values() {
+            let candidates: Vec<BTreeMap<String, Value>> = match query.params.len() {
+                0 => vec![BTreeMap::new()],
+                1 => {
+                    let name = query.params.iter().next().unwrap().clone();
+                    values
+                        .iter()
+                        .map(|v| BTreeMap::from([(name.clone(), v.clone())]))
+                        .collect()
+                }
+                _ => continue,
+            };
+            for params in candidates {
+                let request = ReadRequest::Named {
+                    query: query.id.clone(),
+                    params,
+                };
+                let Ok(result) = world.read(&request, &ctx(principal.clone())) else {
+                    continue;
+                };
+                asked += 1;
+                for row in &result.rows {
+                    assert!(
+                        row.object != post || row.get(&status) == &published,
+                        "{principal:?} got a draft from query {}: {row:?}",
+                        query.id
+                    );
+                }
+            }
+        }
+    }
+    assert!(asked > 100, "only {asked} reads were made");
+    // The same reads are not empty for those whose policies do permit drafts.
+    for principal in [user("ann"), user("ed")] {
+        let direct = ReadRequest::Records {
+            object: post.clone(),
+            ids: drafts.clone(),
+        };
+        assert!(
+            !world
+                .read(&direct, &ctx(principal.clone()))
+                .unwrap()
+                .rows
+                .is_empty(),
+            "{principal:?} cannot read the draft"
+        );
+    }
 }
 
 #[test]
@@ -168,8 +308,9 @@ fn the_theme_and_cover_rules_are_constraints_in_the_metadata() {
         fields: BTreeMap::from([(FieldId::new(field).unwrap(), Value::Str(value.into()))]),
         expected_version: None,
     };
-    // Every token of each list is accepted.
-    for token in ["moss", "clay", "ink", "ochre", "plum"] {
+    // Every token of the token schema (`theme::ACCENTS`, `theme::PAPERS`) is accepted, and the
+    // template's constraints say the same thing as the schema: no more and no fewer.
+    for token in theme::ACCENTS {
         assert!(
             world
                 .step(&update("publication", 1, "accent", token), &ctx(user("ed")))
@@ -177,7 +318,7 @@ fn the_theme_and_cover_rules_are_constraints_in_the_metadata() {
             "accent token {token} is refused"
         );
     }
-    for token in ["linen", "stone", "chalk"] {
+    for token in theme::PAPERS {
         assert!(
             world
                 .step(&update("publication", 1, "paper", token), &ctx(user("ed")))
@@ -209,6 +350,34 @@ fn the_theme_and_cover_rules_are_constraints_in_the_metadata() {
                 .any(|c| c.rule == "constraint:publication.accent_token" && !c.passed),
             "accent {value:?} is not refused by accent_token"
         );
+    }
+    // Values next to the tokens: another case, trailing space, a prefix, an addition, nothing.
+    for (field, tokens) in [
+        ("accent", &theme::ACCENTS[..]),
+        ("paper", &theme::PAPERS[..]),
+    ] {
+        for token in tokens.iter().copied() {
+            for near in [
+                token.to_uppercase(),
+                format!("{token} "),
+                token[..token.len() - 1].to_string(),
+                format!("{token};"),
+                format!("{token}x"),
+                String::new(),
+            ] {
+                let refused = world
+                    .step(&update("publication", 1, field, &near), &ctx(user("ed")))
+                    .expect_err("rejected");
+                assert!(
+                    matches!(
+                        refused.kind,
+                        ErrorKind::ConstraintViolated | ErrorKind::MissingRequired
+                    ),
+                    "{field} {near:?} was refused as {:?}",
+                    refused.kind
+                );
+            }
+        }
     }
     for value in ["url(evil)", "Linen", "red"] {
         let refused = world

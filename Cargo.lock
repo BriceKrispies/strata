@@ -1216,6 +1216,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "sha2",
  "strata-backend",
  "strata-kernel",
  "strata-protocol",

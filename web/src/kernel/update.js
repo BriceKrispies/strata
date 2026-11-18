@@ -397,7 +397,15 @@ function onHttp(state, msg) {
     case 'session': {
       if (!msg.ok) return { state, effects: [] };
       const known = { ...state, session: msg.body.session };
-      return state.view.model?.view === 'lab' ? labEnter(known, msg, { request }) : { state: known, effects: [] };
+      // A cold start could not open the socket before it knew the request token the gateway
+      // issued, so it opens it now.
+      /** @type {Effect[]} */
+      const open = state.session ? [] : [{ type: 'ws_connect', csrf: msg.body.session.csrf_token }];
+      if (state.view.model?.view === 'lab') {
+        const entered = labEnter(known, msg, { request });
+        return { state: entered.state, effects: [...open, ...entered.effects] };
+      }
+      return { state: known, effects: open };
     }
     case 'view': {
       if (state.view.request !== msg.id) return { state, effects: [] };
@@ -600,7 +608,7 @@ function onAction(state, msg) {
       return { state: next, effects: [effect] };
     }
     case 'dev.expire': {
-      const [next, effect] = request(state, 'dev', { method: 'POST', path: '/api/dev/expire-session', body: {} }, msg);
+      const [next, effect] = request(state, 'dev', { method: 'POST', path: '/api/dev/expire-session', write: true, body: {} }, msg);
       return { state: next, effects: [effect] };
     }
     default:
@@ -618,7 +626,8 @@ function onSubmit(state, msg) {
         const error = 'Enter your name and password.';
         return { state: { ...state, announce: error, forms: { ...state.forms, login: { ...state.forms.login, values, error } } }, effects: [] };
       }
-      const [next, effect] = request(state, 'login', { method: 'POST', path: '/api/login', body: values, meta: {} }, msg);
+      // Signing in carries the request token too: the session's own, or the one the gateway issued to this browser.
+      const [next, effect] = request(state, 'login', { method: 'POST', path: '/api/login', write: true, body: values, meta: {} }, msg);
       return { state: { ...next, forms: { ...next.forms, login: { values, busy: true, error: '' } } }, effects: [effect] };
     }
     case 'search': {
@@ -697,7 +706,11 @@ function step(state, msg) {
         next = fetched.state;
         effects.push(...fetched.effects);
       }
-      return { state: { ...next, ws: { ...next.ws, status: 'connecting' } }, effects: [...effects, { type: 'ws_connect' }] };
+      // The socket needs the request token, which a bootstrapped page already has. A cold start
+      // gets it with the session reply and connects then.
+      /** @type {Effect[]} */
+      const connect = next.session ? [{ type: 'ws_connect', csrf: next.session.csrf_token }] : [];
+      return { state: { ...next, ws: { ...next.ws, status: 'connecting' } }, effects: [...effects, ...connect] };
     }
     case 'navigate':
       return navigate(state, msg.href, msg.replace ?? false, msg);
@@ -730,7 +743,7 @@ function step(state, msg) {
       if (msg.name.startsWith('lab.')) return labUpdate(state, msg, { request, toast }) ?? { state, effects: [] };
       if (msg.token !== state.ws.timer) return { state, effects: [] };
       if (msg.name === 'reconnect') {
-        return { state: { ...state, ws: { ...state.ws, status: 'connecting' } }, effects: [{ type: 'ws_connect' }] };
+        return { state: { ...state, ws: { ...state.ws, status: 'connecting' } }, effects: [{ type: 'ws_connect', csrf: state.session?.csrf_token }] };
       }
       if (msg.name === 'heartbeat' && state.ws.status === 'open') {
         if (state.ws.missedPongs >= 2) return { state, effects: [{ type: 'ws_close' }] };

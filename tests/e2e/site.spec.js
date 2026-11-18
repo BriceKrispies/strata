@@ -180,8 +180,8 @@ test('signing in with a wrong password explains itself; signing in and out works
   await expect(page.getByRole('heading', { level: 1, name: 'Writing desk' })).toBeVisible();
   await expect(page.locator('.toast', { hasText: 'Signed in as Inès Okafor.' })).toBeVisible();
   const cookies = await page.context().cookies();
-  const session = cookies.find((cookie) => cookie.name === 'strata_sid');
-  expect(session).toMatchObject({ httpOnly: true, sameSite: 'Strict', path: '/' });
+  const session = cookies.find((cookie) => cookie.name === '__Host-strata_sid');
+  expect(session).toMatchObject({ httpOnly: true, secure: true, sameSite: 'Strict', path: '/' });
   expect(await page.evaluate(() => document.cookie)).toBe('');
 
   // An editor sees every article, including the draft another author wrote.
@@ -191,7 +191,7 @@ test('signing in with a wrong password explains itself; signing in and out works
   await expect(page.locator('.toast', { hasText: 'Signed out.' })).toBeVisible();
   await expect(page.getByRole('banner').getByRole('link', { name: 'Sign in' })).toBeVisible();
   await expect(page.getByRole('heading', { level: 2, name: 'The Jig Is the Work' })).toBeVisible();
-  expect((await page.context().cookies()).find((cookie) => cookie.name === 'strata_sid')).toBeUndefined();
+  expect((await page.context().cookies()).find((cookie) => cookie.name === '__Host-strata_sid')).toBeUndefined();
   await open(page, '/desk');
   await expect(page.getByRole('heading', { level: 1, name: 'Sign in to continue' })).toBeVisible();
 });
@@ -300,7 +300,8 @@ test('a session that ends is noticed at once and the page falls back to signed o
   await signIn(page, 'tomasz');
   await expect(page.locator('.colophon__live')).toHaveAttribute('data-connection', 'open');
   await mark(page);
-  const expired = await page.request.post('/api/dev/expire-session', { headers: { origin: BASE } });
+  const csrf = (await (await page.request.get('/api/session')).json()).session.csrf_token;
+  const expired = await page.request.post('/api/dev/expire-session', { headers: { origin: BASE, 'x-csrf-token': csrf } });
   expect((await expired.json()).expired).toBe(true);
   await expect(page.locator('.toast', { hasText: 'Your session has expired. Sign in again to keep writing.' })).toBeVisible();
   await expect(page.getByRole('heading', { level: 1, name: 'Sign in to continue' })).toBeVisible();
@@ -503,9 +504,9 @@ test('a second tenant on the same substrate shares nothing with the first', asyn
   const owner = await browser.newContext();
   const ownerPage = await owner.newPage();
   await signIn(ownerPage, 'admin');
-  const cookie = (await owner.cookies()).find((c) => c.name === 'strata_sid');
+  const cookie = (await owner.cookies()).find((c) => c.name === '__Host-strata_sid');
   const stolen = await browser.newContext();
-  await stolen.addCookies([{ name: 'strata_sid', value: cookie.value, domain: 'tidewater.localhost', path: '/', httpOnly: true, sameSite: 'Strict' }]);
+  await stolen.addCookies([{ name: '__Host-strata_sid', value: cookie.value, domain: 'tidewater.localhost', path: '/', httpOnly: true, secure: true, sameSite: 'Strict' }]);
   const thief = await stolen.newPage();
   await thief.goto(`${tide}/desk`);
   await ready(thief);
@@ -622,7 +623,7 @@ test('the Impact Lab projects a schema change, explains the differences, and lea
   await page.getByRole('button', { name: 'Diagnostics' }).click();
   await expect(page.getByRole('heading', { level: 2, name: 'Kernel transitions' })).toBeVisible();
   await expect(page.getByRole('row', { name: /change_schema/ })).toBeVisible();
-  const cookie = (await page.context().cookies()).find((c) => c.name === 'strata_sid').value;
+  const cookie = (await page.context().cookies()).find((c) => c.name === '__Host-strata_sid').value;
   const report = await (await page.request.get('/api/diagnostics')).text();
   expect(report).not.toContain(cookie);
   expect(report).not.toContain('strata-dev-');
@@ -658,7 +659,7 @@ test('the Lean proofs can be checked from the Lab when Lean is installed', async
 test('no log line holds a password, a session token or a CSRF token', async ({ page }) => {
   await signIn(page, 'ines');
   const session = (await (await page.request.get('/api/session')).json()).session;
-  const cookie = (await page.context().cookies()).find((c) => c.name === 'strata_sid').value;
+  const cookie = (await page.context().cookies()).find((c) => c.name === '__Host-strata_sid').value;
   const { readFileSync } = await import('node:fs');
   const root = new URL('../../var/logs/', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1');
   const logs = ['backend.jsonl', 'bff.jsonl'].map((name) => readFileSync(`${root}${name}`, 'utf8')).join('\n');

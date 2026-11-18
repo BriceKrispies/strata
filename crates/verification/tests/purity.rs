@@ -105,6 +105,57 @@ fn code_of(line: &str) -> String {
     code
 }
 
+/// The lines that ship, with their numbers: everything except items marked `#[cfg(test)]`.
+/// Such an item is skipped to the end of its braces (or its semicolon), so code that follows a
+/// test module in the same file is still scanned.
+fn shipped_lines(text: &str) -> Vec<(usize, String)> {
+    let mut out = Vec::new();
+    let mut marked = false;
+    // Inside a test-only item: the brace depth, and whether its first brace was seen.
+    let mut skipping: Option<(i64, bool)> = None;
+    for (index, line) in text.lines().enumerate() {
+        let code = code_of(line);
+        let opens = code.matches('{').count() as i64;
+        let closes = code.matches('}').count() as i64;
+        if let Some((depth, opened)) = skipping {
+            let (depth, opened) = (depth + opens - closes, opened || opens > 0);
+            skipping = if (opened && depth <= 0) || (!opened && code.trim_end().ends_with(';')) {
+                None
+            } else {
+                Some((depth, opened))
+            };
+            continue;
+        }
+        if code.trim() == "#[cfg(test)]" {
+            marked = true;
+            continue;
+        }
+        if marked {
+            marked = false;
+            let ends_here =
+                (opens > 0 && opens <= closes) || (opens == 0 && code.trim_end().ends_with(';'));
+            if !ends_here {
+                skipping = Some((opens - closes, opens > 0));
+            }
+            continue;
+        }
+        out.push((index + 1, code));
+    }
+    out
+}
+
+fn violations_in(name: &str, text: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    for (number, code) in shipped_lines(text) {
+        for (token, what) in FORBIDDEN {
+            if code.contains(token) {
+                found.push(format!("{name}:{number}: `{token}` ({what})"));
+            }
+        }
+    }
+    found
+}
+
 fn violations(crate_dir: &str) -> Vec<String> {
     let mut files = Vec::new();
     sources(&root().join(crate_dir).join("src"), &mut files);
@@ -112,20 +163,7 @@ fn violations(crate_dir: &str) -> Vec<String> {
     let mut found = Vec::new();
     for file in files {
         let text = std::fs::read_to_string(&file).unwrap();
-        // Test modules may do what they like; the scan covers what ships.
-        let shipped = text.split("#[cfg(test)]").next().unwrap_or("");
-        for (number, line) in shipped.lines().enumerate() {
-            let code = code_of(line);
-            for (token, what) in FORBIDDEN {
-                if code.contains(token) {
-                    found.push(format!(
-                        "{}:{}: `{token}` ({what})",
-                        file.display(),
-                        number + 1
-                    ));
-                }
-            }
-        }
+        found.extend(violations_in(&file.display().to_string(), &text));
     }
     found
 }
@@ -174,6 +212,36 @@ fn the_kernel_depends_only_on_serialisation_and_hashing() {
     assert_eq!(
         dependencies("substrate"),
         ["strata-kernel", "serde", "serde_json"]
+    );
+}
+
+#[test]
+fn only_test_items_are_left_out_of_the_scan() {
+    let source = "fn shipped() {}
+#[cfg(test)]
+mod tests {
+    fn helper() {
+        let _ = std::fs::read(\"x\");
+    }
+}
+fn also_shipped() {
+    let _ = std::time::SystemTime::now();
+}
+#[cfg(test)]
+use std::env;
+fn last() {
+    let _ = std::process::id();
+}
+";
+    let found = violations_in("probe.rs", source);
+    assert_eq!(
+        found,
+        [
+            "probe.rs:9: `std::time` (the clock)",
+            "probe.rs:9: `SystemTime` (the clock)",
+            "probe.rs:14: `std::process` (processes)",
+        ],
+        "code after a test module is scanned, a test-only module and import are not"
     );
 }
 

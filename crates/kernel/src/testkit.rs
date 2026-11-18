@@ -246,53 +246,195 @@ pub fn principals(tenant: &str) -> Vec<Principal> {
         .collect()
 }
 
+/// Every tenant name the property tests may address: the two of [`notes_world`], and one that
+/// exists in no starting world and can only appear through a `CreateTenant`.
+pub const WORLD_TENANTS: [&str; 3] = ["alpha", "beta", "gamma"];
+
+/// Found one tenant with the notes schema and its members, no records. `start` is the clock the
+/// fixture intents run at.
+pub fn add_notes_tenant(world: World, tenant: &str, start: i64) -> World {
+    let mut world = world;
+    let owner = principal_id(&format!("{tenant}:owner"));
+    let mut now = start;
+    let mut run = |world: &World, principal: Principal, intent: Intent| {
+        now += 1;
+        world
+            .step(&intent, &ctx(tenant, principal, now))
+            .expect("fixture intent is accepted")
+            .0
+    };
+    world = run(
+        &world,
+        Principal::System,
+        Intent::CreateTenant {
+            name: tenant.to_string(),
+            owner: owner.clone(),
+        },
+    );
+    let owner = Principal::User(owner);
+    world = run(
+        &world,
+        owner.clone(),
+        Intent::ChangeSchema {
+            changes: notes_schema(),
+            expected_version: None,
+            existing: ExistingData::Reject,
+        },
+    );
+    for (name, role_name) in [
+        ("editor", "editor"),
+        ("writer1", "writer"),
+        ("writer2", "writer"),
+    ] {
+        world = run(
+            &world,
+            owner.clone(),
+            Intent::AssignRole {
+                principal: principal_id(&format!("{tenant}:{name}")),
+                role: role(role_name),
+            },
+        );
+    }
+    world
+}
+
 /// Two tenants with the notes schema and members, no records.
 pub fn notes_world() -> World {
     let mut world = World::default();
     for (i, tenant) in TENANTS.iter().enumerate() {
-        let owner = principal_id(&format!("{tenant}:owner"));
-        let mut now = 1_000 + i as i64 * 100;
-        let mut run = |world: &World, principal: Principal, intent: Intent| {
-            now += 1;
-            world
-                .step(&intent, &ctx(tenant, principal, now))
-                .expect("fixture intent is accepted")
-                .0
-        };
-        world = run(
-            &world,
-            Principal::System,
-            Intent::CreateTenant {
-                name: tenant.to_string(),
-                owner: owner.clone(),
-            },
-        );
-        let owner = Principal::User(owner);
-        world = run(
-            &world,
-            owner.clone(),
-            Intent::ChangeSchema {
-                changes: notes_schema(),
-                expected_version: None,
-                existing: ExistingData::Reject,
-            },
-        );
-        for (name, role_name) in [
-            ("editor", "editor"),
-            ("writer1", "writer"),
-            ("writer2", "writer"),
-        ] {
-            world = run(
-                &world,
-                owner.clone(),
-                Intent::AssignRole {
-                    principal: principal_id(&format!("{tenant}:{name}")),
-                    role: role(role_name),
-                },
-            );
-        }
+        world = add_notes_tenant(world, tenant, 1_000 + i as i64 * 100);
     }
     world
+}
+
+/// Run a fixture intent as `<tenant>:<who>`; it must be accepted.
+fn fixture_step(world: &World, tenant: &str, who: &str, now: i64, intent: Intent) -> World {
+    world
+        .step(&intent, &ctx(tenant, user(&format!("{tenant}:{who}")), now))
+        .expect("fixture intent is accepted")
+        .0
+}
+
+fn note_intent(title: &str, slug: &str, rank: i64, author: Option<u64>) -> Intent {
+    let mut fields = BTreeMap::from([
+        (field("title"), text(title)),
+        (field("slug"), text(slug)),
+        (field("rank"), Value::Int(rank)),
+    ]);
+    if let Some(author) = author {
+        fields.insert(field("author"), Value::Ref(RecordId(author)));
+    }
+    Intent::CreateRecord {
+        object: object("note"),
+        fields,
+    }
+}
+
+/// Records for a notes tenant: person 1, notes 2 and 3 (3 published) and, when `full`, note 4.
+/// Every note has a rank, so a schema that requires one still fits.
+fn seed_records(world: World, tenant: &str, start: i64, full: bool) -> World {
+    let mut now = start;
+    let mut next = || {
+        now += 1;
+        now
+    };
+    let person = Intent::CreateRecord {
+        object: object("person"),
+        fields: BTreeMap::from([(field("name"), text("Ada"))]),
+    };
+    let mut world = fixture_step(&world, tenant, "editor", next(), person);
+    world = fixture_step(
+        &world,
+        tenant,
+        "writer1",
+        next(),
+        note_intent("First", "s0", 2, Some(1)),
+    );
+    world = fixture_step(
+        &world,
+        tenant,
+        "editor",
+        next(),
+        note_intent("Second", "s1", 3, None),
+    );
+    let publish = Intent::UpdateRecord {
+        object: object("note"),
+        id: RecordId(3),
+        fields: BTreeMap::from([(field("status"), text("published"))]),
+        expected_version: None,
+    };
+    world = fixture_step(&world, tenant, "editor", next(), publish);
+    if full {
+        world = fixture_step(
+            &world,
+            tenant,
+            "writer2",
+            next(),
+            note_intent("Third", "s2", 1, None),
+        );
+    }
+    world
+}
+
+/// Starting points for the property tests. They differ in which tenants exist, whether any
+/// records exist, which states the records are in, who holds which role and what the schema
+/// requires, so that a property is tried from more than one world.
+pub fn starting_worlds() -> Vec<(&'static str, World)> {
+    let empty = World::default();
+    let alpha_only = add_notes_tenant(World::default(), "alpha", 1_000);
+    let bare = notes_world();
+    let seeded = seed_records(
+        seed_records(notes_world(), "alpha", 2_000, true),
+        "beta",
+        2_100,
+        false,
+    );
+    // Alpha now requires a rank (every seeded note has one), has an extra editor and has lost a
+    // writer.
+    let owner = |who: &str, role_name: &str, assign: bool| {
+        let principal = principal_id(&format!("alpha:{who}"));
+        let role = role(role_name);
+        if assign {
+            Intent::AssignRole { principal, role }
+        } else {
+            Intent::RevokeRole { principal, role }
+        }
+    };
+    let mut tightened = fixture_step(
+        &seeded,
+        "alpha",
+        "owner",
+        3_000,
+        Intent::ChangeSchema {
+            changes: vec![SchemaChange::DefineField {
+                object: object("note"),
+                field: field_def("rank", FieldType::Int, true),
+            }],
+            expected_version: None,
+            existing: ExistingData::Reject,
+        },
+    );
+    tightened = fixture_step(
+        &tightened,
+        "alpha",
+        "owner",
+        3_001,
+        owner("stranger", "editor", true),
+    );
+    tightened = fixture_step(
+        &tightened,
+        "alpha",
+        "owner",
+        3_002,
+        owner("writer2", "writer", false),
+    );
+    vec![
+        ("no tenant", empty),
+        ("alpha only", alpha_only),
+        ("two tenants, no records", bare),
+        ("two tenants, seeded records", seeded),
+        ("alpha tightened and re-staffed", tightened),
+    ]
 }
 
 /// A create-note intent with the given title and slug.

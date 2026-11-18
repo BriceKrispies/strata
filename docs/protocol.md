@@ -2,10 +2,14 @@
 
 Types for everything here are in `crates/protocol`.
 
-This is the prototype's protocol. The specification's gateway requirements are the target:
-sign-in, sign-out and the WebSocket upgrade must carry a request token that the gateway issued to
-the browser (`gwy-256`, `gwy-257`), and the session cookie carries the host name prefix (`idn-262`).
-The guards below are what the prototype checks today.
+This is the prototype's protocol. Sign-in, sign-out and the WebSocket upgrade carry a request token
+(`gwy-256`, `gwy-257`) and the session cookie carries the host name prefix and `Secure` (`idn-262`).
+
+A browser with no session is given a request token with its session reply (`csrf_token` in
+`GET /api/session` and in the page's bootstrap data): a keyed hash of the site and an expiry
+under a secret the gateway draws at start. A signed-in browser carries its session's own
+`csrf_token` instead. Both go in `x-csrf-token`, or in `?csrf=` on the WebSocket address, where
+a browser cannot set a header.
 
 ## Browser to BFF: HTTP
 
@@ -13,19 +17,20 @@ All under `/api`, JSON in and out. The tenant is taken from the request's host n
 
 | Method and path | Purpose | Guard |
 |---|---|---|
-| `GET /api/session` | Who am I: roles, what I may attempt, CSRF token | none |
-| `POST /api/login` | Start a session; sets the cookie | allowed origin, `x-strata-request: 1` |
-| `POST /api/logout` | End the session; clears the cookie | allowed origin, CSRF token |
+| `GET /api/session` | Who am I: roles, what I may attempt, the request token | none |
+| `POST /api/login` | Start a session; sets the cookie | allowed origin, request token |
+| `POST /api/logout` | End the session; clears the cookie | allowed origin, request token |
 | `GET /api/view?path=/posts/x&q=...` | The view model for an address | none (rows are filtered by policy) |
 | `POST /api/records` | Create, update or delete a record | allowed origin, CSRF token |
 | `POST /api/preview` | Constrained Markdown to blocks | allowed origin |
 | `GET /api/lab/overview`, `GET /api/lab/runs/:id` | Impact Lab reads | may manage schema |
 | `POST /api/lab/run`, `/api/lab/replay`, `/api/lab/verify` | Impact Lab actions | allowed origin, CSRF token, may manage schema |
 | `GET /api/diagnostics` | Machine-readable state of both services | may manage schema |
-| `POST /api/dev/expire-session`, `/api/dev/reset` | Fixtures | `STRATA_DEV=1`, allowed origin |
+| `POST /api/dev/expire-session`, `/api/dev/reset` | Fixtures | `STRATA_DEV=1`, allowed origin, request token |
 
-The session cookie is `strata_sid`: `HttpOnly`, `SameSite=Strict`, `Path=/`, `Secure` when
-`STRATA_SECURE_COOKIES=1`. It holds a random token; the backend stores only its SHA-256.
+The session cookie is `__Host-strata_sid`: `Secure`, `HttpOnly`, `SameSite=Strict`, `Path=/`, no
+`Domain`. It holds a random token; the backend stores only its SHA-256. Browsers accept a `Secure`
+cookie from `http://localhost` and `http://127.0.0.1`, which is how local development works.
 
 A failure is always
 
@@ -45,7 +50,8 @@ WebSocket with each resulting notice.
 
 ## Browser to BFF: WebSocket protocol v1
 
-`GET /ws`, upgraded only for an allowed `Origin`. Text frames, one JSON object each, discriminated
+`GET /ws?csrf=<request token>`, upgraded only for an allowed `Origin` and the request token of the
+session (the issued token for a browser with no session). Text frames, one JSON object each, discriminated
 by `type`. Frames over 16 KB, unknown types and unknown fields are refused.
 
 Client to server:

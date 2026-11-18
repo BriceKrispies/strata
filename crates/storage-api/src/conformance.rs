@@ -673,63 +673,112 @@ fn reset_removes_everything(store: &dyn Store) {
     Pair::new(store);
 }
 
-type Check = (&'static str, fn(&dyn Store));
+/// A check: the case of the conformance table it establishes (`specifications/spec.jsonc`,
+/// section `cases-storage-conformance`), its name, and the check itself.
+type Check = (&'static str, &'static str, fn(&dyn Store));
 
-/// Every check, by name.
+/// Every check, by case and name. `run` returns the cases it ran, and the adapters' tests compare
+/// them with the rows of the specification's table, so a row without a check or a check without
+/// a row fails.
 pub const CHECKS: &[Check] = &[
     (
+        "absent-tenant",
         "absent_tenant_loads_as_absent",
         absent_tenant_loads_as_absent,
     ),
     (
+        "state-equals-kernel",
         "stored_state_equals_kernel_state",
         stored_state_equals_kernel_state,
     ),
     (
+        "stale-commit",
         "a_stale_commit_conflicts_and_changes_nothing",
         a_stale_commit_conflicts_and_changes_nothing,
     ),
     (
+        "malformed-commit",
         "a_malformed_commit_is_refused_whole",
         a_malformed_commit_is_refused_whole,
     ),
     (
+        "partial-load",
         "partial_loads_hold_what_the_needs_name",
         partial_loads_hold_what_the_needs_name,
     ),
     (
+        "list-containment",
         "list_fields_answer_field_lookups_by_containment",
         list_fields_answer_field_lookups_by_containment,
     ),
-    ("tenants_are_isolated", tenants_are_isolated),
     (
+        "tenant-isolation",
+        "tenants_are_isolated",
+        tenants_are_isolated,
+    ),
+    (
+        "outbox-order",
         "events_are_ordered_and_stay_in_the_outbox_until_published",
         events_are_ordered_and_stay_in_the_outbox_until_published,
     ),
     (
+        "journal-replay",
         "the_journal_replays_to_the_stored_state",
         the_journal_replays_to_the_stored_state,
     ),
     (
+        "sessions",
         "sessions_are_stored_revoked_and_purged",
         sessions_are_stored_revoked_and_purged,
     ),
     (
+        "accounts",
         "accounts_are_scoped_to_their_tenant",
         accounts_are_scoped_to_their_tenant,
     ),
     (
+        "snapshots",
         "snapshots_restore_to_the_same_hash",
         snapshots_restore_to_the_same_hash,
     ),
-    ("reset_removes_everything", reset_removes_everything),
+    (
+        "reset",
+        "reset_removes_everything",
+        reset_removes_everything,
+    ),
 ];
 
-/// Run every check against a fresh, empty store from `make`.
-pub fn run(make: &dyn Fn() -> Box<dyn Store>) {
-    for (name, check) in CHECKS {
-        eprintln!("conformance: {name}");
+/// Run every check against a fresh, empty store from `make`. Returns the cases it ran.
+pub fn run(make: &dyn Fn() -> Box<dyn Store>) -> Vec<&'static str> {
+    let mut ran = Vec::new();
+    for (case, name, check) in CHECKS {
+        eprintln!("conformance: {case} ({name})");
         let store = make();
         check(store.as_ref());
+        ran.push(*case);
     }
+    ran
+}
+
+/// The cases of the conformance table in the text of the specification file: the first column of
+/// the table in the `cases-storage-conformance` section, in order.
+pub fn spec_cases(spec: &str) -> Vec<String> {
+    let line = spec
+        .lines()
+        .find(|line| {
+            line.trim_start()
+                .starts_with("{\"id\":\"cases-storage-conformance\"")
+        })
+        .expect("the specification has a cases-storage-conformance section");
+    let section: serde_json::Value =
+        serde_json::from_str(line.trim().trim_end_matches(',')).expect("the section is JSON");
+    section["body"]
+        .as_str()
+        .expect("the section has a body")
+        .lines()
+        .filter(|row| row.starts_with('|'))
+        .skip(2) // the header and its rule
+        .filter_map(|row| row.trim_matches('|').split('|').next())
+        .map(|cell| cell.trim().to_string())
+        .collect()
 }

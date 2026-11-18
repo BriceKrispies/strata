@@ -105,9 +105,9 @@ A passing gate does not establish these:
 - **The planned requirements.** Requirements of milestones that are not started are reported as
   planned and are not checked against the code. They cannot fail the gate. At present that is
   700 of 737 requirements. The gate holds the code to 37 of 737 (5.0%).
-- **That a proof tests the requirement.** A `Verifies:` line is written by hand, or added in bulk
-  by `scripts/tag-proofs.mjs`, and nothing checks that the test asserts the statement it is
-  tagged with. A passing test that carries the line is evidence that the test passes, not that the
+- **That a proof tests the requirement.** A `Verifies:` line is written by hand, and nothing checks
+  that the test asserts the statement it is tagged with. A passing test that carries the line is
+  evidence that the test passes, not that the
   statement holds.
 - **Lean theorems as proofs of the Rust kernel.** Concordance counts a theorem as passing when its
   module builds without `sorry`; it does not read the theorem. The theorems are about the abstract
@@ -136,10 +136,6 @@ The line goes in the doc comment of the test or theorem, for example a Rust `#[t
 with `/// Verifies: KRN-003` above it, or a Lean theorem whose doc comment contains
 `Verifies: KRN-013`. Read the test before writing the line; the line is a claim that the test
 checks the requirement.
-
-`scripts/tag-proofs.mjs` adds such lines from a list of pairs. It checks that the named function
-exists, not that the function tests the requirement. It exists for bulk tagging and is not how a
-proof is declared.
 
 A requirement whose milestone is not in `[gate] started_milestones` of `concordance.toml` is
 reported as planned. Starting a milestone means adding its number there. From then on the gate

@@ -6,8 +6,14 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use strata_backend::app::Config;
+use strata_kernel::{
+    canon, CmpOp, Context, ExistingData, Expr, FieldId, Intent, ObjectTypeId, OrderKey, Principal,
+    PrincipalId, QueryDef, QueryId, SchemaChange, Scope, TenantId, Timestamp, Value, ViewDef,
+    ViewId, ViewSection,
+};
 use strata_protocol::api::{HEADER_CORRELATION, HEADER_SERVICE, HEADER_SESSION, HEADER_SITE};
 use strata_storage_api::memory::MemoryStore;
+use strata_storage_api::{execute, Store};
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::Message;
 
@@ -23,6 +29,11 @@ async fn start() -> Backend {
 }
 
 async fn start_with(adjust: impl FnOnce(&mut Config)) -> Backend {
+    start_on(Arc::new(MemoryStore::new()), adjust).await
+}
+
+/// Start a backend on a store the test keeps a handle to.
+async fn start_on(store: Arc<MemoryStore>, adjust: impl FnOnce(&mut Config)) -> Backend {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -38,7 +49,7 @@ async fn start_with(adjust: impl FnOnce(&mut Config)) -> Backend {
     adjust(&mut cfg);
     tokio::spawn(strata_backend::run(
         cfg,
-        Arc::new(MemoryStore::new()),
+        store,
         listener,
         std::future::pending(),
     ));
@@ -156,19 +167,23 @@ fn titles(view: &Json, section: &str) -> Vec<String> {
         .collect()
 }
 
+/// The routes of the backend's router and the method each answers, read from its definition so
+/// that a route added later is covered without anyone remembering to list it.
+fn routes() -> Vec<(String, bool)> {
+    include_str!("../src/http.rs")
+        .lines()
+        .filter(|line| line.contains(".route(\""))
+        .map(|line| {
+            let path = line.split('"').nth(1).expect("a route path").to_string();
+            (path, line.contains("get("))
+        })
+        .collect()
+}
+
 /// Verifies: RUN-003
 #[tokio::test]
 async fn requests_without_the_service_token_are_refused() {
     let backend = start().await;
-    let response = backend
-        .http
-        .post(format!("{}/internal/view", backend.base))
-        .header(HEADER_SITE, "fieldnotes")
-        .json(&json!({ "path": "/" }))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(response.status().as_u16(), 401);
     let wrong = backend
         .http
         .post(format!("{}/internal/view", backend.base))
@@ -178,30 +193,38 @@ async fn requests_without_the_service_token_are_refused() {
         .send()
         .await
         .unwrap();
-    assert_eq!(wrong.status().as_u16(), 401);
+    assert_eq!(wrong.status().as_u16(), 401, "a wrong token");
+    let shorter = backend
+        .http
+        .post(format!("{}/internal/view", backend.base))
+        .header(HEADER_SERVICE, &TOKEN[..TOKEN.len() - 1])
+        .header(HEADER_SITE, "fieldnotes")
+        .json(&json!({ "path": "/" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(shorter.status().as_u16(), 401, "a prefix of the token");
 
-    // Every route is behind the gate, not only the one above. The health check is the one
-    // deliberate exemption, and it answers without the credential.
-    for path in [
-        "/internal/session",
-        "/internal/session/login",
-        "/internal/session/logout",
-        "/internal/view",
-        "/internal/mutate",
-        "/internal/diagnostics",
-        "/internal/lab/overview",
-        "/internal/lab/run",
-        "/internal/lab/result",
-        "/internal/lab/replay",
-        "/internal/lab/verify",
-        "/internal/dev/reset",
-        "/internal/dev/expire-session",
-    ] {
-        let response = backend
-            .http
-            .post(format!("{}{path}", backend.base))
+    // Every route is behind the gate. The health check is the one deliberate exemption, and it
+    // answers without the credential; everything else, whichever method it takes and whatever
+    // else the request carries, is refused. Paths that are no route at all are refused as well.
+    let routes = routes();
+    assert!(
+        routes.len() >= 14,
+        "the routes were not read from the router: {routes:?}"
+    );
+    for (path, get) in &routes {
+        if path == "/internal/health" {
+            continue;
+        }
+        let url = format!("{}{path}", backend.base);
+        let request = if *get {
+            backend.http.get(url)
+        } else {
+            backend.http.post(url).json(&json!({}))
+        };
+        let response = request
             .header(HEADER_SITE, "fieldnotes")
-            .json(&json!({}))
             .send()
             .await
             .unwrap();
@@ -211,14 +234,17 @@ async fn requests_without_the_service_token_are_refused() {
             "{path} answered a request without the service credential"
         );
     }
-    let socket = backend
-        .http
-        .get(format!("{}/internal/ws", backend.base))
-        .header(HEADER_SITE, "fieldnotes")
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(socket.status().as_u16(), 401, "/internal/ws");
+    for path in ["/", "/internal", "/internal/nothing", "/internal/lab"] {
+        let response = backend
+            .http
+            .post(format!("{}{path}", backend.base))
+            .header(HEADER_SITE, "fieldnotes")
+            .json(&json!({}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status().as_u16(), 401, "{path} is no route");
+    }
     let health = backend
         .http
         .get(format!("{}/internal/health", backend.base))
@@ -228,10 +254,32 @@ async fn requests_without_the_service_token_are_refused() {
     assert!(health.status().is_success(), "the health check is open");
 }
 
+/// Change the tenant's metadata through the kernel, as its owner does.
+fn owner_changes(store: &MemoryStore, now: i64, changes: Vec<SchemaChange>) {
+    let context = Context {
+        tenant: TenantId::new("fieldnotes").unwrap(),
+        principal: Principal::User(PrincipalId::new("user:admin").unwrap()),
+        session: None,
+        now: Timestamp(now),
+        correlation: "t-metadata".into(),
+    };
+    let intent = Intent::ChangeSchema {
+        changes,
+        expected_version: None,
+        existing: ExistingData::Reject,
+    };
+    execute(store, &intent, &context).unwrap_or_else(|e| panic!("the change was refused: {e}"));
+}
+
 /// Verifies: CMS-002
+///
+/// What a delivery response holds follows from the named queries and view definitions stored in
+/// the tenant: they are changed through the kernel while the backend runs, and the responses
+/// change with them. A page written into platform code would not.
 #[tokio::test]
 async fn the_seeded_blog_is_served_from_tenant_metadata() {
-    let backend = start().await;
+    let store = Arc::new(MemoryStore::new());
+    let backend = start_on(store.clone(), |_| {}).await;
     let home = backend.view("fieldnotes", None, "/").await;
     assert_eq!(home["view"], "home");
     assert_eq!(titles(&home, "featured"), ["The Jig Is the Work"]);
@@ -251,15 +299,114 @@ async fn the_seeded_blog_is_served_from_tenant_metadata() {
         .next()
         .unwrap();
     assert_eq!(author["fields"]["name"]["Str"], "Mirela Ashby");
-    let (status, _) = backend
-        .call(
+    let status_of = |path: &'static str| {
+        backend.call(
             "fieldnotes",
             None,
             "/internal/view",
-            json!({ "path": "/no/such/page" }),
+            json!({ "path": path }),
         )
-        .await;
-    assert_eq!(status, 404);
+    };
+    assert_eq!(status_of("/no/such/page").await.0, 404);
+    assert_eq!(status_of("/oldest").await.0, 404);
+
+    // The published essays, oldest first, worked out from the stored records and not from the
+    // views: the two a new query is about to select.
+    let post_type = ObjectTypeId::new("post").unwrap();
+    let tenant = TenantId::new("fieldnotes").unwrap();
+    let state = store.load_complete(&tenant).unwrap().tenant.unwrap();
+    let mut published: Vec<(i64, String)> = state
+        .records_of(&post_type)
+        .filter(|r| r.get(&FieldId::new("status").unwrap()) == &Value::Str("published".into()))
+        .map(|r| {
+            let at = match r.get(&FieldId::new("published_at").unwrap()) {
+                Value::Time(at) => *at,
+                other => panic!("a published post without a time: {other:?}"),
+            };
+            let title = match r.get(&FieldId::new("title").unwrap()) {
+                Value::Str(title) => title.clone(),
+                other => panic!("a post without a title: {other:?}"),
+            };
+            (at, title)
+        })
+        .collect();
+    published.sort();
+    let oldest: Vec<String> = published.iter().take(2).map(|(_, t)| t.clone()).collect();
+    assert_eq!(oldest.len(), 2);
+
+    // A new named query and a new view over it: a page appears at an address nothing knew.
+    let is_published = Expr::Cmp(
+        CmpOp::Eq,
+        Box::new(Expr::Var(Scope::Record, "status".into())),
+        Box::new(Expr::Lit(Value::Str("published".into()))),
+    );
+    let query = QueryDef {
+        id: QueryId::new("oldest_two").unwrap(),
+        object: post_type.clone(),
+        filter: Some(is_published),
+        params: Default::default(),
+        order: vec![OrderKey {
+            field: "published_at".into(),
+            descending: false,
+        }],
+        limit: Some(2),
+    };
+    let section = |query: &str| ViewSection {
+        query: QueryId::new(query).unwrap(),
+        args: Default::default(),
+        include: vec![],
+        markdown: vec![],
+        single: false,
+    };
+    let oldest_view = ViewDef {
+        id: ViewId::new("oldest").unwrap(),
+        route: "/oldest".into(),
+        title: "Oldest".into(),
+        sections: [("posts".to_string(), section("oldest_two"))].into(),
+    };
+    owner_changes(
+        &store,
+        2_000_000_000_000,
+        vec![
+            SchemaChange::DefineQuery(query),
+            SchemaChange::DefineView(oldest_view),
+        ],
+    );
+    let page = backend.view("fieldnotes", None, "/oldest").await;
+    assert_eq!(page["view"], "oldest");
+    assert_eq!(titles(&page, "posts"), oldest);
+
+    // The home page is a view too: pointing its one section at the new query changes what the
+    // home page delivers, and the featured section it no longer has is gone.
+    let home_view = ViewDef {
+        id: ViewId::new("home").unwrap(),
+        route: "/".into(),
+        title: "Home".into(),
+        sections: [("recent".to_string(), section("oldest_two"))].into(),
+    };
+    owner_changes(
+        &store,
+        2_000_000_000_001,
+        vec![SchemaChange::DefineView(home_view)],
+    );
+    let home = backend.view("fieldnotes", None, "/").await;
+    assert_eq!(titles(&home, "recent"), oldest);
+    assert_eq!(
+        home["sections"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .collect::<Vec<_>>(),
+        ["recent"]
+    );
+
+    // Removing the view removes the page.
+    owner_changes(
+        &store,
+        2_000_000_000_002,
+        vec![SchemaChange::RemoveView(ViewId::new("oldest").unwrap())],
+    );
+    assert_eq!(status_of("/oldest").await.0, 404);
 }
 
 #[tokio::test]
@@ -518,8 +665,26 @@ async fn subscribers_hear_only_what_they_may_read_and_can_resume() {
     )
     .await;
     next(&mut other_tenant).await;
+    // Two more principals of the same tenant: another author, who may read published posts and
+    // her own, and an editor, who may read every post.
+    let mirela = backend
+        .login("fieldnotes", "mirela", "strata-dev-mirela")
+        .await;
+    let editor_session = backend.login("fieldnotes", "ines", "strata-dev-ines").await;
+    let mut peer = backend.socket("fieldnotes", Some(&mirela)).await;
+    let mut editor = backend.socket("fieldnotes", Some(&editor_session)).await;
+    for socket in [&mut peer, &mut editor] {
+        next(socket).await;
+        say(
+            socket,
+            json!({ "type": "subscribe", "req": "r1", "sub": "all" }),
+        )
+        .await;
+        next(socket).await;
+    }
 
-    // A draft: the author hears of it, the public and the other tenant hear nothing.
+    // A draft: the author and the editor hear of it; the public, another author and the other
+    // tenant hear nothing.
     let draft = json!({ "op": "create", "object": "post", "fields": { "title": "Live", "slug": "live", "body": "Text.", "author": 3 } });
     let (_, created) = backend
         .call("fieldnotes", Some(&author), "/internal/mutate", draft)
@@ -539,6 +704,13 @@ async fn subscribers_hear_only_what_they_may_read_and_can_resume() {
         quiet(&mut public).await,
         "a draft is not announced to the public"
     );
+    assert!(
+        quiet(&mut peer).await,
+        "nor to an author whose policies do not reach it"
+    );
+    let editor_heard = next(&mut editor).await;
+    assert_eq!(editor_heard["notice"]["kind"], "upsert");
+    assert_eq!(editor_heard["notice"]["id"], id);
 
     // Publishing it: now the public hears, as its first event.
     let publish =
@@ -547,6 +719,11 @@ async fn subscribers_hear_only_what_they_may_read_and_can_resume() {
         .call("fieldnotes", Some(&author), "/internal/mutate", publish)
         .await;
     let announced = next(&mut public).await;
+    assert_eq!(
+        next(&mut peer).await["notice"]["kind"],
+        "upsert",
+        "once it is published, the other author hears of it as well"
+    );
     assert_eq!(announced["n"], 1);
     assert_eq!(announced["notice"]["kind"], "upsert");
     let seen = announced["seq"].as_u64().unwrap();
@@ -730,21 +907,50 @@ async fn repeated_wrong_passwords_are_throttled() {
     );
 }
 
+/// Everything the store holds about each tenant, as canonical hashes: the complete state, the
+/// events and the journal of intents. Accounts and sessions are left out; they hold salts and
+/// random tokens by design.
+fn stored_state(store: &MemoryStore) -> Vec<(String, u64, String, String, String)> {
+    let mut tenants = store.tenants().unwrap();
+    tenants.sort_by(|a, b| a.id.as_str().cmp(b.id.as_str()));
+    tenants
+        .iter()
+        .map(|summary| {
+            let state = store.load_complete(&summary.id).unwrap();
+            let events = store.events_after(&summary.id, 0, 1_000_000).unwrap();
+            let journal = store.journal_after(&summary.id, 0, 1_000_000).unwrap();
+            (
+                summary.id.as_str().to_string(),
+                summary.records,
+                canon::hash_of(&state.tenant),
+                canon::hash_of(&events),
+                canon::hash_of(&journal),
+            )
+        })
+        .collect()
+}
+
 /// Verifies: RUN-004
 #[tokio::test]
-async fn fixture_reset_rebuilds_the_same_state() {
-    let backend = start().await;
+async fn installing_the_same_bundles_into_an_empty_store_gives_the_same_state() {
+    let (first, second) = (Arc::new(MemoryStore::new()), Arc::new(MemoryStore::new()));
+    let backend = start_on(first.clone(), |_| {}).await;
+    let _other = start_on(second.clone(), |_| {}).await;
+
+    // Two independent empty stores, the same bundles: the same state, the same events and the
+    // same journal for every tenant. The state is read from the stores, not from rendered pages.
+    let installed = stored_state(&first);
+    assert!(
+        installed.len() >= 2 && installed.iter().all(|(_, records, ..)| *records > 0),
+        "the bundles were not installed: {installed:?}"
+    );
+    assert_eq!(installed, stored_state(&second));
+
+    // Work done afterwards makes the states differ, and a reset installs the bundles again into
+    // an empty store: the state is the installed one once more.
     let admin = backend
         .login("fieldnotes", "admin", "strata-dev-admin")
         .await;
-    let before = backend.view("fieldnotes", None, "/").await;
-    // A second, independent empty store installs the same bundles and shows the same tenant.
-    let other = start().await;
-    assert_eq!(
-        other.view("fieldnotes", None, "/").await,
-        before,
-        "two empty stores installed from the same bundles disagree"
-    );
     let extra = json!({ "op": "create", "object": "category", "fields": { "name": "Extra", "slug": "extra" } });
     assert_eq!(
         backend
@@ -753,19 +959,12 @@ async fn fixture_reset_rebuilds_the_same_state() {
             .0,
         200
     );
-    assert_ne!(
-        backend.view("fieldnotes", None, "/").await["revision"],
-        before["revision"]
-    );
+    assert_ne!(stored_state(&first), installed);
     let (status, _) = backend
         .call("fieldnotes", None, "/internal/dev/reset", json!({}))
         .await;
     assert_eq!(status, 200);
-    assert_eq!(
-        backend.view("fieldnotes", None, "/").await,
-        before,
-        "seeding is deterministic"
-    );
+    assert_eq!(stored_state(&first), installed, "seeding is deterministic");
 }
 
 async fn finished_run(backend: &Backend, admin: &str, request: Json) -> Json {

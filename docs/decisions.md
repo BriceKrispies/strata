@@ -11,10 +11,6 @@ prototype until the requirement is met. The ones that differ today:
   (`ten-014`, `tenant-database`).
 - D12 (the event table is the outbox, delivery at least once): the specification requires a failing
   event to be parked with the error of each attempt (`ops-348`).
-- D16 (cookie `strata_sid`, `Secure` only when `STRATA_SECURE_COOKIES=1`): the specification requires
-  the host name prefix and `Secure` on the session cookie (`idn-262`). It also requires a request
-  token issued by the gateway on sign-in and sign-out (`gwy-257`) and on the WebSocket upgrade
-  (`gwy-256`), where this prototype checks the origin and a fixed header.
 - D21 (five failures lock one login for thirty seconds): the specification also requires attempts
   from one source to be refused across accounts (`idn-250`) and slowed across a realm (`idn-251`).
 
@@ -89,10 +85,15 @@ gap in `n` means a lost frame and the client reconnects; after reconnecting it r
 parameter or body field from a browser can name a tenant. A session token presented on another
 tenant's host resolves to an anonymous visitor.
 
-**D16. CSRF: allowed origin plus the session's token.** State-changing requests must carry an
-`Origin` from the configured list and the session's CSRF token in a header. Login, which has no
-session, needs the origin and a custom header that a cross-site form cannot send. The cookie is
-`HttpOnly` and `SameSite=Strict`.
+**D16. CSRF: allowed origin plus a request token.** State-changing requests, sign-in and sign-out
+included, must carry an `Origin` from the configured list and a request token in a header. A
+signed-in browser presents its session's token. A browser with no session presents one the
+gateway issued with its session reply: a keyed hash of the site and an expiry, under a secret the
+gateway draws at start (so tokens do not survive a restart, and a browser fetches a new one).
+The WebSocket upgrade carries the same token as `?csrf=`, since a browser cannot set a header on
+a socket; the gateway's own log lines leave the query out. The cookie is `__Host-strata_sid`,
+`Secure`, `HttpOnly` and `SameSite=Strict`; it works over plain HTTP only where the browser
+treats the host as secure (`localhost`, `127.0.0.1`).
 
 **D17. The first page is bootstrapped, not server-rendered.** The BFF embeds the first view model
 and session as a JSON data block and sets title, description and theme attributes. There is one
