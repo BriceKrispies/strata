@@ -156,6 +156,7 @@ fn titles(view: &Json, section: &str) -> Vec<String> {
         .collect()
 }
 
+/// Verifies: RUN-003
 #[tokio::test]
 async fn requests_without_the_service_token_are_refused() {
     let backend = start().await;
@@ -180,6 +181,7 @@ async fn requests_without_the_service_token_are_refused() {
     assert_eq!(wrong.status().as_u16(), 401);
 }
 
+/// Verifies: CMS-002
 #[tokio::test]
 async fn the_seeded_blog_is_served_from_tenant_metadata() {
     let backend = start().await;
@@ -362,6 +364,7 @@ async fn a_new_login_ends_the_session_it_replaces() {
     assert_eq!(old["session"]["authenticated"], false);
 }
 
+/// Verifies: RUN-002
 #[tokio::test]
 async fn a_session_of_one_tenant_is_nobody_on_another() {
     let backend = start().await;
@@ -426,6 +429,7 @@ async fn a_session_of_one_tenant_is_nobody_on_another() {
     assert_eq!(status, 401);
 }
 
+/// Verifies: RUN-001
 #[tokio::test]
 async fn subscribers_hear_only_what_they_may_read_and_can_resume() {
     let backend = start().await;
@@ -679,6 +683,7 @@ async fn repeated_wrong_passwords_are_throttled() {
     );
 }
 
+/// Verifies: RUN-004
 #[tokio::test]
 async fn fixture_reset_rebuilds_the_same_state() {
     let backend = start().await;

@@ -193,6 +193,7 @@ proptest! {
 
     /// K2. The same state, intent and context always give the same result, and equal worlds
     /// have equal hashes.
+    /// Verifies: KRN-001
     #[test]
     fn transitions_are_deterministic(ops in proptest::collection::vec(op_strategy(), 1..30)) {
         let mut world = notes_world();
@@ -213,6 +214,7 @@ proptest! {
 
     /// K3. A step in one tenant leaves every other tenant exactly as it was, and a rejected
     /// step leaves everything as it was.
+    /// Verifies: KRN-002
     #[test]
     fn a_step_never_touches_another_tenant(ops in proptest::collection::vec(op_strategy(), 1..30)) {
         let mut world = notes_world();
@@ -229,6 +231,7 @@ proptest! {
     }
 
     /// K4. Anonymous visitors, strangers and members of another tenant never change anything.
+    /// Verifies: KRN-003
     #[test]
     fn outsiders_cannot_mutate(ops in proptest::collection::vec(op_strategy(), 1..30)) {
         let mut world = notes_world();
@@ -249,6 +252,7 @@ proptest! {
 
     /// K4, reads. Every returned row is one the principal may see; the public never sees a
     /// draft; nobody sees another tenant's notes.
+    /// Verifies: KRN-004
     #[test]
     fn reads_are_filtered_by_policy(ops in proptest::collection::vec(op_strategy(), 1..30), reader in 0usize..6, reader_tenant in 0usize..2) {
         let mut world = notes_world();
@@ -278,6 +282,7 @@ proptest! {
     /// K7. On the partial snapshot planned by `needs`, a transition either agrees exactly with
     /// the complete snapshot or asks for more state. Loading what it asks for converges on the
     /// same answer.
+    /// Verifies: KRN-005
     #[test]
     fn partial_snapshots_never_change_a_decision(ops in proptest::collection::vec(op_strategy(), 1..25)) {
         let mut world = notes_world();
@@ -310,6 +315,7 @@ proptest! {
 
     /// K8. Revisions rise by one per accepted step, event sequence numbers are gapless and
     /// record ids are never reused.
+    /// Verifies: KRN-006
     #[test]
     fn counters_are_monotonic(ops in proptest::collection::vec(op_strategy(), 1..30)) {
         let mut world = notes_world();

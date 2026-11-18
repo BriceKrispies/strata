@@ -23,6 +23,7 @@ fn fresh_path(name: &str) -> PathBuf {
     path
 }
 
+/// Verifies: STO-002
 #[test]
 fn sqlite_store_conforms_on_disk() {
     conformance::run(&|| {
@@ -31,6 +32,7 @@ fn sqlite_store_conforms_on_disk() {
     });
 }
 
+/// Verifies: STO-003
 #[test]
 fn committed_data_survives_a_reopen() {
     let path = fresh_path("durable");

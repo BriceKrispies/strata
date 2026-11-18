@@ -7,7 +7,8 @@
     "build": "vite build web",
     "check": "tsc -p web/jsconfig.json",
     "test:web": "node --test web/test/kernel.test.js",
-    "e2e": "playwright test -c tests/e2e/playwright.config.js"
+    "e2e": "playwright test -c tests/e2e/playwright.config.js",
+    "spec": "node scripts/spec-gate.mjs"
   },
   "devDependencies": {
     "@axe-core/playwright": "4.14.0",

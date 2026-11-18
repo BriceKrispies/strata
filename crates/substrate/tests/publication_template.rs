@@ -87,6 +87,7 @@ fn slugs(world: &World, principal: Principal, path: &str, section: &str) -> Vec<
     found
 }
 
+/// Verifies: CMS-001
 #[test]
 fn the_template_installs_and_publishing_stamps_the_time() {
     let world = world();
@@ -106,6 +107,7 @@ fn the_template_installs_and_publishing_stamps_the_time() {
     );
 }
 
+/// Verifies: CMS-003
 #[test]
 fn readers_see_published_posts_and_authors_also_see_their_own_drafts() {
     let world = world();
@@ -156,6 +158,7 @@ fn a_dependent_section_reads_through_the_single_row_it_depends_on() {
     );
 }
 
+/// Verifies: CMS-005
 #[test]
 fn the_theme_and_cover_rules_are_constraints_in_the_metadata() {
     let world = world();

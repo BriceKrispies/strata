@@ -82,6 +82,7 @@ fn the_fixtures_exercise_every_outcome_the_model_has() {
     assert!(generated.lines().filter(|l| l.starts_with("op ")).count() > 900);
 }
 
+/// Verifies: KRN-016
 #[test]
 fn the_lean_model_agrees_with_the_kernel_when_lean_is_installed() {
     if !lake_available() {

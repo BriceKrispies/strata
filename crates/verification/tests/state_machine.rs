@@ -146,6 +146,7 @@ fn intent(tenant: &str, op: &Op) -> Intent {
 proptest! {
     #![proptest_config(ProptestConfig { cases: 128, ..ProptestConfig::default() })]
 
+    /// Verifies: KRN-011
     #[test]
     fn every_accepted_state_satisfies_every_invariant(ops in proptest::collection::vec(op(), 1..40)) {
         let mut world = notes_world();

@@ -149,6 +149,7 @@ impl Edge {
     }
 }
 
+/// Verifies: GWY-003
 #[tokio::test]
 async fn the_session_cookie_is_http_only_strict_and_never_in_a_body() {
     let edge = start().await;
@@ -199,6 +200,7 @@ async fn the_session_cookie_is_http_only_strict_and_never_in_a_body() {
     assert!(reply.cookie.unwrap().contains("Max-Age=0"));
 }
 
+/// Verifies: GWY-002
 #[tokio::test]
 async fn writes_need_our_origin_and_the_sessions_csrf_token() {
     let edge = start().await;
@@ -264,6 +266,7 @@ async fn writes_need_our_origin_and_the_sessions_csrf_token() {
     );
 }
 
+/// Verifies: GWY-001
 #[tokio::test]
 async fn the_site_comes_from_the_host_and_nothing_the_client_says() {
     let edge = start().await;
@@ -367,6 +370,7 @@ async fn views_are_projected_to_plain_json_with_markdown_as_blocks() {
     );
 }
 
+/// Verifies: GWY-005
 #[tokio::test]
 async fn pages_carry_security_headers_and_a_bootstrap_that_cannot_break_out() {
     let edge = start().await;
@@ -415,6 +419,7 @@ async fn pages_carry_security_headers_and_a_bootstrap_that_cannot_break_out() {
     assert_eq!(edge.get("127.0.0.1", "/no/such/page", None).await.0, 404);
 }
 
+/// Verifies: GWY-004
 #[tokio::test]
 async fn the_socket_checks_origin_validates_frames_and_relays_events() {
     let edge = start().await;

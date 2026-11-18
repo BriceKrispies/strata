@@ -104,6 +104,7 @@ fn dependencies(crate_dir: &str) -> Vec<String> {
         .collect()
 }
 
+/// Verifies: KRN-012
 #[test]
 fn the_kernel_names_no_ambient_capability() {
     let found = violations("kernel");

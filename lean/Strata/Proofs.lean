@@ -29,7 +29,9 @@ theorem step_deterministic (w : World) (i : Intent) (c : Ctx) (r₁ r₂ : Excep
 
 /-! ## Property 3: tenant isolation -/
 
-/-- An accepted step addressed to one tenant leaves every other tenant exactly as it was. -/
+/-- An accepted step addressed to one tenant leaves every other tenant exactly as it was.
+
+    Verifies: KRN-013 -/
 theorem step_isolated (w w' : World) (i : Intent) (c : Ctx)
     (h : step w i c = .ok w') : ∀ x, x ≠ c.tenant → w' x = w x := by
   intro x hx
@@ -113,7 +115,9 @@ theorem unauthorized_cannot_delete (w : World) (c : Ctx) (t : Tenant) (id : Reco
     step w (.delete id) c = .error .unauthorized := by
   simp [step, ht, stepTenant, hl, hno]
 
-/-- Stated in terms of the outcome: an unauthorized principal's intent is never accepted. -/
+/-- Stated in terms of the outcome: an unauthorized principal's intent is never accepted.
+
+    Verifies: KRN-015 -/
 theorem unauthorized_cannot_mutate (w : World) (i : Intent) (c : Ctx) (t : Tenant)
     (ht : w c.tenant = some t) (hno : authorized t c.principal i = false) :
     ∀ w', step w i c ≠ .ok w' := by
@@ -197,7 +201,9 @@ theorem stepTenant_preserves_wf (t t' : Tenant) (p : PrincipalId) (i : Intent)
         · exact hids
 
 /-- Property 1 for the world: a strict, accepted step from a well-formed world leads to a
-    well-formed world. -/
+    well-formed world.
+
+    Verifies: KRN-014 -/
 theorem step_preserves_wf (w w' : World) (i : Intent) (c : Ctx)
     (hwf : w.WF) (hstrict : i.strict = true) (h : step w i c = .ok w') : w'.WF := by
   intro x t' hx

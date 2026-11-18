@@ -65,6 +65,7 @@ fn require_excerpt(existing: ExistingData, before_step: usize) -> Proposal {
     }
 }
 
+/// Verifies: SIM-001
 #[test]
 fn the_same_scenario_gives_the_same_trace() {
     let faults = Faults {
@@ -171,6 +172,7 @@ fn faults_change_the_path_but_not_the_result() {
     );
 }
 
+/// Verifies: SIM-002
 #[test]
 fn a_branch_with_a_change_that_changes_nothing_equals_its_baseline() {
     let scenario = scenario(
@@ -243,6 +245,7 @@ fn requiring_the_excerpt_strictly_is_refused_because_of_existing_posts() {
     assert_eq!(projection.baseline.final_hash, projection.branch.final_hash);
 }
 
+/// Verifies: SIM-003
 #[test]
 fn grandfathering_the_requirement_diverges_and_the_divergence_is_explained() {
     let scenario = scenario(5, 80, Faults::default());
@@ -346,6 +349,7 @@ fn a_projection_can_be_cancelled() {
     assert!(result.is_err());
 }
 
+/// Verifies: SIM-004
 #[test]
 fn a_journal_of_real_commits_replays_to_the_live_state() {
     // Build a journal the way the store does: record each accepted intent with its hashes.
