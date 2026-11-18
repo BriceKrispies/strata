@@ -179,6 +179,53 @@ async fn requests_without_the_service_token_are_refused() {
         .await
         .unwrap();
     assert_eq!(wrong.status().as_u16(), 401);
+
+    // Every route is behind the gate, not only the one above. The health check is the one
+    // deliberate exemption, and it answers without the credential.
+    for path in [
+        "/internal/session",
+        "/internal/session/login",
+        "/internal/session/logout",
+        "/internal/view",
+        "/internal/mutate",
+        "/internal/diagnostics",
+        "/internal/lab/overview",
+        "/internal/lab/run",
+        "/internal/lab/result",
+        "/internal/lab/replay",
+        "/internal/lab/verify",
+        "/internal/dev/reset",
+        "/internal/dev/expire-session",
+    ] {
+        let response = backend
+            .http
+            .post(format!("{}{path}", backend.base))
+            .header(HEADER_SITE, "fieldnotes")
+            .json(&json!({}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status().as_u16(),
+            401,
+            "{path} answered a request without the service credential"
+        );
+    }
+    let socket = backend
+        .http
+        .get(format!("{}/internal/ws", backend.base))
+        .header(HEADER_SITE, "fieldnotes")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(socket.status().as_u16(), 401, "/internal/ws");
+    let health = backend
+        .http
+        .get(format!("{}/internal/health", backend.base))
+        .send()
+        .await
+        .unwrap();
+    assert!(health.status().is_success(), "the health check is open");
 }
 
 /// Verifies: CMS-002
@@ -691,6 +738,13 @@ async fn fixture_reset_rebuilds_the_same_state() {
         .login("fieldnotes", "admin", "strata-dev-admin")
         .await;
     let before = backend.view("fieldnotes", None, "/").await;
+    // A second, independent empty store installs the same bundles and shows the same tenant.
+    let other = start().await;
+    assert_eq!(
+        other.view("fieldnotes", None, "/").await,
+        before,
+        "two empty stores installed from the same bundles disagree"
+    );
     let extra = json!({ "op": "create", "object": "category", "fields": { "name": "Extra", "slug": "extra" } });
     assert_eq!(
         backend

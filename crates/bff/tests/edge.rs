@@ -197,7 +197,12 @@ async fn the_session_cookie_is_http_only_strict_and_never_in_a_body() {
     assert_eq!(csrf_status, 200);
     let (_, after, reply) = edge.get("127.0.0.1", "/api/session", Some(token)).await;
     assert_eq!(after["session"]["authenticated"], false);
-    assert!(reply.cookie.unwrap().contains("Max-Age=0"));
+    let cleared = reply.cookie.unwrap();
+    assert!(cleared.contains("Max-Age=0"), "{cleared}");
+    assert!(
+        cleared.contains("HttpOnly") && cleared.contains("SameSite=Strict"),
+        "the cleared cookie keeps its attributes: {cleared}"
+    );
 }
 
 /// Verifies: GWY-002
@@ -244,7 +249,25 @@ async fn writes_need_our_origin_and_the_sessions_csrf_token() {
         403,
         "no origin at all"
     );
-    assert_eq!(edge.send(write(Some(ours), Some(&csrf))).await.0, 200);
+    assert_eq!(
+        edge.send(write(Some(ours.clone()), Some(&csrf))).await.0,
+        200
+    );
+
+    // Logout changes state too: without the token it is refused and the session survives.
+    let no_token_logout = edge
+        .post("127.0.0.1", "/api/logout", json!({}))
+        .header("cookie", &cookie);
+    assert_eq!(
+        edge.send(no_token_logout).await.0,
+        403,
+        "logout without the token"
+    );
+    let (_, still, _) = edge.get("127.0.0.1", "/api/session", Some(&token)).await;
+    assert_eq!(
+        still["session"]["authenticated"], true,
+        "the refused logout ended nothing"
+    );
 
     // Login is guarded too, before any session exists.
     let cross_site = edge
@@ -374,21 +397,33 @@ async fn views_are_projected_to_plain_json_with_markdown_as_blocks() {
 #[tokio::test]
 async fn pages_carry_security_headers_and_a_bootstrap_that_cannot_break_out() {
     let edge = start().await;
-    let (status, _, reply) = edge
+    // Two pages of different kinds: the policy is the same on each.
+    for path in ["/posts/a-margin-is-a-promise", "/"] {
+        let (status, _, reply) = edge.get("127.0.0.1", path, None).await;
+        assert_eq!(status, 200, "{path}");
+        let csp = reply
+            .headers
+            .get("content-security-policy")
+            .unwrap()
+            .to_str()
+            .unwrap();
+        // The script directive is exactly 'self': no inline script, no hash, no nonce, no
+        // other origin, and no separate element or attribute directive that could allow inline.
+        let script_src = csp
+            .split(';')
+            .map(str::trim)
+            .find(|d| d.starts_with("script-src"))
+            .unwrap_or("");
+        assert_eq!(script_src, "script-src 'self'", "{path}: {csp}");
+        assert!(
+            !csp.contains("script-src-elem") && !csp.contains("script-src-attr"),
+            "{path}: {csp}"
+        );
+        assert!(csp.contains("frame-ancestors 'none'"), "{path}: {csp}");
+    }
+    let (_, _, reply) = edge
         .get("127.0.0.1", "/posts/a-margin-is-a-promise", None)
         .await;
-    assert_eq!(status, 200);
-    let csp = reply
-        .headers
-        .get("content-security-policy")
-        .unwrap()
-        .to_str()
-        .unwrap();
-    assert!(
-        csp.contains("script-src 'self'")
-            && csp.contains("frame-ancestors 'none'")
-            && !csp.contains("unsafe-inline")
-    );
     assert_eq!(
         reply.headers.get("x-content-type-options").unwrap(),
         "nosniff"
@@ -446,6 +481,17 @@ async fn the_socket_checks_origin_validates_frames_and_relays_events() {
         "foreign origin is refused at upgrade"
     );
     assert!(connect(None, None).await.is_err(), "so is a missing origin");
+    for near_miss in [
+        format!("https://127.0.0.1:{}", edge.port),
+        format!("http://127.0.0.1.evil.example:{}", edge.port),
+        format!("http://127.0.0.1:{}", edge.port.wrapping_add(1)),
+        "null".to_string(),
+    ] {
+        assert!(
+            connect(Some(near_miss.clone()), None).await.is_err(),
+            "origin {near_miss} was accepted"
+        );
+    }
 
     let (token, csrf) = edge.login("127.0.0.1", "ines", "strata-dev-ines").await;
     let (mut socket, _) = connect(Some(edge.origin("127.0.0.1")), Some(token.clone()))

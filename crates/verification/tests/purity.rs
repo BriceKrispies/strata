@@ -36,6 +36,20 @@ const FORBIDDEN: &[(&str, &str)] = &[
     ("dbg!", "output"),
     ("tokio", "an async runtime"),
     ("async fn", "an async runtime"),
+    // Ambient facilities reached other than by a plain `std::x::y` path.
+    ("RandomState", "randomness (hash seeds)"),
+    ("env!", "environment, read at build time"),
+    ("option_env!", "environment, read at build time"),
+    ("include_str!", "file system, read at build time"),
+    ("include_bytes!", "file system, read at build time"),
+    ("include!", "file system, read at build time"),
+    ("extern crate", "a crate outside the allowance"),
+    ("std::{", "a grouped std import, which the scan cannot read"),
+    ("std::os", "the operating system"),
+    ("std::ffi", "the operating system"),
+    ("std::path", "the file system"),
+    ("std::alloc", "the allocator"),
+    ("#[link", "foreign code"),
 ];
 
 fn root() -> PathBuf {
@@ -53,13 +67,42 @@ fn sources(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// The code of a line: without a trailing `//` comment, and nothing at all for doc comments.
-fn code_of(line: &str) -> &str {
-    let trimmed = line.trim_start();
-    if trimmed.starts_with("//") {
-        return "";
+/// The code of a line: nothing at all for comment lines, and otherwise the line without its
+/// string literal contents and without any trailing `//` comment. A `//` inside a string literal
+/// is not a comment, so it must not cut the rest of the line out of the scan.
+fn code_of(line: &str) -> String {
+    if line.trim_start().starts_with("//") {
+        return String::new();
     }
-    line.split("//").next().unwrap_or("")
+    let mut code = String::new();
+    let mut in_string = false;
+    let mut chars = line.chars().peekable();
+    while let Some(c) = chars.next() {
+        if in_string {
+            match c {
+                '\\' => {
+                    chars.next();
+                }
+                '"' => {
+                    in_string = false;
+                    code.push('"');
+                }
+                _ => {}
+            }
+        } else if c == '\'' && chars.peek() == Some(&'"') {
+            // The character literal '"' is not the start of a string.
+            chars.next();
+            chars.next();
+        } else if c == '"' {
+            in_string = true;
+            code.push('"');
+        } else if c == '/' && chars.peek() == Some(&'/') {
+            break;
+        } else {
+            code.push(c);
+        }
+    }
+    code
 }
 
 fn violations(crate_dir: &str) -> Vec<String> {
@@ -144,4 +187,16 @@ fn the_scan_would_catch_a_violation() {
     assert!(FORBIDDEN
         .iter()
         .any(|(token, _)| "std::time::SystemTime::now()".contains(token)));
+    // A `//` inside a string literal does not hide the rest of the line from the scan.
+    assert!(
+        code_of("let u = \"http://x\"; let t = std::time::Instant::now();").contains("std::time")
+    );
+    // A character literal that is a quotation mark does not open a string.
+    assert!(code_of("if c == '\"' { std::fs::read(p); }").contains("std::fs"));
+    // Grouped imports and build-time reads are visible as well.
+    assert!(code_of("use std::{fs, io};").contains("std::{"));
+    assert!(code_of("const HOME: &str = env!(\"HOME\");").contains("env!"));
+    assert!(
+        code_of("let s = std::collections::hash_map::RandomState::new();").contains("RandomState")
+    );
 }

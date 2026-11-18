@@ -89,6 +89,81 @@ fn a_rejection_explains_itself() {
     assert!(failed[0].detail.contains("len(new.title) <= 24"));
 }
 
+/// Verifies: KRN-007
+///
+/// Every kind of rejection, not one example: each refused step must list at least one check
+/// that failed. A rejection whose evidence holds only passed checks is a refusal that does not
+/// say why.
+#[test]
+fn every_rejection_lists_at_least_one_failed_check() {
+    let world = must(
+        &notes_world(),
+        "alpha",
+        "writer1",
+        5_000,
+        new_note("First", "first"),
+    );
+    let rejections: Vec<(&str, &str, Intent)> = vec![
+        (
+            "constraint",
+            "writer1",
+            new_note("A title that is far too long to fit", "long"),
+        ),
+        (
+            "missing required",
+            "writer1",
+            Intent::CreateRecord {
+                object: object("note"),
+                fields: BTreeMap::from([(field("slug"), text("x"))]),
+            },
+        ),
+        (
+            "not authorised",
+            "writer2",
+            patch(1, &[("title", text("Mine now"))]),
+        ),
+        (
+            "workflow",
+            "writer1",
+            patch(1, &[("status", text("published"))]),
+        ),
+        (
+            "unknown record",
+            "writer1",
+            patch(42, &[("title", text("x"))]),
+        ),
+        (
+            "unknown role",
+            "owner",
+            Intent::RevokeRole {
+                principal: principal_id("alpha:editor"),
+                role: role("nobody"),
+            },
+        ),
+        (
+            "stale version",
+            "writer1",
+            Intent::UpdateRecord {
+                object: object("note"),
+                id: RecordId(1),
+                fields: BTreeMap::from([(field("body"), text("two"))]),
+                expected_version: Some(7),
+            },
+        ),
+    ];
+    for (name, who, intent) in rejections {
+        let Err(error) = step(&world, "alpha", who, 5_001, intent) else {
+            panic!("{name} was accepted");
+        };
+        assert!(
+            error.evidence.iter().any(|c| !c.passed),
+            "{name} was refused as {:?} with no failed check listed: {:?}",
+            error.kind,
+            error.evidence
+        );
+    }
+}
+
 #[test]
 fn required_type_unknown_field_and_unique_are_each_rejected() {
     let world = must(
@@ -234,6 +309,72 @@ fn workflow_guards_the_status_field_and_sets_fields_when_it_fires() {
     );
 }
 
+/// Verifies: KRN-008
+///
+/// From each state of the declared workflow, every status the workflow does not declare as a
+/// transition from that state is refused, whoever asks; the declared move is accepted for an
+/// editor. The rows cover both states and the undeclared targets, not one example.
+#[test]
+fn undeclared_status_changes_are_refused_from_every_state() {
+    let world = must(
+        &notes_world(),
+        "alpha",
+        "writer1",
+        5_000,
+        new_note("First", "first"),
+    );
+    // draft: the declared move is to published; archived and an unknown word are not declared.
+    for target in ["archived", "nonsense"] {
+        let refused = step(
+            &world,
+            "alpha",
+            "editor",
+            5_001,
+            patch(1, &[("status", text(target))]),
+        )
+        .unwrap_err();
+        assert_eq!(
+            refused.kind,
+            ErrorKind::WorkflowViolation,
+            "draft -> {target}"
+        );
+    }
+    let published = must(
+        &world,
+        "alpha",
+        "editor",
+        5_002,
+        patch(1, &[("status", text("published"))]),
+    );
+    // published: the declared move is back to draft; archived and an unknown word are not declared.
+    for target in ["archived", "nonsense"] {
+        let refused = step(
+            &published,
+            "alpha",
+            "editor",
+            5_003,
+            patch(1, &[("status", text(target))]),
+        )
+        .unwrap_err();
+        assert_eq!(
+            refused.kind,
+            ErrorKind::WorkflowViolation,
+            "published -> {target}"
+        );
+    }
+    let back = must(
+        &published,
+        "alpha",
+        "editor",
+        5_004,
+        patch(1, &[("status", text("draft"))]),
+    );
+    assert_eq!(
+        note(&back, "alpha", 1).get(&field("status")),
+        &text("draft")
+    );
+}
+
 #[test]
 fn a_stale_expected_version_is_a_conflict() {
     let world = must(
@@ -319,19 +460,29 @@ fn a_strict_migration_is_rejected_when_existing_records_would_not_conform() {
         5_000,
         new_note("First", "first"),
     );
+    let world = must(
+        &world,
+        "alpha",
+        "writer1",
+        5_001,
+        new_note("Second", "second"),
+    );
     let error = step(
         &world,
         "alpha",
         "owner",
-        5_001,
+        5_002,
         require_rank(ExistingData::Reject),
     )
     .unwrap_err();
     assert_eq!(error.kind, ErrorKind::MigrationRejected);
-    assert!(error
-        .evidence
-        .iter()
-        .any(|c| c.rule == "existing:note/1:required:note.rank" && !c.passed));
+    for id in [1, 2] {
+        let rule = format!("existing:note/{id}:required:note.rank");
+        assert!(
+            error.evidence.iter().any(|c| c.rule == rule && !c.passed),
+            "{rule} is not listed among the refusal's checks"
+        );
+    }
 }
 
 /// Verifies: KRN-010
@@ -344,21 +495,36 @@ fn a_grandfathered_migration_is_accepted_and_bites_on_the_next_write() {
         5_000,
         new_note("First", "first"),
     );
+    let world = must(
+        &world,
+        "alpha",
+        "writer1",
+        5_001,
+        new_note("Second", "second"),
+    );
     let (world, outcome) = step(
         &world,
         "alpha",
         "owner",
-        5_001,
+        5_002,
         require_rank(ExistingData::Grandfather),
     )
     .unwrap();
     assert!(matches!(
         outcome.events[0].body,
         EventBody::SchemaChanged {
-            grandfathered: 1,
+            grandfathered: 2,
             ..
         }
     ));
+    // The non-conforming records are listed in the change's own evidence, one check each.
+    for id in [1, 2] {
+        let rule = format!("existing:note/{id}:required:note.rank");
+        assert!(
+            outcome.evidence.iter().any(|c| c.rule == rule && !c.passed),
+            "{rule} is not listed in the accepted change's evidence"
+        );
+    }
     let stuck = step(
         &world,
         "alpha",
