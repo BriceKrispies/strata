@@ -94,6 +94,7 @@ and reports the store's own integrity check.
 | `npm run check` | `tsc --checkJs` over the JSDoc-typed JavaScript |
 | `npm run build && npm run e2e` | 26 Playwright tests on two private stacks (ports 4200/4201 and 4210/4211/5183) |
 | `STRATA_BLESS=1 cargo test -p strata-verification` | Regenerate the Lean correspondence fixtures after an intended change |
+| `npm run spec` | The specification gate: `cargo test --workspace`, `lake build`, the web kernel tests and `npm run check`, then Exegra and Concordance against `specifications/spec.jsonc`. Not the e2e tests. `node scripts/spec-gate.mjs --no-test --allow-recorded` reuses the recorded results. See `specifications/README.md` |
 
 `node scripts/shots.mjs [base-url] [filter]` captures screenshots of a running stack into
 `var/shots/` for visual review; the browser tests also save theirs under

@@ -4,6 +4,12 @@ Strata is a metadata-driven, multi-tenant application substrate. The kernel defi
 system means. Everything else interprets, executes, persists, presents, proves or simulates that
 meaning.
 
+This describes the prototype. The specification (`specifications/spec.jsonc`) sets a different
+target and divides the work differently: an identity service holds sessions, a gateway and a
+runtime sit in front of the kernel, every tenant has a database of its own on PostgreSQL, and the
+components are listed under `components`. Where this document and the specification disagree, the
+specification states what is intended. The boundary rules below are the prototype's own.
+
 ```
 Browser main thread (DOM, view adapter)
         |  postMessage

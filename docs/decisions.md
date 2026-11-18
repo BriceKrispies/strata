@@ -3,6 +3,21 @@
 Decisions that affect correctness, in the order they were made. Each says what was chosen, what
 it costs, and where it is enforced.
 
+These are the prototype's decisions. Where the specification (`specifications/spec.jsonc`) sets a
+different requirement, the specification is the target, and the decision below stays true of the
+prototype until the requirement is met. The ones that differ today:
+
+- D11 (one SQLite connection): the specification places each tenant in its own PostgreSQL database
+  (`ten-014`, `tenant-database`).
+- D12 (the event table is the outbox, delivery at least once): the specification requires a failing
+  event to be parked with the error of each attempt (`ops-348`).
+- D16 (cookie `strata_sid`, `Secure` only when `STRATA_SECURE_COOKIES=1`): the specification requires
+  the host name prefix and `Secure` on the session cookie (`idn-262`). It also requires a request
+  token issued by the gateway on sign-in and sign-out (`gwy-257`) and on the WebSocket upgrade
+  (`gwy-256`), where this prototype checks the origin and a fixed header.
+- D21 (five failures lock one login for thirty seconds): the specification also requires attempts
+  from one source to be refused across accounts (`idn-250`) and slowed across a realm (`idn-251`).
+
 **D1. The kernel owns schema types and transition semantics; the substrate owns the forms around
 them.** `transition` has to validate against the schema, so the schema cannot live in a crate the
 kernel does not see. The substrate holds what interprets kernel data for people and programs:

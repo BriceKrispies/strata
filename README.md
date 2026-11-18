@@ -7,6 +7,19 @@ blog, **Fieldnotes**, that exists only as tenant metadata on top of it.
 The kernel defines what the system means. Everything else interprets, executes, persists,
 presents, proves or simulates that meaning.
 
+## Status
+
+The platform's intended design is the specification, `specifications/spec.jsonc`
+(734 requirements, 74 model claims, milestones 1 to 9). It describes a larger system than this
+repository builds: one database per tenant on PostgreSQL, a separate identity service, a gateway,
+an agent plane and a cloud profile. The prototype here implements milestone 1. The gate holds the
+code to the milestones listed in `concordance.toml` (`[gate] started_milestones`, currently 1),
+which is 37 of the 734 requirements. The rest are planned and are not checked against the code.
+
+The documents in `docs/` describe the prototype as it is. Where they and the specification
+differ, the specification states the target. See `specifications/README.md` for what a passing
+gate does and does not establish.
+
 ## Start it
 
 Needs Rust 1.96, Node 24 and, for the proofs only, Lean 4.36 (via `elan`). No Docker, no
@@ -50,9 +63,12 @@ npm run test:web           # the frontend kernel, as plain functions
 npm run check              # type-check the JavaScript through its JSDoc
 npm run build && npm run e2e   # real browser: 26 tests on two stacks with their own ports
 cd lean && lake build && lake env lean Audit.lean   # the proofs and the axioms they use
+npm run spec               # the specification gate: the tests above except e2e, then Exegra and Concordance
 ```
 
 On a shared machine, cap the Rust build and tests: `CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=2`.
+`npm run spec` needs the Exegra checkout at `../exegra` (or `EXEGRA_HOME`) and `concordance` on
+the PATH. Its details are in `specifications/README.md`.
 
 ## What is where
 
@@ -73,12 +89,15 @@ web/src/views           view model to elements
 web/src/styles          tokens, base, layout, components, in cascade layers
 tenants/                Fieldnotes and Tidewater as data; the publication template
 tests/e2e               Playwright
-docs/                   architecture, invariants, decisions, storage, protocol, verification
+specifications/         the platform specification (spec.jsonc) and how to read it
+scripts/                dev loop, spec gate (spec-gate.mjs), proof tagging (tag-proofs.mjs)
+docs/                   architecture, invariants, decisions, storage, protocol, development, verification
 ```
 
 ## Read next
 
-- [docs/architecture.md](docs/architecture.md): the shape of the system and the request path.
+- [specifications/README.md](specifications/README.md): the specification, the gate, and what a pass means.
+- [docs/architecture.md](docs/architecture.md): the shape of the prototype and the request path.
 - [docs/invariants.md](docs/invariants.md): what must always hold, and what checks it.
 - [docs/decisions.md](docs/decisions.md): decisions that affect correctness, and why.
 - [docs/storage.md](docs/storage.md): the persistence contract and how to add a database.
