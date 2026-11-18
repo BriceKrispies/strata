@@ -10,11 +10,11 @@ presents, proves or simulates that meaning.
 ## Status
 
 The platform's intended design is the specification, `specifications/spec.jsonc`
-(734 requirements, 74 model claims, milestones 1 to 9). It describes a larger system than this
+(737 requirements, 90 model claims, milestones 1 to 12). It describes a larger system than this
 repository builds: one database per tenant on PostgreSQL, a separate identity service, a gateway,
 an agent plane and a cloud profile. The prototype here implements milestone 1. The gate holds the
 code to the milestones listed in `concordance.toml` (`[gate] started_milestones`, currently 1),
-which is 37 of the 734 requirements. The rest are planned and are not checked against the code.
+which is 37 of the 737 requirements. The rest are planned and are not checked against the code.
 
 The documents in `docs/` describe the prototype as it is. Where they and the specification
 differ, the specification states the target. See `specifications/README.md` for what a passing

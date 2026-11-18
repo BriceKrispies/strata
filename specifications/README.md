@@ -28,11 +28,34 @@ the code to is in `[gate] started_milestones` of `concordance.toml`.
 | `components`, `relationships` | The architecture (C-n): one tenant database per tenant, an identity service, a gateway, and so on |
 | `records`, `copies` | The data model: who owns each record, and every copy kept of it, with its key, freshness bound and erasure point |
 | `claims` with `"kind": "requirement"` | The requirements, one SHALL each, with boundary, traces, method and milestone |
-| `claims` with ids `m-...` | Claims Exegra evaluates itself. `models` names the requirement each one is a model of (see below) |
+| `claims` with ids `m-...` | Claims Exegra evaluates itself. `models` names the requirement each one is a model of (see below); a behaviour claim also carries `faultBasis` (see "Behaviour models") |
 | `events`, `behaviors`, `faults`, `scenarios` | The behaviour models |
 | `environments`, `failureModes`, `faultModels`, `assumptions` | What the design is meant to survive, and what it takes for granted |
 | `views` | Six views for reading: architecture, trust zones, data, traceability, requirements and claims, behaviour |
 | `documents`, `sections`, `caseTables`, `terms` | How the above is laid out for reading |
+
+## Behaviour models
+
+A behaviour claim is an `m-` claim that lists scenarios (`state-invariant`, `precedes`, `eventually`, `never`). Exegra runs each scenario with its faults and runs each declared negative: the same scenario with extra faults, which must violate the claim.
+
+### Fault basis of a behaviour claim
+
+Every behaviour claim carries the property `faultBasis` (a property of the specification's vocabulary, because `claim` has no `tags`):
+
+- `fault`: a listed scenario injects a real fault (a message lost, delayed or repeated, a stop, a concurrent actor, an early request), the claim holds in that scenario, and a negative on that scenario takes away the protection and violates the claim. In most of them the fault is what exposes the defect: without the late approval, the defect that applies an unapproved change has nothing to apply. In a few the defect would show with or without the fault (the trigger chain, the audit chain, the self-approval): the claim is then only shown to hold under the fault, and the fault is not what the protection is for.
+- `restatement`: the claim fails only under a defect built to negate it, usually a transition disabled or a check removed, and no real fault is modelled for it. These are liveness claims ("the operation commits", "the move completes") and their scenarios show the mechanism works, not that it survives a failure.
+
+`node scripts/spec-gate.mjs` prints the two counts separately. The ids of the restatements are the `m-` claims whose `faultBasis` is `restatement`.
+
+A failure mode (`failureModes`) carries `modelling`: `exercised` when a fault of a scenario realises it (`realises`) and a model claim lists that scenario, or `not-modelled` with a `modellingNote` that says what answers it instead. Exegra's result for a claim states how many failure modes of its fault model its scenarios inject.
+
+### Ticks
+
+A tick is logical time. For every bound that a requirement or a decision states in minutes, one tick is one minute: the emailed link lifetime of 15 minutes (D-9) is 15 ticks, and the access token lifetime of 5 minutes (D-537), which the revocation bound of the gateway's session copy follows, is 5 ticks. A gap of a few ticks between two messages fixes an order and is not a duration. The relation is stated once as the assumption `a-tick` and the term `term-tick`; the model claims that depend on a bound in ticks name `a-tick`. Where a model scales a number down (a threshold of 3 failures for the 100 of D-700) the claim says so.
+
+### Structure claims over paths
+
+The relationships are paths between components, not requests. A claim that every path from a client to the gateway passes through the traffic switch (`m-external-requests-pass-traffic-switch`) shows that no relationship lets a client bypass the switch. Which colour a request reaches is the behaviour of the colour switch model, and which listener takes a request class is a relationship per listener (the traffic switch for public requests, the agent traffic switch for agents). The relationship kind `controls` is an instruction that carries no request, record or tenant data, and the claims that follow data paths name the kinds they follow.
 
 ## Checking it
 
@@ -69,7 +92,7 @@ A passing gate establishes these, and only these:
    crashes, or prints nothing parseable fails the gate.
 2. Every requirement of a started milestone has a passing proof in Concordance's results file,
    and no Concordance finding on a started milestone is open. The count of such requirements is
-   taken from the specification. Currently that is 37 of the 734 requirements.
+   taken from the specification. Currently that is 37 of the 737 requirements.
 3. Every `m-` claim is verified by Exegra, with no violated claim. The count is taken from the
    specification, and every `models` link names a requirement that exists.
 4. Exegra validates the file with no errors, warnings, gaps or Concordance warnings.
@@ -81,7 +104,7 @@ A passing gate does not establish these:
 
 - **The planned requirements.** Requirements of milestones that are not started are reported as
   planned and are not checked against the code. They cannot fail the gate. At present that is
-  697 of 734 requirements. The gate holds the code to 37 of 734 (5.0%).
+  700 of 737 requirements. The gate holds the code to 37 of 737 (5.0%).
 - **That a proof tests the requirement.** A `Verifies:` line is written by hand, or added in bulk
   by `scripts/tag-proofs.mjs`, and nothing checks that the test asserts the statement it is
   tagged with. A passing test that carries the line is evidence that the test passes, not that the
