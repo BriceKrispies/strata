@@ -1,0 +1,10 @@
+scenario smoke
+op 1 102 create 1=s:abc 2=i:5
+op 1 103 update 1 1=s:zzz
+op 1 101 update 1 1=s:zzz 3=b:1
+op 1 100 require 2 strict
+op 1 100 require 2 lax
+op 2 100 create 1=s:x
+op 3 100 create 1=s:x
+op 1 102 delete 1
+end

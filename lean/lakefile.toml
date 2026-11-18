@@ -1,0 +1,10 @@
+name = "strata"
+version = "0.1.0"
+defaultTargets = ["Strata", "strata_model"]
+
+[[lean_lib]]
+name = "Strata"
+
+[[lean_exe]]
+name = "strata_model"
+root = "Main"
