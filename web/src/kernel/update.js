@@ -1,7 +1,7 @@
 // The frontend kernel's transition function. Pure: no fetch, no socket, no clock, no DOM.
 // @ts-check
 
-import { labInit, labUpdate } from './lab.js';
+import { labEnter, labInit, labUpdate } from './lab.js';
 
 /** @typedef {import('./types.js').Message} Message */
 /** @typedef {import('./types.js').Effect} Effect */
@@ -393,11 +393,15 @@ function onHttp(state, msg) {
   switch (pending.kind) {
     case 'session': {
       if (!msg.ok) return { state, effects: [] };
-      return { state: { ...state, session: msg.body.session }, effects: [] };
+      const known = { ...state, session: msg.body.session };
+      return state.view.model?.view === 'lab' ? labEnter(known, msg, { request }) : { state: known, effects: [] };
     }
     case 'view': {
       if (state.view.request !== msg.id) return { state, effects: [] };
-      if (msg.ok) return { state: acceptView(state, msg.body), effects: [] };
+      if (msg.ok) {
+        const accepted = acceptView(state, msg.body);
+        return msg.body.view === 'lab' ? labEnter(accepted, msg, { request }) : { state: accepted, effects: [] };
+      }
       const status = msg.status === 404 ? 'missing' : 'error';
       return {
         state: { ...state, ready: true, view: { status, model: null, error, request: 0 }, forms: { ...state.forms, editor: null, settings: null } },
@@ -660,6 +664,11 @@ export function update(state, msg) {
       }
       if (boot?.view && boot.path === route.path) {
         next = acceptView(next, boot.view);
+        if (boot.view.view === 'lab') {
+          const entered = labEnter(next, msg, { request });
+          next = entered.state;
+          effects.push(...entered.effects);
+        }
       } else {
         const fetched = fetchView(next, msg, false);
         next = fetched.state;
@@ -695,6 +704,7 @@ export function update(state, msg) {
       return { state: next, effects: [{ type: 'timer', name: 'reconnect', token, ms: Math.round(ms) }] };
     }
     case 'timer': {
+      if (msg.name.startsWith('lab.')) return labUpdate(state, msg, { request, toast }) ?? { state, effects: [] };
       if (msg.token !== state.ws.timer) return { state, effects: [] };
       if (msg.name === 'reconnect') {
         return { state: { ...state, ws: { ...state.ws, status: 'connecting' } }, effects: [{ type: 'ws_connect' }] };

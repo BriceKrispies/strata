@@ -374,3 +374,95 @@ async fn fixture_reset_rebuilds_the_same_state() {
     assert_eq!(status, 200);
     assert_eq!(backend.view("fieldnotes", None, "/").await, before, "seeding is deterministic");
 }
+
+async fn finished_run(backend: &Backend, admin: &str, request: Json) -> Json {
+    let (status, started) = backend.call("fieldnotes", Some(admin), "/internal/lab/run", request).await;
+    assert_eq!(status, 200, "{started}");
+    let id = started["run"].as_str().unwrap().to_string();
+    for _ in 0..400 {
+        let (_, run) = backend.call("fieldnotes", Some(admin), "/internal/lab/result", json!({ "id": id })).await;
+        if run["status"] == "finished" {
+            return run["result"].clone();
+        }
+        assert_eq!(run["status"], "running");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("the run did not finish");
+}
+
+#[tokio::test]
+async fn the_impact_lab_projects_a_change_without_touching_live_state() {
+    let backend = start().await;
+    let admin = backend.login("fieldnotes", "admin", "strata-dev-admin").await;
+    let author = backend.login("fieldnotes", "tomasz", "strata-dev-tomasz").await;
+    assert_eq!(backend.call("fieldnotes", Some(&author), "/internal/lab/overview", json!({})).await.0, 403);
+    assert_eq!(backend.call("fieldnotes", None, "/internal/lab/overview", json!({})).await.0, 401);
+
+    let (status, overview) = backend.call("fieldnotes", Some(&admin), "/internal/lab/overview", json!({})).await;
+    assert_eq!(status, 200, "{overview}");
+    let post = overview["objects"].as_array().unwrap().iter().find(|o| o["id"] == "post").unwrap();
+    assert_eq!(post["records"], 7);
+    assert!(post["fields"].as_array().unwrap().iter().any(|f| f["id"] == "excerpt" && f["required"] == false));
+    assert_eq!(overview["classes"].as_array().unwrap().len(), 5);
+    let before = overview["tenant"].clone();
+
+    // A proposal the parser refuses is an ordinary validation error.
+    let bad = json!({ "change": "require post.nonsense", "existing": "reject", "source": "generated" });
+    let (status, body) = backend.call("fieldnotes", Some(&admin), "/internal/lab/run", bad).await;
+    assert_eq!(status, 422);
+    assert!(body["message"].as_str().unwrap().contains("post has no field nonsense"));
+
+    let mut socket = backend.socket("fieldnotes", Some(&admin)).await;
+    next(&mut socket).await;
+    let request = json!({ "change": "require post.excerpt", "existing": "grandfather", "source": "generated", "steps": 60, "seed": 5, "faults": true });
+    let result = finished_run(&backend, &admin, request.clone()).await;
+    assert_eq!(result["change_outcome"]["result"], "accepted");
+    assert_eq!(result["affected_existing"].as_array().unwrap().len(), 3);
+    assert!(!result["comparison"]["outcome_changes"].as_array().unwrap().is_empty());
+    assert_eq!(result["comparison"]["other_tenants_untouched"], true);
+    assert_eq!(result["trace_replay"]["agreed"], result["trace_replay"]["steps"]);
+    assert_eq!(result["findings"].as_array().unwrap().len(), 7);
+    assert!(result["counterexample"]["steps"].as_array().unwrap().len() <= 3);
+
+    // Progress and the result arrived on the socket of the person who started it.
+    let mut kinds = Vec::new();
+    loop {
+        let message = next(&mut socket).await;
+        if message["type"] == "run" {
+            kinds.push(message["kind"].as_str().unwrap().to_string());
+            if message["kind"] == "finished" {
+                break;
+            }
+        }
+    }
+    assert!(kinds.contains(&"progress".to_string()));
+
+    // The same request again: the same two trace hashes.
+    let again = finished_run(&backend, &admin, request).await;
+    // The generated schedule is stamped with the time of the run, so hashes are compared for a
+    // recorded schedule instead, where every input is fixed.
+    assert_eq!(again["comparison"]["outcome_changes"].as_array().unwrap().len(), result["comparison"]["outcome_changes"].as_array().unwrap().len());
+    let recorded = json!({ "change": "require post.excerpt", "existing": "grandfather", "source": "journal" });
+    let first = finished_run(&backend, &admin, recorded.clone()).await;
+    let second = finished_run(&backend, &admin, recorded).await;
+    assert_eq!(first["baseline"]["trace_hash"], second["baseline"]["trace_hash"]);
+    assert_eq!(first["branch"]["trace_hash"], second["branch"]["trace_hash"]);
+    let refused: Vec<&str> = first["comparison"]["outcome_changes"].as_array().unwrap().iter().map(|c| c["label"].as_str().unwrap()).collect();
+    // The first refusal is the first article written without an excerpt. Later steps refer to
+    // record ids, which shift once a create is refused, so they diverge as a knock-on.
+    assert!(refused[0].starts_with("create record"), "{refused:?}");
+    assert!(refused.len() >= 5);
+    assert_eq!(first["comparison"]["outcome_changes"][0]["because"][0]["rule"], "required:post.excerpt");
+
+    // Nothing the Lab did reached the live tenant.
+    let (_, after) = backend.call("fieldnotes", Some(&admin), "/internal/lab/overview", json!({})).await;
+    assert_eq!(after["tenant"], before);
+    assert!(after["objects"].as_array().unwrap().iter().any(|o| o["id"] == "post" && o["fields"].as_array().unwrap().iter().any(|f| f["id"] == "excerpt" && f["required"] == false)));
+
+    // The journal of what really happened replays to the live state.
+    let (status, replayed) = backend.call("fieldnotes", Some(&admin), "/internal/lab/replay", json!({})).await;
+    assert_eq!(status, 200, "{replayed}");
+    assert_eq!(replayed["report"]["matches_live"], true);
+    assert_eq!(replayed["report"]["agreed"], replayed["report"]["entries"]);
+    assert_eq!(replayed["class"], "reproduced");
+}

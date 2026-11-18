@@ -505,7 +505,7 @@ fn findings(projection: &Projection) -> Vec<Finding> {
             format!("{} of {n} scheduled operations end differently", c.outcome_changes.len())
         },
         detail: format!(
-            "Baseline trace {} and branch trace {}. Running the projection again gives the same two hashes.",
+            "Baseline trace {} and branch trace {}. Running the projection again gives the same two hashes. Only the first divergence is certainly caused by the change itself: later operations name records by id, and a refused create shifts every id after it, so some later differences are knock-on effects.",
             &projection.baseline_hash[..12],
             &projection.branch_hash[..12]
         ),
