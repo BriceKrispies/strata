@@ -91,7 +91,8 @@ A passing gate establishes these, and only these:
    pass. Each tool's result is read from its own output or exit status. A tool that cannot start,
    crashes, or prints nothing parseable fails the gate.
 2. Every requirement of a started milestone has a passing proof in Concordance's results file,
-   and no Concordance finding on a started milestone is open. The count of such requirements is
+   and no Concordance finding on a started milestone is open. Concordance runs with
+   `--fail-on unverified`, so a started requirement with no accepted proof fails the scan itself. The count of such requirements is
    taken from the specification. Currently that is 37 of the 737 requirements.
 3. Every `m-` claim is verified by Exegra, with no violated claim. The count is taken from the
    specification, and every `models` link names a requirement that exists.
@@ -109,19 +110,27 @@ A passing gate does not establish these:
   that the test asserts the statement it is tagged with. A passing test that carries the line is
   evidence that the test passes, not that the
   statement holds.
-- **Lean theorems as proofs of the Rust kernel.** Concordance counts a theorem as passing when its
-  module builds without `sorry`; it does not read the theorem. The theorems are about the abstract
-  model in `lean/Strata/`, not about the Rust code (see `docs/verification.md`).
+- **Lean theorems as proofs of the Rust kernel.** Concordance counts a theorem as passing when the
+  build log shows its own module built without `sorry`. It reports a theorem that states `True` or
+  rests on a declared axiom, and otherwise does not read the theorem. The theorems are about the
+  abstract model in `lean/Strata/`, not about the Rust code (see `docs/verification.md`).
 - **The model claims as statements about the code.** Exegra evaluates each `m-` claim on the
-  scenarios listed in the specification, under their faults. The `models` field is a label: no tool
-  reads it. The link to the requirement is a comment that the gate checks for existence only.
+  scenarios listed in the specification, under their faults. Exegra reads the `models` field: it
+  must name a requirement, and the requirement lists the model claims that name it with their
+  statuses. That is a link, not a proof: nothing checks that the model claim says what the
+  requirement says.
 - **Milestone honesty.** Nothing checks that a requirement's milestone is right. A requirement can
   be planned for a later milestone while the prototype already contradicts it, and the gate does
   not see the contradiction.
-- **Freshness of spec-only changes.** Concordance decides whether a recorded test result is
-  outdated by the modification times of indexed source files. Editing a requirement's text does
-  not make its proof outdated. The gate's own check (`--no-test`) uses content hashes and does
-  notice a specification change.
+- **That the recorded results came from this code, beyond the gate's own run.** Right after the
+  tests, the gate runs `concordance record`, which binds each results file to the content of every
+  indexed source file and to the text of every requirement. A later change to a source file makes
+  every result stale, and a change to a requirement's text makes that requirement stale. What stays
+  trusted is that the record was written straight after the run; the gate checks that no source
+  changed while the tests ran.
+- **Proofs that inspect source text.** A Rust proof that calls no indexed code is refused unless
+  its doc comment says `Inspects: <path>`. KRN-012 is proved this way. Nothing checks that the test
+  really reads that path.
 - **Anything the specification says that no requirement covers**, and the correctness of Exegra
   and Concordance themselves.
 

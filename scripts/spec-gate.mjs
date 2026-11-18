@@ -187,7 +187,7 @@ const snapshot = sourceHashes();
 if (!noTest) {
   console.log('running tests (--no-test would reuse the recorded results instead)');
   // A private build directory, so a running development stack does not hold the binaries.
-  const cargo = run('cargo', ['test', '--workspace'], {
+  const cargo = run('cargo', ['test', '--workspace', '--no-fail-fast'], {
     env: { CARGO_BUILD_JOBS: '2', RUST_TEST_THREADS: '2', CARGO_TARGET_DIR: 'target/gate' },
   });
   writeFileSync(join(resultsDir, 'cargo-test.txt'), cargo.out);
@@ -215,6 +215,16 @@ if (!noTest) {
   check('type check (npm run check)', tsc.ok, tsc.ok ? '' : `${exitText(tsc)}: ${lastLine(tsc.out)}`);
 
   testsPassed = cargoOk && lakeOk && webOk && tsc.ok;
+
+  // Concordance accepts a result only when a manifest written right after the run says which source
+  // content and which requirement statements it was run on. Record only if nothing changed meanwhile.
+  const after = sourceHashes();
+  const moved = [...new Set([...Object.keys(snapshot), ...Object.keys(after)])].filter((file) => snapshot[file] !== after[file]);
+  check('no source changed while the tests ran', moved.length === 0, moved.length ? `${moved.length} changed, e.g. ${moved[0]}` : '');
+  if (moved.length === 0) {
+    const record = run('concordance', ['record', '--config', 'concordance.toml']);
+    check('concordance record', record.ok, record.ok ? lastLine(record.out) : `${exitText(record)}: ${lastLine(record.out)}`);
+  }
 } else {
   console.log('*** NO TESTS RUN. --no-test reuses the recorded results in var/test-results. This is not a full gate run. ***');
   if (!allowRecorded) {
@@ -244,7 +254,7 @@ if (!noTest) {
 const lint = run('concordance', ['lint', '--config', 'concordance.toml']);
 check('concordance lint (strict)', lint.ok, lint.ok ? lastLine(lint.out) : `${exitText(lint)}: ${lastLine(lint.out)}`);
 
-const scan = run('concordance', ['scan', '--config', 'concordance.toml', '--json', '--fail-on', 'proven', '--exegra-results', 'var/concordance-results.json', '--no-generated-at']);
+const scan = run('concordance', ['scan', '--config', 'concordance.toml', '--json', '--fail-on', 'unverified', '--exegra-results', 'var/concordance-results.json', '--no-generated-at']);
 let report = null;
 try {
   report = JSON.parse(scan.stdout);
@@ -256,7 +266,7 @@ if (!report || !Array.isArray(report.findings) || !report.counts) {
 } else {
   writeFileSync(resolve(root, 'var/scan.json'), scan.stdout);
   const provenOk = scan.ok && report.gate?.failed === false;
-  check('concordance scan (fail-on proven)', provenOk, provenOk ? `${report.counts.violated} violated` : `${exitText(scan)}, gate.failed ${report.gate?.failed}`);
+  check('concordance scan (fail-on unverified)', provenOk, provenOk ? `${report.counts.violated} violated` : `${exitText(scan)}, gate.failed ${report.gate?.failed}`);
 
   let results = null;
   try {

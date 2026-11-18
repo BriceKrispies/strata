@@ -32,7 +32,7 @@ fn memory_store_conforms() {
 
 #[test]
 fn the_table_is_read_from_its_markdown() {
-    let text = "{\"id\":\"cases-storage-conformance\",\"body\":\"# T\n\n## Cases\n\n| Case | Establishes |\n|---|---|\n| one | a |\n| two | b |\n\"},";
+    let text = "{\"id\":\"cases-storage-conformance\",\"body\":\"# T\\n\\n## Cases\\n\\n| Case | Establishes |\\n|---|---|\\n| one | a |\\n| two | b |\\n\"},";
     assert_eq!(conformance::spec_cases(text), ["one", "two"]);
 }
 
