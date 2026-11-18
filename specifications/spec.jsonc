@@ -1172,7 +1172,7 @@
     {"id":"g-257","statement":"A tenant cannot make the platform contact an address that the outbound rule forbids, by any name, encoding or redirect.","stage":"R2","group":"Security","ref":"G-257"},
     {"id":"g-258","statement":"An operator or a support person reads tenant content only under a grant that the tenant gave and that ends.","stage":"R1","group":"Security","ref":"G-258"},
     {"id":"g-259","statement":"Every component image that runs can be traced to the source and the build that produced it, and to the dependencies it contains.","stage":"R0","group":"Security","ref":"G-259"},
-    {"id":"g-260","statement":"A tenant's upload is stored, scanned and delivered without being run and without exhausting the platform.","stage":"R2","group":"Security","ref":"G-260"},
+    {"id":"g-260","statement":"A tenant's upload is stored, scanned and delivered without being run and without exhausting the platform.","stage":"R4","group":"Security","ref":"G-260"},
     {"id":"g-261","statement":"A tenant's keys can be rotated while the tenant is in service, and a compromised key can be retired at once.","stage":"R1","group":"Security","ref":"G-261"},
     {"id":"g-262","statement":"Abuse by one tenant or one source does not degrade the platform for others, and a tenant domain used for abuse can be taken down.","stage":"R2","group":"Security","ref":"G-262"},
     {"id":"g-263","statement":"No principal widens its own authority through an operation, an approval, an export or a change to roles and policies.","stage":"R3","group":"Security","ref":"G-263"},
