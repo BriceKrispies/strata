@@ -90,7 +90,7 @@ web/src/styles          tokens, base, layout, components, in cascade layers
 tenants/                Fieldnotes and Tidewater as data; the publication template
 tests/e2e               Playwright
 specifications/         the platform specification (spec.jsonc) and how to read it
-scripts/                dev loop, spec gate (spec-gate.mjs), proof tagging (tag-proofs.mjs)
+scripts/                dev loop, spec gate (spec-gate.mjs)
 docs/                   architecture, invariants, decisions, storage, protocol, development, verification
 ```
 
