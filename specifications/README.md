@@ -71,8 +71,8 @@ milestone means adding its number there, after which the gate holds the code to 
 ## Changing it
 
 Change the specification first, then the code. Edit `spec.jsonc` through Exegra (`apply`), or
-by hand and then run the gate. The rules the lint enforces are in Concordance's
-`docs/spec-lint.md`. The ones that come up most:
+by hand and then run the gate. The rules the lint enforces are described in Concordance's
+documentation of its specification lint. The ones that come up most:
 
 - one SHALL per requirement, stated at a boundary, with no implementation detail
 - "for every", "never" and "always" need a property, a proof or a conformance table
