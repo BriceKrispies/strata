@@ -141,6 +141,8 @@ pub struct ViewSection {
     pub args: BTreeMap<String, ArgSource>,
     /// Reference fields whose targets are delivered alongside the rows.
     pub include: Vec<FieldId>,
+    /// String fields holding constrained Markdown, delivered as structured blocks.
+    pub markdown: Vec<FieldId>,
     /// The section yields at most one row.
     pub single: bool,
 }
@@ -386,6 +388,13 @@ impl TenantSchema {
                             .is_some_and(|f| f.ty.ref_target().is_some());
                         if !is_ref {
                             problems.push(format!("{at}.{name}: {field} is not a reference field"));
+                        }
+                    }
+                    for field in &section.markdown {
+                        let is_text =
+                            object.fields.get(field).is_some_and(|f| f.ty == FieldType::Str);
+                        if !is_text {
+                            problems.push(format!("{at}.{name}: {field} is not a string field"));
                         }
                     }
                 }

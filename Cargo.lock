@@ -451,6 +451,11 @@ version = "0.1.0"
 [[package]]
 name = "strata-substrate"
 version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "strata-kernel",
+]
 
 [[package]]
 name = "strata-verification"

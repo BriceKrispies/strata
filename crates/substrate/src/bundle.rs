@@ -1,0 +1,502 @@
+//! Tenant definition bundles: a whole tenant written down as one JSON document.
+//!
+//! A bundle names the roles, object types, constraints, workflows, policies, queries, views,
+//! members and seed records of a tenant, with expressions in the authoring syntax. `install`
+//! turns it into ordinary kernel intents and hands them to the caller to execute, so a seeded
+//! tenant has gone through exactly the same transition function as everything after it.
+
+use crate::plain::{coerce_fields, parse_time};
+use crate::syntax::parse;
+use serde::Deserialize;
+use serde_json::Value as Json;
+use std::collections::{BTreeMap, BTreeSet};
+use strata_kernel::*;
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Bundle {
+    pub id: TenantId,
+    pub name: String,
+    pub owner: PrincipalId,
+    /// When the tenant is created. Later steps follow one millisecond apart.
+    pub created_at: String,
+    #[serde(default)]
+    pub roles: Vec<RoleDef>,
+    #[serde(default)]
+    pub objects: Vec<ObjectSpec>,
+    #[serde(default)]
+    pub workflows: Vec<WorkflowSpec>,
+    #[serde(default)]
+    pub policies: Vec<PolicySpec>,
+    #[serde(default)]
+    pub queries: Vec<QuerySpec>,
+    #[serde(default)]
+    pub views: Vec<ViewSpec>,
+    #[serde(default)]
+    pub members: Vec<MemberSpec>,
+    #[serde(default)]
+    pub records: Vec<RecordSpec>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ObjectSpec {
+    pub id: ObjectTypeId,
+    pub label: String,
+    pub fields: Vec<FieldSpec>,
+    #[serde(default)]
+    pub constraints: Vec<ConstraintSpec>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FieldSpec {
+    pub id: FieldId,
+    pub label: String,
+    /// `string`, `int`, `bool`, `timestamp`, `ref:<object>` or `list:<type>`.
+    #[serde(rename = "type")]
+    pub ty: String,
+    #[serde(default)]
+    pub required: bool,
+    #[serde(default)]
+    pub unique: bool,
+    #[serde(default)]
+    pub default: Option<String>,
+    /// For references: `restrict` (the default) or `set_null`.
+    #[serde(default)]
+    pub on_delete: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConstraintSpec {
+    pub id: ConstraintId,
+    pub check: String,
+    pub message: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowSpec {
+    pub id: WorkflowId,
+    pub object: ObjectTypeId,
+    pub field: FieldId,
+    pub initial: BTreeSet<String>,
+    pub transitions: Vec<TransitionSpec>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TransitionSpec {
+    pub name: String,
+    pub from: String,
+    pub to: String,
+    #[serde(default)]
+    pub guard: Option<String>,
+    #[serde(default)]
+    pub set: BTreeMap<FieldId, String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PolicySpec {
+    pub id: PolicyId,
+    pub role: RoleId,
+    /// An object type id, `*` for every object type, `$schema` or `$members`.
+    pub on: String,
+    pub actions: Vec<String>,
+    #[serde(default)]
+    pub when: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct QuerySpec {
+    pub id: QueryId,
+    pub object: ObjectTypeId,
+    #[serde(default, rename = "where")]
+    pub filter: Option<String>,
+    #[serde(default)]
+    pub params: BTreeSet<String>,
+    /// Field names; a leading `-` sorts descending.
+    #[serde(default)]
+    pub order: Vec<String>,
+    #[serde(default)]
+    pub limit: Option<u32>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ViewSpec {
+    pub id: ViewId,
+    pub route: String,
+    pub title: String,
+    pub sections: BTreeMap<String, SectionSpec>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SectionSpec {
+    pub query: QueryId,
+    /// `route:<name>`, `request:<name>`, `section:<section>.<attribute>` or a literal in the
+    /// expression syntax.
+    #[serde(default)]
+    pub args: BTreeMap<String, String>,
+    #[serde(default)]
+    pub include: Vec<FieldId>,
+    #[serde(default)]
+    pub markdown: Vec<FieldId>,
+    #[serde(default)]
+    pub single: bool,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MemberSpec {
+    pub principal: PrincipalId,
+    pub roles: Vec<RoleId>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RecordSpec {
+    pub object: ObjectTypeId,
+    /// A name other records can refer to as `@key`.
+    #[serde(default)]
+    pub key: Option<String>,
+    #[serde(rename = "as")]
+    pub principal: PrincipalId,
+    pub at: String,
+    pub fields: serde_json::Map<String, Json>,
+    /// Updates applied after creation, such as publishing.
+    #[serde(default)]
+    pub then: Vec<FollowUp>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FollowUp {
+    #[serde(rename = "as")]
+    pub principal: PrincipalId,
+    pub at: String,
+    pub set: serde_json::Map<String, Json>,
+}
+
+fn parse_type(text: &str, on_delete: OnDelete) -> Result<FieldType, String> {
+    Ok(match text {
+        "string" => FieldType::Str,
+        "int" => FieldType::Int,
+        "bool" => FieldType::Bool,
+        "timestamp" => FieldType::Time,
+        other => {
+            if let Some(target) = other.strip_prefix("ref:") {
+                FieldType::Ref { target: ObjectTypeId::new(target).map_err(|e| e.to_string())?, on_delete }
+            } else if let Some(inner) = other.strip_prefix("list:") {
+                FieldType::List(Box::new(parse_type(inner, on_delete)?))
+            } else {
+                return Err(format!("unknown field type {other:?}"));
+            }
+        }
+    })
+}
+
+fn parse_action(text: &str) -> Result<Action, String> {
+    Ok(match text {
+        "read" => Action::Read,
+        "create" => Action::Create,
+        "update" => Action::Update,
+        "delete" => Action::Delete,
+        "manage" => Action::Manage,
+        other => return Err(format!("unknown action {other:?}")),
+    })
+}
+
+fn optional(expr: &Option<String>) -> Result<Option<Expr>, String> {
+    expr.as_deref().map(parse).transpose()
+}
+
+fn parse_arg(text: &str) -> Result<ArgSource, String> {
+    if let Some(name) = text.strip_prefix("route:") {
+        Ok(ArgSource::Route(name.to_string()))
+    } else if let Some(name) = text.strip_prefix("request:") {
+        Ok(ArgSource::Request(name.to_string()))
+    } else if let Some(path) = text.strip_prefix("section:") {
+        let (section, attribute) =
+            path.split_once('.').ok_or_else(|| format!("expected section:<name>.<attribute>, got {text:?}"))?;
+        Ok(ArgSource::Section { section: section.to_string(), attribute: attribute.to_string() })
+    } else {
+        match parse(text)? {
+            Expr::Lit(value) => Ok(ArgSource::Const(value)),
+            other => Err(format!("a view argument is a source or a literal, got {other}")),
+        }
+    }
+}
+
+impl Bundle {
+    pub fn from_json(text: &str) -> Result<Bundle, String> {
+        serde_json::from_str(text).map_err(|e| format!("tenant bundle: {e}"))
+    }
+
+    /// The schema changes that define this tenant's structure, in dependency order.
+    pub fn schema_changes(&self) -> Result<Vec<SchemaChange>, String> {
+        let mut changes = Vec::new();
+        for role in &self.roles {
+            changes.push(SchemaChange::DefineRole(role.clone()));
+        }
+        for object in &self.objects {
+            changes.push(SchemaChange::DefineObject { id: object.id.clone(), label: object.label.clone() });
+        }
+        for object in &self.objects {
+            for field in &object.fields {
+                let at = format!("{}.{}", object.id, field.id);
+                let on_delete = match field.on_delete.as_deref() {
+                    None | Some("restrict") => OnDelete::Restrict,
+                    Some("set_null") => OnDelete::SetNull,
+                    Some(other) => return Err(format!("{at}: unknown on_delete {other:?}")),
+                };
+                changes.push(SchemaChange::DefineField {
+                    object: object.id.clone(),
+                    field: FieldDef {
+                        id: field.id.clone(),
+                        label: field.label.clone(),
+                        ty: parse_type(&field.ty, on_delete).map_err(|e| format!("{at}: {e}"))?,
+                        required: field.required,
+                        unique: field.unique,
+                        default: optional(&field.default).map_err(|e| format!("{at}: {e}"))?,
+                    },
+                });
+            }
+            for constraint in &object.constraints {
+                changes.push(SchemaChange::DefineConstraint {
+                    object: object.id.clone(),
+                    constraint: ConstraintDef {
+                        id: constraint.id.clone(),
+                        expr: parse(&constraint.check).map_err(|e| format!("{}.{}: {e}", object.id, constraint.id))?,
+                        message: constraint.message.clone(),
+                    },
+                });
+            }
+        }
+        for workflow in &self.workflows {
+            let mut transitions = Vec::new();
+            for step in &workflow.transitions {
+                let at = format!("workflow {}.{}", workflow.id, step.name);
+                let mut set = BTreeMap::new();
+                for (field, value) in &step.set {
+                    set.insert(field.clone(), parse(value).map_err(|e| format!("{at}: {e}"))?);
+                }
+                transitions.push(WorkflowTransition {
+                    name: step.name.clone(),
+                    from: step.from.clone(),
+                    to: step.to.clone(),
+                    guard: optional(&step.guard).map_err(|e| format!("{at}: {e}"))?,
+                    set,
+                });
+            }
+            changes.push(SchemaChange::DefineWorkflow(WorkflowDef {
+                id: workflow.id.clone(),
+                object: workflow.object.clone(),
+                field: workflow.field.clone(),
+                initial: workflow.initial.clone(),
+                transitions,
+            }));
+        }
+        for policy in &self.policies {
+            let at = format!("policy {}", policy.id);
+            let resource = match policy.on.as_str() {
+                "*" => Resource::AnyObject,
+                "$schema" => Resource::Schema,
+                "$members" => Resource::Members,
+                object => Resource::Object(ObjectTypeId::new(object).map_err(|e| format!("{at}: {e}"))?),
+            };
+            changes.push(SchemaChange::DefinePolicy(PolicyDef {
+                id: policy.id.clone(),
+                role: policy.role.clone(),
+                resource,
+                actions: policy
+                    .actions
+                    .iter()
+                    .map(|a| parse_action(a))
+                    .collect::<Result<_, _>>()
+                    .map_err(|e| format!("{at}: {e}"))?,
+                condition: optional(&policy.when).map_err(|e| format!("{at}: {e}"))?,
+            }));
+        }
+        for query in &self.queries {
+            changes.push(SchemaChange::DefineQuery(QueryDef {
+                id: query.id.clone(),
+                object: query.object.clone(),
+                filter: optional(&query.filter).map_err(|e| format!("query {}: {e}", query.id))?,
+                params: query.params.clone(),
+                order: query
+                    .order
+                    .iter()
+                    .map(|key| match key.strip_prefix('-') {
+                        Some(field) => OrderKey { field: field.to_string(), descending: true },
+                        None => OrderKey { field: key.clone(), descending: false },
+                    })
+                    .collect(),
+                limit: query.limit,
+            }));
+        }
+        for view in &self.views {
+            let mut sections = BTreeMap::new();
+            for (name, section) in &view.sections {
+                let mut args = BTreeMap::new();
+                for (param, source) in &section.args {
+                    args.insert(param.clone(), parse_arg(source).map_err(|e| format!("view {}.{name}: {e}", view.id))?);
+                }
+                sections.insert(
+                    name.clone(),
+                    ViewSection {
+                        query: section.query.clone(),
+                        args,
+                        include: section.include.clone(),
+                        markdown: section.markdown.clone(),
+                        single: section.single,
+                    },
+                );
+            }
+            changes.push(SchemaChange::DefineView(ViewDef {
+                id: view.id.clone(),
+                route: view.route.clone(),
+                title: view.title.clone(),
+                sections,
+            }));
+        }
+        Ok(changes)
+    }
+}
+
+/// Why an installation stopped.
+#[derive(Debug)]
+pub enum InstallError<E> {
+    /// The bundle itself is malformed.
+    Bundle(String),
+    /// The executor refused a step.
+    Step { step: String, error: E },
+}
+
+impl<E: std::fmt::Debug> std::fmt::Display for InstallError<E> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            InstallError::Bundle(message) => write!(f, "{message}"),
+            InstallError::Step { step, error } => write!(f, "{step}: {error:?}"),
+        }
+    }
+}
+
+/// Install a bundle by issuing intents to `execute`, which runs each one through the kernel and
+/// returns its output. The same function seeds the live store and builds simulation worlds.
+pub fn install<E>(
+    bundle: &Bundle,
+    execute: &mut dyn FnMut(Context, Intent) -> Result<Output, E>,
+) -> Result<usize, InstallError<E>> {
+    let bad = InstallError::Bundle;
+    let changes = bundle.schema_changes().map_err(bad)?;
+    let created_at = parse_time(&bundle.created_at).map_err(bad)?;
+    let owner = Principal::User(bundle.owner.clone());
+    let mut steps = 0usize;
+    let mut run = |principal: Principal, at: i64, step: String, intent: Intent| {
+        steps += 1;
+        let ctx = Context {
+            tenant: bundle.id.clone(),
+            principal,
+            session: None,
+            now: Timestamp(at),
+            correlation: format!("install:{}:{steps}", bundle.id),
+        };
+        execute(ctx, intent).map_err(|error| InstallError::Step { step, error })
+    };
+
+    run(
+        Principal::System,
+        created_at,
+        "create tenant".into(),
+        Intent::CreateTenant { name: bundle.name.clone(), owner: bundle.owner.clone() },
+    )?;
+    run(
+        owner.clone(),
+        created_at + 1,
+        "define schema".into(),
+        Intent::ChangeSchema { changes: changes.clone(), expected_version: None, existing: ExistingData::Reject },
+    )?;
+    let mut at = created_at + 1;
+    for member in &bundle.members {
+        for role in &member.roles {
+            at += 1;
+            run(
+                owner.clone(),
+                at,
+                format!("assign {role} to {}", member.principal),
+                Intent::AssignRole { principal: member.principal.clone(), role: role.clone() },
+            )?;
+        }
+    }
+
+    // Field types come from the bundle's own object specs, parsed once more for coercion.
+    let mut objects: BTreeMap<ObjectTypeId, ObjectTypeDef> = BTreeMap::new();
+    for change in &changes {
+        match change {
+            SchemaChange::DefineObject { id, label } => {
+                objects.insert(
+                    id.clone(),
+                    ObjectTypeDef { id: id.clone(), label: label.clone(), fields: BTreeMap::new(), constraints: BTreeMap::new() },
+                );
+            }
+            SchemaChange::DefineField { object, field } => {
+                if let Some(def) = objects.get_mut(object) {
+                    def.fields.insert(field.id.clone(), field.clone());
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut keys: BTreeMap<String, RecordId> = BTreeMap::new();
+    for (index, record) in bundle.records.iter().enumerate() {
+        let label = record.key.clone().unwrap_or_else(|| format!("#{index}"));
+        let step = format!("create {} {label}", record.object);
+        let def = objects
+            .get(&record.object)
+            .ok_or_else(|| InstallError::Bundle(format!("{step}: unknown object type")))?;
+        let fields = coerce_fields(def, &record.fields, &|key| keys.get(key).copied())
+            .map_err(|e| InstallError::Bundle(format!("{step}: {e}")))?;
+        let at = parse_time(&record.at).map_err(|e| InstallError::Bundle(format!("{step}: {e}")))?;
+        let output = run(
+            Principal::User(record.principal.clone()),
+            at,
+            step.clone(),
+            Intent::CreateRecord { object: record.object.clone(), fields },
+        )?;
+        let Output::Record { id, .. } = output else {
+            return Err(InstallError::Bundle(format!("{step}: executor returned {output:?}")));
+        };
+        if let Some(key) = &record.key {
+            keys.insert(key.clone(), id);
+        }
+        for follow in &record.then {
+            let step = format!("update {} {label}", record.object);
+            let fields = coerce_fields(def, &follow.set, &|key| keys.get(key).copied())
+                .map_err(|e| InstallError::Bundle(format!("{step}: {e}")))?;
+            let at = parse_time(&follow.at).map_err(|e| InstallError::Bundle(format!("{step}: {e}")))?;
+            run(
+                Principal::User(follow.principal.clone()),
+                at,
+                step,
+                Intent::UpdateRecord { object: record.object.clone(), id, fields, expected_version: None },
+            )?;
+        }
+    }
+    Ok(steps)
+}
+
+/// Build a world holding just this tenant, by installing the bundle into an empty world.
+pub fn install_into(world: &World, bundle: &Bundle) -> Result<World, InstallError<DomainError>> {
+    let mut current = world.clone();
+    install(bundle, &mut |ctx, intent| {
+        let (next, outcome) = current.step(&intent, &ctx)?;
+        current = next;
+        Ok(outcome.output)
+    })?;
+    Ok(current)
+}

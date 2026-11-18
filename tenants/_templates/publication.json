@@ -1,0 +1,252 @@
+{
+  "roles": [
+    { "id": "author", "label": "Author" },
+    { "id": "editor", "label": "Editor" }
+  ],
+  "objects": [
+    {
+      "id": "publication",
+      "label": "Publication settings",
+      "fields": [
+        { "id": "key", "label": "Key", "type": "string", "required": true, "unique": true },
+        { "id": "name", "label": "Name", "type": "string", "required": true },
+        { "id": "tagline", "label": "Tagline", "type": "string" },
+        { "id": "about", "label": "About", "type": "string" },
+        { "id": "colophon", "label": "Colophon", "type": "string" },
+        { "id": "accent", "label": "Accent colour", "type": "string", "required": true, "default": "'moss'" },
+        { "id": "paper", "label": "Paper tone", "type": "string", "required": true, "default": "'linen'" }
+      ],
+      "constraints": [
+        { "id": "singleton", "check": "new.key == 'main'", "message": "A publication has exactly one settings record" },
+        { "id": "accent_token", "check": "new.accent in ['moss', 'clay', 'ink', 'ochre', 'plum']", "message": "Accent must be one of the theme's accent tokens" },
+        { "id": "paper_token", "check": "new.paper in ['linen', 'stone', 'chalk']", "message": "Paper must be one of the theme's paper tokens" },
+        { "id": "name_length", "check": "len(new.name) >= 1 and len(new.name) <= 60", "message": "A name has between 1 and 60 characters" },
+        { "id": "tagline_length", "check": "len(new.tagline) <= 140", "message": "A tagline has at most 140 characters" }
+      ]
+    },
+    {
+      "id": "author",
+      "label": "Author",
+      "fields": [
+        { "id": "name", "label": "Name", "type": "string", "required": true },
+        { "id": "slug", "label": "Slug", "type": "string", "required": true, "unique": true },
+        { "id": "title", "label": "Role", "type": "string" },
+        { "id": "bio", "label": "Biography", "type": "string" },
+        { "id": "principal", "label": "Login identity", "type": "string", "unique": true }
+      ],
+      "constraints": [
+        { "id": "slug_format", "check": "is_slug(new.slug)", "message": "A slug uses lower-case letters, digits and single hyphens" }
+      ]
+    },
+    {
+      "id": "category",
+      "label": "Category",
+      "fields": [
+        { "id": "name", "label": "Name", "type": "string", "required": true },
+        { "id": "slug", "label": "Slug", "type": "string", "required": true, "unique": true },
+        { "id": "description", "label": "Description", "type": "string" }
+      ],
+      "constraints": [
+        { "id": "slug_format", "check": "is_slug(new.slug)", "message": "A slug uses lower-case letters, digits and single hyphens" }
+      ]
+    },
+    {
+      "id": "post",
+      "label": "Post",
+      "fields": [
+        { "id": "title", "label": "Title", "type": "string", "required": true },
+        { "id": "slug", "label": "Slug", "type": "string", "required": true, "unique": true },
+        { "id": "excerpt", "label": "Excerpt", "type": "string" },
+        { "id": "body", "label": "Body", "type": "string", "required": true },
+        { "id": "author", "label": "Author", "type": "ref:author", "required": true },
+        { "id": "category", "label": "Category", "type": "ref:category", "on_delete": "set_null" },
+        { "id": "tags", "label": "Tags", "type": "list:string" },
+        { "id": "status", "label": "Status", "type": "string", "required": true, "default": "'draft'" },
+        { "id": "featured", "label": "Featured", "type": "bool" },
+        { "id": "published_at", "label": "Published", "type": "timestamp" },
+        { "id": "cover", "label": "Cover image", "type": "string" },
+        { "id": "cover_alt", "label": "Cover description", "type": "string" }
+      ],
+      "constraints": [
+        { "id": "title_length", "check": "len(new.title) >= 1 and len(new.title) <= 120", "message": "A title has between 1 and 120 characters" },
+        { "id": "slug_format", "check": "is_slug(new.slug) and len(new.slug) <= 80", "message": "A slug uses lower-case letters, digits and single hyphens, at most 80 characters" },
+        { "id": "excerpt_length", "check": "len(new.excerpt) <= 280", "message": "An excerpt has at most 280 characters" },
+        { "id": "body_present", "check": "len(new.body) >= 1", "message": "A post needs some text" },
+        { "id": "cover_is_local", "check": "is_null(new.cover) or starts_with(new.cover, '/media/')", "message": "A cover image comes from the publication's own media" },
+        { "id": "cover_is_described", "check": "is_null(new.cover) or (not is_null(new.cover_alt) and len(new.cover_alt) >= 1)", "message": "A cover image needs a description for readers who cannot see it" }
+      ]
+    }
+  ],
+  "workflows": [
+    {
+      "id": "post_status",
+      "object": "post",
+      "field": "status",
+      "initial": ["draft"],
+      "transitions": [
+        {
+          "name": "publish",
+          "from": "draft",
+          "to": "published",
+          "set": { "published_at": "if(is_null(old.published_at), now, old.published_at)" }
+        },
+        { "name": "unpublish", "from": "published", "to": "draft" }
+      ]
+    }
+  ],
+  "policies": [
+    { "id": "public_reads_settings", "role": "public", "on": "publication", "actions": ["read"] },
+    { "id": "public_reads_authors", "role": "public", "on": "author", "actions": ["read"] },
+    { "id": "public_reads_categories", "role": "public", "on": "category", "actions": ["read"] },
+    { "id": "public_reads_published", "role": "public", "on": "post", "actions": ["read"], "when": "record.status == 'published'" },
+    { "id": "authors_write_posts", "role": "author", "on": "post", "actions": ["create"] },
+    { "id": "authors_own_posts", "role": "author", "on": "post", "actions": ["read", "update", "delete"], "when": "record.$created_by == principal" },
+    { "id": "editors_run_posts", "role": "editor", "on": "post", "actions": ["read", "create", "update", "delete"] },
+    { "id": "editors_run_categories", "role": "editor", "on": "category", "actions": ["create", "update", "delete"] },
+    { "id": "editors_run_authors", "role": "editor", "on": "author", "actions": ["create", "update"] },
+    { "id": "editors_tune_settings", "role": "editor", "on": "publication", "actions": ["update"] }
+  ],
+  "queries": [
+    { "id": "publication", "object": "publication", "limit": 1 },
+    { "id": "featured_post", "object": "post", "where": "record.status == 'published' and record.featured == true", "order": ["-published_at"], "limit": 1 },
+    { "id": "recent_posts", "object": "post", "where": "record.status == 'published'", "order": ["-published_at"], "limit": 24 },
+    { "id": "post_by_slug", "object": "post", "where": "record.slug == param.slug", "params": ["slug"], "limit": 1 },
+    { "id": "posts_in_category", "object": "post", "where": "record.status == 'published' and record.category == param.category", "params": ["category"], "order": ["-published_at"] },
+    { "id": "posts_by_author", "object": "post", "where": "record.status == 'published' and record.author == param.author", "params": ["author"], "order": ["-published_at"] },
+    { "id": "search_posts", "object": "post", "where": "record.status == 'published' and len(param.q) >= 2 and (contains(lower(record.title), lower(param.q)) or contains(lower(record.excerpt), lower(param.q)) or contains(lower(record.body), lower(param.q)))", "params": ["q"], "order": ["-published_at"], "limit": 30 },
+    { "id": "desk_posts", "object": "post", "where": "record.$created_by == principal or has_role(editor) or has_role(owner)", "order": ["-$updated_at"] },
+    { "id": "categories", "object": "category", "order": ["name"] },
+    { "id": "category_by_slug", "object": "category", "where": "record.slug == param.slug", "params": ["slug"], "limit": 1 },
+    { "id": "authors", "object": "author", "order": ["name"] },
+    { "id": "author_by_slug", "object": "author", "where": "record.slug == param.slug", "params": ["slug"], "limit": 1 }
+  ],
+  "views": [
+    {
+      "id": "home",
+      "route": "/",
+      "title": "Home",
+      "sections": {
+        "site": { "query": "publication", "single": true },
+        "featured": { "query": "featured_post", "single": true, "include": ["author", "category"], "markdown": ["body"] },
+        "recent": { "query": "recent_posts", "include": ["author", "category"], "markdown": ["body"] },
+        "categories": { "query": "categories" }
+      }
+    },
+    {
+      "id": "post",
+      "route": "/posts/:slug",
+      "title": "Article",
+      "sections": {
+        "site": { "query": "publication", "single": true },
+        "post": { "query": "post_by_slug", "args": { "slug": "route:slug" }, "single": true, "include": ["author", "category"], "markdown": ["body"] },
+        "recent": { "query": "recent_posts", "include": ["author", "category"], "markdown": ["body"] }
+      }
+    },
+    {
+      "id": "topics",
+      "route": "/topics",
+      "title": "Topics",
+      "sections": {
+        "site": { "query": "publication", "single": true },
+        "categories": { "query": "categories" },
+        "recent": { "query": "recent_posts", "include": ["author", "category"], "markdown": ["body"] }
+      }
+    },
+    {
+      "id": "topic",
+      "route": "/topics/:slug",
+      "title": "Topic",
+      "sections": {
+        "site": { "query": "publication", "single": true },
+        "category": { "query": "category_by_slug", "args": { "slug": "route:slug" }, "single": true },
+        "posts": { "query": "posts_in_category", "args": { "category": "section:category.$id" }, "include": ["author", "category"], "markdown": ["body"] },
+        "categories": { "query": "categories" }
+      }
+    },
+    {
+      "id": "authors",
+      "route": "/authors",
+      "title": "Authors",
+      "sections": {
+        "site": { "query": "publication", "single": true },
+        "authors": { "query": "authors", "markdown": ["bio"] }
+      }
+    },
+    {
+      "id": "author",
+      "route": "/authors/:slug",
+      "title": "Author",
+      "sections": {
+        "site": { "query": "publication", "single": true },
+        "author": { "query": "author_by_slug", "args": { "slug": "route:slug" }, "single": true, "markdown": ["bio"] },
+        "posts": { "query": "posts_by_author", "args": { "author": "section:author.$id" }, "include": ["author", "category"], "markdown": ["body"] }
+      }
+    },
+    {
+      "id": "search",
+      "route": "/search",
+      "title": "Search",
+      "sections": {
+        "site": { "query": "publication", "single": true },
+        "results": { "query": "search_posts", "args": { "q": "request:q" }, "include": ["author", "category"], "markdown": ["body"] }
+      }
+    },
+    {
+      "id": "about",
+      "route": "/about",
+      "title": "About",
+      "sections": {
+        "site": { "query": "publication", "single": true, "markdown": ["about", "colophon"] },
+        "authors": { "query": "authors", "markdown": ["bio"] }
+      }
+    },
+    {
+      "id": "login",
+      "route": "/login",
+      "title": "Sign in",
+      "sections": { "site": { "query": "publication", "single": true } }
+    },
+    {
+      "id": "desk",
+      "route": "/desk",
+      "title": "Writing desk",
+      "sections": {
+        "site": { "query": "publication", "single": true },
+        "posts": { "query": "desk_posts", "include": ["author", "category"] }
+      }
+    },
+    {
+      "id": "desk_new",
+      "route": "/desk/new",
+      "title": "New article",
+      "sections": {
+        "site": { "query": "publication", "single": true },
+        "categories": { "query": "categories" },
+        "authors": { "query": "authors" }
+      }
+    },
+    {
+      "id": "desk_edit",
+      "route": "/desk/edit/:slug",
+      "title": "Edit article",
+      "sections": {
+        "site": { "query": "publication", "single": true },
+        "post": { "query": "post_by_slug", "args": { "slug": "route:slug" }, "single": true, "include": ["author", "category"], "markdown": ["body"] },
+        "categories": { "query": "categories" },
+        "authors": { "query": "authors" }
+      }
+    },
+    {
+      "id": "desk_settings",
+      "route": "/desk/settings",
+      "title": "Publication settings",
+      "sections": { "site": { "query": "publication", "single": true } }
+    },
+    {
+      "id": "lab",
+      "route": "/lab",
+      "title": "Impact Lab",
+      "sections": { "site": { "query": "publication", "single": true } }
+    }
+  ]
+}
