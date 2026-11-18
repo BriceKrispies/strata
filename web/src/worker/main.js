@@ -44,7 +44,6 @@ async function http(effect) {
   const headers = { 'x-correlation-id': effect.correlation, accept: 'application/json' };
   if (effect.method === 'POST') {
     headers['content-type'] = 'application/json';
-    headers['x-strata-request'] = '1';
   }
   if (effect.csrf) headers['x-csrf-token'] = effect.csrf;
   let reply = { ok: false, status: 0, body: null };
@@ -72,9 +71,10 @@ async function http(effect) {
   dispatch({ type: 'http_result', id: effect.id, ...reply });
 }
 
-function connect() {
+/** @param {string | undefined} csrf The request token of the session. A browser cannot set a header on a socket, so it goes in the address. */
+function connect(csrf) {
   const scheme = self.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const opened = new WebSocket(`${scheme}//${self.location.host}/ws`);
+  const opened = new WebSocket(`${scheme}//${self.location.host}/ws?csrf=${encodeURIComponent(csrf ?? '')}`);
   socket = opened;
   opened.onopen = () => dispatch({ type: 'ws_open' });
   opened.onmessage = (event) => {
@@ -99,7 +99,7 @@ function execute(effect) {
       void http(effect);
       break;
     case 'ws_connect':
-      if (!socket) connect();
+      if (!socket) connect(effect.csrf);
       break;
     case 'ws_send':
       if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(effect.message));

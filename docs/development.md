@@ -90,7 +90,7 @@ and reports the store's own integrity check.
 | Command | What runs |
 |---|---|
 | `cargo test --workspace` | 91 Rust tests: kernel behaviour and properties, substrate, storage conformance on both adapters, simulation, verification (with Lean when installed), backend and BFF as running services |
-| `npm run test:web` | 17 tests of the frontend kernel as plain functions |
+| `npm run test:web` | 20 tests of the frontend kernel as plain functions |
 | `npm run check` | `tsc --checkJs` over the JSDoc-typed JavaScript |
 | `npm run build && npm run e2e` | 26 Playwright tests on two private stacks (ports 4200/4201 and 4210/4211/5183) |
 | `STRATA_BLESS=1 cargo test -p strata-verification` | Regenerate the Lean correspondence fixtures after an intended change |
@@ -113,4 +113,4 @@ and reports the store's own integrity check.
 | `STRATA_BFF_ADDR`, `STRATA_BACKEND_URL` | BFF | `127.0.0.1:4100`, `http://127.0.0.1:4101` |
 | `STRATA_SITES` | BFF | `127.0.0.1=fieldnotes,localhost=fieldnotes,tidewater.localhost=tidewater` |
 | `STRATA_ORIGINS` | BFF | every site host on the BFF port and on 5173 |
-| `STRATA_WEB_DIST`, `STRATA_SECURE_COOKIES` | BFF | `web/dist`, unset |
+| `STRATA_WEB_DIST` | BFF | `web/dist` |

@@ -1,6 +1,9 @@
 // The frontend kernel is pure, so it is tested as plain functions: no browser, no worker.
 import assert from 'node:assert/strict';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
+import { prose } from '../src/components/parts.js';
 import { explainCheck, initialState, parseHref, slugify, update } from '../src/kernel/update.js';
 import { view } from '../src/kernel/view.js';
 
@@ -25,7 +28,8 @@ function homeModel(extra = {}) {
   };
 }
 
-const anonymous = { authenticated: false, tenant: 'fieldnotes', tenant_name: 'Fieldnotes', roles: ['public'], may: {}, may_manage_schema: false };
+// A visitor with no session still holds a request token, which the gateway issued with the reply.
+const anonymous = { authenticated: false, tenant: 'fieldnotes', tenant_name: 'Fieldnotes', roles: ['public'], may: {}, may_manage_schema: false, csrf_token: 'issued' };
 
 function boot(bootstrap) {
   return update(initialState(), { type: 'init', path: '/', search: '', bootstrap, systemDark: false, storedTheme: null, ...stamp });
@@ -63,7 +67,7 @@ test('the same state and message give the same result', () => {
 
 test('a bootstrapped start draws at once and only opens the socket', () => {
   const { state, effects } = boot({ path: '/', session: { session: anonymous }, view: homeModel() });
-  assert.deepEqual(effects, [{ type: 'ws_connect' }]);
+  assert.deepEqual(effects, [{ type: 'ws_connect', csrf: 'issued' }]);
   assert.equal(view(state).page.kind, 'home');
   assert.equal(view(state).title, 'Fieldnotes');
 });
@@ -133,7 +137,7 @@ test('after a disconnect the kernel backs off, reconnects and resumes from the l
   assert.equal(timer.type, 'timer');
   assert.ok(timer.ms >= 250 && timer.ms <= 8000);
   const retried = update(closed.state, { type: 'timer', name: 'reconnect', token: timer.token, ...stamp });
-  assert.deepEqual(retried.effects, [{ type: 'ws_connect' }]);
+  assert.deepEqual(retried.effects, [{ type: 'ws_connect', csrf: 'issued' }]);
   const again = update(retried.state, { type: 'ws_message', message: { type: 'welcome', v: 1, conn: 'd', head: 50, session: 'anonymous', heartbeat_ms: 10000 }, ...stamp });
   assert.equal(again.effects[0].message.after, 45, 'resume from what was last seen, not from the new head');
 
@@ -162,6 +166,69 @@ test('writes carry the session CSRF token; reads do not', () => {
   assert.equal(logout.csrf, 'tok');
   const read = update(start, { type: 'navigate', href: '/about', ...stamp }).effects.find((e) => e.type === 'http');
   assert.equal(read.csrf, undefined);
+});
+
+test('signing in and the socket carry the request token the gateway issued', () => {
+  const start = boot({ path: '/', session: { session: anonymous }, view: homeModel() }).state;
+  const signIn = update(start, { type: 'submit', form: 'login', values: { login: 'ines', password: 'pw' }, ...stamp }).effects[0];
+  assert.equal(signIn.path, '/api/login');
+  assert.equal(signIn.csrf, 'issued');
+
+  // A cold start has no token until the session reply arrives, and opens the socket only then.
+  const cold = boot(null);
+  assert.deepEqual(cold.effects.filter((e) => e.type === 'ws_connect'), []);
+  const session = cold.effects.find((e) => e.type === 'http' && e.path === '/api/session');
+  const replied = update(cold.state, { type: 'http_result', id: session.id, ok: true, status: 200, body: { session: anonymous, state: 'anonymous' }, ...stamp });
+  assert.deepEqual(replied.effects.filter((e) => e.type === 'ws_connect'), [{ type: 'ws_connect', csrf: 'issued' }]);
+});
+
+test('rich text from the server is drawn as text and as a fixed set of elements, never as markup', () => {
+  const hostile = '<script>alert(1)</script> and <img src=x onerror=alert(1)>';
+  const blocks = [
+    { type: 'heading', level: 2, inlines: [{ type: 'text', text: '<h1>not a heading</h1>' }] },
+    { type: 'paragraph', inlines: [{ type: 'text', text: hostile }, { type: 'strong', children: [{ type: 'text', text: '<b>x</b>' }] }, { type: 'link', href: 'https://example.com', children: [{ type: 'text', text: '<a href=x>y</a>' }] }] },
+    { type: 'quote', blocks: [{ type: 'paragraph', inlines: [{ type: 'code', text: '<svg onload=alert(1)>' }] }] },
+    { type: 'list', ordered: false, items: [[{ type: 'text', text: '<li>one</li>' }]] },
+    { type: 'code', lang: '', text: '<iframe src=x></iframe>' },
+    { type: 'figure', src: '/media/kiln.svg', alt: '<b>alt</b>', caption: '<i>caption</i>' },
+    { type: 'html', html: '<script>alert(2)</script>' },
+  ];
+  const tags = new Set();
+  const strings = [];
+  const walk = (node) => {
+    if (typeof node === 'string') return strings.push(node);
+    tags.add(node.tag);
+    node.children.forEach(walk);
+  };
+  prose(blocks).filter(Boolean).forEach(walk);
+  // The only elements are the ones the renderer itself names: nothing the text says adds one.
+  assert.deepEqual(
+    [...tags].sort(),
+    ['a', 'blockquote', 'code', 'figcaption', 'figure', 'h2', 'img', 'li', 'p', 'pre', 'strong', 'ul'],
+  );
+  // The markup survives as text, character for character.
+  for (const text of [hostile, '<h1>not a heading</h1>', '<b>x</b>', '<a href=x>y</a>', '<svg onload=alert(1)>', '<li>one</li>', '<iframe src=x></iframe>', '<i>caption</i>']) {
+    assert.ok(strings.some((s) => s.includes(text)), `${text} was not kept as text`);
+  }
+  assert.ok(!strings.some((s) => s.includes('alert(2)')), 'an unknown block kind is dropped, not passed through');
+});
+
+test('nothing in the frontend parses text as markup or runs it as code', () => {
+  const sinks = /innerHTML|outerHTML|insertAdjacentHTML|document\.write|DOMParser|createContextualFragment|setHTML|dangerouslySet|new Function|\beval\(/;
+  const files = [];
+  const visit = (dir) => {
+    for (const name of readdirSync(dir)) {
+      const path = `${dir}/${name}`;
+      if (statSync(path).isDirectory()) visit(path);
+      else if (path.endsWith('.js')) files.push(path);
+    }
+  };
+  visit(fileURLToPath(new URL('../src', import.meta.url)));
+  assert.ok(files.length > 10, 'the sources were not found');
+  for (const file of files) {
+    const hit = readFileSync(file, 'utf8').match(sinks);
+    assert.equal(hit, null, `${file} uses ${hit?.[0]}`);
+  }
 });
 
 test('the theme control cycles and is stored', () => {

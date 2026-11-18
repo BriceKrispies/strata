@@ -75,7 +75,7 @@
  *
  * @typedef {(
  *   | { type: 'http', id: number, method: 'GET' | 'POST', path: string, body?: any, csrf?: string, write?: boolean, correlation: string }
- *   | { type: 'ws_connect' }
+ *   | { type: 'ws_connect', csrf?: string }
  *   | { type: 'ws_send', message: any }
  *   | { type: 'ws_close' }
  *   | { type: 'timer', name: string, token: number, ms: number }

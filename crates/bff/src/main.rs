@@ -9,7 +9,6 @@
 //! | `STRATA_ORIGINS` | derived | Comma-separated origins browser requests may come from. |
 //! | `STRATA_WEB_DIST` | `web/dist` | The built frontend. |
 //! | `STRATA_DEV` | unset | `1` exposes the development endpoints. |
-//! | `STRATA_SECURE_COOKIES` | unset | `1` marks the session cookie `Secure` (behind HTTPS). |
 //!
 //! The default sites are `127.0.0.1=fieldnotes,localhost=fieldnotes,tidewater.localhost=tidewater`.
 //! The default origins are every site host on the BFF's port and on the Vite port 5173.
@@ -62,7 +61,6 @@ fn config() -> Result<Config, String> {
         origins,
         dist: PathBuf::from(var("STRATA_WEB_DIST", "web/dist")),
         dev: var("STRATA_DEV", "") == "1",
-        secure_cookies: var("STRATA_SECURE_COOKIES", "") == "1",
     })
 }
 

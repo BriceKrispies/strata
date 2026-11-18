@@ -1,5 +1,6 @@
 //! Browser-facing routes.
 
+use crate::token::same;
 use crate::{relay, Bff, Shared, COOKIE, LOG};
 use axum::extract::ws::WebSocketUpgrade;
 use axum::extract::{Path, Query, Request, State};
@@ -166,16 +167,63 @@ pub async fn backend<T: DeserializeOwned>(
     }
 }
 
-fn session_cookie(bff: &Bff, token: &str, max_age: i64) -> HeaderValue {
-    let secure = if bff.cfg.secure_cookies {
-        "; Secure"
-    } else {
-        ""
-    };
+/// The session cookie, as `__Host-` requires: `Secure`, `Path=/` and no `Domain`. Browsers treat
+/// `http://localhost` and `http://127.0.0.1` as secure contexts and accept it there.
+fn session_cookie(token: &str, max_age: i64) -> HeaderValue {
     HeaderValue::from_str(&format!(
-        "{COOKIE}={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age={max_age}{secure}"
+        "{COOKIE}={token}; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age={max_age}"
     ))
     .expect("cookie values are ASCII")
+}
+
+/// A session as the browser may see it. A visitor with no session is handed a request token that
+/// this process issued for the site, which is what the browser presents to sign in or to open a
+/// socket.
+fn with_request_token(bff: &Bff, visit: &Visit, mut session: SessionView) -> SessionView {
+    if session.csrf_token.is_none() {
+        session.csrf_token = Some(
+            bff.tokens
+                .issue(visit.site.as_str(), strata_protocol::log::now_ms()),
+        );
+    }
+    session
+}
+
+/// Check the request token a request presents against the one its session has: the session's own
+/// token when it is signed in, otherwise a token this process issued for the site. Returns `None`
+/// when the token is missing or wrong, and otherwise whether the session is a live one.
+async fn presented_token(bff: &Bff, visit: &Visit, given: &str) -> Result<Option<bool>, Failure> {
+    let reply: SessionReply = backend(bff, visit, "/internal/session", &json!({})).await?;
+    Ok(match &reply.session.csrf_token {
+        Some(expected) => same(given, expected).then_some(true),
+        None => bff
+            .tokens
+            .check(visit.site.as_str(), given, strata_protocol::log::now_ms())
+            .then_some(false),
+    })
+}
+
+/// Require the request to come from one of our pages and to carry the request token of its
+/// session, whether or not there is a session yet. Returns whether the session is live.
+async fn guard_request(bff: &Bff, visit: &Visit, headers: &HeaderMap) -> Result<bool, Failure> {
+    let refuse = |message| Failure::new(ErrorCode::Forbidden, message, &visit.correlation);
+    if !origin_allowed(bff, headers) {
+        LOG.warn(
+            "csrf.origin_refused",
+            &visit.correlation,
+            json!({ "origin": text(headers, ORIGIN) }),
+        );
+        return Err(refuse("This request did not come from the site."));
+    }
+    match presented_token(bff, visit, text(headers, "x-csrf-token").unwrap_or("")).await? {
+        Some(live) => Ok(live),
+        None => {
+            LOG.warn("csrf.token_refused", &visit.correlation, json!({}));
+            Err(refuse(
+                "The request token is missing or stale. Reload the page and try again.",
+            ))
+        }
+    }
 }
 
 /// Require a state-changing request to come from our own pages with the session's CSRF token.
@@ -202,13 +250,7 @@ async fn guard_write(
         ));
     };
     let given = text(headers, "x-csrf-token").unwrap_or("");
-    let same = given.len() == expected.len()
-        && given
-            .bytes()
-            .zip(expected.bytes())
-            .fold(0u8, |acc, (a, b)| acc | (a ^ b))
-            == 0;
-    if !same {
+    if !same(given, expected) {
         LOG.warn("csrf.token_refused", &visit.correlation, json!({}));
         return Err(refuse(
             "The request token is missing or stale. Reload the page and try again.",
@@ -220,13 +262,16 @@ async fn guard_write(
 async fn session(State(bff): State<Shared>, headers: HeaderMap) -> Result<Response, Failure> {
     let visit = visit(&bff, &headers)?;
     let reply: SessionReply = backend(&bff, &visit, "/internal/session", &json!({})).await?;
-    let mut response =
-        Json(json!({ "session": reply.session, "state": reply.state })).into_response();
+    let mut response = Json(json!({
+        "session": with_request_token(&bff, &visit, reply.session),
+        "state": reply.state,
+    }))
+    .into_response();
     if visit.token.is_some() && matches!(reply.state, SessionState::Expired | SessionState::Revoked)
     {
         response
             .headers_mut()
-            .insert(SET_COOKIE, session_cookie(&bff, "", 0));
+            .insert(SET_COOKIE, session_cookie("", 0));
     }
     Ok(response)
 }
@@ -237,13 +282,7 @@ async fn login(
     Json(request): Json<LoginRequest>,
 ) -> Result<Response, Failure> {
     let visit = visit(&bff, &headers)?;
-    if !origin_allowed(&bff, &headers) || text(&headers, "x-strata-request") != Some("1") {
-        return Err(Failure::new(
-            ErrorCode::Forbidden,
-            "This request did not come from the site.",
-            &visit.correlation,
-        ));
-    }
+    guard_request(&bff, &visit, &headers).await?;
     let reply: LoginReply =
         backend(&bff, &visit, "/internal/session/login", &json!(request)).await?;
     let lifetime = reply
@@ -254,33 +293,31 @@ async fn login(
     let mut response = Json(json!({ "session": reply.session, "state": "active" })).into_response();
     response
         .headers_mut()
-        .insert(SET_COOKIE, session_cookie(&bff, &reply.token, lifetime));
+        .insert(SET_COOKIE, session_cookie(&reply.token, lifetime));
     Ok(response)
 }
 
 async fn logout(State(bff): State<Shared>, headers: HeaderMap) -> Result<Response, Failure> {
     let visit = visit(&bff, &headers)?;
-    if visit.token.is_some() {
-        // Without a live session there is nothing to protect; with one, the usual guard applies.
-        match guard_write(&bff, &visit, &headers).await {
-            Ok(_) => {
-                let _: Json_ =
-                    backend(&bff, &visit, "/internal/session/logout", &json!({})).await?;
-            }
-            Err(Failure(reply)) if reply.code == ErrorCode::Unauthenticated => {}
-            Err(failure) => return Err(failure),
-        }
+    // The token is required whether or not there is a session to end: the session's own when
+    // there is one, the one this process issued to the browser when there is not.
+    let live = guard_request(&bff, &visit, &headers).await?;
+    if live {
+        let _: Json_ = backend(&bff, &visit, "/internal/session/logout", &json!({})).await?;
     }
     let anonymous = Visit {
         token: None,
         ..visit
     };
     let reply: SessionReply = backend(&bff, &anonymous, "/internal/session", &json!({})).await?;
-    let mut response =
-        Json(json!({ "session": reply.session, "state": "anonymous" })).into_response();
+    let mut response = Json(json!({
+        "session": with_request_token(&bff, &anonymous, reply.session),
+        "state": "anonymous",
+    }))
+    .into_response();
     response
         .headers_mut()
-        .insert(SET_COOKIE, session_cookie(&bff, "", 0));
+        .insert(SET_COOKIE, session_cookie("", 0));
     Ok(response)
 }
 
@@ -463,19 +500,14 @@ async fn dev(
             ))
         }
     };
-    if !origin_allowed(&bff, &headers) {
-        return Err(Failure::new(
-            ErrorCode::Forbidden,
-            "This request did not come from the site.",
-            &visit.correlation,
-        ));
-    }
+    guard_request(&bff, &visit, &headers).await?;
     backend(&bff, &visit, path, &json!({})).await.map(Json)
 }
 
 async fn socket(
     State(bff): State<Shared>,
     headers: HeaderMap,
+    Query(query): Query<BTreeMap<String, String>>,
     upgrade: WebSocketUpgrade,
 ) -> Result<Response, Failure> {
     let visit = visit(&bff, &headers)?;
@@ -488,6 +520,17 @@ async fn socket(
         return Err(Failure::new(
             ErrorCode::Forbidden,
             "This connection did not come from the site.",
+            &visit.correlation,
+        ));
+    }
+    // A browser cannot set a header on a socket, so the request token travels in the address.
+    // The log lines of this process leave the query string out.
+    let given = query.get("csrf").map_or("", String::as_str);
+    if presented_token(&bff, &visit, given).await?.is_none() {
+        LOG.warn("ws.token_refused", &visit.correlation, json!({}));
+        return Err(Failure::new(
+            ErrorCode::Forbidden,
+            "This connection did not carry the request token of its session.",
             &visit.correlation,
         ));
     }
@@ -591,7 +634,7 @@ async fn page(State(bff): State<Shared>, headers: HeaderMap, request: Request) -
         .unwrap_or_else(|| json!(theme::Theme::default()));
     let bootstrap = json!({
         "path": path,
-        "session": session.ok().map(|reply| json!({ "session": reply.session, "state": reply.state })),
+        "session": session.ok().map(|reply| json!({ "session": with_request_token(&bff, &visit, reply.session), "state": reply.state })),
         "view": view,
     })
     .to_string()

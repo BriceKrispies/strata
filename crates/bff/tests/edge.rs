@@ -12,6 +12,7 @@ use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::Message;
 
 const TOKEN: &str = "edge-service-token-0123456789abcdef";
+const SESSION_COOKIE: &str = "__Host-strata_sid";
 
 struct Edge {
     port: u16,
@@ -59,7 +60,6 @@ async fn start() -> Edge {
         ],
         dist,
         dev: true,
-        secure_cookies: false,
     };
     tokio::spawn(strata_bff::run(cfg, listener, std::future::pending()));
     let edge = Edge {
@@ -112,7 +112,7 @@ impl Edge {
     async fn get(&self, host: &str, path: &str, cookie: Option<&str>) -> (u16, Json, Reply) {
         let mut request = self.http.get(format!("{}{path}", self.origin(host)));
         if let Some(cookie) = cookie {
-            request = request.header("cookie", format!("strata_sid={cookie}"));
+            request = request.header("cookie", format!("{SESSION_COOKIE}={cookie}"));
         }
         self.send(request).await
     }
@@ -124,6 +124,15 @@ impl Edge {
             .json(&body)
     }
 
+    /// The request token the gateway issues to a browser that has no session.
+    async fn request_token(&self, host: &str) -> String {
+        let (_, body, _) = self.get(host, "/api/session", None).await;
+        body["session"]["csrf_token"]
+            .as_str()
+            .expect("the gateway issues a request token with the session reply")
+            .to_string()
+    }
+
     /// Sign in and return `(cookie token, csrf token)`.
     async fn login(&self, host: &str, login: &str, password: &str) -> (String, String) {
         let request = self
@@ -132,7 +141,7 @@ impl Edge {
                 "/api/login",
                 json!({ "login": login, "password": password }),
             )
-            .header("x-strata-request", "1");
+            .header("x-csrf-token", self.request_token(host).await);
         let (status, body, reply) = self.send(request).await;
         assert_eq!(status, 200, "{body}");
         let cookie = reply.cookie.expect("a session cookie");
@@ -140,7 +149,7 @@ impl Edge {
             .split(';')
             .next()
             .unwrap()
-            .trim_start_matches("strata_sid=")
+            .trim_start_matches(&format!("{SESSION_COOKIE}="))
             .to_string();
         (
             token,
@@ -159,7 +168,7 @@ async fn the_session_cookie_is_http_only_strict_and_never_in_a_body() {
             "/api/login",
             json!({ "login": "ines", "password": "strata-dev-ines" }),
         )
-        .header("x-strata-request", "1");
+        .header("x-csrf-token", edge.request_token("127.0.0.1").await);
     let (status, body, reply) = edge.send(request).await;
     assert_eq!(status, 200);
     let cookie = reply.cookie.unwrap();
@@ -173,7 +182,7 @@ async fn the_session_cookie_is_http_only_strict_and_never_in_a_body() {
         .split(';')
         .next()
         .unwrap()
-        .trim_start_matches("strata_sid=");
+        .trim_start_matches(&format!("{SESSION_COOKIE}="));
     assert_eq!(token.len(), 64);
     assert!(
         !reply.text.contains(token),
@@ -184,10 +193,10 @@ async fn the_session_cookie_is_http_only_strict_and_never_in_a_body() {
     let (_, session, _) = edge.get("127.0.0.1", "/api/session", Some(token)).await;
     assert_eq!(session["session"]["authenticated"], true);
     // An ended session makes the BFF clear the cookie.
-    let (csrf_status, _, _) = edge
+    let (csrf_status, _, logout_reply) = edge
         .send(
             edge.post("127.0.0.1", "/api/logout", json!({}))
-                .header("cookie", format!("strata_sid={token}"))
+                .header("cookie", format!("{SESSION_COOKIE}={token}"))
                 .header(
                     "x-csrf-token",
                     session["session"]["csrf_token"].as_str().unwrap(),
@@ -195,6 +204,13 @@ async fn the_session_cookie_is_http_only_strict_and_never_in_a_body() {
         )
         .await;
     assert_eq!(csrf_status, 200);
+    // Every cookie the gateway sets carries the attributes: the one that signs in, the one that
+    // signs out and the one that clears a session that ended.
+    let signed_out = logout_reply.cookie.expect("sign-out sets a cookie");
+    assert!(
+        signed_out.contains("HttpOnly") && signed_out.contains("SameSite=Strict"),
+        "{signed_out}"
+    );
     let (_, after, reply) = edge.get("127.0.0.1", "/api/session", Some(token)).await;
     assert_eq!(after["session"]["authenticated"], false);
     let cleared = reply.cookie.unwrap();
@@ -205,12 +221,88 @@ async fn the_session_cookie_is_http_only_strict_and_never_in_a_body() {
     );
 }
 
+/// Verifies: IDN-262
+#[tokio::test]
+async fn the_session_cookie_carries_the_host_prefix_and_secure() {
+    let edge = start().await;
+    let request = edge
+        .post(
+            "127.0.0.1",
+            "/api/login",
+            json!({ "login": "ines", "password": "strata-dev-ines" }),
+        )
+        .header("x-csrf-token", edge.request_token("127.0.0.1").await);
+    let (status, _, reply) = edge.send(request).await;
+    assert_eq!(status, 200);
+    let cookie = reply.cookie.unwrap();
+    // `__Host-` is only honoured by a browser for a cookie that is `Secure`, has `Path=/` and has
+    // no `Domain`; the prefix, `Secure` and the other two are all there.
+    let attributes: Vec<&str> = cookie.split(';').map(str::trim).collect();
+    assert!(attributes[0].starts_with("__Host-strata_sid="), "{cookie}");
+    assert!(attributes.contains(&"Secure"), "{cookie}");
+    assert!(attributes.contains(&"Path=/"), "{cookie}");
+    assert!(
+        !attributes
+            .iter()
+            .any(|a| a.to_lowercase().starts_with("domain")),
+        "{cookie}"
+    );
+    let token = attributes[0].trim_start_matches("__Host-strata_sid=");
+
+    // The attribute is not an option: the cookie the gateway clears is marked the same way.
+    let (_, session, _) = edge.get("127.0.0.1", "/api/session", Some(token)).await;
+    let logout = edge
+        .post("127.0.0.1", "/api/logout", json!({}))
+        .header("cookie", format!("{SESSION_COOKIE}={token}"))
+        .header(
+            "x-csrf-token",
+            session["session"]["csrf_token"].as_str().unwrap(),
+        );
+    let (status, _, reply) = edge.send(logout).await;
+    assert_eq!(status, 200);
+    let cleared = reply.cookie.unwrap();
+    assert!(
+        cleared.starts_with("__Host-strata_sid=") && cleared.contains("Secure"),
+        "{cleared}"
+    );
+
+    // A cookie under the old, unprefixed name is not a session.
+    let (token, _) = edge.login("127.0.0.1", "ines", "strata-dev-ines").await;
+    let old_name = edge
+        .http
+        .get(format!("{}/api/session", edge.origin("127.0.0.1")))
+        .header("cookie", format!("strata_sid={token}"));
+    let (_, body, _) = edge.send(old_name).await;
+    assert_eq!(body["session"]["authenticated"], false);
+}
+
+/// The `POST` routes of the browser-facing router, read from its definition so that a route
+/// added later is covered without anyone remembering to list it. `:action` stands for the two
+/// development actions.
+fn post_routes() -> Vec<String> {
+    include_str!("../src/routes.rs")
+        .lines()
+        .filter(|line| line.contains(".route(\"") && line.contains("post("))
+        .map(|line| line.split('"').nth(1).expect("a route path").to_string())
+        .flat_map(|path| {
+            if path.contains(":action") {
+                ["expire-session", "reset"]
+                    .map(|action| path.replace(":action", action))
+                    .to_vec()
+            } else {
+                vec![path]
+            }
+        })
+        .map(|path| format!("/api{path}"))
+        .collect()
+}
+
 /// Verifies: GWY-002
 #[tokio::test]
-async fn writes_need_our_origin_and_the_sessions_csrf_token() {
+async fn every_request_that_changes_state_needs_our_origin_and_the_sessions_token() {
     let edge = start().await;
     let (token, csrf) = edge.login("127.0.0.1", "ines", "strata-dev-ines").await;
-    let cookie = format!("strata_sid={token}");
+    let cookie = format!("{SESSION_COOKIE}={token}");
     let change = json!({ "op": "create", "object": "category", "fields": { "name": "Tools", "slug": "tools" } });
     let write = |origin: Option<String>, csrf: Option<&str>| {
         let mut request = edge
@@ -254,38 +346,184 @@ async fn writes_need_our_origin_and_the_sessions_csrf_token() {
         200
     );
 
-    // Logout changes state too: without the token it is refused and the session survives.
-    let no_token_logout = edge
-        .post("127.0.0.1", "/api/logout", json!({}))
-        .header("cookie", &cookie);
+    // Every other route that changes state: the lab, the development fixtures, sign-in and
+    // sign-out as well. Each is sent from our own origin with the session cookie, without the
+    // token and with a wrong one, and must be refused before anything happens. The one POST that
+    // is exempt changes nothing: the Markdown preview is a pure function of its text.
+    let routes = post_routes();
+    assert!(
+        routes.len() >= 8,
+        "the routes were not read from the router: {routes:?}"
+    );
+    let before = edge.get("127.0.0.1", "/api/view?path=/", None).await.1;
+    for path in routes.iter().filter(|path| path.as_str() != "/api/preview") {
+        let body = match path.as_str() {
+            "/api/records" => change.clone(),
+            "/api/login" => json!({ "login": "ines", "password": "strata-dev-ines" }),
+            _ => json!({}),
+        };
+        for presented in [None, Some("0000")] {
+            let mut request = edge
+                .http
+                .post(format!("{}{path}", edge.origin("127.0.0.1")))
+                .header("cookie", &cookie)
+                .header("origin", &ours)
+                .json(&body);
+            if let Some(presented) = presented {
+                request = request.header("x-csrf-token", presented);
+            }
+            let (status, reply, _) = edge.send(request).await;
+            assert_eq!(
+                status, 403,
+                "{path} with token {presented:?} answered {status}: {reply}"
+            );
+        }
+    }
+    let (_, after, _) = edge.get("127.0.0.1", "/api/view?path=/", None).await;
     assert_eq!(
-        edge.send(no_token_logout).await.0,
-        403,
-        "logout without the token"
+        after, before,
+        "the refused requests changed nothing, the fixture reset least of all"
     );
     let (_, still, _) = edge.get("127.0.0.1", "/api/session", Some(&token)).await;
     assert_eq!(
         still["session"]["authenticated"], true,
-        "the refused logout ended nothing"
+        "the refused sign-out and fixtures ended nothing"
     );
-
-    // Login is guarded too, before any session exists.
-    let cross_site = edge
-        .http
-        .post(format!("{}/api/login", edge.origin("127.0.0.1")))
-        .header("origin", "http://evil.example")
-        .header("x-strata-request", "1")
-        .json(&json!({ "login": "ines", "password": "strata-dev-ines" }));
-    assert_eq!(edge.send(cross_site).await.0, 403);
-    let form_post = edge.post(
-        "127.0.0.1",
-        "/api/login",
-        json!({ "login": "ines", "password": "strata-dev-ines" }),
-    );
+    let preview = edge
+        .post("127.0.0.1", "/api/preview", json!({ "markdown": "a *b*" }))
+        .header("cookie", &cookie);
     assert_eq!(
-        edge.send(form_post).await.0,
-        403,
-        "missing the header a form cannot send"
+        edge.send(preview).await.0,
+        200,
+        "the preview changes nothing"
+    );
+}
+
+/// Verifies: GWY-257
+#[tokio::test]
+async fn sign_in_and_sign_out_carry_a_request_token_the_gateway_issued() {
+    let edge = start().await;
+    let credentials = json!({ "login": "ines", "password": "strata-dev-ines" });
+    let issued = edge.request_token("127.0.0.1").await;
+    let other_site = edge.request_token("localhost").await;
+    let mut tampered = issued.clone();
+    tampered.pop();
+    tampered.push(if issued.ends_with('0') { '1' } else { '0' });
+
+    // Sign-in: nothing but a token this gateway issued for this site is accepted. The fixed
+    // header the prototype used to ask for is not a token.
+    let sign_in = |origin: &str, header: Option<(&str, &str)>| {
+        let mut request = edge
+            .http
+            .post(format!("{}/api/login", edge.origin("127.0.0.1")))
+            .header("origin", origin)
+            .json(&credentials);
+        if let Some((name, value)) = header {
+            request = request.header(name, value);
+        }
+        request
+    };
+    let ours = edge.origin("127.0.0.1");
+    for (what, header) in [
+        ("no token", None),
+        ("the fixed header alone", Some(("x-strata-request", "1"))),
+        ("a made-up token", Some(("x-csrf-token", "0000"))),
+        ("an empty token", Some(("x-csrf-token", ""))),
+        (
+            "another site's token",
+            Some(("x-csrf-token", other_site.as_str())),
+        ),
+        (
+            "a tampered token",
+            Some(("x-csrf-token", tampered.as_str())),
+        ),
+    ] {
+        let (status, _, reply) = edge.send(sign_in(&ours, header)).await;
+        assert_eq!(status, 403, "sign-in with {what}");
+        assert!(reply.cookie.is_none(), "{what} was given a session");
+    }
+    let (status, _, _) = edge
+        .send(sign_in(
+            "http://evil.example",
+            Some(("x-csrf-token", issued.as_str())),
+        ))
+        .await;
+    assert_eq!(status, 403, "a token from a foreign origin");
+    let (status, _, reply) = edge
+        .send(sign_in(&ours, Some(("x-csrf-token", issued.as_str()))))
+        .await;
+    assert_eq!(status, 200, "the issued token signs in");
+    let cookie = reply.cookie.expect("a session cookie");
+    let session = cookie
+        .split(';')
+        .next()
+        .unwrap()
+        .trim_start_matches(&format!("{SESSION_COOKIE}="))
+        .to_string();
+
+    // Sign-out of a signed-in browser: the token of its session, and not the one issued to
+    // anonymous browsers.
+    let sign_out = |header: Option<&str>| {
+        let mut request = edge
+            .post("127.0.0.1", "/api/logout", json!({}))
+            .header("cookie", format!("{SESSION_COOKIE}={session}"));
+        if let Some(value) = header {
+            request = request.header("x-csrf-token", value);
+        }
+        request
+    };
+    let (_, current, _) = edge.get("127.0.0.1", "/api/session", Some(&session)).await;
+    let csrf = current["session"]["csrf_token"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    for (what, header) in [
+        ("no token", None),
+        ("a made-up token", Some("0000")),
+        (
+            "the token issued to anonymous browsers",
+            Some(issued.as_str()),
+        ),
+    ] {
+        assert_eq!(
+            edge.send(sign_out(header)).await.0,
+            403,
+            "sign-out with {what}"
+        );
+        let (_, still, _) = edge.get("127.0.0.1", "/api/session", Some(&session)).await;
+        assert_eq!(still["session"]["authenticated"], true, "{what} ended it");
+    }
+    assert_eq!(edge.send(sign_out(Some(&csrf))).await.0, 200);
+    let (_, after, _) = edge.get("127.0.0.1", "/api/session", Some(&session)).await;
+    assert_eq!(after["session"]["authenticated"], false);
+
+    // Sign-out of a browser that has no session still carries the token the gateway issued.
+    let anonymous_out = |header: Option<(&str, &str)>| {
+        let mut request = edge.post("127.0.0.1", "/api/logout", json!({}));
+        if let Some((name, value)) = header {
+            request = request.header(name, value);
+        }
+        request
+    };
+    for (what, header) in [
+        ("no token", None),
+        ("the fixed header alone", Some(("x-strata-request", "1"))),
+        (
+            "another site's token",
+            Some(("x-csrf-token", other_site.as_str())),
+        ),
+    ] {
+        assert_eq!(
+            edge.send(anonymous_out(header)).await.0,
+            403,
+            "anonymous sign-out with {what}"
+        );
+    }
+    assert_eq!(
+        edge.send(anonymous_out(Some(("x-csrf-token", issued.as_str()))))
+            .await
+            .0,
+        200
     );
 }
 
@@ -338,6 +576,45 @@ async fn the_site_comes_from_the_host_and_nothing_the_client_says() {
         .get(format!("{}/api/session", edge.origin("127.0.0.1")))
         .header("host", "elsewhere.example");
     assert_eq!(edge.send(unknown).await.0, 404);
+
+    // Nothing else a client sends names a tenant either: the headers proxies use for the host,
+    // the origin and the referrer, other parameters, and a field in a sign-in body.
+    for (name, value) in [
+        ("x-forwarded-host", "localhost"),
+        ("x-original-host", "localhost"),
+        ("x-forwarded-server", "localhost"),
+        ("forwarded", "host=localhost"),
+        ("origin", "http://localhost"),
+        ("referer", "http://localhost/"),
+        ("x-tenant", "tidewater"),
+        ("x-site", "tidewater"),
+        ("x-strata-tenant", "tidewater"),
+    ] {
+        let request = edge
+            .http
+            .get(format!(
+                "{}/api/view?path=/&host=localhost&tenant=tidewater",
+                edge.origin("127.0.0.1")
+            ))
+            .header(name, value);
+        let (_, view, _) = edge.send(request).await;
+        assert_eq!(
+            view["data"]["site"]["fields"]["name"], "Fieldnotes",
+            "{name}: {value} moved the request to another tenant"
+        );
+    }
+    let sneaky = edge
+        .post(
+            "127.0.0.1",
+            "/api/login",
+            json!({ "login": "ines", "password": "strata-dev-ines", "tenant": "tidewater", "site": "tidewater" }),
+        )
+        .header("x-csrf-token", edge.request_token("127.0.0.1").await);
+    let (status, body, _) = edge.send(sneaky).await;
+    assert!(
+        status != 200 || body["session"]["tenant"] == "fieldnotes",
+        "a tenant named in the sign-in body was honoured: {status} {body}"
+    );
 }
 
 #[tokio::test]
@@ -393,14 +670,150 @@ async fn views_are_projected_to_plain_json_with_markdown_as_blocks() {
     );
 }
 
+/// Verifies: CMS-004
+///
+/// A tenant author writes markup into an essay. What reaches a reader's browser, through the
+/// gateway as data and inside the page, is structured blocks of a fixed set of kinds in which
+/// the markup is text. The raw source is delivered only as a plain string field, which the
+/// editor needs and nothing draws as HTML (`web/test/kernel.test.js` checks the drawing).
+#[tokio::test]
+async fn tenant_rich_text_reaches_the_browser_as_blocks_with_markup_as_text() {
+    let edge = start().await;
+    let (token, csrf) = edge.login("127.0.0.1", "tomasz", "strata-dev-tomasz").await;
+    let cookie = format!("{SESSION_COOKIE}={token}");
+    let body = "<script>alert(1)</script> and <img src=x onerror=alert(1)>\n\n[click](javascript:alert(1)) **bold** <b>not bold</b> [ok](https://example.com)\n\n<div>block</div>";
+    let write = |change: Json| {
+        edge.post("127.0.0.1", "/api/records", change)
+            .header("cookie", &cookie)
+            .header("x-csrf-token", &csrf)
+    };
+    let (status, created, _) = edge
+        .send(write(json!({ "op": "create", "object": "post", "fields": { "title": "Hostile", "slug": "hostile", "body": body, "author": 3 } })))
+        .await;
+    assert_eq!(status, 200, "{created}");
+    let (status, published, _) = edge
+        .send(write(json!({ "op": "update", "object": "post", "id": created["id"], "fields": { "status": "published" } })))
+        .await;
+    assert_eq!(status, 200, "{published}");
+
+    // As data: an anonymous reader's view of the essay.
+    let (_, view, _) = edge
+        .get("127.0.0.1", "/api/view?path=/posts/hostile", None)
+        .await;
+    let blocks = view["data"]["post"]["blocks"]["body"]
+        .as_array()
+        .expect("the body arrives as blocks");
+    fn walk_inlines(
+        inlines: &Json,
+        kinds: &mut Vec<String>,
+        texts: &mut Vec<String>,
+        hrefs: &mut Vec<String>,
+    ) {
+        for inline in inlines.as_array().into_iter().flatten() {
+            kinds.push(inline["type"].as_str().unwrap().to_string());
+            if let Some(text) = inline["text"].as_str() {
+                texts.push(text.to_string());
+            }
+            if let Some(href) = inline["href"].as_str() {
+                hrefs.push(href.to_string());
+            }
+            walk_inlines(&inline["children"], kinds, texts, hrefs);
+        }
+    }
+    let (mut block_kinds, mut inline_kinds, mut texts, mut hrefs) =
+        (vec![], vec![], vec![], vec![]);
+    for block in blocks {
+        block_kinds.push(block["type"].as_str().unwrap());
+        walk_inlines(&block["inlines"], &mut inline_kinds, &mut texts, &mut hrefs);
+    }
+    let allowed_blocks = [
+        "heading",
+        "paragraph",
+        "quote",
+        "list",
+        "code",
+        "figure",
+        "rule",
+    ];
+    assert!(
+        block_kinds.iter().all(|kind| allowed_blocks.contains(kind)),
+        "{block_kinds:?}"
+    );
+    let allowed_inlines = ["text", "em", "strong", "code", "link"];
+    assert!(
+        inline_kinds
+            .iter()
+            .all(|kind| allowed_inlines.contains(&kind.as_str())),
+        "{inline_kinds:?}"
+    );
+    let text = texts.join("");
+    for markup in [
+        "<script>alert(1)</script>",
+        "<img src=x onerror=alert(1)>",
+        "<b>not bold</b>",
+        "<div>block</div>",
+    ] {
+        assert!(
+            text.contains(markup),
+            "{markup} is not kept as text: {text}"
+        );
+    }
+    assert_eq!(
+        hrefs,
+        ["https://example.com"],
+        "the unsafe link lost its target"
+    );
+    assert!(
+        !view["data"]["post"]["blocks"]
+            .to_string()
+            .contains("javascript:"),
+        "no unsafe address reaches the browser as a block"
+    );
+    assert_eq!(
+        view["data"]["post"]["fields"]["body"], body,
+        "the source is only ever a string"
+    );
+
+    // Inside the page: the markup is neither in the document nor able to leave the data block.
+    let (status, _, page) = edge.get("127.0.0.1", "/posts/hostile", None).await;
+    assert_eq!(status, 200);
+    let (before, rest) = page
+        .text
+        .split_once("<script type=\"application/json\" id=\"strata-bootstrap\">")
+        .expect("the data block");
+    let (data, after) = rest.split_once("</script>").expect("the data block ends");
+    assert!(
+        !data.contains('<'),
+        "markup can start inside the data block"
+    );
+    for outside in [before, after] {
+        assert!(
+            !outside.contains("alert(1)") && !outside.contains("<img src=x"),
+            "tenant markup is in the document: {outside}"
+        );
+    }
+    let bootstrap: Json = serde_json::from_str(data).unwrap();
+    assert_eq!(
+        bootstrap["view"]["data"]["post"]["blocks"], view["data"]["post"]["blocks"],
+        "the page carries the same blocks"
+    );
+}
+
 /// Verifies: GWY-005
 #[tokio::test]
 async fn pages_carry_security_headers_and_a_bootstrap_that_cannot_break_out() {
     let edge = start().await;
-    // Two pages of different kinds: the policy is the same on each.
-    for path in ["/posts/a-margin-is-a-promise", "/"] {
-        let (status, _, reply) = edge.get("127.0.0.1", path, None).await;
-        assert_eq!(status, 200, "{path}");
+    // Pages of different kinds, of both tenants and the page that says nothing is there: the
+    // policy is the same on each.
+    for (host, path, expected) in [
+        ("127.0.0.1", "/posts/a-margin-is-a-promise", 200),
+        ("127.0.0.1", "/", 200),
+        ("127.0.0.1", "/desk", 200),
+        ("localhost", "/", 200),
+        ("127.0.0.1", "/no/such/page", 404),
+    ] {
+        let (status, _, reply) = edge.get(host, path, None).await;
+        assert_eq!(status, expected, "{path}");
         let csp = reply
             .headers
             .get("content-security-policy")
@@ -420,6 +833,10 @@ async fn pages_carry_security_headers_and_a_bootstrap_that_cannot_break_out() {
             "{path}: {csp}"
         );
         assert!(csp.contains("frame-ancestors 'none'"), "{path}: {csp}");
+        assert!(
+            !csp.contains("unsafe-inline") && !csp.contains("unsafe-eval"),
+            "{path}: {csp}"
+        );
     }
     let (_, _, reply) = edge
         .get("127.0.0.1", "/posts/a-margin-is-a-promise", None)
@@ -454,33 +871,65 @@ async fn pages_carry_security_headers_and_a_bootstrap_that_cannot_break_out() {
     assert_eq!(edge.get("127.0.0.1", "/no/such/page", None).await.0, 404);
 }
 
+type Upgrade = Result<
+    (
+        tokio_tungstenite::WebSocketStream<
+            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+        >,
+        tokio_tungstenite::tungstenite::handshake::client::Response,
+    ),
+    tokio_tungstenite::tungstenite::Error,
+>;
+
+/// Try to open the browser socket with the given origin, session cookie and request token.
+async fn connect(
+    edge: &Edge,
+    origin: Option<String>,
+    cookie: Option<&str>,
+    csrf: Option<&str>,
+) -> Upgrade {
+    let address = match csrf {
+        Some(csrf) => format!("ws://127.0.0.1:{}/ws?csrf={csrf}", edge.port),
+        None => format!("ws://127.0.0.1:{}/ws", edge.port),
+    };
+    let mut request = address.into_client_request().unwrap();
+    if let Some(origin) = origin {
+        request
+            .headers_mut()
+            .insert("origin", origin.parse().unwrap());
+    }
+    if let Some(cookie) = cookie {
+        request.headers_mut().insert(
+            "cookie",
+            format!("{SESSION_COOKIE}={cookie}").parse().unwrap(),
+        );
+    }
+    tokio_tungstenite::connect_async(request).await
+}
+
 /// Verifies: GWY-004
 #[tokio::test]
 async fn the_socket_checks_origin_validates_frames_and_relays_events() {
     let edge = start().await;
-    let connect = |origin: Option<String>, cookie: Option<String>| {
-        let mut request = format!("ws://127.0.0.1:{}/ws", edge.port)
-            .into_client_request()
-            .unwrap();
-        if let Some(origin) = origin {
-            request
-                .headers_mut()
-                .insert("origin", origin.parse().unwrap());
-        }
-        if let Some(cookie) = cookie {
-            request
-                .headers_mut()
-                .insert("cookie", format!("strata_sid={cookie}").parse().unwrap());
-        }
-        tokio_tungstenite::connect_async(request)
-    };
+    // Every refusal below carries a valid request token, so it is the origin that is refused.
+    let anonymous = edge.request_token("127.0.0.1").await;
     assert!(
-        connect(Some("http://evil.example".into()), None)
-            .await
-            .is_err(),
+        connect(
+            &edge,
+            Some("http://evil.example".into()),
+            None,
+            Some(anonymous.as_str())
+        )
+        .await
+        .is_err(),
         "foreign origin is refused at upgrade"
     );
-    assert!(connect(None, None).await.is_err(), "so is a missing origin");
+    assert!(
+        connect(&edge, None, None, Some(anonymous.as_str()))
+            .await
+            .is_err(),
+        "so is a missing origin"
+    );
     for near_miss in [
         format!("https://127.0.0.1:{}", edge.port),
         format!("http://127.0.0.1.evil.example:{}", edge.port),
@@ -488,15 +937,38 @@ async fn the_socket_checks_origin_validates_frames_and_relays_events() {
         "null".to_string(),
     ] {
         assert!(
-            connect(Some(near_miss.clone()), None).await.is_err(),
+            connect(
+                &edge,
+                Some(near_miss.clone()),
+                None,
+                Some(anonymous.as_str())
+            )
+            .await
+            .is_err(),
             "origin {near_miss} was accepted"
         );
     }
+    assert!(
+        connect(
+            &edge,
+            Some(edge.origin("127.0.0.1")),
+            None,
+            Some(anonymous.as_str())
+        )
+        .await
+        .is_ok(),
+        "the control: our own origin with the token is let in"
+    );
 
     let (token, csrf) = edge.login("127.0.0.1", "ines", "strata-dev-ines").await;
-    let (mut socket, _) = connect(Some(edge.origin("127.0.0.1")), Some(token.clone()))
-        .await
-        .unwrap();
+    let (mut socket, _) = connect(
+        &edge,
+        Some(edge.origin("127.0.0.1")),
+        Some(token.as_str()),
+        Some(csrf.as_str()),
+    )
+    .await
+    .unwrap();
     async fn next(
         socket: &mut (impl StreamExt<Item = Result<Message, tokio_tungstenite::tungstenite::Error>>
                   + Unpin),
@@ -539,7 +1011,7 @@ async fn the_socket_checks_origin_validates_frames_and_relays_events() {
     let change = json!({ "op": "create", "object": "category", "fields": { "name": "Live", "slug": "live" } });
     let write = edge
         .post("127.0.0.1", "/api/records", change)
-        .header("cookie", format!("strata_sid={token}"))
+        .header("cookie", format!("{SESSION_COOKIE}={token}"))
         .header("x-csrf-token", &csrf)
         .header("x-correlation-id", "c-browser-42");
     assert_eq!(edge.send(write).await.0, 200);
@@ -548,5 +1020,60 @@ async fn the_socket_checks_origin_validates_frames_and_relays_events() {
     assert_eq!(
         event["correlation"], "c-browser-42",
         "the browser's correlation id comes back with the event"
+    );
+}
+
+/// Verifies: GWY-256
+#[tokio::test]
+async fn a_socket_upgrade_without_the_request_token_of_its_session_is_refused() {
+    let edge = start().await;
+    let ours = || Some(edge.origin("127.0.0.1"));
+
+    // A visitor with no session: the token the gateway issued to the browser, and no other.
+    let anonymous = edge.request_token("127.0.0.1").await;
+    let other_site = edge.request_token("localhost").await;
+    let mut forged = anonymous.clone();
+    forged.replace_range(0..1, if anonymous.starts_with('9') { "8" } else { "9" });
+    for (what, token) in [
+        ("no token", None),
+        ("an empty token", Some("")),
+        ("a made-up token", Some("0000")),
+        ("a token of another site", Some(other_site.as_str())),
+        ("a tampered token", Some(forged.as_str())),
+    ] {
+        assert!(
+            connect(&edge, ours(), None, token).await.is_err(),
+            "{what} was let in"
+        );
+    }
+    assert!(
+        connect(&edge, ours(), None, Some(anonymous.as_str()))
+            .await
+            .is_ok(),
+        "the issued token opens a socket for a visitor"
+    );
+
+    // A signed-in browser: the token of its own session. The cookie alone, the token the gateway
+    // issued to anonymous browsers, and another session's token are all refused.
+    let (token, csrf) = edge.login("127.0.0.1", "ines", "strata-dev-ines").await;
+    let (_, admin_csrf) = edge.login("127.0.0.1", "admin", "strata-dev-admin").await;
+    for (what, presented) in [
+        ("the cookie alone", None),
+        ("the anonymous token", Some(anonymous.as_str())),
+        ("another session's token", Some(admin_csrf.as_str())),
+        ("a made-up token", Some("0000")),
+    ] {
+        assert!(
+            connect(&edge, ours(), Some(token.as_str()), presented)
+                .await
+                .is_err(),
+            "{what} was let in for a signed-in cookie"
+        );
+    }
+    assert!(
+        connect(&edge, ours(), Some(token.as_str()), Some(csrf.as_str()))
+            .await
+            .is_ok(),
+        "the session's own token opens the socket"
     );
 }
