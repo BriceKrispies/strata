@@ -1,5 +1,6 @@
 [package]
 name = "strata-storage-sqlite"
+description = "SQLite implementation of the Strata persistence contract."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -7,6 +8,15 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+strata-kernel.workspace = true
+strata-storage-api.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+rusqlite.workspace = true
+
+[dev-dependencies]
+strata-storage-api = { workspace = true, features = ["conformance"] }
+strata-kernel = { workspace = true, features = ["testkit"] }
 
 [lints]
 workspace = true
