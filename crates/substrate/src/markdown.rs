@@ -439,6 +439,12 @@ mod tests {
         assert!(!serde_json::to_string(&blocks)
             .unwrap()
             .contains("javascript:"));
+        // Other markup, inline and at the start of a line, is text as well.
+        let other = parse("<img src=x onerror=alert(1)> then <b>bold</b>\n\n<div>block</div>");
+        let json = serde_json::to_string(&other).unwrap();
+        assert!(json.contains("<img src=x onerror=alert(1)>"), "{json}");
+        assert!(json.contains("<b>bold</b>"), "{json}");
+        assert!(json.contains("<div>block</div>"), "{json}");
     }
 
     #[test]

@@ -2,8 +2,8 @@
 //! check with no placeholder and no extra axiom.
 //!
 //! The scenario file and the expected output are committed, so the kernel side of the
-//! comparison runs everywhere. The Lean side runs when `lake` is on the PATH and says so
-//! loudly when it is not.
+//! comparison runs everywhere. The Lean side needs `lake` on the PATH and fails when it is
+//! missing: a skipped check must not report as passed.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -17,15 +17,17 @@ fn lean_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../lean")
 }
 
-fn lake_available() -> bool {
+/// The Lean side must run. A test that returns early when `lake` is missing reports ok without
+/// checking anything, so a missing `lake` fails here instead.
+fn require_lake() {
     let found = Command::new("lake")
         .arg("--version")
         .output()
         .is_ok_and(|o| o.status.success());
-    if !found {
-        eprintln!("SKIPPED: `lake` is not on the PATH, so the Lean side was not run. Install Lean 4 (elan) to run it.");
-    }
-    found
+    assert!(
+        found,
+        "`lake` is not on the PATH, so the Lean model and proofs were not checked. Install Lean 4 (elan)."
+    );
 }
 
 fn read(name: &str) -> String {
@@ -84,10 +86,8 @@ fn the_fixtures_exercise_every_outcome_the_model_has() {
 
 /// Verifies: KRN-016
 #[test]
-fn the_lean_model_agrees_with_the_kernel_when_lean_is_installed() {
-    if !lake_available() {
-        return;
-    }
+fn the_lean_model_agrees_with_the_kernel() {
+    require_lake();
     let generated = scenarios(FIXTURE_SEED, FIXTURE_COUNT);
     let lean = model_output(&lean_dir(), "fixtures/scenarios.txt").expect("the model runs");
     let result = compare_outputs(&generated, &lean, &kernel_output(&generated));
@@ -100,10 +100,8 @@ fn the_lean_model_agrees_with_the_kernel_when_lean_is_installed() {
 }
 
 #[test]
-fn the_lean_proofs_check_with_only_standard_axioms_when_lean_is_installed() {
-    if !lake_available() {
-        return;
-    }
+fn the_lean_proofs_check_with_only_standard_axioms() {
+    require_lake();
     let report = verify(&lean_dir(), 0);
     assert_eq!(report.problem, None);
     assert!(

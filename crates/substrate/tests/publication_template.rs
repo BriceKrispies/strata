@@ -141,6 +141,7 @@ fn readers_see_published_posts_and_authors_also_see_their_own_drafts() {
     );
 }
 
+/// Verifies: CMS-002
 #[test]
 fn a_dependent_section_reads_through_the_single_row_it_depends_on() {
     let world = world();
@@ -168,19 +169,65 @@ fn the_theme_and_cover_rules_are_constraints_in_the_metadata() {
         fields: BTreeMap::from([(FieldId::new(field).unwrap(), Value::Str(value.into()))]),
         expected_version: None,
     };
-    let bad_accent = world
-        .step(
-            &update("publication", 1, "accent", "url(evil)"),
-            &ctx(user("ed")),
-        )
-        .expect_err("rejected");
-    assert_eq!(bad_accent.kind, ErrorKind::ConstraintViolated);
-    assert!(world
-        .step(
-            &update("publication", 1, "accent", "clay"),
-            &ctx(user("ed"))
-        )
-        .is_ok());
+    // Every token of each list is accepted.
+    for token in ["moss", "clay", "ink", "ochre", "plum"] {
+        assert!(
+            world
+                .step(&update("publication", 1, "accent", token), &ctx(user("ed")))
+                .is_ok(),
+            "accent token {token} is refused"
+        );
+    }
+    for token in ["linen", "stone", "chalk"] {
+        assert!(
+            world
+                .step(&update("publication", 1, "paper", token), &ctx(user("ed")))
+                .is_ok(),
+            "paper token {token} is refused"
+        );
+    }
+    // A value outside its list is refused by that list's constraint, whatever its shape.
+    for value in [
+        "url(evil)",
+        "Clay",
+        "clay ",
+        "red",
+        "moss;}",
+        "ink\"><script>",
+    ] {
+        let refused = world
+            .step(&update("publication", 1, "accent", value), &ctx(user("ed")))
+            .expect_err("rejected");
+        assert_eq!(
+            refused.kind,
+            ErrorKind::ConstraintViolated,
+            "accent {value:?}"
+        );
+        assert!(
+            refused
+                .evidence
+                .iter()
+                .any(|c| c.rule == "constraint:publication.accent_token" && !c.passed),
+            "accent {value:?} is not refused by accent_token"
+        );
+    }
+    for value in ["url(evil)", "Linen", "red"] {
+        let refused = world
+            .step(&update("publication", 1, "paper", value), &ctx(user("ed")))
+            .expect_err("rejected");
+        assert_eq!(
+            refused.kind,
+            ErrorKind::ConstraintViolated,
+            "paper {value:?}"
+        );
+        assert!(
+            refused
+                .evidence
+                .iter()
+                .any(|c| c.rule == "constraint:publication.paper_token" && !c.passed),
+            "paper {value:?} is not refused by paper_token"
+        );
+    }
     assert_eq!(
         world
             .step(

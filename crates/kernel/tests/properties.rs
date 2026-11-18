@@ -230,14 +230,24 @@ proptest! {
         }
     }
 
-    /// K4. Anonymous visitors, strangers and members of another tenant never change anything.
+    /// K4. Anonymous visitors, strangers, members of another tenant and principals whose roles
+    /// were all revoked never change anything. "Outsider" is decided from the state before the
+    /// step, not from the index of the principal, so a revoked member is covered too.
     /// Verifies: KRN-003
     #[test]
     fn outsiders_cannot_mutate(ops in proptest::collection::vec(op_strategy(), 1..30)) {
         let mut world = notes_world();
         for (i, op) in ops.iter().enumerate() {
             let context = context_of(op, 10_000 + i as i64);
-            let outsider = op.actor >= 4 || op.actor_tenant != op.tenant;
+            let state = &world.tenants[&context.tenant];
+            let stripped = match &context.principal {
+                Principal::User(id) => match state.members.get(id) {
+                    Some(roles) => roles.is_empty(),
+                    None => true,
+                },
+                _ => false,
+            };
+            let outsider = op.actor >= 4 || op.actor_tenant != op.tenant || stripped;
             match world.step(&intent_of(op), &context) {
                 Ok(_) if outsider => prop_assert!(false, "an outsider's intent was accepted: {:?}", op),
                 Ok((next, _)) => world = next,

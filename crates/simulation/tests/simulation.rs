@@ -256,6 +256,12 @@ fn grandfathering_the_requirement_diverges_and_the_divergence_is_explained() {
     assert!(!c.identical);
     let first = c.first_divergence.expect("something diverges");
     assert_eq!(c.outcome_changes[0].step, first);
+    // "First" is checked against every differing outcome, not only the first one listed: no
+    // differing step comes before the reported divergence.
+    assert!(
+        c.outcome_changes.iter().all(|change| change.step >= first),
+        "a differing outcome precedes the reported first divergence"
+    );
     assert_eq!(c.outcome_changes[0].baseline, "accepted");
     assert_eq!(c.outcome_changes[0].branch, "rejected: MissingRequired");
     assert!(c
