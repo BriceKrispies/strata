@@ -1250,6 +1250,14 @@ dependencies = [
 [[package]]
 name = "strata-simulation"
 version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "strata-kernel",
+ "strata-protocol",
+ "strata-substrate",
+ "strata-verification",
+]
 
 [[package]]
 name = "strata-storage-api"
@@ -1284,6 +1292,12 @@ dependencies = [
 [[package]]
 name = "strata-verification"
 version = "0.1.0"
+dependencies = [
+ "proptest",
+ "serde",
+ "serde_json",
+ "strata-kernel",
+]
 
 [[package]]
 name = "subtle"
