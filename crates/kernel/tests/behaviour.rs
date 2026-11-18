@@ -161,6 +161,137 @@ fn every_rejection_lists_at_least_one_failed_check() {
             error.evidence
         );
     }
+
+    // Refusals that come before any rule of the tenant is consulted, and the ones that come
+    // from a stale or partial snapshot, are refusals too.
+    let create = Intent::CreateTenant {
+        name: "Gamma".into(),
+        owner: principal_id("gamma:owner"),
+    };
+    let blank = Intent::CreateTenant {
+        name: " ".into(),
+        owner: principal_id("gamma:owner"),
+    };
+    let tenant = world.tenants[&tenant_id("alpha")].clone();
+    let mut thin = TenantState::clone(&tenant);
+    thin.records.clear();
+    let thin = State {
+        tenant_id: tenant_id("alpha"),
+        tenant: Some(std::sync::Arc::new(thin)),
+        coverage: Coverage::Partial(BTreeSet::new()),
+    };
+    let owner_of_alpha = ctx("alpha", user("alpha:owner"), 5_001);
+    let early: Vec<(&str, DomainError)> = vec![
+        (
+            "tenant exists",
+            world
+                .step(&create, &ctx("alpha", Principal::System, 5_001))
+                .unwrap_err(),
+        ),
+        (
+            "no such tenant",
+            world
+                .step(
+                    &new_note("T", "t"),
+                    &ctx("gamma", user("alpha:owner"), 5_001),
+                )
+                .unwrap_err(),
+        ),
+        (
+            "tenant created by someone but the system",
+            world
+                .step(&create, &ctx("gamma", user("alpha:owner"), 5_001))
+                .unwrap_err(),
+        ),
+        (
+            "tenant without a name",
+            world
+                .step(&blank, &ctx("gamma", Principal::System, 5_001))
+                .unwrap_err(),
+        ),
+        (
+            "snapshot of another tenant",
+            transition(
+                &world.state(&tenant_id("alpha")),
+                &new_note("T", "t"),
+                &ctx("beta", user("beta:owner"), 5_001),
+            )
+            .unwrap_err(),
+        ),
+        (
+            "partial snapshot that lacks state",
+            transition(
+                &thin,
+                &new_note("Second", "first"),
+                &ctx("alpha", user("alpha:writer1"), 5_001),
+            )
+            .unwrap_err(),
+        ),
+        (
+            "unknown object type",
+            world
+                .step(
+                    &Intent::CreateRecord {
+                        object: object("nothing"),
+                        fields: BTreeMap::new(),
+                    },
+                    &owner_of_alpha,
+                )
+                .unwrap_err(),
+        ),
+        (
+            "the last owner",
+            world
+                .step(
+                    &Intent::RevokeRole {
+                        principal: principal_id("alpha:owner"),
+                        role: role("owner"),
+                    },
+                    &owner_of_alpha,
+                )
+                .unwrap_err(),
+        ),
+        (
+            "schema change that is not consistent",
+            world
+                .step(
+                    &Intent::ChangeSchema {
+                        changes: vec![SchemaChange::RemoveField {
+                            object: object("note"),
+                            field: field("nothing"),
+                        }],
+                        expected_version: None,
+                        existing: ExistingData::Reject,
+                    },
+                    &owner_of_alpha,
+                )
+                .unwrap_err(),
+        ),
+        (
+            "stale schema version",
+            world
+                .step(
+                    &Intent::ChangeSchema {
+                        changes: vec![SchemaChange::RemoveField {
+                            object: object("note"),
+                            field: field("body"),
+                        }],
+                        expected_version: Some(SchemaVersion(99)),
+                        existing: ExistingData::Reject,
+                    },
+                    &owner_of_alpha,
+                )
+                .unwrap_err(),
+        ),
+    ];
+    for (name, error) in early {
+        assert!(
+            error.evidence.iter().any(|c| !c.passed),
+            "{name} was refused as {:?} with no failed check listed: {:?}",
+            error.kind,
+            error.evidence
+        );
+    }
 }
 
 #[test]
@@ -371,6 +502,60 @@ fn undeclared_status_changes_are_refused_from_every_state() {
         note(&back, "alpha", 1).get(&field("status")),
         &text("draft")
     );
+
+    // A declared transition is permitted only where its guard holds: the writer who owns the
+    // note is refused the move the editor was allowed.
+    let guarded = step(
+        &world,
+        "alpha",
+        "writer1",
+        5_005,
+        patch(1, &[("status", text("published"))]),
+    )
+    .unwrap_err();
+    assert_eq!(guarded.kind, ErrorKind::WorkflowViolation);
+    assert!(guarded
+        .evidence
+        .iter()
+        .any(|c| !c.passed && c.rule == "workflow:note_status"));
+    // A record is created only in an initial state of the workflow.
+    for start in ["published", "archived", "nonsense"] {
+        let refused = step(
+            &world,
+            "alpha",
+            "editor",
+            5_006,
+            Intent::CreateRecord {
+                object: object("note"),
+                fields: BTreeMap::from([
+                    (field("title"), text("T")),
+                    (field("slug"), text("t")),
+                    (field("status"), text(start)),
+                ]),
+            },
+        )
+        .unwrap_err();
+        assert_eq!(
+            refused.kind,
+            ErrorKind::WorkflowViolation,
+            "created as {start}"
+        );
+    }
+    // A change that leaves the workflow field alone is not a workflow matter, in any state.
+    must(
+        &world,
+        "alpha",
+        "writer1",
+        5_007,
+        patch(1, &[("body", text("one"))]),
+    );
+    must(
+        &published,
+        "alpha",
+        "writer1",
+        5_008,
+        patch(1, &[("body", text("two"))]),
+    );
 }
 
 #[test]
@@ -448,7 +633,6 @@ fn require_rank(mode: ExistingData) -> Intent {
     }
 }
 
-/// Verifies: KRN-009
 #[test]
 fn a_strict_migration_is_rejected_when_existing_records_would_not_conform() {
     let world = must(
@@ -483,7 +667,6 @@ fn a_strict_migration_is_rejected_when_existing_records_would_not_conform() {
     }
 }
 
-/// Verifies: KRN-010
 #[test]
 fn a_grandfathered_migration_is_accepted_and_bites_on_the_next_write() {
     let world = must(
@@ -539,6 +722,142 @@ fn a_grandfathered_migration_is_accepted_and_bites_on_the_next_write() {
         5_003,
         patch(1, &[("body", text("edit")), ("rank", Value::Int(1))]),
     );
+}
+
+/// Note 1 has a short title and a rank, note 2 has a long title and no rank.
+fn mixed_notes() -> World {
+    let world = must(
+        &notes_world(),
+        "alpha",
+        "writer1",
+        5_000,
+        new_note("Short", "first"),
+    );
+    let world = must(
+        &world,
+        "alpha",
+        "writer1",
+        5_001,
+        patch(1, &[("rank", Value::Int(1))]),
+    );
+    must(
+        &world,
+        "alpha",
+        "writer1",
+        5_002,
+        new_note("A longer title", "second"),
+    )
+}
+
+/// One change of each of three kinds that existing records can break, the rule each breaks and
+/// the records of `mixed_notes` that break it: a new required field (note 2 has no rank), a
+/// tighter constraint (note 2 has a long title) and a changed field type (note 1's rank is a
+/// number).
+fn breaking_changes() -> Vec<(&'static str, SchemaChange, &'static str, Vec<u64>)> {
+    let shorter = SchemaChange::DefineConstraint {
+        object: object("note"),
+        constraint: ConstraintDef {
+            id: ConstraintId::new("title_length").unwrap(),
+            expr: Expr::Cmp(
+                CmpOp::Le,
+                Box::new(Expr::Len(Box::new(var(Scope::New, "title")))),
+                Box::new(Expr::Lit(Value::Int(5))),
+            ),
+            message: "short".into(),
+        },
+    };
+    vec![
+        (
+            "new required field",
+            SchemaChange::DefineField {
+                object: object("note"),
+                field: field_def("rank", FieldType::Int, true),
+            },
+            "required:note.rank",
+            vec![2],
+        ),
+        (
+            "tighter constraint",
+            shorter,
+            "constraint:note.title_length",
+            vec![2],
+        ),
+        (
+            "changed field type",
+            SchemaChange::DefineField {
+                object: object("note"),
+                field: field_def("rank", FieldType::Str, false),
+            },
+            "type:note.rank",
+            vec![1],
+        ),
+    ]
+}
+
+fn change_in(mode: ExistingData, change: SchemaChange) -> Intent {
+    Intent::ChangeSchema {
+        changes: vec![change],
+        expected_version: None,
+        existing: mode,
+    }
+}
+
+/// The checks `existing:<object>/<id>:<rule>` of an outcome that failed.
+fn listed_existing(evidence: &[Check]) -> BTreeSet<String> {
+    evidence
+        .iter()
+        .filter(|c| !c.passed && c.rule.starts_with("existing:"))
+        .map(|c| c.rule.clone())
+        .collect()
+}
+
+/// Verifies: KRN-009
+///
+/// Strict mode refuses each kind of change while a record would not conform, listing exactly
+/// the records that do not conform, and accepts the same change where every record conforms.
+#[test]
+fn a_strict_migration_is_refused_for_every_kind_of_change_that_a_record_breaks() {
+    let world = mixed_notes();
+    for (name, change, rule, broken) in breaking_changes() {
+        let intent = change_in(ExistingData::Reject, change);
+        let error = step(&world, "alpha", "owner", 5_003, intent.clone()).unwrap_err();
+        assert_eq!(error.kind, ErrorKind::MigrationRejected, "{name}");
+        let expected: BTreeSet<String> = broken
+            .iter()
+            .map(|id| format!("existing:note/{id}:{rule}"))
+            .collect();
+        assert_eq!(listed_existing(&error.evidence), expected, "{name}");
+        // Where every record conforms, the same change is accepted.
+        must(&notes_world(), "alpha", "owner", 5_003, intent);
+    }
+}
+
+/// Verifies: KRN-010
+///
+/// Grandfather mode accepts each kind of change that records break, listing exactly the records
+/// that do not conform in the change's own evidence and leaving every record as it was.
+#[test]
+fn a_grandfathered_migration_is_accepted_for_every_kind_of_change_that_a_record_breaks() {
+    let world = mixed_notes();
+    for (name, change, rule, broken) in breaking_changes() {
+        let intent = change_in(ExistingData::Grandfather, change);
+        let (changed, outcome) = step(&world, "alpha", "owner", 5_003, intent)
+            .unwrap_or_else(|e| panic!("{name} was refused: {e}"));
+        let expected: BTreeSet<String> = broken
+            .iter()
+            .map(|id| format!("existing:note/{id}:{rule}"))
+            .collect();
+        assert_eq!(listed_existing(&outcome.evidence), expected, "{name}");
+        let EventBody::SchemaChanged { grandfathered, .. } = &outcome.events[0].body else {
+            panic!("{name}: no schema event");
+        };
+        assert_eq!(*grandfathered, broken.len() as u64, "{name}");
+        assert_eq!(
+            changed.tenants[&tenant_id("alpha")].records,
+            world.tenants[&tenant_id("alpha")].records,
+            "{name}"
+        );
+    }
 }
 
 #[test]

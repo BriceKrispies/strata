@@ -1,5 +1,8 @@
-//! K5 as a state-machine property: whatever sequence of intents is thrown at the kernel, every
-//! state it accepts satisfies every invariant, as long as no schema change was grandfathered in.
+//! K5 as a state-machine property: whatever sequence of intents is thrown at the kernel, from
+//! whichever starting world, every state it accepts satisfies every invariant, as long as no
+//! schema change that left records non-conforming was grandfathered in. The sequences draw from
+//! all seven intents: create a tenant, change the schema (strict and grandfathered), assign and
+//! revoke a role, create, update and delete a record.
 
 use proptest::prelude::*;
 use std::collections::BTreeMap;
@@ -7,8 +10,15 @@ use strata_kernel::testkit::*;
 use strata_kernel::*;
 use strata_verification::invariants::check_world;
 
+/// Number of starting worlds `starting_worlds` returns.
+const WORLDS: usize = 5;
+
 #[derive(Clone, Debug)]
 enum Op {
+    CreateTenant {
+        name: String,
+        owner: usize,
+    },
     Note {
         title: String,
         slug: u8,
@@ -27,29 +37,60 @@ enum Op {
         object: &'static str,
         id: u64,
     },
-    RequireRank,
-    TightenTitle(i64),
-    Revoke(usize),
+    RequireRank {
+        grandfather: bool,
+    },
+    TightenTitle {
+        limit: i64,
+        grandfather: bool,
+    },
+    Assign {
+        who: usize,
+        role: usize,
+    },
+    Revoke {
+        who: usize,
+        role: usize,
+    },
 }
 
+const MEMBERS: [&str; 5] = ["owner", "editor", "writer1", "writer2", "stranger"];
+const ROLES: [&str; 5] = ["owner", "editor", "writer", "ghost", "public"];
+
+/// (tenant index, actor, operation). Actors 0..=3 are members, 4 a stranger, 5 an anonymous
+/// visitor, 6 the system.
 fn op() -> impl Strategy<Value = (usize, usize, Op)> {
     let status = prop_oneof![Just("draft"), Just("published"), Just("nonsense")];
     let op = prop_oneof![
+        1 => ("[a-z]{0,4}", 0usize..2).prop_map(|(name, owner)| Op::CreateTenant { name, owner }),
         5 => ("[a-zA-Z ]{0,30}", 0u8..5, proptest::option::of(-2i64..5), proptest::option::of(1u64..8))
             .prop_map(|(title, slug, rank, author)| Op::Note { title, slug, rank, author }),
         2 => "[a-z]{0,5}".prop_map(Op::Person),
         5 => (1u64..10, proptest::option::of("[a-z]{0,30}"), proptest::option::of(status), proptest::option::of(1u64..8), any::<bool>())
             .prop_map(|(id, title, status, author, clear_rank)| Op::Edit { id, title, status, author, clear_rank }),
         3 => (prop_oneof![Just("note"), Just("person")], 1u64..10).prop_map(|(object, id)| Op::Delete { object, id }),
-        1 => Just(Op::RequireRank),
-        1 => (3i64..30).prop_map(Op::TightenTitle),
-        1 => (0usize..4).prop_map(Op::Revoke),
+        1 => any::<bool>().prop_map(|grandfather| Op::RequireRank { grandfather }),
+        1 => (3i64..30, any::<bool>()).prop_map(|(limit, grandfather)| Op::TightenTitle { limit, grandfather }),
+        2 => (0usize..5, 0usize..5).prop_map(|(who, role)| Op::Assign { who, role }),
+        2 => (0usize..5, 0usize..5).prop_map(|(who, role)| Op::Revoke { who, role }),
     ];
-    (0usize..2, 0usize..6, op)
+    // Owners and editors act most of the time, so that plenty is accepted.
+    (0usize..3, 0usize..7, op)
 }
 
 fn intent(tenant: &str, op: &Op) -> Intent {
+    let existing = |grandfather: bool| {
+        if grandfather {
+            ExistingData::Grandfather
+        } else {
+            ExistingData::Reject
+        }
+    };
     match op {
+        Op::CreateTenant { name, owner } => Intent::CreateTenant {
+            name: name.clone(),
+            owner: principal_id(&format!("{tenant}:{}", MEMBERS[*owner])),
+        },
         Op::Note {
             title,
             slug,
@@ -107,16 +148,15 @@ fn intent(tenant: &str, op: &Op) -> Intent {
             id: RecordId(*id),
             expected_version: None,
         },
-        // Strict migrations only: a grandfathered one is allowed to leave non-conforming records.
-        Op::RequireRank => Intent::ChangeSchema {
+        Op::RequireRank { grandfather } => Intent::ChangeSchema {
             changes: vec![SchemaChange::DefineField {
                 object: object("note"),
                 field: field_def("rank", FieldType::Int, true),
             }],
             expected_version: None,
-            existing: ExistingData::Reject,
+            existing: existing(*grandfather),
         },
-        Op::TightenTitle(limit) => Intent::ChangeSchema {
+        Op::TightenTitle { limit, grandfather } => Intent::ChangeSchema {
             changes: vec![SchemaChange::DefineConstraint {
                 object: object("note"),
                 constraint: ConstraintDef {
@@ -130,35 +170,49 @@ fn intent(tenant: &str, op: &Op) -> Intent {
                 },
             }],
             expected_version: None,
-            existing: ExistingData::Reject,
+            existing: existing(*grandfather),
         },
-        Op::Revoke(who) => {
-            let names = ["owner", "editor", "writer1", "writer2"];
-            let roles = ["owner", "editor", "writer", "writer"];
-            Intent::RevokeRole {
-                principal: principal_id(&format!("{tenant}:{}", names[*who])),
-                role: role(roles[*who]),
-            }
-        }
+        Op::Assign { who, role: r } => Intent::AssignRole {
+            principal: principal_id(&format!("{tenant}:{}", MEMBERS[*who])),
+            role: role(ROLES[*r]),
+        },
+        Op::Revoke { who, role: r } => Intent::RevokeRole {
+            principal: principal_id(&format!("{tenant}:{}", MEMBERS[*who])),
+            role: role(ROLES[*r]),
+        },
     }
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig { cases: 128, ..ProptestConfig::default() })]
+    #![proptest_config(ProptestConfig { cases: 160, ..ProptestConfig::default() })]
 
     /// Verifies: KRN-011
     #[test]
-    fn every_accepted_state_satisfies_every_invariant(ops in proptest::collection::vec(op(), 1..40)) {
-        let mut world = notes_world();
+    fn every_accepted_state_satisfies_every_invariant(
+        from in 0..WORLDS,
+        ops in proptest::collection::vec(op(), 1..40),
+    ) {
+        let mut world = starting_worlds().swap_remove(from).1;
         prop_assert!(check_world(&world).iter().all(|i| i.holds));
+        // Set once a grandfathered change has been accepted over records it leaves
+        // non-conforming; the requirement exempts the states from then on.
+        let mut grandfathered = false;
         for (step, (tenant, actor, op)) in ops.iter().enumerate() {
-            let tenant = TENANTS[*tenant];
-            // Owners and editors act most of the time, so that plenty is accepted.
-            let principal = principals(tenant)[*actor].clone();
+            let tenant = WORLD_TENANTS[*tenant];
+            let principal = if *actor == 6 {
+                Principal::System
+            } else {
+                principals(tenant)[*actor].clone()
+            };
             let context = ctx(tenant, principal, 10_000 + step as i64);
-            if let Ok((next, _)) = world.step(&intent(tenant, op), &context) {
-                for invariant in check_world(&next) {
-                    prop_assert!(invariant.holds, "after step {} ({:?}): {} broken: {:?}", step, op, invariant.id, invariant.violations);
+            if let Ok((next, outcome)) = world.step(&intent(tenant, op), &context) {
+                grandfathered |= outcome.events.iter().any(|event| {
+                    matches!(event.body, EventBody::SchemaChanged { grandfathered: n, .. } if n > 0)
+                });
+                if !grandfathered {
+                    for invariant in check_world(&next) {
+                        prop_assert!(invariant.holds, "after step {} ({:?}): {} broken: {:?}", step, op, invariant.id, invariant.violations);
+                    }
                 }
                 world = next;
             }
