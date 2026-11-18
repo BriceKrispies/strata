@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 use strata_kernel::testkit::*;
 use strata_kernel::*;
-use strata_storage_api::{conformance, execute, Store};
+use strata_storage_api::{conformance, execute, Account, SessionRecord, Store};
 use strata_storage_sqlite::SqliteStore;
 
 static COUNTER: AtomicU32 = AtomicU32::new(0);
@@ -24,20 +24,59 @@ fn fresh_path(name: &str) -> PathBuf {
 }
 
 /// Verifies: STO-002
+///
+/// Every row of the table in the specification has a check and every check has a row, and each
+/// check runs on a database file.
 #[test]
 fn sqlite_store_conforms_on_disk() {
-    conformance::run(&|| {
+    let ran = conformance::run(&|| {
         Box::new(SqliteStore::open(&fresh_path("conformance"), Timestamp(1)).unwrap())
             as Box<dyn Store>
     });
+    let spec = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../specifications/spec.jsonc"
+    ))
+    .expect("the specification file");
+    let (mut ran, mut rows) = (ran, conformance::spec_cases(&spec));
+    assert!(rows.len() >= 13, "the table was not read: {rows:?}");
+    ran.sort();
+    rows.sort();
+    assert_eq!(
+        ran, rows,
+        "the checks that ran are not the rows of the conformance table"
+    );
 }
 
 /// Verifies: STO-003
+///
+/// Everything the adapter acknowledges is there after the file is closed and opened again: the
+/// tenant state, its events and journal, which events were marked published, a session, a login
+/// and a snapshot.
 #[test]
 fn committed_data_survives_a_reopen() {
     let path = fresh_path("durable");
     let alpha = tenant_id("alpha");
-    let hash_before = {
+    let session = SessionRecord {
+        id: SessionId::new("s-durable").unwrap(),
+        token_hash: "hash-of-s-durable".into(),
+        csrf_token: "csrf-s-durable".into(),
+        tenant: alpha.clone(),
+        principal: principal_id("alpha:owner"),
+        display_name: "Owner".into(),
+        created_at: Timestamp(10),
+        last_seen_at: Timestamp(11),
+        expires_at: Timestamp(1_000_000),
+        revoked_at: None,
+    };
+    let account = Account {
+        tenant: alpha.clone(),
+        login: "owner".into(),
+        principal: principal_id("alpha:owner"),
+        display_name: "Owner".into(),
+        password_hash: "$argon2id$placeholder".into(),
+    };
+    let (hash_before, snapshot) = {
         let store = SqliteStore::open(&path, Timestamp(1)).unwrap();
         assert!(store.capabilities().durable);
         let owner = principal_id("alpha:owner");
@@ -67,7 +106,17 @@ fn committed_data_survives_a_reopen() {
             &ctx("alpha", Principal::User(owner), 12),
         )
         .unwrap();
-        canon::hash_of(&store.load_complete(&alpha).unwrap().tenant)
+        store.put_session(&session).unwrap();
+        store.put_account(&account).unwrap();
+        let snapshot = store
+            .create_snapshot(&alpha, "kept", Timestamp(13))
+            .unwrap();
+        let first = store.outbox(1).unwrap().remove(0);
+        store.mark_published(first.position).unwrap();
+        (
+            canon::hash_of(&store.load_complete(&alpha).unwrap().tenant),
+            snapshot,
+        )
     };
     let store = SqliteStore::open(&path, Timestamp(2)).unwrap();
     assert_eq!(
@@ -76,9 +125,16 @@ fn committed_data_survives_a_reopen() {
     );
     assert_eq!(
         store.outbox(10).unwrap().len(),
-        3,
-        "unpublished events are still waiting after a restart"
+        2,
+        "unpublished events are still waiting after a restart, and the published one is not"
     );
+    assert_eq!(
+        store.session_by_token(&session.token_hash).unwrap(),
+        Some(session.clone())
+    );
+    assert_eq!(store.session(&session.id).unwrap(), Some(session));
+    assert_eq!(store.account(&alpha, "owner").unwrap(), Some(account));
+    assert_eq!(store.snapshots(&alpha).unwrap(), vec![snapshot]);
     assert_eq!(store.journal_after(&alpha, 0, 10).unwrap().len(), 3);
     let migrations = store.migrations().unwrap();
     assert_eq!(migrations.len(), 1);
