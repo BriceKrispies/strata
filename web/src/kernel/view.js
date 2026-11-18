@@ -75,7 +75,8 @@ function page(state) {
   const signedIn = session?.authenticated === true;
   const canWrite = signedIn && (session.may?.post ?? []).includes('create');
   const guarded = ['desk', 'desk_new', 'desk_edit', 'desk_settings', 'lab'].includes(model.view);
-  if (guarded && !signedIn) return { kind: 'signin_required', next: state.route.path };
+  // While the next page is on its way, a guarded page the visitor just left is not shown again.
+  if (guarded && !signedIn) return view.status === 'loading' ? { kind: 'loading' } : { kind: 'signin_required', next: state.route.path };
 
   switch (model.view) {
     case 'home':

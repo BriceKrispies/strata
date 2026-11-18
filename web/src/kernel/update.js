@@ -365,6 +365,8 @@ function onSocket(state, frame, msg) {
       return { state: { ...state, ws: { ...ws, missedPongs: 0, lastSeq: Math.max(ws.lastSeq ?? 0, frame.head) } }, effects: [] };
     case 'session': {
       if (frame.state === 'active' || !state.session?.authenticated) return { state, effects: [] };
+      // Our own sign-out ends the session too; its reply will say so, once.
+      if (Object.values(state.pending).some((p) => p.kind === 'logout')) return { state, effects: [] };
       const text = frame.state === 'expired' ? 'Your session has expired. Sign in again to keep writing.' : 'You have been signed out.';
       const [withRequest, effect] = request(toast(state, 'warn', text), 'session', { path: '/api/session' }, msg);
       const signedOut = { ...withRequest, session: { ...state.session, authenticated: false, csrf_token: undefined, roles: ['public'], may: {}, may_manage_schema: false } };
@@ -437,7 +439,8 @@ function onHttp(state, msg) {
       if (!editor) return { state, effects: [] };
       if (!msg.ok) {
         const { errors, formError } = formErrors(error, 'post', EDITOR_FIELDS);
-        const first = Object.keys(errors)[0];
+        // Focus goes to the first failing field in the order the form shows them.
+        const first = EDITOR_FIELDS.find((name) => errors[name]);
         return {
           state: {
             ...state,
