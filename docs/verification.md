@@ -16,7 +16,13 @@ confidence scores.
 `lean/Strata/Model.lean` defines a small model: tenants as a function from ids, one object type
 per tenant with typed fields that may be required, records with an owner, an owner, editors and
 writers, and four intents: create, update, delete, and make a field required (strictly or not).
-`step` is a total, computable function.
+`step` is a total, computable function. It has no constraints, workflows, references, uniqueness,
+queries, events or policy conditions: the assumptions below list each omission. The theorems are
+about this model. The Rust kernel is compared with it on generated scenarios, which is evidence and
+not a proof.
+
+The specification's `Verifies:` lines on these theorems count them as passing when `lake build`
+builds their module, without reading the statements (`specifications/README.md`).
 
 `lean/Strata/Proofs.lean` proves:
 

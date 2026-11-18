@@ -2,6 +2,10 @@
 
 Each invariant names where it is enforced and what checks it.
 
+The identifiers here (K1 to X3) belong to this document. The specification's requirements have
+their own identifiers (`krn-`, `sto-`, `run-`, `idn-`, `sec-` and so on), and nothing links the two.
+The check named in each row is the prototype's test, not a Concordance proof.
+
 ## Kernel
 
 | # | Invariant | Enforced by | Checked by |

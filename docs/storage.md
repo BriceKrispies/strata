@@ -3,6 +3,11 @@
 The rest of Strata knows one thing about storage: the `Store` trait in
 `crates/storage-api/src/lib.rs`. It is written in Strata's terms and mentions no SQL.
 
+The prototype stores every tenant in one SQLite file. The specification sets a different target:
+one PostgreSQL database per tenant (`tenant-database`, `postgres-adapter`, requirement `ten-014`),
+with a control database and backups outside it. The `Store` contract is expected to carry over,
+but the layout, the tables below and the single-connection design are the prototype's only.
+
 ## What the contract requires
 
 | Guarantee | Meaning |

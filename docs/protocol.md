@@ -2,6 +2,11 @@
 
 Types for everything here are in `crates/protocol`.
 
+This is the prototype's protocol. The specification's gateway requirements are the target:
+sign-in, sign-out and the WebSocket upgrade must carry a request token that the gateway issued to
+the browser (`gwy-256`, `gwy-257`), and the session cookie carries the host name prefix (`idn-262`).
+The guards below are what the prototype checks today.
+
 ## Browser to BFF: HTTP
 
 All under `/api`, JSON in and out. The tenant is taken from the request's host name.
