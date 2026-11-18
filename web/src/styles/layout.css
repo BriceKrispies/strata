@@ -1,0 +1,161 @@
+/* Page structure: masthead, main column, footer, and the margin grid that carries the notes. */
+
+@layer layout {
+  .masthead,
+  .main,
+  .colophon {
+    inline-size: min(100% - 2 * var(--gutter), var(--width-page));
+    margin-inline: auto;
+  }
+
+  .masthead {
+    padding-block: var(--space-5) var(--space-4);
+    border-block-end: var(--border-hair) solid var(--rule);
+    font-family: var(--font-ui);
+    font-size: var(--text-sm);
+  }
+
+  .masthead__row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: var(--space-3) var(--space-6);
+  }
+
+  .masthead__name {
+    font-family: var(--font-display);
+    font-size: 1.75rem;
+    font-weight: 560;
+    font-variation-settings: 'SOFT' 100, 'WONK' 1;
+    letter-spacing: -0.03em;
+    line-height: 1;
+    text-decoration: none;
+    margin-inline-end: auto;
+  }
+
+  .masthead__menu {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: var(--space-3) var(--space-6);
+  }
+
+  .masthead__nav,
+  .masthead__tools {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: var(--space-2) var(--space-5);
+  }
+
+  .masthead a:not(.masthead__name) {
+    text-decoration-color: transparent;
+    padding-block: var(--space-2);
+  }
+
+  .masthead a:not(.masthead__name):hover,
+  .masthead a[aria-current='page']:not(.masthead__name) {
+    text-decoration-color: var(--accent);
+    text-decoration-thickness: 2px;
+    text-underline-offset: 0.4em;
+  }
+
+  .masthead__search input {
+    inline-size: 9.5rem;
+    min-block-size: 2.25rem;
+    padding: var(--space-1) var(--space-3);
+    background: transparent;
+    border: var(--border-hair) solid var(--rule-strong);
+    border-radius: 999px;
+    transition: inline-size var(--dur-quick) var(--ease);
+  }
+
+  .masthead__search input:focus {
+    inline-size: 13rem;
+  }
+
+  .masthead__toggle {
+    display: none;
+    min-block-size: var(--size-control);
+    padding-inline: var(--space-4);
+    background: transparent;
+    border: var(--border-hair) solid var(--rule-strong);
+    border-radius: var(--radius-2);
+    cursor: pointer;
+  }
+
+  .main {
+    padding-block: var(--space-7) var(--space-9);
+    container: main / inline-size;
+  }
+
+  .colophon {
+    padding-block: var(--space-6) var(--space-7);
+    border-block-start: var(--border-hair) solid var(--rule);
+    color: var(--ink-quiet);
+    font-family: var(--font-ui);
+    font-size: var(--text-xs);
+    display: grid;
+    gap: var(--space-1);
+  }
+
+  .colophon__name {
+    font-family: var(--font-display);
+    font-size: var(--text-lg);
+    color: var(--ink);
+    font-variation-settings: 'SOFT' 100, 'WONK' 1;
+  }
+
+  .colophon__live[data-connection='open']::before {
+    content: '';
+    display: inline-block;
+    inline-size: 0.5em;
+    block-size: 0.5em;
+    margin-inline-end: 0.5em;
+    border-radius: 50%;
+    background: var(--accent);
+  }
+
+  /* Phones: the menu folds away behind one button. */
+  @media (max-width: 47.99rem) {
+    .masthead__toggle {
+      display: inline-block;
+    }
+
+    .masthead__menu {
+      display: none;
+      flex-basis: 100%;
+      flex-direction: column;
+      align-items: stretch;
+      gap: var(--space-4);
+      padding-block: var(--space-4) var(--space-2);
+      border-block-start: var(--border-hair) solid var(--rule);
+    }
+
+    .masthead__menu--open {
+      display: flex;
+    }
+
+    .masthead__nav {
+      flex-direction: column;
+      gap: 0;
+      font-size: var(--text-lg);
+      font-family: var(--font-display);
+    }
+
+    .masthead__nav a {
+      display: block;
+      padding-block: var(--space-3);
+    }
+
+    .masthead__search input,
+    .masthead__search input:focus {
+      inline-size: 100%;
+      min-block-size: var(--size-control);
+    }
+
+    .masthead__tools {
+      justify-content: space-between;
+    }
+  }
+}

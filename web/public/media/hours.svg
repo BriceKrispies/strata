@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 480" role="img" aria-label="A row of thrown cylinders, each a little taller and straighter">
+<rect width="640" height="480" fill="#e9e2d2"/>
+<g fill="none" stroke="#2b2924" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+<path d="M50.0 372.0L590.0 372.0" />
+<path d="M50.0 384.0L590.0 384.0" stroke="#8d8672" stroke-width="1.5"/>
+<path d="M72 372L85.2 276H125.28L120 372Z" fill="#f3eee2"/>
+<ellipse cx="105.2" cy="276" rx="20.0" ry="5"/>
+<path d="M76.0 348.0L116.0 348.5" stroke="#8d8672" stroke-width="1"/>
+<path d="M76.0 324.0L116.0 324.9" stroke="#8d8672" stroke-width="1"/>
+<path d="M76.0 300.0L116.0 301.1" stroke="#8d8672" stroke-width="1"/>
+<path d="M148 372L159.0 260H200.4L196 372Z" fill="#f3eee2"/>
+<ellipse cx="179.7" cy="260" rx="20.7" ry="5"/>
+<path d="M152.0 344.0L192.0 344.9" stroke="#8d8672" stroke-width="1"/>
+<path d="M152.0 316.0L192.0 317.1" stroke="#8d8672" stroke-width="1"/>
+<path d="M152.0 288.0L192.0 289.2" stroke="#8d8672" stroke-width="1"/>
+<path d="M224 372L232.8 244H275.52L272 372Z" fill="#f3eee2"/>
+<ellipse cx="254.2" cy="244" rx="21.4" ry="5"/>
+<path d="M228.0 340.0L268.0 341.1" stroke="#8d8672" stroke-width="1"/>
+<path d="M228.0 308.0L268.0 309.2" stroke="#8d8672" stroke-width="1"/>
+<path d="M228.0 276.0L268.0 277.0" stroke="#8d8672" stroke-width="1"/>
+<path d="M300 372L306.6 228H350.64L348 372Z" fill="#f3eee2"/>
+<ellipse cx="328.6" cy="228" rx="22.0" ry="5"/>
+<path d="M304.0 336.0L344.0 337.2" stroke="#8d8672" stroke-width="1"/>
+<path d="M304.0 300.0L344.0 301.0" stroke="#8d8672" stroke-width="1"/>
+<path d="M304.0 264.0L344.0 264.7" stroke="#8d8672" stroke-width="1"/>
+<path d="M376 372L380.4 212H425.76L424 372Z" fill="#f3eee2"/>
+<ellipse cx="403.1" cy="212" rx="22.7" ry="5"/>
+<path d="M380.0 332.0L420.0 333.0" stroke="#8d8672" stroke-width="1"/>
+<path d="M380.0 292.0L420.0 292.7" stroke="#8d8672" stroke-width="1"/>
+<path d="M380.0 252.0L420.0 252.2" stroke="#8d8672" stroke-width="1"/>
+<path d="M452 372L454.2 196H500.88L500 372Z" fill="#f3eee2"/>
+<ellipse cx="477.5" cy="196" rx="23.3" ry="5"/>
+<path d="M456.0 328.0L496.0 328.7" stroke="#8d8672" stroke-width="1"/>
+<path d="M456.0 284.0L496.0 284.2" stroke="#8d8672" stroke-width="1"/>
+<path d="M456.0 240.0L496.0 239.7" stroke="#8d8672" stroke-width="1"/>
+<path d="M528 372L528.0 180H576.0L576 372Z" fill="#765610" fill-opacity="0.3"/>
+<ellipse cx="552.0" cy="180" rx="24.0" ry="5"/>
+<path d="M532.0 324.0L572.0 324.2" stroke="#8d8672" stroke-width="1"/>
+<path d="M532.0 276.0L572.0 275.7" stroke="#8d8672" stroke-width="1"/>
+<path d="M532.0 228.0L572.0 227.3" stroke="#8d8672" stroke-width="1"/>
+</g>
+</svg>

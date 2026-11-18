@@ -225,6 +225,24 @@ async fn records(State(bff): State<Shared>, headers: HeaderMap, Json(mutation): 
     backend(&bff, &visit, "/internal/mutate", &json!(mutation)).await.map(Json)
 }
 
+#[derive(serde::Deserialize)]
+struct PreviewRequest {
+    markdown: String,
+}
+
+/// Parse constrained Markdown into blocks for the editor's preview. A pure function of the
+/// text: nothing is stored and the backend is not involved.
+async fn preview(State(bff): State<Shared>, headers: HeaderMap, Json(request): Json<PreviewRequest>) -> Result<Json<Json_>, Failure> {
+    let visit = visit(&bff, &headers)?;
+    if !origin_allowed(&bff, &headers) {
+        return Err(Failure::new(ErrorCode::Forbidden, "This request did not come from the site.", &visit.correlation));
+    }
+    if request.markdown.len() > 200_000 {
+        return Err(Failure::new(ErrorCode::Invalid, "The text is too long to preview.", &visit.correlation));
+    }
+    Ok(Json(json!({ "blocks": strata_substrate::markdown::parse(&request.markdown) })))
+}
+
 /// Relay a guarded POST to an internal endpoint unchanged.
 async fn guarded(bff: &Bff, headers: &HeaderMap, path: &str, body: Json_) -> Result<Json<Json_>, Failure> {
     let visit = visit(bff, headers)?;
@@ -441,6 +459,7 @@ pub fn router(bff: Shared) -> Router {
         .route("/logout", post(logout))
         .route("/view", get(view))
         .route("/records", post(records))
+        .route("/preview", post(preview))
         .route("/lab/overview", get(lab_overview))
         .route("/lab/run", post(lab_run))
         .route("/lab/runs/:id", get(lab_result))

@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 480" role="img" aria-label="An open book with one narrow margin marked">
+<rect width="640" height="480" fill="#e9e2d2"/>
+<g fill="none" stroke="#2b2924" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+<path d="M70 110Q195 84 320 116Q445 84 570 110V380Q445 354 320 386Q195 354 70 380Z" fill="#f3eee2"/>
+<path d="M320.0 116.0L320.0 386.0" />
+<path d="M118.0 150.0L276.0 150.4" stroke="#8d8672" stroke-width="2"/>
+<path d="M334.0 144.7L522.0 145.0" stroke="#8d8672" stroke-width="2"/>
+<path d="M118.0 166.4L262.0 166.7" stroke="#8d8672" stroke-width="2"/>
+<path d="M334.0 161.0L504.0 161.0" stroke="#8d8672" stroke-width="2"/>
+<path d="M118.0 182.7L248.0 183.0" stroke="#8d8672" stroke-width="2"/>
+<path d="M334.0 177.0L486.0 176.9" stroke="#8d8672" stroke-width="2"/>
+<path d="M118.0 199.0L234.0 199.0" stroke="#8d8672" stroke-width="2"/>
+<path d="M334.0 192.9L522.0 192.6" stroke="#8d8672" stroke-width="2"/>
+<path d="M118.0 215.0L276.0 214.9" stroke="#8d8672" stroke-width="2"/>
+<path d="M334.0 208.6L504.0 208.2" stroke="#8d8672" stroke-width="2"/>
+<path d="M118.0 230.9L262.0 230.6" stroke="#8d8672" stroke-width="2"/>
+<path d="M334.0 224.2L486.0 223.8" stroke="#8d8672" stroke-width="2"/>
+<path d="M118.0 246.6L248.0 246.2" stroke="#8d8672" stroke-width="2"/>
+<path d="M334.0 239.8L522.0 239.4" stroke="#8d8672" stroke-width="2"/>
+<path d="M118.0 262.2L234.0 261.8" stroke="#8d8672" stroke-width="2"/>
+<path d="M334.0 255.4L504.0 255.1" stroke="#8d8672" stroke-width="2"/>
+<path d="M118.0 277.8L276.0 277.4" stroke="#8d8672" stroke-width="2"/>
+<path d="M334.0 271.1L486.0 271.0" stroke="#8d8672" stroke-width="2"/>
+<path d="M118.0 293.4L262.0 293.1" stroke="#8d8672" stroke-width="2"/>
+<path d="M334.0 287.0L522.0 287.1" stroke="#8d8672" stroke-width="2"/>
+<path d="M118.0 309.1L248.0 309.0" stroke="#8d8672" stroke-width="2"/>
+<path d="M334.0 303.1L504.0 303.3" stroke="#8d8672" stroke-width="2"/>
+<path d="M118.0 325.0L234.0 325.1" stroke="#8d8672" stroke-width="2"/>
+<path d="M334.0 319.3L486.0 319.7" stroke="#8d8672" stroke-width="2"/>
+<path d="M118.0 341.1L276.0 341.3" stroke="#8d8672" stroke-width="2"/>
+<path d="M334.0 335.7L522.0 336.1" stroke="#8d8672" stroke-width="2"/>
+<path d="M322 136V366M334 136V366" stroke="#8c2f1f" stroke-width="2"/>
+<path d="M322 124H334M322 378H334" stroke="#8c2f1f" stroke-width="2"/>
+<path d="M76 392Q198 366 320 398Q442 366 564 392" stroke-width="1.5"/>
+</g>
+</svg>
