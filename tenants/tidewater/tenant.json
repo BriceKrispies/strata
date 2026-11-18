@@ -1,0 +1,65 @@
+{
+  "id": "tidewater",
+  "name": "Tidewater Review",
+  "owner": "user:harbour",
+  "created_at": "2026-09-01T09:00:00Z",
+  "template": "../_templates/publication.json",
+  "members": [{ "principal": "user:harbour", "roles": ["author"] }],
+  "records": [
+    {
+      "object": "publication",
+      "as": "user:harbour",
+      "at": "2026-09-01T09:05:00Z",
+      "fields": {
+        "key": "main",
+        "name": "Tidewater Review",
+        "tagline": "A second tenant on the same substrate, with its own data, members and theme.",
+        "accent": "ink",
+        "paper": "stone",
+        "about": "Tidewater Review exists to show that two publications can share one substrate and nothing else. Its schema is the same template as Fieldnotes; its records, members, sessions and events are entirely its own."
+      }
+    },
+    {
+      "object": "author",
+      "key": "harbour",
+      "as": "user:harbour",
+      "at": "2026-09-01T09:10:00Z",
+      "fields": { "name": "The Harbour Master", "slug": "harbour-master", "title": "Editor", "principal": "user:harbour", "bio": "Keeps the tide tables." }
+    },
+    {
+      "object": "category",
+      "key": "notices",
+      "as": "user:harbour",
+      "at": "2026-09-01T09:11:00Z",
+      "fields": { "name": "Notices", "slug": "notices", "description": "Notices to mariners." }
+    },
+    {
+      "object": "post",
+      "key": "tide",
+      "as": "user:harbour",
+      "at": "2026-09-02T06:00:00Z",
+      "fields": {
+        "title": "High Water at Six",
+        "slug": "high-water-at-six",
+        "excerpt": "The only published article of the second tenant.",
+        "body": "The tide comes in whether or not anyone is watching. This article belongs to Tidewater Review and to nobody else.",
+        "author": "@harbour",
+        "category": "@notices",
+        "featured": true
+      },
+      "then": [{ "as": "user:harbour", "at": "2026-09-03T06:00:00Z", "set": { "status": "published" } }]
+    },
+    {
+      "object": "post",
+      "key": "private",
+      "as": "user:harbour",
+      "at": "2026-09-04T06:00:00Z",
+      "fields": {
+        "title": "Tidewater Private Draft",
+        "slug": "tidewater-private-draft",
+        "body": "This draft must never be visible outside Tidewater.",
+        "author": "@harbour"
+      }
+    }
+  ]
+}

@@ -1,1 +1,62 @@
+//! The Strata backend: the imperative shell around the kernel.
+//!
+//! It owns the clock, randomness, password hashing, the store and the sockets. It decides
+//! nothing about the domain: every command is `load -> kernel -> commit`, every read is
+//! `load -> kernel`, and every delivered event has been through the kernel's read decision.
 
+pub mod app;
+pub mod auth;
+pub mod http;
+pub mod hub;
+pub mod lab;
+pub mod ops;
+pub mod seed;
+pub mod ws;
+
+use app::{App, Config, Shared, LOG};
+use serde_json::json;
+use std::future::Future;
+use std::sync::Arc;
+use std::time::Duration;
+use strata_storage_api::Store;
+use tokio::net::TcpListener;
+
+/// Seed the store, start the background tasks and serve until `shutdown` resolves.
+pub async fn run(
+    cfg: Config,
+    store: Arc<dyn Store>,
+    listener: TcpListener,
+    shutdown: impl Future<Output = ()> + Send + 'static,
+) -> Result<(), String> {
+    let app: Shared = App::new(cfg, store);
+    let created = app
+        .blocking(|app| seed::seed(app))
+        .await
+        .map_err(|e| e.0.message)?
+        .map_err(|e| format!("seeding failed: {e}"))?;
+    let address = listener.local_addr().map_err(|e| e.to_string())?;
+    LOG.info(
+        "backend.started",
+        "",
+        json!({
+            "address": address.to_string(),
+            "dev": app.cfg.dev,
+            "store": app.store.capabilities().adapter,
+            "seeded": created,
+        }),
+    );
+
+    tokio::spawn(hub::publisher(app.clone()));
+    let janitor = app.clone();
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(Duration::from_secs(600)).await;
+            let _ = janitor.blocking(|app| app.store.purge_sessions(strata_kernel::Timestamp(app.now().0 - 86_400_000))).await;
+        }
+    });
+
+    axum::serve(listener, http::router(app))
+        .with_graceful_shutdown(shutdown)
+        .await
+        .map_err(|e| e.to_string())
+}
