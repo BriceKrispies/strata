@@ -1390,7 +1390,6 @@
     {"id":"k-17","statement":"A lease on work carries a fencing token that the tenant database checks when the work is recorded.","group":"Automation","ref":"K-17"}
   ],
   "openQuestions": [
-    {"id":"q-303","statement":"Are the planning rates of the failure modes replaced by measured rates from the first deployment? Working answer: yes, the rates are planning estimates (a-planning-rates) until a deployment measures them.","ref":"Q-303"}
   ],
 
   // ---- Roadmap -----------------------------------------------------------------------------------
@@ -2424,7 +2423,7 @@
     {"id":"sec-threat-253","title":"Supply chain","level":2,"document":"doc-threat","order":253,"body":"\n{{entity:thr-255}}\n\n{{entity:thr-256}}\n\n{{entity:thr-257}}\n\n{{entity:thr-258}}\n\n"},
     {"id":"sec-threat-254","title":"Incidents and disclosure","level":2,"document":"doc-threat","order":254,"body":"\n{{entity:thr-259}}\n\n{{entity:thr-260}}\n\n{{entity:thr-261}}\n\n"},
     {"id":"sec-threat-255","title":"Abuse and takedown","level":2,"document":"doc-threat","order":255,"body":"\n{{entity:thr-262}}\n\n{{entity:thr-263}}\n\n"},
-    {"id":"sec-whitepaper-300","title":"Operations review","level":2,"document":"doc-whitepaper","order":300,"body":"\nThe operations review adds the objectives, load, failure, recovery and change statements that a platform paged for its own behaviour needs.\n\n**Goals**\n\n{{entity:g-300}}\n\n{{entity:g-301}}\n\n{{entity:g-302}}\n\n{{entity:g-303}}\n\n{{entity:g-304}}\n\n**Constraints**\n\n{{entity:k-300}}\n\n{{entity:k-301}}\n\n{{entity:k-302}}\n\n**Open questions**\n\n{{entity:q-303}}\n\n"},
+    {"id":"sec-whitepaper-300","title":"Operations review","level":2,"document":"doc-whitepaper","order":300,"body":"\nThe operations review adds the objectives, load, failure, recovery and change statements that a platform paged for its own behaviour needs.\n\n**Goals**\n\n{{entity:g-300}}\n\n{{entity:g-301}}\n\n{{entity:g-302}}\n\n{{entity:g-303}}\n\n{{entity:g-304}}\n\n**Constraints**\n\n{{entity:k-300}}\n\n{{entity:k-301}}\n\n{{entity:k-302}}\n\n"},
     {"id":"sec-operations-1","title":"Operations","level":1,"document":"doc-operations","order":1,"body":"\nThe platform is run by people and by agents for thousands of tenant databases. These statements say how load is admitted, how a failure is contained, how data stays safe through change, how a release moves, what objectives and alerts are kept, and how an operator or an agent acts on them. Planning values are marked as planning values and are replaced by measured values once a deployment exists.\n\n"},
     {"id":"sec-operations-2","title":"Reference load","level":2,"document":"doc-operations","order":2,"body":"\nEvery budget in this file is measured under one reference load, so the numbers mean the same in every run.\n\n{{entity:ops-300}}\n\n"},
     {"id":"sec-operations-3","title":"Admission and deadlines","level":2,"document":"doc-operations","order":3,"body":"\nOverload is refused where it arrives, and a request has a final answer within a bounded time.\n\n{{entity:ops-301}}\n\n{{entity:ops-302}}\n\n{{entity:ops-303}}\n\n"},
