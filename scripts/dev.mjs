@@ -3,6 +3,7 @@
 //   node scripts/dev.mjs                 development, with hot module replacement on :5173
 //   node scripts/dev.mjs --no-vite       the BFF serves the built frontend from web/dist
 //   node scripts/dev.mjs --fresh         delete the development database first
+//   node scripts/dev.mjs --no-vite --lan let other devices on the local network reach the BFF
 //
 // Options: --backend-port N, --bff-port N, --vite-port N, --db PATH, --store sqlite|memory,
 // --no-build (use the binaries already in target/debug), --quiet (no request log on screen).
@@ -13,6 +14,7 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { createWriteStream, existsSync, mkdirSync, rmSync } from 'node:fs';
+import { networkInterfaces } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -130,6 +132,13 @@ if (flag('fresh')) {
 
 const token = randomBytes(32).toString('hex');
 const hosts = ['127.0.0.1', 'localhost', 'tidewater.localhost'];
+// --lan: the BFF (never the backend) listens on every interface, and this machine's local
+// network addresses are added as Fieldnotes sites and allowed origins.
+const lanAddresses = flag('lan')
+  ? Object.values(networkInterfaces()).flat().filter((a) => a && a.family === 'IPv4' && !a.internal).map((a) => a.address)
+  : [];
+hosts.push(...lanAddresses);
+const sites = ['127.0.0.1=fieldnotes', 'localhost=fieldnotes', 'tidewater.localhost=tidewater', ...lanAddresses.map((a) => `${a}=fieldnotes`)].join(',');
 const origins = hosts.flatMap((host) => [`http://${host}:${ports.bff}`, `http://${host}:${ports.vite}`]).join(',');
 
 start('backend', join(root, 'target', 'debug', `strata-backend${exe}`), [], {
@@ -144,7 +153,8 @@ start('backend', join(root, 'target', 'debug', `strata-backend${exe}`), [], {
 await waitFor(`http://127.0.0.1:${ports.backend}/internal/health`, 'The backend');
 
 start('bff', join(root, 'target', 'debug', `strata-bff${exe}`), [], {
-  STRATA_BFF_ADDR: `127.0.0.1:${ports.bff}`,
+  STRATA_BFF_ADDR: `${flag('lan') ? '0.0.0.0' : '127.0.0.1'}:${ports.bff}`,
+  STRATA_SITES: sites,
   STRATA_BACKEND_URL: `http://127.0.0.1:${ports.backend}`,
   STRATA_SERVICE_TOKEN: token,
   STRATA_ORIGINS: origins,
@@ -179,6 +189,10 @@ Strata is running.
 
   Database  ${option('store', 'sqlite') === 'memory' ? 'in memory' : db}
   Logs      var/logs/*.jsonl
-
+${lanAddresses.length ? `
+  From another device on this network:
+${lanAddresses.map((a) => `    http://${a}:${ports.bff}/`).join('\n')}
+  The development logins above work from there too, so use this only on a network you trust.
+` : ''}
 Press Ctrl+C to stop.
 `);
