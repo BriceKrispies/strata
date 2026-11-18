@@ -16,7 +16,8 @@ require_milestone = true
 spec = ["specifications/index.md", "specifications/glossary.md", "specifications/0[1-9]-*/**"]
 
 # Milestones whose requirements the gate holds the code to. A requirement of a later milestone
-# is reported as planned. Add a milestone here when work on it starts.
+# is reported as planned and is not checked against the code. Add a milestone here when work on it
+# starts: from then on every requirement of it must have a passing proof (scripts/spec-gate.mjs).
 [gate]
 started_milestones = [1]
 

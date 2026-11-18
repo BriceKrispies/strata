@@ -5,6 +5,10 @@
 // The file is a list of [requirement id, test function or Lean theorem name]. A proof that
 // already carries the line is left alone, so the script can be run again after adding pairs.
 // Concordance reads the lines; see specifications/README.md.
+//
+// This tool adds lines in bulk and does not read the tests it tags: it checks only that a function
+// or theorem with that name exists. Read each test before its line is accepted, and do not use the
+// tool to declare proofs that nobody has read.
 import { readFileSync, writeFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
