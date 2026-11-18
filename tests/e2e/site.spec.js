@@ -1,0 +1,674 @@
+// End-to-end tests in a real browser, against the built frontend served by the BFF.
+import AxeBuilder from '@axe-core/playwright';
+import { expect, test } from '@playwright/test';
+import { mkdirSync } from 'node:fs';
+
+const BASE = 'http://127.0.0.1:4200';
+const SHOTS = new URL('./screenshots/', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1');
+mkdirSync(SHOTS, { recursive: true });
+
+/** Wait until the application has drawn a real page. */
+async function ready(page) {
+  await page.locator('main[data-page]:not([data-page="loading"])').waitFor();
+}
+
+async function open(page, path) {
+  await page.goto(path);
+  await ready(page);
+}
+
+async function signIn(page, name) {
+  await open(page, '/login');
+  await page.getByLabel('Name').fill(name);
+  await page.getByLabel('Password').fill(`strata-dev-${name}`);
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  await expect(page.getByRole('heading', { level: 1, name: 'Writing desk' })).toBeVisible();
+}
+
+/** A marker that only survives if the document is never reloaded. */
+async function mark(page) {
+  await page.evaluate(() => {
+    window.__notReloaded = true;
+  });
+}
+
+async function stillTheSameDocument(page) {
+  expect(await page.evaluate(() => window.__notReloaded === true)).toBe(true);
+}
+
+async function writeDraft(page, title, body = 'A first paragraph written by a test.\n\n## A heading\n\nAnd a second one.') {
+  await page.getByRole('link', { name: 'Write a new article' }).click();
+  await expect(page.getByRole('heading', { level: 1, name: 'New article' })).toBeVisible();
+  await page.getByLabel('Title').fill(title);
+  await page.getByLabel('Text', { exact: true }).fill(body);
+  await page.getByRole('button', { name: 'Save draft' }).click();
+  await expect(page.locator('.toast', { hasText: 'Draft saved.' })).toBeVisible();
+  await expect(page.getByRole('heading', { level: 1, name: 'Edit article' })).toBeVisible();
+}
+
+async function axe(page, name) {
+  const results = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21aa', 'wcag22aa']).analyze();
+  const problems = results.violations.map((v) => `${v.id}: ${v.help} (${v.nodes.length}) ${v.nodes[0]?.target}`);
+  expect(problems, `accessibility problems on ${name}`).toEqual([]);
+}
+
+test('the front page shows the featured essay and the earlier ones', async ({ page }) => {
+  await open(page, '/');
+  await expect(page).toHaveTitle('Fieldnotes');
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText('Fieldnotes');
+  await expect(page.getByRole('heading', { level: 2, name: 'The Jig Is the Work' })).toBeVisible();
+  const earlier = page.getByRole('region', { name: 'Earlier essays' }).getByRole('article');
+  await expect(earlier).toHaveCount(5);
+  await expect(earlier.first().getByRole('heading')).toHaveText('The Second Hundred Hours');
+  await expect(page.getByText('Notes Toward a Workbench')).toHaveCount(0);
+  await expect(page.getByRole('img', { name: /plywood fixture holding a chair leg/ })).toBeVisible();
+  await expect(page.locator('html')).toHaveAttribute('data-accent', 'moss');
+  await page.screenshot({ path: `${SHOTS}home.png`, fullPage: true });
+});
+
+test('the first paint comes from the server-rendered bootstrap, without a request for the view', async ({ page }) => {
+  const viewRequests = [];
+  page.on('request', (request) => request.url().includes('/api/view') && viewRequests.push(request.url()));
+  await open(page, '/posts/slow-software');
+  await expect(page.getByRole('heading', { level: 1, name: 'Slow Software' })).toBeVisible();
+  expect(viewRequests).toEqual([]);
+});
+
+test('following a link opens the article without a page load and moves focus to it', async ({ page }) => {
+  await open(page, '/');
+  await mark(page);
+  await page.getByRole('link', { name: 'What the Kiln Decides' }).click();
+  await expect(page).toHaveURL(`${BASE}/posts/what-the-kiln-decides`);
+  await expect(page.getByRole('heading', { level: 1, name: 'What the Kiln Decides' })).toBeVisible();
+  await expect(page).toHaveTitle('What the Kiln Decides — Fieldnotes');
+  await expect(page.locator('main')).toBeFocused();
+  await expect(page.getByRole('complementary', { name: 'About this essay' }).getByRole('link', { name: 'Mirela Ashby' })).toBeVisible();
+  await expect(page.locator('.prose blockquote')).toContainText('You do not finish a pot');
+  await stillTheSameDocument(page);
+  await page.goBack();
+  await expect(page.getByRole('heading', { level: 2, name: 'The Jig Is the Work' })).toBeVisible();
+  await stillTheSameDocument(page);
+});
+
+test('topics, authors, about and search all work', async ({ page }) => {
+  await open(page, '/topics');
+  await page.getByRole('link', { name: 'Design' }).click();
+  await expect(page.getByRole('heading', { level: 1, name: 'Design' })).toBeVisible();
+  await expect(page.getByRole('article')).toHaveCount(2);
+
+  await page.getByRole('navigation', { name: 'Sections' }).getByRole('link', { name: 'Authors' }).click();
+  await page.getByRole('link', { name: 'Tomasz Wren' }).click();
+  await expect(page.getByRole('heading', { level: 1, name: 'Tomasz Wren' })).toBeVisible();
+  await expect(page.getByRole('article')).toHaveCount(2);
+
+  await page.getByRole('navigation', { name: 'Sections' }).getByRole('link', { name: 'About' }).click();
+  await expect(page.getByRole('heading', { level: 1, name: 'About Fieldnotes' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Colophon' })).toBeVisible();
+
+  await page.getByRole('searchbox', { name: 'Search the essays' }).first().fill('kiln');
+  await page.keyboard.press('Enter');
+  await expect(page).toHaveURL(`${BASE}/search?q=kiln`);
+  await expect(page.getByText('1 essay mentions “kiln”.')).toBeVisible();
+  await expect(page.getByRole('article').getByRole('heading')).toHaveText('What the Kiln Decides');
+  await open(page, '/search?q=zzzz');
+  await expect(page.getByText('Nothing mentions “zzzz”.')).toBeVisible();
+});
+
+test('an unknown address says so, with the right status', async ({ page }) => {
+  const response = await page.goto('/posts/no-such-essay');
+  expect(response.status()).toBe(200);
+  await ready(page);
+  await expect(page.getByRole('heading', { level: 1, name: 'There is nothing at this address' })).toBeVisible();
+  expect((await page.goto('/no/such/route')).status()).toBe(404);
+});
+
+test('every application request comes from the worker and goes to the BFF only', async ({ page }) => {
+  // Count anything the main thread itself tries to fetch or connect to.
+  await page.addInitScript(() => {
+    window.__mainThreadCalls = [];
+    const fetch0 = window.fetch;
+    window.fetch = (...args) => {
+      window.__mainThreadCalls.push(`fetch ${args[0]}`);
+      return fetch0(...args);
+    };
+    const WebSocket0 = window.WebSocket;
+    window.WebSocket = class extends WebSocket0 {
+      constructor(...args) {
+        window.__mainThreadCalls.push(`ws ${args[0]}`);
+        super(...args);
+      }
+    };
+    const open0 = XMLHttpRequest.prototype.open;
+    XMLHttpRequest.prototype.open = function (...args) {
+      window.__mainThreadCalls.push(`xhr ${args[1]}`);
+      return open0.apply(this, args);
+    };
+  });
+  const urls = [];
+  page.on('request', (request) => urls.push(request.url()));
+  const sockets = [];
+  page.on('websocket', (socket) => sockets.push(socket.url()));
+  await open(page, '/');
+  await page.getByRole('link', { name: 'Drawing the Thing You Mean' }).click();
+  await expect(page.getByRole('heading', { level: 1, name: 'Drawing the Thing You Mean' })).toBeVisible();
+  await page.getByRole('navigation', { name: 'Sections' }).getByRole('link', { name: 'Topics' }).click();
+  await expect(page.getByRole('heading', { level: 1, name: 'Topics' })).toBeVisible();
+  await expect(page.locator('.colophon__live')).toHaveAttribute('data-connection', 'open');
+
+  expect(await page.evaluate(() => window.__mainThreadCalls)).toEqual([]);
+  expect(page.workers().length).toBe(1);
+  expect(urls.filter((url) => url.includes('/api/view')).length).toBeGreaterThanOrEqual(2);
+  for (const url of [...urls, ...sockets]) {
+    expect(url.startsWith(BASE) || url.startsWith('ws://127.0.0.1:4200/'), url).toBe(true);
+  }
+  // The backend refuses a browser outright, even one that finds its port.
+  const direct = await page.request.post('http://127.0.0.1:4201/internal/view', { data: { path: '/' }, failOnStatusCode: false });
+  expect(direct.status()).toBe(401);
+});
+
+test('signing in with a wrong password explains itself; signing in and out works', async ({ page }) => {
+  await open(page, '/login');
+  await page.getByLabel('Name').fill('ines');
+  await page.getByLabel('Password').fill('not-the-password');
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  await expect(page.getByRole('alert')).toHaveText('The name or password is not right.');
+  await expect(page.getByLabel('Password')).toBeFocused();
+  await expect(page.getByLabel('Password')).toHaveValue('');
+
+  await page.getByLabel('Password').fill('strata-dev-ines');
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('heading', { level: 1, name: 'Writing desk' })).toBeVisible();
+  await expect(page.locator('.toast', { hasText: 'Signed in as Inès Okafor.' })).toBeVisible();
+  const cookies = await page.context().cookies();
+  const session = cookies.find((cookie) => cookie.name === '__Host-strata_sid');
+  expect(session).toMatchObject({ httpOnly: true, secure: true, sameSite: 'Strict', path: '/' });
+  expect(await page.evaluate(() => document.cookie)).toBe('');
+
+  // An editor sees every article, including the draft another author wrote.
+  await expect(page.getByRole('row', { name: /Notes Toward a Workbench/ })).toContainText('Draft');
+
+  await page.getByRole('button', { name: 'Sign out' }).click();
+  await expect(page.locator('.toast', { hasText: 'Signed out.' })).toBeVisible();
+  await expect(page.getByRole('banner').getByRole('link', { name: 'Sign in' })).toBeVisible();
+  await expect(page.getByRole('heading', { level: 2, name: 'The Jig Is the Work' })).toBeVisible();
+  expect((await page.context().cookies()).find((cookie) => cookie.name === '__Host-strata_sid')).toBeUndefined();
+  await open(page, '/desk');
+  await expect(page.getByRole('heading', { level: 1, name: 'Sign in to continue' })).toBeVisible();
+});
+
+test('requests that skip the page are refused: no session, no CSRF token, foreign origin', async ({ page, request }) => {
+  const change = { op: 'create', object: 'category', fields: { name: 'Forged', slug: 'forged' } };
+  const anonymous = await request.post('/api/records', { data: change, headers: { origin: BASE } });
+  expect(anonymous.status()).toBe(401);
+
+  await signIn(page, 'ines');
+  // The browser's own cookie jar is used here, so the session cookie is sent.
+  const withoutToken = await page.request.post('/api/records', { data: change, headers: { origin: BASE } });
+  expect(withoutToken.status()).toBe(403);
+  const foreignOrigin = await page.request.post('/api/records', { data: change, headers: { origin: 'http://evil.example', 'x-csrf-token': 'x' } });
+  expect(foreignOrigin.status()).toBe(403);
+  await open(page, '/topics');
+  await expect(page.getByText('Forged')).toHaveCount(0);
+});
+
+test('an author writes a draft, sees validation from the kernel, publishes, and readers see it live', async ({ page, browser }) => {
+  const reader = await (await browser.newContext()).newPage();
+  await open(reader, '/');
+  await mark(reader);
+  await expect(reader.locator('.colophon__live')).toHaveAttribute('data-connection', 'open');
+
+  await signIn(page, 'tomasz');
+  await writeDraft(page, 'On Sharpening');
+  await expect(page).toHaveURL(`${BASE}/desk/edit/on-sharpening`);
+  await expect(page.getByLabel('Address')).toHaveValue('on-sharpening');
+
+  // A draft is invisible to readers: not on the page, and not at its address.
+  await expect(reader.getByText('On Sharpening')).toHaveCount(0);
+  const hidden = await (await browser.newContext()).newPage();
+  await open(hidden, '/posts/on-sharpening');
+  await expect(hidden.getByRole('heading', { level: 1, name: 'There is nothing at this address' })).toBeVisible();
+  await hidden.context().close();
+
+  // The kernel's constraints come back as field errors.
+  await page.getByLabel('Address').fill('Not A Slug');
+  await page.getByLabel('Excerpt').fill('x'.repeat(300));
+  await page.getByRole('button', { name: 'Save draft' }).click();
+  await expect(page.getByRole('alert').first()).toHaveText('2 fields need attention before this can be saved.');
+  await expect(page.getByLabel('Address')).toHaveAttribute('aria-invalid', 'true');
+  await expect(page.getByLabel('Address')).toBeFocused();
+  await expect(page.locator('#editor-slug-error')).toHaveText('A slug uses lower-case letters, digits and single hyphens, at most 80 characters.');
+  await expect(page.locator('#editor-excerpt-error')).toHaveText('An excerpt has at most 280 characters.');
+  await page.screenshot({ path: `${SHOTS}editor-errors.png`, fullPage: true });
+
+  await page.getByLabel('Address').fill('on-sharpening');
+  await page.getByLabel('Excerpt').fill('A dull edge is a decision somebody put off.');
+  // The preview is produced by the server from the same Markdown rules as the published page.
+  await page.getByRole('button', { name: 'Preview' }).click();
+  await expect(page.locator('.editor__preview h2')).toHaveText('A heading');
+  await page.getByRole('button', { name: 'Write', exact: true }).click();
+  await page.getByLabel('Text', { exact: true }).focus();
+  await page.keyboard.press('Control+End');
+  await page.getByRole('button', { name: 'Bold' }).click();
+  await expect(page.getByLabel('Text', { exact: true })).toHaveValue(/\*\*bold text\*\*$/);
+
+  await page.getByRole('button', { name: 'Publish' }).click();
+  await expect(page.locator('.toast', { hasText: 'Published.' })).toBeVisible();
+  await expect(page.locator('.editor__state .status')).toHaveText('Published');
+
+  // The reader's open page updates by itself, with no reload and no navigation.
+  await expect(reader.getByRole('heading', { name: 'On Sharpening' })).toBeVisible();
+  await expect(reader.getByText('A dull edge is a decision somebody put off.')).toBeVisible();
+  await stillTheSameDocument(reader);
+  await reader.screenshot({ path: `${SHOTS}home-after-publish.png` });
+
+  await reader.getByRole('link', { name: 'On Sharpening' }).click();
+  await expect(reader.locator('.prose strong')).toHaveText('bold text');
+
+  // Unpublishing from the desk withdraws it from the reader's page as they watch.
+  await page.getByRole('link', { name: 'Back to the desk' }).click();
+  await page.getByRole('button', { name: 'Unpublish On Sharpening' }).click();
+  await expect(page.locator('.toast', { hasText: 'Moved back to drafts.' })).toBeVisible();
+  await expect(reader.getByRole('heading', { level: 1, name: 'There is nothing at this address' })).toBeVisible();
+  await stillTheSameDocument(reader);
+
+  // Deleting takes two presses.
+  await page.getByRole('button', { name: 'Delete On Sharpening', exact: true }).click();
+  await page.getByRole('button', { name: 'Confirm deleting On Sharpening' }).click();
+  await expect(page.locator('.toast', { hasText: 'Deleted.' })).toBeVisible();
+  await expect(page.getByRole('row', { name: /On Sharpening/ })).toHaveCount(0);
+  await reader.context().close();
+});
+
+test('an author cannot edit another author’s article; an editor can', async ({ page }) => {
+  await signIn(page, 'mirela');
+  await expect(page.getByRole('row', { name: /The Jig Is the Work/ })).toHaveCount(0);
+  await expect(page.getByRole('row', { name: /What the Kiln Decides/ })).toBeVisible();
+  // Guessing the address of someone else's draft finds nothing.
+  await open(page, '/desk/edit/notes-toward-a-workbench');
+  await expect(page.getByRole('heading', { level: 1, name: 'There is nothing at this address' })).toBeVisible();
+  // And a forged write is refused by the kernel's policy, not by the page.
+  const csrf = (await (await page.request.get('/api/session')).json()).session.csrf_token;
+  const forged = await page.request.post('/api/records', {
+    data: { op: 'update', object: 'post', id: 15, fields: { title: 'Taken over' } },
+    headers: { origin: BASE, 'x-csrf-token': csrf },
+  });
+  expect(forged.status()).toBe(403);
+  expect((await forged.json()).failed[0].rule).toBe('policy:authors_own_posts');
+});
+
+test('a session that ends is noticed at once and the page falls back to signed out', async ({ page }) => {
+  await signIn(page, 'tomasz');
+  await expect(page.locator('.colophon__live')).toHaveAttribute('data-connection', 'open');
+  await mark(page);
+  const csrf = (await (await page.request.get('/api/session')).json()).session.csrf_token;
+  const expired = await page.request.post('/api/dev/expire-session', { headers: { origin: BASE, 'x-csrf-token': csrf } });
+  expect((await expired.json()).expired).toBe(true);
+  await expect(page.locator('.toast', { hasText: 'Your session has expired. Sign in again to keep writing.' })).toBeVisible();
+  await expect(page.getByRole('heading', { level: 1, name: 'Sign in to continue' })).toBeVisible();
+  await stillTheSameDocument(page);
+  const write = await page.request.post('/api/records', { data: { op: 'delete', object: 'post', id: 9 }, headers: { origin: BASE, 'x-csrf-token': 'stale' } });
+  expect(write.status()).toBe(401);
+});
+
+test('after losing the connection the page reconnects and catches up on what it missed', async ({ page, browser }) => {
+  await open(page, '/');
+  await mark(page);
+  await expect(page.locator('.colophon__live')).toHaveAttribute('data-connection', 'open');
+
+  // Cut the network, drop the socket, and publish something while the reader is away.
+  await page.context().setOffline(true);
+  await page.evaluate(() => window.__strataDropSocket());
+  await expect(page.locator('.colophon__live')).toHaveAttribute('data-connection', 'waiting');
+
+  const author = await (await browser.newContext()).newPage();
+  await signIn(author, 'mirela');
+  await writeDraft(author, 'While You Were Away');
+  await author.getByRole('button', { name: 'Publish' }).click();
+  await expect(author.locator('.toast', { hasText: 'Published.' })).toBeVisible();
+  await expect(page.getByText('While You Were Away')).toHaveCount(0);
+
+  await page.context().setOffline(false);
+  await expect(page.locator('.colophon__live')).toHaveAttribute('data-connection', 'open', { timeout: 20_000 });
+  await expect(page.getByRole('heading', { name: 'While You Were Away' })).toBeVisible();
+  await stillTheSameDocument(page);
+
+  await author.getByRole('button', { name: 'Unpublish' }).click();
+  await expect(page.getByRole('heading', { name: 'While You Were Away' })).toHaveCount(0);
+  await author.context().close();
+});
+
+test('tenant settings are data: changing the accent restyles every open page live', async ({ page, browser }) => {
+  const reader = await (await browser.newContext()).newPage();
+  await open(reader, '/about');
+  await mark(reader);
+  const accent = () => reader.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--accent').trim());
+  expect(await accent()).toBe('#4f6140');
+
+  await signIn(page, 'ines');
+  await page.getByRole('link', { name: 'Publication settings' }).click();
+  await page.getByText('Plum', { exact: true }).click();
+  await page.getByLabel('Tagline').fill('Essays on making things, and what they teach.');
+  await page.getByRole('button', { name: 'Save settings' }).click();
+  await expect(page.locator('.toast', { hasText: 'Settings saved.' })).toBeVisible();
+
+  await expect(reader.locator('html')).toHaveAttribute('data-accent', 'plum');
+  expect(await accent()).toBe('#6b3f5b');
+  await expect(reader.locator('.colophon')).toContainText('Essays on making things, and what they teach.');
+  await stillTheSameDocument(reader);
+  await reader.screenshot({ path: `${SHOTS}about-plum.png` });
+
+  // A value outside the token schema is refused by the tenant's own constraint.
+  const csrf = (await (await page.request.get('/api/session')).json()).session.csrf_token;
+  const injected = await page.request.post('/api/records', {
+    data: { op: 'update', object: 'publication', id: 1, fields: { accent: 'red;background:url(//evil)' } },
+    headers: { origin: BASE, 'x-csrf-token': csrf },
+  });
+  expect(injected.status()).toBe(422);
+  expect((await injected.json()).failed[0].rule).toBe('constraint:publication.accent_token');
+
+  await page.getByText('Moss', { exact: true }).click();
+  await page.getByLabel('Tagline').fill('Essays on making things, and on what making them teaches.');
+  await page.getByRole('button', { name: 'Save settings' }).click();
+  await expect(reader.locator('html')).toHaveAttribute('data-accent', 'moss');
+  await reader.context().close();
+});
+
+test('the theme control cycles device, light and dark, and is remembered', async ({ page }) => {
+  await page.emulateMedia({ colorScheme: 'dark' });
+  await open(page, '/');
+  await expect(page.locator('html')).toHaveAttribute('data-scheme', 'dark');
+  await page.getByRole('button', { name: /Change theme/ }).click();
+  await expect(page.locator('html')).toHaveAttribute('data-scheme', 'light');
+  await page.getByRole('button', { name: /Change theme/ }).click();
+  await expect(page.locator('html')).toHaveAttribute('data-scheme', 'dark');
+  await page.emulateMedia({ colorScheme: 'light' });
+  await page.reload();
+  await ready(page);
+  await expect(page.locator('html')).toHaveAttribute('data-scheme', 'dark');
+  await page.screenshot({ path: `${SHOTS}home-dark.png` });
+  await axe(page, 'the front page in the dark theme');
+});
+
+test('the whole site can be used from the keyboard', async ({ page }) => {
+  await open(page, '/');
+  await page.keyboard.press('Tab');
+  await expect(page.getByRole('link', { name: 'Skip to the content' })).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(page.locator('main')).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(page.getByRole('link', { name: 'The Jig Is the Work' })).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('heading', { level: 1, name: 'The Jig Is the Work' })).toBeVisible();
+
+  // Sign in and publish nothing, entirely without a pointer.
+  await open(page, '/login');
+  await page.getByLabel('Name').focus();
+  await page.keyboard.type('tomasz');
+  await page.keyboard.press('Tab');
+  await page.keyboard.type('strata-dev-tomasz');
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('heading', { level: 1, name: 'Writing desk' })).toBeVisible();
+  const focusRing = await page.evaluate(() => {
+    const link = document.querySelector('.toolbar a');
+    link.focus();
+    return getComputedStyle(link).outlineStyle;
+  });
+  expect(focusRing).not.toBe('none');
+});
+
+test('on a phone the layout folds, the menu opens and closes, and nothing overflows', async ({ browser }) => {
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+  const page = await context.newPage();
+  await open(page, '/');
+  const nav = page.getByRole('navigation', { name: 'Sections' });
+  await expect(nav).toBeHidden();
+  const toggle = page.getByRole('button', { name: 'Menu' });
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  await toggle.click();
+  await expect(nav).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Close menu' })).toHaveAttribute('aria-expanded', 'true');
+  await page.keyboard.press('Escape');
+  await expect(nav).toBeHidden();
+  await page.getByRole('button', { name: 'Menu' }).click();
+  await nav.getByRole('link', { name: 'Topics' }).click();
+  await expect(page.getByRole('heading', { level: 1, name: 'Topics' })).toBeVisible();
+  await expect(nav).toBeHidden();
+
+  for (const path of ['/', '/posts/a-margin-is-a-promise', '/about', '/login']) {
+    await open(page, path);
+    const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+    expect(overflow, `horizontal overflow on ${path}`).toBeLessThanOrEqual(0);
+  }
+  // On a phone the notes sit in a line above the title instead of in a margin column.
+  await open(page, '/');
+  const entry = page.locator('.entry').first();
+  const notes = await entry.locator('.notes').boundingBox();
+  const title = await entry.locator('.entry__title').boundingBox();
+  expect(notes.y + notes.height).toBeLessThanOrEqual(title.y + 1);
+  await page.screenshot({ path: `${SHOTS}home-phone.png`, fullPage: true });
+  await axe(page, 'the front page on a phone');
+  await context.close();
+});
+
+test('on a wide screen the notes sit in the margin beside the text', async ({ page }) => {
+  await open(page, '/posts/the-second-hundred-hours');
+  const margin = await page.locator('.essay__margin').boundingBox();
+  const prose = await page.locator('.prose').boundingBox();
+  expect(margin.x + margin.width).toBeLessThanOrEqual(prose.x);
+  expect(prose.width).toBeLessThanOrEqual(600);
+  await page.screenshot({ path: `${SHOTS}article.png`, fullPage: true });
+});
+
+test('reader pages pass automated accessibility checks', async ({ page }) => {
+  for (const path of ['/', '/posts/the-jig-is-the-work', '/topics', '/authors', '/about', '/search?q=jig', '/login', '/posts/nowhere']) {
+    await open(page, path);
+    await axe(page, path);
+    expect(await page.locator('h1').count(), `one h1 on ${path}`).toBe(1);
+  }
+});
+
+test('the desk, editor and settings pass automated accessibility checks', async ({ page }) => {
+  await signIn(page, 'ines');
+  await axe(page, 'the writing desk');
+  await page.screenshot({ path: `${SHOTS}desk.png`, fullPage: true });
+  await open(page, '/desk/edit/notes-toward-a-workbench');
+  await expect(page.getByRole('heading', { level: 1, name: 'Edit article' })).toBeVisible();
+  await axe(page, 'the editor');
+  await page.screenshot({ path: `${SHOTS}editor.png`, fullPage: true });
+  await open(page, '/desk/settings');
+  await axe(page, 'publication settings');
+  await open(page, '/desk/new');
+  await axe(page, 'a new article');
+});
+
+test('a second tenant on the same substrate shares nothing with the first', async ({ page, browser }) => {
+  const tide = 'http://tidewater.localhost:4200';
+  await page.goto(`${tide}/`);
+  await ready(page);
+  await expect(page).toHaveTitle('Tidewater Review');
+  await expect(page.getByRole('heading', { level: 2, name: 'High Water at Six' })).toBeVisible();
+  await expect(page.locator('html')).toHaveAttribute('data-accent', 'ink');
+  await expect(page.locator('html')).toHaveAttribute('data-paper', 'stone');
+  await expect(page.getByText('The Jig Is the Work')).toHaveCount(0);
+  await page.screenshot({ path: `${SHOTS}tidewater.png` });
+
+  // Fieldnotes logins do not exist there.
+  await page.goto(`${tide}/login`);
+  await ready(page);
+  await page.getByLabel('Name').fill('ines');
+  await page.getByLabel('Password').fill('strata-dev-ines');
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  await expect(page.getByRole('alert')).toHaveText('The name or password is not right.');
+
+  // A Fieldnotes owner's session, replayed against the Tidewater host, is nobody there.
+  const owner = await browser.newContext();
+  const ownerPage = await owner.newPage();
+  await signIn(ownerPage, 'admin');
+  const cookie = (await owner.cookies()).find((c) => c.name === '__Host-strata_sid');
+  const stolen = await browser.newContext();
+  await stolen.addCookies([{ name: '__Host-strata_sid', value: cookie.value, domain: 'tidewater.localhost', path: '/', httpOnly: true, secure: true, sameSite: 'Strict' }]);
+  const thief = await stolen.newPage();
+  await thief.goto(`${tide}/desk`);
+  await ready(thief);
+  await expect(thief.getByRole('heading', { level: 1, name: 'Sign in to continue' })).toBeVisible();
+  const seen = await thief.evaluate(async () => {
+    const get = async (path) => (await fetch(path)).json();
+    return { session: await get('/api/session'), desk: await get('/api/view?path=/desk'), draft: await get('/api/view?path=/posts/tidewater-private-draft') };
+  });
+  expect(seen.session.session.authenticated).toBe(false);
+  expect(seen.desk.data.posts).toEqual([]);
+  expect(seen.draft.data.post).toBeNull();
+
+  // The Fieldnotes owner sees every Fieldnotes article and nothing of Tidewater's.
+  const everything = await (await ownerPage.request.get('/api/view?path=/desk')).text();
+  expect(everything).toContain('Notes Toward a Workbench');
+  expect(everything).not.toContain('Tidewater');
+  expect(everything).not.toContain('High Water');
+
+  // Events do not cross either: a Tidewater reader's page is untouched by a Fieldnotes change.
+  await page.goto(`${tide}/`);
+  await ready(page);
+  await mark(page);
+  await expect(page.locator('.colophon__live')).toHaveAttribute('data-connection', 'open');
+  const frames = [];
+  page.on('websocket', (socket) => socket.on('framereceived', (frame) => frames.push(String(frame.payload))));
+  const viewRequests = [];
+  page.on('request', (request) => request.url().includes('/api/view') && viewRequests.push(request.url()));
+  await ownerPage.getByRole('link', { name: 'Write a new article' }).click();
+  await ownerPage.getByLabel('Title').fill('A Fieldnotes Secret');
+  await ownerPage.getByLabel('Text', { exact: true }).fill('Only for Fieldnotes.');
+  await ownerPage.getByRole('button', { name: 'Publish' }).click();
+  await expect(ownerPage.locator('.toast', { hasText: 'Published.' })).toBeVisible();
+  await page.waitForTimeout(1200);
+  expect(viewRequests).toEqual([]);
+  expect(frames.filter((frame) => frame.includes('"event"'))).toEqual([]);
+  await expect(page.getByText('A Fieldnotes Secret')).toHaveCount(0);
+  await ownerPage.getByRole('button', { name: 'Unpublish' }).click();
+  await expect(ownerPage.locator('.toast', { hasText: 'Moved back to drafts.' })).toBeVisible();
+  await owner.close();
+  await stolen.close();
+});
+
+test('the Impact Lab projects a schema change, explains the differences, and leaves live data alone', async ({ page }) => {
+  test.setTimeout(120_000);
+  await signIn(page, 'tomasz');
+  await open(page, '/lab');
+  await expect(page.getByRole('heading', { level: 1, name: 'Your account cannot open this page' })).toBeVisible();
+  await page.getByRole('button', { name: 'Sign out' }).click();
+  await expect(page.locator('.toast', { hasText: 'Signed out.' })).toBeVisible();
+
+  await signIn(page, 'admin');
+  await page.getByRole('link', { name: 'Impact Lab' }).click();
+  await expect(page.getByRole('heading', { level: 1, name: 'Impact Lab' })).toBeVisible();
+  const snapshot = await page.locator('.lab-snapshot').innerText();
+  expect(snapshot).toMatch(/Fieldnotes at revision \d+: schema version 2/);
+
+  // The tenant's metadata is there to read, as data.
+  await page.getByRole('button', { name: 'Metadata' }).click();
+  await expect(page.getByRole('heading', { level: 2, name: /Post/ })).toBeVisible();
+  await expect(page.getByRole('row', { name: /post\.excerpt string no no/ })).toBeVisible();
+  await expect(page.getByText('public_reads_published')).toBeVisible();
+  await axe(page, 'Impact Lab metadata');
+
+  // A proposal that does not parse is explained next to the field.
+  await page.getByRole('button', { name: 'Projection' }).click();
+  await page.getByLabel('Proposed change').fill('require post.nonsense');
+  await page.getByRole('button', { name: 'Run the projection' }).click();
+  await expect(page.getByRole('alert')).toHaveText('line 1: post has no field nonsense');
+
+  await page.getByRole('button', { name: 'Require an excerpt on every article' }).click();
+  await expect(page.getByLabel('Proposed change')).toHaveValue('require post.excerpt');
+  await page.getByLabel('Inject faults: lost commit races and dropped event deliveries').check();
+  await page.getByRole('button', { name: 'Run the projection' }).click();
+  await expect(page.getByRole('heading', { level: 2, name: 'What would change' })).toBeVisible({ timeout: 60_000 });
+  await expect(page.locator('.lab-verdict').first()).toContainText(/The kernel accepts the change\. \d+ of 60 replayed operations then end differently\./);
+
+  // All five kinds of evidence are present and labelled.
+  for (const label of ['Proven', 'Reproduced', 'Sound approximation', 'Estimated', 'Unknown']) {
+    await expect(page.locator('.findings .evidence', { hasText: label }).first()).toBeVisible();
+  }
+  await expect(page.getByRole('row', { name: /post \d+ Slow Software required:post\.excerpt/ })).toBeVisible();
+  await expect(page.getByRole('row', { name: /first divergence/ })).toContainText('Rejected: MissingRequired');
+  await expect(page.getByText('Smallest schedule found that still shows the first divergence')).toBeVisible();
+  await expect(page.getByRole('row', { name: /Every record has only known fields/ })).toContainText('Fails');
+  await expect(page.getByText('Tenant isolation: every other tenant in the simulated world is identical in both executions.')).toBeVisible();
+  await expect(page.getByText(/60 of 6\d steps agree when re-run against the bare kernel/)).toBeVisible();
+  await expect(page.getByText(/event deliveries dropped and retried; every event still arrived once, in order/)).toBeVisible();
+  await page.screenshot({ path: `${SHOTS}lab.png`, fullPage: true });
+  await axe(page, 'Impact Lab results');
+
+  // Running it again reproduces the same number of divergences.
+  const first = await page.locator('.lab-verdict').first().innerText();
+  await page.getByRole('button', { name: 'Run the projection' }).click();
+  await expect(page.locator('.toast', { hasText: 'Projection finished' }).first()).toBeVisible({ timeout: 60_000 });
+  // The strict variant: the kernel refuses the change and names the records in the way.
+  await page.getByLabel('Refuse the change').check();
+  await page.getByRole('button', { name: 'Run the projection' }).click();
+  await expect(page.locator('.lab-verdict').first()).toContainText(/The kernel refuses the change: \d+ existing record\(s\) would not conform to the new schema\./, { timeout: 60_000 });
+  expect(first).toContain('The kernel accepts the change');
+
+  // What actually happened, replayed with the change in force from the start.
+  await page.getByLabel('Leave them as they are').check();
+  await page.getByLabel('What actually happened').check();
+  await page.getByRole('button', { name: 'Run the projection' }).click();
+  await expect(page.locator('.lab-verdict').first()).toContainText(/replayed operations then end differently/, { timeout: 60_000 });
+  await expect(page.getByRole('row', { name: /first divergence/ })).toContainText('create record');
+
+  // The journal of real commits replays to the live state.
+  await page.getByRole('button', { name: 'Evidence' }).click();
+  await page.getByRole('button', { name: 'Replay the journal' }).click();
+  await expect(page.getByText(/committed operations replay to exactly the recorded result, and the replayed state is the live state\./)).toBeVisible();
+
+  // Diagnostics are there, machine-readable, and hold no secrets.
+  await page.getByRole('button', { name: 'Diagnostics' }).click();
+  await expect(page.getByRole('heading', { level: 2, name: 'Kernel transitions' })).toBeVisible();
+  await expect(page.getByRole('row', { name: /change_schema/ })).toBeVisible();
+  const cookie = (await page.context().cookies()).find((c) => c.name === '__Host-strata_sid').value;
+  const report = await (await page.request.get('/api/diagnostics')).text();
+  expect(report).not.toContain(cookie);
+  expect(report).not.toContain('strata-dev-');
+  expect(JSON.parse(report).backend.recent_runs.length).toBeGreaterThanOrEqual(4);
+  await axe(page, 'Impact Lab diagnostics');
+
+  // Nothing above changed the live publication: same revision, excerpt still optional.
+  await page.reload();
+  await ready(page);
+  await expect(page.locator('.lab-snapshot')).toHaveText(snapshot);
+  await page.getByRole('button', { name: 'Metadata' }).click();
+  await expect(page.getByRole('row', { name: /post\.excerpt string no no/ })).toBeVisible();
+});
+
+test('the Lean proofs can be checked from the Lab when Lean is installed', async ({ page }) => {
+  test.setTimeout(180_000);
+  await signIn(page, 'admin');
+  await open(page, '/lab');
+  await page.getByRole('button', { name: 'Evidence' }).click();
+  await expect(page.getByRole('heading', { level: 2, name: 'The five kinds of evidence' })).toBeVisible();
+  await page.getByRole('button', { name: 'Check the proofs now' }).click();
+  const verdict = page.locator('.lab-block', { hasText: 'Machine-checked proofs' }).locator('.lab-verdict');
+  await expect(verdict).toBeVisible({ timeout: 150_000 });
+  const text = await verdict.innerText();
+  test.skip(text.includes('could not run lake'), 'Lean is not installed on this machine; the report says so honestly.');
+  expect(text).toMatch(/All \d+ theorems are machine-checked by Lean \(version 4\.\d+\.\d+/);
+  await expect(page.getByRole('row', { name: /A tenant-scoped transition cannot modify another tenant/ })).toContainText('step_isolated checked');
+  await expect(page.getByText(/print identical results for \d+ operations across 60 generated scenarios/)).toBeVisible();
+  await page.screenshot({ path: `${SHOTS}lab-evidence.png`, fullPage: true });
+  await axe(page, 'Impact Lab evidence');
+});
+
+test('no log line holds a password, a session token or a CSRF token', async ({ page }) => {
+  await signIn(page, 'ines');
+  const session = (await (await page.request.get('/api/session')).json()).session;
+  const cookie = (await page.context().cookies()).find((c) => c.name === '__Host-strata_sid').value;
+  const { readFileSync } = await import('node:fs');
+  const root = new URL('../../var/logs/', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1');
+  const logs = ['backend.jsonl', 'bff.jsonl'].map((name) => readFileSync(`${root}${name}`, 'utf8')).join('\n');
+  expect(logs.length).toBeGreaterThan(1000);
+  for (const secret of [cookie, session.csrf_token, 'strata-dev-ines', 'strata-dev-admin', 'not-the-password']) {
+    expect(logs.includes(secret), `a secret appears in the logs: ${secret.slice(0, 6)}…`).toBe(false);
+  }
+  // One request can be followed by its correlation id across both services.
+  const correlation = logs.match(/"correlation":"(c-\d+-[0-9a-f]{6})"/)?.[1];
+  expect(correlation).toBeTruthy();
+  expect(logs.split('\n').filter((line) => line.includes(correlation)).map((line) => JSON.parse(line).service)).toEqual(expect.arrayContaining(['backend', 'bff']));
+});

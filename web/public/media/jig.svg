@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 480" role="img" aria-label="A plywood fixture holding a chair leg at an angle">
+<rect width="640" height="480" fill="#e9e2d2"/>
+<g fill="none" stroke="#2b2924" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+<path d="M60.0 380.0L580.0 380.0" />
+<path d="M60.0 396.0L580.0 396.0" stroke="#8d8672" stroke-width="1.5"/>
+<path d="M120 380V330H500V380"/>
+<path d="M170 330L250 150L300 150L225 330" fill="#4f6140" fill-opacity="0.28"/>
+<path d="M360 330V250H470V330"/>
+<path d="M120.0 340.0L500.0 340.0" stroke="#8d8672" stroke-width="1"/>
+<path d="M120.0 350.0L500.0 350.0" stroke="#8d8672" stroke-width="1"/>
+<path d="M120.0 360.0L500.0 360.0" stroke="#8d8672" stroke-width="1"/>
+<path d="M120.0 370.0L500.0 370.0" stroke="#8d8672" stroke-width="1"/>
+<path d="M286 96L330 104L270 372L226 364Z" fill="#f3eee2"/>
+<path d="M292.0 120.0L318.0 125.0" stroke="#8d8672" stroke-width="1"/>
+<path d="M283.0 160.0L309.0 165.0" stroke="#8d8672" stroke-width="1"/>
+<path d="M274.0 200.0L300.0 205.0" stroke="#8d8672" stroke-width="1"/>
+<path d="M265.0 240.0L291.0 245.0" stroke="#8d8672" stroke-width="1"/>
+<path d="M256.0 280.0L282.0 285.0" stroke="#8d8672" stroke-width="1"/>
+<path d="M247.0 320.0L273.0 325.0" stroke="#8d8672" stroke-width="1"/>
+<path d="M392 250V200H440V250M416 200V168M400 168H432"/>
+<path d="M132.0 322.0L160.0 322.0" stroke="#8d8672" stroke-width="1.5"/>
+<path d="M140.0 314.0L140.0 330.0" stroke="#8d8672" stroke-width="1.5"/>
+<path d="M380 312q10 -8 20 0t20 0t20 0t20 0" stroke="#8d8672" stroke-width="1.5"/>
+<path d="M380 300q8 -6 16 0t16 0" stroke="#8d8672" stroke-width="1.5"/>
+</g>
+</svg>

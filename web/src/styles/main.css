@@ -1,0 +1,14 @@
+/* Layer order is declared once, here. Later layers win over earlier ones whatever the
+   specificity of their selectors. */
+@layer reset, tokens, base, layout, components, lab, utilities;
+
+@import '@fontsource-variable/fraunces/full.css';
+@import '@fontsource-variable/newsreader/opsz.css';
+@import '@fontsource-variable/newsreader/opsz-italic.css';
+@import '@fontsource-variable/instrument-sans/index.css';
+
+@import './tokens.css';
+@import './base.css';
+@import './layout.css';
+@import './components.css';
+@import './lab.css';

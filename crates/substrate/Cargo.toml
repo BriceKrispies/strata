@@ -1,0 +1,19 @@
+[package]
+name = "strata-substrate"
+description = "Pure interpreters over kernel data: tenant bundles, authoring syntax, projection, Markdown, themes, subscriptions."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+strata-kernel.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+strata-kernel = { workspace = true, features = ["testkit"] }
+
+[lints]
+workspace = true

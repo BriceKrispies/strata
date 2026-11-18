@@ -1,0 +1,216 @@
+{
+  "id": "fieldnotes",
+  "name": "Fieldnotes",
+  "owner": "user:admin",
+  "created_at": "2026-08-31T09:00:00Z",
+  "template": "../_templates/publication.json",
+  "members": [
+    { "principal": "user:ines", "roles": ["editor", "author"] },
+    { "principal": "user:tomasz", "roles": ["author"] },
+    { "principal": "user:mirela", "roles": ["author"] }
+  ],
+  "records": [
+    {
+      "object": "publication",
+      "as": "user:admin",
+      "at": "2026-08-31T09:05:00Z",
+      "fields": {
+        "key": "main",
+        "name": "Fieldnotes",
+        "tagline": "Essays on making things, and on what making them teaches.",
+        "accent": "moss",
+        "paper": "linen",
+        "about": { "$file": "about.md" },
+        "colophon": "Set in Fraunces and Newsreader, with Instrument Sans for the small print. Every page is produced from tenant metadata by the Strata substrate; nothing about this publication is written into the platform's code."
+      }
+    },
+    {
+      "object": "author",
+      "key": "ines",
+      "as": "user:admin",
+      "at": "2026-08-31T09:10:00Z",
+      "fields": {
+        "name": "Inès Okafor",
+        "slug": "ines-okafor",
+        "title": "Editor",
+        "principal": "user:ines",
+        "bio": "Inès trained as a book designer and spent eleven years setting other people's words before she started writing her own. She edits Fieldnotes from a flat with too many paperbacks in it, and believes most problems of layout are problems of manners."
+      }
+    },
+    {
+      "object": "author",
+      "key": "tomasz",
+      "as": "user:admin",
+      "at": "2026-08-31T09:11:00Z",
+      "fields": {
+        "name": "Tomasz Wren",
+        "slug": "tomasz-wren",
+        "title": "Contributing writer",
+        "principal": "user:tomasz",
+        "bio": "Tomasz makes furniture in the mornings and software in the afternoons, and has not yet decided which one is the day job. He writes about tools: who makes them, what they remember, and why the good ones are boring."
+      }
+    },
+    {
+      "object": "author",
+      "key": "mirela",
+      "as": "user:admin",
+      "at": "2026-08-31T09:12:00Z",
+      "fields": {
+        "name": "Mirela Ashby",
+        "slug": "mirela-ashby",
+        "title": "Contributing writer",
+        "principal": "user:mirela",
+        "bio": "Mirela has fired a wood kiln twice a year since 2007 and taught evening classes for almost as long. She writes about practice, patience, and the parts of the work that are not up to you."
+      }
+    },
+    {
+      "object": "category",
+      "key": "craft",
+      "as": "user:ines",
+      "at": "2026-08-31T10:00:00Z",
+      "fields": { "name": "Craft", "slug": "craft", "description": "Workshops, materials, and the knowledge that lives in tools." }
+    },
+    {
+      "object": "category",
+      "key": "design",
+      "as": "user:ines",
+      "at": "2026-08-31T10:01:00Z",
+      "fields": { "name": "Design", "slug": "design", "description": "Pages, drawings, and decisions made on behalf of someone who is not in the room." }
+    },
+    {
+      "object": "category",
+      "key": "technology",
+      "as": "user:ines",
+      "at": "2026-08-31T10:02:00Z",
+      "fields": { "name": "Technology", "slug": "technology", "description": "Software considered as a made thing, with a maker and a lifespan." }
+    },
+    {
+      "object": "category",
+      "key": "practice",
+      "as": "user:ines",
+      "at": "2026-08-31T10:03:00Z",
+      "fields": { "name": "Practice", "slug": "practice", "description": "Learning, repetition, and the long middle of getting good at something." }
+    },
+    {
+      "object": "post",
+      "key": "margin",
+      "as": "user:ines",
+      "at": "2026-09-07T08:30:00Z",
+      "fields": {
+        "title": "A Margin Is a Promise",
+        "slug": "a-margin-is-a-promise",
+        "excerpt": "Whitespace is not what is left over when the design is finished. It is the part of the page that belongs to the reader, and every time it is narrowed something is taken from someone who was not in the room.",
+        "body": { "$file": "posts/a-margin-is-a-promise.md" },
+        "author": "@ines",
+        "category": "@design",
+        "tags": ["typography", "layout", "reading"],
+        "cover": "/media/margin.svg",
+        "cover_alt": "An open book drawn in outline, its two text blocks set well in from the edges, with one narrow margin marked in red."
+      },
+      "then": [{ "as": "user:ines", "at": "2026-09-09T07:00:00Z", "set": { "status": "published" } }]
+    },
+    {
+      "object": "post",
+      "key": "slow",
+      "as": "user:tomasz",
+      "at": "2026-09-18T14:10:00Z",
+      "fields": {
+        "title": "Slow Software",
+        "slug": "slow-software",
+        "body": { "$file": "posts/slow-software.md" },
+        "author": "@tomasz",
+        "category": "@technology",
+        "tags": ["software", "longevity", "tools"],
+        "cover": "/media/slow.svg",
+        "cover_alt": "Growth rings of a tree drawn as concentric lines, with one ring picked out in a darker tone."
+      },
+      "then": [{ "as": "user:tomasz", "at": "2026-09-23T07:00:00Z", "set": { "status": "published" } }]
+    },
+    {
+      "object": "post",
+      "key": "kiln",
+      "as": "user:mirela",
+      "at": "2026-10-01T19:45:00Z",
+      "fields": {
+        "title": "What the Kiln Decides",
+        "slug": "what-the-kiln-decides",
+        "excerpt": "A wood kiln takes four days to fire and three to cool, and about half of every pot that comes out of it was made by something other than the potter. On doing your part precisely and then handing it over.",
+        "body": { "$file": "posts/what-the-kiln-decides.md" },
+        "author": "@mirela",
+        "category": "@craft",
+        "tags": ["ceramics", "control", "process"],
+        "cover": "/media/kiln.svg",
+        "cover_alt": "The arched mouth of a brick kiln with a small bright opening at its centre and a line of pots waiting in front of it."
+      },
+      "then": [{ "as": "user:mirela", "at": "2026-10-07T07:00:00Z", "set": { "status": "published" } }]
+    },
+    {
+      "object": "post",
+      "key": "drawing",
+      "as": "user:ines",
+      "at": "2026-10-15T09:20:00Z",
+      "fields": {
+        "title": "Drawing the Thing You Mean",
+        "slug": "drawing-the-thing-you-mean",
+        "excerpt": "Words agree too easily. A sketch has to decide which way the door opens, and that is why the first drawing should be quick, rough, and specific enough to be wrong.",
+        "body": { "$file": "posts/drawing-the-thing-you-mean.md" },
+        "author": "@ines",
+        "category": "@design",
+        "tags": ["sketching", "process", "clients"],
+        "cover": "/media/drawing.svg",
+        "cover_alt": "Three quick sketches of the same door side by side, the third with its handle on the opposite side and a pencil lying beneath it."
+      },
+      "then": [{ "as": "user:ines", "at": "2026-10-21T07:00:00Z", "set": { "status": "published" } }]
+    },
+    {
+      "object": "post",
+      "key": "hours",
+      "as": "user:mirela",
+      "at": "2026-10-28T20:05:00Z",
+      "fields": {
+        "title": "The Second Hundred Hours",
+        "slug": "the-second-hundred-hours",
+        "body": { "$file": "posts/the-second-hundred-hours.md" },
+        "author": "@mirela",
+        "category": "@practice",
+        "tags": ["learning", "teaching", "patience"],
+        "cover": "/media/hours.svg",
+        "cover_alt": "A row of nearly identical thrown cylinders on a shelf, each very slightly taller and straighter than the one before."
+      },
+      "then": [{ "as": "user:mirela", "at": "2026-11-04T07:00:00Z", "set": { "status": "published" } }]
+    },
+    {
+      "object": "post",
+      "key": "jig",
+      "as": "user:tomasz",
+      "at": "2026-11-06T06:40:00Z",
+      "fields": {
+        "title": "The Jig Is the Work",
+        "slug": "the-jig-is-the-work",
+        "excerpt": "For years I thought of jigs as cheating, the scaffolding a real craftsman would not need. Then I met a man whose wall of plywood fixtures held twenty-six years of decisions about a single chair.",
+        "body": { "$file": "posts/the-jig-is-the-work.md" },
+        "author": "@tomasz",
+        "category": "@craft",
+        "tags": ["woodworking", "tools", "knowledge"],
+        "featured": true,
+        "cover": "/media/jig.svg",
+        "cover_alt": "A plywood fixture holding a chair leg at an angle, with pencil marks and a date along its edge."
+      },
+      "then": [{ "as": "user:tomasz", "at": "2026-11-12T07:00:00Z", "set": { "status": "published" } }]
+    },
+    {
+      "object": "post",
+      "key": "workbench",
+      "as": "user:tomasz",
+      "at": "2026-11-15T16:30:00Z",
+      "fields": {
+        "title": "Notes Toward a Workbench",
+        "slug": "notes-toward-a-workbench",
+        "body": { "$file": "posts/notes-toward-a-workbench.md" },
+        "author": "@tomasz",
+        "category": "@craft",
+        "tags": ["woodworking", "notes"]
+      }
+    }
+  ]
+}

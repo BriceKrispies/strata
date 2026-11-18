@@ -1,0 +1,197 @@
+/* Design tokens. Components read only these custom properties.
+ *
+ * A tenant chooses an accent and a paper by name (`data-accent`, `data-paper` on the root).
+ * The names are validated against a fixed schema before they reach the page; the values they
+ * stand for are defined here and nowhere else, so tenant data never supplies CSS. */
+
+@layer tokens {
+  :root {
+    /* Typefaces: Fraunces for display, Newsreader for reading, Instrument Sans for small print. */
+    --font-display: 'Fraunces Variable', 'Iowan Old Style', 'Palatino Linotype', Georgia, serif;
+    --font-text: 'Newsreader Variable', 'Iowan Old Style', Georgia, serif;
+    --font-ui: 'Instrument Sans Variable', 'Segoe UI', system-ui, sans-serif;
+    --font-code: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+
+    /* Type scale: a fifth between steps at the top, fluid between phone and desk. */
+    --text-xs: 0.8125rem;
+    --text-sm: 0.9375rem;
+    --text-md: clamp(1.0625rem, 0.98rem + 0.35vw, 1.1875rem);
+    --text-lg: clamp(1.25rem, 1.1rem + 0.6vw, 1.5rem);
+    --text-xl: clamp(1.6rem, 1.3rem + 1.3vw, 2.25rem);
+    --text-2xl: clamp(2.1rem, 1.5rem + 2.8vw, 3.5rem);
+    --text-3xl: clamp(2.6rem, 1.4rem + 5.6vw, 5.75rem);
+    --leading-tight: 1.02;
+    --leading-snug: 1.22;
+    --leading-text: 1.62;
+    --tracking-display: -0.022em;
+
+    /* Spacing: a 4px base, named by step. */
+    --space-1: 0.25rem;
+    --space-2: 0.5rem;
+    --space-3: 0.75rem;
+    --space-4: 1rem;
+    --space-5: 1.5rem;
+    --space-6: 2rem;
+    --space-7: 3rem;
+    --space-8: 4.5rem;
+    --space-9: 7rem;
+
+    /* Layout widths. The measure is the reading column; the margin holds the notes. */
+    --width-page: 76rem;
+    --width-measure: 36rem;
+    --width-margin: 11.5rem;
+    --width-form: 30rem;
+    --gutter: clamp(1.25rem, 0.6rem + 3vw, 3rem);
+
+    /* Sizing, radii, borders. */
+    --size-control: 2.75rem;
+    --radius-1: 2px;
+    --radius-2: 4px;
+    --border-hair: 1px;
+    --border-rule: 2px;
+
+    /* Motion. */
+    --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+    --dur-quick: 120ms;
+    --dur-settle: 520ms;
+
+    /* Paper: linen (default), light scheme. */
+    --paper: #efeadf;
+    --paper-sunk: #e4ddcd;
+    --paper-raised: #f7f3ea;
+    --ink: #23211c;
+    --ink-quiet: #5c574b;
+    --rule: #cdc5b1;
+    --rule-strong: #8f8873;
+    --plate: #e9e2d2;
+    --plate-dim: 1;
+    --shadow-raised: 0 1px 0 rgb(35 33 28 / 0.06), 0 12px 28px -18px rgb(35 33 28 / 0.45);
+    --danger: #8c2f1f;
+    --warn-surface: #f1e2bd;
+
+    /* Accent: moss (default). */
+    --accent: #4f6140;
+    --accent-strong: #3c4b30;
+    --accent-wash: #dbe0cb;
+    --on-accent: #f7f3ea;
+
+    --focus: #1d4f91;
+    color-scheme: light;
+  }
+
+  :root[data-paper='stone'] {
+    --paper: #e9e8e3;
+    --paper-sunk: #dcdbd4;
+    --paper-raised: #f3f2ee;
+    --rule: #c5c4ba;
+    --rule-strong: #86857a;
+    --ink-quiet: #55554c;
+  }
+
+  :root[data-paper='chalk'] {
+    --paper: #f6f4ee;
+    --paper-sunk: #eae7dd;
+    --paper-raised: #fdfcf8;
+    --rule: #d6d2c5;
+    --rule-strong: #8f8b7c;
+  }
+
+  :root[data-accent='clay'] {
+    --accent: #8a4a31;
+    --accent-strong: #6f3a25;
+    --accent-wash: #ecd8cb;
+  }
+
+  :root[data-accent='ink'] {
+    --accent: #2f4a5c;
+    --accent-strong: #223746;
+    --accent-wash: #d3dde2;
+  }
+
+  :root[data-accent='ochre'] {
+    --accent: #765610;
+    --accent-strong: #5c430b;
+    --accent-wash: #ecdfb8;
+  }
+
+  :root[data-accent='plum'] {
+    --accent: #6b3f5b;
+    --accent-strong: #532f46;
+    --accent-wash: #e5d5de;
+  }
+
+  /* Dark scheme: charcoal with a little green in it, so the paper's warmth survives. */
+  :root[data-scheme='dark'] {
+    --paper: #1b1d19;
+    --paper-sunk: #151713;
+    --paper-raised: #252822;
+    --ink: #e9e4d6;
+    --ink-quiet: #aaa594;
+    --rule: #3a3d35;
+    --rule-strong: #6e7164;
+    --plate-dim: 0.86;
+    --shadow-raised: 0 1px 0 rgb(0 0 0 / 0.4), 0 14px 30px -16px rgb(0 0 0 / 0.8);
+    --danger: #f0a394;
+    --warn-surface: #3b3420;
+    --accent: #a9bc8f;
+    --accent-strong: #c3d3ac;
+    --accent-wash: #2c3326;
+    --on-accent: #1b1d19;
+    --focus: #9cc3f5;
+    color-scheme: dark;
+  }
+
+  :root[data-scheme='dark'][data-paper='stone'] {
+    --paper: #1c1d1e;
+    --paper-sunk: #151617;
+    --paper-raised: #26282a;
+    --rule: #3a3c3e;
+  }
+
+  :root[data-scheme='dark'][data-paper='chalk'] {
+    --paper: #201f1c;
+    --paper-sunk: #181714;
+    --paper-raised: #2b2a26;
+    --rule: #403e38;
+  }
+
+  :root[data-scheme='dark'][data-accent='clay'] {
+    --accent: #dba58c;
+    --accent-strong: #ecc1ad;
+    --accent-wash: #3a2a22;
+  }
+
+  :root[data-scheme='dark'][data-accent='ink'] {
+    --accent: #9fbbcd;
+    --accent-strong: #bfd4e1;
+    --accent-wash: #232e35;
+  }
+
+  :root[data-scheme='dark'][data-accent='ochre'] {
+    --accent: #d6b563;
+    --accent-strong: #e6cd8f;
+    --accent-wash: #37301b;
+  }
+
+  :root[data-scheme='dark'][data-accent='plum'] {
+    --accent: #cda5c0;
+    --accent-strong: #e0c3d6;
+    --accent-wash: #35262f;
+  }
+
+  /* Before the kernel has spoken, follow the device. */
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-scheme]) {
+      --paper: #1b1d19;
+      --ink: #e9e4d6;
+      color-scheme: dark;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    :root {
+      --dur-quick: 0ms;
+      --dur-settle: 0ms;
+    }
+  }
+}
