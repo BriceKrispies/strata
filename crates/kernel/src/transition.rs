@@ -28,8 +28,9 @@ pub fn transition(
     ctx: &Context,
 ) -> Result<Transition, DomainError> {
     if state.tenant_id != ctx.tenant {
-        return Err(DomainError::new(
+        return Err(refuse(
             ErrorKind::TenantMismatch,
+            "tenant:snapshot_matches_context",
             format!(
                 "snapshot is of {}, context names {}",
                 state.tenant_id, ctx.tenant
@@ -39,22 +40,25 @@ pub fn transition(
     let tenant = match (intent, state.tenant.as_deref()) {
         (Intent::CreateTenant { name, owner }, None) => return create_tenant(ctx, name, owner),
         (Intent::CreateTenant { .. }, Some(_)) => {
-            return Err(DomainError::new(
+            return Err(refuse(
                 ErrorKind::TenantExists,
+                "tenant:does_not_exist",
                 "the tenant already exists",
             ))
         }
         (_, None) => {
-            return Err(DomainError::new(
+            return Err(refuse(
                 ErrorKind::TenantNotFound,
+                "tenant:exists",
                 "no such tenant",
             ));
         }
         (_, Some(tenant)) => tenant,
     };
     if tenant.id != ctx.tenant {
-        return Err(DomainError::new(
+        return Err(refuse(
             ErrorKind::TenantMismatch,
+            "tenant:snapshot_matches_context",
             "snapshot holds another tenant",
         ));
     }
@@ -90,6 +94,13 @@ pub fn transition(
         } => delete_record(&mut draft, lookup, object, *id, *expected_version)?,
     };
     Ok(draft.finish(output))
+}
+
+/// A rejection made before any rule of the tenant is consulted. It still names the check that
+/// failed, so that every refused transition says why.
+fn refuse(kind: ErrorKind, rule: &str, message: impl Into<String>) -> DomainError {
+    let message = message.into();
+    DomainError::new(kind, message.clone()).with(vec![Check::fail(rule, message)])
 }
 
 /// The state an intent is expected to need. The shell loads these before calling `transition`.
@@ -307,8 +318,9 @@ fn create_tenant(
         );
     }
     if name.trim().is_empty() {
-        return Err(DomainError::new(
+        return Err(refuse(
             ErrorKind::InvalidIntent,
+            "intent:tenant_has_name",
             "a tenant needs a name",
         ));
     }
