@@ -7,6 +7,7 @@
 
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::{Mutex, MutexGuard};
 use strata_verification::lean::{
     compare_outputs, kernel_output, model_output, parse_audit, scenarios, verify, FIXTURE_COUNT,
     FIXTURE_SEED,
@@ -17,9 +18,18 @@ fn lean_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../lean")
 }
 
+/// Tests of this binary run on several threads, and two `lake` processes in one project directory
+/// (`lake exe` builds, `lake build` builds) fight over its lock and its build files. Every test
+/// that runs `lake` holds this lock for as long as it does; a failure in one does not hide in
+/// the other, because a lock poisoned by a failed test is taken over, not treated as an error.
+static LAKE: Mutex<()> = Mutex::new(());
+
 /// The Lean side must run. A test that returns early when `lake` is missing reports ok without
-/// checking anything, so a missing `lake` fails here instead.
-fn require_lake() {
+/// checking anything, so a missing `lake` fails here instead. The returned guard keeps other
+/// tests from running `lake` until it is dropped.
+#[must_use = "hold the guard for as long as lake runs"]
+fn require_lake() -> MutexGuard<'static, ()> {
+    let guard = LAKE.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let found = Command::new("lake")
         .arg("--version")
         .output()
@@ -28,6 +38,7 @@ fn require_lake() {
         found,
         "`lake` is not on the PATH, so the Lean model and proofs were not checked. Install Lean 4 (elan)."
     );
+    guard
 }
 
 fn read(name: &str) -> String {
@@ -87,8 +98,14 @@ fn the_fixtures_exercise_every_outcome_the_model_has() {
 /// Verifies: KRN-016
 #[test]
 fn the_lean_model_agrees_with_the_kernel() {
-    require_lake();
+    let _lake = require_lake();
     let generated = scenarios(FIXTURE_SEED, FIXTURE_COUNT);
+    // The scenarios the Lean program is given are the ones the kernel is given.
+    assert_eq!(
+        read("scenarios.txt"),
+        generated,
+        "lean/fixtures/scenarios.txt is not what the generator writes"
+    );
     let lean = model_output(&lean_dir(), "fixtures/scenarios.txt").expect("the model runs");
     let result = compare_outputs(&generated, &lean, &kernel_output(&generated));
     assert!(
@@ -101,7 +118,7 @@ fn the_lean_model_agrees_with_the_kernel() {
 
 #[test]
 fn the_lean_proofs_check_with_only_standard_axioms() {
-    require_lake();
+    let _lake = require_lake();
     let report = verify(&lean_dir(), 0);
     assert_eq!(report.problem, None);
     assert!(
