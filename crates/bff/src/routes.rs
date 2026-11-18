@@ -568,10 +568,18 @@ async fn page(State(bff): State<Shared>, headers: HeaderMap, request: Request) -
         .as_ref()
         .map(|s| s.session.tenant_name.clone())
         .unwrap_or_else(|_| "Strata".into());
-    let title = view
-        .as_ref()
-        .and_then(|v| v["title"].as_str())
-        .map_or(site_name.clone(), |t| format!("{t} · {site_name}"));
+    // The same title the browser will set once it has drawn the page: the thing shown, then
+    // the publication.
+    let named = view.as_ref().and_then(|v| {
+        let data = &v["data"];
+        data["post"]["fields"]["title"]
+            .as_str()
+            .or_else(|| data["category"]["fields"]["name"].as_str())
+            .or_else(|| data["author"]["fields"]["name"].as_str())
+            .or_else(|| v["title"].as_str().filter(|_| v["view"] != "home"))
+            .map(str::to_string)
+    });
+    let title = named.map_or(site_name.clone(), |t| format!("{t} — {site_name}"));
     let description = view
         .as_ref()
         .and_then(|v| v["data"]["site"]["fields"]["tagline"].as_str())

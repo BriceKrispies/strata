@@ -389,7 +389,9 @@ async fn pages_carry_security_headers_and_a_bootstrap_that_cannot_break_out() {
         reply.headers.get("x-content-type-options").unwrap(),
         "nosniff"
     );
-    assert!(reply.text.contains("<title>Article · Fieldnotes</title>"));
+    assert!(reply
+        .text
+        .contains("<title>A Margin Is a Promise — Fieldnotes</title>"));
     assert!(reply.text.contains("data-accent=\"moss\""));
     assert!(reply.text.contains("id=\"strata-bootstrap\""));
     let data = reply

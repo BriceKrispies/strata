@@ -33,10 +33,10 @@ Each invariant names where it is enforced and what checks it.
 |---|---|---|
 | R1 | The browser reaches only the BFF; the backend listens on loopback and requires the service token | Backend integration tests, e2e network assertions |
 | R2 | Tenant and principal come from the server-side session and the BFF's site configuration, never from client input | Backend tests, e2e cross-tenant test |
-| R3 | No event is published before its transaction commits | Outbox design; backend test |
+| R3 | No event is published before its transaction commits | By construction: the hub is fed only by the outbox publisher, which reads committed rows. Conformance: outbox |
 | R4 | A subscriber receives an event only when the kernel grants read access to the record | Backend visibility test, e2e draft-leak test |
 | R5 | A reconnecting client either receives every missed visible event or is told to resynchronise | e2e reconnect test |
-| R6 | Passwords, session tokens and CSRF tokens never appear in logs or URLs | Log scan test |
+| R6 | Passwords, session tokens and CSRF tokens never appear in logs or URLs | Browser test that reads the log files |
 
 ## Simulation
 

@@ -1,0 +1,87 @@
+# Strata
+
+A metadata-driven, multi-tenant application substrate, built around a pure Rust domain kernel,
+with a Lean 4 model of that kernel, a deterministic simulator that runs the real kernel, and a
+blog, **Fieldnotes**, that exists only as tenant metadata on top of it.
+
+The kernel defines what the system means. Everything else interprets, executes, persists,
+presents, proves or simulates that meaning.
+
+## Start it
+
+Needs Rust 1.96, Node 24 and, for the proofs only, Lean 4.36 (via `elan`). No Docker, no
+database server, no network once dependencies are installed.
+
+```sh
+npm install            # once
+npm run dev            # or: nu scripts/dev.nu
+```
+
+That one command builds and starts the backend, the BFF and Vite, creates the SQLite database
+at `var/strata.db`, installs the tenants on first start, and stops everything on Ctrl+C.
+
+| What | Where |
+|---|---|
+| Fieldnotes, with hot reload | http://127.0.0.1:5173/ |
+| Writing desk | http://127.0.0.1:5173/desk |
+| Impact Lab | http://127.0.0.1:5173/lab |
+| The second tenant, Tidewater Review | http://tidewater.localhost:5173/ |
+| BFF serving the built frontend | http://127.0.0.1:4100/ (after `npm run build`) |
+| Backend | 127.0.0.1:4101, loopback only, refuses anything without the service token |
+
+Development logins (defined in `tenants/fieldnotes/accounts.dev.json`, installed only when
+`STRATA_DEV=1`, never part of the tenant's data):
+
+| Name | Password | Role |
+|---|---|---|
+| `admin` | `strata-dev-admin` | owner: settings, schema, Impact Lab |
+| `ines` | `strata-dev-ines` | editor |
+| `tomasz` | `strata-dev-tomasz` | author |
+| `mirela` | `strata-dev-mirela` | author |
+
+`node scripts/dev.mjs --fresh` deletes the development database first.
+`node scripts/dev.mjs --no-vite` serves the built frontend from the BFF, as a deployment would.
+
+## Check it
+
+```sh
+cargo test --workspace     # kernel, substrate, storage, simulation, verification, backend, BFF
+npm run test:web           # the frontend kernel, as plain functions
+npm run check              # type-check the JavaScript through its JSDoc
+npm run build && npm run e2e   # real browser: 26 tests on two stacks with their own ports
+cd lean && lake build && lake env lean Audit.lean   # the proofs and the axioms they use
+```
+
+On a shared machine, cap the Rust build and tests: `CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=2`.
+
+## What is where
+
+```
+crates/kernel           pure transition engine: no I/O, no clock, no randomness
+crates/substrate        pure interpreters: bundles, expression syntax, views, Markdown, themes
+crates/storage-api      the persistence contract, a memory adapter, the conformance suite
+crates/storage-sqlite   every line of SQL in the project
+crates/protocol         wire types: internal API, WebSocket protocol v1, log lines
+crates/backend          sessions, load -> kernel -> commit, outbox, subscriptions, Lab runs
+crates/bff              the browser's only entry point
+crates/simulation       discrete-event simulator over the real kernel; branching; replay
+crates/verification     invariants, proof obligations, Lean orchestration, correspondence
+lean/                   the abstract model, the proofs, the executable model
+web/src/kernel          the frontend kernel: update(state, message) and view(state)
+web/src/worker          the Web Worker driver: every fetch and the WebSocket
+web/src/views           view model to elements
+web/src/styles          tokens, base, layout, components, in cascade layers
+tenants/                Fieldnotes and Tidewater as data; the publication template
+tests/e2e               Playwright
+docs/                   architecture, invariants, decisions, storage, protocol, verification
+```
+
+## Read next
+
+- [docs/architecture.md](docs/architecture.md): the shape of the system and the request path.
+- [docs/invariants.md](docs/invariants.md): what must always hold, and what checks it.
+- [docs/decisions.md](docs/decisions.md): decisions that affect correctness, and why.
+- [docs/storage.md](docs/storage.md): the persistence contract and how to add a database.
+- [docs/protocol.md](docs/protocol.md): the HTTP surface and WebSocket protocol v1.
+- [docs/verification.md](docs/verification.md): what is proved, what is tested, what is neither.
+- [docs/development.md](docs/development.md): the dev loop, logs, diagnostics, fixtures.
