@@ -43,13 +43,13 @@ node scripts/spec-gate.mjs --no-test --allow-recorded  # reuse the recorded test
 
 The full gate runs `cargo test --workspace`, `lake build`, the web kernel tests (`node --test`)
 and `npm run check` (type check). It records their output under `var/test-results`, together with
-`gate-record.json`, which holds the specification's hash and a content hash of every source file
+a gate record there that holds the specification's hash and a content hash of every source file
 as they were before the run. It then asks Exegra to validate the file and evaluate its claims, and
 asks Concordance to lint the requirements and scan them. It passes only when every check passes.
 
 `--no-test` reuses the recorded results and says so on screen. Without `--allow-recorded` it
 fails. With it, it still fails when the specification or any source file differs from the hashes
-in `gate-record.json`, or when the recorded run did not pass. The browser tests (`npm run e2e`)
+in the gate record, or when the recorded run did not pass. The browser tests (`npm run e2e`)
 are not part of the gate.
 
 Exegra finds this file through the linked project `specs/strata/project.jsonc` in the Exegra
