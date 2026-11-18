@@ -215,8 +215,19 @@ impl<'a> Draft<'a> {
         }
     }
 
+    /// A rejection always names at least one failed check. Refusals that come from a rule or a
+    /// policy already carry it. The others (an unknown record, a stale version, an intent that
+    /// makes no sense) get one here, named after the kind of refusal.
     fn reject(&self, kind: ErrorKind, message: impl Into<String>) -> DomainError {
-        DomainError::new(kind, message).with(self.evidence.clone())
+        let message = message.into();
+        let mut evidence = self.evidence.clone();
+        if evidence.iter().all(|check| check.passed) {
+            evidence.push(Check::fail(
+                format!("intent:{}", snake_case(&format!("{kind:?}"))),
+                message.clone(),
+            ));
+        }
+        DomainError::new(kind, message).with(evidence)
     }
 
     fn require(
@@ -1145,4 +1156,20 @@ pub fn apply_delta(
     next.next_record = delta.next_record;
     next.event_seq = delta.event_seq;
     Ok(next)
+}
+
+/// `UnknownRecord` as `unknown_record`, for the rule name of a refusal.
+fn snake_case(name: &str) -> String {
+    let mut out = String::with_capacity(name.len() + 4);
+    for (index, ch) in name.chars().enumerate() {
+        if ch.is_ascii_uppercase() {
+            if index > 0 {
+                out.push('_');
+            }
+            out.push(ch.to_ascii_lowercase());
+        } else {
+            out.push(ch);
+        }
+    }
+    out
 }
