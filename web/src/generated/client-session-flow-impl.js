@@ -4,7 +4,7 @@
 // The session in the kernel state of the web application (state.session, with its csrf_token). A session frame that says the session ended sets authenticated to false and drops the token in the same transition, then reads the session and the page again. The state is kept in memory for the life of the tab.
 // Specification behavior `client-session-flow-impl`, an implementation-level machine run in the browser.
 
-import { overflow, StepError } from './machine-runtime.js';
+import { check, overflow, StepError } from './machine-runtime.js';
 
 /**
  * The states of machine `client-session-flow-impl`.
@@ -41,6 +41,17 @@ import { overflow, StepError } from './machine-runtime.js';
  */
 
 /**
+ * What each event the machine receives must hold, as the Rust machine's decode requires it.
+ * @type {Map<string, import('./machine-runtime.js').Check>}
+ */
+const PAYLOADS = new Map([
+  ['ui-session-read', check.payload({ authenticated: check.integer(0, 255) })],
+  ['ui-signed-in', check.payload({})],
+  ['ui-signed-out', check.payload({})],
+  ['ui-session-ended', check.payload({})],
+]);
+
+/**
  * The state and variables of a new instance.
  * @param {string} [_key] The instance key; unused, the state lives in the kernel.
  * @returns {{ state: ClientSessionFlowImplState, vars: ClientSessionFlowImplVars }}
@@ -56,9 +67,12 @@ export function initial(_key) {
  * @param {ClientSessionFlowImplEvent} event
  * @param {number} now
  * @returns {ClientSessionFlowImplOutcome}
- * @throws {StepError} when arithmetic overflows or divides by zero.
+ * @throws {StepError} when arithmetic overflows or divides by zero, or the event is not one the machine receives or its payload is not of the declared types (integers beyond +-(2^53 - 1) included).
  */
 export function step(state, vars, event, now) {
+  const payloadCheck = PAYLOADS.get(event.event);
+  if (payloadCheck === undefined) throw new StepError('invalid-event', `machine client-session-flow-impl receives no event ${event.event}`);
+  payloadCheck(event.payload, event.event);
   switch (state) {
     case 'cs-unknown-i':
       switch (event.event) {

@@ -142,6 +142,13 @@ fn is_float(t: &Ty) -> bool {
 }
 
 /// The largest integer a double holds exactly in every step, `2^53 - 1`.
+///
+/// Chosen semantics of the 64-bit integer types: the JavaScript machine holds and computes
+/// integers only within `+-(2^53 - 1)` and refuses everything else (arithmetic past it evaluates
+/// the overflow expression; a payload integer past it is refused by the generated payload checks
+/// of `machine-runtime.js`). The Rust machine accepts the whole `u64` / `i64` range, so the two
+/// sides agree on every value of magnitude at most `2^53 - 1` and differ only above it, where
+/// this side refuses and the Rust side does not.
 const SAFE: i128 = (1 << 53) - 1;
 
 /// Inclusive range of an integer type as checked by the JavaScript target.

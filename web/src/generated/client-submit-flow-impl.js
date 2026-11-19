@@ -4,7 +4,7 @@
 // The busy and error fields of one form of the kernel state (forms.login, forms.editor, forms.settings). The login form checks its two fields itself; the editor and the settings form leave every check to the gateway and ignore a submit while busy. The state is kept in memory for the life of the tab.
 // Specification behavior `client-submit-flow-impl`, an implementation-level machine run in the browser.
 
-import { overflow, StepError } from './machine-runtime.js';
+import { check, overflow, StepError } from './machine-runtime.js';
 
 /**
  * The states of machine `client-submit-flow-impl`.
@@ -40,6 +40,16 @@ import { overflow, StepError } from './machine-runtime.js';
  */
 
 /**
+ * What each event the machine receives must hold, as the Rust machine's decode requires it.
+ * @type {Map<string, import('./machine-runtime.js').Check>}
+ */
+const PAYLOADS = new Map([
+  ['ui-form-submitted', check.payload({ complete: check.integer(0, 255) })],
+  ['ui-form-accepted', check.payload({})],
+  ['ui-form-refused', check.payload({})],
+]);
+
+/**
  * The state and variables of a new instance.
  * @param {string} [_key] The instance key; unused, the state lives in the kernel.
  * @returns {{ state: ClientSubmitFlowImplState, vars: ClientSubmitFlowImplVars }}
@@ -55,9 +65,12 @@ export function initial(_key) {
  * @param {ClientSubmitFlowImplEvent} event
  * @param {number} now
  * @returns {ClientSubmitFlowImplOutcome}
- * @throws {StepError} when arithmetic overflows or divides by zero.
+ * @throws {StepError} when arithmetic overflows or divides by zero, or the event is not one the machine receives or its payload is not of the declared types (integers beyond +-(2^53 - 1) included).
  */
 export function step(state, vars, event, now) {
+  const payloadCheck = PAYLOADS.get(event.event);
+  if (payloadCheck === undefined) throw new StepError('invalid-event', `machine client-submit-flow-impl receives no event ${event.event}`);
+  payloadCheck(event.payload, event.event);
   switch (state) {
     case 'fs-idle-i':
       switch (event.event) {

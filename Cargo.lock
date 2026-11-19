@@ -1352,6 +1352,7 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
+ "strata-model",
  "strata-runtime",
  "strata-spec-compiler-machines-fixture",
  "strata-spec-compiler-wiring-fixture",

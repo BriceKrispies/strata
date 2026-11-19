@@ -2,10 +2,16 @@
 //!
 //! - the golden files `tests/fixtures/machines-web/web/` are what `specc web` generates from the
 //!   machines fixture (`SPECC_BLESS=1` rewrites them);
-//! - every generated file passes `node --check` (skipped, with a message, without `node`);
+//! - every generated file passes `node --check`;
 //! - the generated `login-form` steps exactly as Exegra runs scenario `login-run`, driven by
-//!   `tests/fixtures/machines-web/web-differential.mjs` (skipped without `EXEGRA_HOME` or `node`);
+//!   `tests/fixtures/machines-web/web-differential.mjs`;
+//! - the generated payload checks refuse what Rust's serde refuses.
+//!
+//! The tests that need `node` or Exegra fail without them (see `support`); only an explicit
+//! `SPECC_SKIP_NODE_TESTS=1` or `SPECC_SKIP_EXEGRA_TESTS=1` skips them, with a banner.
 //! - a client machine is not generated as Rust, and a specification without one gives no files.
+
+mod support;
 
 use std::fs;
 use std::path::PathBuf;
@@ -60,10 +66,6 @@ fn written(name: &str) -> PathBuf {
     dir
 }
 
-fn node_available() -> bool {
-    Command::new("node").arg("--version").output().is_ok()
-}
-
 #[test]
 fn golden_output_matches_the_fixture_directory() {
     let dir = manifest_dir().join("tests/fixtures/machines-web/web");
@@ -82,8 +84,7 @@ fn golden_output_matches_the_fixture_directory() {
 
 #[test]
 fn generated_files_are_valid_javascript() {
-    if !node_available() {
-        eprintln!("skipped: node could not be run");
+    if !support::node_required("the node --check of the generated files") {
         return;
     }
     let dir = written("check");
@@ -182,29 +183,13 @@ fn a_client_machine_refuses_what_it_cannot_express() {
     assert_eq!(diagnostics[0].entity, MACHINE);
 }
 
-/// The Exegra CLI script, when `EXEGRA_HOME` names a checkout that has one.
-fn exegra_cli() -> Option<PathBuf> {
-    let home = PathBuf::from(std::env::var_os("EXEGRA_HOME")?);
-    let cli = home.join("cli").join("exegra.js");
-    // EXEGRA_HOME is set, so a missing CLI is a broken setup, not a reason to skip.
-    assert!(
-        cli.is_file(),
-        "EXEGRA_HOME is set but {} does not exist",
-        cli.display()
-    );
-    Some(cli)
-}
-
 #[test]
 fn the_generated_login_form_steps_as_exegra_runs_it() {
-    let Some(cli) = exegra_cli() else {
-        eprintln!(
-            "skipped: set EXEGRA_HOME to an Exegra checkout (one with cli/exegra.js) to compare the generated login form with Exegra"
-        );
+    let what = "the comparison of the generated login form with Exegra";
+    let Some(cli) = support::exegra_cli(what) else {
         return;
     };
-    if !node_available() {
-        eprintln!("skipped: node could not be run");
+    if !support::node_required(what) {
         return;
     }
     let specs = manifest_dir().join("tests").join("fixtures");
@@ -290,8 +275,7 @@ fn the_web_application_holds_what_specc_web_generates_from_the_specification() {
 
 #[test]
 fn the_generated_kernel_modules_route_derive_validate_and_refresh() {
-    if !node_available() {
-        eprintln!("skipped: node could not be run");
+    if !support::node_required("the run of the generated kernel modules") {
         return;
     }
     let (_, root) = strata_spec();
@@ -352,6 +336,72 @@ assert.equal(actions.confirmText('act-desk-delete', {{ title: 'On Sharpening' }}
     assert!(
         run.status.success(),
         "the generated kernel modules misbehave:\n{}\n{}",
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr)
+    );
+}
+
+#[test]
+fn the_generated_machines_refuse_payloads_that_rust_refuses() {
+    if !support::node_required("the run of the generated payload checks") {
+        return;
+    }
+    let (_, root) = strata_spec();
+    let generated = root.join("web/src/generated");
+    let url = |name: &str| {
+        format!(
+            "file:///{}",
+            generated
+                .join(name)
+                .display()
+                .to_string()
+                .replace('\\', "/")
+                .trim_start_matches('/')
+        )
+    };
+    let script = format!(
+        r#"
+import assert from 'node:assert/strict';
+const live = await import({live:?});
+const submit = await import({submit:?});
+const runtime = await import({runtime:?});
+const {{ state, vars }} = live.initial();
+const welcome = (payload) => () => live.step(state, vars, {{ event: 'ui-live-welcome', payload }}, 0);
+const refused = (name, fn) => assert.throws(fn, (e) => e instanceof runtime.StepError && e.kind === 'invalid-event', name);
+// Accepted: what serde accepts for a u64 and a u32 (within the integers JavaScript holds exactly).
+assert.doesNotThrow(welcome({{ head: 10, 'heartbeat-ms': 10000 }}));
+assert.doesNotThrow(welcome({{ head: Number.MAX_SAFE_INTEGER, 'heartbeat-ms': 4294967295 }}));
+// Refused, as serde refuses them: a fraction or a string for a number, a negative for an unsigned
+// integer, a value past the type's range, a missing member, an object that is not one.
+refused('fraction for u64', welcome({{ head: 1.5, 'heartbeat-ms': 10000 }}));
+refused('string for u64', welcome({{ head: '10', 'heartbeat-ms': 10000 }}));
+refused('negative for u64', welcome({{ head: -1, 'heartbeat-ms': 10000 }}));
+refused('past u32', welcome({{ head: 1, 'heartbeat-ms': 4294967296 }}));
+refused('null for u64', welcome({{ head: null, 'heartbeat-ms': 10000 }}));
+refused('missing member', welcome({{ head: 1 }}));
+refused('not an object', welcome('x'));
+// Refused by the +-(2^53 - 1) bound: Rust accepts these, JavaScript cannot hold them.
+refused('past 2^53 - 1', welcome({{ head: Number.MAX_SAFE_INTEGER + 1, 'heartbeat-ms': 10000 }}));
+// An event the machine does not receive is refused, as the Rust machine cannot decode it.
+refused('unknown event', () => live.step(state, vars, {{ event: 'ml-requested', payload: {{}} }}, 0));
+// A u8 member.
+const form = submit.initial();
+const submitted = (payload) => () => submit.step(form.state, form.vars, {{ event: 'ui-form-submitted', payload }}, 0);
+assert.doesNotThrow(submitted({{ complete: 1 }}));
+refused('past u8', submitted({{ complete: 256 }}));
+refused('boolean for u8', submitted({{ complete: true }}));
+"#,
+        live = url("client-live-flow-impl.js"),
+        submit = url("client-submit-flow-impl.js"),
+        runtime = url("machine-runtime.js"),
+    );
+    let dir = scratch_dir("payload-checks");
+    let path = dir.join("checks.mjs");
+    fs::write(&path, script).unwrap();
+    let run = Command::new("node").arg(&path).output().unwrap();
+    assert!(
+        run.status.success(),
+        "the generated payload checks misbehave:\n{}\n{}",
         String::from_utf8_lossy(&run.stdout),
         String::from_utf8_lossy(&run.stderr)
     );
