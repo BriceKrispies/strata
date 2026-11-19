@@ -3173,7 +3173,7 @@
   ],
 
   "validations": [
-    {"id":"val-sign-in-login","description":"update.js onSubmit: a login that is empty after trimming is refused before any request.","contract":"sign-in-at-site","input":"login","rule":"pattern","pattern":"\\S","message":"Enter your name and password."},
+    {"id":"val-sign-in-login","description":"update.js onSubmit: a login that is empty after trimming is refused before any request.","contract":"sign-in-at-site","input":"login","rule":"pattern","pattern":"[\\s\\S]*\\S[\\s\\S]*","message":"Enter your name and password."},
     {"id":"val-sign-in-password","description":"update.js onSubmit: an empty password is refused before any request.","contract":"sign-in-at-site","input":"password","rule":"required","message":"Enter your name and password."}
   ],
 
@@ -3468,7 +3468,7 @@
     {"id":"ui-session-requested","name":"Session read requested","description":"The web application asks the gateway for the session again.","delivery":"at-least-once"},
     {"id":"ui-notice-received","name":"Notice received","description":"A notice frame arrives on the live connection. kind is upsert or remove (a record of the object type object changed), schema or membership (object is empty).","payload":[{"name":"kind","type":"string"},{"name":"object","type":"string"}]},
     {"id":"ui-live-start","name":"Live connection started","description":"The page starts and opens the socket."},
-    {"id":"ui-live-welcome","name":"Welcome frame","description":"The server accepts the socket and says where its event log stands and how often it wants a ping (heartbeat-ms).","payload":[{"name":"head","type":"u64"},{"name":"heartbeat-ms","type":"u64"}]},
+    {"id":"ui-live-welcome","name":"Welcome frame","description":"The server accepts the socket and says where its event log stands and how often it wants a ping (heartbeat-ms).","payload":[{"name":"head","type":"u64"},{"name":"heartbeat-ms","type":"u32"}]},
     {"id":"ui-live-frame","name":"Event frame","description":"The server sends one event frame: its number on this connection and its sequence in the log.","payload":[{"name":"n","type":"u64"},{"name":"seq","type":"u64"}]},
     {"id":"ui-live-pong","name":"Pong frame","description":"The server answers a ping with the head of its event log.","payload":[{"name":"head","type":"u64"}]},
     {"id":"ui-live-heartbeat-due","name":"Heartbeat due","description":"The heartbeat interval passed.","elapsed":true},

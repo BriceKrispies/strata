@@ -39,8 +39,9 @@ pub const VAL_SIGN_IN_PASSWORD: ValidationError = ValidationError {
 pub const ALL: &[ValidationError] = &[VAL_SIGN_IN_LOGIN, VAL_SIGN_IN_PASSWORD];
 
 /// The pattern of validation `val-sign-in-login`, matched against the whole value.
-static VAL_SIGN_IN_LOGIN_PATTERN: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new("\\A(?:\\S)\\z").expect("specc checked that the pattern compiles"));
+static VAL_SIGN_IN_LOGIN_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new("\\A(?:[\\s\\S]*\\S[\\s\\S]*)\\z").expect("specc checked that the pattern compiles")
+});
 
 fn check_val_sign_in_login(
     request: &crate::contracts::SignInAtSiteRequest,

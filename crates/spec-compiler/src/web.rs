@@ -14,7 +14,9 @@
 //! `time` reads), each emit is `{ to, delivery, event, payload }` and each timer command is
 //! `{ set, afterMs, event, payload }` or `{ cancel }`; an emit with a delay (`after`) also carries
 //! `afterMs`, which the kernel waits before delivering it; `event` in an emit or timer is the event
-//! id. Nothing is stored: the machine's state and variables live in the kernel's state, so there
+//! id. A timer whose delay is read at run time (`after: {expr, simulate}`) evaluates `expr`, an
+//! unsigned integer over the variables as the effects before it left them and the payload, for
+//! its `afterMs`; `simulate` is for simulations only. Nothing is stored: the machine's state and variables live in the kernel's state, so there
 //! is no `to_record` or `from_record`.
 //!
 //! `step` has the semantics of the Rust backend (`backend/machines.rs`) and of Exegra
@@ -826,6 +828,31 @@ impl<'a> Gen<'a> {
         }
     }
 
+    /// The JavaScript of a timer delay read at run time: an expression of an unsigned integer
+    /// type (a number of milliseconds).
+    fn delay(
+        &mut self,
+        src: &str,
+        scope: &MachineScope,
+        what: &str,
+        timer: &str,
+    ) -> Option<String> {
+        let parsed = self.parse(src, what)?;
+        for ty in [Ty::U64, Ty::U32, Ty::U16, Ty::U8] {
+            if let Ok(js) = expr::to_js_as(&parsed, scope, &ty) {
+                return Some(js);
+            }
+        }
+        self.refuse(
+            TIMER_AFTER,
+            format!(
+                "{what} of machine \"{}\" sets timer \"{timer}\" with a delay `{src}` that is not an unsigned integer number of milliseconds.",
+                self.b.id
+            ),
+        );
+        None
+    }
+
     /// A JSON value as a JavaScript value of type `t`.
     fn literal(&self, value: &Value, t: &TypeRef) -> Result<String, String> {
         let spec = self.spec;
@@ -1132,6 +1159,36 @@ impl<'a> Gen<'a> {
                     event,
                     payload,
                 } => {
+                    // A delay read at run time, `{expr, simulate}`: the expression is evaluated
+                    // when the timer is set, on the variables as the effects before it left them.
+                    if let Some(src) = after
+                        .as_ref()
+                        .and_then(|a| a.get("expr"))
+                        .and_then(Value::as_str)
+                    {
+                        let scope = self.scope(payload_fields, &t.id, "next");
+                        let Some(delay) = self.delay(src, &scope, &what, name) else {
+                            ok = false;
+                            continue;
+                        };
+                        let Some(info) =
+                            self.received.iter().find(|e| e.event.id == *event).cloned()
+                        else {
+                            ok = false;
+                            continue;
+                        };
+                        let Some(p) = self.payload(&info, payload, &scope, &what) else {
+                            ok = false;
+                            continue;
+                        };
+                        self.timer_events.insert(event.clone());
+                        lines.push(format!(
+                            "timers.push({{ set: {}, afterMs: {delay}, event: {}, payload: {p} }});",
+                            sq(name),
+                            sq(event)
+                        ));
+                        continue;
+                    }
                     let Some(millis) = after.as_ref().and_then(Value::as_u64) else {
                         self.refuse(
                             TIMER_AFTER,
