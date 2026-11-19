@@ -26,8 +26,8 @@ use serde_json::Value;
 
 use super::rust::{by_ref, rust_ty, snake_ident, type_path};
 use super::typing::{
-    int_kind, invalid, struct_fields, ty_of_text, unsupported, variants, FieldInfo, Refusal, Sig,
-    Ty,
+    int_kind, invalid, struct_fields, ty_of_text, unshared, unsupported, variants, FieldInfo,
+    Refusal, Sig, Ty,
 };
 use super::{Example, Function, Outcome};
 use crate::ir::Spec;
@@ -83,6 +83,23 @@ pub(crate) fn literal(spec: &Spec, t: &Ty, v: &Value) -> Result<TokenStream, Ref
             } else {
                 lit
             }
+        }
+        Ty::Float => {
+            let x = v.as_f64().ok_or_else(|| not_a(t, v))?;
+            if !x.is_finite() {
+                return Err(not_a(t, v));
+            }
+            let lit = Literal::f64_unsuffixed(x.abs());
+            if x.is_sign_negative() {
+                quote! { -#lit }
+            } else {
+                quote! { #lit }
+            }
+        }
+        // Exegra writes a shared<T> as a T.
+        Ty::Shared(of) => {
+            let inner = literal(spec, of, v)?;
+            quote! { std::sync::Arc::new(#inner) }
         }
         Ty::Alias(id, repr) => {
             let inner = literal(spec, repr, v)?;
@@ -276,7 +293,12 @@ fn order(spec: &Spec, t: &Ty, a: &Value, b: &Value) -> Result<std::cmp::Ordering
             };
             n(a)?.cmp(&n(b)?)
         }
-        Ty::Alias(_, repr) => order(spec, repr, a, b)?,
+        Ty::Alias(_, repr) | Ty::Shared(repr) => order(spec, repr, a, b)?,
+        Ty::Float => {
+            return Err(unsupported(
+                "an example set of f64 items, which have no total order",
+            ))
+        }
         Ty::Enum(id) => {
             let values = super::typing::enum_values(spec, id);
             let at = |v: &Value| match v {
@@ -668,18 +690,29 @@ fn value_expr(
         )));
     };
     let fty = ty_of_text(spec, &fx.type_name)?;
-    let wrap = match t {
-        _ if t == &fty => false,
-        Ty::Option(of) if **of == fty => true,
-        _ => {
-            return Err(invalid(format!(
-                "the fixture {} is a {}, but a {} stands here",
-                fx.id,
-                fty.text(),
-                t.text()
-            )))
-        }
+    // A fixture stands for a value of its type, an option of it, or (as Exegra reads
+    // shared<T> as T) a shared one of either.
+    let (wrap, inner) = match t {
+        Ty::Option(of) if unshared(of) == unshared(&fty) => (true, of.as_ref()),
+        _ => (false, t),
     };
+    if unshared(inner) != unshared(&fty) {
+        return Err(invalid(format!(
+            "the fixture {} is a {}, but a {} stands here",
+            fx.id,
+            fty.text(),
+            t.text()
+        )));
+    }
+    let share = matches!(inner, Ty::Shared(_)) && !matches!(fty, Ty::Shared(_));
+    if matches!(fty, Ty::Shared(_)) && !matches!(inner, Ty::Shared(_)) {
+        return Err(unsupported(format!(
+            "the fixture {} is a {}, written as an Arc, where a plain {} stands",
+            fx.id,
+            fty.text(),
+            inner.text()
+        )));
+    }
     used.insert(fx.id.clone());
     let make = fixture_fn(&fx.id);
     let overrides: Vec<(&String, &Value)> = r.with.map(|w| w.iter().collect()).unwrap_or_default();
@@ -713,6 +746,11 @@ fn value_expr(
             json_set(&mut merged, &segs, value, path)?;
         }
         literal(spec, &fty, &merged)?
+    };
+    let body = if share {
+        quote! { std::sync::Arc::new(#body) }
+    } else {
+        body
     };
     Ok(if wrap {
         quote! { Some(#body) }

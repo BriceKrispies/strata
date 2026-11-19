@@ -20,8 +20,8 @@ use quote::{format_ident, quote};
 
 use super::syntax::{uses, Arm, BinOp, Expr, Kind, Op, Pattern, Res, UnOp};
 use super::typing::{
-    cases, class, int_kind, is_number, match_on, struct_fields, unsupported, variants, Class,
-    MatchOn, Refusal, Sig, Ty, TIMESTAMP,
+    cases, class, format_parts, int_kind, is_number, json_writable, match_on, struct_fields,
+    unshared, unsupported, variants, Class, Hole, MatchOn, Refusal, Sig, Ty, TIMESTAMP,
 };
 use crate::ir::Spec;
 use crate::naming;
@@ -120,12 +120,15 @@ struct Binding {
     ident: Ident,
     ty: Ty,
     form: Form,
+    /// How many `*` reach the value: 1 for a `Box<T>` bound by value, 2 for a `&Box<T>` (a
+    /// boxed field bound by a match), 0 otherwise.
+    deref: usize,
 }
 
 /// True when the generated Rust type is `Copy`.
 pub(crate) fn is_copy(t: &Ty) -> bool {
     match t {
-        Ty::Bool | Ty::Int(_) | Ty::Number => true,
+        Ty::Bool | Ty::Int(_) | Ty::Number | Ty::Float => true,
         // prelude::Timestamp is Copy.
         Ty::Alias(..) if t.is_timestamp() => true,
         Ty::Option(of) => is_copy(of),
@@ -175,6 +178,11 @@ pub(crate) fn rust_ty(t: &Ty) -> Result<TokenStream, Refusal> {
             let of = rust_ty(of)?;
             quote! { std::collections::BTreeSet<#of> }
         }
+        Ty::Float => quote! { f64 },
+        Ty::Shared(of) => {
+            let of = rust_ty(of)?;
+            quote! { std::sync::Arc<#of> }
+        }
         Ty::Option(of) => {
             let of = rust_ty(of)?;
             quote! { Option<#of> }
@@ -200,6 +208,7 @@ pub(crate) fn concretize(t: &Ty, hint: Option<&Ty>) -> Ty {
     match (t, hint) {
         (Ty::Number, Some(h)) => match (int_kind(h), h) {
             (Some(b), _) => Ty::Int(b),
+            (None, Ty::Float) => Ty::Float,
             (None, Ty::Option(inner)) => concretize(t, Some(inner)),
             _ => Ty::Int(Builtin::I64),
         },
@@ -208,6 +217,9 @@ pub(crate) fn concretize(t: &Ty, hint: Option<&Ty>) -> Ty {
         // A set and a list take each other's items; each keeps its own form.
         (Ty::List(a), Some(Ty::List(b) | Ty::Set(b))) => Ty::list(concretize(a, Some(b))),
         (Ty::Set(a), Some(Ty::List(b) | Ty::Set(b))) => Ty::set(concretize(a, Some(b))),
+        // A shared value stays shared; what it holds takes the hint's (shared or not).
+        (Ty::Shared(a), Some(h)) => Ty::shared(concretize(a, Some(unshared(h)))),
+        (Ty::Shared(a), None) => Ty::shared(concretize(a, None)),
         (Ty::Option(a), Some(Ty::Option(b))) => Ty::option(concretize(a, Some(b))),
         (Ty::Map(k, v), Some(Ty::Map(hk, hv))) => {
             Ty::map(concretize(k, Some(hk)), concretize(v, Some(hv)))
@@ -285,10 +297,13 @@ fn held(e: &Expr, hint: Option<&Ty>) -> Ty {
 fn same(a: &Ty, b: &Ty) -> bool {
     match (a, b) {
         (Ty::Unknown | Ty::Never, _) | (_, Ty::Unknown | Ty::Never) => true,
-        (Ty::Number, Ty::Int(_)) | (Ty::Int(_), Ty::Number) | (Ty::Number, Ty::Number) => true,
-        (Ty::List(x), Ty::List(y)) | (Ty::Set(x), Ty::Set(y)) | (Ty::Option(x), Ty::Option(y)) => {
-            same(x, y)
-        }
+        (Ty::Number, Ty::Int(_) | Ty::Float)
+        | (Ty::Int(_) | Ty::Float, Ty::Number)
+        | (Ty::Number, Ty::Number) => true,
+        (Ty::List(x), Ty::List(y))
+        | (Ty::Set(x), Ty::Set(y))
+        | (Ty::Option(x), Ty::Option(y))
+        | (Ty::Shared(x), Ty::Shared(y)) => same(x, y),
         (Ty::Map(k, v), Ty::Map(k2, v2)) | (Ty::Result(k, v), Ty::Result(k2, v2)) => {
             same(k, k2) && same(v, v2)
         }
@@ -343,6 +358,38 @@ fn constrained_literal(spec: &Spec, e: &Expr, want: &Ty) -> Option<Code> {
     })
 }
 
+/// What in a type `{:?}` writes otherwise than Exegra: a timestamp, which the generated type
+/// writes as `Timestamp(n)` and Exegra as `n`. Declared types are looked through once each.
+fn debug_differs(spec: &Spec, t: &Ty, seen: &mut BTreeSet<String>) -> Option<String> {
+    match t {
+        _ if t.is_timestamp() => Some("a timestamp".to_string()),
+        Ty::List(of) | Ty::Set(of) | Ty::Option(of) | Ty::Shared(of) => {
+            debug_differs(spec, of, seen)
+        }
+        Ty::Map(k, v) | Ty::Result(k, v) => {
+            debug_differs(spec, k, seen).or_else(|| debug_differs(spec, v, seen))
+        }
+        Ty::Struct(id) | Ty::Union(id) => {
+            if !seen.insert(id.clone()) {
+                return None;
+            }
+            let fields = if matches!(t, Ty::Struct(_)) {
+                struct_fields(spec, id)
+            } else {
+                variants(spec, id)
+                    .into_iter()
+                    .flat_map(|v| v.fields)
+                    .collect()
+            };
+            fields.iter().find_map(|f| {
+                let ft = f.declared(spec).ok()?;
+                debug_differs(spec, &ft, seen).map(|w| format!("{w} (in {id}.{})", f.name))
+            })
+        }
+        _ => None,
+    }
+}
+
 fn is_constrained(spec: &Spec, id: &str) -> bool {
     spec.type_decl(id)
         .is_some_and(|d| !d.constraints.is_empty())
@@ -366,6 +413,20 @@ fn int_lit(v: i128, kind: Builtin, suffixed: bool) -> Option<Code> {
     } else {
         Code::new(lit, Prec::Postfix)
     })
+}
+
+/// An f64 literal of a number as written (`1` is `1.0`).
+fn float_lit(text: &str) -> Gened<Code> {
+    let v: f64 = text
+        .parse()
+        .map_err(|_| unsupported(format!("the number {text} is not an f64")))?;
+    if !v.is_finite() {
+        return Err(unsupported(format!(
+            "the number {text} is too large for an f64"
+        )));
+    }
+    let lit = Literal::f64_unsuffixed(v);
+    Ok(Code::new(quote! { #lit }, Prec::Postfix))
 }
 
 fn wide_lit(v: i128) -> TokenStream {
@@ -400,6 +461,8 @@ fn is_empty_collection(e: &Expr) -> bool {
 enum Piece {
     Text(String),
     Arg(Code),
+    /// A value written with `{:?}`.
+    Debug(Code),
 }
 
 /// An integer operand of a comparison or arithmetic.
@@ -465,6 +528,7 @@ impl<'a> Gen<'a> {
             ident: ident.clone(),
             ty,
             form,
+            deref: 0,
         });
         Ok(ident)
     }
@@ -600,8 +664,23 @@ impl<'a> Gen<'a> {
         self.shape_next = true;
         let c = self.raw(e, Some(want))?;
         let from = held(e, Some(want));
+        // A shared value where its plain type is expected: the value it holds, cloned from
+        // the Arc without cloning the Arc first.
+        if let Ty::Shared(inner) = &from {
+            if !matches!(want, Ty::Shared(_)) && c.form != Form::OptRef {
+                let v = self.unshare(Self::borrow_code(c), inner)?;
+                return self.coerce(v, inner, want);
+            }
+        }
         let owned = self.own(c, &from);
         self.coerce(owned, &from, want)
+    }
+
+    /// The `T` a `&Arc<T>` holds, cloned.
+    fn unshare(&self, r: Code, inner: &Ty) -> Gened<Code> {
+        let ty = rust_ty(inner)?;
+        let t = &r.t;
+        Ok(Code::new(quote! { <#ty as Clone>::clone(#t) }, Prec::Postfix).exits(r.exits))
     }
 
     /// A `&T` of type `want`.
@@ -614,6 +693,16 @@ impl<'a> Gen<'a> {
         let from = held(e, Some(want));
         if same(&from, want) && c.form != Form::OptRef {
             return Ok(Self::borrow_code(c));
+        }
+        // A shared value borrowed as its plain type: the `&T` in the Arc.
+        if let Ty::Shared(inner) = &from {
+            if same(inner, want) && c.form != Form::OptRef {
+                let b = Self::borrow_code(c);
+                let t = &b.t;
+                return Ok(
+                    Code::new(quote! { std::sync::Arc::as_ref(#t) }, Prec::Postfix).exits(b.exits),
+                );
+            }
         }
         let owned = self.own(c, &from);
         let v = self.coerce(owned, &from, want)?;
@@ -681,6 +770,51 @@ impl<'a> Gen<'a> {
                 let t = c.recv();
                 Ok(Code::new(quote! { #t.0 }, Prec::Postfix).exits(exits))
             }
+            // A shared value as the value it holds (Exegra reads shared<T> as T), and a value
+            // shared where shared<T> is expected.
+            (Ty::Shared(a), _) => {
+                let t = c.at(Prec::Prefix);
+                let v = self.unshare(Code::new(quote! { &#t }, Prec::Prefix).exits(exits), a)?;
+                self.coerce(v, a, to)
+            }
+            (_, Ty::Shared(b)) => {
+                let v = self.coerce(c, from, b)?;
+                let t = &v.t;
+                Ok(Code::new(quote! { std::sync::Arc::new(#t) }, Prec::Postfix).exits(exits))
+            }
+            (Ty::Option(a), Ty::Option(b)) => {
+                let item = self.coerce(Code::new(quote! { item_ }, Prec::Postfix), a, b)?;
+                let (t, it) = (c.recv(), &item.t);
+                Ok(Code::new(quote! { #t.map(|item_| #it) }, Prec::Postfix).exits(exits))
+            }
+            (Ty::Map(k, a), Ty::Map(k2, b)) if same(k, k2) => {
+                let item = self.coerce(Code::new(quote! { item_ }, Prec::Postfix), a, b)?;
+                let (t, it) = (c.recv(), &item.t);
+                Ok(Code::new(
+                    quote! {
+                        #t.into_iter()
+                            .map(|(key_, item_)| (key_, #it))
+                            .collect::<std::collections::BTreeMap<_, _>>()
+                    },
+                    Prec::Postfix,
+                )
+                .exits(exits))
+            }
+            // An integer where a wider integer type is expected (every value fits): `From`.
+            (Ty::Int(a), Ty::Int(b))
+                if a.integer_range()
+                    .zip(b.integer_range())
+                    .is_some_and(|((alo, ahi), (blo, bhi))| blo <= alo && ahi <= bhi) =>
+            {
+                let k = format_ident!("{}", b.as_str());
+                let t = &c.t;
+                Ok(Code::new(quote! { #k::from(#t) }, Prec::Postfix).exits(exits))
+            }
+            // An integer where an f64 is expected, as Exegra's numbers are.
+            (Ty::Int(_), Ty::Float) => {
+                let t = c.at(Prec::Prefix);
+                Ok(Code::new(quote! { (#t as f64) }, Prec::Postfix).exits(exits))
+            }
             // Exegra holds a set as a list: where one stands for the other, the items are
             // collected. A list that becomes a set is put in order and loses repeated items, as
             // a BTreeSet holds it. Items of another type (an id where its representation is
@@ -738,6 +872,15 @@ impl<'a> Gen<'a> {
             concretize(&e.ty(), hint)
         };
         match &e.kind {
+            Kind::Num(text) if eff == Ty::Float || text.contains('.') => {
+                if eff != Ty::Float {
+                    return Err(unsupported(format!(
+                        "the number {text} has a fraction where {} is expected",
+                        eff.text()
+                    )));
+                }
+                float_lit(text)
+            }
             Kind::Num(text) => {
                 let v: i128 = text
                     .parse()
@@ -882,8 +1025,16 @@ impl<'a> Gen<'a> {
                     return Err(unsupported(format!("the name {} is not bound", path[0])));
                 };
                 let ident = &b.ident;
-                let mut c = Code::new(quote! { #ident }, Prec::Postfix).form(b.form);
-                c.ident = true;
+                let mut c = match b.deref {
+                    0 => {
+                        let mut c = Code::new(quote! { #ident }, Prec::Postfix).form(b.form);
+                        c.ident = true;
+                        c
+                    }
+                    // A boxed field bound by a match: the place in the box.
+                    1 => Code::new(quote! { (*#ident) }, Prec::Postfix).form(Form::Place),
+                    _ => Code::new(quote! { (**#ident) }, Prec::Postfix).form(Form::Place),
+                };
                 let mut ty = b.ty.clone();
                 for f in &path[1..] {
                     let next = self.field(c, &ty, f)?;
@@ -900,7 +1051,7 @@ impl<'a> Gen<'a> {
     }
 
     fn field_ty(&self, owner: &Ty, name: &str) -> Gened<Ty> {
-        let Ty::Struct(id) = owner else {
+        let Ty::Struct(id) = unshared(owner) else {
             return Err(unsupported(format!("{} has no field {name}", owner.text())));
         };
         let f = struct_fields(self.spec, id)
@@ -910,9 +1061,11 @@ impl<'a> Gen<'a> {
         f.read(self.spec)
     }
 
-    /// `owner.name`.
+    /// `owner.name`: a field read through a shared owner (`Arc<T>` derefs to `T`), and a boxed
+    /// field read as the place in its box (`(*owner.name)`).
     fn field(&mut self, c: Code, owner: &Ty, name: &str) -> Gened<Code> {
-        let Ty::Struct(id) = owner else {
+        let shared = matches!(owner, Ty::Shared(_));
+        let Ty::Struct(id) = unshared(owner) else {
             return Err(unsupported(format!("{} has no field {name}", owner.text())));
         };
         let fields = struct_fields(self.spec, id);
@@ -920,25 +1073,35 @@ impl<'a> Gen<'a> {
             .iter()
             .find(|f| f.name == name)
             .ok_or_else(|| unsupported(format!("{id} has no field {name}")))?;
-        if f.boxed {
+        let read = f.read(self.spec)?;
+        if f.boxed && matches!(read, Ty::Option(_)) {
             return Err(unsupported(format!(
-                "the field {name} of {id} is boxed; reading it is not compiled yet"
+                "the field {name} of {id} is an optional boxed field; reading it is not compiled yet"
             )));
         }
-        f.read(self.spec)?;
         let fid = snake_ident(name);
         let r = c.recv();
-        let form = if c.form == Form::Temp {
+        // A field of an owned value is owned too, but not through an Arc or a Box, which it
+        // cannot be moved out of.
+        let form = if c.form == Form::Temp && !shared && !f.boxed {
             Form::Temp
         } else {
             Form::Place
         };
-        Ok(Code::new(quote! { #r.#fid }, Prec::Postfix)
-            .form(form)
-            .exits(c.exits))
+        let t = if f.boxed {
+            quote! { (*#r.#fid) }
+        } else {
+            quote! { #r.#fid }
+        };
+        Ok(Code::new(t, Prec::Postfix).form(form).exits(c.exits))
     }
 
     fn negate(&mut self, e: &Expr, a: &Expr, eff: &Ty) -> Gened<Code> {
+        if *eff == Ty::Float {
+            let v = self.value(a, &Ty::Float)?;
+            let t = v.at(Prec::Prefix);
+            return Ok(Code::new(quote! { -#t }, Prec::Prefix).exits(v.exits));
+        }
         let kind = int_kind(eff).unwrap_or(Builtin::I64);
         if let Some(v) = const_int(e) {
             return int_lit(v, kind, false).ok_or_else(|| {
@@ -1012,6 +1175,9 @@ impl<'a> Gen<'a> {
                 Ok(c)
             }
             BinOp::Eq | BinOp::Ne => self.equality(l, r, op == BinOp::Ne),
+            BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge if self.floats(l, r) => {
+                self.float_compare(op, l, r)
+            }
             BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => {
                 let (a, b) = (self.int_operand(l)?, self.int_operand(r)?);
                 Ok(self.compare_ints(a, b, op))
@@ -1086,7 +1252,59 @@ impl<'a> Gen<'a> {
         Code::new(t.0, Prec::Cmp).exits(t.1)
     }
 
+    /// True when a comparison or arithmetic is on f64s: either side is one (the other is then
+    /// an f64 or an integer, which Exegra computes with as the same number).
+    fn floats(&self, l: &Expr, r: &Expr) -> bool {
+        concretize(&l.ty(), None) == Ty::Float || concretize(&r.ty(), None) == Ty::Float
+    }
+
+    /// Two numbers compared as f64s.
+    fn float_compare(&mut self, op: BinOp, l: &Expr, r: &Expr) -> Gened<Code> {
+        let (a, b) = (self.value(l, &Ty::Float)?, self.value(r, &Ty::Float)?);
+        let sym: TokenStream = op.symbol().parse().unwrap_or_default();
+        let (at, bt) = (a.at(Prec::Add), b.at(Prec::Add));
+        Ok(Code::new(quote! { #at #sym #bt }, Prec::Cmp).exits(a.exits || b.exits))
+    }
+
+    /// f64 arithmetic, as Exegra computes with numbers: `+`, `-` and `*` as they are; `/` and
+    /// `%` by zero are an evaluation error in Exegra, a fault here.
+    fn float_arith(&mut self, op: BinOp, l: &Expr, r: &Expr) -> Gened<Code> {
+        let (a, b) = (self.value(l, &Ty::Float)?, self.value(r, &Ty::Float)?);
+        let exits = a.exits || b.exits;
+        let (at, bt) = (a.at(Prec::Add), b.at(Prec::Prefix));
+        Ok(match op {
+            BinOp::Add => Code::new(quote! { #at + #bt }, Prec::Add).exits(exits),
+            BinOp::Sub => Code::new(quote! { #at - #bt }, Prec::Add).exits(exits),
+            BinOp::Mul => {
+                let at = a.at(Prec::Prefix);
+                Code::new(quote! { (#at * #bt) }, Prec::Postfix).exits(exits)
+            }
+            _ => {
+                let fault = self.fault(op.symbol());
+                let at = a.at(Prec::Prefix);
+                let sym: TokenStream = op.symbol().parse().unwrap_or_default();
+                let bt = &b.t;
+                Code::new(
+                    quote! {
+                        {
+                            let divisor_: f64 = #bt;
+                            if divisor_ == 0.0 {
+                                return Err(#fault);
+                            }
+                            #at #sym divisor_
+                        }
+                    },
+                    Prec::Block,
+                )
+                .exits(true)
+            }
+        })
+    }
+
     fn arith(&mut self, op: BinOp, l: &Expr, r: &Expr, eff: &Ty) -> Gened<Code> {
+        if *eff == Ty::Float {
+            return self.float_arith(op, l, r);
+        }
         let kind = int_kind(eff).ok_or_else(|| {
             unsupported(format!(
                 "arithmetic on {}, which is not an integer type",
@@ -1178,6 +1396,13 @@ impl<'a> Gen<'a> {
             quote! { == }
         };
         let both_numbers = is_number(&lt) && is_number(&rt);
+        if both_numbers
+            && !matches!(lt, Ty::Option(_))
+            && !matches!(rt, Ty::Option(_))
+            && self.floats(l, r)
+        {
+            return self.float_compare(if ne { BinOp::Ne } else { BinOp::Eq }, l, r);
+        }
         if both_numbers && !matches!(lt, Ty::Option(_)) && !matches!(rt, Ty::Option(_)) {
             let (a, b) = (self.int_operand(l)?, self.int_operand(r)?);
             return Ok(self.compare_ints(a, b, if ne { BinOp::Ne } else { BinOp::Eq }));
@@ -1310,6 +1535,40 @@ impl<'a> Gen<'a> {
         Ok(Piece::Arg(c))
     }
 
+    /// A value written by `{:?}`: Rust's derived Debug of the generated type, which Exegra's
+    /// debug rule mirrors, but where the generated type is a newtype Exegra writes as a bare
+    /// number (a timestamp).
+    fn debug_piece(&mut self, e: &Expr) -> Gened<Piece> {
+        let ty = concretize(&e.ty(), None);
+        if let Some(what) = debug_differs(self.spec, &ty, &mut BTreeSet::new()) {
+            return Err(unsupported(format!(
+                "{{:?}} writes {}, which holds {what}: Exegra writes it as its number, the generated type as a newtype",
+                ty.text()
+            )));
+        }
+        let c = self.raw(e, None)?;
+        Ok(Piece::Debug(c))
+    }
+
+    /// A value written by `{:json}`: serde_json's text of it, as Exegra's JSON rule mirrors
+    /// (strings, numbers, bools, ids and scalars over them, options and lists of these).
+    fn json_piece(&mut self, e: &Expr) -> Gened<Piece> {
+        let ty = concretize(&e.ty(), None);
+        if !json_writable(&ty) {
+            return Err(unsupported(format!("{{:json}} writes {}", ty.text())));
+        }
+        let c = self.raw(e, None)?;
+        let b = Self::borrow_code(c);
+        let t = &b.t;
+        Ok(Piece::Arg(
+            Code::new(
+                quote! { serde_json::to_string(#t).unwrap_or_default() },
+                Prec::Postfix,
+            )
+            .exits(b.exits),
+        ))
+    }
+
     fn format(&self, pieces: Vec<Piece>) -> Code {
         let mut text = String::new();
         let mut args = Vec::new();
@@ -1317,6 +1576,11 @@ impl<'a> Gen<'a> {
         for p in pieces {
             match p {
                 Piece::Text(s) => text.push_str(&s.replace('{', "{{").replace('}', "}}")),
+                Piece::Debug(c) => {
+                    exits = exits || c.exits;
+                    text.push_str("{:?}");
+                    args.push(c.t);
+                }
                 Piece::Arg(c) => {
                     exits = exits || c.exits;
                     let name = c.t.to_string();
@@ -1345,6 +1609,12 @@ impl<'a> Gen<'a> {
         let all = cases(self.spec, &m);
         let sc = self.raw(s, None)?;
         let (scrut, bind_form) = match sc.form {
+            // A shared union is matched through its Arc.
+            _ if matches!(st, Ty::Shared(_)) => {
+                let b = Self::borrow_code(sc.clone());
+                let t = &b.t;
+                (quote! { std::sync::Arc::as_ref(#t) }, Form::Ref)
+            }
             Form::Temp => (sc.cond(), Form::Place),
             Form::OptRef | Form::Ref => (sc.cond(), Form::Ref),
             Form::Place => {
@@ -1383,6 +1653,14 @@ impl<'a> Gen<'a> {
                             Some(b) if b != "_" && uses(&arm.body, b) => {
                                 let ty = case.fields[i].ty.clone()?;
                                 let ident = self.bind(b, ty, bind_form)?;
+                                if case.fields[i].boxed {
+                                    // The binding is the Box (or a &Box); the value is the
+                                    // place in it.
+                                    if let Some(last) = self.scope.last_mut() {
+                                        last.deref = if bind_form == Form::Ref { 2 } else { 1 };
+                                        last.form = Form::Place;
+                                    }
+                                }
                                 bound += 1;
                                 idents.push(quote! { #ident });
                             }
@@ -1815,15 +2093,23 @@ impl<'a> Gen<'a> {
                 let Kind::Str(text) = &op.args[0].kind else {
                     return Err(unsupported("format without a literal"));
                 };
-                let parts: Vec<&str> = text.split("{}").collect();
                 let mut pieces = Vec::new();
-                for (i, part) in parts.iter().enumerate() {
+                let mut arg = 1;
+                for (part, hole) in format_parts(text) {
                     if !part.is_empty() {
-                        pieces.push(Piece::Text(part.to_string()));
+                        pieces.push(Piece::Text(part));
                     }
-                    if i + 1 < parts.len() {
-                        pieces.push(self.piece(&op.args[i + 1])?);
-                    }
+                    let Some(hole) = hole else { continue };
+                    let e = op
+                        .args
+                        .get(arg)
+                        .ok_or_else(|| unsupported("format has more placeholders than values"))?;
+                    arg += 1;
+                    pieces.push(match hole {
+                        Hole::Display => self.piece(e)?,
+                        Hole::Debug => self.debug_piece(e)?,
+                        Hole::Json => self.json_piece(e)?,
+                    });
                 }
                 Ok(self.format(pieces))
             }
@@ -1858,8 +2144,107 @@ impl<'a> Gen<'a> {
                 let v = self.fail_value(op)?;
                 Ok(Code::new(quote! { return #v }, Prec::Block).exits(true))
             }
+            "startsWith" | "endsWith" => {
+                let (a, b) = (self.str_ref(&op.args[0])?, self.str_ref(&op.args[1])?);
+                let method = if op.name == "startsWith" {
+                    quote! { starts_with }
+                } else {
+                    quote! { ends_with }
+                };
+                let (at, bt) = (a.recv(), &b.t);
+                Ok(Code::new(quote! { #at.#method(#bt) }, Prec::Postfix).exits(a.exits || b.exits))
+            }
+            "length" => {
+                let ty = concretize(&op.args[0].ty(), None);
+                if matches!(unshared(&ty), Ty::List(_) | Ty::Set(_)) {
+                    let c = self.raw(&op.args[0], None)?;
+                    let r = c.recv();
+                    return Ok(Code::new(
+                        quote! { u64::try_from(#r.len()).unwrap_or(u64::MAX) },
+                        Prec::Postfix,
+                    )
+                    .exits(c.exits));
+                }
+                // A string's length in characters (Unicode scalar values), as Exegra counts.
+                let c = self.str_ref(&op.args[0])?;
+                let r = c.recv();
+                Ok(Code::new(
+                    quote! { u64::try_from(#r.chars().count()).unwrap_or(u64::MAX) },
+                    Prec::Postfix,
+                )
+                .exits(c.exits))
+            }
+            // str::trim removes Rust's White_Space, which is the set Exegra's trim removes.
+            "trim" => {
+                let c = self.str_ref(&op.args[0])?;
+                let r = c.recv();
+                Ok(Code::new(quote! { #r.trim().to_string() }, Prec::Postfix).exits(c.exits))
+            }
+            "chars" => {
+                let c = self.str_ref(&op.args[0])?;
+                let r = c.recv();
+                Ok(Code::new(
+                    quote! { #r.chars().map(String::from).collect::<Vec<_>>() },
+                    Prec::Postfix,
+                )
+                .exits(c.exits))
+            }
+            "snakeCase" | "parseTime" => {
+                let c = self.str_ref(&op.args[0])?;
+                let (helper, name) = if op.name == "snakeCase" {
+                    ("snake_case", quote! { snake_case })
+                } else {
+                    ("parse_time", quote! { parse_time })
+                };
+                self.helpers.insert(helper);
+                let t = &c.t;
+                Ok(Code::new(quote! { support::#name(#t) }, Prec::Postfix).exits(c.exits))
+            }
+            "isAsciiLowercase"
+            | "isAsciiUppercase"
+            | "isAsciiAlphabetic"
+            | "isAsciiDigit"
+            | "isAsciiAlphanumeric" => {
+                let test = match op.name.as_str() {
+                    "isAsciiLowercase" => quote! { is_ascii_lowercase },
+                    "isAsciiUppercase" => quote! { is_ascii_uppercase },
+                    "isAsciiAlphabetic" => quote! { is_ascii_alphabetic },
+                    "isAsciiDigit" => quote! { is_ascii_digit },
+                    _ => quote! { is_ascii_alphanumeric },
+                };
+                let c = self.str_ref(&op.args[0])?;
+                self.helpers.insert("every_char");
+                let t = &c.t;
+                Ok(Code::new(
+                    quote! { support::every_char(#t, char::#test) },
+                    Prec::Postfix,
+                )
+                .exits(c.exits))
+            }
             other => Err(unsupported(format!("the operation {other}"))),
         }
+    }
+
+    /// A `&str` of a string, or of an id or scalar over one: a literal as itself.
+    fn str_ref(&mut self, e: &Expr) -> Gened<Code> {
+        if let Kind::Str(s) = &e.kind {
+            let lit = Literal::string(s);
+            return Ok(Code::new(quote! { #lit }, Prec::Postfix));
+        }
+        let ty = concretize(&e.ty(), None);
+        let c = self.raw(e, None)?;
+        let r = c.recv();
+        let t = match &ty {
+            Ty::Alias(..) => quote! { #r.0.as_str() },
+            Ty::Str => quote! { #r.as_str() },
+            other => {
+                return Err(unsupported(format!(
+                    "a string operation on {}, which is not a string",
+                    other.text()
+                )))
+            }
+        };
+        Ok(Code::new(t, Prec::Postfix).exits(c.exits))
     }
 
     /// An argument of `concat`: a list literal as `&[..]`, anything else borrowed.
@@ -2145,6 +2530,11 @@ impl<'a> Gen<'a> {
     /// A sort key: numbers and strings as they are, an enum value by its name, an id or scalar
     /// by its representation.
     fn sort_key(&mut self, e: &Expr, ty: &Ty) -> Gened<Code> {
+        if *ty == Ty::Float {
+            return Err(unsupported(
+                "sortBy with an f64 key: an f64 has no total order to sort by in Rust",
+            ));
+        }
         let c = self.raw(e, None)?;
         match ty {
             Ty::Enum(_) => {
@@ -2238,6 +2628,77 @@ pub(crate) fn helper(name: &str) -> TokenStream {
                 let mut out = a.to_vec();
                 out.extend_from_slice(b);
                 out
+            }
+        },
+        "snake_case" => quote! {
+            /// Exegra's snakeCase (the kernel's snake_case of a PascalCase name): every ASCII
+            /// capital becomes its lower case, after a `_` unless it is the first character.
+            pub(super) fn snake_case(name: &str) -> String {
+                let mut out = String::new();
+                for (i, c) in name.chars().enumerate() {
+                    if c.is_ascii_uppercase() {
+                        if i > 0 {
+                            out.push('_');
+                        }
+                        out.push(c.to_ascii_lowercase());
+                    } else {
+                        out.push(c);
+                    }
+                }
+                out
+            }
+        },
+        "every_char" => quote! {
+            /// Whether a string has a character and every one passes the test (Exegra's
+            /// isAscii* operations).
+            pub(super) fn every_char(s: &str, test: fn(&char) -> bool) -> bool {
+                !s.is_empty() && s.chars().all(|c| test(&c))
+            }
+        },
+        "parse_time" => quote! {
+            /// Exegra's parseTime, which is substrate's parse_time: `YYYY-MM-DD` or
+            /// `YYYY-MM-DDTHH:MM[:SS]Z` (UTC) as milliseconds since the epoch. The date and time
+            /// split at the first `T`; the year is four bytes; each number is read as
+            /// `i64::from_str` reads it; month 1..=12, day 1..=31, hour 0..24, minute and
+            /// second 0..60. It computes in i128, so a time beyond the i64 milliseconds is
+            /// refused rather than wrapped.
+            pub(super) fn parse_time(text: &str) -> Result<i64, String> {
+                let bad = || format!("not a UTC timestamp: {text:?}");
+                let number = |s: &str| s.parse::<i64>().map(i128::from).map_err(|_| bad());
+                let (date, time) = match text.split_once('T') {
+                    Some((date, time)) => (date, Some(time.strip_suffix('Z').ok_or_else(bad)?)),
+                    None => (text, None),
+                };
+                let parts: Vec<&str> = date.split('-').collect();
+                if parts.len() != 3 || parts[0].len() != 4 {
+                    return Err(bad());
+                }
+                let (year, month, day) = (number(parts[0])?, number(parts[1])?, number(parts[2])?);
+                if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+                    return Err(bad());
+                }
+                let y = if month <= 2 { year - 1 } else { year };
+                let era = if y >= 0 { y } else { y - 399 } / 400;
+                let yoe = y - era * 400;
+                let doy = (153 * (month + if month > 2 { -3 } else { 9 }) + 2) / 5 + day - 1;
+                let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+                let mut seconds = (era * 146_097 + doe - 719_468) * 86_400;
+                if let Some(time) = time {
+                    let parts: Vec<&str> = time.split(':').collect();
+                    if !(2..=3).contains(&parts.len()) {
+                        return Err(bad());
+                    }
+                    let (hour, minute) = (number(parts[0])?, number(parts[1])?);
+                    let second = if parts.len() == 3 { number(parts[2])? } else { 0 };
+                    if !(0..24).contains(&hour)
+                        || !(0..60).contains(&minute)
+                        || !(0..60).contains(&second)
+                    {
+                        return Err(bad());
+                    }
+                    seconds += hour * 3_600 + minute * 60 + second;
+                }
+                i64::try_from(seconds * 1_000).map_err(|_| bad())
             }
         },
         "count" => quote! {
