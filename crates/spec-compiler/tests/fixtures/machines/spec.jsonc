@@ -1,0 +1,157 @@
+// Golden fixture for specc's machines backend, and the specification of the differential test
+// against Exegra (tests/differential.rs runs its scenario "lease-run" with the Exegra CLI). It is a
+// complete Exegra specification: `exegra validate --specs crates/spec-compiler/tests/fixtures
+// --project machines` must report no error. The expected output is the crate
+// crates/spec-compiler-machines-fixture.
+//
+// - lease: one lease per record, a token raised on every grant, a result accepted only with the
+//   current token, and a timer that grants again when the lease expires.
+// - job: keyed instances, otherwise, ignores, an at-least-once and an at-most-once emit, a timer
+//   and a cancel, terminal states, and a record field the machine does not own.
+{
+  "exegra": "0.1",
+  "system": { "id": "machines-fixture", "name": "Machines fixture" },
+  "components": [
+    { "id": "lease-service", "name": "Lease service", "category": "computational", "purpose": "Grants leases on work." },
+    { "id": "worker", "name": "Worker", "category": "external", "purpose": "Holds leases and reports results." },
+    { "id": "ledger", "name": "Ledger", "category": "external", "purpose": "Records accepted results." },
+    { "id": "runner", "name": "Runner", "category": "external", "purpose": "Runs jobs." }
+  ],
+  "records": [
+    { "id": "rec-lease", "name": "Lease", "owner": "lease-service", "key": ["lease-id"], "schemaVersion": 1,
+      "fields": [
+        { "name": "lease-id", "type": "string" },
+        { "name": "state", "type": "string" },
+        { "name": "token", "type": "u32" },
+        { "name": "holder", "type": "string" },
+        { "name": "accepted", "type": "u32" },
+        { "name": "granted", "type": "timestamp" }
+      ] },
+    { "id": "rec-job", "name": "Job", "owner": "lease-service", "key": ["job"], "schemaVersion": 1,
+      "fields": [
+        { "name": "job", "type": "string" },
+        { "name": "state", "type": "string" },
+        { "name": "attempts", "type": "u32" },
+        { "name": "note", "type": "string", "optional": true }
+      ] }
+  ],
+  "events": [
+    { "id": "lease-requested", "name": "Lease requested", "payload": [ { "name": "holder", "type": "string" } ] },
+    { "id": "lease-result", "name": "Result reported", "payload": [ { "name": "token", "type": "u32" }, { "name": "value", "type": "string" } ] },
+    { "id": "lease-expired", "name": "Lease expired", "elapsed": true, "payload": [ { "name": "token", "type": "u32" } ] },
+    { "id": "lease-granted", "name": "Lease granted", "delivery": "at-least-once", "payload": [ { "name": "holder", "type": "string" }, { "name": "token", "type": "u32" } ] },
+    { "id": "result-accepted", "name": "Result accepted", "delivery": "at-least-once", "payload": [ { "name": "token", "type": "u32" }, { "name": "value", "type": "string" } ] },
+    { "id": "result-stale", "name": "Result stale", "delivery": "at-most-once", "payload": [ { "name": "token", "type": "u32" } ] },
+    { "id": "job-submitted", "name": "Job submitted", "payload": [ { "name": "job", "type": "string" }, { "name": "priority", "type": "u32" } ] },
+    { "id": "job-tick", "name": "Job retry due", "elapsed": true, "payload": [ { "name": "job", "type": "string" } ] },
+    { "id": "job-cancel", "name": "Job cancelled", "payload": [ { "name": "job", "type": "string" } ] },
+    { "id": "job-started", "name": "Job started", "delivery": "at-least-once", "payload": [ { "name": "job", "type": "string" }, { "name": "attempts", "type": "u32" } ] },
+    { "id": "job-dropped", "name": "Job dropped", "delivery": "at-most-once", "payload": [ { "name": "job", "type": "string" } ] }
+  ],
+  "behaviors": [
+    {
+      "id": "lease", "name": "Lease", "subject": "lease-service", "initial": "idle", "level": "implementation",
+      "description": "One lease on a piece of work. Every grant raises the token; a result is accepted only with the current token; when the lease expires it is granted again to the same holder.",
+      "variables": [
+        { "name": "token", "type": "number", "initial": 0, "repr": "u32" },
+        { "name": "holder", "type": "string", "initial": "", "repr": "string" },
+        { "name": "accepted", "type": "number", "initial": 0, "repr": "u32" },
+        { "name": "granted", "type": "number", "initial": 0, "repr": "timestamp" }
+      ],
+      "storage": { "record": "rec-lease", "key": "lease-id" },
+      "transaction": { "scope": "transition", "isolation": "serializable" },
+      "states": [
+        { "id": "idle", "name": "Free", "ignores": ["lease-expired"] },
+        { "id": "granted", "name": "Granted", "ignores": ["lease-requested"] }
+      ],
+      "transitions": [
+        { "id": "grant", "from": "idle", "to": "granted", "on": "lease-requested", "otherwise": true,
+          "effects": [
+            { "set": "token", "to": "token + 1" },
+            { "set": "holder", "to": "event.holder" },
+            { "set": "granted", "to": "time" },
+            { "emit": "lease-granted", "to": "worker", "payload": { "holder": "holder", "token": "token" } },
+            { "timer": "expiry", "after": 30, "emit": "lease-expired", "payload": { "token": "token" } }
+          ] },
+        { "id": "accept", "from": "granted", "to": "idle", "on": "lease-result", "guard": "event.token == token",
+          "effects": [
+            { "set": "accepted", "to": "accepted + 1" },
+            { "emit": "result-accepted", "to": "ledger", "payload": { "token": "event.token", "value": "event.value" } },
+            { "cancel": "expiry" }
+          ] },
+        { "id": "stale-granted", "from": "granted", "to": "granted", "on": "lease-result", "otherwise": true,
+          "effects": [
+            { "emit": "result-stale", "to": "worker", "payload": { "token": "event.token" } }
+          ] },
+        { "id": "stale-idle", "from": "idle", "to": "idle", "on": "lease-result", "otherwise": true,
+          "effects": [
+            { "emit": "result-stale", "to": "worker", "payload": { "token": "event.token" } }
+          ] },
+        { "id": "regrant", "from": "granted", "to": "granted", "on": "lease-expired", "guard": "event.token == token",
+          "effects": [
+            { "set": "token", "to": "token + 1" },
+            { "set": "granted", "to": "time" },
+            { "emit": "lease-granted", "to": "worker", "payload": { "holder": "holder", "token": "token" } },
+            { "timer": "expiry", "after": 30, "emit": "lease-expired", "payload": { "token": "token" } }
+          ] },
+        { "id": "late-expiry", "from": "granted", "to": "granted", "on": "lease-expired", "otherwise": true }
+      ]
+    },
+    {
+      "id": "job", "name": "Job", "subject": "lease-service", "initial": "idle", "level": "implementation",
+      "description": "One job per key: started when submitted with a priority, retried by a timer up to three attempts, cancelled on request.",
+      "variables": [
+        { "name": "attempts", "type": "number", "initial": 0, "repr": "u32" }
+      ],
+      "instances": { "key": "job", "storedIn": "rec-job" },
+      "transaction": { "scope": "transition", "isolation": "snapshot" },
+      "states": [
+        { "id": "idle", "name": "Waiting", "ignores": ["job-tick", "job-cancel"] },
+        { "id": "running", "name": "Running", "ignores": ["job-submitted"] },
+        { "id": "failed", "name": "Failed", "terminal": true },
+        { "id": "done", "name": "Done", "terminal": true }
+      ],
+      "transitions": [
+        { "id": "submit", "from": "idle", "to": "running", "on": "job-submitted", "guard": "event.priority > 0",
+          "effects": [
+            { "set": "attempts", "to": "attempts + 1" },
+            { "emit": "job-started", "to": "runner", "payload": { "job": "event.job", "attempts": "attempts" } },
+            { "timer": "retry", "after": 100, "emit": "job-tick", "payload": { "job": "event.job" } }
+          ] },
+        { "id": "refuse", "from": "idle", "to": "idle", "on": "job-submitted", "otherwise": true,
+          "effects": [
+            { "emit": "job-dropped", "to": "runner", "payload": { "job": "event.job" } }
+          ] },
+        { "id": "retry", "from": "running", "to": "running", "on": "job-tick", "guard": "attempts < 3",
+          "effects": [
+            { "emit": "job-started", "to": "runner", "payload": { "job": "event.job", "attempts": "attempts + 1" } },
+            { "set": "attempts", "to": "attempts + 1" },
+            { "timer": "retry", "after": 100, "emit": "job-tick", "payload": { "job": "event.job" } }
+          ] },
+        { "id": "give-up", "from": "running", "to": "failed", "on": "job-tick", "otherwise": true,
+          "effects": [
+            { "emit": "job-dropped", "to": "runner", "payload": { "job": "event.job" } }
+          ] },
+        { "id": "cancel", "from": "running", "to": "done", "on": "job-cancel", "otherwise": true,
+          "effects": [
+            { "cancel": "retry" }
+          ] }
+      ]
+    }
+  ],
+  "scenarios": [
+    // A grant, a forged result, an expiry and re-grant, a late result under the old token, an
+    // accepted result, then a second grant (and an ignored third request) that expires once
+    // before its result is accepted.
+    { "id": "lease-run", "name": "Lease run", "behaviors": ["lease"],
+      "steps": [
+        { "at": 0, "event": "lease-requested", "payload": { "holder": "w1" } },
+        { "at": 10, "event": "lease-result", "payload": { "token": 7, "value": "forged" } },
+        { "at": 40, "event": "lease-result", "payload": { "token": 1, "value": "late" } },
+        { "at": 45, "event": "lease-result", "payload": { "token": 2, "value": "done" } },
+        { "at": 50, "event": "lease-requested", "payload": { "holder": "w2" } },
+        { "at": 55, "event": "lease-requested", "payload": { "holder": "w3" } },
+        { "at": 100, "event": "lease-result", "payload": { "token": 4, "value": "done" } }
+      ] }
+  ]
+}

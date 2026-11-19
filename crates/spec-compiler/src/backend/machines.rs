@@ -1227,13 +1227,11 @@ impl<'a> Gen<'a> {
         let mut statements = Vec::new();
         let mut chain = Vec::new();
         let mut ok = true;
-        let mut sets_left = sets;
         for (i, e) in t.effects.iter().enumerate() {
             let what = format!("Effect {} of transition \"{}\"", i + 1, t.id);
             let scope = self.scope(payload_fields, &t.id, base, used_payload);
             match e {
                 Effect::Set { variable, to } => {
-                    sets_left -= 1;
                     let Some(slot) = self.vars.iter().find(|v| v.name == *variable).cloned() else {
                         self.refuse(
                             VARIABLE_UNKNOWN,
@@ -1320,7 +1318,9 @@ impl<'a> Gen<'a> {
                     };
                     self.has_emits = true;
                     let value = quote! { Emitted::#variant(#p) };
-                    let value = if sets_left > 0 {
+                    // `next` moves into the outcome, so a transition that sets variables builds
+                    // each payload where it stands among the effects, before later sets.
+                    let value = if sets > 0 {
                         let local = format_ident!("emitted_{}", i + 1);
                         statements.push(quote! { let #local = #value; });
                         quote! { #local }
@@ -1359,7 +1359,7 @@ impl<'a> Gen<'a> {
                     };
                     self.has_timers = true;
                     let value = quote! { Event::#variant(#p) };
-                    let value = if sets_left > 0 {
+                    let value = if sets > 0 {
                         let local = format_ident!("timer_{}", i + 1);
                         statements.push(quote! { let #local = #value; });
                         quote! { #local }

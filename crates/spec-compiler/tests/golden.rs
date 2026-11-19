@@ -1,6 +1,7 @@
-//! The golden fixture: generating from `tests/fixtures/full/spec.jsonc` gives exactly the crate
-//! `crates/spec-compiler-fixture`, which the workspace compiles. Run with `SPECC_BLESS=1` to
-//! rewrite that crate from the current compiler instead of comparing.
+//! The golden fixtures: generating from `tests/fixtures/full/spec.jsonc` gives exactly the crate
+//! `crates/spec-compiler-fixture`, and from `tests/fixtures/machines/spec.jsonc` exactly
+//! `crates/spec-compiler-machines-fixture`; the workspace compiles both. Run with `SPECC_BLESS=1`
+//! to rewrite those crates from the current compiler instead of comparing.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -11,6 +12,8 @@ use strata_spec_compiler::{generate, output, GeneratedFile, Options, RuntimeDepe
 /// The fixture's path as the headers name it: relative to the workspace root.
 const FIXTURE_SPEC: &str = "crates/spec-compiler/tests/fixtures/full/spec.jsonc";
 const FIXTURE_CRATE: &str = "strata-spec-compiler-fixture";
+const MACHINES_SPEC: &str = "crates/spec-compiler/tests/fixtures/machines/spec.jsonc";
+const MACHINES_CRATE: &str = "strata-spec-compiler-machines-fixture";
 
 fn manifest_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -21,11 +24,21 @@ fn fixture_text() -> String {
 }
 
 fn fixture_files() -> Vec<GeneratedFile> {
+    generated(FIXTURE_SPEC, &fixture_text(), FIXTURE_CRATE)
+}
+
+fn machines_files() -> Vec<GeneratedFile> {
+    let text =
+        fs::read_to_string(manifest_dir().join("tests/fixtures/machines/spec.jsonc")).unwrap();
+    generated(MACHINES_SPEC, &text, MACHINES_CRATE)
+}
+
+fn generated(spec: &str, text: &str, crate_name: &str) -> Vec<GeneratedFile> {
     let options = Options {
-        crate_name: FIXTURE_CRATE.to_string(),
+        crate_name: crate_name.to_string(),
         runtime: RuntimeDependency::Workspace,
     };
-    match generate(FIXTURE_SPEC, &fixture_text(), &options) {
+    match generate(spec, text, &options) {
         Ok(files) => files,
         Err(diagnostics) => panic!(
             "the fixture was refused:\n{}",
@@ -65,6 +78,75 @@ fn golden_output_matches_the_fixture_crate() {
 }
 
 #[test]
+fn machines_golden_output_matches_its_fixture_crate() {
+    let dir = manifest_dir().join("../spec-compiler-machines-fixture");
+    let files = machines_files();
+    if std::env::var("SPECC_BLESS").as_deref() == Ok("1") {
+        output::write(&dir, &files).unwrap();
+        return;
+    }
+    let differences = output::compare(&dir, &files).unwrap();
+    assert!(
+        differences.is_empty(),
+        "crates/spec-compiler-machines-fixture is not what specc generates from the machines fixture: {differences:?}.          Run the test with SPECC_BLESS=1 to rewrite it, and review the change."
+    );
+}
+
+#[test]
+fn only_a_specification_with_machines_gets_a_machines_module_and_the_runtime() {
+    let full = fixture_files();
+    assert!(!full.iter().any(|f| f.path == "src/machines.rs"));
+    let manifest = |files: &[GeneratedFile]| {
+        files
+            .iter()
+            .find(|f| f.path == "Cargo.toml")
+            .unwrap()
+            .contents
+            .clone()
+    };
+    assert!(!manifest(&full).contains("strata-runtime"));
+
+    let machines = machines_files();
+    let paths: Vec<&str> = machines.iter().map(|f| f.path.as_str()).collect();
+    assert!(paths.contains(&"src/machines.rs"));
+    assert!(manifest(&machines).contains(
+        "strata-runtime.workspace = true
+"
+    ));
+
+    let text =
+        fs::read_to_string(manifest_dir().join("tests/fixtures/machines/spec.jsonc")).unwrap();
+    let options = Options {
+        crate_name: "out".to_string(),
+        runtime: RuntimeDependency::Path("../../crates/runtime".to_string()),
+    };
+    let files = generate(MACHINES_SPEC, &text, &options).unwrap();
+    assert!(manifest(&files).contains(
+        "strata-runtime = { path = \"../../crates/runtime\" }
+"
+    ));
+}
+
+#[test]
+fn machine_steps_follow_the_effect_order() {
+    let machines = machines_files();
+    let code = &machines
+        .iter()
+        .find(|f| f.path == "src/machines.rs")
+        .unwrap()
+        .contents;
+    // The job's retry emits before it sets: the payload is built before the set, from the
+    // variables as they were.
+    let emitted = code.find("let emitted_1 = Emitted::JobStarted").unwrap();
+    let set = code[emitted..].find("next.attempts = ").unwrap();
+    assert!(set > 0);
+    // Exegra's time is the step's now.
+    assert!(code.contains("next.granted = prelude::Timestamp(now.0);"));
+    // Ignored and unmatched events keep the state and variables.
+    assert!(code.contains("_ => Ok(Outcome::to(*state, vars.clone())),"));
+}
+
+#[test]
 fn the_crate_has_the_expected_files_each_with_a_header() {
     let files = fixture_files();
     let paths: Vec<&str> = files.iter().map(|f| f.path.as_str()).collect();
@@ -94,6 +176,7 @@ fn the_crate_has_the_expected_files_each_with_a_header() {
 #[test]
 fn generation_is_deterministic() {
     assert_eq!(fixture_files(), fixture_files());
+    assert_eq!(machines_files(), machines_files());
 }
 
 #[test]

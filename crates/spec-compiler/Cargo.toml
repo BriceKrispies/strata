@@ -25,5 +25,9 @@ prettyplease.workspace = true
 regex.workspace = true
 strata-spec-expr.workspace = true
 
+[dev-dependencies]
+strata-runtime.workspace = true
+strata-spec-compiler-machines-fixture = { path = "../spec-compiler-machines-fixture" }
+
 [lints]
 workspace = true

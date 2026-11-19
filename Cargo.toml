@@ -13,6 +13,7 @@ members = [
     "crates/verification",
     "crates/spec-compiler",
     "crates/spec-compiler-fixture",
+    "crates/spec-compiler-machines-fixture",
     "crates/spec-expr",
 ]
 
