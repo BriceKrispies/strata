@@ -44,6 +44,8 @@ pub struct Spec {
     pub languages: Vec<crate::language::Language>,
     /// The `functions` section: pure functions compiled into the pure crate.
     pub functions: Vec<crate::function::Function>,
+    /// The `exampleFixtures` section: values the functions' examples share.
+    pub example_fixtures: Vec<crate::function::ExampleFixture>,
 }
 
 /// `system.telemetry` and the types a log line may never hold.

@@ -386,6 +386,7 @@ mod tests {
             telemetry: Default::default(),
             languages: Vec::new(),
             functions: Vec::new(),
+            example_fixtures: Vec::new(),
         }
     }
 

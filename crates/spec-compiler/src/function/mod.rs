@@ -128,6 +128,20 @@ pub struct Example {
     pub outcome: Outcome,
 }
 
+/// An example fixture: a value of a type that examples refer to as `{"fixture": id}` or
+/// `{"fixture": id, "with": {path: value}}` instead of writing it out (Exegra WG-4963).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExampleFixture {
+    /// Its id.
+    pub id: String,
+    /// The description, if any.
+    pub description: Option<String>,
+    /// The type text of its value.
+    pub type_name: String,
+    /// The value, written as examples write values.
+    pub value: Value,
+}
+
 /// What an example expects.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Outcome {
@@ -144,6 +158,28 @@ impl Loader {
             .into_iter()
             .filter_map(|(id, obj)| self.function(&id, obj))
             .collect()
+    }
+
+    /// The `exampleFixtures` section.
+    pub(crate) fn example_fixtures(&mut self, top: &Obj) -> Vec<ExampleFixture> {
+        let mut out = Vec::new();
+        for (id, obj) in self.section(top, "exampleFixtures") {
+            let description = self.opt_str(obj, "description", &id);
+            let type_name = self.req_str(obj, "type", &id);
+            let Some(value) = obj.get("value").cloned() else {
+                self.shape(&id, "\"value\" is required");
+                continue;
+            };
+            if let Some(type_name) = type_name {
+                out.push(ExampleFixture {
+                    id,
+                    description,
+                    type_name,
+                    value,
+                });
+            }
+        }
+        out
     }
 
     fn function(&mut self, id: &str, obj: &Obj) -> Option<Function> {
@@ -536,6 +572,7 @@ fn compile(spec: &Spec) -> Result<TokenStream, Vec<Diagnostic>> {
     let reserved: BTreeSet<String> = reserved.into_keys().collect();
     let mut items = Vec::new();
     let mut tests = Vec::new();
+    let mut used_fixtures = BTreeSet::new();
     let mut helpers: BTreeSet<&'static str> = BTreeSet::new();
     for f in &spec.functions {
         let t = &typed[&f.id];
@@ -551,10 +588,21 @@ fn compile(spec: &Spec) -> Result<TokenStream, Vec<Diagnostic>> {
                 continue;
             }
         }
-        match examples::tests(spec, f, sig) {
+        match examples::tests(spec, f, sig, &mut used_fixtures) {
             Ok(mut ts) => tests.append(&mut ts),
             Err(r) => diags.push(diag(&f.id, r)),
         }
+    }
+    match examples::fixtures(spec, &used_fixtures) {
+        Ok(mut fixtures) => {
+            fixtures.append(&mut tests);
+            tests = fixtures;
+        }
+        Err((id, r)) => diags.push(Diagnostic::new(
+            r.code,
+            &id,
+            format!("example fixture {id}: {}.", r.message),
+        )),
     }
     if !diags.is_empty() {
         return Err(diags);
@@ -810,5 +858,78 @@ mod tests {
         );
         let d = refusals(&text);
         assert!(d.iter().any(|d| d.code == FUNCTION_INVALID), "{d:?}");
+    }
+
+    const TENANT: &str = r#"{ "id": "tenant", "name": "Tenant", "kind": "struct",
+        "fields": [{ "name": "members", "type": "map<string, list<string>>" }] }"#;
+
+    fn fixture_spec(fixtures: &str, args: &str) -> String {
+        format!(
+            r#"{{ "system": {{ "id": "s", "name": "S", "generation": {{ "target": "rust" }} }},
+                 "types": [{TENANT}],
+                 "exampleFixtures": [{fixtures}],
+                 "functions": [{{ "id": "held", "params": [{{ "name": "t", "type": "tenant" }}], "returns": "bool",
+                   "body": "any(k in keys(t.members), k == 'a')",
+                   "examples": [{{ "args": {{ "t": {args} }}, "result": true }}] }}] }}"#
+        )
+    }
+
+    const ALPHA: &str =
+        r#"{ "id": "alpha-tenant", "type": "tenant", "value": { "members": { "a": ["owner"] } } }"#;
+
+    #[test]
+    fn a_fixture_is_written_once_and_an_example_calls_it() {
+        let out = module(&fixture_spec(ALPHA, r#"{ "fixture": "alpha-tenant" }"#));
+        assert!(
+            out.contains("fn fixture_alpha_tenant () -> types :: Tenant"),
+            "{out}"
+        );
+        assert!(
+            out.contains("let t : types :: Tenant = fixture_alpha_tenant ()"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn an_override_is_an_assignment_after_the_call() {
+        let out = module(&fixture_spec(
+            ALPHA,
+            r#"{ "fixture": "alpha-tenant", "with": { "members.b": ["writer"] } }"#,
+        ));
+        assert!(
+            out.contains("let mut fixture = fixture_alpha_tenant ()"),
+            "{out}"
+        );
+        assert!(out.contains("fixture . members . insert"), "{out}");
+    }
+
+    #[test]
+    fn an_unused_fixture_is_not_written() {
+        let other = r#"{ "id": "beta-tenant", "type": "tenant", "value": { "members": {} } }"#;
+        let out = module(&fixture_spec(
+            &format!("{ALPHA}, {other}"),
+            r#"{ "fixture": "alpha-tenant" }"#,
+        ));
+        assert!(!out.contains("fixture_beta_tenant"), "{out}");
+    }
+
+    #[test]
+    fn a_fixture_that_is_not_declared_or_of_another_type_is_refused() {
+        let d = refusals(&fixture_spec(ALPHA, r#"{ "fixture": "gamma" }"#));
+        assert!(
+            d.iter()
+                .any(|d| d.code == FUNCTION_INVALID && d.message.contains("gamma")),
+            "{d:?}"
+        );
+        let text = fixture_spec(
+            r#"{ "id": "n", "type": "string", "value": "x" }"#,
+            r#"{ "fixture": "n" }"#,
+        );
+        let d = refusals(&text);
+        assert!(
+            d.iter()
+                .any(|d| d.code == FUNCTION_INVALID && d.message.contains("stands here")),
+            "{d:?}"
+        );
     }
 }

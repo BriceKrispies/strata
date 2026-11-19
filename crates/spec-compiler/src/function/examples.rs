@@ -7,13 +7,28 @@
 //! as decimal strings); a union in serde's external form whatever its wire encoding; a result as
 //! `{"Ok": ..}` or `{"Err": ..}`. Each is written as a Rust value expression of the generated
 //! type, so the tests do not depend on the types' serde encodings.
+//!
+//! # Fixtures
+//!
+//! An argument, result or error may be a reference to an example fixture (Exegra WG-4963):
+//! `{"fixture": id}` or `{"fixture": id, "with": {"a.b": value}}`. Each fixture a test uses is
+//! written once, as `fn fixture_<id>() -> T` in the test module, and a use calls it; an override
+//! is an assignment in code after the call (a struct field, a map key or a list index, through
+//! options). A path that goes through a union or a boxed field cannot be assigned, so that use
+//! writes the fixture's value with the overrides merged in as a literal instead, which is the
+//! same value. A fixture nobody uses is not written.
+
+use std::collections::{BTreeMap, BTreeSet};
 
 use proc_macro2::{Literal, TokenStream};
 use quote::{format_ident, quote};
 use serde_json::Value;
 
 use super::rust::{by_ref, rust_ty, snake_ident, type_path};
-use super::typing::{int_kind, struct_fields, unsupported, variants, FieldInfo, Refusal, Sig, Ty};
+use super::typing::{
+    int_kind, invalid, struct_fields, ty_of_text, unsupported, variants, FieldInfo, Refusal, Sig,
+    Ty,
+};
 use super::{Example, Function, Outcome};
 use crate::ir::Spec;
 use crate::naming;
@@ -163,15 +178,7 @@ pub(crate) fn literal(spec: &Spec, t: &Ty, v: &Value) -> Result<TokenStream, Ref
             } else {
                 let mut entries = Vec::new();
                 for (key, x) in obj {
-                    let key_json = if int_kind(k).is_some() {
-                        key.parse::<i64>()
-                            .map(Value::from)
-                            .or_else(|_| key.parse::<u64>().map(Value::from))
-                            .map_err(|_| not_a(k, &Value::String(key.clone())))?
-                    } else {
-                        Value::String(key.clone())
-                    };
-                    let kt = literal(spec, k, &key_json)?;
+                    let kt = map_key(spec, k, key)?;
                     let vt = literal(spec, val, x)?;
                     entries.push(quote! { (#kt, #vt) });
                 }
@@ -195,6 +202,19 @@ pub(crate) fn literal(spec: &Spec, t: &Ty, v: &Value) -> Result<TokenStream, Ref
             ))
         }
     })
+}
+
+/// A map key written as an object key: an integer key is a decimal string.
+fn map_key(spec: &Spec, k: &Ty, key: &str) -> Result<TokenStream, Refusal> {
+    let key_json = if int_kind(k).is_some() {
+        key.parse::<i64>()
+            .map(Value::from)
+            .or_else(|_| key.parse::<u64>().map(Value::from))
+            .map_err(|_| not_a(k, &Value::String(key.to_string())))?
+    } else {
+        Value::String(key.to_string())
+    };
+    literal(spec, k, &key_json)
 }
 
 fn b_range(t: &Ty) -> (i128, i128) {
@@ -248,12 +268,17 @@ fn field_inits(
 }
 
 /// The tests of one function's examples.
-pub(crate) fn tests(spec: &Spec, f: &Function, sig: &Sig) -> Result<Vec<TokenStream>, Refusal> {
+pub(crate) fn tests(
+    spec: &Spec,
+    f: &Function,
+    sig: &Sig,
+    used: &mut BTreeSet<String>,
+) -> Result<Vec<TokenStream>, Refusal> {
     let name = snake_ident(&f.id);
     let base = naming::snake(&f.id).unwrap_or_default();
     let mut out = Vec::new();
     for (i, ex) in f.examples.iter().enumerate() {
-        out.push(test(spec, f, sig, &name, &base, i + 1, ex)?);
+        out.push(test(spec, f, sig, &name, &base, i + 1, ex, used)?);
     }
     Ok(out)
 }
@@ -266,6 +291,7 @@ fn test(
     base: &str,
     n: usize,
     ex: &Example,
+    used: &mut BTreeSet<String>,
 ) -> Result<TokenStream, Refusal> {
     let test_name = format_ident!("{base}_example_{n}");
     if let Some(k) = ex
@@ -281,7 +307,7 @@ fn test(
     let mut args = Vec::new();
     for (pname, pt) in &sig.params {
         let v = ex.args.get(pname).cloned().unwrap_or(Value::Null);
-        let value = literal(spec, pt, &v).map_err(|r| Refusal {
+        let value = value_expr(spec, pt, &v, used).map_err(|r| Refusal {
             code: r.code,
             message: format!("example {n}, argument {pname}: {}", r.message),
         })?;
@@ -297,7 +323,7 @@ fn test(
     let call = quote! { #name(#(#args),*) };
     let check = match &ex.outcome {
         Outcome::Result(v) => {
-            let want = literal(spec, &sig.returns, v).map_err(|r| Refusal {
+            let want = value_expr(spec, &sig.returns, v, used).map_err(|r| Refusal {
                 code: r.code,
                 message: format!("example {n}, result: {}", r.message),
             })?;
@@ -316,10 +342,11 @@ fn test(
                     f.id
                 )));
             };
-            let want = literal(spec, &Ty::Union(errors.clone()), v).map_err(|r| Refusal {
-                code: r.code,
-                message: format!("example {n}, error: {}", r.message),
-            })?;
+            let want =
+                value_expr(spec, &Ty::Union(errors.clone()), v, used).map_err(|r| Refusal {
+                    code: r.code,
+                    message: format!("example {n}, error: {}", r.message),
+                })?;
             if sig.faultable {
                 quote! { assert_eq!(#call, Err(Failure::Error(#want))); }
             } else {
@@ -342,4 +369,234 @@ fn test(
             #check
         }
     })
+}
+
+/// A fixture reference: the fixture's id and its overrides.
+struct FixtureRef<'a> {
+    id: &'a str,
+    with: Option<&'a serde_json::Map<String, Value>>,
+}
+
+/// The reference an example value is, if it is one: an object whose `fixture` is a string and
+/// whose only other key is `with`.
+fn fixture_ref(v: &Value) -> Result<Option<FixtureRef<'_>>, Refusal> {
+    let Value::Object(obj) = v else {
+        return Ok(None);
+    };
+    let Some(Value::String(id)) = obj.get("fixture") else {
+        return Ok(None);
+    };
+    if obj.keys().any(|k| k != "fixture" && k != "with") {
+        return Ok(None);
+    }
+    let with = match obj.get("with") {
+        None => None,
+        Some(Value::Object(w)) => Some(w),
+        Some(_) => {
+            return Err(invalid(format!(
+                "\"with\" of the fixture {id} must be an object of path to value"
+            )))
+        }
+    };
+    Ok(Some(FixtureRef { id, with }))
+}
+
+/// The name of the function that gives a fixture's value.
+fn fixture_fn(id: &str) -> proc_macro2::Ident {
+    format_ident!("fixture_{}", naming::snake(id).unwrap_or_default())
+}
+
+/// A value expression of type `t` for an example value that is a literal or a fixture reference.
+fn value_expr(
+    spec: &Spec,
+    t: &Ty,
+    v: &Value,
+    used: &mut BTreeSet<String>,
+) -> Result<TokenStream, Refusal> {
+    let Some(r) = fixture_ref(v)? else {
+        return literal(spec, t, v);
+    };
+    let Some(fx) = spec.example_fixtures.iter().find(|f| f.id == r.id) else {
+        return Err(invalid(format!(
+            "the example refers to the fixture {}, which is not declared",
+            r.id
+        )));
+    };
+    let fty = ty_of_text(spec, &fx.type_name)?;
+    let wrap = match t {
+        _ if t == &fty => false,
+        Ty::Option(of) if **of == fty => true,
+        _ => {
+            return Err(invalid(format!(
+                "the fixture {} is a {}, but a {} stands here",
+                fx.id,
+                fty.text(),
+                t.text()
+            )))
+        }
+    };
+    used.insert(fx.id.clone());
+    let make = fixture_fn(&fx.id);
+    let overrides: Vec<(&String, &Value)> = r.with.map(|w| w.iter().collect()).unwrap_or_default();
+    let mut stmts = Vec::new();
+    let mut in_code = true;
+    for (path, value) in &overrides {
+        let segs: Vec<&str> = path.split('.').collect();
+        if segs.iter().any(|s| s.is_empty()) {
+            return Err(invalid(format!(
+                "the override {path} of the fixture {} has an empty step",
+                fx.id
+            )));
+        }
+        match assign(spec, &fty, &segs, value)? {
+            Some(stmt) => stmts.push(stmt),
+            None => {
+                in_code = false;
+                break;
+            }
+        }
+    }
+    let body = if overrides.is_empty() {
+        quote! { #make() }
+    } else if in_code {
+        quote! { { let mut fixture = #make(); #(#stmts)* fixture } }
+    } else {
+        // A path through a union or a boxed field: the same value, written out.
+        let mut merged = fx.value.clone();
+        for (path, value) in &overrides {
+            let segs: Vec<&str> = path.split('.').collect();
+            json_set(&mut merged, &segs, value, path)?;
+        }
+        literal(spec, &fty, &merged)?
+    };
+    Ok(if wrap {
+        quote! { Some(#body) }
+    } else {
+        body
+    })
+}
+
+/// The statement that sets the value at `segs` of the local `fixture` (of type `t`), or `None`
+/// when the path goes where an assignment cannot (a union, a boxed field).
+fn assign(
+    spec: &Spec,
+    t: &Ty,
+    segs: &[&str],
+    value: &Value,
+) -> Result<Option<TokenStream>, Refusal> {
+    let mut place = quote! { fixture };
+    let mut t = t.clone();
+    for (i, seg) in segs.iter().enumerate() {
+        let last = i + 1 == segs.len();
+        while let Ty::Option(of) = t.clone() {
+            place = quote! { #place.as_mut().expect("the fixture value is present") };
+            t = *of;
+        }
+        match t.clone() {
+            Ty::Struct(id) => {
+                let fields = struct_fields(spec, &id);
+                let Some(f) = fields.iter().find(|f| f.name == *seg) else {
+                    return Err(invalid(format!("{id} has no field {seg}")));
+                };
+                let fid = snake_ident(&f.name);
+                if last {
+                    let v = field_value(spec, f, value)?;
+                    return Ok(Some(quote! { #place.#fid = #v; }));
+                }
+                if f.boxed {
+                    return Ok(None);
+                }
+                place = quote! { #place.#fid };
+                t = f.read(spec)?;
+            }
+            Ty::Map(k, vt) => {
+                let key = map_key(spec, &k, seg)?;
+                if last {
+                    let v = literal(spec, &vt, value)?;
+                    return Ok(Some(quote! { #place.insert(#key, #v); }));
+                }
+                place = quote! { #place.get_mut(&#key).expect("the fixture has the key") };
+                t = *vt;
+            }
+            Ty::List(of) => {
+                let idx: usize = seg
+                    .parse()
+                    .map_err(|_| invalid(format!("{seg} is not a list index")))?;
+                let index = Literal::usize_unsuffixed(idx);
+                if last {
+                    let v = literal(spec, &of, value)?;
+                    return Ok(Some(quote! { #place[#index] = #v; }));
+                }
+                place = quote! { #place[#index] };
+                t = *of;
+            }
+            _ => return Ok(None),
+        }
+    }
+    Ok(None)
+}
+
+/// Sets the value at `segs` of a JSON value: object keys (a struct field, a map key or the
+/// name of a union variant) and array indexes.
+fn json_set(v: &mut Value, segs: &[&str], value: &Value, path: &str) -> Result<(), Refusal> {
+    let Some((seg, rest)) = segs.split_first() else {
+        *v = value.clone();
+        return Ok(());
+    };
+    let bad = || {
+        invalid(format!(
+            "the override {path} does not lead into the fixture's value"
+        ))
+    };
+    match v {
+        Value::Object(o) if rest.is_empty() => {
+            o.insert((*seg).to_string(), value.clone());
+            Ok(())
+        }
+        Value::Object(o) => json_set(o.get_mut(*seg).ok_or_else(bad)?, rest, value, path),
+        Value::Array(a) => {
+            let idx: usize = seg.parse().map_err(|_| bad())?;
+            json_set(a.get_mut(idx).ok_or_else(bad)?, rest, value, path)
+        }
+        _ => Err(bad()),
+    }
+}
+
+/// The fixture functions of the fixtures the tests use, in id order.
+pub(crate) fn fixtures(
+    spec: &Spec,
+    used: &BTreeSet<String>,
+) -> Result<Vec<TokenStream>, (String, Refusal)> {
+    let mut names: BTreeMap<String, &str> = BTreeMap::new();
+    let mut out = Vec::new();
+    for id in used {
+        let Some(fx) = spec.example_fixtures.iter().find(|f| &f.id == id) else {
+            continue;
+        };
+        let fail = |r: Refusal| (id.clone(), r);
+        let rust = naming::snake(id).unwrap_or_default();
+        if let Some(other) = names.insert(rust.clone(), id) {
+            return Err(fail(unsupported(format!(
+                "the fixtures {other} and {id} both become the Rust function fixture_{rust}"
+            ))));
+        }
+        let ty = ty_of_text(spec, &fx.type_name).map_err(fail)?;
+        let rust_type = rust_ty(&ty).map_err(fail)?;
+        let value = literal(spec, &ty, &fx.value).map_err(fail)?;
+        let name = fixture_fn(id);
+        let doc = match &fx.description {
+            Some(d) => crate::render::Doc::new(d).tokens(),
+            None => {
+                let line = format!(" Example fixture `{id}`.");
+                quote! { #[doc = #line] }
+            }
+        };
+        out.push(quote! {
+            #doc
+            fn #name() -> #rust_type {
+                #value
+            }
+        });
+    }
+    Ok(out)
 }

@@ -251,6 +251,7 @@ impl Loader {
         let telemetry = self.telemetry(top);
         let languages = self.languages(top);
         let functions = self.functions(top);
+        let example_fixtures = self.example_fixtures(top);
         Some(Spec {
             path: path.replace('\\', "/"),
             system: system?,
@@ -266,6 +267,7 @@ impl Loader {
             telemetry,
             languages,
             functions,
+            example_fixtures,
         })
     }
 
