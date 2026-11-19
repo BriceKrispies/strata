@@ -71,11 +71,18 @@ fn the_crate_has_the_expected_files_each_with_a_header() {
         paths,
         [
             "Cargo.toml",
+            "src/audits.rs",
             "src/contracts.rs",
             "src/lib.rs",
+            "src/policies.rs",
             "src/prelude.rs",
+            "src/quotas.rs",
             "src/records.rs",
-            "src/types.rs"
+            "src/retentions.rs",
+            "src/retries.rs",
+            "src/support.rs",
+            "src/types.rs",
+            "src/validations.rs"
         ]
     );
     for file in &files {
@@ -106,6 +113,54 @@ fn the_hole_carries_its_implements_line() {
     assert!(contracts.contains(
         "/// Hole H-7: hand-written. The implementing item carries `/// Implements: H-7`."
     ));
+}
+
+fn generated(files: &[GeneratedFile], path: &str) -> String {
+    files
+        .iter()
+        .find(|f| f.path == path)
+        .unwrap_or_else(|| panic!("no {path}"))
+        .contents
+        .clone()
+}
+
+#[test]
+fn every_construct_reaches_the_generated_crate() {
+    let files = fixture_files();
+    let policies = generated(&files, "src/policies.rs");
+    assert!(policies.contains("pub fn authorize_create_tenant("));
+    assert!(policies.contains("pub fn authorize_get_account("));
+    assert!(policies.contains("record: Option<&crate::records::RecAccount>"));
+    assert!(policies.contains("pub fn authorize_ping("));
+
+    let validations = generated(&files, "src/validations.rs");
+    assert!(validations.contains("impl crate::contracts::CreateTenantRequest {"));
+    assert!(validations.contains("pub fn validate_rules(&self)"));
+    assert!(validations.contains("pub const VAL_SLUG_LENGTH: ValidationError"));
+    assert!(validations.contains("static VAL_SLUG_PATTERN_PATTERN: LazyLock<Regex>"));
+
+    let retentions = generated(&files, "src/retentions.rs");
+    assert!(retentions.contains("pub const RETENTIONS: &[Retention]"));
+    assert!(retentions.contains("pub fn anonymise(&mut self)"));
+
+    let quotas = generated(&files, "src/quotas.rs");
+    assert!(quotas.contains("pub const QUOTAS: &[Quota]"));
+    assert!(quotas.contains("pub fn check(&self, counter: Option<Counter>, now: Timestamp)"));
+
+    let retries = generated(&files, "src/retries.rs");
+    assert!(retries.contains("pub const RETRY_GET_ACCOUNT: RetryPolicy"));
+    assert!(retries.contains("Target::Event(\"entry-posted\")"));
+
+    let audits = generated(&files, "src/audits.rs");
+    assert!(audits.contains("pub fn audit_tenant_created("));
+    assert!(audits.contains("pub fn chain_tenant_created("));
+    assert!(audits.contains("pub fn verify_account_closing("));
+    assert!(audits.contains("pub fn audit_account_read("));
+    assert!(
+        !audits.contains("chain_account_read"),
+        "an append-only audit has no chain"
+    );
+    assert!(generated(&files, "Cargo.toml").contains("sha2 = \"0.10.9\""));
 }
 
 #[test]

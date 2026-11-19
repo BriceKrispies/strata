@@ -78,6 +78,23 @@ impl Leaf {
         out
     }
 
+    /// A text leaf's value as a `&str` expression.
+    pub fn as_str(&self, place: TokenStream) -> TokenStream {
+        let mut out = place;
+        for layer in &self.layers {
+            out = match layer {
+                Layer::Newtype(_) | Layer::Timestamp | Layer::Duration => quote! { #out.0 },
+                Layer::Uuid => quote! { #out.to_string().as_str() },
+                Layer::Enum => quote! { #out.as_str() },
+            };
+        }
+        if matches!(self.layers.last(), Some(Layer::Uuid | Layer::Enum)) {
+            out
+        } else {
+            quote! { #out.as_str() }
+        }
+    }
+
     /// The Rust value of this leaf's type made from a value of the language's type, or `None`
     /// when the language's value cannot give one (a `uuid` or an enum).
     pub fn build(&self, value: TokenStream, uses: &mut Uses) -> Option<TokenStream> {

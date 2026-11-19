@@ -3,7 +3,7 @@
 //! A validation on a contract input becomes part of `validate(&self)` on the contract's request
 //! type; one on a record field becomes part of `validate_rules(&self)` on the record (the record's
 //! own `validate` checks its field constraints). Both return the first rule that fails, as a
-//! [`ValidationError`](crate) that carries the validation's id and message.
+//! `ValidationError` that carries the validation's id and message.
 //!
 //! An absent optional value passes every rule except `required`. `required` means present, and
 //! for text, bytes and lists not empty. `pattern` must match the whole value. A `custom` rule
@@ -113,8 +113,9 @@ fn float_tokens(f: f64) -> TokenStream {
     }
 }
 
-/// Wraps `inner` in the `if let Some(value)` blocks that reach a value `options` options deep
-/// in `place`. `inner` receives the place of the value and a reference to it.
+/// Wraps `inner` in the `if let Some(value)` block that reaches a value inside an optional
+/// `place`. `inner` receives the place of the value (a copy of it when `copy`, else a reference)
+/// and a reference to it. Without an option the place is the field itself.
 fn peeled(
     place: &TokenStream,
     options: usize,
@@ -124,28 +125,20 @@ fn peeled(
     if options == 0 {
         return inner(place.clone(), quote! { &#place });
     }
-    let value_place = if copy {
-        quote! { (*value) }
+    let (pattern, reference) = if copy {
+        (quote! { Some(&value) }, quote! { &value })
     } else {
-        quote! { value }
+        (quote! { Some(value) }, quote! { value })
     };
-    let mut body = inner(value_place, quote! { value });
+    let body = inner(quote! { value }, reference);
     if body.is_empty() {
         return body;
     }
-    for level in (0..options).rev() {
-        let source = if level == 0 {
-            quote! { &#place }
-        } else {
-            quote! { value }
-        };
-        body = quote! {
-            if let Some(value) = #source {
-                #body
-            }
-        };
+    quote! {
+        if let #pattern = &#place {
+            #body
+        }
     }
-    body
 }
 
 fn compile(
@@ -238,6 +231,15 @@ fn compile(
         }
     };
     let (inner_type, options) = view::peel_options(&full);
+    if options > 1 {
+        return Err(fail(
+            TARGET_TYPE,
+            format!(
+                "The target of validation \"{}\" is an option of an option.",
+                v.id
+            ),
+        ));
+    }
     let leaf: Option<Leaf> = view::leaf(spec, inner_type);
     let is_list = matches!(inner_type, TypeRef::List(_));
     let (head, field_ident) = base;
@@ -335,12 +337,19 @@ fn compile(
                 let Some(l) = &leaf else {
                     return TokenStream::new();
                 };
-                let read = l.read(p);
                 match (l.class, unit) {
                     (Class::Text, Unit::Characters) => {
-                        quote! { if #read.chars().count() > #lit { #refuse } }
+                        let text = l.as_str(p);
+                        quote! { if #text.chars().count() > #lit { #refuse } }
                     }
-                    _ => quote! { if #read.len() > #lit { #refuse } },
+                    (Class::Text, Unit::Bytes) => {
+                        let text = l.as_str(p);
+                        quote! { if #text.len() > #lit { #refuse } }
+                    }
+                    _ => {
+                        let read = l.read(p);
+                        quote! { if #read.len() > #lit { #refuse } }
+                    }
                 }
             })
         }
@@ -383,8 +392,8 @@ fn compile(
                     LazyLock::new(|| Regex::new(#anchored).expect("specc checked that the pattern compiles"));
             });
             peeled(&place, options, copy, &|p, _| {
-                let read = l.read(p);
-                quote! { if !#name.is_match(#read.as_str()) { #refuse } }
+                let text = l.as_str(p);
+                quote! { if !#name.is_match(#text) { #refuse } }
             })
         }
         Rule::Range => {
@@ -504,10 +513,11 @@ fn compile(
                 });
             }
             peeled(&place, options, copy, &|p, _| {
-                let read = l.read(p);
+                let read = l.read(p.clone());
                 match l.class {
                     Class::Text => {
-                        quote! { if ![#(#values),*].contains(&#read.as_str()) { #refuse } }
+                        let text = l.as_str(p);
+                        quote! { if ![#(#values),*].contains(&#text) { #refuse } }
                     }
                     Class::Bool => quote! { if ![#(#values),*].contains(&#read) { #refuse } },
                     _ if l.base == Builtin::F64 => {
@@ -544,9 +554,9 @@ fn compile(
                 }
             };
             scope.head(head_name, entries);
-            // The helper reads the value through its reference parameter.
+            // The helper takes a copy of a plain number or bool and a reference to anything else.
             let value_place = match &leaf {
-                Some(l) if !l.layers_empty() => quote! { value },
+                Some(l) if !l.layers_empty() || copy => quote! { value },
                 _ => quote! { (*value) },
             };
             let value_entry = match &leaf {
@@ -595,14 +605,20 @@ fn compile(
             } else {
                 naming::ident("_value")
             };
+            let value_decl = if copy {
+                quote! { #value_param: #value_ty }
+            } else {
+                quote! { #value_param: &#value_ty }
+            };
             extra = quote! {
-                fn #expr_name(#head_param: &#owner, #value_param: &#value_ty) -> Result<bool, crate::support::Overflow> {
+                fn #expr_name(#head_param: &#owner, #value_decl) -> Result<bool, crate::support::Overflow> {
                     Ok(#tokens)
                 }
             };
-            peeled(&place, options, copy, &|_, reference| {
+            peeled(&place, options, copy, &|p, reference| {
+                let argument = if copy { p } else { reference };
                 quote! {
-                    if !matches!(#expr_name(#head, #reference), Ok(true)) { #refuse }
+                    if !matches!(#expr_name(#head, #argument), Ok(true)) { #refuse }
                 }
             })
         }

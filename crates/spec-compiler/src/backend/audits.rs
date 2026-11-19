@@ -77,7 +77,7 @@ fn eff_of(f: &RecordField) -> TypeRef {
     }
 }
 
-/// True when a leaf's plain value is `Copy` and read through a reference as `(*value)`.
+/// True when a leaf's plain value is `Copy`, so a reference to it is matched as `&value`.
 fn plain_copy(l: &Leaf) -> bool {
     l.layers_empty() && !matches!(l.base, Builtin::String | Builtin::Bytes | Builtin::Uuid)
 }
@@ -469,23 +469,27 @@ fn compile(spec: &Spec, a: &Audit, uses: &mut Uses) -> Result<Compiled, Vec<Fail
                 continue;
             };
             let encode = |place: TokenStream| -> TokenStream {
-                let read = l.read(place);
+                let read = l.read(place.clone());
                 match l.class {
-                    Class::Text => quote! { feed(&mut hasher, #name, #read.as_bytes()); },
+                    Class::Text => {
+                        let text = l.as_str(place);
+                        quote! { feed(&mut hasher, #name, #text.as_bytes()); }
+                    }
                     Class::Bytes => quote! { feed(&mut hasher, #name, &#read); },
                     _ => quote! { feed(&mut hasher, #name, #read.to_string().as_bytes()); },
                 }
             };
             let place = quote! { entry.#ident };
             encodings.push(if f.optional {
-                let inner = encode(if plain_copy(&l) {
-                    quote! { (*value) }
+                let inner = encode(quote! { value });
+                let pattern = if plain_copy(&l) {
+                    quote! { Some(&value) }
                 } else {
-                    quote! { value }
-                });
+                    quote! { Some(value) }
+                };
                 quote! {
                     match &#place {
-                        Some(value) => {
+                        #pattern => {
                             feed(&mut hasher, #name, &[1]);
                             #inner
                         }

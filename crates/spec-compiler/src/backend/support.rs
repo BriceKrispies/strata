@@ -1,7 +1,7 @@
 //! The `support` module: the small types the construct modules share (who is acting, what a
 //! policy decides, the error of checked arithmetic in an expression). It does not depend on the
 //! specification and is the same in every generated crate. The generated crate depends on no
-//! runtime; a deployment's authorizer builds a [`Caller`](crate::support) from whatever it
+//! runtime; a deployment's authorizer builds a `Caller` from whatever it
 //! authenticated.
 
 use proc_macro2::TokenStream;

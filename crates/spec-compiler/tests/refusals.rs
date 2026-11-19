@@ -286,6 +286,97 @@ fn hostile_values_are_refused_without_panicking() {
     }
 }
 
+/// A base specification with a record, a contract with inputs, and the given construct sections.
+fn with_constructs(sections: Value) -> String {
+    let mut base: Value = serde_json::from_str(&spec(json!({
+        "records": [ record(json!([
+            { "name": "id", "type": "u32" }, { "name": "name", "type": "string" },
+            { "name": "note", "type": "string", "optional": true }, { "name": "hash", "type": "bytes" } ]), json!({})) ],
+        "contracts": [ contract(json!({ "policyDefault": "deny", "idempotent": false,
+            "inputs": [ { "name": "slug", "type": "string" }, { "name": "n", "type": "u32" }, { "name": "tags", "type": "list<string>" } ],
+            "outputs": [ { "name": "ok", "type": "bool" } ],
+            "errors": [ { "name": "slow-down" } ] })) ]
+    })))
+    .unwrap();
+    if let (Some(base), Some(extra)) = (base.as_object_mut(), sections.as_object()) {
+        for (k, v) in extra {
+            base.insert(k.clone(), v.clone());
+        }
+    }
+    base.to_string()
+}
+
+#[test]
+fn a_specification_with_every_construct_is_ready() {
+    let text = with_constructs(json!({
+        "policies": [ { "id": "p", "subject": { "principal": "member" }, "contract": "do-it", "effect": "allow", "condition": "request.n > 1" } ],
+        "validations": [ { "id": "v", "contract": "do-it", "input": "slug", "rule": "required", "message": "m" } ],
+        "retentions": [ { "id": "t", "record": "rec", "keepFor": "1 d", "then": "delete" } ],
+        "quotas": [ { "id": "q", "scope": "tenant", "contract": "do-it", "limit": 1, "window": "1 s", "onExceed": "refuse", "error": "slow-down" } ],
+        "retries": [ { "id": "y", "contract": "do-it", "attempts": 2, "backoff": { "kind": "fixed", "base": "1 s" } } ],
+        "audits": [ { "id": "a", "contract": "do-it", "record": "rec", "immutability": "chained-hash", "chainField": "hash",
+            "capture": [ { "field": "name", "from": "request.slug" }, { "field": "note", "from": "null" } ] } ]
+    }));
+    if let Err(diagnostics) = generate("spec.jsonc", &text, &options()) {
+        panic!("refused: {diagnostics:?}");
+    }
+}
+
+#[test]
+fn constructs_that_cannot_be_generated_are_refused() {
+    let text = with_constructs(json!({
+        "policies": [
+            { "id": "p-transition", "subject": { "principal": "member" }, "transition": "go", "effect": "allow" },
+            { "id": "p-list", "subject": { "principal": "member" }, "contract": "do-it", "effect": "deny", "condition": "request.tags == null" },
+            { "id": "p-contract", "subject": { "principal": "member" }, "contract": "nope", "effect": "allow" } ],
+        "validations": [
+            { "id": "v-unit", "contract": "do-it", "input": "slug", "rule": "maxLength", "maxLength": 3, "message": "m" },
+            { "id": "v-type", "contract": "do-it", "input": "n", "rule": "pattern", "pattern": "a", "message": "m" },
+            { "id": "v-target", "contract": "do-it", "rule": "required", "message": "m" } ],
+        "retentions": [
+            { "id": "t-clear", "record": "rec", "keepFor": "1 d", "then": "anonymise", "fields": ["id", "ghost"] },
+            { "id": "t-twice", "record": "rec", "keepFor": "1 s", "then": "delete" } ],
+        "quotas": [ { "id": "q", "scope": "tenant", "contract": "do-it", "limit": 1, "window": "1 s", "onExceed": "refuse" } ],
+        "retries": [ { "id": "y", "contract": "do-it", "attempts": 2, "backoff": { "kind": "fixed", "base": "1 s", "cap": "2 s" } } ],
+        "audits": [
+            { "id": "a-event", "event": "sent", "record": "rec", "immutability": "append-only", "capture": [ { "field": "name", "from": "time" } ] },
+            { "id": "a-unfilled", "contract": "do-it", "record": "rec", "immutability": "append-only", "capture": [ { "field": "name", "from": "request.slug" } ] } ]
+    }));
+    let found = codes(&text);
+    for code in [
+        "specc.policy-transition-unsupported",
+        "specc.policy-expression",
+        "specc.policy-contract-unknown",
+        "ready.validation-unit-missing",
+        "specc.validation-target-type",
+        "specc.validation-target",
+        "specc.retention-field-unknown",
+        "specc.retention-duplicate",
+        "specc.quota-error",
+        "specc.retry-backoff",
+        "specc.audit-target-unsupported",
+        "ready.audit-field-unfilled",
+    ] {
+        assert!(
+            found.iter().any(|c| c == code),
+            "{code} missing from {found:?}"
+        );
+    }
+}
+
+#[test]
+fn a_governed_contract_needs_a_policy_default() {
+    let mut text: Value = serde_json::from_str(&with_constructs(json!({
+        "policies": [ { "id": "p", "subject": { "principal": "member" }, "contract": "do-it", "effect": "allow" } ]
+    })))
+    .unwrap();
+    text["contracts"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("policyDefault");
+    assert_refused_with(&text.to_string(), "ready.policy-default-missing", "do-it");
+}
+
 /// The Strata specification is either generated from or refused with diagnostics; which one
 /// depends on how far its generation readiness has come, so only the absence of a panic and the
 /// diagnostic format are asserted.
