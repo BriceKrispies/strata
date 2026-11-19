@@ -10,13 +10,18 @@
 //!
 //! - `POST <path>` with the request as a JSON body.
 //! - Success: status 200, the response as JSON.
-//! - Failure: a [`Failure`] as JSON. A contract error has the status its
-//!   [`ContractError::status`] gives and `{"kind": "contract", "error": ...}`; a failure of the
+//! - Failure: the status and body the contract's [`FailureBody`] (`Contract::Body`) makes of the
+//!   [`Failure`]. With the runtime's own body, [`RuntimeBody`], a contract error has the status its
+//!   [`ContractError::status`] gives and `{"kind": "contract", "error": ...}`, and a failure of the
 //!   runtime itself (authorization, a malformed request, the timeout) has the status of its
-//!   [`FailureCode`] and `{"kind": "runtime", "code": ..., "message": ...}`.
+//!   [`FailureCode`] and `{"kind": "runtime", "code": ..., "message": ...}`. A specification that
+//!   states an error body has generated code supply a body of its own instead.
 //!
 //! Who may call is decided by an [`Authorizer`], written by hand per deployment, which reads the
-//! contract's `auth` requirement and the request headers.
+//! contract's `auth` requirement and the request headers. It is the one seam through which a route
+//! asks who the caller is. An authorizer refuses a requirement it does not recognise; a contract
+//! that states no requirement carries the empty one, which [`ServiceToken`] admits only with the
+//! token.
 
 use crate::telemetry::{NoTelemetry, Span, Telemetry};
 use axum::body::Bytes;
@@ -71,6 +76,43 @@ pub trait Contract: Send + Sync + 'static {
     type Response: Serialize + DeserializeOwned + Send + 'static;
     /// The contract's errors (`errors`).
     type Error: Serialize + DeserializeOwned + ContractError + Send + 'static;
+    /// How its failures are written on the wire and read back: [`RuntimeBody`] unless the
+    /// specification states an error body.
+    type Body: FailureBody<Self::Error>;
+}
+
+/// How the failures of a contract are written on the wire and read back. The server encodes every
+/// failed call with it and the client decodes every answer that is not a success with it.
+pub trait FailureBody<E>: Send + Sync + 'static {
+    /// The status and JSON body of `failure`, answered to a caller whose correlation id is
+    /// `correlation` (empty when it gave none).
+    fn encode(failure: Failure<&E>, correlation: &str) -> serde_json::Result<(u16, Vec<u8>)>;
+    /// The failure a `body` answered with `status` stands for, or `None` when it is not a body of
+    /// this kind.
+    fn decode(status: u16, body: &[u8]) -> Option<Failure<E>>;
+}
+
+/// The runtime's own failure body: `{"kind": "contract", "error": ...}` with the error's
+/// [`ContractError::status`], or `{"kind": "runtime", "code": ..., "message": ...}` with the
+/// status of the [`FailureCode`]. The correlation id is not part of it.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct RuntimeBody;
+
+impl<E> FailureBody<E> for RuntimeBody
+where
+    E: Serialize + DeserializeOwned + ContractError,
+{
+    fn encode(failure: Failure<&E>, _correlation: &str) -> serde_json::Result<(u16, Vec<u8>)> {
+        let status = match &failure {
+            Failure::Contract { error } => error.status(),
+            Failure::Runtime { code, .. } => code.status(),
+        };
+        Ok((status, serde_json::to_vec(&failure)?))
+    }
+
+    fn decode(_status: u16, body: &[u8]) -> Option<Failure<E>> {
+        serde_json::from_slice(body).ok()
+    }
 }
 
 /// A failure the runtime itself reports, as opposed to a contract error.
@@ -267,13 +309,36 @@ fn respond(status: u16, body: Bytes) -> Response {
     response
 }
 
-fn runtime_failure(code: FailureCode, message: impl Into<String>) -> (u16, Bytes) {
-    let failure: Failure<()> = Failure::Runtime {
-        code,
-        message: message.into(),
-    };
-    let body = serde_json::to_vec(&failure).unwrap_or_default();
-    (code.status(), Bytes::from(body))
+/// The status and body of `failure` in contract `C`'s failure body. A body that cannot be written
+/// falls back to an `internal` failure, and that to an empty 500.
+fn encoded<C: Contract>(failure: Failure<&C::Error>, correlation: &str) -> (u16, Bytes) {
+    match C::Body::encode(failure, correlation) {
+        Ok((status, body)) => (status, Bytes::from(body)),
+        Err(error) => {
+            let internal = Failure::Runtime {
+                code: FailureCode::Internal,
+                message: error.to_string(),
+            };
+            match C::Body::encode(internal, correlation) {
+                Ok((status, body)) => (status, Bytes::from(body)),
+                Err(_) => (500, Bytes::new()),
+            }
+        }
+    }
+}
+
+fn runtime_failure<C: Contract>(
+    code: FailureCode,
+    message: impl Into<String>,
+    correlation: &str,
+) -> (u16, Bytes) {
+    encoded::<C>(
+        Failure::Runtime {
+            code,
+            message: message.into(),
+        },
+        correlation,
+    )
 }
 
 /// Contract handlers collected into an axum router.
@@ -384,8 +449,12 @@ where
 {
     let caller = match authorizer.authorize(C::SPEC.auth, &headers).await {
         Ok(caller) => caller,
-        Err(refusal) => return runtime_failure(refusal.code, refusal.message),
+        Err(refusal) => {
+            let correlation = header(&headers, CORRELATION).unwrap_or("");
+            return runtime_failure::<C>(refusal.code, refusal.message, correlation);
+        }
     };
+    let correlation = caller.correlation.clone();
     let replay_key = match header(&headers, IDEMPOTENCY_KEY) {
         Some(key) if C::SPEC.idempotent => Some((
             C::SPEC.id,
@@ -399,29 +468,150 @@ where
     }
     let request: C::Request = match serde_json::from_slice(&body) {
         Ok(request) => request,
-        Err(error) => return runtime_failure(FailureCode::InvalidRequest, error.to_string()),
+        Err(error) => {
+            return runtime_failure::<C>(
+                FailureCode::InvalidRequest,
+                error.to_string(),
+                &correlation,
+            )
+        }
     };
     let encoded = match tokio::time::timeout(C::SPEC.timeout, handler(caller, request)).await {
         Err(_) => {
-            return runtime_failure(
+            return runtime_failure::<C>(
                 FailureCode::Timeout,
                 format!("{} did not finish in time", C::SPEC.id),
+                &correlation,
             )
         }
-        Ok(Ok(response)) => serde_json::to_vec(&response).map(|body| (200, body)),
-        Ok(Err(Failure::Runtime { code, message })) => return runtime_failure(code, message),
-        Ok(Err(Failure::Contract { error })) => {
-            let status = error.status();
-            serde_json::to_vec(&Failure::<&C::Error>::Contract { error: &error })
-                .map(|body| (status, body))
+        Ok(Ok(response)) => serde_json::to_vec(&response).map(|body| (200, Bytes::from(body))),
+        Ok(Err(Failure::Runtime { code, message })) => {
+            return runtime_failure::<C>(code, message, &correlation)
         }
+        Ok(Err(Failure::Contract { error })) => Ok(encoded::<C>(
+            Failure::Contract { error: &error },
+            &correlation,
+        )),
     };
     let (status, body) = match encoded {
-        Ok((status, body)) => (status, Bytes::from(body)),
-        Err(error) => return runtime_failure(FailureCode::Internal, error.to_string()),
+        Ok(answer) => answer,
+        Err(error) => {
+            return runtime_failure::<C>(FailureCode::Internal, error.to_string(), &correlation)
+        }
     };
     if let Some(key) = replay_key {
         replay.put(key, status, body.clone());
     }
     (status, body)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Debug, PartialEq, Serialize, Deserialize)]
+    enum Oops {
+        #[serde(rename = "busy")]
+        Busy,
+    }
+
+    impl ContractError for Oops {
+        fn status(&self) -> u16 {
+            409
+        }
+    }
+
+    struct Probe;
+
+    impl Contract for Probe {
+        const SPEC: ContractSpec = ContractSpec {
+            id: "CT-0",
+            path: "/probe",
+            auth: "",
+            timeout: Duration::from_secs(1),
+            idempotent: false,
+        };
+        type Request = ();
+        type Response = ();
+        type Error = Oops;
+        type Body = RuntimeBody;
+    }
+
+    #[test]
+    fn the_runtime_body_carries_the_error_status_and_reads_back() {
+        let (status, body) = encoded::<Probe>(Failure::Contract { error: &Oops::Busy }, "c-1");
+        assert_eq!(status, 409);
+        assert_eq!(&body[..], br#"{"kind":"contract","error":"busy"}"#);
+        assert_eq!(
+            <RuntimeBody as FailureBody<Oops>>::decode(status, &body),
+            Some(Failure::Contract { error: Oops::Busy })
+        );
+        let (status, body) = runtime_failure::<Probe>(FailureCode::Forbidden, "no", "c-1");
+        assert_eq!(status, 403);
+        assert_eq!(
+            &body[..],
+            br#"{"kind":"runtime","code":"forbidden","message":"no"}"#
+        );
+    }
+
+    /// A body of its own: the status and the correlation id in a flat object.
+    struct Flat;
+
+    impl FailureBody<Oops> for Flat {
+        fn encode(
+            failure: Failure<&Oops>,
+            correlation: &str,
+        ) -> serde_json::Result<(u16, Vec<u8>)> {
+            let (status, what) = match failure {
+                Failure::Contract { error } => (error.status(), "busy".to_string()),
+                Failure::Runtime { code, message } => (code.status(), message),
+            };
+            serde_json::to_vec(&serde_json::json!({ "what": what, "correlation": correlation }))
+                .map(|body| (status, body))
+        }
+
+        fn decode(status: u16, _body: &[u8]) -> Option<Failure<Oops>> {
+            (status == 409).then_some(Failure::Contract { error: Oops::Busy })
+        }
+    }
+
+    struct FlatProbe;
+
+    impl Contract for FlatProbe {
+        const SPEC: ContractSpec = Probe::SPEC;
+        type Request = ();
+        type Response = ();
+        type Error = Oops;
+        type Body = Flat;
+    }
+
+    #[test]
+    fn a_contract_answers_in_its_own_body_with_the_correlation_id() {
+        let (status, body) = encoded::<FlatProbe>(Failure::Contract { error: &Oops::Busy }, "c-9");
+        assert_eq!(status, 409);
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
+            serde_json::json!({ "what": "busy", "correlation": "c-9" })
+        );
+        let (status, body) = runtime_failure::<FlatProbe>(FailureCode::Unavailable, "down", "");
+        assert_eq!(status, 503);
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
+            serde_json::json!({ "what": "down", "correlation": "" })
+        );
+    }
+
+    #[test]
+    fn the_service_token_refuses_an_unstated_requirement_without_the_token() {
+        let token = ServiceToken {
+            header: "x-token",
+            secret: "s".into(),
+        };
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        let empty = HeaderMap::new();
+        assert!(runtime.block_on(token.authorize("", &empty)).is_err());
+        assert!(runtime.block_on(token.authorize("none", &empty)).is_ok());
+    }
 }

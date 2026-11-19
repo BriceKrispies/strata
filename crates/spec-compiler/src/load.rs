@@ -11,9 +11,9 @@ use serde_json::{Map, Number, Value};
 
 use crate::diagnostic::{Diagnostic, SPEC_ENTITY};
 use crate::ir::{
-    Behavior, Component, Constraints, Contract, ContractError, ContractField, Effect, Event, Index,
-    Instances, OnDelete, PayloadField, Realisation, Record, RecordField, Spec, State, Storage,
-    StructField, System, Transition, TypeDecl, TypeKind, Variable,
+    Behavior, Component, Constraints, Contract, ContractError, ContractField, Effect, ErrorBody,
+    ErrorWire, Event, Index, Instances, OnDelete, PayloadField, Realisation, Record, RecordField,
+    Spec, State, Storage, StructField, System, Transition, TypeDecl, TypeKind, Variable,
 };
 use crate::jsonc;
 
@@ -272,15 +272,16 @@ impl Loader {
         let id = self.req_str(obj, "id", SPEC_ENTITY);
         let entity = id.clone().unwrap_or_else(|| SPEC_ENTITY.to_string());
         let name = self.req_str(obj, "name", &entity);
-        let (generation_target, wire_case) = match obj.get("generation") {
-            None | Some(Value::Null) => (None, None),
+        let (generation_target, wire_case, error_wire) = match obj.get("generation") {
+            None | Some(Value::Null) => (None, None, ErrorWire::default()),
             Some(Value::Object(g)) => (
                 self.opt_str(g, "target", &entity),
                 self.wire_case(g, "wireCase", &entity),
+                self.error_wire(g, &entity),
             ),
             Some(_) => {
                 self.shape(&entity, "\"generation\" must be an object");
-                (None, None)
+                (None, None, ErrorWire::default())
             }
         };
         Some(System {
@@ -288,7 +289,89 @@ impl Loader {
             name: name?,
             generation_target,
             wire_case: wire_case.unwrap_or_default(),
+            error_wire,
         })
+    }
+
+    /// An HTTP status under `key`, if stated: an integer from 400 to 599.
+    fn status(&mut self, obj: &Obj, key: &str, entity: &str) -> Option<u16> {
+        let n = self.opt_number(obj, key, entity)?;
+        match n.as_u64().filter(|s| (400..=599).contains(s)) {
+            Some(s) => Some(s as u16),
+            None => {
+                self.shape(
+                    entity,
+                    format!("\"{key}\" is {n}; a status is an integer from 400 to 599"),
+                );
+                None
+            }
+        }
+    }
+
+    /// A map of strings under `key`, in declaration order.
+    fn str_map(&mut self, obj: &Obj, key: &str, entity: &str) -> Vec<(String, String)> {
+        let mut out = Vec::new();
+        match obj.get(key) {
+            None | Some(Value::Null) => {}
+            Some(Value::Object(m)) => {
+                for (k, v) in m {
+                    match v.as_str() {
+                        Some(v) => out.push((k.clone(), v.to_string())),
+                        None => self.shape(entity, format!("\"{key}.{k}\" must be a string")),
+                    }
+                }
+            }
+            Some(_) => self.shape(entity, format!("\"{key}\" must be an object")),
+        }
+        out
+    }
+
+    /// The error kinds, default status or kind and error body of `system.generation`.
+    fn error_wire(&mut self, g: &Obj, entity: &str) -> ErrorWire {
+        let mut kinds = Vec::new();
+        match g.get("errorKinds") {
+            None | Some(Value::Null) => {}
+            Some(Value::Object(m)) => {
+                for k in m.keys() {
+                    if let Some(s) = self.status(m, k, entity) {
+                        kinds.push((k.clone(), s));
+                    }
+                }
+            }
+            Some(_) => self.shape(entity, "\"errorKinds\" must be an object"),
+        }
+        let default_status = self.status(g, "errorStatus", entity);
+        let default_kind = self.opt_str(g, "errorKind", entity);
+        let body = match g.get("errorBody") {
+            None | Some(Value::Null) => None,
+            Some(Value::Object(b)) => {
+                let type_name = self.req_str(b, "type", entity);
+                let code = self.req_str(b, "code", entity);
+                let message = self.req_str(b, "message", entity);
+                let correlation = self.opt_str(b, "correlation", entity);
+                let runtime = self.str_map(b, "runtime", entity);
+                match (type_name, code, message) {
+                    (Some(type_name), Some(code), Some(message)) => Some(ErrorBody {
+                        type_name,
+                        code,
+                        message,
+                        correlation,
+                        runtime,
+                    }),
+                    _ => None,
+                }
+            }
+            Some(_) => {
+                self.shape(entity, "\"errorBody\" must be an object");
+                None
+            }
+        };
+        ErrorWire {
+            kinds,
+            default_status,
+            default_kind,
+            body,
+        }
     }
 
     /// A wire case (`snake_case`, `kebab-case` or `camelCase`) under `key`, if stated.
@@ -490,11 +573,15 @@ impl Loader {
             let name = self.req_str(e, "name", id);
             let condition = self.opt_str(e, "condition", id);
             let type_name = self.opt_str(e, "type", id);
+            let status = self.status(e, "status", id);
+            let kind = self.opt_str(e, "kind", id);
             if let Some(name) = name {
                 errors.push(ContractError {
                     name,
                     condition,
                     type_name,
+                    status,
+                    kind,
                 });
             }
         }

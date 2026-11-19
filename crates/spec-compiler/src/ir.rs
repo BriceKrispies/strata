@@ -65,6 +65,63 @@ pub struct System {
     /// `system.generation.wireCase`: how contract payloads name their JSON members; kebab-case
     /// (the names as written) when unstated.
     pub wire_case: crate::wire::WireCase,
+    /// How contract errors travel: `system.generation.errorKinds`, `errorStatus`, `errorKind`
+    /// and `errorBody`.
+    pub error_wire: ErrorWire,
+}
+
+/// What `system.generation` states about contract errors on the wire.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ErrorWire {
+    /// `errorKinds`: each kind of failure with its HTTP status, in declaration order.
+    pub kinds: Vec<(String, u16)>,
+    /// `errorStatus`: the status of an error that states neither status nor kind.
+    pub default_status: Option<u16>,
+    /// `errorKind`: the kind of an error that states neither status nor kind.
+    pub default_kind: Option<String>,
+    /// `errorBody`: the body every failed call is answered with, when the specification states
+    /// one.
+    pub body: Option<ErrorBody>,
+}
+
+impl ErrorWire {
+    /// The status of a kind, when it is declared.
+    pub fn kind_status(&self, kind: &str) -> Option<u16> {
+        self.kinds.iter().find(|(k, _)| k == kind).map(|(_, s)| *s)
+    }
+
+    /// The kind of an error: its own, else the default kind.
+    pub fn kind_of<'a>(&'a self, error: &'a ContractError) -> Option<&'a str> {
+        error.kind.as_deref().or(self.default_kind.as_deref())
+    }
+
+    /// The status of an error: its own, else the status of its kind, else the default kind's,
+    /// else the default status.
+    pub fn status_of(&self, error: &ContractError) -> Option<u16> {
+        if let Some(status) = error.status {
+            return Some(status);
+        }
+        match self.kind_of(error) {
+            Some(kind) => self.kind_status(kind),
+            None => self.default_status,
+        }
+    }
+}
+
+/// `system.generation.errorBody`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ErrorBody {
+    /// The struct type of the body.
+    pub type_name: String,
+    /// The field holding the kind (an enum of the kinds).
+    pub code: String,
+    /// The string field holding the message.
+    pub message: String,
+    /// The string field the route fills with the caller's correlation id, if any.
+    pub correlation: Option<String>,
+    /// The kind of each runtime failure, by its name (`unauthenticated`, `forbidden`,
+    /// `invalid-request`, `timeout`, `unavailable`, `internal`).
+    pub runtime: Vec<(String, String)>,
 }
 
 /// A component; only what the contract and wiring backends name.
@@ -318,6 +375,10 @@ pub struct ContractError {
     pub condition: Option<String>,
     /// The payload type, when it carries one.
     pub type_name: Option<String>,
+    /// `status`: the HTTP status it is answered with, when it states one.
+    pub status: Option<u16>,
+    /// `kind`: the kind of failure (a key of `system.generation.errorKinds`), when it states one.
+    pub kind: Option<String>,
 }
 
 /// How a contract is realised.

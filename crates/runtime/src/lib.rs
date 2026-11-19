@@ -44,8 +44,8 @@ pub use machine::{
 };
 pub use memory::MemoryStore;
 pub use routes::{
-    Authorizer, Caller, Contract, ContractError, ContractSpec, Failure, FailureCode, Refusal,
-    Routes, ServiceToken,
+    Authorizer, Caller, Contract, ContractError, ContractSpec, Failure, FailureBody, FailureCode,
+    Refusal, Routes, RuntimeBody, ServiceToken,
 };
 pub use sqlite::{Database, SqliteMachineStore};
 pub use store::{

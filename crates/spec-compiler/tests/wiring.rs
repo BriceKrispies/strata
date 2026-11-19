@@ -4,6 +4,8 @@
 //! - generated routes served in-process on an ephemeral port, with in-test implementations of
 //!   the component traits, called through the generated clients and `Deps`: a successful call
 //!   with its audit entry, a validation refusal, policy refusals and a quota refusal;
+//! - one contract served on its own through its handler trait, and every failure answered with
+//!   the specification's error body at the status of its kind, byte for byte (WG-4893);
 //! - the machine handlers bringing contract requests and another machine's emitted event to the
 //!   machines, through the memory store.
 //!
@@ -23,22 +25,31 @@ use strata_spec_compiler_wiring_fixture::contracts::{
     SubmitJobError, SubmitJobRequest, SubmitJobResponse,
 };
 use strata_spec_compiler_wiring_fixture::{
-    audits, deps, handlers, machines, prelude, quotas, routes,
+    audits, deps, handlers, machines, prelude, quotas, routes, types,
 };
 
 /// The header the test's callers name themselves in: `kind/subject` or `kind/subject/role`.
 const PRINCIPAL: &str = "x-principal";
 
 /// Admits anyone to a contract whose requirement is `none`, and otherwise the principal named in
-/// the `x-principal` header.
+/// the `x-principal` header; refuses any other requirement without one, the empty requirement of a
+/// contract that states none included. The correlation id is the `x-correlation-id` header.
 struct Principals;
 
 impl Authorizer for Principals {
     async fn authorize(&self, requirement: &str, headers: &HeaderMap) -> Result<Caller, Refusal> {
         let named = headers.get(PRINCIPAL).and_then(|v| v.to_str().ok());
+        let correlation = headers
+            .get("x-correlation-id")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_string();
         let Some(named) = named else {
             if requirement == "none" {
-                return Ok(Caller::default());
+                return Ok(Caller {
+                    correlation,
+                    ..Caller::default()
+                });
             }
             return Err(Refusal {
                 code: FailureCode::Unauthenticated,
@@ -52,7 +63,7 @@ impl Authorizer for Principals {
         }
         Ok(Caller {
             subject: parts.get(1).map(|s| s.to_string()),
-            correlation: String::new(),
+            correlation,
             attributes,
         })
     }
@@ -111,11 +122,13 @@ struct Hooks {
     log: Mutex<Vec<audits::JobSubmittedAuditEntry>>,
 }
 
-impl routes::SchedulerHooks for Hooks {
+impl routes::AuditClock for Hooks {
     fn now(&self) -> prelude::Timestamp {
         prelude::Timestamp(7)
     }
+}
 
+impl routes::QuotaCounter for Hooks {
     async fn count(
         &self,
         quota: &'static quotas::Quota,
@@ -129,7 +142,9 @@ impl routes::SchedulerHooks for Hooks {
         }
         Ok(outcome)
     }
+}
 
+impl routes::SubmitJobHooks for Hooks {
     async fn append_job_submitted_audit(
         &self,
         entry: audits::JobSubmittedAuditEntry,
@@ -416,7 +431,172 @@ fn kebab_named_requests_cross_the_wire_in_their_wire_case_and_back() {
     );
 
     assert_eq!(
-        serde_json::to_value(MakeReportError::NotFound).unwrap(),
-        json!("not_found")
+        serde_json::to_value(MakeReportError::NotFound(types::ApiError {
+            code: types::ErrorCode::NotFound,
+            message: "no job".into(),
+            detail: None,
+            correlation: String::new(),
+        }))
+        .unwrap(),
+        json!({ "not_found": { "code": "not_found", "message": "no job", "correlation": "" } })
     );
+}
+
+/// Sends one POST of `body` to `base` + `path` with `headers` over a plain connection and
+/// returns the status and the body as sent.
+async fn post(base: &str, path: &str, headers: &[(&str, &str)], body: &str) -> (u16, String) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let address = base.trim_start_matches("http://");
+    let mut stream = tokio::net::TcpStream::connect(address).await.unwrap();
+    let mut request = format!(
+        "POST {path} HTTP/1.1\r\nhost: {address}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n",
+        body.len()
+    );
+    for (name, value) in headers {
+        request.push_str(&format!("{name}: {value}\r\n"));
+    }
+    request.push_str("\r\n");
+    request.push_str(body);
+    stream.write_all(request.as_bytes()).await.unwrap();
+    let mut answer = String::new();
+    stream.read_to_string(&mut answer).await.unwrap();
+    let (head, body) = answer.split_once("\r\n\r\n").unwrap();
+    let status = head.split(' ').nth(1).unwrap().parse().unwrap();
+    (status, body.to_string())
+}
+
+/// Reports nothing: every report is missing.
+struct NoReports;
+
+impl routes::MakeReportHandler for NoReports {
+    async fn handle(
+        &self,
+        request: MakeReportRequest,
+    ) -> Result<MakeReportResponse, contracts::MakeReportError> {
+        Err(contracts::MakeReportError::NotFound(types::ApiError {
+            code: types::ErrorCode::Internal,
+            message: format!("no job {}", request.job),
+            detail: Some("looked everywhere".into()),
+            correlation: "set by the handler".into(),
+        }))
+    }
+}
+
+struct Pong;
+
+impl routes::PingHandler for Pong {
+    async fn handle(
+        &self,
+        _request: contracts::PingRequest,
+    ) -> Result<contracts::PingResponse, contracts::PingError> {
+        Ok(contracts::PingResponse {
+            pong: "pong".into(),
+        })
+    }
+}
+
+/// One contract is served on its own by a type that implements only its handler, and answers
+/// a contract error with its payload as the error body: the status of its kind, the code set to
+/// the kind, the caller's correlation id, and the left-out field absent.
+#[tokio::test(flavor = "current_thread")]
+async fn one_contract_is_served_alone_and_answers_with_the_error_body() {
+    let base = serve(
+        routes::serve_make_report(Routes::new(Principals), Arc::new(NoReports), Arc::new(()))
+            .into_router(),
+    )
+    .await;
+    let (status, body) = post(
+        &base,
+        "/reports/make-report",
+        &[("x-correlation-id", "c-7")],
+        r#"{"job":"j4"}"#,
+    )
+    .await;
+    assert_eq!(status, 404);
+    assert_eq!(
+        body,
+        r#"{"code":"not_found","message":"no job j4","detail":"looked everywhere","correlation":"c-7"}"#
+    );
+
+    // The generated client reads the body back as the contract's error.
+    let client = routes::ReportsClient::new(Client::new(&base, NoCredentials).unwrap());
+    match client
+        .make_report(&MakeReportRequest { job: "j5".into() })
+        .await
+    {
+        Err(CallError::Contract(contracts::MakeReportError::NotFound(reply))) => {
+            assert_eq!(reply.code, types::ErrorCode::NotFound);
+            assert_eq!(reply.message, "no job j5");
+        }
+        other => panic!("expected not_found, got {other:?}"),
+    }
+
+    // A failure of the runtime is a body of its kind: a request that does not decode.
+    let (status, body) = post(&base, "/reports/make-report", &[], r#"{"jobb":1}"#).await;
+    assert_eq!(status, 422);
+    let reply: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(reply["code"], "invalid");
+    assert_eq!(reply["correlation"], "");
+    assert!(reply.get("detail").is_none());
+}
+
+/// Refusals of the runtime and of the specification's checks answer with the error body at the
+/// status of their kind: no principal 401, a policy 403, a quota refusal (kind throttled) 429.
+/// A contract that states no requirement is refused without a principal: the authorizer does not
+/// recognise the empty requirement.
+#[tokio::test(flavor = "current_thread")]
+async fn refusals_answer_with_the_error_body_at_the_status_of_their_kind() {
+    let scheduler = Arc::new(Scheduler {
+        deps: deps::SchedulerDeps::new(routes::ReportsClient::new(
+            Client::new("http://127.0.0.1:9", NoCredentials).unwrap(),
+        )),
+        submitted: Mutex::new(Vec::new()),
+    });
+    let served = routes::scheduler_routes(
+        Routes::new(Principals),
+        scheduler,
+        Arc::new(Hooks::default()),
+    );
+    let base = serve(routes::serve_ping(served, Arc::new(Pong), Arc::new(())).into_router()).await;
+    let job = r#"{"job":"j1","priority":3}"#;
+
+    let (status, body) = post(
+        &base,
+        "/api/jobs/submit",
+        &[("x-correlation-id", "c-1")],
+        job,
+    )
+    .await;
+    assert_eq!(status, 401);
+    assert_eq!(
+        body,
+        r#"{"code":"unauthenticated","message":"name a principal","correlation":"c-1"}"#
+    );
+    let (status, body) = post(&base, "/api/jobs/submit", &[(PRINCIPAL, "member/mia")], job).await;
+    assert_eq!(status, 403);
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&body).unwrap()["code"],
+        "forbidden"
+    );
+    for expected in [200, 200, 429] {
+        let (status, body) = post(
+            &base,
+            "/api/jobs/submit",
+            &[(PRINCIPAL, "operator/ann")],
+            job,
+        )
+        .await;
+        assert_eq!(status, expected, "{body}");
+        if status == 429 {
+            assert_eq!(
+                body,
+                r#"{"code":"throttled","message":"busy","correlation":""}"#
+            );
+        }
+    }
+
+    let (status, _) = post(&base, "/gateway/ping", &[], "{}").await;
+    assert_eq!(status, 401);
+    let (status, body) = post(&base, "/gateway/ping", &[(PRINCIPAL, "member/mia")], "{}").await;
+    assert_eq!((status, body.as_str()), (200, r#"{"pong":"pong"}"#));
 }

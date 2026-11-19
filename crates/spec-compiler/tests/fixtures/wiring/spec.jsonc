@@ -12,9 +12,17 @@
 //   and its job-summary struct as display_name, started_at, extra_info; inspect-job-camel
 //   overrides the case with binding.case camelCase (jobId, lastSeen). filter-params, details and
 //   extra-info are json.
+// - contract errors on the wire (WG-4893): every failure is answered with the error body
+//   api-error {code, message, detail?, correlation}; busy is of kind throttled (429) and
+//   make-report's not-found of kind not_found (404) carrying an api-error. cancel-job and
+//   make-report state the requirement none, which the test's authorizer admits without a
+//   principal; a contract that states no requirement is refused without one.
 {
   "exegra": "0.1",
-  "system": { "id": "wiring-fixture", "name": "Wiring fixture", "generation": { "target": "rust", "wireCase": "snake_case" } },
+  "system": { "id": "wiring-fixture", "name": "Wiring fixture", "generation": { "target": "rust", "wireCase": "snake_case",
+    "errorKinds": { "unauthenticated": 401, "forbidden": 403, "not_found": 404, "throttled": 429, "invalid": 422, "unavailable": 503, "internal": 500 },
+    "errorBody": { "type": "api-error", "code": "code", "message": "message", "correlation": "correlation",
+      "runtime": { "unauthenticated": "unauthenticated", "forbidden": "forbidden", "invalid-request": "invalid", "timeout": "unavailable", "unavailable": "unavailable", "internal": "internal" } } } },
   "components": [
     { "id": "gateway", "name": "Gateway", "category": "service", "purpose": "Takes requests from outside." },
     { "id": "scheduler", "name": "Scheduler", "category": "service", "purpose": "Runs jobs." },
@@ -28,6 +36,8 @@
     { "id": "reports-reads-scheduler", "kind": "reads", "from": "reports", "to": "scheduler", "description": "Not a call: gives no client." }
   ],
   "types": [
+    { "id": "error-code", "name": "Error code", "kind": "enum", "values": [ "unauthenticated", "forbidden", "not_found", "throttled", "invalid", "unavailable", "internal" ] },
+    { "id": "api-error", "name": "Api error", "kind": "struct", "fields": [ { "name": "code", "type": "error-code" }, { "name": "message", "type": "string" }, { "name": "detail", "type": "string", "optional": true }, { "name": "correlation", "type": "string" } ] },
     { "id": "job-summary", "name": "Job summary", "kind": "struct", "fields": [ { "name": "display-name", "type": "string" }, { "name": "started-at", "type": "option<timestamp>", "optional": true }, { "name": "extra-info", "type": "json" } ] }
   ],
   "records": [
@@ -57,16 +67,16 @@
       "auth": "An operator.", "idempotent": true, "timeoutMs": 2000, "policyDefault": "deny",
       "inputs": [{ "name": "job", "type": "string" }, { "name": "priority", "type": "u32" }],
       "outputs": [{ "name": "accepted", "type": "bool" }],
-      "errors": [{ "name": "busy", "condition": "Too many jobs were submitted in the last minute." }] },
-    { "id": "cancel-job", "name": "Cancel job", "ref": "CT-2", "realisation": "generated", "implementedBy": "scheduler", "idempotent": true, "timeoutMs": 1000,
+      "errors": [{ "name": "busy", "condition": "Too many jobs were submitted in the last minute.", "kind": "throttled" }] },
+    { "id": "cancel-job", "name": "Cancel job", "ref": "CT-2", "realisation": "generated", "implementedBy": "scheduler", "auth": "none", "idempotent": true, "timeoutMs": 1000,
       "inputs": [{ "name": "job", "type": "string" }],
       "outputs": [] },
     { "id": "ping", "name": "Ping", "ref": "CT-3", "realisation": "generated", "implementedBy": "gateway", "idempotent": false, "policyDefault": "allow",
       "outputs": [{ "name": "pong", "type": "string" }] },
-    { "id": "make-report", "name": "Make report", "ref": "CT-4", "realisation": "generated", "implementedBy": "reports", "idempotent": true, "timeoutMs": 1000,
+    { "id": "make-report", "name": "Make report", "ref": "CT-4", "realisation": "generated", "implementedBy": "reports", "auth": "none", "idempotent": true, "timeoutMs": 1000,
       "inputs": [{ "name": "job", "type": "string" }],
       "outputs": [{ "name": "text", "type": "string" }],
-      "errors": [{ "name": "not-found", "condition": "No job has the id." }] },
+      "errors": [{ "name": "not-found", "condition": "No job has the id.", "type": "api-error", "kind": "not_found" }] },
     { "id": "inspect-job", "name": "Inspect job", "ref": "CT-5", "realisation": "generated", "idempotent": true,
       "inputs": [{ "name": "job-id", "type": "string" }, { "name": "filter-params", "type": "json", "optional": true }],
       "outputs": [{ "name": "summary", "type": "job-summary" }],

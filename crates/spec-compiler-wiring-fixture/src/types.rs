@@ -4,6 +4,65 @@ use serde::{Deserialize, Serialize};
 
 use crate::prelude;
 
+/// Error code
+///
+/// Specification type `error-code`: an enumeration, serialised as the specification's values.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub enum ErrorCode {
+    /// The value `unauthenticated`.
+    #[serde(rename = "unauthenticated")]
+    Unauthenticated,
+    /// The value `forbidden`.
+    #[serde(rename = "forbidden")]
+    Forbidden,
+    /// The value `not_found`.
+    #[serde(rename = "not_found")]
+    NotFound,
+    /// The value `throttled`.
+    #[serde(rename = "throttled")]
+    Throttled,
+    /// The value `invalid`.
+    #[serde(rename = "invalid")]
+    Invalid,
+    /// The value `unavailable`.
+    #[serde(rename = "unavailable")]
+    Unavailable,
+    /// The value `internal`.
+    #[serde(rename = "internal")]
+    Internal,
+}
+
+impl ErrorCode {
+    /// The value as the specification writes it.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Unauthenticated => "unauthenticated",
+            Self::Forbidden => "forbidden",
+            Self::NotFound => "not_found",
+            Self::Throttled => "throttled",
+            Self::Invalid => "invalid",
+            Self::Unavailable => "unavailable",
+            Self::Internal => "internal",
+        }
+    }
+}
+
+/// Api error
+///
+/// Specification type `api-error`: a struct.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct ApiError {
+    /// Field `code`.
+    pub code: ErrorCode,
+    /// Field `message`.
+    pub message: String,
+    /// Field `detail`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    /// Field `correlation`.
+    pub correlation: String,
+}
+
 /// Job summary
 ///
 /// Specification type `job-summary`: a struct.

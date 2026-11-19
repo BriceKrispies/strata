@@ -1,7 +1,8 @@
 //! Calling another component's contract.
 //!
 //! [`Client::call`] sends a [`Contract`]'s request in the wire format [`Routes`](crate::Routes)
-//! serves and decodes the answer into the contract's response or error. Credentials are added by
+//! serves and decodes the answer into the contract's response or error, reading a failure with
+//! the contract's [`FailureBody`]. Credentials are added by
 //! a [`Credentials`] value, written by hand per deployment.
 //!
 //! Retries: a call to an idempotent contract is sent up to [`CallRetry::attempts`] times
@@ -12,7 +13,9 @@
 //! specification states for that contract. A call to a contract that is not idempotent is sent
 //! once.
 
-use crate::routes::{Contract, Failure, FailureCode, ServiceToken, CORRELATION, IDEMPOTENCY_KEY};
+use crate::routes::{
+    Contract, Failure, FailureBody, FailureCode, ServiceToken, CORRELATION, IDEMPOTENCY_KEY,
+};
 use std::fmt;
 use std::time::Duration;
 
@@ -264,10 +267,10 @@ impl<K: Credentials> Client<K> {
         if status.is_success() {
             return serde_json::from_slice(&body).map_err(|e| CallError::Codec(e.to_string()));
         }
-        match serde_json::from_slice::<Failure<C::Error>>(&body) {
-            Ok(Failure::Contract { error }) => Err(CallError::Contract(error)),
-            Ok(Failure::Runtime { code, message }) => Err(CallError::Runtime { code, message }),
-            Err(_) => Err(CallError::Runtime {
+        match <C::Body as FailureBody<C::Error>>::decode(status.as_u16(), &body) {
+            Some(Failure::Contract { error }) => Err(CallError::Contract(error)),
+            Some(Failure::Runtime { code, message }) => Err(CallError::Runtime { code, message }),
+            None => Err(CallError::Runtime {
                 code: if status.as_u16() == 503 {
                     FailureCode::Unavailable
                 } else {

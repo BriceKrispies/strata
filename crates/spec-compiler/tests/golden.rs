@@ -397,7 +397,11 @@ fn the_wiring_reaches_the_generated_crate() {
     assert!(routes.contains("path: \"/scheduler/cancel-job\","));
     assert!(routes.contains("pub fn scheduler_routes<A, S, H>("));
     assert!(routes.contains("pub struct SchedulerClient<K: strata_runtime::Credentials = strata_runtime::NoCredentials>"));
-    assert!(routes.contains("impl GatewayHooks for () {}"));
+    assert!(routes.contains("pub trait PingHandler: Send + Sync + 'static {"));
+    assert!(routes.contains("pub fn serve_make_report<A, S, H>("));
+    assert!(routes.contains("pub trait SchedulerHooks: SubmitJobHooks + CancelJobHooks {}"));
+    assert!(routes.contains("type Body = ErrorBody;"));
+    assert!(routes.contains("impl<E> strata_runtime::FailureBody<E> for ErrorBody"));
     assert!(routes.contains("fn append_job_submitted_audit("));
 
     let deps = file_text(&files, "src/deps.rs");
