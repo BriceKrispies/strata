@@ -93,6 +93,9 @@ pub fn crate_files_with(
                 spec,
                 crate::backend::types::Selection::Rest { core_crate: krate },
             ),
+            Some(krate) if backend.module() == crate::backend::derived::MODULE => {
+                crate::backend::derived::emit_with(spec, Some(krate))
+            }
             _ => backend.emit(spec),
         };
         modules.push((backend.module(), tokens));

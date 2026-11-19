@@ -228,6 +228,12 @@ fn descriptions() -> TokenStream {
             Generated,
             /// A hole: the code is written by hand against the contract's postconditions.
             Hand,
+            /// The code is generated from the contract's derivation: functions, and the
+            /// contracts it loads and commits through (module `derived`).
+            Derived,
+            /// No server implementation: a client lowers the contract onto the generic
+            /// contract its route names. It has no trait method and no route.
+            Facade,
         }
 
         /// What the specification states about a contract beyond its data.
