@@ -360,7 +360,7 @@ function projection(page) {
   return [
     h(
       'p',
-      { class: 'lab-snapshot' },
+      { class: 'lab-snapshot', role: 'region', 'aria-label': 'Snapshot' },
       `${t.name} at revision ${t.revision}: schema version ${t.schema_version}, ${t.records} records, ${t.journal_entries} journalled operations. State `,
       short(t.state_hash),
       '. A projection works on a copy; the live publication is never changed from this page.',
@@ -375,7 +375,7 @@ function projection(page) {
 function metadata(page) {
   const o = page.overview;
   return [
-    h('p', { class: 'lab-snapshot' }, `Everything below is data stored for ${o.tenant.name} at schema version ${o.tenant.schema_version}. None of it is written into the platform’s code.`),
+    h('p', { class: 'lab-snapshot', role: 'region', 'aria-label': 'Snapshot' }, `Everything below is data stored for ${o.tenant.name} at schema version ${o.tenant.schema_version}. None of it is written into the platform’s code.`),
     o.objects.map((object) =>
       h(
         'section',

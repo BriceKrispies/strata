@@ -358,6 +358,24 @@ async fn view_model(
     }
     model["theme"] = json!(resolved);
     model["path"] = json!(path);
+    if data.view.as_str() == "desk" {
+        // The writing desk's rows as its per-row actions name them: each article with the
+        // version a change starts from (read-desk-view, desk-article).
+        model["articles"] = json!(model["data"]["posts"]
+            .as_array()
+            .map(|rows| rows
+                .iter()
+                .map(|row| json!({
+                    "article_id": row["id"],
+                    "version": row["version"],
+                    "title": row["fields"]["title"],
+                    "slug": row["fields"]["slug"],
+                    "body": row["fields"]["body"],
+                    "status": row["fields"]["status"],
+                }))
+                .collect::<Vec<_>>())
+            .unwrap_or_default());
+    }
     Ok(model)
 }
 

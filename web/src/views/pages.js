@@ -73,7 +73,7 @@ export function post(page) {
           page.tags.length ? h('p', { class: 'tags' }, page.tags.join(', ')) : null,
           page.canEdit ? h('p', null, h('a', { class: 'button button--quiet', href: page.editHref }, 'Edit this essay')) : null,
         ),
-        h('div', { class: 'prose' }, prose(page.blocks)),
+        h('div', { class: 'prose', role: 'region', 'aria-label': 'Essay text' }, prose(page.blocks)),
       ),
       page.author
         ? h(
