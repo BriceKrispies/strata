@@ -1030,3 +1030,63 @@ fn saml_sign_ins_are_taken_once_and_accepted_assertions_are_remembered_once() {
         .put_saml_assertion(&alpha, "acme", "assertion-1", Timestamp(900))
         .is_err());
 }
+
+/// Teams live in the schema without changing its version: defining one and giving it a role
+/// commit, and the schema that comes back holds the team, after a reopen too.
+#[test]
+fn a_team_change_commits_without_a_new_schema_version() {
+    let path = fresh_path("teams");
+    let store = SqliteStore::open(&path, Timestamp(1)).unwrap();
+    tenant_with_a_note(&store, "alpha", 10);
+    let owner = Principal::User(principal_id("alpha:owner"));
+    let team = TeamId::new("desk").unwrap();
+    let version = |store: &SqliteStore| {
+        store
+            .load(&tenant_id("alpha"), &[])
+            .unwrap()
+            .tenant
+            .unwrap()
+            .schema
+            .version
+    };
+    let before = version(&store);
+    for (at, intent) in [
+        (
+            20,
+            Intent::DefineTeam {
+                team: team.clone(),
+                label: "Desk".into(),
+            },
+        ),
+        (
+            21,
+            Intent::AssignTeamRole {
+                team: team.clone(),
+                role: role("editor"),
+            },
+        ),
+        (
+            22,
+            Intent::DefineTeam {
+                team: team.clone(),
+                label: "News desk".into(),
+            },
+        ),
+    ] {
+        execute(&store, &intent, &ctx("alpha", owner.clone(), at)).unwrap();
+    }
+    drop(store);
+    let store = SqliteStore::open(&path, Timestamp(30)).unwrap();
+    let tenant = store
+        .load(&tenant_id("alpha"), &[])
+        .unwrap()
+        .tenant
+        .unwrap();
+    assert_eq!(tenant.schema.version, before);
+    let desk = tenant
+        .schema
+        .team(&team)
+        .expect("the team is in the schema");
+    assert_eq!(desk.label, "News desk");
+    assert!(desk.roles.contains(&role("editor")));
+}

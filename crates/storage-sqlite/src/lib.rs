@@ -1128,8 +1128,11 @@ impl SqliteStore {
             }
         }
         if let Some(schema) = &schema {
+            // A schema can change without a new version: teams and their roles live in it and do
+            // not change the shape of records. The row of a version keeps the revision the
+            // version began at and holds the latest schema at that version.
             tx.execute(
-                "INSERT INTO schema_history (version, revision, schema) VALUES (?1, ?2, ?3)",
+                "INSERT INTO schema_history (version, revision, schema) VALUES (?1, ?2, ?3)                  ON CONFLICT(version) DO UPDATE SET schema = excluded.schema",
                 params![
                     schema.version.0 as i64,
                     delta.new_revision.0 as i64,
