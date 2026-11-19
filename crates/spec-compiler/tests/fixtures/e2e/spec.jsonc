@@ -1,0 +1,88 @@
+{
+  "system": { "id": "fieldnotes" },
+  "claims": [
+    { "id": "req-read", "ref": "R-10", "kind": "requirement", "statement": "A reader can open an essay." },
+    { "id": "req-live", "ref": "R-11", "kind": "requirement", "statement": "Open pages update live." },
+    { "id": "req-a11y", "ref": "R-12", "kind": "requirement", "statement": "Pages are accessible." }
+  ],
+  "events": [{ "id": "post-published", "name": "Post published" }],
+  "screens": [
+    { "id": "home", "name": "Front page", "route": "/", "query": ["q"] },
+    { "id": "post", "name": "Essay", "route": "/posts/:slug" },
+    { "id": "login", "name": "Sign in", "route": "/login" },
+    { "id": "desk", "name": "Writing desk", "route": "/desk" }
+  ],
+  "forms": [
+    {
+      "id": "login-form",
+      "screen": "login",
+      "contract": "sign-in",
+      "fields": [
+        { "name": "name", "input": "name", "label": "Name", "control": "text" },
+        { "name": "password", "input": "password", "label": "Password", "control": "password" },
+        { "name": "remember", "input": "remember", "label": "Remember me", "control": "checkbox" },
+        { "name": "topic", "input": "topic", "label": "Topic", "control": "select",
+          "options": [{ "value": "design", "label": "Design" }, { "value": "craft", "label": "Craft" }] },
+        { "name": "count", "input": "count", "label": "Count", "control": "number" }
+      ],
+      "submitLabel": "Sign in"
+    }
+  ],
+  "liveBindings": [{ "id": "home-live", "screen": "home", "event": "post-published", "refresh": "whole" }],
+  "uiScenarios": [
+    {
+      "id": "read-an-essay",
+      "name": "a reader opens an essay from the front page",
+      "verifies": ["req-read", "req-a11y"],
+      "viewport": { "width": 390, "height": 844 },
+      "steps": [
+        { "goto": { "screen": "home", "params": { "q": "kiln" } } },
+        { "expectStatus": 200 },
+        { "expectText": { "text": "Fieldnotes", "within": { "role": "banner", "name": "Site" } } },
+        { "click": { "role": "link", "name": "What the Kiln Decides" } },
+        { "expectScreen": "post" },
+        { "expectRole": { "role": "heading", "name": "What the Kiln Decides" } },
+        { "expectRole": { "role": "button", "name": "Edit", "state": "hidden" } },
+        { "setViewport": { "width": 1280, "height": 860 } },
+        { "axeScan": {} },
+        { "logScan": { "forbid": ["password", "csrf_token=\\w+"] } }
+      ]
+    },
+    {
+      "id": "sign-in-offline",
+      "name": "a writer signs in and loses the connection",
+      "steps": [
+        { "goto": { "screen": "login" } },
+        { "fill": { "form": "login-form", "field": "name", "value": "ines" } },
+        { "fill": { "form": "login-form", "field": "password", "value": "secret" } },
+        { "fill": { "form": "login-form", "field": "remember", "value": true } },
+        { "fill": { "form": "login-form", "field": "topic", "value": "Craft" } },
+        { "fill": { "form": "login-form", "field": "count", "value": 3 } },
+        { "submit": { "form": "login-form" } },
+        { "expectScreen": "desk" },
+        { "fill": { "role": "searchbox", "name": "Search the essays", "value": "kiln" } },
+        { "press": "Enter" },
+        { "expectRole": { "role": "button", "name": "Save", "state": "disabled" } },
+        { "expectRole": { "role": "searchbox", "name": "Search the essays", "state": "focused" } },
+        { "goOffline": {} },
+        { "expectText": { "text": "offline" } },
+        { "goOnline": {} }
+      ]
+    },
+    {
+      "id": "readers-see-it-live",
+      "name": "a reader sees a published essay without reloading",
+      "verifies": ["req-live"],
+      "browsers": ["reader", "author"],
+      "steps": [
+        { "goto": { "screen": "home" } },
+        { "switchBrowser": "author" },
+        { "goto": { "screen": "post", "params": { "slug": "on-sharpening" } } },
+        { "expectStatus": 200 },
+        { "switchBrowser": "reader" },
+        { "waitFor": { "event": "post-published" } },
+        { "expectText": { "text": "On Sharpening" } }
+      ]
+    }
+  ]
+}
