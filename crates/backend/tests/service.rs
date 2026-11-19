@@ -53,6 +53,7 @@ async fn start_on(store: Arc<MemoryStore>, adjust: impl FnOnce(&mut Config)) -> 
         mail: std::sync::Arc::new(strata_backend::mail::DevSink::memory()),
         federation: std::sync::Arc::new(strata_backend::signin::oidc::Federation::none()),
         factors: Default::default(),
+        limits: Default::default(),
     };
     adjust(&mut cfg);
     tokio::spawn(strata_backend::run(
@@ -148,6 +149,28 @@ impl Backend {
         let response = request.send().await.unwrap();
         let status = response.status().as_u16();
         (status, response.json().await.unwrap_or(Json::Null))
+    }
+
+    /// A socket opened as a visitor from `source`; the refusal when the upgrade is refused.
+    async fn socket_from(
+        &self,
+        source: &str,
+        site: &str,
+        session: Option<&str>,
+    ) -> Result<Socket, tokio_tungstenite::tungstenite::Error> {
+        let mut request = format!("{}/internal/ws", self.base.replace("http", "ws"))
+            .into_client_request()
+            .unwrap();
+        let headers = request.headers_mut();
+        headers.insert(HEADER_SERVICE, TOKEN.parse().unwrap());
+        headers.insert(HEADER_SITE, site.parse().unwrap());
+        headers.insert(HEADER_SOURCE, source.parse().unwrap());
+        if let Some(token) = session {
+            headers.insert(HEADER_SESSION, token.parse().unwrap());
+        }
+        tokio_tungstenite::connect_async(request)
+            .await
+            .map(|(socket, _)| socket)
     }
 
     /// One password attempt, answered with its status.
@@ -3641,4 +3664,211 @@ async fn the_development_outbox_is_for_the_owner() {
     assert_eq!(status, 200, "{outbox}");
     assert_eq!(outbox["messages"].as_array().unwrap().len(), 1);
     assert_eq!(outbox["messages"][0]["to"], LINK_ADDRESS);
+}
+
+fn refused_as_throttled(result: &Result<Socket, tokio_tungstenite::tungstenite::Error>) -> bool {
+    matches!(
+        result,
+        Err(tokio_tungstenite::tungstenite::Error::Http(response)) if response.status().as_u16() == 429
+    )
+}
+
+/// One session may hold only so many sockets, and one source address only so many, signed in or
+/// not. A closed socket frees its place.
+#[tokio::test]
+async fn sockets_are_capped_per_session_and_per_source() {
+    let backend = start_with(|cfg| {
+        cfg.limits.sockets_per_session = 2;
+        cfg.limits.sockets_per_source = 3;
+    })
+    .await;
+    let author = backend
+        .login("fieldnotes", "tomasz", "strata-dev-tomasz")
+        .await;
+
+    // Per session: the third socket of one session is refused, wherever it comes from.
+    let first = backend
+        .socket_from("10.0.0.1", "fieldnotes", Some(&author))
+        .await
+        .expect("first");
+    let _second = backend
+        .socket_from("10.0.0.2", "fieldnotes", Some(&author))
+        .await
+        .expect("second");
+    let third = backend
+        .socket_from("10.0.0.3", "fieldnotes", Some(&author))
+        .await;
+    assert!(refused_as_throttled(&third), "third socket of one session");
+    // A closed socket frees its place (the backend notices the close a moment later).
+    drop(first);
+    let mut reopened = false;
+    for _ in 0..40 {
+        if backend
+            .socket_from("10.0.0.3", "fieldnotes", Some(&author))
+            .await
+            .is_ok()
+        {
+            reopened = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(reopened, "the place of a closed socket was never freed");
+
+    // Per source: three anonymous sockets from one address, and the fourth is refused.
+    let mut held = Vec::new();
+    for _ in 0..3 {
+        held.push(
+            backend
+                .socket_from("10.0.1.1", "fieldnotes", None)
+                .await
+                .expect("within the cap"),
+        );
+    }
+    let fourth = backend.socket_from("10.0.1.1", "fieldnotes", None).await;
+    assert!(refused_as_throttled(&fourth), "fourth socket of one source");
+    assert!(
+        backend
+            .socket_from("10.0.1.2", "fieldnotes", None)
+            .await
+            .is_ok(),
+        "another address is not affected"
+    );
+}
+
+/// Sign-in attempts are counted per source address, whatever the account, and a source over its
+/// limit is refused before any password is hashed.
+#[tokio::test]
+async fn sign_in_is_rate_limited_per_source() {
+    let backend = start_with(|cfg| cfg.limits.logins_per_source_per_minute = 3).await;
+    for login in ["ines", "mirela", "tomasz"] {
+        let (status, _) = backend
+            .call_from(
+                "10.0.2.1",
+                "fieldnotes",
+                None,
+                "/internal/session/login",
+                json!({ "login": login, "password": "nope" }),
+            )
+            .await;
+        assert_eq!(status, 401, "{login}");
+    }
+    let right = json!({ "login": "ines", "password": "strata-dev-ines" });
+    let (status, _) = backend
+        .call_from(
+            "10.0.2.1",
+            "fieldnotes",
+            None,
+            "/internal/session/login",
+            right.clone(),
+        )
+        .await;
+    assert_eq!(status, 429, "over the limit, even with the right password");
+    let (status, _) = backend
+        .call_from(
+            "10.0.2.2",
+            "fieldnotes",
+            None,
+            "/internal/session/login",
+            right,
+        )
+        .await;
+    assert_eq!(status, 200, "another source is not affected");
+}
+
+/// Password verifications run a few at a time. With memory for one, a burst of sign-ins is
+/// served one after another and those that cannot get a place in time are refused.
+#[tokio::test]
+async fn concurrent_password_hashing_is_bounded() {
+    let backend = start_with(|cfg| {
+        cfg.limits.argon2_memory_mib = 19;
+        cfg.limits.argon2_wait_ms = 20;
+    })
+    .await;
+    let right = json!({ "login": "ines", "password": "strata-dev-ines" });
+    let attempts =
+        (0..10).map(|_| backend.call("fieldnotes", None, "/internal/session/login", right.clone()));
+    let statuses: Vec<u16> = futures_util::future::join_all(attempts)
+        .await
+        .into_iter()
+        .map(|(status, _)| status)
+        .collect();
+    assert!(
+        statuses.iter().all(|s| matches!(s, 200 | 429)),
+        "{statuses:?}"
+    );
+    assert!(statuses.contains(&200), "someone was served: {statuses:?}");
+    assert!(
+        statuses.contains(&429),
+        "the burst was bounded: {statuses:?}"
+    );
+}
+
+/// Verification builds the Lean project, so a tenant may ask for it once per interval and never
+/// while its last one is running.
+#[tokio::test]
+async fn verification_is_limited_per_tenant() {
+    let backend = start_with(|cfg| {
+        // No Lean project here: the run ends at once with a report that says so.
+        cfg.lean_dir = PathBuf::from("no-such-lean-project");
+    })
+    .await;
+    let admin = backend
+        .login("fieldnotes", "admin", "strata-dev-admin")
+        .await;
+    let (first, body) = backend
+        .call(
+            "fieldnotes",
+            Some(&admin),
+            "/internal/lab/verify",
+            json!({}),
+        )
+        .await;
+    assert_eq!(first, 200, "{body}");
+    let (second, body) = backend
+        .call(
+            "fieldnotes",
+            Some(&admin),
+            "/internal/lab/verify",
+            json!({}),
+        )
+        .await;
+    assert_eq!(second, 429, "{body}");
+}
+
+/// A tenant may have only so many projections running or waiting. A burst of requests is
+/// admitted up to that and the rest are refused.
+#[tokio::test]
+async fn projections_are_limited_per_tenant() {
+    let backend = start_with(|cfg| {
+        cfg.limits.lab_runs_per_tenant = 1;
+        cfg.limits.lab_workers = 1;
+    })
+    .await;
+    let admin = backend
+        .login("fieldnotes", "admin", "strata-dev-admin")
+        .await;
+    let request = json!({ "change": "require post.excerpt", "existing": "grandfather", "source": "generated", "steps": 300, "seed": 5, "faults": true });
+    let attempts = (0..6).map(|_| {
+        backend.call(
+            "fieldnotes",
+            Some(&admin),
+            "/internal/lab/run",
+            request.clone(),
+        )
+    });
+    let statuses: Vec<u16> = futures_util::future::join_all(attempts)
+        .await
+        .into_iter()
+        .map(|(status, _)| status)
+        .collect();
+    assert!(
+        statuses.iter().all(|s| matches!(s, 200 | 429)),
+        "{statuses:?}"
+    );
+    assert!(statuses.contains(&200), "one was admitted: {statuses:?}");
+    assert!(
+        statuses.contains(&429),
+        "the burst was bounded: {statuses:?}"
+    );
 }

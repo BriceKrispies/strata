@@ -194,7 +194,10 @@ pub fn sign_in(
     let name = method.name();
     // No method can be checked while the identity service cannot be reached: a sign-in fails
     // closed (IDN-300).
-    if app.identity_outage.load(std::sync::atomic::Ordering::Relaxed) {
+    if app
+        .identity_outage
+        .load(std::sync::atomic::Ordering::Relaxed)
+    {
         return Err(auth::identity_outage());
     }
     let Some(tenant) = app.store.load(&caller.site, &[])?.tenant else {

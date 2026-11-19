@@ -35,6 +35,15 @@ pub struct Caller {
     pub origin: Option<String>,
 }
 
+impl Caller {
+    /// The visitor's address as the BFF established it, for the limits on what one source may
+    /// open or attempt; `None` for calls that are not a visitor's, which are not limited per
+    /// source.
+    pub fn visitor_source(&self) -> Option<&str> {
+        (self.source != "unknown").then_some(self.source.as_str())
+    }
+}
+
 /// Who a request acts as, after the session has been checked.
 #[derive(Clone, Debug)]
 pub struct Identity {

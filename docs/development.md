@@ -137,3 +137,25 @@ store's own integrity check.
 | `STRATA_SITES` | BFF | `127.0.0.1=fieldnotes,localhost=fieldnotes,tidewater.localhost=tidewater` |
 | `STRATA_ORIGINS` | BFF | every site host on the BFF port and on 5173 |
 | `STRATA_WEB_DIST` | BFF | `web/dist` |
+
+### Resource limits
+
+Every limit refuses with `429` (or closes the connection) and none of them is a quality knob: a
+deployment sets them from the memory and cores it has.
+
+| Variable | Service | Default |
+|---|---|---|
+| `STRATA_HEADER_TIMEOUT_SECS`, `STRATA_REQUEST_TIMEOUT_SECS` | both | 10, 30 (a request over its time is answered `408`; sockets are not subject to the second) |
+| `STRATA_MAX_CONNECTIONS` | both | 2048 |
+| `STRATA_TRUSTED_PROXIES` | BFF | none. Comma-separated proxy addresses; only their `X-Forwarded-For` is believed, the rightmost hop that is not itself a trusted proxy is the visitor, and from any other peer the header is ignored. Without it every visitor behind a reverse proxy shares the proxy's address |
+| `STRATA_BFF_SOCKETS_PER_SESSION`, `STRATA_BFF_SOCKETS_PER_SOURCE` | BFF | 8, 32 |
+| `STRATA_SOCKETS_PER_SESSION`, `STRATA_SOCKETS_PER_SOURCE` | backend | 8, 32 |
+| `STRATA_DIAG_PER_SOCKET`, `STRATA_DIAG_PER_SOURCE` | backend | 50 per socket, 200 per source per minute |
+| `STRATA_LOGINS_PER_SOURCE` | backend | 30 per source per minute |
+| `STRATA_ARGON2_MEMORY_MIB`, `STRATA_ARGON2_WAIT_MS` | backend | 64 (three 19 MiB verifications at once), 3000 |
+| `STRATA_LAB_WORKERS`, `STRATA_LAB_QUEUE`, `STRATA_LAB_RUNS_PER_TENANT` | backend | 2, 4, 2 |
+| `STRATA_VERIFY_INTERVAL_MS` | backend | 60000 (and one Lean build at a time on the whole backend) |
+
+The BFF states the visitor's source to the backend in `x-strata-source`, replacing anything a
+browser sent under that name. A backend call without it (an operator's tool) is not limited per
+source.

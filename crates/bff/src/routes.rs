@@ -1,5 +1,6 @@
 //! Browser-facing routes.
 
+use crate::limits::client_address;
 use crate::signin;
 use crate::token::same;
 use crate::{relay, Bff, Shared, COOKIE, LOG};
@@ -60,7 +61,8 @@ pub struct Visit {
     pub site: TenantId,
     pub token: Option<String>,
     pub correlation: String,
-    /// The address the connection came from, which the backend limits failed sign-ins by.
+    /// The visitor's address, as `envelope` established it from the connection and the trusted
+    /// proxies. Passed to the backend, which limits what one source may open or attempt.
     pub source: Option<String>,
     /// The origin the request was made from, when it is one of the site's own. A passkey is made
     /// and used at that address.
@@ -192,6 +194,7 @@ pub fn visit(bff: &Bff, headers: &HeaderMap) -> Result<Visit, Failure> {
         site,
         token: cookie(headers),
         correlation,
+        // `envelope` replaces this header on every request, so it is never the browser's.
         source: text(headers, HEADER_SOURCE).map(str::to_string),
         origin,
     })
@@ -1366,9 +1369,22 @@ async fn socket(
             &visit.correlation,
         ));
     }
+    // At most so many sockets per session and per source address; the places are held until the
+    // socket closes.
+    let places = bff
+        .admission
+        .socket(visit.token.as_deref(), visit.source.as_deref())
+        .map_err(|message| {
+            LOG.warn(
+                "ws.cap_refused",
+                &visit.correlation,
+                json!({ "source": visit.source, "signed_in": visit.token.is_some() }),
+            );
+            Failure::new(ErrorCode::Throttled, message, &visit.correlation)
+        })?;
     Ok(upgrade
         .max_message_size(strata_protocol::ws::MAX_FRAME)
-        .on_upgrade(move |browser| relay::relay(bff, visit, browser)))
+        .on_upgrade(move |browser| relay::relay(bff, visit, places, browser)))
 }
 
 /// Decode a query-string value: `+` is a space, `%XX` is a byte.
@@ -1508,18 +1524,33 @@ async fn page(State(bff): State<Shared>, headers: HeaderMap, request: Request) -
     response
 }
 
-/// Security headers on everything, and one log line per request.
-async fn envelope(State(bff): State<Shared>, mut request: Request, next: Next) -> Response {
-    let started = Instant::now();
-    // The source of a request is the address of its connection and nothing the browser says: a
-    // header of that name that came in is thrown away.
+/// The address a request is attributed to: its TCP peer, or the client a trusted proxy reports.
+fn source_of(bff: &Bff, request: &Request) -> Option<String> {
     let peer = request
         .extensions()
-        .get::<ConnectInfo<SocketAddr>>()
-        .map(|ConnectInfo(peer)| peer.ip().to_string());
+        .get::<ConnectInfo<SocketAddr>>()?
+        .0
+        .ip();
+    let forwarded = request
+        .headers()
+        .get_all("x-forwarded-for")
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .collect::<Vec<_>>()
+        .join(",");
+    let forwarded = (!forwarded.is_empty()).then_some(forwarded);
+    Some(client_address(peer, forwarded.as_deref(), &bff.cfg.trusted_proxies).to_string())
+}
+
+/// Security headers on everything, and one log line per request. Also the one place that sets the
+/// request's source: whatever a browser sent under that name is dropped first.
+async fn envelope(State(bff): State<Shared>, mut request: Request, next: Next) -> Response {
+    let started = Instant::now();
     request.headers_mut().remove(HEADER_SOURCE);
-    if let Some(value) = peer.and_then(|peer| HeaderValue::from_str(&peer).ok()) {
-        request.headers_mut().insert(HEADER_SOURCE, value);
+    if let Some(source) = source_of(&bff, &request) {
+        if let Ok(value) = HeaderValue::from_str(&source) {
+            request.headers_mut().insert(HEADER_SOURCE, value);
+        }
     }
     let method = request.method().clone();
     let path = request.uri().path().to_string();

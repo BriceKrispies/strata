@@ -45,6 +45,8 @@ async fn start() -> Backend {
         link_ttl_ms: 900_000,
         mail: Arc::new(DevSink::memory()),
         federation: Arc::new(Federation::none()),
+        factors: Default::default(),
+        limits: Default::default(),
     };
     tokio::spawn(strata_backend::run(
         cfg,

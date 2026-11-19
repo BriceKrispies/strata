@@ -92,10 +92,23 @@ async fn sign_in(
 ) -> Result<impl IntoResponse, ApiError> {
     let caller = auth::caller(&headers)?;
     let correlation = caller.correlation.clone();
-    app.blocking(move |app| auth::login(app, &caller, &method, &request))
-        .await?
-        .map(Json)
-        .map_err(|error| error.with_correlation(&correlation))
+    // The per-source limit comes first and costs nothing; then a place to hash, held until the
+    // verification is done. The limits on failed attempts in `signin::sign_in` sit behind both.
+    app.admission
+        .login_attempt(caller.visitor_source(), strata_protocol::log::now_ms())
+        .map_err(|error| error.with_correlation(&correlation))?;
+    let hashing = app
+        .admission
+        .hashing()
+        .await
+        .map_err(|error| error.with_correlation(&correlation))?;
+    app.blocking(move |app| {
+        let _hashing = hashing;
+        auth::login(app, &caller, &method, &request)
+    })
+    .await?
+    .map(Json)
+    .map_err(|error| error.with_correlation(&correlation))
 }
 
 async fn login(
@@ -918,10 +931,24 @@ async fn socket(
     upgrade: WebSocketUpgrade,
 ) -> Result<Response, ApiError> {
     let caller = auth::caller(&headers)?;
+    let correlation = caller.correlation.clone();
+    let source = caller.visitor_source().map(str::to_string);
     let identity = auth::identify_async(&app, caller).await?;
+    let session = identity.session.as_ref().map(|s| s.id.as_str().to_string());
+    let places = app
+        .admission
+        .socket(session.as_deref(), source.as_deref())
+        .map_err(|error| {
+            app.audit(
+                "socket.refused",
+                &correlation,
+                json!({ "tenant": identity.tenant.as_str(), "session": session, "source": source }),
+            );
+            error.with_correlation(&correlation)
+        })?;
     Ok(upgrade
         .max_message_size(MAX_FRAME)
-        .on_upgrade(move |socket| ws::serve(app, identity, socket)))
+        .on_upgrade(move |socket| ws::serve(app, identity, places, socket)))
 }
 
 /// Refuse anything that does not carry the service token. The backend listens on loopback, and

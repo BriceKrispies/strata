@@ -15,7 +15,10 @@ pub const HEADER_SERVICE: &str = "x-strata-service";
 pub const HEADER_SITE: &str = "x-strata-site";
 pub const HEADER_SESSION: &str = "x-strata-session";
 pub const HEADER_CORRELATION: &str = "x-correlation-id";
-/// The address of the browser as the BFF saw it, so that the backend can limit a source.
+/// The address the BFF established for the visitor: the connection's peer, or the client behind a
+/// trusted proxy. Set by the BFF only (anything a browser sends under this name is discarded) and
+/// used by the backend to limit a source: what it may open, and how many sign-in attempts it may
+/// make. Absent on calls that did not come from a visitor, which are then not limited per source.
 pub const HEADER_SOURCE: &str = "x-strata-source";
 /// The origin the browser made the request from, once the BFF has checked it is one of the
 /// site's own. A passkey is made and used at that origin.

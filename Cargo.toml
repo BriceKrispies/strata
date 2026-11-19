@@ -56,6 +56,9 @@ argon2 = "0.5.3"
 getrandom = "0.2.16"
 unicode-normalization = "0.1.25"
 tower-http = { version = "0.6.8", features = ["fs"] }
+hyper = { version = "1.8.0", features = ["http1", "server"] }
+hyper-util = { version = "0.1.17", features = ["tokio", "server", "service", "http1"] }
+tower = { version = "0.5.3", features = ["util"] }
 proc-macro2 = "1.0.107"
 quote = "1.0.47"
 syn = { version = "2.0.119", features = ["full"] }

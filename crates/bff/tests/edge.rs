@@ -20,14 +20,18 @@ struct Edge {
 }
 
 async fn start() -> Edge {
-    start_with(Default::default()).await
+    start_with(|_| {}, |_| {}).await
 }
 
-async fn start_with(throttle: strata_backend::app::ThrottleLimits) -> Edge {
+/// Start the edge, with the BFF's and the backend's configuration adjusted by the caller.
+async fn start_with(
+    adjust_bff: impl FnOnce(&mut Config),
+    adjust_backend: impl FnOnce(&mut strata_backend::app::Config),
+) -> Edge {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let backend_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let backend_addr = backend_listener.local_addr().unwrap();
-    let backend_cfg = strata_backend::app::Config {
+    let mut backend_cfg = strata_backend::app::Config {
         addr: backend_addr,
         service_token: TOKEN.into(),
         dev: true,
@@ -40,8 +44,9 @@ async fn start_with(throttle: strata_backend::app::ThrottleLimits) -> Edge {
         mail: std::sync::Arc::new(strata_backend::mail::DevSink::memory()),
         federation: std::sync::Arc::new(strata_backend::signin::oidc::Federation::none()),
         factors: Default::default(),
-        throttle,
+        limits: Default::default(),
     };
+    adjust_backend(&mut backend_cfg);
     tokio::spawn(strata_backend::run(
         backend_cfg,
         Arc::new(MemoryStore::new()),
@@ -59,7 +64,7 @@ async fn start_with(throttle: strata_backend::app::ThrottleLimits) -> Edge {
     .unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
-    let cfg = Config {
+    let mut cfg = Config {
         addr: listener.local_addr().unwrap(),
         backend: format!("http://{backend_addr}"),
         service_token: TOKEN.into(),
@@ -70,7 +75,10 @@ async fn start_with(throttle: strata_backend::app::ThrottleLimits) -> Edge {
         ],
         dist,
         dev: true,
+        trusted_proxies: Vec::new(),
+        limits: Default::default(),
     };
+    adjust_bff(&mut cfg);
     tokio::spawn(strata_bff::run(cfg, listener, std::future::pending()));
     let edge = Edge {
         port,
@@ -965,6 +973,17 @@ async fn connect(
     cookie: Option<&str>,
     csrf: Option<&str>,
 ) -> Upgrade {
+    connect_with(edge, origin, cookie, csrf, &[]).await
+}
+
+/// `connect`, with extra request headers.
+async fn connect_with(
+    edge: &Edge,
+    origin: Option<String>,
+    cookie: Option<&str>,
+    csrf: Option<&str>,
+    extra: &[(&'static str, &str)],
+) -> Upgrade {
     let address = match csrf {
         Some(csrf) => format!("ws://127.0.0.1:{}/ws?csrf={csrf}", edge.port),
         None => format!("ws://127.0.0.1:{}/ws", edge.port),
@@ -980,6 +999,9 @@ async fn connect(
             "cookie",
             format!("{SESSION_COOKIE}={cookie}").parse().unwrap(),
         );
+    }
+    for (name, value) in extra {
+        request.headers_mut().insert(*name, value.parse().unwrap());
     }
     tokio_tungstenite::connect_async(request).await
 }
@@ -1393,10 +1415,15 @@ async fn a_person_lists_and_revokes_their_sessions_behind_the_origin_and_token_c
 /// writes another into a header does not get a count of its own for each.
 #[tokio::test]
 async fn the_source_of_a_sign_in_is_the_connection_and_not_what_the_browser_says() {
-    let edge = start_with(strata_backend::app::ThrottleLimits {
-        source_max: 3,
-        ..Default::default()
-    })
+    let edge = start_with(
+        |_| {},
+        |backend| {
+            backend.throttle = strata_backend::app::ThrottleLimits {
+                source_max: 3,
+                ..Default::default()
+            }
+        },
+    )
     .await;
     for (i, claimed) in ["203.0.113.1", "203.0.113.2", "203.0.113.3"]
         .iter()
@@ -1577,4 +1604,148 @@ async fn the_assertion_consumer_address_moves_the_response_to_the_page_and_signs
         .get("127.0.0.1", "/federation/saml/metadata/nobody", None)
         .await;
     assert_eq!(status, 404, "no such provider");
+}
+
+/// A socket opened as an anonymous visitor, with extra request headers.
+async fn anonymous_socket(edge: &Edge, extra: &[(&'static str, &str)]) -> Upgrade {
+    let token = edge.request_token("127.0.0.1").await;
+    connect_with(
+        edge,
+        Some(edge.origin("127.0.0.1")),
+        None,
+        Some(token.as_str()),
+        extra,
+    )
+    .await
+}
+
+fn throttled(upgrade: &Upgrade) -> bool {
+    matches!(
+        upgrade,
+        Err(tokio_tungstenite::tungstenite::Error::Http(response)) if response.status().as_u16() == 429
+    )
+}
+
+/// Sockets are capped per source address at the BFF. A browser cannot change its source by
+/// sending `X-Forwarded-For` or `x-strata-source` itself: no proxy is trusted, so the peer's
+/// address is the source whatever the headers say.
+#[tokio::test]
+async fn forwarded_headers_from_an_untrusted_peer_do_not_change_the_source() {
+    let edge = start_with(
+        |bff| {
+            bff.limits.sockets_per_source = 2;
+            bff.limits.sockets_per_session = 8;
+        },
+        |_| {},
+    )
+    .await;
+    let mut held = Vec::new();
+    for spoofed in ["203.0.113.1", "203.0.113.2"] {
+        held.push(
+            anonymous_socket(
+                &edge,
+                &[("x-forwarded-for", spoofed), ("x-strata-source", spoofed)],
+            )
+            .await
+            .expect("within the cap"),
+        );
+    }
+    let third = anonymous_socket(
+        &edge,
+        &[
+            ("x-forwarded-for", "203.0.113.3"),
+            ("x-strata-source", "203.0.113.3"),
+        ],
+    )
+    .await;
+    assert!(
+        throttled(&third),
+        "a third socket from one peer, however it signs itself: {third:?}"
+    );
+}
+
+/// Behind a trusted proxy the visitor is the rightmost hop of `X-Forwarded-For` that is not a
+/// trusted proxy: two visitors behind it have their own caps, and a client cannot pass as
+/// another by writing the left of the chain.
+#[tokio::test]
+async fn a_trusted_proxy_passes_the_visitor_through_x_forwarded_for() {
+    let edge = start_with(
+        |bff| {
+            bff.trusted_proxies = vec!["127.0.0.1".parse().unwrap()];
+            bff.limits.sockets_per_source = 1;
+        },
+        |_| {},
+    )
+    .await;
+    let first = anonymous_socket(&edge, &[("x-forwarded-for", "203.0.113.1")]).await;
+    assert!(first.is_ok(), "{first:?}");
+    let other = anonymous_socket(&edge, &[("x-forwarded-for", "203.0.113.2")]).await;
+    assert!(
+        other.is_ok(),
+        "another visitor behind the same proxy: {other:?}"
+    );
+    let again = anonymous_socket(&edge, &[("x-forwarded-for", "203.0.113.1")]).await;
+    assert!(
+        throttled(&again),
+        "the first visitor's second socket: {again:?}"
+    );
+    // The left of the chain is whatever the client wrote; the proxy appended the right.
+    let forged = anonymous_socket(
+        &edge,
+        &[("x-forwarded-for", "198.51.100.77, 203.0.113.1, 127.0.0.1")],
+    )
+    .await;
+    assert!(
+        throttled(&forged),
+        "a chain through the proxy resolves to the rightmost untrusted hop: {forged:?}"
+    );
+    let fresh = anonymous_socket(
+        &edge,
+        &[("x-forwarded-for", "198.51.100.77, 203.0.113.9, 127.0.0.1")],
+    )
+    .await;
+    assert!(fresh.is_ok(), "{fresh:?}");
+    // Without the header the proxy itself is the source, and it has no socket of its own yet.
+    let bare = anonymous_socket(&edge, &[]).await;
+    assert!(bare.is_ok(), "{bare:?}");
+    drop((first, other, fresh, bare));
+}
+
+/// One session may hold only so many sockets through the BFF, and the cap is the BFF's own: the
+/// backend's limits are out of the way here.
+#[tokio::test]
+async fn sockets_are_capped_per_session_at_the_bff() {
+    let edge = start_with(
+        |bff| {
+            bff.limits.sockets_per_session = 2;
+            bff.limits.sockets_per_source = 50;
+        },
+        |backend| {
+            backend.limits.sockets_per_session = 50;
+            backend.limits.sockets_per_source = 50;
+        },
+    )
+    .await;
+    let (token, csrf) = edge.login("127.0.0.1", "ines", "strata-dev-ines").await;
+    let mut held = Vec::new();
+    for _ in 0..2 {
+        held.push(
+            connect(
+                &edge,
+                Some(edge.origin("127.0.0.1")),
+                Some(token.as_str()),
+                Some(csrf.as_str()),
+            )
+            .await
+            .expect("within the cap"),
+        );
+    }
+    let third = connect(
+        &edge,
+        Some(edge.origin("127.0.0.1")),
+        Some(token.as_str()),
+        Some(csrf.as_str()),
+    )
+    .await;
+    assert!(throttled(&third), "{third:?}");
 }

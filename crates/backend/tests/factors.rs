@@ -53,6 +53,7 @@ async fn start_with(adjust: impl FnOnce(&mut Config)) -> Backend {
         mail: mail.clone(),
         federation: Arc::new(strata_backend::signin::oidc::Federation::none()),
         factors: Default::default(),
+        limits: Default::default(),
     };
     adjust(&mut cfg);
     tokio::spawn(strata_backend::run(

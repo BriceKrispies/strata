@@ -2,6 +2,7 @@
 
 use crate::hub::Hub;
 use crate::lab::Lab;
+use crate::limits::{Admission, Limits};
 use crate::mail::Mailer;
 use crate::signin::oidc::Federation;
 use axum::http::StatusCode;
@@ -47,6 +48,8 @@ pub struct Config {
     /// Second factors, step-up and recovery: which realms ask for a second factor and the
     /// platform defaults of D-700 for them.
     pub factors: FactorPolicy,
+    /// What one visitor, session or tenant may cost. See [`Limits`].
+    pub limits: Limits,
 }
 
 /// The key that seals TOTP secrets at rest. It is derived from a platform secret and kept out of
@@ -245,6 +248,8 @@ pub struct App {
     pub hub: Hub,
     pub stats: Stats,
     pub lab: Lab,
+    /// Socket, sign-in and hashing limits in force.
+    pub admission: Admission,
     pub started_at: i64,
     /// Recent security-relevant events, newest last. Reported by the platform diagnostics only.
     pub audit: Recent<serde_json::Value>,
@@ -260,11 +265,12 @@ pub type Shared = Arc<App>;
 impl App {
     pub fn new(cfg: Config, store: Arc<dyn Store>) -> Shared {
         Arc::new(App {
+            lab: Lab::with_limits(&cfg.limits),
+            admission: Admission::new(&cfg.limits),
             cfg,
             store,
             hub: Hub::new(),
             stats: Stats::new(),
-            lab: Lab::new(),
             started_at: now_ms(),
             audit: Recent::new(1000),
             clock_skew_ms: AtomicI64::new(0),
