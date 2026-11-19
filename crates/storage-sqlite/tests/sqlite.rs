@@ -24,7 +24,6 @@ fn fresh_path(name: &str) -> PathBuf {
 }
 
 /// Verifies: STO-002
-/// Verifies: H-008
 ///
 /// Every row of the table in the specification has a check and every check has a row, and each
 /// check runs on a database file.
@@ -50,7 +49,6 @@ fn sqlite_store_conforms_on_disk() {
 }
 
 /// Verifies: STO-003
-/// Verifies: H-008
 ///
 /// Everything the adapter acknowledges is there after the file is closed and opened again: the
 /// tenant state, its events and journal, which events were marked published, a session, a login
