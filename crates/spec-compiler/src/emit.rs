@@ -75,14 +75,16 @@ pub fn crate_files_with(
     core: Option<&crate::model_core::CoreDependency>,
 ) -> Result<Vec<GeneratedFile>, Vec<Diagnostic>> {
     let core_ident = core.map(|c| c.crate_name.replace('-', "_"));
-    let mut toml = cargo_toml(spec, options);
-    if let Some(c) = core {
-        toml.push_str(&format!(
+    // The pure crate is a dependency like the others, so it goes inside [dependencies], before
+    // any later table such as [features].
+    let core_line = core.map(|c| {
+        format!(
             "{} = {{ path = \"{}\" }}\n",
             c.crate_name,
             toml_escape(&c.path)
-        ));
-    }
+        )
+    });
+    let toml = cargo_toml(spec, options, core_line.as_deref().unwrap_or(""));
     let files = vec![GeneratedFile {
         path: "Cargo.toml".to_string(),
         contents: toml,
@@ -284,7 +286,7 @@ fn lib_rs<'a>(spec: &Spec, modules: impl Iterator<Item = &'a str>) -> TokenStrea
     }
 }
 
-fn cargo_toml(spec: &Spec, options: &Options) -> String {
+fn cargo_toml(spec: &Spec, options: &Options, core: &str) -> String {
     let features = if spec.target_machines.is_empty() {
         String::new()
     } else {
@@ -326,6 +328,7 @@ fn cargo_toml(spec: &Spec, options: &Options) -> String {
          serde = {{ version = \"{SERDE_VERSION}\", features = [\"derive\"] }}\n\
          serde_json = \"{SERDE_JSON_VERSION}\"\n\
          {runtime}\
+         {core}\
          {sha2}\
          uuid = {{ version = \"{UUID_VERSION}\", features = [\"serde\"] }}\n\
          {features}",
