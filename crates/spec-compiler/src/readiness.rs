@@ -27,5 +27,6 @@ pub fn check(spec: &Spec) -> Vec<Diagnostic> {
         out.extend(backend.check(spec));
     }
     out.extend(crate::language::check(spec));
+    out.extend(crate::function::check(spec));
     diagnostic::dedup(out)
 }

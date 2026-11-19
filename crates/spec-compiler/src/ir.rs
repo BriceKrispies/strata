@@ -33,6 +33,8 @@ pub struct Spec {
     pub telemetry: Telemetry,
     /// The `languages` section: expression languages the specified system's users write.
     pub languages: Vec<crate::language::Language>,
+    /// The `functions` section: pure functions compiled into the pure crate.
+    pub functions: Vec<crate::function::Function>,
 }
 
 /// `system.telemetry` and the types a log line may never hold.

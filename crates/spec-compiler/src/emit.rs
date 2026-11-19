@@ -109,6 +109,10 @@ pub fn crate_files_with(
     for (lang, module) in spec.languages.iter().zip(&languages) {
         modules.push((module.as_str(), crate::language::emit(spec, lang)));
     }
+    // So do the functions, which may call a language.
+    if core.is_none() && crate::function::wanted(spec) {
+        modules.push((crate::function::MODULE, crate::function::emit(spec)));
+    }
     let lib = lib_rs(spec, modules.iter().map(|(name, _)| *name));
     modules.push(("lib", lib));
     rust_files(spec, files, modules)

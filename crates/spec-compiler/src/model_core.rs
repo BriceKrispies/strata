@@ -7,7 +7,9 @@
 //! - `prelude`: the representation types (`Timestamp`, `DurationMs`, the safe-integer decoders);
 //! - `types`: every declared type that reaches no `uuid`;
 //! - one module per declared `language` ([`crate::language`]): its parser, printer, static
-//!   checker and evaluator over the language's AST and value types.
+//!   checker and evaluator over the language's AST and value types;
+//! - `functions` when the specification declares functions ([`crate::function`]): each a pure
+//!   Rust function, each example a unit test.
 //!
 //! Its only dependencies are serde, serde_json and regex (sha2 is allowed for what later needs
 //! it). The model crate generated beside it depends on it by path, re-exports its prelude's
@@ -22,7 +24,7 @@ use crate::backend::{prelude, types};
 use crate::diagnostic::Diagnostic;
 use crate::emit::{self, GeneratedFile, REGEX_VERSION, SERDE_JSON_VERSION, SERDE_VERSION};
 use crate::ir::Spec;
-use crate::language;
+use crate::{function, language};
 
 /// How the model crate names the pure crate beside it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -47,7 +49,12 @@ pub fn crate_files(spec: &Spec, crate_name: &str) -> Result<Vec<GeneratedFile>, 
     for (lang, module) in spec.languages.iter().zip(&languages) {
         modules.push((module.as_str(), language::emit(spec, lang)));
     }
-    modules.push(("lib", lib_rs(spec, &languages)));
+    let mut names = languages.clone();
+    if function::wanted(spec) {
+        modules.push((function::MODULE, function::emit(spec)));
+        names.push(function::MODULE.to_string());
+    }
+    modules.push(("lib", lib_rs(spec, &names)));
     emit::rust_files(spec, files, modules)
 }
 

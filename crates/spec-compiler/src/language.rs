@@ -463,6 +463,352 @@ pub fn module_name(lang: &Language) -> String {
     naming::snake(&lang.id).unwrap_or_default()
 }
 
+// ---------------------------------------------------------------------------------------------
+// The bridge to functions (WG-4934)
+// ---------------------------------------------------------------------------------------------
+
+/// How a function's `eval` and `check` of a language ([`crate::function`]) reach the generated
+/// module: its environment traits implemented over the environment structs the function passes,
+/// read as Exegra reads them (`src/core/language-eval.js`). For `eval`, a record scope is an
+/// `option<map<string, V>>` field, a param scope a `map<string, V>`, a constant a `V` and a role
+/// test a `list<string>`, each named as its scope; no lookup is available, so following a
+/// reference is an evaluation error. For `check`, the struct has `fields: map<string, string>`
+/// (a shape name per field), `params: list<string>` and `roles: list<string>`, and a field read
+/// through a reference has the any shape.
+pub(crate) struct Bridge<'a> {
+    plan: Plan<'a>,
+}
+
+/// The bridge of a language specc generates; `None` when [`check`] refuses the language.
+pub(crate) fn bridge<'a>(spec: &'a Spec, lang: &'a Language) -> Option<Bridge<'a>> {
+    resolve(spec, lang).ok().map(|plan| Bridge { plan })
+}
+
+/// The scope kinds of the language a bridge reads, with the struct field each scope is.
+pub(crate) struct ScopeField {
+    /// The scope's name, which is also the field's.
+    pub name: String,
+    /// `record-scope`, `param`, `constant` or `role-test`.
+    pub kind: String,
+}
+
+impl Bridge<'_> {
+    /// The id of the language's AST union.
+    pub(crate) fn ast_id(&self) -> &str {
+        &self.plan.ast.id
+    }
+
+    /// The id of the language's value union.
+    pub(crate) fn values_id(&self) -> &str {
+        &self.plan.values.id
+    }
+
+    /// The scopes, in declaration order.
+    pub(crate) fn scopes(&self) -> Vec<ScopeField> {
+        self.plan
+            .lang
+            .scopes
+            .iter()
+            .map(|s| ScopeField {
+                name: s.name.clone(),
+                kind: s.kind.clone(),
+            })
+            .collect()
+    }
+
+    fn reads_records(&self) -> bool {
+        !self.plan.record_scopes.is_empty()
+            && (self.plan.uses(Prim::Var) || self.plan.uses(Prim::Through))
+    }
+
+    fn module(&self) -> TokenStream {
+        let m = naming::ident(&module_name(self.plan.lang));
+        quote! { crate::#m }
+    }
+
+    /// The scope token of the operator of a primitive (its scope's name), if the language has one.
+    fn token_of(&self, p: Prim) -> Option<&str> {
+        self.plan
+            .ops
+            .iter()
+            .find(|o| o.info.prim == p)
+            .and_then(|o| match &o.form {
+                Form::Scope { token: Some(t) } => Some(t.as_str()),
+                _ => None,
+            })
+    }
+
+    fn field(name: &str) -> Ident {
+        naming::ident(&naming::snake(name).unwrap_or_default())
+    }
+
+    /// `impl Record for BTreeMap<String, V>`: the record of a record scope, a field or system
+    /// attribute read from the map (null when absent), as Exegra reads it. Nothing when the
+    /// language reads no records.
+    pub(crate) fn record_impl(&self) -> TokenStream {
+        if !self.reads_records() {
+            return TokenStream::new();
+        }
+        let module = self.module();
+        let value = self.plan.value_ty();
+        let null = self.plan.value("null");
+        quote! {
+            impl #module::Record for std::collections::BTreeMap<String, #value> {
+                fn system_attribute(&self, name: &str) -> #value {
+                    self.get(name).cloned().unwrap_or(#null)
+                }
+
+                fn field(&self, name: &str) -> Result<#value, String> {
+                    Ok(self.get(name).cloned().unwrap_or(#null))
+                }
+            }
+        }
+    }
+
+    /// `fn <name>(expr: &Ast, env: &<env>) -> Result<V, String>`: `eval` of the language over an
+    /// environment struct whose fields are named as the scopes. A constant scope the evaluator
+    /// reads as a time (`now`) or a principal must hold a value of that kind (a time; a string or
+    /// null): anything else is an `Err`, where Exegra would hand the value back unchanged.
+    pub(crate) fn eval_fn(&self, name: &Ident, env: &TokenStream) -> TokenStream {
+        let module = self.module();
+        let ast = self.plan.ast_ty();
+        let value = self.plan.value_ty();
+        let null = self.plan.value("null");
+        let mut fields: Vec<TokenStream> = Vec::new();
+        let mut inits: Vec<TokenStream> = Vec::new();
+        let mut extracts: Vec<TokenStream> = Vec::new();
+        let mut methods: Vec<TokenStream> = Vec::new();
+        let needs_env =
+            self.reads_records() || self.plan.uses(Prim::Param) || self.plan.uses(Prim::HasRole);
+        if needs_env {
+            fields.push(quote! { env: &'a #env });
+            inits.push(quote! { env });
+        }
+        if self.reads_records() {
+            let scope = self.plan.scope_enum_path();
+            let arms: Vec<TokenStream> = self
+                .plan
+                .record_scopes
+                .iter()
+                .map(|s| {
+                    let v = self.plan.scope_value(s.value);
+                    let f = Self::field(s.name);
+                    quote! { #v => &self.env.#f, }
+                })
+                .collect();
+            methods.push(quote! {
+                fn record(&self, scope: &#scope) -> Option<&dyn #module::Record> {
+                    let record = match scope {
+                        #(#arms)*
+                    };
+                    record.as_ref().map(|r| r as &dyn #module::Record)
+                }
+            });
+        }
+        if self.plan.uses(Prim::Through) {
+            let scope = self.plan.scope_enum_path();
+            let target = self.plan.payload_ty("ref");
+            methods.push(quote! {
+                fn follow(
+                    &self,
+                    _scope: &#scope,
+                    _field: &str,
+                    _target: &#target,
+                ) -> Result<Option<Box<dyn #module::Record + '_>>, #module::EvalError> {
+                    Err(#module::EvalError(
+                        "following a reference needs a lookup, and none is available".to_string(),
+                    ))
+                }
+            });
+        }
+        if let (true, Some(t)) = (self.plan.uses(Prim::Param), self.token_of(Prim::Param)) {
+            let f = Self::field(t);
+            methods.push(quote! {
+                fn param(&self, name: &str) -> Option<#value> {
+                    self.env.#f.get(name).cloned()
+                }
+            });
+        }
+        if let (true, Some(t)) = (self.plan.uses(Prim::Now), self.token_of(Prim::Now)) {
+            let f = Self::field(t);
+            let time = self.plan.payload_ty("time");
+            let tv = self.plan.value("time");
+            let message = lit_str(&format!("the scope {t} holds {{other:?}}, not a time"));
+            fields.push(quote! { now: #time });
+            inits.push(quote! { now });
+            extracts.push(quote! {
+                let now = match &env.#f {
+                    #tv(t) => *t,
+                    other => return Err(format!(#message)),
+                };
+            });
+            methods.push(quote! {
+                fn now(&self) -> #time {
+                    self.now
+                }
+            });
+        }
+        if let (true, Some(t)) = (
+            self.plan.uses(Prim::Principal),
+            self.token_of(Prim::Principal),
+        ) {
+            let f = Self::field(t);
+            let text = self.plan.payload_ty("string");
+            let sv = self.plan.value("string");
+            let message = lit_str(&format!(
+                "the scope {t} holds {{other:?}}, not a principal's id or null"
+            ));
+            fields.push(quote! { principal: Option<#text> });
+            inits.push(quote! { principal });
+            extracts.push(quote! {
+                let principal = match &env.#f {
+                    #sv(id) => Some(id.clone()),
+                    #null => None,
+                    other => return Err(format!(#message)),
+                };
+            });
+            methods.push(quote! {
+                fn principal(&self) -> Option<#text> {
+                    self.principal.clone()
+                }
+            });
+        }
+        if let (true, Some(t)) = (self.plan.uses(Prim::HasRole), self.token_of(Prim::HasRole)) {
+            let f = Self::field(t);
+            methods.push(quote! {
+                fn has_role(&self, role: &str) -> bool {
+                    self.env.#f.iter().any(|held| held == role)
+                }
+            });
+        }
+        let (decl, header, build) = match (fields.is_empty(), needs_env) {
+            (true, _) => (
+                quote! { struct Scopes; },
+                quote! { Scopes },
+                quote! { Scopes },
+            ),
+            (false, true) => (
+                quote! { struct Scopes<'a> { #(#fields,)* } },
+                quote! { Scopes<'_> },
+                quote! { Scopes { #(#inits,)* } },
+            ),
+            (false, false) => (
+                quote! { struct Scopes { #(#fields,)* } },
+                quote! { Scopes },
+                quote! { Scopes { #(#inits,)* } },
+            ),
+        };
+        let unused = if needs_env || !extracts.is_empty() {
+            TokenStream::new()
+        } else {
+            quote! { let _ = env; }
+        };
+        quote! {
+            pub(super) fn #name(expr: &#ast, env: &#env) -> Result<#value, String> {
+                #unused
+                #(#extracts)*
+                #decl
+
+                impl #module::Env for #header {
+                    #(#methods)*
+                }
+
+                #module::eval(expr, &#build).map_err(|e| e.0)
+            }
+        }
+    }
+
+    /// `fn <name>(expr: &Ast, env: &<env>) -> Result<String, String>`: `check` of the language
+    /// against a definition site stated as a struct `{fields, params, roles}`; `Ok` of the shape's
+    /// name.
+    pub(crate) fn check_fn(&self, name: &Ident, env: &TokenStream) -> TokenStream {
+        let module = self.module();
+        let ast = self.plan.ast_ty();
+        let shape_path = |s: &str| {
+            let ident = naming::ident(&naming::pascal(s).unwrap_or_default());
+            quote! { #module::Shape::#ident }
+        };
+        let any = shape_path(self.plan.lang.any_shape.as_deref().unwrap_or_default());
+        let names: Vec<Literal> = self.plan.lang.shapes.iter().map(|s| lit_str(s)).collect();
+        let paths: Vec<TokenStream> = self
+            .plan
+            .lang
+            .shapes
+            .iter()
+            .map(|s| shape_path(s))
+            .collect();
+        let mut methods = Vec::new();
+        if self.reads_records() {
+            methods.push(quote! {
+                fn field_shape(&self, through: Option<&str>, name: &str) -> Result<#module::Shape, String> {
+                    if through.is_some() {
+                        return Ok(#any);
+                    }
+                    match self.0.fields.get(name).map(String::as_str) {
+                        #( Some(#names) => Ok(#paths), )*
+                        Some(other) => Err(format!("the field {name} has the unknown shape {other}")),
+                        None => Err(format!("unknown field {name}")),
+                    }
+                }
+            });
+        }
+        if self.plan.uses(Prim::Through) {
+            methods.push(quote! {
+                fn follow(&self, field: &str) -> Result<(), String> {
+                    if self.0.fields.contains_key(field) {
+                        Ok(())
+                    } else {
+                        Err(format!("unknown field {field}"))
+                    }
+                }
+            });
+        }
+        if self.plan.uses(Prim::Param) {
+            methods.push(quote! {
+                fn has_param(&self, name: &str) -> bool {
+                    self.0.params.iter().any(|p| p == name)
+                }
+            });
+        }
+        if self.plan.uses(Prim::HasRole) {
+            methods.push(quote! {
+                fn has_role(&self, role: &str) -> bool {
+                    self.0.roles.iter().any(|r| r == role)
+                }
+            });
+        }
+        let (decl, header, build) = if methods.is_empty() {
+            (
+                quote! { let _ = env; struct Site; },
+                quote! { Site },
+                quote! { Site },
+            )
+        } else {
+            (
+                quote! { struct Site<'a>(&'a #env); },
+                quote! { Site<'_> },
+                quote! { Site(env) },
+            )
+        };
+        quote! {
+            pub(super) fn #name(expr: &#ast, env: &#env) -> Result<String, String> {
+                #decl
+
+                impl #module::TypeEnv for #header {
+                    #(#methods)*
+                }
+
+                #module::check(expr, &#build).map(|shape| {
+                    let name = match shape {
+                        #( #paths => #names, )*
+                    };
+                    name.to_string()
+                })
+            }
+        }
+    }
+}
+
 /// The readiness checks of every language.
 pub fn check(spec: &Spec) -> Vec<Diagnostic> {
     let mut out = Vec::new();

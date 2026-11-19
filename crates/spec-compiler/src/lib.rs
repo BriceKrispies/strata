@@ -25,6 +25,7 @@ pub mod deploy;
 pub mod diagnostic;
 pub mod e2e;
 pub mod emit;
+pub mod function;
 pub mod ir;
 pub mod jsonc;
 pub mod language;

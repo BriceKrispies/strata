@@ -331,6 +331,7 @@ mod tests {
             constructs: Default::default(),
             telemetry: Default::default(),
             languages: Vec::new(),
+            functions: Vec::new(),
         }
     }
 
