@@ -32,6 +32,40 @@ pub struct Config {
     pub session_ttl_ms: i64,
     /// A session unused for this long ends.
     pub session_idle_ms: i64,
+    /// How many failed attempts are let through, and for how long a limit holds.
+    pub throttle: ThrottleLimits,
+}
+
+/// The limits on failed sign-in attempts. The defaults are the platform defaults of D-700; a
+/// realm may tighten them (D-535).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ThrottleLimits {
+    /// Failed attempts for one account before it is locked (IDN-008).
+    pub account_max: u32,
+    /// How long a locked account refuses attempts.
+    pub account_lock_ms: i64,
+    /// Failures older than this are forgotten, for an account, a source and a realm alike.
+    pub window_ms: i64,
+    /// Failed attempts from one source, across all accounts, before it is refused (IDN-250).
+    pub source_max: u32,
+    /// Failed attempts across one realm within the window after which attempts are slowed
+    /// (IDN-251).
+    pub realm_max: u32,
+    /// The gap kept between attempts of a realm that is slowed.
+    pub realm_interval_ms: i64,
+}
+
+impl Default for ThrottleLimits {
+    fn default() -> Self {
+        ThrottleLimits {
+            account_max: 10,
+            account_lock_ms: 30_000,
+            window_ms: 15 * 60_000,
+            source_max: 100,
+            realm_max: 1000,
+            realm_interval_ms: 1000,
+        }
+    }
 }
 
 /// A bounded list of recent things, newest last.
@@ -133,8 +167,6 @@ pub struct App {
     pub stats: Stats,
     pub lab: Lab,
     pub started_at: i64,
-    /// Failed logins per `tenant/login`: `(count, locked until)`.
-    pub throttle: Mutex<BTreeMap<String, (u32, i64)>>,
     /// Recent security-relevant events, newest last. Reported by the platform diagnostics only.
     pub audit: Recent<serde_json::Value>,
 }
@@ -150,8 +182,7 @@ impl App {
             stats: Stats::new(),
             lab: Lab::new(),
             started_at: now_ms(),
-            throttle: Mutex::new(BTreeMap::new()),
-            audit: Recent::new(200),
+            audit: Recent::new(1000),
         })
     }
 
@@ -164,6 +195,19 @@ impl App {
         }
         LOG.warn(&format!("audit.{event}"), correlation, fields);
         self.audit.push(entry);
+    }
+
+    /// Record an authentication decision: the method, the outcome and the checks evaluated
+    /// (IDN-021). It names no secret, and no account that was not signed in (IDN-022).
+    pub fn decision(&self, method: &str, outcome: &str, checks: &[&str], correlation: &str) {
+        self.audit.push(json!({
+            "at": now_ms(),
+            "event": "auth.decision",
+            "correlation": correlation,
+            "method": method,
+            "outcome": outcome,
+            "checks": checks,
+        }));
     }
 
     /// The one place the backend reads the clock for domain purposes.

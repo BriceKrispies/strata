@@ -6,6 +6,47 @@ import { control, date, prose } from '../components/parts.js';
 
 const STATUS = { draft: 'Draft', published: 'Published' };
 
+/** The signed-in person's own sessions, with a way to end each of the others. */
+function sessionsSection(sessions) {
+  if (!sessions?.loaded && !sessions?.error) return null;
+  const others = sessions.list.filter((s) => !s.current).length;
+  return h(
+    'section',
+    { class: 'sessions', 'data-sessions': true, 'aria-labelledby': 'sessions-title' },
+    h('h2', { id: 'sessions-title', class: 'section-title' }, 'Where you are signed in'),
+    sessions.error ? h('p', { class: 'form__error', role: 'alert' }, sessions.error) : null,
+    h(
+      'table',
+      { class: 'table' },
+      h('caption', { class: 'visually-hidden' }, 'Your sessions'),
+      h('thead', null, h('tr', null, h('th', { scope: 'col' }, 'Session'), h('th', { scope: 'col' }, 'Signed in'), h('th', { scope: 'col' }, 'Last used'), h('th', { scope: 'col' }, 'Actions'))),
+      h(
+        'tbody',
+        null,
+        sessions.list.map((s) =>
+          h(
+            'tr',
+            { key: s.id, 'data-session': s.id, 'data-current': s.current ? 'true' : 'false' },
+            h('th', { scope: 'row' }, s.current ? 'This device' : 'Another device'),
+            h('td', null, date(s.created_at, 'stamp')),
+            h('td', null, date(s.last_seen_at, 'stamp')),
+            h(
+              'td',
+              { class: 'table__actions' },
+              s.current
+                ? null
+                : h('button', { class: 'button button--small button--quiet', type: 'button', disabled: sessions.busy, 'data-action': 'sessions.revoke', 'data-arg': arg({ id: s.id }), 'aria-label': 'Sign out that session' }, 'Sign out'),
+            ),
+          ),
+        ),
+      ),
+    ),
+    others
+      ? h('p', { class: 'toolbar' }, h('button', { class: 'button button--quiet', type: 'button', disabled: sessions.busy, 'data-action': 'sessions.revoke_others' }, 'Sign out all other sessions'))
+      : h('p', { class: 'empty' }, 'This is the only place you are signed in.'),
+  );
+}
+
 function arg(value) {
   return JSON.stringify(value);
 }
@@ -59,6 +100,7 @@ export function desk(page) {
           ),
         )
       : h('p', { class: 'empty' }, 'You have not written anything yet. Start with a draft; nobody sees it until you publish.'),
+    sessionsSection(page.sessions),
   ];
 }
 

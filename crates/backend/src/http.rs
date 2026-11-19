@@ -4,7 +4,7 @@ use crate::app::{ApiError, App, Shared, LOG};
 use crate::auth::{self, has_service_token, Identity};
 use crate::{lab, ops, seed, ws};
 use axum::extract::ws::WebSocketUpgrade;
-use axum::extract::{Request, State};
+use axum::extract::{Path, Request, State};
 use axum::http::HeaderMap;
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
@@ -16,8 +16,7 @@ use std::time::Instant;
 use strata_kernel::owner_role;
 use strata_kernel::rules::roles_of;
 use strata_protocol::api::{
-    Empty, ErrorCode, IdRequest, LoginRequest, Mutation, SessionReply, ViewRequest,
-    HEADER_CORRELATION,
+    Empty, ErrorCode, IdRequest, Mutation, SessionReply, ViewRequest, HEADER_CORRELATION,
 };
 use strata_protocol::ws::{SessionState, MAX_FRAME};
 
@@ -62,17 +61,67 @@ async fn session(
     .await
 }
 
-async fn login(
-    State(app): State<Shared>,
+/// Sign in with the named method. The request is the method's own: the backend does not look
+/// inside it.
+async fn sign_in(
+    app: Shared,
     headers: HeaderMap,
-    Json(request): Json<LoginRequest>,
+    method: String,
+    request: Json_,
 ) -> Result<impl IntoResponse, ApiError> {
     let caller = auth::caller(&headers)?;
     let correlation = caller.correlation.clone();
-    app.blocking(move |app| auth::login(app, &caller, &request))
+    app.blocking(move |app| auth::login(app, &caller, &method, &request))
         .await?
         .map(Json)
         .map_err(|error| error.with_correlation(&correlation))
+}
+
+async fn login(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Json(request): Json<Json_>,
+) -> Result<impl IntoResponse, ApiError> {
+    sign_in(app, headers, "password".into(), request).await
+}
+
+async fn login_with(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Path(method): Path<String>,
+    Json(request): Json<Json_>,
+) -> Result<impl IntoResponse, ApiError> {
+    sign_in(app, headers, method, request).await
+}
+
+/// The caller's own live sessions.
+async fn sessions(State(app): State<Shared>, headers: HeaderMap) -> Result<Json<Json_>, ApiError> {
+    as_caller(&app, &headers, |app, identity| {
+        Ok(json!({ "sessions": auth::list_sessions(app, identity)? }))
+    })
+    .await
+}
+
+async fn session_revoke(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Json(request): Json<IdRequest>,
+) -> Result<Json<Json_>, ApiError> {
+    as_caller(&app, &headers, move |app, identity| {
+        auth::revoke_own_session(app, identity, &request.id)?;
+        Ok(json!({}))
+    })
+    .await
+}
+
+async fn sessions_revoke_others(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+) -> Result<Json<Json_>, ApiError> {
+    as_caller(&app, &headers, |app, identity| {
+        Ok(json!({ "revoked": auth::revoke_other_sessions(app, identity)? }))
+    })
+    .await
 }
 
 async fn logout(State(app): State<Shared>, headers: HeaderMap) -> Result<Json<Empty>, ApiError> {
@@ -309,6 +358,13 @@ pub fn router(app: Shared) -> Router {
         .route("/internal/health", get(health))
         .route("/internal/session", post(session))
         .route("/internal/session/login", post(login))
+        .route("/internal/session/sign-in/:method", post(login_with))
+        .route("/internal/sessions", post(sessions))
+        .route("/internal/sessions/revoke", post(session_revoke))
+        .route(
+            "/internal/sessions/revoke-others",
+            post(sessions_revoke_others),
+        )
         .route("/internal/session/logout", post(logout))
         .route("/internal/view", post(view))
         .route("/internal/mutate", post(mutate))

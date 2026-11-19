@@ -141,6 +141,7 @@ function page(state) {
         canWrite,
         canSettings: (session.may?.publication ?? []).includes('update'),
         canLab: session.may_manage_schema,
+        sessions: state.sessions,
         posts: d.posts
           .map((r) => ({ ...entry(r, state.optimistic), confirming: state.confirmDelete === r.id }))
           .filter((p) => p.status !== 'deleted'),

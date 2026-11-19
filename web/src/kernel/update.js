@@ -13,6 +13,7 @@ import * as forms from '../generated/forms.js';
 import * as live from '../generated/live.js';
 import { matchRoute, route as routeOf } from '../generated/routes.js';
 import { labEnter, labInit, labUpdate } from './lab.js';
+import { sessionsEnter, sessionsInit, sessionsUpdate } from './sessions.js';
 import {
   busy,
   liveInit,
@@ -53,6 +54,7 @@ export function initialState() {
     optimistic: {},
     confirmDelete: null,
     lab: labInit(),
+    sessions: sessionsInit(),
     /** @type {{ id: number, kind: string, text: string }[]} */
     toasts: [],
     announce: '',
@@ -390,6 +392,9 @@ function onHttp(state, msg) {
   if (pending.kind.startsWith('lab.')) {
     return labUpdate(state, { ...msg, pending, error }, { request, toast }) ?? { state, effects: [] };
   }
+  if (pending.kind.startsWith('sessions.')) {
+    return sessionsUpdate(state, { ...msg, pending, error }, { request, toast }) ?? { state, effects: [] };
+  }
 
   switch (pending.kind) {
     case 'session': {
@@ -409,6 +414,7 @@ function onHttp(state, msg) {
       if (state.view.request !== msg.id) return { state, effects: [] };
       if (msg.ok) {
         const accepted = acceptView(state, decodeView(state, msg.body));
+        if (msg.body.view === 'desk') return sessionsEnter(accepted, msg, { request });
         return msg.body.view === 'lab' ? labEnter(accepted, msg, { request }) : { state: accepted, effects: [] };
       }
       const status = msg.status === 404 ? 'missing' : 'error';
@@ -627,6 +633,7 @@ function onAction(state, msg) {
     }
     default:
       if (msg.name.startsWith('lab.')) return labUpdate(state, msg, { request, toast }) ?? { state, effects: [] };
+      if (msg.name.startsWith('sessions.')) return sessionsUpdate(state, msg, { request, toast }) ?? { state, effects: [] };
       return { state, effects: [] };
   }
 }
@@ -717,6 +724,11 @@ function step(state, msg) {
         next = acceptView(next, decodeView(next, boot.view));
         if (boot.view.view === 'lab') {
           const entered = labEnter(next, msg, { request });
+          next = entered.state;
+          effects.push(...entered.effects);
+        }
+        if (boot.view.view === 'desk') {
+          const entered = sessionsEnter(next, msg, { request });
           next = entered.state;
           effects.push(...entered.effects);
         }

@@ -25,19 +25,21 @@ use strata_kernel::{
 };
 use strata_runtime::sqlite::{Database, DbError, Migration};
 use strata_storage_api::{
-    check_event_sequence, field_matches, Account, Capabilities, Commit, Health, JournalEntry,
-    OutboxEntry, Receipt, SessionRecord, SnapshotInfo, StorageMigration, Store, StoreError,
-    StoreResult, TenantSummary,
+    check_event_sequence, field_matches, throttle_refund, throttle_step, Account, Capabilities,
+    Commit, Health, JournalEntry, OutboxEntry, Receipt, SessionRecord, SnapshotInfo,
+    StorageMigration, Store, StoreError, StoreResult, TenantSummary, ThrottleRow, ThrottleRule,
+    ThrottleSettle, ThrottleVerdict,
 };
 
 /// The ledger table of the tenant store's migrations.
 const LEDGER: &str = "storage_migrations";
 
 /// The storage layout, one step per entry. Steps are only ever appended.
-const MIGRATIONS: &[Migration] = &[Migration {
-    version: 1,
-    name: "initial layout",
-    sql: "
+const MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        name: "initial layout",
+        sql: "
     CREATE TABLE tenants (
         id          TEXT PRIMARY KEY,
         name        TEXT NOT NULL,
@@ -119,7 +121,24 @@ const MIGRATIONS: &[Migration] = &[Migration {
         PRIMARY KEY (tenant, id)
     );
     ",
-}];
+    },
+    Migration {
+        version: 2,
+        name: "login throttle",
+        sql: "
+    CREATE TABLE login_throttle (
+        tenant       TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+        key          TEXT NOT NULL,
+        failures     INTEGER NOT NULL,
+        window_start INTEGER NOT NULL,
+        locked_until INTEGER NOT NULL,
+        expires_at   INTEGER NOT NULL,
+        PRIMARY KEY (tenant, key)
+    );
+    CREATE INDEX login_throttle_expiry ON login_throttle(expires_at);
+    ",
+    },
+];
 
 /// Index values longer than this are not indexed; lookups for them scan the object type.
 const MAX_INDEXED: usize = 240;
@@ -268,6 +287,27 @@ fn write_record(tx: &Transaction<'_>, tenant: &TenantId, record: &Record) -> Sto
             .map_err(db)?;
     }
     Ok(())
+}
+
+fn throttle_row(
+    conn: &Connection,
+    tenant: &TenantId,
+    key: &str,
+) -> StoreResult<Option<ThrottleRow>> {
+    conn.query_row(
+        "SELECT failures, window_start, locked_until, expires_at FROM login_throttle WHERE tenant = ?1 AND key = ?2",
+        params![tenant.as_str(), key],
+        |r| {
+            Ok(ThrottleRow {
+                failures: r.get::<_, i64>(0)? as u32,
+                window_start: r.get(1)?,
+                locked_until: r.get(2)?,
+                expires_at: r.get(3)?,
+            })
+        },
+    )
+    .optional()
+    .map_err(db)
 }
 
 fn session_from(
@@ -807,6 +847,96 @@ impl Store for SqliteStore {
             .execute(
                 "DELETE FROM sessions WHERE expires_at < ?1 OR (revoked_at IS NOT NULL AND revoked_at < ?1)",
                 params![before.0],
+            )
+            .map_err(db)?;
+        Ok(removed as u64)
+    }
+
+    fn throttle_reserve(
+        &self,
+        tenant: &TenantId,
+        rules: &[ThrottleRule],
+        now: Timestamp,
+    ) -> StoreResult<ThrottleVerdict> {
+        self.db.write(dbe, |tx| {
+            let mut next = Vec::with_capacity(rules.len());
+            let mut until: Option<i64> = None;
+            for rule in rules {
+                let row = throttle_row(tx, tenant, &rule.key)?;
+                match throttle_step(row, rule, now.0) {
+                    Ok(row) => next.push((rule.key.as_str(), row)),
+                    Err(locked) => until = Some(until.map_or(locked, |u| u.max(locked))),
+                }
+            }
+            if let Some(until) = until {
+                return Ok(ThrottleVerdict::Refused {
+                    until: Timestamp(until),
+                });
+            }
+            for (key, row) in next {
+                tx.execute(
+                    "INSERT INTO login_throttle (tenant, key, failures, window_start, locked_until, expires_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                     ON CONFLICT (tenant, key) DO UPDATE SET failures = excluded.failures,
+                        window_start = excluded.window_start, locked_until = excluded.locked_until,
+                        expires_at = excluded.expires_at",
+                    params![
+                        tenant.as_str(),
+                        key,
+                        i64::from(row.failures),
+                        row.window_start,
+                        row.locked_until,
+                        row.expires_at
+                    ],
+                )
+                .map_err(db)?;
+            }
+            Ok(ThrottleVerdict::Allowed)
+        })
+    }
+
+    fn throttle_settle(
+        &self,
+        tenant: &TenantId,
+        key: &str,
+        max: u32,
+        how: ThrottleSettle,
+    ) -> StoreResult<()> {
+        self.db.write(dbe, |tx| {
+            match how {
+                ThrottleSettle::Clear => {
+                    tx.execute(
+                        "DELETE FROM login_throttle WHERE tenant = ?1 AND key = ?2",
+                        params![tenant.as_str(), key],
+                    )
+                    .map_err(db)?;
+                }
+                ThrottleSettle::Refund => {
+                    if let Some(row) = throttle_row(tx, tenant, key)? {
+                        let row = throttle_refund(row, max);
+                        tx.execute(
+                            "UPDATE login_throttle SET failures = ?3, locked_until = ?4 WHERE tenant = ?1 AND key = ?2",
+                            params![
+                                tenant.as_str(),
+                                key,
+                                i64::from(row.failures),
+                                row.locked_until
+                            ],
+                        )
+                        .map_err(db)?;
+                    }
+                }
+            }
+            Ok(())
+        })
+    }
+
+    fn purge_throttle(&self, now: Timestamp) -> StoreResult<u64> {
+        let removed = self
+            .lock()?
+            .execute(
+                "DELETE FROM login_throttle WHERE expires_at <= ?1",
+                params![now.0],
             )
             .map_err(db)?;
         Ok(removed as u64)

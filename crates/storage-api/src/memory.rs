@@ -4,9 +4,10 @@
 //! that the rest of the system does not depend on SQLite. It is not durable and says so.
 
 use crate::{
-    check_event_sequence, partial_state, Account, Capabilities, Commit, Health, JournalEntry,
-    OutboxEntry, Receipt, SessionRecord, SnapshotInfo, StorageMigration, Store, StoreError,
-    StoreResult, TenantSummary,
+    check_event_sequence, partial_state, throttle_refund, throttle_step, Account, Capabilities,
+    Commit, Health, JournalEntry, OutboxEntry, Receipt, SessionRecord, SnapshotInfo,
+    StorageMigration, Store, StoreError, StoreResult, TenantSummary, ThrottleRow, ThrottleRule,
+    ThrottleSettle, ThrottleVerdict,
 };
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -22,6 +23,7 @@ struct Inner {
     journal: Vec<JournalEntry>,
     sessions: BTreeMap<SessionId, SessionRecord>,
     accounts: BTreeMap<(TenantId, String), Account>,
+    throttle: BTreeMap<(TenantId, String), ThrottleRow>,
     snapshots: BTreeMap<(TenantId, u64), (SnapshotInfo, Arc<TenantState>)>,
 }
 
@@ -249,6 +251,65 @@ impl Store for MemoryStore {
         Ok((count - inner.sessions.len()) as u64)
     }
 
+    fn throttle_reserve(
+        &self,
+        tenant: &TenantId,
+        rules: &[ThrottleRule],
+        now: Timestamp,
+    ) -> StoreResult<ThrottleVerdict> {
+        let mut inner = self.lock()?;
+        let mut next = Vec::with_capacity(rules.len());
+        let mut until: Option<i64> = None;
+        for rule in rules {
+            let row = inner
+                .throttle
+                .get(&(tenant.clone(), rule.key.clone()))
+                .copied();
+            match throttle_step(row, rule, now.0) {
+                Ok(row) => next.push((rule.key.clone(), row)),
+                Err(locked) => until = Some(until.map_or(locked, |u| u.max(locked))),
+            }
+        }
+        if let Some(until) = until {
+            return Ok(ThrottleVerdict::Refused {
+                until: Timestamp(until),
+            });
+        }
+        for (key, row) in next {
+            inner.throttle.insert((tenant.clone(), key), row);
+        }
+        Ok(ThrottleVerdict::Allowed)
+    }
+
+    fn throttle_settle(
+        &self,
+        tenant: &TenantId,
+        key: &str,
+        max: u32,
+        how: ThrottleSettle,
+    ) -> StoreResult<()> {
+        let mut inner = self.lock()?;
+        let slot = (tenant.clone(), key.to_string());
+        match how {
+            ThrottleSettle::Clear => {
+                inner.throttle.remove(&slot);
+            }
+            ThrottleSettle::Refund => {
+                if let Some(row) = inner.throttle.get_mut(&slot) {
+                    *row = throttle_refund(*row, max);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn purge_throttle(&self, now: Timestamp) -> StoreResult<u64> {
+        let mut inner = self.lock()?;
+        let count = inner.throttle.len();
+        inner.throttle.retain(|_, row| row.expires_at > now.0);
+        Ok((count - inner.throttle.len()) as u64)
+    }
+
     fn put_account(&self, account: &Account) -> StoreResult<()> {
         let mut inner = self.lock()?;
         if !inner.tenants.contains_key(&account.tenant) {
@@ -358,6 +419,7 @@ impl Store for MemoryStore {
         inner.journal.retain(|entry| entry.tenant != *tenant);
         inner.sessions.retain(|_, s| s.tenant != *tenant);
         inner.accounts.retain(|(t, _), _| t != tenant);
+        inner.throttle.retain(|(t, _), _| t != tenant);
         inner.snapshots.retain(|(t, _), _| t != tenant);
         Ok(())
     }

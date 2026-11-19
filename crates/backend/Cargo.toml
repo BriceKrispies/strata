@@ -24,6 +24,7 @@ axum.workspace = true
 futures-util.workspace = true
 argon2.workspace = true
 getrandom.workspace = true
+unicode-normalization.workspace = true
 
 [dev-dependencies]
 reqwest.workspace = true

@@ -1,9 +1,10 @@
 //! Browser-facing routes.
 
+use crate::signin;
 use crate::token::same;
 use crate::{relay, Bff, Shared, COOKIE, LOG};
 use axum::extract::ws::WebSocketUpgrade;
-use axum::extract::{Path, Query, Request, State};
+use axum::extract::{ConnectInfo, Path, Query, Request, State};
 use axum::http::header::{
     CACHE_CONTROL, CONTENT_SECURITY_POLICY, CONTENT_TYPE, COOKIE as COOKIE_HEADER, HOST, ORIGIN,
     SET_COOKIE,
@@ -16,12 +17,13 @@ use axum::{Json, Router};
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value as Json_};
 use std::collections::BTreeMap;
+use std::net::SocketAddr;
 use std::sync::atomic::Ordering;
 use std::time::Instant;
 use strata_kernel::TenantId;
 use strata_protocol::api::{
-    valid_correlation, ErrorCode, ErrorReply, LoginReply, LoginRequest, Mutation, SessionReply,
-    SessionView, ViewRequest, HEADER_CORRELATION, HEADER_SERVICE, HEADER_SESSION, HEADER_SITE,
+    valid_correlation, ErrorCode, ErrorReply, LoginReply, Mutation, SessionReply, SessionView,
+    ViewRequest, HEADER_CORRELATION, HEADER_SERVICE, HEADER_SESSION, HEADER_SITE, HEADER_SOURCE,
 };
 use strata_protocol::ws::SessionState;
 use strata_substrate::project::{project, ViewData};
@@ -57,6 +59,8 @@ pub struct Visit {
     pub site: TenantId,
     pub token: Option<String>,
     pub correlation: String,
+    /// The address the connection came from, which the backend limits failed sign-ins by.
+    pub source: Option<String>,
 }
 
 fn text(headers: &HeaderMap, name: impl axum::http::header::AsHeaderName) -> Option<&str> {
@@ -109,6 +113,7 @@ pub fn visit(bff: &Bff, headers: &HeaderMap) -> Result<Visit, Failure> {
         site,
         token: cookie(headers),
         correlation,
+        source: text(headers, HEADER_SOURCE).map(str::to_string),
     })
 }
 
@@ -165,6 +170,9 @@ pub async fn backend<T: DeserializeOwned>(
         .json(body);
     if let Some(token) = &visit.token {
         request = request.header(HEADER_SESSION, token);
+    }
+    if let Some(source) = &visit.source {
+        request = request.header(HEADER_SOURCE, source);
     }
     let response = request
         .send()
@@ -295,15 +303,39 @@ async fn session(State(bff): State<Shared>, headers: HeaderMap) -> Result<Respon
     Ok(response)
 }
 
-async fn login(
-    State(bff): State<Shared>,
-    headers: HeaderMap,
-    Json(request): Json<LoginRequest>,
+/// Sign in with the named method: the same origin and request-token checks for every method,
+/// the method's own credentials, and the session cookie from the backend's answer.
+async fn sign_in(
+    bff: &Bff,
+    headers: &HeaderMap,
+    method: &str,
+    body: Json_,
 ) -> Result<Response, Failure> {
-    let visit = visit(&bff, &headers)?;
-    guard_request(&bff, &visit, &headers).await?;
-    let reply: LoginReply =
-        backend(&bff, &visit, "/internal/session/login", &json!(request)).await?;
+    let visit = visit(bff, headers)?;
+    guard_request(bff, &visit, headers).await?;
+    let credentials = signin::route(method)
+        .ok_or_else(|| {
+            Failure::new(
+                ErrorCode::NotFound,
+                "No such sign-in method.",
+                &visit.correlation,
+            )
+        })?
+        .credentials(&body)
+        .ok_or_else(|| {
+            Failure::new(
+                ErrorCode::Unauthenticated,
+                "The name or password is not right.",
+                &visit.correlation,
+            )
+        })?;
+    let reply: LoginReply = backend(
+        bff,
+        &visit,
+        &format!("/internal/session/sign-in/{method}"),
+        &credentials,
+    )
+    .await?;
     let lifetime = reply
         .session
         .expires_at
@@ -314,6 +346,79 @@ async fn login(
         .headers_mut()
         .insert(SET_COOKIE, session_cookie(&reply.token, lifetime));
     Ok(response)
+}
+
+async fn login(
+    State(bff): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<Json_>,
+) -> Result<Response, Failure> {
+    sign_in(&bff, &headers, "password", body).await
+}
+
+async fn login_with(
+    State(bff): State<Shared>,
+    headers: HeaderMap,
+    Path(method): Path<String>,
+    Json(body): Json<Json_>,
+) -> Result<Response, Failure> {
+    sign_in(&bff, &headers, &method, body).await
+}
+
+/// The signed-in person's own live sessions.
+async fn sessions(State(bff): State<Shared>, headers: HeaderMap) -> Result<Json<Json_>, Failure> {
+    let visit = visit(&bff, &headers)?;
+    backend(&bff, &visit, "/internal/sessions", &json!({}))
+        .await
+        .map(Json)
+}
+
+/// Revoke one of the signed-in person's own sessions. When it is the one making the request, the
+/// cookie goes with it.
+async fn session_revoke(
+    State(bff): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<Json_>,
+) -> Result<Response, Failure> {
+    let visit = visit(&bff, &headers)?;
+    // The checks come before the body is looked at: a request that skips them learns nothing
+    // about what a body should hold.
+    let current = guard_write(&bff, &visit, &headers).await?;
+    let Some(id) = body.get("id").and_then(Json_::as_str) else {
+        return Err(Failure::new(
+            ErrorCode::Invalid,
+            "Say which session.",
+            &visit.correlation,
+        ));
+    };
+    let reply: Json_ = backend(
+        &bff,
+        &visit,
+        "/internal/sessions/revoke",
+        &json!({ "id": id }),
+    )
+    .await?;
+    let mut response = Json(reply).into_response();
+    if current.session_id.as_deref() == Some(id) {
+        response
+            .headers_mut()
+            .insert(SET_COOKIE, session_cookie("", 0));
+    }
+    Ok(response)
+}
+
+/// Revoke every other session of the signed-in person.
+async fn sessions_revoke_others(
+    State(bff): State<Shared>,
+    headers: HeaderMap,
+) -> Result<Json<Json_>, Failure> {
+    guarded(
+        &bff,
+        &headers,
+        "/internal/sessions/revoke-others",
+        json!({}),
+    )
+    .await
 }
 
 async fn logout(State(bff): State<Shared>, headers: HeaderMap) -> Result<Response, Failure> {
@@ -761,8 +866,18 @@ async fn page(State(bff): State<Shared>, headers: HeaderMap, request: Request) -
 }
 
 /// Security headers on everything, and one log line per request.
-async fn envelope(State(bff): State<Shared>, request: Request, next: Next) -> Response {
+async fn envelope(State(bff): State<Shared>, mut request: Request, next: Next) -> Response {
     let started = Instant::now();
+    // The source of a request is the address of its connection and nothing the browser says: a
+    // header of that name that came in is thrown away.
+    let peer = request
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|ConnectInfo(peer)| peer.ip().to_string());
+    request.headers_mut().remove(HEADER_SOURCE);
+    if let Some(value) = peer.and_then(|peer| HeaderValue::from_str(&peer).ok()) {
+        request.headers_mut().insert(HEADER_SOURCE, value);
+    }
     let method = request.method().clone();
     let path = request.uri().path().to_string();
     let correlation = text(request.headers(), HEADER_CORRELATION)
@@ -815,6 +930,10 @@ pub fn router(bff: Shared) -> Router {
     let api = Router::new()
         .route("/session", get(session))
         .route("/login", post(login))
+        .route("/sign-in/:method", post(login_with))
+        .route("/sessions", get(sessions))
+        .route("/sessions/revoke", post(session_revoke))
+        .route("/sessions/revoke-others", post(sessions_revoke_others))
         .route("/logout", post(logout))
         .route("/view", get(view))
         .route("/records", post(records))

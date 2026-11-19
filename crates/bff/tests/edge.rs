@@ -20,6 +20,10 @@ struct Edge {
 }
 
 async fn start() -> Edge {
+    start_with(Default::default()).await
+}
+
+async fn start_with(throttle: strata_backend::app::ThrottleLimits) -> Edge {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let backend_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let backend_addr = backend_listener.local_addr().unwrap();
@@ -31,6 +35,7 @@ async fn start() -> Edge {
         lean_dir: root.join("lean"),
         session_ttl_ms: 3_600_000,
         session_idle_ms: 3_600_000,
+        throttle,
     };
     tokio::spawn(strata_backend::run(
         backend_cfg,
@@ -1243,4 +1248,226 @@ async fn diagnostics_name_no_other_site() {
         assert!(!text.contains(other), "{other} is in the report: {text}");
     }
     assert!(report["bff"]["open_sockets"].is_number());
+}
+
+/// One sign-in attempt through the edge, from a browser that says it comes from `claimed`.
+async fn attempt_from(
+    edge: &Edge,
+    claimed: Option<&str>,
+    login: &str,
+    password: &str,
+) -> (u16, Json, Reply) {
+    let mut request = edge
+        .post(
+            "127.0.0.1",
+            "/api/login",
+            json!({ "login": login, "password": password }),
+        )
+        .header("x-csrf-token", edge.request_token("127.0.0.1").await);
+    if let Some(claimed) = claimed {
+        request = request.header("x-strata-source", claimed);
+    }
+    edge.send(request).await
+}
+
+/// Verifies: IDN-012
+#[tokio::test]
+async fn a_person_lists_and_revokes_their_sessions_behind_the_origin_and_token_checks() {
+    let edge = start().await;
+    let (here, here_csrf) = edge.login("127.0.0.1", "ines", "strata-dev-ines").await;
+    let (there, _) = edge.login("127.0.0.1", "ines", "strata-dev-ines").await;
+    let ours = edge.origin("127.0.0.1");
+
+    let (status, listed, _) = edge.get("127.0.0.1", "/api/sessions", Some(&here)).await;
+    assert_eq!(status, 200, "{listed}");
+    let list = listed["sessions"].as_array().unwrap();
+    assert_eq!(list.len(), 2);
+    assert_eq!(list.iter().filter(|s| s["current"] == true).count(), 1);
+    let text = listed.to_string();
+    assert!(!text.contains(&here) && !text.contains(&there) && !text.contains("csrf"));
+    assert_eq!(
+        edge.get("127.0.0.1", "/api/sessions", None).await.0,
+        401,
+        "no session, nothing to list"
+    );
+
+    let (_, there_view, _) = edge.get("127.0.0.1", "/api/session", Some(&there)).await;
+    let there_id = there_view["session"]["session_id"].as_str().unwrap();
+    let revoke = |origin: Option<&str>, csrf: Option<&str>| {
+        let mut request = edge
+            .http
+            .post(format!("{ours}/api/sessions/revoke"))
+            .header("cookie", format!("{SESSION_COOKIE}={here}"))
+            .json(&json!({ "id": there_id }));
+        if let Some(origin) = origin {
+            request = request.header("origin", origin);
+        }
+        if let Some(csrf) = csrf {
+            request = request.header("x-csrf-token", csrf);
+        }
+        request
+    };
+    assert_eq!(
+        edge.send(revoke(Some(&ours), None)).await.0,
+        403,
+        "no token"
+    );
+    assert_eq!(
+        edge.send(revoke(Some(&ours), Some("0000"))).await.0,
+        403,
+        "wrong token"
+    );
+    assert_eq!(
+        edge.send(revoke(Some("http://evil.example"), Some(&here_csrf)))
+            .await
+            .0,
+        403,
+        "foreign origin"
+    );
+    assert_eq!(
+        edge.send(revoke(None, Some(&here_csrf))).await.0,
+        403,
+        "no origin"
+    );
+    let (_, still, _) = edge.get("127.0.0.1", "/api/session", Some(&there)).await;
+    assert_eq!(
+        still["session"]["authenticated"], true,
+        "the refusals ended nothing"
+    );
+
+    assert_eq!(
+        edge.send(revoke(Some(&ours), Some(&here_csrf))).await.0,
+        200
+    );
+    let (_, gone, reply) = edge.get("127.0.0.1", "/api/session", Some(&there)).await;
+    assert_eq!(gone["state"], "revoked");
+    assert!(
+        reply.cookie.unwrap().contains("Max-Age=0"),
+        "its cookie is cleared"
+    );
+
+    // Ending the session that makes the request clears its own cookie in the same answer.
+    let (_, here_view, _) = edge.get("127.0.0.1", "/api/session", Some(&here)).await;
+    let own_id = here_view["session"]["session_id"].as_str().unwrap();
+    let (status, _, reply) = edge
+        .send(
+            edge.post("127.0.0.1", "/api/sessions/revoke", json!({ "id": own_id }))
+                .header("cookie", format!("{SESSION_COOKIE}={here}"))
+                .header("x-csrf-token", &here_csrf),
+        )
+        .await;
+    assert_eq!(status, 200);
+    assert!(reply.cookie.expect("a cookie header").contains("Max-Age=0"));
+
+    // The others, all at once.
+    let (first, first_csrf) = edge.login("127.0.0.1", "ines", "strata-dev-ines").await;
+    let (second, _) = edge.login("127.0.0.1", "ines", "strata-dev-ines").await;
+    let (third, _) = edge.login("127.0.0.1", "ines", "strata-dev-ines").await;
+    let (status, reply, _) = edge
+        .send(
+            edge.post("127.0.0.1", "/api/sessions/revoke-others", json!({}))
+                .header("cookie", format!("{SESSION_COOKIE}={first}"))
+                .header("x-csrf-token", &first_csrf),
+        )
+        .await;
+    assert_eq!((status, &reply["revoked"]), (200, &json!(2)));
+    for gone in [&second, &third] {
+        let (_, view, _) = edge.get("127.0.0.1", "/api/session", Some(gone)).await;
+        assert_eq!(view["session"]["authenticated"], false);
+    }
+    let (_, kept, _) = edge.get("127.0.0.1", "/api/session", Some(&first)).await;
+    assert_eq!(kept["session"]["authenticated"], true);
+}
+
+/// Verifies: IDN-250
+///
+/// The address a sign-in is limited by is the one the connection came from. A browser that
+/// writes another into a header does not get a count of its own for each.
+#[tokio::test]
+async fn the_source_of_a_sign_in_is_the_connection_and_not_what_the_browser_says() {
+    let edge = start_with(strata_backend::app::ThrottleLimits {
+        source_max: 3,
+        ..Default::default()
+    })
+    .await;
+    for (i, claimed) in ["203.0.113.1", "203.0.113.2", "203.0.113.3"]
+        .iter()
+        .enumerate()
+    {
+        let (status, _, _) = attempt_from(&edge, Some(claimed), &format!("nobody{i}"), "x").await;
+        assert_eq!(status, 401);
+    }
+    let (status, body, reply) =
+        attempt_from(&edge, Some("203.0.113.4"), "tomasz", "strata-dev-tomasz").await;
+    assert_eq!(status, 429, "{body}");
+    assert!(reply.cookie.is_none(), "a refused sign-in sets no cookie");
+}
+
+/// Verifies: IDN-008
+/// Verifies: IDN-255
+#[tokio::test]
+async fn a_throttled_sign_in_is_answered_the_same_for_an_account_that_does_not_exist() {
+    let edge = start().await;
+    let mut wrong = Vec::new();
+    for login in ["tomasz", "nobody-at-all"] {
+        for _ in 0..10 {
+            let (status, body, reply) = attempt_from(&edge, None, login, "wrong").await;
+            assert_eq!(status, 401);
+            assert!(reply.cookie.is_none());
+            wrong.push(body["message"].clone());
+        }
+    }
+    assert!(wrong.windows(2).all(|pair| pair[0] == pair[1]), "{wrong:?}");
+    let mut refused = Vec::new();
+    for login in ["tomasz", "nobody-at-all"] {
+        let (status, body, reply) = attempt_from(&edge, None, login, "strata-dev-tomasz").await;
+        assert_eq!(status, 429, "{login}: {body}");
+        assert!(reply.cookie.is_none(), "a refused sign-in sets no cookie");
+        refused.push((body["code"].clone(), body["message"].clone()));
+    }
+    assert_eq!(
+        refused[0], refused[1],
+        "the refusal does not say which exists"
+    );
+}
+
+/// Verifies: IDN-001
+#[tokio::test]
+async fn sign_in_goes_through_the_method_named_and_passes_on_only_its_own_fields() {
+    let edge = start().await;
+    let token = edge.request_token("127.0.0.1").await;
+    let (status, body, reply) = edge
+        .send(
+            edge.post(
+                "127.0.0.1",
+                "/api/sign-in/password",
+                json!({ "login": "ines", "password": "strata-dev-ines", "tenant": "tidewater", "admin": true }),
+            )
+            .header("x-csrf-token", &token),
+        )
+        .await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(
+        body["session"]["tenant"], "fieldnotes",
+        "the site is the host's"
+    );
+    assert!(reply.cookie.unwrap().starts_with(SESSION_COOKIE));
+    for (path, payload, expected) in [
+        (
+            "/api/sign-in/telepathy",
+            json!({ "login": "ines", "password": "x" }),
+            404,
+        ),
+        ("/api/sign-in/password", json!({ "login": "ines" }), 401),
+        ("/api/sign-in/password", json!({}), 401),
+    ] {
+        let (status, _, reply) = edge
+            .send(
+                edge.post("127.0.0.1", path, payload)
+                    .header("x-csrf-token", &token),
+            )
+            .await;
+        assert_eq!(status, expected, "{path}");
+        assert!(reply.cookie.is_none());
+    }
 }

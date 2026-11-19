@@ -839,3 +839,93 @@ test('sign-in, publish and unpublish are logged as domain events, with their all
   await expect(page.locator('.toast', { hasText: 'Deleted.' })).toBeVisible();
   await line('record.deleted', { tenant: 'fieldnotes', object: 'post', id: created.id });
 });
+
+/** Sign out every other session of the person at the desk, so that a test starts from one. */
+async function leaveOnlyThisSession(page) {
+  await open(page, '/desk');
+  const section = page.getByRole('region', { name: 'Where you are signed in' });
+  await expect(section).toBeVisible();
+  const others = section.getByRole('button', { name: 'Sign out all other sessions' });
+  if (await others.count()) {
+    await others.click();
+    await expect(section.getByText('This is the only place you are signed in.')).toBeVisible();
+  }
+}
+
+test('a person sees where they are signed in and signs out another session from the desk', async ({ page, browser }) => {
+  await signIn(page, 'tomasz');
+  await leaveOnlyThisSession(page);
+  const section = page.getByRole('region', { name: 'Where you are signed in' });
+  await expect(section.getByRole('row')).toHaveCount(2); // the header and this device
+
+  const elsewhere = await (await browser.newContext({ baseURL: BASE })).newPage();
+  await signIn(elsewhere, 'tomasz');
+  await expect(elsewhere.getByRole('region', { name: 'Where you are signed in' }).getByRole('row')).toHaveCount(3);
+  await expect(elsewhere.locator('.colophon__live')).toHaveAttribute('data-connection', 'open');
+
+  await open(page, '/desk');
+  await expect(section.getByRole('row')).toHaveCount(3);
+  await expect(section.locator('tr[data-current="true"]')).toHaveCount(1);
+  await expect(section.locator('tr[data-current="false"]')).toContainText('Another device');
+  // Nothing of the session's secret is on the page.
+  expect(await page.content()).not.toContain('csrf');
+
+  await section.getByRole('button', { name: 'Sign out that session' }).click();
+  await expect(page.locator('.toast', { hasText: 'That session has been signed out.' })).toBeVisible();
+  await expect(section.getByRole('row')).toHaveCount(2);
+  await expect(section.getByText('This is the only place you are signed in.')).toBeVisible();
+
+  // The session that was ended is noticed where it is open, and its page falls back to signed out.
+  await expect(elsewhere.getByRole('heading', { level: 1, name: 'Sign in to continue' })).toBeVisible();
+  // This one was not touched.
+  await expect(page.getByRole('heading', { level: 1, name: 'Writing desk' })).toBeVisible();
+});
+
+test('a person signs out all their other sessions at once', async ({ page, browser }) => {
+  await signIn(page, 'mirela');
+  await leaveOnlyThisSession(page);
+  const others = [];
+  for (let i = 0; i < 2; i++) {
+    const elsewhere = await (await browser.newContext({ baseURL: BASE })).newPage();
+    await signIn(elsewhere, 'mirela');
+    others.push(elsewhere);
+  }
+  await open(page, '/desk');
+  const section = page.getByRole('region', { name: 'Where you are signed in' });
+  await expect(section.getByRole('row')).toHaveCount(4);
+  await section.getByRole('button', { name: 'Sign out all other sessions' }).click();
+  await expect(page.locator('.toast', { hasText: 'Signed out 2 other sessions.' })).toBeVisible();
+  await expect(section.getByRole('row')).toHaveCount(2);
+  for (const elsewhere of others) {
+    await expect(elsewhere.getByRole('heading', { level: 1, name: 'Sign in to continue' })).toBeVisible();
+  }
+  await expect(page.getByRole('heading', { level: 1, name: 'Writing desk' })).toBeVisible();
+});
+
+test('ten wrong passwords lock a login for a while, whether or not it exists', async ({ page }) => {
+  await open(page, '/login');
+  // A login that does not exist, so that no real account is locked for the tests that follow:
+  // the limit counts the name that was typed, and nothing about it says whether it has an account.
+  const csrf = (await (await page.request.get('/api/session')).json()).session.csrf_token;
+  const attempt = () =>
+    page.request.post('/api/login', {
+      data: { login: '  Lockout-Probe ', password: 'not-the-password' },
+      headers: { origin: BASE, 'x-csrf-token': csrf },
+    });
+  for (let i = 0; i < 10; i++) {
+    const refused = await attempt();
+    expect(refused.status()).toBe(401);
+    expect((await refused.json()).message).toBe('The name or password is not right.');
+  }
+  // The eleventh, another spelling of the same login, through the page.
+  await page.getByLabel('Name').fill('LOCKOUT-PROBE');
+  await page.getByLabel('Password').fill('not-the-password');
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  await expect(page.getByRole('alert')).toContainText('Too many attempts');
+  const locked = await attempt();
+  expect(locked.status()).toBe(429);
+  expect(locked.headers()['set-cookie']).toBeUndefined();
+
+  // Another login is not affected, and signing in still works.
+  await signIn(page, 'ines');
+});

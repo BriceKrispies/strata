@@ -35,6 +35,7 @@ fn visit(session: Option<&str>) -> Visit {
         site: TenantId::new("fieldnotes").unwrap(),
         token: session.map(str::to_string),
         correlation: "c-visit-7".into(),
+        source: None,
     }
 }
 

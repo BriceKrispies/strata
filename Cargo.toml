@@ -54,6 +54,7 @@ futures-util = "0.3.31"
 reqwest = { version = "0.12", default-features = false, features = ["json"] }
 argon2 = "0.5.3"
 getrandom = "0.2.16"
+unicode-normalization = "0.1.25"
 tower-http = { version = "0.6.8", features = ["fs"] }
 proc-macro2 = "1.0.107"
 quote = "1.0.47"

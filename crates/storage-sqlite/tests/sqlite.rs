@@ -4,7 +4,10 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 use strata_kernel::testkit::*;
 use strata_kernel::*;
-use strata_storage_api::{conformance, execute, Account, SessionRecord, Store};
+use strata_storage_api::{
+    conformance, execute, Account, SessionRecord, Store, ThrottleRule, ThrottleSettle,
+    ThrottleVerdict,
+};
 use strata_storage_sqlite::SqliteStore;
 
 static COUNTER: AtomicU32 = AtomicU32::new(0);
@@ -137,7 +140,7 @@ fn committed_data_survives_a_reopen() {
     assert_eq!(store.snapshots(&alpha).unwrap(), vec![snapshot]);
     assert_eq!(store.journal_after(&alpha, 0, 10).unwrap().len(), 3);
     let migrations = store.migrations().unwrap();
-    assert_eq!(migrations.len(), 1);
+    assert_eq!(migrations.len(), 2);
     assert_eq!(
         migrations[0].applied_at,
         Timestamp(1),
@@ -228,4 +231,92 @@ fn query_values_are_bound_as_data_and_an_unopenable_file_is_unavailable() {
         SqliteStore::open(&missing, Timestamp(1)),
         Err(strata_storage_api::StoreError::Unavailable(_))
     ));
+}
+
+fn rule(key: &str, max: u32, lock_resets: bool) -> ThrottleRule {
+    ThrottleRule {
+        key: key.into(),
+        max,
+        window_ms: 1000,
+        lock_ms: 100,
+        lock_resets,
+    }
+}
+
+/// Verifies: IDN-008
+///
+/// The counters are rows: a reopened file holds them, a tenant reset takes them, a right
+/// password clears one, and an expired one is purged.
+#[test]
+fn login_throttle_counters_are_durable_atomic_and_purged() {
+    let path = fresh_path("throttle");
+    let alpha = tenant_id("alpha");
+    let account = rule("account:password:a", 3, true);
+    let source = rule("source:password:1.2.3.4", 2, false);
+    {
+        let store = SqliteStore::open(&path, Timestamp(1)).unwrap();
+        execute(
+            &store,
+            &Intent::CreateTenant {
+                name: "alpha".into(),
+                owner: principal_id("alpha:owner"),
+            },
+            &ctx("alpha", Principal::System, 10),
+        )
+        .unwrap();
+        let both = [account.clone(), source.clone()];
+        for _ in 0..2 {
+            assert_eq!(
+                store
+                    .throttle_reserve(&alpha, &both, Timestamp(100))
+                    .unwrap(),
+                ThrottleVerdict::Allowed
+            );
+        }
+        // The source is full: a refusal counts nothing on the account either.
+        assert!(matches!(
+            store
+                .throttle_reserve(&alpha, &both, Timestamp(100))
+                .unwrap(),
+            ThrottleVerdict::Refused { .. }
+        ));
+    }
+    let store = SqliteStore::open(&path, Timestamp(1)).unwrap();
+    let verdict = store
+        .throttle_reserve(&alpha, std::slice::from_ref(&account), Timestamp(100))
+        .unwrap();
+    assert_eq!(
+        verdict,
+        ThrottleVerdict::Allowed,
+        "the account had two, not three"
+    );
+    assert!(
+        matches!(
+            store
+                .throttle_reserve(&alpha, std::slice::from_ref(&source), Timestamp(100))
+                .unwrap(),
+            ThrottleVerdict::Refused {
+                until: Timestamp(200)
+            }
+        ),
+        "the source count survived the reopen, with its lock, which ends at 200"
+    );
+    store
+        .throttle_settle(&alpha, &account.key, 3, ThrottleSettle::Clear)
+        .unwrap();
+    assert_eq!(
+        store
+            .throttle_reserve(&alpha, std::slice::from_ref(&account), Timestamp(100))
+            .unwrap(),
+        ThrottleVerdict::Allowed
+    );
+    // After its window a counter starts again, and the expired rows can be purged.
+    assert_eq!(
+        store
+            .throttle_reserve(&alpha, std::slice::from_ref(&source), Timestamp(1200))
+            .unwrap(),
+        ThrottleVerdict::Allowed
+    );
+    assert_eq!(store.purge_throttle(Timestamp(1_000_000)).unwrap(), 2);
+    assert_eq!(store.purge_throttle(Timestamp(1_000_000)).unwrap(), 0);
 }

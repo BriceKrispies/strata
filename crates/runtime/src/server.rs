@@ -39,10 +39,13 @@ pub async fn serve(
     router: Router,
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> Result<(), String> {
-    axum::serve(listener, router)
-        .with_graceful_shutdown(shutdown)
-        .await
-        .map_err(|e| e.to_string())
+    axum::serve(
+        listener,
+        router.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown)
+    .await
+    .map_err(|e| e.to_string())
 }
 
 /// End the process: normally on `Ok`, and on `Err` with the problem on standard error, prefixed

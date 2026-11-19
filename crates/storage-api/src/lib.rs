@@ -36,7 +36,7 @@ use std::collections::BTreeSet;
 use std::fmt;
 use std::sync::Arc;
 use strata_kernel::{
-    canon, Context, Coverage, DomainError, DomainEvent, Effect, ErrorKind, Intent, Need,
+    canon, Context, Coverage, DomainError, DomainEvent, Effect, ErrorKind, EventBody, Intent, Need,
     PrincipalId, ReadRequest, ReadResult, Record, SessionId, State, StateDelta, StateRevision,
     TenantId, TenantState, Timestamp, Transition, Value,
 };
@@ -134,6 +134,9 @@ impl Commit {
                 delta_hash: canon::hash_of(&transition.delta),
                 events_hash: canon::hash_of(&transition.events),
             },
+            // A principal whose roles changed in any way starts again from a new sign-in (IDN-012):
+            // a session issued under the old roles is not carried over to the new ones. The
+            // kernel's own effect, for a principal left with no role, is included.
             revoke_sessions: transition
                 .effects
                 .iter()
@@ -141,6 +144,17 @@ impl Commit {
                     Effect::RevokeSessions { principal } => Some(principal.clone()),
                     Effect::Publish { .. } => None,
                 })
+                .chain(
+                    transition
+                        .events
+                        .iter()
+                        .filter_map(|event| match &event.body {
+                            EventBody::MemberChanged { principal, .. } => Some(principal.clone()),
+                            _ => None,
+                        }),
+                )
+                .collect::<BTreeSet<_>>()
+                .into_iter()
                 .collect(),
         }
     }
@@ -197,6 +211,94 @@ pub struct Account {
     pub display_name: String,
     /// An Argon2id PHC string.
     pub password_hash: String,
+}
+
+/// How one counter of failed attempts limits what follows it.
+///
+/// Attempts are counted when they are reserved, before the credential is checked, and given
+/// back (or cleared) when it turns out to be right. So `max` attempts may be in flight at once,
+/// and no more, however they interleave.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ThrottleRule {
+    /// What is counted, such as one account, one source or one realm. Scoped by tenant.
+    pub key: String,
+    /// The attempt that reaches this count is the last one let through before the lock.
+    pub max: u32,
+    /// Failures older than this are forgotten.
+    pub window_ms: i64,
+    /// How long attempts are refused once `max` is reached.
+    pub lock_ms: i64,
+    /// Whether the count starts again when a lock ends (an account) or goes on until the window
+    /// ends (a source, a realm).
+    pub lock_resets: bool,
+}
+
+/// What a counter holds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ThrottleRow {
+    pub failures: u32,
+    pub window_start: i64,
+    /// Attempts are refused until this time; 0 when there is no lock.
+    pub locked_until: i64,
+    /// When the row means nothing any more and may be purged.
+    pub expires_at: i64,
+}
+
+/// The answer to a reservation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ThrottleVerdict {
+    /// Every counter had room, and each now holds this attempt.
+    Allowed,
+    /// A counter is locked; nothing was counted.
+    Refused { until: Timestamp },
+}
+
+/// What becomes of a reserved attempt once its credential has been checked and found right.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ThrottleSettle {
+    /// Forget the counter.
+    Clear,
+    /// Give the slot back and keep the other failures.
+    Refund,
+}
+
+/// Count one more attempt on a counter, or refuse it. Shared by the adapters, so that they cannot
+/// disagree on what a limit means.
+pub fn throttle_step(
+    row: Option<ThrottleRow>,
+    rule: &ThrottleRule,
+    now: i64,
+) -> Result<ThrottleRow, i64> {
+    let fresh = ThrottleRow {
+        failures: 0,
+        window_start: now,
+        locked_until: 0,
+        expires_at: 0,
+    };
+    let mut row = row.unwrap_or(fresh);
+    if now - row.window_start >= rule.window_ms
+        || (rule.lock_resets && row.locked_until != 0 && now >= row.locked_until)
+    {
+        row = fresh;
+    }
+    if row.locked_until > now {
+        return Err(row.locked_until);
+    }
+    row.failures = row.failures.saturating_add(1);
+    if row.failures >= rule.max {
+        row.locked_until = now + rule.lock_ms;
+    }
+    row.expires_at = (row.window_start + rule.window_ms).max(row.locked_until);
+    Ok(row)
+}
+
+/// The row after a reserved attempt is given back.
+pub fn throttle_refund(mut row: ThrottleRow, max: u32) -> ThrottleRow {
+    row.failures = row.failures.saturating_sub(1);
+    if row.failures < max {
+        row.locked_until = 0;
+    }
+    row
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -276,6 +378,27 @@ pub trait Store: Send + Sync {
     fn live_sessions(&self, now: Timestamp) -> StoreResult<Vec<SessionRecord>>;
     /// Remove sessions that ended before `before`. Returns how many were removed.
     fn purge_sessions(&self, before: Timestamp) -> StoreResult<u64>;
+
+    /// Reserve one attempt on every counter named, all or none, as one atomic step. When a counter
+    /// is locked the attempt is refused and nothing is counted. The counters outlive the process
+    /// and are shared by everything that uses the store.
+    fn throttle_reserve(
+        &self,
+        tenant: &TenantId,
+        rules: &[ThrottleRule],
+        now: Timestamp,
+    ) -> StoreResult<ThrottleVerdict>;
+    /// Settle a reserved attempt on one counter whose credential turned out to be right. `max` is
+    /// the counter's limit, to know whether giving the slot back lifts a lock.
+    fn throttle_settle(
+        &self,
+        tenant: &TenantId,
+        key: &str,
+        max: u32,
+        how: ThrottleSettle,
+    ) -> StoreResult<()>;
+    /// Remove counters that mean nothing any more at `now`. Returns how many were removed.
+    fn purge_throttle(&self, now: Timestamp) -> StoreResult<u64>;
 
     fn put_account(&self, account: &Account) -> StoreResult<()>;
     fn account(&self, tenant: &TenantId, login: &str) -> StoreResult<Option<Account>>;
