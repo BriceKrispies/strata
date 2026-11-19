@@ -257,7 +257,7 @@ fn implementing_components(spec: &Spec) -> Vec<&crate::ir::Component> {
         .filter(|component| {
             spec.contracts
                 .iter()
-                .any(|c| c.implemented_by.as_deref() == Some(component.id.as_str()))
+                .any(|c| !c.target && c.implemented_by.as_deref() == Some(component.id.as_str()))
         })
         .collect()
 }
@@ -267,7 +267,7 @@ fn contracts_of<'a>(spec: &'a Spec, component: &str) -> impl Iterator<Item = &'a
     let component = component.to_string();
     spec.contracts
         .iter()
-        .filter(move |c| c.implemented_by.as_deref() == Some(component.as_str()))
+        .filter(move |c| !c.target && c.implemented_by.as_deref() == Some(component.as_str()))
 }
 
 fn type_names(c: &Contract) -> (String, String, String) {

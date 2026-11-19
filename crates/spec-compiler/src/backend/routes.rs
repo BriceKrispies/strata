@@ -74,7 +74,10 @@ pub struct RoutesBackend;
 /// True when the generated crate depends on `strata-runtime`: it has an implementation-level
 /// machine or a contract a component implements.
 pub fn uses_runtime(spec: &Spec) -> bool {
-    !spec.machines.is_empty() || !served(spec).is_empty()
+    !spec.machines.is_empty()
+        || !spec.memory_machines.is_empty()
+        || !spec.target_machines.is_empty()
+        || !served(spec).is_empty()
 }
 
 /// The components that implement at least one contract, in declaration order.
@@ -89,7 +92,7 @@ pub fn implementing_components(spec: &Spec) -> Vec<&Component> {
 pub fn contracts_of<'a>(spec: &'a Spec, component: &str) -> Vec<&'a Contract> {
     spec.contracts
         .iter()
-        .filter(|c| c.implemented_by.as_deref() == Some(component))
+        .filter(|c| !c.target && c.implemented_by.as_deref() == Some(component))
         .collect()
 }
 
@@ -98,9 +101,10 @@ fn served(spec: &Spec) -> Vec<&Contract> {
     spec.contracts
         .iter()
         .filter(|c| {
-            c.implemented_by
-                .as_deref()
-                .is_some_and(|id| spec.component(id).is_some())
+            !c.target
+                && c.implemented_by
+                    .as_deref()
+                    .is_some_and(|id| spec.component(id).is_some())
         })
         .collect()
 }

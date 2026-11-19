@@ -14,6 +14,9 @@ pub mod contracts;
 
 pub mod machines;
 
+#[cfg(feature = "target-models")]
+pub mod target_machines;
+
 pub mod support;
 
 pub mod policies;

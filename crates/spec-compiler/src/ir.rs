@@ -24,9 +24,18 @@ pub struct Spec {
     pub contracts: Vec<Contract>,
     /// The `events` section.
     pub events: Vec<Event>,
-    /// The behaviors with `level: "implementation"`, in declaration order. Model-level
+    /// The shipped behaviors with `level: "implementation"` that are stored in a record, in
+    /// declaration order: what the `machines` module holds and the system host runs. Model-level
     /// behaviors are not loaded: nothing is generated from them.
     pub machines: Vec<Behavior>,
+    /// The shipped implementation-level machines with `storage.durability: "memory"`, in
+    /// declaration order. They have no record, key or transaction, so the `Host` and `System`
+    /// cannot run them: they are generated as pure steppers (see `backend::machines`).
+    pub memory_machines: Vec<Behavior>,
+    /// The implementation-level machines whose realisation is `target` (declared, or defaulted
+    /// from a `not-implemented` subject component), in declaration order, record-stored or memory.
+    /// They are generated only into the `target_models` feature.
+    pub target_machines: Vec<Behavior>,
     /// The cross-cutting constructs: policies, validations, retentions, quotas, retries, audits.
     pub constructs: crate::constructs::Constructs,
     /// `system.telemetry` and the sensitive types: what the telemetry backend needs.
@@ -85,6 +94,19 @@ impl Spec {
     /// The record with this id.
     pub fn record(&self, id: &str) -> Option<&Record> {
         self.records.iter().find(|r| r.id == id)
+    }
+
+    /// Every implementation-level machine, shipped or target, stored or held in memory, in
+    /// declaration order.
+    pub fn all_machines(&self) -> Vec<&Behavior> {
+        let mut all: Vec<&Behavior> = self
+            .machines
+            .iter()
+            .chain(&self.memory_machines)
+            .chain(&self.target_machines)
+            .collect();
+        all.sort_by_key(|b| b.declared);
+        all
     }
 
     /// The component with this id.
@@ -339,6 +361,10 @@ pub struct Contract {
     pub binding_path: Option<String>,
     /// `binding.case`: the contract's own wire case, overriding the system's.
     pub binding_case: Option<crate::wire::WireCase>,
+    /// True when `deployment` is `target`, declared or defaulted from a `not-implemented`
+    /// `implementedBy` component: the contract describes the enterprise target, so it is served
+    /// by no route and has no handler in the shipped code.
+    pub target: bool,
 }
 
 /// An input or output of a contract.
@@ -457,6 +483,15 @@ pub struct Behavior {
     /// The events the steps of scenarios that run this machine inject from outside, each
     /// distinct one once, with the first scenario that does.
     pub injected: Vec<Injection>,
+    /// True when `realisation` is `target`, declared or defaulted from a `not-implemented`
+    /// subject component.
+    pub target: bool,
+    /// True when `storage.durability` is `memory`: the machine has no record, key or
+    /// transaction.
+    pub memory: bool,
+    /// The position among every implementation-level behavior of the specification, so the
+    /// full declaration order can be rebuilt from the shipped and target lists.
+    pub declared: usize,
 }
 
 /// An event a scenario step injects into a machine from outside.
@@ -687,6 +722,9 @@ mod delay_tests {
             time_units: units.iter().map(|u| (*u).to_string()).collect(),
             routes: Vec::new(),
             injected: Vec::new(),
+            target: false,
+            memory: false,
+            declared: 0,
         }
     }
 
