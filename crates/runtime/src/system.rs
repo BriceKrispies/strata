@@ -45,16 +45,25 @@
 //!   instances are those its routes have created, plus the one instance of an unkeyed behaviour.
 //! - A route to a key with no record steps a new instance only when the machine creates records
 //!   (`storage.creates`); otherwise the step fails with [`HostError::RecordMissing`]. Exegra
-//!   creates the instance in its initial state. A keyed behaviour's `max` is a model bound and
-//!   is not enforced.
-//! - Faults (dropped, delayed or duplicated entries, disabled transitions) are what Exegra
-//!   injects; the host has none of its own.
+//!   creates the instance in its initial state, which is why Exegra refuses a shipped machine that
+//!   a scenario runs unless it creates its records or names the contract that writes them
+//!   (`machine.initial-unreachable`). A keyed behaviour's `max` ([`Machine::MAX_INSTANCES`]) is
+//!   enforced: an entry that would create one instance more fails its step with
+//!   [`HostError::InstanceLimit`], as in Exegra. Exegra counts an instance its route created even
+//!   when the entry was ignored; the host counts records, and an ignored entry writes none.
+//! - Inside one system every entry is delivered exactly once, at its due time, whatever the
+//!   delivery of its event: the queue is transactional. The faults Exegra models for an emitted
+//!   event (duplicate, lose, retry, drop and delay, `docs/semantics.md`, "Faults the runtime can
+//!   produce") arise on the hop through a [`Dispatcher`], from another host's outbox: an
+//!   `at-least-once` message is retried with backoff until delivered and dispatched again when the
+//!   sender stops between dispatch and removing it; an `at-most-once` one is claimed, then
+//!   dispatched once, and lost when the sender stops in between. A timer firing is never faulted.
 //! - Exegra's `reply` addressing and links (`via`) are not supported; specc refuses them.
 
 use crate::clock::{Clock, Time};
 use crate::host::{
-    decode, encode, is_conflict, DispatchReport, Dispatcher, Envelope, HostError, RetryPolicy,
-    CONFLICT_RETRIES,
+    admit_new_instance, decode, encode, is_conflict, DispatchReport, Dispatcher, Envelope,
+    HostError, RetryPolicy, CONFLICT_RETRIES,
 };
 use crate::machine::{Delivery, EffectRef, Isolation, Machine, Receiver, TimerCommand};
 use crate::store::{DeadLetter, MachineStore, NewEntry, NewMessage, OutboxEntry, QueueEntry, Tx};
@@ -265,6 +274,9 @@ fn deliver<M: Machine>(
             key: key_text,
         });
     };
+    if previous.is_none() {
+        admit_new_instance::<M>(tx)?;
+    }
     let event: M::Event = serde_json::from_value(event.clone()).map_err(codec)?;
     let outcome = M::step(&state, &vars, &event, now)?;
     if outcome.ignored {
@@ -493,6 +505,7 @@ fn fails_step(error: &HostError) -> bool {
         HostError::Step(_)
             | HostError::Record(_)
             | HostError::RecordMissing { .. }
+            | HostError::InstanceLimit { .. }
             | HostError::Codec(_)
             | HostError::Constraint(_)
     )

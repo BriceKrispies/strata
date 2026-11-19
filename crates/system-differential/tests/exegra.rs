@@ -25,12 +25,26 @@
 //! Exegra's time is read as the host's milliseconds, one base unit for one millisecond, from 0;
 //! the generated machines read delays and `time` the same way.
 //!
-//! Skipped, each with its reason in the output: scenarios with a fault other than `inject-event`
-//! (a dropped, delayed or disabled step is Exegra's doing and the host has no faults of its own;
-//! WG-4903 aligns them), scenarios with a behaviour that has no generated Rust machine (a model
-//! behaviour, or a client machine generated as JavaScript), and scenarios whose inputs the
-//! generated types cannot hold (a payload that does not decode as the machine's event, or a key
-//! that does not decode as its key type). The last are gaps in the specification, listed as such.
+//! Faults are produced as the runtime produces them (WG-4903, Exegra's `docs/semantics.md`,
+//! "Faults the runtime can produce"). Inside one system host every entry is delivered exactly
+//! once, so a fault acts on the hop by which an entry reaches the host: an input, sent by the
+//! outside or by another host's outbox through a dispatcher that submits it here. The test is
+//! that dispatcher. An input Exegra drops or loses (`drop-event`, `lose-event`) is never
+//! submitted; one it delays (`delay-event`, `retry-event`) is submitted when Exegra queues the
+//! delayed copy, due when the copy is; one it duplicates (`duplicate-event`) is submitted again
+//! when Exegra queues the copy, after the step that delivered the first one, as a sender's outbox
+//! offers an at-least-once message again after a stop between dispatch and acknowledgement. An
+//! injected event (`inject-event`) is one more input.
+//!
+//! Skipped, each with its reason in the output: scenarios with a fault the runtime cannot produce
+//! (Exegra's `fault.unrealisable`, mirrored by `strata_spec_compiler::scenarios::unrealisable`),
+//! a fault that changes a machine (`enable-transition`, `disable-transition`), or a fault on an
+//! event a scenario machine emits or a timer fires (the host's own queue delivers those exactly
+//! once; the fault needs machines on two hosts); scenarios with a behaviour that has no generated
+//! Rust machine (a model behaviour, or a client machine generated as JavaScript), and scenarios
+//! whose inputs the generated types cannot hold (a payload that does not decode as the machine's
+//! event, or a key that does not decode as its key type). The last are gaps in the specification,
+//! listed as such.
 //!
 //! The test fails when `EXEGRA_HOME` is not an Exegra checkout or `node` cannot run, when a trace
 //! cannot be had, when any covered scenario diverges, and when no scenario is covered.
@@ -52,8 +66,16 @@ use strata_spec_compiler::{jsonc, load};
 /// The project name of the temporary link.
 const PROJECT: &str = "strata-under-test";
 
-/// The fault kinds the host can be given: an injected event is one more external input.
-const HOST_FAULTS: &[&str] = &["inject-event"];
+/// The fault kinds the host can be given, on its inputs: an injected event is one more input; a
+/// dropped, lost, delayed, retried or duplicated one is what the dispatcher that submits it does.
+const HOST_FAULTS: &[&str] = &[
+    "inject-event",
+    "drop-event",
+    "lose-event",
+    "delay-event",
+    "retry-event",
+    "duplicate-event",
+];
 
 fn workspace() -> PathBuf {
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -233,16 +255,51 @@ struct Plan<'s> {
 fn plan<'s>(spec: &'s Spec, all: &Value, scenario: &Value) -> Result<Plan<'s>, String> {
     let id = scenario["id"].as_str().unwrap_or_default().to_string();
     let faults = all["faults"].as_array().cloned().unwrap_or_default();
+    let top = all.as_object().cloned().unwrap_or_default();
+    let raw = scenario.as_object().cloned().unwrap_or_default();
+    // Events a scenario machine emits or a timer of one fires: the host's queue carries them.
+    let mut internal: BTreeSet<String> = BTreeSet::new();
+    for b in all["behaviors"].as_array().into_iter().flatten() {
+        let ran = scenario["behaviors"]
+            .as_array()
+            .is_some_and(|bs| bs.iter().any(|x| *x == b["id"]));
+        if !ran {
+            continue;
+        }
+        for t in b["transitions"].as_array().into_iter().flatten() {
+            for fx in t["effects"].as_array().into_iter().flatten() {
+                if let Some(e) = fx["emit"].as_str() {
+                    internal.insert(e.to_string());
+                }
+            }
+        }
+    }
     for f in scenario["faults"].as_array().into_iter().flatten() {
         let fid = f.as_str().unwrap_or_default();
-        let kind = faults
-            .iter()
-            .find(|x| x["id"] == fid)
+        let declared = faults.iter().find(|x| x["id"] == fid);
+        let kind = declared
             .and_then(|x| x["kind"].as_str())
             .unwrap_or("unknown");
         if !HOST_FAULTS.contains(&kind) {
             return Err(format!(
-                "fault {fid} ({kind}) is Exegra's doing, which the host cannot produce (WG-4903)"
+                "fault {fid} ({kind}) changes a machine, which the runtime cannot do"
+            ));
+        }
+        let declared = declared.and_then(Value::as_object);
+        if let Some(why) =
+            declared.and_then(|d| strata_spec_compiler::scenarios::unrealisable(&top, &raw, d))
+        {
+            return Err(format!(
+                "fault {fid} ({kind}) is one the runtime cannot produce: {why}"
+            ));
+        }
+        let event = declared
+            .and_then(|d| d.get("event"))
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if kind != "inject-event" && internal.contains(event) {
+            return Err(format!(
+                "fault {fid} ({kind}) acts on {event}, which a scenario machine emits: one system host delivers it exactly once, and the fault needs the machines on two hosts"
             ));
         }
     }
@@ -511,8 +568,22 @@ async fn run(spec: &Spec, plan: &Plan<'_>, trace: &Value) -> Result<usize, (bool
         .map_err(diverged)?;
     check("initially", expected, actual).map_err(diverged)?;
 
-    // Exegra's initial queue: the external entries, in its order.
-    for input in &inputs {
+    let steps = trace["steps"].as_array().cloned().unwrap_or_default();
+    // What Exegra does with each entry it takes, by sequence number: the kind of that step. The
+    // dispatcher in front of the host (this test) submits an input only when Exegra delivers it,
+    // or never takes it.
+    let fate: BTreeMap<u64, String> = steps
+        .iter()
+        .filter_map(|s| Some((s["event"]["seq"].as_u64()?, s["kind"].as_str()?.to_string())))
+        .collect();
+    let reaches_host = |entry: &Value| {
+        let taken = entry["seq"].as_u64().and_then(|s| fate.get(&s));
+        taken.is_none_or(|k| k == "deliver")
+    };
+
+    // Exegra's initial queue: the external entries, in its order, but those Exegra drops or
+    // delays before delivering them.
+    for input in inputs.iter().filter(|i| reaches_host(i)) {
         let event = json!({ "event": input["event"], "payload": payload_of(input) });
         system
             .submit_at(event, Time(time_of(&input["time"])))
@@ -520,16 +591,66 @@ async fn run(spec: &Spec, plan: &Plan<'_>, trace: &Value) -> Result<usize, (bool
             .map_err(|e| diverged(e.to_string()))?;
     }
 
-    let steps = trace["steps"].as_array().cloned().unwrap_or_default();
+    // The copies of an input Exegra queued in a step: a delayed, retried or duplicated input,
+    // which the dispatcher submits when Exegra queues it, due when it is.
+    let copies = |before: &[Value], step: &Value| -> Vec<Value> {
+        let head = &step["event"];
+        step["config"]["pending"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|p| !before.iter().any(|b| b["seq"] == p["seq"]))
+            .filter(|p| p["event"] == head["id"] && p["source"] == head["source"])
+            .filter(|p| reaches_host(p))
+            .cloned()
+            .collect()
+    };
+    let mut before: Vec<Value> = inputs.iter().map(|i| (*i).clone()).collect();
     for step in &steps {
         let index = &step["index"];
         let time = time_of(&step["time"]);
         let id = step["event"]["id"].as_str().unwrap_or_default();
         let context = format!("step {index} (t={time}, {id})");
-        if step["kind"] != json!("deliver") {
+        let kind = step["kind"].as_str().unwrap_or_default();
+        let sys = &system;
+        let submit = |copies: Vec<Value>| async move {
+            for copy in copies {
+                let event = json!({ "event": copy["event"], "payload": payload_of(&copy) });
+                sys.submit_at(event, Time(time_of(&copy["time"])))
+                    .await
+                    .map_err(|e| e.to_string())?;
+            }
+            Ok::<(), String>(())
+        };
+        if kind == "drop" || kind == "delay" {
+            // Exegra's fault acted on an input on its way to the host: nothing reaches the host
+            // now, and a delayed input is submitted for its later time.
+            let source = step["event"]["source"]["kind"].as_str();
+            if !matches!(source, Some("scenario" | "fault")) {
+                return Err(diverged(format!(
+                    "{context}: Exegra's {kind} acts on an entry the machines queued, which one host delivers exactly once"
+                )));
+            }
+            if kind == "delay" {
+                let delayed = copies(&before, step);
+                if delayed.is_empty() && step["error"].is_null() {
+                    return Err(diverged(format!(
+                        "{context}: Exegra delayed the input, but its trace has no delayed copy"
+                    )));
+                }
+                submit(delayed)
+                    .await
+                    .map_err(|e| diverged(format!("{context}: {e}")))?;
+            }
+            before = step["config"]["pending"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default();
+            continue;
+        }
+        if kind != "deliver" {
             return Err(diverged(format!(
-                "{context}: Exegra's step is a {}, which the host does not make",
-                step["kind"]
+                "{context}: Exegra's step is a {kind}, which the host does not make"
             )));
         }
         let due = system
@@ -577,6 +698,15 @@ async fn run(spec: &Spec, plan: &Plan<'_>, trace: &Value) -> Result<usize, (bool
             .await
             .map_err(diverged)?;
         check(&context, expected, actual).map_err(diverged)?;
+        // A duplicated input: the sender's outbox offers it again, after this delivery.
+        let duplicated = step["faults"]
+            .as_array()
+            .is_some_and(|f| f.iter().any(|f| f["effect"] == json!("duplicated")));
+        if duplicated {
+            submit(copies(&before, step))
+                .await
+                .map_err(|e| diverged(format!("{context}: {e}")))?;
+        }
         let expected: Vec<(i64, String, Value)> = step["config"]["pending"]
             .as_array()
             .into_iter()
@@ -615,6 +745,10 @@ async fn run(spec: &Spec, plan: &Plan<'_>, trace: &Value) -> Result<usize, (bool
                 queued.iter().map(describe).collect::<Vec<_>>().join(", ")
             )));
         }
+        before = step["config"]["pending"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
     }
     if trace["outcome"] == json!("quiescent") {
         if let Some(due) = system

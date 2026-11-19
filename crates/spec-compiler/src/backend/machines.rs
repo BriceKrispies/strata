@@ -1999,6 +1999,12 @@ impl<'a> Gen<'a> {
         };
         let read_state = &storage.read_state;
         let creates = storage.creates;
+        // `instances.max` of a keyed machine that creates its records: the runtime refuses an
+        // event that would create one instance more (`Machine::MAX_INSTANCES`), as Exegra does.
+        let max_instances = match b.instances.as_ref().and_then(|i| i.max) {
+            Some(max) if creates => quote! { const MAX_INSTANCES: Option<u64> = Some(#max); },
+            _ => quote! {},
+        };
         let previous_required = if storage.uses_previous && !creates {
             let message = format!(
                 "machine `{}` does not create records of `{}`, and the key has none",
@@ -2195,6 +2201,7 @@ impl<'a> Gen<'a> {
                 const RECORD: &'static str = #record_id;
                 const ISOLATION: Isolation = #isolation;
                 const CREATES: bool = #creates;
+                #max_instances
 
                 type State = State;
                 type Vars = Vars;

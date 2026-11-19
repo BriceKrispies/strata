@@ -46,6 +46,9 @@ enum Out {
 /// The longest key a record may have: the machines' stand-in for a generated record constraint.
 const MAX_KEY: usize = 8;
 
+/// The counter's `instances.max`.
+const MAX_COUNTERS: u64 = 3;
+
 fn validate(record: &Rec) -> Result<(), String> {
     if record.key.chars().count() > MAX_KEY {
         return Err(format!("key is longer than {MAX_KEY} characters"));
@@ -95,6 +98,7 @@ impl Machine for Counter {
     const RECORD: &'static str = "counters";
     const ISOLATION: Isolation = Isolation::Serializable;
     const CREATES: bool = true;
+    const MAX_INSTANCES: Option<u64> = Some(MAX_COUNTERS);
     type State = Phase;
     type Vars = Vars;
     type Event = In;
@@ -255,6 +259,86 @@ fn system_on<S: MachineStore>(
     System::new(store, router, outside.clone(), Arc::new(clock.clone()))
         .unwrap()
         .with_telemetry(telemetry)
+}
+
+/// A system host on `store` dispatching to `dispatcher`.
+fn system_to<S: MachineStore, D: Dispatcher<Value>>(
+    store: Arc<S>,
+    clock: &TestClock,
+    dispatcher: Arc<D>,
+) -> System<S, D> {
+    let router = Router::new(
+        vec![Member::of::<Counter>(), Member::of::<Watcher>()],
+        ROUTES,
+    );
+    System::new(store, router, dispatcher, Arc::new(clock.clone())).unwrap()
+}
+
+/// What reached the receivers outside the machines: receiver, outbox id and event.
+#[derive(Default)]
+struct Received {
+    seen: Mutex<Vec<(String, Option<u64>, Value)>>,
+}
+
+impl Received {
+    fn all(&self) -> Vec<(String, Option<u64>, Value)> {
+        self.seen.lock().unwrap().clone()
+    }
+}
+
+impl Dispatcher<Value> for Received {
+    async fn dispatch(&self, envelope: &Envelope<Value>) -> Result<(), DispatchError> {
+        self.seen.lock().unwrap().push((
+            envelope.receiver.as_str().to_string(),
+            envelope.id,
+            envelope.event.clone(),
+        ));
+        Ok(())
+    }
+}
+
+/// A process that stops during a dispatch: `Hands` hands the envelope over (the receiver has it)
+/// and the process stops before the host records the dispatch; `Nothing` stops before anything
+/// leaves. Either way the dispatch never returns; the test drops the host's future, as a stop does.
+enum Stop {
+    Hands(Received),
+    Nothing,
+}
+
+impl Dispatcher<Value> for Stop {
+    async fn dispatch(&self, envelope: &Envelope<Value>) -> Result<(), DispatchError> {
+        if let Stop::Hands(received) = self {
+            received.dispatch(envelope).await?;
+        }
+        std::future::pending::<()>().await;
+        Ok(())
+    }
+}
+
+/// Fails the first `failures` dispatches, then delivers.
+struct FailFirst {
+    failures: Mutex<u32>,
+    received: Received,
+}
+
+impl Dispatcher<Value> for FailFirst {
+    async fn dispatch(&self, envelope: &Envelope<Value>) -> Result<(), DispatchError> {
+        {
+            let mut left = self.failures.lock().unwrap();
+            if *left > 0 {
+                *left -= 1;
+                return Err(DispatchError("the receiver is unreachable".to_string()));
+            }
+        }
+        self.received.dispatch(envelope).await
+    }
+}
+
+/// Drain the outbox of a host that stops during a dispatch: the drain does not finish, and its
+/// future is dropped.
+async fn drain_and_stop<S: MachineStore>(host: &System<S, Stop>) {
+    let stopped = tokio::time::timeout(Duration::from_millis(500), host.drain_outbox()).await;
+    assert!(stopped.is_err(), "the stopping dispatch must not return");
 }
 
 fn system<S: MachineStore>(store: Arc<S>, clock: &TestClock) -> System<S, Outside> {
@@ -530,4 +614,144 @@ pub async fn refuses_a_record_that_breaks_a_constraint<S: MachineStore>(open: im
         .unwrap();
     assert!(host.step().await.unwrap().unwrap().failed.is_none());
     assert_eq!(host.keys("counter").await.unwrap().len(), 1);
+}
+
+/// An at-least-once message whose sender stops after handing it over and before removing it from
+/// the outbox is dispatched again, with the same id, by the host that comes back: the duplicate
+/// delivery Exegra's `duplicate-event` models.
+pub async fn redelivers_at_least_once_after_a_stop_between_dispatch_and_removal<S: MachineStore>(
+    open: impl Fn() -> Arc<S>,
+) {
+    let clock = TestClock::at(Time(0));
+    let stop = Arc::new(Stop::Hands(Received::default()));
+    let first = system_to(open(), &clock, stop.clone());
+    first
+        .submit(json!({"event": "bump", "payload": {"key": "a"}}))
+        .await
+        .unwrap();
+    first.step().await.unwrap().unwrap();
+    // The bump's at-least-once message to the receiver outside is due 10 ms later.
+    clock.set(Time(10));
+    drain_and_stop(&first).await;
+    let Stop::Hands(handed) = &*stop else {
+        unreachable!()
+    };
+    let handed = handed.all();
+    assert_eq!(handed.len(), 1, "{handed:?}");
+    let (receiver, id, event) = handed[0].clone();
+    assert_eq!(receiver, "outside");
+    assert!(
+        id.is_some(),
+        "an at-least-once envelope carries its outbox id"
+    );
+
+    // The host comes back on the same store and drains again.
+    let received = Arc::new(Received::default());
+    let again = system_to(open(), &clock, received.clone());
+    let report = again.drain_outbox().await.unwrap();
+    assert_eq!(report.delivered, 1, "{report:?}");
+    assert_eq!(
+        received.all(),
+        [(receiver, id, event)],
+        "the same message, the same id"
+    );
+    // Delivered and removed: nothing is left to dispatch.
+    assert_eq!(again.drain_outbox().await.unwrap().delivered, 0);
+}
+
+/// An at-most-once message is lost when its sender stops after claiming it and before it is
+/// dispatched: the host that comes back dispatches nothing. That is Exegra's `lose-event`.
+pub async fn loses_at_most_once_on_a_stop_between_commit_and_dispatch<S: MachineStore>(
+    open: impl Fn() -> Arc<S>,
+) {
+    let clock = TestClock::at(Time(0));
+    let store = open();
+    let first = system_to(store.clone(), &clock, Arc::new(Stop::Nothing));
+    first
+        .submit(json!({"event": "ping", "payload": {"key": "a"}}))
+        .await
+        .unwrap();
+    first.step().await.unwrap().unwrap();
+    // Committed: the ping's at-most-once message to the pager is in the outbox, due at 10 ms.
+    assert_eq!(store.pending().unwrap(), 1);
+    clock.set(Time(10));
+    drain_and_stop(&first).await;
+
+    let received = Arc::new(Received::default());
+    let again = system_to(open(), &clock, received.clone());
+    let report = again.drain_outbox().await.unwrap();
+    assert_eq!(report.delivered, 0, "{report:?}");
+    assert!(received.all().is_empty(), "the message is lost");
+    assert_eq!(store.pending().unwrap(), 0, "and gone from the outbox");
+}
+
+/// A failed at-least-once dispatch is retried after the backoff (1 s, then 2 s more), not before:
+/// the delays Exegra's `retry-event` gives.
+pub async fn retries_at_least_once_with_backoff<S: MachineStore>(open: impl Fn() -> Arc<S>) {
+    let clock = TestClock::at(Time(0));
+    let dispatcher = Arc::new(FailFirst {
+        failures: Mutex::new(2),
+        received: Received::default(),
+    });
+    let host = system_to(open(), &clock, dispatcher.clone());
+    host.submit(json!({"event": "bump", "payload": {"key": "a"}}))
+        .await
+        .unwrap();
+    host.step().await.unwrap().unwrap();
+    clock.set(Time(10));
+    assert_eq!(host.drain_outbox().await.unwrap().deferred, 1);
+    clock.set(Time(10 + 999));
+    assert_eq!(
+        host.drain_outbox().await.unwrap(),
+        Default::default(),
+        "not yet due"
+    );
+    clock.set(Time(10 + 1_000));
+    assert_eq!(host.drain_outbox().await.unwrap().deferred, 1);
+    clock.set(Time(10 + 1_000 + 1_999));
+    assert_eq!(
+        host.drain_outbox().await.unwrap(),
+        Default::default(),
+        "not yet due"
+    );
+    clock.set(Time(10 + 3_000));
+    assert_eq!(host.drain_outbox().await.unwrap().delivered, 1);
+    assert_eq!(dispatcher.received.all().len(), 1);
+}
+
+/// A creating machine has at most `instances.max` instances: an entry that would create one more
+/// fails its step (a dead letter, nothing committed), and its existing instances still step.
+pub async fn refuses_an_instance_beyond_max<S: MachineStore>(open: impl Fn() -> Arc<S>) {
+    let clock = TestClock::at(Time(0));
+    let host = system(open(), &clock);
+    for k in ["a", "b", "c", "d"] {
+        host.submit(json!({"event": "bump", "payload": {"key": k}}))
+            .await
+            .unwrap();
+    }
+    let mut failed = Vec::new();
+    for _ in 0..4 {
+        let step = host.step().await.unwrap().unwrap();
+        failed.push(step.failed);
+    }
+    assert!(failed[..3].iter().all(Option::is_none), "{failed:?}");
+    assert!(
+        failed[3].as_deref().unwrap().contains("instances.max"),
+        "{failed:?}"
+    );
+    assert_eq!(
+        host.keys("counter").await.unwrap().len(),
+        MAX_COUNTERS as usize
+    );
+    assert_eq!(host.dead_letters().await.unwrap().len(), 1);
+    // An existing instance is not refused.
+    host.submit(json!({"event": "bump", "payload": {"key": "a"}}))
+        .await
+        .unwrap();
+    while let Some(step) = host.step().await.unwrap() {
+        if step.entry.source == "input" {
+            assert!(step.failed.is_none(), "{step:?}");
+        }
+    }
+    assert_eq!(view(&host, "counter", "a").await["vars"]["n"], json!(2));
 }

@@ -98,3 +98,43 @@ async fn memory_refuses_a_record_that_breaks_a_constraint() {
 async fn sqlite_refuses_a_record_that_breaks_a_constraint() {
     refuses_a_record_that_breaks_a_constraint(sqlite("constraint")).await;
 }
+
+#[tokio::test]
+async fn memory_redelivers_at_least_once_after_a_stop_between_dispatch_and_removal() {
+    redelivers_at_least_once_after_a_stop_between_dispatch_and_removal(memory()).await;
+}
+
+#[tokio::test]
+async fn sqlite_redelivers_at_least_once_after_a_stop_between_dispatch_and_removal() {
+    redelivers_at_least_once_after_a_stop_between_dispatch_and_removal(sqlite("redeliver")).await;
+}
+
+#[tokio::test]
+async fn memory_loses_at_most_once_on_a_stop_between_commit_and_dispatch() {
+    loses_at_most_once_on_a_stop_between_commit_and_dispatch(memory()).await;
+}
+
+#[tokio::test]
+async fn sqlite_loses_at_most_once_on_a_stop_between_commit_and_dispatch() {
+    loses_at_most_once_on_a_stop_between_commit_and_dispatch(sqlite("lose")).await;
+}
+
+#[tokio::test]
+async fn memory_retries_at_least_once_with_backoff() {
+    retries_at_least_once_with_backoff(memory()).await;
+}
+
+#[tokio::test]
+async fn sqlite_retries_at_least_once_with_backoff() {
+    retries_at_least_once_with_backoff(sqlite("retry")).await;
+}
+
+#[tokio::test]
+async fn memory_refuses_an_instance_beyond_max() {
+    refuses_an_instance_beyond_max(memory()).await;
+}
+
+#[tokio::test]
+async fn sqlite_refuses_an_instance_beyond_max() {
+    refuses_an_instance_beyond_max(sqlite("max")).await;
+}

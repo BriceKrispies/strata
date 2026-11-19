@@ -419,3 +419,46 @@ async fn api_memory_delayed_two_hosts_dispatch_once() {
 async fn api_sqlite_delayed_two_hosts_dispatch_once() {
     delayed::two_hosts_dispatch_once(api_sqlite("two-hosts-delayed")).await;
 }
+
+#[tokio::test]
+async fn api_memory_redelivers_at_least_once_after_a_stop_between_dispatch_and_removal() {
+    system::redelivers_at_least_once_after_a_stop_between_dispatch_and_removal(api_memory()).await;
+}
+
+#[tokio::test]
+async fn api_sqlite_redelivers_at_least_once_after_a_stop_between_dispatch_and_removal() {
+    system::redelivers_at_least_once_after_a_stop_between_dispatch_and_removal(api_sqlite(
+        "redeliver",
+    ))
+    .await;
+}
+
+#[tokio::test]
+async fn api_memory_loses_at_most_once_on_a_stop_between_commit_and_dispatch() {
+    system::loses_at_most_once_on_a_stop_between_commit_and_dispatch(api_memory()).await;
+}
+
+#[tokio::test]
+async fn api_sqlite_loses_at_most_once_on_a_stop_between_commit_and_dispatch() {
+    system::loses_at_most_once_on_a_stop_between_commit_and_dispatch(api_sqlite("lose")).await;
+}
+
+#[tokio::test]
+async fn api_memory_retries_at_least_once_with_backoff() {
+    system::retries_at_least_once_with_backoff(api_memory()).await;
+}
+
+#[tokio::test]
+async fn api_sqlite_retries_at_least_once_with_backoff() {
+    system::retries_at_least_once_with_backoff(api_sqlite("retry")).await;
+}
+
+#[tokio::test]
+async fn api_memory_refuses_an_instance_beyond_max() {
+    system::refuses_an_instance_beyond_max(api_memory()).await;
+}
+
+#[tokio::test]
+async fn api_sqlite_refuses_an_instance_beyond_max() {
+    system::refuses_an_instance_beyond_max(api_sqlite("max")).await;
+}

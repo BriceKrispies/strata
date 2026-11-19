@@ -13326,7 +13326,12 @@
     {"id":"rt-committed","name":"Commit confirmed","description":"The store confirmed the commit.","delivery":"at-least-once"},
     {"id":"arc-ob-delivered","name":"Notice delivered","description":"The notice queue delivers an event notice to a subscriber.","payload":[{"name":"seq","type":"u64"}],"delivery":"at-least-once"},
     {"id":"arc-ob-acknowledged","name":"Notice acknowledged","description":"The subscriber acknowledges the notice.","delivery":"at-most-once"},
-    {"id":"arc-ob-publish-now","name":"Publish now","description":"The runtime that committed publishes the events it committed."},
+    {
+      "id": "arc-ob-publish-now",
+      "name": "Publish now",
+      "description": "The runtime that committed publishes the events it committed.",
+      "delivery": "at-most-once"
+    },
     {"id":"arc-ob-sweep-due","name":"Outbox job due","description":"The outbox job of a tenant comes due.","elapsed":true},
     {"id":"arc-ob-published","name":"Events published","description":"The unpublished events of the tenant were handed to subscribers.","delivery":"at-least-once"},
     {"id":"arc-rl-deploy-started","name":"Rolling deployment started","description":"A newer version starts beside the older one."},
@@ -17623,11 +17628,114 @@
           "gs-recheck-revoked-i": "gs-recheck-revoked"
         },
         "timeScale": 1000
-      },"storage":{"record":"rec-session-copy","key":"session-id","fields":{"checkedAt":"checked-at"},"state":"session-state"}},
+      },
+      "storage": {
+        "record": "rec-session-copy",
+        "key": "session-id",
+        "fields": {
+          "checkedAt": "checked-at"
+        },
+        "state": "session-state",
+        "createdBy": "look-up-session"
+      }
+    },
     {"id":"job-lease-flow","name":"Job lease","subject":"automation-worker","initial":"jl-waiting","description":"One job. Every grant raises the token, and a result is recorded only with the current token.","variables":[{"name":"token","type":"number","initial":0},{"name":"completions","type":"number","initial":0},{"name":"acceptedToken","type":"number","initial":0}],"states":[{"id":"jl-waiting","name":"Waiting"},{"id":"jl-leased","name":"Leased"},{"id":"jl-done","name":"Completed"}],"transitions":[{"id":"jl-grant","from":"jl-waiting","to":"jl-leased","on":"job-due","effects":[{"set":"token","to":"token + 1"},{"emit":"lease-granted"}]},{"id":"jl-regrant","from":"jl-leased","to":"jl-leased","on":"lease-expired","effects":[{"set":"token","to":"token + 1"},{"emit":"lease-granted"}]},{"id":"jl-complete-any-token","from":"jl-leased","to":"jl-done","on":"work-reported","faultOnly":true,"description":"Defect: records a result without checking its token.","effects":[{"set":"completions","to":"completions + 1"},{"set":"acceptedToken","to":"event.token"},{"emit":"job-completed"}]},{"id":"jl-complete","from":"jl-leased","to":"jl-done","on":"work-reported","guard":"event.token == token","effects":[{"set":"completions","to":"completions + 1"},{"set":"acceptedToken","to":"event.token"},{"emit":"job-completed"}]},{"id":"jl-refuse-stale","from":"jl-leased","to":"jl-leased","on":"work-reported","effects":[{"emit":"result-refused"}]},{"id":"jl-refuse-after-done","from":"jl-done","to":"jl-done","on":"work-reported","effects":[{"emit":"result-refused"}]}]},
     {"id":"job-lease-flow-impl","name":"Job lease (implementation)","subject":"automation-worker","level":"implementation","initial":"jl-waiting-i","description":"One job as the automation worker keeps it (rec-job, keyed by job-id): lease-token is raised at every grant and a reported result is recorded only when it carries the current token. A lease runs for 60 seconds (60000 ms, default) and a timer then raises lease-expired. A result with another token, or one that arrives after the job is done, is refused.","transaction":{"scope":"transition","isolation":"serializable"},"variables":[{"name":"token","type":"number","initial":0,"repr":"u64"},{"name":"completions","type":"number","initial":0,"repr":"u32"},{"name":"acceptedToken","type":"number","initial":0,"repr":"u64"}],"states":[{"id":"jl-waiting-i","name":"Waiting for a worker","ignores":["lease-expired","work-reported"]},{"id":"jl-leased-i","name":"Leased","ignores":["job-due"]},{"id":"jl-done-i","name":"Done","ignores":["job-due","lease-expired"]}],"transitions":[{"id":"jl-grant-i","from":"jl-waiting-i","to":"jl-leased-i","on":"job-due","otherwise":true,"effects":[{"set":"token","to":"token + 1"},{"emit":"lease-granted","to":"automation-worker"},{"timer":"lease","after":60000,"emit":"lease-expired"}]},{"id":"jl-regrant-i","from":"jl-leased-i","to":"jl-leased-i","on":"lease-expired","otherwise":true,"effects":[{"set":"token","to":"token + 1"},{"emit":"lease-granted","to":"automation-worker"},{"timer":"lease","after":60000,"emit":"lease-expired"}]},{"id":"jl-complete-i","from":"jl-leased-i","to":"jl-done-i","on":"work-reported","guard":"event.token == token","effects":[{"set":"completions","to":"completions + 1"},{"set":"acceptedToken","to":"event.token"},{"emit":"job-completed","to":"automation-worker"},{"cancel":"lease"}]},{"id":"jl-refuse-stale-i","from":"jl-leased-i","to":"jl-leased-i","on":"work-reported","otherwise":true,"effects":[{"emit":"result-refused","to":"automation-worker"}]},{"id":"jl-refuse-after-done-i","from":"jl-done-i","to":"jl-done-i","on":"work-reported","otherwise":true,"effects":[{"emit":"result-refused","to":"automation-worker"}]}],"refines":"job-lease-flow","refinement":{"states":{"jl-waiting-i":"jl-waiting","jl-leased-i":"jl-leased","jl-done-i":"jl-done"},"variables":{"token":"token","completions":"completions","acceptedToken":"acceptedToken"},"transitions":{"jl-grant-i":"jl-grant","jl-regrant-i":"jl-regrant","jl-complete-i":"jl-complete","jl-refuse-stale-i":"jl-refuse-stale","jl-refuse-after-done-i":"jl-refuse-after-done"}},"storage":{"record":"rec-job","key":"job-id","fields":{"token":"lease-token","acceptedToken":"accepted-token"},"stateValues":{"jl-waiting-i":"waiting","jl-leased-i":"leased","jl-done-i":"completed"}}},
     {"id":"origin-content-flow","name":"Origin content","subject":"runtime","initial":"oc-live","description":"The published version of one page at the origin.","variables":[{"name":"version","type":"number","initial":1},{"name":"changedAt","type":"number","initial":0}],"states":[{"id":"oc-live","name":"Live"}],"transitions":[{"id":"oc-publish","from":"oc-live","to":"oc-live","on":"ec-published","effects":[{"set":"version","to":"version + 1"},{"set":"changedAt","to":"time"},{"emit":"ec-purge"}]},{"id":"oc-answer","from":"oc-live","to":"oc-live","on":"ec-origin-fetch","effects":[{"emit":"ec-origin-answer","payload":{"version":"version"}}]}]},
-    {"id":"origin-content-flow-impl","name":"Origin content (implementation)","subject":"runtime","level":"implementation","initial":"oc-live-i","description":"The published version of one page at the origin, read from its content record (rec-content, keyed by object and record-id). A publication raises the version, notes the time in milliseconds and asks the content delivery network, through its control interface, to purge; a fetch is answered with the current version. The refinement reads one model tick as one second (timeScale 1000, as for the edge copy whose model compares with it), and the mapping gives the model the time of the change in seconds.","transaction":{"scope":"transition","isolation":"serializable"},"variables":[{"name":"version","type":"number","initial":1,"repr":"u64"},{"name":"changedAt","type":"number","initial":0,"repr":"timestamp"}],"states":[{"id":"oc-live-i","name":"Live"}],"transitions":[{"id":"oc-publish-i","from":"oc-live-i","to":"oc-live-i","on":"ec-published","otherwise":true,"effects":[{"set":"version","to":"version + 1"},{"set":"changedAt","to":"time"},{"emit":"ec-purge","to":"delivery-network-control"}]},{"id":"oc-answer-i","from":"oc-live-i","to":"oc-live-i","on":"ec-origin-fetch","otherwise":true,"effects":[{"emit":"ec-origin-answer","to":"delivery-network","payload":{"version":"version"}}]}],"refines":"origin-content-flow","refinement":{"states":{"oc-live-i":"oc-live"},"variables":{"version":"version","changedAt":"changedAt / 1000"},"transitions":{"oc-publish-i":"oc-publish","oc-answer-i":"oc-answer"},"timeScale":1000},"storage":{"record":"rec-content","key":"record-id","fields":{"changedAt":"changed-at"}}},
+    {
+      "id": "origin-content-flow-impl",
+      "name": "Origin content (implementation)",
+      "subject": "runtime",
+      "level": "implementation",
+      "initial": "oc-live-i",
+      "description": "The published version of one page at the origin, read from its content record (rec-content, keyed by object and record-id). A publication raises the version, notes the time in milliseconds and asks the content delivery network, through its control interface, to purge; a fetch is answered with the current version. The refinement reads one model tick as one second (timeScale 1000, as for the edge copy whose model compares with it), and the mapping gives the model the time of the change in seconds.",
+      "transaction": {
+        "scope": "transition",
+        "isolation": "serializable"
+      },
+      "variables": [
+        {
+          "name": "version",
+          "type": "number",
+          "initial": 1,
+          "repr": "u64"
+        },
+        {
+          "name": "changedAt",
+          "type": "number",
+          "initial": 0,
+          "repr": "timestamp"
+        }
+      ],
+      "states": [
+        {
+          "id": "oc-live-i",
+          "name": "Live"
+        }
+      ],
+      "transitions": [
+        {
+          "id": "oc-publish-i",
+          "from": "oc-live-i",
+          "to": "oc-live-i",
+          "on": "ec-published",
+          "otherwise": true,
+          "effects": [
+            {
+              "set": "version",
+              "to": "version + 1"
+            },
+            {
+              "set": "changedAt",
+              "to": "time"
+            },
+            {
+              "emit": "ec-purge",
+              "to": "delivery-network-control"
+            }
+          ]
+        },
+        {
+          "id": "oc-answer-i",
+          "from": "oc-live-i",
+          "to": "oc-live-i",
+          "on": "ec-origin-fetch",
+          "otherwise": true,
+          "effects": [
+            {
+              "emit": "ec-origin-answer",
+              "to": "delivery-network",
+              "payload": {
+                "version": "version"
+              }
+            }
+          ]
+        }
+      ],
+      "refines": "origin-content-flow",
+      "refinement": {
+        "states": {
+          "oc-live-i": "oc-live"
+        },
+        "variables": {
+          "version": "version",
+          "changedAt": "changedAt / 1000"
+        },
+        "transitions": {
+          "oc-publish-i": "oc-publish",
+          "oc-answer-i": "oc-answer"
+        },
+        "timeScale": 1000
+      },
+      "storage": {
+        "record": "rec-content",
+        "key": "record-id",
+        "fields": {
+          "changedAt": "changed-at"
+        },
+        "createdBy": "commit-transition"
+      }
+    },
     {"id":"edge-copy-flow","name":"Edge copy","subject":"delivery-network","initial":"eg-ready","description":"The edge copy of the page. It is dropped by a purge and revalidated after a lifetime of 5 ticks.","variables":[
         {
           "name": "held",
@@ -17839,19 +17947,559 @@
     {"id":"proposal-flow","name":"Change proposal","subject":"agent-gateway","initial":"cp-idle","description":"A change is projected, then applied directly when policy classes it as safe, or after approval when it is risky.","variables":[{"name":"risky","type":"boolean","initial":false},{"name":"projected","type":"boolean","initial":false},{"name":"cleared","type":"boolean","initial":false},{"name":"applied","type":"boolean","initial":false}],"states":[{"id":"cp-idle","name":"No proposal"},{"id":"cp-projecting","name":"Projecting"},{"id":"cp-awaiting","name":"Awaiting approval"},{"id":"cp-ready","name":"Cleared"},{"id":"cp-closed","name":"Rejected"},{"id":"cp-done","name":"Applied","terminal":true}],"transitions":[{"id":"cp-open","from":"cp-idle","to":"cp-projecting","on":"cp-proposed","effects":[{"set":"risky","to":"event.risky"},{"emit":"cp-projected"}]},{"id":"cp-clear-safe","from":"cp-projecting","to":"cp-ready","on":"cp-projected","guard":"!risky","effects":[{"set":"projected","to":true},{"set":"cleared","to":true}]},{"id":"cp-hold-risky","from":"cp-projecting","to":"cp-awaiting","on":"cp-projected","guard":"risky","effects":[{"set":"projected","to":true}]},{"id":"cp-approve","from":"cp-awaiting","to":"cp-ready","on":"cp-approved","effects":[{"set":"cleared","to":true}]},{"id":"cp-reject","from":"cp-awaiting","to":"cp-closed","on":"cp-rejected"},{"id":"cp-apply-unapproved","from":"cp-awaiting","to":"cp-done","on":"cp-apply-requested","faultOnly":true,"description":"Defect: applies a risky change that nobody approved.","effects":[{"set":"applied","to":true},{"emit":"cp-applied"}]},{"id":"cp-refuse-awaiting","from":"cp-awaiting","to":"cp-awaiting","on":"cp-apply-requested","effects":[{"emit":"cp-refused"}]},{"id":"cp-apply-rejected","from":"cp-closed","to":"cp-done","on":"cp-apply-requested","faultOnly":true,"description":"Defect: applies a change that was rejected.","effects":[{"set":"applied","to":true},{"emit":"cp-applied"}]},{"id":"cp-refuse-closed","from":"cp-closed","to":"cp-closed","on":"cp-apply-requested","effects":[{"emit":"cp-refused"}]},{"id":"cp-apply","from":"cp-ready","to":"cp-done","on":"cp-apply-requested","effects":[{"set":"applied","to":true},{"emit":"cp-applied"}]}]},
     {"id":"proposal-flow-impl","name":"Change proposal (implementation)","subject":"agent-gateway","level":"implementation","initial":"cp-idle-i","description":"One change proposal as the agent gateway keeps it (rec-proposal, keyed by proposal-id; its state follows this machine). The change is projected first; a safe change is cleared at once, a risky one waits for an approver. An apply request is honoured only for a cleared proposal and is refused while it waits for approval or after a rejection.","transaction":{"scope":"transition","isolation":"serializable"},"variables":[{"name":"risky","type":"boolean","initial":false,"repr":"bool"},{"name":"projected","type":"boolean","initial":false,"repr":"bool"},{"name":"cleared","type":"boolean","initial":false,"repr":"bool"},{"name":"applied","type":"boolean","initial":false,"repr":"bool"}],"states":[{"id":"cp-idle-i","name":"No proposal","ignores":["cp-projected","cp-approved","cp-rejected","cp-apply-requested"]},{"id":"cp-projecting-i","name":"Projecting","ignores":["cp-proposed","cp-approved","cp-rejected","cp-apply-requested"]},{"id":"cp-awaiting-i","name":"Awaiting approval","ignores":["cp-proposed","cp-projected"]},{"id":"cp-ready-i","name":"Cleared to apply","ignores":["cp-proposed","cp-projected","cp-approved","cp-rejected"]},{"id":"cp-closed-i","name":"Rejected","ignores":["cp-proposed","cp-projected","cp-approved","cp-rejected"]},{"id":"cp-done-i","name":"Applied","terminal":true}],"transitions":[{"id":"cp-open-i","from":"cp-idle-i","to":"cp-projecting-i","on":"cp-proposed","otherwise":true,"effects":[{"set":"risky","to":"event.risky"},{"emit":"cp-projected","to":"agent-gateway"}]},{"id":"cp-clear-safe-i","from":"cp-projecting-i","to":"cp-ready-i","on":"cp-projected","guard":"!risky","effects":[{"set":"projected","to":true},{"set":"cleared","to":true}]},{"id":"cp-hold-risky-i","from":"cp-projecting-i","to":"cp-awaiting-i","on":"cp-projected","guard":"risky","effects":[{"set":"projected","to":true}]},{"id":"cp-approve-i","from":"cp-awaiting-i","to":"cp-ready-i","on":"cp-approved","otherwise":true,"effects":[{"set":"cleared","to":true}]},{"id":"cp-reject-i","from":"cp-awaiting-i","to":"cp-closed-i","on":"cp-rejected","otherwise":true},{"id":"cp-refuse-awaiting-i","from":"cp-awaiting-i","to":"cp-awaiting-i","on":"cp-apply-requested","otherwise":true,"effects":[{"emit":"cp-refused","to":"agent"}]},{"id":"cp-refuse-closed-i","from":"cp-closed-i","to":"cp-closed-i","on":"cp-apply-requested","otherwise":true,"effects":[{"emit":"cp-refused","to":"agent"}]},{"id":"cp-apply-i","from":"cp-ready-i","to":"cp-done-i","on":"cp-apply-requested","otherwise":true,"effects":[{"set":"applied","to":true},{"emit":"cp-applied","to":"runtime"}]}],"refines":"proposal-flow","refinement":{"states":{"cp-idle-i":"cp-idle","cp-projecting-i":"cp-projecting","cp-awaiting-i":"cp-awaiting","cp-ready-i":"cp-ready","cp-closed-i":"cp-closed","cp-done-i":"cp-done"},"variables":{"risky":"risky","projected":"projected","cleared":"cleared","applied":"applied"},"transitions":{"cp-open-i":"cp-open","cp-clear-safe-i":"cp-clear-safe","cp-hold-risky-i":"cp-hold-risky","cp-approve-i":"cp-approve","cp-reject-i":"cp-reject","cp-refuse-awaiting-i":"cp-refuse-awaiting","cp-refuse-closed-i":"cp-refuse-closed","cp-apply-i":"cp-apply"}},"storage":{"record":"rec-proposal","key":"proposal-id","state":"flow-state"}},
     {"id":"arc-outbox-consumer-flow","name":"Notice subscriber","subject":"connector-runner","initial":"arc-oc-ready","description":"One subscriber receiving notices of one tenant. A notice whose sequence number is already applied is acknowledged and makes no further effect.","variables":[{"name":"applied","type":"number","initial":0},{"name":"effects","type":"number","initial":0}],"states":[{"id":"arc-oc-ready","name":"Ready"}],"transitions":[{"id":"arc-ob-apply","from":"arc-oc-ready","to":"arc-oc-ready","on":"arc-ob-delivered","guard":"event.seq > applied","effects":[{"set":"applied","to":"event.seq"},{"set":"effects","to":"effects + 1"},{"emit":"arc-ob-acknowledged"}]},{"id":"arc-ob-apply-again","from":"arc-oc-ready","to":"arc-oc-ready","on":"arc-ob-delivered","guard":"event.seq <= applied","faultOnly":true,"description":"Defect: makes the effect of a notice it has already applied.","effects":[{"set":"effects","to":"effects + 1"},{"emit":"arc-ob-acknowledged"}]},{"id":"arc-ob-skip-seen","from":"arc-oc-ready","to":"arc-oc-ready","on":"arc-ob-delivered","guard":"event.seq <= applied","effects":[{"emit":"arc-ob-acknowledged"}]}]},
-    {"id":"arc-outbox-consumer-flow-impl","name":"Notice subscriber (implementation)","subject":"connector-runner","level":"implementation","initial":"arc-oc-ready-i","description":"One subscriber receiving the notices of one tenant, held by the connector runner. A notice is applied only when its sequence number is above the last one applied; any other is acknowledged without an effect. The outbox delivers at least once, so a repeated notice is expected.","transaction":{"scope":"transition","isolation":"serializable"},"variables":[{"name":"applied","type":"number","initial":0,"repr":"u64"},{"name":"effects","type":"number","initial":0,"repr":"u32"}],"states":[{"id":"arc-oc-ready-i","name":"Ready"}],"transitions":[{"id":"arc-ob-apply-i","from":"arc-oc-ready-i","to":"arc-oc-ready-i","on":"arc-ob-delivered","guard":"event.seq > applied","effects":[{"set":"applied","to":"event.seq"},{"set":"effects","to":"effects + 1"},{"emit":"arc-ob-acknowledged","to":"runtime"}]},{"id":"arc-ob-skip-seen-i","from":"arc-oc-ready-i","to":"arc-oc-ready-i","on":"arc-ob-delivered","guard":"event.seq <= applied","effects":[{"emit":"arc-ob-acknowledged","to":"runtime"}]}],"refines":"arc-outbox-consumer-flow","refinement":{"states":{"arc-oc-ready-i":"arc-oc-ready"},"variables":{"applied":"applied","effects":"effects"},"transitions":{"arc-ob-apply-i":"arc-ob-apply","arc-ob-skip-seen-i":"arc-ob-skip-seen"}},"storage":{"record":"rec-notice-subscriber","key":"subscriber-id"}},
+    {
+      "id": "arc-outbox-consumer-flow-impl",
+      "name": "Notice subscriber (implementation)",
+      "subject": "connector-runner",
+      "level": "implementation",
+      "initial": "arc-oc-ready-i",
+      "description": "One subscriber receiving the notices of one tenant, held by the connector runner. A notice is applied only when its sequence number is above the last one applied; any other is acknowledged without an effect. The outbox delivers at least once, so a repeated notice is expected.",
+      "transaction": {
+        "scope": "transition",
+        "isolation": "serializable"
+      },
+      "variables": [
+        {
+          "name": "applied",
+          "type": "number",
+          "initial": 0,
+          "repr": "u64"
+        },
+        {
+          "name": "effects",
+          "type": "number",
+          "initial": 0,
+          "repr": "u32"
+        }
+      ],
+      "states": [
+        {
+          "id": "arc-oc-ready-i",
+          "name": "Ready"
+        }
+      ],
+      "transitions": [
+        {
+          "id": "arc-ob-apply-i",
+          "from": "arc-oc-ready-i",
+          "to": "arc-oc-ready-i",
+          "on": "arc-ob-delivered",
+          "guard": "event.seq > applied",
+          "effects": [
+            {
+              "set": "applied",
+              "to": "event.seq"
+            },
+            {
+              "set": "effects",
+              "to": "effects + 1"
+            },
+            {
+              "emit": "arc-ob-acknowledged",
+              "to": "runtime"
+            }
+          ]
+        },
+        {
+          "id": "arc-ob-skip-seen-i",
+          "from": "arc-oc-ready-i",
+          "to": "arc-oc-ready-i",
+          "on": "arc-ob-delivered",
+          "guard": "event.seq <= applied",
+          "effects": [
+            {
+              "emit": "arc-ob-acknowledged",
+              "to": "runtime"
+            }
+          ]
+        }
+      ],
+      "refines": "arc-outbox-consumer-flow",
+      "refinement": {
+        "states": {
+          "arc-oc-ready-i": "arc-oc-ready"
+        },
+        "variables": {
+          "applied": "applied",
+          "effects": "effects"
+        },
+        "transitions": {
+          "arc-ob-apply-i": "arc-ob-apply",
+          "arc-ob-skip-seen-i": "arc-ob-skip-seen"
+        }
+      },
+      "storage": {
+        "record": "rec-notice-subscriber",
+        "key": "subscriber-id",
+        "creates": true
+      }
+    },
     {"id":"arc-outbox-delivery-flow","name":"Outbox delivery after a stop","subject":"runtime","initial":"arc-od-idle","description":"A commit leaves events unpublished. The runtime that committed publishes them, or else the outbox job does.","variables":[{"name":"pending","type":"boolean","initial":false}],"states":[{"id":"arc-od-idle","name":"Nothing pending"},{"id":"arc-od-pending","name":"Events pending"},{"id":"arc-od-done","name":"Published","terminal":true}],"transitions":[{"id":"arc-od-commit","from":"arc-od-idle","to":"arc-od-pending","on":"rt-committed","effects":[{"set":"pending","to":true}]},{"id":"arc-od-publish-now","from":"arc-od-pending","to":"arc-od-done","on":"arc-ob-publish-now","effects":[{"set":"pending","to":false},{"emit":"arc-ob-published"}]},{"id":"arc-od-sweep","from":"arc-od-pending","to":"arc-od-done","on":"arc-ob-sweep-due","effects":[{"set":"pending","to":false},{"emit":"arc-ob-published"}]}]},
-    {"id":"arc-outbox-delivery-flow-impl","name":"Outbox delivery after a stop (implementation)","subject":"runtime","level":"implementation","initial":"arc-od-idle-i","description":"A commit leaves its domain events (rec-event, keyed by seq) unpublished. The runtime that committed publishes them at once, or else the outbox job finds them on its next sweep, 10 seconds after the commit (10000 ms, default), and publishes them. Publication is at least once; the consumer discards what it has seen.","transaction":{"scope":"transition","isolation":"serializable"},"variables":[{"name":"pending","type":"boolean","initial":false,"repr":"bool"}],"states":[{"id":"arc-od-idle-i","name":"Nothing unpublished","ignores":["arc-ob-publish-now","arc-ob-sweep-due"]},{"id":"arc-od-pending-i","name":"Events unpublished","ignores":["rt-committed"]},{"id":"arc-od-done-i","name":"Published","terminal":true}],"transitions":[{"id":"arc-od-commit-i","from":"arc-od-idle-i","to":"arc-od-pending-i","on":"rt-committed","otherwise":true,"effects":[{"set":"pending","to":true},{"timer":"sweep","after":10000,"emit":"arc-ob-sweep-due"}]},{"id":"arc-od-publish-now-i","from":"arc-od-pending-i","to":"arc-od-done-i","on":"arc-ob-publish-now","otherwise":true,"effects":[{"set":"pending","to":false},{"emit":"arc-ob-published","to":"notice-queue"},{"cancel":"sweep"}]},{"id":"arc-od-sweep-i","from":"arc-od-pending-i","to":"arc-od-done-i","on":"arc-ob-sweep-due","otherwise":true,"effects":[{"set":"pending","to":false},{"emit":"arc-ob-published","to":"notice-queue"}]}],"refines":"arc-outbox-delivery-flow","refinement":{"states":{"arc-od-idle-i":"arc-od-idle","arc-od-pending-i":"arc-od-pending","arc-od-done-i":"arc-od-done"},"variables":{"pending":"pending"},"transitions":{"arc-od-commit-i":"arc-od-commit","arc-od-publish-now-i":"arc-od-publish-now","arc-od-sweep-i":"arc-od-sweep"}},"storage":{"record":"rec-event","key":"seq"}},
+    {
+      "id": "arc-outbox-delivery-flow-impl",
+      "name": "Outbox delivery after a stop (implementation)",
+      "subject": "runtime",
+      "level": "implementation",
+      "initial": "arc-od-idle-i",
+      "description": "A commit leaves its domain events (rec-event, keyed by seq) unpublished. The runtime that committed publishes them at once, or else the outbox job finds them on its next sweep, 10 seconds after the commit (10000 ms, default), and publishes them. Publication is at least once; the consumer discards what it has seen.",
+      "transaction": {
+        "scope": "transition",
+        "isolation": "serializable"
+      },
+      "variables": [
+        {
+          "name": "pending",
+          "type": "boolean",
+          "initial": false,
+          "repr": "bool"
+        }
+      ],
+      "states": [
+        {
+          "id": "arc-od-idle-i",
+          "name": "Nothing unpublished",
+          "ignores": [
+            "arc-ob-publish-now",
+            "arc-ob-sweep-due"
+          ]
+        },
+        {
+          "id": "arc-od-pending-i",
+          "name": "Events unpublished",
+          "ignores": [
+            "rt-committed"
+          ]
+        },
+        {
+          "id": "arc-od-done-i",
+          "name": "Published",
+          "terminal": true
+        }
+      ],
+      "transitions": [
+        {
+          "id": "arc-od-commit-i",
+          "from": "arc-od-idle-i",
+          "to": "arc-od-pending-i",
+          "on": "rt-committed",
+          "otherwise": true,
+          "effects": [
+            {
+              "set": "pending",
+              "to": true
+            },
+            {
+              "timer": "sweep",
+              "after": 10000,
+              "emit": "arc-ob-sweep-due"
+            }
+          ]
+        },
+        {
+          "id": "arc-od-publish-now-i",
+          "from": "arc-od-pending-i",
+          "to": "arc-od-done-i",
+          "on": "arc-ob-publish-now",
+          "otherwise": true,
+          "effects": [
+            {
+              "set": "pending",
+              "to": false
+            },
+            {
+              "emit": "arc-ob-published",
+              "to": "notice-queue"
+            },
+            {
+              "cancel": "sweep"
+            }
+          ]
+        },
+        {
+          "id": "arc-od-sweep-i",
+          "from": "arc-od-pending-i",
+          "to": "arc-od-done-i",
+          "on": "arc-ob-sweep-due",
+          "otherwise": true,
+          "effects": [
+            {
+              "set": "pending",
+              "to": false
+            },
+            {
+              "emit": "arc-ob-published",
+              "to": "notice-queue"
+            }
+          ]
+        }
+      ],
+      "refines": "arc-outbox-delivery-flow",
+      "refinement": {
+        "states": {
+          "arc-od-idle-i": "arc-od-idle",
+          "arc-od-pending-i": "arc-od-pending",
+          "arc-od-done-i": "arc-od-done"
+        },
+        "variables": {
+          "pending": "pending"
+        },
+        "transitions": {
+          "arc-od-commit-i": "arc-od-commit",
+          "arc-od-publish-now-i": "arc-od-publish-now",
+          "arc-od-sweep-i": "arc-od-sweep"
+        }
+      },
+      "storage": {
+        "record": "rec-event",
+        "key": "seq",
+        "createdBy": "commit-transition"
+      }
+    },
     {"id":"arc-rolling-change-flow","name":"Rolling change of format","subject":"runtime","initial":"arc-rc-old","description":"Two versions run together while a deployment replaces the older one. Commits are written in the older format until the older version has stopped.","variables":[{"name":"oldRunning","type":"boolean","initial":true},{"name":"newFormat","type":"boolean","initial":false}],"states":[{"id":"arc-rc-old","name":"Older version only"},{"id":"arc-rc-mixed","name":"Both versions running"},{"id":"arc-rc-new","name":"Newer version only"}],"transitions":[{"id":"arc-rl-start","from":"arc-rc-old","to":"arc-rc-mixed","on":"arc-rl-deploy-started"},{"id":"arc-rl-commit-early","from":"arc-rc-mixed","to":"arc-rc-mixed","on":"arc-rl-commit","faultOnly":true,"description":"Defect: writes the newer format while the older version still runs.","effects":[{"set":"newFormat","to":true},{"emit":"arc-rl-committed"}]},{"id":"arc-rl-commit-old","from":"arc-rc-mixed","to":"arc-rc-mixed","on":"arc-rl-commit","effects":[{"emit":"arc-rl-committed"}]},{"id":"arc-rl-finish","from":"arc-rc-mixed","to":"arc-rc-new","on":"arc-rl-deploy-finished","effects":[{"set":"oldRunning","to":false}]},{"id":"arc-rl-commit-new","from":"arc-rc-new","to":"arc-rc-new","on":"arc-rl-commit","effects":[{"set":"newFormat","to":true},{"emit":"arc-rl-committed"}]}]},
-    {"id":"arc-rolling-change-flow-impl","name":"Rolling change of format (implementation)","subject":"runtime","level":"implementation","initial":"arc-rc-old-i","description":"Two versions of the runtime run together while a deployment replaces the older one. A commit is written in the older format until the deployment has finished and the older version has stopped; only then is the newer format written.","transaction":{"scope":"transition","isolation":"serializable"},"variables":[{"name":"oldRunning","type":"boolean","initial":true,"repr":"bool"},{"name":"newFormat","type":"boolean","initial":false,"repr":"bool"}],"states":[{"id":"arc-rc-old-i","name":"Only the older version","ignores":["arc-rl-commit","arc-rl-deploy-finished"]},{"id":"arc-rc-mixed-i","name":"Both versions","ignores":["arc-rl-deploy-started"]},{"id":"arc-rc-new-i","name":"Only the newer version","ignores":["arc-rl-deploy-started","arc-rl-deploy-finished"]}],"transitions":[{"id":"arc-rl-start-i","from":"arc-rc-old-i","to":"arc-rc-mixed-i","on":"arc-rl-deploy-started","otherwise":true},{"id":"arc-rl-commit-old-i","from":"arc-rc-mixed-i","to":"arc-rc-mixed-i","on":"arc-rl-commit","otherwise":true,"effects":[{"emit":"arc-rl-committed","to":"tenant-database"}]},{"id":"arc-rl-finish-i","from":"arc-rc-mixed-i","to":"arc-rc-new-i","on":"arc-rl-deploy-finished","otherwise":true,"effects":[{"set":"oldRunning","to":false}]},{"id":"arc-rl-commit-new-i","from":"arc-rc-new-i","to":"arc-rc-new-i","on":"arc-rl-commit","otherwise":true,"effects":[{"set":"newFormat","to":true},{"emit":"arc-rl-committed","to":"tenant-database"}]}],"refines":"arc-rolling-change-flow","refinement":{"states":{"arc-rc-old-i":"arc-rc-old","arc-rc-mixed-i":"arc-rc-mixed","arc-rc-new-i":"arc-rc-new"},"variables":{"oldRunning":"oldRunning","newFormat":"newFormat"},"transitions":{"arc-rl-start-i":"arc-rl-start","arc-rl-commit-old-i":"arc-rl-commit-old","arc-rl-finish-i":"arc-rl-finish","arc-rl-commit-new-i":"arc-rl-commit-new"}},"storage":{"record":"rec-rolling-change","key":"release-id"}},
+    {
+      "id": "arc-rolling-change-flow-impl",
+      "name": "Rolling change of format (implementation)",
+      "subject": "runtime",
+      "level": "implementation",
+      "initial": "arc-rc-old-i",
+      "description": "Two versions of the runtime run together while a deployment replaces the older one. A commit is written in the older format until the deployment has finished and the older version has stopped; only then is the newer format written.",
+      "transaction": {
+        "scope": "transition",
+        "isolation": "serializable"
+      },
+      "variables": [
+        {
+          "name": "oldRunning",
+          "type": "boolean",
+          "initial": true,
+          "repr": "bool"
+        },
+        {
+          "name": "newFormat",
+          "type": "boolean",
+          "initial": false,
+          "repr": "bool"
+        }
+      ],
+      "states": [
+        {
+          "id": "arc-rc-old-i",
+          "name": "Only the older version",
+          "ignores": [
+            "arc-rl-commit",
+            "arc-rl-deploy-finished"
+          ]
+        },
+        {
+          "id": "arc-rc-mixed-i",
+          "name": "Both versions",
+          "ignores": [
+            "arc-rl-deploy-started"
+          ]
+        },
+        {
+          "id": "arc-rc-new-i",
+          "name": "Only the newer version",
+          "ignores": [
+            "arc-rl-deploy-started",
+            "arc-rl-deploy-finished"
+          ]
+        }
+      ],
+      "transitions": [
+        {
+          "id": "arc-rl-start-i",
+          "from": "arc-rc-old-i",
+          "to": "arc-rc-mixed-i",
+          "on": "arc-rl-deploy-started",
+          "otherwise": true
+        },
+        {
+          "id": "arc-rl-commit-old-i",
+          "from": "arc-rc-mixed-i",
+          "to": "arc-rc-mixed-i",
+          "on": "arc-rl-commit",
+          "otherwise": true,
+          "effects": [
+            {
+              "emit": "arc-rl-committed",
+              "to": "tenant-database"
+            }
+          ]
+        },
+        {
+          "id": "arc-rl-finish-i",
+          "from": "arc-rc-mixed-i",
+          "to": "arc-rc-new-i",
+          "on": "arc-rl-deploy-finished",
+          "otherwise": true,
+          "effects": [
+            {
+              "set": "oldRunning",
+              "to": false
+            }
+          ]
+        },
+        {
+          "id": "arc-rl-commit-new-i",
+          "from": "arc-rc-new-i",
+          "to": "arc-rc-new-i",
+          "on": "arc-rl-commit",
+          "otherwise": true,
+          "effects": [
+            {
+              "set": "newFormat",
+              "to": true
+            },
+            {
+              "emit": "arc-rl-committed",
+              "to": "tenant-database"
+            }
+          ]
+        }
+      ],
+      "refines": "arc-rolling-change-flow",
+      "refinement": {
+        "states": {
+          "arc-rc-old-i": "arc-rc-old",
+          "arc-rc-mixed-i": "arc-rc-mixed",
+          "arc-rc-new-i": "arc-rc-new"
+        },
+        "variables": {
+          "oldRunning": "oldRunning",
+          "newFormat": "newFormat"
+        },
+        "transitions": {
+          "arc-rl-start-i": "arc-rl-start",
+          "arc-rl-commit-old-i": "arc-rl-commit-old",
+          "arc-rl-finish-i": "arc-rl-finish",
+          "arc-rl-commit-new-i": "arc-rl-commit-new"
+        }
+      },
+      "storage": {
+        "record": "rec-rolling-change",
+        "key": "release-id",
+        "creates": true
+      }
+    },
     {"id":"preview-link-flow","name":"Preview link","subject":"gateway","initial":"pl-idle","description":"One preview link, valid for 15 ticks from the tick of its pl-issue event (the tick its link is issued).","variables":[{"name":"issuedAt","type":"number","initial":0},{"name":"shown","type":"number","initial":0}],"states":[{"id":"pl-idle","name":"Not issued"},{"id":"pl-issued","name":"Issued"}],"transitions":[{"id":"pl-link-issued","from":"pl-idle","to":"pl-issued","on":"pl-issue","effects":[{"set":"issuedAt","to":"time"}],"faultOnly":false},{"id":"pl-show-expired","from":"pl-issued","to":"pl-issued","on":"pl-presented","faultOnly":true,"description":"Defect: shows the draft after its expiry.","effects":[{"set":"shown","to":"shown + 1"},{"emit":"pl-shown"}]},{"id":"pl-show","from":"pl-issued","to":"pl-issued","on":"pl-presented","guard":"time - issuedAt < 15","effects":[{"set":"shown","to":"shown + 1"},{"emit":"pl-shown"}]},{"id":"pl-refuse","from":"pl-issued","to":"pl-issued","on":"pl-presented","effects":[{"emit":"pl-refused"}]}]},
-    {"id":"preview-link-flow-impl","name":"Preview link (implementation)","subject":"gateway","level":"implementation","initial":"pl-idle-i","description":"One preview link as the gateway checks it. The expiry is the time of issue plus the lifetime of 15 minutes (900000 ms, a default: no requirement states the lifetime), and the link is shown only before that time; at and after it every presentation is refused. The refinement reads one model tick as one minute (timeScale 60000), so the model lifetime of 15 ticks is the 15 minutes here, and the mapping gives the model its issue tick.","transaction":{"scope":"transition","isolation":"serializable"},"variables":[{"name":"expiresAt","type":"number","initial":900000,"repr":"timestamp"},{"name":"shown","type":"number","initial":0,"repr":"u32"}],"states":[{"id":"pl-idle-i","name":"No link","ignores":["pl-presented"]},{"id":"pl-issued-i","name":"Link issued","ignores":["pl-issue"]}],"transitions":[{"id":"pl-link-issued-i","from":"pl-idle-i","to":"pl-issued-i","on":"pl-issue","otherwise":true,"effects":[{"set":"expiresAt","to":"time + 900000"}]},{"id":"pl-show-i","from":"pl-issued-i","to":"pl-issued-i","on":"pl-presented","guard":"time < expiresAt","effects":[{"set":"shown","to":"shown + 1"},{"emit":"pl-shown","to":"web-application"}]},{"id":"pl-refuse-i","from":"pl-issued-i","to":"pl-issued-i","on":"pl-presented","otherwise":true,"effects":[{"emit":"pl-refused","to":"web-application"}]}],"refines":"preview-link-flow","refinement":{"states":{"pl-idle-i":"pl-idle","pl-issued-i":"pl-issued"},"variables":{"issuedAt":"(expiresAt - 900000) / 60000","shown":"shown"},"transitions":{"pl-link-issued-i":"pl-link-issued","pl-show-i":"pl-show","pl-refuse-i":"pl-refuse"},"timeScale":60000},"storage":{"record":"rec-preview-link","key":"link-id"}},
+    {
+      "id": "preview-link-flow-impl",
+      "name": "Preview link (implementation)",
+      "subject": "gateway",
+      "level": "implementation",
+      "initial": "pl-idle-i",
+      "description": "One preview link as the gateway checks it. The expiry is the time of issue plus the lifetime of 15 minutes (900000 ms, a default: no requirement states the lifetime), and the link is shown only before that time; at and after it every presentation is refused. The refinement reads one model tick as one minute (timeScale 60000), so the model lifetime of 15 ticks is the 15 minutes here, and the mapping gives the model its issue tick.",
+      "transaction": {
+        "scope": "transition",
+        "isolation": "serializable"
+      },
+      "variables": [
+        {
+          "name": "expiresAt",
+          "type": "number",
+          "initial": 900000,
+          "repr": "timestamp"
+        },
+        {
+          "name": "shown",
+          "type": "number",
+          "initial": 0,
+          "repr": "u32"
+        }
+      ],
+      "states": [
+        {
+          "id": "pl-idle-i",
+          "name": "No link",
+          "ignores": [
+            "pl-presented"
+          ]
+        },
+        {
+          "id": "pl-issued-i",
+          "name": "Link issued",
+          "ignores": [
+            "pl-issue"
+          ]
+        }
+      ],
+      "transitions": [
+        {
+          "id": "pl-link-issued-i",
+          "from": "pl-idle-i",
+          "to": "pl-issued-i",
+          "on": "pl-issue",
+          "otherwise": true,
+          "effects": [
+            {
+              "set": "expiresAt",
+              "to": "time + 900000"
+            }
+          ]
+        },
+        {
+          "id": "pl-show-i",
+          "from": "pl-issued-i",
+          "to": "pl-issued-i",
+          "on": "pl-presented",
+          "guard": "time < expiresAt",
+          "effects": [
+            {
+              "set": "shown",
+              "to": "shown + 1"
+            },
+            {
+              "emit": "pl-shown",
+              "to": "web-application"
+            }
+          ]
+        },
+        {
+          "id": "pl-refuse-i",
+          "from": "pl-issued-i",
+          "to": "pl-issued-i",
+          "on": "pl-presented",
+          "otherwise": true,
+          "effects": [
+            {
+              "emit": "pl-refused",
+              "to": "web-application"
+            }
+          ]
+        }
+      ],
+      "refines": "preview-link-flow",
+      "refinement": {
+        "states": {
+          "pl-idle-i": "pl-idle",
+          "pl-issued-i": "pl-issued"
+        },
+        "variables": {
+          "issuedAt": "(expiresAt - 900000) / 60000",
+          "shown": "shown"
+        },
+        "transitions": {
+          "pl-link-issued-i": "pl-link-issued",
+          "pl-show-i": "pl-show",
+          "pl-refuse-i": "pl-refuse"
+        },
+        "timeScale": 60000
+      },
+      "storage": {
+        "record": "rec-preview-link",
+        "key": "link-id",
+        "creates": true
+      }
+    },
     {"id":"inbound-run-flow","name":"Inbound delivery","subject":"automation-worker","initial":"iw-idle","description":"One event key. The first delivery starts a run and a repeated delivery of the same event starts nothing.","variables":[{"name":"runs","type":"number","initial":0}],"states":[{"id":"iw-idle","name":"No delivery"},{"id":"iw-accepted","name":"Run started"}],"transitions":[{"id":"iw-first","from":"iw-idle","to":"iw-accepted","on":"iw-received","effects":[{"set":"runs","to":"runs + 1"},{"emit":"iw-run-started"}]},{"id":"iw-accept-again","from":"iw-accepted","to":"iw-accepted","on":"iw-received","faultOnly":true,"description":"Defect: starts a second run for a repeated delivery.","effects":[{"set":"runs","to":"runs + 1"},{"emit":"iw-run-started"}]},{"id":"iw-repeat","from":"iw-accepted","to":"iw-accepted","on":"iw-received","effects":[{"emit":"iw-ignored"}]}]},
     {"id":"inbound-run-flow-impl","name":"Inbound delivery (implementation)","subject":"automation-worker","level":"implementation","initial":"iw-idle-i","description":"One inbound event key as the automation worker handles it, keyed in the effect record by its idempotency key (rec-effect-record). The first delivery starts a run; a repeated delivery of the same key starts nothing and is reported as ignored. The sender may deliver the same event more than once.","transaction":{"scope":"transition","isolation":"serializable"},"variables":[{"name":"runs","type":"number","initial":0,"repr":"u32"}],"states":[{"id":"iw-idle-i","name":"Not seen"},{"id":"iw-accepted-i","name":"Run started"}],"transitions":[{"id":"iw-first-i","from":"iw-idle-i","to":"iw-accepted-i","on":"iw-received","otherwise":true,"effects":[{"set":"runs","to":"runs + 1"},{"emit":"iw-run-started","to":"automation-worker"}]},{"id":"iw-repeat-i","from":"iw-accepted-i","to":"iw-accepted-i","on":"iw-received","otherwise":true,"effects":[{"emit":"iw-ignored","to":"external-endpoint"}]}],"refines":"inbound-run-flow","refinement":{"states":{"iw-idle-i":"iw-idle","iw-accepted-i":"iw-accepted"},"variables":{"runs":"runs"},"transitions":{"iw-first-i":"iw-first","iw-repeat-i":"iw-repeat"}},"storage":{"record":"rec-effect-record","key":"idempotency-key","state":"run-state"}},
     {"id":"cv-change-flow","name":"Confirmed change","subject":"conversation-service","initial":"cf-idle","description":"One change proposed by the assistant: previewed, then applied only after the person confirms it.","variables":[{"name":"previewed","type":"boolean","initial":false},{"name":"confirmed","type":"boolean","initial":false},{"name":"applied","type":"boolean","initial":false}],"states":[{"id":"cf-idle","name":"No change"},{"id":"cf-previewed","name":"Preview shown"},{"id":"cf-confirmed","name":"Confirmed"},{"id":"cf-applied","name":"Applied","terminal":true},{"id":"cf-cancelled","name":"Cancelled","terminal":true}],"transitions":[{"id":"cf-propose","from":"cf-idle","to":"cf-previewed","on":"cv-proposed","effects":[{"set":"previewed","to":true},{"emit":"cv-previewed"}]},{"id":"cf-confirm","from":"cf-previewed","to":"cf-confirmed","on":"cv-confirmed","effects":[{"set":"confirmed","to":true}]},{"id":"cf-apply","from":"cf-confirmed","to":"cf-applied","on":"cv-apply-requested","effects":[{"set":"applied","to":true},{"emit":"cv-applied"}]},{"id":"cf-apply-unconfirmed","from":"cf-previewed","to":"cf-applied","on":"cv-apply-requested","faultOnly":true,"description":"Defect: applies a previewed change that the person has not confirmed.","effects":[{"set":"applied","to":true},{"emit":"cv-applied"}]},{"id":"cf-refuse-unconfirmed","from":"cf-previewed","to":"cf-previewed","on":"cv-apply-requested","effects":[{"emit":"cv-refused"}]},{"id":"cf-cancel","from":"cf-previewed","to":"cf-cancelled","on":"cv-cancel","effects":[{"emit":"cv-cancelled"}]},{"id":"cf-refuse-cancelled","from":"cf-cancelled","to":"cf-cancelled","on":"cv-apply-requested","effects":[{"emit":"cv-refused"}]}]},
     {"id":"cv-change-flow-impl","name":"Confirmed change (implementation)","subject":"conversation-service","level":"implementation","initial":"cf-idle-i","description":"One change the assistant proposes, held as a pending action (rec-cnv-pending-action, keyed by pending-id; its state follows this machine). The change is previewed to the person first; it is applied only after the person confirms it, and a request to apply an unconfirmed or cancelled change is refused.","transaction":{"scope":"transition","isolation":"serializable"},"variables":[{"name":"previewed","type":"boolean","initial":false,"repr":"bool"},{"name":"confirmed","type":"boolean","initial":false,"repr":"bool"},{"name":"applied","type":"boolean","initial":false,"repr":"bool"}],"states":[{"id":"cf-idle-i","name":"No change","ignores":["cv-confirmed","cv-apply-requested","cv-cancel"]},{"id":"cf-previewed-i","name":"Previewed","ignores":["cv-proposed"]},{"id":"cf-confirmed-i","name":"Confirmed","ignores":["cv-proposed","cv-confirmed","cv-cancel"]},{"id":"cf-applied-i","name":"Applied","terminal":true},{"id":"cf-cancelled-i","name":"Cancelled","terminal":true}],"transitions":[{"id":"cf-propose-i","from":"cf-idle-i","to":"cf-previewed-i","on":"cv-proposed","otherwise":true,"effects":[{"set":"previewed","to":true},{"emit":"cv-previewed","to":"web-application"}]},{"id":"cf-confirm-i","from":"cf-previewed-i","to":"cf-confirmed-i","on":"cv-confirmed","otherwise":true,"effects":[{"set":"confirmed","to":true}]},{"id":"cf-apply-i","from":"cf-confirmed-i","to":"cf-applied-i","on":"cv-apply-requested","otherwise":true,"effects":[{"set":"applied","to":true},{"emit":"cv-applied","to":"runtime"}]},{"id":"cf-refuse-unconfirmed-i","from":"cf-previewed-i","to":"cf-previewed-i","on":"cv-apply-requested","otherwise":true,"effects":[{"emit":"cv-refused","to":"web-application"}]},{"id":"cf-cancel-i","from":"cf-previewed-i","to":"cf-cancelled-i","on":"cv-cancel","otherwise":true,"effects":[{"emit":"cv-cancelled","to":"web-application"}]},{"id":"cf-refuse-cancelled-i","from":"cf-cancelled-i","to":"cf-cancelled-i","on":"cv-apply-requested","otherwise":true,"effects":[{"emit":"cv-refused","to":"web-application"}]}],"refines":"cv-change-flow","refinement":{"states":{"cf-idle-i":"cf-idle","cf-previewed-i":"cf-previewed","cf-confirmed-i":"cf-confirmed","cf-applied-i":"cf-applied","cf-cancelled-i":"cf-cancelled"},"variables":{"previewed":"previewed","confirmed":"confirmed","applied":"applied"},"transitions":{"cf-propose-i":"cf-propose","cf-confirm-i":"cf-confirm","cf-apply-i":"cf-apply","cf-refuse-unconfirmed-i":"cf-refuse-unconfirmed","cf-cancel-i":"cf-cancel","cf-refuse-cancelled-i":"cf-refuse-cancelled"}},"storage":{"record":"rec-cnv-pending-action","key":"pending-id","state":"flow-state"}},
     {"id":"cv-authority-flow","name":"Operation under withdrawable permission","subject":"conversation-service","initial":"ca-waiting","description":"One operation the assistant runs for a person. It commits only while the permission the person holds at that moment allows it.","variables":[{"name":"permitted","type":"boolean","initial":true},{"name":"applied","type":"boolean","initial":false}],"states":[{"id":"ca-waiting","name":"Awaiting run"},{"id":"ca-done","name":"Committed","terminal":true}],"transitions":[{"id":"ca-withdraw","from":"ca-waiting","to":"ca-waiting","on":"cv-permission-withdrawn","effects":[{"set":"permitted","to":false}]},{"id":"ca-run","from":"ca-waiting","to":"ca-done","on":"cv-operation-run","guard":"permitted","effects":[{"set":"applied","to":true},{"emit":"cv-operation-committed"}]},{"id":"ca-run-stale","from":"ca-waiting","to":"ca-done","on":"cv-operation-run","faultOnly":true,"description":"Defect: runs the operation on the permission held when the preview was made.","effects":[{"set":"applied","to":true},{"emit":"cv-operation-committed"}]},{"id":"ca-refuse","from":"ca-waiting","to":"ca-waiting","on":"cv-operation-run","guard":"!permitted","effects":[{"emit":"cv-operation-refused"}]}]},
-    {"id":"cv-authority-flow-impl","name":"Operation under withdrawable permission (implementation)","subject":"conversation-service","level":"implementation","initial":"ca-waiting-i","description":"One operation the assistant runs for a person, as the conversation service decides it. The permission the person holds is read at the moment of commit: a withdrawal that arrives before the run refuses it, and a run that arrives after the permission is withdrawn is refused too.","transaction":{"scope":"transition","isolation":"serializable"},"variables":[{"name":"permitted","type":"boolean","initial":true,"repr":"bool"},{"name":"applied","type":"boolean","initial":false,"repr":"bool"}],"states":[{"id":"ca-waiting-i","name":"Waiting to run"},{"id":"ca-done-i","name":"Committed","terminal":true}],"transitions":[{"id":"ca-withdraw-i","from":"ca-waiting-i","to":"ca-waiting-i","on":"cv-permission-withdrawn","otherwise":true,"effects":[{"set":"permitted","to":false}]},{"id":"ca-run-i","from":"ca-waiting-i","to":"ca-done-i","on":"cv-operation-run","guard":"permitted","effects":[{"set":"applied","to":true},{"emit":"cv-operation-committed","to":"runtime"}]},{"id":"ca-refuse-i","from":"ca-waiting-i","to":"ca-waiting-i","on":"cv-operation-run","guard":"!permitted","effects":[{"emit":"cv-operation-refused","to":"web-application"}]}],"refines":"cv-authority-flow","refinement":{"states":{"ca-waiting-i":"ca-waiting","ca-done-i":"ca-done"},"variables":{"permitted":"permitted","applied":"applied"},"transitions":{"ca-withdraw-i":"ca-withdraw","ca-run-i":"ca-run","ca-refuse-i":"ca-refuse"}},"storage":{"record":"rec-cnv-operation","key":"operation-id"}},
+    {
+      "id": "cv-authority-flow-impl",
+      "name": "Operation under withdrawable permission (implementation)",
+      "subject": "conversation-service",
+      "level": "implementation",
+      "initial": "ca-waiting-i",
+      "description": "One operation the assistant runs for a person, as the conversation service decides it. The permission the person holds is read at the moment of commit: a withdrawal that arrives before the run refuses it, and a run that arrives after the permission is withdrawn is refused too.",
+      "transaction": {
+        "scope": "transition",
+        "isolation": "serializable"
+      },
+      "variables": [
+        {
+          "name": "permitted",
+          "type": "boolean",
+          "initial": true,
+          "repr": "bool"
+        },
+        {
+          "name": "applied",
+          "type": "boolean",
+          "initial": false,
+          "repr": "bool"
+        }
+      ],
+      "states": [
+        {
+          "id": "ca-waiting-i",
+          "name": "Waiting to run"
+        },
+        {
+          "id": "ca-done-i",
+          "name": "Committed",
+          "terminal": true
+        }
+      ],
+      "transitions": [
+        {
+          "id": "ca-withdraw-i",
+          "from": "ca-waiting-i",
+          "to": "ca-waiting-i",
+          "on": "cv-permission-withdrawn",
+          "otherwise": true,
+          "effects": [
+            {
+              "set": "permitted",
+              "to": false
+            }
+          ]
+        },
+        {
+          "id": "ca-run-i",
+          "from": "ca-waiting-i",
+          "to": "ca-done-i",
+          "on": "cv-operation-run",
+          "guard": "permitted",
+          "effects": [
+            {
+              "set": "applied",
+              "to": true
+            },
+            {
+              "emit": "cv-operation-committed",
+              "to": "runtime"
+            }
+          ]
+        },
+        {
+          "id": "ca-refuse-i",
+          "from": "ca-waiting-i",
+          "to": "ca-waiting-i",
+          "on": "cv-operation-run",
+          "guard": "!permitted",
+          "effects": [
+            {
+              "emit": "cv-operation-refused",
+              "to": "web-application"
+            }
+          ]
+        }
+      ],
+      "refines": "cv-authority-flow",
+      "refinement": {
+        "states": {
+          "ca-waiting-i": "ca-waiting",
+          "ca-done-i": "ca-done"
+        },
+        "variables": {
+          "permitted": "permitted",
+          "applied": "applied"
+        },
+        "transitions": {
+          "ca-withdraw-i": "ca-withdraw",
+          "ca-run-i": "ca-run",
+          "ca-refuse-i": "ca-refuse"
+        }
+      },
+      "storage": {
+        "record": "rec-cnv-operation",
+        "key": "operation-id",
+        "creates": true
+      }
+    },
     {"id":"saml-assertion-flow","name":"SAML assertion use","subject":"identity-service","initial":"sa-fresh","description":"One SAML assertion. The first presentation yields a session, and a presentation after it is refused.","variables":[{"name":"sessions","type":"number","initial":0}],"states":[{"id":"sa-fresh","name":"Not presented"},{"id":"sa-spent","name":"Presented"}],"transitions":[{"id":"sam-accept-replay","from":"sa-spent","to":"sa-spent","on":"saml-response","faultOnly":true,"description":"Defect: accepts an assertion that was already used.","effects":[{"set":"sessions","to":"sessions + 1"},{"emit":"saml-session-issued"}]},{"id":"sam-accept","from":"sa-fresh","to":"sa-spent","on":"saml-response","effects":[{"set":"sessions","to":"sessions + 1"},{"emit":"saml-session-issued"}]},{"id":"sam-refuse","from":"sa-spent","to":"sa-spent","on":"saml-response","effects":[{"emit":"saml-refused"}]}]},
     {"id":"saml-assertion-flow-impl","name":"SAML assertion use (implementation)","subject":"identity-service","level":"implementation","initial":"sa-fresh-i","description":"One SAML assertion as the identity service records it: the assertion identifier is stored as consumed (rec-challenge, keyed by challenge-id) when its first presentation yields a session, and any later presentation is refused. The browser or the network may deliver the response more than once.","transaction":{"scope":"transition","isolation":"serializable"},"variables":[{"name":"sessions","type":"number","initial":0,"repr":"u32"}],"states":[{"id":"sa-fresh-i","name":"Not yet presented"},{"id":"sa-spent-i","name":"Presented"}],"transitions":[{"id":"sam-accept-i","from":"sa-fresh-i","to":"sa-spent-i","on":"saml-response","otherwise":true,"effects":[{"set":"sessions","to":"sessions + 1"},{"emit":"saml-session-issued","to":"web-application"}]},{"id":"sam-refuse-i","from":"sa-spent-i","to":"sa-spent-i","on":"saml-response","otherwise":true,"effects":[{"emit":"saml-refused","to":"web-application"}]}],"refines":"saml-assertion-flow","refinement":{"states":{"sa-fresh-i":"sa-fresh","sa-spent-i":"sa-spent"},"variables":{"sessions":"sessions"},"transitions":{"sam-accept-i":"sam-accept","sam-refuse-i":"sam-refuse"}},"storage":{"record":"rec-challenge","key":"challenge-id"}},
     {"id":"guess-throttle-flow","name":"Password guessing throttle","subject":"identity-service","initial":"gt-open","description":"Password attempts for one realm. Three failures close the throttle, and an attempt evaluated while it is closed is counted.","variables":[{"name":"failures","type":"number","initial":0},{"name":"throttled","type":"number","initial":0}],"states":[{"id":"gt-open","name":"Accepting attempts"}],"transitions":[{"id":"gt-ignore-throttle","from":"gt-open","to":"gt-open","on":"pw-attempt","faultOnly":true,"guard":"failures >= 3","description":"Defect: evaluates an attempt after the throttle has closed.","effects":[{"set":"throttled","to":"throttled + 1"},{"emit":"pw-refused"}]},{"id":"gt-refuse","from":"gt-open","to":"gt-open","on":"pw-attempt","guard":"failures >= 3","effects":[{"emit":"pw-refused"}]},{"id":"gt-wrong","from":"gt-open","to":"gt-open","on":"pw-attempt","guard":"failures < 3 && event.guess == 'wrong'","effects":[{"set":"failures","to":"failures + 1"},{"emit":"pw-refused"}]},{"id":"gt-right","from":"gt-open","to":"gt-open","on":"pw-attempt","guard":"failures < 3 && event.guess == 'right'","effects":[{"emit":"pw-accepted"}]}]},
@@ -18118,7 +18766,17 @@
           "gwi-serve-public-checking": "go-serve-public-checking"
         },
         "timeScale": 1000
-      },"storage":{"record":"rec-session-copy","key":"session-id","fields":{"checkedAt":"checked-at"},"state":"outage-state"}},
+      },
+      "storage": {
+        "record": "rec-session-copy",
+        "key": "session-id",
+        "fields": {
+          "checkedAt": "checked-at"
+        },
+        "state": "outage-state",
+        "createdBy": "look-up-session"
+      }
+    },
     {"id":"erasure-copy-flow","name":"Erased copy","subject":"copy-store","initial":"er-holding","description":"One copy of the personal data of an erased principal. A purge drops it. Once the lifetime of 5 ticks has passed after the erasure committed, a read revalidates the copy and drops it before it answers. Every answer states whether it carried the held personal data after that bound: the flag leak.","variables":[{"name":"erased","type":"boolean","initial":false},{"name":"erasedAt","type":"number","initial":0},{"name":"held","type":"boolean","initial":true},{"name":"leak","type":"boolean","initial":false}],"states":[{"id":"er-holding","name":"Copy holds the data"},{"id":"er-dropped","name":"Copy dropped"}],"transitions":[{"id":"er-commit","from":"er-holding","to":"er-holding","on":"er-erase-committed","effects":[{"set":"erased","to":true},{"set":"erasedAt","to":"time"}]},{"id":"er-purge","from":"er-holding","to":"er-dropped","on":"er-purge-sent","effects":[{"set":"held","to":false}]},{"id":"er-serve-stale","from":"er-holding","to":"er-holding","on":"er-read","faultOnly":true,"guard":"erased && time - erasedAt >= 5","effects":[{"set":"leak","to":"leak || (held && erased && time - erasedAt >= 5)"},{"emit":"er-served"}]},{"id":"er-serve-fresh","from":"er-holding","to":"er-holding","on":"er-read","guard":"!(erased && time - erasedAt >= 5)","effects":[{"set":"leak","to":"leak || (held && erased && time - erasedAt >= 5)"},{"emit":"er-served"}]},{"id":"er-revalidate","from":"er-holding","to":"er-dropped","on":"er-read","guard":"erased && time - erasedAt >= 5","effects":[{"set":"held","to":false},{"set":"leak","to":"leak || (held && erased && time - erasedAt >= 5)"},{"emit":"er-served"}]},{"id":"er-serve-dropped","from":"er-dropped","to":"er-dropped","on":"er-read","effects":[{"set":"leak","to":"leak || (held && erased && time - erasedAt >= 5)"},{"emit":"er-served"}]}]},
     {"id":"erasure-copy-flow-impl","name":"Erased copy (implementation)","level":"implementation","subject":"copy-store","refines":"erasure-copy-flow","description":"One copy entry in the copy store. After the erasure commits, a read made once the erasure bound of 2 seconds (2000 ms, CPY-009, audience view class) has passed revalidates the copy and drops it before it answers; a purge drops it at once. The refinement reads one model tick as 400 ms (timeScale 400), so the model erasure bound of 5 ticks is the 2 seconds here.","initial":"eri-holding","instances":{"key":"copy-ref","storedIn":"rec-copy-entry","max":16},"transaction":{"scope":"transition","isolation":"serializable"},"variables":[{"name":"erased","type":"boolean","repr":"bool","initial":false},{"name":"erasedAt","type":"number","repr":"timestamp","initial":0},{"name":"held","type":"boolean","repr":"bool","initial":true}],"states":[{"id":"eri-holding","name":"Copy holds the data"},{"id":"eri-dropped","name":"Copy dropped","ignores":["er-erase-committed","er-purge-sent"]}],"transitions":[
         {
@@ -18194,17 +18852,192 @@
             }
           ]
         }
-      ],"refinement":{"states":{"eri-holding":"er-holding","eri-dropped":"er-dropped"},"variables":{"erased":"erased","erasedAt":"erasedAt / 400","held":"held","leak":"false"},"transitions":{"eri-commit":"er-commit","eri-purge":"er-purge","eri-revalidate":"er-revalidate","eri-serve":"er-serve-fresh","eri-serve-dropped":"er-serve-dropped"},"timeScale":400},"storage":{"record":"rec-copy-entry","key":"copy-ref","fields":{"erasedAt":"erased-at"}}},
+      ],
+      "refinement": {
+        "states": {
+          "eri-holding": "er-holding",
+          "eri-dropped": "er-dropped"
+        },
+        "variables": {
+          "erased": "erased",
+          "erasedAt": "erasedAt / 400",
+          "held": "held",
+          "leak": "false"
+        },
+        "transitions": {
+          "eri-commit": "er-commit",
+          "eri-purge": "er-purge",
+          "eri-revalidate": "er-revalidate",
+          "eri-serve": "er-serve-fresh",
+          "eri-serve-dropped": "er-serve-dropped"
+        },
+        "timeScale": 400
+      },
+      "storage": {
+        "record": "rec-copy-entry",
+        "key": "copy-ref",
+        "fields": {
+          "erasedAt": "erased-at"
+        },
+        "creates": true
+      }
+    },
     {"id":"subject-key-flow","name":"Subject key","subject":"key-service","initial":"sk-live","description":"The sealed personal fields of one subject. Destroying the subject key makes them unreadable, so a read after destruction returns only the sealed form.","variables":[{"name":"shredRequested","type":"boolean","initial":false},{"name":"plainAfterShred","type":"boolean","initial":false}],"states":[{"id":"sk-live","name":"Key held"},{"id":"sk-shredded","name":"Key destroyed","terminal":true}],"transitions":[{"id":"sk-destroy-ignored","from":"sk-live","to":"sk-live","on":"sk-shred","faultOnly":true,"description":"Defect: reports the key destroyed and keeps it.","effects":[{"set":"shredRequested","to":true},{"emit":"sk-destroyed"}]},{"id":"sk-destroy","from":"sk-live","to":"sk-shredded","on":"sk-shred","effects":[{"set":"shredRequested","to":true},{"emit":"sk-destroyed"}]},{"id":"sk-read-plain","from":"sk-live","to":"sk-live","on":"sk-read","effects":[{"set":"plainAfterShred","to":"plainAfterShred || shredRequested"},{"emit":"sk-plain"}]},{"id":"sk-read-sealed","from":"sk-shredded","to":"sk-shredded","on":"sk-read","effects":[{"emit":"sk-sealed"}]}]},
     {"id":"subject-key-flow-impl","name":"Subject key (implementation)","level":"implementation","subject":"key-service","refines":"subject-key-flow","description":"The key of one subject, held wrapped in the key service. Destroying it overwrites the wrapped key and records the time, and a read after that returns only the sealed form.","initial":"ski-live","instances":{"key":"key-id","storedIn":"rec-subject-key","max":16},"transaction":{"scope":"transition","isolation":"serializable"},"variables":[{"name":"keyState","type":"string","repr":"string","initial":"live"},{"name":"destroyedAt","type":"number","repr":"timestamp","initial":0}],"states":[{"id":"ski-live","name":"Key held"},{"id":"ski-shredded","name":"Key destroyed","terminal":true}],"transitions":[{"id":"ski-destroy","from":"ski-live","to":"ski-shredded","on":"sk-shred","otherwise":true,"effects":[{"set":"keyState","to":"'destroyed'"},{"set":"destroyedAt","to":"time"},{"emit":"sk-destroyed","to":"subject-rights-service"}]},{"id":"ski-read-plain","from":"ski-live","to":"ski-live","on":"sk-read","otherwise":true,"effects":[{"emit":"sk-plain","to":"runtime"}]},{"id":"ski-read-sealed","from":"ski-shredded","to":"ski-shredded","on":"sk-read","otherwise":true,"effects":[{"emit":"sk-sealed","to":"runtime"}]}],"refinement":{"states":{"ski-live":"sk-live","ski-shredded":"sk-shredded"},"variables":{"shredRequested":"keyState == 'destroyed'","plainAfterShred":"false"},"transitions":{"ski-destroy":"sk-destroy","ski-read-plain":"sk-read-plain","ski-read-sealed":"sk-read-sealed"}},"storage":{"record":"rec-subject-key","key":"key-id","fields":{"keyState":"key-state","destroyedAt":"destroyed-at"},"stateValues":{"ski-live":"live","ski-shredded":"destroyed"}}},
     {"id":"audit-chain-flow","name":"Audit chain under erasure","subject":"audit-log","initial":"ac-open","description":"An append-only chain. Erasing a principal seals its entries, and the hash of each entry is computed over the sealed form, so the chain stays valid.","variables":[{"name":"chainOk","type":"boolean","initial":true},{"name":"sealed","type":"number","initial":0}],"states":[{"id":"ac-open","name":"Open"}],"transitions":[{"id":"ac-append","from":"ac-open","to":"ac-open","on":"au-append","effects":[{"emit":"au-appended"}]},{"id":"ac-rewrite","from":"ac-open","to":"ac-open","on":"au-erase","faultOnly":true,"description":"Defect: rewrites the entry in place, so the link of the next entry no longer matches.","effects":[{"set":"chainOk","to":false},{"emit":"au-sealed"}]},{"id":"ac-seal","from":"ac-open","to":"ac-open","on":"au-erase","effects":[{"set":"sealed","to":"sealed + 1"},{"emit":"au-sealed"}]}]},
-    {"id":"audit-chain-flow-impl","name":"Audit chain under erasure (implementation)","level":"implementation","subject":"audit-log","refines":"audit-chain-flow","description":"The audit chain of one tenant. An append takes the next sequence number and links to the hash of the previous entry. An erasure seals the entries of the principal and never rewrites one, so every link still matches.","initial":"aci-open","instances":{"key":"tenant-id","storedIn":"rec-audit-chain","max":16},"transaction":{"scope":"transition","isolation":"serializable"},"variables":[{"name":"headSeq","type":"number","repr":"u64","initial":0},{"name":"sealed","type":"number","repr":"u64","initial":0}],"states":[{"id":"aci-open","name":"Open"}],"transitions":[{"id":"aci-append","from":"aci-open","to":"aci-open","on":"au-append","otherwise":true,"effects":[{"set":"headSeq","to":"headSeq + 1"},{"emit":"au-appended","to":"runtime"}]},{"id":"aci-seal","from":"aci-open","to":"aci-open","on":"au-erase","otherwise":true,"effects":[{"set":"sealed","to":"sealed + 1"},{"emit":"au-sealed","to":"subject-rights-service"}]}],"refinement":{"states":{"aci-open":"ac-open"},"variables":{"chainOk":"true","sealed":"sealed"},"transitions":{"aci-append":"ac-append","aci-seal":"ac-seal"}},"storage":{"record":"rec-audit-chain","key":"tenant-id","fields":{"headSeq":"head-seq"}}},
+    {
+      "id": "audit-chain-flow-impl",
+      "name": "Audit chain under erasure (implementation)",
+      "level": "implementation",
+      "subject": "audit-log",
+      "refines": "audit-chain-flow",
+      "description": "The audit chain of one tenant. An append takes the next sequence number and links to the hash of the previous entry. An erasure seals the entries of the principal and never rewrites one, so every link still matches.",
+      "initial": "aci-open",
+      "instances": {
+        "key": "tenant-id",
+        "storedIn": "rec-audit-chain",
+        "max": 16
+      },
+      "transaction": {
+        "scope": "transition",
+        "isolation": "serializable"
+      },
+      "variables": [
+        {
+          "name": "headSeq",
+          "type": "number",
+          "repr": "u64",
+          "initial": 0
+        },
+        {
+          "name": "sealed",
+          "type": "number",
+          "repr": "u64",
+          "initial": 0
+        }
+      ],
+      "states": [
+        {
+          "id": "aci-open",
+          "name": "Open"
+        }
+      ],
+      "transitions": [
+        {
+          "id": "aci-append",
+          "from": "aci-open",
+          "to": "aci-open",
+          "on": "au-append",
+          "otherwise": true,
+          "effects": [
+            {
+              "set": "headSeq",
+              "to": "headSeq + 1"
+            },
+            {
+              "emit": "au-appended",
+              "to": "runtime"
+            }
+          ]
+        },
+        {
+          "id": "aci-seal",
+          "from": "aci-open",
+          "to": "aci-open",
+          "on": "au-erase",
+          "otherwise": true,
+          "effects": [
+            {
+              "set": "sealed",
+              "to": "sealed + 1"
+            },
+            {
+              "emit": "au-sealed",
+              "to": "subject-rights-service"
+            }
+          ]
+        }
+      ],
+      "refinement": {
+        "states": {
+          "aci-open": "ac-open"
+        },
+        "variables": {
+          "chainOk": "true",
+          "sealed": "sealed"
+        },
+        "transitions": {
+          "aci-append": "ac-append",
+          "aci-seal": "ac-seal"
+        }
+      },
+      "storage": {
+        "record": "rec-audit-chain",
+        "key": "tenant-id",
+        "fields": {
+          "headSeq": "head-seq"
+        },
+        "creates": true
+      }
+    },
     {"id":"agent-halt-flow","name":"Agent halt","subject":"agent-gateway","initial":"ah-running","description":"One agent: an anomaly halts it, and a halted agent applies nothing until a principal other than the agent resumes it.","variables":[],"states":[{"id":"ah-running","name":"Running"},{"id":"ah-stopped","name":"Halted"}],"transitions":[{"id":"ah-trip","from":"ah-running","to":"ah-stopped","on":"ah-anomaly","effects":[{"emit":"ah-halted"}]},{"id":"ah-apply","from":"ah-running","to":"ah-running","on":"ah-operation","effects":[{"emit":"ah-applied"}]},{"id":"ah-apply-halted","from":"ah-stopped","to":"ah-stopped","on":"ah-operation","faultOnly":true,"description":"Defect: applies an operation while the agent is halted.","effects":[{"emit":"ah-applied"}]},{"id":"ah-refuse-halted","from":"ah-stopped","to":"ah-stopped","on":"ah-operation","effects":[{"emit":"ah-refused"}]},{"id":"ah-resume-agent","from":"ah-stopped","to":"ah-running","on":"ah-resume"}]},
     {"id":"agent-halt-flow-impl","name":"Agent halt (implementation)","level":"implementation","subject":"agent-gateway","refines":"agent-halt-flow","description":"One agent principal. The state of the principal record is active while the agent runs and suspended while it is halted; an operation of a suspended agent is refused before anything is applied.","initial":"ahi-running","instances":{"key":"principal-id","storedIn":"rec-principal","max":16},"transaction":{"scope":"transition","isolation":"serializable"},"variables":[],"states":[{"id":"ahi-running","name":"Running (principal active)","ignores":["ah-resume"]},{"id":"ahi-stopped","name":"Halted (principal suspended)","ignores":["ah-anomaly"]}],"transitions":[{"id":"ahi-trip","from":"ahi-running","to":"ahi-stopped","on":"ah-anomaly","otherwise":true,"effects":[{"emit":"ah-halted","to":"notification-service"}]},{"id":"ahi-apply","from":"ahi-running","to":"ahi-running","on":"ah-operation","otherwise":true,"effects":[{"emit":"ah-applied","to":"agent"}]},{"id":"ahi-refuse-halted","from":"ahi-stopped","to":"ahi-stopped","on":"ah-operation","otherwise":true,"effects":[{"emit":"ah-refused","to":"agent"}]},{"id":"ahi-resume","from":"ahi-stopped","to":"ahi-running","on":"ah-resume","otherwise":true}],"refinement":{"states":{"ahi-running":"ah-running","ahi-stopped":"ah-stopped"},"variables":{},"transitions":{"ahi-trip":"ah-trip","ahi-apply":"ah-apply","ahi-refuse-halted":"ah-refuse-halted","ahi-resume":"ah-resume-agent"}},"storage":{"record":"rec-principal","key":"principal-id","stateValues":{"ahi-running":"active","ahi-stopped":"suspended"}}},
     {"id":"approval-separation-flow","name":"Approval separation","subject":"agent-gateway","initial":"sp-idle","description":"A proposal is cleared only by an approval from a principal other than its author.","variables":[{"name":"author","type":"string","initial":""}],"states":[{"id":"sp-idle","name":"No proposal"},{"id":"sp-open","name":"Awaiting approval"},{"id":"sp-done","name":"Cleared","terminal":true}],"transitions":[{"id":"sp-open-proposal","from":"sp-idle","to":"sp-open","on":"sp-proposed","effects":[{"set":"author","to":"event.author"}]},{"id":"sp-accept-self","from":"sp-open","to":"sp-done","on":"sp-approve","guard":"event.by == author","faultOnly":true,"description":"Defect: lets the author of a proposal approve it.","effects":[{"emit":"sp-cleared"}]},{"id":"sp-approve-other","from":"sp-open","to":"sp-done","on":"sp-approve","guard":"event.by != author","effects":[{"emit":"sp-cleared"}]},{"id":"sp-refuse-self","from":"sp-open","to":"sp-open","on":"sp-approve","guard":"event.by == author","effects":[{"emit":"sp-refused"}]}]},
     {"id":"approval-separation-flow-impl","name":"Approval separation (implementation)","level":"implementation","subject":"agent-gateway","refines":"approval-separation-flow","description":"One proposal. Opening it records its author; an approval clears it only when the approving principal is not the author. The stored proposal is awaiting approval while it is open and cleared afterwards.","initial":"spi-idle","instances":{"key":"proposal-id","storedIn":"rec-proposal","max":16},"transaction":{"scope":"transition","isolation":"serializable"},"variables":[{"name":"author","type":"string","repr":"principal-id","initial":""}],"states":[{"id":"spi-idle","name":"No proposal","ignores":["sp-approve"]},{"id":"spi-open","name":"Awaiting approval","ignores":["sp-proposed"]},{"id":"spi-done","name":"Cleared","terminal":true}],"transitions":[{"id":"spi-open-proposal","from":"spi-idle","to":"spi-open","on":"sp-proposed","otherwise":true,"effects":[{"set":"author","to":"event.author"}]},{"id":"spi-approve-other","from":"spi-open","to":"spi-done","on":"sp-approve","guard":"event.by != author","effects":[{"emit":"sp-cleared","to":"runtime"}]},{"id":"spi-refuse-self","from":"spi-open","to":"spi-open","on":"sp-approve","guard":"event.by == author","effects":[{"emit":"sp-refused","to":"agent"}]}],"refinement":{"states":{"spi-idle":"sp-idle","spi-open":"sp-open","spi-done":"sp-done"},"variables":{"author":"author"},"transitions":{"spi-open-proposal":"sp-open-proposal","spi-approve-other":"sp-approve-other","spi-refuse-self":"sp-refuse-self"}},"storage":{"record":"rec-proposal","key":"proposal-id","state":"approval-state"}},
     {"id":"token-render-flow","name":"Rendering a page with a reader-dependent token","subject":"runtime","initial":"tk-ready","description":"A page holds a token whose value depends on the reader. The design renders it for each reader and stores no shared copy.","variables":[{"name":"stored","type":"boolean","initial":false},{"name":"storedFor","type":"string","initial":""},{"name":"leak","type":"boolean","initial":false}],"states":[{"id":"tk-ready","name":"Ready"}],"transitions":[{"id":"tk-store-shared","from":"tk-ready","to":"tk-ready","on":"tk-request","faultOnly":true,"guard":"!stored","description":"Defect: stores the rendered page as a shared copy.","effects":[{"set":"stored","to":true},{"set":"storedFor","to":"event.reader"},{"emit":"tk-rendered"}]},{"id":"tk-serve-stored","from":"tk-ready","to":"tk-ready","on":"tk-request","guard":"stored","effects":[{"set":"leak","to":"leak || event.reader != storedFor"},{"emit":"tk-rendered"}]},{"id":"tk-render","from":"tk-ready","to":"tk-ready","on":"tk-request","effects":[{"emit":"tk-rendered"}]}]},
-    {"id":"token-render-flow-impl","name":"Rendering a page with a reader-dependent token (implementation)","level":"implementation","subject":"runtime","refines":"token-render-flow","description":"Rendering a page that holds a reader-dependent token. Every request is rendered for its reader from the token expression and nothing is stored, so the machine holds no state and no instance outlives a request.","initial":"tki-ready","transaction":{"scope":"transition","isolation":"serializable"},"variables":[],"states":[{"id":"tki-ready","name":"Ready"}],"transitions":[{"id":"tki-render","from":"tki-ready","to":"tki-ready","on":"tk-request","otherwise":true,"effects":[{"emit":"tk-rendered","to":"gateway"}]}],"refinement":{"states":{"tki-ready":"tk-ready"},"variables":{"stored":"false","storedFor":"''","leak":"false"},"transitions":{"tki-render":"tk-render"}},"storage":{"record":"rec-render-request","key":"request-id"}},
+    {
+      "id": "token-render-flow-impl",
+      "name": "Rendering a page with a reader-dependent token (implementation)",
+      "level": "implementation",
+      "subject": "runtime",
+      "refines": "token-render-flow",
+      "description": "Rendering a page that holds a reader-dependent token. Every request is rendered for its reader from the token expression and nothing is stored, so the machine holds no state and no instance outlives a request.",
+      "initial": "tki-ready",
+      "transaction": {
+        "scope": "transition",
+        "isolation": "serializable"
+      },
+      "variables": [],
+      "states": [
+        {
+          "id": "tki-ready",
+          "name": "Ready"
+        }
+      ],
+      "transitions": [
+        {
+          "id": "tki-render",
+          "from": "tki-ready",
+          "to": "tki-ready",
+          "on": "tk-request",
+          "otherwise": true,
+          "effects": [
+            {
+              "emit": "tk-rendered",
+              "to": "gateway"
+            }
+          ]
+        }
+      ],
+      "refinement": {
+        "states": {
+          "tki-ready": "tk-ready"
+        },
+        "variables": {
+          "stored": "false",
+          "storedFor": "''",
+          "leak": "false"
+        },
+        "transitions": {
+          "tki-render": "tk-render"
+        }
+      },
+      "storage": {
+        "record": "rec-render-request",
+        "key": "request-id",
+        "creates": true
+      }
+    },
     {"id":"mail-dispatch-flow","name":"Mail dispatch","subject":"mail-dispatcher","initial":"md-idle","description":"One message with its idempotency key. The dispatcher submits it, and submits it again with the same key when no acknowledgement comes.","variables":[{"name":"submissions","type":"number","initial":0},{"name":"key","type":"string","initial":""}],"states":[{"id":"md-idle","name":"Idle"},{"id":"md-waiting","name":"Waiting for an acknowledgement"},{"id":"md-sent","name":"Recorded as sent"}],"transitions":[{"id":"md-submit","from":"md-idle","to":"md-waiting","on":"em-due","effects":[{"set":"submissions","to":"submissions + 1"},{"set":"key","to":"event.key"},{"emit":"em-submit","payload":{"key":"key"}}]},{"id":"md-resubmit","from":"md-waiting","to":"md-waiting","on":"em-timeout","effects":[{"set":"submissions","to":"submissions + 1"},{"emit":"em-submit","payload":{"key":"key"}}]},{"id":"md-record","from":"md-waiting","to":"md-sent","on":"em-ack","effects":[{"emit":"em-recorded"}]},{"id":"md-ignore-late-ack","from":"md-sent","to":"md-sent","on":"em-ack","effects":[]}]},
     {"id":"mail-dispatch-flow-impl","name":"Mail dispatch (implementation)","level":"implementation","subject":"mail-dispatcher","refines":"mail-dispatch-flow","description":"One message of the mail outbox. The dispatcher submits it with its idempotency key and counts the submission; when no acknowledgement comes within 30 seconds (30000 ms, default) a timer raises em-timeout and it submits it again with the same key, and an acknowledgement records the message as sent.","initial":"mdi-idle","instances":{"key":"message-id","storedIn":"rec-mail-message","max":16},"transaction":{"scope":"transition","isolation":"serializable"},"variables":[{"name":"attempts","type":"number","repr":"u64","initial":0},{"name":"key","type":"string","repr":"string","initial":""}],"states":[{"id":"mdi-idle","name":"Queued","ignores":["em-timeout","em-ack"]},{"id":"mdi-waiting","name":"Submitted, waiting for an acknowledgement","ignores":["em-due"]},{"id":"mdi-sent","name":"Recorded as sent","ignores":["em-due","em-timeout"]}],"transitions":[{"id":"mdi-submit","from":"mdi-idle","to":"mdi-waiting","on":"em-due","otherwise":true,"effects":[{"set":"attempts","to":"attempts + 1"},{"set":"key","to":"event.key"},{"emit":"em-submit","to":"mail-service","payload":{"key":"key"}},{"timer":"ack-timeout","after":30000,"emit":"em-timeout","payload":{"message-id":"event.message-id"}}]},{"id":"mdi-resubmit","from":"mdi-waiting","to":"mdi-waiting","on":"em-timeout","otherwise":true,"effects":[{"set":"attempts","to":"attempts + 1"},{"emit":"em-submit","to":"mail-service","payload":{"key":"key"}},{"timer":"ack-timeout","after":30000,"emit":"em-timeout","payload":{"message-id":"event.message-id"}}]},{"id":"mdi-record","from":"mdi-waiting","to":"mdi-sent","on":"em-ack","otherwise":true,"effects":[{"emit":"em-recorded","to":"automation-worker"},{"cancel":"ack-timeout"}]},{"id":"mdi-ignore-late-ack","from":"mdi-sent","to":"mdi-sent","on":"em-ack","otherwise":true,"effects":[]}],"refinement":{"states":{"mdi-idle":"md-idle","mdi-waiting":"md-waiting","mdi-sent":"md-sent"},"variables":{"submissions":"attempts","key":"key"},"transitions":{"mdi-submit":"md-submit","mdi-resubmit":"md-resubmit","mdi-record":"md-record","mdi-ignore-late-ack":"md-ignore-late-ack"}},"storage":{"record":"rec-mail-message","key":"message-id","fields":{"key":"idempotency-key"},"stateValues":{"mdi-idle":"queued","mdi-waiting":"submitted","mdi-sent":"sent"}}},
     {"id":"mail-adapter-flow","name":"Mail adapter","subject":"mail-service","initial":"ma-ready","description":"The adapter of the mail contract. It keeps a table of idempotency keys with two slots, k1 and k2. It delivers a key once and acknowledges every submission of it; a submission with the other key is a different message.","variables":[{"name":"seenK1","type":"boolean","initial":false},{"name":"seenK2","type":"boolean","initial":false},{"name":"delivered","type":"number","initial":0},{"name":"deliveredK1","type":"number","initial":0},{"name":"deliveredK2","type":"number","initial":0}],"states":[{"id":"ma-ready","name":"Ready"}],"transitions":[{"id":"ma-deliver-again","from":"ma-ready","to":"ma-ready","on":"em-submit","faultOnly":true,"guard":"event.key == 'k1' && seenK1","effects":[{"set":"delivered","to":"delivered + 1"},{"set":"deliveredK1","to":"deliveredK1 + 1"},{"emit":"em-ack"}]},{"id":"ma-deliver-again-k2","from":"ma-ready","to":"ma-ready","on":"em-submit","faultOnly":true,"guard":"event.key == 'k2' && seenK2","effects":[{"set":"delivered","to":"delivered + 1"},{"set":"deliveredK2","to":"deliveredK2 + 1"},{"emit":"em-ack"}]},{"id":"ma-treat-keys-alike","from":"ma-ready","to":"ma-ready","on":"em-submit","faultOnly":true,"guard":"event.key == 'k2' && seenK1 && !seenK2","effects":[{"set":"seenK2","to":true},{"emit":"em-ack","after":2}]},{"id":"ma-deliver-k1","from":"ma-ready","to":"ma-ready","on":"em-submit","guard":"event.key == 'k1' && !seenK1","effects":[{"set":"seenK1","to":true},{"set":"delivered","to":"delivered + 1"},{"set":"deliveredK1","to":"deliveredK1 + 1"},{"emit":"em-ack","after":2}]},{"id":"ma-deliver-k2","from":"ma-ready","to":"ma-ready","on":"em-submit","guard":"event.key == 'k2' && !seenK2","effects":[{"set":"seenK2","to":true},{"set":"delivered","to":"delivered + 1"},{"set":"deliveredK2","to":"deliveredK2 + 1"},{"emit":"em-ack","after":2}]},{"id":"ma-acknowledge-repeat","from":"ma-ready","to":"ma-ready","on":"em-submit","guard":"(event.key == 'k1' && seenK1) || (event.key == 'k2' && seenK2)","effects":[{"emit":"em-ack","after":2}]}]},
@@ -18218,7 +19051,142 @@
     {"id":"tenant-move-flow","name":"Tenant move","subject":"control-plane","initial":"tm-source","description":"One tenant moving between placements. The source serves while the copy runs, and a writer may write while it does. The source is frozen, the writes the copy missed are applied to the target (the final synchronisation), and the two state hashes are compared. A hash is modelled as the number of writes a side holds. The directory switches only when the comparison finds them equal.","variables":[{"name":"frozen","type":"boolean","initial":false},{"name":"sourceVersion","type":"number","initial":0},{"name":"targetVersion","type":"number","initial":0},{"name":"matched","type":"boolean","initial":false},{"name":"switched","type":"boolean","initial":false}],"states":[{"id":"tm-source","name":"Source serves"},{"id":"tm-copying","name":"Copying"},{"id":"tm-frozen","name":"Source frozen"},{"id":"tm-verified","name":"Hashes equal"},{"id":"tm-target","name":"Target serves"}],"transitions":[{"id":"tm-write-while-frozen","from":"tm-frozen","to":"tm-frozen","on":"tm-write-requested","faultOnly":true,"effects":[{"set":"sourceVersion","to":"sourceVersion + 1"},{"emit":"tm-write-accepted"}]},{"id":"tm-switch-unverified","from":"tm-frozen","to":"tm-target","on":"tm-switch-requested","faultOnly":true,"effects":[{"set":"switched","to":true},{"emit":"tm-directory-switched"}]},{"id":"tm-switch-on-failure","from":"tm-copying","to":"tm-target","on":"tm-copy-failed","faultOnly":true,"effects":[{"set":"switched","to":true},{"emit":"tm-directory-switched"}]},{"id":"tm-begin","from":"tm-source","to":"tm-copying","on":"tm-move-requested","effects":[{"set":"targetVersion","to":"sourceVersion"}]},{"id":"tm-write-source","from":"tm-source","to":"tm-source","on":"tm-write-requested","effects":[{"set":"sourceVersion","to":"sourceVersion + 1"},{"emit":"tm-write-accepted"}]},{"id":"tm-write-copying","from":"tm-copying","to":"tm-copying","on":"tm-write-requested","effects":[{"set":"sourceVersion","to":"sourceVersion + 1"},{"emit":"tm-write-accepted"}]},{"id":"tm-write-frozen","from":"tm-frozen","to":"tm-frozen","on":"tm-write-requested","effects":[{"emit":"tm-write-refused"}]},{"id":"tm-write-verified","from":"tm-verified","to":"tm-verified","on":"tm-write-requested","effects":[{"emit":"tm-write-refused"}]},{"id":"tm-freeze","from":"tm-copying","to":"tm-frozen","on":"tm-freeze-requested","effects":[{"set":"frozen","to":true}]},{"id":"tm-reconcile","from":"tm-frozen","to":"tm-frozen","on":"tm-reconcile-requested","effects":[{"set":"targetVersion","to":"sourceVersion"}]},{"id":"tm-hash-match","from":"tm-frozen","to":"tm-verified","on":"tm-hash-checked","guard":"sourceVersion == targetVersion","effects":[{"set":"matched","to":true}]},{"id":"tm-hash-mismatch","from":"tm-frozen","to":"tm-source","on":"tm-hash-checked","guard":"sourceVersion != targetVersion","effects":[{"set":"frozen","to":false},{"emit":"tm-move-failed"}]},{"id":"tm-abandon-copy","from":"tm-copying","to":"tm-source","on":"tm-copy-failed","effects":[{"emit":"tm-move-failed"}]},{"id":"tm-switch","from":"tm-verified","to":"tm-target","on":"tm-switch-requested","guard":"matched","effects":[{"set":"switched","to":true},{"emit":"tm-directory-switched"}]}]},
     {"id":"tenant-move-flow-impl","name":"Tenant move (implementation)","level":"implementation","subject":"control-plane","refines":"tenant-move-flow","description":"One move of a tenant to another placement. The move record holds its stage, and the two state hashes are modelled as the number of writes each side holds. The source serves while the copy runs, is frozen for the final synchronisation, and the directory switches only when the hashes are equal.","initial":"tmi-source","instances":{"key":"move-id","storedIn":"rec-tenant-move","max":16},"transaction":{"scope":"transition","isolation":"serializable"},"variables":[{"name":"frozen","type":"boolean","repr":"bool","initial":false},{"name":"sourceVersion","type":"number","repr":"u64","initial":0},{"name":"targetVersion","type":"number","repr":"u64","initial":0},{"name":"matched","type":"boolean","repr":"bool","initial":false},{"name":"switched","type":"boolean","repr":"bool","initial":false}],"states":[{"id":"tmi-source","name":"Source serves","ignores":["tm-freeze-requested","tm-hash-checked","tm-switch-requested","tm-copy-failed","tm-reconcile-requested"]},{"id":"tmi-copying","name":"Copying","ignores":["tm-move-requested","tm-hash-checked","tm-switch-requested","tm-reconcile-requested"]},{"id":"tmi-frozen","name":"Source frozen","ignores":["tm-move-requested","tm-freeze-requested","tm-switch-requested","tm-copy-failed"]},{"id":"tmi-verified","name":"Hashes equal","ignores":["tm-move-requested","tm-freeze-requested","tm-hash-checked","tm-copy-failed","tm-reconcile-requested"]},{"id":"tmi-target","name":"Target serves","terminal":true}],"transitions":[{"id":"tmi-begin","from":"tmi-source","to":"tmi-copying","on":"tm-move-requested","otherwise":true,"effects":[{"set":"targetVersion","to":"sourceVersion"}]},{"id":"tmi-write-source","from":"tmi-source","to":"tmi-source","on":"tm-write-requested","otherwise":true,"effects":[{"set":"sourceVersion","to":"sourceVersion + 1"},{"emit":"tm-write-accepted","to":"gateway"}]},{"id":"tmi-write-copying","from":"tmi-copying","to":"tmi-copying","on":"tm-write-requested","otherwise":true,"effects":[{"set":"sourceVersion","to":"sourceVersion + 1"},{"emit":"tm-write-accepted","to":"gateway"}]},{"id":"tmi-freeze","from":"tmi-copying","to":"tmi-frozen","on":"tm-freeze-requested","otherwise":true,"effects":[{"set":"frozen","to":true}]},{"id":"tmi-abandon-copy","from":"tmi-copying","to":"tmi-source","on":"tm-copy-failed","otherwise":true,"effects":[{"emit":"tm-move-failed","to":"operator-console"}]},{"id":"tmi-write-frozen","from":"tmi-frozen","to":"tmi-frozen","on":"tm-write-requested","otherwise":true,"effects":[{"emit":"tm-write-refused","to":"gateway"}]},{"id":"tmi-reconcile","from":"tmi-frozen","to":"tmi-frozen","on":"tm-reconcile-requested","otherwise":true,"effects":[{"set":"targetVersion","to":"sourceVersion"}]},{"id":"tmi-hash-match","from":"tmi-frozen","to":"tmi-verified","on":"tm-hash-checked","guard":"sourceVersion == targetVersion","effects":[{"set":"matched","to":true}]},{"id":"tmi-hash-mismatch","from":"tmi-frozen","to":"tmi-source","on":"tm-hash-checked","guard":"sourceVersion != targetVersion","effects":[{"set":"frozen","to":false},{"emit":"tm-move-failed","to":"operator-console"}]},{"id":"tmi-write-verified","from":"tmi-verified","to":"tmi-verified","on":"tm-write-requested","otherwise":true,"effects":[{"emit":"tm-write-refused","to":"gateway"}]},{"id":"tmi-switch","from":"tmi-verified","to":"tmi-target","on":"tm-switch-requested","guard":"matched","effects":[{"set":"switched","to":true},{"emit":"tm-directory-switched","to":"gateway"}]}],"refinement":{"states":{"tmi-source":"tm-source","tmi-copying":"tm-copying","tmi-frozen":"tm-frozen","tmi-verified":"tm-verified","tmi-target":"tm-target"},"variables":{"frozen":"frozen","sourceVersion":"sourceVersion","targetVersion":"targetVersion","matched":"matched","switched":"switched"},"transitions":{"tmi-begin":"tm-begin","tmi-write-source":"tm-write-source","tmi-write-copying":"tm-write-copying","tmi-freeze":"tm-freeze","tmi-abandon-copy":"tm-abandon-copy","tmi-write-frozen":"tm-write-frozen","tmi-reconcile":"tm-reconcile","tmi-hash-match":"tm-hash-match","tmi-hash-mismatch":"tm-hash-mismatch","tmi-write-verified":"tm-write-verified","tmi-switch":"tm-switch"}},"storage":{"record":"rec-tenant-move","key":"move-id","fields":{"sourceVersion":"source-version","targetVersion":"target-version"},"stateValues":{"tmi-source":"source-serves","tmi-copying":"copying","tmi-frozen":"frozen","tmi-verified":"verified","tmi-target":"target-serves"}}},
     {"id":"commit-flow","name":"Commit and publication","subject":"runtime","initial":"rc-idle","description":"An accepted intent is committed, and only then is its event published.","variables":[{"name":"committed","type":"boolean","initial":false},{"name":"published","type":"boolean","initial":false}],"states":[{"id":"rc-idle","name":"Idle"},{"id":"rc-deciding","name":"Deciding"},{"id":"rc-committing","name":"Committing"},{"id":"rc-done","name":"Published","terminal":true}],"transitions":[{"id":"rc-decide","from":"rc-idle","to":"rc-deciding","on":"rt-intent","effects":[{"emit":"rt-decided"}]},{"id":"rc-publish-early","from":"rc-deciding","to":"rc-committing","on":"rt-decided","faultOnly":true,"description":"Defect: publishes the event before the commit is confirmed.","effects":[{"set":"published","to":true},{"emit":"rt-published"},{"emit":"rt-committed","after":1}]},{"id":"rc-commit","from":"rc-deciding","to":"rc-committing","on":"rt-decided","effects":[{"emit":"rt-committed","after":1}]},{"id":"rc-publish","from":"rc-committing","to":"rc-done","on":"rt-committed","effects":[{"set":"committed","to":true},{"set":"published","to":true},{"emit":"rt-published"}]}]},
-    {"id":"commit-flow-impl","name":"Commit and publication (implementation)","level":"implementation","subject":"runtime","refines":"commit-flow","description":"The outbox entry of one intent. The kernel decides, the commit is requested, and the event is published only after the store confirmed the commit; the entry records both facts. The store confirms the commit 20 ms after it is requested (default). One model tick is 20 ms here (timeScale 20), so the model delay of one tick is the 20 ms.","initial":"rci-idle","instances":{"key":"correlation","storedIn":"rec-outbox-entry","max":16},"transaction":{"scope":"transition","isolation":"serializable"},"variables":[{"name":"committed","type":"boolean","repr":"bool","initial":false},{"name":"published","type":"boolean","repr":"bool","initial":false}],"states":[{"id":"rci-idle","name":"Idle","ignores":["rt-decided","rt-committed"]},{"id":"rci-deciding","name":"Deciding","ignores":["rt-intent","rt-committed"]},{"id":"rci-committing","name":"Committing","ignores":["rt-intent","rt-decided"]},{"id":"rci-done","name":"Published","terminal":true}],"transitions":[{"id":"rci-decide","from":"rci-idle","to":"rci-deciding","on":"rt-intent","otherwise":true,"effects":[{"emit":"rt-decided","to":"runtime"}]},{"id":"rci-commit","from":"rci-deciding","to":"rci-committing","on":"rt-decided","otherwise":true,"effects":[{"emit":"rt-committed","after":20,"to":"runtime"}]},{"id":"rci-publish","from":"rci-committing","to":"rci-done","on":"rt-committed","otherwise":true,"effects":[{"set":"committed","to":true},{"set":"published","to":true},{"emit":"rt-published","to":"automation-worker"}]}],"refinement":{"states":{"rci-idle":"rc-idle","rci-deciding":"rc-deciding","rci-committing":"rc-committing","rci-done":"rc-done"},"variables":{"committed":"committed","published":"published"},"transitions":{"rci-decide":"rc-decide","rci-commit":"rc-commit","rci-publish":"rc-publish"},"timeScale":20},"storage":{"record":"rec-outbox-entry","key":"correlation"}},
+    {
+      "id": "commit-flow-impl",
+      "name": "Commit and publication (implementation)",
+      "level": "implementation",
+      "subject": "runtime",
+      "refines": "commit-flow",
+      "description": "The outbox entry of one intent. The kernel decides, the commit is requested, and the event is published only after the store confirmed the commit; the entry records both facts. The store confirms the commit 20 ms after it is requested (default). One model tick is 20 ms here (timeScale 20), so the model delay of one tick is the 20 ms.",
+      "initial": "rci-idle",
+      "instances": {
+        "key": "correlation",
+        "storedIn": "rec-outbox-entry",
+        "max": 16
+      },
+      "transaction": {
+        "scope": "transition",
+        "isolation": "serializable"
+      },
+      "variables": [
+        {
+          "name": "committed",
+          "type": "boolean",
+          "repr": "bool",
+          "initial": false
+        },
+        {
+          "name": "published",
+          "type": "boolean",
+          "repr": "bool",
+          "initial": false
+        }
+      ],
+      "states": [
+        {
+          "id": "rci-idle",
+          "name": "Idle",
+          "ignores": [
+            "rt-decided",
+            "rt-committed"
+          ]
+        },
+        {
+          "id": "rci-deciding",
+          "name": "Deciding",
+          "ignores": [
+            "rt-intent",
+            "rt-committed"
+          ]
+        },
+        {
+          "id": "rci-committing",
+          "name": "Committing",
+          "ignores": [
+            "rt-intent",
+            "rt-decided"
+          ]
+        },
+        {
+          "id": "rci-done",
+          "name": "Published",
+          "terminal": true
+        }
+      ],
+      "transitions": [
+        {
+          "id": "rci-decide",
+          "from": "rci-idle",
+          "to": "rci-deciding",
+          "on": "rt-intent",
+          "otherwise": true,
+          "effects": [
+            {
+              "emit": "rt-decided",
+              "to": "runtime"
+            }
+          ]
+        },
+        {
+          "id": "rci-commit",
+          "from": "rci-deciding",
+          "to": "rci-committing",
+          "on": "rt-decided",
+          "otherwise": true,
+          "effects": [
+            {
+              "emit": "rt-committed",
+              "after": 20,
+              "to": "runtime"
+            }
+          ]
+        },
+        {
+          "id": "rci-publish",
+          "from": "rci-committing",
+          "to": "rci-done",
+          "on": "rt-committed",
+          "otherwise": true,
+          "effects": [
+            {
+              "set": "committed",
+              "to": true
+            },
+            {
+              "set": "published",
+              "to": true
+            },
+            {
+              "emit": "rt-published",
+              "to": "automation-worker"
+            }
+          ]
+        }
+      ],
+      "refinement": {
+        "states": {
+          "rci-idle": "rc-idle",
+          "rci-deciding": "rc-deciding",
+          "rci-committing": "rc-committing",
+          "rci-done": "rc-done"
+        },
+        "variables": {
+          "committed": "committed",
+          "published": "published"
+        },
+        "transitions": {
+          "rci-decide": "rc-decide",
+          "rci-commit": "rc-commit",
+          "rci-publish": "rc-publish"
+        },
+        "timeScale": 20
+      },
+      "storage": {
+        "record": "rec-outbox-entry",
+        "key": "correlation",
+        "creates": true
+      }
+    },
     {"id":"source-throttle-flow","name":"Per-source sign-in throttle","subject":"identity-service","initial":"st-open","description":"Password attempts from two sources, a and b, across many accounts. Once the failures from one source reach the threshold of 3, an attempt from that source is refused whatever its account. The threshold of 3 stands for the 100 failures of D-700, and the window of fifteen minutes is not modelled.","variables":[{"name":"failuresA","type":"number","initial":0},{"name":"failuresB","type":"number","initial":0},{"name":"evaluatedWhileThrottled","type":"number","initial":0}],"states":[{"id":"st-open","name":"Open"}],"transitions":[{"id":"st-evaluate-throttled","from":"st-open","to":"st-open","on":"src-attempt","faultOnly":true,"guard":"(event.source == 'a' && failuresA >= 3) || (event.source == 'b' && failuresB >= 3)","effects":[{"set":"evaluatedWhileThrottled","to":"evaluatedWhileThrottled + 1"},{"emit":"src-accepted"}]},{"id":"st-refuse-throttled","from":"st-open","to":"st-open","on":"src-attempt","guard":"(event.source == 'a' && failuresA >= 3) || (event.source == 'b' && failuresB >= 3)","effects":[{"emit":"src-refused"}]},{"id":"st-fail-a","from":"st-open","to":"st-open","on":"src-attempt","guard":"event.source == 'a' && event.guess == 'wrong'","effects":[{"set":"failuresA","to":"failuresA + 1"},{"emit":"src-refused"}]},{"id":"st-fail-b","from":"st-open","to":"st-open","on":"src-attempt","guard":"event.source == 'b' && event.guess == 'wrong'","effects":[{"set":"failuresB","to":"failuresB + 1"},{"emit":"src-refused"}]},{"id":"st-accept","from":"st-open","to":"st-open","on":"src-attempt","guard":"event.guess == 'right'","effects":[{"emit":"src-accepted"}]}]},
     {"id":"source-throttle-flow-impl","name":"Per-source sign-in throttle (implementation)","level":"implementation","subject":"identity-service","refines":"source-throttle-flow","description":"The per-source failure counters of the sign-in throttle, for the two sources a and b. Once the failures of a source reach the threshold of 3, every attempt from it is refused without being evaluated, whatever its account. The counters are rows of the limit counter record; the model puts both sources in one machine, so this one is a single unit and has no keyed instances.","initial":"sti-open","transaction":{"scope":"transition","isolation":"serializable"},"variables":[{"name":"failuresA","type":"number","repr":"u64","initial":0},{"name":"failuresB","type":"number","repr":"u64","initial":0}],"states":[{"id":"sti-open","name":"Open"}],"transitions":[{"id":"sti-refuse-throttled","from":"sti-open","to":"sti-open","on":"src-attempt","guard":"(event.source == 'a' && failuresA >= 3) || (event.source == 'b' && failuresB >= 3)","effects":[{"emit":"src-refused","to":"gateway"}]},{"id":"sti-fail-a","from":"sti-open","to":"sti-open","on":"src-attempt","guard":"event.source == 'a' && event.guess == 'wrong'","effects":[{"set":"failuresA","to":"failuresA + 1"},{"emit":"src-refused","to":"gateway"}]},{"id":"sti-fail-b","from":"sti-open","to":"sti-open","on":"src-attempt","guard":"event.source == 'b' && event.guess == 'wrong'","effects":[{"set":"failuresB","to":"failuresB + 1"},{"emit":"src-refused","to":"gateway"}]},{"id":"sti-accept","from":"sti-open","to":"sti-open","on":"src-attempt","guard":"event.guess == 'right'","effects":[{"emit":"src-accepted","to":"gateway"}]}],"refinement":{"states":{"sti-open":"st-open"},"variables":{"failuresA":"failuresA","failuresB":"failuresB","evaluatedWhileThrottled":"0"},"transitions":{"sti-refuse-throttled":"st-refuse-throttled","sti-fail-a":"st-fail-a","sti-fail-b":"st-fail-b","sti-accept":"st-accept"}},"storage":{"record":"rec-limit-counter","key":"limit-key","fields":{"failuresA":"failures-a","failuresB":"failures-b"}}},
     {"id":"client-session-flow","name":"Client session","subject":"web-application","initial":"cs-unknown","description":"The session the web application believes it holds. It is unknown until the first read; signing in and out move it; a session frame that says the session ended clears the request token at once and asks for the session again.","variables":[{"name":"holdsToken","type":"number","initial":0},{"name":"warnings","type":"number","initial":0}],"states":[{"id":"cs-unknown","name":"Not read yet"},{"id":"cs-out","name":"Signed out"},{"id":"cs-in","name":"Signed in"},{"id":"cs-ended","name":"Ended, read pending"}],"transitions":[{"id":"cs-read-in","from":"cs-unknown","to":"cs-in","on":"ui-session-read","guard":"event.authenticated == 1","effects":[{"set":"holdsToken","to":"1"}]},{"id":"cs-read-out","from":"cs-unknown","to":"cs-out","on":"ui-session-read","effects":[{"set":"holdsToken","to":"0"}]},{"id":"cs-sign-in","from":"cs-out","to":"cs-in","on":"ui-signed-in","effects":[{"set":"holdsToken","to":"1"}]},{"id":"cs-sign-out","from":"cs-in","to":"cs-out","on":"ui-signed-out","effects":[{"set":"holdsToken","to":"0"}]},{"id":"cs-end","from":"cs-in","to":"cs-ended","on":"ui-session-ended","effects":[{"set":"holdsToken","to":"0"},{"set":"warnings","to":"warnings + 1"},{"emit":"ui-session-requested"}]},{"id":"cs-confirm-end","from":"cs-ended","to":"cs-out","on":"ui-session-read","guard":"event.authenticated == 0"},{"id":"cs-resign","from":"cs-ended","to":"cs-in","on":"ui-signed-in","effects":[{"set":"holdsToken","to":"1"}]}]},
@@ -19582,7 +20550,8 @@
       },
       "storage": {
         "record": "rec-trigger-run",
-        "key": "correlation"
+        "key": "correlation",
+        "creates": true
       }
     },
     {
@@ -19789,7 +20758,8 @@
       },
       "storage": {
         "record": "rec-lease-attempt",
-        "key": "job-id"
+        "key": "job-id",
+        "creates": true
       }
     },
     {
@@ -20231,7 +21201,8 @@
         "fields": {
           "otherDueAt": "other-due-at",
           "otherStartedAt": "other-started-at"
-        }
+        },
+        "creates": true
       }
     },
     {
@@ -20421,7 +21392,8 @@
         "key": "scan-id",
         "fields": {
           "awakeScans": "awake-scans"
-        }
+        },
+        "creates": true
       }
     },
     {
@@ -20668,7 +21640,8 @@
         "stateValues": {
           "bk-running-i": "running",
           "bk-stopped-i": "stopped"
-        }
+        },
+        "creates": true
       }
     },
     {
@@ -20885,7 +21858,8 @@
         "fields": {
           "schemaNow": "schema-now",
           "savedUnder": "saved-under"
-        }
+        },
+        "creates": true
       }
     },
     {
@@ -21100,7 +22074,8 @@
         "stateValues": {
           "wa-draft-i": "draft",
           "wa-active-i": "active"
-        }
+        },
+        "creates": true
       }
     },
     {
@@ -21273,7 +22248,8 @@
         "stateValues": {
           "ti-offered-i": "offered",
           "ti-installed-i": "installed"
-        }
+        },
+        "creates": true
       }
     },
     {
@@ -22293,7 +23269,8 @@
           "namedEvaluated": "named-evaluated",
           "itemsNamed": "items-named",
           "itemsOther": "items-other"
-        }
+        },
+        "creates": true
       }
     },
     {
@@ -22475,7 +23452,8 @@
           "cs-open-i": "open",
           "cs-committed-i": "committed",
           "cs-aborted-i": "aborted"
-        }
+        },
+        "creates": true
       }
     },
     {
@@ -22863,7 +23841,8 @@
           "oc-idle-i": "idle",
           "oc-open-i": "open",
           "oc-ended-i": "ended"
-        }
+        },
+        "creates": true
       }
     },
     {
@@ -23204,7 +24183,8 @@
           "logAttempts": "log-attempts",
           "lastStatus": "last-status",
           "logStatus": "log-status"
-        }
+        },
+        "creates": true
       }
     },
     {
@@ -23433,7 +24413,8 @@
           "sp-draft-i": "draft",
           "sp-scheduled-i": "scheduled",
           "sp-published-i": "published"
-        }
+        },
+        "creates": true
       }
     },
     {
@@ -23595,7 +24576,8 @@
       },
       "storage": {
         "record": "rec-inbound-delivery",
-        "key": "delivery-id"
+        "key": "delivery-id",
+        "creates": true
       }
     },
     {
@@ -23776,7 +24758,8 @@
       },
       "storage": {
         "record": "rec-mail-request",
-        "key": "change-id"
+        "key": "change-id",
+        "creates": true
       }
     },
     {
@@ -24595,7 +25578,8 @@
           "heldA": "held-a",
           "heldB": "held-b",
           "signinsSent": "signins-sent"
-        }
+        },
+        "creates": true
       }
     },
     {
@@ -24813,7 +25797,8 @@
           "startupProvider": "startup-provider",
           "usedProvider": "used-provider",
           "configuredAtSend": "configured-at-send"
-        }
+        },
+        "creates": true
       }
     },
     {
@@ -24975,7 +25960,8 @@
       },
       "storage": {
         "record": "rec-mail-log-read",
-        "key": "read-id"
+        "key": "read-id",
+        "creates": true
       }
     },
     {
@@ -25435,7 +26421,8 @@
           "htmlParts": "html-parts",
           "textParts": "text-parts",
           "rawMarkup": "raw-markup"
-        }
+        },
+        "creates": true
       }
     },
     {
@@ -25686,7 +26673,8 @@
         "key": "report-id",
         "fields": {
           "mustSuppress": "must-suppress"
-        }
+        },
+        "creates": true
       }
     },
     {
@@ -25932,7 +26920,8 @@
         "fields": {
           "audienceSent": "audience-sent",
           "withUnsubscribe": "with-unsubscribe"
-        }
+        },
+        "creates": true
       }
     },
     {
@@ -26254,7 +27243,8 @@
       },
       "storage": {
         "record": "rec-tenant-suspension",
-        "key": "tenant-id"
+        "key": "tenant-id",
+        "creates": true
       },
       "instances": {
         "key": "tenant-id",
@@ -26520,7 +27510,8 @@
       },
       "storage": {
         "record": "rec-write-quota",
-        "key": "tenant-id"
+        "key": "tenant-id",
+        "creates": true
       },
       "instances": {
         "key": "tenant-id",
@@ -26805,7 +27796,8 @@
       },
       "storage": {
         "record": "rec-plan-change",
-        "key": "tenant-id"
+        "key": "tenant-id",
+        "creates": true
       },
       "instances": {
         "key": "tenant-id",
@@ -27039,7 +28031,8 @@
       },
       "storage": {
         "record": "rec-connection-quota",
-        "key": "scope"
+        "key": "scope",
+        "creates": true
       }
     },
     {
@@ -27409,7 +28402,8 @@
       },
       "storage": {
         "record": "rec-bootstrap-credential",
-        "key": "tenant-id"
+        "key": "tenant-id",
+        "creates": true
       },
       "instances": {
         "key": "tenant-id",
@@ -27711,7 +28705,8 @@
       },
       "storage": {
         "record": "rec-placement-choice",
-        "key": "tenant-id"
+        "key": "tenant-id",
+        "creates": true
       },
       "instances": {
         "key": "tenant-id",
@@ -28113,7 +29108,8 @@
       },
       "storage": {
         "record": "rec-tenant-deletion",
-        "key": "tenant-id"
+        "key": "tenant-id",
+        "creates": true
       },
       "instances": {
         "key": "tenant-id",
@@ -28296,7 +29292,8 @@
       },
       "storage": {
         "record": "rec-backup-key",
-        "key": "tenant-id"
+        "key": "tenant-id",
+        "creates": true
       },
       "instances": {
         "key": "tenant-id",
@@ -28544,7 +29541,8 @@
       },
       "storage": {
         "record": "rec-runtime-credential",
-        "key": "tenant-id"
+        "key": "tenant-id",
+        "creates": true
       },
       "instances": {
         "key": "tenant-id",
@@ -28866,7 +29864,8 @@
       },
       "storage": {
         "record": "rec-export-restore",
-        "key": "tenant-id"
+        "key": "tenant-id",
+        "creates": true
       },
       "instances": {
         "key": "tenant-id",
@@ -29145,7 +30144,8 @@
       },
       "storage": {
         "record": "rec-point-in-time",
-        "key": "tenant-id"
+        "key": "tenant-id",
+        "creates": true
       },
       "instances": {
         "key": "tenant-id",
@@ -29373,7 +30373,8 @@
       },
       "storage": {
         "record": "rec-kernel-upgrade",
-        "key": "tenant-id"
+        "key": "tenant-id",
+        "creates": true
       },
       "instances": {
         "key": "tenant-id",
@@ -29719,7 +30720,8 @@
       },
       "storage": {
         "record": "rec-placement-switch",
-        "key": "tenant-id"
+        "key": "tenant-id",
+        "creates": true
       },
       "instances": {
         "key": "tenant-id",
@@ -30295,7 +31297,8 @@
       },
       "storage": {
         "record": "rec-schema-change",
-        "key": "tenant-id"
+        "key": "tenant-id",
+        "creates": true
       },
       "instances": {
         "key": "tenant-id",
@@ -30587,7 +31590,8 @@
       },
       "storage": {
         "record": "rec-layout-rollout",
-        "key": "scope"
+        "key": "scope",
+        "creates": true
       }
     },
     {
@@ -30847,7 +31851,8 @@
       },
       "storage": {
         "record": "rec-staging-promotion",
-        "key": "tenant-id"
+        "key": "tenant-id",
+        "creates": true
       },
       "instances": {
         "key": "tenant-id",
@@ -31263,7 +32268,8 @@
       },
       "storage": {
         "record": "rec-field-change",
-        "key": "tenant-id"
+        "key": "tenant-id",
+        "creates": true
       },
       "instances": {
         "key": "tenant-id",
@@ -31551,7 +32557,8 @@
       },
       "storage": {
         "record": "rec-draft-save",
-        "key": "tenant-id"
+        "key": "tenant-id",
+        "creates": true
       },
       "instances": {
         "key": "tenant-id",
@@ -31885,7 +32892,8 @@
       },
       "storage": {
         "record": "rec-workflow-version",
-        "key": "tenant-id"
+        "key": "tenant-id",
+        "creates": true
       },
       "instances": {
         "key": "tenant-id",
@@ -32185,7 +33193,8 @@
       },
       "storage": {
         "record": "rec-scheduled-job-check",
-        "key": "tenant-id"
+        "key": "tenant-id",
+        "creates": true
       },
       "instances": {
         "key": "tenant-id",
@@ -32498,7 +33507,8 @@
       },
       "storage": {
         "record": "rec-template-proposal",
-        "key": "tenant-id"
+        "key": "tenant-id",
+        "creates": true
       },
       "instances": {
         "key": "tenant-id",
@@ -32814,7 +33824,8 @@
       },
       "storage": {
         "record": "rec-import",
-        "key": "tenant-id"
+        "key": "tenant-id",
+        "creates": true
       },
       "instances": {
         "key": "tenant-id",
@@ -32988,7 +33999,8 @@
       },
       "storage": {
         "record": "rec-identity-decision",
-        "key": "decision-id"
+        "key": "decision-id",
+        "creates": true
       }
     },
     {
@@ -33171,7 +34183,8 @@
       },
       "storage": {
         "record": "rec-identity-decision",
-        "key": "decision-id"
+        "key": "decision-id",
+        "creates": true
       }
     },
     {
@@ -33298,7 +34311,8 @@
       },
       "storage": {
         "record": "rec-identity-decision",
-        "key": "decision-id"
+        "key": "decision-id",
+        "creates": true
       }
     },
     {
@@ -33411,7 +34425,8 @@
       },
       "storage": {
         "record": "rec-identity-decision",
-        "key": "decision-id"
+        "key": "decision-id",
+        "creates": true
       }
     },
     {
@@ -33524,7 +34539,8 @@
       },
       "storage": {
         "record": "rec-identity-decision",
-        "key": "decision-id"
+        "key": "decision-id",
+        "creates": true
       }
     },
     {
@@ -33651,7 +34667,8 @@
       },
       "storage": {
         "record": "rec-identity-decision",
-        "key": "decision-id"
+        "key": "decision-id",
+        "creates": true
       }
     },
     {
@@ -33792,7 +34809,8 @@
       },
       "storage": {
         "record": "rec-identity-decision",
-        "key": "decision-id"
+        "key": "decision-id",
+        "creates": true
       }
     },
     {
@@ -33919,7 +34937,8 @@
       },
       "storage": {
         "record": "rec-identity-decision",
-        "key": "decision-id"
+        "key": "decision-id",
+        "creates": true
       }
     },
     {
@@ -34046,7 +35065,8 @@
       },
       "storage": {
         "record": "rec-identity-decision",
-        "key": "decision-id"
+        "key": "decision-id",
+        "creates": true
       }
     },
     {
@@ -34173,7 +35193,8 @@
       },
       "storage": {
         "record": "rec-identity-decision",
-        "key": "decision-id"
+        "key": "decision-id",
+        "creates": true
       }
     },
     {
@@ -34301,7 +35322,8 @@
       },
       "storage": {
         "record": "rec-identity-decision",
-        "key": "decision-id"
+        "key": "decision-id",
+        "creates": true
       }
     },
     {
@@ -34428,7 +35450,8 @@
       },
       "storage": {
         "record": "rec-identity-decision",
-        "key": "decision-id"
+        "key": "decision-id",
+        "creates": true
       }
     },
     {
@@ -34541,7 +35564,8 @@
       },
       "storage": {
         "record": "rec-identity-decision",
-        "key": "decision-id"
+        "key": "decision-id",
+        "creates": true
       }
     },
     {
@@ -34654,7 +35678,8 @@
       },
       "storage": {
         "record": "rec-identity-decision",
-        "key": "decision-id"
+        "key": "decision-id",
+        "creates": true
       }
     },
     {
@@ -34767,7 +35792,8 @@
       },
       "storage": {
         "record": "rec-identity-decision",
-        "key": "decision-id"
+        "key": "decision-id",
+        "creates": true
       }
     },
     {
@@ -34880,7 +35906,8 @@
       },
       "storage": {
         "record": "rec-identity-decision",
-        "key": "decision-id"
+        "key": "decision-id",
+        "creates": true
       }
     },
     {
@@ -35007,7 +36034,8 @@
       },
       "storage": {
         "record": "rec-identity-decision",
-        "key": "decision-id"
+        "key": "decision-id",
+        "creates": true
       }
     },
     {
@@ -35120,7 +36148,8 @@
       },
       "storage": {
         "record": "rec-identity-decision",
-        "key": "decision-id"
+        "key": "decision-id",
+        "creates": true
       }
     },
     {
@@ -35383,7 +36412,8 @@
         "fields": {
           "issuedAt": "issued-at",
           "lastUsed": "last-used-at"
-        }
+        },
+        "creates": true
       }
     },
     {
@@ -35575,7 +36605,8 @@
       },
       "storage": {
         "record": "rec-sign-in-attempt",
-        "key": "attempt-id"
+        "key": "attempt-id",
+        "creates": true
       }
     },
     {
@@ -35926,7 +36957,8 @@
         "fields": {
           "requestedAt": "requested-at",
           "secondFactor": "second-factor"
-        }
+        },
+        "creates": true
       }
     },
     {
@@ -36133,7 +37165,8 @@
       },
       "storage": {
         "record": "rec-one-time-code",
-        "key": "code-id"
+        "key": "code-id",
+        "creates": true
       }
     },
     {
@@ -36393,7 +37426,8 @@
         "fields": {
           "windowStart": "window-started-at",
           "windowOpen": "window-open"
-        }
+        },
+        "creates": true
       }
     },
     {
@@ -36653,7 +37687,8 @@
         "fields": {
           "windowStart": "window-started-at",
           "windowOpen": "window-open"
-        }
+        },
+        "creates": true
       }
     },
     {
@@ -36913,7 +37948,8 @@
         "fields": {
           "windowStart": "window-started-at",
           "windowOpen": "window-open"
-        }
+        },
+        "creates": true
       }
     },
     {
@@ -37173,7 +38209,8 @@
         "fields": {
           "windowStart": "window-started-at",
           "windowOpen": "window-open"
-        }
+        },
+        "creates": true
       }
     },
     {
@@ -37433,7 +38470,8 @@
         "fields": {
           "windowStart": "window-started-at",
           "windowOpen": "window-open"
-        }
+        },
+        "creates": true
       }
     },
     {
@@ -37700,7 +38738,8 @@
         "fields": {
           "windowStart": "window-started-at",
           "windowOpen": "window-open"
-        }
+        },
+        "creates": true
       }
     },
     {
@@ -37866,7 +38905,8 @@
       },
       "storage": {
         "record": "rec-provider-health",
-        "key": "provider-id"
+        "key": "provider-id",
+        "creates": true
       }
     },
     {
@@ -38054,7 +39094,8 @@
         "key": "provider-id",
         "fields": {
           "knownKid": "known-kid"
-        }
+        },
+        "creates": true
       }
     },
     {
@@ -38197,7 +39238,8 @@
         "fields": {
           "requestedRealm": "requested-realm",
           "offeredRealm": "offered-realm"
-        }
+        },
+        "creates": true
       }
     },
     {
@@ -38339,7 +39381,8 @@
         "key": "signup-id",
         "fields": {
           "defaultRole": "default-role"
-        }
+        },
+        "creates": true
       }
     },
     {
@@ -38601,7 +39644,8 @@
           "copyRevoked": "copy-revoked",
           "checkedAt": "checked-at",
           "checked": "checked"
-        }
+        },
+        "creates": true
       }
     },
     {
@@ -38880,7 +39924,8 @@
         "fields": {
           "current": "current-kid",
           "previous": "previous-kid"
-        }
+        },
+        "creates": true
       }
     },
     {
@@ -39017,7 +40062,8 @@
       },
       "storage": {
         "record": "rec-identity-decision",
-        "key": "decision-id"
+        "key": "decision-id",
+        "creates": true
       }
     },
     {
@@ -39137,7 +40183,8 @@
       },
       "storage": {
         "record": "rec-identity-decision",
-        "key": "decision-id"
+        "key": "decision-id",
+        "creates": true
       }
     }
   ],
@@ -39158,7 +40205,13 @@
     {"id":"defect-apply-rejected","name":"A rejected change is applied","kind":"enable-transition","transition":"cp-apply-rejected","description":"The defect that AGT-011 forbids, on a rejected proposal."},
     {"id":"arc-defect-outbox-duplicate-applied","name":"A redelivered notice makes its effect again","kind":"enable-transition","transition":"arc-ob-apply-again","description":"The defect that ARC-104 forbids."},
     {"id":"arc-publisher-stops","name":"The runtime stops before it publishes","kind":"disable-transition","transition":"arc-od-publish-now","description":"A runtime crashes after its commit and before its publication.","realises":"fm-runtime-crash"},
-    {"id":"arc-publisher-stops-impl","name":"The runtime stops before it publishes (implementation)","kind":"disable-transition","transition":"arc-od-publish-now-i","description":"A runtime crashes after its commit and before its publication, on the implementation machine."},
+    {
+      "id": "arc-publisher-stops-impl",
+      "name": "The runtime stops between its commit and its publication (implementation)",
+      "kind": "lose-event",
+      "description": "The runtime that committed stops after the commit and before it dispatches its publish-now signal, an at-most-once message, which is lost (lose-event): the runtime cannot switch a transition of the machine off, but it can lose this message.",
+      "event": "arc-ob-publish-now"
+    },
     {"id":"arc-recovery-disabled","name":"The outbox job does not publish","kind":"disable-transition","transition":"arc-od-sweep","description":"Shows that the recovery claim can fail."},
     {"id":"arc-defect-new-format-early","name":"A commit writes the newer format during a rolling deployment","kind":"enable-transition","transition":"arc-rl-commit-early","description":"The defect that ARC-106 forbids."},
     {"id":"defect-webhook-no-dedupe","name":"A repeated delivery starts a second run","kind":"enable-transition","transition":"iw-accept-again","description":"The defect that INT-151 forbids."},
@@ -39214,7 +40267,15 @@
     {"id":"cv-confirmation-delayed","name":"The confirmation arrives 3 ticks late","kind":"delay-event","event":"cv-confirmed","by":3,"occurrence":1,"description":"The person's confirmation is delayed, so the apply request arrives first."},
     {"id":"cv-run-delayed-past-withdrawal","name":"An operation request arrives after its permission is withdrawn","kind":"delay-event","event":"cv-operation-run","by":3,"occurrence":1,"description":"The run request is delayed in transit past the withdrawal of the permission."},
     {"id":"first-acknowledgement-lost","name":"The first acknowledgement is lost","kind":"drop-event","event":"em-ack","occurrence":1,"description":"The first acknowledgement of the mail adapter never reaches the dispatcher."},
-    {"id":"first-acknowledgement-slow-impl","name":"The first acknowledgement arrives after the dispatcher timed out","kind":"delay-event","event":"em-ack","by":40000,"occurrence":1,"description":"The first acknowledgement of the mail adapter is delayed by 40 seconds, past the acknowledgement timeout of the dispatcher (milliseconds)."},
+    {
+      "id": "first-acknowledgement-slow-impl",
+      "name": "The first acknowledgement is retried past the dispatcher's timeout",
+      "kind": "retry-event",
+      "event": "em-ack",
+      "occurrence": 1,
+      "description": "The first acknowledgement of the mail adapter fails five dispatches and arrives after the runtime's backoff of 1, 2, 4, 8 and 16 seconds, 31 seconds late, past the acknowledgement timeout of the dispatcher (30 seconds).",
+      "attempts": 5
+    },
     {"id":"operation-delayed-past-halt","name":"An operation arrives after the anomaly halts the agent","kind":"delay-event","event":"ah-operation","by":3,"occurrence":1,"description":"The operation is sent before the anomaly and delivered after the halt."},
     {"id":"first-delivery-delayed","name":"The first delivery of a notice arrives late","kind":"delay-event","event":"arc-ob-delivered","by":3,"occurrence":1,"description":"The first delivery is delayed; the redelivery arrives first."},
     {"id":"migration-crash-before-cursor","name":"A stop after a batch and before its cursor is recorded","kind":"enable-transition","transition":"mg-batch-unsaved","realises":"fm-migration-interrupted","description":"The worker stops after it commits the records of the second batch and before it records the cursor. This is the failure of a design that does not commit the records and the cursor together."},
@@ -40884,6 +41945,42 @@
       "kind": "enable-transition",
       "transition": "go-refuse-public-outage",
       "description": "The defect that IDN-301 forbids."
+    },
+    {
+      "id": "first-acknowledgement-retried-impl",
+      "name": "The first acknowledgement is retried for a minute",
+      "kind": "retry-event",
+      "event": "em-ack",
+      "attempts": 6,
+      "occurrence": 1,
+      "description": "The first acknowledgement of the mail adapter fails six dispatches and arrives 63 seconds late (the runtime's backoff of 1 to 32 seconds): an at-least-once message is never lost, so the implementation twin of a lost acknowledgement is one that arrives after the dispatcher has given up waiting."
+    },
+    {
+      "id": "first-submission-retried-impl",
+      "name": "The first submission is retried through an outage",
+      "kind": "retry-event",
+      "event": "em-submit",
+      "attempts": 6,
+      "occurrence": 1,
+      "realises": "fm-mail-outage",
+      "description": "The mail provider does not take the first submission for a minute: its dispatch fails six times and it reaches the provider 63 seconds late (the runtime's backoff of 1 to 32 seconds)."
+    },
+    {
+      "id": "commit-confirmation-retried-impl",
+      "name": "The commit confirmation is retried once",
+      "kind": "retry-event",
+      "event": "rt-committed",
+      "attempts": 1,
+      "description": "The first dispatch of the commit confirmation fails and it arrives after the runtime's first backoff of 1 second; publication must still wait for it."
+    },
+    {
+      "id": "first-delivery-retried-impl",
+      "name": "The first delivery of a notice is retried twice",
+      "kind": "retry-event",
+      "event": "arc-ob-delivered",
+      "attempts": 2,
+      "occurrence": 1,
+      "description": "The first dispatch of the notice fails twice and it arrives 3 seconds late (the runtime's backoff of 1 and 2 seconds); the redelivery arrives first."
     }
   ],
   "scenarios": [
@@ -41409,7 +42506,7 @@
           }
         }
       ]},
-    {"id":"mail-timeout-then-retry-impl","name":"The dispatcher times out and submits again (implementation)","description":"The first acknowledgement is slow: it arrives 40 seconds after the submission, after the dispatcher waited 30 seconds for it. The dispatcher times out and submits the same key a second time. Times are in milliseconds.","behaviors":["mail-dispatch-flow-impl","mail-adapter-flow"],"steps":[
+    {"id":"mail-timeout-then-retry-impl","name":"The dispatcher times out and submits again (implementation)","description":"The first acknowledgement is slow: its dispatch fails five times and it arrives 31 seconds after the submission (the runtime's backoff of 1, 2, 4, 8 and 16 seconds), after the dispatcher waited 30 seconds for it. The dispatcher times out and submits the same key a second time. Times are in milliseconds.","behaviors":["mail-dispatch-flow-impl","mail-adapter-flow"],"steps":[
         {
           "at": 0,
           "event": "em-due",
@@ -41963,7 +43060,9 @@
           }
         }
       ]},
-    {"id":"intent-commit-confirmation-delayed-impl","name":"A commit confirmation delayed before publication (implementation)","description":"The intent is committed, and the confirmation of the commit is delayed by 4 ticks.","behaviors":["commit-flow-impl"],"faults":["commit-confirmation-delayed"],"steps":[
+    {"id":"intent-commit-confirmation-delayed-impl","name":"A commit confirmation delayed before publication (implementation)","description":"The intent is committed, and the confirmation of the commit is retried once, arriving 1 second late (the runtime's first backoff). Times are in milliseconds.","behaviors":["commit-flow-impl"],"faults":[
+        "commit-confirmation-retried-impl"
+      ],"steps":[
         {
           "at": 0,
           "event": "rt-intent",
@@ -42041,7 +43140,9 @@
           }
         }
       ]},
-    {"id":"mail-first-acknowledgement-lost-impl","name":"A message whose first acknowledgement is lost (implementation)","description":"The message is submitted at 0; its first acknowledgement is lost; the dispatcher times out after 30 seconds and submits it again. Times are in milliseconds.","behaviors":["mail-dispatch-flow-impl","mail-adapter-flow"],"faults":["first-acknowledgement-lost"],"steps":[
+    {"id":"mail-first-acknowledgement-lost-impl","name":"A message whose first acknowledgement arrives after the timeout (implementation)","description":"The message is submitted at 0; its first acknowledgement is retried for 63 seconds, since an at-least-once message is never lost; the dispatcher times out after 30 seconds and submits it again before the acknowledgement arrives. Times are in milliseconds.","behaviors":["mail-dispatch-flow-impl","mail-adapter-flow"],"faults":[
+        "first-acknowledgement-retried-impl"
+      ],"steps":[
         {
           "at": 0,
           "event": "em-due",
@@ -42069,7 +43170,28 @@
       ]},
     {"id":"operation-in-transit-at-halt-impl","name":"An operation delivered after the halt (implementation)","description":"The agent sends an operation at tick 0, delayed by 3 ticks; an anomaly halts the agent at tick 1.","behaviors":["agent-halt-flow-impl"],"faults":["operation-delayed-past-halt"],"steps":[{"at":0,"event":"ah-operation","payload":{"principal-id":"agent-1"}},{"at":1,"event":"ah-anomaly","payload":{"principal-id":"agent-1"}}],"routes":[{"event":"ah-anomaly","behavior":"agent-halt-flow-impl","by":"key","field":"principal-id"},{"event":"ah-operation","behavior":"agent-halt-flow-impl","by":"key","field":"principal-id"},{"event":"ah-resume","behavior":"agent-halt-flow-impl","by":"key","field":"principal-id"}]},
     {"id":"arc-outbox-delayed-first-delivery","name":"A notice redelivered before its delayed first delivery","description":"The notice is delivered at tick 0, delayed by 3 ticks, and redelivered at tick 2.","behaviors":["arc-outbox-consumer-flow"],"faults":["first-delivery-delayed"],"steps":[{"at":0,"event":"arc-ob-delivered","payload":{"seq":1}},{"at":2,"event":"arc-ob-delivered","payload":{"seq":1},"note":"The redelivery arrives first."}]},
-    {"id":"arc-outbox-delayed-first-delivery-impl","name":"A notice redelivered before its delayed first delivery (implementation)","description":"The notice is delivered at tick 0, delayed by 3 ticks, and redelivered at tick 2. The same scenario run on the implementation machines.","behaviors":["arc-outbox-consumer-flow-impl"],"faults":["first-delivery-delayed"],"steps":[{"at":0,"event":"arc-ob-delivered","payload":{"seq":1}},{"at":2,"event":"arc-ob-delivered","payload":{"seq":1},"note":"The redelivery arrives first."}]},
+    {"id":"arc-outbox-delayed-first-delivery-impl","name":"A notice redelivered before its delayed first delivery (implementation)","description":"The notice is delivered at 0, retried twice so that it arrives 3 seconds late, and redelivered at 2 seconds. Times are in milliseconds. The same scenario run on the implementation machines.","behaviors":["arc-outbox-consumer-flow-impl"],"faults":[
+        "first-delivery-retried-impl"
+      ],
+      "steps": [
+        {
+          "at": 0,
+          "event": "arc-ob-delivered",
+          "payload": {
+            "seq": 1
+          }
+        },
+        {
+          "at": 2000,
+          "event": "arc-ob-delivered",
+          "payload": {
+            "seq": 1
+          },
+          "note": "The redelivery arrives first."
+        }
+      ],
+      "timeUnit": "ms"
+    },
     {"id":"release-approval-duplicated","name":"One approval delivered twice","description":"The gate passes; one approver approves at tick 1 and the same approval arrives again at tick 1; promotion is requested at tick 2.","behaviors":["release-promotion-flow"],"faults":["approval-delivered-twice"],"steps":[
         {
           "at": 0,
@@ -42678,7 +43800,9 @@
           }
         }
       ]},
-    {"id":"mail-first-submission-lost-impl","name":"The first submission is lost (implementation)","description":"The mail provider does not take the first submission; the dispatcher times out after 30 seconds and submits it again with the same key. Times are in milliseconds.","behaviors":["mail-dispatch-flow-impl","mail-adapter-flow"],"faults":["first-submission-lost"],"steps":[
+    {"id":"mail-first-submission-lost-impl","name":"The first submission is retried through an outage (implementation)","description":"The mail provider does not take the first submission for a minute; the runtime retries it with backoff, and the dispatcher times out after 30 seconds and submits it again with the same key. Times are in milliseconds.","behaviors":["mail-dispatch-flow-impl","mail-adapter-flow"],"faults":[
+        "first-submission-retried-impl"
+      ],"steps":[
         {
           "at": 0,
           "event": "em-due",

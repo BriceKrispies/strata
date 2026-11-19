@@ -472,3 +472,71 @@ fn only_the_machines_exegra_routed_an_event_to_are_stepped() {
 fn fixture_deliveries(text: &str) -> usize {
     text.matches(".deliver(").count()
 }
+
+#[test]
+fn faults_the_runtime_cannot_produce_are_refused_before_exegra_runs() {
+    let spec = edit(
+        &spec_text(),
+        "\"scenarios\": [",
+        r#""faults": [
+    { "id": "f-twice", "kind": "duplicate-event", "event": "lease-result", "by": 3 },
+    { "id": "f-lost", "kind": "lose-event", "event": "lease-result" },
+    { "id": "f-retried", "kind": "retry-event", "event": "lease-result", "attempts": 1 },
+    { "id": "f-no-expiry", "kind": "drop-event", "event": "lease-expired" }
+  ],
+  "scenarios": ["#,
+    );
+    let spec = edit(
+        &spec,
+        "\"behaviors\": [\"lease\"], \"timeUnit\"",
+        "\"behaviors\": [\"lease\"], \"faults\": [\"f-twice\", \"f-lost\", \"f-retried\", \"f-no-expiry\"], \"timeUnit\"",
+    );
+    let diagnostics = scenarios::generate(SPEC_PATH, &spec, CRATE, None).unwrap_err();
+    let refused: Vec<&Diagnostic> = diagnostics
+        .iter()
+        .filter(|d| d.code == scenarios::FAULT_UNREALISABLE)
+        .collect();
+    // A result with no declared delivery comes from outside: it may come twice, but it is not an
+    // at-most-once message to lose nor an at-least-once one to retry; a timer firing is never
+    // dropped.
+    assert_eq!(refused.len(), 3, "{diagnostics:?}");
+    assert!(refused[0].message.contains("f-lost"));
+    assert!(refused[1].message.contains("f-retried"));
+    assert!(refused[2].message.contains("f-no-expiry") && refused[2].message.contains("timer"));
+    assert!(diagnostics
+        .iter()
+        .all(|d| d.code != scenarios::FAULT_UNSUPPORTED));
+}
+
+#[test]
+fn a_delay_of_an_at_least_once_event_is_realisable_only_by_its_backoff() {
+    let spec = edit(
+        &spec_text(),
+        "{ \"id\": \"lease-result\", \"name\": \"Result reported\",",
+        "{ \"id\": \"lease-result\", \"name\": \"Result reported\", \"delivery\": \"at-least-once\",",
+    );
+    let with_delay = |by: &str| {
+        let spec = edit(
+            &spec,
+            "\"scenarios\": [",
+            &format!(
+                "\"faults\": [ {{ \"id\": \"f-late\", \"kind\": \"delay-event\", \"event\": \"lease-result\", \"by\": {by} }} ],\n  \"scenarios\": ["
+            ),
+        );
+        let spec = edit(
+            &spec,
+            "\"behaviors\": [\"lease\"], \"timeUnit\"",
+            "\"behaviors\": [\"lease\"], \"faults\": [\"f-late\"], \"timeUnit\"",
+        );
+        scenarios::generate(SPEC_PATH, &spec, CRATE, None)
+            .unwrap_err()
+            .into_iter()
+            .filter(|d| d.code == scenarios::FAULT_UNREALISABLE)
+            .count()
+    };
+    // 1 s, then 1 s + 2 s: the waits after one and two failed dispatches.
+    assert_eq!(with_delay("1000"), 0);
+    assert_eq!(with_delay("\"3 s\""), 0);
+    assert_eq!(with_delay("5"), 1);
+    assert_eq!(with_delay("2000"), 1);
+}
