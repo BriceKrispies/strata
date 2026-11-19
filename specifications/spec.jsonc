@@ -159382,7 +159382,7 @@
         }
       ],
       "returns": "set<object-type-id>",
-      "body": "call set-of(fold(c in changes, acc = [], concat(acc, match c { define-field{object, field} => concat([object], match call ref-target(field.ty) { Some(t) => [t], None => [] }), define-relationship{object, target} => [object, target], remove-field{object} => [object], define-constraint{object} => [object], remove-constraint{object} => [object], define-workflow(w) => [w.object], _ => [] })))",
+      "body": "let all = fold(c in changes, acc = [], concat(acc, match c { define-field{object, field} => concat([object], match call ref-target(field.ty) { Some(t) => [t], None => [] }), define-relationship{object, target} => [object, target], remove-field{object} => [object], define-constraint{object} => [object], remove-constraint{object} => [object], define-workflow(w) => [w.object], _ => [] })) in fold(o in sortBy(o in all, o), acc = [], if any(a in acc, a == o) then acc else concat(acc, [o]))",
       "examples": [
         {
           "args": {
@@ -163287,7 +163287,7 @@
           "expr": "match expected-version { Some(e) => e != current, None => false }"
         }
       ],
-      "body": "if stale then fail(call draft-reject(d1.evidence, error-kind.schema-conflict, format('schema is at version {}, expected {}', current, match expected-version { Some(e) => e, None => 0 }))) else if changes == [] then fail(call draft-reject(d1.evidence, error-kind.invalid-intent, 'no changes given')) else let plan = match call plan-migration(d1.tenant, d1.coverage, changes, d1.ctx.now, texts) { Ok(m) => m, Err(e) => match e { rejected(err) => fail(rejection.rejected(domain-error{kind: err.kind, message: err.message, evidence: concat(d1.evidence, err.evidence), missing: err.missing})) } } in let affected = fold(a in call set-of(map(x in plan.violations, format('{}/{}', x.object, x.id))), n = 0, n + 1) in let evidence = concat(concat(d1.evidence, map(l in plan.summary, check{rule: 'schema:change', passed: true, detail: l})), map(x in plan.violations, check{rule: format('existing:{}/{}:{}', x.object, x.id, x.check.rule), passed: false, detail: x.check.detail})) in if existing == existing-data.reject && affected > 0 then fail(call draft-reject(evidence, error-kind.migration-rejected, format('{} existing record(s) would not conform to the new schema', affected))) else decided{draft: draft{tenant: d1.tenant, ctx: d1.ctx, coverage: d1.coverage, ops: concat(concat(d1.ops, [delta-op.put-schema(plan.schema)]), map(r in plan.rewritten, delta-op.put-record(r))), events: concat(d1.events, [event-body.schema-changed{version: plan.schema.version, summary: plan.summary, grandfathered: affected}]), effects: d1.effects, evidence: evidence, next-record: d1.next-record}, output: output.schema{version: plan.schema.version}}",
+      "body": "if stale then fail(call draft-reject(d1.evidence, error-kind.schema-conflict, format('schema is at version {}, expected {}', current, match expected-version { Some(e) => e, None => 0 }))) else if changes == [] then fail(call draft-reject(d1.evidence, error-kind.invalid-intent, 'no changes given')) else let plan = match call plan-migration(d1.tenant, d1.coverage, changes, d1.ctx.now, texts) { Ok(m) => m, Err(e) => match e { rejected(err) => fail(rejection.rejected(domain-error{kind: err.kind, message: err.message, evidence: concat(d1.evidence, err.evidence), missing: err.missing})) } } in let affected = fold(a in fold(k in sortBy(k in map(x in plan.violations, format('{}/{}', x.object, x.id)), k), ks = [], if any(a in ks, a == k) then ks else concat(ks, [k])), n = 0, n + 1) in let evidence = concat(concat(d1.evidence, map(l in plan.summary, check{rule: 'schema:change', passed: true, detail: l})), map(x in plan.violations, check{rule: format('existing:{}/{}:{}', x.object, x.id, x.check.rule), passed: false, detail: x.check.detail})) in if existing == existing-data.reject && affected > 0 then fail(call draft-reject(evidence, error-kind.migration-rejected, format('{} existing record(s) would not conform to the new schema', affected))) else decided{draft: draft{tenant: d1.tenant, ctx: d1.ctx, coverage: d1.coverage, ops: concat(concat(d1.ops, [delta-op.put-schema(plan.schema)]), map(r in plan.rewritten, delta-op.put-record(r))), events: concat(d1.events, [event-body.schema-changed{version: plan.schema.version, summary: plan.summary, grandfathered: affected}]), effects: d1.effects, evidence: evidence, next-record: d1.next-record}, output: output.schema{version: plan.schema.version}}",
       "examples": [
         {
           "description": "behaviour.rs a_strict_migration_is_rejected_when_existing_records_would_not_conform.",
@@ -192089,12 +192089,8 @@
           "expr": "try call view-read(state, call section-request(section, route, request, acc.done), context, texts)"
         },
         {
-          "name": "object",
-          "expr": "match get(tenant.schema.queries, section.query) { Some(q) => q.object, None => '' }"
-        },
-        {
           "name": "refs",
-          "expr": "call included-refs(tenant.schema, object, section, result.rows)"
+          "expr": "match get(tenant.schema.queries, section.query) { Some(q) => call included-refs(tenant.schema, q.object, section, result.rows), None => {} }"
         },
         {
           "name": "included",
