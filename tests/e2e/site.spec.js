@@ -416,6 +416,45 @@ test('the whole site can be used from the keyboard', async ({ page }) => {
   expect(focusRing).not.toBe('none');
 });
 
+test('a slow render never rewinds what was typed into a field', async ({ page }) => {
+  // Hold every message from the kernel worker back, so each draw reaches the page after the
+  // keystrokes that came later than the state it shows.
+  await page.addInitScript(() => {
+    const Native = window.Worker;
+    const own = Object.getOwnPropertyDescriptor(Native.prototype, 'onmessage');
+    window.Worker = class extends Native {
+      constructor(...args) {
+        super(...args);
+        Object.defineProperty(this, 'onmessage', {
+          set: (fn) => own.set.call(this, fn && ((event) => setTimeout(() => fn.call(this, event), 150))),
+          get: () => own.get.call(this),
+        });
+      }
+    };
+  });
+  await open(page, '/login');
+  const name = page.getByLabel('Name');
+  await name.focus();
+  await page.keyboard.type('tomasz');
+  // Leave the field, so the focused-field rule no longer protects it, and watch it while the
+  // delayed draws of the earlier keystrokes arrive.
+  await page.keyboard.press('Tab');
+  const seen = await page.evaluate(
+    () =>
+      new Promise((resolve) => {
+        const input = document.getElementById('login-name');
+        const values = new Set([input.value]);
+        const timer = setInterval(() => values.add(input.value), 2);
+        setTimeout(() => {
+          clearInterval(timer);
+          resolve([...values]);
+        }, 600);
+      }),
+  );
+  expect(seen).toEqual(['tomasz']);
+  await expect(name).toHaveValue('tomasz');
+});
+
 test('on a phone the layout folds, the menu opens and closes, and nothing overflows', async ({ browser }) => {
   const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
   const page = await context.newPage();
