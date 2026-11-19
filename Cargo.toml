@@ -16,6 +16,7 @@ members = [
     "crates/spec-compiler-machines-fixture",
     "crates/spec-compiler-wiring-fixture",
     "crates/spec-expr",
+    "crates/model",
 ]
 
 [workspace.package]

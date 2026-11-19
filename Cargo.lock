@@ -1283,6 +1283,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "strata-model"
+version = "0.1.0"
+dependencies = [
+ "regex",
+ "serde",
+ "serde_json",
+ "strata-runtime",
+ "uuid",
+]
+
+[[package]]
 name = "strata-protocol"
 version = "0.1.0"
 dependencies = [

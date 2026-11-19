@@ -8,9 +8,11 @@
 // crashes, prints nothing parseable, or cannot be found is a failed check.
 //
 // Steps, in order:
+//   0. specc check: crates/model is exactly what the compiler writes from the specification.
 //   1. cargo test --workspace, lake build, node --test (web), npm run check (tsc), recorded under
 //      var/test-results (at most two jobs). Not run with --no-test.
-//   2. Exegra (EXEGRA_HOME, default ../exegra): validate the specification, evaluate its claims.
+//   2. Exegra (EXEGRA_HOME, default ../exegra; EXEGRA_PROJECT, default strata): validate the
+//      specification, evaluate its claims.
 //   3. Concordance: lint (strict), then scan with the recorded results and the Exegra results file.
 //   4. Counts read from the specification itself, compared with the last successful gate record.
 //
@@ -27,6 +29,8 @@ import { generatedTests, rustLineShare } from './generated-share.mjs';
 
 const root = resolve(import.meta.dirname, '..');
 const exegraHome = resolve(root, process.env.EXEGRA_HOME ?? '../exegra');
+// The Exegra project that links this checkout's specification (a worktree links its own).
+const exegraProject = process.env.EXEGRA_PROJECT ?? 'strata';
 const resultsDir = resolve(root, 'var/test-results');
 const recordPath = join(resultsDir, 'gate-record.json');
 const specPath = resolve(root, 'specifications/spec.jsonc');
@@ -176,6 +180,18 @@ console.log(`specification: ${requirements.length} requirements, ${modelClaims.l
 if (!startedMatch || started.size === 0) check('concordance.toml names started milestones', false, 'no [gate] started_milestones');
 
 // ---------------------------------------------------------------------------------------------
+// 0. Generated code: crates/model is what specc writes from the specification, byte for byte.
+// ---------------------------------------------------------------------------------------------
+{
+  const specc = run('cargo', ['run', '--quiet', '-p', 'strata-spec-compiler', '--bin', 'specc', '--',
+    'check', '--spec', 'specifications/spec.jsonc', '--out', 'crates/model', '--crate-name', 'strata-model', '--runtime', 'crates/runtime'], {
+    env: { CARGO_BUILD_JOBS: '2', CARGO_TARGET_DIR: 'target/gate' },
+  });
+  check('specc check (crates/model is generated from the specification)', specc.ok,
+    specc.ok ? 'up to date' : `${exitText(specc)}: ${lastLine(specc.out)}; run specc generate and commit`);
+}
+
+// ---------------------------------------------------------------------------------------------
 // 1. Tests
 // ---------------------------------------------------------------------------------------------
 const specSha = sha256(specPath);
@@ -300,7 +316,7 @@ if (!exegraFound) {
   check('Exegra checkout', false, `no cli/exegra.js under ${exegraHome} (set EXEGRA_HOME)`);
 } else {
   const exegra = (command) => {
-    const r = run(process.execPath, [exegraCli, command, '--project', 'strata'], { cwd: exegraHome });
+    const r = run(process.execPath, [exegraCli, command, '--project', exegraProject], { cwd: exegraHome });
     let json = null;
     try {
       json = JSON.parse(r.stdout);
