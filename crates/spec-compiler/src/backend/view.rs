@@ -95,6 +95,23 @@ impl Leaf {
         }
     }
 
+    /// An expression whose `.as_bytes()` gives this text leaf's UTF-8 bytes: the `String` itself,
+    /// the owned text of a uuid, or an enum's `&str`. Unlike [`Self::as_str`] it adds no
+    /// `.as_str()` that `.as_bytes()` would make redundant.
+    pub fn text_for_bytes(&self, place: TokenStream) -> TokenStream {
+        let mut out = place;
+        let last = self.layers.len().saturating_sub(1);
+        for (i, layer) in self.layers.iter().enumerate() {
+            out = match layer {
+                Layer::Newtype(_) | Layer::Timestamp | Layer::Duration => quote! { #out.0 },
+                Layer::Uuid if i == last => quote! { #out.to_string() },
+                Layer::Uuid => quote! { #out.to_string().as_str() },
+                Layer::Enum => quote! { #out.as_str() },
+            };
+        }
+        out
+    }
+
     /// The Rust value of this leaf's type made from a value of the language's type, or `None`
     /// when the language's value cannot give one (a `uuid` or an enum).
     pub fn build(&self, value: TokenStream, uses: &mut Uses) -> Option<TokenStream> {

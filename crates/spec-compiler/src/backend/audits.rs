@@ -472,7 +472,7 @@ fn compile(spec: &Spec, a: &Audit, uses: &mut Uses) -> Result<Compiled, Vec<Fail
                 let read = l.read(place.clone());
                 match l.class {
                     Class::Text => {
-                        let text = l.as_str(place);
+                        let text = l.text_for_bytes(place);
                         quote! { feed(&mut hasher, #name, #text.as_bytes()); }
                     }
                     Class::Bytes => quote! { feed(&mut hasher, #name, &#read); },

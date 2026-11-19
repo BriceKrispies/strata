@@ -519,7 +519,19 @@ impl Cx<'_> {
             BinOp::And | BinOp::Or | BinOp::Implies => self.logical_expr(op, a, b),
             BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => {
                 match self.pair(a, b, None)? {
-                    Pair::Typed(ty, l, r) => self.compare(e, op, ty, l, r),
+                    Pair::Typed(ty, mut l, mut r) => {
+                        // A String compares with a `&str` directly, so a literal operand of an
+                        // equality stays a plain literal instead of building a String to compare.
+                        if matches!(op, BinOp::Eq | BinOp::Ne) && ty == Ty::String {
+                            if let ExprKind::Lit(Lit::Str(s)) = &a.kind {
+                                l = Out::known(Ty::String, quote!(#s));
+                            }
+                            if let ExprKind::Lit(Lit::Str(s)) = &b.kind {
+                                r = Out::known(Ty::String, quote!(#s));
+                            }
+                        }
+                        self.compare(e, op, ty, l, r)
+                    }
                     Pair::Untyped(p) => Err(self.untyped_comparison(e, &p)),
                 }
             }

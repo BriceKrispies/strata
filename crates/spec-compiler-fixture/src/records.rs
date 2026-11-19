@@ -446,3 +446,185 @@ impl RecLedgerEntry {
         Ok(())
     }
 }
+
+/// Tenant audit entry
+///
+/// One entry of the tenant audit log; entries are never changed.
+///
+/// Record `rec-tenant-audit`, owned by component `control-plane`, schema version 1.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecTenantAudit {
+    /// Field `entry-id`.
+    #[serde(rename = "entry-id")]
+    pub entry_id: types::Sequence,
+    /// Field `actor`.
+    pub actor: String,
+    /// Field `at`.
+    pub at: prelude::Timestamp,
+    /// Field `tenant`.
+    pub tenant: types::TenantId,
+    /// Field `state`.
+    pub state: types::TenantState,
+    /// Field `parent`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<types::TenantId>,
+    /// Field `chain`.
+    pub chain: Vec<u8>,
+}
+
+/// The key of a [`RecTenantAudit`]: `entry-id`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecTenantAuditKey {
+    /// Field `entry-id`.
+    #[serde(rename = "entry-id")]
+    pub entry_id: types::Sequence,
+}
+
+impl RecTenantAudit {
+    /// The record's id in the specification.
+    pub const ID: &str = "rec-tenant-audit";
+
+    /// The version of the record's stored shape.
+    pub const SCHEMA_VERSION: u32 = 1;
+
+    /// The key fields, by their specification names.
+    pub const KEY: &[&str] = &["entry-id"];
+
+    /// Sets of fields whose combined values are unique, by their specification names.
+    pub const UNIQUE: &[&[&str]] = &[];
+
+    /// The record's indexes.
+    pub const INDEXES: &[prelude::Index] = &[];
+
+    /// The fields that hold the key of another record, and what deleting it does.
+    pub const REFERENCES: &[prelude::Reference] = &[];
+
+    /// The record's key.
+    pub fn key(&self) -> RecTenantAuditKey {
+        RecTenantAuditKey {
+            entry_id: self.entry_id.clone(),
+        }
+    }
+
+    /// Checks the field constraints, returning the first one the record breaks.
+    pub fn validate(&self) -> Result<(), prelude::ConstraintViolation> {
+        Ok(())
+    }
+}
+
+/// Account closing audit entry
+///
+/// Record `rec-close-audit`, owned by component `identity`, schema version 1.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecCloseAudit {
+    /// Field `log-id`.
+    #[serde(rename = "log-id")]
+    pub log_id: types::Sequence,
+    /// Field `actor`.
+    pub actor: String,
+    /// Field `account`.
+    pub account: types::AccountId,
+    /// Field `grace`.
+    pub grace: types::Ttl,
+    /// Field `at`.
+    pub at: prelude::Timestamp,
+    /// Field `digest`.
+    pub digest: String,
+}
+
+/// The key of a [`RecCloseAudit`]: `log-id`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecCloseAuditKey {
+    /// Field `log-id`.
+    #[serde(rename = "log-id")]
+    pub log_id: types::Sequence,
+}
+
+impl RecCloseAudit {
+    /// The record's id in the specification.
+    pub const ID: &str = "rec-close-audit";
+
+    /// The version of the record's stored shape.
+    pub const SCHEMA_VERSION: u32 = 1;
+
+    /// The key fields, by their specification names.
+    pub const KEY: &[&str] = &["log-id"];
+
+    /// Sets of fields whose combined values are unique, by their specification names.
+    pub const UNIQUE: &[&[&str]] = &[];
+
+    /// The record's indexes.
+    pub const INDEXES: &[prelude::Index] = &[];
+
+    /// The fields that hold the key of another record, and what deleting it does.
+    pub const REFERENCES: &[prelude::Reference] = &[];
+
+    /// The record's key.
+    pub fn key(&self) -> RecCloseAuditKey {
+        RecCloseAuditKey {
+            log_id: self.log_id.clone(),
+        }
+    }
+
+    /// Checks the field constraints, returning the first one the record breaks.
+    pub fn validate(&self) -> Result<(), prelude::ConstraintViolation> {
+        Ok(())
+    }
+}
+
+/// Account read log entry
+///
+/// Record `rec-access-log`, owned by component `ledger`, schema version 1.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecAccessLog {
+    /// Field `log-id`.
+    #[serde(rename = "log-id")]
+    pub log_id: types::Sequence,
+    /// Field `who`.
+    pub who: String,
+    /// Field `account`.
+    pub account: types::AccountId,
+    /// Field `at`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at: Option<prelude::Timestamp>,
+}
+
+/// The key of a [`RecAccessLog`]: `log-id`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecAccessLogKey {
+    /// Field `log-id`.
+    #[serde(rename = "log-id")]
+    pub log_id: types::Sequence,
+}
+
+impl RecAccessLog {
+    /// The record's id in the specification.
+    pub const ID: &str = "rec-access-log";
+
+    /// The version of the record's stored shape.
+    pub const SCHEMA_VERSION: u32 = 1;
+
+    /// The key fields, by their specification names.
+    pub const KEY: &[&str] = &["log-id"];
+
+    /// Sets of fields whose combined values are unique, by their specification names.
+    pub const UNIQUE: &[&[&str]] = &[];
+
+    /// The record's indexes.
+    pub const INDEXES: &[prelude::Index] = &[];
+
+    /// The fields that hold the key of another record, and what deleting it does.
+    pub const REFERENCES: &[prelude::Reference] = &[];
+
+    /// The record's key.
+    pub fn key(&self) -> RecAccessLogKey {
+        RecAccessLogKey {
+            log_id: self.log_id.clone(),
+        }
+    }
+
+    /// Checks the field constraints, returning the first one the record breaks.
+    pub fn validate(&self) -> Result<(), prelude::ConstraintViolation> {
+        Ok(())
+    }
+}
