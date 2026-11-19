@@ -7,6 +7,8 @@
 mod delayed;
 #[path = "../../runtime/tests/common/lease_cases.rs"]
 mod lease;
+#[path = "../../runtime/tests/common/system_cases.rs"]
+mod system;
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -125,6 +127,36 @@ async fn api_memory_retries_only_at_least_once() {
 #[tokio::test]
 async fn api_sqlite_retries_only_at_least_once() {
     delayed::retries_only_at_least_once(api_sqlite("retries")).await;
+}
+
+#[tokio::test]
+async fn api_memory_delivers_at_deadlines() {
+    system::delivers_at_deadlines(api_memory()).await;
+}
+
+#[tokio::test]
+async fn api_sqlite_delivers_at_deadlines() {
+    system::delivers_at_deadlines(api_sqlite("deadlines")).await;
+}
+
+#[tokio::test]
+async fn api_memory_ignores_without_writing() {
+    system::ignores_without_writing(api_memory()).await;
+}
+
+#[tokio::test]
+async fn api_sqlite_ignores_without_writing() {
+    system::ignores_without_writing(api_sqlite("ignores")).await;
+}
+
+#[tokio::test]
+async fn api_memory_a_failed_step_commits_nothing() {
+    system::a_failed_step_commits_nothing(api_memory()).await;
+}
+
+#[tokio::test]
+async fn api_sqlite_a_failed_step_commits_nothing() {
+    system::a_failed_step_commits_nothing(api_sqlite("failed")).await;
 }
 
 fn message(source: &str) -> NewMessage {
