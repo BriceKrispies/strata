@@ -1,0 +1,33 @@
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 39 tests
+.................. 18/39
+api_memory_two_hosts_dispatch_once --- FAILED
+................. 36/39
+api_sqlite_two_hosts_dispatch_once --- FAILED
+..
+failures:
+
+---- api_memory_two_hosts_dispatch_once stdout ----
+
+thread 'api_memory_two_hosts_dispatch_once' (1416) panicked at crates\machine-store\tests\..\..\runtime\tests\common\system_cases.rs:462:12:
+called `Result::unwrap()` on an `Err` value: Storage(Conflict("tenant revision changed: based on Some(StateRevision(3)), store is at Some(StateRevision(4))"))
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- api_sqlite_two_hosts_dispatch_once stdout ----
+
+thread 'api_sqlite_two_hosts_dispatch_once' (9092) panicked at crates\machine-store\tests\..\..\runtime\tests\common\system_cases.rs:462:12:
+called `Result::unwrap()` on an `Err` value: Storage(Conflict("tenant revision changed: based on Some(StateRevision(3)), store is at Some(StateRevision(4))"))
+
+
+failures:
+    api_memory_two_hosts_dispatch_once
+    api_sqlite_two_hosts_dispatch_once
+
+test result: FAILED. 37 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.83s
+
+error: test failed, to rerun pass `-p strata-machine-store --test runtime_cases`

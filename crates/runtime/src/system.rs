@@ -52,7 +52,10 @@
 //! - Exegra's `reply` addressing and links (`via`) are not supported; specc refuses them.
 
 use crate::clock::{Clock, Time};
-use crate::host::{decode, encode, DispatchReport, Dispatcher, Envelope, HostError, RetryPolicy};
+use crate::host::{
+    decode, encode, is_conflict, DispatchReport, Dispatcher, Envelope, HostError, RetryPolicy,
+    CONFLICT_RETRIES,
+};
 use crate::machine::{Delivery, EffectRef, Isolation, Machine, Receiver, TimerCommand};
 use crate::store::{DeadLetter, MachineStore, NewEntry, NewMessage, OutboxEntry, QueueEntry, Tx};
 use crate::telemetry::{Level, NoTelemetry, Span, Telemetry};
@@ -675,7 +678,21 @@ impl<S: MachineStore, D: Dispatcher<Value>> System<S, D> {
     }
 
     /// Deliver the head of the queue if it is due: one step. `None` when nothing is due.
+    ///
+    /// When another host commits first, the step is rolled back and tried again on the queue as
+    /// the winner left it, a bounded number of times; if every try loses, nothing was stepped
+    /// and `None` comes back. A lost race never dead-letters an entry.
     pub async fn step(&self) -> Result<Option<StepReport>, HostError> {
+        for _ in 0..CONFLICT_RETRIES {
+            match self.step_once().await {
+                Err(error) if is_conflict(&error) => {}
+                other => return other,
+            }
+        }
+        Ok(None)
+    }
+
+    async fn step_once(&self) -> Result<Option<StepReport>, HostError> {
         let now = self.clock.now();
         let Some(entry) = self.on_store(|store, _| store.head()).await?? else {
             return Ok(None);

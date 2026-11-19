@@ -468,6 +468,8 @@ pub async fn two_hosts_dispatch_once<S: MachineStore>(open: impl Fn() -> Arc<S>)
         json!({"state": "open", "vars": {"n": 1, "at": 0}}),
         "the bump counted once"
     );
+    // A lost race leaves the entry for the winner: nothing was dead-lettered.
+    assert!(one.dead_letters().await.unwrap().is_empty());
 
     // The ping's at-most-once message to the pager, due 10 ms later, is claimed by one host.
     clock.set(Time(10));

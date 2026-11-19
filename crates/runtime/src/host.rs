@@ -242,6 +242,15 @@ pub(crate) fn event_name<T: Serialize>(event: &T) -> String {
         .to_string()
 }
 
+/// How many times a step is tried when a concurrent writer wins the commit.
+pub(crate) const CONFLICT_RETRIES: usize = 3;
+
+/// Whether `error` is a lost optimistic-concurrency race: the transaction was rolled back and
+/// nothing was changed, so it is neither a failure of the step nor a reason to dead-letter.
+pub(crate) fn is_conflict(error: &HostError) -> bool {
+    matches!(error, HostError::Storage(StorageError::Conflict(_)))
+}
+
 pub(crate) fn decode<T: DeserializeOwned>(text: &str) -> Result<T, HostError> {
     serde_json::from_str(text).map_err(|e| HostError::Codec(e.to_string()))
 }
@@ -530,15 +539,23 @@ impl<M: Machine, S: MachineStore, D: Dispatcher<M::Emitted>> Host<M, S, D> {
         }
         let span = Span::start(&self.telemetry, "machine.transition");
         let (now, hold) = (self.clock.now(), self.retry.first);
-        let result = self
-            .on_store(move |store| {
-                store.transact(M::ISOLATION, |tx| {
-                    transition::<M>(tx, &key, &event, now, hold, None)
+        let mut result = Err(HostError::Worker("not run".to_string()));
+        // A lost commit race rolled everything back: try again on what the winner wrote.
+        for _ in 0..CONFLICT_RETRIES {
+            let (key, event) = (key.clone(), event.clone());
+            result = self
+                .on_store(move |store| {
+                    store.transact(M::ISOLATION, |tx| {
+                        transition::<M>(tx, &key, &event, now, hold, None)
+                    })
                 })
-            })
-            .await
-            .and_then(|inner| inner)
-            .map(|committed| committed.expect("a transition without a timer always commits"));
+                .await
+                .and_then(|inner| inner)
+                .map(|committed| committed.expect("a transition without a timer always commits"));
+            if !result.as_ref().is_err_and(is_conflict) {
+                break;
+            }
+        }
         span.finish(result.is_ok(), &[("machine", M::NAME.into())]);
         result
     }
@@ -780,6 +797,8 @@ impl<M: Machine, S: MachineStore, D: Dispatcher<M::Emitted>> Host<M, S, D> {
                     .await??;
                     report.discarded += 1;
                 }
+                // Another host won the commit: the timer is theirs, or stays for the next tick.
+                Err(error) if is_conflict(&error) => {}
                 Err(error) => return Err(error),
             }
         }
@@ -816,16 +835,22 @@ impl<M: Machine, S: MachineStore, D: Dispatcher<M::Emitted>> Host<M, S, D> {
             },
             error.to_string(),
         );
-        self.on_store(move |store| {
-            store.transact(M::ISOLATION, |tx| -> Result<bool, HostError> {
-                if !tx.take_timer(id)? {
-                    return Ok(false);
-                }
-                tx.dead_letter(&entry, &why, now)?;
-                Ok(true)
+        let moved = self
+            .on_store(move |store| {
+                store.transact(M::ISOLATION, |tx| -> Result<bool, HostError> {
+                    if !tx.take_timer(id)? {
+                        return Ok(false);
+                    }
+                    tx.dead_letter(&entry, &why, now)?;
+                    Ok(true)
+                })
             })
-        })
-        .await?
+            .await?;
+        match moved {
+            // Lost a race: it is still there for the next tick.
+            Err(error) if is_conflict(&error) => Ok(false),
+            other => other,
+        }
     }
 
     /// Fire due timers, then drain the outbox. One failing does not stop the other: the first
