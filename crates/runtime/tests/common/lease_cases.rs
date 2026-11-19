@@ -233,6 +233,8 @@ impl Machine for Borrowed {
             vars: o.vars,
             emits: o.emits,
             timers: o.timers,
+            sequence: o.sequence,
+            ignored: o.ignored,
         })
     }
 }
@@ -427,7 +429,7 @@ pub async fn fires_timers<S: MachineStore>(open: impl Fn() -> Arc<S>) {
     assert_eq!(fired.dispatched.delivered, 1);
     let (state, vars, _) = host.load(&key("a")).await.unwrap().unwrap();
     assert_eq!((state, vars.token), (Phase::Granted, 2));
-    // The re-grant ran at the clock's time when the timer fired.
+    // The re-grant ran at the timer's deadline (here also the clock's time).
     assert_eq!(vars.granted_at, clock.now());
     assert_eq!(
         receivers.seen().last().unwrap().event,

@@ -1,5 +1,11 @@
 //! The machine host: runs a [`Machine`]'s steps against a store, with an outbox and timers.
 //!
+//! [`Host`] runs one machine on its own, and hands what it emits to a hand-written
+//! [`Dispatcher`]. It does not deliver one machine's emits to another, so it is not how Exegra
+//! runs a system of machines: that is the [`System`](crate::System) host, with one queue for every
+//! machine and the generated routes. What `Host` does follow from Exegra: an ignored event writes
+//! nothing, and a timer is delivered with `now` equal to its deadline.
+//!
 //! For one incoming event the host
 //!
 //! 1. opens one transaction at the machine's declared isolation (or stronger),
@@ -16,16 +22,18 @@
 //!
 //! A delayed emit ([`Outcome::emit_after`](crate::Outcome::emit_after)) is not dispatched at
 //! commit: its outbox entry carries a not-before time (the step's time plus the delay), and
-//! [`Host::drain_outbox`] hands it to the receiver once the clock reaches it, with the same
-//! guarantees: `at-least-once` retried until delivered, `at-most-once` removed and dispatched once.
+//! [`Host::drain_outbox`] hands it to the receiver once the clock reaches it, in due order, with
+//! the same guarantees: `at-least-once` retried until delivered, `at-most-once` dispatched once
+//! and removed after the dispatch, whatever it returned.
 //!
 //! If the step fails, the transaction is rolled back and nothing is saved, scheduled or emitted.
 //! If the process stops between commit and dispatch, the `at-least-once` emits are still in the
 //! outbox and [`Host::drain_outbox`] delivers them later; the `at-most-once` emits are lost.
 //!
 //! Timers fire through [`Host::fire_due_timers`]: each due timer is removed and its event is
-//! stepped in one transaction, so a timer fires at most once per setting and its effects commit
-//! together with its removal. [`Host::tick`] does both jobs and [`Host::run`] calls it in a loop.
+//! stepped in one transaction, at its deadline, so a timer fires at most once per setting and its
+//! effects commit together with its removal. [`Host::tick`] does both jobs and [`Host::run`] calls
+//! it in a loop.
 
 use crate::clock::{Clock, Time};
 use crate::machine::{
@@ -194,11 +202,11 @@ impl From<RecordError> for HostError {
     }
 }
 
-fn encode<T: Serialize>(value: &T) -> Result<String, HostError> {
+pub(crate) fn encode<T: Serialize>(value: &T) -> Result<String, HostError> {
     serde_json::to_string(value).map_err(|e| HostError::Codec(e.to_string()))
 }
 
-fn decode<T: DeserializeOwned>(text: &str) -> Result<T, HostError> {
+pub(crate) fn decode<T: DeserializeOwned>(text: &str) -> Result<T, HostError> {
     serde_json::from_str(text).map_err(|e| HostError::Codec(e.to_string()))
 }
 
@@ -213,7 +221,8 @@ pub struct Committed<M: Machine> {
     pub state: M::State,
     /// Its variables after the step.
     pub vars: M::Vars,
-    /// The record version written.
+    /// The record version after the step: the one written, or for an ignored event the one
+    /// loaded (0 when there is no record).
     pub version: u64,
     /// The immediate emits, in order, waiting for dispatch.
     pub emits: Vec<Envelope<M::Emitted>>,
@@ -318,6 +327,17 @@ fn transition<M: Machine>(
         }
     };
     let outcome = M::step(&state, &vars, event, now)?;
+    if outcome.ignored {
+        // An ignored event changes nothing: no record is written, created or versioned.
+        return Ok(Some(Committed {
+            key: key.clone(),
+            state: outcome.state,
+            vars: outcome.vars,
+            version: stored.map_or(0, |s| s.version),
+            emits: Vec::new(),
+            delayed: Vec::new(),
+        }));
+    }
     let record = M::to_record(key, &outcome.state, &outcome.vars, previous.as_ref())?;
     let version = tx.save(
         M::RECORD,
@@ -597,17 +617,8 @@ impl<M: Machine, S: MachineStore, D: Dispatcher<M::Emitted>> Host<M, S, D> {
                     continue;
                 }
             };
-            if entry.delivery == Delivery::AtMostOnce {
-                // A delayed at-most-once emit: removed first, then dispatched once, so a stop
-                // between the two loses it rather than sending it twice. If it cannot be removed
-                // it stays for a later drain and is not dispatched now.
-                let id = entry.id;
-                match self.on_store(move |store| store.mark_delivered(id)).await {
-                    Ok(Ok(())) => {}
-                    _ => continue,
-                }
-            }
             let at_least_once = entry.delivery == Delivery::AtLeastOnce;
+            let id = entry.id;
             let envelope = Envelope {
                 id: at_least_once.then_some(entry.id),
                 source: entry.source,
@@ -617,8 +628,30 @@ impl<M: Machine, S: MachineStore, D: Dispatcher<M::Emitted>> Host<M, S, D> {
                 event,
             };
             report.add(self.deliver(envelope, entry.attempts).await);
+            if !at_least_once {
+                // A delayed at-most-once emit: dispatched once, then removed whatever the
+                // dispatch did, so it is never removed before its dispatch was attempted. A stop
+                // between the two offers it once more.
+                self.forget(id).await;
+            }
         }
         Ok(report)
+    }
+
+    /// Remove an outbox entry that will not be dispatched again, saying so when that fails.
+    async fn forget(&self, id: u64) {
+        let failed = match self.on_store(move |store| store.mark_delivered(id)).await {
+            Ok(Ok(())) => None,
+            Ok(Err(error)) => Some(error.to_string()),
+            Err(error) => Some(error.to_string()),
+        };
+        if let Some(why) = failed {
+            self.telemetry.event(
+                Level::Warn,
+                "outbox.unremoved",
+                &[("id", id.into()), ("error", why.as_str().into())],
+            );
+        }
     }
 
     /// Fire every timer of this machine that is due, earliest first, and dispatch what the
@@ -635,10 +668,13 @@ impl<M: Machine, S: MachineStore, D: Dispatcher<M::Emitted>> Host<M, S, D> {
             let key: M::Key = decode(&timer.key)?;
             let event: M::Event = decode(&timer.event)?;
             let id = timer.id;
+            // Delivered at exactly its deadline, as Exegra delivers a timer, however late this
+            // tick is: the step's `time` and the timers it sets again count from the deadline.
+            let at = timer.fire_at;
             let fired = self
                 .on_store(move |store| {
                     store.transact(M::ISOLATION, |tx| {
-                        transition::<M>(tx, &key, &event, now, hold, Some(id))
+                        transition::<M>(tx, &key, &event, at, hold, Some(id))
                     })
                 })
                 .await?;

@@ -8,8 +8,8 @@
 use crate::clock::Time;
 use crate::machine::Isolation;
 use crate::store::{
-    NewMessage, NewTimer, OutboxEntry, OutboxStore, RecordStore, StorageError, StoredRecord,
-    TimerEntry, TimerStore, Tx,
+    DeadLetter, NewEntry, NewMessage, NewTimer, OutboxEntry, OutboxStore, QueueEntry, QueueStore,
+    RecordStore, StorageError, StoredRecord, TimerEntry, TimerStore, Tx,
 };
 use std::collections::BTreeMap;
 use std::sync::{Mutex, MutexGuard};
@@ -17,10 +17,22 @@ use std::sync::{Mutex, MutexGuard};
 #[derive(Clone, Debug, Default)]
 struct Data {
     records: BTreeMap<(String, String), StoredRecord>,
+    /// When each record was created, as a counter: the order of [`Tx::keys`].
+    created: BTreeMap<(String, String), u64>,
     outbox: BTreeMap<u64, OutboxEntry>,
     timers: BTreeMap<u64, TimerEntry>,
+    queue: BTreeMap<u64, QueueEntry>,
+    dead: Vec<DeadLetter>,
     last_message: u64,
     last_timer: u64,
+    last_record: u64,
+    last_entry: u64,
+}
+
+fn in_queue_order(entries: impl Iterator<Item = QueueEntry>) -> Vec<QueueEntry> {
+    let mut all: Vec<QueueEntry> = entries.collect();
+    all.sort_by_key(|e| (e.due, e.seq));
+    all
 }
 
 /// A machine store held in memory. Its contents live as long as the value.
@@ -70,6 +82,12 @@ impl Tx for MemoryTx<'_> {
             )));
         }
         let version = found.unwrap_or(0) + 1;
+        if found.is_none() {
+            self.data.last_record += 1;
+            self.data
+                .created
+                .insert(slot.clone(), self.data.last_record);
+        }
         self.data.records.insert(
             slot,
             StoredRecord {
@@ -131,6 +149,88 @@ impl Tx for MemoryTx<'_> {
     fn take_timer(&mut self, id: u64) -> Result<bool, StorageError> {
         Ok(self.data.timers.remove(&id).is_some())
     }
+
+    fn keys(&mut self, collection: &str) -> Result<Vec<String>, StorageError> {
+        let mut keys: Vec<(u64, String)> = self
+            .data
+            .created
+            .iter()
+            .filter(|((c, _), _)| c == collection)
+            .map(|((_, k), n)| (*n, k.clone()))
+            .collect();
+        keys.sort();
+        Ok(keys.into_iter().map(|(_, k)| k).collect())
+    }
+
+    fn push(&mut self, entry: &NewEntry) -> Result<u64, StorageError> {
+        self.data.last_entry += 1;
+        let seq = self.data.last_entry;
+        self.data.queue.insert(
+            seq,
+            QueueEntry {
+                seq,
+                due: entry.due,
+                event: entry.event.clone(),
+                target: entry.target.clone(),
+                timer: entry.timer.clone(),
+                source: entry.source.clone(),
+                source_key: entry.source_key.clone(),
+            },
+        );
+        Ok(seq)
+    }
+
+    fn take_entry(&mut self, seq: u64) -> Result<bool, StorageError> {
+        Ok(self.data.queue.remove(&seq).is_some())
+    }
+
+    fn drop_timer_entry(
+        &mut self,
+        machine: &str,
+        key: &str,
+        name: &str,
+    ) -> Result<bool, StorageError> {
+        let before = self.data.queue.len();
+        self.data.queue.retain(|_, e| {
+            !(e.timer.as_deref() == Some(name)
+                && e.target
+                    .as_ref()
+                    .is_some_and(|(m, k)| m == machine && k == key))
+        });
+        Ok(self.data.queue.len() != before)
+    }
+
+    fn dead_letter(
+        &mut self,
+        entry: &QueueEntry,
+        error: &str,
+        at: Time,
+    ) -> Result<(), StorageError> {
+        self.data.dead.push(DeadLetter {
+            entry: entry.clone(),
+            error: error.to_string(),
+            at,
+        });
+        Ok(())
+    }
+}
+
+impl QueueStore for MemoryStore {
+    fn head(&self) -> Result<Option<QueueEntry>, StorageError> {
+        Ok(in_queue_order(self.lock()?.queue.values().cloned())
+            .into_iter()
+            .next())
+    }
+
+    fn queued(&self, limit: usize) -> Result<Vec<QueueEntry>, StorageError> {
+        let mut all = in_queue_order(self.lock()?.queue.values().cloned());
+        all.truncate(limit);
+        Ok(all)
+    }
+
+    fn dead_letters(&self) -> Result<Vec<DeadLetter>, StorageError> {
+        Ok(self.lock()?.dead.clone())
+    }
 }
 
 impl RecordStore for MemoryStore {
@@ -161,14 +261,16 @@ impl OutboxStore for MemoryStore {
         now: Time,
         limit: usize,
     ) -> Result<Vec<OutboxEntry>, StorageError> {
-        Ok(self
+        let mut due: Vec<OutboxEntry> = self
             .lock()?
             .outbox
             .values()
             .filter(|m| m.source == source && m.next_attempt_at <= now && m.not_before <= now)
-            .take(limit)
             .cloned()
-            .collect())
+            .collect();
+        due.sort_by_key(|m| (m.not_before, m.id));
+        due.truncate(limit);
+        Ok(due)
     }
 
     fn mark_delivered(&self, id: u64) -> Result<(), StorageError> {

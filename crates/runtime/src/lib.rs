@@ -6,8 +6,14 @@
 //!
 //! - [`machine`]: the [`Machine`] trait a generated machine implements, and the [`Outcome`] its
 //!   `step` returns.
-//! - [`host`]: the [`Host`] that runs a machine's steps in storage transactions, with an outbox
-//!   for emitted events and persisted timers.
+//! - [`system`]: the [`System`] host that runs every machine of a deployment on one queue,
+//!   delivering inputs, emits and timers in `(due, seq)` order to the instances the generated
+//!   [`Router`] names, one atomic step per entry, as Exegra's simulator does. A failed step
+//!   commits nothing and its entry becomes a dead letter (Exegra ends the run instead); the
+//!   module documentation lists every remaining difference.
+//! - [`host`]: the single-machine [`Host`] that runs one machine's steps in storage
+//!   transactions, with an outbox for emitted events, handed to a hand-written dispatcher, and
+//!   persisted timers.
 //! - [`store`]: the storage traits the host uses, with [`memory`] and [`sqlite`]
 //!   implementations.
 //! - [`clock`]: the [`Clock`] every timer and retry reads, with a [`TestClock`] for tests.
@@ -31,6 +37,7 @@ pub mod routes;
 pub mod server;
 pub mod sqlite;
 pub mod store;
+pub mod system;
 pub mod telemetry;
 
 pub use client::{CallBackoff, CallError, CallRetry, Client, Credentials, NoCredentials};
@@ -40,7 +47,8 @@ pub use host::{
     RetryPolicy, TickReport,
 };
 pub use machine::{
-    Delivery, Emit, Isolation, Machine, Outcome, Receiver, RecordError, StepError, TimerCommand,
+    Delivery, EffectRef, Emit, Isolation, Machine, Outcome, Receiver, RecordError, StepError,
+    TimerCommand,
 };
 pub use memory::MemoryStore;
 pub use routes::{
@@ -49,7 +57,10 @@ pub use routes::{
 };
 pub use sqlite::{Database, SqliteMachineStore};
 pub use store::{
-    MachineStore, NewMessage, NewTimer, OutboxEntry, OutboxStore, RecordStore, StorageError,
-    StoredRecord, TimerEntry, TimerStore, Tx,
+    DeadLetter, MachineStore, NewEntry, NewMessage, NewTimer, OutboxEntry, OutboxStore, QueueEntry,
+    QueueStore, RecordStore, StorageError, StoredRecord, TimerEntry, TimerStore, Tx,
+};
+pub use system::{
+    Delivered, Member, Reached, RouteTable, Router, Routing, StepReport, System, SystemTick,
 };
 pub use telemetry::{JsonLines, Level, NoTelemetry, Telemetry};

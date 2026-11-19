@@ -14,8 +14,8 @@ use crate::clock::Time;
 use crate::machine::Delivery;
 use crate::machine::Isolation;
 use crate::store::{
-    NewMessage, NewTimer, OutboxEntry, OutboxStore, RecordStore, StorageError, StoredRecord,
-    TimerEntry, TimerStore, Tx,
+    DeadLetter, NewEntry, NewMessage, NewTimer, OutboxEntry, OutboxStore, QueueEntry, QueueStore,
+    RecordStore, StorageError, StoredRecord, TimerEntry, TimerStore, Tx,
 };
 use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
 use std::fmt;
@@ -239,7 +239,56 @@ const MIGRATIONS: &[Migration] = &[
     ALTER TABLE runtime_outbox ADD COLUMN not_before INTEGER NOT NULL DEFAULT 0;
     ",
     },
+    Migration {
+        version: 3,
+        name: "the system queue and its dead letters",
+        sql: "
+    CREATE TABLE runtime_queue (
+        seq            INTEGER PRIMARY KEY AUTOINCREMENT,
+        due            INTEGER NOT NULL,
+        event          TEXT NOT NULL,
+        target_machine TEXT,
+        target_key     TEXT,
+        timer          TEXT,
+        source         TEXT NOT NULL,
+        source_key     TEXT NOT NULL
+    );
+    CREATE INDEX runtime_queue_order ON runtime_queue(due, seq);
+    CREATE INDEX runtime_queue_timer ON runtime_queue(target_machine, target_key, timer);
+    CREATE TABLE runtime_dead_letters (
+        id             INTEGER PRIMARY KEY AUTOINCREMENT,
+        seq            INTEGER NOT NULL,
+        due            INTEGER NOT NULL,
+        event          TEXT NOT NULL,
+        target_machine TEXT,
+        target_key     TEXT,
+        timer          TEXT,
+        source         TEXT NOT NULL,
+        source_key     TEXT NOT NULL,
+        error          TEXT NOT NULL,
+        at             INTEGER NOT NULL
+    );
+    CREATE INDEX runtime_outbox_not_before ON runtime_outbox(source, not_before, id);
+    ",
+    },
 ];
+
+const QUEUE_COLUMNS: &str =
+    "seq, due, event, target_machine, target_key, timer, source, source_key";
+
+fn queue_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<QueueEntry> {
+    let machine: Option<String> = row.get(3)?;
+    let key: Option<String> = row.get(4)?;
+    Ok(QueueEntry {
+        seq: row.get::<_, i64>(0)? as u64,
+        due: Time(row.get(1)?),
+        event: row.get(2)?,
+        target: machine.zip(key),
+        timer: row.get(5)?,
+        source: row.get(6)?,
+        source_key: row.get(7)?,
+    })
+}
 
 /// The ledger table of the machine store's migrations.
 pub const LEDGER: &str = "runtime_migrations";
@@ -368,6 +417,131 @@ impl Tx for SqliteTx<'_, '_> {
             .map_err(sql)?;
         Ok(removed > 0)
     }
+
+    fn keys(&mut self, collection: &str) -> Result<Vec<String>, StorageError> {
+        let mut statement = self
+            .tx
+            .prepare_cached("SELECT key FROM runtime_records WHERE collection = ?1 ORDER BY rowid")
+            .map_err(sql)?;
+        let rows = statement
+            .query_map(params![collection], |row| row.get(0))
+            .map_err(sql)?;
+        rows.collect::<Result<Vec<String>, _>>().map_err(sql)
+    }
+
+    fn push(&mut self, entry: &NewEntry) -> Result<u64, StorageError> {
+        let (machine, key) = entry.target.clone().unzip();
+        self.tx
+            .execute(
+                "INSERT INTO runtime_queue (due, event, target_machine, target_key, timer, source, source_key)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![
+                    entry.due.0,
+                    entry.event,
+                    machine,
+                    key,
+                    entry.timer,
+                    entry.source,
+                    entry.source_key
+                ],
+            )
+            .map_err(sql)?;
+        Ok(self.tx.last_insert_rowid() as u64)
+    }
+
+    fn take_entry(&mut self, seq: u64) -> Result<bool, StorageError> {
+        let removed = self
+            .tx
+            .execute(
+                "DELETE FROM runtime_queue WHERE seq = ?1",
+                params![seq as i64],
+            )
+            .map_err(sql)?;
+        Ok(removed > 0)
+    }
+
+    fn drop_timer_entry(
+        &mut self,
+        machine: &str,
+        key: &str,
+        name: &str,
+    ) -> Result<bool, StorageError> {
+        let removed = self
+            .tx
+            .execute(
+                "DELETE FROM runtime_queue WHERE target_machine = ?1 AND target_key = ?2 AND timer = ?3",
+                params![machine, key, name],
+            )
+            .map_err(sql)?;
+        Ok(removed > 0)
+    }
+
+    fn dead_letter(
+        &mut self,
+        entry: &QueueEntry,
+        error: &str,
+        at: Time,
+    ) -> Result<(), StorageError> {
+        let (machine, key) = entry.target.clone().unzip();
+        self.tx
+            .execute(
+                "INSERT INTO runtime_dead_letters
+                   (seq, due, event, target_machine, target_key, timer, source, source_key, error, at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                params![
+                    entry.seq as i64,
+                    entry.due.0,
+                    entry.event,
+                    machine,
+                    key,
+                    entry.timer,
+                    entry.source,
+                    entry.source_key,
+                    error,
+                    at.0
+                ],
+            )
+            .map_err(sql)?;
+        Ok(())
+    }
+}
+
+impl QueueStore for SqliteMachineStore {
+    fn head(&self) -> Result<Option<QueueEntry>, StorageError> {
+        Ok(self.queued(1)?.into_iter().next())
+    }
+
+    fn queued(&self, limit: usize) -> Result<Vec<QueueEntry>, StorageError> {
+        let conn = self.db.lock()?;
+        let mut statement = conn
+            .prepare_cached(&format!(
+                "SELECT {QUEUE_COLUMNS} FROM runtime_queue ORDER BY due, seq LIMIT ?1"
+            ))
+            .map_err(sql)?;
+        let rows = statement
+            .query_map(params![limit as i64], queue_entry)
+            .map_err(sql)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(sql)
+    }
+
+    fn dead_letters(&self) -> Result<Vec<DeadLetter>, StorageError> {
+        let conn = self.db.lock()?;
+        let mut statement = conn
+            .prepare_cached(&format!(
+                "SELECT {QUEUE_COLUMNS}, error, at FROM runtime_dead_letters ORDER BY id"
+            ))
+            .map_err(sql)?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok(DeadLetter {
+                    entry: queue_entry(row)?,
+                    error: row.get(8)?,
+                    at: Time(row.get(9)?),
+                })
+            })
+            .map_err(sql)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(sql)
+    }
 }
 
 impl RecordStore for SqliteMachineStore {
@@ -422,7 +596,7 @@ impl OutboxStore for SqliteMachineStore {
                 "SELECT id, source, key, receiver, event, created_at, attempts, next_attempt_at, last_error,
                         delivery, not_before
                  FROM runtime_outbox WHERE source = ?1 AND next_attempt_at <= ?2 AND not_before <= ?2
-                 ORDER BY id LIMIT ?3",
+                 ORDER BY not_before, id LIMIT ?3",
             )
             .map_err(sql)?;
         let rows = statement

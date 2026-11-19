@@ -53,8 +53,8 @@ use strata_kernel::{
     Timestamp, Value, KERNEL_VERSION,
 };
 use strata_runtime::store::{
-    NewMessage, NewTimer, OutboxEntry, OutboxStore, RecordStore, StoredRecord, TimerEntry,
-    TimerStore, Tx,
+    DeadLetter, NewEntry, NewMessage, NewTimer, OutboxEntry, OutboxStore, QueueEntry, QueueStore,
+    RecordStore, StoredRecord, TimerEntry, TimerStore, Tx,
 };
 use strata_runtime::{Clock, Delivery, Isolation, StorageError, Time};
 use strata_storage_api::{Commit, JournalEntry, Store, StoreError};
@@ -63,6 +63,13 @@ use strata_storage_api::{Commit, JournalEntry, Store, StoreError};
 pub const OUTBOX: &str = "runtime_outbox";
 /// The object type of the runtime's timers.
 pub const TIMERS: &str = "runtime_timer";
+/// The object type of the system queue's entries.
+pub const QUEUE: &str = "runtime_queue";
+/// The object type of the system queue's dead letters.
+pub const DEAD_LETTERS: &str = "runtime_dead_letter";
+
+/// The adapter's own object types.
+const INTERNAL: [&str; 4] = [OUTBOX, TIMERS, QUEUE, DEAD_LETTERS];
 
 fn storage(error: StoreError) -> StorageError {
     match error {
@@ -88,7 +95,7 @@ fn object_type(name: &str) -> Result<ObjectTypeId, StorageError> {
 /// refused.
 fn collection_object(collection: &str) -> Result<ObjectTypeId, StorageError> {
     let name = collection.replace('-', "_");
-    if name == OUTBOX || name == TIMERS {
+    if INTERNAL.contains(&name.as_str()) {
         return Err(StorageError::Invalid(format!(
             "collection {collection} collides with the runtime's own records"
         )));
@@ -159,6 +166,53 @@ fn timer_entry(record: &Record) -> Result<TimerEntry, StorageError> {
         fire_at: Time(int(record, "fire_at")?),
         event: text(record, "event")?,
     })
+}
+
+fn optional_text(record: &Record, name: &str) -> Option<String> {
+    match record.get(&field(name)) {
+        Value::Str(s) => Some(s.clone()),
+        _ => None,
+    }
+}
+
+fn queue_entry(record: &Record) -> Result<QueueEntry, StorageError> {
+    let machine = optional_text(record, "target_machine");
+    let key = optional_text(record, "target_key");
+    Ok(QueueEntry {
+        seq: record.id.0,
+        due: Time(int(record, "due")?),
+        event: text(record, "event")?,
+        target: machine.zip(key),
+        timer: optional_text(record, "timer"),
+        source: text(record, "source")?,
+        source_key: text(record, "source_key")?,
+    })
+}
+
+/// The fields of a queue entry (without its sequence number, which is the record id).
+fn queue_fields(
+    due: Time,
+    event: &str,
+    target: Option<&(String, String)>,
+    timer: Option<&str>,
+    source: &str,
+    source_key: &str,
+) -> BTreeMap<FieldId, Value> {
+    let mut fields = strings(&[
+        ("event", event),
+        ("source", source),
+        ("source_key", source_key),
+    ]);
+    fields.insert(field("due"), Value::Int(due.0));
+    if let Some((machine, key)) = target {
+        fields.insert(field("target_machine"), Value::Str(machine.clone()));
+        fields.insert(field("target_key"), Value::Str(key.clone()));
+        if let Some(name) = timer {
+            fields.insert(field("timer"), Value::Str(name.to_string()));
+            fields.insert(field("slot"), Value::Str(timer_slot(machine, key, name)));
+        }
+    }
+    fields
 }
 
 fn context(tenant: &TenantId, now: Time) -> Context {
@@ -338,6 +392,29 @@ impl<'a> ApiTx<'a> {
             .next())
     }
 
+    /// Every current record of `object` as this transaction sees it, by id.
+    fn all(&mut self, object: &ObjectTypeId) -> Result<Vec<Arc<Record>>, StorageError> {
+        let mut by_id: BTreeMap<RecordId, Arc<Record>> = self
+            .read(Need::AllOf(object.clone()))?
+            .into_iter()
+            .map(|r| (r.id, r))
+            .collect();
+        for ((kind, id), slot) in &self.pending {
+            if kind != object {
+                continue;
+            }
+            match &slot.after {
+                Some(after) => {
+                    by_id.insert(*id, after.clone());
+                }
+                None => {
+                    by_id.remove(id);
+                }
+            }
+        }
+        Ok(by_id.into_values().collect())
+    }
+
     fn get(
         &mut self,
         object: &ObjectTypeId,
@@ -443,7 +520,10 @@ impl<'a> ApiTx<'a> {
 
     /// Commit the buffered writes as one store commit. Nothing buffered commits nothing.
     fn finish(self) -> Result<(), StorageError> {
-        let internal = [object_type(OUTBOX)?, object_type(TIMERS)?];
+        let internal = INTERNAL
+            .iter()
+            .map(|name| object_type(name))
+            .collect::<Result<Vec<_>, _>>()?;
         let revision = StateRevision(self.header.revision.0 + 1);
         let mut ops = Vec::new();
         let mut events: Vec<DomainEvent> = Vec::new();
@@ -654,6 +734,82 @@ impl Tx for ApiTx<'_> {
             None => Ok(false),
         }
     }
+
+    fn keys(&mut self, collection: &str) -> Result<Vec<String>, StorageError> {
+        let object = collection_object(collection)?;
+        self.all(&object)?.iter().map(|r| text(r, "key")).collect()
+    }
+
+    fn push(&mut self, entry: &NewEntry) -> Result<u64, StorageError> {
+        let id = self.alloc();
+        let fields = queue_fields(
+            entry.due,
+            &entry.event,
+            entry.target.as_ref(),
+            entry.timer.as_deref(),
+            &entry.source,
+            &entry.source_key,
+        );
+        let record = self.record(object_type(QUEUE)?, id, 1, Timestamp(self.now.0), fields);
+        self.put(None, record);
+        Ok(id.0)
+    }
+
+    fn take_entry(&mut self, seq: u64) -> Result<bool, StorageError> {
+        match self.get(&object_type(QUEUE)?, RecordId(seq))? {
+            Some(found) => {
+                self.remove(&found);
+                Ok(true)
+            }
+            None => Ok(false),
+        }
+    }
+
+    fn drop_timer_entry(
+        &mut self,
+        machine: &str,
+        key: &str,
+        name: &str,
+    ) -> Result<bool, StorageError> {
+        let slot = timer_slot(machine, key, name);
+        match self.find(&object_type(QUEUE)?, "slot", &slot)? {
+            Some(found) => {
+                self.remove(&found);
+                Ok(true)
+            }
+            None => Ok(false),
+        }
+    }
+
+    fn dead_letter(
+        &mut self,
+        entry: &QueueEntry,
+        error: &str,
+        at: Time,
+    ) -> Result<(), StorageError> {
+        let id = self.alloc();
+        let mut fields = queue_fields(
+            entry.due,
+            &entry.event,
+            entry.target.as_ref(),
+            entry.timer.as_deref(),
+            &entry.source,
+            &entry.source_key,
+        );
+        fields.remove(&field("slot"));
+        fields.insert(field("seq"), Value::Int(entry.seq as i64));
+        fields.insert(field("error"), Value::Str(error.to_string()));
+        fields.insert(field("at"), Value::Int(at.0));
+        let record = self.record(
+            object_type(DEAD_LETTERS)?,
+            id,
+            1,
+            Timestamp(self.now.0),
+            fields,
+        );
+        self.put(None, record);
+        Ok(())
+    }
 }
 
 /// The runtime's machine store on a [`Store`].
@@ -761,7 +917,7 @@ impl OutboxStore for StorageApiMachineStore {
                 due.push(entry);
             }
         }
-        due.sort_by_key(|entry| entry.id);
+        due.sort_by_key(|entry| (entry.not_before, entry.id));
         due.truncate(limit);
         Ok(due)
     }
@@ -782,6 +938,41 @@ impl OutboxStore for StorageApiMachineStore {
 
     fn pending(&self) -> Result<u64, StorageError> {
         Ok(self.records(Need::AllOf(object_type(OUTBOX)?))?.len() as u64)
+    }
+}
+
+impl QueueStore for StorageApiMachineStore {
+    fn head(&self) -> Result<Option<QueueEntry>, StorageError> {
+        Ok(self.queued(1)?.into_iter().next())
+    }
+
+    fn queued(&self, limit: usize) -> Result<Vec<QueueEntry>, StorageError> {
+        let mut entries = self
+            .records(Need::AllOf(object_type(QUEUE)?))?
+            .iter()
+            .map(|r| queue_entry(r))
+            .collect::<Result<Vec<_>, _>>()?;
+        entries.sort_by_key(|e| (e.due, e.seq));
+        entries.truncate(limit);
+        Ok(entries)
+    }
+
+    fn dead_letters(&self) -> Result<Vec<DeadLetter>, StorageError> {
+        let mut records = self.records(Need::AllOf(object_type(DEAD_LETTERS)?))?;
+        records.sort_by_key(|r| r.id);
+        records
+            .iter()
+            .map(|r| {
+                let mut entry = queue_entry(r)?;
+                entry.seq = u64::try_from(int(r, "seq")?)
+                    .map_err(|_| StorageError::Corrupt("dead letter seq out of range".into()))?;
+                Ok(DeadLetter {
+                    entry,
+                    error: text(r, "error")?,
+                    at: Time(int(r, "at")?),
+                })
+            })
+            .collect()
     }
 }
 
