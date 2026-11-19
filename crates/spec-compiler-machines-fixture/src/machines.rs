@@ -10,12 +10,27 @@ pub mod lease {
     use std::time::Duration;
 
     use serde::{Deserialize, Serialize};
-    use strata_runtime::{Delivery, Isolation, Machine, Outcome, RecordError, StepError, Time};
+
+    use strata_runtime::{
+        Delivery, Isolation, Machine, Outcome, RecordError, StepError, Time,
+    };
 
     use crate::{prelude, records};
 
     /// The states of machine `lease`.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Hash,
+        Serialize,
+        Deserialize
+    )]
+
     pub enum State {
         /// State `idle`: Free. Ignores `lease-expired`.
         #[serde(rename = "idle")]
@@ -144,21 +159,28 @@ pub mod lease {
 
     /// The refusal of a step whose arithmetic overflows or divides by zero.
     fn overflow(transition: &str) -> StepError {
-        StepError::Rejected(format!(
-            "transition {transition} overflowed or divided by zero"
-        ))
+        StepError::Rejected(
+            format!("transition {transition} overflowed or divided by zero"),
+        )
     }
 
     impl Machine for Lease {
         const NAME: &'static str = "lease";
+
         const RECORD: &'static str = "rec-lease";
+
         const ISOLATION: Isolation = Isolation::Serializable;
 
         type State = State;
+
         type Vars = Vars;
+
         type Event = Event;
+
         type Emitted = Emitted;
+
         type Key = Key;
+
         type Record = records::RecLease;
 
         fn initial(_key: &Key) -> (State, Vars) {
@@ -173,13 +195,13 @@ pub mod lease {
             )
         }
 
-        fn from_record(record: &records::RecLease) -> Result<(State, Vars), RecordError> {
-            let state = State::from_id(&record.state).ok_or_else(|| {
-                RecordError(format!(
-                    "{:?} is not a state of machine `lease`",
-                    record.state
-                ))
-            })?;
+        fn from_record(
+            record: &records::RecLease,
+        ) -> Result<(State, Vars), RecordError> {
+            let state = State::from_id(&record.state)
+                .ok_or_else(|| RecordError(
+                    format!("{:?} is not a state of machine `lease`", record.state),
+                ))?;
             Ok((
                 state,
                 Vars {
@@ -223,56 +245,76 @@ pub mod lease {
                         holder: next.holder.clone(),
                         token: next.token,
                     });
-                    let timer_5 = Event::LeaseExpired(LeaseExpiredPayload { token: next.token });
-                    Ok(Outcome::to(State::Granted, next)
-                        .emit("worker", Delivery::AtLeastOnce, emitted_4)
-                        .set_timer("expiry", Duration::from_millis(30), timer_5))
+                    let timer_5 = Event::LeaseExpired(LeaseExpiredPayload {
+                        token: next.token,
+                    });
+                    Ok(
+                        Outcome::to(State::Granted, next)
+                            .emit("worker", Delivery::AtLeastOnce, emitted_4)
+                            .set_timer("expiry", Duration::from_millis(30), timer_5),
+                    )
                 }
                 (State::Idle, Event::LeaseResult(payload)) => {
-                    Ok(Outcome::to(State::Idle, vars.clone()).emit(
-                        "worker",
-                        Delivery::AtMostOnce,
-                        Emitted::ResultStale(ResultStalePayload {
-                            token: payload.token,
-                        }),
-                    ))
+                    Ok(
+                        Outcome::to(State::Idle, vars.clone())
+                            .emit(
+                                "worker",
+                                Delivery::AtMostOnce,
+                                Emitted::ResultStale(ResultStalePayload {
+                                    token: payload.token,
+                                }),
+                            ),
+                    )
                 }
                 (State::Granted, Event::LeaseResult(payload)) => {
                     if payload.token == vars.token {
                         let mut next = vars.clone();
-                        next.accepted =
-                            next.accepted.checked_add(1u32).ok_or(overflow("accept"))?;
+                        next.accepted = next
+                            .accepted
+                            .checked_add(1u32)
+                            .ok_or(overflow("accept"))?;
                         let emitted_2 = Emitted::ResultAccepted(ResultAcceptedPayload {
                             token: payload.token,
                             value: payload.value.clone(),
                         });
-                        Ok(Outcome::to(State::Idle, next)
-                            .emit("ledger", Delivery::AtLeastOnce, emitted_2)
-                            .cancel_timer("expiry"))
+                        Ok(
+                            Outcome::to(State::Idle, next)
+                                .emit("ledger", Delivery::AtLeastOnce, emitted_2)
+                                .cancel_timer("expiry"),
+                        )
                     } else {
-                        Ok(Outcome::to(State::Granted, vars.clone()).emit(
-                            "worker",
-                            Delivery::AtMostOnce,
-                            Emitted::ResultStale(ResultStalePayload {
-                                token: payload.token,
-                            }),
-                        ))
+                        Ok(
+                            Outcome::to(State::Granted, vars.clone())
+                                .emit(
+                                    "worker",
+                                    Delivery::AtMostOnce,
+                                    Emitted::ResultStale(ResultStalePayload {
+                                        token: payload.token,
+                                    }),
+                                ),
+                        )
                     }
                 }
                 (State::Granted, Event::LeaseExpired(payload)) => {
                     if payload.token == vars.token {
                         let mut next = vars.clone();
-                        next.token = next.token.checked_add(1u32).ok_or(overflow("regrant"))?;
+                        next.token = next
+                            .token
+                            .checked_add(1u32)
+                            .ok_or(overflow("regrant"))?;
                         next.granted = prelude::Timestamp(now.0);
                         let emitted_3 = Emitted::LeaseGranted(LeaseGrantedPayload {
                             holder: next.holder.clone(),
                             token: next.token,
                         });
-                        let timer_4 =
-                            Event::LeaseExpired(LeaseExpiredPayload { token: next.token });
-                        Ok(Outcome::to(State::Granted, next)
-                            .emit("worker", Delivery::AtLeastOnce, emitted_3)
-                            .set_timer("expiry", Duration::from_millis(30), timer_4))
+                        let timer_4 = Event::LeaseExpired(LeaseExpiredPayload {
+                            token: next.token,
+                        });
+                        Ok(
+                            Outcome::to(State::Granted, next)
+                                .emit("worker", Delivery::AtLeastOnce, emitted_3)
+                                .set_timer("expiry", Duration::from_millis(30), timer_4),
+                        )
                     } else {
                         Ok(Outcome::to(State::Granted, vars.clone()))
                     }
@@ -292,12 +334,27 @@ pub mod job {
     use std::time::Duration;
 
     use serde::{Deserialize, Serialize};
-    use strata_runtime::{Delivery, Isolation, Machine, Outcome, RecordError, StepError, Time};
+
+    use strata_runtime::{
+        Delivery, Isolation, Machine, Outcome, RecordError, StepError, Time,
+    };
 
     use crate::records;
 
     /// The states of machine `job`.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Hash,
+        Serialize,
+        Deserialize
+    )]
+
     pub enum State {
         /// State `idle`: Waiting. Ignores `job-tick`, `job-cancel`.
         #[serde(rename = "idle")]
@@ -418,21 +475,28 @@ pub mod job {
 
     /// The refusal of a step whose arithmetic overflows or divides by zero.
     fn overflow(transition: &str) -> StepError {
-        StepError::Rejected(format!(
-            "transition {transition} overflowed or divided by zero"
-        ))
+        StepError::Rejected(
+            format!("transition {transition} overflowed or divided by zero"),
+        )
     }
 
     impl Machine for Job {
         const NAME: &'static str = "job";
+
         const RECORD: &'static str = "rec-job";
+
         const ISOLATION: Isolation = Isolation::Snapshot;
 
         type State = State;
+
         type Vars = Vars;
+
         type Event = Event;
+
         type Emitted = Emitted;
+
         type Key = Key;
+
         type Record = records::RecJob;
 
         fn initial(_key: &Key) -> (State, Vars) {
@@ -440,18 +504,11 @@ pub mod job {
         }
 
         fn from_record(record: &records::RecJob) -> Result<(State, Vars), RecordError> {
-            let state = State::from_id(&record.state).ok_or_else(|| {
-                RecordError(format!(
-                    "{:?} is not a state of machine `job`",
-                    record.state
-                ))
-            })?;
-            Ok((
-                state,
-                Vars {
-                    attempts: record.attempts,
-                },
-            ))
+            let state = State::from_id(&record.state)
+                .ok_or_else(|| RecordError(
+                    format!("{:?} is not a state of machine `job`", record.state),
+                ))?;
+            Ok((state, Vars { attempts: record.attempts }))
         }
 
         fn to_record(
@@ -478,8 +535,10 @@ pub mod job {
                 (State::Idle, Event::JobSubmitted(payload)) => {
                     if payload.priority > 0u32 {
                         let mut next = vars.clone();
-                        next.attempts =
-                            next.attempts.checked_add(1u32).ok_or(overflow("submit"))?;
+                        next.attempts = next
+                            .attempts
+                            .checked_add(1u32)
+                            .ok_or(overflow("submit"))?;
                         let emitted_2 = Emitted::JobStarted(JobStartedPayload {
                             job: payload.job.clone(),
                             attempts: next.attempts,
@@ -487,17 +546,22 @@ pub mod job {
                         let timer_3 = Event::JobTick(JobTickPayload {
                             job: payload.job.clone(),
                         });
-                        Ok(Outcome::to(State::Running, next)
-                            .emit("runner", Delivery::AtLeastOnce, emitted_2)
-                            .set_timer("retry", Duration::from_millis(100), timer_3))
+                        Ok(
+                            Outcome::to(State::Running, next)
+                                .emit("runner", Delivery::AtLeastOnce, emitted_2)
+                                .set_timer("retry", Duration::from_millis(100), timer_3),
+                        )
                     } else {
-                        Ok(Outcome::to(State::Idle, vars.clone()).emit(
-                            "runner",
-                            Delivery::AtMostOnce,
-                            Emitted::JobDropped(JobDroppedPayload {
-                                job: payload.job.clone(),
-                            }),
-                        ))
+                        Ok(
+                            Outcome::to(State::Idle, vars.clone())
+                                .emit(
+                                    "runner",
+                                    Delivery::AtMostOnce,
+                                    Emitted::JobDropped(JobDroppedPayload {
+                                        job: payload.job.clone(),
+                                    }),
+                                ),
+                        )
                     }
                 }
                 (State::Running, Event::JobTick(payload)) => {
@@ -505,23 +569,34 @@ pub mod job {
                         let mut next = vars.clone();
                         let emitted_1 = Emitted::JobStarted(JobStartedPayload {
                             job: payload.job.clone(),
-                            attempts: next.attempts.checked_add(1u32).ok_or(overflow("retry"))?,
+                            attempts: next
+                                .attempts
+                                .checked_add(1u32)
+                                .ok_or(overflow("retry"))?,
                         });
-                        next.attempts = next.attempts.checked_add(1u32).ok_or(overflow("retry"))?;
+                        next.attempts = next
+                            .attempts
+                            .checked_add(1u32)
+                            .ok_or(overflow("retry"))?;
                         let timer_3 = Event::JobTick(JobTickPayload {
                             job: payload.job.clone(),
                         });
-                        Ok(Outcome::to(State::Running, next)
-                            .emit("runner", Delivery::AtLeastOnce, emitted_1)
-                            .set_timer("retry", Duration::from_millis(100), timer_3))
+                        Ok(
+                            Outcome::to(State::Running, next)
+                                .emit("runner", Delivery::AtLeastOnce, emitted_1)
+                                .set_timer("retry", Duration::from_millis(100), timer_3),
+                        )
                     } else {
-                        Ok(Outcome::to(State::Failed, vars.clone()).emit(
-                            "runner",
-                            Delivery::AtMostOnce,
-                            Emitted::JobDropped(JobDroppedPayload {
-                                job: payload.job.clone(),
-                            }),
-                        ))
+                        Ok(
+                            Outcome::to(State::Failed, vars.clone())
+                                .emit(
+                                    "runner",
+                                    Delivery::AtMostOnce,
+                                    Emitted::JobDropped(JobDroppedPayload {
+                                        job: payload.job.clone(),
+                                    }),
+                                ),
+                        )
                     }
                 }
                 (State::Running, Event::JobCancel(_)) => {

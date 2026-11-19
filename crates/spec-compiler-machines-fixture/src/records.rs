@@ -108,9 +108,7 @@ impl RecJob {
 
     /// The record's key.
     pub fn key(&self) -> RecJobKey {
-        RecJobKey {
-            job: self.job.clone(),
-        }
+        RecJobKey { job: self.job.clone() }
     }
 
     /// Checks the field constraints, returning the first one the record breaks.
