@@ -711,3 +711,47 @@ test('no log line holds a password, a session token or a CSRF token', async ({ p
   expect(correlation).toBeTruthy();
   expect(logs.split('\n').filter((line) => line.includes(correlation)).map((line) => JSON.parse(line).service)).toEqual(expect.arrayContaining(['backend', 'bff']));
 });
+
+// Team membership (ADM-151). The fixture seeds `dana` with no role of her own and in the
+// `newsdesk` team, which holds the editor role, so everything she may do she may do through it.
+test('a person in a team that holds the editor role has the editor’s access and the author without a team does not', async ({ page, browser }) => {
+  await signIn(page, 'dana');
+  // Editors see every article on the desk, not only their own.
+  await expect(page.getByRole('row', { name: /What the Kiln Decides/ })).toBeVisible();
+  await expect(page.getByRole('row', { name: /The Jig Is the Work/ })).toBeVisible();
+  // Editors tune the publication's settings; she reaches them through the team alone.
+  await page.getByRole('link', { name: 'Publication settings' }).click();
+  await expect(page.getByRole('heading', { level: 1, name: 'Publication settings' })).toBeVisible();
+  // The kernel decides, not the page: a category is the editor's to create ...
+  const change = { op: 'create', object: 'category', fields: { name: 'Team made', slug: 'team-made' } };
+  const csrf = (await (await page.request.get('/api/session')).json()).session.csrf_token;
+  const allowed = await page.request.post('/api/records', { data: change, headers: { origin: BASE, 'x-csrf-token': csrf } });
+  expect(allowed.status()).toBe(200);
+  // ... and an author who is in no team is refused the same write.
+  const author = await (await browser.newContext()).newPage();
+  await signIn(author, 'mirela');
+  const authorCsrf = (await (await author.request.get('/api/session')).json()).session.csrf_token;
+  const refused = await author.request.post('/api/records', {
+    data: { ...change, fields: { name: 'Author made', slug: 'author-made' } },
+    headers: { origin: BASE, 'x-csrf-token': authorCsrf },
+  });
+  expect(refused.status()).toBe(403);
+});
+
+// Over-granting (ADM-152). The stack does not yet expose role assignment: there is no route for
+// it and no screen for teams or roles. The kernel tests cover the rule; enable this one when the
+// route exists, with a fixture member `moderator` who manages members but holds none of the
+// permissions of the editor role.
+test.fixme('assigning a role whose permissions the assigner lacks is refused with the named reason', async ({ page }) => {
+  await signIn(page, 'moderator');
+  const csrf = (await (await page.request.get('/api/session')).json()).session.csrf_token;
+  const assign = (role) =>
+    page.request.post('/api/members', {
+      data: { op: 'assign_role', principal: 'user:mirela', role },
+      headers: { origin: BASE, 'x-csrf-token': csrf },
+    });
+  const refused = await assign('editor');
+  expect(refused.status()).toBe(403);
+  expect((await refused.json()).failed[0].rule).toBe('permission:confer:editor');
+  expect((await assign('author')).status()).toBe(200);
+});
