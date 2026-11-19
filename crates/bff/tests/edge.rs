@@ -222,6 +222,7 @@ async fn the_session_cookie_is_http_only_strict_and_never_in_a_body() {
 }
 
 /// Verifies: IDN-262
+/// Verifies: H-006
 #[tokio::test]
 async fn the_session_cookie_carries_the_host_prefix_and_secure() {
     let edge = start().await;
@@ -241,6 +242,8 @@ async fn the_session_cookie_carries_the_host_prefix_and_secure() {
     assert!(attributes[0].starts_with("__Host-strata_sid="), "{cookie}");
     assert!(attributes.contains(&"Secure"), "{cookie}");
     assert!(attributes.contains(&"Path=/"), "{cookie}");
+    assert!(attributes.contains(&"HttpOnly"), "{cookie}");
+    assert!(attributes.contains(&"SameSite=Strict"), "{cookie}");
     assert!(
         !attributes
             .iter()
@@ -262,9 +265,10 @@ async fn the_session_cookie_carries_the_host_prefix_and_secure() {
     assert_eq!(status, 200);
     let cleared = reply.cookie.unwrap();
     assert!(
-        cleared.starts_with("__Host-strata_sid=") && cleared.contains("Secure"),
-        "{cleared}"
+        cleared.starts_with("__Host-strata_sid=;") && cleared.contains("Secure"),
+        "an empty token ends the cookie: {cleared}"
     );
+    assert!(cleared.contains("Max-Age=0"), "{cleared}");
 
     // A cookie under the old, unprefixed name is not a session.
     let (token, _) = edge.login("127.0.0.1", "ines", "strata-dev-ines").await;

@@ -83,11 +83,22 @@ mod tests {
         assert_eq!(hash_of(&A { b: 2, a: 1 }), hash_of(&B { a: 1, b: 2 }));
     }
 
+    /// Verifies: H-010
     #[test]
     fn hash_is_the_known_sha256() {
         assert_eq!(
             hash_bytes(b"abc"),
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+        assert_eq!(
+            hash_bytes(b""),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+        // State, delta and event hashes are this function over the canonical JSON form.
+        let value = serde_json::json!({ "b": [1, 2], "a": "x" });
+        assert_eq!(
+            hash_of(&value),
+            hash_bytes(canonical_json(&value).as_bytes())
         );
     }
 }

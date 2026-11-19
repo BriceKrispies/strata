@@ -428,6 +428,7 @@ mod tests {
 
     /// The parser's half of CMS-004; the proof of the requirement itself is the gateway test
     /// `tenant_rich_text_reaches_the_browser_as_blocks_with_markup_as_text`.
+    /// Verifies: H-009
     #[test]
     fn html_is_text_and_unsafe_links_lose_their_target() {
         let blocks = parse("<script>alert(1)</script> and [click](javascript:alert(1)) and [ok](https://example.com)");
@@ -448,6 +449,23 @@ mod tests {
         assert!(json.contains("<img src=x onerror=alert(1)>"), "{json}");
         assert!(json.contains("<b>bold</b>"), "{json}");
         assert!(json.contains("<div>block</div>"), "{json}");
+        // Only the web and mail schemes survive, and the same source gives the same blocks.
+        let links = parse("[m](mailto:a@example.com) [d](data:text/html,x) [v](vbscript:x) [f](file:///etc/passwd) [h](http://example.com)");
+        let hrefs: Vec<String> = match &links[0] {
+            Block::Paragraph { inlines } => inlines
+                .iter()
+                .filter_map(|i| match i {
+                    Inline::Link { href, .. } => Some(href.clone()),
+                    _ => None,
+                })
+                .collect(),
+            _ => panic!(),
+        };
+        assert_eq!(hrefs, ["mailto:a@example.com", "http://example.com"]);
+        assert_eq!(
+            parse("A *b* [c](https://example.com)"),
+            parse("A *b* [c](https://example.com)")
+        );
     }
 
     #[test]

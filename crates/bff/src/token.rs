@@ -92,6 +92,8 @@ mod tests {
         );
     }
 
+    /// Verifies: H-004
+    /// Verifies: H-005
     #[test]
     fn a_token_is_good_for_its_site_until_it_expires_and_for_nothing_else() {
         let issuer = Issuer::new().unwrap();

@@ -361,3 +361,59 @@ pub fn put_dev_account(
     })?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifies: H-001
+    #[test]
+    fn a_password_hash_is_argon2id_with_a_fresh_salt_each_time() {
+        let first = hash_password("correct horse").unwrap();
+        let second = hash_password("correct horse").unwrap();
+        assert!(first.starts_with("$argon2id$"), "{first}");
+        assert_ne!(first, second, "two hashes of one password differ");
+        let parsed = PasswordHash::new(&first).expect("PHC string form");
+        assert!(parsed.salt.is_some());
+    }
+
+    /// Verifies: H-002
+    #[test]
+    fn a_password_matches_exactly_its_own_hash_and_a_bad_hash_is_no_match() {
+        let stored = hash_password("correct horse").unwrap();
+        assert!(verify_password("correct horse", &stored));
+        assert!(!verify_password("correct horse ", &stored));
+        assert!(!verify_password("Correct horse", &stored));
+        assert!(!verify_password(
+            "correct horse",
+            &hash_password("other").unwrap()
+        ));
+        for junk in [
+            "",
+            "plain text",
+            "$argon2id$broken",
+            "$argon2id$v=19$m=1,t=1,p=1$$",
+        ] {
+            assert!(!verify_password("correct horse", junk), "{junk:?}");
+        }
+    }
+
+    /// Verifies: H-003
+    #[test]
+    fn a_random_secret_is_lower_case_hex_of_the_requested_length_and_never_repeats() {
+        for bytes in [0usize, 1, 6, 32] {
+            let secret = random_hex(bytes).unwrap();
+            assert_eq!(secret.len(), bytes * 2);
+            assert!(secret
+                .chars()
+                .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c)));
+        }
+        let drawn: std::collections::BTreeSet<String> =
+            (0..50).map(|_| random_hex(16).unwrap()).collect();
+        assert_eq!(
+            drawn.len(),
+            50,
+            "a secret drawn for one challenge opens no other"
+        );
+    }
+}
