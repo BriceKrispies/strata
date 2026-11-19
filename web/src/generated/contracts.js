@@ -615,3 +615,34 @@ export function decode(contract, body, inputs = {}) {
       throw new Error(`the web application does not call contract ${contract}`);
   }
 }
+
+/**
+ * How the BFF serves each contract: its route, and for the records endpoint the operation and
+ * the object.
+ * @type {Record<string, { method: 'GET' | 'POST', path: string, shape: 'json' | 'view' | 'records', op: string | null, object: string | null }>}
+ */
+export const BFF = {
+  'read-front-page': { method: 'GET', path: '/api/view', shape: 'view', op: null, object: null },
+  'read-article-page': { method: 'GET', path: '/api/view', shape: 'view', op: null, object: null },
+  'read-topics-page': { method: 'GET', path: '/api/view', shape: 'view', op: null, object: null },
+  'read-topic-page': { method: 'GET', path: '/api/view', shape: 'view', op: null, object: null },
+  'read-authors-page': { method: 'GET', path: '/api/view', shape: 'view', op: null, object: null },
+  'read-author-page': { method: 'GET', path: '/api/view', shape: 'view', op: null, object: null },
+  'read-search-page': { method: 'GET', path: '/api/view', shape: 'view', op: null, object: null },
+  'read-about-page': { method: 'GET', path: '/api/view', shape: 'view', op: null, object: null },
+  'read-missing-page': { method: 'GET', path: '/api/view', shape: 'view', op: null, object: null },
+  'read-sign-in-view': { method: 'GET', path: '/api/view', shape: 'view', op: null, object: null },
+  'read-desk-view': { method: 'GET', path: '/api/view', shape: 'view', op: null, object: null },
+  'read-new-article-view': { method: 'GET', path: '/api/view', shape: 'view', op: null, object: null },
+  'read-edit-article-view': { method: 'GET', path: '/api/view', shape: 'view', op: null, object: null },
+  'read-settings-view': { method: 'GET', path: '/api/view', shape: 'view', op: null, object: null },
+  'read-lab-view': { method: 'GET', path: '/api/view', shape: 'view', op: null, object: null },
+  'sign-in-at-site': { method: 'POST', path: '/api/login', shape: 'json', op: null, object: null },
+  'sign-out-of-site': { method: 'POST', path: '/api/logout', shape: 'json', op: null, object: null },
+  'read-session-view': { method: 'GET', path: '/api/session', shape: 'json', op: null, object: null },
+  'create-article': { method: 'POST', path: '/api/records', shape: 'records', op: 'create', object: 'post' },
+  'update-article': { method: 'POST', path: '/api/records', shape: 'records', op: 'update', object: 'post' },
+  'delete-article': { method: 'POST', path: '/api/records', shape: 'records', op: 'delete', object: 'post' },
+  'save-site-settings': { method: 'POST', path: '/api/records', shape: 'records', op: 'update', object: 'publication' },
+  'preview-markdown': { method: 'POST', path: '/api/preview', shape: 'json', op: null, object: null },
+};

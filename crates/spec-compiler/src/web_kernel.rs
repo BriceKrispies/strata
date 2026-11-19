@@ -15,7 +15,8 @@
 //! - `contracts.js`: one request builder per contract a screen, form, action or client machine
 //!   uses, which returns `{method, path, body?, write}` for the kernel's HTTP effect, and one
 //!   decoder of its reply into the contract's outputs; `request(contract, inputs, address)` and
-//!   `decode(contract, body, inputs)` dispatch on the contract id. Inputs and outputs are named in
+//!   `decode(contract, body, inputs)` dispatch on the contract id, and `BFF` records each one's route.
+//!   Inputs and outputs are named in
 //!   the contract's wire case. `write` (the request carries the session's request token) is true
 //!   for every `POST`.
 //! - `forms.js`: the forms (`FORMS`), `initialValues(form, view)`, `options(form, field, view)`,
@@ -1001,6 +1002,7 @@ function pick(body, names) {
 ",
         );
         let mut requests = Vec::new();
+        let mut table = Vec::new();
         let mut decoders = Vec::new();
         for c in used {
             let Some(route) = self.routes.get(&c.id).cloned() else {
@@ -1033,6 +1035,22 @@ function pick(body, names) {
             let write = route.method == "POST";
             let method = sq(&route.method);
             let path = sq(&route.path);
+            table.push(match &route.shape {
+                Shape::Json => format!(
+                    "  {}: {{ method: {method}, path: {path}, shape: 'json', op: null, object: null }},",
+                    sq(&c.id)
+                ),
+                Shape::View => format!(
+                    "  {}: {{ method: {method}, path: {path}, shape: 'view', op: null, object: null }},",
+                    sq(&c.id)
+                ),
+                Shape::Records { op, object } => format!(
+                    "  {}: {{ method: {method}, path: {path}, shape: 'records', op: {}, object: {} }},",
+                    sq(&c.id),
+                    sq(op),
+                    sq(object)
+                ),
+            });
             match &route.shape {
                 Shape::Json => {
                     let body = if route.method == "POST" {
@@ -1197,11 +1215,20 @@ export function decode(contract, body, inputs = {{}}) {{
       throw new Error(`the web application does not call contract ${{contract}}`);
   }}
 }}
+
+/**
+ * How the BFF serves each contract: its route, and for the records endpoint the operation and
+ * the object.
+ * @type {{Record<string, {{ method: 'GET' | 'POST', path: string, shape: 'json' | 'view' | 'records', op: string | null, object: string | null }}>}}
+ */
+export const BFF = {{
+{}
+}};
 ",
             requests.join("\n"),
-            decoders.join("\n")
+            decoders.join("\n"),
+            table.join("\n")
         ));
-        // Decoders of one argument ignore the second.
         out
     }
 
