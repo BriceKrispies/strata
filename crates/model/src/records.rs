@@ -5804,3 +5804,790 @@ impl RecClientVisit {
         Ok(())
     }
 }
+
+/// Session lifetime
+///
+/// Retention: Held with the session it belongs to and dropped with it.
+///
+/// Record `rec-session-lifetime`, owned by component `identity-service`, schema version 1.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecSessionLifetime {
+    /// Field `session-id`.
+    ///
+    /// Holds the key of record `rec-session`. On delete: cascade.
+    #[serde(rename = "session-id")]
+    pub session_id: types::SessionId,
+    /// Field `issued-at`.
+    #[serde(rename = "issued-at")]
+    pub issued_at: prelude::Timestamp,
+    /// Field `last-used-at`.
+    #[serde(rename = "last-used-at")]
+    pub last_used_at: prelude::Timestamp,
+    /// Field `state`.
+    pub state: String,
+}
+
+/// The key of a [`RecSessionLifetime`]: `session-id`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecSessionLifetimeKey {
+    /// Field `session-id`.
+    ///
+    /// Holds the key of record `rec-session`. On delete: cascade.
+    #[serde(rename = "session-id")]
+    pub session_id: types::SessionId,
+}
+
+impl RecSessionLifetime {
+    /// The record's id in the specification.
+    pub const ID: &str = "rec-session-lifetime";
+
+    /// The version of the record's stored shape.
+    pub const SCHEMA_VERSION: u32 = 1;
+
+    /// The key fields, by their specification names.
+    pub const KEY: &[&str] = &["session-id"];
+
+    /// Sets of fields whose combined values are unique, by their specification names.
+    pub const UNIQUE: &[&[&str]] = &[];
+
+    /// The record's indexes.
+    pub const INDEXES: &[prelude::Index] = &[];
+
+    /// The fields that hold the key of another record, and what deleting it does.
+    pub const REFERENCES: &[prelude::Reference] = &[prelude::Reference {
+        field: "session-id",
+        record: "rec-session",
+        on_delete: prelude::OnDelete::Cascade,
+    }];
+
+    /// The record's key.
+    pub fn key(&self) -> RecSessionLifetimeKey {
+        RecSessionLifetimeKey {
+            session_id: self.session_id.clone(),
+        }
+    }
+
+    /// Checks the field constraints, returning the first one the record breaks.
+    pub fn validate(&self) -> Result<(), prelude::ConstraintViolation> {
+        Ok(())
+    }
+}
+
+/// Sign-in attempt
+///
+/// Retention: Removed when the attempt ends, at the latest when its challenge expires.
+///
+/// Record `rec-sign-in-attempt`, owned by component `identity-service`, schema version 1.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecSignInAttempt {
+    /// Field `attempt-id`.
+    #[serde(rename = "attempt-id")]
+    pub attempt_id: types::ChallengeId,
+    /// Field `state`.
+    pub state: String,
+}
+
+/// The key of a [`RecSignInAttempt`]: `attempt-id`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecSignInAttemptKey {
+    /// Field `attempt-id`.
+    #[serde(rename = "attempt-id")]
+    pub attempt_id: types::ChallengeId,
+}
+
+impl RecSignInAttempt {
+    /// The record's id in the specification.
+    pub const ID: &str = "rec-sign-in-attempt";
+
+    /// The version of the record's stored shape.
+    pub const SCHEMA_VERSION: u32 = 1;
+
+    /// The key fields, by their specification names.
+    pub const KEY: &[&str] = &["attempt-id"];
+
+    /// Sets of fields whose combined values are unique, by their specification names.
+    pub const UNIQUE: &[&[&str]] = &[];
+
+    /// The record's indexes.
+    pub const INDEXES: &[prelude::Index] = &[];
+
+    /// The fields that hold the key of another record, and what deleting it does.
+    pub const REFERENCES: &[prelude::Reference] = &[];
+
+    /// The record's key.
+    pub fn key(&self) -> RecSignInAttemptKey {
+        RecSignInAttemptKey {
+            attempt_id: self.attempt_id.clone(),
+        }
+    }
+
+    /// Checks the field constraints, returning the first one the record breaks.
+    pub fn validate(&self) -> Result<(), prelude::ConstraintViolation> {
+        Ok(())
+    }
+}
+
+/// Recovery request
+///
+/// Retention: Kept until the recovery completes or is cancelled.
+///
+/// Record `rec-recovery-request`, owned by component `identity-service`, schema version 1.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecRecoveryRequest {
+    /// Field `recovery-id`.
+    #[serde(rename = "recovery-id")]
+    pub recovery_id: types::RequestId,
+    /// Field `contacts`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contacts: Option<u64>,
+    /// Field `notified`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notified: Option<u64>,
+    /// Field `requested-at`.
+    #[serde(
+        rename = "requested-at",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub requested_at: Option<prelude::Timestamp>,
+    /// Field `second-factor`.
+    #[serde(
+        rename = "second-factor",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub second_factor: Option<bool>,
+    /// Field `state`.
+    pub state: String,
+}
+
+/// The key of a [`RecRecoveryRequest`]: `recovery-id`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecRecoveryRequestKey {
+    /// Field `recovery-id`.
+    #[serde(rename = "recovery-id")]
+    pub recovery_id: types::RequestId,
+}
+
+impl RecRecoveryRequest {
+    /// The record's id in the specification.
+    pub const ID: &str = "rec-recovery-request";
+
+    /// The version of the record's stored shape.
+    pub const SCHEMA_VERSION: u32 = 1;
+
+    /// The key fields, by their specification names.
+    pub const KEY: &[&str] = &["recovery-id"];
+
+    /// Sets of fields whose combined values are unique, by their specification names.
+    pub const UNIQUE: &[&[&str]] = &[];
+
+    /// The record's indexes.
+    pub const INDEXES: &[prelude::Index] = &[];
+
+    /// The fields that hold the key of another record, and what deleting it does.
+    pub const REFERENCES: &[prelude::Reference] = &[];
+
+    /// The record's key.
+    pub fn key(&self) -> RecRecoveryRequestKey {
+        RecRecoveryRequestKey {
+            recovery_id: self.recovery_id.clone(),
+        }
+    }
+
+    /// Checks the field constraints, returning the first one the record breaks.
+    pub fn validate(&self) -> Result<(), prelude::ConstraintViolation> {
+        Ok(())
+    }
+}
+
+/// One-time code
+///
+/// Retention: Removed when the code is spent or expires.
+///
+/// Record `rec-one-time-code`, owned by component `identity-service`, schema version 1.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecOneTimeCode {
+    /// Field `code-id`.
+    #[serde(rename = "code-id")]
+    pub code_id: types::ChallengeId,
+    /// Field `failures`.
+    pub failures: u64,
+    /// Field `state`.
+    pub state: String,
+}
+
+/// The key of a [`RecOneTimeCode`]: `code-id`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecOneTimeCodeKey {
+    /// Field `code-id`.
+    #[serde(rename = "code-id")]
+    pub code_id: types::ChallengeId,
+}
+
+impl RecOneTimeCode {
+    /// The record's id in the specification.
+    pub const ID: &str = "rec-one-time-code";
+
+    /// The version of the record's stored shape.
+    pub const SCHEMA_VERSION: u32 = 1;
+
+    /// The key fields, by their specification names.
+    pub const KEY: &[&str] = &["code-id"];
+
+    /// Sets of fields whose combined values are unique, by their specification names.
+    pub const UNIQUE: &[&[&str]] = &[];
+
+    /// The record's indexes.
+    pub const INDEXES: &[prelude::Index] = &[];
+
+    /// The fields that hold the key of another record, and what deleting it does.
+    pub const REFERENCES: &[prelude::Reference] = &[];
+
+    /// The record's key.
+    pub fn key(&self) -> RecOneTimeCodeKey {
+        RecOneTimeCodeKey {
+            code_id: self.code_id.clone(),
+        }
+    }
+
+    /// Checks the field constraints, returning the first one the record breaks.
+    pub fn validate(&self) -> Result<(), prelude::ConstraintViolation> {
+        Ok(())
+    }
+}
+
+/// Identity limit counter
+///
+/// Retention: Kept while the window of the limit is open and dropped when it ends.
+///
+/// Record `rec-identity-limit`, owned by component `limit-store`, schema version 1.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecIdentityLimit {
+    /// Field `limit-key`.
+    ///
+    /// Constraints: at most 128 characters.
+    #[serde(rename = "limit-key")]
+    pub limit_key: String,
+    /// Field `count`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub count: Option<u64>,
+    /// Field `failures`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failures: Option<u64>,
+    /// Field `window-started-at`.
+    #[serde(
+        rename = "window-started-at",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub window_started_at: Option<prelude::Timestamp>,
+    /// Field `limit`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u64>,
+}
+
+/// The key of a [`RecIdentityLimit`]: `limit-key`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecIdentityLimitKey {
+    /// Field `limit-key`.
+    ///
+    /// Constraints: at most 128 characters.
+    #[serde(rename = "limit-key")]
+    pub limit_key: String,
+}
+
+impl RecIdentityLimit {
+    /// The record's id in the specification.
+    pub const ID: &str = "rec-identity-limit";
+
+    /// The version of the record's stored shape.
+    pub const SCHEMA_VERSION: u32 = 1;
+
+    /// The key fields, by their specification names.
+    pub const KEY: &[&str] = &["limit-key"];
+
+    /// Sets of fields whose combined values are unique, by their specification names.
+    pub const UNIQUE: &[&[&str]] = &[];
+
+    /// The record's indexes.
+    pub const INDEXES: &[prelude::Index] = &[];
+
+    /// The fields that hold the key of another record, and what deleting it does.
+    pub const REFERENCES: &[prelude::Reference] = &[];
+
+    /// The record's key.
+    pub fn key(&self) -> RecIdentityLimitKey {
+        RecIdentityLimitKey {
+            limit_key: self.limit_key.clone(),
+        }
+    }
+
+    /// Checks the field constraints, returning the first one the record breaks.
+    pub fn validate(&self) -> Result<(), prelude::ConstraintViolation> {
+        if self.limit_key.chars().count() > 128 {
+            return Err(prelude::ConstraintViolation {
+                record: Self::ID,
+                field: "limit-key",
+                constraint: prelude::Constraint::MaxLength,
+            });
+        }
+        Ok(())
+    }
+}
+
+/// Identity provider health
+///
+/// Retention: Held while the provider is configured.
+///
+/// Record `rec-provider-health`, owned by component `identity-service`, schema version 1.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecProviderHealth {
+    /// Field `provider-id`.
+    ///
+    /// Holds the key of record `rec-provider-config`. On delete: cascade.
+    #[serde(rename = "provider-id")]
+    pub provider_id: types::ProviderId,
+    /// Field `state`.
+    pub state: String,
+}
+
+/// The key of a [`RecProviderHealth`]: `provider-id`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecProviderHealthKey {
+    /// Field `provider-id`.
+    ///
+    /// Holds the key of record `rec-provider-config`. On delete: cascade.
+    #[serde(rename = "provider-id")]
+    pub provider_id: types::ProviderId,
+}
+
+impl RecProviderHealth {
+    /// The record's id in the specification.
+    pub const ID: &str = "rec-provider-health";
+
+    /// The version of the record's stored shape.
+    pub const SCHEMA_VERSION: u32 = 1;
+
+    /// The key fields, by their specification names.
+    pub const KEY: &[&str] = &["provider-id"];
+
+    /// Sets of fields whose combined values are unique, by their specification names.
+    pub const UNIQUE: &[&[&str]] = &[];
+
+    /// The record's indexes.
+    pub const INDEXES: &[prelude::Index] = &[];
+
+    /// The fields that hold the key of another record, and what deleting it does.
+    pub const REFERENCES: &[prelude::Reference] = &[prelude::Reference {
+        field: "provider-id",
+        record: "rec-provider-config",
+        on_delete: prelude::OnDelete::Cascade,
+    }];
+
+    /// The record's key.
+    pub fn key(&self) -> RecProviderHealthKey {
+        RecProviderHealthKey {
+            provider_id: self.provider_id.clone(),
+        }
+    }
+
+    /// Checks the field constraints, returning the first one the record breaks.
+    pub fn validate(&self) -> Result<(), prelude::ConstraintViolation> {
+        Ok(())
+    }
+}
+
+/// Identity provider keys
+///
+/// Retention: Held while the provider is configured.
+///
+/// Record `rec-provider-keys`, owned by component `identity-service`, schema version 1.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecProviderKeys {
+    /// Field `provider-id`.
+    ///
+    /// Holds the key of record `rec-provider-config`. On delete: cascade.
+    #[serde(rename = "provider-id")]
+    pub provider_id: types::ProviderId,
+    /// Field `known-kid`.
+    #[serde(rename = "known-kid", default, skip_serializing_if = "Option::is_none")]
+    pub known_kid: Option<String>,
+}
+
+/// The key of a [`RecProviderKeys`]: `provider-id`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecProviderKeysKey {
+    /// Field `provider-id`.
+    ///
+    /// Holds the key of record `rec-provider-config`. On delete: cascade.
+    #[serde(rename = "provider-id")]
+    pub provider_id: types::ProviderId,
+}
+
+impl RecProviderKeys {
+    /// The record's id in the specification.
+    pub const ID: &str = "rec-provider-keys";
+
+    /// The version of the record's stored shape.
+    pub const SCHEMA_VERSION: u32 = 1;
+
+    /// The key fields, by their specification names.
+    pub const KEY: &[&str] = &["provider-id"];
+
+    /// Sets of fields whose combined values are unique, by their specification names.
+    pub const UNIQUE: &[&[&str]] = &[];
+
+    /// The record's indexes.
+    pub const INDEXES: &[prelude::Index] = &[];
+
+    /// The fields that hold the key of another record, and what deleting it does.
+    pub const REFERENCES: &[prelude::Reference] = &[prelude::Reference {
+        field: "provider-id",
+        record: "rec-provider-config",
+        on_delete: prelude::OnDelete::Cascade,
+    }];
+
+    /// The record's key.
+    pub fn key(&self) -> RecProviderKeysKey {
+        RecProviderKeysKey {
+            provider_id: self.provider_id.clone(),
+        }
+    }
+
+    /// Checks the field constraints, returning the first one the record breaks.
+    pub fn validate(&self) -> Result<(), prelude::ConstraintViolation> {
+        Ok(())
+    }
+}
+
+/// Federated first sign-in
+///
+/// Retention: Removed when the first sign-in completes.
+///
+/// Record `rec-federated-signup`, owned by component `identity-service`, schema version 1.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecFederatedSignup {
+    /// Field `signup-id`.
+    #[serde(rename = "signup-id")]
+    pub signup_id: types::RequestId,
+    /// Field `role`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+    /// Field `default-role`.
+    #[serde(
+        rename = "default-role",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub default_role: Option<String>,
+}
+
+/// The key of a [`RecFederatedSignup`]: `signup-id`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecFederatedSignupKey {
+    /// Field `signup-id`.
+    #[serde(rename = "signup-id")]
+    pub signup_id: types::RequestId,
+}
+
+impl RecFederatedSignup {
+    /// The record's id in the specification.
+    pub const ID: &str = "rec-federated-signup";
+
+    /// The version of the record's stored shape.
+    pub const SCHEMA_VERSION: u32 = 1;
+
+    /// The key fields, by their specification names.
+    pub const KEY: &[&str] = &["signup-id"];
+
+    /// Sets of fields whose combined values are unique, by their specification names.
+    pub const UNIQUE: &[&[&str]] = &[];
+
+    /// The record's indexes.
+    pub const INDEXES: &[prelude::Index] = &[];
+
+    /// The fields that hold the key of another record, and what deleting it does.
+    pub const REFERENCES: &[prelude::Reference] = &[];
+
+    /// The record's key.
+    pub fn key(&self) -> RecFederatedSignupKey {
+        RecFederatedSignupKey {
+            signup_id: self.signup_id.clone(),
+        }
+    }
+
+    /// Checks the field constraints, returning the first one the record breaks.
+    pub fn validate(&self) -> Result<(), prelude::ConstraintViolation> {
+        Ok(())
+    }
+}
+
+/// Sign-in page request
+///
+/// Retention: Removed when the page has been served.
+///
+/// Record `rec-sign-in-page`, owned by component `identity-service`, schema version 1.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecSignInPage {
+    /// Field `page-id`.
+    #[serde(rename = "page-id")]
+    pub page_id: types::RequestId,
+    /// Field `requested-realm`.
+    #[serde(
+        rename = "requested-realm",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub requested_realm: Option<String>,
+    /// Field `offered-realm`.
+    #[serde(
+        rename = "offered-realm",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub offered_realm: Option<String>,
+}
+
+/// The key of a [`RecSignInPage`]: `page-id`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecSignInPageKey {
+    /// Field `page-id`.
+    #[serde(rename = "page-id")]
+    pub page_id: types::RequestId,
+}
+
+impl RecSignInPage {
+    /// The record's id in the specification.
+    pub const ID: &str = "rec-sign-in-page";
+
+    /// The version of the record's stored shape.
+    pub const SCHEMA_VERSION: u32 = 1;
+
+    /// The key fields, by their specification names.
+    pub const KEY: &[&str] = &["page-id"];
+
+    /// Sets of fields whose combined values are unique, by their specification names.
+    pub const UNIQUE: &[&[&str]] = &[];
+
+    /// The record's indexes.
+    pub const INDEXES: &[prelude::Index] = &[];
+
+    /// The fields that hold the key of another record, and what deleting it does.
+    pub const REFERENCES: &[prelude::Reference] = &[];
+
+    /// The record's key.
+    pub fn key(&self) -> RecSignInPageKey {
+        RecSignInPageKey {
+            page_id: self.page_id.clone(),
+        }
+    }
+
+    /// Checks the field constraints, returning the first one the record breaks.
+    pub fn validate(&self) -> Result<(), prelude::ConstraintViolation> {
+        Ok(())
+    }
+}
+
+/// Grant copy
+///
+/// Retention: Held while tokens of the grant are in use at the gateway and dropped with the grant.
+///
+/// Record `rec-grant-copy`, owned by component `gateway`, schema version 1.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecGrantCopy {
+    /// Field `grant-id`.
+    ///
+    /// Holds the key of record `rec-grant`. On delete: cascade.
+    #[serde(rename = "grant-id")]
+    pub grant_id: types::GrantId,
+    /// Field `copy-revoked`.
+    #[serde(
+        rename = "copy-revoked",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub copy_revoked: Option<bool>,
+    /// Field `checked-at`.
+    #[serde(
+        rename = "checked-at",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub checked_at: Option<prelude::Timestamp>,
+}
+
+/// The key of a [`RecGrantCopy`]: `grant-id`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecGrantCopyKey {
+    /// Field `grant-id`.
+    ///
+    /// Holds the key of record `rec-grant`. On delete: cascade.
+    #[serde(rename = "grant-id")]
+    pub grant_id: types::GrantId,
+}
+
+impl RecGrantCopy {
+    /// The record's id in the specification.
+    pub const ID: &str = "rec-grant-copy";
+
+    /// The version of the record's stored shape.
+    pub const SCHEMA_VERSION: u32 = 1;
+
+    /// The key fields, by their specification names.
+    pub const KEY: &[&str] = &["grant-id"];
+
+    /// Sets of fields whose combined values are unique, by their specification names.
+    pub const UNIQUE: &[&[&str]] = &[];
+
+    /// The record's indexes.
+    pub const INDEXES: &[prelude::Index] = &[];
+
+    /// The fields that hold the key of another record, and what deleting it does.
+    pub const REFERENCES: &[prelude::Reference] = &[prelude::Reference {
+        field: "grant-id",
+        record: "rec-grant",
+        on_delete: prelude::OnDelete::Cascade,
+    }];
+
+    /// The record's key.
+    pub fn key(&self) -> RecGrantCopyKey {
+        RecGrantCopyKey {
+            grant_id: self.grant_id.clone(),
+        }
+    }
+
+    /// Checks the field constraints, returning the first one the record breaks.
+    pub fn validate(&self) -> Result<(), prelude::ConstraintViolation> {
+        Ok(())
+    }
+}
+
+/// Signing key set
+///
+/// Retention: Held for as long as tokens signed by its keys can be presented.
+///
+/// Record `rec-signing-key-set`, owned by component `identity-service`, schema version 1.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecSigningKeySet {
+    /// Field `key-set-id`.
+    ///
+    /// Constraints: at most 96 characters.
+    #[serde(rename = "key-set-id")]
+    pub key_set_id: String,
+    /// Field `current-kid`.
+    #[serde(
+        rename = "current-kid",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub current_kid: Option<String>,
+    /// Field `previous-kid`.
+    #[serde(
+        rename = "previous-kid",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub previous_kid: Option<String>,
+}
+
+/// The key of a [`RecSigningKeySet`]: `key-set-id`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecSigningKeySetKey {
+    /// Field `key-set-id`.
+    ///
+    /// Constraints: at most 96 characters.
+    #[serde(rename = "key-set-id")]
+    pub key_set_id: String,
+}
+
+impl RecSigningKeySet {
+    /// The record's id in the specification.
+    pub const ID: &str = "rec-signing-key-set";
+
+    /// The version of the record's stored shape.
+    pub const SCHEMA_VERSION: u32 = 1;
+
+    /// The key fields, by their specification names.
+    pub const KEY: &[&str] = &["key-set-id"];
+
+    /// Sets of fields whose combined values are unique, by their specification names.
+    pub const UNIQUE: &[&[&str]] = &[];
+
+    /// The record's indexes.
+    pub const INDEXES: &[prelude::Index] = &[];
+
+    /// The fields that hold the key of another record, and what deleting it does.
+    pub const REFERENCES: &[prelude::Reference] = &[];
+
+    /// The record's key.
+    pub fn key(&self) -> RecSigningKeySetKey {
+        RecSigningKeySetKey {
+            key_set_id: self.key_set_id.clone(),
+        }
+    }
+
+    /// Checks the field constraints, returning the first one the record breaks.
+    pub fn validate(&self) -> Result<(), prelude::ConstraintViolation> {
+        if self.key_set_id.chars().count() > 96 {
+            return Err(prelude::ConstraintViolation {
+                record: Self::ID,
+                field: "key-set-id",
+                constraint: prelude::Constraint::MaxLength,
+            });
+        }
+        Ok(())
+    }
+}
+
+/// Identity decision
+///
+/// Retention: Nothing is kept: a decision is taken from its inputs and its row stands for the request only while it is answered.
+///
+/// Record `rec-identity-decision`, owned by component `identity-service`, schema version 1.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecIdentityDecision {
+    /// Field `decision-id`.
+    #[serde(rename = "decision-id")]
+    pub decision_id: types::RequestId,
+}
+
+/// The key of a [`RecIdentityDecision`]: `decision-id`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecIdentityDecisionKey {
+    /// Field `decision-id`.
+    #[serde(rename = "decision-id")]
+    pub decision_id: types::RequestId,
+}
+
+impl RecIdentityDecision {
+    /// The record's id in the specification.
+    pub const ID: &str = "rec-identity-decision";
+
+    /// The version of the record's stored shape.
+    pub const SCHEMA_VERSION: u32 = 1;
+
+    /// The key fields, by their specification names.
+    pub const KEY: &[&str] = &["decision-id"];
+
+    /// Sets of fields whose combined values are unique, by their specification names.
+    pub const UNIQUE: &[&[&str]] = &[];
+
+    /// The record's indexes.
+    pub const INDEXES: &[prelude::Index] = &[];
+
+    /// The fields that hold the key of another record, and what deleting it does.
+    pub const REFERENCES: &[prelude::Reference] = &[];
+
+    /// The record's key.
+    pub fn key(&self) -> RecIdentityDecisionKey {
+        RecIdentityDecisionKey {
+            decision_id: self.decision_id.clone(),
+        }
+    }
+
+    /// Checks the field constraints, returning the first one the record breaks.
+    pub fn validate(&self) -> Result<(), prelude::ConstraintViolation> {
+        Ok(())
+    }
+}

@@ -545,7 +545,7 @@ pub mod session_authority_flow_impl {
         /// State `sa-live-i`: Session live.
         #[serde(rename = "sa-live-i")]
         SaLiveI,
-        /// State `sa-revoked-i`: Session revoked. Ignores `sr-revoked`.
+        /// State `sa-revoked-i`: Session revoked. Ignores `sr-revoked`, `sr-authenticated`, `sr-password-changed`, `sr-recovered`, `sr-signed-out`, `sr-deactivated`, `sr-owner-revoked`, `sr-list`.
         #[serde(rename = "sa-revoked-i")]
         SaRevokedI,
     }
@@ -591,6 +591,58 @@ pub mod session_authority_flow_impl {
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
     pub struct SrLookupPayload {}
 
+    /// The payload of event `sr-authenticated`: Successful authentication.
+    ///
+    /// A person authenticates; the flag says whether the session belongs to the browser that authenticated.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct SrAuthenticatedPayload {
+        /// Field `sameBrowser`.
+        #[serde(rename = "sameBrowser")]
+        pub same_browser: bool,
+    }
+
+    /// The payload of event `sr-password-changed`: Password changed.
+    ///
+    /// The password of the account is changed from a session; the initiator says whether this is that session.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct SrPasswordChangedPayload {
+        /// Field `initiator`.
+        pub initiator: String,
+    }
+
+    /// The payload of event `sr-recovered`: Account recovered.
+    ///
+    /// The account recovery completes.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct SrRecoveredPayload {}
+
+    /// The payload of event `sr-signed-out`: Signed out.
+    ///
+    /// The person signs out.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct SrSignedOutPayload {}
+
+    /// The payload of event `sr-deactivated`: Person deactivated.
+    ///
+    /// The person is deactivated through provisioning.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct SrDeactivatedPayload {}
+
+    /// The payload of event `sr-owner-revoked`: Session revoked by its owner.
+    ///
+    /// The person revokes one of their own sessions; the target says whether it is this one.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct SrOwnerRevokedPayload {
+        /// Field `target`.
+        pub target: String,
+    }
+
+    /// The payload of event `sr-list`: Sessions listed.
+    ///
+    /// The person lists their own sessions.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct SrListPayload {}
+
     /// The payload of event `sr-notice`: Revocation notice.
     ///
     /// The identity service tells gateways about a revocation.
@@ -606,6 +658,24 @@ pub mod session_authority_flow_impl {
         pub valid: bool,
     }
 
+    /// The payload of event `sr-session-valid`: Session answered valid.
+    ///
+    /// The identity service answers that the session is valid.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct SrSessionValidPayload {}
+
+    /// The payload of event `sr-session-invalid`: Session answered invalid.
+    ///
+    /// The identity service answers that the session is not valid.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct SrSessionInvalidPayload {}
+
+    /// The payload of event `sr-listed`: Session listed.
+    ///
+    /// The session appears in the list of the person.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct SrListedPayload {}
+
     /// The events machine `session-authority-flow-impl` receives, including those its timers fire.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
     #[serde(tag = "event", content = "payload")]
@@ -616,6 +686,27 @@ pub mod session_authority_flow_impl {
         /// Event `sr-lookup`: Session lookup.
         #[serde(rename = "sr-lookup")]
         SrLookup(SrLookupPayload),
+        /// Event `sr-authenticated`: Successful authentication.
+        #[serde(rename = "sr-authenticated")]
+        SrAuthenticated(SrAuthenticatedPayload),
+        /// Event `sr-password-changed`: Password changed.
+        #[serde(rename = "sr-password-changed")]
+        SrPasswordChanged(SrPasswordChangedPayload),
+        /// Event `sr-recovered`: Account recovered.
+        #[serde(rename = "sr-recovered")]
+        SrRecovered(SrRecoveredPayload),
+        /// Event `sr-signed-out`: Signed out.
+        #[serde(rename = "sr-signed-out")]
+        SrSignedOut(SrSignedOutPayload),
+        /// Event `sr-deactivated`: Person deactivated.
+        #[serde(rename = "sr-deactivated")]
+        SrDeactivated(SrDeactivatedPayload),
+        /// Event `sr-owner-revoked`: Session revoked by its owner.
+        #[serde(rename = "sr-owner-revoked")]
+        SrOwnerRevoked(SrOwnerRevokedPayload),
+        /// Event `sr-list`: Sessions listed.
+        #[serde(rename = "sr-list")]
+        SrList(SrListPayload),
     }
 
     /// The events machine `session-authority-flow-impl` emits.
@@ -628,6 +719,15 @@ pub mod session_authority_flow_impl {
         /// Event `sr-lookup-answer`: Session lookup answer.
         #[serde(rename = "sr-lookup-answer")]
         SrLookupAnswer(SrLookupAnswerPayload),
+        /// Event `sr-session-valid`: Session answered valid.
+        #[serde(rename = "sr-session-valid")]
+        SrSessionValid(SrSessionValidPayload),
+        /// Event `sr-session-invalid`: Session answered invalid.
+        #[serde(rename = "sr-session-invalid")]
+        SrSessionInvalid(SrSessionInvalidPayload),
+        /// Event `sr-listed`: Session listed.
+        #[serde(rename = "sr-listed")]
+        SrListed(SrListedPayload),
     }
 
     /// The instance key: field `session-id` of record `rec-session`.
@@ -735,18 +835,114 @@ pub mod session_authority_flow_impl {
                     ))
                 }
                 (State::SaLiveI, Event::SrLookup(_)) => {
-                    Ok(Outcome::to(State::SaLiveI, vars.clone()).emit(
+                    Ok(Outcome::to(State::SaLiveI, vars.clone())
+                        .emit(
+                            "gateway",
+                            Delivery::AtMostOnce,
+                            Emitted::SrLookupAnswer(SrLookupAnswerPayload { valid: true }),
+                        )
+                        .emit(
+                            "gateway",
+                            Delivery::AtMostOnce,
+                            Emitted::SrSessionValid(SrSessionValidPayload {}),
+                        ))
+                }
+                (State::SaLiveI, Event::SrAuthenticated(payload)) => {
+                    if payload.same_browser {
+                        let mut next = vars.clone();
+                        next.revoked = true;
+                        next.revoked_at = prelude::Timestamp(now.0);
+                        let emitted_3 = Emitted::SrNotice(SrNoticePayload {});
+                        Ok(Outcome::to(State::SaRevokedI, next).emit(
+                            "gateway",
+                            Delivery::AtMostOnce,
+                            emitted_3,
+                        ))
+                    } else {
+                        Ok(Outcome::to(*state, vars.clone()))
+                    }
+                }
+                (State::SaLiveI, Event::SrPasswordChanged(payload)) => {
+                    if payload.initiator == "other" {
+                        let mut next = vars.clone();
+                        next.revoked = true;
+                        next.revoked_at = prelude::Timestamp(now.0);
+                        let emitted_3 = Emitted::SrNotice(SrNoticePayload {});
+                        Ok(Outcome::to(State::SaRevokedI, next).emit(
+                            "gateway",
+                            Delivery::AtMostOnce,
+                            emitted_3,
+                        ))
+                    } else {
+                        Ok(Outcome::to(*state, vars.clone()))
+                    }
+                }
+                (State::SaLiveI, Event::SrRecovered(_)) => {
+                    let mut next = vars.clone();
+                    next.revoked = true;
+                    next.revoked_at = prelude::Timestamp(now.0);
+                    let emitted_3 = Emitted::SrNotice(SrNoticePayload {});
+                    Ok(Outcome::to(State::SaRevokedI, next).emit(
                         "gateway",
                         Delivery::AtMostOnce,
-                        Emitted::SrLookupAnswer(SrLookupAnswerPayload { valid: true }),
+                        emitted_3,
                     ))
                 }
-                (State::SaRevokedI, Event::SrLookup(_)) => {
-                    Ok(Outcome::to(State::SaRevokedI, vars.clone()).emit(
+                (State::SaLiveI, Event::SrSignedOut(_)) => {
+                    let mut next = vars.clone();
+                    next.revoked = true;
+                    next.revoked_at = prelude::Timestamp(now.0);
+                    let emitted_3 = Emitted::SrNotice(SrNoticePayload {});
+                    Ok(Outcome::to(State::SaRevokedI, next).emit(
                         "gateway",
                         Delivery::AtMostOnce,
-                        Emitted::SrLookupAnswer(SrLookupAnswerPayload { valid: false }),
+                        emitted_3,
                     ))
+                }
+                (State::SaLiveI, Event::SrDeactivated(_)) => {
+                    let mut next = vars.clone();
+                    next.revoked = true;
+                    next.revoked_at = prelude::Timestamp(now.0);
+                    let emitted_3 = Emitted::SrNotice(SrNoticePayload {});
+                    Ok(Outcome::to(State::SaRevokedI, next).emit(
+                        "gateway",
+                        Delivery::AtMostOnce,
+                        emitted_3,
+                    ))
+                }
+                (State::SaLiveI, Event::SrOwnerRevoked(payload)) => {
+                    if payload.target == "this" {
+                        let mut next = vars.clone();
+                        next.revoked = true;
+                        next.revoked_at = prelude::Timestamp(now.0);
+                        let emitted_3 = Emitted::SrNotice(SrNoticePayload {});
+                        Ok(Outcome::to(State::SaRevokedI, next).emit(
+                            "gateway",
+                            Delivery::AtMostOnce,
+                            emitted_3,
+                        ))
+                    } else {
+                        Ok(Outcome::to(*state, vars.clone()))
+                    }
+                }
+                (State::SaLiveI, Event::SrList(_)) => Ok(Outcome::to(State::SaLiveI, vars.clone())
+                    .emit(
+                        "web-application",
+                        Delivery::AtMostOnce,
+                        Emitted::SrListed(SrListedPayload {}),
+                    )),
+                (State::SaRevokedI, Event::SrLookup(_)) => {
+                    Ok(Outcome::to(State::SaRevokedI, vars.clone())
+                        .emit(
+                            "gateway",
+                            Delivery::AtMostOnce,
+                            Emitted::SrLookupAnswer(SrLookupAnswerPayload { valid: false }),
+                        )
+                        .emit(
+                            "gateway",
+                            Delivery::AtMostOnce,
+                            Emitted::SrSessionInvalid(SrSessionInvalidPayload {}),
+                        ))
                 }
                 _ => Ok(Outcome::to(*state, vars.clone())),
             }
@@ -4752,6 +4948,16 @@ pub mod gateway_outage_flow_impl {
         pub valid: bool,
     }
 
+    /// The payload of event `sr-public-request`: Request for published content.
+    ///
+    /// A reader asks for published content that needs no session.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct SrPublicRequestPayload {
+        /// Field `session-id`.
+        #[serde(rename = "session-id")]
+        pub session_id: types::SessionId,
+    }
+
     /// The payload of event `sr-lookup`: Session lookup.
     ///
     /// The gateway asks the identity service about the session.
@@ -4776,6 +4982,12 @@ pub mod gateway_outage_flow_impl {
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
     pub struct SrUnavailablePayload {}
 
+    /// The payload of event `sr-public-served`: Published content served.
+    ///
+    /// The gateway serves the published content.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct SrPublicServedPayload {}
+
     /// The events machine `gateway-outage-flow-impl` receives, including those its timers fire.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
     #[serde(tag = "event", content = "payload")]
@@ -4786,6 +4998,9 @@ pub mod gateway_outage_flow_impl {
         /// Event `sr-lookup-answer`: Session lookup answer.
         #[serde(rename = "sr-lookup-answer")]
         SrLookupAnswer(SrLookupAnswerPayload),
+        /// Event `sr-public-request`: Request for published content.
+        #[serde(rename = "sr-public-request")]
+        SrPublicRequest(SrPublicRequestPayload),
     }
 
     /// The events machine `gateway-outage-flow-impl` emits.
@@ -4804,6 +5019,9 @@ pub mod gateway_outage_flow_impl {
         /// Event `sr-unavailable`: Refused for identity outage.
         #[serde(rename = "sr-unavailable")]
         SrUnavailable(SrUnavailablePayload),
+        /// Event `sr-public-served`: Published content served.
+        #[serde(rename = "sr-public-served")]
+        SrPublicServed(SrPublicServedPayload),
     }
 
     /// The instance key: field `session-id` of record `rec-session-copy`.
@@ -4915,6 +5133,13 @@ pub mod gateway_outage_flow_impl {
                         ))
                     }
                 }
+                (State::GwiReady, Event::SrPublicRequest(_)) => {
+                    Ok(Outcome::to(State::GwiReady, vars.clone()).emit(
+                        "web-application",
+                        Delivery::AtMostOnce,
+                        Emitted::SrPublicServed(SrPublicServedPayload {}),
+                    ))
+                }
                 (State::GwiChecking, Event::SrLookupAnswer(payload)) => {
                     if payload.valid == true {
                         let mut next = vars.clone();
@@ -4942,6 +5167,13 @@ pub mod gateway_outage_flow_impl {
                         "web-application",
                         Delivery::AtMostOnce,
                         Emitted::SrUnavailable(SrUnavailablePayload {}),
+                    ))
+                }
+                (State::GwiChecking, Event::SrPublicRequest(_)) => {
+                    Ok(Outcome::to(State::GwiChecking, vars.clone()).emit(
+                        "web-application",
+                        Delivery::AtMostOnce,
+                        Emitted::SrPublicServed(SrPublicServedPayload {}),
                     ))
                 }
                 _ => Ok(Outcome::to(*state, vars.clone())),
@@ -8613,6 +8845,7055 @@ pub mod source_throttle_flow_impl {
                                 }
                             }
                         }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// SAML response checks (implementation)
+///
+/// One SAML response presented to the identity service. It yields a session only when its assertion is signed by a certificate the tenant configured, the signature covers the subject and attributes that are taken, the issuer is the one the realm names, the audience and recipient name this service, and the response answers a pending request or the tenant enabled sign-in started by the provider. This is the decision as the code takes it: it keeps nothing between presentations.
+///
+/// Specification behavior `samlv-flow-impl`, an implementation-level machine.
+pub mod samlv_flow_impl {
+    use serde::{Deserialize, Serialize};
+
+    use strata_runtime::{Delivery, Isolation, Machine, Outcome, RecordError, StepError, Time};
+
+    use crate::{records, types};
+
+    /// The states of machine `samlv-flow-impl`.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+
+    pub enum State {
+        /// State `samlv-open-i`: Deciding.
+        #[serde(rename = "samlv-open-i")]
+        SamlvOpenI,
+    }
+
+    impl State {
+        /// The state's id in the specification.
+        pub fn id(self) -> &'static str {
+            match self {
+                State::SamlvOpenI => "samlv-open-i",
+            }
+        }
+
+        /// The state with this id in the specification.
+        pub fn from_id(id: &str) -> Option<State> {
+            match id {
+                "samlv-open-i" => Some(State::SamlvOpenI),
+                _ => None,
+            }
+        }
+    }
+
+    /// The variables of the machine.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct Vars {}
+
+    /// The payload of event `samlv-presented`: SAML response checked.
+    ///
+    /// The identity service examines a SAML response.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct SamlvPresentedPayload {
+        /// Field `signer`.
+        pub signer: String,
+        /// Field `covered`.
+        pub covered: String,
+        /// Field `issuer`.
+        pub issuer: String,
+        /// Field `audience`.
+        pub audience: String,
+        /// Field `recipient`.
+        pub recipient: String,
+        /// Field `answers`.
+        pub answers: String,
+        /// Field `idpInitiated`.
+        #[serde(rename = "idpInitiated")]
+        pub idp_initiated: bool,
+    }
+
+    /// The payload of event `samlv-accepted`: SAML response accepted.
+    ///
+    /// The response yields a session.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct SamlvAcceptedPayload {}
+
+    /// The payload of event `samlv-refused`: SAML response rejected.
+    ///
+    /// The response is refused.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct SamlvRefusedPayload {}
+
+    /// The events machine `samlv-flow-impl` receives, including those its timers fire.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Event {
+        /// Event `samlv-presented`: SAML response checked.
+        #[serde(rename = "samlv-presented")]
+        SamlvPresented(SamlvPresentedPayload),
+    }
+
+    /// The events machine `samlv-flow-impl` emits.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Emitted {
+        /// Event `samlv-accepted`: SAML response accepted.
+        #[serde(rename = "samlv-accepted")]
+        SamlvAccepted(SamlvAcceptedPayload),
+        /// Event `samlv-refused`: SAML response rejected.
+        #[serde(rename = "samlv-refused")]
+        SamlvRefused(SamlvRefusedPayload),
+    }
+
+    /// The instance key: field `decision-id` of record `rec-identity-decision`.
+    pub type Key = types::RequestId;
+
+    /// Machine `samlv-flow-impl`, stored in record `rec-identity-decision` by `decision-id`.
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct SamlvFlowImpl;
+
+    impl Machine for SamlvFlowImpl {
+        const NAME: &'static str = "samlv-flow-impl";
+
+        const RECORD: &'static str = "rec-identity-decision";
+
+        const ISOLATION: Isolation = Isolation::Serializable;
+
+        const CREATES: bool = false;
+
+        type State = State;
+
+        type Vars = Vars;
+
+        type Event = Event;
+
+        type Emitted = Emitted;
+
+        type Key = Key;
+
+        type Record = records::RecIdentityDecision;
+
+        fn initial(_key: &Key) -> (State, Vars) {
+            (State::SamlvOpenI, Vars {})
+        }
+
+        fn from_record(
+            _record: &records::RecIdentityDecision,
+        ) -> Result<(State, Vars), RecordError> {
+            let state = State::SamlvOpenI;
+            Ok((state, Vars {}))
+        }
+
+        fn to_record(
+            key: &Key,
+            _state: &State,
+            _vars: &Vars,
+            _previous: Option<&records::RecIdentityDecision>,
+        ) -> Result<records::RecIdentityDecision, RecordError> {
+            Ok(records::RecIdentityDecision {
+                decision_id: key.clone(),
+            })
+        }
+
+        fn step(
+            state: &State,
+            vars: &Vars,
+            event: &Event,
+            _now: Time,
+        ) -> Result<Outcome<Self>, StepError> {
+            match (state, event) {
+                (State::SamlvOpenI, Event::SamlvPresented(payload)) => {
+                    if payload.signer == "configured"
+                        && payload.covered == "signed"
+                        && payload.issuer == "configured"
+                        && payload.audience == "this-service"
+                        && payload.recipient == "this-service"
+                        && (payload.answers == "pending" || payload.idp_initiated)
+                    {
+                        Ok(Outcome::to(State::SamlvOpenI, vars.clone()).emit(
+                            "web-application",
+                            Delivery::AtMostOnce,
+                            Emitted::SamlvAccepted(SamlvAcceptedPayload {}),
+                        ))
+                    } else {
+                        Ok(Outcome::to(State::SamlvOpenI, vars.clone()).emit(
+                            "web-application",
+                            Delivery::AtMostOnce,
+                            Emitted::SamlvRefused(SamlvRefusedPayload {}),
+                        ))
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// OpenID Connect token checks (implementation)
+///
+/// One identity token returned by an OpenID Connect provider. The identity service accepts it only when its issuer, audience, signature and nonce verify, when it is verified with the signature method that the provider configuration names, and when the key that verified it belongs to the provider that issued it. This is the decision as the code takes it: it keeps nothing between presentations.
+///
+/// Specification behavior `oidcv-flow-impl`, an implementation-level machine.
+pub mod oidcv_flow_impl {
+    use serde::{Deserialize, Serialize};
+
+    use strata_runtime::{Delivery, Isolation, Machine, Outcome, RecordError, StepError, Time};
+
+    use crate::{records, types};
+
+    /// The states of machine `oidcv-flow-impl`.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+
+    pub enum State {
+        /// State `oidcv-open-i`: Deciding.
+        #[serde(rename = "oidcv-open-i")]
+        OidcvOpenI,
+    }
+
+    impl State {
+        /// The state's id in the specification.
+        pub fn id(self) -> &'static str {
+            match self {
+                State::OidcvOpenI => "oidcv-open-i",
+            }
+        }
+
+        /// The state with this id in the specification.
+        pub fn from_id(id: &str) -> Option<State> {
+            match id {
+                "oidcv-open-i" => Some(State::OidcvOpenI),
+                _ => None,
+            }
+        }
+    }
+
+    /// The variables of the machine.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct Vars {}
+
+    /// The payload of event `oidcv-presented`: Identity token checked.
+    ///
+    /// The identity service verifies an identity token.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct OidcvPresentedPayload {
+        /// Field `issuer`.
+        pub issuer: String,
+        /// Field `audience`.
+        pub audience: String,
+        /// Field `signature`.
+        pub signature: String,
+        /// Field `nonce`.
+        pub nonce: String,
+        /// Field `alg`.
+        pub alg: String,
+        /// Field `configuredAlg`.
+        #[serde(rename = "configuredAlg")]
+        pub configured_alg: String,
+        /// Field `keyOwner`.
+        #[serde(rename = "keyOwner")]
+        pub key_owner: String,
+        /// Field `provider`.
+        pub provider: String,
+    }
+
+    /// The payload of event `oidcv-accepted`: Identity token accepted.
+    ///
+    /// The token yields a session.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct OidcvAcceptedPayload {}
+
+    /// The payload of event `oidcv-refused`: Identity token rejected.
+    ///
+    /// The token is refused.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct OidcvRefusedPayload {}
+
+    /// The events machine `oidcv-flow-impl` receives, including those its timers fire.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Event {
+        /// Event `oidcv-presented`: Identity token checked.
+        #[serde(rename = "oidcv-presented")]
+        OidcvPresented(OidcvPresentedPayload),
+    }
+
+    /// The events machine `oidcv-flow-impl` emits.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Emitted {
+        /// Event `oidcv-accepted`: Identity token accepted.
+        #[serde(rename = "oidcv-accepted")]
+        OidcvAccepted(OidcvAcceptedPayload),
+        /// Event `oidcv-refused`: Identity token rejected.
+        #[serde(rename = "oidcv-refused")]
+        OidcvRefused(OidcvRefusedPayload),
+    }
+
+    /// The instance key: field `decision-id` of record `rec-identity-decision`.
+    pub type Key = types::RequestId;
+
+    /// Machine `oidcv-flow-impl`, stored in record `rec-identity-decision` by `decision-id`.
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct OidcvFlowImpl;
+
+    impl Machine for OidcvFlowImpl {
+        const NAME: &'static str = "oidcv-flow-impl";
+
+        const RECORD: &'static str = "rec-identity-decision";
+
+        const ISOLATION: Isolation = Isolation::Serializable;
+
+        const CREATES: bool = false;
+
+        type State = State;
+
+        type Vars = Vars;
+
+        type Event = Event;
+
+        type Emitted = Emitted;
+
+        type Key = Key;
+
+        type Record = records::RecIdentityDecision;
+
+        fn initial(_key: &Key) -> (State, Vars) {
+            (State::OidcvOpenI, Vars {})
+        }
+
+        fn from_record(
+            _record: &records::RecIdentityDecision,
+        ) -> Result<(State, Vars), RecordError> {
+            let state = State::OidcvOpenI;
+            Ok((state, Vars {}))
+        }
+
+        fn to_record(
+            key: &Key,
+            _state: &State,
+            _vars: &Vars,
+            _previous: Option<&records::RecIdentityDecision>,
+        ) -> Result<records::RecIdentityDecision, RecordError> {
+            Ok(records::RecIdentityDecision {
+                decision_id: key.clone(),
+            })
+        }
+
+        fn step(
+            state: &State,
+            vars: &Vars,
+            event: &Event,
+            _now: Time,
+        ) -> Result<Outcome<Self>, StepError> {
+            match (state, event) {
+                (State::OidcvOpenI, Event::OidcvPresented(payload)) => {
+                    if payload.issuer == "configured"
+                        && payload.audience == "this-client"
+                        && payload.signature == "valid"
+                        && payload.nonce == "match"
+                        && payload.alg == payload.configured_alg
+                        && payload.key_owner == payload.provider
+                    {
+                        Ok(Outcome::to(State::OidcvOpenI, vars.clone()).emit(
+                            "web-application",
+                            Delivery::AtMostOnce,
+                            Emitted::OidcvAccepted(OidcvAcceptedPayload {}),
+                        ))
+                    } else {
+                        Ok(Outcome::to(State::OidcvOpenI, vars.clone()).emit(
+                            "web-application",
+                            Delivery::AtMostOnce,
+                            Emitted::OidcvRefused(OidcvRefusedPayload {}),
+                        ))
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// OpenID Connect sign-in start (implementation)
+///
+/// The identity service starts an OpenID Connect sign-in only with the authorization code flow and a proof key. This is the decision as the code takes it: it keeps nothing between presentations.
+///
+/// Specification behavior `oidcs-flow-impl`, an implementation-level machine.
+pub mod oidcs_flow_impl {
+    use serde::{Deserialize, Serialize};
+
+    use strata_runtime::{Delivery, Isolation, Machine, Outcome, RecordError, StepError, Time};
+
+    use crate::{records, types};
+
+    /// The states of machine `oidcs-flow-impl`.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+
+    pub enum State {
+        /// State `oidcs-open-i`: Deciding.
+        #[serde(rename = "oidcs-open-i")]
+        OidcsOpenI,
+    }
+
+    impl State {
+        /// The state's id in the specification.
+        pub fn id(self) -> &'static str {
+            match self {
+                State::OidcsOpenI => "oidcs-open-i",
+            }
+        }
+
+        /// The state with this id in the specification.
+        pub fn from_id(id: &str) -> Option<State> {
+            match id {
+                "oidcs-open-i" => Some(State::OidcsOpenI),
+                _ => None,
+            }
+        }
+    }
+
+    /// The variables of the machine.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct Vars {}
+
+    /// The payload of event `oidcs-presented`: OpenID Connect sign-in requested.
+    ///
+    /// A sign-in with an external provider is requested.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct OidcsPresentedPayload {
+        /// Field `flow`.
+        pub flow: String,
+        /// Field `pkce`.
+        pub pkce: bool,
+    }
+
+    /// The payload of event `oidcs-accepted`: OpenID Connect sign-in started.
+    ///
+    /// The sign-in request goes to the provider.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct OidcsAcceptedPayload {}
+
+    /// The payload of event `oidcs-refused`: OpenID Connect sign-in refused.
+    ///
+    /// The sign-in request is not made.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct OidcsRefusedPayload {}
+
+    /// The events machine `oidcs-flow-impl` receives, including those its timers fire.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Event {
+        /// Event `oidcs-presented`: OpenID Connect sign-in requested.
+        #[serde(rename = "oidcs-presented")]
+        OidcsPresented(OidcsPresentedPayload),
+    }
+
+    /// The events machine `oidcs-flow-impl` emits.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Emitted {
+        /// Event `oidcs-accepted`: OpenID Connect sign-in started.
+        #[serde(rename = "oidcs-accepted")]
+        OidcsAccepted(OidcsAcceptedPayload),
+        /// Event `oidcs-refused`: OpenID Connect sign-in refused.
+        #[serde(rename = "oidcs-refused")]
+        OidcsRefused(OidcsRefusedPayload),
+    }
+
+    /// The instance key: field `decision-id` of record `rec-identity-decision`.
+    pub type Key = types::RequestId;
+
+    /// Machine `oidcs-flow-impl`, stored in record `rec-identity-decision` by `decision-id`.
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct OidcsFlowImpl;
+
+    impl Machine for OidcsFlowImpl {
+        const NAME: &'static str = "oidcs-flow-impl";
+
+        const RECORD: &'static str = "rec-identity-decision";
+
+        const ISOLATION: Isolation = Isolation::Serializable;
+
+        const CREATES: bool = false;
+
+        type State = State;
+
+        type Vars = Vars;
+
+        type Event = Event;
+
+        type Emitted = Emitted;
+
+        type Key = Key;
+
+        type Record = records::RecIdentityDecision;
+
+        fn initial(_key: &Key) -> (State, Vars) {
+            (State::OidcsOpenI, Vars {})
+        }
+
+        fn from_record(
+            _record: &records::RecIdentityDecision,
+        ) -> Result<(State, Vars), RecordError> {
+            let state = State::OidcsOpenI;
+            Ok((state, Vars {}))
+        }
+
+        fn to_record(
+            key: &Key,
+            _state: &State,
+            _vars: &Vars,
+            _previous: Option<&records::RecIdentityDecision>,
+        ) -> Result<records::RecIdentityDecision, RecordError> {
+            Ok(records::RecIdentityDecision {
+                decision_id: key.clone(),
+            })
+        }
+
+        fn step(
+            state: &State,
+            vars: &Vars,
+            event: &Event,
+            _now: Time,
+        ) -> Result<Outcome<Self>, StepError> {
+            match (state, event) {
+                (State::OidcsOpenI, Event::OidcsPresented(payload)) => {
+                    if payload.flow == "code" && payload.pkce {
+                        Ok(Outcome::to(State::OidcsOpenI, vars.clone()).emit(
+                            "web-application",
+                            Delivery::AtMostOnce,
+                            Emitted::OidcsAccepted(OidcsAcceptedPayload {}),
+                        ))
+                    } else {
+                        Ok(Outcome::to(State::OidcsOpenI, vars.clone()).emit(
+                            "web-application",
+                            Delivery::AtMostOnce,
+                            Emitted::OidcsRefused(OidcsRefusedPayload {}),
+                        ))
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Sign-in method for a bound domain (implementation)
+///
+/// A sign-in attempt for an address. When the realm binds the email domain of the address to an identity provider, password and emailed-link sign-in are refused for it and only the provider sign-in is allowed. This is the decision as the code takes it: it keeps nothing between presentations.
+///
+/// Specification behavior `fedp-flow-impl`, an implementation-level machine.
+pub mod fedp_flow_impl {
+    use serde::{Deserialize, Serialize};
+
+    use strata_runtime::{Delivery, Isolation, Machine, Outcome, RecordError, StepError, Time};
+
+    use crate::{records, types};
+
+    /// The states of machine `fedp-flow-impl`.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+
+    pub enum State {
+        /// State `fedp-open-i`: Deciding.
+        #[serde(rename = "fedp-open-i")]
+        FedpOpenI,
+    }
+
+    impl State {
+        /// The state's id in the specification.
+        pub fn id(self) -> &'static str {
+            match self {
+                State::FedpOpenI => "fedp-open-i",
+            }
+        }
+
+        /// The state with this id in the specification.
+        pub fn from_id(id: &str) -> Option<State> {
+            match id {
+                "fedp-open-i" => Some(State::FedpOpenI),
+                _ => None,
+            }
+        }
+    }
+
+    /// The variables of the machine.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct Vars {}
+
+    /// The payload of event `fedp-presented`: Sign-in attempted.
+    ///
+    /// An address attempts to sign in with a method.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct FedpPresentedPayload {
+        /// Field `method`.
+        pub method: String,
+        /// Field `domainBound`.
+        #[serde(rename = "domainBound")]
+        pub domain_bound: bool,
+    }
+
+    /// The payload of event `fedp-accepted`: Sign-in method allowed.
+    ///
+    /// The attempt goes on.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct FedpAcceptedPayload {}
+
+    /// The payload of event `fedp-refused`: Sign-in method refused.
+    ///
+    /// The attempt stops.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct FedpRefusedPayload {}
+
+    /// The events machine `fedp-flow-impl` receives, including those its timers fire.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Event {
+        /// Event `fedp-presented`: Sign-in attempted.
+        #[serde(rename = "fedp-presented")]
+        FedpPresented(FedpPresentedPayload),
+    }
+
+    /// The events machine `fedp-flow-impl` emits.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Emitted {
+        /// Event `fedp-accepted`: Sign-in method allowed.
+        #[serde(rename = "fedp-accepted")]
+        FedpAccepted(FedpAcceptedPayload),
+        /// Event `fedp-refused`: Sign-in method refused.
+        #[serde(rename = "fedp-refused")]
+        FedpRefused(FedpRefusedPayload),
+    }
+
+    /// The instance key: field `decision-id` of record `rec-identity-decision`.
+    pub type Key = types::RequestId;
+
+    /// Machine `fedp-flow-impl`, stored in record `rec-identity-decision` by `decision-id`.
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct FedpFlowImpl;
+
+    impl Machine for FedpFlowImpl {
+        const NAME: &'static str = "fedp-flow-impl";
+
+        const RECORD: &'static str = "rec-identity-decision";
+
+        const ISOLATION: Isolation = Isolation::Serializable;
+
+        const CREATES: bool = false;
+
+        type State = State;
+
+        type Vars = Vars;
+
+        type Event = Event;
+
+        type Emitted = Emitted;
+
+        type Key = Key;
+
+        type Record = records::RecIdentityDecision;
+
+        fn initial(_key: &Key) -> (State, Vars) {
+            (State::FedpOpenI, Vars {})
+        }
+
+        fn from_record(
+            _record: &records::RecIdentityDecision,
+        ) -> Result<(State, Vars), RecordError> {
+            let state = State::FedpOpenI;
+            Ok((state, Vars {}))
+        }
+
+        fn to_record(
+            key: &Key,
+            _state: &State,
+            _vars: &Vars,
+            _previous: Option<&records::RecIdentityDecision>,
+        ) -> Result<records::RecIdentityDecision, RecordError> {
+            Ok(records::RecIdentityDecision {
+                decision_id: key.clone(),
+            })
+        }
+
+        fn step(
+            state: &State,
+            vars: &Vars,
+            event: &Event,
+            _now: Time,
+        ) -> Result<Outcome<Self>, StepError> {
+            match (state, event) {
+                (State::FedpOpenI, Event::FedpPresented(payload)) => {
+                    if !payload.domain_bound || payload.method == "federated" {
+                        Ok(Outcome::to(State::FedpOpenI, vars.clone()).emit(
+                            "web-application",
+                            Delivery::AtMostOnce,
+                            Emitted::FedpAccepted(FedpAcceptedPayload {}),
+                        ))
+                    } else {
+                        Ok(Outcome::to(State::FedpOpenI, vars.clone()).emit(
+                            "web-application",
+                            Delivery::AtMostOnce,
+                            Emitted::FedpRefused(FedpRefusedPayload {}),
+                        ))
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Principal creation at first federated sign-in (implementation)
+///
+/// A first federated sign-in for an identity that has no principal creates one only when the realm enabled creation on first sign-in. This is the decision as the code takes it: it keeps nothing between presentations.
+///
+/// Specification behavior `fedc-flow-impl`, an implementation-level machine.
+pub mod fedc_flow_impl {
+    use serde::{Deserialize, Serialize};
+
+    use strata_runtime::{Delivery, Isolation, Machine, Outcome, RecordError, StepError, Time};
+
+    use crate::{records, types};
+
+    /// The states of machine `fedc-flow-impl`.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+
+    pub enum State {
+        /// State `fedc-open-i`: Deciding.
+        #[serde(rename = "fedc-open-i")]
+        FedcOpenI,
+    }
+
+    impl State {
+        /// The state's id in the specification.
+        pub fn id(self) -> &'static str {
+            match self {
+                State::FedcOpenI => "fedc-open-i",
+            }
+        }
+
+        /// The state with this id in the specification.
+        pub fn from_id(id: &str) -> Option<State> {
+            match id {
+                "fedc-open-i" => Some(State::FedcOpenI),
+                _ => None,
+            }
+        }
+    }
+
+    /// The variables of the machine.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct Vars {}
+
+    /// The payload of event `fedc-presented`: First federated sign-in.
+    ///
+    /// An external identity signs in for the first time.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct FedcPresentedPayload {
+        /// Field `creationEnabled`.
+        #[serde(rename = "creationEnabled")]
+        pub creation_enabled: bool,
+    }
+
+    /// The payload of event `fedc-accepted`: Principal created.
+    ///
+    /// A principal is created for the external identity.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct FedcAcceptedPayload {}
+
+    /// The payload of event `fedc-refused`: First sign-in refused.
+    ///
+    /// No principal is created and no session issued.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct FedcRefusedPayload {}
+
+    /// The events machine `fedc-flow-impl` receives, including those its timers fire.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Event {
+        /// Event `fedc-presented`: First federated sign-in.
+        #[serde(rename = "fedc-presented")]
+        FedcPresented(FedcPresentedPayload),
+    }
+
+    /// The events machine `fedc-flow-impl` emits.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Emitted {
+        /// Event `fedc-accepted`: Principal created.
+        #[serde(rename = "fedc-accepted")]
+        FedcAccepted(FedcAcceptedPayload),
+        /// Event `fedc-refused`: First sign-in refused.
+        #[serde(rename = "fedc-refused")]
+        FedcRefused(FedcRefusedPayload),
+    }
+
+    /// The instance key: field `decision-id` of record `rec-identity-decision`.
+    pub type Key = types::RequestId;
+
+    /// Machine `fedc-flow-impl`, stored in record `rec-identity-decision` by `decision-id`.
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct FedcFlowImpl;
+
+    impl Machine for FedcFlowImpl {
+        const NAME: &'static str = "fedc-flow-impl";
+
+        const RECORD: &'static str = "rec-identity-decision";
+
+        const ISOLATION: Isolation = Isolation::Serializable;
+
+        const CREATES: bool = false;
+
+        type State = State;
+
+        type Vars = Vars;
+
+        type Event = Event;
+
+        type Emitted = Emitted;
+
+        type Key = Key;
+
+        type Record = records::RecIdentityDecision;
+
+        fn initial(_key: &Key) -> (State, Vars) {
+            (State::FedcOpenI, Vars {})
+        }
+
+        fn from_record(
+            _record: &records::RecIdentityDecision,
+        ) -> Result<(State, Vars), RecordError> {
+            let state = State::FedcOpenI;
+            Ok((state, Vars {}))
+        }
+
+        fn to_record(
+            key: &Key,
+            _state: &State,
+            _vars: &Vars,
+            _previous: Option<&records::RecIdentityDecision>,
+        ) -> Result<records::RecIdentityDecision, RecordError> {
+            Ok(records::RecIdentityDecision {
+                decision_id: key.clone(),
+            })
+        }
+
+        fn step(
+            state: &State,
+            vars: &Vars,
+            event: &Event,
+            _now: Time,
+        ) -> Result<Outcome<Self>, StepError> {
+            match (state, event) {
+                (State::FedcOpenI, Event::FedcPresented(payload)) => {
+                    if payload.creation_enabled {
+                        Ok(Outcome::to(State::FedcOpenI, vars.clone()).emit(
+                            "web-application",
+                            Delivery::AtMostOnce,
+                            Emitted::FedcAccepted(FedcAcceptedPayload {}),
+                        ))
+                    } else {
+                        Ok(Outcome::to(State::FedcOpenI, vars.clone()).emit(
+                            "web-application",
+                            Delivery::AtMostOnce,
+                            Emitted::FedcRefused(FedcRefusedPayload {}),
+                        ))
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Linking a federated identity (implementation)
+///
+/// A federated identity is linked to an existing principal only after that principal has authenticated, and an email address that the provider asserts links only when the provider marks it verified. This is the decision as the code takes it: it keeps nothing between presentations.
+///
+/// Specification behavior `fedl-flow-impl`, an implementation-level machine.
+pub mod fedl_flow_impl {
+    use serde::{Deserialize, Serialize};
+
+    use strata_runtime::{Delivery, Isolation, Machine, Outcome, RecordError, StepError, Time};
+
+    use crate::{records, types};
+
+    /// The states of machine `fedl-flow-impl`.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+
+    pub enum State {
+        /// State `fedl-open-i`: Deciding.
+        #[serde(rename = "fedl-open-i")]
+        FedlOpenI,
+    }
+
+    impl State {
+        /// The state's id in the specification.
+        pub fn id(self) -> &'static str {
+            match self {
+                State::FedlOpenI => "fedl-open-i",
+            }
+        }
+
+        /// The state with this id in the specification.
+        pub fn from_id(id: &str) -> Option<State> {
+            match id {
+                "fedl-open-i" => Some(State::FedlOpenI),
+                _ => None,
+            }
+        }
+    }
+
+    /// The variables of the machine.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct Vars {}
+
+    /// The payload of event `fedl-presented`: Federated identity offered for linking.
+    ///
+    /// A federated identity asks to be linked to an existing principal.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct FedlPresentedPayload {
+        /// Field `authenticated`.
+        pub authenticated: bool,
+        /// Field `emailVerified`.
+        #[serde(rename = "emailVerified")]
+        pub email_verified: bool,
+    }
+
+    /// The payload of event `fedl-accepted`: Federated identity linked.
+    ///
+    /// The identity is linked to the principal.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct FedlAcceptedPayload {}
+
+    /// The payload of event `fedl-refused`: Linking refused.
+    ///
+    /// The identity is not linked.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct FedlRefusedPayload {}
+
+    /// The events machine `fedl-flow-impl` receives, including those its timers fire.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Event {
+        /// Event `fedl-presented`: Federated identity offered for linking.
+        #[serde(rename = "fedl-presented")]
+        FedlPresented(FedlPresentedPayload),
+    }
+
+    /// The events machine `fedl-flow-impl` emits.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Emitted {
+        /// Event `fedl-accepted`: Federated identity linked.
+        #[serde(rename = "fedl-accepted")]
+        FedlAccepted(FedlAcceptedPayload),
+        /// Event `fedl-refused`: Linking refused.
+        #[serde(rename = "fedl-refused")]
+        FedlRefused(FedlRefusedPayload),
+    }
+
+    /// The instance key: field `decision-id` of record `rec-identity-decision`.
+    pub type Key = types::RequestId;
+
+    /// Machine `fedl-flow-impl`, stored in record `rec-identity-decision` by `decision-id`.
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct FedlFlowImpl;
+
+    impl Machine for FedlFlowImpl {
+        const NAME: &'static str = "fedl-flow-impl";
+
+        const RECORD: &'static str = "rec-identity-decision";
+
+        const ISOLATION: Isolation = Isolation::Serializable;
+
+        const CREATES: bool = false;
+
+        type State = State;
+
+        type Vars = Vars;
+
+        type Event = Event;
+
+        type Emitted = Emitted;
+
+        type Key = Key;
+
+        type Record = records::RecIdentityDecision;
+
+        fn initial(_key: &Key) -> (State, Vars) {
+            (State::FedlOpenI, Vars {})
+        }
+
+        fn from_record(
+            _record: &records::RecIdentityDecision,
+        ) -> Result<(State, Vars), RecordError> {
+            let state = State::FedlOpenI;
+            Ok((state, Vars {}))
+        }
+
+        fn to_record(
+            key: &Key,
+            _state: &State,
+            _vars: &Vars,
+            _previous: Option<&records::RecIdentityDecision>,
+        ) -> Result<records::RecIdentityDecision, RecordError> {
+            Ok(records::RecIdentityDecision {
+                decision_id: key.clone(),
+            })
+        }
+
+        fn step(
+            state: &State,
+            vars: &Vars,
+            event: &Event,
+            _now: Time,
+        ) -> Result<Outcome<Self>, StepError> {
+            match (state, event) {
+                (State::FedlOpenI, Event::FedlPresented(payload)) => {
+                    if payload.authenticated && payload.email_verified {
+                        Ok(Outcome::to(State::FedlOpenI, vars.clone()).emit(
+                            "web-application",
+                            Delivery::AtMostOnce,
+                            Emitted::FedlAccepted(FedlAcceptedPayload {}),
+                        ))
+                    } else {
+                        Ok(Outcome::to(State::FedlOpenI, vars.clone()).emit(
+                            "web-application",
+                            Delivery::AtMostOnce,
+                            Emitted::FedlRefused(FedlRefusedPayload {}),
+                        ))
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Provisioning requests (implementation)
+///
+/// A request to the provisioning endpoint. The provisioning token grants access to that endpoint of its own realm and to no other endpoint, and a request changes the roles of a principal only through the group mapping the realm declares. This is the decision as the code takes it: it keeps nothing between presentations.
+///
+/// Specification behavior `prov-flow-impl`, an implementation-level machine.
+pub mod prov_flow_impl {
+    use serde::{Deserialize, Serialize};
+
+    use strata_runtime::{Delivery, Isolation, Machine, Outcome, RecordError, StepError, Time};
+
+    use crate::{records, types};
+
+    /// The states of machine `prov-flow-impl`.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+
+    pub enum State {
+        /// State `prov-open-i`: Deciding.
+        #[serde(rename = "prov-open-i")]
+        ProvOpenI,
+    }
+
+    impl State {
+        /// The state's id in the specification.
+        pub fn id(self) -> &'static str {
+            match self {
+                State::ProvOpenI => "prov-open-i",
+            }
+        }
+
+        /// The state with this id in the specification.
+        pub fn from_id(id: &str) -> Option<State> {
+            match id {
+                "prov-open-i" => Some(State::ProvOpenI),
+                _ => None,
+            }
+        }
+    }
+
+    /// The variables of the machine.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct Vars {}
+
+    /// The payload of event `prov-presented`: Provisioning request presented.
+    ///
+    /// A provisioning token is presented.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct ProvPresentedPayload {
+        /// Field `endpoint`.
+        pub endpoint: String,
+        /// Field `realm`.
+        pub realm: String,
+        /// Field `tokenRealm`.
+        #[serde(rename = "tokenRealm")]
+        pub token_realm: String,
+        /// Field `roleChange`.
+        #[serde(rename = "roleChange")]
+        pub role_change: String,
+    }
+
+    /// The payload of event `prov-accepted`: Provisioning request accepted.
+    ///
+    /// The request is carried out.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct ProvAcceptedPayload {}
+
+    /// The payload of event `prov-refused`: Provisioning request refused.
+    ///
+    /// The request is refused.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct ProvRefusedPayload {}
+
+    /// The events machine `prov-flow-impl` receives, including those its timers fire.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Event {
+        /// Event `prov-presented`: Provisioning request presented.
+        #[serde(rename = "prov-presented")]
+        ProvPresented(ProvPresentedPayload),
+    }
+
+    /// The events machine `prov-flow-impl` emits.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Emitted {
+        /// Event `prov-accepted`: Provisioning request accepted.
+        #[serde(rename = "prov-accepted")]
+        ProvAccepted(ProvAcceptedPayload),
+        /// Event `prov-refused`: Provisioning request refused.
+        #[serde(rename = "prov-refused")]
+        ProvRefused(ProvRefusedPayload),
+    }
+
+    /// The instance key: field `decision-id` of record `rec-identity-decision`.
+    pub type Key = types::RequestId;
+
+    /// Machine `prov-flow-impl`, stored in record `rec-identity-decision` by `decision-id`.
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct ProvFlowImpl;
+
+    impl Machine for ProvFlowImpl {
+        const NAME: &'static str = "prov-flow-impl";
+
+        const RECORD: &'static str = "rec-identity-decision";
+
+        const ISOLATION: Isolation = Isolation::Serializable;
+
+        const CREATES: bool = false;
+
+        type State = State;
+
+        type Vars = Vars;
+
+        type Event = Event;
+
+        type Emitted = Emitted;
+
+        type Key = Key;
+
+        type Record = records::RecIdentityDecision;
+
+        fn initial(_key: &Key) -> (State, Vars) {
+            (State::ProvOpenI, Vars {})
+        }
+
+        fn from_record(
+            _record: &records::RecIdentityDecision,
+        ) -> Result<(State, Vars), RecordError> {
+            let state = State::ProvOpenI;
+            Ok((state, Vars {}))
+        }
+
+        fn to_record(
+            key: &Key,
+            _state: &State,
+            _vars: &Vars,
+            _previous: Option<&records::RecIdentityDecision>,
+        ) -> Result<records::RecIdentityDecision, RecordError> {
+            Ok(records::RecIdentityDecision {
+                decision_id: key.clone(),
+            })
+        }
+
+        fn step(
+            state: &State,
+            vars: &Vars,
+            event: &Event,
+            _now: Time,
+        ) -> Result<Outcome<Self>, StepError> {
+            match (state, event) {
+                (State::ProvOpenI, Event::ProvPresented(payload)) => {
+                    if payload.endpoint == "provisioning"
+                        && payload.realm == payload.token_realm
+                        && payload.role_change != "direct"
+                    {
+                        Ok(Outcome::to(State::ProvOpenI, vars.clone()).emit(
+                            "web-application",
+                            Delivery::AtMostOnce,
+                            Emitted::ProvAccepted(ProvAcceptedPayload {}),
+                        ))
+                    } else {
+                        Ok(Outcome::to(State::ProvOpenI, vars.clone()).emit(
+                            "web-application",
+                            Delivery::AtMostOnce,
+                            Emitted::ProvRefused(ProvRefusedPayload {}),
+                        ))
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Calls to an identity provider (implementation)
+///
+/// A call to an identity provider for its metadata, its keys or its token endpoint. It is made only at the address that the provider configuration names, and through the outbound gate. This is the decision as the code takes it: it keeps nothing between presentations.
+///
+/// Specification behavior `idpa-flow-impl`, an implementation-level machine.
+pub mod idpa_flow_impl {
+    use serde::{Deserialize, Serialize};
+
+    use strata_runtime::{Delivery, Isolation, Machine, Outcome, RecordError, StepError, Time};
+
+    use crate::{records, types};
+
+    /// The states of machine `idpa-flow-impl`.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+
+    pub enum State {
+        /// State `idpa-open-i`: Deciding.
+        #[serde(rename = "idpa-open-i")]
+        IdpaOpenI,
+    }
+
+    impl State {
+        /// The state's id in the specification.
+        pub fn id(self) -> &'static str {
+            match self {
+                State::IdpaOpenI => "idpa-open-i",
+            }
+        }
+
+        /// The state with this id in the specification.
+        pub fn from_id(id: &str) -> Option<State> {
+            match id {
+                "idpa-open-i" => Some(State::IdpaOpenI),
+                _ => None,
+            }
+        }
+    }
+
+    /// The variables of the machine.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct Vars {}
+
+    /// The payload of event `idpa-presented`: Provider call requested.
+    ///
+    /// The identity service wants to reach a provider.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct IdpaPresentedPayload {
+        /// Field `address`.
+        pub address: String,
+        /// Field `route`.
+        pub route: String,
+    }
+
+    /// The payload of event `idpa-accepted`: Provider call made.
+    ///
+    /// The call goes out.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct IdpaAcceptedPayload {}
+
+    /// The payload of event `idpa-refused`: Provider call refused.
+    ///
+    /// The call does not go out.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct IdpaRefusedPayload {}
+
+    /// The events machine `idpa-flow-impl` receives, including those its timers fire.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Event {
+        /// Event `idpa-presented`: Provider call requested.
+        #[serde(rename = "idpa-presented")]
+        IdpaPresented(IdpaPresentedPayload),
+    }
+
+    /// The events machine `idpa-flow-impl` emits.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Emitted {
+        /// Event `idpa-accepted`: Provider call made.
+        #[serde(rename = "idpa-accepted")]
+        IdpaAccepted(IdpaAcceptedPayload),
+        /// Event `idpa-refused`: Provider call refused.
+        #[serde(rename = "idpa-refused")]
+        IdpaRefused(IdpaRefusedPayload),
+    }
+
+    /// The instance key: field `decision-id` of record `rec-identity-decision`.
+    pub type Key = types::RequestId;
+
+    /// Machine `idpa-flow-impl`, stored in record `rec-identity-decision` by `decision-id`.
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct IdpaFlowImpl;
+
+    impl Machine for IdpaFlowImpl {
+        const NAME: &'static str = "idpa-flow-impl";
+
+        const RECORD: &'static str = "rec-identity-decision";
+
+        const ISOLATION: Isolation = Isolation::Serializable;
+
+        const CREATES: bool = false;
+
+        type State = State;
+
+        type Vars = Vars;
+
+        type Event = Event;
+
+        type Emitted = Emitted;
+
+        type Key = Key;
+
+        type Record = records::RecIdentityDecision;
+
+        fn initial(_key: &Key) -> (State, Vars) {
+            (State::IdpaOpenI, Vars {})
+        }
+
+        fn from_record(
+            _record: &records::RecIdentityDecision,
+        ) -> Result<(State, Vars), RecordError> {
+            let state = State::IdpaOpenI;
+            Ok((state, Vars {}))
+        }
+
+        fn to_record(
+            key: &Key,
+            _state: &State,
+            _vars: &Vars,
+            _previous: Option<&records::RecIdentityDecision>,
+        ) -> Result<records::RecIdentityDecision, RecordError> {
+            Ok(records::RecIdentityDecision {
+                decision_id: key.clone(),
+            })
+        }
+
+        fn step(
+            state: &State,
+            vars: &Vars,
+            event: &Event,
+            _now: Time,
+        ) -> Result<Outcome<Self>, StepError> {
+            match (state, event) {
+                (State::IdpaOpenI, Event::IdpaPresented(payload)) => {
+                    if payload.address == "configured" && payload.route == "outbound-gate" {
+                        Ok(Outcome::to(State::IdpaOpenI, vars.clone()).emit(
+                            "outbound-gate",
+                            Delivery::AtMostOnce,
+                            Emitted::IdpaAccepted(IdpaAcceptedPayload {}),
+                        ))
+                    } else {
+                        Ok(Outcome::to(State::IdpaOpenI, vars.clone()).emit(
+                            "outbound-gate",
+                            Delivery::AtMostOnce,
+                            Emitted::IdpaRefused(IdpaRefusedPayload {}),
+                        ))
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Access token issue (implementation)
+///
+/// A request at the token endpoint. A service account obtains an access token through the client credentials grant, with its own valid secret. This is the decision as the code takes it: it keeps nothing between presentations.
+///
+/// Specification behavior `tokiss-flow-impl`, an implementation-level machine.
+pub mod tokiss_flow_impl {
+    use serde::{Deserialize, Serialize};
+
+    use strata_runtime::{Delivery, Isolation, Machine, Outcome, RecordError, StepError, Time};
+
+    use crate::{records, types};
+
+    /// The states of machine `tokiss-flow-impl`.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+
+    pub enum State {
+        /// State `tokiss-open-i`: Deciding.
+        #[serde(rename = "tokiss-open-i")]
+        TokissOpenI,
+    }
+
+    impl State {
+        /// The state's id in the specification.
+        pub fn id(self) -> &'static str {
+            match self {
+                State::TokissOpenI => "tokiss-open-i",
+            }
+        }
+
+        /// The state with this id in the specification.
+        pub fn from_id(id: &str) -> Option<State> {
+            match id {
+                "tokiss-open-i" => Some(State::TokissOpenI),
+                _ => None,
+            }
+        }
+    }
+
+    /// The variables of the machine.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct Vars {}
+
+    /// The payload of event `tokiss-presented`: Token requested.
+    ///
+    /// A client asks the token endpoint for an access token.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct TokissPresentedPayload {
+        /// Field `grant`.
+        pub grant: String,
+        /// Field `secret`.
+        pub secret: String,
+    }
+
+    /// The payload of event `tokiss-accepted`: Access token issued.
+    ///
+    /// The client receives a token.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct TokissAcceptedPayload {}
+
+    /// The payload of event `tokiss-refused`: Token request refused.
+    ///
+    /// No token is issued.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct TokissRefusedPayload {}
+
+    /// The events machine `tokiss-flow-impl` receives, including those its timers fire.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Event {
+        /// Event `tokiss-presented`: Token requested.
+        #[serde(rename = "tokiss-presented")]
+        TokissPresented(TokissPresentedPayload),
+    }
+
+    /// The events machine `tokiss-flow-impl` emits.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Emitted {
+        /// Event `tokiss-accepted`: Access token issued.
+        #[serde(rename = "tokiss-accepted")]
+        TokissAccepted(TokissAcceptedPayload),
+        /// Event `tokiss-refused`: Token request refused.
+        #[serde(rename = "tokiss-refused")]
+        TokissRefused(TokissRefusedPayload),
+    }
+
+    /// The instance key: field `decision-id` of record `rec-identity-decision`.
+    pub type Key = types::RequestId;
+
+    /// Machine `tokiss-flow-impl`, stored in record `rec-identity-decision` by `decision-id`.
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct TokissFlowImpl;
+
+    impl Machine for TokissFlowImpl {
+        const NAME: &'static str = "tokiss-flow-impl";
+
+        const RECORD: &'static str = "rec-identity-decision";
+
+        const ISOLATION: Isolation = Isolation::Serializable;
+
+        const CREATES: bool = false;
+
+        type State = State;
+
+        type Vars = Vars;
+
+        type Event = Event;
+
+        type Emitted = Emitted;
+
+        type Key = Key;
+
+        type Record = records::RecIdentityDecision;
+
+        fn initial(_key: &Key) -> (State, Vars) {
+            (State::TokissOpenI, Vars {})
+        }
+
+        fn from_record(
+            _record: &records::RecIdentityDecision,
+        ) -> Result<(State, Vars), RecordError> {
+            let state = State::TokissOpenI;
+            Ok((state, Vars {}))
+        }
+
+        fn to_record(
+            key: &Key,
+            _state: &State,
+            _vars: &Vars,
+            _previous: Option<&records::RecIdentityDecision>,
+        ) -> Result<records::RecIdentityDecision, RecordError> {
+            Ok(records::RecIdentityDecision {
+                decision_id: key.clone(),
+            })
+        }
+
+        fn step(
+            state: &State,
+            vars: &Vars,
+            event: &Event,
+            _now: Time,
+        ) -> Result<Outcome<Self>, StepError> {
+            match (state, event) {
+                (State::TokissOpenI, Event::TokissPresented(payload)) => {
+                    if payload.grant == "client_credentials" && payload.secret == "valid" {
+                        Ok(Outcome::to(State::TokissOpenI, vars.clone()).emit(
+                            "web-application",
+                            Delivery::AtMostOnce,
+                            Emitted::TokissAccepted(TokissAcceptedPayload {}),
+                        ))
+                    } else {
+                        Ok(Outcome::to(State::TokissOpenI, vars.clone()).emit(
+                            "web-application",
+                            Delivery::AtMostOnce,
+                            Emitted::TokissRefused(TokissRefusedPayload {}),
+                        ))
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Agent token use (implementation)
+///
+/// An access token is presented. A token for an agent acting for a person is accepted only when it names both the agent and the person. This is the decision as the code takes it: it keeps nothing between presentations.
+///
+/// Specification behavior `tokact-flow-impl`, an implementation-level machine.
+pub mod tokact_flow_impl {
+    use serde::{Deserialize, Serialize};
+
+    use strata_runtime::{Delivery, Isolation, Machine, Outcome, RecordError, StepError, Time};
+
+    use crate::{records, types};
+
+    /// The states of machine `tokact-flow-impl`.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+
+    pub enum State {
+        /// State `tokact-open-i`: Deciding.
+        #[serde(rename = "tokact-open-i")]
+        TokactOpenI,
+    }
+
+    impl State {
+        /// The state's id in the specification.
+        pub fn id(self) -> &'static str {
+            match self {
+                State::TokactOpenI => "tokact-open-i",
+            }
+        }
+
+        /// The state with this id in the specification.
+        pub fn from_id(id: &str) -> Option<State> {
+            match id {
+                "tokact-open-i" => Some(State::TokactOpenI),
+                _ => None,
+            }
+        }
+    }
+
+    /// The variables of the machine.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct Vars {}
+
+    /// The payload of event `tokact-presented`: Token presented for acting.
+    ///
+    /// A token is presented.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct TokactPresentedPayload {
+        /// Field `kind`.
+        pub kind: String,
+        /// Field `agent`.
+        pub agent: String,
+        /// Field `person`.
+        pub person: String,
+    }
+
+    /// The payload of event `tokact-accepted`: Token accepted.
+    ///
+    /// The request goes on under the token.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct TokactAcceptedPayload {}
+
+    /// The payload of event `tokact-refused`: Token refused.
+    ///
+    /// The request is refused.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct TokactRefusedPayload {}
+
+    /// The events machine `tokact-flow-impl` receives, including those its timers fire.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Event {
+        /// Event `tokact-presented`: Token presented for acting.
+        #[serde(rename = "tokact-presented")]
+        TokactPresented(TokactPresentedPayload),
+    }
+
+    /// The events machine `tokact-flow-impl` emits.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Emitted {
+        /// Event `tokact-accepted`: Token accepted.
+        #[serde(rename = "tokact-accepted")]
+        TokactAccepted(TokactAcceptedPayload),
+        /// Event `tokact-refused`: Token refused.
+        #[serde(rename = "tokact-refused")]
+        TokactRefused(TokactRefusedPayload),
+    }
+
+    /// The instance key: field `decision-id` of record `rec-identity-decision`.
+    pub type Key = types::RequestId;
+
+    /// Machine `tokact-flow-impl`, stored in record `rec-identity-decision` by `decision-id`.
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct TokactFlowImpl;
+
+    impl Machine for TokactFlowImpl {
+        const NAME: &'static str = "tokact-flow-impl";
+
+        const RECORD: &'static str = "rec-identity-decision";
+
+        const ISOLATION: Isolation = Isolation::Serializable;
+
+        const CREATES: bool = false;
+
+        type State = State;
+
+        type Vars = Vars;
+
+        type Event = Event;
+
+        type Emitted = Emitted;
+
+        type Key = Key;
+
+        type Record = records::RecIdentityDecision;
+
+        fn initial(_key: &Key) -> (State, Vars) {
+            (State::TokactOpenI, Vars {})
+        }
+
+        fn from_record(
+            _record: &records::RecIdentityDecision,
+        ) -> Result<(State, Vars), RecordError> {
+            let state = State::TokactOpenI;
+            Ok((state, Vars {}))
+        }
+
+        fn to_record(
+            key: &Key,
+            _state: &State,
+            _vars: &Vars,
+            _previous: Option<&records::RecIdentityDecision>,
+        ) -> Result<records::RecIdentityDecision, RecordError> {
+            Ok(records::RecIdentityDecision {
+                decision_id: key.clone(),
+            })
+        }
+
+        fn step(
+            state: &State,
+            vars: &Vars,
+            event: &Event,
+            _now: Time,
+        ) -> Result<Outcome<Self>, StepError> {
+            match (state, event) {
+                (State::TokactOpenI, Event::TokactPresented(payload)) => {
+                    if (payload.kind != "agent" || payload.agent != "none")
+                        && (payload.kind != "agent" || payload.person != "none")
+                    {
+                        Ok(Outcome::to(State::TokactOpenI, vars.clone()).emit(
+                            "web-application",
+                            Delivery::AtMostOnce,
+                            Emitted::TokactAccepted(TokactAcceptedPayload {}),
+                        ))
+                    } else {
+                        Ok(Outcome::to(State::TokactOpenI, vars.clone()).emit(
+                            "web-application",
+                            Delivery::AtMostOnce,
+                            Emitted::TokactRefused(TokactRefusedPayload {}),
+                        ))
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Token introspection (implementation)
+///
+/// A caller asks the introspection endpoint about a token. A permitted caller receives the scopes, the subject and the expiry of the token; another caller receives nothing. This is the decision as the code takes it: it keeps nothing between presentations.
+///
+/// Specification behavior `tokint-flow-impl`, an implementation-level machine.
+pub mod tokint_flow_impl {
+    use serde::{Deserialize, Serialize};
+
+    use strata_runtime::{Delivery, Isolation, Machine, Outcome, RecordError, StepError, Time};
+
+    use crate::{records, types};
+
+    /// The states of machine `tokint-flow-impl`.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+
+    pub enum State {
+        /// State `tokint-open-i`: Deciding.
+        #[serde(rename = "tokint-open-i")]
+        TokintOpenI,
+    }
+
+    impl State {
+        /// The state's id in the specification.
+        pub fn id(self) -> &'static str {
+            match self {
+                State::TokintOpenI => "tokint-open-i",
+            }
+        }
+
+        /// The state with this id in the specification.
+        pub fn from_id(id: &str) -> Option<State> {
+            match id {
+                "tokint-open-i" => Some(State::TokintOpenI),
+                _ => None,
+            }
+        }
+    }
+
+    /// The variables of the machine.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct Vars {}
+
+    /// The payload of event `tokint-presented`: Token introspection asked.
+    ///
+    /// A caller asks about a token.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct TokintPresentedPayload {
+        /// Field `caller`.
+        pub caller: String,
+        /// Field `scopes`.
+        pub scopes: String,
+        /// Field `subject`.
+        pub subject: String,
+        /// Field `expiry`.
+        pub expiry: u64,
+    }
+
+    /// The payload of event `tokint-accepted`: Token introspected.
+    ///
+    /// The scopes, the subject and the expiry are reported.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct TokintAcceptedPayload {
+        /// Field `scopes`.
+        pub scopes: String,
+        /// Field `subject`.
+        pub subject: String,
+        /// Field `expiry`.
+        pub expiry: u64,
+    }
+
+    /// The payload of event `tokint-refused`: Introspection refused.
+    ///
+    /// Nothing is reported.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct TokintRefusedPayload {}
+
+    /// The events machine `tokint-flow-impl` receives, including those its timers fire.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Event {
+        /// Event `tokint-presented`: Token introspection asked.
+        #[serde(rename = "tokint-presented")]
+        TokintPresented(TokintPresentedPayload),
+    }
+
+    /// The events machine `tokint-flow-impl` emits.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Emitted {
+        /// Event `tokint-accepted`: Token introspected.
+        #[serde(rename = "tokint-accepted")]
+        TokintAccepted(TokintAcceptedPayload),
+        /// Event `tokint-refused`: Introspection refused.
+        #[serde(rename = "tokint-refused")]
+        TokintRefused(TokintRefusedPayload),
+    }
+
+    /// The instance key: field `decision-id` of record `rec-identity-decision`.
+    pub type Key = types::RequestId;
+
+    /// Machine `tokint-flow-impl`, stored in record `rec-identity-decision` by `decision-id`.
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct TokintFlowImpl;
+
+    impl Machine for TokintFlowImpl {
+        const NAME: &'static str = "tokint-flow-impl";
+
+        const RECORD: &'static str = "rec-identity-decision";
+
+        const ISOLATION: Isolation = Isolation::Serializable;
+
+        const CREATES: bool = false;
+
+        type State = State;
+
+        type Vars = Vars;
+
+        type Event = Event;
+
+        type Emitted = Emitted;
+
+        type Key = Key;
+
+        type Record = records::RecIdentityDecision;
+
+        fn initial(_key: &Key) -> (State, Vars) {
+            (State::TokintOpenI, Vars {})
+        }
+
+        fn from_record(
+            _record: &records::RecIdentityDecision,
+        ) -> Result<(State, Vars), RecordError> {
+            let state = State::TokintOpenI;
+            Ok((state, Vars {}))
+        }
+
+        fn to_record(
+            key: &Key,
+            _state: &State,
+            _vars: &Vars,
+            _previous: Option<&records::RecIdentityDecision>,
+        ) -> Result<records::RecIdentityDecision, RecordError> {
+            Ok(records::RecIdentityDecision {
+                decision_id: key.clone(),
+            })
+        }
+
+        fn step(
+            state: &State,
+            vars: &Vars,
+            event: &Event,
+            _now: Time,
+        ) -> Result<Outcome<Self>, StepError> {
+            match (state, event) {
+                (State::TokintOpenI, Event::TokintPresented(payload)) => {
+                    if payload.caller == "permitted" {
+                        Ok(Outcome::to(State::TokintOpenI, vars.clone()).emit(
+                            "web-application",
+                            Delivery::AtMostOnce,
+                            Emitted::TokintAccepted(TokintAcceptedPayload {
+                                scopes: payload.scopes.clone(),
+                                subject: payload.subject.clone(),
+                                expiry: payload.expiry,
+                            }),
+                        ))
+                    } else {
+                        Ok(Outcome::to(State::TokintOpenI, vars.clone()).emit(
+                            "web-application",
+                            Delivery::AtMostOnce,
+                            Emitted::TokintRefused(TokintRefusedPayload {}),
+                        ))
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Sensitive operations (implementation)
+///
+/// An operation presented with a session. A sensitive operation is refused when the last authentication is older than the step-up age of 15 minutes, and when the session now appears from another network context than the one that authenticated it unless the person has authenticated again since. This is the decision as the code takes it: it keeps nothing between presentations.
+///
+/// Specification behavior `stepup-flow-impl`, an implementation-level machine.
+pub mod stepup_flow_impl {
+    use serde::{Deserialize, Serialize};
+
+    use strata_runtime::{Delivery, Isolation, Machine, Outcome, RecordError, StepError, Time};
+
+    use crate::{records, types};
+
+    /// The states of machine `stepup-flow-impl`.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+
+    pub enum State {
+        /// State `stepup-open-i`: Deciding.
+        #[serde(rename = "stepup-open-i")]
+        StepupOpenI,
+    }
+
+    impl State {
+        /// The state's id in the specification.
+        pub fn id(self) -> &'static str {
+            match self {
+                State::StepupOpenI => "stepup-open-i",
+            }
+        }
+
+        /// The state with this id in the specification.
+        pub fn from_id(id: &str) -> Option<State> {
+            match id {
+                "stepup-open-i" => Some(State::StepupOpenI),
+                _ => None,
+            }
+        }
+    }
+
+    /// The variables of the machine.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct Vars {}
+
+    /// The payload of event `stepup-presented`: Operation presented.
+    ///
+    /// An operation is presented with a session.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct StepupPresentedPayload {
+        /// Field `sensitive`.
+        pub sensitive: bool,
+        /// Field `authAge`.
+        #[serde(rename = "authAge")]
+        pub auth_age: u64,
+        /// Field `contextChanged`.
+        #[serde(rename = "contextChanged")]
+        pub context_changed: bool,
+        /// Field `authSinceChange`.
+        #[serde(rename = "authSinceChange")]
+        pub auth_since_change: bool,
+    }
+
+    /// The payload of event `stepup-accepted`: Operation allowed.
+    ///
+    /// The operation goes on.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct StepupAcceptedPayload {}
+
+    /// The payload of event `stepup-refused`: Fresh authentication required.
+    ///
+    /// The operation needs a fresh authentication first.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct StepupRefusedPayload {}
+
+    /// The events machine `stepup-flow-impl` receives, including those its timers fire.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Event {
+        /// Event `stepup-presented`: Operation presented.
+        #[serde(rename = "stepup-presented")]
+        StepupPresented(StepupPresentedPayload),
+    }
+
+    /// The events machine `stepup-flow-impl` emits.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Emitted {
+        /// Event `stepup-accepted`: Operation allowed.
+        #[serde(rename = "stepup-accepted")]
+        StepupAccepted(StepupAcceptedPayload),
+        /// Event `stepup-refused`: Fresh authentication required.
+        #[serde(rename = "stepup-refused")]
+        StepupRefused(StepupRefusedPayload),
+    }
+
+    /// The instance key: field `decision-id` of record `rec-identity-decision`.
+    pub type Key = types::RequestId;
+
+    /// Machine `stepup-flow-impl`, stored in record `rec-identity-decision` by `decision-id`.
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct StepupFlowImpl;
+
+    impl Machine for StepupFlowImpl {
+        const NAME: &'static str = "stepup-flow-impl";
+
+        const RECORD: &'static str = "rec-identity-decision";
+
+        const ISOLATION: Isolation = Isolation::Serializable;
+
+        const CREATES: bool = false;
+
+        type State = State;
+
+        type Vars = Vars;
+
+        type Event = Event;
+
+        type Emitted = Emitted;
+
+        type Key = Key;
+
+        type Record = records::RecIdentityDecision;
+
+        fn initial(_key: &Key) -> (State, Vars) {
+            (State::StepupOpenI, Vars {})
+        }
+
+        fn from_record(
+            _record: &records::RecIdentityDecision,
+        ) -> Result<(State, Vars), RecordError> {
+            let state = State::StepupOpenI;
+            Ok((state, Vars {}))
+        }
+
+        fn to_record(
+            key: &Key,
+            _state: &State,
+            _vars: &Vars,
+            _previous: Option<&records::RecIdentityDecision>,
+        ) -> Result<records::RecIdentityDecision, RecordError> {
+            Ok(records::RecIdentityDecision {
+                decision_id: key.clone(),
+            })
+        }
+
+        fn step(
+            state: &State,
+            vars: &Vars,
+            event: &Event,
+            _now: Time,
+        ) -> Result<Outcome<Self>, StepError> {
+            match (state, event) {
+                (State::StepupOpenI, Event::StepupPresented(payload)) => {
+                    if (!payload.sensitive || payload.auth_age <= 15u64)
+                        && (!payload.sensitive
+                            || !payload.context_changed
+                            || payload.auth_since_change)
+                    {
+                        Ok(Outcome::to(State::StepupOpenI, vars.clone()).emit(
+                            "web-application",
+                            Delivery::AtMostOnce,
+                            Emitted::StepupAccepted(StepupAcceptedPayload {}),
+                        ))
+                    } else {
+                        Ok(Outcome::to(State::StepupOpenI, vars.clone()).emit(
+                            "web-application",
+                            Delivery::AtMostOnce,
+                            Emitted::StepupRefused(StepupRefusedPayload {}),
+                        ))
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Sign-in methods under a second-factor realm (implementation)
+///
+/// A sign-in method that proves only one factor is refused for a realm that requires a second factor. This is the decision as the code takes it: it keeps nothing between presentations.
+///
+/// Specification behavior `facg-flow-impl`, an implementation-level machine.
+pub mod facg_flow_impl {
+    use serde::{Deserialize, Serialize};
+
+    use strata_runtime::{Delivery, Isolation, Machine, Outcome, RecordError, StepError, Time};
+
+    use crate::{records, types};
+
+    /// The states of machine `facg-flow-impl`.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+
+    pub enum State {
+        /// State `facg-open-i`: Deciding.
+        #[serde(rename = "facg-open-i")]
+        FacgOpenI,
+    }
+
+    impl State {
+        /// The state's id in the specification.
+        pub fn id(self) -> &'static str {
+            match self {
+                State::FacgOpenI => "facg-open-i",
+            }
+        }
+
+        /// The state with this id in the specification.
+        pub fn from_id(id: &str) -> Option<State> {
+            match id {
+                "facg-open-i" => Some(State::FacgOpenI),
+                _ => None,
+            }
+        }
+    }
+
+    /// The variables of the machine.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct Vars {}
+
+    /// The payload of event `facg-presented`: Sign-in method presented.
+    ///
+    /// A sign-in method is used.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct FacgPresentedPayload {
+        /// Field `secondRequired`.
+        #[serde(rename = "secondRequired")]
+        pub second_required: bool,
+        /// Field `factors`.
+        pub factors: u64,
+    }
+
+    /// The payload of event `facg-accepted`: Sign-in method sufficient.
+    ///
+    /// The method proves what the realm requires.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct FacgAcceptedPayload {}
+
+    /// The payload of event `facg-refused`: Sign-in method refused.
+    ///
+    /// The method proves too little.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct FacgRefusedPayload {}
+
+    /// The events machine `facg-flow-impl` receives, including those its timers fire.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Event {
+        /// Event `facg-presented`: Sign-in method presented.
+        #[serde(rename = "facg-presented")]
+        FacgPresented(FacgPresentedPayload),
+    }
+
+    /// The events machine `facg-flow-impl` emits.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Emitted {
+        /// Event `facg-accepted`: Sign-in method sufficient.
+        #[serde(rename = "facg-accepted")]
+        FacgAccepted(FacgAcceptedPayload),
+        /// Event `facg-refused`: Sign-in method refused.
+        #[serde(rename = "facg-refused")]
+        FacgRefused(FacgRefusedPayload),
+    }
+
+    /// The instance key: field `decision-id` of record `rec-identity-decision`.
+    pub type Key = types::RequestId;
+
+    /// Machine `facg-flow-impl`, stored in record `rec-identity-decision` by `decision-id`.
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct FacgFlowImpl;
+
+    impl Machine for FacgFlowImpl {
+        const NAME: &'static str = "facg-flow-impl";
+
+        const RECORD: &'static str = "rec-identity-decision";
+
+        const ISOLATION: Isolation = Isolation::Serializable;
+
+        const CREATES: bool = false;
+
+        type State = State;
+
+        type Vars = Vars;
+
+        type Event = Event;
+
+        type Emitted = Emitted;
+
+        type Key = Key;
+
+        type Record = records::RecIdentityDecision;
+
+        fn initial(_key: &Key) -> (State, Vars) {
+            (State::FacgOpenI, Vars {})
+        }
+
+        fn from_record(
+            _record: &records::RecIdentityDecision,
+        ) -> Result<(State, Vars), RecordError> {
+            let state = State::FacgOpenI;
+            Ok((state, Vars {}))
+        }
+
+        fn to_record(
+            key: &Key,
+            _state: &State,
+            _vars: &Vars,
+            _previous: Option<&records::RecIdentityDecision>,
+        ) -> Result<records::RecIdentityDecision, RecordError> {
+            Ok(records::RecIdentityDecision {
+                decision_id: key.clone(),
+            })
+        }
+
+        fn step(
+            state: &State,
+            vars: &Vars,
+            event: &Event,
+            _now: Time,
+        ) -> Result<Outcome<Self>, StepError> {
+            match (state, event) {
+                (State::FacgOpenI, Event::FacgPresented(payload)) => {
+                    if !payload.second_required || payload.factors >= 2u64 {
+                        Ok(Outcome::to(State::FacgOpenI, vars.clone()).emit(
+                            "web-application",
+                            Delivery::AtMostOnce,
+                            Emitted::FacgAccepted(FacgAcceptedPayload {}),
+                        ))
+                    } else {
+                        Ok(Outcome::to(State::FacgOpenI, vars.clone()).emit(
+                            "web-application",
+                            Delivery::AtMostOnce,
+                            Emitted::FacgRefused(FacgRefusedPayload {}),
+                        ))
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Realm policy that turns password sign-in off (implementation)
+///
+/// A realm policy change. Turning password sign-in off is refused while an owner of the tenant has no other sign-in method and no recovery path. This is the decision as the code takes it: it keeps nothing between presentations.
+///
+/// Specification behavior `realm-flow-impl`, an implementation-level machine.
+pub mod realm_flow_impl {
+    use serde::{Deserialize, Serialize};
+
+    use strata_runtime::{Delivery, Isolation, Machine, Outcome, RecordError, StepError, Time};
+
+    use crate::{records, types};
+
+    /// The states of machine `realm-flow-impl`.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+
+    pub enum State {
+        /// State `realm-open-i`: Deciding.
+        #[serde(rename = "realm-open-i")]
+        RealmOpenI,
+    }
+
+    impl State {
+        /// The state's id in the specification.
+        pub fn id(self) -> &'static str {
+            match self {
+                State::RealmOpenI => "realm-open-i",
+            }
+        }
+
+        /// The state with this id in the specification.
+        pub fn from_id(id: &str) -> Option<State> {
+            match id {
+                "realm-open-i" => Some(State::RealmOpenI),
+                _ => None,
+            }
+        }
+    }
+
+    /// The variables of the machine.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct Vars {}
+
+    /// The payload of event `realm-presented`: Realm policy change proposed.
+    ///
+    /// A realm policy change is proposed.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct RealmPresentedPayload {
+        /// Field `change`.
+        pub change: String,
+        /// Field `ownerHasOtherMethod`.
+        #[serde(rename = "ownerHasOtherMethod")]
+        pub owner_has_other_method: bool,
+        /// Field `ownerHasRecovery`.
+        #[serde(rename = "ownerHasRecovery")]
+        pub owner_has_recovery: bool,
+    }
+
+    /// The payload of event `realm-accepted`: Realm policy changed.
+    ///
+    /// The change is made.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct RealmAcceptedPayload {}
+
+    /// The payload of event `realm-refused`: Realm policy change refused.
+    ///
+    /// The change is refused.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct RealmRefusedPayload {}
+
+    /// The events machine `realm-flow-impl` receives, including those its timers fire.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Event {
+        /// Event `realm-presented`: Realm policy change proposed.
+        #[serde(rename = "realm-presented")]
+        RealmPresented(RealmPresentedPayload),
+    }
+
+    /// The events machine `realm-flow-impl` emits.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Emitted {
+        /// Event `realm-accepted`: Realm policy changed.
+        #[serde(rename = "realm-accepted")]
+        RealmAccepted(RealmAcceptedPayload),
+        /// Event `realm-refused`: Realm policy change refused.
+        #[serde(rename = "realm-refused")]
+        RealmRefused(RealmRefusedPayload),
+    }
+
+    /// The instance key: field `decision-id` of record `rec-identity-decision`.
+    pub type Key = types::RequestId;
+
+    /// Machine `realm-flow-impl`, stored in record `rec-identity-decision` by `decision-id`.
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct RealmFlowImpl;
+
+    impl Machine for RealmFlowImpl {
+        const NAME: &'static str = "realm-flow-impl";
+
+        const RECORD: &'static str = "rec-identity-decision";
+
+        const ISOLATION: Isolation = Isolation::Serializable;
+
+        const CREATES: bool = false;
+
+        type State = State;
+
+        type Vars = Vars;
+
+        type Event = Event;
+
+        type Emitted = Emitted;
+
+        type Key = Key;
+
+        type Record = records::RecIdentityDecision;
+
+        fn initial(_key: &Key) -> (State, Vars) {
+            (State::RealmOpenI, Vars {})
+        }
+
+        fn from_record(
+            _record: &records::RecIdentityDecision,
+        ) -> Result<(State, Vars), RecordError> {
+            let state = State::RealmOpenI;
+            Ok((state, Vars {}))
+        }
+
+        fn to_record(
+            key: &Key,
+            _state: &State,
+            _vars: &Vars,
+            _previous: Option<&records::RecIdentityDecision>,
+        ) -> Result<records::RecIdentityDecision, RecordError> {
+            Ok(records::RecIdentityDecision {
+                decision_id: key.clone(),
+            })
+        }
+
+        fn step(
+            state: &State,
+            vars: &Vars,
+            event: &Event,
+            _now: Time,
+        ) -> Result<Outcome<Self>, StepError> {
+            match (state, event) {
+                (State::RealmOpenI, Event::RealmPresented(payload)) => {
+                    if payload.change != "password-off"
+                        || payload.owner_has_other_method
+                        || payload.owner_has_recovery
+                    {
+                        Ok(Outcome::to(State::RealmOpenI, vars.clone()).emit(
+                            "control-plane",
+                            Delivery::AtMostOnce,
+                            Emitted::RealmAccepted(RealmAcceptedPayload {}),
+                        ))
+                    } else {
+                        Ok(Outcome::to(State::RealmOpenI, vars.clone()).emit(
+                            "control-plane",
+                            Delivery::AtMostOnce,
+                            Emitted::RealmRefused(RealmRefusedPayload {}),
+                        ))
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Audit entry retention (implementation)
+///
+/// An audit entry is removed only when its age has reached the retention period of the tenant policy, or the platform default of one year (365 days) when the tenant sets none. This is the decision as the code takes it: it keeps nothing between presentations.
+///
+/// Specification behavior `auditk-flow-impl`, an implementation-level machine.
+pub mod auditk_flow_impl {
+    use serde::{Deserialize, Serialize};
+
+    use strata_runtime::{Delivery, Isolation, Machine, Outcome, RecordError, StepError, Time};
+
+    use crate::{records, types};
+
+    /// The states of machine `auditk-flow-impl`.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+
+    pub enum State {
+        /// State `auditk-open-i`: Deciding.
+        #[serde(rename = "auditk-open-i")]
+        AuditkOpenI,
+    }
+
+    impl State {
+        /// The state's id in the specification.
+        pub fn id(self) -> &'static str {
+            match self {
+                State::AuditkOpenI => "auditk-open-i",
+            }
+        }
+
+        /// The state with this id in the specification.
+        pub fn from_id(id: &str) -> Option<State> {
+            match id {
+                "auditk-open-i" => Some(State::AuditkOpenI),
+                _ => None,
+            }
+        }
+    }
+
+    /// The variables of the machine.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct Vars {}
+
+    /// The payload of event `auditk-presented`: Audit entry up for removal.
+    ///
+    /// The retention sweep reaches an entry.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct AuditkPresentedPayload {
+        /// Field `ageDays`.
+        #[serde(rename = "ageDays")]
+        pub age_days: u64,
+        /// Field `tenantDays`.
+        #[serde(rename = "tenantDays")]
+        pub tenant_days: u64,
+        /// Field `defaultDays`.
+        #[serde(rename = "defaultDays")]
+        pub default_days: u64,
+    }
+
+    /// The payload of event `auditk-accepted`: Audit entry removed.
+    ///
+    /// The entry is removed.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct AuditkAcceptedPayload {}
+
+    /// The payload of event `auditk-refused`: Audit entry kept.
+    ///
+    /// The entry stays.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct AuditkRefusedPayload {}
+
+    /// The events machine `auditk-flow-impl` receives, including those its timers fire.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Event {
+        /// Event `auditk-presented`: Audit entry up for removal.
+        #[serde(rename = "auditk-presented")]
+        AuditkPresented(AuditkPresentedPayload),
+    }
+
+    /// The events machine `auditk-flow-impl` emits.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Emitted {
+        /// Event `auditk-accepted`: Audit entry removed.
+        #[serde(rename = "auditk-accepted")]
+        AuditkAccepted(AuditkAcceptedPayload),
+        /// Event `auditk-refused`: Audit entry kept.
+        #[serde(rename = "auditk-refused")]
+        AuditkRefused(AuditkRefusedPayload),
+    }
+
+    /// The instance key: field `decision-id` of record `rec-identity-decision`.
+    pub type Key = types::RequestId;
+
+    /// Machine `auditk-flow-impl`, stored in record `rec-identity-decision` by `decision-id`.
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct AuditkFlowImpl;
+
+    impl Machine for AuditkFlowImpl {
+        const NAME: &'static str = "auditk-flow-impl";
+
+        const RECORD: &'static str = "rec-identity-decision";
+
+        const ISOLATION: Isolation = Isolation::Serializable;
+
+        const CREATES: bool = false;
+
+        type State = State;
+
+        type Vars = Vars;
+
+        type Event = Event;
+
+        type Emitted = Emitted;
+
+        type Key = Key;
+
+        type Record = records::RecIdentityDecision;
+
+        fn initial(_key: &Key) -> (State, Vars) {
+            (State::AuditkOpenI, Vars {})
+        }
+
+        fn from_record(
+            _record: &records::RecIdentityDecision,
+        ) -> Result<(State, Vars), RecordError> {
+            let state = State::AuditkOpenI;
+            Ok((state, Vars {}))
+        }
+
+        fn to_record(
+            key: &Key,
+            _state: &State,
+            _vars: &Vars,
+            _previous: Option<&records::RecIdentityDecision>,
+        ) -> Result<records::RecIdentityDecision, RecordError> {
+            Ok(records::RecIdentityDecision {
+                decision_id: key.clone(),
+            })
+        }
+
+        fn step(
+            state: &State,
+            vars: &Vars,
+            event: &Event,
+            _now: Time,
+        ) -> Result<Outcome<Self>, StepError> {
+            match (state, event) {
+                (State::AuditkOpenI, Event::AuditkPresented(payload)) => {
+                    if payload.tenant_days > 0u64 && payload.age_days >= payload.tenant_days
+                        || payload.tenant_days == 0u64 && payload.age_days >= payload.default_days
+                    {
+                        Ok(Outcome::to(State::AuditkOpenI, vars.clone()).emit(
+                            "audit-log",
+                            Delivery::AtMostOnce,
+                            Emitted::AuditkAccepted(AuditkAcceptedPayload {}),
+                        ))
+                    } else {
+                        Ok(Outcome::to(State::AuditkOpenI, vars.clone()).emit(
+                            "audit-log",
+                            Delivery::AtMostOnce,
+                            Emitted::AuditkRefused(AuditkRefusedPayload {}),
+                        ))
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Passkey registration (implementation)
+///
+/// A passkey is registered. The credential is bound to the address of the tenant as the relying party and to no other. This is the decision as the code takes it: it keeps nothing between presentations.
+///
+/// Specification behavior `ppreg-flow-impl`, an implementation-level machine.
+pub mod ppreg_flow_impl {
+    use serde::{Deserialize, Serialize};
+
+    use strata_runtime::{Delivery, Isolation, Machine, Outcome, RecordError, StepError, Time};
+
+    use crate::{records, types};
+
+    /// The states of machine `ppreg-flow-impl`.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+
+    pub enum State {
+        /// State `ppreg-open-i`: Deciding.
+        #[serde(rename = "ppreg-open-i")]
+        PpregOpenI,
+    }
+
+    impl State {
+        /// The state's id in the specification.
+        pub fn id(self) -> &'static str {
+            match self {
+                State::PpregOpenI => "ppreg-open-i",
+            }
+        }
+
+        /// The state with this id in the specification.
+        pub fn from_id(id: &str) -> Option<State> {
+            match id {
+                "ppreg-open-i" => Some(State::PpregOpenI),
+                _ => None,
+            }
+        }
+    }
+
+    /// The variables of the machine.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct Vars {}
+
+    /// The payload of event `ppreg-presented`: Passkey registered.
+    ///
+    /// A passkey registration completes.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct PpregPresentedPayload {
+        /// Field `rpId`.
+        #[serde(rename = "rpId")]
+        pub rp_id: String,
+        /// Field `tenantAddress`.
+        #[serde(rename = "tenantAddress")]
+        pub tenant_address: String,
+    }
+
+    /// The payload of event `ppreg-accepted`: Passkey bound.
+    ///
+    /// The credential is stored.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct PpregAcceptedPayload {}
+
+    /// The payload of event `ppreg-refused`: Passkey refused.
+    ///
+    /// The credential is not stored.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct PpregRefusedPayload {}
+
+    /// The events machine `ppreg-flow-impl` receives, including those its timers fire.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Event {
+        /// Event `ppreg-presented`: Passkey registered.
+        #[serde(rename = "ppreg-presented")]
+        PpregPresented(PpregPresentedPayload),
+    }
+
+    /// The events machine `ppreg-flow-impl` emits.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Emitted {
+        /// Event `ppreg-accepted`: Passkey bound.
+        #[serde(rename = "ppreg-accepted")]
+        PpregAccepted(PpregAcceptedPayload),
+        /// Event `ppreg-refused`: Passkey refused.
+        #[serde(rename = "ppreg-refused")]
+        PpregRefused(PpregRefusedPayload),
+    }
+
+    /// The instance key: field `decision-id` of record `rec-identity-decision`.
+    pub type Key = types::RequestId;
+
+    /// Machine `ppreg-flow-impl`, stored in record `rec-identity-decision` by `decision-id`.
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct PpregFlowImpl;
+
+    impl Machine for PpregFlowImpl {
+        const NAME: &'static str = "ppreg-flow-impl";
+
+        const RECORD: &'static str = "rec-identity-decision";
+
+        const ISOLATION: Isolation = Isolation::Serializable;
+
+        const CREATES: bool = false;
+
+        type State = State;
+
+        type Vars = Vars;
+
+        type Event = Event;
+
+        type Emitted = Emitted;
+
+        type Key = Key;
+
+        type Record = records::RecIdentityDecision;
+
+        fn initial(_key: &Key) -> (State, Vars) {
+            (State::PpregOpenI, Vars {})
+        }
+
+        fn from_record(
+            _record: &records::RecIdentityDecision,
+        ) -> Result<(State, Vars), RecordError> {
+            let state = State::PpregOpenI;
+            Ok((state, Vars {}))
+        }
+
+        fn to_record(
+            key: &Key,
+            _state: &State,
+            _vars: &Vars,
+            _previous: Option<&records::RecIdentityDecision>,
+        ) -> Result<records::RecIdentityDecision, RecordError> {
+            Ok(records::RecIdentityDecision {
+                decision_id: key.clone(),
+            })
+        }
+
+        fn step(
+            state: &State,
+            vars: &Vars,
+            event: &Event,
+            _now: Time,
+        ) -> Result<Outcome<Self>, StepError> {
+            match (state, event) {
+                (State::PpregOpenI, Event::PpregPresented(payload)) => {
+                    if payload.rp_id == payload.tenant_address {
+                        Ok(Outcome::to(State::PpregOpenI, vars.clone()).emit(
+                            "web-application",
+                            Delivery::AtMostOnce,
+                            Emitted::PpregAccepted(PpregAcceptedPayload {}),
+                        ))
+                    } else {
+                        Ok(Outcome::to(State::PpregOpenI, vars.clone()).emit(
+                            "web-application",
+                            Delivery::AtMostOnce,
+                            Emitted::PpregRefused(PpregRefusedPayload {}),
+                        ))
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Passkey assertion (implementation)
+///
+/// A passkey assertion presented at sign-in. It carries the challenge issued for that sign-in, and the challenge is bound to the address that the sign-in was requested at. This is the decision as the code takes it: it keeps nothing between presentations.
+///
+/// Specification behavior `ppauth-flow-impl`, an implementation-level machine.
+pub mod ppauth_flow_impl {
+    use serde::{Deserialize, Serialize};
+
+    use strata_runtime::{Delivery, Isolation, Machine, Outcome, RecordError, StepError, Time};
+
+    use crate::{records, types};
+
+    /// The states of machine `ppauth-flow-impl`.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+
+    pub enum State {
+        /// State `ppauth-open-i`: Deciding.
+        #[serde(rename = "ppauth-open-i")]
+        PpauthOpenI,
+    }
+
+    impl State {
+        /// The state's id in the specification.
+        pub fn id(self) -> &'static str {
+            match self {
+                State::PpauthOpenI => "ppauth-open-i",
+            }
+        }
+
+        /// The state with this id in the specification.
+        pub fn from_id(id: &str) -> Option<State> {
+            match id {
+                "ppauth-open-i" => Some(State::PpauthOpenI),
+                _ => None,
+            }
+        }
+    }
+
+    /// The variables of the machine.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct Vars {}
+
+    /// The payload of event `ppauth-presented`: Passkey assertion presented.
+    ///
+    /// A passkey assertion is presented.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct PpauthPresentedPayload {
+        /// Field `challenge`.
+        pub challenge: String,
+        /// Field `challengeAddress`.
+        #[serde(rename = "challengeAddress")]
+        pub challenge_address: String,
+        /// Field `requestAddress`.
+        #[serde(rename = "requestAddress")]
+        pub request_address: String,
+    }
+
+    /// The payload of event `ppauth-accepted`: Passkey assertion accepted.
+    ///
+    /// The assertion yields a session.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct PpauthAcceptedPayload {}
+
+    /// The payload of event `ppauth-refused`: Passkey assertion refused.
+    ///
+    /// The assertion is refused.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct PpauthRefusedPayload {}
+
+    /// The events machine `ppauth-flow-impl` receives, including those its timers fire.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Event {
+        /// Event `ppauth-presented`: Passkey assertion presented.
+        #[serde(rename = "ppauth-presented")]
+        PpauthPresented(PpauthPresentedPayload),
+    }
+
+    /// The events machine `ppauth-flow-impl` emits.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Emitted {
+        /// Event `ppauth-accepted`: Passkey assertion accepted.
+        #[serde(rename = "ppauth-accepted")]
+        PpauthAccepted(PpauthAcceptedPayload),
+        /// Event `ppauth-refused`: Passkey assertion refused.
+        #[serde(rename = "ppauth-refused")]
+        PpauthRefused(PpauthRefusedPayload),
+    }
+
+    /// The instance key: field `decision-id` of record `rec-identity-decision`.
+    pub type Key = types::RequestId;
+
+    /// Machine `ppauth-flow-impl`, stored in record `rec-identity-decision` by `decision-id`.
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct PpauthFlowImpl;
+
+    impl Machine for PpauthFlowImpl {
+        const NAME: &'static str = "ppauth-flow-impl";
+
+        const RECORD: &'static str = "rec-identity-decision";
+
+        const ISOLATION: Isolation = Isolation::Serializable;
+
+        const CREATES: bool = false;
+
+        type State = State;
+
+        type Vars = Vars;
+
+        type Event = Event;
+
+        type Emitted = Emitted;
+
+        type Key = Key;
+
+        type Record = records::RecIdentityDecision;
+
+        fn initial(_key: &Key) -> (State, Vars) {
+            (State::PpauthOpenI, Vars {})
+        }
+
+        fn from_record(
+            _record: &records::RecIdentityDecision,
+        ) -> Result<(State, Vars), RecordError> {
+            let state = State::PpauthOpenI;
+            Ok((state, Vars {}))
+        }
+
+        fn to_record(
+            key: &Key,
+            _state: &State,
+            _vars: &Vars,
+            _previous: Option<&records::RecIdentityDecision>,
+        ) -> Result<records::RecIdentityDecision, RecordError> {
+            Ok(records::RecIdentityDecision {
+                decision_id: key.clone(),
+            })
+        }
+
+        fn step(
+            state: &State,
+            vars: &Vars,
+            event: &Event,
+            _now: Time,
+        ) -> Result<Outcome<Self>, StepError> {
+            match (state, event) {
+                (State::PpauthOpenI, Event::PpauthPresented(payload)) => {
+                    if payload.challenge == "this-sign-in"
+                        && payload.challenge_address == payload.request_address
+                    {
+                        Ok(Outcome::to(State::PpauthOpenI, vars.clone()).emit(
+                            "web-application",
+                            Delivery::AtMostOnce,
+                            Emitted::PpauthAccepted(PpauthAcceptedPayload {}),
+                        ))
+                    } else {
+                        Ok(Outcome::to(State::PpauthOpenI, vars.clone()).emit(
+                            "web-application",
+                            Delivery::AtMostOnce,
+                            Emitted::PpauthRefused(PpauthRefusedPayload {}),
+                        ))
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Caller identity assertion (implementation)
+///
+/// A component other than the identity service is handed a caller identity. It accepts the identity only from an assertion that the identity service signed. This is the decision as the code takes it: it keeps nothing between presentations.
+///
+/// Specification behavior `asrt-flow-impl`, an implementation-level machine.
+pub mod asrt_flow_impl {
+    use serde::{Deserialize, Serialize};
+
+    use strata_runtime::{Delivery, Isolation, Machine, Outcome, RecordError, StepError, Time};
+
+    use crate::{records, types};
+
+    /// The states of machine `asrt-flow-impl`.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+
+    pub enum State {
+        /// State `asrt-open-i`: Deciding.
+        #[serde(rename = "asrt-open-i")]
+        AsrtOpenI,
+    }
+
+    impl State {
+        /// The state's id in the specification.
+        pub fn id(self) -> &'static str {
+            match self {
+                State::AsrtOpenI => "asrt-open-i",
+            }
+        }
+
+        /// The state with this id in the specification.
+        pub fn from_id(id: &str) -> Option<State> {
+            match id {
+                "asrt-open-i" => Some(State::AsrtOpenI),
+                _ => None,
+            }
+        }
+    }
+
+    /// The variables of the machine.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct Vars {}
+
+    /// The payload of event `asrt-presented`: Caller identity presented.
+    ///
+    /// A caller identity arrives at a component.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct AsrtPresentedPayload {
+        /// Field `signer`.
+        pub signer: String,
+    }
+
+    /// The payload of event `asrt-accepted`: Caller identity accepted.
+    ///
+    /// The request goes on under the identity.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct AsrtAcceptedPayload {}
+
+    /// The payload of event `asrt-refused`: Caller identity refused.
+    ///
+    /// The request is refused.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct AsrtRefusedPayload {}
+
+    /// The events machine `asrt-flow-impl` receives, including those its timers fire.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Event {
+        /// Event `asrt-presented`: Caller identity presented.
+        #[serde(rename = "asrt-presented")]
+        AsrtPresented(AsrtPresentedPayload),
+    }
+
+    /// The events machine `asrt-flow-impl` emits.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Emitted {
+        /// Event `asrt-accepted`: Caller identity accepted.
+        #[serde(rename = "asrt-accepted")]
+        AsrtAccepted(AsrtAcceptedPayload),
+        /// Event `asrt-refused`: Caller identity refused.
+        #[serde(rename = "asrt-refused")]
+        AsrtRefused(AsrtRefusedPayload),
+    }
+
+    /// The instance key: field `decision-id` of record `rec-identity-decision`.
+    pub type Key = types::RequestId;
+
+    /// Machine `asrt-flow-impl`, stored in record `rec-identity-decision` by `decision-id`.
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct AsrtFlowImpl;
+
+    impl Machine for AsrtFlowImpl {
+        const NAME: &'static str = "asrt-flow-impl";
+
+        const RECORD: &'static str = "rec-identity-decision";
+
+        const ISOLATION: Isolation = Isolation::Serializable;
+
+        const CREATES: bool = false;
+
+        type State = State;
+
+        type Vars = Vars;
+
+        type Event = Event;
+
+        type Emitted = Emitted;
+
+        type Key = Key;
+
+        type Record = records::RecIdentityDecision;
+
+        fn initial(_key: &Key) -> (State, Vars) {
+            (State::AsrtOpenI, Vars {})
+        }
+
+        fn from_record(
+            _record: &records::RecIdentityDecision,
+        ) -> Result<(State, Vars), RecordError> {
+            let state = State::AsrtOpenI;
+            Ok((state, Vars {}))
+        }
+
+        fn to_record(
+            key: &Key,
+            _state: &State,
+            _vars: &Vars,
+            _previous: Option<&records::RecIdentityDecision>,
+        ) -> Result<records::RecIdentityDecision, RecordError> {
+            Ok(records::RecIdentityDecision {
+                decision_id: key.clone(),
+            })
+        }
+
+        fn step(
+            state: &State,
+            vars: &Vars,
+            event: &Event,
+            _now: Time,
+        ) -> Result<Outcome<Self>, StepError> {
+            match (state, event) {
+                (State::AsrtOpenI, Event::AsrtPresented(payload)) => {
+                    if payload.signer == "identity-service" {
+                        Ok(Outcome::to(State::AsrtOpenI, vars.clone()).emit(
+                            "runtime",
+                            Delivery::AtMostOnce,
+                            Emitted::AsrtAccepted(AsrtAcceptedPayload {}),
+                        ))
+                    } else {
+                        Ok(Outcome::to(State::AsrtOpenI, vars.clone()).emit(
+                            "runtime",
+                            Delivery::AtMostOnce,
+                            Emitted::AsrtRefused(AsrtRefusedPayload {}),
+                        ))
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Session lifetime (implementation)
+///
+/// The lifetimes of one session as the identity service keeps them (rec-session-lifetime): the time of sign-in and the time of last use, in milliseconds, against the idle and absolute lifetimes that the realm gives in hours. The refinement reads one model tick as one hour (timeScale 3600000).
+///
+/// Specification behavior `session-lifetime-flow-impl`, an implementation-level machine.
+pub mod session_lifetime_flow_impl {
+    use serde::{Deserialize, Serialize};
+
+    use strata_runtime::{Delivery, Isolation, Machine, Outcome, RecordError, StepError, Time};
+
+    use crate::{prelude, records, types};
+
+    /// The states of machine `session-lifetime-flow-impl`.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+
+    pub enum State {
+        /// State `sl-live-i`: Live.
+        #[serde(rename = "sl-live-i")]
+        SlLiveI,
+        /// State `sl-over-i`: Ended.
+        #[serde(rename = "sl-over-i")]
+        SlOverI,
+    }
+
+    impl State {
+        /// The state's id in the specification.
+        pub fn id(self) -> &'static str {
+            match self {
+                State::SlLiveI => "sl-live-i",
+                State::SlOverI => "sl-over-i",
+            }
+        }
+
+        /// The state with this id in the specification.
+        pub fn from_id(id: &str) -> Option<State> {
+            match id {
+                "sl-live-i" => Some(State::SlLiveI),
+                "sl-over-i" => Some(State::SlOverI),
+                _ => None,
+            }
+        }
+    }
+
+    /// The variables of the machine.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct Vars {
+        /// Variable `issuedAt`.
+        #[serde(rename = "issuedAt")]
+        pub issued_at: prelude::Timestamp,
+        /// Variable `lastUsed`.
+        #[serde(rename = "lastUsed")]
+        pub last_used: prelude::Timestamp,
+    }
+
+    /// The payload of event `sl-used`: Session used.
+    ///
+    /// A request arrives with the session; the realm sets the idle and the absolute lifetime in hours.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct SlUsedPayload {
+        /// Field `idleHours`.
+        #[serde(rename = "idleHours")]
+        pub idle_hours: i64,
+        /// Field `absoluteHours`.
+        #[serde(rename = "absoluteHours")]
+        pub absolute_hours: i64,
+    }
+
+    /// The payload of event `sl-session-valid`: Session still valid.
+    ///
+    /// The session is accepted.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct SlSessionValidPayload {}
+
+    /// The payload of event `sl-session-ended`: Session ended by its lifetime.
+    ///
+    /// The session is refused because a lifetime has passed.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct SlSessionEndedPayload {}
+
+    /// The events machine `session-lifetime-flow-impl` receives, including those its timers fire.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Event {
+        /// Event `sl-used`: Session used.
+        #[serde(rename = "sl-used")]
+        SlUsed(SlUsedPayload),
+    }
+
+    /// The events machine `session-lifetime-flow-impl` emits.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Emitted {
+        /// Event `sl-session-valid`: Session still valid.
+        #[serde(rename = "sl-session-valid")]
+        SlSessionValid(SlSessionValidPayload),
+        /// Event `sl-session-ended`: Session ended by its lifetime.
+        #[serde(rename = "sl-session-ended")]
+        SlSessionEnded(SlSessionEndedPayload),
+    }
+
+    /// The instance key: field `session-id` of record `rec-session-lifetime`.
+    pub type Key = types::SessionId;
+
+    /// Machine `session-lifetime-flow-impl`, stored in record `rec-session-lifetime` by `session-id`.
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct SessionLifetimeFlowImpl;
+
+    /// The refusal of a step whose arithmetic overflows or divides by zero.
+    fn overflow(transition: &str) -> StepError {
+        StepError::Rejected(format!(
+            "transition {transition} overflowed or divided by zero"
+        ))
+    }
+
+    impl Machine for SessionLifetimeFlowImpl {
+        const NAME: &'static str = "session-lifetime-flow-impl";
+
+        const RECORD: &'static str = "rec-session-lifetime";
+
+        const ISOLATION: Isolation = Isolation::Serializable;
+
+        const CREATES: bool = false;
+
+        type State = State;
+
+        type Vars = Vars;
+
+        type Event = Event;
+
+        type Emitted = Emitted;
+
+        type Key = Key;
+
+        type Record = records::RecSessionLifetime;
+
+        fn initial(_key: &Key) -> (State, Vars) {
+            (
+                State::SlLiveI,
+                Vars {
+                    issued_at: prelude::Timestamp(0i64),
+                    last_used: prelude::Timestamp(0i64),
+                },
+            )
+        }
+
+        fn from_record(record: &records::RecSessionLifetime) -> Result<(State, Vars), RecordError> {
+            let state = State::from_id(&record.state).ok_or_else(|| {
+                RecordError(format!(
+                    "{:?} is not a state of machine `session-lifetime-flow-impl`",
+                    record.state
+                ))
+            })?;
+            Ok((
+                state,
+                Vars {
+                    issued_at: record.issued_at,
+                    last_used: record.last_used_at,
+                },
+            ))
+        }
+
+        fn to_record(
+            key: &Key,
+            state: &State,
+            vars: &Vars,
+            _previous: Option<&records::RecSessionLifetime>,
+        ) -> Result<records::RecSessionLifetime, RecordError> {
+            Ok(records::RecSessionLifetime {
+                session_id: key.clone(),
+                issued_at: vars.issued_at,
+                last_used_at: vars.last_used,
+                state: state.id().to_string(),
+            })
+        }
+
+        fn step(
+            state: &State,
+            vars: &Vars,
+            event: &Event,
+            now: Time,
+        ) -> Result<Outcome<Self>, StepError> {
+            match (state, event) {
+                (State::SlLiveI, Event::SlUsed(payload)) => {
+                    if now
+                        .0
+                        .checked_sub(vars.last_used.0)
+                        .ok_or(overflow("sl-accept-i"))?
+                        <= payload
+                            .idle_hours
+                            .checked_mul(3600000i64)
+                            .ok_or(overflow("sl-accept-i"))?
+                        && now
+                            .0
+                            .checked_sub(vars.issued_at.0)
+                            .ok_or(overflow("sl-accept-i"))?
+                            <= payload
+                                .absolute_hours
+                                .checked_mul(3600000i64)
+                                .ok_or(overflow("sl-accept-i"))?
+                    {
+                        let mut next = vars.clone();
+                        next.last_used = prelude::Timestamp(now.0);
+                        let emitted_2 = Emitted::SlSessionValid(SlSessionValidPayload {});
+                        Ok(Outcome::to(State::SlLiveI, next).emit(
+                            "gateway",
+                            Delivery::AtMostOnce,
+                            emitted_2,
+                        ))
+                    } else {
+                        Ok(Outcome::to(State::SlOverI, vars.clone()).emit(
+                            "gateway",
+                            Delivery::AtMostOnce,
+                            Emitted::SlSessionEnded(SlSessionEndedPayload {}),
+                        ))
+                    }
+                }
+                (State::SlOverI, Event::SlUsed(_)) => Ok(Outcome::to(State::SlOverI, vars.clone())
+                    .emit(
+                        "gateway",
+                        Delivery::AtMostOnce,
+                        Emitted::SlSessionEnded(SlSessionEndedPayload {}),
+                    )),
+            }
+        }
+    }
+}
+
+/// Second factor (implementation)
+///
+/// One sign-in attempt as the identity service keeps it (rec-sign-in-attempt): the state says whether the first factor is verified and the second is awaited. No session is issued from the waiting state except by a verified second factor.
+///
+/// Specification behavior `second-factor-flow-impl`, an implementation-level machine.
+pub mod second_factor_flow_impl {
+    use serde::{Deserialize, Serialize};
+
+    use strata_runtime::{Delivery, Isolation, Machine, Outcome, RecordError, StepError, Time};
+
+    use crate::{records, types};
+
+    /// The states of machine `second-factor-flow-impl`.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+
+    pub enum State {
+        /// State `sf-start-i`: First factor pending. Ignores `sf-second`.
+        #[serde(rename = "sf-start-i")]
+        SfStartI,
+        /// State `sf-awaiting-i`: Waiting for the second factor. Ignores `sf-primary`.
+        #[serde(rename = "sf-awaiting-i")]
+        SfAwaitingI,
+        /// State `sf-done-i`: Signed in. Ignores `sf-primary`, `sf-second`.
+        #[serde(rename = "sf-done-i")]
+        SfDoneI,
+    }
+
+    impl State {
+        /// The state's id in the specification.
+        pub fn id(self) -> &'static str {
+            match self {
+                State::SfStartI => "sf-start-i",
+                State::SfAwaitingI => "sf-awaiting-i",
+                State::SfDoneI => "sf-done-i",
+            }
+        }
+
+        /// The state with this id in the specification.
+        pub fn from_id(id: &str) -> Option<State> {
+            match id {
+                "sf-start-i" => Some(State::SfStartI),
+                "sf-awaiting-i" => Some(State::SfAwaitingI),
+                "sf-done-i" => Some(State::SfDoneI),
+                _ => None,
+            }
+        }
+    }
+
+    /// The variables of the machine.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct Vars {}
+
+    /// The payload of event `sf-primary`: First factor verified.
+    ///
+    /// The first factor of a sign-in is verified; the realm says whether it asks for a second.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct SfPrimaryPayload {
+        /// Field `secondRequired`.
+        #[serde(rename = "secondRequired")]
+        pub second_required: bool,
+    }
+
+    /// The payload of event `sf-second`: Second factor presented.
+    ///
+    /// A second factor is presented.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct SfSecondPayload {
+        /// Field `valid`.
+        pub valid: bool,
+    }
+
+    /// The payload of event `sf-session-issued`: Session issued.
+    ///
+    /// The sign-in yields a session.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct SfSessionIssuedPayload {}
+
+    /// The payload of event `sf-second-asked`: Second factor asked.
+    ///
+    /// The person is asked for a second factor.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct SfSecondAskedPayload {}
+
+    /// The payload of event `sf-refused`: Second factor refused.
+    ///
+    /// The second factor does not verify.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct SfRefusedPayload {}
+
+    /// The events machine `second-factor-flow-impl` receives, including those its timers fire.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Event {
+        /// Event `sf-primary`: First factor verified.
+        #[serde(rename = "sf-primary")]
+        SfPrimary(SfPrimaryPayload),
+        /// Event `sf-second`: Second factor presented.
+        #[serde(rename = "sf-second")]
+        SfSecond(SfSecondPayload),
+    }
+
+    /// The events machine `second-factor-flow-impl` emits.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Emitted {
+        /// Event `sf-session-issued`: Session issued.
+        #[serde(rename = "sf-session-issued")]
+        SfSessionIssued(SfSessionIssuedPayload),
+        /// Event `sf-second-asked`: Second factor asked.
+        #[serde(rename = "sf-second-asked")]
+        SfSecondAsked(SfSecondAskedPayload),
+        /// Event `sf-refused`: Second factor refused.
+        #[serde(rename = "sf-refused")]
+        SfRefused(SfRefusedPayload),
+    }
+
+    /// The instance key: field `attempt-id` of record `rec-sign-in-attempt`.
+    pub type Key = types::ChallengeId;
+
+    /// Machine `second-factor-flow-impl`, stored in record `rec-sign-in-attempt` by `attempt-id`.
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct SecondFactorFlowImpl;
+
+    impl Machine for SecondFactorFlowImpl {
+        const NAME: &'static str = "second-factor-flow-impl";
+
+        const RECORD: &'static str = "rec-sign-in-attempt";
+
+        const ISOLATION: Isolation = Isolation::Serializable;
+
+        const CREATES: bool = false;
+
+        type State = State;
+
+        type Vars = Vars;
+
+        type Event = Event;
+
+        type Emitted = Emitted;
+
+        type Key = Key;
+
+        type Record = records::RecSignInAttempt;
+
+        fn initial(_key: &Key) -> (State, Vars) {
+            (State::SfStartI, Vars {})
+        }
+
+        fn from_record(record: &records::RecSignInAttempt) -> Result<(State, Vars), RecordError> {
+            let state = State::from_id(&record.state).ok_or_else(|| {
+                RecordError(format!(
+                    "{:?} is not a state of machine `second-factor-flow-impl`",
+                    record.state
+                ))
+            })?;
+            Ok((state, Vars {}))
+        }
+
+        fn to_record(
+            key: &Key,
+            state: &State,
+            _vars: &Vars,
+            _previous: Option<&records::RecSignInAttempt>,
+        ) -> Result<records::RecSignInAttempt, RecordError> {
+            Ok(records::RecSignInAttempt {
+                attempt_id: key.clone(),
+                state: state.id().to_string(),
+            })
+        }
+
+        fn step(
+            state: &State,
+            vars: &Vars,
+            event: &Event,
+            _now: Time,
+        ) -> Result<Outcome<Self>, StepError> {
+            match (state, event) {
+                (State::SfStartI, Event::SfPrimary(payload)) => {
+                    if payload.second_required {
+                        Ok(Outcome::to(State::SfAwaitingI, vars.clone()).emit(
+                            "web-application",
+                            Delivery::AtMostOnce,
+                            Emitted::SfSecondAsked(SfSecondAskedPayload {}),
+                        ))
+                    } else {
+                        Ok(Outcome::to(State::SfDoneI, vars.clone()).emit(
+                            "web-application",
+                            Delivery::AtMostOnce,
+                            Emitted::SfSessionIssued(SfSessionIssuedPayload {}),
+                        ))
+                    }
+                }
+                (State::SfAwaitingI, Event::SfSecond(payload)) => {
+                    if payload.valid {
+                        Ok(Outcome::to(State::SfDoneI, vars.clone()).emit(
+                            "web-application",
+                            Delivery::AtMostOnce,
+                            Emitted::SfSessionIssued(SfSessionIssuedPayload {}),
+                        ))
+                    } else {
+                        Ok(Outcome::to(State::SfAwaitingI, vars.clone()).emit(
+                            "web-application",
+                            Delivery::AtMostOnce,
+                            Emitted::SfRefused(SfRefusedPayload {}),
+                        ))
+                    }
+                }
+                _ => Ok(Outcome::to(*state, vars.clone())),
+            }
+        }
+    }
+}
+
+/// Account recovery (implementation)
+///
+/// One account recovery as the identity service keeps it (rec-recovery-request): the number of contacts, the number told, the time of the request in milliseconds and whether the second factor is in force. The delay of 24 hours is 86400000 ms; the refinement reads one model tick as one hour (timeScale 3600000).
+///
+/// Specification behavior `recovery-flow-impl`, an implementation-level machine.
+pub mod recovery_flow_impl {
+    use serde::{Deserialize, Serialize};
+
+    use strata_runtime::{Delivery, Isolation, Machine, Outcome, RecordError, StepError, Time};
+
+    use crate::{prelude, records, types};
+
+    /// The states of machine `recovery-flow-impl`.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+
+    pub enum State {
+        /// State `rc-none-i`: No recovery. Ignores `rc-completion-asked`, `rc-signed-in`.
+        #[serde(rename = "rc-none-i")]
+        RcNoneI,
+        /// State `rc-waiting-i`: Waiting out the delay. Ignores `rc-requested`, `rc-signed-in`.
+        #[serde(rename = "rc-waiting-i")]
+        RcWaitingI,
+        /// State `rc-recovered-i`: Recovered. Ignores `rc-requested`, `rc-completion-asked`.
+        #[serde(rename = "rc-recovered-i")]
+        RcRecoveredI,
+    }
+
+    impl State {
+        /// The state's id in the specification.
+        pub fn id(self) -> &'static str {
+            match self {
+                State::RcNoneI => "rc-none-i",
+                State::RcWaitingI => "rc-waiting-i",
+                State::RcRecoveredI => "rc-recovered-i",
+            }
+        }
+
+        /// The state with this id in the specification.
+        pub fn from_id(id: &str) -> Option<State> {
+            match id {
+                "rc-none-i" => Some(State::RcNoneI),
+                "rc-waiting-i" => Some(State::RcWaitingI),
+                "rc-recovered-i" => Some(State::RcRecoveredI),
+                _ => None,
+            }
+        }
+    }
+
+    /// The variables of the machine.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct Vars {
+        /// Variable `contacts`.
+        pub contacts: u64,
+        /// Variable `notified`.
+        pub notified: u64,
+        /// Variable `requestedAt`.
+        #[serde(rename = "requestedAt")]
+        pub requested_at: prelude::Timestamp,
+        /// Variable `secondFactor`.
+        #[serde(rename = "secondFactor")]
+        pub second_factor: bool,
+    }
+
+    /// The payload of event `rc-requested`: Recovery requested.
+    ///
+    /// A person asks to recover an account; the account has contacts.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct RcRequestedPayload {
+        /// Field `contacts`.
+        pub contacts: u64,
+    }
+
+    /// The payload of event `rc-completion-asked`: Recovery completion asked.
+    ///
+    /// The recovery is asked to complete.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct RcCompletionAskedPayload {}
+
+    /// The payload of event `rc-signed-in`: Sign-in after recovery.
+    ///
+    /// The person signs in after the recovery.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct RcSignedInPayload {}
+
+    /// The payload of event `rc-notice`: Recovery notice sent.
+    ///
+    /// Every registered contact of the account is told of the recovery.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct RcNoticePayload {}
+
+    /// The payload of event `rc-completed`: Recovery completed.
+    ///
+    /// The recovery completes.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct RcCompletedPayload {}
+
+    /// The payload of event `rc-too-early`: Recovery not yet due.
+    ///
+    /// The recovery cannot complete yet.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct RcTooEarlyPayload {}
+
+    /// The payload of event `rc-second-factor-asked`: Second factor asked after recovery.
+    ///
+    /// The sign-in asks for the second factor.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct RcSecondFactorAskedPayload {}
+
+    /// The payload of event `rc-session-issued`: Session issued after recovery.
+    ///
+    /// The sign-in yields a session without a second factor.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct RcSessionIssuedPayload {}
+
+    /// The events machine `recovery-flow-impl` receives, including those its timers fire.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Event {
+        /// Event `rc-requested`: Recovery requested.
+        #[serde(rename = "rc-requested")]
+        RcRequested(RcRequestedPayload),
+        /// Event `rc-completion-asked`: Recovery completion asked.
+        #[serde(rename = "rc-completion-asked")]
+        RcCompletionAsked(RcCompletionAskedPayload),
+        /// Event `rc-signed-in`: Sign-in after recovery.
+        #[serde(rename = "rc-signed-in")]
+        RcSignedIn(RcSignedInPayload),
+    }
+
+    /// The events machine `recovery-flow-impl` emits.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Emitted {
+        /// Event `rc-notice`: Recovery notice sent.
+        #[serde(rename = "rc-notice")]
+        RcNotice(RcNoticePayload),
+        /// Event `rc-completed`: Recovery completed.
+        #[serde(rename = "rc-completed")]
+        RcCompleted(RcCompletedPayload),
+        /// Event `rc-too-early`: Recovery not yet due.
+        #[serde(rename = "rc-too-early")]
+        RcTooEarly(RcTooEarlyPayload),
+        /// Event `rc-second-factor-asked`: Second factor asked after recovery.
+        #[serde(rename = "rc-second-factor-asked")]
+        RcSecondFactorAsked(RcSecondFactorAskedPayload),
+        /// Event `rc-session-issued`: Session issued after recovery.
+        #[serde(rename = "rc-session-issued")]
+        RcSessionIssued(RcSessionIssuedPayload),
+    }
+
+    /// The instance key: field `recovery-id` of record `rec-recovery-request`.
+    pub type Key = types::RequestId;
+
+    /// Machine `recovery-flow-impl`, stored in record `rec-recovery-request` by `recovery-id`.
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct RecoveryFlowImpl;
+
+    /// The refusal of a step whose arithmetic overflows or divides by zero.
+    fn overflow(transition: &str) -> StepError {
+        StepError::Rejected(format!(
+            "transition {transition} overflowed or divided by zero"
+        ))
+    }
+
+    impl Machine for RecoveryFlowImpl {
+        const NAME: &'static str = "recovery-flow-impl";
+
+        const RECORD: &'static str = "rec-recovery-request";
+
+        const ISOLATION: Isolation = Isolation::Serializable;
+
+        const CREATES: bool = false;
+
+        type State = State;
+
+        type Vars = Vars;
+
+        type Event = Event;
+
+        type Emitted = Emitted;
+
+        type Key = Key;
+
+        type Record = records::RecRecoveryRequest;
+
+        fn initial(_key: &Key) -> (State, Vars) {
+            (
+                State::RcNoneI,
+                Vars {
+                    contacts: 0u64,
+                    notified: 0u64,
+                    requested_at: prelude::Timestamp(0i64),
+                    second_factor: true,
+                },
+            )
+        }
+
+        fn from_record(record: &records::RecRecoveryRequest) -> Result<(State, Vars), RecordError> {
+            let state = State::from_id(&record.state).ok_or_else(|| {
+                RecordError(format!(
+                    "{:?} is not a state of machine `recovery-flow-impl`",
+                    record.state
+                ))
+            })?;
+            Ok((
+                state,
+                Vars {
+                    contacts: match &record.contacts {
+                        Some(v) => *v,
+                        None => 0u64,
+                    },
+                    notified: match &record.notified {
+                        Some(v) => *v,
+                        None => 0u64,
+                    },
+                    requested_at: match &record.requested_at {
+                        Some(v) => *v,
+                        None => prelude::Timestamp(0i64),
+                    },
+                    second_factor: match &record.second_factor {
+                        Some(v) => *v,
+                        None => true,
+                    },
+                },
+            ))
+        }
+
+        fn to_record(
+            key: &Key,
+            state: &State,
+            vars: &Vars,
+            _previous: Option<&records::RecRecoveryRequest>,
+        ) -> Result<records::RecRecoveryRequest, RecordError> {
+            Ok(records::RecRecoveryRequest {
+                recovery_id: key.clone(),
+                contacts: Some(vars.contacts),
+                notified: Some(vars.notified),
+                requested_at: Some(vars.requested_at),
+                second_factor: Some(vars.second_factor),
+                state: state.id().to_string(),
+            })
+        }
+
+        fn step(
+            state: &State,
+            vars: &Vars,
+            event: &Event,
+            now: Time,
+        ) -> Result<Outcome<Self>, StepError> {
+            match (state, event) {
+                (State::RcNoneI, Event::RcRequested(payload)) => {
+                    let mut next = vars.clone();
+                    next.contacts = payload.contacts;
+                    next.notified = payload.contacts;
+                    next.requested_at = prelude::Timestamp(now.0);
+                    let emitted_4 = Emitted::RcNotice(RcNoticePayload {});
+                    Ok(Outcome::to(State::RcWaitingI, next).emit(
+                        "mail-service",
+                        Delivery::AtMostOnce,
+                        emitted_4,
+                    ))
+                }
+                (State::RcWaitingI, Event::RcCompletionAsked(_)) => {
+                    if now
+                        .0
+                        .checked_sub(vars.requested_at.0)
+                        .ok_or(overflow("rc-complete-i"))?
+                        >= 86400000i64
+                        && vars.notified == vars.contacts
+                    {
+                        Ok(Outcome::to(State::RcRecoveredI, vars.clone()).emit(
+                            "web-application",
+                            Delivery::AtMostOnce,
+                            Emitted::RcCompleted(RcCompletedPayload {}),
+                        ))
+                    } else {
+                        Ok(Outcome::to(State::RcWaitingI, vars.clone()).emit(
+                            "web-application",
+                            Delivery::AtMostOnce,
+                            Emitted::RcTooEarly(RcTooEarlyPayload {}),
+                        ))
+                    }
+                }
+                (State::RcRecoveredI, Event::RcSignedIn(_)) => {
+                    if vars.second_factor {
+                        Ok(Outcome::to(State::RcRecoveredI, vars.clone()).emit(
+                            "web-application",
+                            Delivery::AtMostOnce,
+                            Emitted::RcSecondFactorAsked(RcSecondFactorAskedPayload {}),
+                        ))
+                    } else {
+                        Ok(Outcome::to(State::RcRecoveredI, vars.clone()).emit(
+                            "web-application",
+                            Delivery::AtMostOnce,
+                            Emitted::RcSessionIssued(RcSessionIssuedPayload {}),
+                        ))
+                    }
+                }
+                _ => Ok(Outcome::to(*state, vars.clone())),
+            }
+        }
+    }
+}
+
+/// One-time code (implementation)
+///
+/// One one-time code as the identity service keeps it (rec-one-time-code): the count of failed presentations and whether it is spent. The fifth failure spends it.
+///
+/// Specification behavior `code-spend-flow-impl`, an implementation-level machine.
+pub mod code_spend_flow_impl {
+    use serde::{Deserialize, Serialize};
+
+    use strata_runtime::{Delivery, Isolation, Machine, Outcome, RecordError, StepError, Time};
+
+    use crate::{records, types};
+
+    /// The states of machine `code-spend-flow-impl`.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+
+    pub enum State {
+        /// State `cs-live-i`: Live.
+        #[serde(rename = "cs-live-i")]
+        CsLiveI,
+        /// State `cs-spent-i`: Spent.
+        #[serde(rename = "cs-spent-i")]
+        CsSpentI,
+    }
+
+    impl State {
+        /// The state's id in the specification.
+        pub fn id(self) -> &'static str {
+            match self {
+                State::CsLiveI => "cs-live-i",
+                State::CsSpentI => "cs-spent-i",
+            }
+        }
+
+        /// The state with this id in the specification.
+        pub fn from_id(id: &str) -> Option<State> {
+            match id {
+                "cs-live-i" => Some(State::CsLiveI),
+                "cs-spent-i" => Some(State::CsSpentI),
+                _ => None,
+            }
+        }
+    }
+
+    /// The variables of the machine.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct Vars {
+        /// Variable `failures`.
+        pub failures: u64,
+    }
+
+    /// The payload of event `cs-presented`: One-time code presented.
+    ///
+    /// A one-time code is presented.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct CsPresentedPayload {
+        /// Field `guess`.
+        pub guess: String,
+    }
+
+    /// The payload of event `cs-accepted`: One-time code accepted.
+    ///
+    /// The code is accepted.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct CsAcceptedPayload {}
+
+    /// The payload of event `cs-refused`: One-time code refused.
+    ///
+    /// The code is refused.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct CsRefusedPayload {}
+
+    /// The events machine `code-spend-flow-impl` receives, including those its timers fire.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Event {
+        /// Event `cs-presented`: One-time code presented.
+        #[serde(rename = "cs-presented")]
+        CsPresented(CsPresentedPayload),
+    }
+
+    /// The events machine `code-spend-flow-impl` emits.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Emitted {
+        /// Event `cs-accepted`: One-time code accepted.
+        #[serde(rename = "cs-accepted")]
+        CsAccepted(CsAcceptedPayload),
+        /// Event `cs-refused`: One-time code refused.
+        #[serde(rename = "cs-refused")]
+        CsRefused(CsRefusedPayload),
+    }
+
+    /// The instance key: field `code-id` of record `rec-one-time-code`.
+    pub type Key = types::ChallengeId;
+
+    /// Machine `code-spend-flow-impl`, stored in record `rec-one-time-code` by `code-id`.
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct CodeSpendFlowImpl;
+
+    /// The refusal of a step whose arithmetic overflows or divides by zero.
+    fn overflow(transition: &str) -> StepError {
+        StepError::Rejected(format!(
+            "transition {transition} overflowed or divided by zero"
+        ))
+    }
+
+    impl Machine for CodeSpendFlowImpl {
+        const NAME: &'static str = "code-spend-flow-impl";
+
+        const RECORD: &'static str = "rec-one-time-code";
+
+        const ISOLATION: Isolation = Isolation::Serializable;
+
+        const CREATES: bool = false;
+
+        type State = State;
+
+        type Vars = Vars;
+
+        type Event = Event;
+
+        type Emitted = Emitted;
+
+        type Key = Key;
+
+        type Record = records::RecOneTimeCode;
+
+        fn initial(_key: &Key) -> (State, Vars) {
+            (State::CsLiveI, Vars { failures: 0u64 })
+        }
+
+        fn from_record(record: &records::RecOneTimeCode) -> Result<(State, Vars), RecordError> {
+            let state = State::from_id(&record.state).ok_or_else(|| {
+                RecordError(format!(
+                    "{:?} is not a state of machine `code-spend-flow-impl`",
+                    record.state
+                ))
+            })?;
+            Ok((
+                state,
+                Vars {
+                    failures: record.failures,
+                },
+            ))
+        }
+
+        fn to_record(
+            key: &Key,
+            state: &State,
+            vars: &Vars,
+            _previous: Option<&records::RecOneTimeCode>,
+        ) -> Result<records::RecOneTimeCode, RecordError> {
+            Ok(records::RecOneTimeCode {
+                code_id: key.clone(),
+                failures: vars.failures,
+                state: state.id().to_string(),
+            })
+        }
+
+        fn step(
+            state: &State,
+            vars: &Vars,
+            event: &Event,
+            _now: Time,
+        ) -> Result<Outcome<Self>, StepError> {
+            match (state, event) {
+                (State::CsLiveI, Event::CsPresented(payload)) => {
+                    if payload.guess == "right" {
+                        Ok(Outcome::to(State::CsSpentI, vars.clone()).emit(
+                            "web-application",
+                            Delivery::AtMostOnce,
+                            Emitted::CsAccepted(CsAcceptedPayload {}),
+                        ))
+                    } else {
+                        if payload.guess == "wrong" && vars.failures == 4u64 {
+                            let mut next = vars.clone();
+                            next.failures = next
+                                .failures
+                                .checked_add(1u64)
+                                .ok_or(overflow("cs-wrong-last-i"))?;
+                            let emitted_2 = Emitted::CsRefused(CsRefusedPayload {});
+                            Ok(Outcome::to(State::CsSpentI, next).emit(
+                                "web-application",
+                                Delivery::AtMostOnce,
+                                emitted_2,
+                            ))
+                        } else {
+                            if payload.guess == "wrong" {
+                                let mut next = vars.clone();
+                                next.failures = next
+                                    .failures
+                                    .checked_add(1u64)
+                                    .ok_or(overflow("cs-wrong-i"))?;
+                                let emitted_2 = Emitted::CsRefused(CsRefusedPayload {});
+                                Ok(Outcome::to(State::CsLiveI, next).emit(
+                                    "web-application",
+                                    Delivery::AtMostOnce,
+                                    emitted_2,
+                                ))
+                            } else {
+                                Ok(Outcome::to(*state, vars.clone()))
+                            }
+                        }
+                    }
+                }
+                (State::CsSpentI, Event::CsPresented(_)) => {
+                    Ok(Outcome::to(State::CsSpentI, vars.clone()).emit(
+                        "web-application",
+                        Delivery::AtMostOnce,
+                        Emitted::CsRefused(CsRefusedPayload {}),
+                    ))
+                }
+            }
+        }
+    }
+}
+
+/// Second-factor prompt limit (implementation)
+///
+/// The counter of one key in the limit store (rec-identity-limit): the number of requests in the open window, the time the window opened in milliseconds and the limit. The window is one hour; the refinement reads one model tick as one minute (timeScale 60000).
+///
+/// Specification behavior `mfp-limit-flow-impl`, an implementation-level machine.
+pub mod mfp_limit_flow_impl {
+    use serde::{Deserialize, Serialize};
+
+    use strata_runtime::{Delivery, Isolation, Machine, Outcome, RecordError, StepError, Time};
+
+    use crate::{prelude, records};
+
+    /// The states of machine `mfp-limit-flow-impl`.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+
+    pub enum State {
+        /// State `mfp-open-i`: Counting.
+        #[serde(rename = "mfp-open-i")]
+        MfpOpenI,
+    }
+
+    impl State {
+        /// The state's id in the specification.
+        pub fn id(self) -> &'static str {
+            match self {
+                State::MfpOpenI => "mfp-open-i",
+            }
+        }
+
+        /// The state with this id in the specification.
+        pub fn from_id(id: &str) -> Option<State> {
+            match id {
+                "mfp-open-i" => Some(State::MfpOpenI),
+                _ => None,
+            }
+        }
+    }
+
+    /// The variables of the machine.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct Vars {
+        /// Variable `count`.
+        pub count: u64,
+        /// Variable `windowStart`.
+        #[serde(rename = "windowStart")]
+        pub window_start: prelude::Timestamp,
+        /// Variable `limit`.
+        pub limit: u64,
+    }
+
+    /// The payload of event `mfp-requested`: Second-factor prompt requested.
+    ///
+    /// A second-factor prompt is to be sent to the account.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct MfpRequestedPayload {}
+
+    /// The payload of event `mfp-tightened`: Second-factor prompt requested tightened.
+    ///
+    /// The realm tightens the limit (D-535).
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct MfpTightenedPayload {
+        /// Field `limit`.
+        pub limit: u64,
+    }
+
+    /// The payload of event `mfp-accepted`: Second-factor prompt sent.
+    ///
+    /// The request is allowed.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct MfpAcceptedPayload {}
+
+    /// The payload of event `mfp-refused`: Second-factor prompt refused.
+    ///
+    /// The request is refused because the limit is reached.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct MfpRefusedPayload {}
+
+    /// The events machine `mfp-limit-flow-impl` receives, including those its timers fire.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Event {
+        /// Event `mfp-requested`: Second-factor prompt requested.
+        #[serde(rename = "mfp-requested")]
+        MfpRequested(MfpRequestedPayload),
+        /// Event `mfp-tightened`: Second-factor prompt requested tightened.
+        #[serde(rename = "mfp-tightened")]
+        MfpTightened(MfpTightenedPayload),
+    }
+
+    /// The events machine `mfp-limit-flow-impl` emits.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Emitted {
+        /// Event `mfp-accepted`: Second-factor prompt sent.
+        #[serde(rename = "mfp-accepted")]
+        MfpAccepted(MfpAcceptedPayload),
+        /// Event `mfp-refused`: Second-factor prompt refused.
+        #[serde(rename = "mfp-refused")]
+        MfpRefused(MfpRefusedPayload),
+    }
+
+    /// The instance key: field `limit-key` of record `rec-identity-limit`.
+    pub type Key = String;
+
+    /// Machine `mfp-limit-flow-impl`, stored in record `rec-identity-limit` by `limit-key`.
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct MfpLimitFlowImpl;
+
+    /// The refusal of a step whose arithmetic overflows or divides by zero.
+    fn overflow(transition: &str) -> StepError {
+        StepError::Rejected(format!(
+            "transition {transition} overflowed or divided by zero"
+        ))
+    }
+
+    impl Machine for MfpLimitFlowImpl {
+        const NAME: &'static str = "mfp-limit-flow-impl";
+
+        const RECORD: &'static str = "rec-identity-limit";
+
+        const ISOLATION: Isolation = Isolation::Serializable;
+
+        const CREATES: bool = false;
+
+        type State = State;
+
+        type Vars = Vars;
+
+        type Event = Event;
+
+        type Emitted = Emitted;
+
+        type Key = Key;
+
+        type Record = records::RecIdentityLimit;
+
+        fn initial(_key: &Key) -> (State, Vars) {
+            (
+                State::MfpOpenI,
+                Vars {
+                    count: 0u64,
+                    window_start: prelude::Timestamp(0i64),
+                    limit: 5u64,
+                },
+            )
+        }
+
+        fn from_record(record: &records::RecIdentityLimit) -> Result<(State, Vars), RecordError> {
+            let state = State::MfpOpenI;
+            Ok((
+                state,
+                Vars {
+                    count: match &record.count {
+                        Some(v) => *v,
+                        None => 0u64,
+                    },
+                    window_start: match &record.window_started_at {
+                        Some(v) => *v,
+                        None => prelude::Timestamp(0i64),
+                    },
+                    limit: match &record.limit {
+                        Some(v) => *v,
+                        None => 5u64,
+                    },
+                },
+            ))
+        }
+
+        fn to_record(
+            key: &Key,
+            _state: &State,
+            vars: &Vars,
+            previous: Option<&records::RecIdentityLimit>,
+        ) -> Result<records::RecIdentityLimit, RecordError> {
+            let Some(previous) = previous else {
+                return Err(
+                    RecordError(
+                        "machine `mfp-limit-flow-impl` does not create records of `rec-identity-limit`, and the key has none"
+                            .to_string(),
+                    ),
+                );
+            };
+            Ok(records::RecIdentityLimit {
+                limit_key: key.clone(),
+                count: Some(vars.count),
+                failures: previous.failures,
+                window_started_at: Some(vars.window_start),
+                limit: Some(vars.limit),
+            })
+        }
+
+        fn step(
+            state: &State,
+            vars: &Vars,
+            event: &Event,
+            now: Time,
+        ) -> Result<Outcome<Self>, StepError> {
+            match (state, event) {
+                (State::MfpOpenI, Event::MfpRequested(_)) => {
+                    if now
+                        .0
+                        .checked_sub(vars.window_start.0)
+                        .ok_or(overflow("mfp-new-window-i"))?
+                        >= 3600000i64
+                    {
+                        let mut next = vars.clone();
+                        next.window_start = prelude::Timestamp(now.0);
+                        next.count = 1u64;
+                        let emitted_3 = Emitted::MfpAccepted(MfpAcceptedPayload {});
+                        Ok(Outcome::to(State::MfpOpenI, next).emit(
+                            "web-application",
+                            Delivery::AtMostOnce,
+                            emitted_3,
+                        ))
+                    } else {
+                        if vars.count < vars.limit {
+                            let mut next = vars.clone();
+                            next.count = next
+                                .count
+                                .checked_add(1u64)
+                                .ok_or(overflow("mfp-accept-i"))?;
+                            let emitted_2 = Emitted::MfpAccepted(MfpAcceptedPayload {});
+                            Ok(Outcome::to(State::MfpOpenI, next).emit(
+                                "web-application",
+                                Delivery::AtMostOnce,
+                                emitted_2,
+                            ))
+                        } else {
+                            Ok(Outcome::to(State::MfpOpenI, vars.clone()).emit(
+                                "web-application",
+                                Delivery::AtMostOnce,
+                                Emitted::MfpRefused(MfpRefusedPayload {}),
+                            ))
+                        }
+                    }
+                }
+                (State::MfpOpenI, Event::MfpTightened(payload)) => {
+                    if payload.limit < vars.limit {
+                        let mut next = vars.clone();
+                        next.limit = payload.limit;
+                        Ok(Outcome::to(State::MfpOpenI, next))
+                    } else {
+                        Ok(Outcome::to(*state, vars.clone()))
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Emailed-link limit per address (implementation)
+///
+/// The counter of one key in the limit store (rec-identity-limit): the number of requests in the open window, the time the window opened in milliseconds and the limit. The window is one hour; the refinement reads one model tick as one minute (timeScale 60000).
+///
+/// Specification behavior `lea-limit-flow-impl`, an implementation-level machine.
+pub mod lea_limit_flow_impl {
+    use serde::{Deserialize, Serialize};
+
+    use strata_runtime::{Delivery, Isolation, Machine, Outcome, RecordError, StepError, Time};
+
+    use crate::{prelude, records};
+
+    /// The states of machine `lea-limit-flow-impl`.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+
+    pub enum State {
+        /// State `lea-open-i`: Counting.
+        #[serde(rename = "lea-open-i")]
+        LeaOpenI,
+    }
+
+    impl State {
+        /// The state's id in the specification.
+        pub fn id(self) -> &'static str {
+            match self {
+                State::LeaOpenI => "lea-open-i",
+            }
+        }
+
+        /// The state with this id in the specification.
+        pub fn from_id(id: &str) -> Option<State> {
+            match id {
+                "lea-open-i" => Some(State::LeaOpenI),
+                _ => None,
+            }
+        }
+    }
+
+    /// The variables of the machine.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct Vars {
+        /// Variable `count`.
+        pub count: u64,
+        /// Variable `windowStart`.
+        #[serde(rename = "windowStart")]
+        pub window_start: prelude::Timestamp,
+        /// Variable `limit`.
+        pub limit: u64,
+    }
+
+    /// The payload of event `lea-requested`: Link requested for an address.
+    ///
+    /// A sign-in link is requested for the address.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct LeaRequestedPayload {}
+
+    /// The payload of event `lea-tightened`: Link requested for an address tightened.
+    ///
+    /// The realm tightens the limit (D-535).
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct LeaTightenedPayload {
+        /// Field `limit`.
+        pub limit: u64,
+    }
+
+    /// The payload of event `lea-accepted`: Link sent to the address.
+    ///
+    /// The request is allowed.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct LeaAcceptedPayload {}
+
+    /// The payload of event `lea-refused`: Link refused for the address.
+    ///
+    /// The request is refused because the limit is reached.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct LeaRefusedPayload {}
+
+    /// The events machine `lea-limit-flow-impl` receives, including those its timers fire.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Event {
+        /// Event `lea-requested`: Link requested for an address.
+        #[serde(rename = "lea-requested")]
+        LeaRequested(LeaRequestedPayload),
+        /// Event `lea-tightened`: Link requested for an address tightened.
+        #[serde(rename = "lea-tightened")]
+        LeaTightened(LeaTightenedPayload),
+    }
+
+    /// The events machine `lea-limit-flow-impl` emits.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Emitted {
+        /// Event `lea-accepted`: Link sent to the address.
+        #[serde(rename = "lea-accepted")]
+        LeaAccepted(LeaAcceptedPayload),
+        /// Event `lea-refused`: Link refused for the address.
+        #[serde(rename = "lea-refused")]
+        LeaRefused(LeaRefusedPayload),
+    }
+
+    /// The instance key: field `limit-key` of record `rec-identity-limit`.
+    pub type Key = String;
+
+    /// Machine `lea-limit-flow-impl`, stored in record `rec-identity-limit` by `limit-key`.
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct LeaLimitFlowImpl;
+
+    /// The refusal of a step whose arithmetic overflows or divides by zero.
+    fn overflow(transition: &str) -> StepError {
+        StepError::Rejected(format!(
+            "transition {transition} overflowed or divided by zero"
+        ))
+    }
+
+    impl Machine for LeaLimitFlowImpl {
+        const NAME: &'static str = "lea-limit-flow-impl";
+
+        const RECORD: &'static str = "rec-identity-limit";
+
+        const ISOLATION: Isolation = Isolation::Serializable;
+
+        const CREATES: bool = false;
+
+        type State = State;
+
+        type Vars = Vars;
+
+        type Event = Event;
+
+        type Emitted = Emitted;
+
+        type Key = Key;
+
+        type Record = records::RecIdentityLimit;
+
+        fn initial(_key: &Key) -> (State, Vars) {
+            (
+                State::LeaOpenI,
+                Vars {
+                    count: 0u64,
+                    window_start: prelude::Timestamp(0i64),
+                    limit: 5u64,
+                },
+            )
+        }
+
+        fn from_record(record: &records::RecIdentityLimit) -> Result<(State, Vars), RecordError> {
+            let state = State::LeaOpenI;
+            Ok((
+                state,
+                Vars {
+                    count: match &record.count {
+                        Some(v) => *v,
+                        None => 0u64,
+                    },
+                    window_start: match &record.window_started_at {
+                        Some(v) => *v,
+                        None => prelude::Timestamp(0i64),
+                    },
+                    limit: match &record.limit {
+                        Some(v) => *v,
+                        None => 5u64,
+                    },
+                },
+            ))
+        }
+
+        fn to_record(
+            key: &Key,
+            _state: &State,
+            vars: &Vars,
+            previous: Option<&records::RecIdentityLimit>,
+        ) -> Result<records::RecIdentityLimit, RecordError> {
+            let Some(previous) = previous else {
+                return Err(
+                    RecordError(
+                        "machine `lea-limit-flow-impl` does not create records of `rec-identity-limit`, and the key has none"
+                            .to_string(),
+                    ),
+                );
+            };
+            Ok(records::RecIdentityLimit {
+                limit_key: key.clone(),
+                count: Some(vars.count),
+                failures: previous.failures,
+                window_started_at: Some(vars.window_start),
+                limit: Some(vars.limit),
+            })
+        }
+
+        fn step(
+            state: &State,
+            vars: &Vars,
+            event: &Event,
+            now: Time,
+        ) -> Result<Outcome<Self>, StepError> {
+            match (state, event) {
+                (State::LeaOpenI, Event::LeaRequested(_)) => {
+                    if now
+                        .0
+                        .checked_sub(vars.window_start.0)
+                        .ok_or(overflow("lea-new-window-i"))?
+                        >= 3600000i64
+                    {
+                        let mut next = vars.clone();
+                        next.window_start = prelude::Timestamp(now.0);
+                        next.count = 1u64;
+                        let emitted_3 = Emitted::LeaAccepted(LeaAcceptedPayload {});
+                        Ok(Outcome::to(State::LeaOpenI, next).emit(
+                            "web-application",
+                            Delivery::AtMostOnce,
+                            emitted_3,
+                        ))
+                    } else {
+                        if vars.count < vars.limit {
+                            let mut next = vars.clone();
+                            next.count = next
+                                .count
+                                .checked_add(1u64)
+                                .ok_or(overflow("lea-accept-i"))?;
+                            let emitted_2 = Emitted::LeaAccepted(LeaAcceptedPayload {});
+                            Ok(Outcome::to(State::LeaOpenI, next).emit(
+                                "web-application",
+                                Delivery::AtMostOnce,
+                                emitted_2,
+                            ))
+                        } else {
+                            Ok(Outcome::to(State::LeaOpenI, vars.clone()).emit(
+                                "web-application",
+                                Delivery::AtMostOnce,
+                                Emitted::LeaRefused(LeaRefusedPayload {}),
+                            ))
+                        }
+                    }
+                }
+                (State::LeaOpenI, Event::LeaTightened(payload)) => {
+                    if payload.limit < vars.limit {
+                        let mut next = vars.clone();
+                        next.limit = payload.limit;
+                        Ok(Outcome::to(State::LeaOpenI, next))
+                    } else {
+                        Ok(Outcome::to(*state, vars.clone()))
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Emailed-link limit per browser (implementation)
+///
+/// The counter of one key in the limit store (rec-identity-limit): the number of requests in the open window, the time the window opened in milliseconds and the limit. The window is one hour; the refinement reads one model tick as one minute (timeScale 60000).
+///
+/// Specification behavior `leb-limit-flow-impl`, an implementation-level machine.
+pub mod leb_limit_flow_impl {
+    use serde::{Deserialize, Serialize};
+
+    use strata_runtime::{Delivery, Isolation, Machine, Outcome, RecordError, StepError, Time};
+
+    use crate::{prelude, records};
+
+    /// The states of machine `leb-limit-flow-impl`.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+
+    pub enum State {
+        /// State `leb-open-i`: Counting.
+        #[serde(rename = "leb-open-i")]
+        LebOpenI,
+    }
+
+    impl State {
+        /// The state's id in the specification.
+        pub fn id(self) -> &'static str {
+            match self {
+                State::LebOpenI => "leb-open-i",
+            }
+        }
+
+        /// The state with this id in the specification.
+        pub fn from_id(id: &str) -> Option<State> {
+            match id {
+                "leb-open-i" => Some(State::LebOpenI),
+                _ => None,
+            }
+        }
+    }
+
+    /// The variables of the machine.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct Vars {
+        /// Variable `count`.
+        pub count: u64,
+        /// Variable `windowStart`.
+        #[serde(rename = "windowStart")]
+        pub window_start: prelude::Timestamp,
+        /// Variable `limit`.
+        pub limit: u64,
+    }
+
+    /// The payload of event `leb-requested`: Link requested from a browser.
+    ///
+    /// A sign-in link is requested from the browser.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct LebRequestedPayload {}
+
+    /// The payload of event `leb-tightened`: Link requested from a browser tightened.
+    ///
+    /// The realm tightens the limit (D-535).
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct LebTightenedPayload {
+        /// Field `limit`.
+        pub limit: u64,
+    }
+
+    /// The payload of event `leb-accepted`: Link sent for the browser.
+    ///
+    /// The request is allowed.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct LebAcceptedPayload {}
+
+    /// The payload of event `leb-refused`: Link refused for the browser.
+    ///
+    /// The request is refused because the limit is reached.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct LebRefusedPayload {}
+
+    /// The events machine `leb-limit-flow-impl` receives, including those its timers fire.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Event {
+        /// Event `leb-requested`: Link requested from a browser.
+        #[serde(rename = "leb-requested")]
+        LebRequested(LebRequestedPayload),
+        /// Event `leb-tightened`: Link requested from a browser tightened.
+        #[serde(rename = "leb-tightened")]
+        LebTightened(LebTightenedPayload),
+    }
+
+    /// The events machine `leb-limit-flow-impl` emits.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Emitted {
+        /// Event `leb-accepted`: Link sent for the browser.
+        #[serde(rename = "leb-accepted")]
+        LebAccepted(LebAcceptedPayload),
+        /// Event `leb-refused`: Link refused for the browser.
+        #[serde(rename = "leb-refused")]
+        LebRefused(LebRefusedPayload),
+    }
+
+    /// The instance key: field `limit-key` of record `rec-identity-limit`.
+    pub type Key = String;
+
+    /// Machine `leb-limit-flow-impl`, stored in record `rec-identity-limit` by `limit-key`.
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct LebLimitFlowImpl;
+
+    /// The refusal of a step whose arithmetic overflows or divides by zero.
+    fn overflow(transition: &str) -> StepError {
+        StepError::Rejected(format!(
+            "transition {transition} overflowed or divided by zero"
+        ))
+    }
+
+    impl Machine for LebLimitFlowImpl {
+        const NAME: &'static str = "leb-limit-flow-impl";
+
+        const RECORD: &'static str = "rec-identity-limit";
+
+        const ISOLATION: Isolation = Isolation::Serializable;
+
+        const CREATES: bool = false;
+
+        type State = State;
+
+        type Vars = Vars;
+
+        type Event = Event;
+
+        type Emitted = Emitted;
+
+        type Key = Key;
+
+        type Record = records::RecIdentityLimit;
+
+        fn initial(_key: &Key) -> (State, Vars) {
+            (
+                State::LebOpenI,
+                Vars {
+                    count: 0u64,
+                    window_start: prelude::Timestamp(0i64),
+                    limit: 20u64,
+                },
+            )
+        }
+
+        fn from_record(record: &records::RecIdentityLimit) -> Result<(State, Vars), RecordError> {
+            let state = State::LebOpenI;
+            Ok((
+                state,
+                Vars {
+                    count: match &record.count {
+                        Some(v) => *v,
+                        None => 0u64,
+                    },
+                    window_start: match &record.window_started_at {
+                        Some(v) => *v,
+                        None => prelude::Timestamp(0i64),
+                    },
+                    limit: match &record.limit {
+                        Some(v) => *v,
+                        None => 20u64,
+                    },
+                },
+            ))
+        }
+
+        fn to_record(
+            key: &Key,
+            _state: &State,
+            vars: &Vars,
+            previous: Option<&records::RecIdentityLimit>,
+        ) -> Result<records::RecIdentityLimit, RecordError> {
+            let Some(previous) = previous else {
+                return Err(
+                    RecordError(
+                        "machine `leb-limit-flow-impl` does not create records of `rec-identity-limit`, and the key has none"
+                            .to_string(),
+                    ),
+                );
+            };
+            Ok(records::RecIdentityLimit {
+                limit_key: key.clone(),
+                count: Some(vars.count),
+                failures: previous.failures,
+                window_started_at: Some(vars.window_start),
+                limit: Some(vars.limit),
+            })
+        }
+
+        fn step(
+            state: &State,
+            vars: &Vars,
+            event: &Event,
+            now: Time,
+        ) -> Result<Outcome<Self>, StepError> {
+            match (state, event) {
+                (State::LebOpenI, Event::LebRequested(_)) => {
+                    if now
+                        .0
+                        .checked_sub(vars.window_start.0)
+                        .ok_or(overflow("leb-new-window-i"))?
+                        >= 3600000i64
+                    {
+                        let mut next = vars.clone();
+                        next.window_start = prelude::Timestamp(now.0);
+                        next.count = 1u64;
+                        let emitted_3 = Emitted::LebAccepted(LebAcceptedPayload {});
+                        Ok(Outcome::to(State::LebOpenI, next).emit(
+                            "web-application",
+                            Delivery::AtMostOnce,
+                            emitted_3,
+                        ))
+                    } else {
+                        if vars.count < vars.limit {
+                            let mut next = vars.clone();
+                            next.count = next
+                                .count
+                                .checked_add(1u64)
+                                .ok_or(overflow("leb-accept-i"))?;
+                            let emitted_2 = Emitted::LebAccepted(LebAcceptedPayload {});
+                            Ok(Outcome::to(State::LebOpenI, next).emit(
+                                "web-application",
+                                Delivery::AtMostOnce,
+                                emitted_2,
+                            ))
+                        } else {
+                            Ok(Outcome::to(State::LebOpenI, vars.clone()).emit(
+                                "web-application",
+                                Delivery::AtMostOnce,
+                                Emitted::LebRefused(LebRefusedPayload {}),
+                            ))
+                        }
+                    }
+                }
+                (State::LebOpenI, Event::LebTightened(payload)) => {
+                    if payload.limit < vars.limit {
+                        let mut next = vars.clone();
+                        next.limit = payload.limit;
+                        Ok(Outcome::to(State::LebOpenI, next))
+                    } else {
+                        Ok(Outcome::to(*state, vars.clone()))
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Sign-up limit per source (implementation)
+///
+/// The counter of one key in the limit store (rec-identity-limit): the number of requests in the open window, the time the window opened in milliseconds and the limit. The window is one hour; the refinement reads one model tick as one minute (timeScale 60000).
+///
+/// Specification behavior `sus-limit-flow-impl`, an implementation-level machine.
+pub mod sus_limit_flow_impl {
+    use serde::{Deserialize, Serialize};
+
+    use strata_runtime::{Delivery, Isolation, Machine, Outcome, RecordError, StepError, Time};
+
+    use crate::{prelude, records};
+
+    /// The states of machine `sus-limit-flow-impl`.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+
+    pub enum State {
+        /// State `sus-open-i`: Counting.
+        #[serde(rename = "sus-open-i")]
+        SusOpenI,
+    }
+
+    impl State {
+        /// The state's id in the specification.
+        pub fn id(self) -> &'static str {
+            match self {
+                State::SusOpenI => "sus-open-i",
+            }
+        }
+
+        /// The state with this id in the specification.
+        pub fn from_id(id: &str) -> Option<State> {
+            match id {
+                "sus-open-i" => Some(State::SusOpenI),
+                _ => None,
+            }
+        }
+    }
+
+    /// The variables of the machine.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct Vars {
+        /// Variable `count`.
+        pub count: u64,
+        /// Variable `windowStart`.
+        #[serde(rename = "windowStart")]
+        pub window_start: prelude::Timestamp,
+        /// Variable `limit`.
+        pub limit: u64,
+    }
+
+    /// The payload of event `sus-requested`: Sign-up requested.
+    ///
+    /// A sign-up is requested from the source.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct SusRequestedPayload {}
+
+    /// The payload of event `sus-tightened`: Sign-up requested tightened.
+    ///
+    /// The realm tightens the limit (D-535).
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct SusTightenedPayload {
+        /// Field `limit`.
+        pub limit: u64,
+    }
+
+    /// The payload of event `sus-accepted`: Sign-up accepted.
+    ///
+    /// The request is allowed.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct SusAcceptedPayload {}
+
+    /// The payload of event `sus-refused`: Sign-up refused.
+    ///
+    /// The request is refused because the limit is reached.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct SusRefusedPayload {}
+
+    /// The events machine `sus-limit-flow-impl` receives, including those its timers fire.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Event {
+        /// Event `sus-requested`: Sign-up requested.
+        #[serde(rename = "sus-requested")]
+        SusRequested(SusRequestedPayload),
+        /// Event `sus-tightened`: Sign-up requested tightened.
+        #[serde(rename = "sus-tightened")]
+        SusTightened(SusTightenedPayload),
+    }
+
+    /// The events machine `sus-limit-flow-impl` emits.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Emitted {
+        /// Event `sus-accepted`: Sign-up accepted.
+        #[serde(rename = "sus-accepted")]
+        SusAccepted(SusAcceptedPayload),
+        /// Event `sus-refused`: Sign-up refused.
+        #[serde(rename = "sus-refused")]
+        SusRefused(SusRefusedPayload),
+    }
+
+    /// The instance key: field `limit-key` of record `rec-identity-limit`.
+    pub type Key = String;
+
+    /// Machine `sus-limit-flow-impl`, stored in record `rec-identity-limit` by `limit-key`.
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct SusLimitFlowImpl;
+
+    /// The refusal of a step whose arithmetic overflows or divides by zero.
+    fn overflow(transition: &str) -> StepError {
+        StepError::Rejected(format!(
+            "transition {transition} overflowed or divided by zero"
+        ))
+    }
+
+    impl Machine for SusLimitFlowImpl {
+        const NAME: &'static str = "sus-limit-flow-impl";
+
+        const RECORD: &'static str = "rec-identity-limit";
+
+        const ISOLATION: Isolation = Isolation::Serializable;
+
+        const CREATES: bool = false;
+
+        type State = State;
+
+        type Vars = Vars;
+
+        type Event = Event;
+
+        type Emitted = Emitted;
+
+        type Key = Key;
+
+        type Record = records::RecIdentityLimit;
+
+        fn initial(_key: &Key) -> (State, Vars) {
+            (
+                State::SusOpenI,
+                Vars {
+                    count: 0u64,
+                    window_start: prelude::Timestamp(0i64),
+                    limit: 20u64,
+                },
+            )
+        }
+
+        fn from_record(record: &records::RecIdentityLimit) -> Result<(State, Vars), RecordError> {
+            let state = State::SusOpenI;
+            Ok((
+                state,
+                Vars {
+                    count: match &record.count {
+                        Some(v) => *v,
+                        None => 0u64,
+                    },
+                    window_start: match &record.window_started_at {
+                        Some(v) => *v,
+                        None => prelude::Timestamp(0i64),
+                    },
+                    limit: match &record.limit {
+                        Some(v) => *v,
+                        None => 20u64,
+                    },
+                },
+            ))
+        }
+
+        fn to_record(
+            key: &Key,
+            _state: &State,
+            vars: &Vars,
+            previous: Option<&records::RecIdentityLimit>,
+        ) -> Result<records::RecIdentityLimit, RecordError> {
+            let Some(previous) = previous else {
+                return Err(
+                    RecordError(
+                        "machine `sus-limit-flow-impl` does not create records of `rec-identity-limit`, and the key has none"
+                            .to_string(),
+                    ),
+                );
+            };
+            Ok(records::RecIdentityLimit {
+                limit_key: key.clone(),
+                count: Some(vars.count),
+                failures: previous.failures,
+                window_started_at: Some(vars.window_start),
+                limit: Some(vars.limit),
+            })
+        }
+
+        fn step(
+            state: &State,
+            vars: &Vars,
+            event: &Event,
+            now: Time,
+        ) -> Result<Outcome<Self>, StepError> {
+            match (state, event) {
+                (State::SusOpenI, Event::SusRequested(_)) => {
+                    if now
+                        .0
+                        .checked_sub(vars.window_start.0)
+                        .ok_or(overflow("sus-new-window-i"))?
+                        >= 3600000i64
+                    {
+                        let mut next = vars.clone();
+                        next.window_start = prelude::Timestamp(now.0);
+                        next.count = 1u64;
+                        let emitted_3 = Emitted::SusAccepted(SusAcceptedPayload {});
+                        Ok(Outcome::to(State::SusOpenI, next).emit(
+                            "web-application",
+                            Delivery::AtMostOnce,
+                            emitted_3,
+                        ))
+                    } else {
+                        if vars.count < vars.limit {
+                            let mut next = vars.clone();
+                            next.count = next
+                                .count
+                                .checked_add(1u64)
+                                .ok_or(overflow("sus-accept-i"))?;
+                            let emitted_2 = Emitted::SusAccepted(SusAcceptedPayload {});
+                            Ok(Outcome::to(State::SusOpenI, next).emit(
+                                "web-application",
+                                Delivery::AtMostOnce,
+                                emitted_2,
+                            ))
+                        } else {
+                            Ok(Outcome::to(State::SusOpenI, vars.clone()).emit(
+                                "web-application",
+                                Delivery::AtMostOnce,
+                                Emitted::SusRefused(SusRefusedPayload {}),
+                            ))
+                        }
+                    }
+                }
+                (State::SusOpenI, Event::SusTightened(payload)) => {
+                    if payload.limit < vars.limit {
+                        let mut next = vars.clone();
+                        next.limit = payload.limit;
+                        Ok(Outcome::to(State::SusOpenI, next))
+                    } else {
+                        Ok(Outcome::to(*state, vars.clone()))
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Token request limit per client (implementation)
+///
+/// The counter of one key in the limit store (rec-identity-limit): the number of requests in the open window, the time the window opened in milliseconds and the limit. The window is one minute; the refinement reads one model tick as one second (timeScale 1000).
+///
+/// Specification behavior `tcl-limit-flow-impl`, an implementation-level machine.
+pub mod tcl_limit_flow_impl {
+    use serde::{Deserialize, Serialize};
+
+    use strata_runtime::{Delivery, Isolation, Machine, Outcome, RecordError, StepError, Time};
+
+    use crate::{prelude, records};
+
+    /// The states of machine `tcl-limit-flow-impl`.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+
+    pub enum State {
+        /// State `tcl-open-i`: Counting.
+        #[serde(rename = "tcl-open-i")]
+        TclOpenI,
+    }
+
+    impl State {
+        /// The state's id in the specification.
+        pub fn id(self) -> &'static str {
+            match self {
+                State::TclOpenI => "tcl-open-i",
+            }
+        }
+
+        /// The state with this id in the specification.
+        pub fn from_id(id: &str) -> Option<State> {
+            match id {
+                "tcl-open-i" => Some(State::TclOpenI),
+                _ => None,
+            }
+        }
+    }
+
+    /// The variables of the machine.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct Vars {
+        /// Variable `count`.
+        pub count: u64,
+        /// Variable `windowStart`.
+        #[serde(rename = "windowStart")]
+        pub window_start: prelude::Timestamp,
+        /// Variable `limit`.
+        pub limit: u64,
+    }
+
+    /// The payload of event `tcl-requested`: Credential request.
+    ///
+    /// A client presents its credentials at the token endpoint.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct TclRequestedPayload {}
+
+    /// The payload of event `tcl-tightened`: Credential request tightened.
+    ///
+    /// The realm tightens the limit (D-535).
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct TclTightenedPayload {
+        /// Field `limit`.
+        pub limit: u64,
+    }
+
+    /// The payload of event `tcl-accepted`: Credential request accepted.
+    ///
+    /// The request is allowed.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct TclAcceptedPayload {}
+
+    /// The payload of event `tcl-refused`: Credential request refused.
+    ///
+    /// The request is refused because the limit is reached.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct TclRefusedPayload {}
+
+    /// The events machine `tcl-limit-flow-impl` receives, including those its timers fire.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Event {
+        /// Event `tcl-requested`: Credential request.
+        #[serde(rename = "tcl-requested")]
+        TclRequested(TclRequestedPayload),
+        /// Event `tcl-tightened`: Credential request tightened.
+        #[serde(rename = "tcl-tightened")]
+        TclTightened(TclTightenedPayload),
+    }
+
+    /// The events machine `tcl-limit-flow-impl` emits.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Emitted {
+        /// Event `tcl-accepted`: Credential request accepted.
+        #[serde(rename = "tcl-accepted")]
+        TclAccepted(TclAcceptedPayload),
+        /// Event `tcl-refused`: Credential request refused.
+        #[serde(rename = "tcl-refused")]
+        TclRefused(TclRefusedPayload),
+    }
+
+    /// The instance key: field `limit-key` of record `rec-identity-limit`.
+    pub type Key = String;
+
+    /// Machine `tcl-limit-flow-impl`, stored in record `rec-identity-limit` by `limit-key`.
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct TclLimitFlowImpl;
+
+    /// The refusal of a step whose arithmetic overflows or divides by zero.
+    fn overflow(transition: &str) -> StepError {
+        StepError::Rejected(format!(
+            "transition {transition} overflowed or divided by zero"
+        ))
+    }
+
+    impl Machine for TclLimitFlowImpl {
+        const NAME: &'static str = "tcl-limit-flow-impl";
+
+        const RECORD: &'static str = "rec-identity-limit";
+
+        const ISOLATION: Isolation = Isolation::Serializable;
+
+        const CREATES: bool = false;
+
+        type State = State;
+
+        type Vars = Vars;
+
+        type Event = Event;
+
+        type Emitted = Emitted;
+
+        type Key = Key;
+
+        type Record = records::RecIdentityLimit;
+
+        fn initial(_key: &Key) -> (State, Vars) {
+            (
+                State::TclOpenI,
+                Vars {
+                    count: 0u64,
+                    window_start: prelude::Timestamp(0i64),
+                    limit: 30u64,
+                },
+            )
+        }
+
+        fn from_record(record: &records::RecIdentityLimit) -> Result<(State, Vars), RecordError> {
+            let state = State::TclOpenI;
+            Ok((
+                state,
+                Vars {
+                    count: match &record.count {
+                        Some(v) => *v,
+                        None => 0u64,
+                    },
+                    window_start: match &record.window_started_at {
+                        Some(v) => *v,
+                        None => prelude::Timestamp(0i64),
+                    },
+                    limit: match &record.limit {
+                        Some(v) => *v,
+                        None => 30u64,
+                    },
+                },
+            ))
+        }
+
+        fn to_record(
+            key: &Key,
+            _state: &State,
+            vars: &Vars,
+            previous: Option<&records::RecIdentityLimit>,
+        ) -> Result<records::RecIdentityLimit, RecordError> {
+            let Some(previous) = previous else {
+                return Err(
+                    RecordError(
+                        "machine `tcl-limit-flow-impl` does not create records of `rec-identity-limit`, and the key has none"
+                            .to_string(),
+                    ),
+                );
+            };
+            Ok(records::RecIdentityLimit {
+                limit_key: key.clone(),
+                count: Some(vars.count),
+                failures: previous.failures,
+                window_started_at: Some(vars.window_start),
+                limit: Some(vars.limit),
+            })
+        }
+
+        fn step(
+            state: &State,
+            vars: &Vars,
+            event: &Event,
+            now: Time,
+        ) -> Result<Outcome<Self>, StepError> {
+            match (state, event) {
+                (State::TclOpenI, Event::TclRequested(_)) => {
+                    if now
+                        .0
+                        .checked_sub(vars.window_start.0)
+                        .ok_or(overflow("tcl-new-window-i"))?
+                        >= 60000i64
+                    {
+                        let mut next = vars.clone();
+                        next.window_start = prelude::Timestamp(now.0);
+                        next.count = 1u64;
+                        let emitted_3 = Emitted::TclAccepted(TclAcceptedPayload {});
+                        Ok(Outcome::to(State::TclOpenI, next).emit(
+                            "web-application",
+                            Delivery::AtMostOnce,
+                            emitted_3,
+                        ))
+                    } else {
+                        if vars.count < vars.limit {
+                            let mut next = vars.clone();
+                            next.count = next
+                                .count
+                                .checked_add(1u64)
+                                .ok_or(overflow("tcl-accept-i"))?;
+                            let emitted_2 = Emitted::TclAccepted(TclAcceptedPayload {});
+                            Ok(Outcome::to(State::TclOpenI, next).emit(
+                                "web-application",
+                                Delivery::AtMostOnce,
+                                emitted_2,
+                            ))
+                        } else {
+                            Ok(Outcome::to(State::TclOpenI, vars.clone()).emit(
+                                "web-application",
+                                Delivery::AtMostOnce,
+                                Emitted::TclRefused(TclRefusedPayload {}),
+                            ))
+                        }
+                    }
+                }
+                (State::TclOpenI, Event::TclTightened(payload)) => {
+                    if payload.limit < vars.limit {
+                        let mut next = vars.clone();
+                        next.limit = payload.limit;
+                        Ok(Outcome::to(State::TclOpenI, next))
+                    } else {
+                        Ok(Outcome::to(*state, vars.clone()))
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Realm failure rate (implementation)
+///
+/// The failure counter of one realm in the limit store (rec-identity-limit): the failures in the open window, the time the window opened in milliseconds and the limit. The window is 15 minutes (900000 ms); the refinement reads one model tick as one minute (timeScale 60000).
+///
+/// Specification behavior `realm-rate-flow-impl`, an implementation-level machine.
+pub mod realm_rate_flow_impl {
+    use serde::{Deserialize, Serialize};
+
+    use strata_runtime::{Delivery, Isolation, Machine, Outcome, RecordError, StepError, Time};
+
+    use crate::{prelude, records};
+
+    /// The states of machine `realm-rate-flow-impl`.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+
+    pub enum State {
+        /// State `rl-open-i`: Counting.
+        #[serde(rename = "rl-open-i")]
+        RlOpenI,
+    }
+
+    impl State {
+        /// The state's id in the specification.
+        pub fn id(self) -> &'static str {
+            match self {
+                State::RlOpenI => "rl-open-i",
+            }
+        }
+
+        /// The state with this id in the specification.
+        pub fn from_id(id: &str) -> Option<State> {
+            match id {
+                "rl-open-i" => Some(State::RlOpenI),
+                _ => None,
+            }
+        }
+    }
+
+    /// The variables of the machine.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct Vars {
+        /// Variable `failures`.
+        pub failures: u64,
+        /// Variable `windowStart`.
+        #[serde(rename = "windowStart")]
+        pub window_start: prelude::Timestamp,
+        /// Variable `limit`.
+        pub limit: u64,
+    }
+
+    /// The payload of event `rl-failed`: Password attempt failed.
+    ///
+    /// A password attempt in the realm fails.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct RlFailedPayload {}
+
+    /// The payload of event `rl-attempt`: Password attempt.
+    ///
+    /// A password attempt reaches the realm.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct RlAttemptPayload {}
+
+    /// The payload of event `rl-tightened`: Rate tightened.
+    ///
+    /// The realm tightens the failure rate at which it slows attempts (D-535).
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct RlTightenedPayload {
+        /// Field `limit`.
+        pub limit: u64,
+    }
+
+    /// The payload of event `rl-slowed`: Password attempt slowed.
+    ///
+    /// The attempt is answered at the slowed pace of one a second.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct RlSlowedPayload {}
+
+    /// The payload of event `rl-immediate`: Password attempt answered at once.
+    ///
+    /// The attempt is answered without delay.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct RlImmediatePayload {}
+
+    /// The events machine `realm-rate-flow-impl` receives, including those its timers fire.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Event {
+        /// Event `rl-failed`: Password attempt failed.
+        #[serde(rename = "rl-failed")]
+        RlFailed(RlFailedPayload),
+        /// Event `rl-attempt`: Password attempt.
+        #[serde(rename = "rl-attempt")]
+        RlAttempt(RlAttemptPayload),
+        /// Event `rl-tightened`: Rate tightened.
+        #[serde(rename = "rl-tightened")]
+        RlTightened(RlTightenedPayload),
+    }
+
+    /// The events machine `realm-rate-flow-impl` emits.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Emitted {
+        /// Event `rl-slowed`: Password attempt slowed.
+        #[serde(rename = "rl-slowed")]
+        RlSlowed(RlSlowedPayload),
+        /// Event `rl-immediate`: Password attempt answered at once.
+        #[serde(rename = "rl-immediate")]
+        RlImmediate(RlImmediatePayload),
+    }
+
+    /// The instance key: field `limit-key` of record `rec-identity-limit`.
+    pub type Key = String;
+
+    /// Machine `realm-rate-flow-impl`, stored in record `rec-identity-limit` by `limit-key`.
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct RealmRateFlowImpl;
+
+    /// The refusal of a step whose arithmetic overflows or divides by zero.
+    fn overflow(transition: &str) -> StepError {
+        StepError::Rejected(format!(
+            "transition {transition} overflowed or divided by zero"
+        ))
+    }
+
+    impl Machine for RealmRateFlowImpl {
+        const NAME: &'static str = "realm-rate-flow-impl";
+
+        const RECORD: &'static str = "rec-identity-limit";
+
+        const ISOLATION: Isolation = Isolation::Serializable;
+
+        const CREATES: bool = false;
+
+        type State = State;
+
+        type Vars = Vars;
+
+        type Event = Event;
+
+        type Emitted = Emitted;
+
+        type Key = Key;
+
+        type Record = records::RecIdentityLimit;
+
+        fn initial(_key: &Key) -> (State, Vars) {
+            (
+                State::RlOpenI,
+                Vars {
+                    failures: 0u64,
+                    window_start: prelude::Timestamp(0i64),
+                    limit: 1000u64,
+                },
+            )
+        }
+
+        fn from_record(record: &records::RecIdentityLimit) -> Result<(State, Vars), RecordError> {
+            let state = State::RlOpenI;
+            Ok((
+                state,
+                Vars {
+                    failures: match &record.failures {
+                        Some(v) => *v,
+                        None => 0u64,
+                    },
+                    window_start: match &record.window_started_at {
+                        Some(v) => *v,
+                        None => prelude::Timestamp(0i64),
+                    },
+                    limit: match &record.limit {
+                        Some(v) => *v,
+                        None => 1000u64,
+                    },
+                },
+            ))
+        }
+
+        fn to_record(
+            key: &Key,
+            _state: &State,
+            vars: &Vars,
+            previous: Option<&records::RecIdentityLimit>,
+        ) -> Result<records::RecIdentityLimit, RecordError> {
+            let Some(previous) = previous else {
+                return Err(
+                    RecordError(
+                        "machine `realm-rate-flow-impl` does not create records of `rec-identity-limit`, and the key has none"
+                            .to_string(),
+                    ),
+                );
+            };
+            Ok(records::RecIdentityLimit {
+                limit_key: key.clone(),
+                count: previous.count,
+                failures: Some(vars.failures),
+                window_started_at: Some(vars.window_start),
+                limit: Some(vars.limit),
+            })
+        }
+
+        fn step(
+            state: &State,
+            vars: &Vars,
+            event: &Event,
+            now: Time,
+        ) -> Result<Outcome<Self>, StepError> {
+            match (state, event) {
+                (State::RlOpenI, Event::RlFailed(_)) => {
+                    if now
+                        .0
+                        .checked_sub(vars.window_start.0)
+                        .ok_or(overflow("rl-fail-new-window-i"))?
+                        >= 900000i64
+                    {
+                        let mut next = vars.clone();
+                        next.window_start = prelude::Timestamp(now.0);
+                        next.failures = 1u64;
+                        Ok(Outcome::to(State::RlOpenI, next))
+                    } else {
+                        let mut next = vars.clone();
+                        next.failures = next
+                            .failures
+                            .checked_add(1u64)
+                            .ok_or(overflow("rl-fail-i"))?;
+                        Ok(Outcome::to(State::RlOpenI, next))
+                    }
+                }
+                (State::RlOpenI, Event::RlAttempt(_)) => {
+                    if vars.failures >= vars.limit
+                        && now
+                            .0
+                            .checked_sub(vars.window_start.0)
+                            .ok_or(overflow("rl-attempt-slow-i"))?
+                            < 900000i64
+                    {
+                        Ok(Outcome::to(State::RlOpenI, vars.clone()).emit(
+                            "web-application",
+                            Delivery::AtMostOnce,
+                            Emitted::RlSlowed(RlSlowedPayload {}),
+                        ))
+                    } else {
+                        Ok(Outcome::to(State::RlOpenI, vars.clone()).emit(
+                            "web-application",
+                            Delivery::AtMostOnce,
+                            Emitted::RlImmediate(RlImmediatePayload {}),
+                        ))
+                    }
+                }
+                (State::RlOpenI, Event::RlTightened(payload)) => {
+                    if payload.limit < vars.limit {
+                        let mut next = vars.clone();
+                        next.limit = payload.limit;
+                        Ok(Outcome::to(State::RlOpenI, next))
+                    } else {
+                        Ok(Outcome::to(*state, vars.clone()))
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Identity provider outage (implementation)
+///
+/// The health of one identity provider as the identity service keeps it (rec-provider-health). While it is down only the sign-in through it fails; the other methods are answered as before.
+///
+/// Specification behavior `idp-outage-flow-impl`, an implementation-level machine.
+pub mod idp_outage_flow_impl {
+    use serde::{Deserialize, Serialize};
+
+    use strata_runtime::{Delivery, Isolation, Machine, Outcome, RecordError, StepError, Time};
+
+    use crate::{records, types};
+
+    /// The states of machine `idp-outage-flow-impl`.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+
+    pub enum State {
+        /// State `io-up-i`: Provider answering.
+        #[serde(rename = "io-up-i")]
+        IoUpI,
+        /// State `io-down-i`: Provider down. Ignores `io-outage`.
+        #[serde(rename = "io-down-i")]
+        IoDownI,
+    }
+
+    impl State {
+        /// The state's id in the specification.
+        pub fn id(self) -> &'static str {
+            match self {
+                State::IoUpI => "io-up-i",
+                State::IoDownI => "io-down-i",
+            }
+        }
+
+        /// The state with this id in the specification.
+        pub fn from_id(id: &str) -> Option<State> {
+            match id {
+                "io-up-i" => Some(State::IoUpI),
+                "io-down-i" => Some(State::IoDownI),
+                _ => None,
+            }
+        }
+    }
+
+    /// The variables of the machine.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct Vars {}
+
+    /// The payload of event `io-outage`: Identity provider down.
+    ///
+    /// An external identity provider stops answering.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct IoOutagePayload {}
+
+    /// The payload of event `io-sign-in`: Sign-in attempted.
+    ///
+    /// A person signs in with a method.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct IoSignInPayload {
+        /// Field `method`.
+        pub method: String,
+    }
+
+    /// The payload of event `io-session-issued`: Session issued.
+    ///
+    /// The sign-in yields a session.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct IoSessionIssuedPayload {}
+
+    /// The payload of event `io-unavailable`: Provider unavailable.
+    ///
+    /// The sign-in is refused because the provider is down.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct IoUnavailablePayload {}
+
+    /// The events machine `idp-outage-flow-impl` receives, including those its timers fire.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Event {
+        /// Event `io-outage`: Identity provider down.
+        #[serde(rename = "io-outage")]
+        IoOutage(IoOutagePayload),
+        /// Event `io-sign-in`: Sign-in attempted.
+        #[serde(rename = "io-sign-in")]
+        IoSignIn(IoSignInPayload),
+    }
+
+    /// The events machine `idp-outage-flow-impl` emits.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Emitted {
+        /// Event `io-session-issued`: Session issued.
+        #[serde(rename = "io-session-issued")]
+        IoSessionIssued(IoSessionIssuedPayload),
+        /// Event `io-unavailable`: Provider unavailable.
+        #[serde(rename = "io-unavailable")]
+        IoUnavailable(IoUnavailablePayload),
+    }
+
+    /// The instance key: field `provider-id` of record `rec-provider-health`.
+    pub type Key = types::ProviderId;
+
+    /// Machine `idp-outage-flow-impl`, stored in record `rec-provider-health` by `provider-id`.
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct IdpOutageFlowImpl;
+
+    impl Machine for IdpOutageFlowImpl {
+        const NAME: &'static str = "idp-outage-flow-impl";
+
+        const RECORD: &'static str = "rec-provider-health";
+
+        const ISOLATION: Isolation = Isolation::Serializable;
+
+        const CREATES: bool = false;
+
+        type State = State;
+
+        type Vars = Vars;
+
+        type Event = Event;
+
+        type Emitted = Emitted;
+
+        type Key = Key;
+
+        type Record = records::RecProviderHealth;
+
+        fn initial(_key: &Key) -> (State, Vars) {
+            (State::IoUpI, Vars {})
+        }
+
+        fn from_record(record: &records::RecProviderHealth) -> Result<(State, Vars), RecordError> {
+            let state = State::from_id(&record.state).ok_or_else(|| {
+                RecordError(format!(
+                    "{:?} is not a state of machine `idp-outage-flow-impl`",
+                    record.state
+                ))
+            })?;
+            Ok((state, Vars {}))
+        }
+
+        fn to_record(
+            key: &Key,
+            state: &State,
+            _vars: &Vars,
+            _previous: Option<&records::RecProviderHealth>,
+        ) -> Result<records::RecProviderHealth, RecordError> {
+            Ok(records::RecProviderHealth {
+                provider_id: key.clone(),
+                state: state.id().to_string(),
+            })
+        }
+
+        fn step(
+            state: &State,
+            vars: &Vars,
+            event: &Event,
+            _now: Time,
+        ) -> Result<Outcome<Self>, StepError> {
+            match (state, event) {
+                (State::IoUpI, Event::IoOutage(_)) => Ok(Outcome::to(State::IoDownI, vars.clone())),
+                (State::IoUpI, Event::IoSignIn(_)) => Ok(Outcome::to(State::IoUpI, vars.clone())
+                    .emit(
+                        "web-application",
+                        Delivery::AtMostOnce,
+                        Emitted::IoSessionIssued(IoSessionIssuedPayload {}),
+                    )),
+                (State::IoDownI, Event::IoSignIn(payload)) => {
+                    if payload.method != "federated" {
+                        Ok(Outcome::to(State::IoDownI, vars.clone()).emit(
+                            "web-application",
+                            Delivery::AtMostOnce,
+                            Emitted::IoSessionIssued(IoSessionIssuedPayload {}),
+                        ))
+                    } else {
+                        Ok(Outcome::to(State::IoDownI, vars.clone()).emit(
+                            "web-application",
+                            Delivery::AtMostOnce,
+                            Emitted::IoUnavailable(IoUnavailablePayload {}),
+                        ))
+                    }
+                }
+                _ => Ok(Outcome::to(*state, vars.clone())),
+            }
+        }
+    }
+}
+
+/// Provider signing keys (implementation)
+///
+/// The key identifier of one provider as the identity service holds it (rec-provider-keys). An unknown identifier is looked up in the provider metadata, reached through the outbound gate.
+///
+/// Specification behavior `provider-keys-flow-impl`, an implementation-level machine.
+pub mod provider_keys_flow_impl {
+    use serde::{Deserialize, Serialize};
+
+    use strata_runtime::{Delivery, Isolation, Machine, Outcome, RecordError, StepError, Time};
+
+    use crate::{records, types};
+
+    /// The states of machine `provider-keys-flow-impl`.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+
+    pub enum State {
+        /// State `jw-open-i`: Keys known.
+        #[serde(rename = "jw-open-i")]
+        JwOpenI,
+    }
+
+    impl State {
+        /// The state's id in the specification.
+        pub fn id(self) -> &'static str {
+            match self {
+                State::JwOpenI => "jw-open-i",
+            }
+        }
+
+        /// The state with this id in the specification.
+        pub fn from_id(id: &str) -> Option<State> {
+            match id {
+                "jw-open-i" => Some(State::JwOpenI),
+                _ => None,
+            }
+        }
+    }
+
+    /// The variables of the machine.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct Vars {
+        /// Variable `knownKid`.
+        #[serde(rename = "knownKid")]
+        pub known_kid: String,
+    }
+
+    /// The payload of event `jw-token`: Token with a key id.
+    ///
+    /// A token arrives whose header names a signing key.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct JwTokenPayload {
+        /// Field `kid`.
+        pub kid: String,
+        /// Field `metadataHas`.
+        #[serde(rename = "metadataHas")]
+        pub metadata_has: bool,
+    }
+
+    /// The payload of event `jw-verified`: Token verified.
+    ///
+    /// The token verifies with a known key.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct JwVerifiedPayload {}
+
+    /// The payload of event `jw-refreshed`: Provider keys refreshed.
+    ///
+    /// The provider keys were fetched again from the provider metadata.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct JwRefreshedPayload {}
+
+    /// The payload of event `jw-rejected`: Token rejected.
+    ///
+    /// The key is unknown and the metadata does not hold it.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct JwRejectedPayload {}
+
+    /// The events machine `provider-keys-flow-impl` receives, including those its timers fire.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Event {
+        /// Event `jw-token`: Token with a key id.
+        #[serde(rename = "jw-token")]
+        JwToken(JwTokenPayload),
+    }
+
+    /// The events machine `provider-keys-flow-impl` emits.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Emitted {
+        /// Event `jw-verified`: Token verified.
+        #[serde(rename = "jw-verified")]
+        JwVerified(JwVerifiedPayload),
+        /// Event `jw-refreshed`: Provider keys refreshed.
+        #[serde(rename = "jw-refreshed")]
+        JwRefreshed(JwRefreshedPayload),
+        /// Event `jw-rejected`: Token rejected.
+        #[serde(rename = "jw-rejected")]
+        JwRejected(JwRejectedPayload),
+    }
+
+    /// The instance key: field `provider-id` of record `rec-provider-keys`.
+    pub type Key = types::ProviderId;
+
+    /// Machine `provider-keys-flow-impl`, stored in record `rec-provider-keys` by `provider-id`.
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct ProviderKeysFlowImpl;
+
+    impl Machine for ProviderKeysFlowImpl {
+        const NAME: &'static str = "provider-keys-flow-impl";
+
+        const RECORD: &'static str = "rec-provider-keys";
+
+        const ISOLATION: Isolation = Isolation::Serializable;
+
+        const CREATES: bool = false;
+
+        type State = State;
+
+        type Vars = Vars;
+
+        type Event = Event;
+
+        type Emitted = Emitted;
+
+        type Key = Key;
+
+        type Record = records::RecProviderKeys;
+
+        fn initial(_key: &Key) -> (State, Vars) {
+            (
+                State::JwOpenI,
+                Vars {
+                    known_kid: String::from("k1"),
+                },
+            )
+        }
+
+        fn from_record(record: &records::RecProviderKeys) -> Result<(State, Vars), RecordError> {
+            let state = State::JwOpenI;
+            Ok((
+                state,
+                Vars {
+                    known_kid: match &record.known_kid {
+                        Some(v) => v.clone(),
+                        None => String::from("k1"),
+                    },
+                },
+            ))
+        }
+
+        fn to_record(
+            key: &Key,
+            _state: &State,
+            vars: &Vars,
+            _previous: Option<&records::RecProviderKeys>,
+        ) -> Result<records::RecProviderKeys, RecordError> {
+            Ok(records::RecProviderKeys {
+                provider_id: key.clone(),
+                known_kid: Some(vars.known_kid.clone()),
+            })
+        }
+
+        fn step(
+            state: &State,
+            vars: &Vars,
+            event: &Event,
+            _now: Time,
+        ) -> Result<Outcome<Self>, StepError> {
+            match (state, event) {
+                (State::JwOpenI, Event::JwToken(payload)) => {
+                    if payload.kid == vars.known_kid {
+                        Ok(Outcome::to(State::JwOpenI, vars.clone()).emit(
+                            "web-application",
+                            Delivery::AtMostOnce,
+                            Emitted::JwVerified(JwVerifiedPayload {}),
+                        ))
+                    } else {
+                        if payload.metadata_has {
+                            let mut next = vars.clone();
+                            next.known_kid = payload.kid.clone();
+                            let emitted_2 = Emitted::JwRefreshed(JwRefreshedPayload {});
+                            let emitted_3 = Emitted::JwVerified(JwVerifiedPayload {});
+                            Ok(Outcome::to(State::JwOpenI, next)
+                                .emit("outbound-gate", Delivery::AtMostOnce, emitted_2)
+                                .emit("web-application", Delivery::AtMostOnce, emitted_3))
+                        } else {
+                            Ok(Outcome::to(State::JwOpenI, vars.clone()).emit(
+                                "web-application",
+                                Delivery::AtMostOnce,
+                                Emitted::JwRejected(JwRejectedPayload {}),
+                            ))
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Providers offered on the sign-in page (implementation)
+///
+/// The sign-in page request as the identity service records it (rec-sign-in-page): the realm of the address and the realm whose providers the page lists.
+///
+/// Specification behavior `idp-offer-flow-impl`, an implementation-level machine.
+pub mod idp_offer_flow_impl {
+    use serde::{Deserialize, Serialize};
+
+    use strata_runtime::{Delivery, Isolation, Machine, Outcome, RecordError, StepError, Time};
+
+    use crate::{records, types};
+
+    /// The states of machine `idp-offer-flow-impl`.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+
+    pub enum State {
+        /// State `po-open-i`: Serving.
+        #[serde(rename = "po-open-i")]
+        PoOpenI,
+    }
+
+    impl State {
+        /// The state's id in the specification.
+        pub fn id(self) -> &'static str {
+            match self {
+                State::PoOpenI => "po-open-i",
+            }
+        }
+
+        /// The state with this id in the specification.
+        pub fn from_id(id: &str) -> Option<State> {
+            match id {
+                "po-open-i" => Some(State::PoOpenI),
+                _ => None,
+            }
+        }
+    }
+
+    /// The variables of the machine.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct Vars {
+        /// Variable `requestedRealm`.
+        #[serde(rename = "requestedRealm")]
+        pub requested_realm: String,
+        /// Variable `offeredRealm`.
+        #[serde(rename = "offeredRealm")]
+        pub offered_realm: String,
+    }
+
+    /// The payload of event `po-page`: Sign-in page requested.
+    ///
+    /// The sign-in page is requested at an address that belongs to a realm.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct PoPagePayload {
+        /// Field `realm`.
+        pub realm: String,
+    }
+
+    /// The payload of event `po-offered`: Providers offered.
+    ///
+    /// The page offers the identity providers of a realm.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct PoOfferedPayload {}
+
+    /// The events machine `idp-offer-flow-impl` receives, including those its timers fire.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Event {
+        /// Event `po-page`: Sign-in page requested.
+        #[serde(rename = "po-page")]
+        PoPage(PoPagePayload),
+    }
+
+    /// The events machine `idp-offer-flow-impl` emits.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Emitted {
+        /// Event `po-offered`: Providers offered.
+        #[serde(rename = "po-offered")]
+        PoOffered(PoOfferedPayload),
+    }
+
+    /// The instance key: field `page-id` of record `rec-sign-in-page`.
+    pub type Key = types::RequestId;
+
+    /// Machine `idp-offer-flow-impl`, stored in record `rec-sign-in-page` by `page-id`.
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct IdpOfferFlowImpl;
+
+    impl Machine for IdpOfferFlowImpl {
+        const NAME: &'static str = "idp-offer-flow-impl";
+
+        const RECORD: &'static str = "rec-sign-in-page";
+
+        const ISOLATION: Isolation = Isolation::Serializable;
+
+        const CREATES: bool = false;
+
+        type State = State;
+
+        type Vars = Vars;
+
+        type Event = Event;
+
+        type Emitted = Emitted;
+
+        type Key = Key;
+
+        type Record = records::RecSignInPage;
+
+        fn initial(_key: &Key) -> (State, Vars) {
+            (
+                State::PoOpenI,
+                Vars {
+                    requested_realm: String::from(""),
+                    offered_realm: String::from(""),
+                },
+            )
+        }
+
+        fn from_record(record: &records::RecSignInPage) -> Result<(State, Vars), RecordError> {
+            let state = State::PoOpenI;
+            Ok((
+                state,
+                Vars {
+                    requested_realm: match &record.requested_realm {
+                        Some(v) => v.clone(),
+                        None => String::from(""),
+                    },
+                    offered_realm: match &record.offered_realm {
+                        Some(v) => v.clone(),
+                        None => String::from(""),
+                    },
+                },
+            ))
+        }
+
+        fn to_record(
+            key: &Key,
+            _state: &State,
+            vars: &Vars,
+            _previous: Option<&records::RecSignInPage>,
+        ) -> Result<records::RecSignInPage, RecordError> {
+            Ok(records::RecSignInPage {
+                page_id: key.clone(),
+                requested_realm: Some(vars.requested_realm.clone()),
+                offered_realm: Some(vars.offered_realm.clone()),
+            })
+        }
+
+        fn step(
+            state: &State,
+            vars: &Vars,
+            event: &Event,
+            _now: Time,
+        ) -> Result<Outcome<Self>, StepError> {
+            match (state, event) {
+                (State::PoOpenI, Event::PoPage(payload)) => {
+                    let mut next = vars.clone();
+                    next.requested_realm = payload.realm.clone();
+                    next.offered_realm = payload.realm.clone();
+                    let emitted_3 = Emitted::PoOffered(PoOfferedPayload {});
+                    Ok(Outcome::to(State::PoOpenI, next).emit(
+                        "web-application",
+                        Delivery::AtMostOnce,
+                        emitted_3,
+                    ))
+                }
+            }
+        }
+    }
+}
+
+/// Role at a first federated sign-in (implementation)
+///
+/// The principal created at a first federated sign-in as the identity service records it (rec-federated-signup): the role it receives and the default role of the realm.
+///
+/// Specification behavior `first-sign-in-role-flow-impl`, an implementation-level machine.
+pub mod first_sign_in_role_flow_impl {
+    use serde::{Deserialize, Serialize};
+
+    use strata_runtime::{Delivery, Isolation, Machine, Outcome, RecordError, StepError, Time};
+
+    use crate::{records, types};
+
+    /// The states of machine `first-sign-in-role-flow-impl`.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+
+    pub enum State {
+        /// State `fr-open-i`: Creating.
+        #[serde(rename = "fr-open-i")]
+        FrOpenI,
+    }
+
+    impl State {
+        /// The state's id in the specification.
+        pub fn id(self) -> &'static str {
+            match self {
+                State::FrOpenI => "fr-open-i",
+            }
+        }
+
+        /// The state with this id in the specification.
+        pub fn from_id(id: &str) -> Option<State> {
+            match id {
+                "fr-open-i" => Some(State::FrOpenI),
+                _ => None,
+            }
+        }
+    }
+
+    /// The variables of the machine.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct Vars {
+        /// Variable `role`.
+        pub role: String,
+        /// Variable `defaultRole`.
+        #[serde(rename = "defaultRole")]
+        pub default_role: String,
+    }
+
+    /// The payload of event `fr-created`: Principal created at a first sign-in.
+    ///
+    /// A first federated sign-in creates a principal; the provider asserts a role and the realm names a default role.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct FrCreatedPayload {
+        /// Field `asserted`.
+        pub asserted: String,
+        /// Field `defaultRole`.
+        #[serde(rename = "defaultRole")]
+        pub default_role: String,
+    }
+
+    /// The payload of event `fr-principal-created`: Principal created.
+    ///
+    /// The principal exists with its role.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct FrPrincipalCreatedPayload {}
+
+    /// The events machine `first-sign-in-role-flow-impl` receives, including those its timers fire.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Event {
+        /// Event `fr-created`: Principal created at a first sign-in.
+        #[serde(rename = "fr-created")]
+        FrCreated(FrCreatedPayload),
+    }
+
+    /// The events machine `first-sign-in-role-flow-impl` emits.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Emitted {
+        /// Event `fr-principal-created`: Principal created.
+        #[serde(rename = "fr-principal-created")]
+        FrPrincipalCreated(FrPrincipalCreatedPayload),
+    }
+
+    /// The instance key: field `signup-id` of record `rec-federated-signup`.
+    pub type Key = types::RequestId;
+
+    /// Machine `first-sign-in-role-flow-impl`, stored in record `rec-federated-signup` by `signup-id`.
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct FirstSignInRoleFlowImpl;
+
+    impl Machine for FirstSignInRoleFlowImpl {
+        const NAME: &'static str = "first-sign-in-role-flow-impl";
+
+        const RECORD: &'static str = "rec-federated-signup";
+
+        const ISOLATION: Isolation = Isolation::Serializable;
+
+        const CREATES: bool = false;
+
+        type State = State;
+
+        type Vars = Vars;
+
+        type Event = Event;
+
+        type Emitted = Emitted;
+
+        type Key = Key;
+
+        type Record = records::RecFederatedSignup;
+
+        fn initial(_key: &Key) -> (State, Vars) {
+            (
+                State::FrOpenI,
+                Vars {
+                    role: String::from(""),
+                    default_role: String::from(""),
+                },
+            )
+        }
+
+        fn from_record(record: &records::RecFederatedSignup) -> Result<(State, Vars), RecordError> {
+            let state = State::FrOpenI;
+            Ok((
+                state,
+                Vars {
+                    role: match &record.role {
+                        Some(v) => v.clone(),
+                        None => String::from(""),
+                    },
+                    default_role: match &record.default_role {
+                        Some(v) => v.clone(),
+                        None => String::from(""),
+                    },
+                },
+            ))
+        }
+
+        fn to_record(
+            key: &Key,
+            _state: &State,
+            vars: &Vars,
+            _previous: Option<&records::RecFederatedSignup>,
+        ) -> Result<records::RecFederatedSignup, RecordError> {
+            Ok(records::RecFederatedSignup {
+                signup_id: key.clone(),
+                role: Some(vars.role.clone()),
+                default_role: Some(vars.default_role.clone()),
+            })
+        }
+
+        fn step(
+            state: &State,
+            vars: &Vars,
+            event: &Event,
+            _now: Time,
+        ) -> Result<Outcome<Self>, StepError> {
+            match (state, event) {
+                (State::FrOpenI, Event::FrCreated(payload)) => {
+                    let mut next = vars.clone();
+                    next.default_role = payload.default_role.clone();
+                    next.role = payload.default_role.clone();
+                    let emitted_3 = Emitted::FrPrincipalCreated(FrPrincipalCreatedPayload {});
+                    Ok(Outcome::to(State::FrOpenI, next).emit(
+                        "web-application",
+                        Delivery::AtMostOnce,
+                        emitted_3,
+                    ))
+                }
+            }
+        }
+    }
+}
+
+/// Token verifier copy of a grant (implementation)
+///
+/// The verifier copy of one grant (rec-grant-copy): whether the copy is revoked and when it was last checked against the grant record, in milliseconds. It trusts the copy for 5000 ms. The refinement reads one model tick as one second (timeScale 1000).
+///
+/// Specification behavior `token-verifier-flow-impl`, an implementation-level machine.
+pub mod token_verifier_flow_impl {
+    use serde::{Deserialize, Serialize};
+
+    use strata_runtime::{Delivery, Isolation, Machine, Outcome, RecordError, StepError, Time};
+
+    use crate::{prelude, records, types};
+
+    /// The states of machine `token-verifier-flow-impl`.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+
+    pub enum State {
+        /// State `tg-open-i`: Verifying.
+        #[serde(rename = "tg-open-i")]
+        TgOpenI,
+    }
+
+    impl State {
+        /// The state's id in the specification.
+        pub fn id(self) -> &'static str {
+            match self {
+                State::TgOpenI => "tg-open-i",
+            }
+        }
+
+        /// The state with this id in the specification.
+        pub fn from_id(id: &str) -> Option<State> {
+            match id {
+                "tg-open-i" => Some(State::TgOpenI),
+                _ => None,
+            }
+        }
+    }
+
+    /// The variables of the machine.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct Vars {
+        /// Variable `copyRevoked`.
+        #[serde(rename = "copyRevoked")]
+        pub copy_revoked: bool,
+        /// Variable `checkedAt`.
+        #[serde(rename = "checkedAt")]
+        pub checked_at: prelude::Timestamp,
+    }
+
+    /// The payload of event `tg-notice`: Grant revocation notice.
+    ///
+    /// The verifier is told that a grant was revoked.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct TgNoticePayload {}
+
+    /// The payload of event `tg-presented`: Token presented.
+    ///
+    /// A token of a grant is presented; the grant record says whether it was revoked.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct TgPresentedPayload {
+        /// Field `grantRevoked`.
+        #[serde(rename = "grantRevoked")]
+        pub grant_revoked: bool,
+    }
+
+    /// The payload of event `tg-accepted`: Token accepted.
+    ///
+    /// The token is accepted.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct TgAcceptedPayload {}
+
+    /// The payload of event `tg-refused`: Token refused.
+    ///
+    /// The token is refused.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct TgRefusedPayload {}
+
+    /// The events machine `token-verifier-flow-impl` receives, including those its timers fire.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Event {
+        /// Event `tg-notice`: Grant revocation notice.
+        #[serde(rename = "tg-notice")]
+        TgNotice(TgNoticePayload),
+        /// Event `tg-presented`: Token presented.
+        #[serde(rename = "tg-presented")]
+        TgPresented(TgPresentedPayload),
+    }
+
+    /// The events machine `token-verifier-flow-impl` emits.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Emitted {
+        /// Event `tg-accepted`: Token accepted.
+        #[serde(rename = "tg-accepted")]
+        TgAccepted(TgAcceptedPayload),
+        /// Event `tg-refused`: Token refused.
+        #[serde(rename = "tg-refused")]
+        TgRefused(TgRefusedPayload),
+    }
+
+    /// The instance key: field `grant-id` of record `rec-grant-copy`.
+    pub type Key = types::GrantId;
+
+    /// Machine `token-verifier-flow-impl`, stored in record `rec-grant-copy` by `grant-id`.
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct TokenVerifierFlowImpl;
+
+    /// The refusal of a step whose arithmetic overflows or divides by zero.
+    fn overflow(transition: &str) -> StepError {
+        StepError::Rejected(format!(
+            "transition {transition} overflowed or divided by zero"
+        ))
+    }
+
+    impl Machine for TokenVerifierFlowImpl {
+        const NAME: &'static str = "token-verifier-flow-impl";
+
+        const RECORD: &'static str = "rec-grant-copy";
+
+        const ISOLATION: Isolation = Isolation::Serializable;
+
+        const CREATES: bool = false;
+
+        type State = State;
+
+        type Vars = Vars;
+
+        type Event = Event;
+
+        type Emitted = Emitted;
+
+        type Key = Key;
+
+        type Record = records::RecGrantCopy;
+
+        fn initial(_key: &Key) -> (State, Vars) {
+            (
+                State::TgOpenI,
+                Vars {
+                    copy_revoked: false,
+                    checked_at: prelude::Timestamp(0i64),
+                },
+            )
+        }
+
+        fn from_record(record: &records::RecGrantCopy) -> Result<(State, Vars), RecordError> {
+            let state = State::TgOpenI;
+            Ok((
+                state,
+                Vars {
+                    copy_revoked: match &record.copy_revoked {
+                        Some(v) => *v,
+                        None => false,
+                    },
+                    checked_at: match &record.checked_at {
+                        Some(v) => *v,
+                        None => prelude::Timestamp(0i64),
+                    },
+                },
+            ))
+        }
+
+        fn to_record(
+            key: &Key,
+            _state: &State,
+            vars: &Vars,
+            _previous: Option<&records::RecGrantCopy>,
+        ) -> Result<records::RecGrantCopy, RecordError> {
+            Ok(records::RecGrantCopy {
+                grant_id: key.clone(),
+                copy_revoked: Some(vars.copy_revoked),
+                checked_at: Some(vars.checked_at),
+            })
+        }
+
+        fn step(
+            state: &State,
+            vars: &Vars,
+            event: &Event,
+            now: Time,
+        ) -> Result<Outcome<Self>, StepError> {
+            match (state, event) {
+                (State::TgOpenI, Event::TgNotice(_)) => {
+                    let mut next = vars.clone();
+                    next.copy_revoked = true;
+                    Ok(Outcome::to(State::TgOpenI, next))
+                }
+                (State::TgOpenI, Event::TgPresented(payload)) => {
+                    if !vars.copy_revoked
+                        && now
+                            .0
+                            .checked_sub(vars.checked_at.0)
+                            .ok_or(overflow("tg-accept-cached-i"))?
+                            < 5000i64
+                    {
+                        Ok(Outcome::to(State::TgOpenI, vars.clone()).emit(
+                            "web-application",
+                            Delivery::AtMostOnce,
+                            Emitted::TgAccepted(TgAcceptedPayload {}),
+                        ))
+                    } else {
+                        if vars.copy_revoked {
+                            Ok(Outcome::to(State::TgOpenI, vars.clone()).emit(
+                                "web-application",
+                                Delivery::AtMostOnce,
+                                Emitted::TgRefused(TgRefusedPayload {}),
+                            ))
+                        } else {
+                            if !payload.grant_revoked {
+                                let mut next = vars.clone();
+                                next.checked_at = prelude::Timestamp(now.0);
+                                let emitted_2 = Emitted::TgAccepted(TgAcceptedPayload {});
+                                Ok(Outcome::to(State::TgOpenI, next).emit(
+                                    "web-application",
+                                    Delivery::AtMostOnce,
+                                    emitted_2,
+                                ))
+                            } else {
+                                let mut next = vars.clone();
+                                next.copy_revoked = true;
+                                let emitted_2 = Emitted::TgRefused(TgRefusedPayload {});
+                                Ok(Outcome::to(State::TgOpenI, next).emit(
+                                    "web-application",
+                                    Delivery::AtMostOnce,
+                                    emitted_2,
+                                ))
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Signing keys (implementation)
+///
+/// The key set of the platform as the identity service holds it (rec-signing-key-set): the current and the previous key identifier. A token verifies only with one of them and only until it expires.
+///
+/// Specification behavior `signing-key-flow-impl`, an implementation-level machine.
+pub mod signing_key_flow_impl {
+    use serde::{Deserialize, Serialize};
+
+    use strata_runtime::{Delivery, Isolation, Machine, Outcome, RecordError, StepError, Time};
+
+    use crate::records;
+
+    /// The states of machine `signing-key-flow-impl`.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+
+    pub enum State {
+        /// State `sk-open-i`: Keys held.
+        #[serde(rename = "sk-open-i")]
+        SkOpenI,
+    }
+
+    impl State {
+        /// The state's id in the specification.
+        pub fn id(self) -> &'static str {
+            match self {
+                State::SkOpenI => "sk-open-i",
+            }
+        }
+
+        /// The state with this id in the specification.
+        pub fn from_id(id: &str) -> Option<State> {
+            match id {
+                "sk-open-i" => Some(State::SkOpenI),
+                _ => None,
+            }
+        }
+    }
+
+    /// The variables of the machine.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct Vars {
+        /// Variable `current`.
+        pub current: String,
+        /// Variable `previous`.
+        pub previous: String,
+    }
+
+    /// The payload of event `sk-rotated`: Signing key rotated.
+    ///
+    /// A new signing key is brought into use.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct SkRotatedPayload {
+        /// Field `newKid`.
+        #[serde(rename = "newKid")]
+        pub new_kid: String,
+    }
+
+    /// The payload of event `sk-compromised`: Signing key compromised.
+    ///
+    /// A signing key is known to be compromised; a replacement takes its place.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct SkCompromisedPayload {
+        /// Field `kid`.
+        pub kid: String,
+        /// Field `replacement`.
+        pub replacement: String,
+    }
+
+    /// The payload of event `sk-token`: Token presented for verification.
+    ///
+    /// A token signed with a key is presented.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct SkTokenPayload {
+        /// Field `kid`.
+        pub kid: String,
+        /// Field `expired`.
+        pub expired: bool,
+    }
+
+    /// The payload of event `sk-accepted`: Token verified.
+    ///
+    /// The token verifies.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct SkAcceptedPayload {}
+
+    /// The payload of event `sk-refused`: Token refused.
+    ///
+    /// The token does not verify.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct SkRefusedPayload {}
+
+    /// The events machine `signing-key-flow-impl` receives, including those its timers fire.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Event {
+        /// Event `sk-rotated`: Signing key rotated.
+        #[serde(rename = "sk-rotated")]
+        SkRotated(SkRotatedPayload),
+        /// Event `sk-compromised`: Signing key compromised.
+        #[serde(rename = "sk-compromised")]
+        SkCompromised(SkCompromisedPayload),
+        /// Event `sk-token`: Token presented for verification.
+        #[serde(rename = "sk-token")]
+        SkToken(SkTokenPayload),
+    }
+
+    /// The events machine `signing-key-flow-impl` emits.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Emitted {
+        /// Event `sk-accepted`: Token verified.
+        #[serde(rename = "sk-accepted")]
+        SkAccepted(SkAcceptedPayload),
+        /// Event `sk-refused`: Token refused.
+        #[serde(rename = "sk-refused")]
+        SkRefused(SkRefusedPayload),
+    }
+
+    /// The instance key: field `key-set-id` of record `rec-signing-key-set`.
+    pub type Key = String;
+
+    /// Machine `signing-key-flow-impl`, stored in record `rec-signing-key-set` by `key-set-id`.
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct SigningKeyFlowImpl;
+
+    impl Machine for SigningKeyFlowImpl {
+        const NAME: &'static str = "signing-key-flow-impl";
+
+        const RECORD: &'static str = "rec-signing-key-set";
+
+        const ISOLATION: Isolation = Isolation::Serializable;
+
+        const CREATES: bool = false;
+
+        type State = State;
+
+        type Vars = Vars;
+
+        type Event = Event;
+
+        type Emitted = Emitted;
+
+        type Key = Key;
+
+        type Record = records::RecSigningKeySet;
+
+        fn initial(_key: &Key) -> (State, Vars) {
+            (
+                State::SkOpenI,
+                Vars {
+                    current: String::from("k1"),
+                    previous: String::from("none"),
+                },
+            )
+        }
+
+        fn from_record(record: &records::RecSigningKeySet) -> Result<(State, Vars), RecordError> {
+            let state = State::SkOpenI;
+            Ok((
+                state,
+                Vars {
+                    current: match &record.current_kid {
+                        Some(v) => v.clone(),
+                        None => String::from("k1"),
+                    },
+                    previous: match &record.previous_kid {
+                        Some(v) => v.clone(),
+                        None => String::from("none"),
+                    },
+                },
+            ))
+        }
+
+        fn to_record(
+            key: &Key,
+            _state: &State,
+            vars: &Vars,
+            _previous: Option<&records::RecSigningKeySet>,
+        ) -> Result<records::RecSigningKeySet, RecordError> {
+            Ok(records::RecSigningKeySet {
+                key_set_id: key.clone(),
+                current_kid: Some(vars.current.clone()),
+                previous_kid: Some(vars.previous.clone()),
+            })
+        }
+
+        fn step(
+            state: &State,
+            vars: &Vars,
+            event: &Event,
+            _now: Time,
+        ) -> Result<Outcome<Self>, StepError> {
+            match (state, event) {
+                (State::SkOpenI, Event::SkRotated(payload)) => {
+                    let mut next = vars.clone();
+                    next.previous = next.current.clone();
+                    next.current = payload.new_kid.clone();
+                    Ok(Outcome::to(State::SkOpenI, next))
+                }
+                (State::SkOpenI, Event::SkCompromised(payload)) => {
+                    if payload.kid == vars.current {
+                        let mut next = vars.clone();
+                        next.current = payload.replacement.clone();
+                        next.previous = ::std::string::String::from("none");
+                        Ok(Outcome::to(State::SkOpenI, next))
+                    } else {
+                        if payload.kid == vars.previous {
+                            let mut next = vars.clone();
+                            next.previous = ::std::string::String::from("none");
+                            Ok(Outcome::to(State::SkOpenI, next))
+                        } else {
+                            Ok(Outcome::to(*state, vars.clone()))
+                        }
+                    }
+                }
+                (State::SkOpenI, Event::SkToken(payload)) => {
+                    if !payload.expired
+                        && (payload.kid == vars.current || payload.kid == vars.previous)
+                    {
+                        Ok(Outcome::to(State::SkOpenI, vars.clone()).emit(
+                            "web-application",
+                            Delivery::AtMostOnce,
+                            Emitted::SkAccepted(SkAcceptedPayload {}),
+                        ))
+                    } else {
+                        Ok(Outcome::to(State::SkOpenI, vars.clone()).emit(
+                            "web-application",
+                            Delivery::AtMostOnce,
+                            Emitted::SkRefused(SkRefusedPayload {}),
+                        ))
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Sign-up and recovery responses (implementation)
+///
+/// The answer to one sign-up or recovery request. It keeps nothing between requests; the notice goes to the owner through the mail service.
+///
+/// Specification behavior `signup-notice-flow-impl`, an implementation-level machine.
+pub mod signup_notice_flow_impl {
+    use serde::{Deserialize, Serialize};
+
+    use strata_runtime::{Delivery, Isolation, Machine, Outcome, RecordError, StepError, Time};
+
+    use crate::{records, types};
+
+    /// The states of machine `signup-notice-flow-impl`.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+
+    pub enum State {
+        /// State `su-open-i`: Answering.
+        #[serde(rename = "su-open-i")]
+        SuOpenI,
+    }
+
+    impl State {
+        /// The state's id in the specification.
+        pub fn id(self) -> &'static str {
+            match self {
+                State::SuOpenI => "su-open-i",
+            }
+        }
+
+        /// The state with this id in the specification.
+        pub fn from_id(id: &str) -> Option<State> {
+            match id {
+                "su-open-i" => Some(State::SuOpenI),
+                _ => None,
+            }
+        }
+    }
+
+    /// The variables of the machine.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct Vars {}
+
+    /// The payload of event `su-requested`: Sign-up or recovery requested.
+    ///
+    /// A sign-up or a recovery request names an address.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct SuRequestedPayload {
+        /// Field `addressExists`.
+        #[serde(rename = "addressExists")]
+        pub address_exists: bool,
+        /// Field `kind`.
+        pub kind: String,
+    }
+
+    /// The payload of event `su-response-sent`: Response sent.
+    ///
+    /// The requester receives the uniform response.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct SuResponseSentPayload {}
+
+    /// The payload of event `su-owner-notified`: Owner notified.
+    ///
+    /// The owner of the address is sent a notice.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct SuOwnerNotifiedPayload {}
+
+    /// The events machine `signup-notice-flow-impl` receives, including those its timers fire.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Event {
+        /// Event `su-requested`: Sign-up or recovery requested.
+        #[serde(rename = "su-requested")]
+        SuRequested(SuRequestedPayload),
+    }
+
+    /// The events machine `signup-notice-flow-impl` emits.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Emitted {
+        /// Event `su-response-sent`: Response sent.
+        #[serde(rename = "su-response-sent")]
+        SuResponseSent(SuResponseSentPayload),
+        /// Event `su-owner-notified`: Owner notified.
+        #[serde(rename = "su-owner-notified")]
+        SuOwnerNotified(SuOwnerNotifiedPayload),
+    }
+
+    /// The instance key: field `decision-id` of record `rec-identity-decision`.
+    pub type Key = types::RequestId;
+
+    /// Machine `signup-notice-flow-impl`, stored in record `rec-identity-decision` by `decision-id`.
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct SignupNoticeFlowImpl;
+
+    impl Machine for SignupNoticeFlowImpl {
+        const NAME: &'static str = "signup-notice-flow-impl";
+
+        const RECORD: &'static str = "rec-identity-decision";
+
+        const ISOLATION: Isolation = Isolation::Serializable;
+
+        const CREATES: bool = false;
+
+        type State = State;
+
+        type Vars = Vars;
+
+        type Event = Event;
+
+        type Emitted = Emitted;
+
+        type Key = Key;
+
+        type Record = records::RecIdentityDecision;
+
+        fn initial(_key: &Key) -> (State, Vars) {
+            (State::SuOpenI, Vars {})
+        }
+
+        fn from_record(
+            _record: &records::RecIdentityDecision,
+        ) -> Result<(State, Vars), RecordError> {
+            let state = State::SuOpenI;
+            Ok((state, Vars {}))
+        }
+
+        fn to_record(
+            key: &Key,
+            _state: &State,
+            _vars: &Vars,
+            _previous: Option<&records::RecIdentityDecision>,
+        ) -> Result<records::RecIdentityDecision, RecordError> {
+            Ok(records::RecIdentityDecision {
+                decision_id: key.clone(),
+            })
+        }
+
+        fn step(
+            state: &State,
+            vars: &Vars,
+            event: &Event,
+            _now: Time,
+        ) -> Result<Outcome<Self>, StepError> {
+            match (state, event) {
+                (State::SuOpenI, Event::SuRequested(payload)) => {
+                    if payload.address_exists {
+                        Ok(Outcome::to(State::SuOpenI, vars.clone())
+                            .emit(
+                                "web-application",
+                                Delivery::AtMostOnce,
+                                Emitted::SuResponseSent(SuResponseSentPayload {}),
+                            )
+                            .emit(
+                                "mail-service",
+                                Delivery::AtMostOnce,
+                                Emitted::SuOwnerNotified(SuOwnerNotifiedPayload {}),
+                            ))
+                    } else {
+                        Ok(Outcome::to(State::SuOpenI, vars.clone()).emit(
+                            "web-application",
+                            Delivery::AtMostOnce,
+                            Emitted::SuResponseSent(SuResponseSentPayload {}),
+                        ))
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Sign-in from a new source or device (implementation)
+///
+/// One successful sign-in. The notice to the account owner goes through the mail service.
+///
+/// Specification behavior `new-device-flow-impl`, an implementation-level machine.
+pub mod new_device_flow_impl {
+    use serde::{Deserialize, Serialize};
+
+    use strata_runtime::{Delivery, Isolation, Machine, Outcome, RecordError, StepError, Time};
+
+    use crate::{records, types};
+
+    /// The states of machine `new-device-flow-impl`.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+
+    pub enum State {
+        /// State `nd-open-i`: Answering.
+        #[serde(rename = "nd-open-i")]
+        NdOpenI,
+    }
+
+    impl State {
+        /// The state's id in the specification.
+        pub fn id(self) -> &'static str {
+            match self {
+                State::NdOpenI => "nd-open-i",
+            }
+        }
+
+        /// The state with this id in the specification.
+        pub fn from_id(id: &str) -> Option<State> {
+            match id {
+                "nd-open-i" => Some(State::NdOpenI),
+                _ => None,
+            }
+        }
+    }
+
+    /// The variables of the machine.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct Vars {}
+
+    /// The payload of event `nd-signed-in`: Sign-in succeeded.
+    ///
+    /// A sign-in succeeds; the identity service knows whether the source and the device were used before.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct NdSignedInPayload {
+        /// Field `known`.
+        pub known: bool,
+    }
+
+    /// The payload of event `nd-session-issued`: Session issued.
+    ///
+    /// The sign-in yields a session.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct NdSessionIssuedPayload {}
+
+    /// The payload of event `nd-notice-sent`: New sign-in notice sent.
+    ///
+    /// The account owner is told of a sign-in from a new source or device.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct NdNoticeSentPayload {}
+
+    /// The events machine `new-device-flow-impl` receives, including those its timers fire.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Event {
+        /// Event `nd-signed-in`: Sign-in succeeded.
+        #[serde(rename = "nd-signed-in")]
+        NdSignedIn(NdSignedInPayload),
+    }
+
+    /// The events machine `new-device-flow-impl` emits.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Emitted {
+        /// Event `nd-session-issued`: Session issued.
+        #[serde(rename = "nd-session-issued")]
+        NdSessionIssued(NdSessionIssuedPayload),
+        /// Event `nd-notice-sent`: New sign-in notice sent.
+        #[serde(rename = "nd-notice-sent")]
+        NdNoticeSent(NdNoticeSentPayload),
+    }
+
+    /// The instance key: field `decision-id` of record `rec-identity-decision`.
+    pub type Key = types::RequestId;
+
+    /// Machine `new-device-flow-impl`, stored in record `rec-identity-decision` by `decision-id`.
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct NewDeviceFlowImpl;
+
+    impl Machine for NewDeviceFlowImpl {
+        const NAME: &'static str = "new-device-flow-impl";
+
+        const RECORD: &'static str = "rec-identity-decision";
+
+        const ISOLATION: Isolation = Isolation::Serializable;
+
+        const CREATES: bool = false;
+
+        type State = State;
+
+        type Vars = Vars;
+
+        type Event = Event;
+
+        type Emitted = Emitted;
+
+        type Key = Key;
+
+        type Record = records::RecIdentityDecision;
+
+        fn initial(_key: &Key) -> (State, Vars) {
+            (State::NdOpenI, Vars {})
+        }
+
+        fn from_record(
+            _record: &records::RecIdentityDecision,
+        ) -> Result<(State, Vars), RecordError> {
+            let state = State::NdOpenI;
+            Ok((state, Vars {}))
+        }
+
+        fn to_record(
+            key: &Key,
+            _state: &State,
+            _vars: &Vars,
+            _previous: Option<&records::RecIdentityDecision>,
+        ) -> Result<records::RecIdentityDecision, RecordError> {
+            Ok(records::RecIdentityDecision {
+                decision_id: key.clone(),
+            })
+        }
+
+        fn step(
+            state: &State,
+            vars: &Vars,
+            event: &Event,
+            _now: Time,
+        ) -> Result<Outcome<Self>, StepError> {
+            match (state, event) {
+                (State::NdOpenI, Event::NdSignedIn(payload)) => {
+                    if !payload.known {
+                        Ok(Outcome::to(State::NdOpenI, vars.clone())
+                            .emit(
+                                "web-application",
+                                Delivery::AtMostOnce,
+                                Emitted::NdSessionIssued(NdSessionIssuedPayload {}),
+                            )
+                            .emit(
+                                "mail-service",
+                                Delivery::AtMostOnce,
+                                Emitted::NdNoticeSent(NdNoticeSentPayload {}),
+                            ))
+                    } else {
+                        Ok(Outcome::to(State::NdOpenI, vars.clone()).emit(
+                            "web-application",
+                            Delivery::AtMostOnce,
+                            Emitted::NdSessionIssued(NdSessionIssuedPayload {}),
+                        ))
                     }
                 }
             }
