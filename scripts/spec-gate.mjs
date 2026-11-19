@@ -423,7 +423,7 @@ const constructionPct = requirements.length ? ((realised.construction / requirem
 console.log(`construction share: ${realised.construction} of ${requirements.length} requirements (${constructionPct}%); checked ${realised.checked}, operational ${realised.operational}, missing ${realised.missing}`);
 const rust = rustLineShare(root);
 const generatedPct = rust.total ? ((rust.generated / rust.total) * 100).toFixed(1) : '0.0';
-console.log(`generated code: ${rust.generated} of ${rust.total} non-blank Rust lines under crates/ (${generatedPct}%); hand-written ${rust.handWritten}`);
+console.log(`generated code: ${rust.generated} of ${rust.total} non-blank Rust lines linked into the shipped binaries (${generatedPct}%); hand-written ${rust.handWritten}; crates ${rust.crates.join(', ')}; generated modules ${rust.generatedModules.join(', ') || 'none'}`);
 const cargoRecord = existsSync(join(resultsDir, 'cargo-test.txt')) ? readFileSync(join(resultsDir, 'cargo-test.txt'), 'utf8') : '';
 const genTests = generatedTests(root, cargoRecord);
 if (genTests.total === 0 && genTests.unmapped === 0) console.log('generated tests: none yet');
