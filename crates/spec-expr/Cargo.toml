@@ -1,6 +1,6 @@
 [package]
 name = "strata-spec-expr"
-description = "The Exegra expression language of the specification: parser, type checker against representation types, and translation to Rust token streams."
+description = "The Exegra expression language of the specification: parser, type checker against representation types, and translation to Rust token streams and to JavaScript."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

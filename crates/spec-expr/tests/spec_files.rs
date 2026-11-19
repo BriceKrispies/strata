@@ -163,3 +163,110 @@ fn jsonc_stripping_respects_strings() {
     assert_eq!(v["a"], "x // y, }");
     assert_eq!(v["b"][0], 1);
 }
+
+/// A scope that gives each reference the type assigned to it, for both targets.
+struct Assigned(std::collections::HashMap<String, strata_spec_expr::Ty>);
+
+impl strata_spec_expr::Scope for Assigned {
+    fn resolve(&self, path: &[&str]) -> Option<strata_spec_expr::Binding> {
+        let key = path.join(".");
+        let ty = self.0.get(&key)?.clone();
+        Some(strata_spec_expr::Binding {
+            ty,
+            tokens: key.replace(['.', '-'], "_").parse().unwrap(),
+        })
+    }
+
+    fn overflow_error(&self) -> proc_macro2::TokenStream {
+        "StepError::Overflow".parse().unwrap()
+    }
+}
+
+impl strata_spec_expr::JsScope for Assigned {
+    fn resolve_js(&self, path: &[&str]) -> Option<strata_spec_expr::JsBinding> {
+        let key = path.join(".");
+        let ty = self.0.get(&key)?.clone();
+        Some(strata_spec_expr::JsBinding {
+            ty,
+            js: key.replace(['.', '-'], "_"),
+        })
+    }
+
+    fn overflow_error_js(&self) -> String {
+        "__ov()".to_string()
+    }
+}
+
+fn refs(e: &strata_spec_expr::Expr, out: &mut Vec<String>) {
+    use strata_spec_expr::ExprKind;
+    match &e.kind {
+        ExprKind::Ref(p) => {
+            let k = p.join(".");
+            if !out.contains(&k) {
+                out.push(k);
+            }
+        }
+        ExprKind::Un(_, a) => refs(a, out),
+        ExprKind::Bin(_, a, b) => {
+            refs(a, out);
+            refs(b, out);
+        }
+        ExprKind::Lit(_) => {}
+    }
+}
+
+/// Over every assignment of candidate types to an expression's references, the Rust and the
+/// JavaScript target accept the expression for the same assignments and refuse with the same kind.
+#[test]
+fn both_targets_accept_exactly_the_same_specification_expressions() {
+    use strata_spec_expr::{to_js, to_rust, Ty};
+    let candidates = [
+        Ty::U64,
+        Ty::I64,
+        Ty::F64,
+        Ty::Bool,
+        Ty::String,
+        Ty::Option(Box::new(Ty::U64)),
+    ];
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../specifications/spec.jsonc");
+    let text = std::fs::read_to_string(&path).unwrap();
+    let json: Value = serde_json::from_str(&strip_jsonc(&text)).unwrap();
+    let mut found = Vec::new();
+    expressions(&json, "", &mut found);
+    let (mut accepted, mut refused) = (0usize, 0usize);
+    for (place, src) in &found {
+        let e = parse(src).unwrap();
+        let mut names = Vec::new();
+        refs(&e, &mut names);
+        // At most five references vary; the rest stay u64.
+        let varying = names.len().min(5);
+        let total = candidates.len().pow(varying as u32);
+        for n in 0..total {
+            let mut k = n;
+            let mut map = std::collections::HashMap::new();
+            for (i, name) in names.iter().enumerate() {
+                let ty = if i < varying {
+                    let t = candidates[k % candidates.len()].clone();
+                    k /= candidates.len();
+                    t
+                } else {
+                    Ty::U64
+                };
+                map.insert(name.clone(), ty);
+            }
+            let scope = Assigned(map);
+            let r = to_rust(&e, &scope);
+            let j = to_js(&e, &scope);
+            match (&r, &j) {
+                (Ok(_), Ok(_)) => accepted += 1,
+                (Err(a), Err(b)) => {
+                    refused += 1;
+                    assert_eq!(a.kind, b.kind, "{place}: `{src}`");
+                }
+                _ => panic!("{place}: `{src}` differs between targets: rust {r:?}, js {j:?}"),
+            }
+        }
+    }
+    assert!(accepted > 0, "no expression was accepted by both targets");
+    assert!(refused > 0);
+}

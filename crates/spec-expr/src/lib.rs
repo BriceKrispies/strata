@@ -1,5 +1,5 @@
 //! The Exegra expression language as used by the Strata specification: a parser that follows
-//! `src/core/expr.js`, a type checker against representation types, and a translation to Rust.
+//! `src/core/expr.js`, a type checker against representation types, and translations to Rust and to JavaScript (`js.rs`).
 //!
 //! Grammar, lowest precedence first:
 //!
@@ -24,9 +24,11 @@
 mod ast;
 mod check;
 mod error;
+mod js;
 mod parse;
 
 pub use ast::{BinOp, Expr, ExprKind, Lit, Span, UnOp};
 pub use check::{to_rust, to_rust_as, type_of, Binding, Scope, Ty};
 pub use error::{ParseError, TypeError, TypeErrorKind};
+pub use js::{to_js, to_js_as, JsBinding, JsScope};
 pub use parse::parse;

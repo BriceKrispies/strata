@@ -3,7 +3,7 @@
 use proc_macro2::TokenStream;
 use quote::format_ident;
 use std::collections::HashMap;
-use strata_spec_expr::{Binding, Scope, Ty};
+use strata_spec_expr::{Binding, JsBinding, JsScope, Scope, Ty};
 
 /// A scope of named references. The Rust expression of `a.b-c` is the identifier `a_b_c`.
 pub struct TestScope {
@@ -33,6 +33,37 @@ impl Scope for TestScope {
     fn overflow_error(&self) -> TokenStream {
         "StepError::Overflow".parse().unwrap()
     }
+}
+
+/// The JavaScript identifier of `a.b-c` is `a_b_c`; overflow is the call `__ov()`.
+impl JsScope for TestScope {
+    fn resolve_js(&self, path: &[&str]) -> Option<JsBinding> {
+        let key = path.join(".");
+        let ty = self.vars.get(&key)?.clone();
+        Some(JsBinding {
+            ty,
+            js: key.replace(['.', '-'], "_"),
+        })
+    }
+
+    fn overflow_error_js(&self) -> String {
+        "__ov()".to_string()
+    }
+}
+
+pub fn js(src: &str, s: &TestScope) -> String {
+    let e = strata_spec_expr::parse(src).unwrap();
+    strata_spec_expr::to_js(&e, s).unwrap()
+}
+
+pub fn js_as(src: &str, s: &TestScope, ty: &Ty) -> String {
+    let e = strata_spec_expr::parse(src).unwrap();
+    strata_spec_expr::to_js_as(&e, s, ty).unwrap()
+}
+
+pub fn js_err(src: &str, s: &TestScope) -> strata_spec_expr::TypeError {
+    let e = strata_spec_expr::parse(src).unwrap();
+    strata_spec_expr::to_js(&e, s).unwrap_err()
 }
 
 /// Token text without whitespace, so that expectations are written as ordinary Rust and token
