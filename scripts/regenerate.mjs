@@ -7,6 +7,9 @@
 //      clean checkout (or one where crates/model/src was deleted) could not regenerate itself.
 //   2. The backend model: crates/model, from specifications/spec.jsonc.
 //   3. The web modules: web/src/generated, from the same specification.
+//   4. The browser journeys: tests/e2e/generated, from the same specification's uiScenarios,
+//      written against the stack on http://127.0.0.1:4200 (STRATA_E2E_BASE_URL moves them).
+//   5. The step fixtures: tests/e2e/step-checks, from tests/e2e/step-fixtures/spec.jsonc.
 //
 // The first failing step stops the run. Cargo runs with two jobs.
 import { spawnSync } from 'node:child_process';
@@ -51,6 +54,12 @@ specc('generate the backend model (crates/model)', [
 ]);
 specc('generate the web modules (web/src/generated)', [
   'web', '--spec', 'specifications/spec.jsonc', '--out', 'web/src/generated',
+]);
+specc('generate the browser journeys (tests/e2e/generated)', [
+  'e2e', '--spec', 'specifications/spec.jsonc', '--out', 'tests/e2e/generated', '--origin', 'http://127.0.0.1:4200',
+]);
+specc('generate the step fixtures (tests/e2e/step-checks)', [
+  'e2e', '--spec', 'tests/e2e/step-fixtures/spec.jsonc', '--out', 'tests/e2e/step-checks', '--expect-fail-prefix', 'violates-',
 ]);
 
 console.log('\nregenerate: done');

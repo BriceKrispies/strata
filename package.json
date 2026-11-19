@@ -9,6 +9,8 @@
     "check": "tsc -p web/jsconfig.json",
     "test:web": "node --test web/test/kernel.test.js",
     "e2e": "playwright test -c tests/e2e/playwright.config.js",
+    "e2e:generated": "playwright test -c tests/e2e/generated/playwright.generated.config.js",
+    "e2e:steps": "playwright test -c tests/e2e/step-fixtures/playwright.config.js",
     "spec": "node scripts/spec-gate.mjs"
   },
   "devDependencies": {

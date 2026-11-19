@@ -8,7 +8,9 @@
 // crashes, prints nothing parseable, or cannot be found is a failed check.
 //
 // Steps, in order:
-//   0. specc check: crates/model is exactly what the compiler writes from the specification.
+//   0. specc check: crates/model is exactly what the compiler writes from the specification;
+//      check-web and check-e2e do the same for web/src/generated, tests/e2e/generated (the
+//      journeys) and tests/e2e/step-checks (the step fixtures).
 //   1. cargo test --workspace, lake build, node --test (web), npm run check (tsc), recorded under
 //      var/test-results (at most two jobs). Not run with --no-test.
 //   2. Exegra (EXEGRA_HOME, default ../exegra; EXEGRA_PROJECT, default strata): validate the
@@ -196,6 +198,20 @@ if (!startedMatch || started.size === 0) check('concordance.toml names started m
   });
   check('specc check-web (web/src/generated is generated from the specification)', web.ok,
     web.ok ? 'up to date' : `${exitText(web)}: ${lastLine(web.out)}; run npm run generate and commit`);
+
+  const e2e = run('cargo', ['run', '--quiet', '-p', 'strata-spec-compiler', '--bin', 'specc', '--',
+    'check-e2e', '--spec', 'specifications/spec.jsonc', '--out', 'tests/e2e/generated', '--origin', 'http://127.0.0.1:4200'], {
+    env: { CARGO_BUILD_JOBS: '2', CARGO_TARGET_DIR: 'target/gate' },
+  });
+  check('specc check-e2e (tests/e2e/generated is generated from the specification)', e2e.ok,
+    e2e.ok ? 'up to date' : `${exitText(e2e)}: ${lastLine(e2e.out)}; run npm run generate and commit`);
+
+  const steps = run('cargo', ['run', '--quiet', '-p', 'strata-spec-compiler', '--bin', 'specc', '--',
+    'check-e2e', '--spec', 'tests/e2e/step-fixtures/spec.jsonc', '--out', 'tests/e2e/step-checks', '--expect-fail-prefix', 'violates-'], {
+    env: { CARGO_BUILD_JOBS: '2', CARGO_TARGET_DIR: 'target/gate' },
+  });
+  check('specc check-e2e (tests/e2e/step-checks is generated from the step fixtures)', steps.ok,
+    steps.ok ? 'up to date' : `${exitText(steps)}: ${lastLine(steps.out)}; run npm run generate and commit`);
 }
 
 // ---------------------------------------------------------------------------------------------
