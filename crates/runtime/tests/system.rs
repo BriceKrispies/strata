@@ -58,3 +58,43 @@ async fn memory_a_failed_step_commits_nothing() {
 async fn sqlite_a_failed_step_commits_nothing() {
     a_failed_step_commits_nothing(sqlite("failed")).await;
 }
+
+#[tokio::test]
+async fn memory_quarantines_an_unreadable_entry() {
+    quarantines_an_unreadable_entry(memory()).await;
+}
+
+#[tokio::test]
+async fn sqlite_quarantines_an_unreadable_entry() {
+    quarantines_an_unreadable_entry(sqlite("quarantine")).await;
+}
+
+#[tokio::test]
+async fn memory_two_hosts_dispatch_once() {
+    two_hosts_dispatch_once(memory()).await;
+}
+
+#[tokio::test]
+async fn sqlite_two_hosts_dispatch_once() {
+    two_hosts_dispatch_once(sqlite("two-hosts")).await;
+}
+
+#[tokio::test]
+async fn memory_refuses_an_elapsed_event_from_outside() {
+    refuses_an_elapsed_event_from_outside(memory()).await;
+}
+
+#[tokio::test]
+async fn sqlite_refuses_an_elapsed_event_from_outside() {
+    refuses_an_elapsed_event_from_outside(sqlite("elapsed")).await;
+}
+
+#[tokio::test]
+async fn memory_refuses_a_record_that_breaks_a_constraint() {
+    refuses_a_record_that_breaks_a_constraint(memory()).await;
+}
+
+#[tokio::test]
+async fn sqlite_refuses_a_record_that_breaks_a_constraint() {
+    refuses_a_record_that_breaks_a_constraint(sqlite("constraint")).await;
+}

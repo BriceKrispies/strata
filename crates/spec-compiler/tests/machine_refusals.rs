@@ -399,3 +399,43 @@ fn an_omitted_option_payload_field_is_none() {
         .contents;
     assert!(machines.contains("note: None"), "{machines}");
 }
+
+/// The base with a scenario that runs machine `m` and takes `steps`.
+fn with_scenario(steps: Value) -> String {
+    with(|s| {
+        s["scenarios"] = json!([
+            { "id": "run", "name": "Run", "description": "Runs the machine.",
+              "behaviors": ["m"], "steps": steps }
+        ]);
+    })
+}
+
+/// Negative fixture of `event.elapsed-external` (WG-4948): the base specification plus one
+/// scenario step that injects the elapsed event `ev-tick` into machine `m` from outside. That is
+/// the only thing missing from a specification that generates.
+#[test]
+fn an_elapsed_event_injected_from_outside_is_refused() {
+    let ok = with_scenario(json!([ { "at": 0, "event": "ev-go", "payload": { "n": 1 } } ]));
+    generate("spec.jsonc", &ok, &options()).expect("the control scenario generates");
+
+    let text = with_scenario(json!([
+        { "at": 0, "event": "ev-go", "payload": { "n": 1 } },
+        { "at": 1, "event": "ev-tick" }
+    ]));
+    assert_refused(&text, m::ELAPSED_EXTERNAL, "ev-tick");
+    assert_eq!(m::ELAPSED_EXTERNAL, "event.elapsed-external");
+}
+
+/// The generated machine says which of its events are elapsed time, and validates its record.
+#[test]
+fn the_generated_machine_marks_elapsed_events_and_validates_records() {
+    let files = generate("spec.jsonc", &with(|_| {}), &options()).unwrap();
+    let code = &files
+        .iter()
+        .find(|f| f.path == "src/machines.rs")
+        .unwrap()
+        .contents;
+    assert!(code.contains("fn is_elapsed(event: &Event) -> bool"));
+    assert!(code.contains("matches!(event, Event::EvTick(_))"), "{code}");
+    assert!(code.contains("record.validate()"));
+}

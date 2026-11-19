@@ -273,9 +273,8 @@ impl OutboxStore for MemoryStore {
         Ok(due)
     }
 
-    fn mark_delivered(&self, id: u64) -> Result<(), StorageError> {
-        self.lock()?.outbox.remove(&id);
-        Ok(())
+    fn mark_delivered(&self, id: u64) -> Result<bool, StorageError> {
+        Ok(self.lock()?.outbox.remove(&id).is_some())
     }
 
     fn defer(

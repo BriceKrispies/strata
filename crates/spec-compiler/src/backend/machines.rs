@@ -94,6 +94,10 @@ pub const VARIABLE_UNKNOWN: &str = "specc.variable-unknown";
 pub const LITERAL: &str = "specc.machine-literal";
 /// Code of an emit or timer payload that does not match its event's payload fields.
 pub const PAYLOAD_FIELD: &str = "specc.payload-field";
+/// Code of an event that stands for elapsed time (`elapsed: true`) and is reachable from outside:
+/// a scenario step injects it into an implementation machine, or a scenario routes it to one.
+/// Only a timer the machine set may deliver it, and the generated hosts refuse it as an input.
+pub const ELAPSED_EXTERNAL: &str = "event.elapsed-external";
 /// Code of a machine that receives no event.
 pub const NO_EVENTS: &str = "specc.machine-no-events";
 
@@ -128,6 +132,7 @@ impl Backend for MachinesBackend {
             out.extend(gen.out);
         }
         routing_rows(spec, &mut out);
+        elapsed_external(spec, &mut out);
         out
     }
 
@@ -239,6 +244,30 @@ fn routing_rows<'a>(
         }
     }
     rows
+}
+
+/// Refuse an elapsed event that a scenario injects into, or routes to, an implementation machine:
+/// the generated hosts accept an elapsed event only from the timer that set it.
+fn elapsed_external(spec: &Spec, out: &mut Vec<Diagnostic>) {
+    for b in &spec.machines {
+        let injected = b
+            .injected
+            .iter()
+            .map(|i| (&i.event, &i.scenario, "injects"));
+        let routed = b.routes.iter().map(|r| (&r.event, &r.scenario, "routes"));
+        for (event, scenario, how) in injected.chain(routed) {
+            if spec.event(event).is_some_and(|e| e.elapsed) {
+                out.push(Diagnostic::new(
+                    ELAPSED_EXTERNAL,
+                    &b.id,
+                    format!(
+                        "Scenario \"{scenario}\" {how} \"{event}\", which stands for elapsed time (\"elapsed\": true), into machine \"{}\"; only a timer the machine sets may deliver it, so it cannot be an input from outside.",
+                        b.id
+                    ),
+                ));
+            }
+        }
+    }
 }
 
 /// The `dispatch` module: the members and routing table of the system host.
@@ -1979,6 +2008,20 @@ impl<'a> Gen<'a> {
             b.id, record_id, storage.key_field
         );
 
+        // Events that stand for elapsed time are fired only by a timer: the hosts refuse them
+        // from outside, by this.
+        let elapsed_variants: Vec<&Ident> = self
+            .received
+            .iter()
+            .filter(|e| e.event.elapsed)
+            .map(|e| &e.variant)
+            .collect();
+        let is_elapsed = if elapsed_variants.is_empty() {
+            quote! { let _ = event; false }
+        } else {
+            quote! { matches!(event, #(Event::#elapsed_variants(_))|*) }
+        };
+
         quote! {
             #duration
 
@@ -2065,6 +2108,14 @@ impl<'a> Gen<'a> {
                 ) -> Result<records::#record_ty, RecordError> {
                     #previous_required
                     Ok(records::#record_ty { #(#to_fields),* })
+                }
+
+                fn is_elapsed(event: &Event) -> bool {
+                    #is_elapsed
+                }
+
+                fn validate_record(record: &records::#record_ty) -> Result<(), String> {
+                    record.validate().map_err(|violation| violation.to_string())
                 }
 
                 fn step(state: &State, vars: &Vars, event: &Event, #now: Time) -> Result<Outcome<Self>, StepError> {

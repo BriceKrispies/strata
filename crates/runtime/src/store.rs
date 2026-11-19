@@ -275,8 +275,10 @@ pub trait OutboxStore: Send + Sync + 'static {
         limit: usize,
     ) -> Result<Vec<OutboxEntry>, StorageError>;
 
-    /// The entry was delivered: remove it. Removing an entry that is gone does nothing.
-    fn mark_delivered(&self, id: u64) -> Result<(), StorageError>;
+    /// Claim the entry by removing it, and say whether this caller removed it: `false` means it
+    /// was already gone (delivered or claimed by another host), and the caller must not dispatch
+    /// it on the strength of this claim.
+    fn mark_delivered(&self, id: u64) -> Result<bool, StorageError>;
 
     /// A dispatch failed: record the attempt and when to try again.
     fn defer(

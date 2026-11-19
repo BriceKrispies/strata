@@ -335,6 +335,20 @@ pub trait Machine: Send + Sync + 'static {
         previous: Option<&Self::Record>,
     ) -> Result<Self::Record, RecordError>;
 
+    /// Whether `event` stands for elapsed time (`elapsed: true` in the specification). Such an
+    /// event is fired only by a timer the machine set: the hosts refuse it from outside
+    /// ([`Host::handle`](crate::Host::handle), [`System::submit`](crate::System::submit)).
+    fn is_elapsed(_event: &Self::Event) -> bool {
+        false
+    }
+
+    /// Check the constraints of a record the machine is about to save (its fields' lengths and
+    /// patterns). The hosts call it on every save and refuse the transition with the error,
+    /// committing nothing.
+    fn validate_record(_record: &Self::Record) -> Result<(), String> {
+        Ok(())
+    }
+
     /// Take one transition at time `now`: the first enabled transition from `state` on `event`,
     /// in declaration order, or an ignore ([`Outcome::ignore`]: the same state and variables,
     /// nothing emitted, nothing written).

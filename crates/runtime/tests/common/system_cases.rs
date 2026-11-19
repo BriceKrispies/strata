@@ -8,11 +8,13 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use strata_runtime::telemetry::Field;
 use strata_runtime::{
-    Delivery, DispatchError, Dispatcher, Envelope, Isolation, Machine, MachineStore, Member,
-    Outcome, RecordError, Router, Routing, StepError, System, TestClock, Time,
+    Delivery, DispatchError, Dispatcher, Envelope, HostError, Isolation, Level, Machine,
+    MachineStore, Member, NewEntry, NoTelemetry, Outcome, RecordError, Router, Routing, StepError,
+    System, Telemetry, TestClock, Time,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -28,6 +30,8 @@ enum In {
     Bumped { key: String },
     #[serde(rename = "settled")]
     Settled {},
+    #[serde(rename = "ping")]
+    Ping { key: String },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -35,6 +39,18 @@ enum In {
 enum Out {
     #[serde(rename = "bumped")]
     Bumped { key: String },
+    #[serde(rename = "pinged")]
+    Pinged {},
+}
+
+/// The longest key a record may have: the machines' stand-in for a generated record constraint.
+const MAX_KEY: usize = 8;
+
+fn validate(record: &Rec) -> Result<(), String> {
+    if record.key.chars().count() > MAX_KEY {
+        return Err(format!("key is longer than {MAX_KEY} characters"));
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -95,8 +111,20 @@ impl Machine for Counter {
     fn to_record(k: &String, s: &Phase, v: &Vars, _: Option<&Rec>) -> Result<Rec, RecordError> {
         Ok(to_rec(k, s, v))
     }
+    fn is_elapsed(e: &In) -> bool {
+        matches!(e, In::Settled {})
+    }
+    fn validate_record(r: &Rec) -> Result<(), String> {
+        validate(r)
+    }
     fn step(s: &Phase, v: &Vars, e: &In, now: Time) -> Result<Outcome<Counter>, StepError> {
         match e {
+            In::Ping { .. } => Ok(Outcome::to(*s, v.clone()).emit_after(
+                "pager",
+                Delivery::AtMostOnce,
+                Out::Pinged {},
+                Duration::from_millis(10),
+            )),
             In::Bump { key } => Ok(Outcome::to(
                 *s,
                 Vars {
@@ -139,6 +167,12 @@ impl Machine for Watcher {
     fn to_record(k: &String, s: &Phase, v: &Vars, _: Option<&Rec>) -> Result<Rec, RecordError> {
         Ok(to_rec(k, s, v))
     }
+    fn is_elapsed(e: &In) -> bool {
+        matches!(e, In::Settled {})
+    }
+    fn validate_record(r: &Rec) -> Result<(), String> {
+        validate(r)
+    }
     fn step(s: &Phase, v: &Vars, e: &In, now: Time) -> Result<Outcome<Watcher>, StepError> {
         match (s, e) {
             (Phase::Open, In::Bumped { .. } | In::Both { .. }) => Ok(Outcome::to(
@@ -168,22 +202,68 @@ const ROUTES: strata_runtime::RouteTable = &[
         ],
     ),
     ("bumped", &[Routing::by_key("watcher", "key")]),
+    ("ping", &[Routing::by_key("counter", "key")]),
 ];
 
-struct Outside;
+/// The receivers outside the machines: remembers who was dispatched to.
+#[derive(Default)]
+struct Outside {
+    receivers: Mutex<Vec<String>>,
+}
+
+impl Outside {
+    fn reached(&self, receiver: &str) -> usize {
+        let seen = self.receivers.lock().unwrap();
+        seen.iter().filter(|r| *r == receiver).count()
+    }
+}
 
 impl Dispatcher<Value> for Outside {
-    async fn dispatch(&self, _: &Envelope<Value>) -> Result<(), DispatchError> {
+    async fn dispatch(&self, envelope: &Envelope<Value>) -> Result<(), DispatchError> {
+        let mut seen = self.receivers.lock().unwrap();
+        seen.push(envelope.receiver.as_str().to_string());
         Ok(())
     }
 }
 
-fn system<S: MachineStore>(store: Arc<S>, clock: &TestClock) -> System<S, Outside> {
+/// Telemetry that keeps the names of the events reported at level error.
+#[derive(Default)]
+struct Errors {
+    names: Mutex<Vec<String>>,
+}
+
+impl Telemetry for Errors {
+    fn event(&self, level: Level, name: &str, _: &[Field<'_>]) {
+        if level == Level::Error {
+            self.names.lock().unwrap().push(name.to_string());
+        }
+    }
+    fn metric(&self, _: &str, _: f64, _: &[Field<'_>]) {}
+    fn span(&self, _: &str, _: Duration, _: bool, _: &[Field<'_>]) {}
+}
+
+fn system_on<S: MachineStore>(
+    store: Arc<S>,
+    clock: &TestClock,
+    outside: &Arc<Outside>,
+    telemetry: Arc<dyn Telemetry>,
+) -> System<S, Outside> {
     let router = Router::new(
         vec![Member::of::<Counter>(), Member::of::<Watcher>()],
         ROUTES,
     );
-    System::new(store, router, Arc::new(Outside), Arc::new(clock.clone())).unwrap()
+    System::new(store, router, outside.clone(), Arc::new(clock.clone()))
+        .unwrap()
+        .with_telemetry(telemetry)
+}
+
+fn system<S: MachineStore>(store: Arc<S>, clock: &TestClock) -> System<S, Outside> {
+    system_on(
+        store,
+        clock,
+        &Arc::new(Outside::default()),
+        Arc::new(NoTelemetry),
+    )
 }
 
 fn key(k: &str) -> String {
@@ -302,4 +382,150 @@ pub async fn a_failed_step_commits_nothing<S: MachineStore>(open: impl Fn() -> A
     );
     let queued = host.queued(10).await.unwrap();
     assert_eq!(queued.len(), 1, "only the bump's delayed emit: {queued:?}");
+}
+
+/// An entry of the queue that cannot be read is set aside as a dead letter and reported at level
+/// error, and the entries behind it are still delivered and the outbox still drained.
+pub async fn quarantines_an_unreadable_entry<S: MachineStore>(open: impl Fn() -> Arc<S>) {
+    let clock = TestClock::at(Time(0));
+    let store = open();
+    let errors = Arc::new(Errors::default());
+    let host = system_on(
+        store.clone(),
+        &clock,
+        &Arc::new(Outside::default()),
+        errors.clone(),
+    );
+    let push = |event: &str| {
+        store
+            .transact(Isolation::Serializable, |tx| {
+                tx.push(&NewEntry {
+                    due: Time(0),
+                    event: event.to_string(),
+                    target: None,
+                    timer: None,
+                    source: "input".to_string(),
+                    source_key: String::new(),
+                })
+            })
+            .unwrap()
+    };
+    // Not JSON; then JSON of an event shape the machines no longer read; then a good entry.
+    let broken = push("{ not json");
+    let reshaped = push(r#"{"event":"bump","payload":{"key":7}}"#);
+    host.submit(json!({"event": "bump", "payload": {"key": "a"}}))
+        .await
+        .unwrap();
+    clock.set(Time(1_000));
+    let tick = host.tick().await.unwrap();
+    assert_eq!(tick.dead, 2, "{tick:?}");
+    assert!(tick.steps >= 1, "the good entry was delivered: {tick:?}");
+    let dead = host.dead_letters().await.unwrap();
+    let seqs: Vec<u64> = dead.iter().map(|d| d.entry.seq).collect();
+    assert_eq!(seqs, [broken, reshaped]);
+    assert!(dead.iter().all(|d| !d.error.is_empty()));
+    assert_eq!(
+        errors
+            .names
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|n| *n == "queue.dead_lettered")
+            .count(),
+        2
+    );
+    assert_eq!(
+        view(&host, "counter", "a").await,
+        json!({"state": "open", "vars": {"n": 1, "at": 0}})
+    );
+    // The outbox is still drained by the same tick: the good entry's delayed emit left for its
+    // receiver.
+    assert_eq!(tick.dispatched.delivered, 1, "{tick:?}");
+}
+
+/// Two hosts on one store: an entry is stepped once, and an at-most-once message is dispatched
+/// once, by the host that removes it.
+pub async fn two_hosts_dispatch_once<S: MachineStore>(open: impl Fn() -> Arc<S>) {
+    let clock = TestClock::at(Time(0));
+    let outside = Arc::new(Outside::default());
+    let one = system_on(open(), &clock, &outside, Arc::new(NoTelemetry));
+    let two = system_on(open(), &clock, &outside, Arc::new(NoTelemetry));
+    one.submit(json!({"event": "bump", "payload": {"key": "a"}}))
+        .await
+        .unwrap();
+    one.submit(json!({"event": "ping", "payload": {"key": "a"}}))
+        .await
+        .unwrap();
+    // Both race for the head; whoever loses finds it taken and reaches nothing.
+    let (first, second) = tokio::join!(one.step(), two.step());
+    first.unwrap();
+    second.unwrap();
+    let (first, second) = tokio::join!(one.step(), two.step());
+    first.unwrap();
+    second.unwrap();
+    assert_eq!(
+        view(&one, "counter", "a").await,
+        json!({"state": "open", "vars": {"n": 1, "at": 0}}),
+        "the bump counted once"
+    );
+
+    // The ping's at-most-once message to the pager, due 10 ms later, is claimed by one host.
+    clock.set(Time(10));
+    let (first, second) = tokio::join!(one.drain_outbox(), two.drain_outbox());
+    let (first, second) = (first.unwrap(), second.unwrap());
+    assert_eq!(outside.reached("pager"), 1, "{first:?} {second:?}");
+}
+
+/// An event that stands for elapsed time cannot be submitted from outside; the timer that sets it
+/// still delivers it.
+pub async fn refuses_an_elapsed_event_from_outside<S: MachineStore>(open: impl Fn() -> Arc<S>) {
+    let clock = TestClock::at(Time(0));
+    let host = system(open(), &clock);
+    let refused = host
+        .submit(json!({"event": "settled", "payload": {}}))
+        .await;
+    match refused {
+        Err(HostError::Elapsed { event, .. }) => assert_eq!(event, "settled"),
+        other => panic!("expected the elapsed event to be refused, got {other:?}"),
+    }
+    assert!(host
+        .submit_at(json!({"event": "settled", "payload": {}}), Time(5))
+        .await
+        .is_err());
+    assert!(host.queued(10).await.unwrap().is_empty());
+
+    // The same event, delivered by the timer the watcher sets, still works.
+    host.submit(json!({"event": "bumped", "payload": {"key": "w"}}))
+        .await
+        .unwrap();
+    clock.set(Time(1_000));
+    while let Some(step) = host.step().await.unwrap() {
+        assert!(step.failed.is_none(), "{step:?}");
+    }
+    assert_eq!(view(&host, "watcher", "w").await["state"], json!("settled"));
+}
+
+/// A record that breaks a constraint is refused: the step fails and nothing of it is committed.
+pub async fn refuses_a_record_that_breaks_a_constraint<S: MachineStore>(open: impl Fn() -> Arc<S>) {
+    let clock = TestClock::at(Time(0));
+    let store = open();
+    let host = system(store.clone(), &clock);
+    host.submit(json!({"event": "bump", "payload": {"key": "much-too-long"}}))
+        .await
+        .unwrap();
+    let step = host.step().await.unwrap().unwrap();
+    assert!(
+        step.failed.as_deref().unwrap().contains("longer than"),
+        "{step:?}"
+    );
+    assert!(host.keys("counter").await.unwrap().is_empty());
+    assert!(host.queued(10).await.unwrap().is_empty(), "no delayed emit");
+    assert_eq!(store.pending().unwrap(), 0, "no outbox message");
+    assert_eq!(host.dead_letters().await.unwrap().len(), 1);
+    // A key within the limit goes through.
+    host.submit(json!({"event": "bump", "payload": {"key": "short"}}))
+        .await
+        .unwrap();
+    assert!(host.step().await.unwrap().unwrap().failed.is_none());
+    assert_eq!(host.keys("counter").await.unwrap().len(), 1);
 }

@@ -214,6 +214,15 @@ pub mod emailed_link_flow_impl {
             })
         }
 
+        fn is_elapsed(event: &Event) -> bool {
+            let _ = event;
+            false
+        }
+
+        fn validate_record(record: &records::RecChallenge) -> Result<(), String> {
+            record.validate().map_err(|violation| violation.to_string())
+        }
+
         fn step(
             state: &State,
             vars: &Vars,
@@ -485,6 +494,15 @@ pub mod oidc_callback_flow_impl {
             })
         }
 
+        fn is_elapsed(event: &Event) -> bool {
+            let _ = event;
+            false
+        }
+
+        fn validate_record(record: &records::RecChallenge) -> Result<(), String> {
+            record.validate().map_err(|violation| violation.to_string())
+        }
+
         fn step(
             state: &State,
             vars: &Vars,
@@ -714,6 +732,15 @@ pub mod session_authority_flow_impl {
                 revoked: Some(vars.revoked),
                 state: state.id().to_string(),
             })
+        }
+
+        fn is_elapsed(event: &Event) -> bool {
+            let _ = event;
+            false
+        }
+
+        fn validate_record(record: &records::RecSession) -> Result<(), String> {
+            record.validate().map_err(|violation| violation.to_string())
         }
 
         fn step(
@@ -965,6 +992,15 @@ pub mod gateway_session_flow_impl {
                 session_state: state.id().to_string(),
                 outage_state: previous.outage_state.clone(),
             })
+        }
+
+        fn is_elapsed(event: &Event) -> bool {
+            let _ = event;
+            false
+        }
+
+        fn validate_record(record: &records::RecSessionCopy) -> Result<(), String> {
+            record.validate().map_err(|violation| violation.to_string())
         }
 
         fn step(
@@ -1283,6 +1319,14 @@ pub mod job_lease_flow_impl {
             })
         }
 
+        fn is_elapsed(event: &Event) -> bool {
+            matches!(event, Event::LeaseExpired(_))
+        }
+
+        fn validate_record(record: &records::RecJob) -> Result<(), String> {
+            record.validate().map_err(|violation| violation.to_string())
+        }
+
         fn step(
             state: &State,
             vars: &Vars,
@@ -1531,6 +1575,15 @@ pub mod origin_content_flow_impl {
             })
         }
 
+        fn is_elapsed(event: &Event) -> bool {
+            let _ = event;
+            false
+        }
+
+        fn validate_record(record: &records::RecContent) -> Result<(), String> {
+            record.validate().map_err(|violation| violation.to_string())
+        }
+
         fn step(
             state: &State,
             vars: &Vars,
@@ -1773,6 +1826,15 @@ pub mod edge_copy_flow_impl {
                 stored_at: Some(vars.stored_at),
                 copy_state: state.id().to_string(),
             })
+        }
+
+        fn is_elapsed(event: &Event) -> bool {
+            let _ = event;
+            false
+        }
+
+        fn validate_record(record: &records::RecContent) -> Result<(), String> {
+            record.validate().map_err(|violation| violation.to_string())
         }
 
         fn step(
@@ -2082,6 +2144,15 @@ pub mod provisioning_flow_impl {
                 activated: Some(vars.active),
                 flow_state: state.id().to_string(),
             })
+        }
+
+        fn is_elapsed(event: &Event) -> bool {
+            let _ = event;
+            false
+        }
+
+        fn validate_record(record: &records::RecTenant) -> Result<(), String> {
+            record.validate().map_err(|violation| violation.to_string())
         }
 
         fn step(
@@ -2415,6 +2486,15 @@ pub mod proposal_flow_impl {
             })
         }
 
+        fn is_elapsed(event: &Event) -> bool {
+            let _ = event;
+            false
+        }
+
+        fn validate_record(record: &records::RecProposal) -> Result<(), String> {
+            record.validate().map_err(|violation| violation.to_string())
+        }
+
         fn step(
             state: &State,
             vars: &Vars,
@@ -2643,6 +2723,15 @@ pub mod arc_outbox_consumer_flow_impl {
             })
         }
 
+        fn is_elapsed(event: &Event) -> bool {
+            let _ = event;
+            false
+        }
+
+        fn validate_record(record: &records::RecNoticeSubscriber) -> Result<(), String> {
+            record.validate().map_err(|violation| violation.to_string())
+        }
+
         fn step(
             state: &State,
             vars: &Vars,
@@ -2861,6 +2950,14 @@ pub mod arc_outbox_delivery_flow_impl {
             })
         }
 
+        fn is_elapsed(event: &Event) -> bool {
+            matches!(event, Event::ArcObSweepDue(_))
+        }
+
+        fn validate_record(record: &records::RecEvent) -> Result<(), String> {
+            record.validate().map_err(|violation| violation.to_string())
+        }
+
         fn step(
             state: &State,
             vars: &Vars,
@@ -3077,6 +3174,15 @@ pub mod arc_rolling_change_flow_impl {
             })
         }
 
+        fn is_elapsed(event: &Event) -> bool {
+            let _ = event;
+            false
+        }
+
+        fn validate_record(record: &records::RecRollingChange) -> Result<(), String> {
+            record.validate().map_err(|violation| violation.to_string())
+        }
+
         fn step(
             state: &State,
             vars: &Vars,
@@ -3289,6 +3395,15 @@ pub mod preview_link_flow_impl {
                 shown: vars.shown,
                 state: state.id().to_string(),
             })
+        }
+
+        fn is_elapsed(event: &Event) -> bool {
+            let _ = event;
+            false
+        }
+
+        fn validate_record(record: &records::RecPreviewLink) -> Result<(), String> {
+            record.validate().map_err(|violation| violation.to_string())
         }
 
         fn step(
@@ -3505,6 +3620,15 @@ pub mod inbound_run_flow_impl {
                 delivered_k1: previous.delivered_k1,
                 delivered_k2: previous.delivered_k2,
             })
+        }
+
+        fn is_elapsed(event: &Event) -> bool {
+            let _ = event;
+            false
+        }
+
+        fn validate_record(record: &records::RecEffectRecord) -> Result<(), String> {
+            record.validate().map_err(|violation| violation.to_string())
         }
 
         fn step(
@@ -3786,6 +3910,15 @@ pub mod cv_change_flow_impl {
             })
         }
 
+        fn is_elapsed(event: &Event) -> bool {
+            let _ = event;
+            false
+        }
+
+        fn validate_record(record: &records::RecCnvPendingAction) -> Result<(), String> {
+            record.validate().map_err(|violation| violation.to_string())
+        }
+
         fn step(
             state: &State,
             vars: &Vars,
@@ -4013,6 +4146,15 @@ pub mod cv_authority_flow_impl {
             })
         }
 
+        fn is_elapsed(event: &Event) -> bool {
+            let _ = event;
+            false
+        }
+
+        fn validate_record(record: &records::RecCnvOperation) -> Result<(), String> {
+            record.validate().map_err(|violation| violation.to_string())
+        }
+
         fn step(
             state: &State,
             vars: &Vars,
@@ -4229,6 +4371,15 @@ pub mod saml_assertion_flow_impl {
             })
         }
 
+        fn is_elapsed(event: &Event) -> bool {
+            let _ = event;
+            false
+        }
+
+        fn validate_record(record: &records::RecChallenge) -> Result<(), String> {
+            record.validate().map_err(|violation| violation.to_string())
+        }
+
         fn step(
             state: &State,
             vars: &Vars,
@@ -4424,6 +4575,15 @@ pub mod guess_throttle_flow_impl {
                 failures_a: previous.and_then(|p| p.failures_a),
                 failures_b: previous.and_then(|p| p.failures_b),
             })
+        }
+
+        fn is_elapsed(event: &Event) -> bool {
+            let _ = event;
+            false
+        }
+
+        fn validate_record(record: &records::RecLimitCounter) -> Result<(), String> {
+            record.validate().map_err(|violation| violation.to_string())
         }
 
         fn step(
@@ -4637,6 +4797,15 @@ pub mod trigger_chain_flow_impl {
                 correlation: key.clone(),
                 accepted: vars.accepted,
             })
+        }
+
+        fn is_elapsed(event: &Event) -> bool {
+            let _ = event;
+            false
+        }
+
+        fn validate_record(record: &records::RecTriggerChain) -> Result<(), String> {
+            record.validate().map_err(|violation| violation.to_string())
         }
 
         fn step(
@@ -4886,6 +5055,15 @@ pub mod gateway_outage_flow_impl {
                 session_state: previous.session_state.clone(),
                 outage_state: state.id().to_string(),
             })
+        }
+
+        fn is_elapsed(event: &Event) -> bool {
+            let _ = event;
+            false
+        }
+
+        fn validate_record(record: &records::RecSessionCopy) -> Result<(), String> {
+            record.validate().map_err(|violation| violation.to_string())
         }
 
         fn step(
@@ -5144,6 +5322,15 @@ pub mod erasure_copy_flow_impl {
                 held: vars.held,
                 state: state.id().to_string(),
             })
+        }
+
+        fn is_elapsed(event: &Event) -> bool {
+            let _ = event;
+            false
+        }
+
+        fn validate_record(record: &records::RecCopyEntry) -> Result<(), String> {
+            record.validate().map_err(|violation| violation.to_string())
         }
 
         fn step(
@@ -5405,6 +5592,15 @@ pub mod subject_key_flow_impl {
             })
         }
 
+        fn is_elapsed(event: &Event) -> bool {
+            let _ = event;
+            false
+        }
+
+        fn validate_record(record: &records::RecSubjectKey) -> Result<(), String> {
+            record.validate().map_err(|violation| violation.to_string())
+        }
+
         fn step(
             state: &State,
             vars: &Vars,
@@ -5613,6 +5809,15 @@ pub mod audit_chain_flow_impl {
                 head_seq: vars.head_seq,
                 sealed: vars.sealed,
             })
+        }
+
+        fn is_elapsed(event: &Event) -> bool {
+            let _ = event;
+            false
+        }
+
+        fn validate_record(record: &records::RecAuditChain) -> Result<(), String> {
+            record.validate().map_err(|violation| violation.to_string())
         }
 
         fn step(
@@ -5844,6 +6049,15 @@ pub mod agent_halt_flow_impl {
                 display_name: previous.display_name.clone(),
                 email: previous.email.clone(),
             })
+        }
+
+        fn is_elapsed(event: &Event) -> bool {
+            let _ = event;
+            false
+        }
+
+        fn validate_record(record: &records::RecPrincipal) -> Result<(), String> {
+            record.validate().map_err(|violation| violation.to_string())
         }
 
         fn step(
@@ -6080,6 +6294,15 @@ pub mod approval_separation_flow_impl {
             })
         }
 
+        fn is_elapsed(event: &Event) -> bool {
+            let _ = event;
+            false
+        }
+
+        fn validate_record(record: &records::RecProposal) -> Result<(), String> {
+            record.validate().map_err(|violation| violation.to_string())
+        }
+
         fn step(
             state: &State,
             vars: &Vars,
@@ -6238,6 +6461,15 @@ pub mod token_render_flow_impl {
             Ok(records::RecRenderRequest {
                 request_id: key.clone(),
             })
+        }
+
+        fn is_elapsed(event: &Event) -> bool {
+            let _ = event;
+            false
+        }
+
+        fn validate_record(record: &records::RecRenderRequest) -> Result<(), String> {
+            record.validate().map_err(|violation| violation.to_string())
         }
 
         fn step(
@@ -6483,6 +6715,14 @@ pub mod mail_dispatch_flow_impl {
             })
         }
 
+        fn is_elapsed(event: &Event) -> bool {
+            matches!(event, Event::EmTimeout(_))
+        }
+
+        fn validate_record(record: &records::RecMailMessage) -> Result<(), String> {
+            record.validate().map_err(|violation| violation.to_string())
+        }
+
         fn step(
             state: &State,
             vars: &Vars,
@@ -6710,6 +6950,15 @@ pub mod mail_adapter_flow_impl {
                 delivered_k1: Some(vars.delivered_k1),
                 delivered_k2: Some(vars.delivered_k2),
             })
+        }
+
+        fn is_elapsed(event: &Event) -> bool {
+            let _ = event;
+            false
+        }
+
+        fn validate_record(record: &records::RecEffectRecord) -> Result<(), String> {
+            record.validate().map_err(|violation| violation.to_string())
         }
 
         fn step(
@@ -7033,6 +7282,15 @@ pub mod colour_switch_flow_impl {
                 green_withdrawn: vars.withdrawn,
                 state: state.id().to_string(),
             })
+        }
+
+        fn is_elapsed(event: &Event) -> bool {
+            let _ = event;
+            false
+        }
+
+        fn validate_record(record: &records::RecPlatformEnvironment) -> Result<(), String> {
+            record.validate().map_err(|violation| violation.to_string())
         }
 
         fn step(
@@ -7360,6 +7618,15 @@ pub mod release_promotion_flow_impl {
             })
         }
 
+        fn is_elapsed(event: &Event) -> bool {
+            let _ = event;
+            false
+        }
+
+        fn validate_record(record: &records::RecReleaseRecord) -> Result<(), String> {
+            record.validate().map_err(|violation| violation.to_string())
+        }
+
         fn step(
             state: &State,
             vars: &Vars,
@@ -7666,6 +7933,15 @@ pub mod migration_batch_flow_impl {
                 },
                 started_by: previous.started_by.clone(),
             })
+        }
+
+        fn is_elapsed(event: &Event) -> bool {
+            let _ = event;
+            false
+        }
+
+        fn validate_record(record: &records::RecMigrationRun) -> Result<(), String> {
+            record.validate().map_err(|violation| violation.to_string())
         }
 
         fn step(
@@ -8041,6 +8317,15 @@ pub mod tenant_move_flow_impl {
             })
         }
 
+        fn is_elapsed(event: &Event) -> bool {
+            let _ = event;
+            false
+        }
+
+        fn validate_record(record: &records::RecTenantMove) -> Result<(), String> {
+            record.validate().map_err(|violation| violation.to_string())
+        }
+
         fn step(
             state: &State,
             vars: &Vars,
@@ -8339,6 +8624,15 @@ pub mod commit_flow_impl {
             })
         }
 
+        fn is_elapsed(event: &Event) -> bool {
+            let _ = event;
+            false
+        }
+
+        fn validate_record(record: &records::RecOutboxEntry) -> Result<(), String> {
+            record.validate().map_err(|violation| violation.to_string())
+        }
+
         fn step(
             state: &State,
             vars: &Vars,
@@ -8557,6 +8851,15 @@ pub mod source_throttle_flow_impl {
                 failures_a: Some(vars.failures_a),
                 failures_b: Some(vars.failures_b),
             })
+        }
+
+        fn is_elapsed(event: &Event) -> bool {
+            let _ = event;
+            false
+        }
+
+        fn validate_record(record: &records::RecLimitCounter) -> Result<(), String> {
+            record.validate().map_err(|violation| violation.to_string())
         }
 
         fn step(

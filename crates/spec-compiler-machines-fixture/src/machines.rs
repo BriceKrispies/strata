@@ -218,6 +218,14 @@ pub mod lease {
             })
         }
 
+        fn is_elapsed(event: &Event) -> bool {
+            matches!(event, Event::LeaseExpired(_))
+        }
+
+        fn validate_record(record: &records::RecLease) -> Result<(), String> {
+            record.validate().map_err(|violation| violation.to_string())
+        }
+
         fn step(
             state: &State,
             vars: &Vars,
@@ -495,6 +503,14 @@ pub mod job {
             })
         }
 
+        fn is_elapsed(event: &Event) -> bool {
+            matches!(event, Event::JobTick(_))
+        }
+
+        fn validate_record(record: &records::RecJob) -> Result<(), String> {
+            record.validate().map_err(|violation| violation.to_string())
+        }
+
         fn step(
             state: &State,
             vars: &Vars,
@@ -723,6 +739,15 @@ pub mod hold {
                 reason: previous.reason.clone(),
                 memo: previous.memo.clone(),
             })
+        }
+
+        fn is_elapsed(event: &Event) -> bool {
+            let _ = event;
+            false
+        }
+
+        fn validate_record(record: &records::RecHold) -> Result<(), String> {
+            record.validate().map_err(|violation| violation.to_string())
         }
 
         fn step(

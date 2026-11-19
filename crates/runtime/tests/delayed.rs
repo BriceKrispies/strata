@@ -48,3 +48,13 @@ async fn memory_retries_only_at_least_once() {
 async fn sqlite_retries_only_at_least_once() {
     retries_only_at_least_once(sqlite("retries")).await;
 }
+
+#[tokio::test]
+async fn memory_two_hosts_dispatch_once() {
+    two_hosts_dispatch_once(memory()).await;
+}
+
+#[tokio::test]
+async fn sqlite_two_hosts_dispatch_once() {
+    two_hosts_dispatch_once(sqlite("two-hosts")).await;
+}

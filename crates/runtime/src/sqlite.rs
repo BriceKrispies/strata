@@ -605,15 +605,16 @@ impl OutboxStore for SqliteMachineStore {
         rows.collect::<Result<Vec<_>, _>>().map_err(sql)
     }
 
-    fn mark_delivered(&self, id: u64) -> Result<(), StorageError> {
-        self.db
+    fn mark_delivered(&self, id: u64) -> Result<bool, StorageError> {
+        let removed = self
+            .db
             .lock()?
             .execute(
                 "DELETE FROM runtime_outbox WHERE id = ?1",
                 params![id as i64],
             )
             .map_err(sql)?;
-        Ok(())
+        Ok(removed > 0)
     }
 
     fn defer(

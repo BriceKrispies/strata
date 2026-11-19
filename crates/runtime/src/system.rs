@@ -104,6 +104,7 @@ type ViewFn = fn(&mut dyn Tx, &str) -> Result<Option<(Value, Value)>, HostError>
 type InitFn = fn(&mut dyn Tx, &str, &Value) -> Result<(), HostError>;
 type KeyFn = fn(&Value) -> Result<String, HostError>;
 type AcceptsFn = fn(&Value) -> Result<(), String>;
+type ElapsedFn = fn(&Value) -> bool;
 
 /// One machine as the system host drives it: events, keys and records as JSON, with the typed
 /// work done by the machine's own code.
@@ -122,6 +123,7 @@ pub struct Member {
     init: InitFn,
     key: KeyFn,
     accepts: AcceptsFn,
+    elapsed: ElapsedFn,
 }
 
 impl std::fmt::Debug for Member {
@@ -151,6 +153,7 @@ impl Member {
             init: init::<M>,
             key: canonical_key::<M>,
             accepts: accepts::<M>,
+            elapsed: is_elapsed::<M>,
         }
     }
 
@@ -158,6 +161,12 @@ impl Member {
     /// encoding, so two spellings of one key are one instance.
     pub fn key_of(&self, value: &Value) -> Result<String, HostError> {
         (self.key)(value)
+    }
+
+    /// Whether the machine reads `event` as an event standing for elapsed time, which only a
+    /// timer may deliver.
+    pub fn is_elapsed(&self, event: &Value) -> bool {
+        (self.elapsed)(event)
     }
 
     /// Whether the machine can read `event` (`{"event", "payload"}`) as one of its events.
@@ -179,6 +188,10 @@ fn accepts<M: Machine>(event: &Value) -> Result<(), String> {
     serde_json::from_value::<M::Event>(event.clone())
         .map(|_| ())
         .map_err(|e| e.to_string())
+}
+
+fn is_elapsed<M: Machine>(event: &Value) -> bool {
+    serde_json::from_value::<M::Event>(event.clone()).is_ok_and(|e| M::is_elapsed(&e))
 }
 
 /// The state and variables of an instance as stored, or as a creating machine starts it.
@@ -225,6 +238,7 @@ fn init<M: Machine>(tx: &mut dyn Tx, key_text: &str, base: &Value) -> Result<(),
     };
     let (state, vars) = M::initial(&key);
     let record = M::to_record(&key, &state, &vars, Some(&previous))?;
+    M::validate_record(&record).map_err(HostError::Constraint)?;
     tx.save(
         M::RECORD,
         &key_text,
@@ -255,6 +269,7 @@ fn deliver<M: Machine>(
     }
     let (previous, version) = previous.unzip();
     let record = M::to_record(&key, &outcome.state, &outcome.vars, previous.as_ref())?;
+    M::validate_record(&record).map_err(HostError::Constraint)?;
     tx.save(M::RECORD, &key_text, &encode(&record)?, version)?;
     for effect in outcome.effects() {
         match effect {
@@ -476,6 +491,7 @@ fn fails_step(error: &HostError) -> bool {
             | HostError::Record(_)
             | HostError::RecordMissing { .. }
             | HostError::Codec(_)
+            | HostError::Constraint(_)
     )
 }
 
@@ -569,8 +585,15 @@ impl<S: MachineStore, D: Dispatcher<Value>> System<S, D> {
 
     /// Queue `event`, an input from outside, due at `at`. Returns its sequence number.
     pub async fn submit_at(&self, event: Value, at: Time) -> Result<u64, HostError> {
-        if event.get("event").and_then(Value::as_str).is_none() {
+        let Some(id) = event.get("event").and_then(Value::as_str) else {
             return Err(codec("an input needs a string \"event\""));
+        };
+        // An event that stands for elapsed time is fired by a timer, never offered from outside.
+        if let Some(member) = self.router.members().iter().find(|m| m.is_elapsed(&event)) {
+            return Err(HostError::Elapsed {
+                machine: member.name,
+                event: id.to_string(),
+            });
         }
         let text = event.to_string();
         self.on_store(move |store, router| {
@@ -756,6 +779,12 @@ impl<S: MachineStore, D: Dispatcher<Value>> System<S, D> {
                 }
             };
             let at_least_once = entry.delivery == Delivery::AtLeastOnce;
+            let (id, attempts) = (entry.id, entry.attempts);
+            if !at_least_once && !self.forget(id).await {
+                // At most once: dispatched by whoever removes the entry, and only by them. If
+                // another host took it, or the claim failed, nothing is dispatched here.
+                continue;
+            }
             let envelope = Envelope {
                 id: at_least_once.then_some(entry.id),
                 source: entry.source,
@@ -764,12 +793,13 @@ impl<S: MachineStore, D: Dispatcher<Value>> System<S, D> {
                 delivery: entry.delivery,
                 event,
             };
-            let (id, attempts) = (entry.id, entry.attempts);
             let result = self.dispatcher.dispatch(&envelope).await;
             match result {
                 Ok(()) => {
                     report.delivered += 1;
-                    self.forget(id).await;
+                    if at_least_once {
+                        self.forget(id).await;
+                    }
                 }
                 Err(error) if at_least_once => {
                     let attempts = attempts + 1;
@@ -802,30 +832,29 @@ impl<S: MachineStore, D: Dispatcher<Value>> System<S, D> {
                         ],
                     );
                     report.dropped += 1;
-                    // At most once: removed after its one dispatch.
-                    self.forget(id).await;
                 }
             }
         }
         Ok(report)
     }
 
-    async fn forget(&self, id: u64) {
+    /// Remove an outbox entry. True when this call removed it; false when another host had, or
+    /// the store failed (said to telemetry).
+    async fn forget(&self, id: u64) -> bool {
         let failed = match self
             .on_store(move |store, _| store.mark_delivered(id))
             .await
         {
-            Ok(Ok(())) => None,
-            Ok(Err(error)) => Some(error.to_string()),
-            Err(error) => Some(error.to_string()),
+            Ok(Ok(removed)) => return removed,
+            Ok(Err(error)) => error.to_string(),
+            Err(error) => error.to_string(),
         };
-        if let Some(why) = failed {
-            self.telemetry.event(
-                Level::Warn,
-                "outbox.unremoved",
-                &[("id", id.into()), ("error", why.as_str().into())],
-            );
-        }
+        self.telemetry.event(
+            Level::Warn,
+            "outbox.unremoved",
+            &[("id", id.into()), ("error", failed.as_str().into())],
+        );
+        false
     }
 
     /// Deliver due entries, up to a batch, then drain the outbox.

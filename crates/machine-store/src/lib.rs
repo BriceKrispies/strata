@@ -922,8 +922,8 @@ impl OutboxStore for StorageApiMachineStore {
         Ok(due)
     }
 
-    fn mark_delivered(&self, id: u64) -> Result<(), StorageError> {
-        self.write(|tx| tx.remove_outbox(id).map(|_| ()))
+    fn mark_delivered(&self, id: u64) -> Result<bool, StorageError> {
+        self.write(|tx| tx.remove_outbox(id))
     }
 
     fn defer(

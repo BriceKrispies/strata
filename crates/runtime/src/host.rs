@@ -39,7 +39,9 @@ use crate::clock::{Clock, Time};
 use crate::machine::{
     Delivery, Isolation, Machine, Receiver, RecordError, StepError, TimerCommand,
 };
-use crate::store::{MachineStore, NewMessage, NewTimer, OutboxEntry, StorageError, TimerEntry, Tx};
+use crate::store::{
+    MachineStore, NewMessage, NewTimer, OutboxEntry, QueueEntry, StorageError, TimerEntry, Tx,
+};
 use crate::telemetry::{Level, NoTelemetry, Span, Telemetry};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -156,6 +158,17 @@ pub enum HostError {
     },
     /// The blocking worker running the store call failed.
     Worker(String),
+    /// The event stands for elapsed time, which only a timer the machine set may deliver; it was
+    /// offered from outside and refused. Nothing was committed.
+    Elapsed {
+        /// The machine.
+        machine: &'static str,
+        /// The event's id.
+        event: String,
+    },
+    /// The record the step produced breaks a constraint of its generated validation (a length
+    /// or a pattern). The transition is refused and nothing was committed.
+    Constraint(String),
 }
 
 impl fmt::Display for HostError {
@@ -178,6 +191,11 @@ impl fmt::Display for HostError {
                 )
             }
             HostError::Worker(why) => write!(f, "worker failed: {why}"),
+            HostError::Elapsed { machine, event } => write!(
+                f,
+                "{event} stands for elapsed time and only a timer of {machine} may deliver it"
+            ),
+            HostError::Constraint(why) => write!(f, "record constraint: {why}"),
         }
     }
 }
@@ -204,6 +222,24 @@ impl From<RecordError> for HostError {
 
 pub(crate) fn encode<T: Serialize>(value: &T) -> Result<String, HostError> {
     serde_json::to_string(value).map_err(|e| HostError::Codec(e.to_string()))
+}
+
+/// The id of an event as its wire form names it, for messages.
+pub(crate) fn event_name<T: Serialize>(event: &T) -> String {
+    let value = serde_json::to_value(event).ok();
+    let tagged = value
+        .as_ref()
+        .and_then(|v| v.get("event"))
+        .and_then(|e| e.as_str());
+    let external = value
+        .as_ref()
+        .and_then(|v| v.as_object())
+        .filter(|o| o.len() == 1)
+        .and_then(|o| o.keys().next());
+    tagged
+        .or(external.map(String::as_str))
+        .unwrap_or("an event")
+        .to_string()
 }
 
 pub(crate) fn decode<T: DeserializeOwned>(text: &str) -> Result<T, HostError> {
@@ -268,6 +304,8 @@ pub struct TickReport {
     pub fired: usize,
     /// Timers that were due but discarded because their step failed.
     pub discarded: usize,
+    /// Timers that were due but could not be read, set aside as dead letters.
+    pub quarantined: usize,
     /// Dispatches, from fired timers and from the outbox drain together.
     pub dispatched: DispatchReport,
 }
@@ -339,6 +377,7 @@ fn transition<M: Machine>(
         }));
     }
     let record = M::to_record(key, &outcome.state, &outcome.vars, previous.as_ref())?;
+    M::validate_record(&record).map_err(HostError::Constraint)?;
     let version = tx.save(
         M::RECORD,
         &key_text,
@@ -479,7 +518,16 @@ impl<M: Machine, S: MachineStore, D: Dispatcher<M::Emitted>> Host<M, S, D> {
     }
 
     /// Step the instance of `key` with `event` and commit, without dispatching the emits.
+    ///
+    /// An event that stands for elapsed time is refused ([`HostError::Elapsed`]): only a timer
+    /// the machine set delivers it.
     pub async fn commit(&self, key: M::Key, event: M::Event) -> Result<Committed<M>, HostError> {
+        if M::is_elapsed(&event) {
+            return Err(HostError::Elapsed {
+                machine: M::NAME,
+                event: event_name(&event),
+            });
+        }
         let span = Span::start(&self.telemetry, "machine.transition");
         let (now, hold) = (self.clock.now(), self.retry.first);
         let result = self
@@ -528,7 +576,9 @@ impl<M: Machine, S: MachineStore, D: Dispatcher<M::Emitted>> Host<M, S, D> {
         match (envelope.id, result) {
             (Some(id), Ok(())) => {
                 let marked = match self.on_store(move |store| store.mark_delivered(id)).await {
-                    Ok(Ok(())) => None,
+                    Ok(Ok(true)) => None,
+                    // Another host delivered it too: at-least-once allows that.
+                    Ok(Ok(false)) => Some("already delivered by another host".to_string()),
                     Ok(Err(error)) => Some(error.to_string()),
                     Err(error) => Some(error.to_string()),
                 };
@@ -619,6 +669,12 @@ impl<M: Machine, S: MachineStore, D: Dispatcher<M::Emitted>> Host<M, S, D> {
             };
             let at_least_once = entry.delivery == Delivery::AtLeastOnce;
             let id = entry.id;
+            if !at_least_once && !self.claim(id).await {
+                // A delayed at-most-once emit is dispatched by whoever removes its entry, and
+                // only by them: another host took it, or the claim failed and it stays for the
+                // next drain. A stop after the claim loses it, which is what at-most-once means.
+                continue;
+            }
             let envelope = Envelope {
                 id: at_least_once.then_some(entry.id),
                 source: entry.source,
@@ -628,30 +684,32 @@ impl<M: Machine, S: MachineStore, D: Dispatcher<M::Emitted>> Host<M, S, D> {
                 event,
             };
             report.add(self.deliver(envelope, entry.attempts).await);
-            if !at_least_once {
-                // A delayed at-most-once emit: dispatched once, then removed whatever the
-                // dispatch did, so it is never removed before its dispatch was attempted. A stop
-                // between the two offers it once more.
-                self.forget(id).await;
-            }
         }
         Ok(report)
     }
 
-    /// Remove an outbox entry that will not be dispatched again, saying so when that fails.
-    async fn forget(&self, id: u64) {
-        let failed = match self.on_store(move |store| store.mark_delivered(id)).await {
-            Ok(Ok(())) => None,
-            Ok(Err(error)) => Some(error.to_string()),
-            Err(error) => Some(error.to_string()),
-        };
-        if let Some(why) = failed {
-            self.telemetry.event(
-                Level::Warn,
-                "outbox.unremoved",
-                &[("id", id.into()), ("error", why.as_str().into())],
-            );
+    /// Remove an outbox entry to claim it. True when this call removed it; false when another
+    /// host did, or the store failed (said to telemetry).
+    async fn claim(&self, id: u64) -> bool {
+        match self.on_store(move |store| store.mark_delivered(id)).await {
+            Ok(Ok(claimed)) => claimed,
+            Ok(Err(error)) => {
+                self.claim_failed(id, error.to_string());
+                false
+            }
+            Err(error) => {
+                self.claim_failed(id, error.to_string());
+                false
+            }
         }
+    }
+
+    fn claim_failed(&self, id: u64, why: String) {
+        self.telemetry.event(
+            Level::Warn,
+            "outbox.unclaimed",
+            &[("id", id.into()), ("error", why.as_str().into())],
+        );
     }
 
     /// Fire every timer of this machine that is due, earliest first, and dispatch what the
@@ -665,9 +723,20 @@ impl<M: Machine, S: MachineStore, D: Dispatcher<M::Emitted>> Host<M, S, D> {
         let mut report = TickReport::default();
         let hold = self.retry.first;
         for timer in due {
-            let key: M::Key = decode(&timer.key)?;
-            let event: M::Event = decode(&timer.event)?;
             let id = timer.id;
+            let decoded = decode::<M::Key>(&timer.key)
+                .and_then(|key| decode::<M::Event>(&timer.event).map(|event| (key, event)));
+            let (key, event) = match decoded {
+                Ok(pair) => pair,
+                Err(error) => {
+                    // After a regeneration that changed an event's shape a stored timer may
+                    // not read. Setting it aside keeps every other timer and the outbox going.
+                    if self.quarantine(&timer, &error.to_string(), now).await? {
+                        report.quarantined += 1;
+                    }
+                    continue;
+                }
+            };
             // Delivered at exactly its deadline, as Exegra delivers a timer, however late this
             // tick is: the step's `time` and the timers it sets again count from the deadline.
             let at = timer.fire_at;
@@ -688,7 +757,8 @@ impl<M: Machine, S: MachineStore, D: Dispatcher<M::Emitted>> Host<M, S, D> {
                     error @ (HostError::Step(_)
                     | HostError::Record(_)
                     | HostError::RecordMissing { .. }
-                    | HostError::Codec(_)),
+                    | HostError::Codec(_)
+                    | HostError::Constraint(_)),
                 ) => {
                     // The step can never succeed for this timer; firing it again would fail the
                     // same way, so it is removed on its own.
@@ -716,11 +786,61 @@ impl<M: Machine, S: MachineStore, D: Dispatcher<M::Emitted>> Host<M, S, D> {
         Ok(report)
     }
 
-    /// Fire due timers, then drain the outbox.
+    /// Take a timer that cannot be read out of the timers and keep it as a dead letter with
+    /// the reason, reporting `timer.quarantined` at level error. False when it was gone.
+    async fn quarantine(
+        &self,
+        timer: &TimerEntry,
+        error: &str,
+        now: Time,
+    ) -> Result<bool, HostError> {
+        self.telemetry.event(
+            Level::Error,
+            "timer.quarantined",
+            &[
+                ("machine", M::NAME.into()),
+                ("timer", timer.name.as_str().into()),
+                ("error", error.into()),
+            ],
+        );
+        let (id, entry, why) = (
+            timer.id,
+            QueueEntry {
+                seq: timer.id,
+                due: timer.fire_at,
+                event: timer.event.clone(),
+                target: Some((timer.machine.clone(), timer.key.clone())),
+                timer: Some(timer.name.clone()),
+                source: timer.machine.clone(),
+                source_key: timer.key.clone(),
+            },
+            error.to_string(),
+        );
+        self.on_store(move |store| {
+            store.transact(M::ISOLATION, |tx| -> Result<bool, HostError> {
+                if !tx.take_timer(id)? {
+                    return Ok(false);
+                }
+                tx.dead_letter(&entry, &why, now)?;
+                Ok(true)
+            })
+        })
+        .await?
+    }
+
+    /// Fire due timers, then drain the outbox. One failing does not stop the other: the first
+    /// error is returned after both ran.
     pub async fn tick(&self) -> Result<TickReport, HostError> {
-        let mut report = self.fire_due_timers().await?;
-        report.dispatched.add(self.drain_outbox().await?);
-        Ok(report)
+        let fired = self.fire_due_timers().await;
+        let drained = self.drain_outbox().await;
+        let mut report = fired.as_ref().ok().copied().unwrap_or_default();
+        if let Ok(drained) = &drained {
+            report.dispatched.add(*drained);
+        }
+        match (fired, drained) {
+            (Err(error), _) | (_, Err(error)) => Err(error),
+            _ => Ok(report),
+        }
     }
 
     /// Call [`Host::tick`] every `period` until `shutdown` resolves. Failures are reported to

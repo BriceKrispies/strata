@@ -399,6 +399,18 @@ pub struct Behavior {
     /// in the order the scenarios give them. Exegra decides a routed event's receiving instance
     /// by them; the generated routing table does the same.
     pub routes: Vec<Route>,
+    /// The events the steps of scenarios that run this machine inject from outside, each
+    /// distinct one once, with the first scenario that does.
+    pub injected: Vec<Injection>,
+}
+
+/// An event a scenario step injects into a machine from outside.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Injection {
+    /// The injected event.
+    pub event: String,
+    /// The scenario whose step injects it.
+    pub scenario: String,
 }
 
 /// A scenario route `{event, behavior, by, field?}` to a machine.
