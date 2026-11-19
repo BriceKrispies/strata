@@ -76728,7 +76728,8 @@
         "pattern": "^[a-z][a-z0-9_]*$",
         "maxLength": 64
       },
-      "description": "kernel FieldId: a field of an object type, [a-z][a-z0-9_]*, at most 64 bytes."
+      "description": "kernel FieldId: a field of an object type, [a-z][a-z0-9_]*, at most 64 bytes.",
+      "metamodel": "field-id"
     },
     {
       "id": "role-id",
@@ -77239,7 +77240,8 @@
           "optional": true
         }
       ],
-      "description": "strata_kernel::FieldDef."
+      "description": "strata_kernel::FieldDef.",
+      "metamodel": "definition"
     },
     {
       "id": "constraint-def",
@@ -77259,7 +77261,8 @@
           "type": "string"
         }
       ],
-      "description": "strata_kernel::ConstraintDef."
+      "description": "strata_kernel::ConstraintDef.",
+      "metamodel": "definition"
     },
     {
       "id": "object-type-def",
@@ -77283,7 +77286,8 @@
           "type": "map<constraint-id, constraint-def>"
         }
       ],
-      "description": "strata_kernel::ObjectTypeDef."
+      "description": "strata_kernel::ObjectTypeDef.",
+      "metamodel": "definition"
     },
     {
       "id": "role-def",
@@ -77647,7 +77651,8 @@
           "type": "map<view-id, view-def>"
         }
       ],
-      "description": "strata_kernel::TenantSchema. role-permissions, teams and invitations are left out while empty, so a schema without them reads and hashes as before; a role without an entry in role-permissions grants none. Teams and invitations change through their own intents, not through ChangeSchema, and do not raise the schema version."
+      "description": "strata_kernel::TenantSchema. role-permissions, teams and invitations are left out while empty, so a schema without them reads and hashes as before; a role without an entry in role-permissions grants none. Teams and invitations change through their own intents, not through ChangeSchema, and do not raise the schema version.",
+      "metamodel": "tenant-schema"
     },
     {
       "id": "principal",
@@ -78979,31 +78984,6 @@
         }
       ],
       "description": "The (bool, Vec<Check>) that rules.rs authorize returns."
-    },
-    {
-      "id": "object-def",
-      "name": "Object definition",
-      "kind": "struct",
-      "metamodel": "definition",
-      "fields": [
-        {
-          "name": "id",
-          "type": "object-type-id"
-        },
-        {
-          "name": "label",
-          "type": "string"
-        },
-        {
-          "name": "fields",
-          "type": "json"
-        },
-        {
-          "name": "constraints",
-          "type": "json"
-        }
-      ],
-      "description": "strata_kernel::ObjectTypeDef: a tenant object type. fields maps field ids to field-def and constraints maps constraint ids to constraint-def, as JSON objects (map types follow with WG-4927)."
     },
     {
       "id": "tenant-file-state",
@@ -85434,7 +85414,7 @@
         },
         {
           "name": "data",
-          "type": "stored-record",
+          "type": "record",
           "description": "The canonical JSON of the record; its fields are those the tenant schema gives its object type."
         }
       ],
@@ -85586,7 +85566,7 @@
         },
         {
           "name": "data",
-          "type": "tenant-snapshot",
+          "type": "tenant-state",
           "personal": "other"
         }
       ],
