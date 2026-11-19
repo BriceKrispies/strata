@@ -125,14 +125,28 @@ fn ident(name: &str) -> String {
 
 #[test]
 fn generated_javascript_agrees_with_exegra_evaluator() {
-    let exegra = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../exegra/src/core/expr.js");
-    if !exegra.exists() {
-        eprintln!("skipped: {} is absent", exegra.display());
-        return;
-    }
-    if !node_available() {
-        eprintln!("skipped: node is not on PATH");
-        return;
+    // The Exegra the gate validates with (`EXEGRA_HOME`, also `EXEGRA_DIR`), else the checkout
+    // beside the Strata one. Its evaluator takes declared types (WG-4902).
+    let exegra = std::env::var_os("EXEGRA_HOME")
+        .or_else(|| std::env::var_os("EXEGRA_DIR"))
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../exegra"))
+        .join("src/core/expr.js");
+    // A missing prerequisite fails: a comparison that did not run must not pass (WG-4899).
+    // SPECC_SKIP_EXEGRA_TESTS=1 opts out, loudly.
+    let opted_out = std::env::var_os("SPECC_SKIP_EXEGRA_TESTS").is_some_and(|v| v == "1");
+    if !exegra.exists() || !node_available() {
+        if opted_out {
+            eprintln!(
+                "!!! SKIPPED BY SPECC_SKIP_EXEGRA_TESTS: the generated JavaScript is NOT compared \
+                 with Exegra's evaluator"
+            );
+            return;
+        }
+        panic!(
+            "cannot compare with Exegra: {} must exist (set EXEGRA_HOME) and node must be on PATH",
+            exegra.display()
+        );
     }
     let exegra = exegra.canonicalize().unwrap();
     let e = env();

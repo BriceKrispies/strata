@@ -29,6 +29,17 @@
 //! is how Exegra addresses an entry (`addressed` and `decideRoutes` in `Format2.lean`); an emit's
 //! `to` names a receiver outside the machines and does not route it.
 //!
+//! Realisation and durability. A behavior whose `realisation` is `target` (declared, or by
+//! default because its `subject` component is `not-implemented`) models the enterprise target, not
+//! code that ships, so it is not in `machines`: it is written to `target_machines`, which the
+//! generated crate compiles only with its `target-models` feature (tests and differentials enable
+//! it). `target_machines::dispatch` is the routing table of the whole system, shipped and target
+//! machines together, as Exegra runs the specification; `machines::dispatch` holds the shipped
+//! machines only. A machine with `storage.durability: "memory"` has no record, key or
+//! transaction, so it implements no `Machine`: its module has an inherent pure `step` returning a
+//! `strata_runtime::MemoryOutcome`, and the `Host` and `System` cannot run it (the routing tables
+//! do not name it); whoever owns the instance keeps its state and carries out the effects.
+//!
 //! Guards and values are translated by `strata-spec-expr`: a variable reads `vars.<field>` in a
 //! guard and the updated `next.<field>` in an effect, `event.<field>` reads the payload, and
 //! `time` reads the step's `now` (milliseconds since the Unix epoch), which is what the simulator's
@@ -117,7 +128,7 @@ impl Backend for MachinesBackend {
     }
 
     fn wanted(&self, spec: &Spec) -> bool {
-        !spec.machines.is_empty()
+        !spec.machines.is_empty() || !spec.memory_machines.is_empty()
     }
 
     fn check(&self, spec: &Spec) -> Vec<Diagnostic> {
@@ -129,45 +140,142 @@ impl Backend for MachinesBackend {
             "the routing table `dispatch`",
             "dispatch",
         );
-        for b in &spec.machines {
-            let what = format!("machine \"{}\"", b.id);
-            if let Some(name) = render::checked_name(&mut out, &b.id, &what, naming::snake(&b.id)) {
-                module.claim(&mut out, &b.id, &what, &name);
-            }
-            let mut gen = Gen::new(spec, b);
-            gen.machine();
-            out.extend(gen.out);
-        }
-        routing_rows(spec, &mut out);
-        elapsed_external(spec, &mut out);
+        let shipped: Vec<&Behavior> = in_declaration_order(&spec.machines, &spec.memory_machines);
+        check_machines(spec, &shipped, &mut module, &mut out);
+        let record: Vec<&Behavior> = spec.machines.iter().collect();
+        routing_rows(spec, &record, &mut out);
+        elapsed_external(spec, &record, &mut out);
         out
     }
 
     fn emit(&self, spec: &Spec) -> TokenStream {
-        let modules: Vec<TokenStream> = spec
-            .machines
-            .iter()
-            .map(|b| {
-                let mut gen = Gen::new(spec, b);
-                let body = gen.machine().unwrap_or_default();
-                let name = naming::ident(&naming::snake(&b.id).unwrap_or_default());
-                let doc = gen.module_doc().tokens();
-                quote! {
-                    #doc
-                    pub mod #name {
-                        #body
-                    }
-                }
-            })
-            .collect();
-        let dispatch = dispatch_module(spec);
+        let shipped: Vec<&Behavior> = in_declaration_order(&spec.machines, &spec.memory_machines);
+        let modules = machine_modules(spec, &shipped);
+        let record: Vec<&Behavior> = spec.machines.iter().collect();
+        let members: Vec<(&Behavior, TokenStream)> =
+            record.iter().map(|b| (*b, quote! { super })).collect();
+        let dispatch = dispatch_module(spec, &record, &members);
         quote! {
-            #![doc = " The implementation-level machines of the specification: for each, its states, variables and events, and its `strata_runtime::Machine`; and the routing table that delivers events between them (`dispatch`)."]
+            #![doc = " The shipped implementation-level machines of the specification: for each, its states, variables and events, and its `strata_runtime::Machine` (a machine held in memory has a pure `step` instead); and the routing table that delivers events between the stored ones (`dispatch`). Machines the specification marks as target are in `target_machines`, behind the `target-models` feature."]
             #![allow(clippy::bool_comparison, clippy::nonminimal_bool, clippy::cmp_owned)]
             #(#modules)*
             #dispatch
         }
     }
+}
+
+/// The target machines backend: the machines whose realisation is `target`, which the shipped
+/// code does not run. Written to `target_machines`, a module the generated crate compiles only
+/// with its `target-models` feature, so that tests and differentials still step them.
+pub struct TargetMachinesBackend;
+
+impl Backend for TargetMachinesBackend {
+    fn module(&self) -> &'static str {
+        super::TARGET_MODULE
+    }
+
+    fn wanted(&self, spec: &Spec) -> bool {
+        !spec.target_machines.is_empty()
+    }
+
+    fn check(&self, spec: &Spec) -> Vec<Diagnostic> {
+        let mut out = Vec::new();
+        let mut module = Namespace::new("module target_machines");
+        module.claim(
+            &mut out,
+            crate::diagnostic::SPEC_ENTITY,
+            "the routing table `dispatch`",
+            "dispatch",
+        );
+        let target: Vec<&Behavior> = spec.target_machines.iter().collect();
+        check_machines(spec, &target, &mut module, &mut out);
+        let record = full_system(spec);
+        routing_rows(spec, &record, &mut out);
+        let stored: Vec<&Behavior> = target.iter().copied().filter(|b| !b.memory).collect();
+        elapsed_external(spec, &stored, &mut out);
+        out
+    }
+
+    fn emit(&self, spec: &Spec) -> TokenStream {
+        let target: Vec<&Behavior> = spec.target_machines.iter().collect();
+        let modules = machine_modules(spec, &target);
+        let record = full_system(spec);
+        let members: Vec<(&Behavior, TokenStream)> = record
+            .iter()
+            .map(|b| {
+                if b.target {
+                    (*b, quote! { super })
+                } else {
+                    (*b, quote! { crate::machines })
+                }
+            })
+            .collect();
+        let dispatch = dispatch_module(spec, &record, &members);
+        quote! {
+            #![doc = " The machines the specification marks as target: they model the enterprise target, not code that ships, so they are compiled only with the `target-models` feature, which tests and differentials enable."]
+            #![doc = ""]
+            #![doc = " `dispatch` is the routing table of the whole system, shipped machines (from `machines`) and target machines together, as Exegra runs the specification."]
+            #![allow(clippy::bool_comparison, clippy::nonminimal_bool, clippy::cmp_owned)]
+            #(#modules)*
+            #dispatch
+        }
+    }
+}
+
+/// Every stored machine of the specification, shipped and target, in declaration order: the
+/// members of the whole-system routing table. Machines held in memory are not hosted.
+fn full_system(spec: &Spec) -> Vec<&Behavior> {
+    let mut all: Vec<&Behavior> = spec
+        .machines
+        .iter()
+        .chain(spec.target_machines.iter().filter(|b| !b.memory))
+        .collect();
+    all.sort_by_key(|b| b.declared);
+    all
+}
+
+/// The two lists merged in declaration order.
+fn in_declaration_order<'a>(a: &'a [Behavior], b: &'a [Behavior]) -> Vec<&'a Behavior> {
+    let mut all: Vec<&Behavior> = a.iter().chain(b.iter()).collect();
+    all.sort_by_key(|m| m.declared);
+    all
+}
+
+/// The module-name and generation checks of the machines of one module.
+fn check_machines(
+    spec: &Spec,
+    machines: &[&Behavior],
+    module: &mut Namespace,
+    out: &mut Vec<Diagnostic>,
+) {
+    for b in machines {
+        let what = format!("machine \"{}\"", b.id);
+        if let Some(name) = render::checked_name(out, &b.id, &what, naming::snake(&b.id)) {
+            module.claim(out, &b.id, &what, &name);
+        }
+        let mut gen = Gen::new(spec, b);
+        gen.machine();
+        out.extend(gen.out);
+    }
+}
+
+/// One inline module per machine.
+fn machine_modules(spec: &Spec, machines: &[&Behavior]) -> Vec<TokenStream> {
+    machines
+        .iter()
+        .map(|b| {
+            let mut gen = Gen::new(spec, b);
+            let body = gen.machine().unwrap_or_default();
+            let name = naming::ident(&naming::snake(&b.id).unwrap_or_default());
+            let doc = gen.module_doc().tokens();
+            quote! {
+                #doc
+                pub mod #name {
+                    #body
+                }
+            }
+        })
+        .collect()
 }
 
 /// Code of a scenario route the generated routing table cannot follow (any `by` but `key`).
@@ -182,12 +290,13 @@ pub const ROUTE_KEY: &str = "specc.route-key";
 /// events have no row.
 fn routing_rows<'a>(
     spec: &'a Spec,
+    machines: &[&'a Behavior],
     out: &mut Vec<Diagnostic>,
 ) -> Vec<(&'a Event, Vec<(&'a Behavior, Option<String>)>)> {
     let mut rows = Vec::new();
     for event in spec.events.iter().filter(|e| !e.elapsed) {
         let mut receivers = Vec::new();
-        for b in &spec.machines {
+        for b in machines.iter().copied() {
             if !b
                 .transitions
                 .iter()
@@ -255,8 +364,8 @@ fn routing_rows<'a>(
 
 /// Refuse an elapsed event that a scenario injects into, or routes to, an implementation machine:
 /// the generated hosts accept an elapsed event only from the timer that set it.
-fn elapsed_external(spec: &Spec, out: &mut Vec<Diagnostic>) {
-    for b in &spec.machines {
+fn elapsed_external(spec: &Spec, machines: &[&Behavior], out: &mut Vec<Diagnostic>) {
+    for b in machines.iter().copied() {
         let injected = b
             .injected
             .iter()
@@ -278,15 +387,19 @@ fn elapsed_external(spec: &Spec, out: &mut Vec<Diagnostic>) {
 }
 
 /// The `dispatch` module: the members and routing table of the system host.
-fn dispatch_module(spec: &Spec) -> TokenStream {
-    let rows = routing_rows(spec, &mut Vec::new());
-    let members: Vec<TokenStream> = spec
-        .machines
+/// `paths` give each member and the path of the module that holds its type.
+fn dispatch_module(
+    spec: &Spec,
+    machines: &[&Behavior],
+    paths: &[(&Behavior, TokenStream)],
+) -> TokenStream {
+    let rows = routing_rows(spec, machines, &mut Vec::new());
+    let members: Vec<TokenStream> = paths
         .iter()
-        .map(|b| {
+        .map(|(b, path)| {
             let module = naming::ident(&naming::snake(&b.id).unwrap_or_default());
             let ty = naming::ident(&naming::pascal(&b.id).unwrap_or_default());
-            quote! { strata_runtime::Member::of::<super::#module::#ty>() }
+            quote! { strata_runtime::Member::of::<#path::#module::#ty>() }
         })
         .collect();
     let table: Vec<TokenStream> = rows
@@ -709,6 +822,8 @@ impl<'a> Gen<'a> {
 
         // Isolation.
         let isolation = match b.isolation.as_deref() {
+            // A memory machine has no transaction.
+            _ if b.memory => Some(TokenStream::new()),
             Some("serializable") => Some(quote! { Isolation::Serializable }),
             Some("snapshot") => Some(quote! { Isolation::Snapshot }),
             Some("read-committed") => Some(quote! { Isolation::ReadCommitted }),
@@ -860,7 +975,12 @@ impl<'a> Gen<'a> {
         }
 
         // Storage.
-        let storage = self.storage();
+        // A memory machine has no record: its state lives in memory, and nothing converts it.
+        let storage: Option<Option<StorageCode>> = if b.memory {
+            Some(None)
+        } else {
+            self.storage().map(Some)
+        };
 
         // Transitions, grouped by (from, on) in the order the groups first appear per state.
         let mut arms = Vec::new();
@@ -1809,7 +1929,7 @@ impl<'a> Gen<'a> {
         states: &[Ident],
         initial: usize,
         isolation: TokenStream,
-        storage: StorageCode,
+        storage: Option<StorageCode>,
         arms: Vec<TokenStream>,
         covered: usize,
     ) -> TokenStream {
@@ -1967,51 +2087,73 @@ impl<'a> Gen<'a> {
             &self.emitted,
         );
 
-        // Storage.
-        let record_ty = &storage.record_ty;
-        let record_id = &storage.record.id;
-        let key_ty = &storage.key_ty;
-        let key_doc = format!(
-            " The instance key: field `{}` of record `{}`.",
-            storage.key_field, record_id
-        );
-        let to_fields = &storage.to_fields;
-        let from_fields = &storage.from_fields;
-        let state_param = if storage.uses_state {
-            quote! { state }
-        } else {
-            quote! { _state }
-        };
-        let previous_param = if storage.uses_previous {
-            quote! { previous }
-        } else {
-            quote! { _previous }
-        };
-        let vars_param = if self.vars.is_empty() {
-            quote! { _vars }
-        } else {
-            quote! { vars }
-        };
-        let record_param = if storage.reads_record {
-            quote! { record }
-        } else {
-            quote! { _record }
-        };
-        let read_state = &storage.read_state;
-        let creates = storage.creates;
-        let previous_required = if storage.uses_previous && !creates {
-            let message = format!(
-                "machine `{}` does not create records of `{}`, and the key has none",
-                b.id, record_id
+        // Storage: a record-stored machine converts to and from its record; a memory machine has
+        // no record, key or transaction.
+        let storage_code = storage.as_ref().map(|storage| {
+            let record_ty = &storage.record_ty;
+            let record_id = &storage.record.id;
+            let key_ty = &storage.key_ty;
+            let key_doc = format!(
+                " The instance key: field `{}` of record `{}`.",
+                storage.key_field, record_id
             );
-            quote! {
-                let Some(previous) = previous else {
-                    return Err(RecordError(#message.to_string()));
-                };
+            let to_fields = &storage.to_fields;
+            let from_fields = &storage.from_fields;
+            let state_param = if storage.uses_state {
+                quote! { state }
+            } else {
+                quote! { _state }
+            };
+            let previous_param = if storage.uses_previous {
+                quote! { previous }
+            } else {
+                quote! { _previous }
+            };
+            let vars_param = if self.vars.is_empty() {
+                quote! { _vars }
+            } else {
+                quote! { vars }
+            };
+            let record_param = if storage.reads_record {
+                quote! { record }
+            } else {
+                quote! { _record }
+            };
+            let read_state = &storage.read_state;
+            let creates = storage.creates;
+            let previous_required = if storage.uses_previous && !creates {
+                let message = format!(
+                    "machine `{}` does not create records of `{}`, and the key has none",
+                    b.id, record_id
+                );
+                quote! {
+                    let Some(previous) = previous else {
+                        return Err(RecordError(#message.to_string()));
+                    };
+                }
+            } else {
+                TokenStream::new()
+            };
+            StorageTokens {
+                key_doc,
+                key_ty: quote! { #key_ty },
+                record_id: record_id.clone(),
+                record_ty: quote! { #record_ty },
+                creates,
+                record_param,
+                read_state: read_state.clone(),
+                from_fields: from_fields.clone(),
+                state_param,
+                vars_param,
+                previous_param,
+                previous_required,
+                to_fields: to_fields.clone(),
+                machine_doc: format!(
+                    " Machine `{}`, stored in record `{}` by `{}`.",
+                    b.id, record_id, storage.key_field
+                ),
             }
-        } else {
-            TokenStream::new()
-        };
+        });
         let initial_state = &states[initial];
         let name = &b.id;
 
@@ -2044,14 +2186,23 @@ impl<'a> Gen<'a> {
         if self.has_emits {
             runtime.push(quote! { Delivery });
         }
-        runtime.extend([
-            quote! { Isolation },
-            quote! { Machine },
-            quote! { Outcome },
-            quote! { RecordError },
-            quote! { StepError },
-            quote! { Time },
-        ]);
+        if storage_code.is_some() {
+            runtime.extend([
+                quote! { Isolation },
+                quote! { Machine },
+                quote! { Outcome },
+                quote! { RecordError },
+                quote! { StepError },
+                quote! { Time },
+            ]);
+        } else {
+            // A memory machine steps to a `MemoryOutcome`, which the module names `Outcome`.
+            runtime.extend([
+                quote! { MemoryOutcome },
+                quote! { StepError },
+                quote! { Time },
+            ]);
+        }
         let duration = if self.has_timers {
             quote! { use std::time::Duration; }
         } else {
@@ -2061,14 +2212,16 @@ impl<'a> Gen<'a> {
         if self.uses.prelude {
             crate_mods.push(quote! { prelude });
         }
-        crate_mods.push(quote! { records });
+        if storage_code.is_some() {
+            crate_mods.push(quote! { records });
+        }
         if self.uses.types {
             crate_mods.push(quote! { types });
         }
-        let crate_use = if crate_mods.len() == 1 {
-            quote! { use crate::records; }
-        } else {
-            quote! { use crate::{#(#crate_mods),*}; }
+        let crate_use = match crate_mods.as_slice() {
+            [] => TokenStream::new(),
+            [only] => quote! { use crate::#only; },
+            _ => quote! { use crate::{#(#crate_mods),*}; },
         };
         // Logging: the events it emits that the specification logs (telemetry.rs).
         let log_arms: Vec<(TokenStream, TokenStream)> = self
@@ -2106,20 +2259,21 @@ impl<'a> Gen<'a> {
                 }
             }
         };
+        // In a `Machine` impl `log_emitted` is a trait method; a memory machine has it inherent.
+        let log_vis = if storage_code.is_some() {
+            TokenStream::new()
+        } else {
+            quote! { pub }
+        };
         let log_emitted = if log_arms.is_empty() {
             TokenStream::new()
         } else {
             quote! {
-                fn log_emitted(emitted: &Emitted, telemetry: &dyn strata_runtime::Telemetry) {
+                #log_vis fn log_emitted(emitted: &Emitted, telemetry: &dyn strata_runtime::Telemetry) {
                     #log_body
                 }
             }
         };
-        let machine_doc = format!(
-            " Machine `{}`, stored in record `{}` by `{}`.",
-            b.id, record_id, storage.key_field
-        );
-
         // Events that stand for elapsed time are fired only by a timer: the hosts refuse them
         // from outside, by this.
         let elapsed_variants: Vec<&Ident> = self
@@ -2132,6 +2286,128 @@ impl<'a> Gen<'a> {
             quote! { let _ = event; false }
         } else {
             quote! { matches!(event, #(Event::#elapsed_variants(_))|*) }
+        };
+
+        let machine_items = match &storage_code {
+            Some(st) => {
+                let StorageTokens {
+                    key_doc,
+                    key_ty,
+                    record_id,
+                    record_ty,
+                    creates,
+                    record_param,
+                    read_state,
+                    from_fields,
+                    state_param,
+                    vars_param,
+                    previous_param,
+                    previous_required,
+                    to_fields,
+                    machine_doc,
+                } = st;
+                quote! {
+                    #[doc = #key_doc]
+                    pub type Key = #key_ty;
+
+                    #[doc = #machine_doc]
+                    #[derive(Debug, Clone, Copy, Default)]
+                    pub struct #machine;
+
+                    #overflow
+
+                    impl Machine for #machine {
+                        const NAME: &'static str = #name;
+                        const RECORD: &'static str = #record_id;
+                        const ISOLATION: Isolation = #isolation;
+                        const CREATES: bool = #creates;
+
+                        type State = State;
+                        type Vars = Vars;
+                        type Event = Event;
+                        type Emitted = Emitted;
+                        type Key = Key;
+                        type Record = records::#record_ty;
+
+                        fn initial(_key: &Key) -> (State, Vars) {
+                            (State::#initial_state, Vars { #(#initial_values),* })
+                        }
+
+                        fn from_record(#record_param: &records::#record_ty) -> Result<(State, Vars), RecordError> {
+                            #read_state
+                            Ok((state, Vars { #(#from_fields),* }))
+                        }
+
+                        fn to_record(
+                            key: &Key,
+                            #state_param: &State,
+                            #vars_param: &Vars,
+                            #previous_param: Option<&records::#record_ty>,
+                        ) -> Result<records::#record_ty, RecordError> {
+                            #previous_required
+                            Ok(records::#record_ty { #(#to_fields),* })
+                        }
+
+                        fn is_elapsed(event: &Event) -> bool {
+                            #is_elapsed
+                        }
+
+                        fn validate_record(record: &records::#record_ty) -> Result<(), String> {
+                            record.validate().map_err(|violation| violation.to_string())
+                        }
+
+                        fn step(state: &State, vars: &Vars, event: &Event, #now: Time) -> Result<Outcome<Self>, StepError> {
+                            match (state, event) {
+                                #(#arms)*
+                                #fallback
+                            }
+                        }
+
+                        #log_emitted
+                    }
+                }
+            }
+            None => {
+                let machine_doc = format!(
+                    " Machine `{}`, held in memory: it has no record, key or transaction, so the `Host` and `System` cannot run it; its `step` is pure.",
+                    b.id
+                );
+                quote! {
+                    /// What a step of the machine yields.
+                    pub type Outcome = MemoryOutcome<State, Vars, Event, Emitted>;
+
+                    #[doc = #machine_doc]
+                    #[derive(Debug, Clone, Copy, Default)]
+                    pub struct #machine;
+
+                    #overflow
+
+                    impl #machine {
+                        /// The behavior's id.
+                        pub const NAME: &'static str = #name;
+
+                        /// The state and variables of a new instance.
+                        pub fn initial() -> (State, Vars) {
+                            (State::#initial_state, Vars { #(#initial_values),* })
+                        }
+
+                        /// Whether `event` stands for elapsed time: only a timer the machine set fires it.
+                        pub fn is_elapsed(event: &Event) -> bool {
+                            #is_elapsed
+                        }
+
+                        /// Takes one transition at time `now`: the first enabled transition from `state` on `event`, in declaration order, or an ignore.
+                        pub fn step(state: &State, vars: &Vars, event: &Event, #now: Time) -> Result<Outcome, StepError> {
+                            match (state, event) {
+                                #(#arms)*
+                                #fallback
+                            }
+                        }
+
+                        #log_emitted
+                    }
+                }
+            }
         };
 
         quote! {
@@ -2181,64 +2457,7 @@ impl<'a> Gen<'a> {
 
             #emitted_enum
 
-            #[doc = #key_doc]
-            pub type Key = #key_ty;
-
-            #[doc = #machine_doc]
-            #[derive(Debug, Clone, Copy, Default)]
-            pub struct #machine;
-
-            #overflow
-
-            impl Machine for #machine {
-                const NAME: &'static str = #name;
-                const RECORD: &'static str = #record_id;
-                const ISOLATION: Isolation = #isolation;
-                const CREATES: bool = #creates;
-
-                type State = State;
-                type Vars = Vars;
-                type Event = Event;
-                type Emitted = Emitted;
-                type Key = Key;
-                type Record = records::#record_ty;
-
-                fn initial(_key: &Key) -> (State, Vars) {
-                    (State::#initial_state, Vars { #(#initial_values),* })
-                }
-
-                fn from_record(#record_param: &records::#record_ty) -> Result<(State, Vars), RecordError> {
-                    #read_state
-                    Ok((state, Vars { #(#from_fields),* }))
-                }
-
-                fn to_record(
-                    key: &Key,
-                    #state_param: &State,
-                    #vars_param: &Vars,
-                    #previous_param: Option<&records::#record_ty>,
-                ) -> Result<records::#record_ty, RecordError> {
-                    #previous_required
-                    Ok(records::#record_ty { #(#to_fields),* })
-                }
-
-                fn is_elapsed(event: &Event) -> bool {
-                    #is_elapsed
-                }
-
-                fn validate_record(record: &records::#record_ty) -> Result<(), String> {
-                    record.validate().map_err(|violation| violation.to_string())
-                }
-
-                fn step(state: &State, vars: &Vars, event: &Event, #now: Time) -> Result<Outcome<Self>, StepError> {
-                    match (state, event) {
-                        #(#arms)*
-                        #fallback
-                    }
-                }
-
-                #log_emitted
-            }
+            #machine_items
         }
     }
 
@@ -2276,6 +2495,24 @@ impl<'a> Gen<'a> {
             }
         }
     }
+}
+
+/// The tokens `assemble` writes for a record-stored machine's `Machine` impl.
+struct StorageTokens {
+    key_doc: String,
+    key_ty: TokenStream,
+    record_id: String,
+    record_ty: TokenStream,
+    creates: bool,
+    record_param: TokenStream,
+    read_state: TokenStream,
+    from_fields: Vec<TokenStream>,
+    state_param: TokenStream,
+    vars_param: TokenStream,
+    previous_param: TokenStream,
+    previous_required: TokenStream,
+    to_fields: Vec<TokenStream>,
+    machine_doc: String,
 }
 
 /// What `assemble` needs to know about the storage record.

@@ -677,6 +677,8 @@ mod tests {
             contracts: vec![],
             events: vec![],
             machines: vec![],
+            memory_machines: vec![],
+            target_machines: vec![],
             constructs: Default::default(),
             telemetry: Default::default(),
         }

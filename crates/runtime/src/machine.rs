@@ -239,6 +239,121 @@ impl<M: Machine + ?Sized> Debug for Outcome<M> {
     }
 }
 
+/// The result of one step of a machine held in memory (`storage.durability: "memory"`): the
+/// same as [`Outcome`], without a [`Machine`] to name its types. A memory machine has no record,
+/// key or transaction, so the [`Host`](crate::Host) and [`System`](crate::System) cannot run it:
+/// whoever owns the instance keeps its state and variables, calls the machine's pure `step`, and
+/// carries out the emits and timers itself.
+pub struct MemoryOutcome<S, V, Ev, Em> {
+    /// The state the instance moves to.
+    pub state: S,
+    /// The variables after the step.
+    pub vars: V,
+    /// The events to emit, in effect order.
+    pub emits: Vec<Emit<Em>>,
+    /// The timers to set or cancel, in effect order.
+    pub timers: Vec<TimerCommand<Ev>>,
+    /// The order of the emits and timers together.
+    pub sequence: Vec<EffectRef>,
+    /// True when the event was ignored.
+    pub ignored: bool,
+}
+
+impl<S, V, Ev, Em> MemoryOutcome<S, V, Ev, Em> {
+    /// A step that moves to `state` with `vars` and has no effects yet.
+    pub fn to(state: S, vars: V) -> Self {
+        MemoryOutcome {
+            state,
+            vars,
+            emits: Vec::new(),
+            timers: Vec::new(),
+            sequence: Vec::new(),
+            ignored: false,
+        }
+    }
+
+    /// An ignored event: the same state and variables, nothing emitted.
+    pub fn ignore(state: S, vars: V) -> Self {
+        MemoryOutcome {
+            ignored: true,
+            ..MemoryOutcome::to(state, vars)
+        }
+    }
+
+    /// Adds an emit to `receiver`.
+    pub fn emit(mut self, receiver: &str, delivery: Delivery, event: Em) -> Self {
+        self.sequence.push(EffectRef::Emit(self.emits.len()));
+        self.emits.push(Emit {
+            receiver: Receiver::new(receiver),
+            delivery,
+            event,
+            after: None,
+        });
+        self
+    }
+
+    /// Adds an emit to `receiver` once `after` has passed.
+    pub fn emit_after(
+        mut self,
+        receiver: &str,
+        delivery: Delivery,
+        event: Em,
+        after: Duration,
+    ) -> Self {
+        self.sequence.push(EffectRef::Emit(self.emits.len()));
+        self.emits.push(Emit {
+            receiver: Receiver::new(receiver),
+            delivery,
+            event,
+            after: Some(after),
+        });
+        self
+    }
+
+    /// Sets the named timer to fire `event` after `after`, replacing one of the same name.
+    pub fn set_timer(mut self, name: &str, after: Duration, event: Ev) -> Self {
+        self.sequence.push(EffectRef::Timer(self.timers.len()));
+        self.timers.push(TimerCommand::Set {
+            name: name.to_string(),
+            after,
+            event,
+        });
+        self
+    }
+
+    /// Cancels the named timer.
+    pub fn cancel_timer(mut self, name: &str) -> Self {
+        self.sequence.push(EffectRef::Timer(self.timers.len()));
+        self.timers.push(TimerCommand::Cancel {
+            name: name.to_string(),
+        });
+        self
+    }
+
+    /// The effects in the order they were added.
+    pub fn effects(&self) -> Vec<EffectRef> {
+        if self.sequence.len() == self.emits.len() + self.timers.len() {
+            return self.sequence.clone();
+        }
+        (0..self.emits.len())
+            .map(EffectRef::Emit)
+            .chain((0..self.timers.len()).map(EffectRef::Timer))
+            .collect()
+    }
+}
+
+impl<S: Debug, V: Debug, Ev: Debug, Em: Debug> Debug for MemoryOutcome<S, V, Ev, Em> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("MemoryOutcome")
+            .field("state", &self.state)
+            .field("vars", &self.vars)
+            .field("emits", &self.emits)
+            .field("timers", &self.timers)
+            .field("ignored", &self.ignored)
+            .finish()
+    }
+}
+
 /// Why a step produced no outcome. The host aborts the transaction: nothing is persisted,
 /// emitted or scheduled.
 #[derive(Clone, Debug, PartialEq, Eq)]

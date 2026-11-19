@@ -4,7 +4,7 @@
 //! this test asks Exegra for the trace (`node $EXEGRA_HOME/cli/exegra.js trace <scenario>`,
 //! through a temporary project link to this checkout's specification) and runs the same scenario
 //! on `strata_runtime::System` with the generated machines and routing table
-//! (`strata_model::machines::dispatch`), on the in-memory store, with a `TestClock`:
+//! (`strata_model::target_machines::dispatch`, which holds shipped and target machines), on the in-memory store, with a `TestClock`:
 //!
 //! - The host gets the scenario's machines only, as Exegra runs only the scenario's behaviours.
 //! - A machine that does not create its records (`storage.creates` false) steps records someone
@@ -41,7 +41,9 @@ use std::process::Command;
 use std::sync::Arc;
 
 use serde_json::{json, Value};
-use strata_model::machines::dispatch;
+// The routing table of the whole system, shipped machines and target machines together (the
+// `target-models` feature of `strata-model`, which this crate's manifest enables).
+use strata_model::target_machines::dispatch;
 use strata_runtime::{
     DispatchError, Dispatcher, Envelope, Member, MemoryStore, Router, System, TestClock, Time,
 };
@@ -253,7 +255,7 @@ fn plan<'s>(spec: &'s Spec, all: &Value, scenario: &Value) -> Result<Plan<'s>, S
         let b = b.as_str().unwrap_or_default();
         let (Some(member), Some(ir)) = (
             generated.iter().find(|m| m.name == b),
-            spec.machines.iter().find(|m| m.id == b),
+            spec.all_machines().into_iter().find(|m| m.id == b),
         ) else {
             return Err(format!(
                 "behaviour {b} has no generated Rust machine (a model behaviour or a client machine)"
@@ -401,11 +403,24 @@ async fn run(spec: &Spec, plan: &Plan<'_>, trace: &Value) -> Result<usize, (bool
             system
                 .init(member.name, &text, Value::Object(base))
                 .await
-                .map_err(|e| {
-                    diverged(format!(
+                .map_err(|e| match e {
+                    // Exegra starts the instance in a state whose record the runtime refuses to
+                    // hold: the specification's initial values break the record's constraints.
+                    // That is a fidelity gap of the specification (WG-4903,
+                    // machine.initial-unreachable), reported as such, never hidden by skipping
+                    // the runtime's validation.
+                    strata_runtime::HostError::Constraint(why) => (
+                        true,
+                        format!(
+                            "the initial state of {} (instance {text}) cannot be held by its \
+                             record: {why}",
+                            member.name
+                        ),
+                    ),
+                    e => diverged(format!(
                         "setting up instance {text} of {}: {e}",
                         member.name
-                    ))
+                    )),
                 })?;
         }
     }
@@ -639,7 +654,11 @@ async fn the_system_host_runs_every_scenario_as_exegra_does() {
     let all = jsonc::parse(&text).unwrap();
     let spec = load::load("specifications/spec.jsonc", &text)
         .unwrap_or_else(|d| panic!("the specification does not load: {d:?}"));
-    let machines: BTreeSet<&str> = spec.machines.iter().map(|m| m.id.as_str()).collect();
+    let machines: BTreeSet<&str> = spec
+        .all_machines()
+        .into_iter()
+        .map(|m| m.id.as_str())
+        .collect();
     let implementation: BTreeSet<&str> = all["behaviors"]
         .as_array()
         .into_iter()
