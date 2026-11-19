@@ -35349,7 +35349,6 @@
       "storage": {
         "record": "rec-published-page",
         "key": [
-          "object",
           "record-id"
         ],
         "fields": {
@@ -35598,7 +35597,6 @@
       "storage": {
         "record": "rec-published-page",
         "key": [
-          "object",
           "record-id"
         ],
         "fields": {
