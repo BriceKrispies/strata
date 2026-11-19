@@ -62,6 +62,10 @@ pub struct FieldSpec {
     pub unique: bool,
     #[serde(default)]
     pub default: Option<String>,
+    /// A condition over `record`, the principal and its roles: who may read the field's value.
+    /// Left out, everyone who can read the record reads the field.
+    #[serde(default)]
+    pub read: Option<String>,
     /// For references: `restrict` (the default) or `set_null`.
     #[serde(default)]
     pub on_delete: Option<String>,
@@ -275,6 +279,7 @@ impl Bundle {
                         required: field.required,
                         unique: field.unique,
                         default: optional(&field.default).map_err(|e| format!("{at}: {e}"))?,
+                        read: optional(&field.read).map_err(|e| format!("{at}: {e}"))?,
                     },
                 });
             }

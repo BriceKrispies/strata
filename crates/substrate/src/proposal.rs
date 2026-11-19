@@ -90,6 +90,7 @@ fn parse_line(schema: &TenantSchema, line: &str) -> Result<SchemaChange, String>
                     required: false,
                     unique: false,
                     default: None,
+                    read: None,
                 },
             })
         }

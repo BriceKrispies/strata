@@ -32,7 +32,7 @@
         { "id": "slug", "label": "Slug", "type": "string", "required": true, "unique": true },
         { "id": "title", "label": "Role", "type": "string" },
         { "id": "bio", "label": "Biography", "type": "string" },
-        { "id": "principal", "label": "Login identity", "type": "string", "unique": true }
+        { "id": "principal", "label": "Login identity", "type": "string", "unique": true, "read": "has_role(editor) or has_role(owner) or record.principal == principal" }
       ],
       "constraints": [
         { "id": "slug_format", "check": "is_slug(new.slug)", "message": "A slug uses lower-case letters, digits and single hyphens" }

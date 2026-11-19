@@ -2,12 +2,62 @@
 //! policies do not grant.
 
 use crate::expr::{self, Env};
-use crate::ids::Timestamp;
+use crate::ids::{RoleId, Timestamp};
 use crate::intent::{Check, Context, DomainError, ErrorKind, ReadRequest, ReadResult};
 use crate::rules::{authorize, roles_of, Lookup, Subject};
 use crate::schema::{Action, Resource, TenantSchema};
 use crate::state::{Need, Principal, Record, State, TenantState};
+use crate::value::Value;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
+
+/// What a reader receives of a record: the record without the fields whose `read` condition
+/// does not hold for them. A condition that cannot be evaluated hides the field. The system
+/// reads everything. Policy conditions, query filters and constraints see the whole record,
+/// because they run inside the kernel; only what leaves it is trimmed.
+fn redact(
+    lookup: Lookup<'_>,
+    principal: &Principal,
+    roles: &BTreeSet<RoleId>,
+    now: Timestamp,
+    record: &Arc<Record>,
+) -> Arc<Record> {
+    if matches!(principal, Principal::System) {
+        return record.clone();
+    }
+    let Some(def) = lookup.tenant.schema.objects.get(&record.object) else {
+        return record.clone();
+    };
+    let params: BTreeMap<String, Value> = BTreeMap::new();
+    let env = Env {
+        record: Some(record),
+        old: Some(record),
+        new: Some(record),
+        params: &params,
+        now,
+        principal,
+        roles,
+        lookup: Some(lookup),
+    };
+    let hidden: Vec<_> = def
+        .fields
+        .values()
+        .filter(|field| {
+            field.read.as_ref().is_some_and(|rule| {
+                record.fields.contains_key(&field.id) && !expr::holds(rule, &env).unwrap_or(false)
+            })
+        })
+        .map(|field| field.id.clone())
+        .collect();
+    if hidden.is_empty() {
+        return record.clone();
+    }
+    let mut shown = Record::clone(record);
+    for field in &hidden {
+        shown.fields.remove(field);
+    }
+    Arc::new(shown)
+}
 
 /// Whether a principal may read a record. The same decision `read` makes per row; the shell
 /// uses it to decide who receives an event about the record.
@@ -155,6 +205,11 @@ pub fn read(
                 .collect()
         }
     };
+    let roles = roles_of(tenant, &ctx.principal);
+    let rows: Vec<Arc<Record>> = rows
+        .iter()
+        .map(|record| redact(lookup, &ctx.principal, &roles, ctx.now, record))
+        .collect();
     Ok(ReadResult {
         rows,
         revision: tenant.revision,
