@@ -37713,7 +37713,7 @@
         },
         {
           "name": "schema",
-          "type": "tenant-schema"
+          "type": "shared<tenant-schema>"
         },
         {
           "name": "members",
@@ -37721,10 +37721,10 @@
         },
         {
           "name": "records",
-          "type": "map<object-type-id, map<record-id, record>>"
+          "type": "map<object-type-id, map<record-id, shared<record>>>"
         }
       ],
-      "description": "strata_kernel::TenantState: members is BTreeMap<PrincipalId, BTreeSet<RoleId>>, records is BTreeMap<ObjectTypeId, BTreeMap<RecordId, Arc<Record>>>."
+      "description": "strata_kernel::TenantState: members is BTreeMap<PrincipalId, BTreeSet<RoleId>>; the schema and every record are shared<T> (Arc<T>), so a new state shares what it did not change with the one before it."
     },
     {
       "id": "need",
@@ -37814,7 +37814,7 @@
         },
         {
           "name": "tenant",
-          "type": "option<tenant-state>"
+          "type": "option<shared<tenant-state>>"
         },
         {
           "name": "coverage",
@@ -38329,7 +38329,7 @@
           "fields": [
             {
               "name": "value",
-              "type": "tenant-schema"
+              "type": "shared<tenant-schema>"
             }
           ]
         },
@@ -38352,7 +38352,7 @@
           "fields": [
             {
               "name": "value",
-              "type": "record"
+              "type": "shared<record>"
             }
           ]
         },
@@ -38457,7 +38457,7 @@
           "fields": [
             {
               "name": "record",
-              "type": "record"
+              "type": "shared<record>"
             }
           ]
         },
@@ -38466,11 +38466,11 @@
           "fields": [
             {
               "name": "before",
-              "type": "record"
+              "type": "shared<record>"
             },
             {
               "name": "after",
-              "type": "record"
+              "type": "shared<record>"
             }
           ]
         },
@@ -38479,7 +38479,7 @@
           "fields": [
             {
               "name": "before",
-              "type": "record"
+              "type": "shared<record>"
             }
           ]
         }
@@ -38686,7 +38686,7 @@
       "fields": [
         {
           "name": "rows",
-          "type": "list<record>"
+          "type": "list<shared<record>>"
         },
         {
           "name": "revision",
