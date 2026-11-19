@@ -89,10 +89,10 @@ pub const RET_CHALLENGE: Retention = Retention {
     archive_to: None,
 };
 
-/// Retention `ret-content` of record `rec-content`.
+/// Retention `ret-content` of record `tbl-records`.
 pub const RET_CONTENT: Retention = Retention {
     id: "ret-content",
-    record: "rec-content",
+    record: "tbl-records",
     period: Period::Until("ev-content-removed"),
     then: Action::Delete,
     fields: &[],
@@ -114,16 +114,6 @@ pub const RET_PROPOSAL: Retention = Retention {
     id: "ret-proposal",
     record: "rec-proposal",
     period: Period::Until("ev-proposal-retention-elapsed"),
-    then: Action::Delete,
-    fields: &[],
-    archive_to: None,
-};
-
-/// Retention `ret-submission` of record `rec-submission`.
-pub const RET_SUBMISSION: Retention = Retention {
-    id: "ret-submission",
-    record: "rec-submission",
-    period: Period::Until("ev-submission-retention-ended"),
     then: Action::Delete,
     fields: &[],
     archive_to: None,
@@ -259,6 +249,66 @@ pub const RET_DELIVERY_KEY: Retention = Retention {
     archive_to: None,
 };
 
+/// Retention `ret-tbl-session-directory` of record `tbl-session-directory`.
+pub const RET_TBL_SESSION_DIRECTORY: Retention = Retention {
+    id: "ret-tbl-session-directory",
+    record: "tbl-session-directory",
+    period: Period::Until("ev-session-retention-elapsed"),
+    then: Action::Delete,
+    fields: &[],
+    archive_to: None,
+};
+
+/// Retention `ret-tbl-sessions` of record `tbl-sessions`.
+pub const RET_TBL_SESSIONS: Retention = Retention {
+    id: "ret-tbl-sessions",
+    record: "tbl-sessions",
+    period: Period::Until("ev-session-retention-elapsed"),
+    then: Action::Delete,
+    fields: &[],
+    archive_to: None,
+};
+
+/// Retention `ret-tbl-events` of record `tbl-events`.
+pub const RET_TBL_EVENTS: Retention = Retention {
+    id: "ret-tbl-events",
+    record: "tbl-events",
+    period: Period::Until("td-tenant-deleted"),
+    then: Action::Delete,
+    fields: &[],
+    archive_to: None,
+};
+
+/// Retention `ret-tbl-journal` of record `tbl-journal`.
+pub const RET_TBL_JOURNAL: Retention = Retention {
+    id: "ret-tbl-journal",
+    record: "tbl-journal",
+    period: Period::Until("td-tenant-deleted"),
+    then: Action::Delete,
+    fields: &[],
+    archive_to: None,
+};
+
+/// Retention `ret-tbl-snapshots` of record `tbl-snapshots`.
+pub const RET_TBL_SNAPSHOTS: Retention = Retention {
+    id: "ret-tbl-snapshots",
+    record: "tbl-snapshots",
+    period: Period::Until("td-tenant-deleted"),
+    then: Action::Delete,
+    fields: &[],
+    archive_to: None,
+};
+
+/// Retention `ret-tbl-accounts` of record `tbl-accounts`.
+pub const RET_TBL_ACCOUNTS: Retention = Retention {
+    id: "ret-tbl-accounts",
+    record: "tbl-accounts",
+    period: Period::Until("td-tenant-deleted"),
+    then: Action::Delete,
+    fields: &[],
+    archive_to: None,
+};
+
 /// Every retention, in declaration order.
 pub const RETENTIONS: &[Retention] = &[
     RET_PRINCIPAL,
@@ -269,7 +319,6 @@ pub const RETENTIONS: &[Retention] = &[
     RET_CONTENT,
     RET_EVENT,
     RET_PROPOSAL,
-    RET_SUBMISSION,
     RET_CNV_TURN,
     RET_CONSENT_RECORD,
     RET_LOG_LINE,
@@ -283,6 +332,12 @@ pub const RETENTIONS: &[Retention] = &[
     RET_WEBHOOK_SUBSCRIPTION,
     RET_CONNECTOR_SECRET,
     RET_DELIVERY_KEY,
+    RET_TBL_SESSION_DIRECTORY,
+    RET_TBL_SESSIONS,
+    RET_TBL_EVENTS,
+    RET_TBL_JOURNAL,
+    RET_TBL_SNAPSHOTS,
+    RET_TBL_ACCOUNTS,
 ];
 
 /// The retention of a record, by the record's id.

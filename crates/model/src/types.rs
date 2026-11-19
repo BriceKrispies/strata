@@ -2840,7 +2840,7 @@ pub struct OperationResult {
 
 /// Outbox Entry
 ///
-/// strata_storage_api::OutboxEntry: an event waiting to be handed to subscribers.
+/// strata_storage_api::OutboxEntry: an event waiting to be handed to subscribers. position is per tenant (the tenant of the event), increasing in that tenant's commit order; the outboxes of different tenants are not ordered against each other.
 ///
 /// Specification type `outbox-entry`: a struct.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -3025,7 +3025,7 @@ pub struct RealmPolicy {
 
 /// Receipt
 ///
-/// strata_storage_api::Receipt.
+/// strata_storage_api::Receipt. last-position is the outbox position, in the tenant's own outbox, of the last event written.
 ///
 /// Specification type `receipt`: a struct.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -3715,3 +3715,114 @@ pub struct WebhookDelivery {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct SessionToken(pub String);
+
+/// Field id
+///
+/// A field of a tenant object type (kernel FieldId).
+///
+/// Specification type `field-id`: an identifier represented as `string`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct FieldId(pub String);
+
+/// Field definition
+///
+/// strata_kernel::FieldDef: one field of a tenant object type. ty is the kernel FieldType and default an expression; their exact types are stated by WG-4927.
+///
+/// Specification type `field-def`: a struct.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FieldDef {
+    /// Field `id`.
+    pub id: FieldId,
+    /// Field `label`.
+    pub label: String,
+    /// Field `ty`.
+    pub ty: serde_json::Value,
+    /// Field `required`.
+    pub required: bool,
+    /// Field `unique`.
+    pub unique: bool,
+    /// Field `default`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default: Option<serde_json::Value>,
+}
+
+/// Constraint definition
+///
+/// strata_kernel::ConstraintDef: a rule every record of an object type satisfies.
+///
+/// Specification type `constraint-def`: a struct.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ConstraintDef {
+    /// Field `id`.
+    pub id: String,
+    /// Field `expr`.
+    pub expr: serde_json::Value,
+    /// Field `message`.
+    pub message: String,
+}
+
+/// Object definition
+///
+/// strata_kernel::ObjectTypeDef: a tenant object type. fields maps field ids to field-def and constraints maps constraint ids to constraint-def, as JSON objects (map types follow with WG-4927).
+///
+/// Specification type `object-def`: a struct.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ObjectDef {
+    /// Field `id`.
+    pub id: ObjectTypeId,
+    /// Field `label`.
+    pub label: String,
+    /// Field `fields`.
+    pub fields: serde_json::Value,
+    /// Field `constraints`.
+    pub constraints: serde_json::Value,
+}
+
+/// Tenant schema
+///
+/// strata_kernel::TenantSchema: everything a tenant states about its own data (object types with fields and constraints, roles, policies, workflows, named queries, views), under one version. The root of the tenant-schema metamodel: tenant domain data is described only by values of this type, held in the tenant-meta tables, and never by a fixed record of its own. objects maps object type ids to object-def.
+///
+/// Specification type `tenant-schema`: a struct.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TenantSchema {
+    /// Field `version`.
+    pub version: SchemaVersion,
+    /// Field `objects`.
+    pub objects: serde_json::Value,
+    /// Field `roles`.
+    pub roles: serde_json::Value,
+    /// Field `policies`.
+    pub policies: serde_json::Value,
+    /// Field `workflows`.
+    pub workflows: serde_json::Value,
+    /// Field `queries`.
+    pub queries: serde_json::Value,
+    /// Field `views`.
+    pub views: serde_json::Value,
+}
+
+/// Tenant file state
+///
+/// The state of a tenant in the SQLite control database: active, or deleting (its file is being removed; it loads as absent, and the next open finishes the removal).
+///
+/// Specification type `tenant-file-state`: an enumeration, serialised as the specification's values.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub enum TenantFileState {
+    /// The value `active`.
+    #[serde(rename = "active")]
+    Active,
+    /// The value `deleting`.
+    #[serde(rename = "deleting")]
+    Deleting,
+}
+
+impl TenantFileState {
+    /// The value as the specification writes it.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Deleting => "deleting",
+        }
+    }
+}

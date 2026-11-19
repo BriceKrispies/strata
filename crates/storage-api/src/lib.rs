@@ -19,8 +19,11 @@
 //!   Adapters may serialise all writers; they may not expose a partially applied commit.
 //! - **Tenant scope.** Every read and write names a tenant. Data of one tenant is never
 //!   returned for, or changed through, another.
-//! - **Ordering.** Events have a per-tenant sequence that continues without gaps, and a global
-//!   outbox position that follows commit order.
+//! - **Ordering.** Events have a per-tenant sequence that continues without gaps, and an outbox
+//!   position of their tenant that follows that tenant's commit order. The outboxes of different
+//!   tenants are not ordered against each other: each tenant may live in a database of its own.
+//! - **Publish after commit.** An event is in the outbox only once the commit that wrote it is
+//!   applied, and stays there until it is marked published for its tenant.
 //! - **Durability.** What [`Capabilities::durable`] says. A durable adapter keeps every
 //!   acknowledged commit across a process restart.
 //!
@@ -149,14 +152,15 @@ impl Commit {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Receipt {
     pub revision: StateRevision,
-    /// Outbox position of the last event written, if the commit had events.
+    /// Outbox position, in the tenant's own outbox, of the last event written, if the commit had
+    /// events.
     pub last_position: Option<u64>,
 }
 
 /// An event waiting to be handed to subscribers.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OutboxEntry {
-    /// Global, increasing in commit order.
+    /// Position in the outbox of the event's tenant, increasing in that tenant's commit order.
     pub position: u64,
     pub event: DomainEvent,
 }
@@ -255,11 +259,13 @@ pub trait Store: Send + Sync {
         limit: usize,
     ) -> StoreResult<Vec<DomainEvent>>;
 
-    /// Events not yet marked published, in commit order across all tenants.
+    /// At most `limit` events not yet marked published, from every tenant's outbox: each tenant's
+    /// in its commit order, the tenants in no promised order against each other.
     fn outbox(&self, limit: usize) -> StoreResult<Vec<OutboxEntry>>;
 
-    /// Mark every outbox entry up to and including `position` as published.
-    fn mark_published(&self, position: u64) -> StoreResult<()>;
+    /// Mark every outbox entry of `tenant` up to and including `position` as published. Other
+    /// tenants' outboxes are untouched.
+    fn mark_published(&self, tenant: &TenantId, position: u64) -> StoreResult<()>;
 
     /// Journal entries of a tenant with a revision above `after`, oldest first.
     fn journal_after(

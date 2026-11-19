@@ -13,15 +13,23 @@ logins, and stops all three on Ctrl+C.
 
 | Flag | Effect |
 |---|---|
-| `--fresh` | Delete the development database first |
+| `--fresh` | Delete the development databases first (the control database and its tenant files) |
 | `--no-vite` | No Vite: the BFF serves `web/dist` (builds it if missing) |
 | `--no-build` | Use the binaries already in `target/debug` |
 | `--store memory` | Keep everything in memory |
-| `--db PATH` | Another database file |
+| `--db PATH` | Another control database; its tenant files go in `<stem>-tenants/` beside it |
+| `--tenant-files DIR` | Keep the tenant files in another directory |
 | `--backend-port`, `--bff-port`, `--vite-port` | Other ports |
 | `--quiet` | Only warnings and errors on screen; everything still goes to the log files |
 
 The service token is generated on each start and exists only in the two processes' environment.
+
+The SQLite store keeps a control database (`var/strata.db`: the tenant directory and the session
+directory, no tenant content) and one database file per tenant (`var/strata-tenants/<tenant>.db`)
+holding that tenant's records, schema history, events, journal, snapshots, sessions and logins.
+A database from before this layout, with every tenant in one file, is refused on start with a
+message: development data is reseeded, so delete `var/strata.db` (with its `-wal` and `-shm`
+files) or start with `--fresh`.
 
 ## Two kinds of live update
 
@@ -121,7 +129,8 @@ store's own integrity check.
 | `STRATA_SERVICE_TOKEN` | both | none; required, at least 24 characters |
 | `STRATA_DEV` | both | unset; `1` enables development logins and fixture endpoints |
 | `STRATA_BACKEND_ADDR` | backend | `127.0.0.1:4101` (must be loopback) |
-| `STRATA_STORE`, `STRATA_DB` | backend | `sqlite`, `var/strata.db` |
+| `STRATA_STORE`, `STRATA_DB` | backend | `sqlite`, `var/strata.db` (the control database) |
+| `STRATA_TENANT_FILES` | backend | `var/strata-tenants` (one `<tenant>.db` per tenant) |
 | `STRATA_TENANTS`, `STRATA_LEAN_DIR` | backend | `tenants`, `lean` |
 | `STRATA_SESSION_TTL_MS`, `STRATA_SESSION_IDLE_MS` | backend | 12 hours, 2 hours |
 | `STRATA_BFF_ADDR`, `STRATA_BACKEND_URL` | BFF | `127.0.0.1:4100`, `http://127.0.0.1:4101` |

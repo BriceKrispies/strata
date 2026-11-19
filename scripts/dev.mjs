@@ -2,11 +2,12 @@
 //
 //   node scripts/dev.mjs                 development, with hot module replacement on :5173
 //   node scripts/dev.mjs --no-vite       the BFF serves the built frontend from web/dist
-//   node scripts/dev.mjs --fresh         delete the development database first
+//   node scripts/dev.mjs --fresh         delete the development databases first
 //   node scripts/dev.mjs --no-vite --lan let other devices on the local network reach the BFF
 //
-// Options: --backend-port N, --bff-port N, --vite-port N, --db PATH, --store sqlite|memory,
-// --no-build (use the binaries already in target/debug), --quiet (no request log on screen).
+// Options: --backend-port N, --bff-port N, --vite-port N, --db PATH, --tenant-files DIR,
+// --store sqlite|memory, --no-build (use the binaries already in target/debug), --quiet (no
+// request log on screen).
 //
 // A fresh service token is generated on every start and handed to both services through their
 // environment; it is never written to disk. Ctrl+C stops everything.
@@ -15,7 +16,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { createWriteStream, existsSync, mkdirSync, rmSync } from 'node:fs';
 import { networkInterfaces } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, extname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -32,7 +33,10 @@ const ports = {
   vite: Number(option('vite-port', 5173)),
 };
 const withVite = !flag('no-vite');
+// --db names the control database (the tenant directory); each tenant's database file goes in
+// --tenant-files, by default <stem>-tenants beside it (var/strata-tenants/<tenant>.db).
 const db = resolve(root, option('db', 'var/strata.db'));
+const tenantFiles = resolve(root, option('tenant-files', join(dirname(db), `${basename(db, extname(db))}-tenants`)));
 const exe = process.platform === 'win32' ? '.exe' : '';
 const children = [];
 let stopping = false;
@@ -132,6 +136,7 @@ if (!withVite && !existsSync(join(root, 'web', 'dist', 'index.html'))) {
 }
 if (flag('fresh')) {
   for (const suffix of ['', '-wal', '-shm']) rmSync(`${db}${suffix}`, { force: true });
+  rmSync(tenantFiles, { recursive: true, force: true });
 }
 
 const token = randomBytes(32).toString('hex');
@@ -150,6 +155,7 @@ start('backend', join(root, 'target', 'debug', `strata-backend${exe}`), [], {
   STRATA_SERVICE_TOKEN: token,
   STRATA_STORE: option('store', 'sqlite'),
   STRATA_DB: db,
+  STRATA_TENANT_FILES: tenantFiles,
   STRATA_TENANTS: join(root, 'tenants'),
   STRATA_LEAN_DIR: join(root, 'lean'),
   STRATA_DEV: '1',
@@ -191,7 +197,7 @@ Strata is running.
     tomasz / strata-dev-tomasz    author
     mirela / strata-dev-mirela    author
 
-  Database  ${option('store', 'sqlite') === 'memory' ? 'in memory' : db}
+  Database  ${option('store', 'sqlite') === 'memory' ? 'in memory' : `${db} (tenant files in ${tenantFiles})`}
   Logs      var/logs/*.jsonl
 ${lanAddresses.length ? `
   From another device on this network:
