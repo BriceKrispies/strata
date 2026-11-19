@@ -11,6 +11,7 @@ use proc_macro2::TokenStream;
 use crate::diagnostic::Diagnostic;
 use crate::ir::Spec;
 
+pub mod audits;
 pub mod contracts;
 pub mod policies;
 pub mod prelude;
@@ -48,4 +49,5 @@ pub const BACKENDS: &[&dyn Backend] = &[
     &retentions::RetentionsBackend,
     &quotas::QuotasBackend,
     &retries::RetriesBackend,
+    &audits::AuditsBackend,
 ];

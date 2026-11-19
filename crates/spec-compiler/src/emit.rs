@@ -14,6 +14,8 @@ pub const SERDE_VERSION: &str = "1.0.228";
 pub const UUID_VERSION: &str = "1.24.0";
 /// The regex version the generated crate depends on (the workspace's).
 pub const REGEX_VERSION: &str = "1.13.1";
+/// The sha2 version a generated crate with a hash-chained audit depends on (the workspace's).
+pub const SHA2_VERSION: &str = "0.10.9";
 
 /// Code of a module that does not parse as Rust: a defect in specc, never in the specification.
 pub const INTERNAL: &str = "specc.internal";
@@ -124,7 +126,7 @@ const ITEM_KEYWORDS: &[&str] = &[
 
 fn lib_rs<'a>(spec: &Spec, modules: impl Iterator<Item = &'a str>) -> TokenStream {
     let summary = format!(
-        " {}: the declared types, records and contracts of its specification, as Rust.",
+        " {}: the declared types, records, contracts and cross-cutting constructs of its specification, as Rust.",
         spec.system.name
     );
     let origin = format!(
@@ -144,6 +146,16 @@ fn lib_rs<'a>(spec: &Spec, modules: impl Iterator<Item = &'a str>) -> TokenStrea
 }
 
 fn cargo_toml(spec: &Spec, crate_name: &str) -> String {
+    let chained = spec
+        .constructs
+        .audits
+        .iter()
+        .any(|a| a.immutability == crate::constructs::Immutability::ChainedHash);
+    let sha2 = if chained {
+        format!("sha2 = \"{SHA2_VERSION}\"\n")
+    } else {
+        String::new()
+    };
     format!(
         "{header}\n\
          [package]\n\
@@ -155,6 +167,7 @@ fn cargo_toml(spec: &Spec, crate_name: &str) -> String {
          [dependencies]\n\
          regex = \"{REGEX_VERSION}\"\n\
          serde = {{ version = \"{SERDE_VERSION}\", features = [\"derive\"] }}\n\
+         {sha2}\
          uuid = {{ version = \"{UUID_VERSION}\", features = [\"serde\"] }}\n",
         header = toml_header(&spec.path),
     )
@@ -187,6 +200,7 @@ mod tests {
         assert!(line("serde").contains(&format!("version = \"{SERDE_VERSION}\"")));
         assert!(line("uuid").contains(&format!("version = \"{UUID_VERSION}\"")));
         assert_eq!(line("regex"), format!("regex = \"{REGEX_VERSION}\""));
+        assert_eq!(line("sha2"), format!("sha2 = \"{SHA2_VERSION}\""));
     }
 
     #[test]
