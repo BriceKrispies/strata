@@ -17016,7 +17016,10 @@
       "ref": "H-031",
       "realisation": "hand",
       "implementedBy": "store-contract",
-      "auth": "Local call inside the platform process; no network credential",
+      "auth": {
+        "scheme": "in-process",
+        "description": "Local call inside the platform process; no network credential"
+      },
       "idempotent": true,
       "inputs": [
         {
@@ -17084,7 +17087,8 @@
           "type": "store-error",
           "kind": "internal"
         }
-      ]
+      ],
+      "exposure": "local"
     },
     {
       "id": "commit-accepted",
@@ -17092,7 +17096,10 @@
       "ref": "CT-262",
       "realisation": "generated",
       "implementedBy": "store-contract",
-      "auth": "Local call inside the platform process; no network credential",
+      "auth": {
+        "scheme": "in-process",
+        "description": "Local call inside the platform process; no network credential"
+      },
       "idempotent": false,
       "timeoutMs": 300,
       "inputs": [
@@ -17142,7 +17149,8 @@
           "type": "store-error",
           "kind": "internal"
         }
-      ]
+      ],
+      "exposure": "local"
     },
     {
       "id": "mutate-record",
@@ -17163,7 +17171,16 @@
         "retries": 8,
         "fault": "fault"
       },
-      "auth": "A principal whose policies permit the change; anonymous callers carry the request token (GWY-002)",
+      "auth": {
+        "scheme": "session",
+        "tenantPolicies": true,
+        "csrf": true,
+        "origin": true,
+        "requires": [
+          "content-write"
+        ],
+        "description": "A principal whose policies permit the change; anonymous callers carry the request token (GWY-002)"
+      },
       "idempotent": false,
       "timeoutMs": 10000,
       "inputs": [
@@ -17236,7 +17253,9 @@
           "condition": "An integer overflow in the decision (a revision, an event sequence, a version or a record id past its type); never in practice.",
           "kind": "internal"
         }
-      ]
+      ],
+      "exposure": "public",
+      "tenantScope": "request"
     },
     {
       "id": "read-view",
@@ -17254,7 +17273,14 @@
         "needRounds": 32,
         "fault": "fault"
       },
-      "auth": "Anyone; a session widens what its policies let it read",
+      "auth": {
+        "scheme": "anonymous",
+        "justification": "Published views are for visitors; a session only widens what its policies let it read.",
+        "requires": [
+          "content-read"
+        ],
+        "description": "Anyone; a session widens what its policies let it read"
+      },
       "idempotent": true,
       "timeoutMs": 10000,
       "inputs": [
@@ -17318,7 +17344,10 @@
           "condition": "An integer overflow in the route match (a revision, an event sequence, a version or a record id past its type); never in practice.",
           "kind": "internal"
         }
-      ]
+      ],
+      "exposure": "public",
+      "tenantScope": "request",
+      "readOnly": true
     },
     {
       "id": "issue-passkey-challenge",
@@ -17327,7 +17356,16 @@
       "realisation": "hand",
       "milestone": 3,
       "implementedBy": "identity-service",
-      "auth": "Anyone for a sign-in, a signed-in principal for a registration",
+      "auth": {
+        "scheme": "anonymous",
+        "csrf": true,
+        "origin": true,
+        "justification": "A sign-in challenge is asked for before any session exists; a registration challenge additionally needs the session.",
+        "requires": [
+          "identity-sign-in"
+        ],
+        "description": "Anyone for a sign-in, a signed-in principal for a registration"
+      },
       "idempotent": false,
       "inputs": [],
       "outputs": [
@@ -17363,7 +17401,9 @@
           "type": "api-error",
           "kind": "unauthenticated"
         }
-      ]
+      ],
+      "exposure": "public",
+      "tenantScope": "request"
     },
     {
       "id": "list-passkeys",
@@ -17372,7 +17412,13 @@
       "realisation": "hand",
       "milestone": 3,
       "implementedBy": "identity-service",
-      "auth": "A signed-in principal",
+      "auth": {
+        "scheme": "session",
+        "requires": [
+          "account-manage"
+        ],
+        "description": "A signed-in principal"
+      },
       "idempotent": true,
       "inputs": [],
       "outputs": [
@@ -17391,7 +17437,10 @@
           "type": "api-error",
           "kind": "unauthenticated"
         }
-      ]
+      ],
+      "exposure": "public",
+      "tenantScope": "request",
+      "readOnly": true
     },
     {
       "id": "remove-passkey",
@@ -17400,7 +17449,16 @@
       "realisation": "hand",
       "milestone": 3,
       "implementedBy": "identity-service",
-      "auth": "A signed-in principal",
+      "auth": {
+        "scheme": "session",
+        "csrf": true,
+        "origin": true,
+        "stepUp": "15 min",
+        "requires": [
+          "account-manage"
+        ],
+        "description": "A signed-in principal"
+      },
       "idempotent": true,
       "inputs": [
         {
@@ -17425,7 +17483,9 @@
           "type": "api-error",
           "kind": "not_found"
         }
-      ]
+      ],
+      "exposure": "public",
+      "tenantScope": "request"
     },
     {
       "id": "deliver-sign-in-mail",
@@ -17434,7 +17494,10 @@
       "realisation": "hand",
       "milestone": 3,
       "implementedBy": "identity-service",
-      "auth": "Local call inside the platform process; no network credential",
+      "auth": {
+        "scheme": "in-process",
+        "description": "Local call inside the platform process; no network credential"
+      },
       "idempotent": false,
       "inputs": [
         {
@@ -17463,7 +17526,8 @@
           "type": "api-error",
           "kind": "unavailable"
         }
-      ]
+      ],
+      "exposure": "local"
     },
     {
       "id": "check-return-address",
@@ -17472,7 +17536,10 @@
       "realisation": "hand",
       "milestone": 3,
       "implementedBy": "identity-service",
-      "auth": "Local call inside the platform process; no network credential",
+      "auth": {
+        "scheme": "in-process",
+        "description": "Local call inside the platform process; no network credential"
+      },
       "idempotent": true,
       "inputs": [
         {
@@ -17492,7 +17559,8 @@
         "Any other address gives no result, and the person lands on the default page instead of being sent on.",
         "A sign-in link carries a return address only when this check passes, and the page that the link opens checks it again before it navigates."
       ],
-      "errors": []
+      "errors": [],
+      "exposure": "local"
     },
     {
       "id": "configure-identity-providers",
@@ -17501,7 +17569,13 @@
       "realisation": "hand",
       "milestone": 4,
       "implementedBy": "identity-service",
-      "auth": "Platform operator, through the platform configuration file and the process environment",
+      "auth": {
+        "scheme": "in-process",
+        "roles": [
+          "platform-operator"
+        ],
+        "description": "Platform operator, through the platform configuration file and the process environment"
+      },
       "idempotent": true,
       "inputs": [
         {
@@ -17529,7 +17603,8 @@
           "type": "api-error",
           "kind": "invalid"
         }
-      ]
+      ],
+      "exposure": "local"
     },
     {
       "id": "redeem-oidc-code",
@@ -17538,7 +17613,10 @@
       "realisation": "hand",
       "milestone": 4,
       "implementedBy": "identity-service",
-      "auth": "Local call inside the platform process; the client secret goes to the provider's token endpoint only",
+      "auth": {
+        "scheme": "in-process",
+        "description": "Local call inside the platform process; the client secret goes to the provider's token endpoint only"
+      },
       "idempotent": false,
       "inputs": [
         {
@@ -17582,7 +17660,8 @@
           "type": "api-error",
           "kind": "unavailable"
         }
-      ]
+      ],
+      "exposure": "local"
     },
     {
       "id": "refuse-bound-domain-sign-in",
@@ -17591,7 +17670,10 @@
       "realisation": "hand",
       "milestone": 4,
       "implementedBy": "identity-service",
-      "auth": "Local call inside the platform process; no network credential",
+      "auth": {
+        "scheme": "in-process",
+        "description": "Local call inside the platform process; no network credential"
+      },
       "idempotent": true,
       "inputs": [
         {
@@ -17611,7 +17693,8 @@
         "A request for an emailed link for such an address is answered as one for an address with no account is, and no message is sent (IDN-006).",
         "A login with no @ is in no bound domain."
       ],
-      "errors": []
+      "errors": [],
+      "exposure": "local"
     },
     {
       "id": "resolve-federated-identity",
@@ -17620,7 +17703,10 @@
       "realisation": "hand",
       "milestone": 4,
       "implementedBy": "identity-service",
-      "auth": "Local call inside the platform process; no network credential",
+      "auth": {
+        "scheme": "in-process",
+        "description": "Local call inside the platform process; no network credential"
+      },
       "idempotent": false,
       "inputs": [
         {
@@ -17663,7 +17749,8 @@
           "type": "api-error",
           "kind": "unauthenticated"
         }
-      ]
+      ],
+      "exposure": "local"
     },
     {
       "id": "configure-saml-providers",
@@ -17672,7 +17759,13 @@
       "realisation": "hand",
       "milestone": 4,
       "implementedBy": "identity-service",
-      "auth": "Platform operator, through the platform configuration file",
+      "auth": {
+        "scheme": "in-process",
+        "roles": [
+          "platform-operator"
+        ],
+        "description": "Platform operator, through the platform configuration file"
+      },
       "idempotent": true,
       "inputs": [
         {
@@ -17700,7 +17793,8 @@
           "type": "api-error",
           "kind": "invalid"
         }
-      ]
+      ],
+      "exposure": "local"
     },
     {
       "id": "start-saml-sign-in",
@@ -17709,7 +17803,16 @@
       "realisation": "hand",
       "milestone": 4,
       "implementedBy": "identity-service",
-      "auth": "Anyone from one of the site's own pages, with the request token every sign-in carries; to link a provider to an account, the signed-in person",
+      "auth": {
+        "scheme": "anonymous",
+        "csrf": true,
+        "origin": true,
+        "justification": "Signing in with a provider starts before any session exists.",
+        "requires": [
+          "identity-sign-in"
+        ],
+        "description": "Anyone from one of the site's own pages, with the request token every sign-in carries; to link a provider to an account, the signed-in person"
+      },
       "idempotent": false,
       "inputs": [
         {
@@ -17766,7 +17869,9 @@
           "type": "api-error",
           "kind": "unavailable"
         }
-      ]
+      ],
+      "exposure": "public",
+      "tenantScope": "request"
     },
     {
       "id": "carry-saml-response-to-sign-in-page",
@@ -17775,7 +17880,14 @@
       "realisation": "hand",
       "milestone": 4,
       "implementedBy": "identity-service",
-      "auth": "Anyone: the provider's page posts from another site and carries no session",
+      "auth": {
+        "scheme": "anonymous",
+        "justification": "The provider's page posts from another site and carries no session; it only carries the response on to the sign-in page, which checks it.",
+        "requires": [
+          "identity-sign-in"
+        ],
+        "description": "Anyone: the provider's page posts from another site and carries no session"
+      },
       "idempotent": true,
       "inputs": [
         {
@@ -17806,7 +17918,10 @@
           "type": "api-error",
           "kind": "not_found"
         }
-      ]
+      ],
+      "exposure": "public",
+      "tenantScope": "request",
+      "readOnly": true
     },
     {
       "id": "consume-saml-response",
@@ -17815,7 +17930,16 @@
       "realisation": "hand",
       "milestone": 4,
       "implementedBy": "identity-service",
-      "auth": "Anyone from one of the site's own pages, with the request token every sign-in carries",
+      "auth": {
+        "scheme": "anonymous",
+        "csrf": true,
+        "origin": true,
+        "justification": "Signing in with a provider happens before any session exists; the signed assertion proves the identity.",
+        "requires": [
+          "identity-federate"
+        ],
+        "description": "Anyone from one of the site's own pages, with the request token every sign-in carries"
+      },
       "idempotent": false,
       "inputs": [
         {
@@ -17851,7 +17975,9 @@
           "type": "api-error",
           "kind": "unauthenticated"
         }
-      ]
+      ],
+      "exposure": "public",
+      "tenantScope": "request"
     },
     {
       "id": "assign-role",
@@ -194779,6 +194905,57 @@
       "contract": "read-session-view",
       "limit": 600,
       "window": "1 min",
+      "onExceed": "throttle",
+      "heldBy": "limit-store"
+    },
+    {
+      "id": "q-read-view",
+      "description": "Anonymous calls of read-view from one source address.",
+      "scope": "source-address",
+      "contract": "read-view",
+      "limit": 600,
+      "window": "1 min",
+      "onExceed": "throttle",
+      "heldBy": "limit-store"
+    },
+    {
+      "id": "q-issue-passkey-challenge",
+      "description": "Anonymous calls of issue-passkey-challenge from one source address.",
+      "scope": "source-address",
+      "contract": "issue-passkey-challenge",
+      "limit": 100,
+      "window": "15 min",
+      "onExceed": "refuse",
+      "error": "throttled",
+      "heldBy": "limit-store"
+    },
+    {
+      "id": "q-start-saml-sign-in",
+      "description": "Anonymous calls of start-saml-sign-in from one source address.",
+      "scope": "source-address",
+      "contract": "start-saml-sign-in",
+      "limit": 100,
+      "window": "15 min",
+      "onExceed": "throttle",
+      "heldBy": "limit-store"
+    },
+    {
+      "id": "q-carry-saml-response-to-sign-in-page",
+      "description": "Anonymous calls of carry-saml-response-to-sign-in-page from one source address.",
+      "scope": "source-address",
+      "contract": "carry-saml-response-to-sign-in-page",
+      "limit": 100,
+      "window": "15 min",
+      "onExceed": "throttle",
+      "heldBy": "limit-store"
+    },
+    {
+      "id": "q-consume-saml-response",
+      "description": "Anonymous calls of consume-saml-response from one source address.",
+      "scope": "source-address",
+      "contract": "consume-saml-response",
+      "limit": 100,
+      "window": "15 min",
       "onExceed": "throttle",
       "heldBy": "limit-store"
     }
