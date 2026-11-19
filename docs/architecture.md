@@ -31,16 +31,23 @@ Arrows point from a crate to what it may import. Nothing points back up.
 | `kernel` | Pure transition engine: identifiers, value algebra, expressions, schema-as-data, authorization, validation, `transition`, `read`, state deltas, events, effects, canonical hashing | `serde`, `serde_json`, `sha2` only |
 | `substrate` | Pure interpreters over kernel data: tenant definition bundles, JSON coercion, view-model projection, constrained Markdown, theme token schema, subscription matching | `kernel` |
 | `storage-api` | Persistence contract (`Store`), capability statement, in-memory reference adapter, reusable conformance suite | `kernel` |
-| `storage-sqlite` | SQLite adapter. All SQL, pragmas and table layout live here | `storage-api`, `kernel`, `rusqlite` |
+| `runtime` | Generic runtime generated code plugs into: machine host (transactions, outbox, timers), its stores (memory, SQLite), SQLite connection handling and migrations, contract routes and typed clients, clock, telemetry hooks, process bootstrap and background loops. See `docs/runtime.md` | no Strata crate; `serde`, `tokio`, `axum`, `reqwest`, `rusqlite` |
+| `storage-sqlite` | SQLite adapter. All SQL and table layout of the tenant store live here; the connection, pragmas and migration runner are the runtime's | `storage-api`, `kernel`, `runtime`, `rusqlite` |
 | `verification` | Invariant evaluation over kernel states, proof-obligation table, Lean orchestration, correspondence fixtures, evidence report | `kernel` |
 | `simulation` | Deterministic discrete-event simulator that drives the real kernel; traces, branching, comparison, minimisation, journal replay | `kernel`, `verification` |
 | `protocol` | Wire types shared by backend and BFF: internal API, WebSocket protocol v1, structured log lines | `kernel` |
 | `backend` | Imperative shell: clock, random tokens, Argon2, store, outbox publisher, subscriptions, Impact Lab runs | everything above |
-| `bff` | Browser-facing shell. Talks only to the backend's internal API | `protocol`, `substrate`, `kernel` (types only) |
+| `bff` | Browser-facing shell. Talks only to the backend's internal API | `protocol`, `substrate`, `kernel` (types only), `runtime` |
 
 `crates/verification/tests/purity.rs` fails the build when the kernel or substrate gains a
 forbidden dependency or mentions an ambient capability (filesystem, network, clock, randomness,
-environment, process, interior mutability, `unsafe`).
+environment, process, interior mutability, `unsafe`). `crates/runtime/tests/dependencies.rs` fails
+it when the runtime depends on or names the kernel, the substrate, the backend, the BFF or the
+protocol.
+
+[`docs/runtime.md`](runtime.md) draws the line between the runtime (hand-written once, generic)
+and platform-specific code, and states every trait generated code implements or calls, and the
+transaction and delivery semantics of the machine host.
 
 ## The kernel contract
 

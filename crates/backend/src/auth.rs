@@ -63,13 +63,7 @@ fn header<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
 }
 
 /// Compare two secrets without stopping at the first difference.
-pub fn same_secret(a: &str, b: &str) -> bool {
-    a.len() == b.len()
-        && a.bytes()
-            .zip(b.bytes())
-            .fold(0u8, |acc, (x, y)| acc | (x ^ y))
-            == 0
-}
+pub use strata_runtime::routes::same_secret;
 
 pub fn has_service_token(app: &App, headers: &HeaderMap) -> bool {
     header(headers, HEADER_SERVICE).is_some_and(|given| same_secret(given, &app.cfg.service_token))

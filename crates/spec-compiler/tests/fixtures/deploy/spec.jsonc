@@ -1,0 +1,41 @@
+// A small specification for the deployment output: components in four trust zones, relationships
+// of connecting and non-connecting kinds, and budget requirements.
+{
+  "system": { "id": "mini", "name": "Mini" },
+  "components": [
+    { "id": "kernel", "name": "Kernel", "category": "logical", "trustZone": "core", "ref": "C-1",
+      "implementation": { "status": "manual", "notes": "crates/kernel" } },
+    { "id": "browser", "name": "Browser", "category": "client", "trustZone": "public", "ref": "C-2",
+      "implementation": { "status": "manual", "notes": "web" } },
+    { "id": "gateway", "name": "Gateway", "category": "computational", "trustZone": "edge", "ref": "C-3",
+      "implementation": { "status": "manual", "notes": "crates/bff" } },
+    { "id": "runtime", "name": "Runtime", "category": "computational", "trustZone": "tenant", "ref": "C-4",
+      "implementation": { "status": "manual", "notes": "crates/backend" } },
+    { "id": "tenant-db", "name": "Tenant database", "category": "storage", "trustZone": "data", "ref": "C-5",
+      "implementation": { "status": "not-implemented" } },
+    { "id": "telemetry", "name": "Telemetry", "category": "infrastructure", "trustZone": "data", "ref": "C-6",
+      "implementation": { "status": "not-implemented" } },
+    { "id": "worker", "name": "Worker", "category": "computational", "trustZone": "tenant", "ref": "C-7",
+      "implementation": { "status": "not-implemented" } }
+  ],
+  "relationships": [
+    { "id": "browser-calls-gateway", "kind": "calls", "from": "browser", "to": "gateway" },
+    { "id": "gateway-calls-runtime", "kind": "calls", "from": "gateway", "to": "runtime" },
+    { "id": "runtime-writes-db", "kind": "writes", "from": "runtime", "to": "tenant-db" },
+    { "id": "worker-reads-db", "kind": "reads", "from": "worker", "to": "tenant-db" },
+    { "id": "worker-calls-runtime", "kind": "calls", "from": "worker", "to": "runtime" },
+    { "id": "runtime-depends-on-kernel", "kind": "depends-on", "from": "runtime", "to": "kernel" },
+    { "id": "telemetry-observes-gateway", "kind": "observes", "from": "telemetry", "to": "gateway" }
+  ],
+  "claims": [
+    { "id": "ops-1", "kind": "requirement", "ref": "OPS-1",
+      "statement": "A request SHALL complete within 300 ms at the 99th percentile.",
+      "evaluate": { "method": "budget" }, "boundary": "b-2", "boundaryDetail": "`commit`" },
+    { "id": "ops-2", "kind": "requirement", "ref": "OPS-2",
+      "statement": "A reply SHALL reflow without horizontal scrolling.",
+      "evaluate": { "method": "budget" }, "boundary": "b-9", "boundaryDetail": "`reply`" },
+    { "id": "ops-3", "kind": "requirement", "ref": "OPS-3",
+      "statement": "A request SHALL be answered.",
+      "evaluate": { "method": "scenario" } }
+  ]
+}

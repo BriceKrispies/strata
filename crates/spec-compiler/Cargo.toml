@@ -1,0 +1,36 @@
+[package]
+name = "strata-spec-compiler"
+description = "specc: compiles the structural parts of the Strata specification (types, records, contracts) into Rust."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+name = "strata_spec_compiler"
+path = "src/lib.rs"
+
+[[bin]]
+name = "specc"
+path = "src/main.rs"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+proc-macro2.workspace = true
+quote.workspace = true
+syn.workspace = true
+prettyplease.workspace = true
+regex.workspace = true
+strata-spec-expr.workspace = true
+
+[dev-dependencies]
+axum.workspace = true
+strata-runtime.workspace = true
+strata-spec-compiler-machines-fixture = { path = "../spec-compiler-machines-fixture" }
+strata-spec-compiler-wiring-fixture = { path = "../spec-compiler-wiring-fixture" }
+tokio.workspace = true
+
+[lints]
+workspace = true

@@ -22,18 +22,7 @@ use strata_storage_api::memory::MemoryStore;
 use strata_storage_api::Store;
 use strata_storage_sqlite::SqliteStore;
 
-fn var(name: &str, default: &str) -> String {
-    std::env::var(name)
-        .ok()
-        .filter(|v| !v.is_empty())
-        .unwrap_or_else(|| default.to_string())
-}
-
-fn number(name: &str, default: i64) -> Result<i64, String> {
-    var(name, &default.to_string())
-        .parse()
-        .map_err(|_| format!("{name} must be a number"))
-}
+use strata_runtime::server::{self, env_number as number, env_var as var};
 
 fn start() -> Result<(Config, Arc<dyn Store>), String> {
     let addr: SocketAddr = var("STRATA_BACKEND_ADDR", "127.0.0.1:4101")
@@ -74,17 +63,9 @@ fn start() -> Result<(Config, Arc<dyn Store>), String> {
 async fn main() {
     let result = async {
         let (cfg, store) = start()?;
-        let listener = tokio::net::TcpListener::bind(cfg.addr)
-            .await
-            .map_err(|e| format!("{}: {e}", cfg.addr))?;
-        let shutdown = async {
-            let _ = tokio::signal::ctrl_c().await;
-        };
-        strata_backend::run(cfg, store, listener, shutdown).await
+        let listener = server::bind(cfg.addr).await?;
+        strata_backend::run(cfg, store, listener, server::interrupted()).await
     }
     .await;
-    if let Err(problem) = result {
-        eprintln!("strata-backend: {problem}");
-        std::process::exit(1);
-    }
+    server::exit_on_error("strata-backend", result);
 }
