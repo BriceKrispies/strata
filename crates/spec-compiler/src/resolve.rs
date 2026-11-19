@@ -240,6 +240,7 @@ mod tests {
                 name: "S".into(),
                 generation_target: None,
                 wire_case: Default::default(),
+                error_wire: Default::default(),
             },
             components: vec![],
             types,

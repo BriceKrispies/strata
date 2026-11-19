@@ -223,6 +223,7 @@ fn contract_rules_are_checked() {
 fn a_well_formed_hole_is_accepted() {
     let contracts = json!([contract(
         json!({ "realisation": "hand", "ref": "H-12", "implementedBy": "svc",
+        "exposure": "local", "auth": { "scheme": "in-process" },
         "postconditions": ["It is done."] })
     )]);
     assert!(generate(

@@ -109,7 +109,7 @@ its event back at the same instance. Neither stands in for the other.
 pub struct ContractSpec {
     pub id: &'static str,        // ref, e.g. "CT-012"
     pub path: &'static str,      // the route it is served at
-    pub auth: &'static str,      // auth
+    pub access: Access,          // exposure, auth, tenantScope, development
     pub timeout: Duration,       // timeoutMs
     pub idempotent: bool,        // idempotent
 }
@@ -130,7 +130,7 @@ The generated async trait for a contract (methods returning `impl Future + Send`
 registering one handler per operation:
 
 ```rust
-Routes::new(authorizer)
+Routes::new(authorizer)   // or Routes::gateway(authorizer): public contracts only
     .serve::<GrantLease, _, _>(move |caller, request| { let s = service.clone(); async move { s.grant(caller, request).await } })
     .into_router()   // an axum Router, merged into the service's router
 ```
@@ -170,19 +170,23 @@ Per deployment, outside generated code:
 
   `Envelope { id: Option<u64>, source, key, receiver, delivery, event }`. `id` is the outbox id
   of an `at-least-once` event and stays the same on every redelivery.
-- An `Authorizer`: interprets a contract's `auth` requirement against the request headers.
+- An `Authorizer`: checks a contract's `Access` against what the request presents.
 
   ```rust
   pub trait Authorizer: Send + Sync + 'static {
-      fn authorize(&self, requirement: &str, headers: &HeaderMap)
+      fn authorize(&self, access: &Access, request: &Presented<'_>)
           -> impl Future<Output = Result<Caller, Refusal>> + Send;
   }
   ```
 
-  `ServiceToken { header, secret }` is provided: the requirement `none` admits anyone, any other
-  requirement needs the secret in the header, and a caller presenting it is subject `service`
-  with the attribute `kind = service`. Session- and tenant-based authorization stays in the
-  services. `Caller { subject, correlation, attributes }`: `attributes` is whatever else the
+  Generated code provides `routes::SpecAuthorizer<H: routes::AuthHoles>`, built from the
+  specification's schemes: the deployment fills the holes (`site`, `session`, `visitor_token`,
+  `service_secret`, `provisioning`, `delegation`, `signature`, `signed_address`, `development`),
+  each of which admits nobody by default, and the CSRF, origin, role, step-up and tenant checks
+  are generated. `ServiceToken { header, secret }` is provided for a service network: the service
+  scheme needs the secret in the header, and a caller presenting it is subject `service` with the
+  attribute `kind = service`; an anonymous contract that asks for no browser check admits anyone;
+  every other scheme is refused. `Caller { subject, correlation, attributes }`: `attributes` is whatever else the
   authorizer established, by name; the runtime never reads it, and generated routes read
   `kind`, `tenant` and `role` from it for the specification's policies and audits.
 - `Credentials` for outgoing calls (`fn apply(&self, RequestBuilder) -> RequestBuilder`);
@@ -361,20 +365,58 @@ database to `SqliteMachineStore`, so machine state can live in the tenant store'
 
 - `POST <SPEC.path>` with the request as a JSON body.
 - Success: status 200 and the response as JSON.
-- Contract error: the error's `status()` and `{"kind": "contract", "error": <error>}`.
-- Runtime failure: `{"kind": "runtime", "code": <code>, "message": <text>}` with the code's status:
+- Failure: the status and body the contract's `FailureBody` (`Contract::Body`) makes of it. The
+  runtime's own body, `RuntimeBody`, answers a contract error with the error's `status()` and
+  `{"kind": "contract", "error": <error>}`, and a runtime failure with
+  `{"kind": "runtime", "code": <code>, "message": <text>}` at the code's status:
   `unauthenticated` 401, `forbidden` 403, `invalid_request` 400, `timeout` 504, `unavailable`
-  503, `internal` 500.
+  503, `internal` 500, `idempotency_conflict` 409. A specification that states an error body has the generated crate supply
+  a body of its own (below); the client reads failures back with the same `FailureBody`.
 
-Per call, the server: asks the `Authorizer` about `SPEC.auth` and answers its refusal at once;
-for an idempotent contract with an `idempotency-key` header, replays an answer already given to
-the same caller subject under the same key, without running the handler (the last 1024 answers
-are kept in memory, per `Routes`); decodes the body (`invalid_request` if it does not decode);
-runs the handler, dropping it and answering `timeout` if it has not finished within
-`SPEC.timeout`; records the answer for replay when the contract is idempotent and a key was given.
-Runtime failures are not recorded for replay.
+```rust
+pub trait FailureBody<E>: Send + Sync + 'static {
+    fn encode(failure: Failure<&E>, correlation: &str) -> serde_json::Result<(u16, Vec<u8>)>;
+    fn decode(status: u16, body: &[u8]) -> Option<Failure<E>>;
+}
+```
 
-The client sends `idempotency-key` (fresh per call, the same across its retries) for idempotent
+`Access` is the contract's exposure (`Public`, `Internal`, `Local`) and its auth as data: a
+`Scheme` (`Anonymous`, `Session`, `Service`, `ProvisioningToken`, `Signature`, `SignedAddress`,
+`Delegation`, `InProcess`), the roles any one of which admits the caller, whether the tenant's
+own policies decide in the handler, the CSRF and origin checks of a browser call, the step-up age,
+the name of the secret a signature is verified with, the tenant scope and the development
+condition. Nothing is a sentence and nothing is matched as a string.
+
+The `Authorizer` is the one seam through which a route asks who the caller is:
+`authorize(&Access, &Presented)`, where `Presented` is the request's headers, target (path and
+query) and body. It refuses any scheme it cannot check in full. Generated code supplies
+`routes::SpecAuthorizer`, built from the schemes, with the deployment's part (the session store,
+the sites and their origins, the secrets) behind the `routes::AuthHoles` trait, every method of
+which admits nobody until the deployment says otherwise. `ServiceToken` is the small authorizer
+of a service network: the service scheme with the token, and anonymous calls that ask for no
+browser check; everything else is refused.
+
+`Routes::new` is the service network's listener (public and internal contracts);
+`Routes::gateway` faces browsers and the internet and serves public contracts only, so an
+internal contract has no route there and its path answers 404. A local contract is never served.
+
+Per call, the server: asks the `Authorizer` about `SPEC.access` and answers its refusal at once;
+for an idempotent contract with an `idempotency-key` header, replays an answer already given
+under the same scope (contract, tenant, caller subject, key) to the same request (its SHA-256
+digest) without running the handler. The tenant is the authorizer's `tenant` attribute, else the
+`x-tenant-id` header. The same key with another body is refused with `idempotency_conflict`
+(409; generated code answers it as the error kind `conflict`, unless `errorBody.runtime` maps
+`idempotency-conflict` elsewhere). A key is reserved while its first call runs: a duplicate waits
+for it, up to the contract's timeout, and gets its answer. The server decodes the body
+(`invalid_request` if it does not decode) and runs the handler on a task of its own; if it has not
+finished within `SPEC.timeout` the call answers `timeout`, but nothing is cancelled: the handler
+finishes and its answer is recorded, so the client's retry is answered from it and never runs a
+half-applied handler again. Answers are recorded when the contract is idempotent and a key was
+given; runtime failures (including `timeout`) are not. The recorded answers are bounded by bytes
+(`Routes::with_replay_bytes`, 8 MiB by default), oldest first out.
+
+The client sends `idempotency-key` (fresh per call, 128 random bits; if the operating system's
+random source fails the call fails with `CallError::Key` and sends nothing, the same across its retries) for idempotent
 contracts and the correlation id in `x-correlation-id` when given. It retries an idempotent
 contract on a transport failure or a runtime `timeout` or `unavailable`; a contract that is not
 idempotent is sent once. How often and how long it waits is a `CallRetry`:
@@ -433,17 +475,47 @@ specc also generates the code that connects the contracts and machines to this r
 three modules of the generated crate (`crates/spec-compiler-wiring-fixture` is an example):
 
 - **`routes`.** Per contract a component implements, a unit type implementing `Contract`. Its
-  `SPEC.id` is the contract's `ref` (its id without one), `auth` its `auth` (`none` without one),
+  `SPEC.id` is the contract's `ref` (its id without one), `auth` its `auth` (empty without one),
   `timeout` its `timeoutMs` (30 s without one), `idempotent` its `idempotent` (false without one).
   **The path** is the contract's `binding.path` when it states one, and otherwise
   `/<implementing component>/<contract id>`; a path must be plain segments (letters, digits,
-  `-`, `_`, `.`, `~`) without parameters, since every contract is a `POST` of a JSON body. A
-  contract error travels with status 422.
+  `-`, `_`, `.`, `~`) without parameters, since every contract is a `POST` of a JSON body.
 
-  Per implementing component `<C>`:
+  **Statuses.** Each contract error travels with the status the specification gives it: its
+  `status`, else the status of its `kind` in `system.generation.errorKinds`, else the default
+  `errorKind` or `errorStatus`. specc refuses an error with none (`ready.error-status-missing`).
+
+  **The error body.** With `system.generation.errorBody`, `Contract::Body` is the generated
+  `ErrorBody`: every failure is answered with the stated struct type (in Strata, `api-error`,
+  which is `strata_protocol::api::ErrorReply`). An error whose payload is that type is answered
+  with the payload, its code set to the error's kind; any other error with a body of its kind
+  whose message is the error's name; a runtime failure with a body of the kind
+  `errorBody.runtime` maps it to, at that kind's status. The correlation field is set to the
+  caller's correlation id. The client reads a body back as the contract error that is alone with
+  its kind, and otherwise as the runtime failure of that kind.
+
+  **One contract at a time.** Per served contract:
 
   ```rust
-  pub trait <C>Hooks: Send + Sync + 'static { /* only what its contracts need */ }
+  pub trait <Contract>Handler: Send + Sync + 'static {
+      fn handle(&self, request: <Contract>Request)
+          -> impl Future<Output = Result<<Contract>Response, <Contract>Error>> + Send;
+  }   // implemented by every implementation of contracts::<C>
+  pub trait <Contract>Hooks: Send + Sync + 'static [+ AuditClock + QuotaCounter + QuotaWait] {
+      /* only what this contract needs */
+  }
+  pub fn serve_<contract><A, S, H>(routes: Routes<A>, handler: Arc<S>, hooks: Arc<H>) -> Routes<A>
+  where A: Authorizer, S: <Contract>Handler, H: <Contract>Hooks;
+  ```
+
+  `AuditClock` (`now`), `QuotaCounter` (`count`) and `QuotaWait` (`wait`) are shared by every
+  contract that needs them. A hooks trait with no method of its own is implemented for every type
+  with its supertraits, `()` included when it has none.
+
+  Per implementing component `<C>`, built from those pieces:
+
+  ```rust
+  pub trait <C>Hooks: <Contract>Hooks + ... {}   // implemented for every type that has them all
   pub fn <c>_routes<A, S, H>(routes: Routes<A>, service: Arc<S>, hooks: Arc<H>) -> Routes<A>
   where A: Authorizer, S: contracts::<C> + Send + Sync + 'static, H: <C>Hooks;
   pub struct <C>Client<K: Credentials = NoCredentials> { client: Client<K> }
@@ -459,10 +531,10 @@ three modules of the generated crate (`crates/spec-compiler-wiring-fixture` is a
   `hooks.<contract>_resource(&request)` loads when a policy names a `resource` (`forbidden`);
   `hooks.count(&QUOTA, &caller)` for each quota on the contract (a refusing quota answers with its
   contract error, whose payload `hooks.<quota>_exceeded(retry_after)` gives when it has one; a
-  queueing or throttling quota calls `hooks.wait`); the trait method; and on success
+  queueing or throttling quota calls `hooks.wait`); the handler; and on success
   `hooks.append_<audit>(audits::audit_<audit>(.., hooks.now()))` for each audit. A hook that
-  fails answers `unavailable` before the call and `internal` after it. `()` implements a hooks
-  trait that requires nothing. A client method of a contract with a retry policy calls under it.
+  fails answers `unavailable` before the call and `internal` after it. A client method of a
+  contract with a retry policy calls under it.
 - **`deps`.** Per implementing component, `<C>Deps` holds exactly one `<D>Client` per component
   `<D>` it calls (relationships of kind `calls` whose target implements contracts), built by
   `<C>Deps::new(<d>, ..)` and read by `deps.<d>()`. An implementation handed its `Deps` can reach

@@ -6,7 +6,7 @@
 // crates/spec-compiler-fixture.
 {
   "exegra": "0.1",
-  "system": { "id": "fixture-platform", "name": "Fixture platform", "generation": { "target": "rust" } },
+  "system": { "id": "fixture-platform", "name": "Fixture platform", "generation": { "target": "rust", "errorKinds": { "conflict": 409, "invalid": 422, "not_found": 404, "throttled": 429 }, "errorStatus": 422 } },
   "components": [
     { "id": "gateway", "name": "Gateway", "category": "service" },
     { "id": "ledger", "name": "Ledger", "category": "service" },
@@ -106,25 +106,25 @@
       ] }
   ],
   "contracts": [
-    { "id": "create-tenant", "name": "Create tenant", "ref": "CT-001", "realisation": "generated", "implementedBy": "gateway", "auth": "An operator of the control plane.", "idempotent": true, "timeoutMs": 2000, "policyDefault": "deny",
+    { "id": "create-tenant", "name": "Create tenant", "ref": "CT-001", "realisation": "generated", "implementedBy": "gateway", "exposure": "internal", "auth": { "scheme": "session", "roles": ["operator"], "csrf": true, "origin": true, "description": "An operator of the control plane." }, "idempotent": true, "timeoutMs": 2000, "policyDefault": "deny",
       "description": "Creates a tenant and reserves its slug.",
       "inputs": [{ "name": "slug", "type": "string" }, { "name": "plan-seats", "type": "u32" }, { "name": "parent", "type": "tenant-id", "optional": true }, { "name": "type", "type": "string", "optional": true, "description": "A free-form tenant category." }],
       "outputs": [{ "name": "tenant-id", "type": "tenant-id" }, { "name": "state", "type": "tenant-state" }],
       "preconditions": ["The slug is not taken.", "The caller is an operator."],
       "postconditions": ["A tenant record exists in state active.", "The slug is reserved for it."],
-      "errors": [{ "name": "slug-taken", "condition": "Another tenant holds the slug." }, { "name": "invalid-slug", "condition": "The slug breaks the slug pattern.", "type": "string" }, { "name": "quota-exceeded", "type": "quota" }] },
-    { "id": "get-account", "name": "Get account", "ref": "CT-002", "realisation": "generated", "implementedBy": "ledger", "idempotent": true, "timeoutMs": 500, "policyDefault": "deny",
+      "errors": [{ "name": "slug-taken", "condition": "Another tenant holds the slug.", "kind": "conflict" }, { "name": "invalid-slug", "condition": "The slug breaks the slug pattern.", "type": "string" }, { "name": "quota-exceeded", "type": "quota", "kind": "throttled" }] },
+    { "id": "get-account", "name": "Get account", "ref": "CT-002", "realisation": "generated", "implementedBy": "ledger", "exposure": "public", "readOnly": true, "tenantScope": "request", "auth": { "scheme": "session", "stepUp": "15 min" }, "idempotent": true, "timeoutMs": 500, "policyDefault": "deny",
       "inputs": [{ "name": "account-id", "type": "account-id" }, { "name": "as-of", "type": "option<timestamp>" }],
       "outputs": [{ "name": "balance", "type": "money" }, { "name": "location", "type": "option<geo-point>" }, { "name": "entries", "type": "list<sequence>" }],
-      "errors": [{ "name": "not-found", "condition": "No account has the id." }] },
-    { "id": "post-entry", "name": "Post entry", "ref": "H-7", "realisation": "hand", "implementedBy": "ledger", "auth": "The ledger's own workers.", "idempotent": false,
+      "errors": [{ "name": "not-found", "condition": "No account has the id.", "kind": "not_found" }] },
+    { "id": "post-entry", "name": "Post entry", "ref": "H-7", "realisation": "hand", "implementedBy": "ledger", "exposure": "local", "auth": { "scheme": "in-process", "description": "The ledger's own workers." }, "idempotent": false,
       "inputs": [{ "name": "account-id", "type": "account-id" }, { "name": "amount", "type": "money" }, { "name": "deadline", "type": "deadline" }],
       "outputs": [{ "name": "sequence", "type": "sequence" }],
       "postconditions": ["Exactly one ledger entry is appended with the next sequence number.", "The account balance changes by the amount."] },
-    { "id": "close-account", "name": "Close account", "ref": "CT-003", "realisation": "generated", "implementedBy": "identity", "timeoutMs": 10000,
+    { "id": "close-account", "name": "Close account", "ref": "CT-003", "realisation": "generated", "implementedBy": "identity", "exposure": "internal", "auth": { "scheme": "service" }, "timeoutMs": 10000,
       "inputs": [{ "name": "account-id", "type": "account-id" }, { "name": "grace", "type": "duration" }],
       "outputs": [],
-      "errors": [{ "name": "still-funded", "condition": "The balance is not zero.", "type": "money" }, { "name": "location-unknown", "type": "geo-point" }] },
+      "errors": [{ "name": "still-funded", "condition": "The balance is not zero.", "type": "money", "status": 409 }, { "name": "location-unknown", "type": "geo-point" }] },
     { "id": "ping", "name": "Ping", "realisation": "generated", "idempotent": false, "policyDefault": "allow" }
   ],
   "policies": [

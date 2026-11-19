@@ -105,13 +105,13 @@ pub struct MakeReportResponse {
 pub enum MakeReportError {
     /// No job has the id.
     #[serde(rename = "not_found")]
-    NotFound,
+    NotFound(types::ApiError),
 }
 
 impl fmt::Display for MakeReportError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::NotFound => f.write_str("not_found"),
+            Self::NotFound(_) => f.write_str("not_found"),
         }
     }
 }
@@ -214,6 +214,8 @@ pub trait Scheduler {
 
     /// Cancel job
     ///
+    /// Authorisation: none
+    ///
     /// Idempotent: repeating a call has the effect of making it once.
     ///
     /// Timeout: 1000 ms.
@@ -228,6 +230,8 @@ pub trait Scheduler {
 /// The contracts component `reports` (Reports) implements.
 pub trait Reports {
     /// Make report
+    ///
+    /// Authorisation: none
     ///
     /// Idempotent: repeating a call has the effect of making it once.
     ///
@@ -263,7 +267,7 @@ pub mod meta {
         reference: Some("CT-2"),
         realisation: Realisation::Generated,
         implemented_by: Some("scheduler"),
-        auth: None,
+        auth: Some("none"),
         idempotent: Some(true),
         timeout_ms: Some(1000),
     };
@@ -287,7 +291,7 @@ pub mod meta {
         reference: Some("CT-4"),
         realisation: Realisation::Generated,
         implemented_by: Some("reports"),
-        auth: None,
+        auth: Some("none"),
         idempotent: Some(true),
         timeout_ms: Some(1000),
     };

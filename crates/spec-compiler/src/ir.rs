@@ -132,6 +132,63 @@ pub struct System {
     /// `system.generation.wireCase`: how contract payloads name their JSON members; kebab-case
     /// (the names as written) when unstated.
     pub wire_case: crate::wire::WireCase,
+    /// How contract errors travel: `system.generation.errorKinds`, `errorStatus`, `errorKind`
+    /// and `errorBody`.
+    pub error_wire: ErrorWire,
+}
+
+/// What `system.generation` states about contract errors on the wire.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ErrorWire {
+    /// `errorKinds`: each kind of failure with its HTTP status, in declaration order.
+    pub kinds: Vec<(String, u16)>,
+    /// `errorStatus`: the status of an error that states neither status nor kind.
+    pub default_status: Option<u16>,
+    /// `errorKind`: the kind of an error that states neither status nor kind.
+    pub default_kind: Option<String>,
+    /// `errorBody`: the body every failed call is answered with, when the specification states
+    /// one.
+    pub body: Option<ErrorBody>,
+}
+
+impl ErrorWire {
+    /// The status of a kind, when it is declared.
+    pub fn kind_status(&self, kind: &str) -> Option<u16> {
+        self.kinds.iter().find(|(k, _)| k == kind).map(|(_, s)| *s)
+    }
+
+    /// The kind of an error: its own, else the default kind.
+    pub fn kind_of<'a>(&'a self, error: &'a ContractError) -> Option<&'a str> {
+        error.kind.as_deref().or(self.default_kind.as_deref())
+    }
+
+    /// The status of an error: its own, else the status of its kind, else the default kind's,
+    /// else the default status.
+    pub fn status_of(&self, error: &ContractError) -> Option<u16> {
+        if let Some(status) = error.status {
+            return Some(status);
+        }
+        match self.kind_of(error) {
+            Some(kind) => self.kind_status(kind),
+            None => self.default_status,
+        }
+    }
+}
+
+/// `system.generation.errorBody`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ErrorBody {
+    /// The struct type of the body.
+    pub type_name: String,
+    /// The field holding the kind (an enum of the kinds).
+    pub code: String,
+    /// The string field holding the message.
+    pub message: String,
+    /// The string field the route fills with the caller's correlation id, if any.
+    pub correlation: Option<String>,
+    /// The kind of each runtime failure, by its name (`unauthenticated`, `forbidden`,
+    /// `invalid-request`, `timeout`, `unavailable`, `internal`).
+    pub runtime: Vec<(String, String)>,
 }
 
 /// A component; only what the contract and wiring backends name.
@@ -349,8 +406,19 @@ pub struct Contract {
     pub realisation: Option<Realisation>,
     /// The implementing component.
     pub implemented_by: Option<String>,
-    /// Who may call it.
-    pub auth: Option<String>,
+    /// Who may call it, as `{scheme, ...}`: `None` when it states no auth or states it as a
+    /// sentence (`auth_prose`), which generated routes refuse to serve.
+    pub auth: Option<Auth>,
+    /// The auth as a sentence, when the specification states it so.
+    pub auth_prose: Option<String>,
+    /// `exposure`: where it can be reached from.
+    pub exposure: Option<Exposure>,
+    /// `readOnly`: true when a call changes no state.
+    pub read_only: bool,
+    /// `tenantScope`: what tenant data it returns.
+    pub tenant_scope: Option<TenantScope>,
+    /// `development`: the development condition without which it does not exist.
+    pub development: Option<String>,
     /// Whether repeating a call has the effect of one call.
     pub idempotent: Option<bool>,
     /// How long a caller waits, as written.
@@ -365,6 +433,131 @@ pub struct Contract {
     /// `implementedBy` component: the contract describes the enterprise target, so it is served
     /// by no route and has no handler in the shipped code.
     pub target: bool,
+}
+
+/// Where a contract can be reached from (`contract.exposure`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Exposure {
+    /// Browsers and the internet, through the gateway.
+    Public,
+    /// The service network only.
+    Internal,
+    /// An in-process call, never a route.
+    Local,
+}
+
+impl Exposure {
+    /// Reads the specification's value.
+    pub fn parse(text: &str) -> Option<Self> {
+        match text {
+            "public" => Some(Self::Public),
+            "internal" => Some(Self::Internal),
+            "local" => Some(Self::Local),
+            _ => None,
+        }
+    }
+}
+
+/// How a caller proves who it is (`contract.auth.scheme`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Scheme {
+    /// Nothing.
+    Anonymous,
+    /// A session established by signing in.
+    Session,
+    /// The credential of a platform component.
+    Service,
+    /// The provisioning token of one realm.
+    ProvisioningToken,
+    /// A request signed with a named secret.
+    Signature,
+    /// An address signed with a named secret.
+    SignedAddress,
+    /// A token an agent holds on behalf of a person.
+    Delegation,
+    /// A local call inside the process.
+    InProcess,
+}
+
+impl Scheme {
+    /// Every scheme, in the order the format lists them.
+    pub const ALL: [Scheme; 8] = [
+        Scheme::Anonymous,
+        Scheme::Session,
+        Scheme::Service,
+        Scheme::ProvisioningToken,
+        Scheme::Signature,
+        Scheme::SignedAddress,
+        Scheme::Delegation,
+        Scheme::InProcess,
+    ];
+
+    /// Reads the specification's value.
+    pub fn parse(text: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|s| s.name() == text)
+    }
+
+    /// The specification's name of the scheme.
+    pub fn name(self) -> &'static str {
+        match self {
+            Scheme::Anonymous => "anonymous",
+            Scheme::Session => "session",
+            Scheme::Service => "service",
+            Scheme::ProvisioningToken => "provisioning-token",
+            Scheme::Signature => "signature",
+            Scheme::SignedAddress => "signed-address",
+            Scheme::Delegation => "delegation",
+            Scheme::InProcess => "in-process",
+        }
+    }
+}
+
+/// What tenant data a contract returns (`contract.tenantScope`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TenantScope {
+    /// Only the tenant the request is made in.
+    Request,
+    /// No tenant's data.
+    None,
+    /// Data across tenants.
+    Platform,
+}
+
+impl TenantScope {
+    /// Reads the specification's value.
+    pub fn parse(text: &str) -> Option<Self> {
+        match text {
+            "request" => Some(Self::Request),
+            "none" => Some(Self::None),
+            "platform" => Some(Self::Platform),
+            _ => None,
+        }
+    }
+}
+
+/// A structured `contract.auth`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Auth {
+    /// How the caller proves who it is.
+    pub scheme: Scheme,
+    /// The roles any one of which admits the caller.
+    pub roles: Vec<String>,
+    /// The policies of the contract that must permit the call.
+    pub policies: Vec<String>,
+    /// Whether the tenant's own policies decide in the handler.
+    pub tenant_policies: bool,
+    /// Whether a browser call carries the request token of its session or visit.
+    pub csrf: bool,
+    /// Whether a browser call comes from an origin of the site it addresses.
+    pub origin: bool,
+    /// `stepUp`, as written: how recently the caller proved who it is.
+    pub step_up: Option<String>,
+    /// The name of the secret a signature or signed address is verified with.
+    pub secret: Option<String>,
+    /// Why an anonymous contract is open to anyone.
+    pub justification: Option<String>,
+    /// The auth in words.
+    pub description: Option<String>,
 }
 
 /// An input or output of a contract.
@@ -389,6 +582,10 @@ pub struct ContractError {
     pub condition: Option<String>,
     /// The payload type, when it carries one.
     pub type_name: Option<String>,
+    /// `status`: the HTTP status it is answered with, when it states one.
+    pub status: Option<u16>,
+    /// `kind`: the kind of failure (a key of `system.generation.errorKinds`), when it states one.
+    pub kind: Option<String>,
 }
 
 /// How a contract is realised.
