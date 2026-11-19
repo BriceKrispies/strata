@@ -1,0 +1,505 @@
+//! Loading: JSONC text to the typed IR.
+//!
+//! Only the sections specc reads are loaded (`system`, `components`, `types`, `records`,
+//! `contracts`); unknown sections and properties are left to Exegra's own validation. A value
+//! of the wrong JSON type is a `specc.spec-shape` diagnostic, and loading carries on so every
+//! problem is reported at once.
+
+use serde_json::{Map, Number, Value};
+
+use crate::diagnostic::{Diagnostic, SPEC_ENTITY};
+use crate::ir::{
+    Component, Constraints, Contract, ContractError, ContractField, Index, OnDelete, Realisation,
+    Record, RecordField, Spec, StructField, System, TypeDecl, TypeKind,
+};
+use crate::jsonc;
+
+/// The code of a text that is not JSONC.
+pub const SYNTAX: &str = "specc.spec-syntax";
+/// The code of a value with the wrong shape.
+pub const SHAPE: &str = "specc.spec-shape";
+
+/// Loads a specification. `path` is the path to print in headers and diagnostics.
+pub fn load(path: &str, text: &str) -> Result<Spec, Vec<Diagnostic>> {
+    let value = jsonc::parse(text).map_err(|e| {
+        vec![Diagnostic::new(
+            SYNTAX,
+            SPEC_ENTITY,
+            format!("the specification is not valid JSONC: {e}"),
+        )]
+    })?;
+    let mut loader = Loader::default();
+    let spec = loader.spec(path, &value);
+    if loader.diagnostics.is_empty() {
+        if let Some(spec) = spec {
+            return Ok(spec);
+        }
+    }
+    Err(loader.diagnostics)
+}
+
+#[derive(Default)]
+struct Loader {
+    diagnostics: Vec<Diagnostic>,
+}
+
+type Obj = Map<String, Value>;
+
+impl Loader {
+    fn shape(&mut self, entity: &str, message: impl Into<String>) {
+        self.diagnostics
+            .push(Diagnostic::new(SHAPE, entity, message.into()));
+    }
+
+    fn spec(&mut self, path: &str, value: &Value) -> Option<Spec> {
+        let Some(top) = value.as_object() else {
+            self.shape(SPEC_ENTITY, "the specification is not a JSON object");
+            return None;
+        };
+        let system = match top.get("system") {
+            Some(Value::Object(obj)) => self.system(obj),
+            Some(_) => {
+                self.shape(SPEC_ENTITY, "\"system\" must be an object");
+                None
+            }
+            None => {
+                self.shape(SPEC_ENTITY, "the specification has no \"system\"");
+                None
+            }
+        };
+        let components = self
+            .section(top, "components")
+            .into_iter()
+            .filter_map(|(entity, obj)| self.component(&entity, obj))
+            .collect();
+        let types = self
+            .section(top, "types")
+            .into_iter()
+            .filter_map(|(entity, obj)| self.type_decl(&entity, obj))
+            .collect();
+        let records = self
+            .section(top, "records")
+            .into_iter()
+            .filter_map(|(entity, obj)| self.record(&entity, obj))
+            .collect();
+        let contracts = self
+            .section(top, "contracts")
+            .into_iter()
+            .filter_map(|(entity, obj)| self.contract(&entity, obj))
+            .collect();
+        Some(Spec {
+            path: path.replace('\\', "/"),
+            system: system?,
+            components,
+            types,
+            records,
+            contracts,
+        })
+    }
+
+    /// The entities of a section, each with the name diagnostics use for it: its id, or
+    /// `<section>[<index>]` when it has none.
+    fn section<'a>(&mut self, top: &'a Obj, name: &str) -> Vec<(String, &'a Obj)> {
+        let items = match top.get(name) {
+            None => return Vec::new(),
+            Some(Value::Array(items)) => items,
+            Some(_) => {
+                self.shape(SPEC_ENTITY, format!("section \"{name}\" must be an array"));
+                return Vec::new();
+            }
+        };
+        let mut out = Vec::new();
+        for (i, item) in items.iter().enumerate() {
+            let fallback = format!("{name}[{i}]");
+            let Some(obj) = item.as_object() else {
+                self.shape(&fallback, "an entity must be an object");
+                continue;
+            };
+            match obj.get("id") {
+                Some(Value::String(id)) => out.push((id.clone(), obj)),
+                _ => self.shape(&fallback, "an entity needs a string \"id\""),
+            }
+        }
+        out
+    }
+
+    fn opt_str(&mut self, obj: &Obj, key: &str, entity: &str) -> Option<String> {
+        match obj.get(key) {
+            None | Some(Value::Null) => None,
+            Some(Value::String(s)) => Some(s.clone()),
+            Some(_) => {
+                self.shape(entity, format!("\"{key}\" must be a string"));
+                None
+            }
+        }
+    }
+
+    fn req_str(&mut self, obj: &Obj, key: &str, entity: &str) -> Option<String> {
+        if obj.get(key).is_none() {
+            self.shape(entity, format!("\"{key}\" is required"));
+            return None;
+        }
+        self.opt_str(obj, key, entity)
+    }
+
+    fn opt_bool(&mut self, obj: &Obj, key: &str, entity: &str) -> Option<bool> {
+        match obj.get(key) {
+            None | Some(Value::Null) => None,
+            Some(Value::Bool(b)) => Some(*b),
+            Some(_) => {
+                self.shape(entity, format!("\"{key}\" must be true or false"));
+                None
+            }
+        }
+    }
+
+    fn opt_number(&mut self, obj: &Obj, key: &str, entity: &str) -> Option<Number> {
+        match obj.get(key) {
+            None | Some(Value::Null) => None,
+            Some(Value::Number(n)) => Some(n.clone()),
+            Some(_) => {
+                self.shape(entity, format!("\"{key}\" must be a number"));
+                None
+            }
+        }
+    }
+
+    fn opt_str_list(&mut self, obj: &Obj, key: &str, entity: &str) -> Option<Vec<String>> {
+        let value = obj.get(key).filter(|v| !v.is_null())?;
+        let Some(items) = value.as_array() else {
+            self.shape(entity, format!("\"{key}\" must be a list of strings"));
+            return None;
+        };
+        let mut out = Vec::new();
+        for item in items {
+            match item.as_str() {
+                Some(s) => out.push(s.to_string()),
+                None => {
+                    self.shape(entity, format!("\"{key}\" must be a list of strings"));
+                    return None;
+                }
+            }
+        }
+        Some(out)
+    }
+
+    fn obj_list<'a>(&mut self, obj: &'a Obj, key: &str, entity: &str) -> Vec<&'a Obj> {
+        let Some(value) = obj.get(key).filter(|v| !v.is_null()) else {
+            return Vec::new();
+        };
+        let Some(items) = value.as_array() else {
+            self.shape(entity, format!("\"{key}\" must be a list of objects"));
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        for item in items {
+            match item.as_object() {
+                Some(o) => out.push(o),
+                None => self.shape(entity, format!("every item of \"{key}\" must be an object")),
+            }
+        }
+        out
+    }
+
+    fn system(&mut self, obj: &Obj) -> Option<System> {
+        let id = self.req_str(obj, "id", SPEC_ENTITY);
+        let entity = id.clone().unwrap_or_else(|| SPEC_ENTITY.to_string());
+        let name = self.req_str(obj, "name", &entity);
+        let generation_target = match obj.get("generation") {
+            None | Some(Value::Null) => None,
+            Some(Value::Object(g)) => self.opt_str(g, "target", &entity),
+            Some(_) => {
+                self.shape(&entity, "\"generation\" must be an object");
+                None
+            }
+        };
+        Some(System {
+            id: id?,
+            name: name?,
+            generation_target,
+        })
+    }
+
+    fn component(&mut self, id: &str, obj: &Obj) -> Option<Component> {
+        let name = self.req_str(obj, "name", id)?;
+        Some(Component {
+            id: id.to_string(),
+            name,
+        })
+    }
+
+    fn type_decl(&mut self, id: &str, obj: &Obj) -> Option<TypeDecl> {
+        let name = self.req_str(obj, "name", id);
+        let description = self.opt_str(obj, "description", id);
+        let kind_text = self.req_str(obj, "kind", id);
+        let repr = self.opt_str(obj, "repr", id);
+        let kind = match kind_text.as_deref() {
+            None => None,
+            Some("id") => Some(TypeKind::Id { repr }),
+            Some("scalar") => Some(TypeKind::Scalar { repr }),
+            Some("enum") => Some(TypeKind::Enum {
+                values: self.opt_str_list(obj, "values", id).unwrap_or_default(),
+            }),
+            Some("struct") => {
+                let mut fields = Vec::new();
+                for f in self.obj_list(obj, "fields", id) {
+                    let name = self.req_str(f, "name", id);
+                    let type_name = self.req_str(f, "type", id);
+                    let optional = self.opt_bool(f, "optional", id).unwrap_or(false);
+                    if let (Some(name), Some(type_name)) = (name, type_name) {
+                        fields.push(StructField {
+                            name,
+                            type_name,
+                            optional,
+                        });
+                    }
+                }
+                Some(TypeKind::Struct { fields })
+            }
+            Some(other) => {
+                self.shape(
+                    id,
+                    format!("\"kind\" is \"{other}\"; it must be id, scalar, enum or struct"),
+                );
+                None
+            }
+        };
+        Some(TypeDecl {
+            id: id.to_string(),
+            name: name?,
+            description,
+            kind: kind?,
+        })
+    }
+
+    fn record(&mut self, id: &str, obj: &Obj) -> Option<Record> {
+        let name = self.req_str(obj, "name", id);
+        let owner = self.opt_str(obj, "owner", id);
+        let key = self.opt_str_list(obj, "key", id);
+        if obj.get("fields").is_none() {
+            self.shape(id, "\"fields\" is required");
+        }
+        let mut fields = Vec::new();
+        for f in self.obj_list(obj, "fields", id) {
+            if let Some(field) = self.record_field(id, f) {
+                fields.push(field);
+            }
+        }
+        let mut unique = Vec::new();
+        match obj.get("unique") {
+            None | Some(Value::Null) => {}
+            Some(Value::Array(sets)) => {
+                for set in sets {
+                    match set
+                        .as_array()
+                        .and_then(|s| s.iter().map(|n| n.as_str().map(str::to_string)).collect())
+                    {
+                        Some(names) => unique.push(names),
+                        None => self.shape(id, "\"unique\" must be a list of lists of field names"),
+                    }
+                }
+            }
+            Some(_) => self.shape(id, "\"unique\" must be a list of lists of field names"),
+        }
+        let mut indexes = Vec::new();
+        for ix in self.obj_list(obj, "indexes", id) {
+            let name = self.req_str(ix, "name", id);
+            let fields = self.opt_str_list(ix, "fields", id);
+            if fields.is_none() && ix.get("fields").is_none() {
+                self.shape(id, "every index needs \"fields\"");
+            }
+            if let (Some(name), Some(fields)) = (name, fields) {
+                indexes.push(Index { name, fields });
+            }
+        }
+        let schema_version = self.opt_number(obj, "schemaVersion", id);
+        let retention = self.opt_str(obj, "retention", id);
+        let description = self.opt_str(obj, "description", id);
+        Some(Record {
+            id: id.to_string(),
+            name: name?,
+            owner,
+            key,
+            fields,
+            unique,
+            indexes,
+            schema_version,
+            retention,
+            description,
+        })
+    }
+
+    fn record_field(&mut self, id: &str, f: &Obj) -> Option<RecordField> {
+        let name = self.req_str(f, "name", id);
+        let type_name = self.req_str(f, "type", id);
+        let optional = self.opt_bool(f, "optional", id).unwrap_or(false);
+        let constraints = match f.get("constraints") {
+            None | Some(Value::Null) => Constraints::default(),
+            Some(Value::Object(c)) => Constraints {
+                min: self.opt_number(c, "min", id),
+                max: self.opt_number(c, "max", id),
+                max_length: self.opt_number(c, "maxLength", id),
+                pattern: self.opt_str(c, "pattern", id),
+            },
+            Some(_) => {
+                self.shape(id, "\"constraints\" must be an object");
+                Constraints::default()
+            }
+        };
+        let refers_to = self.opt_str(f, "refersTo", id);
+        let on_delete = match self.opt_str(f, "onDelete", id) {
+            None => None,
+            Some(text) => {
+                let parsed = OnDelete::parse(&text);
+                if parsed.is_none() {
+                    self.shape(
+                        id,
+                        format!(
+                            "\"onDelete\" is \"{text}\"; it must be restrict, cascade or set-null"
+                        ),
+                    );
+                }
+                parsed
+            }
+        };
+        let personal = self.opt_str(f, "personal", id);
+        let description = self.opt_str(f, "description", id);
+        Some(RecordField {
+            name: name?,
+            type_name: type_name?,
+            optional,
+            constraints,
+            refers_to,
+            on_delete,
+            personal,
+            description,
+        })
+    }
+
+    fn contract_fields(&mut self, id: &str, obj: &Obj, key: &str) -> Vec<ContractField> {
+        let mut out = Vec::new();
+        for f in self.obj_list(obj, key, id) {
+            let name = self.req_str(f, "name", id);
+            let type_name = self.opt_str(f, "type", id);
+            let optional = self.opt_bool(f, "optional", id).unwrap_or(false);
+            let description = self.opt_str(f, "description", id);
+            if let Some(name) = name {
+                out.push(ContractField {
+                    name,
+                    type_name,
+                    optional,
+                    description,
+                });
+            }
+        }
+        out
+    }
+
+    fn contract(&mut self, id: &str, obj: &Obj) -> Option<Contract> {
+        let name = self.req_str(obj, "name", id);
+        let description = self.opt_str(obj, "description", id);
+        let inputs = self.contract_fields(id, obj, "inputs");
+        let outputs = self.contract_fields(id, obj, "outputs");
+        let mut errors = Vec::new();
+        for e in self.obj_list(obj, "errors", id) {
+            let name = self.req_str(e, "name", id);
+            let condition = self.opt_str(e, "condition", id);
+            let type_name = self.opt_str(e, "type", id);
+            if let Some(name) = name {
+                errors.push(ContractError {
+                    name,
+                    condition,
+                    type_name,
+                });
+            }
+        }
+        let preconditions = self
+            .opt_str_list(obj, "preconditions", id)
+            .unwrap_or_default();
+        let postconditions = self
+            .opt_str_list(obj, "postconditions", id)
+            .unwrap_or_default();
+        let reference = self.opt_str(obj, "ref", id);
+        let realisation = match self.opt_str(obj, "realisation", id) {
+            None => None,
+            Some(text) => {
+                let parsed = Realisation::parse(&text);
+                if parsed.is_none() {
+                    self.shape(
+                        id,
+                        format!("\"realisation\" is \"{text}\"; it must be generated or hand"),
+                    );
+                }
+                parsed
+            }
+        };
+        let implemented_by = self.opt_str(obj, "implementedBy", id);
+        let auth = self.opt_str(obj, "auth", id);
+        let idempotent = self.opt_bool(obj, "idempotent", id);
+        let timeout_ms = self.opt_number(obj, "timeoutMs", id);
+        Some(Contract {
+            id: id.to_string(),
+            name: name?,
+            description,
+            inputs,
+            outputs,
+            errors,
+            preconditions,
+            postconditions,
+            reference,
+            realisation,
+            implemented_by,
+            auth,
+            idempotent,
+            timeout_ms,
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const MINIMAL: &str = r#"{ "exegra": "0.1", "system": { "id": "s", "name": "S" } }"#;
+
+    #[test]
+    fn a_minimal_specification_loads() {
+        let spec = load("specs/a.jsonc", MINIMAL).unwrap();
+        assert_eq!(spec.system.id, "s");
+        assert!(spec.types.is_empty() && spec.records.is_empty() && spec.contracts.is_empty());
+    }
+
+    #[test]
+    fn backslashes_in_the_path_become_forward_slashes() {
+        let spec = load("specs\\a.jsonc", MINIMAL).unwrap();
+        assert_eq!(spec.path, "specs/a.jsonc");
+    }
+
+    #[test]
+    fn invalid_jsonc_is_a_syntax_diagnostic() {
+        let err = load("a", "{ \"system\": ").unwrap_err();
+        assert_eq!(err[0].code, SYNTAX);
+    }
+
+    #[test]
+    fn wrong_shapes_are_all_reported() {
+        let text = r#"{ "system": { "id": "s", "name": "S" },
+            "types": [ { "id": "t", "name": "T", "kind": "tuple" }, 3 ],
+            "records": { } }"#;
+        let err = load("a", text).unwrap_err();
+        assert!(err.iter().all(|d| d.code == SHAPE));
+        assert!(err.iter().any(|d| d.entity == "t"));
+        assert!(err.iter().any(|d| d.entity == "types[1]"));
+        assert!(err.iter().any(|d| d.message.contains("\"records\"")));
+    }
+
+    #[test]
+    fn unknown_on_delete_is_a_shape_diagnostic() {
+        let text = r#"{ "system": { "id": "s", "name": "S" },
+            "records": [ { "id": "r", "name": "R", "owner": "c", "key": ["a"],
+              "fields": [ { "name": "a", "type": "u32", "refersTo": "r", "onDelete": "explode" } ] } ] }"#;
+        let err = load("a", text).unwrap_err();
+        assert_eq!(err.len(), 1);
+        assert_eq!(err[0].entity, "r");
+    }
+}

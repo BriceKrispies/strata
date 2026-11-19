@@ -1,0 +1,317 @@
+//! The typed, owned form of the parts of a specification specc reads.
+//!
+//! Every entity keeps its specification id for diagnostics, and every list keeps declaration
+//! order, which is the order of the generated code. Properties that the readiness checks
+//! require are still optional here, so that loading never fails on them and the checks can
+//! name every gap at once.
+
+use serde_json::Number;
+
+/// A loaded specification.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Spec {
+    /// The specification's path as given on the command line, with forward slashes.
+    pub path: String,
+    /// The `system` section.
+    pub system: System,
+    /// The `components` section.
+    pub components: Vec<Component>,
+    /// The `types` section.
+    pub types: Vec<TypeDecl>,
+    /// The `records` section.
+    pub records: Vec<Record>,
+    /// The `contracts` section.
+    pub contracts: Vec<Contract>,
+}
+
+impl Spec {
+    /// The declared type with this id.
+    pub fn type_decl(&self, id: &str) -> Option<&TypeDecl> {
+        self.types.iter().find(|t| t.id == id)
+    }
+
+    /// The record with this id.
+    pub fn record(&self, id: &str) -> Option<&Record> {
+        self.records.iter().find(|r| r.id == id)
+    }
+
+    /// The component with this id.
+    pub fn component(&self, id: &str) -> Option<&Component> {
+        self.components.iter().find(|c| c.id == id)
+    }
+}
+
+/// The `system` object.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct System {
+    /// The system id.
+    pub id: String,
+    /// The system name.
+    pub name: String,
+    /// `system.generation.target`, when the specification declares it ready to generate from.
+    pub generation_target: Option<String>,
+}
+
+/// A component; only what the contract backend names.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Component {
+    /// The component id.
+    pub id: String,
+    /// The component name.
+    pub name: String,
+}
+
+/// A `type` entity.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TypeDecl {
+    /// The type id, which other entities use as a type name.
+    pub id: String,
+    /// The display name.
+    pub name: String,
+    /// The description, if any.
+    pub description: Option<String>,
+    /// What kind of type it is.
+    pub kind: TypeKind,
+}
+
+/// The four kinds of declared type.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TypeKind {
+    /// An identifier over a built-in representation.
+    Id {
+        /// The representation, which must be built-in.
+        repr: Option<String>,
+    },
+    /// A scalar over a built-in representation.
+    Scalar {
+        /// The representation, which must be built-in.
+        repr: Option<String>,
+    },
+    /// An enumeration of string values.
+    Enum {
+        /// The values, in declaration order.
+        values: Vec<String>,
+    },
+    /// A struct of named fields.
+    Struct {
+        /// The fields, in declaration order.
+        fields: Vec<StructField>,
+    },
+}
+
+impl TypeKind {
+    /// The kind as the specification writes it.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Id { .. } => "id",
+            Self::Scalar { .. } => "scalar",
+            Self::Enum { .. } => "enum",
+            Self::Struct { .. } => "struct",
+        }
+    }
+}
+
+/// A field of a struct type.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StructField {
+    /// The field name.
+    pub name: String,
+    /// The type name.
+    pub type_name: String,
+    /// True when the field may be left out.
+    pub optional: bool,
+}
+
+/// A `record` entity.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Record {
+    /// The record id.
+    pub id: String,
+    /// The display name.
+    pub name: String,
+    /// The owning component.
+    pub owner: Option<String>,
+    /// The names of the key fields; `None` when the record states no key.
+    pub key: Option<Vec<String>>,
+    /// The fields, in declaration order.
+    pub fields: Vec<RecordField>,
+    /// Sets of field names whose combined values are unique.
+    pub unique: Vec<Vec<String>>,
+    /// Named indexes.
+    pub indexes: Vec<Index>,
+    /// The schema version, as written.
+    pub schema_version: Option<Number>,
+    /// The retention text.
+    pub retention: Option<String>,
+    /// The description, if any.
+    pub description: Option<String>,
+}
+
+impl Record {
+    /// The field with this name.
+    pub fn field(&self, name: &str) -> Option<&RecordField> {
+        self.fields.iter().find(|f| f.name == name)
+    }
+}
+
+/// A field of a record.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RecordField {
+    /// The field name.
+    pub name: String,
+    /// The type name.
+    pub type_name: String,
+    /// True when a record may leave the field unset.
+    pub optional: bool,
+    /// The constraints on its value.
+    pub constraints: Constraints,
+    /// The record whose key the field holds, or `principal`.
+    pub refers_to: Option<String>,
+    /// What deleting the referred record does.
+    pub on_delete: Option<OnDelete>,
+    /// The personal-data class, if the field is personal data.
+    pub personal: Option<String>,
+    /// The description, if any.
+    pub description: Option<String>,
+}
+
+/// The constraints on a record field, as written.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Constraints {
+    /// The least allowed value.
+    pub min: Option<Number>,
+    /// The greatest allowed value.
+    pub max: Option<Number>,
+    /// The greatest allowed length in characters.
+    pub max_length: Option<Number>,
+    /// A regular expression the value must match.
+    pub pattern: Option<String>,
+}
+
+impl Constraints {
+    /// True when no constraint is stated.
+    pub fn is_empty(&self) -> bool {
+        self.min.is_none()
+            && self.max.is_none()
+            && self.max_length.is_none()
+            && self.pattern.is_none()
+    }
+}
+
+/// What deleting a referred record does to the referring one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OnDelete {
+    /// Deleting the referred record is refused.
+    Restrict,
+    /// The referring record is deleted too.
+    Cascade,
+    /// The referring field is cleared.
+    SetNull,
+}
+
+impl OnDelete {
+    /// Reads the specification's value.
+    pub fn parse(text: &str) -> Option<Self> {
+        match text {
+            "restrict" => Some(Self::Restrict),
+            "cascade" => Some(Self::Cascade),
+            "set-null" => Some(Self::SetNull),
+            _ => None,
+        }
+    }
+
+    /// The value as the specification writes it.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Restrict => "restrict",
+            Self::Cascade => "cascade",
+            Self::SetNull => "set-null",
+        }
+    }
+}
+
+/// A named index of a record.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Index {
+    /// The index name.
+    pub name: String,
+    /// The indexed field names, in order.
+    pub fields: Vec<String>,
+}
+
+/// A `contract` entity.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Contract {
+    /// The contract id.
+    pub id: String,
+    /// The display name.
+    pub name: String,
+    /// The description, if any.
+    pub description: Option<String>,
+    /// The inputs, in declaration order.
+    pub inputs: Vec<ContractField>,
+    /// The outputs, in declaration order.
+    pub outputs: Vec<ContractField>,
+    /// The error conditions, in declaration order.
+    pub errors: Vec<ContractError>,
+    /// The preconditions.
+    pub preconditions: Vec<String>,
+    /// The postconditions.
+    pub postconditions: Vec<String>,
+    /// The stable code, such as `CT-012` or `H-012`.
+    pub reference: Option<String>,
+    /// Whether the code is generated or hand-written.
+    pub realisation: Option<Realisation>,
+    /// The implementing component.
+    pub implemented_by: Option<String>,
+    /// Who may call it.
+    pub auth: Option<String>,
+    /// Whether repeating a call has the effect of one call.
+    pub idempotent: Option<bool>,
+    /// How long a caller waits, as written.
+    pub timeout_ms: Option<Number>,
+}
+
+/// An input or output of a contract.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContractField {
+    /// The field name.
+    pub name: String,
+    /// The type name, if stated.
+    pub type_name: Option<String>,
+    /// True when it may be left out.
+    pub optional: bool,
+    /// The description, if any.
+    pub description: Option<String>,
+}
+
+/// An error condition of a contract.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContractError {
+    /// The error name.
+    pub name: String,
+    /// When it happens.
+    pub condition: Option<String>,
+    /// The payload type, when it carries one.
+    pub type_name: Option<String>,
+}
+
+/// How a contract is realised.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Realisation {
+    /// Generated from the contract.
+    Generated,
+    /// A hole: written by hand against the postconditions.
+    Hand,
+}
+
+impl Realisation {
+    /// Reads the specification's value.
+    pub fn parse(text: &str) -> Option<Self> {
+        match text {
+            "generated" => Some(Self::Generated),
+            "hand" => Some(Self::Hand),
+            _ => None,
+        }
+    }
+}
