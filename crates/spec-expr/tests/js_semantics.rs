@@ -125,9 +125,10 @@ fn ident(name: &str) -> String {
 
 #[test]
 fn generated_javascript_agrees_with_exegra_evaluator() {
-    // The Exegra checkout beside the Strata one, or the one `EXEGRA_DIR` names (a checkout whose
-    // evaluator takes declared types, WG-4902).
-    let exegra = std::env::var_os("EXEGRA_DIR")
+    // The Exegra the gate validates with (`EXEGRA_HOME`, also `EXEGRA_DIR`), else the checkout
+    // beside the Strata one. Its evaluator takes declared types (WG-4902).
+    let exegra = std::env::var_os("EXEGRA_HOME")
+        .or_else(|| std::env::var_os("EXEGRA_DIR"))
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../exegra"))
         .join("src/core/expr.js");

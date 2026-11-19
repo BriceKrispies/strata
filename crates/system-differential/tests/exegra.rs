@@ -403,11 +403,24 @@ async fn run(spec: &Spec, plan: &Plan<'_>, trace: &Value) -> Result<usize, (bool
             system
                 .init(member.name, &text, Value::Object(base))
                 .await
-                .map_err(|e| {
-                    diverged(format!(
+                .map_err(|e| match e {
+                    // Exegra starts the instance in a state whose record the runtime refuses to
+                    // hold: the specification's initial values break the record's constraints.
+                    // That is a fidelity gap of the specification (WG-4903,
+                    // machine.initial-unreachable), reported as such, never hidden by skipping
+                    // the runtime's validation.
+                    strata_runtime::HostError::Constraint(why) => (
+                        true,
+                        format!(
+                            "the initial state of {} (instance {text}) cannot be held by its \
+                             record: {why}",
+                            member.name
+                        ),
+                    ),
+                    e => diverged(format!(
                         "setting up instance {text} of {}: {e}",
                         member.name
-                    ))
+                    )),
                 })?;
         }
     }

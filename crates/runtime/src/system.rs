@@ -241,9 +241,7 @@ fn init<M: Machine>(tx: &mut dyn Tx, key_text: &str, base: &Value) -> Result<(),
     };
     let (state, vars) = M::initial(&key);
     let record = M::to_record(&key, &state, &vars, Some(&previous))?;
-    // Not validated: an initial variable value stands for "not set yet" (an `author` that is
-    // `""` under a pattern that wants a character), so the record of the initial state may break
-    // a constraint no step could leave it breaking. Every record a step saves is validated.
+    M::validate_record(&record).map_err(HostError::Constraint)?;
     tx.save(
         M::RECORD,
         &key_text,
