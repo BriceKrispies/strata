@@ -181,6 +181,14 @@ pub mod job {
             })
         }
 
+        fn is_elapsed(event: &Event) -> bool {
+            matches!(event, Event::JobTick(_))
+        }
+
+        fn validate_record(record: &records::RecJob) -> Result<(), String> {
+            record.validate().map_err(|violation| violation.to_string())
+        }
+
         fn step(
             state: &State,
             vars: &Vars,
@@ -369,6 +377,15 @@ pub mod tracker {
                 state: state.id().to_string(),
                 seen: vars.seen,
             })
+        }
+
+        fn is_elapsed(event: &Event) -> bool {
+            let _ = event;
+            false
+        }
+
+        fn validate_record(record: &records::RecTracker) -> Result<(), String> {
+            record.validate().map_err(|violation| violation.to_string())
         }
 
         fn step(

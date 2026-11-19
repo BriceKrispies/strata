@@ -174,8 +174,9 @@ fn machine_steps_follow_the_effect_order() {
     assert!(set > 0);
     // Exegra's time is the step's now.
     assert!(code.contains("next.granted = prelude::Timestamp(now.0);"));
-    // Ignored and unmatched events keep the state and variables.
-    assert!(code.contains("_ => Ok(Outcome::to(*state, vars.clone())),"));
+    // Ignored and unmatched events keep the state and variables, and are marked ignored so the
+    // host writes nothing for them.
+    assert!(code.contains("_ => Ok(Outcome::ignore(*state, vars.clone())),"));
 }
 
 #[test]
