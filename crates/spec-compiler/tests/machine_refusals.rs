@@ -382,3 +382,20 @@ fn model_level_behaviors_are_not_generated() {
     let files = generate("spec.jsonc", &text, &options()).unwrap();
     assert!(!files.iter().any(|f| f.path == "src/machines.rs"));
 }
+
+#[test]
+fn an_omitted_option_payload_field_is_none() {
+    let mut spec = base();
+    spec["events"][1]["payload"] = json!([
+        { "name": "n", "type": "u32" },
+        { "name": "note", "type": "option<string>" }
+    ]);
+    let text = serde_json::to_string(&spec).unwrap();
+    let files = generate("spec.jsonc", &text, &options()).unwrap();
+    let machines = &files
+        .iter()
+        .find(|f| f.path == "src/machines.rs")
+        .unwrap()
+        .contents;
+    assert!(machines.contains("note: None"), "{machines}");
+}

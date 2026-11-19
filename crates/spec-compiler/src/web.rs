@@ -286,7 +286,12 @@ fn js_type(spec: &Spec, t: &TypeRef, nested: bool, depth: usize) -> String {
                     .iter()
                     .map(|f| {
                         let t = js_type(spec, &TypeRef::parse(&f.type_name), false, depth + 1);
-                        format!("{}{}: {t}", key(&f.name), if f.optional { "?" } else { "" })
+                        let option = f.type_name.trim_start().starts_with("option<");
+                        format!(
+                            "{}{}: {t}",
+                            key(&f.name),
+                            if f.optional || option { "?" } else { "" }
+                        )
                     })
                     .collect();
                 object_type(&items)
@@ -330,6 +335,13 @@ struct Slot {
     ty: Ty,
 }
 
+impl Slot {
+    /// True when a payload may leave the field out: it is optional or of type `option<T>`.
+    fn omittable(&self) -> bool {
+        self.optional || self.type_name.trim_start().starts_with("option<")
+    }
+}
+
 /// The scope of one transition: `vars` in a guard, `next` in the effects.
 struct MachineScope {
     vars: Vec<Slot>,
@@ -356,10 +368,15 @@ impl JsScope for MachineScope {
             ["event", name] => {
                 let slot = self.payload.iter().find(|s| s.name == *name)?;
                 let read = format!("event.payload{}", member(name));
-                if slot.optional {
+                if slot.optional || matches!(slot.ty, Ty::Option(_)) {
                     // A field left out reads as the option's None.
+                    let ty = if slot.optional {
+                        Ty::Option(Box::new(raw_ty(&TypeRef::parse(&slot.type_name))))
+                    } else {
+                        slot.ty.clone()
+                    };
                     return Some(JsBinding {
-                        ty: Ty::Option(Box::new(raw_ty(&TypeRef::parse(&slot.type_name)))),
+                        ty,
                         js: format!("({read} ?? null)"),
                     });
                 }
@@ -394,7 +411,7 @@ impl EventInfo<'_> {
                 format!(
                     "{}{}: {}",
                     key(&f.name),
-                    if f.optional { "?" } else { "" },
+                    if f.omittable() { "?" } else { "" },
                     js_type(spec, &TypeRef::parse(&f.type_name), false, 0)
                 )
             })
@@ -894,6 +911,8 @@ impl<'a> Gen<'a> {
             let fwhat = format!("{what}, payload field \"{}\",", f.name);
             let value = match entry {
                 None if f.optional => continue,
+                // An `option<T>` field left out is null (readers take null and absent alike).
+                None if f.omittable() => Some("null".to_string()),
                 None => {
                     self.refuse(
                         PAYLOAD_FIELD,

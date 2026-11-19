@@ -21,14 +21,14 @@ import { overflow, StepError } from './machine-runtime.js';
  * @typedef {{ event: 'login-typed', payload: { name: string } }
  *   | { event: 'login-submitted', payload: { chars: number } }
  *   | { event: 'login-accepted', payload?: {} }
- *   | { event: 'login-rejected', payload: { reason: string, note?: string } }
+ *   | { event: 'login-rejected', payload: { reason: string, note?: string | null } }
  *   | { event: 'login-cancelled', payload?: {} }
  *   | { event: 'login-timeout', payload: { attempt: number } }} LoginFormEvent
  */
 
 /**
  * An event machine `login-form` asks the kernel to deliver.
- * @typedef {{ to: string, delivery: 'at-least-once', event: 'credentials-sent', payload: { name: string, attempt: number, hint?: string }, afterMs?: number }
+ * @typedef {{ to: string, delivery: 'at-least-once', event: 'credentials-sent', payload: { name: string, attempt: number, hint?: string | null }, afterMs?: number }
  *   | { to: string, delivery: 'at-most-once', event: 'login-abandoned', payload: { attempts: number }, afterMs?: number }} LoginFormEmit
  */
 
@@ -96,7 +96,7 @@ export function step(state, vars, event, now) {
             const timers = [];
             next.attempts = (($v) => $v >= 0 && $v <= 4294967295 ? $v : overflow('submit'))(next.attempts + 1);
             next.lastSubmit = now;
-            emits.push({ to: 'api', delivery: 'at-least-once', event: 'credentials-sent', payload: { name: next.name, attempt: next.attempts } });
+            emits.push({ to: 'api', delivery: 'at-least-once', event: 'credentials-sent', payload: { name: next.name, attempt: next.attempts, hint: null } });
             timers.push({ set: 'timeout', afterMs: 5000, event: 'login-timeout', payload: { attempt: next.attempts } });
             return { state: 'sending', vars: next, emits, timers };
           }

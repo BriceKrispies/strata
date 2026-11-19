@@ -114,7 +114,20 @@ fn a_client_machine_is_not_generated_as_rust() {
     let files = generate(SPEC, &machines_text(), &options).unwrap();
     // The fixture's only machine runs in the browser, so the crate has no machines module.
     assert!(!files.iter().any(|f| f.path == "src/machines.rs"));
-    assert!(!files.iter().any(|f| f.contents.contains("LoginForm")));
+    assert!(!files.iter().any(|f| f.contents.contains("impl Machine")));
+}
+
+#[test]
+fn an_omitted_option_payload_field_is_null() {
+    let files = web_files();
+    let js = &files
+        .iter()
+        .find(|f| f.path == "login-form.js")
+        .unwrap()
+        .contents;
+    // `credentials-sent` has an `option<string>` field `hint` that the machine never gives.
+    assert!(js.contains("attempt: next.attempts, hint: null }"), "{js}");
+    assert!(js.contains("hint?: string | null"), "{js}");
 }
 
 #[test]
@@ -141,7 +154,13 @@ fn a_client_machine_refuses_what_it_cannot_express() {
 fn exegra_cli() -> Option<PathBuf> {
     let home = PathBuf::from(std::env::var_os("EXEGRA_HOME")?);
     let cli = home.join("cli").join("exegra.js");
-    cli.is_file().then_some(cli)
+    // EXEGRA_HOME is set, so a missing CLI is a broken setup, not a reason to skip.
+    assert!(
+        cli.is_file(),
+        "EXEGRA_HOME is set but {} does not exist",
+        cli.display()
+    );
+    Some(cli)
 }
 
 #[test]

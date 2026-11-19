@@ -15,14 +15,25 @@
     { "id": "web-client", "name": "Web client", "category": "client", "purpose": "The browser frontend." },
     { "id": "api", "name": "API", "category": "external", "purpose": "The backend the web client calls." }
   ],
+  "records": [
+    { "id": "rec-login-form", "name": "Login form state", "owner": "web-client", "key": ["form-id"], "schemaVersion": 1,
+      "retention": "Held in the memory of one browser tab; gone when the tab closes. It is never sent to the server.",
+      "fields": [
+        { "name": "form-id", "type": "string" },
+        { "name": "form-state", "type": "string" },
+        { "name": "name", "type": "string" },
+        { "name": "attempts", "type": "u32" },
+        { "name": "last-submit", "type": "timestamp" }
+      ] }
+  ],
   "events": [
     { "id": "login-typed", "name": "Name typed", "payload": [ { "name": "name", "type": "string" } ] },
     { "id": "login-submitted", "name": "Login submitted", "payload": [ { "name": "chars", "type": "u32" } ] },
     { "id": "login-accepted", "name": "Login accepted" },
-    { "id": "login-rejected", "name": "Login rejected", "payload": [ { "name": "reason", "type": "string" }, { "name": "note", "type": "string", "optional": true } ] },
+    { "id": "login-rejected", "name": "Login rejected", "payload": [ { "name": "reason", "type": "string" }, { "name": "note", "type": "option<string>" } ] },
     { "id": "login-cancelled", "name": "Login cancelled" },
     { "id": "login-timeout", "name": "Login timed out", "elapsed": true, "payload": [ { "name": "attempt", "type": "u32" } ] },
-    { "id": "credentials-sent", "name": "Credentials sent", "delivery": "at-least-once", "payload": [ { "name": "name", "type": "string" }, { "name": "attempt", "type": "u32" }, { "name": "hint", "type": "string", "optional": true } ] },
+    { "id": "credentials-sent", "name": "Credentials sent", "delivery": "at-least-once", "payload": [ { "name": "name", "type": "string" }, { "name": "attempt", "type": "u32" }, { "name": "hint", "type": "option<string>" } ] },
     { "id": "login-abandoned", "name": "Login abandoned", "delivery": "at-most-once", "payload": [ { "name": "attempts", "type": "u32" } ] }
   ],
   "behaviors": [
@@ -34,6 +45,9 @@
         { "name": "attempts", "type": "number", "initial": 0, "repr": "u32" },
         { "name": "lastSubmit", "type": "number", "initial": 0, "repr": "timestamp" }
       ],
+      "storage": { "record": "rec-login-form", "key": "form-id", "creates": true,
+        "fields": { "lastSubmit": "last-submit" }, "state": "form-state" },
+      "transaction": { "scope": "transition", "isolation": "serializable" },
       "states": [
         { "id": "editing", "name": "Editing", "ignores": ["login-accepted", "login-rejected", "login-cancelled", "login-timeout"] },
         { "id": "sending", "name": "Sending", "ignores": ["login-typed", "login-submitted"] },

@@ -1238,8 +1238,11 @@ impl<'a> Gen<'a> {
             let entry = entries.iter().find(|(k, _)| *k == f.name).map(|(_, v)| v);
             let fwhat = format!("{what}, payload field \"{}\",", f.name);
             let t = TypeRef::parse(&f.type_name);
+            // A field that is optional, or whose type is `option<T>`, left out is none (as in
+            // Exegra, where a missing payload field is absent).
+            let omittable = f.optional || matches!(t, TypeRef::Option(_));
             let value = match entry {
-                None if f.optional => Some(quote! { None }),
+                None if omittable => Some(quote! { None }),
                 None => {
                     self.refuse(
                         PAYLOAD_FIELD,
