@@ -6,6 +6,7 @@ members = [
     "crates/storage-api",
     "crates/storage-sqlite",
     "crates/runtime",
+    "crates/machine-store",
     "crates/protocol",
     "crates/backend",
     "crates/bff",
@@ -32,6 +33,7 @@ strata-substrate = { path = "crates/substrate" }
 strata-storage-api = { path = "crates/storage-api" }
 strata-storage-sqlite = { path = "crates/storage-sqlite" }
 strata-runtime = { path = "crates/runtime" }
+strata-machine-store = { path = "crates/machine-store" }
 strata-protocol = { path = "crates/protocol" }
 strata-simulation = { path = "crates/simulation" }
 strata-verification = { path = "crates/verification" }

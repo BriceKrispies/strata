@@ -1283,6 +1283,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "strata-machine-store"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "strata-kernel",
+ "strata-runtime",
+ "strata-storage-api",
+ "strata-storage-sqlite",
+ "tokio",
+]
+
+[[package]]
 name = "strata-model"
 version = "0.1.0"
 dependencies = [
