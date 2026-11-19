@@ -7,6 +7,7 @@ use quote::quote;
 use crate::backend::{prelude, BACKENDS};
 use crate::diagnostic::Diagnostic;
 use crate::ir::Spec;
+use crate::{Options, RuntimeDependency};
 
 /// The serde version the generated crate depends on (the workspace's).
 pub const SERDE_VERSION: &str = "1.0.228";
@@ -48,14 +49,14 @@ pub fn toml_header(spec_path: &str) -> String {
 }
 
 /// Every file of the generated crate, sorted by path. Assumes the readiness checks passed.
-pub fn crate_files(spec: &Spec, crate_name: &str) -> Result<Vec<GeneratedFile>, Vec<Diagnostic>> {
+pub fn crate_files(spec: &Spec, options: &Options) -> Result<Vec<GeneratedFile>, Vec<Diagnostic>> {
     let mut files = vec![GeneratedFile {
         path: "Cargo.toml".to_string(),
-        contents: cargo_toml(spec, crate_name),
+        contents: cargo_toml(spec, options),
     }];
     let mut errors = Vec::new();
     let mut modules: Vec<(&str, TokenStream)> = vec![(prelude::MODULE, prelude::emit())];
-    for backend in BACKENDS {
+    for backend in BACKENDS.iter().filter(|b| b.wanted(spec)) {
         modules.push((backend.module(), backend.emit(spec)));
     }
     let lib = lib_rs(spec, modules.iter().map(|(name, _)| *name));
@@ -123,8 +124,13 @@ const ITEM_KEYWORDS: &[&str] = &[
 ];
 
 fn lib_rs<'a>(spec: &Spec, modules: impl Iterator<Item = &'a str>) -> TokenStream {
+    let parts = if spec.machines.is_empty() {
+        "the declared types, records and contracts"
+    } else {
+        "the declared types, records, contracts and implementation-level machines"
+    };
     let summary = format!(
-        " {}: the declared types, records and contracts of its specification, as Rust.",
+        " {}: {parts} of its specification, as Rust.",
         spec.system.name
     );
     let origin = format!(
@@ -143,7 +149,18 @@ fn lib_rs<'a>(spec: &Spec, modules: impl Iterator<Item = &'a str>) -> TokenStrea
     }
 }
 
-fn cargo_toml(spec: &Spec, crate_name: &str) -> String {
+fn cargo_toml(spec: &Spec, options: &Options) -> String {
+    let runtime = if spec.machines.is_empty() {
+        String::new()
+    } else {
+        match &options.runtime {
+            RuntimeDependency::Workspace => "strata-runtime.workspace = true\n".to_string(),
+            RuntimeDependency::Path(path) => {
+                format!("strata-runtime = {{ path = \"{}\" }}\n", toml_escape(path))
+            }
+        }
+    };
+    let crate_name = &options.crate_name;
     format!(
         "{header}\n\
          [package]\n\
@@ -155,9 +172,37 @@ fn cargo_toml(spec: &Spec, crate_name: &str) -> String {
          [dependencies]\n\
          regex = \"{REGEX_VERSION}\"\n\
          serde = {{ version = \"{SERDE_VERSION}\", features = [\"derive\"] }}\n\
+         {runtime}\
          uuid = {{ version = \"{UUID_VERSION}\", features = [\"serde\"] }}\n",
         header = toml_header(&spec.path),
     )
+}
+
+/// `text` as the inside of a TOML basic string.
+fn toml_escape(text: &str) -> String {
+    text.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+/// The path from `from` to `to`, both absolute and normalised, with forward slashes: `..` for
+/// every component of `from` past their common prefix, then the rest of `to`. `None` when they
+/// share no prefix (different drives), so no relative path exists.
+pub fn relative_path(from: &std::path::Path, to: &std::path::Path) -> Option<String> {
+    let from: Vec<_> = from.components().collect();
+    let to: Vec<_> = to.components().collect();
+    let common = from.iter().zip(&to).take_while(|(a, b)| a == b).count();
+    if common == 0 {
+        return None;
+    }
+    let mut parts: Vec<String> = vec!["..".to_string(); from.len() - common];
+    parts.extend(
+        to[common..]
+            .iter()
+            .map(|c| c.as_os_str().to_string_lossy().into_owned()),
+    );
+    if parts.is_empty() {
+        return Some(".".to_string());
+    }
+    Some(parts.join("/"))
 }
 
 /// True when `name` can be the generated package's name: an ASCII letter followed by ASCII
@@ -187,6 +232,19 @@ mod tests {
         assert!(line("serde").contains(&format!("version = \"{SERDE_VERSION}\"")));
         assert!(line("uuid").contains(&format!("version = \"{UUID_VERSION}\"")));
         assert_eq!(line("regex"), format!("regex = \"{REGEX_VERSION}\""));
+    }
+
+    #[test]
+    fn relative_paths_climb_to_the_common_prefix() {
+        use std::path::Path;
+        let base = if cfg!(windows) { "C:/w" } else { "/w" };
+        let at = |p: &str| Path::new(base).join(p);
+        assert_eq!(
+            relative_path(&at("gen/out"), &at("crates/runtime")).as_deref(),
+            Some("../../crates/runtime")
+        );
+        assert_eq!(relative_path(&at("a"), &at("a")).as_deref(), Some("."));
+        assert_eq!(relative_path(&at("a"), &at("a/b")).as_deref(), Some("b"));
     }
 
     #[test]

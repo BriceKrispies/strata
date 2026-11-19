@@ -12,6 +12,7 @@ use crate::diagnostic::Diagnostic;
 use crate::ir::Spec;
 
 pub mod contracts;
+pub mod machines;
 pub mod prelude;
 pub mod records;
 pub mod types;
@@ -20,6 +21,12 @@ pub mod types;
 pub trait Backend {
     /// The module name; the module is written to `src/<module>.rs`.
     fn module(&self) -> &'static str;
+
+    /// True when the specification gives this backend anything to emit; a backend that is not
+    /// wanted writes no module. Every backend is wanted unless it says otherwise.
+    fn wanted(&self, _spec: &Spec) -> bool {
+        true
+    }
 
     /// Every diagnostic that would stop this backend from emitting correct code, including
     /// name problems in its module.
@@ -35,4 +42,5 @@ pub const BACKENDS: &[&dyn Backend] = &[
     &types::TypesBackend,
     &records::RecordsBackend,
     &contracts::ContractsBackend,
+    &machines::MachinesBackend,
 ];

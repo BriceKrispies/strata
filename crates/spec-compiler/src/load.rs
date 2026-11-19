@@ -1,7 +1,8 @@
 //! Loading: JSONC text to the typed IR.
 //!
 //! Only the sections specc reads are loaded (`system`, `components`, `types`, `records`,
-//! `contracts`); unknown sections and properties are left to Exegra's own validation. A value
+//! `contracts`, `events`, and the behaviors with `level: "implementation"`); unknown sections and
+//! properties are left to Exegra's own validation. A value
 //! of the wrong JSON type is a `specc.spec-shape` diagnostic, and loading carries on so every
 //! problem is reported at once.
 
@@ -9,8 +10,9 @@ use serde_json::{Map, Number, Value};
 
 use crate::diagnostic::{Diagnostic, SPEC_ENTITY};
 use crate::ir::{
-    Component, Constraints, Contract, ContractError, ContractField, Index, OnDelete, Realisation,
-    Record, RecordField, Spec, StructField, System, TypeDecl, TypeKind,
+    Behavior, Component, Constraints, Contract, ContractError, ContractField, Effect, Event, Index,
+    Instances, OnDelete, PayloadField, Realisation, Record, RecordField, Spec, State, Storage,
+    StructField, System, Transition, TypeDecl, TypeKind, Variable,
 };
 use crate::jsonc;
 
@@ -87,6 +89,17 @@ impl Loader {
             .into_iter()
             .filter_map(|(entity, obj)| self.contract(&entity, obj))
             .collect();
+        let events = self
+            .section(top, "events")
+            .into_iter()
+            .filter_map(|(entity, obj)| self.event(&entity, obj))
+            .collect();
+        let machines = self
+            .section(top, "behaviors")
+            .into_iter()
+            .filter(|(_, obj)| obj.get("level").and_then(Value::as_str) == Some("implementation"))
+            .filter_map(|(entity, obj)| self.behavior(&entity, obj))
+            .collect();
         Some(Spec {
             path: path.replace('\\', "/"),
             system: system?,
@@ -94,6 +107,8 @@ impl Loader {
             types,
             records,
             contracts,
+            events,
+            machines,
         })
     }
 
@@ -453,6 +468,225 @@ impl Loader {
             idempotent,
             timeout_ms,
         })
+    }
+
+    fn event(&mut self, id: &str, obj: &Obj) -> Option<Event> {
+        let name = self.req_str(obj, "name", id);
+        let description = self.opt_str(obj, "description", id);
+        let mut payload = Vec::new();
+        for f in self.obj_list(obj, "payload", id) {
+            let fname = self.req_str(f, "name", id);
+            let type_name = self.opt_str(f, "type", id);
+            let optional = self.opt_bool(f, "optional", id).unwrap_or(false);
+            if let Some(name) = fname {
+                payload.push(PayloadField {
+                    name,
+                    type_name,
+                    optional,
+                });
+            }
+        }
+        let delivery = self.opt_str(obj, "delivery", id);
+        let elapsed = self.opt_bool(obj, "elapsed", id).unwrap_or(false);
+        Some(Event {
+            id: id.to_string(),
+            name: name?,
+            description,
+            payload,
+            delivery,
+            elapsed,
+        })
+    }
+
+    fn behavior(&mut self, id: &str, obj: &Obj) -> Option<Behavior> {
+        let name = self.req_str(obj, "name", id);
+        let description = self.opt_str(obj, "description", id);
+        let initial = self.opt_str(obj, "initial", id);
+        let mut variables = Vec::new();
+        for v in self.obj_list(obj, "variables", id) {
+            let vname = self.req_str(v, "name", id);
+            let repr = self.opt_str(v, "repr", id);
+            let initial = v.get("initial").cloned();
+            if let Some(name) = vname {
+                variables.push(Variable {
+                    name,
+                    repr,
+                    initial,
+                });
+            }
+        }
+        let mut states = Vec::new();
+        for st in self.obj_list(obj, "states", id) {
+            let sid = self.req_str(st, "id", id);
+            let sname = self.opt_str(st, "name", id);
+            let terminal = self.opt_bool(st, "terminal", id).unwrap_or(false);
+            let ignores = self.opt_str_list(st, "ignores", id).unwrap_or_default();
+            if let Some(sid) = sid {
+                states.push(State {
+                    name: sname.unwrap_or_else(|| sid.clone()),
+                    id: sid,
+                    terminal,
+                    ignores,
+                });
+            }
+        }
+        let mut transitions = Vec::new();
+        for t in self.obj_list(obj, "transitions", id) {
+            if let Some(t) = self.transition(id, t) {
+                transitions.push(t);
+            }
+        }
+        let storage = match obj.get("storage") {
+            None | Some(Value::Null) => None,
+            Some(Value::Object(st)) => Some(Storage {
+                record: self.opt_str(st, "record", id),
+                key: self.opt_str(st, "key", id),
+            }),
+            Some(_) => {
+                self.shape(id, "\"storage\" must be an object");
+                None
+            }
+        };
+        let instances = match obj.get("instances") {
+            None | Some(Value::Null) => None,
+            Some(Value::Object(i)) => Some(Instances {
+                key: self.opt_str(i, "key", id),
+                stored_in: self.opt_str(i, "storedIn", id),
+                counted: i.contains_key("count"),
+            }),
+            Some(_) => {
+                self.shape(id, "\"instances\" must be an object");
+                None
+            }
+        };
+        let isolation = match obj.get("transaction") {
+            None | Some(Value::Null) => None,
+            Some(Value::Object(t)) => self.opt_str(t, "isolation", id),
+            Some(_) => {
+                self.shape(id, "\"transaction\" must be an object");
+                None
+            }
+        };
+        Some(Behavior {
+            id: id.to_string(),
+            name: name?,
+            description,
+            initial,
+            variables,
+            states,
+            transitions,
+            storage,
+            instances,
+            isolation,
+        })
+    }
+
+    fn transition(&mut self, behavior: &str, t: &Obj) -> Option<Transition> {
+        let id = self.req_str(t, "id", behavior);
+        let at = id.clone().unwrap_or_else(|| behavior.to_string());
+        let from = self.req_str(t, "from", &at);
+        let to = self.req_str(t, "to", &at);
+        let on = self.req_str(t, "on", &at);
+        let guard = self.opt_str(t, "guard", &at);
+        let otherwise = self.opt_bool(t, "otherwise", &at).unwrap_or(false);
+        let fault_only = self.opt_bool(t, "faultOnly", &at).unwrap_or(false);
+        let mut effects = Vec::new();
+        for e in self.obj_list(t, "effects", &at) {
+            if let Some(effect) = self.effect(&at, e) {
+                effects.push(effect);
+            }
+        }
+        Some(Transition {
+            id: id?,
+            from: from?,
+            to: to?,
+            on: on?,
+            guard,
+            otherwise,
+            fault_only,
+            effects,
+        })
+    }
+
+    fn payload_entries(&mut self, obj: &Obj, entity: &str) -> Vec<(String, Value)> {
+        match obj.get("payload") {
+            None | Some(Value::Null) => Vec::new(),
+            Some(Value::Object(p)) => p.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+            Some(_) => {
+                self.shape(entity, "an effect's \"payload\" must be an object");
+                Vec::new()
+            }
+        }
+    }
+
+    fn effect(&mut self, entity: &str, e: &Obj) -> Option<Effect> {
+        if e.contains_key("set") {
+            let variable = self.req_str(e, "set", entity)?;
+            return match e.get("to") {
+                Some(Value::Object(_)) => Some(Effect::Other {
+                    kind: "set with a sampled value".to_string(),
+                }),
+                Some(to) => Some(Effect::Set {
+                    variable,
+                    to: to.clone(),
+                }),
+                None => {
+                    self.shape(entity, format!("the set of \"{variable}\" has no \"to\""));
+                    None
+                }
+            };
+        }
+        if e.contains_key("timer") {
+            let name = self.req_str(e, "timer", entity);
+            let event = self.req_str(e, "emit", entity);
+            let payload = self.payload_entries(e, entity);
+            return Some(Effect::Timer {
+                name: name?,
+                after: e.get("after").cloned(),
+                event: event?,
+                payload,
+            });
+        }
+        if e.contains_key("cancel") {
+            return Some(Effect::Cancel {
+                name: self.req_str(e, "cancel", entity)?,
+            });
+        }
+        if e.contains_key("emit") {
+            let event = self.req_str(e, "emit", entity);
+            let to = self.opt_str(e, "to", entity);
+            let target = self.opt_str(e, "target", entity);
+            let payload = self.payload_entries(e, entity);
+            let link = ["via", "size", "fanout"]
+                .into_iter()
+                .filter(|k| {
+                    e.get(*k)
+                        .is_some_and(|v| !v.is_null() && *v != Value::Bool(false))
+                })
+                .map(str::to_string)
+                .collect();
+            return Some(Effect::Emit {
+                event: event?,
+                to,
+                target,
+                after: e.get("after").cloned(),
+                payload,
+                link,
+            });
+        }
+        let kind = ["use", "acquire", "release"]
+            .into_iter()
+            .find(|k| e.contains_key(*k))
+            .map_or_else(
+                || {
+                    e.keys()
+                        .next()
+                        .cloned()
+                        .unwrap_or_else(|| "empty".to_string())
+                },
+                str::to_string,
+            );
+        Some(Effect::Other { kind })
     }
 }
 

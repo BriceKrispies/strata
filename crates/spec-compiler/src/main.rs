@@ -1,8 +1,8 @@
 //! The `specc` command.
 //!
 //! ```text
-//! specc generate --spec <file> --out <dir> [--crate-name <name>]
-//! specc check    --spec <file> --out <dir> [--crate-name <name>]
+//! specc generate --spec <file> --out <dir> [--crate-name <name>] [--runtime <dir>]
+//! specc check    --spec <file> --out <dir> [--crate-name <name>] [--runtime <dir>]
 //! ```
 //!
 //! `generate` writes the crate into `<dir>` and removes generated files it no longer writes.
@@ -10,15 +10,23 @@
 //! leave. A specification that is not ready is refused with one `error[<code>] <entity>:
 //! <message>` line per diagnostic and exit code 1. Usage errors exit with 2. The crate name
 //! defaults to the last component of `<dir>`.
+//!
+//! A crate with implementation-level machines depends on `strata-runtime` by path: `--runtime`
+//! names the runtime crate's directory, by default `crates/runtime` of the Strata checkout specc
+//! was built from, and the manifest holds its path relative to `<dir>`.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use strata_spec_compiler::{generate, output, GeneratedFile, Options};
+use strata_spec_compiler::emit::relative_path;
+use strata_spec_compiler::{generate, output, GeneratedFile, Options, RuntimeDependency};
 
 const USAGE: &str = "usage:
-  specc generate --spec <file> --out <dir> [--crate-name <name>]
-  specc check    --spec <file> --out <dir> [--crate-name <name>]";
+  specc generate --spec <file> --out <dir> [--crate-name <name>] [--runtime <dir>]
+  specc check    --spec <file> --out <dir> [--crate-name <name>] [--runtime <dir>]";
+
+/// The runtime crate of the checkout specc was built from.
+const DEFAULT_RUNTIME: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../runtime");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Command {
@@ -31,6 +39,7 @@ struct Args {
     spec: String,
     out: PathBuf,
     crate_name: String,
+    runtime: PathBuf,
 }
 
 fn parse_args(raw: &[String]) -> Result<Args, String> {
@@ -43,12 +52,14 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
     let mut spec = None;
     let mut out = None;
     let mut crate_name = None;
+    let mut runtime = None;
     let mut iter = rest.iter();
     while let Some(flag) = iter.next() {
         let slot = match flag.as_str() {
             "--spec" => &mut spec,
             "--out" => &mut out,
             "--crate-name" => &mut crate_name,
+            "--runtime" => &mut runtime,
             other => return Err(format!("unknown argument \"{other}\"")),
         };
         let Some(value) = iter.next() else {
@@ -72,6 +83,7 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
         spec,
         out,
         crate_name,
+        runtime: PathBuf::from(runtime.unwrap_or_else(|| DEFAULT_RUNTIME.to_string())),
     })
 }
 
@@ -91,8 +103,16 @@ fn main() -> ExitCode {
             return ExitCode::from(1);
         }
     };
+    let runtime = match runtime_path(&args.out, &args.runtime) {
+        Ok(path) => path,
+        Err(message) => {
+            eprintln!("specc: {message}");
+            return ExitCode::from(1);
+        }
+    };
     let options = Options {
         crate_name: args.crate_name.clone(),
+        runtime: RuntimeDependency::Path(runtime),
     };
     let files = match generate(&args.spec, &text, &options) {
         Ok(files) => files,
@@ -111,6 +131,50 @@ fn main() -> ExitCode {
     match args.command {
         Command::Generate => run_generate(&args.out, &files),
         Command::Check => run_check(&args.out, &files),
+    }
+}
+
+/// The runtime directory relative to the output directory, both made absolute and normalised
+/// (the output directory need not exist yet).
+fn runtime_path(out: &Path, runtime: &Path) -> Result<String, String> {
+    let runtime = std::fs::canonicalize(runtime)
+        .map_err(|e| format!("cannot find the runtime crate {}: {e}", runtime.display()))?;
+    let out = absolute(out)?;
+    // canonicalize gives verbatim paths on Windows (\\?\C:\...); compare like with like.
+    let runtime = absolute(&strip_verbatim(&runtime))?;
+    relative_path(&out, &runtime).ok_or_else(|| {
+        format!(
+            "{} and {} share no root, so the runtime cannot be named by a relative path; give --runtime on the same drive",
+            out.display(),
+            runtime.display()
+        )
+    })
+}
+
+/// `path` made absolute against the current directory, with `.` and `..` resolved by name.
+fn absolute(path: &Path) -> Result<PathBuf, String> {
+    let joined = std::env::current_dir()
+        .map_err(|e| format!("cannot read the current directory: {e}"))?
+        .join(path);
+    let mut out = PathBuf::new();
+    for part in joined.components() {
+        match part {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other),
+        }
+    }
+    Ok(out)
+}
+
+/// A Windows verbatim path (`\\?\C:\x`) as an ordinary one (`C:\x`); other paths unchanged.
+fn strip_verbatim(path: &Path) -> PathBuf {
+    let text = path.to_string_lossy();
+    match text.strip_prefix(r"\\?\") {
+        Some(rest) if !rest.starts_with("UNC") => PathBuf::from(rest),
+        _ => path.to_path_buf(),
     }
 }
 
@@ -179,6 +243,15 @@ mod tests {
         .unwrap();
         assert_eq!(parsed.command, Command::Generate);
         assert_eq!(parsed.crate_name, "my-crate");
+        assert_eq!(parsed.runtime, PathBuf::from(DEFAULT_RUNTIME));
+    }
+
+    #[test]
+    fn the_runtime_is_named_relative_to_the_output() {
+        let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let out = workspace.join("target/specc-out/generated");
+        let path = runtime_path(&out, Path::new(DEFAULT_RUNTIME)).unwrap();
+        assert_eq!(path, "../../../crates/runtime");
     }
 
     #[test]

@@ -5,7 +5,7 @@
 //! require are still optional here, so that loading never fails on them and the checks can
 //! name every gap at once.
 
-use serde_json::Number;
+use serde_json::{Number, Value};
 
 /// A loaded specification.
 #[derive(Debug, Clone, PartialEq)]
@@ -22,6 +22,11 @@ pub struct Spec {
     pub records: Vec<Record>,
     /// The `contracts` section.
     pub contracts: Vec<Contract>,
+    /// The `events` section.
+    pub events: Vec<Event>,
+    /// The behaviors with `level: "implementation"`, in declaration order. Model-level
+    /// behaviors are not loaded: nothing is generated from them.
+    pub machines: Vec<Behavior>,
 }
 
 impl Spec {
@@ -38,6 +43,11 @@ impl Spec {
     /// The component with this id.
     pub fn component(&self, id: &str) -> Option<&Component> {
         self.components.iter().find(|c| c.id == id)
+    }
+
+    /// The event with this id.
+    pub fn event(&self, id: &str) -> Option<&Event> {
+        self.events.iter().find(|e| e.id == id)
     }
 }
 
@@ -314,4 +324,172 @@ impl Realisation {
             _ => None,
         }
     }
+}
+
+/// An `event` entity.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Event {
+    /// The event id.
+    pub id: String,
+    /// The display name.
+    pub name: String,
+    /// The description, if any.
+    pub description: Option<String>,
+    /// The payload fields, in declaration order.
+    pub payload: Vec<PayloadField>,
+    /// `delivery`: `at-most-once` or `at-least-once`, as written.
+    pub delivery: Option<String>,
+    /// `elapsed`: the event stands for elapsed time and is fired by a timer.
+    pub elapsed: bool,
+}
+
+/// A payload field of an event.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PayloadField {
+    /// The field name.
+    pub name: String,
+    /// The type name, if stated.
+    pub type_name: Option<String>,
+    /// True when the field may be left out.
+    pub optional: bool,
+}
+
+/// A `behavior` entity with `level: "implementation"`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Behavior {
+    /// The behavior id.
+    pub id: String,
+    /// The display name.
+    pub name: String,
+    /// The description, if any.
+    pub description: Option<String>,
+    /// The initial state id.
+    pub initial: Option<String>,
+    /// The variables, in declaration order.
+    pub variables: Vec<Variable>,
+    /// The states, in declaration order.
+    pub states: Vec<State>,
+    /// The transitions, in declaration order (the order they are tried in).
+    pub transitions: Vec<Transition>,
+    /// `storage: {record, key}`.
+    pub storage: Option<Storage>,
+    /// `instances`, as written.
+    pub instances: Option<Instances>,
+    /// `transaction.isolation`, as written.
+    pub isolation: Option<String>,
+}
+
+/// A variable of a behavior.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Variable {
+    /// The variable name.
+    pub name: String,
+    /// The representation type name.
+    pub repr: Option<String>,
+    /// The initial value, a JSON literal.
+    pub initial: Option<Value>,
+}
+
+/// A state of a behavior.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct State {
+    /// The state id.
+    pub id: String,
+    /// The display name.
+    pub name: String,
+    /// True when the state is terminal.
+    pub terminal: bool,
+    /// The events the state deliberately ignores.
+    pub ignores: Vec<String>,
+}
+
+/// A transition of a behavior.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Transition {
+    /// The transition id.
+    pub id: String,
+    /// The source state.
+    pub from: String,
+    /// The target state.
+    pub to: String,
+    /// The event it reacts to.
+    pub on: String,
+    /// The guard expression, if any.
+    pub guard: Option<String>,
+    /// True when the transition is the explicit fall-through of its group.
+    pub otherwise: bool,
+    /// True when the transition fires only under a fault.
+    pub fault_only: bool,
+    /// The effects, in order.
+    pub effects: Vec<Effect>,
+}
+
+/// An effect of a transition.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Effect {
+    /// `{set, to}`: `to` is an expression when a string, a literal otherwise.
+    Set {
+        /// The variable assigned.
+        variable: String,
+        /// The value.
+        to: Value,
+    },
+    /// `{emit, to?, target?, after?, payload?, via?, size?, fanout?}`.
+    Emit {
+        /// The emitted event.
+        event: String,
+        /// The receiver outside the modelled behaviors.
+        to: Option<String>,
+        /// The simulation addressing (`reply`), as written.
+        target: Option<String>,
+        /// The delay, as written.
+        after: Option<Value>,
+        /// The payload entries, in order.
+        payload: Vec<(String, Value)>,
+        /// The link properties present (`via`, `size`, `fanout`), which the runtime cannot
+        /// express.
+        link: Vec<String>,
+    },
+    /// `{timer, after, emit, payload?}`.
+    Timer {
+        /// The timer's name.
+        name: String,
+        /// The delay, as written.
+        after: Option<Value>,
+        /// The event the timer fires.
+        event: String,
+        /// The payload entries, in order.
+        payload: Vec<(String, Value)>,
+    },
+    /// `{cancel}`.
+    Cancel {
+        /// The timer's name.
+        name: String,
+    },
+    /// Any other effect (`use`, `acquire`, `release`, a sampled `set`, ...), by the property
+    /// that names its kind.
+    Other {
+        /// The kind, such as `acquire`.
+        kind: String,
+    },
+}
+
+/// `storage: {record, key}`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Storage {
+    /// The record id.
+    pub record: Option<String>,
+    /// The key field.
+    pub key: Option<String>,
+}
+
+/// `instances`, as written.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Instances {
+    /// The payload field that keys the instances.
+    pub key: Option<String>,
+    /// The record each instance is stored in.
+    pub stored_in: Option<String>,
+    /// True when the instances are counted (`count`) rather than keyed.
+    pub counted: bool,
 }

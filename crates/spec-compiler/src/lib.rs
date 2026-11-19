@@ -1,4 +1,5 @@
-//! specc: compiles the structural parts of an Exegra specification into a Rust crate.
+//! specc: compiles an Exegra specification (types, records, contracts and implementation-level
+//! machines) into a Rust crate.
 //!
 //! The pipeline is fixed and deterministic:
 //!
@@ -36,6 +37,20 @@ pub const CRATE_NAME_INVALID: &str = "specc.crate-name-invalid";
 pub struct Options {
     /// The package name of the generated crate.
     pub crate_name: String,
+    /// How the generated crate depends on `strata-runtime`, which its machines implement. Only
+    /// written into the manifest when the specification has an implementation-level machine.
+    pub runtime: RuntimeDependency,
+}
+
+/// How the generated crate names its `strata-runtime` dependency.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RuntimeDependency {
+    /// `strata-runtime.workspace = true`: the generated crate is a member of the Strata
+    /// workspace, as the golden fixture crates are.
+    Workspace,
+    /// `strata-runtime = { path = "..." }`, the path relative to the generated crate's directory,
+    /// with forward slashes.
+    Path(String),
 }
 
 /// Generates the crate's files from a specification's text, or refuses with every diagnostic.
@@ -61,5 +76,5 @@ pub fn generate(
     if !diagnostics.is_empty() {
         return Err(diagnostics);
     }
-    emit::crate_files(&spec, &options.crate_name)
+    emit::crate_files(&spec, options)
 }

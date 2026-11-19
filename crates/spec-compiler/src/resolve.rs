@@ -238,6 +238,8 @@ mod tests {
             types,
             records: vec![],
             contracts: vec![],
+            events: vec![],
+            machines: vec![],
         }
     }
 

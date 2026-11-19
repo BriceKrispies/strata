@@ -6,7 +6,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use strata_spec_compiler::emit::HEADER_MARKERS;
-use strata_spec_compiler::{generate, output, GeneratedFile, Options};
+use strata_spec_compiler::{generate, output, GeneratedFile, Options, RuntimeDependency};
 
 /// The fixture's path as the headers name it: relative to the workspace root.
 const FIXTURE_SPEC: &str = "crates/spec-compiler/tests/fixtures/full/spec.jsonc";
@@ -23,6 +23,7 @@ fn fixture_text() -> String {
 fn fixture_files() -> Vec<GeneratedFile> {
     let options = Options {
         crate_name: FIXTURE_CRATE.to_string(),
+        runtime: RuntimeDependency::Workspace,
     };
     match generate(FIXTURE_SPEC, &fixture_text(), &options) {
         Ok(files) => files,

@@ -2,11 +2,12 @@
 //! diagnostics, every one at once, and never with a panic.
 
 use serde_json::{json, Value};
-use strata_spec_compiler::{generate, Diagnostic, Options};
+use strata_spec_compiler::{generate, Diagnostic, Options, RuntimeDependency};
 
 fn options() -> Options {
     Options {
         crate_name: "generated".to_string(),
+        runtime: RuntimeDependency::Workspace,
     }
 }
 
@@ -239,6 +240,7 @@ fn generation_target_and_crate_name_are_checked() {
     assert_refused_with(&text, "specc.generation-target", "sys");
     let bad = Options {
         crate_name: "not a name".to_string(),
+        runtime: RuntimeDependency::Workspace,
     };
     let diagnostics = generate("spec.jsonc", &spec(json!({})), &bad).unwrap_err();
     assert_eq!(diagnostics[0].code, "specc.crate-name-invalid");
@@ -300,6 +302,7 @@ fn the_strata_specification_is_handled() {
     };
     let options = Options {
         crate_name: "strata-spec".to_string(),
+        runtime: RuntimeDependency::Workspace,
     };
     if let Err(diagnostics) = generate("specifications/spec.jsonc", &text, &options) {
         assert!(!diagnostics.is_empty());
