@@ -195,6 +195,10 @@ fn functions_golden_output_matches_its_fixture_crate() {
         "pub fn num_text(",
         "pub fn millis(",
         "fn parse_time(",
+        // WG-4966: checked conversions.
+        "pub fn narrow(",
+        "pub fn role_map(",
+        "pub fn key_order(",
     ] {
         assert!(functions.contains(f), "no {f} in src/functions.rs");
     }

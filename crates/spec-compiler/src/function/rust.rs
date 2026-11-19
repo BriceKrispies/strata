@@ -128,7 +128,7 @@ struct Binding {
 /// True when the generated Rust type is `Copy`.
 pub(crate) fn is_copy(t: &Ty) -> bool {
     match t {
-        Ty::Bool | Ty::Int(_) | Ty::Number | Ty::Float => true,
+        Ty::Bool | Ty::Int(_) | Ty::Number | Ty::Float | Ty::Wide => true,
         // prelude::Timestamp is Copy.
         Ty::Alias(..) if t.is_timestamp() => true,
         Ty::Option(of) => is_copy(of),
@@ -179,6 +179,7 @@ pub(crate) fn rust_ty(t: &Ty) -> Result<TokenStream, Refusal> {
             quote! { std::collections::BTreeSet<#of> }
         }
         Ty::Float => quote! { f64 },
+        Ty::Wide => quote! { i128 },
         Ty::Shared(of) => {
             let of = rust_ty(of)?;
             quote! { std::sync::Arc<#of> }
@@ -209,6 +210,7 @@ pub(crate) fn concretize(t: &Ty, hint: Option<&Ty>) -> Ty {
         (Ty::Number, Some(h)) => match (int_kind(h), h) {
             (Some(b), _) => Ty::Int(b),
             (None, Ty::Float) => Ty::Float,
+            (None, Ty::Wide) => Ty::Wide,
             (None, Ty::Option(inner)) => concretize(t, Some(inner)),
             _ => Ty::Int(Builtin::I64),
         },
@@ -252,7 +254,13 @@ fn set_hint(hint: Option<&Ty>) -> Option<&Ty> {
 /// `set<role-id>`) instead of being converted after.
 fn refine(t: &Ty, hint: Option<&Ty>) -> Ty {
     match (t, hint) {
-        (Ty::Bool | Ty::Str | Ty::Int(_), Some(h @ Ty::Alias(_, r))) if **r == *t => h.clone(),
+        // A scalar takes the scalar type expected of it (an id, its representation, another
+        // integer type, the wide sort key), so each branch converts, rather than the whole.
+        (_, Some(h))
+            if t != h && scalar_class(t).is_some() && scalar_class(t) == scalar_class(h) =>
+        {
+            h.clone()
+        }
         (Ty::List(a), Some(Ty::List(b) | Ty::Set(b))) => Ty::list(refine(a, Some(b))),
         (Ty::Set(a), Some(Ty::List(b) | Ty::Set(b))) => Ty::set(refine(a, Some(b))),
         (Ty::Option(a), Some(Ty::Option(b))) => Ty::option(refine(a, Some(b))),
@@ -262,13 +270,24 @@ fn refine(t: &Ty, hint: Option<&Ty>) -> Ty {
     }
 }
 
+/// The class of a scalar type (bool, string, number), for [`refine`]; `None` for any other.
+fn scalar_class(t: &Ty) -> Option<Class> {
+    match t {
+        Ty::Wide => Some(Class::Num),
+        Ty::Bool | Ty::Str | Ty::Int(_) | Ty::Number | Ty::Float | Ty::Alias(..) => class(t),
+        _ => None,
+    }
+}
+
 /// True for the expressions whose generated form follows what is expected of them: list
-/// literals, `if`, `match` and `let`, whose items or branches are built in the expected type.
+/// literals, `if`, `match`, `let` and `insert`, whose items, branches, keys and values are
+/// built in the expected type.
 fn follows_hint(e: &Expr) -> bool {
-    matches!(
-        e.kind,
-        Kind::List(_) | Kind::If(..) | Kind::Match(..) | Kind::Let(..)
-    )
+    match &e.kind {
+        Kind::List(_) | Kind::If(..) | Kind::Match(..) | Kind::Let(..) => true,
+        Kind::Op(op) => op.binder.is_none() && op.name == "insert",
+        _ => false,
+    }
 }
 
 /// The type `e` is generated in where `hint` is expected, when the hint shapes it ([`Gen::value`]
@@ -316,10 +335,32 @@ fn same(a: &Ty, b: &Ty) -> bool {
 /// checked here, on the literal, so the value needs no check where it is built. `None` for
 /// anything else, which converts as usual (and a constrained type built from a value that is
 /// not such a literal stays refused).
-fn constrained_literal(spec: &Spec, e: &Expr, want: &Ty) -> Option<Code> {
+fn constrained_literal(spec: &Spec, e: &Expr, want: &Ty) -> Result<Option<Code>, Refusal> {
     let Kind::Str(s) = &e.kind else {
-        return None;
+        return Ok(None);
     };
+    let (inner, _) = match want {
+        Ty::Option(of) => (of.as_ref(), true),
+        other => (other, false),
+    };
+    if let Ty::Alias(id, repr) = inner {
+        if **repr == Ty::Str && is_constrained(spec, id) {
+            return match literal_meets(spec, s, want) {
+                Some(c) => Ok(Some(c)),
+                // Exegra does not check a type's constraints inside a function; the generated
+                // construction would, and would fail on every run.
+                None => Err(unsupported(format!(
+                    "the string literal {s:?} is built as the constrained type {id} but breaks its constraints, so the generated check would fail on every run (Exegra does not check them inside functions)"
+                ))),
+            };
+        }
+    }
+    Ok(None)
+}
+
+/// The literal as a value of the constrained type `want` (or an option of one), when it meets
+/// the type's constraints.
+fn literal_meets(spec: &Spec, s: &str, want: &Ty) -> Option<Code> {
     let (inner, some) = match want {
         Ty::Option(of) => (of.as_ref(), true),
         other => (other, false),
@@ -483,6 +524,9 @@ pub(crate) struct Gen<'a> {
     pub helpers: BTreeSet<&'static str>,
     /// The next [`Gen::raw`] is of a value whose type [`held`] gives, so the hint shapes it.
     shape_next: bool,
+    /// The code can fault: it does checked arithmetic or a checked conversion (an integer
+    /// narrowed, a constrained id built from a value). Read by [`Gen::faults`].
+    faulted: std::cell::Cell<bool>,
 }
 
 type Gened<T> = Result<T, Refusal>;
@@ -502,7 +546,14 @@ impl<'a> Gen<'a> {
             reserved,
             helpers: BTreeSet::new(),
             shape_next: false,
+            faulted: std::cell::Cell::new(false),
         }
+    }
+
+    /// True when the generated code can fault ([`Gen::fault`] was used), so the function must
+    /// say so in its type.
+    pub(crate) fn faults(&self) -> bool {
+        self.faulted.get()
     }
 
     fn bind(&mut self, name: &str, ty: Ty, form: Form) -> Gened<Ident> {
@@ -539,11 +590,45 @@ impl<'a> Gen<'a> {
     }
 
     fn fault(&self, op: &str) -> TokenStream {
+        self.faulted.set(true);
         if self.me.errors.is_some() {
             quote! { Failure::Fault(Fault { op: #op }) }
         } else {
             quote! { Fault { op: #op } }
         }
+    }
+
+    /// The error type a fault is returned as: `Fault`, or `Failure<E>` with errors.
+    fn fault_type(&self) -> TokenStream {
+        match &self.me.errors {
+            Some(e) => {
+                let e = type_path(e);
+                quote! { Failure<#e> }
+            }
+            None => quote! { Fault },
+        }
+    }
+
+    /// `items` with each item converted by `conv` (code over `item_`), collected as `target`;
+    /// when the conversion can fail, the first failure is returned.
+    fn map_items(&self, items: TokenStream, conv: &Code, target: TokenStream) -> Code {
+        let it = &conv.t;
+        if conv.exits {
+            let err = self.fault_type();
+            return Code::new(
+                quote! {
+                    #items
+                        .map(|item_| Ok::<_, #err>(#it))
+                        .collect::<Result<#target, _>>()?
+                },
+                Prec::Postfix,
+            )
+            .exits(true);
+        }
+        Code::new(
+            quote! { #items.map(|item_| #it).collect::<#target>() },
+            Prec::Postfix,
+        )
     }
 
     /// The function: its signature, lets and body.
@@ -658,7 +743,7 @@ impl<'a> Gen<'a> {
 
     /// An owned value of type `want`.
     fn value(&mut self, e: &Expr, want: &Ty) -> Gened<Code> {
-        if let Some(c) = constrained_literal(self.spec, e, want) {
+        if let Some(c) = constrained_literal(self.spec, e, want)? {
             return Ok(c);
         }
         self.shape_next = true;
@@ -685,7 +770,7 @@ impl<'a> Gen<'a> {
 
     /// A `&T` of type `want`.
     fn borrow(&mut self, e: &Expr, want: &Ty) -> Gened<Code> {
-        if let Some(c) = constrained_literal(self.spec, e, want) {
+        if let Some(c) = constrained_literal(self.spec, e, want)? {
             return Ok(Self::borrow_code(c));
         }
         self.shape_next = true;
@@ -770,6 +855,13 @@ impl<'a> Gen<'a> {
                 let t = c.recv();
                 Ok(Code::new(quote! { #t.0 }, Prec::Postfix).exits(exits))
             }
+            // An id or scalar where another scalar is expected (another id, a wider or narrower
+            // integer): its representation, converted as that would be.
+            (Ty::Alias(_, r), _) if scalar_class(to).is_some() => {
+                let t = c.recv();
+                let v = Code::new(quote! { #t.0 }, Prec::Postfix).exits(exits);
+                self.coerce(v, r, to)
+            }
             // A shared value as the value it holds (Exegra reads shared<T> as T), and a value
             // shared where shared<T> is expected.
             (Ty::Shared(a), _) => {
@@ -785,16 +877,41 @@ impl<'a> Gen<'a> {
             (Ty::Option(a), Ty::Option(b)) => {
                 let item = self.coerce(Code::new(quote! { item_ }, Prec::Postfix), a, b)?;
                 let (t, it) = (c.recv(), &item.t);
+                if item.exits {
+                    let err = self.fault_type();
+                    return Ok(Code::new(
+                        quote! { #t.map(|item_| Ok::<_, #err>(#it)).transpose()? },
+                        Prec::Postfix,
+                    )
+                    .exits(true));
+                }
                 Ok(Code::new(quote! { #t.map(|item_| #it) }, Prec::Postfix).exits(exits))
             }
-            (Ty::Map(k, a), Ty::Map(k2, b)) if same(k, k2) => {
+            // A map whose keys or values are of other types: each entry converted, keys as
+            // single values are (an id to its representation, a string to a constrained id,
+            // checked), values too.
+            (Ty::Map(k, a), Ty::Map(k2, b)) => {
+                let key = self.coerce(Code::new(quote! { key_ }, Prec::Postfix), k, k2)?;
                 let item = self.coerce(Code::new(quote! { item_ }, Prec::Postfix), a, b)?;
-                let (t, it) = (c.recv(), &item.t);
+                let (t, kt, it) = (c.recv(), &key.t, &item.t);
+                let target = quote! { std::collections::BTreeMap<_, _> };
+                if key.exits || item.exits {
+                    let err = self.fault_type();
+                    return Ok(Code::new(
+                        quote! {
+                            #t.into_iter()
+                                .map(|(key_, item_)| Ok::<_, #err>((#kt, #it)))
+                                .collect::<Result<#target, _>>()?
+                        },
+                        Prec::Postfix,
+                    )
+                    .exits(true));
+                }
                 Ok(Code::new(
                     quote! {
                         #t.into_iter()
-                            .map(|(key_, item_)| (key_, #it))
-                            .collect::<std::collections::BTreeMap<_, _>>()
+                            .map(|(key_, item_)| (#kt, #it))
+                            .collect::<#target>()
                     },
                     Prec::Postfix,
                 )
@@ -809,6 +926,24 @@ impl<'a> Gen<'a> {
                 let k = format_ident!("{}", b.as_str());
                 let t = &c.t;
                 Ok(Code::new(quote! { #k::from(#t) }, Prec::Postfix).exits(exits))
+            }
+            // An integer where a narrower integer type is expected. Exegra passes the number on
+            // (it checks ranges only of arithmetic and of example values); the generated value
+            // must fit, so one that does not is a fault.
+            (Ty::Int(_), Ty::Int(b)) => {
+                let k = format_ident!("{}", b.as_str());
+                let fault = self.fault("as");
+                let t = &c.t;
+                Ok(Code::new(
+                    quote! { #k::try_from(#t).map_err(|_| #fault)? },
+                    Prec::Postfix,
+                )
+                .exits(true))
+            }
+            // Any integer as the wide sort key.
+            (Ty::Int(_), Ty::Wide) => {
+                let t = &c.t;
+                Ok(Code::new(quote! { i128::from(#t) }, Prec::Postfix).exits(exits))
             }
             // An integer where an f64 is expected, as Exegra's numbers are.
             (Ty::Int(_), Ty::Float) => {
@@ -834,22 +969,32 @@ impl<'a> Gen<'a> {
                     .exits(exits));
                 }
                 let item = self.coerce(Code::new(quote! { item_ }, Prec::Postfix), a, b)?;
-                let it = &item.t;
-                Ok(Code::new(
-                    quote! { #t.into_iter().map(|item_| #it).collect::<#target>() },
-                    Prec::Postfix,
-                )
-                .exits(exits))
+                let v = self.map_items(quote! { #t.into_iter() }, &item, target);
+                Ok(v.exits(exits))
             }
             (_, Ty::Alias(id, r)) if same(from, r) => {
-                if is_constrained(self.spec, id) {
-                    return Err(unsupported(format!(
-                        "a value of the constrained type {id} is built from its representation; specc does not check type constraints inside functions"
-                    )));
-                }
                 let p = type_path(id);
                 let t = &c.t;
+                if is_constrained(self.spec, id) {
+                    // The generated type keeps its constraints: the value is checked. Exegra
+                    // does not check them inside a function, so a value that breaks them is a
+                    // fault here where Exegra goes on.
+                    let fault = self.fault("new");
+                    return Ok(Code::new(
+                        quote! { #p::new(#t).map_err(|_| #fault)? },
+                        Prec::Postfix,
+                    )
+                    .exits(true));
+                }
                 Ok(Code::new(quote! { #p(#t) }, Prec::Postfix).exits(exits))
+            }
+            // A scalar of another representation where an id is expected: converted to the
+            // representation first (an i64 for a record id over u64, checked).
+            (_, Ty::Alias(_, r))
+                if scalar_class(from).is_some() && scalar_class(from) == class(r) =>
+            {
+                let v = self.coerce(c, from, r)?;
+                self.coerce(v, r, to)
             }
             _ => Err(unsupported(format!(
                 "a value of type {} stands where {} is expected; the generated types differ",
@@ -885,6 +1030,10 @@ impl<'a> Gen<'a> {
                 let v: i128 = text
                     .parse()
                     .map_err(|_| unsupported(format!("the number {text} is too large")))?;
+                if eff == Ty::Wide {
+                    let lit = Literal::i128_suffixed(v);
+                    return Ok(Code::new(quote! { #lit }, Prec::Postfix));
+                }
                 let kind = int_kind(&eff).unwrap_or(Builtin::I64);
                 int_lit(v, kind, false).ok_or_else(|| {
                     unsupported(format!("the number {text} does not fit {}", kind.as_str()))
@@ -2080,7 +2229,7 @@ impl<'a> Gen<'a> {
                     )
                     .exits(m.exits || kc.exits || vc.exits))
                 } else {
-                    let kc = self.borrow(&op.args[1], k)?;
+                    let kc = self.lookup_key(&op.args[1], k)?;
                     let kt = &kc.t;
                     Ok(Code::new(
                         quote! { { let mut map_ = #mt; map_.remove(#kt); map_ } },
@@ -2225,6 +2374,23 @@ impl<'a> Gen<'a> {
         }
     }
 
+    /// The `&K` a map is looked up (or a key removed) by. A string (or an id of another type)
+    /// looking up a map of constrained ids is built as that id without the check: it is never
+    /// stored, and a value that breaks the constraints is a key no map holds, so the lookup
+    /// finds nothing, as Exegra's does.
+    fn lookup_key(&mut self, e: &Expr, k: &Ty) -> Gened<Code> {
+        let et = concretize(&e.ty(), Some(k));
+        if let Ty::Alias(id, repr) = k {
+            if **repr == Ty::Str && is_constrained(self.spec, id) && !same(&et, k) {
+                let v = self.value(e, &Ty::Str)?;
+                let p = type_path(id);
+                let t = &v.t;
+                return Ok(Code::new(quote! { &#p(#t) }, Prec::Prefix).exits(v.exits));
+            }
+        }
+        self.borrow(e, k)
+    }
+
     /// A `&str` of a string, or of an id or scalar over one: a literal as itself.
     fn str_ref(&mut self, e: &Expr) -> Gened<Code> {
         if let Kind::Str(s) = &e.kind {
@@ -2272,7 +2438,7 @@ impl<'a> Gen<'a> {
                     let lit = Literal::string(s);
                     Code::new(quote! { #lit }, Prec::Postfix)
                 } else {
-                    self.borrow(&op.args[1], k)?
+                    self.lookup_key(&op.args[1], k)?
                 };
                 let kt = &key.t;
                 Ok(Code::new(quote! { #r.get(#kt) }, Prec::Postfix)
@@ -2535,17 +2701,22 @@ impl<'a> Gen<'a> {
                 "sortBy with an f64 key: an f64 has no total order to sort by in Rust",
             ));
         }
-        let c = self.raw(e, None)?;
         match ty {
             Ty::Enum(_) => {
+                let c = self.raw(e, None)?;
                 let r = c.recv();
                 Ok(Code::new(quote! { #r.as_str() }, Prec::Postfix).exits(c.exits))
             }
-            Ty::Alias(_, r) => {
-                let owned = self.own(c, ty);
-                self.coerce(owned, ty, r)
+            // A number key is compared as the number: an i128, which holds every integer type,
+            // so branches of different integer types (a record id, an i64) compare as Exegra's
+            // numbers do.
+            _ if class(ty) == Some(Class::Num) => self.value(e, &Ty::Wide),
+            // A string key, an id's included, is compared as its string.
+            _ if class(ty) == Some(Class::Str) => self.value(e, &Ty::Str),
+            _ => {
+                let c = self.raw(e, None)?;
+                Ok(self.own(c, ty))
             }
-            _ => Ok(self.own(c, ty)),
         }
     }
 

@@ -32,6 +32,10 @@ pub(crate) enum Ty {
     Number,
     /// `f64`.
     Float,
+    /// `i128`: the generated code's own type of a numeric sort key, which holds every integer
+    /// type's values, so keys of different integer types compare as Exegra's numbers do. No
+    /// specification type is one.
+    Wide,
     /// An id or scalar type over a bool, string or integer representation; `timestamp` too, as
     /// [`TIMESTAMP`] over `i64` ([`Ty::timestamp`]).
     Alias(String, Box<Ty>),
@@ -94,6 +98,7 @@ impl Ty {
             Ty::Int(b) => b.as_str().into(),
             Ty::Number => "a number".into(),
             Ty::Float => "f64".into(),
+            Ty::Wide => "i128".into(),
             Ty::Shared(of) => format!("shared<{}>", of.text()),
             Ty::Alias(id, _) | Ty::Enum(id) | Ty::Struct(id) | Ty::Union(id) => id.clone(),
             Ty::List(of) => format!("list<{}>", of.text()),
@@ -158,6 +163,14 @@ pub(crate) fn int_kind(t: &Ty) -> Option<Builtin> {
         Ty::Int(b) => Some(*b),
         Ty::Alias(_, r) => int_kind(r),
         _ => None,
+    }
+}
+
+/// The representation of an id or scalar; any other type as it is.
+pub(crate) fn alias_repr(t: &Ty) -> &Ty {
+    match t {
+        Ty::Alias(_, r) => r,
+        other => other,
     }
 }
 
@@ -1296,7 +1309,20 @@ impl<'a> Checker<'a> {
                 arity(3, op)?;
                 let t = walk_args(self, op)?;
                 let (k, v) = self.need_map(&t[0], "the first argument of insert")?;
-                let key = join(&k, &t[1]).ok_or_else(|| {
+                // Exegra's map keys are their representation: inserting a key of another id
+                // (or a plain value) into a map of ids gives a map of the representation, which
+                // holds both. The generated code converts the map's keys (`.0`); a context that
+                // expects ids builds them as ids again.
+                let mixed = !is_open(&k)
+                    && !is_open(&t[1])
+                    && k != t[1]
+                    && (matches!(k, Ty::Alias(..)) || matches!(t[1], Ty::Alias(..)));
+                let key = if mixed {
+                    join(alias_repr(&k), alias_repr(&t[1]))
+                } else {
+                    join(&k, &t[1])
+                };
+                let key = key.ok_or_else(|| {
                     invalid(format!(
                         "the key of insert is {}, the map's keys {}",
                         t[1].text(),

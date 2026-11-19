@@ -257,7 +257,7 @@ pub(crate) fn literal(spec: &Spec, t: &Ty, v: &Value) -> Result<TokenStream, Ref
             }
             _ => return Err(not_a(t, v)),
         },
-        Ty::Number | Ty::Unknown | Ty::Never => {
+        Ty::Number | Ty::Wide | Ty::Unknown | Ty::Never => {
             return Err(unsupported(
                 "an example value of a type that cannot be told",
             ))
@@ -429,7 +429,7 @@ fn order(spec: &Spec, t: &Ty, a: &Value, b: &Value) -> Result<std::cmp::Ordering
             }
             order(spec, if ea { e } else { o }, &x, &y)?
         }
-        Ty::Number | Ty::Unknown | Ty::Never => {
+        Ty::Number | Ty::Wide | Ty::Unknown | Ty::Never => {
             return Err(unsupported(
                 "an example value of a type that cannot be told",
             ))

@@ -66,10 +66,37 @@
 //!   doubles), and division or remainder by zero, an evaluation error in Exegra, is a fault. It
 //!   is not a sort key (it has no total order) nor a set item.
 //!
-//! Literals and branches are built in the id or scalar expected of them: a list literal, `if`,
-//! `match` or `let` where a `list<role-id>` or `set<role-id>` is expected builds its string
-//! literals as `RoleId`s, and a string literal of a constrained id or scalar is built directly
-//! when it meets the type's constraints, which specc checks on the literal.
+//! # Conversions between scalars
+//!
+//! Exegra's values are numbers, strings and bools: it passes an id where its representation is
+//! expected and back, an integer where another integer type is, a string where a constrained id
+//! is, and it checks neither ranges (but of arithmetic and of example values) nor a type's
+//! constraints inside a function. The generated types hold less, so specc converts:
+//!
+//! - an id to its representation is `.0`, and to another scalar its representation converted;
+//! - an integer to a wider integer type is `From`; to a narrower one it is checked with
+//!   `try_from`, and one that does not fit is a `Fault` (`op: "as"`), where Exegra goes on with
+//!   a number beyond the type;
+//! - a value to an unconstrained id wraps it; to a constrained one it is checked with the
+//!   type's `new`, and one that breaks the constraints is a `Fault` (`op: "new"`), where Exegra
+//!   goes on. A string literal is checked by specc instead: one that meets the constraints is
+//!   built directly, one that does not is refused (the check would fail on every run);
+//! - a map lookup (`get`, `remove`) by a string in a map of constrained ids builds the key
+//!   without the check: it is never stored, and a key that breaks the constraints is one no map
+//!   holds, so the lookup finds nothing, as in Exegra;
+//! - lists, sets, options and maps convert item by item (keys too), and collect the first
+//!   failure of a checked item.
+//!
+//! A function that does a conversion that can fail can fault, and says so in its type; specc
+//! finds them by generating each function once before deciding the signatures.
+//!
+//! Literals, branches and keys are built in the type expected of them: a list literal, `if`,
+//! `match`, `let` or `insert` where a `list<role-id>`, `set<role-id>` or `map<role-id, T>` is
+//! expected builds its string literals as `RoleId`s, and branches of other integer types as the
+//! expected one. `insert` of a key that is not the map's id (a string, another id) gives a map
+//! of the representation, as Exegra's keys are. A number sort key is compared as an `i128`, which
+//! holds every integer type, so keys of different integer types compare as Exegra's numbers do;
+//! a string key (an id's too) as its string.
 //!
 //! # Ownership
 //!
@@ -87,7 +114,8 @@
 //! WG-4902 have it: `checked_add`, `checked_sub`, `checked_mul`, `checked_div` and `checked_rem`
 //! (so division by zero is a fault too), and `checked_neg`. Operands of different integer types
 //! are computed in `i128` and converted back with `try_from`. Nothing panics and nothing wraps.
-//! A function that can fault (it does such arithmetic, or calls a function that can) says so in
+//! A function that can fault (it does such arithmetic or a checked conversion, or calls a
+//! function that can) says so in
 //! its type: it returns `Result<R, Fault>` when it declares no errors, and
 //! `Result<R, Failure<E>>` (`Failure::Error(E)` or `Failure::Fault(Fault)`) when it does. A
 //! function that cannot fault keeps the plain `R` or `Result<R, E>`.
@@ -98,10 +126,8 @@
 //! recursion; dividing a timestamp; `{:?}` of a value holding a timestamp; an f64 sort key or
 //! set item; `==` between a set and a list other than `[]`, or a shared and a plain value; an
 //! example set not written in order or with an item twice; an optional boxed field; an
-//! optional field of an option type; values of a constrained id
-//! or scalar built from their representation (but a string literal that meets the constraints);
-//! an integer passed where a narrower integer type is expected (a wider one is converted with
-//! `From`; computing and comparing mix any); names that become the same Rust name, or the name of a function.
+//! optional field of an option type; a string literal built as a constrained id whose
+//! constraints it breaks; names that become the same Rust name, or the name of a function.
 
 mod examples;
 mod rust;
@@ -581,7 +607,21 @@ fn analyse(spec: &Spec) -> Result<Analysis, Vec<Diagnostic>> {
     if !diags.is_empty() {
         return Err(diags);
     }
-    // Which functions can fault: their own arithmetic, or a call of one that can.
+    // Conversions that can fail (an integer narrowed, a constrained id built from a value) are
+    // found by generating each function once: those that use a fault can fault too.
+    let names: BTreeSet<String> = reserved.keys().cloned().collect();
+    let mut converting = Vec::new();
+    for f in &spec.functions {
+        let t = &typed[&f.id];
+        let mut gen = rust::Gen::new(spec, &sigs, &sigs[&f.id], names.clone());
+        if gen.function(TokenStream::new(), &t.lets, &t.body).is_ok() && gen.faults() {
+            converting.push(f.id.clone());
+        }
+    }
+    for id in converting {
+        typed.get_mut(&id).expect("typed").arith = true;
+    }
+    // Which functions can fault: their own arithmetic or conversions, or a call of one that can.
     loop {
         let mut changed = false;
         for id in &order {
@@ -676,9 +716,9 @@ fn function_doc(f: &Function, sig: &Sig) -> TokenStream {
     match (&sig.errors, sig.faultable) {
         (None, false) => origin.push('.'),
         (Some(e), false) => origin.push_str(&format!("; fails with `{e}`.")),
-        (None, true) => origin.push_str("; an integer overflow or a division by zero is a `Fault`."),
+        (None, true) => origin.push_str("; an integer overflow, a division by zero or a failed conversion is a `Fault`."),
         (Some(e), true) => origin.push_str(&format!(
-            "; fails with `{e}` (`Failure::Error`), and an integer overflow or a division by zero is `Failure::Fault`."
+            "; fails with `{e}` (`Failure::Error`), and an integer overflow, a division by zero or a failed conversion is `Failure::Fault`."
         )),
     }
     doc.paragraph(&origin);
@@ -717,16 +757,23 @@ fn assemble(
         };
         quote! {
             /// An integer overflow or a division by zero, which Exegra's evaluation reports as an
-            /// evaluation error.
+            /// evaluation error; or a value the generated types cannot hold where Exegra passes
+            /// it on: an integer out of the range of the type it is converted to, a value that
+            /// breaks the constraints of the id it is built as.
             #[derive(Debug, Clone, Copy, PartialEq, Eq)]
             pub struct Fault {
-                /// The operator: `+`, `-`, `*`, `/` or `%`.
+                /// The operator: `+`, `-`, `*`, `/` or `%`; `as` for an integer conversion,
+                /// `new` for a constrained id built from a value.
                 pub op: &'static str,
             }
 
             impl std::fmt::Display for Fault {
                 fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                    write!(f, "integer overflow or division by zero in {}", self.op)
+                    match self.op {
+                        "as" => write!(f, "an integer out of the range of the type it is converted to"),
+                        "new" => write!(f, "a value that breaks the constraints of the id it is built as"),
+                        op => write!(f, "integer overflow or division by zero in {op}"),
+                    }
                 }
             }
 
@@ -1195,19 +1242,99 @@ mod tests {
     }
 
     #[test]
-    fn an_integer_widens_with_from_and_does_not_narrow() {
+    fn an_integer_widens_with_from() {
         let wide = r#"{ "id": "wide", "params": [{ "name": "x", "type": "u32" }], "returns": "u64", "body": "x",
                  "examples": [{ "args": { "x": 3 }, "result": 3 }] }"#;
         let out = module(&spec(wide, ""));
         assert!(out.contains("u64 :: from (x)"), "{out}");
-        let narrow = wide.replace("\"u32\"", "\"u64\"");
-        let narrow = narrow.replacen("\"returns\": \"u64\"", "\"returns\": \"u32\"", 1);
-        let d = refusals(&spec(&narrow, ""));
+        assert!(out.contains("pub fn wide (x : u32) -> u64"), "{out}");
+    }
+
+    const CONVERT: &str = r#"{"id": "role", "name": "Role", "kind": "id", "repr": "string", "constraints": {"pattern": "^[a-z][a-z0-9_]*$", "maxLength": 64}}, {"id": "rid", "name": "Record id", "kind": "id", "repr": "u64"}, {"id": "key", "name": "Key", "kind": "union", "variants": [{"name": "rec", "newtype": true, "fields": [{"name": "value", "type": "rid"}]}, {"name": "num", "newtype": true, "fields": [{"name": "value", "type": "i64"}]}]}"#;
+
+    #[test]
+    fn an_integer_narrows_with_try_from_and_the_function_can_fault() {
+        let out = module(&spec(
+            r#"{"id": "narrow", "params": [{"name": "x", "type": "i64"}], "returns": "u64", "body": "x", "examples": [{"args": {"x": 3}, "result": 3}]}, {"id": "twice", "params": [{"name": "x", "type": "i64"}], "returns": "u64", "body": "call narrow(x)", "examples": [{"args": {"x": 3}, "result": 3}]}, {"id": "rid-number", "params": [{"name": "r", "type": "rid"}], "returns": "i64", "body": "r", "examples": [{"args": {"r": 4}, "result": 4}]}"#,
+            CONVERT,
+        ));
         assert!(
-            d.iter()
-                .any(|d| d.code == FUNCTION_UNSUPPORTED && d.message.contains("u64")),
-            "{d:?}"
+            out.contains("u64 :: try_from (x) . map_err (| _ | Fault { op : \"as\" }) ?"),
+            "{out}"
         );
+        assert!(
+            out.contains("pub fn narrow (x : i64) -> Result < u64 , Fault >"),
+            "{out}"
+        );
+        // A caller of a function that can fault can fault too.
+        assert!(out.contains("narrow (x) ?"), "{out}");
+        assert!(
+            out.contains("pub fn twice (x : i64) -> Result < u64 , Fault >"),
+            "{out}"
+        );
+        // An id over u64 where an i64 is expected: its representation, narrowed.
+        assert!(out.contains("i64 :: try_from (r . clone () . 0)"), "{out}");
+    }
+
+    #[test]
+    fn a_constrained_id_from_a_value_is_checked_and_map_keys_convert() {
+        let out = module(&spec(
+            r#"{"id": "make-role", "params": [{"name": "s", "type": "string"}], "returns": "role", "body": "s", "examples": [{"args": {"s": "editor"}, "result": "editor"}]}, {"id": "role-names", "params": [{"name": "m", "type": "map<role, string>"}], "returns": "map<string, string>", "body": "m", "examples": [{"args": {"m": {"editor": "x"}}, "result": {"editor": "x"}}]}, {"id": "role-map", "params": [{"name": "m", "type": "map<string, string>"}], "returns": "map<role, string>", "body": "m", "examples": [{"args": {"m": {"editor": "x"}}, "result": {"editor": "x"}}]}, {"id": "has-role", "params": [{"name": "m", "type": "map<role, string>"}, {"name": "s", "type": "string"}], "returns": "bool", "body": "get(m, s) != null", "examples": [{"args": {"m": {"editor": "x"}, "s": "editor"}, "result": true}, {"args": {"m": {}, "s": "Not A Role"}, "result": false}]}, {"id": "scoped", "params": [{"name": "m", "type": "map<role, string>"}], "returns": "map<string, string>", "body": "insert(m, '$id', 'y')", "examples": [{"args": {"m": {"editor": "x"}}, "result": {"$id": "y", "editor": "x"}}]}, {"id": "builtin-roles", "params": [], "returns": "map<role, string>", "body": "insert(insert({}, 'owner', 'Owner'), 'public', 'Everyone')", "examples": [{"args": {}, "result": {"owner": "Owner", "public": "Everyone"}}]}"#,
+            CONVERT,
+        ));
+        assert!(
+            out.contains(
+                "types :: Role :: new (s . clone ()) . map_err (| _ | Fault { op : \"new\" }) ?"
+            ),
+            "{out}"
+        );
+        assert!(
+            out.contains("(| (key_ , item_) | (key_ . 0 , item_))"),
+            "{out}"
+        );
+        assert!(
+            out.contains("Ok :: < _ , Fault > ((types :: Role :: new (key_)"),
+            "{out}"
+        );
+        assert!(
+            out.contains(
+                "collect :: < Result < std :: collections :: BTreeMap < _ , _ > , _ > > () ?"
+            ),
+            "{out}"
+        );
+        // A lookup builds the key without the check: it finds nothing, as Exegra's does.
+        assert!(
+            out.contains("m . get (& types :: Role (s . clone ())) . is_some ()"),
+            "{out}"
+        );
+        assert!(
+            out.contains("pub fn has_role (m : & std :: collections :: BTreeMap < types :: Role , String > , s : & String) -> bool"),
+            "{out}"
+        );
+        // A key of the representation makes a map of the representation.
+        assert!(
+            out.contains("map_ . insert (\"$id\" . to_string () , \"y\" . to_string ())"),
+            "{out}"
+        );
+        // Literal keys where ids are expected are built (and checked) as ids.
+        assert!(
+            out.contains("types :: Role (\"owner\" . to_string ())"),
+            "{out}"
+        );
+        assert!(
+            out.contains("pub fn builtin_roles () -> std :: collections :: BTreeMap"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn a_number_sort_key_of_mixed_integer_types_is_an_i128() {
+        let out = module(&spec(
+            r#"{"id": "key-order", "params": [{"name": "xs", "type": "list<key>"}], "returns": "list<key>", "body": "sortBy(x in xs, match x { rec(r) => r, num(i) => i })", "examples": [{"args": {"xs": [{"rec": 5}, {"num": -1}, {"num": 3}]}, "result": [{"num": -1}, {"num": 3}, {"rec": 5}]}]}"#,
+            CONVERT,
+        ));
+        assert!(out.contains("i128 :: from (r . clone () . 0)"), "{out}");
+        assert!(out.contains("i128 :: from (* i)"), "{out}");
     }
 
     #[test]
