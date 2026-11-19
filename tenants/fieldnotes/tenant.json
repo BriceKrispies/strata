@@ -9,6 +9,9 @@
     { "principal": "user:tomasz", "roles": ["author"] },
     { "principal": "user:mirela", "roles": ["author"] }
   ],
+  "teams": [
+    { "id": "newsdesk", "label": "News desk", "roles": ["editor"], "members": ["user:dana"] }
+  ],
   "records": [
     {
       "object": "publication",
