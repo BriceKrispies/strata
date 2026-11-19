@@ -2,59 +2,15 @@
 //! How incoming requests and events reach the implementation-level machines: for each machine, the glue that turns a contract's request or another machine's emitted event into the machine's event and runs it through `strata_runtime::Host`.
 //!
 //! Events whose arrival the specification does not state get nothing, and are listed on their machine's module.
-/// How events reach machine `emailed-link-flow-impl` (Emailed link (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `ml-requested`, `ml-presented`.
-pub mod emailed_link_flow_impl {}
-
-/// How events reach machine `oidc-callback-flow-impl` (OpenID Connect callback (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `oidc-started`, `oidc-callback`.
-pub mod oidc_callback_flow_impl {}
-
-/// How events reach machine `session-authority-flow-impl` (Session authority (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `sr-revoked`, `sr-lookup`, `sr-authenticated`, `sr-password-changed`, `sr-recovered`, `sr-signed-out`, `sr-deactivated`, `sr-owner-revoked`, `sr-list`.
-pub mod session_authority_flow_impl {}
-
 /// How events reach machine `gateway-session-flow-impl` (Gateway session copy (implementation)).
 ///
 /// The specification does not say how these events arrive, so nothing is generated for them: `sr-notice`, `sr-request`, `sr-lookup-answer`.
 pub mod gateway_session_flow_impl {}
 
-/// How events reach machine `job-lease-flow-impl` (Job lease (implementation)).
-///
-/// Arrivals:
-///
-/// - `lease-expired`: fired by the machine's own timers.
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `job-due`, `work-reported`.
-pub mod job_lease_flow_impl {}
-
 /// How events reach machine `origin-content-flow-impl` (Origin content (implementation)).
 ///
 /// The specification does not say how these events arrive, so nothing is generated for them: `ec-published`, `ec-origin-fetch`.
 pub mod origin_content_flow_impl {}
-
-/// How events reach machine `edge-copy-flow-impl` (Edge copy (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `ec-purge`, `ec-request`, `ec-origin-answer`.
-pub mod edge_copy_flow_impl {}
-
-/// How events reach machine `provisioning-flow-impl` (Tenant provisioning (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `pv-requested`, `pv-database-created`, `pv-layout-applied`, `pv-template-installed`, `pv-step-failed`.
-pub mod provisioning_flow_impl {}
-
-/// How events reach machine `proposal-flow-impl` (Change proposal (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `cp-proposed`, `cp-projected`, `cp-approved`, `cp-rejected`, `cp-apply-requested`.
-pub mod proposal_flow_impl {}
-
-/// How events reach machine `arc-outbox-consumer-flow-impl` (Notice subscriber (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `arc-ob-delivered`.
-pub mod arc_outbox_consumer_flow_impl {}
 
 /// How events reach machine `arc-outbox-delivery-flow-impl` (Outbox delivery after a stop (implementation)).
 ///
@@ -75,541 +31,52 @@ pub mod arc_rolling_change_flow_impl {}
 /// The specification does not say how these events arrive, so nothing is generated for them: `pl-presented`, `pl-issue`.
 pub mod preview_link_flow_impl {}
 
-/// How events reach machine `inbound-run-flow-impl` (Inbound delivery (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `iw-received`.
-pub mod inbound_run_flow_impl {}
-
-/// How events reach machine `cv-change-flow-impl` (Confirmed change (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `cv-proposed`, `cv-confirmed`, `cv-cancel`, `cv-apply-requested`.
-pub mod cv_change_flow_impl {}
-
-/// How events reach machine `cv-authority-flow-impl` (Operation under withdrawable permission (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `cv-permission-withdrawn`, `cv-operation-run`.
-pub mod cv_authority_flow_impl {}
-
-/// How events reach machine `saml-assertion-flow-impl` (SAML assertion use (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `saml-response`.
-pub mod saml_assertion_flow_impl {}
-
-/// How events reach machine `guess-throttle-flow-impl` (Password guessing throttle (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `pw-attempt`.
-pub mod guess_throttle_flow_impl {}
-
-/// How events reach machine `trigger-chain-flow-impl` (Trigger chain (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `tc-change`.
-pub mod trigger_chain_flow_impl {}
-
 /// How events reach machine `gateway-outage-flow-impl` (Gateway during identity outage (implementation)).
 ///
 /// The specification does not say how these events arrive, so nothing is generated for them: `sr-request`, `sr-lookup-answer`, `sr-public-request`.
 pub mod gateway_outage_flow_impl {}
-
-/// How events reach machine `erasure-copy-flow-impl` (Erased copy (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `er-erase-committed`, `er-purge-sent`, `er-read`.
-pub mod erasure_copy_flow_impl {}
-
-/// How events reach machine `subject-key-flow-impl` (Subject key (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `sk-shred`, `sk-read`.
-pub mod subject_key_flow_impl {}
-
-/// How events reach machine `audit-chain-flow-impl` (Audit chain under erasure (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `au-append`, `au-erase`.
-pub mod audit_chain_flow_impl {}
-
-/// How events reach machine `agent-halt-flow-impl` (Agent halt (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `ah-anomaly`, `ah-operation`, `ah-resume`.
-pub mod agent_halt_flow_impl {}
-
-/// How events reach machine `approval-separation-flow-impl` (Approval separation (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `sp-proposed`, `sp-approve`.
-pub mod approval_separation_flow_impl {}
 
 /// How events reach machine `token-render-flow-impl` (Rendering a page with a reader-dependent token (implementation)).
 ///
 /// The specification does not say how these events arrive, so nothing is generated for them: `tk-request`.
 pub mod token_render_flow_impl {}
 
-/// How events reach machine `mail-dispatch-flow-impl` (Mail dispatch (implementation)).
-///
-/// Arrivals:
-///
-/// - `em-timeout`: fired by the machine's own timers.
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `em-due`, `em-ack`.
-pub mod mail_dispatch_flow_impl {}
-
-/// How events reach machine `mail-adapter-flow-impl` (Mail adapter (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `em-submit`.
-pub mod mail_adapter_flow_impl {}
-
-/// How events reach machine `colour-switch-flow-impl` (Colour switch (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `cs-green-deployed`, `cs-green-verified`, `cs-switch-requested`, `cs-rollback-requested`, `cs-request`.
-pub mod colour_switch_flow_impl {}
-
-/// How events reach machine `release-promotion-flow-impl` (Release promotion (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `rp-stage-gated`, `rp-approved`, `rp-promote-requested`.
-pub mod release_promotion_flow_impl {}
-
-/// How events reach machine `migration-batch-flow-impl` (Migration run in batches (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `mg-started`, `mg-batch-run`, `mg-interrupted`, `mg-resumed`.
-pub mod migration_batch_flow_impl {}
-
-/// How events reach machine `tenant-move-flow-impl` (Tenant move (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `tm-move-requested`, `tm-write-requested`, `tm-freeze-requested`, `tm-hash-checked`, `tm-switch-requested`, `tm-copy-failed`, `tm-reconcile-requested`.
-pub mod tenant_move_flow_impl {}
-
 /// How events reach machine `commit-flow-impl` (Commit and publication (implementation)).
 ///
 /// The specification does not say how these events arrive, so nothing is generated for them: `rt-intent`, `rt-decided`, `rt-committed`.
 pub mod commit_flow_impl {}
-
-/// How events reach machine `source-throttle-flow-impl` (Per-source sign-in throttle (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `src-attempt`.
-pub mod source_throttle_flow_impl {}
-
-/// How events reach machine `job-run-flow-impl` (Job run (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `jr-poll`, `jr-attempt-failed`, `jr-attempt-succeeded`, `jr-cancel`, `jr-created`.
-pub mod job_run_flow_impl {}
-
-/// How events reach machine `schedule-flow-impl` (Recurring schedule (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `sc-job-completed`, `sc-pause`, `sc-resume`.
-pub mod schedule_flow_impl {}
-
-/// How events reach machine `trigger-commit-flow-impl` (Trigger jobs of a committed event (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `tg-commit`, `tg-abort`.
-pub mod trigger_commit_flow_impl {}
-
-/// How events reach machine `lease-reach-flow-impl` (Lease and reach of the tenant database (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `lr-job-due`, `lr-unreachable`, `lr-reachable`.
-pub mod lease_reach_flow_impl {}
-
-/// How events reach machine `job-admission-flow-impl` (Job admission (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `ad-burst`, `ad-tick`, `ad-other-due`.
-pub mod job_admission_flow_impl {}
-
-/// How events reach machine `wake-flow-impl` (Wake scan (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `wk-scan`.
-pub mod wake_flow_impl {}
-
-/// How events reach machine `bulk-change-flow-impl` (Bulk change (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `bk-process`, `bk-interrupt`, `bk-resume`.
-pub mod bulk_change_flow_impl {}
-
-/// How events reach machine `workflow-definition-flow-impl` (Workflow definition schema version (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `wd-save`, `wd-migrate`.
-pub mod workflow_definition_flow_impl {}
-
-/// How events reach machine `workflow-activation-flow-impl` (Workflow activation (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `wa-project`, `wa-activate`.
-pub mod workflow_activation_flow_impl {}
 
 /// How events reach machine `template-install-flow-impl` (Template install (implementation)).
 ///
 /// The specification does not say how these events arrive, so nothing is generated for them: `ti-review`, `ti-install`.
 pub mod template_install_flow_impl {}
 
-/// How events reach machine `workflow-run-flow-impl` (Workflow run (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `wr-advance`, `wr-restart`.
-pub mod workflow_run_flow_impl {}
-
-/// How events reach machine `workflow-compensation-flow-impl` (Workflow compensation (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `wc-step-done`, `wc-step-failed`, `wc-compensate`.
-pub mod workflow_compensation_flow_impl {}
-
-/// How events reach machine `approval-flow-impl` (Workflow approval (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `wp-approve`.
-pub mod approval_flow_impl {}
-
-/// How events reach machine `approval-inbox-flow-impl` (Approval task delivery (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `ni-evaluate`.
-pub mod approval_inbox_flow_impl {}
-
-/// How events reach machine `call-step-flow-impl` (External call step (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `cs-commit`, `cs-abort`, `cs-runner-poll`.
-pub mod call_step_flow_impl {}
-
-/// How events reach machine `outbound-call-flow-impl` (Outbound call (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `oc-request`, `oc-redirect`, `oc-chunk`, `oc-timeout`.
-pub mod outbound_call_flow_impl {}
-
-/// How events reach machine `webhook-delivery-flow-impl` (Outbound webhook delivery (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `wh-send`, `wh-response`.
-pub mod webhook_delivery_flow_impl {}
-
-/// How events reach machine `scheduled-publication-flow-impl` (Scheduled publication (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `sp-save`, `sp-job-run`.
-pub mod scheduled_publication_flow_impl {}
-
-/// How events reach machine `inbound-signature-flow-impl` (Inbound webhook signature (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `is-received`.
-pub mod inbound_signature_flow_impl {}
-
-/// How events reach machine `mail-enqueue-flow-impl` (Mail job of a change (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `me-commit`, `me-abort`.
-pub mod mail_enqueue_flow_impl {}
-
-/// How events reach machine `mail-attempt-flow-impl` (Mail attempt (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `mt-attempt`.
-pub mod mail_attempt_flow_impl {}
-
-/// How events reach machine `mail-quota-flow-impl` (Mail quota (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `mq-release`.
-pub mod mail_quota_flow_impl {}
-
-/// How events reach machine `mail-provider-flow-impl` (Mail provider selection (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `mp-configure`, `mp-send`.
-pub mod mail_provider_flow_impl {}
-
-/// How events reach machine `mail-log-read-flow-impl` (Mail log read (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `mr-read`.
-pub mod mail_log_read_flow_impl {}
-
-/// How events reach machine `sender-domain-flow-impl` (Sender domain (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `sd-verify`, `sd-send`.
-pub mod sender_domain_flow_impl {}
-
 /// How events reach machine `mail-render-flow-impl` (Mail rendering (implementation)).
 ///
 /// The specification does not say how these events arrive, so nothing is generated for them: `rd-render`.
 pub mod mail_render_flow_impl {}
-
-/// How events reach machine `delivery-report-flow-impl` (Delivery report (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `dr-report`.
-pub mod delivery_report_flow_impl {}
-
-/// How events reach machine `audience-mail-flow-impl` (Audience mail (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `am-send`, `am-click`.
-pub mod audience_mail_flow_impl {}
-
-/// How events reach machine `tenant-suspension-flow-impl` (Tenant suspension (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `ts-write-requested`, `ts-plan-chosen`, `ts-trial-ended`.
-pub mod tenant_suspension_flow_impl {}
-
-/// How events reach machine `write-quota-flow-impl` (Write against plan quotas (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `wq-write-requested`.
-pub mod write_quota_flow_impl {}
-
-/// How events reach machine `plan-change-flow-impl` (Plan change (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `pc-change-requested`.
-pub mod plan_change_flow_impl {}
-
-/// How events reach machine `connection-quota-flow-impl` (Connection quota per tenant (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `cq-connection-requested`.
-pub mod connection_quota_flow_impl {}
-
-/// How events reach machine `bootstrap-credential-flow-impl` (Bootstrap credential (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `bc-issue-requested`, `bc-presented`, `bc-expiry-reached`.
-pub mod bootstrap_credential_flow_impl {}
-
-/// How events reach machine `placement-choice-flow-impl` (Placement by region (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `rg-create-requested`.
-pub mod placement_choice_flow_impl {}
-
-/// How events reach machine `tenant-deletion-flow-impl` (Tenant deletion (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `td-delete-requested`, `td-database-removed`, `td-files-removed`, `td-key-destroyed`, `td-step-failed`.
-pub mod tenant_deletion_flow_impl {}
-
-/// How events reach machine `backup-key-flow-impl` (Reading a backup (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `bk-read-requested`.
-pub mod backup_key_flow_impl {}
 
 /// How events reach machine `runtime-credential-flow-impl` (Runtime database credentials (implementation)).
 ///
 /// The specification does not say how these events arrive, so nothing is generated for them: `rc-serve-requested`, `rc-stop-serving`, `rc-open-requested`.
 pub mod runtime_credential_flow_impl {}
 
-/// How events reach machine `export-restore-flow-impl` (Export and restore of a tenant (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `er-write-requested`, `er-export-requested`, `er-restore-requested`.
-pub mod export_restore_flow_impl {}
-
-/// How events reach machine `point-in-time-flow-impl` (Point-in-time restore (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `pt-write-requested`, `pt-point-reached`, `pt-restore-requested`.
-pub mod point_in_time_flow_impl {}
-
 /// How events reach machine `kernel-upgrade-flow-impl` (Serving under a newer kernel (implementation)).
 ///
 /// The specification does not say how these events arrive, so nothing is generated for them: `ku-replay-finished`, `ku-serve-requested`.
 pub mod kernel_upgrade_flow_impl {}
-
-/// How events reach machine `placement-switch-flow-impl` (Directory switch of a tenant placement (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `ps-switched`, `ps-request-begun`, `ps-request-completed`, `ps-address-resolved`.
-pub mod placement_switch_flow_impl {}
-
-/// How events reach machine `schema-change-flow-impl` (Schema change run (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `sc-preview-requested`, `sc-apply-requested`, `sc-batch-committed`, `sc-batch-failed`, `sc-stop-requested`.
-pub mod schema_change_flow_impl {}
-
-/// How events reach machine `layout-rollout-flow-impl` (Layout change across tenants (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `lr-apply-requested`.
-pub mod layout_rollout_flow_impl {}
-
-/// How events reach machine `staging-promotion-flow-impl` (Promotion of a staging migration (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `sp-staging-applied`, `sp-prod-preview-requested`, `sp-promote-requested`.
-pub mod staging_promotion_flow_impl {}
-
-/// How events reach machine `field-change-flow-impl` (Field added and field renamed (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `fc-field-added`, `fc-rename-applied`, `fc-read-requested`.
-pub mod field_change_flow_impl {}
 
 /// How events reach machine `draft-save-flow-impl` (Saving a draft across a schema change (implementation)).
 ///
 /// The specification does not say how these events arrive, so nothing is generated for them: `ds-schema-changed`, `ds-save-requested`.
 pub mod draft_save_flow_impl {}
 
-/// How events reach machine `workflow-version-flow-impl` (Workflow run across a definition change (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `wf-run-started`, `wf-definition-changed`, `wf-step-due`.
-pub mod workflow_version_flow_impl {}
-
-/// How events reach machine `scheduled-job-check-flow-impl` (Scheduled job against the schema (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `sj-schema-changed`, `sj-job-due`.
-pub mod scheduled_job_check_flow_impl {}
-
-/// How events reach machine `template-proposal-flow-impl` (Template version proposal (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `tp-version-published`, `tp-tenant-approved`, `tp-apply-requested`.
-pub mod template_proposal_flow_impl {}
-
-/// How events reach machine `import-flow-impl` (Import of records and pages (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `im-record-imported`, `im-page-imported`.
-pub mod import_flow_impl {}
-
-/// How events reach machine `samlv-flow-impl` (SAML response checks (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `samlv-presented`.
-pub mod samlv_flow_impl {}
-
-/// How events reach machine `oidcv-flow-impl` (OpenID Connect token checks (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `oidcv-presented`.
-pub mod oidcv_flow_impl {}
-
-/// How events reach machine `oidcs-flow-impl` (OpenID Connect sign-in start (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `oidcs-presented`.
-pub mod oidcs_flow_impl {}
-
-/// How events reach machine `fedp-flow-impl` (Sign-in method for a bound domain (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `fedp-presented`.
-pub mod fedp_flow_impl {}
-
-/// How events reach machine `fedc-flow-impl` (Principal creation at first federated sign-in (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `fedc-presented`.
-pub mod fedc_flow_impl {}
-
-/// How events reach machine `fedl-flow-impl` (Linking a federated identity (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `fedl-presented`.
-pub mod fedl_flow_impl {}
-
-/// How events reach machine `prov-flow-impl` (Provisioning requests (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `prov-presented`.
-pub mod prov_flow_impl {}
-
-/// How events reach machine `idpa-flow-impl` (Calls to an identity provider (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `idpa-presented`.
-pub mod idpa_flow_impl {}
-
-/// How events reach machine `tokiss-flow-impl` (Access token issue (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `tokiss-presented`.
-pub mod tokiss_flow_impl {}
-
-/// How events reach machine `tokact-flow-impl` (Agent token use (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `tokact-presented`.
-pub mod tokact_flow_impl {}
-
-/// How events reach machine `tokint-flow-impl` (Token introspection (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `tokint-presented`.
-pub mod tokint_flow_impl {}
-
-/// How events reach machine `stepup-flow-impl` (Sensitive operations (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `stepup-presented`.
-pub mod stepup_flow_impl {}
-
-/// How events reach machine `facg-flow-impl` (Sign-in methods under a second-factor realm (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `facg-presented`.
-pub mod facg_flow_impl {}
-
-/// How events reach machine `realm-flow-impl` (Realm policy that turns password sign-in off (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `realm-presented`.
-pub mod realm_flow_impl {}
-
-/// How events reach machine `auditk-flow-impl` (Audit entry retention (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `auditk-presented`.
-pub mod auditk_flow_impl {}
-
-/// How events reach machine `ppreg-flow-impl` (Passkey registration (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `ppreg-presented`.
-pub mod ppreg_flow_impl {}
-
-/// How events reach machine `ppauth-flow-impl` (Passkey assertion (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `ppauth-presented`.
-pub mod ppauth_flow_impl {}
-
 /// How events reach machine `asrt-flow-impl` (Caller identity assertion (implementation)).
 ///
 /// The specification does not say how these events arrive, so nothing is generated for them: `asrt-presented`.
 pub mod asrt_flow_impl {}
 
-/// How events reach machine `session-lifetime-flow-impl` (Session lifetime (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `sl-used`, `sl-issued`.
-pub mod session_lifetime_flow_impl {}
-
-/// How events reach machine `second-factor-flow-impl` (Second factor (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `sf-primary`, `sf-second`.
-pub mod second_factor_flow_impl {}
-
-/// How events reach machine `recovery-flow-impl` (Account recovery (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `rc-requested`, `rc-completion-asked`, `rc-signed-in`.
-pub mod recovery_flow_impl {}
-
-/// How events reach machine `code-spend-flow-impl` (One-time code (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `cs-presented`.
-pub mod code_spend_flow_impl {}
-
-/// How events reach machine `mfp-limit-flow-impl` (Second-factor prompt limit (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `mfp-requested`, `mfp-tightened`.
-pub mod mfp_limit_flow_impl {}
-
-/// How events reach machine `lea-limit-flow-impl` (Emailed-link limit per address (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `lea-requested`, `lea-tightened`.
-pub mod lea_limit_flow_impl {}
-
-/// How events reach machine `leb-limit-flow-impl` (Emailed-link limit per browser (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `leb-requested`, `leb-tightened`.
-pub mod leb_limit_flow_impl {}
-
-/// How events reach machine `sus-limit-flow-impl` (Sign-up limit per source (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `sus-requested`, `sus-tightened`.
-pub mod sus_limit_flow_impl {}
-
-/// How events reach machine `tcl-limit-flow-impl` (Token request limit per client (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `tcl-requested`, `tcl-tightened`.
-pub mod tcl_limit_flow_impl {}
-
-/// How events reach machine `realm-rate-flow-impl` (Realm failure rate (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `rl-failed`, `rl-attempt`, `rl-tightened`.
-pub mod realm_rate_flow_impl {}
-
-/// How events reach machine `idp-outage-flow-impl` (Identity provider outage (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `io-outage`, `io-sign-in`.
-pub mod idp_outage_flow_impl {}
-
-/// How events reach machine `provider-keys-flow-impl` (Provider signing keys (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `jw-token`.
-pub mod provider_keys_flow_impl {}
-
-/// How events reach machine `idp-offer-flow-impl` (Providers offered on the sign-in page (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `po-page`.
-pub mod idp_offer_flow_impl {}
-
-/// How events reach machine `first-sign-in-role-flow-impl` (Role at a first federated sign-in (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `fr-created`.
-pub mod first_sign_in_role_flow_impl {}
-
 /// How events reach machine `token-verifier-flow-impl` (Token verifier copy of a grant (implementation)).
 ///
 /// The specification does not say how these events arrive, so nothing is generated for them: `tg-notice`, `tg-presented`.
 pub mod token_verifier_flow_impl {}
-
-/// How events reach machine `signing-key-flow-impl` (Signing keys (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `sk-rotated`, `sk-compromised`, `sk-token`.
-pub mod signing_key_flow_impl {}
-
-/// How events reach machine `signup-notice-flow-impl` (Sign-up and recovery responses (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `su-requested`.
-pub mod signup_notice_flow_impl {}
-
-/// How events reach machine `new-device-flow-impl` (Sign-in from a new source or device (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `nd-signed-in`.
-pub mod new_device_flow_impl {}
