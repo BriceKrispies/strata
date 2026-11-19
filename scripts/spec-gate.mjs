@@ -8,7 +8,8 @@
 // crashes, prints nothing parseable, or cannot be found is a failed check.
 //
 // Steps, in order:
-//   0. specc check: crates/model is exactly what the compiler writes from the specification.
+//   0. specc check: crates/model and its pure crate crates/model-core are exactly what the compiler
+//      writes from the specification.
 //   1. cargo test --workspace, lake build, node --test (web), npm run check (tsc), recorded under
 //      var/test-results (at most two jobs). Not run with --no-test.
 //   2. Exegra (EXEGRA_HOME, default ../exegra; EXEGRA_PROJECT, default strata): validate the
@@ -180,14 +181,16 @@ console.log(`specification: ${requirements.length} requirements, ${modelClaims.l
 if (!startedMatch || started.size === 0) check('concordance.toml names started milestones', false, 'no [gate] started_milestones');
 
 // ---------------------------------------------------------------------------------------------
-// 0. Generated code: crates/model is what specc writes from the specification, byte for byte.
+// 0. Generated code: crates/model and crates/model-core are what specc writes from the
+//    specification, byte for byte.
 // ---------------------------------------------------------------------------------------------
 {
   const specc = run('cargo', ['run', '--quiet', '-p', 'strata-spec-compiler', '--bin', 'specc', '--',
-    'check', '--spec', 'specifications/spec.jsonc', '--out', 'crates/model', '--crate-name', 'strata-model', '--runtime', 'crates/runtime'], {
+    'check', '--spec', 'specifications/spec.jsonc', '--out', 'crates/model', '--crate-name', 'strata-model', '--runtime', 'crates/runtime',
+    '--core-out', 'crates/model-core', '--core-crate-name', 'strata-model-core'], {
     env: { CARGO_BUILD_JOBS: '2', CARGO_TARGET_DIR: 'target/gate' },
   });
-  check('specc check (crates/model is generated from the specification)', specc.ok,
+  check('specc check (crates/model and crates/model-core are generated from the specification)', specc.ok,
     specc.ok ? 'up to date' : `${exitText(specc)}: ${lastLine(specc.out)}; run npm run generate and commit`);
 
   const web = run('cargo', ['run', '--quiet', '-p', 'strata-spec-compiler', '--bin', 'specc', '--',

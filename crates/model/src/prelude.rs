@@ -2,64 +2,10 @@
 //! Shared representation types and descriptions used by the other generated modules.
 use std::fmt;
 
-use serde::{Deserialize, Serialize};
-
-/// The largest integer a double holds exactly together with every smaller one, `2^53 - 1`:
-/// the bound of `u64` and `i64` values in the simulator, in Rust and in JavaScript (Exegra
-/// `docs/semantics.md`, "Numbers").
-pub const SAFE_INTEGER: i64 = 9_007_199_254_740_991;
-
-/// Decodes a `u64` of an event payload, refusing one beyond [`SAFE_INTEGER`].
-pub fn safe_u64<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u64, D::Error> {
-    let v = u64::deserialize(d)?;
-    if v <= SAFE_INTEGER as u64 {
-        Ok(v)
-    } else {
-        Err(serde::de::Error::custom(format!("{v} is beyond 2^53 - 1")))
-    }
-}
-
-/// Decodes an `i64` of an event payload, refusing one beyond +-[`SAFE_INTEGER`].
-pub fn safe_i64<'de, D: serde::Deserializer<'de>>(d: D) -> Result<i64, D::Error> {
-    let v = i64::deserialize(d)?;
-    if (-SAFE_INTEGER..=SAFE_INTEGER).contains(&v) {
-        Ok(v)
-    } else {
-        Err(serde::de::Error::custom(format!(
-            "{v} is beyond +-(2^53 - 1)"
-        )))
-    }
-}
-
-/// As [`safe_u64`], for an optional field.
-pub fn safe_opt_u64<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<u64>, D::Error> {
-    match Option::<u64>::deserialize(d)? {
-        Some(v) if v > SAFE_INTEGER as u64 => {
-            Err(serde::de::Error::custom(format!("{v} is beyond 2^53 - 1")))
-        }
-        v => Ok(v),
-    }
-}
-
-/// As [`safe_i64`], for an optional field.
-pub fn safe_opt_i64<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<i64>, D::Error> {
-    match Option::<i64>::deserialize(d)? {
-        Some(v) if !(-SAFE_INTEGER..=SAFE_INTEGER).contains(&v) => Err(serde::de::Error::custom(
-            format!("{v} is beyond +-(2^53 - 1)"),
-        )),
-        v => Ok(v),
-    }
-}
-
-/// A point in time: milliseconds since the Unix epoch, UTC.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct Timestamp(pub i64);
-
-/// A length of time in milliseconds.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct DurationMs(pub u64);
+/// The representation types, from the pure crate.
+pub use strata_model_core::prelude::{
+    safe_i64, safe_opt_i64, safe_opt_u64, safe_u64, DurationMs, Timestamp, SAFE_INTEGER,
+};
 
 /// What deleting a referred record does to a record that refers to it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
