@@ -1338,6 +1338,30 @@ mod tests {
     }
 
     #[test]
+    fn a_let_bound_count_converts_where_a_u64_field_takes_it() {
+        let text = spec(
+            r#"{ "id": "count-into", "params": [{ "name": "xs", "type": "list<string>" }], "returns": "holder",
+                 "let": [{ "name": "checks", "expr": "fold(c in xs, n = 0, n + 1)" }],
+                 "body": "holder{n: checks}",
+                 "examples": [{ "args": { "xs": ["a", "b"] }, "result": { "n": 2 } }] }"#,
+            r#"{ "id": "holder", "name": "Holder", "kind": "struct", "fields": [{ "name": "n", "type": "u64" }] }"#,
+        );
+        let out = module(&text);
+        // The let holds Exegra's untyped number as an i64; the u64 field converts it.
+        assert!(out.contains("let checks : i64 ="), "{out}");
+        assert!(
+            out.contains("n : u64 :: try_from (checks) . map_err (| _ | Fault { op : \"as\" }) ?"),
+            "{out}"
+        );
+        assert!(
+            out.contains(
+                "pub fn count_into (xs : & Vec < String >) -> Result < types :: Holder , Fault >"
+            ),
+            "{out}"
+        );
+    }
+
+    #[test]
     fn print_is_refused_as_not_compiled() {
         let d = refusals(&spec(
             r#"{ "id": "p", "params": [{ "name": "s", "type": "string" }], "returns": "string", "body": "print(l, s)",

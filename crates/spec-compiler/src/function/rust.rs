@@ -748,7 +748,7 @@ impl<'a> Gen<'a> {
         }
         self.shape_next = true;
         let c = self.raw(e, Some(want))?;
-        let from = held(e, Some(want));
+        let from = self.held_of(e, Some(want));
         // A shared value where its plain type is expected: the value it holds, cloned from
         // the Arc without cloning the Arc first.
         if let Ty::Shared(inner) = &from {
@@ -759,6 +759,27 @@ impl<'a> Gen<'a> {
         }
         let owned = self.own(c, &from);
         self.coerce(owned, &from, want)
+    }
+
+    /// The type `e` is held in where `hint` is expected ([`held`]), but a name (and its fields)
+    /// as it is bound: a let or accumulator of a number (untyped in Exegra) is held in the
+    /// integer type its binding was given, which the expected type need not be, so the value
+    /// converts (an i64 count into a u64 field is `try_from`).
+    fn held_of(&self, e: &Expr, hint: Option<&Ty>) -> Ty {
+        self.bound_ty(e).unwrap_or_else(|| held(e, hint))
+    }
+
+    /// The type of a name as bound, then of its fields; `None` for any other expression.
+    fn bound_ty(&self, e: &Expr) -> Option<Ty> {
+        let Kind::Ref(path, Res::Var) = &e.kind else {
+            return None;
+        };
+        let b = self.scope.iter().rev().find(|b| b.name == path[0])?;
+        let mut ty = b.ty.clone();
+        for f in &path[1..] {
+            ty = self.field_ty(&ty, f).ok()?;
+        }
+        Some(ty)
     }
 
     /// The `T` a `&Arc<T>` holds, cloned.
@@ -775,7 +796,7 @@ impl<'a> Gen<'a> {
         }
         self.shape_next = true;
         let c = self.raw(e, Some(want))?;
-        let from = held(e, Some(want));
+        let from = self.held_of(e, Some(want));
         if same(&from, want) && c.form != Form::OptRef {
             return Ok(Self::borrow_code(c));
         }
@@ -1283,7 +1304,9 @@ impl<'a> Gen<'a> {
         if let Some(v) = const_int(e) {
             return Ok(IntOpd::Const(v));
         }
-        let ty = concretize(&e.ty(), None);
+        let ty = self
+            .bound_ty(e)
+            .unwrap_or_else(|| concretize(&e.ty(), None));
         let Some(kind) = int_kind(&ty) else {
             return Err(unsupported(format!("{} is not an integer type", ty.text())));
         };
