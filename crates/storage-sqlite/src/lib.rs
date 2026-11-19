@@ -1,4 +1,4 @@
-//! The SQLite adapter. Every SQL statement, pragma and table of Strata lives in this file.
+//! The SQLite adapter. Every SQL statement and table of the tenant store lives in this file.
 //!
 //! Layout: tenant state is one header row per tenant (`tenants`) plus one row per record
 //! (`records`), each record stored as its canonical JSON document. `record_index` holds one row
@@ -8,30 +8,36 @@
 //!
 //! Concurrency: one connection behind a mutex, write transactions opened `IMMEDIATE`, WAL
 //! journal, `synchronous = FULL`, foreign keys on, a busy timeout for other processes that have
-//! the file open.
+//! the file open. The connection handling and the migration runner are the runtime's
+//! ([`strata_runtime::sqlite::Database`]); the tables and statements of the tenant store are
+//! here. [`SqliteStore::database`] hands the same database to the runtime's machine store, so
+//! machine records, their outbox and their timers can live in the same file.
 
-use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
+use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
-use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::Duration;
+use std::sync::{Arc, MutexGuard};
 use strata_kernel::{
     canon, Coverage, DeltaOp, DomainEvent, Need, ObjectTypeId, PrincipalId, Record, RoleId,
     SessionId, State, StateRevision, TenantId, TenantSchema, TenantState, Timestamp, Value,
 };
+use strata_runtime::sqlite::{Database, DbError, Migration};
 use strata_storage_api::{
     check_event_sequence, field_matches, Account, Capabilities, Commit, Health, JournalEntry,
     OutboxEntry, Receipt, SessionRecord, SnapshotInfo, StorageMigration, Store, StoreError,
     StoreResult, TenantSummary,
 };
 
+/// The ledger table of the tenant store's migrations.
+const LEDGER: &str = "storage_migrations";
+
 /// The storage layout, one step per entry. Steps are only ever appended.
-const MIGRATIONS: &[(u32, &str, &str)] = &[(
-    1,
-    "initial layout",
-    "
+const MIGRATIONS: &[Migration] = &[Migration {
+    version: 1,
+    name: "initial layout",
+    sql: "
     CREATE TABLE tenants (
         id          TEXT PRIMARY KEY,
         name        TEXT NOT NULL,
@@ -113,14 +119,13 @@ const MIGRATIONS: &[(u32, &str, &str)] = &[(
         PRIMARY KEY (tenant, id)
     );
     ",
-)];
+}];
 
 /// Index values longer than this are not indexed; lookups for them scan the object type.
 const MAX_INDEXED: usize = 240;
 
 pub struct SqliteStore {
-    conn: Mutex<Connection>,
-    location: String,
+    db: Database,
 }
 
 fn db(error: rusqlite::Error) -> StoreError {
@@ -131,6 +136,13 @@ fn db(error: rusqlite::Error) -> StoreError {
             StoreError::Invalid(error.to_string())
         }
         _ => StoreError::Unavailable(error.to_string()),
+    }
+}
+
+fn dbe(error: DbError) -> StoreError {
+    match error {
+        DbError::Sql(error) => db(error),
+        other => StoreError::Unavailable(other.to_string()),
     }
 }
 
@@ -335,61 +347,27 @@ fn sessions_where(
 impl SqliteStore {
     /// Open (creating if needed) a database file and bring its layout up to date.
     pub fn open(path: &Path, now: Timestamp) -> StoreResult<Self> {
-        let conn = Connection::open(path).map_err(db)?;
-        Self::prepare(conn, path.display().to_string(), now)
+        Self::on(Database::open(path).map_err(dbe)?, now)
     }
 
     /// A private in-memory database, for tests.
     pub fn open_in_memory(now: Timestamp) -> StoreResult<Self> {
-        let conn = Connection::open_in_memory().map_err(db)?;
-        Self::prepare(conn, ":memory:".into(), now)
+        Self::on(Database::open_in_memory().map_err(dbe)?, now)
     }
 
-    fn prepare(mut conn: Connection, location: String, now: Timestamp) -> StoreResult<Self> {
-        conn.busy_timeout(Duration::from_secs(5)).map_err(db)?;
-        conn.pragma_update(None, "journal_mode", "WAL")
-            .map_err(db)?;
-        conn.pragma_update(None, "synchronous", "FULL")
-            .map_err(db)?;
-        conn.pragma_update(None, "foreign_keys", "ON").map_err(db)?;
-        conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS storage_migrations (
-                version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at INTEGER NOT NULL
-            );",
-        )
-        .map_err(db)?;
-        let tx = conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(db)?;
-        let applied: u32 = tx
-            .query_row(
-                "SELECT COALESCE(MAX(version), 0) FROM storage_migrations",
-                [],
-                |r| r.get(0),
-            )
-            .map_err(db)?;
-        for (version, name, sql) in MIGRATIONS
-            .iter()
-            .filter(|(version, _, _)| *version > applied)
-        {
-            tx.execute_batch(sql).map_err(db)?;
-            tx.execute(
-                "INSERT INTO storage_migrations (version, name, applied_at) VALUES (?1, ?2, ?3)",
-                params![version, name, now.0],
-            )
-            .map_err(db)?;
-        }
-        tx.commit().map_err(db)?;
-        Ok(SqliteStore {
-            conn: Mutex::new(conn),
-            location,
-        })
+    /// The tenant store on an open database, bringing its tables up to date.
+    pub fn on(db: Database, now: Timestamp) -> StoreResult<Self> {
+        db.migrate(LEDGER, MIGRATIONS, now.0).map_err(dbe)?;
+        Ok(SqliteStore { db })
+    }
+
+    /// The database underneath, to share with the runtime's machine store.
+    pub fn database(&self) -> &Database {
+        &self.db
     }
 
     fn lock(&self) -> StoreResult<MutexGuard<'_, Connection>> {
-        self.conn
-            .lock()
-            .map_err(|_| StoreError::Unavailable("a writer panicked".into()))
+        self.db.lock().map_err(dbe)
     }
 
     fn complete(conn: &Connection, tenant: &TenantId) -> StoreResult<Option<TenantState>> {
@@ -410,13 +388,13 @@ impl Store for SqliteStore {
     fn capabilities(&self) -> Capabilities {
         Capabilities {
             adapter: "sqlite".into(),
-            durable: self.location != ":memory:",
+            durable: self.db.durable(),
             isolation: "serialisable: one writer at a time (BEGIN IMMEDIATE on a single connection)".into(),
             read_consistency: "a load runs in one read transaction and sees only whole commits".into(),
             notes: vec![
                 "WAL journal with synchronous=FULL".into(),
                 "field values longer than 240 bytes are not indexed; lookups for them scan the object type".into(),
-                format!("database at {}", self.location),
+                format!("database at {}", self.db.location()),
             ],
         }
     }
@@ -501,8 +479,7 @@ impl Store for SqliteStore {
     }
 
     fn load(&self, tenant: &TenantId, needs: &[Need]) -> StoreResult<State> {
-        let mut conn = self.lock()?;
-        let tx = conn.transaction().map_err(db)?;
+        self.db.read(dbe, |tx| {
         let Some(Header { mut state }) = header(&tx, tenant)? else {
             return Ok(State::absent(tenant.clone()));
         };
@@ -547,22 +524,20 @@ impl Store for SqliteStore {
             tenant: Some(Arc::new(state)),
             coverage: Coverage::Partial(needs.iter().cloned().collect()),
         })
+        })
     }
 
     fn load_complete(&self, tenant: &TenantId) -> StoreResult<State> {
-        let mut conn = self.lock()?;
-        let tx = conn.transaction().map_err(db)?;
-        Ok(match Self::complete(&tx, tenant)? {
-            Some(state) => State::complete(Arc::new(state)),
-            None => State::absent(tenant.clone()),
+        self.db.read(dbe, |tx| {
+            Ok(match Self::complete(tx, tenant)? {
+                Some(state) => State::complete(Arc::new(state)),
+                None => State::absent(tenant.clone()),
+            })
         })
     }
 
     fn commit(&self, commit: &Commit) -> StoreResult<Receipt> {
-        let mut conn = self.lock()?;
-        let tx = conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(db)?;
+        self.db.write(dbe, |tx| {
         let delta = &commit.delta;
         let tenant = delta.tenant.as_str();
         let current = header(&tx, &delta.tenant)?;
@@ -697,10 +672,10 @@ impl Store for SqliteStore {
             )
             .map_err(db)?;
         }
-        tx.commit().map_err(db)?;
         Ok(Receipt {
             revision: delta.new_revision,
             last_position,
+        })
         })
     }
 
@@ -894,11 +869,8 @@ impl Store for SqliteStore {
         label: &str,
         at: Timestamp,
     ) -> StoreResult<SnapshotInfo> {
-        let mut conn = self.lock()?;
-        let tx = conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(db)?;
-        let state = Self::complete(&tx, tenant)?
+        self.db.write(dbe, |tx| {
+        let state = Self::complete(tx, tenant)?
             .ok_or_else(|| StoreError::NotFound(format!("tenant {tenant}")))?;
         let id: i64 = tx
             .query_row(
@@ -920,8 +892,8 @@ impl Store for SqliteStore {
             params![tenant.as_str(), id, label, state.revision.0 as i64, info.hash, at.0, encode(&state)],
         )
         .map_err(db)?;
-        tx.commit().map_err(db)?;
         Ok(info)
+        })
     }
 
     fn snapshots(&self, tenant: &TenantId) -> StoreResult<Vec<SnapshotInfo>> {
@@ -962,10 +934,7 @@ impl Store for SqliteStore {
 
     fn restore_snapshot(&self, tenant: &TenantId, id: u64) -> StoreResult<()> {
         let state = self.load_snapshot(tenant, id)?;
-        let mut conn = self.lock()?;
-        let tx = conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(db)?;
+        self.db.write(dbe, |tx| {
         let name = tenant.as_str();
         tx.execute("DELETE FROM records WHERE tenant = ?1", params![name])
             .map_err(db)?;
@@ -1001,7 +970,8 @@ impl Store for SqliteStore {
             params![name, state.schema.version.0 as i64],
         )
         .map_err(db)?;
-        tx.commit().map_err(db)
+        Ok(())
+        })
     }
 
     fn reset(&self) -> StoreResult<()> {

@@ -22,6 +22,7 @@ pub mod clock;
 pub mod host;
 pub mod machine;
 pub mod memory;
+pub mod sqlite;
 pub mod store;
 pub mod telemetry;
 
@@ -34,6 +35,7 @@ pub use machine::{
     Delivery, Emit, Isolation, Machine, Outcome, Receiver, RecordError, StepError, TimerCommand,
 };
 pub use memory::MemoryStore;
+pub use sqlite::{Database, SqliteMachineStore};
 pub use store::{
     MachineStore, NewMessage, NewTimer, OutboxEntry, OutboxStore, RecordStore, StorageError,
     StoredRecord, TimerEntry, TimerStore, Tx,
