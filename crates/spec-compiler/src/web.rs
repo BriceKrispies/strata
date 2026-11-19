@@ -50,6 +50,7 @@ use crate::backend::machines::{
     EVENT_UNKNOWN, EXPRESSION, LITERAL, NO_EVENTS, PAYLOAD_FIELD, RESOURCE_EFFECT, STATE_UNKNOWN,
     TIMER_AFTER, VARIABLE_UNKNOWN,
 };
+use crate::codetext;
 use crate::diagnostic::{dedup, Diagnostic};
 use crate::emit::{rust_header, GeneratedFile};
 use crate::ir::{Behavior, Effect, Event, Spec, Transition, TypeKind};
@@ -297,24 +298,9 @@ pub(crate) fn is_ident(name: &str) -> bool {
         && chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$')
 }
 
-/// A single-quoted JavaScript string literal.
+/// A single-quoted JavaScript string literal (see [`codetext::js::string`]).
 pub(crate) fn sq(s: &str) -> String {
-    let mut out = String::from("'");
-    for c in s.chars() {
-        match c {
-            '\'' => out.push_str("\\'"),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if (c as u32) < 0x20 || c == '\u{7f}' || c == '\u{2028}' || c == '\u{2029}' => {
-                out.push_str(&format!("\\u{:04x}", c as u32));
-            }
-            c => out.push(c),
-        }
-    }
-    out.push('\'');
-    out
+    codetext::js::string(s)
 }
 
 /// A property name in an object literal or type.
@@ -1273,7 +1259,7 @@ impl<'a> Gen<'a> {
     fn body(&mut self, t: &'a Transition, payload_fields: &[Slot]) -> Option<Vec<String>> {
         let b = self.b;
         let mut lines = vec![
-            format!("// {}", t.id),
+            format!("// {}", codetext::js::comment_text(&t.id)),
             "const next = { ...vars };".to_string(),
             format!("/** @type {{{}[]}} */", self.ty_name("Emit")),
             "const emits = [];".to_string(),
@@ -1498,11 +1484,12 @@ impl<'a> Gen<'a> {
         );
         let mut out = String::new();
         out.push_str("// @ts-check\n");
-        out.push_str(&format!("// Machine `{}`: {}.\n", b.id, b.name));
+        out.push_str(&codetext::js::line_comments(
+            "",
+            &format!("Machine `{}`: {}.", b.id, b.name),
+        ));
         if let Some(d) = &b.description {
-            for line in d.lines() {
-                out.push_str(&format!("// {line}\n").replace("// \n", "//\n"));
-            }
+            out.push_str(&codetext::js::line_comments("", d));
         }
         out.push_str(&format!(
             "// Specification behavior `{}`, an implementation-level machine run in the browser.\n",
@@ -1691,5 +1678,8 @@ pub(crate) fn typedef(doc: &str, name: &str, members: &[String]) -> String {
         [only] => only.clone(),
         many => many.join("\n *   | "),
     };
-    format!("/**\n * {doc}\n * @typedef {{{union}}} {name}\n */\n\n")
+    format!(
+        "/**\n * {}\n * @typedef {{{union}}} {name}\n */\n\n",
+        codetext::js::doc_text(doc)
+    )
 }

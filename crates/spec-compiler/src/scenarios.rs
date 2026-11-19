@@ -168,7 +168,11 @@ pub fn generate(
             "no scenario runs only implementation-level machines, so there is nothing to generate.",
         ));
     }
+    let mut names = crate::codetext::Claims::new(FILE, &[]);
     for sc in &plan.scenarios {
+        if let Err(clash) = names.claim(&sc.id, &test_name(&sc.id)) {
+            d.push(clash);
+        }
         d.extend(check_scenario(&plan, sc));
     }
     if !d.is_empty() {
@@ -200,8 +204,9 @@ pub fn generate(
     }
     let body = file_text(&plan, crate_name, &tests);
     let text = format!(
-        "{} from {spec_path}. Do not edit; change the specification and regenerate.\n{body}",
-        HEADER_MARKERS[0]
+        "{} from {}. Do not edit; change the specification and regenerate.\n{body}",
+        HEADER_MARKERS[0],
+        crate::codetext::line_text(&spec_path)
     );
     let contents = match rustfmt(&text) {
         Ok(formatted) => formatted,
@@ -521,15 +526,14 @@ fn mismatch(sc: &ScenarioPlan, message: String) -> Vec<Diagnostic> {
     vec![Diagnostic::new(TRACE_MISMATCH, &sc.id, message)]
 }
 
+/// A `json!` call building `value`: strings are Rust literals, so no control character of the
+/// value makes invalid Rust (see [`crate::codetext::rust::json`]).
 fn lit(value: &Value) -> String {
-    format!(
-        "json!({})",
-        serde_json::to_string(value).unwrap_or_default()
-    )
+    format!("json!({})", crate::codetext::rust::json(value))
 }
 
 fn str_lit(text: &str) -> String {
-    format!("{text:?}")
+    crate::codetext::rust::string(text)
 }
 
 fn test_of(plan: &Plan, sc: &ScenarioPlan, trace: &Value) -> Result<String, Vec<Diagnostic>> {
@@ -556,14 +560,18 @@ fn test_of(plan: &Plan, sc: &ScenarioPlan, trace: &Value) -> Result<String, Vec<
     let Some(steps) = trace["steps"].as_array() else {
         return Err(mismatch(sc, "the trace has no steps".to_string()));
     };
-    let mut out = format!("/// Scenario `{}`: {}\n", sc.id, sc.name.replace('\n', " "));
+    let mut out =
+        crate::codetext::rust::doc_comment("", &format!("Scenario `{}`: {}", sc.id, sc.name));
     if !sc.verifies.is_empty() {
         out.push_str("///\n");
     }
     for line in &sc.verifies {
-        out.push_str(&format!("/// Verifies: {line}\n"));
+        out.push_str(&crate::codetext::rust::doc_comment(
+            "",
+            &format!("Verifies: {line}"),
+        ));
     }
-    out.push_str(&format!("#[test]\nfn scenario_{}() {{\n", sanitize(&sc.id)));
+    out.push_str(&format!("#[test]\nfn {}() {{\n", test_name(&sc.id)));
     for m in &sc.machines {
         let Some(initial) = trace["initial"]["machines"].get(&m.id) else {
             return Err(mismatch(
@@ -825,10 +833,11 @@ fn var(m: &MachineInfo) -> String {
     format!("run_{}", m.module)
 }
 
-fn sanitize(id: &str) -> String {
-    id.chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
-        .collect()
+/// The name of the test function of a scenario. Ids that differ only in characters that are not
+/// letters or digits (`a-b`, `a_b`, `a.b`) give one name: [`generate`] refuses them with
+/// [`crate::codetext::IDENTIFIER_COLLISION`].
+fn test_name(id: &str) -> String {
+    crate::codetext::rust::fn_name("scenario", id)
 }
 
 // ---- the file -----------------------------------------------------------------------------

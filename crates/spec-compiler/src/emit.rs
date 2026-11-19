@@ -47,16 +47,18 @@ pub struct GeneratedFile {
 /// The header line of a generated Rust file.
 pub fn rust_header(spec_path: &str) -> String {
     format!(
-        "{} from {spec_path}. Do not edit; change the specification and regenerate.",
-        HEADER_MARKERS[0]
+        "{} from {}. Do not edit; change the specification and regenerate.",
+        HEADER_MARKERS[0],
+        crate::codetext::line_text(spec_path)
     )
 }
 
 /// The header line of the generated `Cargo.toml`.
 pub fn toml_header(spec_path: &str) -> String {
     format!(
-        "{} from {spec_path}. Do not edit; change the specification and regenerate.",
-        HEADER_MARKERS[1]
+        "{} from {}. Do not edit; change the specification and regenerate.",
+        HEADER_MARKERS[1],
+        crate::codetext::line_text(spec_path)
     )
 }
 
@@ -117,6 +119,7 @@ pub(crate) enum FileError {
 }
 
 fn rust_file(spec: &Spec, tokens: TokenStream) -> Result<String, FileError> {
+    let tokens = crate::codetext::rust::neutralise_docs(tokens);
     let file: syn::File = syn::parse2(tokens).map_err(FileError::Syntax)?;
     let body = separate_items(&prettyplease::unparse(&file));
     rustfmt(&format!("{}\n{body}", rust_header(&spec.path)))

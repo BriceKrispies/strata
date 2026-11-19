@@ -524,8 +524,9 @@ fn file(path: &str, spec_path: &str, body: String) -> GeneratedFile {
     GeneratedFile {
         path: path.to_string(),
         contents: format!(
-            "{} from {spec_path}. Do not edit; change the specification and regenerate.\n{body}",
-            HEADER_MARKERS[0]
+            "{} from {}. Do not edit; change the specification and regenerate.\n{body}",
+            HEADER_MARKERS[0],
+            crate::codetext::line_text(spec_path)
         ),
     }
 }
@@ -1078,7 +1079,7 @@ fn data_attribute(a: &str) -> bool {
 
 /// A JavaScript string literal.
 fn js(text: &str) -> String {
-    serde_json::to_string(text).unwrap_or_else(|_| "\"\"".to_string())
+    crate::codetext::js::double_quoted(text)
 }
 
 /// A JavaScript string: a literal, or the text with its `${name}` captures filled in.
@@ -2638,7 +2639,10 @@ fn scenario_file(plan: &Plan, sc: &Scenario, expect_fail: bool) -> Result<String
         ));
     }
     for r in &sc.verifies {
-        out.push_str(&format!("// Verifies: {r}\n"));
+        out.push_str(&crate::codetext::js::line_comments(
+            "",
+            &format!("Verifies: {r}"),
+        ));
     }
     out.push_str(&format!(
         "test({}, async ({{ browser, baseURL, page, context }}) => {{\n",

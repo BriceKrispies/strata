@@ -53,12 +53,14 @@
 //! on the page and counts as matching; a contract without a matching policy and without a
 //! `policyDefault` is shown (the server's decision is final).
 
+use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Deserialize;
 use serde_json::Value;
 use strata_spec_expr::{self as expr, ExprKind, JsBinding, JsScope, Ty};
 
+use crate::codetext::{self, Claims};
 use crate::constructs::{Rule, Unit, Verdict};
 use crate::diagnostic::{dedup, Diagnostic, SPEC_ENTITY};
 use crate::emit::{rust_header, GeneratedFile};
@@ -338,18 +340,9 @@ pub fn generate(
         .collect())
 }
 
-/// `camelCase` of an id, for a JavaScript name.
+/// `camelCase` of an id, for a JavaScript name: valid, and never a reserved word.
 fn camel(id: &str) -> String {
-    let pascal = naming::pascal(id).unwrap_or_else(|_| {
-        id.chars()
-            .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
-            .collect()
-    });
-    let mut chars = pascal.chars();
-    match chars.next() {
-        Some(first) => format!("{}{}", first.to_ascii_lowercase(), chars.as_str()),
-        None => "unnamed".to_string(),
-    }
+    codetext::js::camel(id)
 }
 
 /// How a contract is called through the BFF.
@@ -417,11 +410,37 @@ struct Root {
     direct: Option<TypeRef>,
 }
 
+impl Root {
+    /// The JavaScript name the root is read from: `scope` for `scope.route`, `view` for `view`.
+    fn base(&self) -> &str {
+        self.js.split(['.', '?', '[']).next().unwrap_or(&self.js)
+    }
+}
+
+/// The roots read from `to` where they were read from `from` (a root `scope.route` with `from` =
+/// `scope` becomes `context.route`): a rewrite of the scope's data before any text is emitted.
+fn rebase(roots: &[Root], from: &str, to: &str) -> Vec<Root> {
+    roots
+        .iter()
+        .map(|r| {
+            let mut r = r.clone();
+            if r.base() == from {
+                r.js = format!("{to}{}", &r.js[from.len()..]);
+            }
+            r
+        })
+        .collect()
+}
+
 /// The scope of an expression: its roots, and whether a read of `record.<field>` was seen.
 struct UiScope<'a> {
     spec: &'a Spec,
     cases: &'a Cases,
     roots: Vec<Root>,
+    /// The JavaScript names the expressions read through [`UiScope::walk`] start at (`scope`,
+    /// `item`, `view`, `inputs`, ...), so that the generator knows which parameters a method
+    /// uses from the expression tree, not from the emitted text.
+    used: &'a RefCell<BTreeSet<String>>,
 }
 
 /// The overflow expression of the kernel modules: a `RangeError`.
@@ -456,6 +475,7 @@ impl UiScope<'_> {
     fn walk(&self, path: &[&str]) -> Option<(String, TypeRef, bool)> {
         let (first, rest) = path.split_first()?;
         let root = self.roots.iter().find(|r| r.name == *first)?;
+        self.used.borrow_mut().insert(root.base().to_string());
         if rest.is_empty() {
             return root.direct.clone().map(|t| (root.js.clone(), t, false));
         }
@@ -535,6 +555,11 @@ struct Kernel<'a> {
     case: WireCase,
     routes: BTreeMap<String, BffRoute>,
     out: Vec<Diagnostic>,
+    /// The JavaScript names the expressions compiled since the last [`Kernel::forget_reads`]
+    /// read from (see [`UiScope`]).
+    used: RefCell<BTreeSet<String>>,
+    /// Whether a request or a decoder applies an input's `encode`.
+    encodes: Cell<bool>,
 }
 
 impl<'a> Kernel<'a> {
@@ -564,7 +589,20 @@ impl<'a> Kernel<'a> {
             case: spec.system.wire_case,
             routes,
             out,
+            used: RefCell::new(BTreeSet::new()),
+            encodes: Cell::new(false),
         }
+    }
+
+    /// Starts a new group of expressions whose reads [`Kernel::reads`] reports.
+    fn forget_reads(&self) {
+        self.used.borrow_mut().clear();
+    }
+
+    /// Whether an expression compiled since [`Kernel::forget_reads`] read from the JavaScript
+    /// name `base`.
+    fn reads(&self, base: &str) -> bool {
+        self.used.borrow().contains(base)
     }
 
     fn refuse(&mut self, entity: &str, message: String) {
@@ -733,6 +771,7 @@ impl<'a> Kernel<'a> {
         let scope = UiScope {
             spec: self.spec,
             cases: &self.cases,
+            used: &self.used,
             roots: roots.to_vec(),
         };
         let result = if types.is_empty() {
@@ -772,6 +811,7 @@ impl<'a> Kernel<'a> {
         let scope = UiScope {
             spec: self.spec,
             cases: &self.cases,
+            used: &self.used,
             roots: roots.to_vec(),
         };
         let mut parts = Vec::new();
@@ -822,6 +862,7 @@ impl<'a> Kernel<'a> {
         let scope = UiScope {
             spec: self.spec,
             cases: &self.cases,
+            used: &self.used,
             roots,
         };
         let mut parts = vec!["view"];
@@ -1108,6 +1149,12 @@ function encoded(value, how) {
         let mut requests = Vec::new();
         let mut table = Vec::new();
         let mut decoders = Vec::new();
+        let mut claims = Claims::new(
+            "contracts.js",
+            &[
+                "BFF", "decode", "defined", "encoded", "pick", "request", "text", "viewPath",
+            ],
+        );
         for c in used {
             let Some(route) = self.routes.get(&c.id).cloned() else {
                 self.out.push(Diagnostic::new(
@@ -1125,17 +1172,31 @@ function encoded(value, how) {
                 "decode{}",
                 naming::pascal(&c.id).unwrap_or_else(|_| name.clone())
             );
+            let mut clash = false;
+            for ident in [&name, &decoder] {
+                if let Err(d) = claims.claim(&c.id, ident) {
+                    self.out.push(d);
+                    clash = true;
+                }
+            }
+            if clash {
+                continue;
+            }
+            let (doc_id, doc_name) = (
+                codetext::js::doc_text(&c.id),
+                codetext::js::doc_text(&c.name),
+            );
             let inputs = self.slots(c, false);
             let outputs = self.slots(c, true);
             let input_t = self.object_jsdoc(&inputs);
             let output_t = self.object_jsdoc(&outputs);
-            let doc_route = match &route.shape {
+            let doc_route = codetext::js::doc_text(&match &route.shape {
                 Shape::Json => format!("{} {}", route.method, route.path),
                 Shape::View => format!("{} {} (the view endpoint)", route.method, route.path),
                 Shape::Records { op, object } => {
                     format!("{} {} ({op} {object})", route.method, route.path)
                 }
-            };
+            });
             let write = route.method == "POST";
             let method = sq(&route.method);
             let path = sq(&route.path);
@@ -1162,14 +1223,17 @@ function encoded(value, how) {
                             .iter()
                             .map(|s| format!("{}: {}", key(&s.wire), self.encoded(&c.id, s)))
                             .collect();
-                        format!(", body: defined({{ {} }})", items.join(", "))
-                            .replace("defined({  })", "{}")
+                        if items.is_empty() {
+                            ", body: {}".to_string()
+                        } else {
+                            format!(", body: defined({{ {} }})", items.join(", "))
+                        }
                     } else {
                         String::new()
                     };
                     out.push_str(&format!(
                         "/**\n * Contract `{}`: {}. {doc_route}.\n * @param {{{input_t}}} inputs\n * @returns {{Request}}\n */\nexport function {name}(inputs) {{\n  return {{ method: {method}, path: {path}{body}, write: {write} }};\n}}\n\n",
-                        c.id, c.name
+                        doc_id, doc_name
                     ));
                     requests.push(format!(
                         "    case {}:\n      return {name}(inputs);",
@@ -1197,8 +1261,8 @@ function encoded(value, how) {
                         .collect();
                     out.push_str(&format!(
                         "/**\n * Contract `{}`: {}. {doc_route}; the address carries the route parameters.\n * @param {{string}} address\n * @param {{{input_t}}} inputs\n * @returns {{Request}}\n */\nexport function {name}(address, inputs) {{\n  return {{ method: {method}, path: viewPath(address, [{}]), write: false }};\n}}\n\n",
-                        c.id,
-                        c.name,
+                        doc_id,
+                        doc_name,
                         query.join(", ")
                     ));
                     requests.push(format!(
@@ -1233,8 +1297,8 @@ function encoded(value, how) {
                     }
                     out.push_str(&format!(
                         "/**\n * Contract `{}`: {}. {doc_route}.\n * @param {{{input_t}}} inputs\n * @returns {{Request}}\n */\nexport function {name}(inputs) {{\n  return {{ method: {method}, path: {path}, body: {{ {} }}, write: true }};\n}}\n\n",
-                        c.id,
-                        c.name,
+                        doc_id,
+                        doc_name,
                         body.join(", ")
                     ));
                     requests.push(format!(
@@ -1246,32 +1310,38 @@ function encoded(value, how) {
             // The decoder.
             match &route.shape {
                 Shape::Records { .. } => {
+                    // Which of the two parameters the outputs read: known from where each output
+                    // comes from, not from the text.
+                    let mut uses_inputs = false;
+                    let mut uses_body = false;
                     let items: Vec<String> = outputs
                         .iter()
                         .map(|o| {
                             let from = if matches!(&o.ty, TypeRef::Declared(t) if t == "record-id")
                             {
+                                uses_body = true;
                                 "body?.id".to_string()
                             } else if o.name == "version" {
+                                uses_body = true;
                                 "body?.version".to_string()
                             } else if let Some(i) = inputs.iter().find(|i| i.name == o.name) {
                                 // The input as it was sent.
+                                uses_inputs = true;
                                 self.encoded_from(
                                     &c.id,
                                     i,
                                     format!("inputs{}", optional_member(&o.wire)),
                                 )
                             } else {
+                                uses_body = true;
                                 format!("body{}", optional_member(&o.wire))
                             };
                             format!("{}: {from}", key(&o.wire))
                         })
                         .collect();
-                    let uses_inputs = items.iter().any(|i| i.contains("inputs"));
-                    let uses_body = items.iter().any(|i| i.contains("body"));
                     out.push_str(&format!(
                         "/**\n * The outputs of `{}` from the records endpoint's reply (`{{id, version}}`) and the inputs it repeats.\n * @param {{any}} {}\n * @param {{any}} {}\n * @returns {{{output_t}}}\n */\nexport function {decoder}({}, {}) {{\n  return {};\n}}\n\n",
-                        c.id,
+                        doc_id,
                         if uses_body { "body" } else { "_body" },
                         if uses_inputs { "inputs" } else { "_inputs" },
                         if uses_body { "body" } else { "_body" },
@@ -1283,7 +1353,7 @@ function encoded(value, how) {
                     let names: Vec<String> = outputs.iter().map(|o| sq(&o.wire)).collect();
                     out.push_str(&format!(
                         "/**\n * The outputs of `{}` from its reply.\n * @param {{any}} body\n * @param {{any}} [_inputs]\n * @returns {{{output_t}}}\n */\nexport function {decoder}(body, _inputs) {{\n  return /** @type {{any}} */ (pick(body, [{}]));\n}}\n\n",
-                        c.id,
+                        doc_id,
                         names.join(", ")
                     ));
                 }
@@ -1340,7 +1410,7 @@ export const BFF = {{
         ));
         // The encoding helpers only when an input is encoded.
         let helpers_end = "  return v;\n}\n\n";
-        if !out.contains("encoded(inputs") {
+        if !self.encodes.get() {
             if let (Some(start), Some(end)) = (
                 out.find("/**\n * A value as text: empty when absent."),
                 out.find(helpers_end),
@@ -1383,6 +1453,7 @@ export const BFF = {{
         if how.is_empty() {
             return read;
         }
+        self.encodes.set(true);
         format!("encoded({read}, {{ {} }})", how.join(", "))
     }
 
@@ -1409,6 +1480,29 @@ export const BFF = {{
         let mut table = Vec::new();
         let mut code = Vec::new();
         let mut cases = Vec::new();
+        let mut claims = Claims::new(
+            "forms.js",
+            &[
+                "CODE",
+                "FORMS",
+                "bothResponses",
+                "empty",
+                "followUp",
+                "held",
+                "hrefFor",
+                "initialValues",
+                "input",
+                "inputs",
+                "of",
+                "options",
+                "sameSite",
+                "slug",
+                "submitted",
+                "succeeded",
+                "text",
+                "validate",
+            ],
+        );
         for form in &self.ui.forms {
             let Some(screen) = self.screen(&form.screen) else {
                 self.refuse(
@@ -1433,6 +1527,10 @@ export const BFF = {{
             let inputs = self.slots(contract, false);
             let input_case = self.contract_case(contract);
             let name = camel(&form.id);
+            if let Err(d) = claims.claim(&form.id, &name) {
+                self.out.push(d);
+                continue;
+            }
             // Table entry.
             let fields: Vec<String> = form
                 .fields
@@ -1484,6 +1582,8 @@ export const BFF = {{
 
             // initial
             let mut initial = Vec::new();
+            self.forget_reads();
+            let mut options_read = false;
             for f in &form.fields {
                 let wire = self.case.name(&f.name);
                 let value = match (f.control.as_str(), &f.options, &f.options_from) {
@@ -1493,6 +1593,7 @@ export const BFF = {{
                         .first()
                         .map_or("''".to_string(), |o| json_js(&o.value)),
                     (_, _, Some(_)) => {
+                        options_read = true;
                         format!("this.options{}(view)[0]?.value ?? ''", member(&wire))
                     }
                     _ => "''".to_string(),
@@ -1506,7 +1607,7 @@ export const BFF = {{
                 initial.push(format!("{}: {value}", key(&wire)));
             }
             let initial = initial.join(", ");
-            let view_line = if initial.contains("view") {
+            let view_line = if options_read || self.reads("view") {
                 "    const view = scope?.view;\n"
             } else {
                 ""
@@ -1545,6 +1646,7 @@ export const BFF = {{
                             let scope = UiScope {
                                 spec: self.spec,
                                 cases: &self.cases,
+                                used: &self.used,
                                 roots: vec![],
                             };
                             let slots = scope.struct_slots(&item).unwrap_or_default();
@@ -1570,10 +1672,13 @@ export const BFF = {{
             // derive
             let form_root = self.form_root(form, "next");
             let mut derive_lines = Vec::new();
+            self.forget_reads();
+            let mut reads_edited = false;
             for f in &form.fields {
                 let Some(src) = &f.derive else { continue };
                 let wire = self.case.name(&f.name);
-                let mut droots = roots.clone();
+                // A derivation reads the scope the form was given as `context`.
+                let mut droots = rebase(&roots, "scope", "context");
                 droots.push(form_root.clone());
                 let what = format!(
                     "The derivation of field \"{}\" of form \"{}\"",
@@ -1582,13 +1687,13 @@ export const BFF = {{
                 let Some(js) = self.compile(&form.id, &what, src, &droots, &[]) else {
                     continue;
                 };
-                let js = js.replace("scope.", "context.");
                 let value = if f.transform.as_deref() == Some("slug") {
                     format!("slug(text({js}))")
                 } else {
                     js
                 };
                 let guard = if f.until.as_deref() == Some("edited") {
+                    reads_edited = true;
                     format!("if (!edited.includes({})) ", sq(&wire))
                 } else {
                     String::new()
@@ -1597,10 +1702,10 @@ export const BFF = {{
             }
             lines.push(format!(
                 "  /**\n   * @param {{Record<string, any>}} values\n   * @param {{string[]}} {}\n   * @param {{any}} {}\n   */\n  derive(values, {}, {}) {{\n    const next = {{ ...values }};\n{}    return next;\n  }},",
-                if derive_lines.iter().any(|l| l.contains("edited")) { "edited" } else { "_edited" },
-                if derive_lines.iter().any(|l| l.contains("context.")) { "context" } else { "_context" },
-                if derive_lines.iter().any(|l| l.contains("edited")) { "edited" } else { "_edited" },
-                if derive_lines.iter().any(|l| l.contains("context.")) { "context" } else { "_context" },
+                if reads_edited { "edited" } else { "_edited" },
+                if self.reads("context") { "context" } else { "_context" },
+                if reads_edited { "edited" } else { "_edited" },
+                if self.reads("context") { "context" } else { "_context" },
                 derive_lines.iter().map(|l| format!("{l}\n")).collect::<String>()
             ));
 
@@ -1702,6 +1807,7 @@ export const BFF = {{
             }
             let mut aroots = roots.clone();
             aroots.push(self.form_root(form, "values"));
+            self.forget_reads();
             for (input, src) in &form.arguments {
                 let Some(slot) = inputs.iter().find(|i| i.name == *input) else {
                     self.refuse(&form.id, format!("Form \"{}\" gives argument \"{input}\", which contract \"{}\" does not declare.", form.id, form.contract));
@@ -1713,7 +1819,7 @@ export const BFF = {{
                     items.push(format!("{}: {js}", key(&slot.wire)));
                 }
             }
-            let uses_scope = items.iter().any(|i| i.contains("scope."));
+            let uses_scope = self.reads("scope");
             lines.push(format!(
                 "  /**\n   * @param {{Record<string, any>}} values\n   * @param {{any}} {}\n   */\n  inputs(values, {}) {{\n    return {{ {} }};\n  }},",
                 if uses_scope { "scope" } else { "_scope" },
@@ -1745,6 +1851,7 @@ export const BFF = {{
             ));
 
             // then: the second call when the first succeeds.
+            self.forget_reads();
             roots.push(self.form_root(form, "scope.form"));
             let mut then_roots = roots.clone();
             then_roots.push(self.response_root(&form.contract));
@@ -1785,7 +1892,7 @@ export const BFF = {{
             }
             lines.push(format!(
                 "  /**\n   * @param {{any}} {s}\n   * @returns {{{{ contract: string, inputs: Record<string, any> }} | null}}\n   */\n  then({s}) {{\n    return {then_js};\n  }},",
-                s = if then_js.contains("scope") { "scope" } else { "_scope" }
+                s = if self.reads("scope") { "scope" } else { "_scope" }
             ));
 
             // succeeded
@@ -1801,9 +1908,9 @@ export const BFF = {{
 
             code.push(format!(
                 "/** Form `{}` of screen `{}`: calls `{}`. */\nconst {name} = {{\n{}\n}};\n",
-                form.id,
-                form.screen,
-                form.contract,
+                codetext::js::doc_text(&form.id),
+                codetext::js::doc_text(&form.screen),
+                codetext::js::doc_text(&form.contract),
                 lines.join("\n")
             ));
             cases.push(format!("  {}: {name},", sq(&form.id)));
@@ -2066,6 +2173,7 @@ export function held(form, view) {{
             let scope = UiScope {
                 spec: self.spec,
                 cases: &self.cases,
+                used: &self.used,
                 roots: vec![],
             };
             let slots = Self::list_item(&t)
@@ -2074,6 +2182,7 @@ export function held(form, view) {{
             let items = UiScope {
                 spec: self.spec,
                 cases: &self.cases,
+                used: &self.used,
                 roots: vec![Root {
                     name: "item",
                     js: "o".into(),
@@ -2130,6 +2239,7 @@ export function held(form, view) {{
         let mut navigate = "null".to_string();
         let mut toast = "null".to_string();
         let mut view = "null".to_string();
+        self.forget_reads();
         if let Some(o) = outcome {
             let mut items = Vec::new();
             for (output, slot) in self.overlay_slots(entity, o, screen) {
@@ -2155,8 +2265,8 @@ export function held(form, view) {{
                     }
                 }
                 let fallback = match target {
-                    Some(t) => format!("hrefFor({}, {{ {} }})", sq(&t.id), params.join(", "))
-                        .replace("{  }", "{}"),
+                    Some(t) if params.is_empty() => format!("hrefFor({}, {{}})", sq(&t.id)),
+                    Some(t) => format!("hrefFor({}, {{ {} }})", sq(&t.id), params.join(", ")),
                     None => "null".to_string(),
                 };
                 navigate = match &n.path {
@@ -2176,7 +2286,7 @@ export function held(form, view) {{
                 }
             }
         }
-        let uses = navigate.contains("scope") || toast.contains("scope") || view.contains("scope");
+        let uses = self.reads("scope");
         format!(
             "  /** @param {{any}} {s} */\n  succeeded({s}) {{\n    return {{ navigate: {navigate}, toast: {toast}, view: {view} }};\n  }},",
             s = if uses { "scope" } else { "_scope" }
@@ -2223,6 +2333,26 @@ export function held(form, view) {{
         let mut table = Vec::new();
         let mut code = Vec::new();
         let mut cases = Vec::new();
+        let mut claims = Claims::new(
+            "actions.js",
+            &[
+                "ACTIONS",
+                "CODE",
+                "actionsOn",
+                "args",
+                "confirmText",
+                "hrefFor",
+                "label",
+                "of",
+                "placeResult",
+                "rows",
+                "sameSite",
+                "subject",
+                "succeeded",
+                "text",
+                "visible",
+            ],
+        );
         for a in &self.ui.actions {
             let Some(screen) = self.screen(&a.screen) else {
                 self.refuse(
@@ -2246,6 +2376,10 @@ export function held(form, view) {{
             };
             let inputs = self.slots(contract, false);
             let name = camel(&a.id);
+            if let Err(d) = claims.claim(&a.id, &name) {
+                self.out.push(d);
+                continue;
+            }
             let mut roots = self.screen_roots(screen);
             let mut lines = Vec::new();
 
@@ -2257,6 +2391,7 @@ export function held(form, view) {{
                         let scope = UiScope {
                             spec: self.spec,
                             cases: &self.cases,
+                            used: &self.used,
                             roots: vec![],
                         };
                         item_slots = Self::list_item(&t)
@@ -2299,6 +2434,7 @@ export function held(form, view) {{
                 slots: item_slots.clone(),
                 direct: None,
             }];
+            self.forget_reads();
             let label = self
                 .template(
                     &a.id,
@@ -2307,6 +2443,8 @@ export function held(form, view) {{
                     &item_roots,
                 )
                 .unwrap_or_else(|| "''".into());
+            let label_reads_item = self.reads("item");
+            self.forget_reads();
             let confirm = match &a.confirm {
                 Some(c) => self
                     .template(
@@ -2318,18 +2456,19 @@ export function held(form, view) {{
                     .unwrap_or_else(|| "''".into()),
                 None => "null".to_string(),
             };
-            let item_param = |js: &str| if js.contains("item") { "item" } else { "_item" };
+            let item_param = |reads: bool| if reads { "item" } else { "_item" };
             lines.push(format!(
                 "  /** @param {{any}} {p} */\n  label({p}) {{\n    return {label};\n  }},",
-                p = item_param(&label)
+                p = item_param(label_reads_item)
             ));
             lines.push(format!(
                 "  /** @param {{any}} {p} @returns {{string | null}} */\n  confirmText({p}) {{\n    return {confirm};\n  }},",
-                p = item_param(&confirm)
+                p = item_param(self.reads("item"))
             ));
 
             // args
             let mut items = Vec::new();
+            self.forget_reads();
             for (input, src) in &a.arguments {
                 let Some(slot) = inputs.iter().find(|i| i.name == *input) else {
                     self.refuse(&a.id, format!("Action \"{}\" gives argument \"{input}\", which contract \"{}\" does not declare.", a.id, a.contract));
@@ -2341,7 +2480,7 @@ export function held(form, view) {{
                     items.push(format!("{}: {js}", key(&slot.wire)));
                 }
             }
-            let uses = items.iter().any(|i| i.contains("scope"));
+            let uses = self.reads("scope");
             lines.push(format!(
                 "  /** @param {{any}} {s} */\n  args({s}) {{\n    return {};\n  }},",
                 if items.is_empty() {
@@ -2361,6 +2500,7 @@ export function held(form, view) {{
             lines.push(self.outcome(&a.id, &what, a.on_success.as_ref(), &roots, screen));
 
             // result
+            let mut places_outputs = false;
             let place = match &a.result {
                 Some(r) => {
                     let wire = contract
@@ -2369,11 +2509,14 @@ export function held(form, view) {{
                         .find(|o| o.name == r.output)
                         .map(|o| self.contract_case(contract).name(&o.name));
                     match wire {
-                        Some(w) => format!(
-                            "{{ ...local, {}: outputs{} }}",
-                            key(&r.into),
-                            optional_member(&w)
-                        ),
+                        Some(w) => {
+                            places_outputs = true;
+                            format!(
+                                "{{ ...local, {}: outputs{} }}",
+                                key(&r.into),
+                                optional_member(&w)
+                            )
+                        }
                         None => {
                             self.refuse(&a.id, format!("Action \"{}\" keeps output \"{}\", which contract \"{}\" does not declare.", a.id, r.output, a.contract));
                             "local".into()
@@ -2384,7 +2527,7 @@ export function held(form, view) {{
             };
             lines.push(format!(
                 "  /**\n   * @param {{Record<string, any>}} local\n   * @param {{any}} {o}\n   */\n  placeResult(local, {o}) {{\n    return {place};\n  }},",
-                o = if place.contains("outputs") { "outputs" } else { "_outputs" }
+                o = if places_outputs { "outputs" } else { "_outputs" }
             ));
 
             let result = a.result.as_ref().map_or("null".to_string(), |r| {
@@ -2415,9 +2558,9 @@ export function held(form, view) {{
             ));
             code.push(format!(
                 "/** Action `{}` of screen `{}`: calls `{}`. */\nconst {name} = {{\n{}\n}};\n",
-                a.id,
-                a.screen,
-                a.contract,
+                codetext::js::doc_text(&a.id),
+                codetext::js::doc_text(&a.screen),
+                codetext::js::doc_text(&a.contract),
                 lines.join("\n")
             ));
             cases.push(format!("  {}: {name},", sq(&a.id)));
@@ -2610,6 +2753,7 @@ export function placeResult(action, local, outputs) {{
             },
         ];
         let mut lines = Vec::new();
+        self.forget_reads();
         for verdict in [Verdict::Deny, Verdict::Allow] {
             for p in policies.iter().filter(|p| p.effect == Some(verdict)) {
                 let condition = match &p.condition {
@@ -2635,7 +2779,7 @@ export function placeResult(action, local, outputs) {{
                 let opt = |v: &Option<String>| v.as_deref().map_or("null".to_string(), sq);
                 lines.push(format!(
                     "    // policy {}\n    if (subject(scope.principal, {}, {}) && ({condition})) return {};",
-                    p.id,
+                    codetext::js::comment_text(&p.id),
                     opt(&p.principal),
                     opt(&p.role),
                     verdict == Verdict::Allow
@@ -2647,12 +2791,9 @@ export function placeResult(action, local, outputs) {{
             Some(Verdict::Deny)
         );
         let body = lines.join("\n");
-        let s = if body.contains("scope") {
-            "scope"
-        } else {
-            "_scope"
-        };
-        let i = if body.contains("inputs") {
+        // Every policy line reads `scope.principal`.
+        let s = if !lines.is_empty() { "scope" } else { "_scope" };
+        let i = if self.reads("inputs") {
             "inputs"
         } else {
             "_inputs"
@@ -2670,6 +2811,7 @@ export function placeResult(action, local, outputs) {{
         let mut table = Vec::new();
         let mut by_screen: BTreeMap<&str, Vec<String>> = BTreeMap::new();
         let mut order: Vec<&str> = Vec::new();
+        self.forget_reads();
         for b in &self.ui.live_bindings {
             let Some(screen) = self.screen(&b.screen) else {
                 self.refuse(
@@ -2775,16 +2917,12 @@ export function refreshes(screen, event, {p}, {v}) {{
 }}
 ",
             table.join("\n"),
-            p = if body.contains("payload") {
+            p = if self.reads("payload") {
                 "payload"
             } else {
                 "_payload"
             },
-            v = if body.contains("view") {
-                "view"
-            } else {
-                "_view"
-            },
+            v = if self.reads("view") { "view" } else { "_view" },
         )
     }
 
