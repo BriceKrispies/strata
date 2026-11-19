@@ -2817,7 +2817,7 @@ async fn a_registered_passkey_signs_its_owner_in() {
     assert_eq!(status, 200, "{reply}");
     let token = reply["token"].as_str().unwrap();
     assert_eq!(reply["session"]["authenticated"], true);
-    assert_eq!(reply["session"]["display_name"], "Mirela");
+    assert_eq!(reply["session"]["display_name"], "Mirela Ashby");
     let (_, session) = backend
         .call("fieldnotes", Some(token), "/internal/session", json!({}))
         .await;
@@ -3169,7 +3169,7 @@ async fn a_person_manages_only_their_own_passkeys() {
         .passkey_sign_in(&mut tomasz_key, &tomasz_passkey, SITE, SITE, SITE)
         .await;
     assert_eq!(status, 200, "{reply}");
-    assert_eq!(reply["session"]["display_name"], "Tomasz");
+    assert_eq!(reply["session"]["display_name"], "Tomasz Wren");
 }
 
 /// Verifies: IDN-250

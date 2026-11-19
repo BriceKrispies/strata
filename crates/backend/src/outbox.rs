@@ -64,7 +64,10 @@ fn base_record() -> Value {
     json!({
         "seq": 0,
         "revision": 0,
-        "body": "",
+        // The record's body is the kernel's event body; the machine never reads it, so any valid
+        // one stands in, written by the type itself so its encoding is exactly what decodes.
+        "body": serde_json::to_value(strata_kernel::EventBody::TenantCreated { name: String::new() })
+            .unwrap_or(Value::Null),
         "actor": "system",
         "correlation": "00000000-0000-0000-0000-000000000000",
         "state": "arc-od-idle-i",
@@ -136,7 +139,7 @@ impl Outbox {
     pub fn new(app: &Shared) -> Result<Outbox, String> {
         let store = Arc::new(StorageApiMachineStore::new(
             Arc::new(MemoryStore::new()),
-            TenantId::new("outbox-machine").map_err(|e| e.to_string())?,
+            TenantId::new("outbox_machine").map_err(|e| e.to_string())?,
             Arc::new(SystemClock),
         ));
         let router = Router::new(vec![Member::of::<ArcOutboxDeliveryFlowImpl>()], ROUTES);

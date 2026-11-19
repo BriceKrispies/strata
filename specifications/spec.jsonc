@@ -19362,7 +19362,7 @@
       "id": "m-guessing-throttled",
       "kind": "invariant",
       "models": "idn-008",
-      "statement": "A guess that arrives after three failed guesses is refused, because the model counts the failures against one account. The threshold of 3 stands for the ten of D-700.",
+      "statement": "A guess that arrives after ten failed guesses is refused, because the model counts the failures against one account (D-700).",
       "evaluate": {
         "method": "state-invariant",
         "scenarios": [
@@ -30382,7 +30382,7 @@
     {
       "id": "sr-notice",
       "name": "Revocation notice",
-      "description": "The identity service tells gateways about a revocation.",
+      "description": "The runtime tells the WebSocket connections of a session that it ended (a session notice), and the connections close. Gateways that keep a copy learn of it at their next check.",
       "delivery": "at-most-once"
     },
     {"id":"sr-request","name":"Request with the session","description":"A request arrives at the gateway carrying the session.","payload":[{"name":"session-id","type":"session-id"}]},
@@ -33969,6 +33969,27 @@
       "id": "sl-issued",
       "name": "Session issued",
       "description": "The session is signed in: its issue time and its last use are set to now."
+    },
+    {
+      "id": "pw-lockout-ended",
+      "name": "Lockout ended",
+      "description": "The lockout of a closed throttle ends.",
+      "elapsed": true
+    },
+    {
+      "id": "sr-expired",
+      "name": "Session expired",
+      "description": "The runtime finds a session past its idle limit (2 hours since it was last used) or its absolute limit (12 hours since sign-in).",
+      "payload": [
+        {
+          "name": "idleMs",
+          "type": "u64"
+        },
+        {
+          "name": "ageMs",
+          "type": "u64"
+        }
+      ]
     }
   ],
   "behaviors": [
@@ -34108,7 +34129,8 @@
         "fields": {
           "expiresAt": "expires-at"
         }
-      }
+      },
+      "realisation": "target"
     },
     {"id":"oidc-callback-flow","name":"OpenID Connect callback","subject":"identity-service","initial":"oidc-idle","description":"One sign-in through a provider. The pending request carries the state value s1.","variables":[{"name":"federatedSessions","type":"number","initial":0}],"states":[{"id":"oidc-idle","name":"No request"},{"id":"oidc-awaiting","name":"Awaiting callback"},{"id":"oidc-done","name":"Signed in","terminal":true}],"transitions":[{"id":"oidc-begin","from":"oidc-idle","to":"oidc-awaiting","on":"oidc-started","effects":[{"emit":"oidc-redirected"}]},{"id":"oidc-accept-any-state","from":"oidc-awaiting","to":"oidc-done","on":"oidc-callback","faultOnly":true,"description":"Defect: accepts a callback without comparing its state value.","effects":[{"set":"federatedSessions","to":"federatedSessions + 1"},{"emit":"oidc-session-issued"}]},{"id":"oidc-accept","from":"oidc-awaiting","to":"oidc-done","on":"oidc-callback","guard":"event.state == 's1'","effects":[{"set":"federatedSessions","to":"federatedSessions + 1"},{"emit":"oidc-session-issued"}]},{"id":"oidc-refuse","from":"oidc-awaiting","to":"oidc-awaiting","on":"oidc-callback","effects":[{"emit":"oidc-refused"}]}]},
     {
@@ -34225,14 +34247,15 @@
           "expectedState": "expected-state",
           "federatedSessions": "federated-sessions"
         }
-      }
+      },
+      "realisation": "target"
     },
     {
       "id": "session-authority-flow",
       "name": "Session authority",
-      "subject": "identity-service",
+      "subject": "runtime",
       "initial": "sa-live",
-      "description": "The identity service's record of one session.",
+      "description": "The runtime's record of one session: it ends by an explicit revocation, by a sign-in, a password change, a recovery, a sign-out, a deactivation, or by expiry (2 hours without use, or 12 hours after sign-in).",
       "variables": [
         {
           "name": "revoked",
@@ -34493,16 +34516,36 @@
               "emit": "sr-listed"
             }
           ]
+        },
+        {
+          "id": "sa-end-on-expiry",
+          "from": "sa-live",
+          "to": "sa-revoked",
+          "on": "sr-expired",
+          "guard": "event.idleMs >= 7200000 || event.ageMs >= 43200000",
+          "effects": [
+            {
+              "set": "revoked",
+              "to": true
+            },
+            {
+              "set": "revokedAt",
+              "to": "time"
+            },
+            {
+              "emit": "sr-notice"
+            }
+          ]
         }
       ]
     },
     {
       "id": "session-authority-flow-impl",
       "name": "Session authority (implementation)",
-      "subject": "identity-service",
+      "subject": "runtime",
       "level": "implementation",
       "initial": "sa-live-i",
-      "description": "The identity service record of one session (rec-session, keyed by session-id): revoked-at is set at the revocation and a lookup answers from it. The revocation notice to the gateways may be lost; a lookup is never answered from a copy. The refinement reads one model tick as one second (timeScale 1000, as for the gateway copy whose model compares with it), and the mapping gives the model the revocation in seconds.",
+      "description": "The runtime record of one session (rec-session, keyed by session-id; the backend holds it in the store). revoked-at is set at the revocation and a lookup answers from it. A session also ends by expiry: the runtime finds it idle for 2 hours (7200000 ms; the idle time slides, written at most once a minute) or 12 hours (43200000 ms) after sign-in, and ends it the same way. Every end tells the WebSocket connections of the session with a session notice, and the connections close. The notice may be lost; a lookup is never answered from a copy. The refinement reads one model tick as one second (timeScale 1000, as for the gateway copy whose model compares with it), and the mapping gives the model the revocation in seconds.",
       "transaction": {
         "scope": "transition",
         "isolation": "serializable"
@@ -34537,7 +34580,8 @@
             "sr-signed-out",
             "sr-deactivated",
             "sr-owner-revoked",
-            "sr-list"
+            "sr-list",
+            "sr-expired"
           ]
         }
       ],
@@ -34559,7 +34603,7 @@
             },
             {
               "emit": "sr-notice",
-              "to": "gateway"
+              "to": "web-application"
             }
           ]
         },
@@ -34620,7 +34664,7 @@
             },
             {
               "emit": "sr-notice",
-              "to": "gateway"
+              "to": "web-application"
             }
           ]
         },
@@ -34641,7 +34685,7 @@
             },
             {
               "emit": "sr-notice",
-              "to": "gateway"
+              "to": "web-application"
             }
           ]
         },
@@ -34661,7 +34705,7 @@
             },
             {
               "emit": "sr-notice",
-              "to": "gateway"
+              "to": "web-application"
             }
           ],
           "otherwise": true
@@ -34682,7 +34726,7 @@
             },
             {
               "emit": "sr-notice",
-              "to": "gateway"
+              "to": "web-application"
             }
           ],
           "otherwise": true
@@ -34703,7 +34747,7 @@
             },
             {
               "emit": "sr-notice",
-              "to": "gateway"
+              "to": "web-application"
             }
           ],
           "otherwise": true
@@ -34725,7 +34769,7 @@
             },
             {
               "emit": "sr-notice",
-              "to": "gateway"
+              "to": "web-application"
             }
           ]
         },
@@ -34741,6 +34785,27 @@
             }
           ],
           "otherwise": true
+        },
+        {
+          "id": "sa-end-on-expiry-i",
+          "from": "sa-live-i",
+          "to": "sa-revoked-i",
+          "on": "sr-expired",
+          "guard": "event.idleMs >= 7200000 || event.ageMs >= 43200000",
+          "effects": [
+            {
+              "set": "revoked",
+              "to": true
+            },
+            {
+              "set": "revokedAt",
+              "to": "time"
+            },
+            {
+              "emit": "sr-notice",
+              "to": "web-application"
+            }
+          ]
         }
       ],
       "refines": "session-authority-flow",
@@ -34763,7 +34828,8 @@
           "sa-end-on-signout-i": "sa-end-on-signout",
           "sa-end-on-deactivation-i": "sa-end-on-deactivation",
           "sa-end-on-owner-i": "sa-end-on-owner",
-          "sa-list-i": "sa-list"
+          "sa-list-i": "sa-list",
+          "sa-end-on-expiry-i": "sa-end-on-expiry"
         },
         "timeScale": 1000
       },
@@ -34772,7 +34838,8 @@
         "key": "session-id",
         "fields": {
           "revokedAt": "revoked-at"
-        }
+        },
+        "createdBy": "sign-in-with-password"
       }
     },
     {"id":"gateway-session-flow","name":"Gateway session copy","subject":"gateway","initial":"gs-ready","description":"The gateway's copy of the session. It trusts the copy for 5 ticks, then asks again.","variables":[
@@ -35078,7 +35145,8 @@
         },
         "state": "session-state",
         "createdBy": "look-up-session"
-      }
+      },
+      "realisation": "target"
     },
     {"id":"job-lease-flow","name":"Job lease","subject":"automation-worker","initial":"jl-waiting","description":"One job. Every grant raises the token, and a result is recorded only with the current token.","variables":[{"name":"token","type":"number","initial":0},{"name":"completions","type":"number","initial":0},{"name":"acceptedToken","type":"number","initial":0}],"states":[{"id":"jl-waiting","name":"Waiting"},{"id":"jl-leased","name":"Leased"},{"id":"jl-done","name":"Completed"}],"transitions":[{"id":"jl-grant","from":"jl-waiting","to":"jl-leased","on":"job-due","effects":[{"set":"token","to":"token + 1"},{"emit":"lease-granted"}]},{"id":"jl-regrant","from":"jl-leased","to":"jl-leased","on":"lease-expired","effects":[{"set":"token","to":"token + 1"},{"emit":"lease-granted"}]},{"id":"jl-complete-any-token","from":"jl-leased","to":"jl-done","on":"work-reported","faultOnly":true,"description":"Defect: records a result without checking its token.","effects":[{"set":"completions","to":"completions + 1"},{"set":"acceptedToken","to":"event.token"},{"emit":"job-completed"}]},{"id":"jl-complete","from":"jl-leased","to":"jl-done","on":"work-reported","guard":"event.token == token","effects":[{"set":"completions","to":"completions + 1"},{"set":"acceptedToken","to":"event.token"},{"emit":"job-completed"}]},{"id":"jl-refuse-stale","from":"jl-leased","to":"jl-leased","on":"work-reported","effects":[{"emit":"result-refused"}]},{"id":"jl-refuse-after-done","from":"jl-done","to":"jl-done","on":"work-reported","effects":[{"emit":"result-refused"}]}]},
     {
@@ -35265,7 +35333,8 @@
           "jl-leased-i": "leased",
           "jl-done-i": "completed"
         }
-      }
+      },
+      "realisation": "target"
     },
     {"id":"origin-content-flow","name":"Origin content","subject":"runtime","initial":"oc-live","description":"The published version of one page at the origin.","variables":[{"name":"version","type":"number","initial":1},{"name":"changedAt","type":"number","initial":0}],"states":[{"id":"oc-live","name":"Live"}],"transitions":[{"id":"oc-publish","from":"oc-live","to":"oc-live","on":"ec-published","effects":[{"set":"version","to":"version + 1"},{"set":"changedAt","to":"time"},{"emit":"ec-purge"}]},{"id":"oc-answer","from":"oc-live","to":"oc-live","on":"ec-origin-fetch","effects":[{"emit":"ec-origin-answer","payload":{"version":"version"}}]}]},
     {
@@ -35362,7 +35431,8 @@
           "changedAt": "changed-at"
         },
         "createdBy": "commit-transition"
-      }
+      },
+      "realisation": "target"
     },
     {"id":"edge-copy-flow","name":"Edge copy","subject":"delivery-network","initial":"eg-ready","description":"The edge copy of the page. It is dropped by a purge and revalidated after a lifetime of 5 ticks.","variables":[
         {
@@ -35610,7 +35680,8 @@
           "storedAt": "stored-at"
         },
         "state": "copy-state"
-      }
+      },
+      "realisation": "target"
     },
     {"id":"provisioning-flow","name":"Tenant provisioning","subject":"control-plane","initial":"pv-idle","description":"Create the database, apply the layout, install the template, then report the tenant as active.","variables":[{"name":"database","type":"boolean","initial":false},{"name":"layout","type":"boolean","initial":false},{"name":"template","type":"boolean","initial":false},{"name":"active","type":"boolean","initial":false}],"states":[{"id":"pv-idle","name":"Idle"},{"id":"pv-creating","name":"Creating the database"},{"id":"pv-laying","name":"Applying the layout"},{"id":"pv-installing","name":"Installing the template"},{"id":"pv-active","name":"Active","terminal":true},{"id":"pv-failed","name":"Rolled back","terminal":true}],"transitions":[{"id":"pv-start","from":"pv-idle","to":"pv-creating","on":"pv-requested","effects":[{"emit":"pv-database-created"}]},{"id":"pv-activate-early","from":"pv-creating","to":"pv-active","on":"pv-database-created","faultOnly":true,"description":"Defect: reports the tenant active as soon as its database exists.","effects":[{"set":"database","to":true},{"set":"active","to":true},{"emit":"pv-activated"}]},{"id":"pv-created","from":"pv-creating","to":"pv-laying","on":"pv-database-created","effects":[{"set":"database","to":true},{"emit":"pv-layout-applied","after":2}]},{"id":"pv-laid","from":"pv-laying","to":"pv-installing","on":"pv-layout-applied","effects":[{"set":"layout","to":true},{"emit":"pv-template-installed","after":2}]},{"id":"pv-installed","from":"pv-installing","to":"pv-active","on":"pv-template-installed","effects":[{"set":"template","to":true},{"set":"active","to":true},{"emit":"pv-activated"}]},{"id":"pv-fail-laying","from":"pv-laying","to":"pv-failed","on":"pv-step-failed","effects":[{"set":"database","to":false},{"emit":"pv-rolled-back"}]},{"id":"pv-fail-installing","from":"pv-installing","to":"pv-failed","on":"pv-step-failed","effects":[{"set":"database","to":false},{"set":"layout","to":false},{"emit":"pv-rolled-back"}]}]},
     {
@@ -35846,7 +35917,8 @@
           "active": "activated"
         },
         "state": "flow-state"
-      }
+      },
+      "realisation": "target"
     },
     {"id":"proposal-flow","name":"Change proposal","subject":"agent-gateway","initial":"cp-idle","description":"A change is projected, then applied directly when policy classes it as safe, or after approval when it is risky.","variables":[{"name":"risky","type":"boolean","initial":false},{"name":"projected","type":"boolean","initial":false},{"name":"cleared","type":"boolean","initial":false},{"name":"applied","type":"boolean","initial":false}],"states":[{"id":"cp-idle","name":"No proposal"},{"id":"cp-projecting","name":"Projecting"},{"id":"cp-awaiting","name":"Awaiting approval"},{"id":"cp-ready","name":"Cleared"},{"id":"cp-closed","name":"Rejected"},{"id":"cp-done","name":"Applied","terminal":true}],"transitions":[{"id":"cp-open","from":"cp-idle","to":"cp-projecting","on":"cp-proposed","effects":[{"set":"risky","to":"event.risky"},{"emit":"cp-projected"}]},{"id":"cp-clear-safe","from":"cp-projecting","to":"cp-ready","on":"cp-projected","guard":"!risky","effects":[{"set":"projected","to":true},{"set":"cleared","to":true}]},{"id":"cp-hold-risky","from":"cp-projecting","to":"cp-awaiting","on":"cp-projected","guard":"risky","effects":[{"set":"projected","to":true}]},{"id":"cp-approve","from":"cp-awaiting","to":"cp-ready","on":"cp-approved","effects":[{"set":"cleared","to":true}]},{"id":"cp-reject","from":"cp-awaiting","to":"cp-closed","on":"cp-rejected"},{"id":"cp-apply-unapproved","from":"cp-awaiting","to":"cp-done","on":"cp-apply-requested","faultOnly":true,"description":"Defect: applies a risky change that nobody approved.","effects":[{"set":"applied","to":true},{"emit":"cp-applied"}]},{"id":"cp-refuse-awaiting","from":"cp-awaiting","to":"cp-awaiting","on":"cp-apply-requested","effects":[{"emit":"cp-refused"}]},{"id":"cp-apply-rejected","from":"cp-closed","to":"cp-done","on":"cp-apply-requested","faultOnly":true,"description":"Defect: applies a change that was rejected.","effects":[{"set":"applied","to":true},{"emit":"cp-applied"}]},{"id":"cp-refuse-closed","from":"cp-closed","to":"cp-closed","on":"cp-apply-requested","effects":[{"emit":"cp-refused"}]},{"id":"cp-apply","from":"cp-ready","to":"cp-done","on":"cp-apply-requested","effects":[{"set":"applied","to":true},{"emit":"cp-applied"}]}]},
     {
@@ -36084,7 +36156,8 @@
         "record": "rec-proposal",
         "key": "proposal-id",
         "state": "flow-state"
-      }
+      },
+      "realisation": "target"
     },
     {"id":"arc-outbox-consumer-flow","name":"Notice subscriber","subject":"connector-runner","initial":"arc-oc-ready","description":"One subscriber receiving notices of one tenant. A notice whose sequence number is already applied is acknowledged and makes no further effect.","variables":[{"name":"applied","type":"number","initial":0},{"name":"effects","type":"number","initial":0}],"states":[{"id":"arc-oc-ready","name":"Ready"}],"transitions":[{"id":"arc-ob-apply","from":"arc-oc-ready","to":"arc-oc-ready","on":"arc-ob-delivered","guard":"event.seq > applied","effects":[{"set":"applied","to":"event.seq"},{"set":"effects","to":"effects + 1"},{"emit":"arc-ob-acknowledged"}]},{"id":"arc-ob-apply-again","from":"arc-oc-ready","to":"arc-oc-ready","on":"arc-ob-delivered","guard":"event.seq <= applied","faultOnly":true,"description":"Defect: makes the effect of a notice it has already applied.","effects":[{"set":"effects","to":"effects + 1"},{"emit":"arc-ob-acknowledged"}]},{"id":"arc-ob-skip-seen","from":"arc-oc-ready","to":"arc-oc-ready","on":"arc-ob-delivered","guard":"event.seq <= applied","effects":[{"emit":"arc-ob-acknowledged"}]}]},
     {
@@ -36172,7 +36245,8 @@
         "record": "rec-notice-subscriber",
         "key": "subscriber-id",
         "creates": true
-      }
+      },
+      "realisation": "target"
     },
     {"id":"arc-outbox-delivery-flow","name":"Outbox delivery after a stop","subject":"runtime","initial":"arc-od-idle","description":"A commit leaves events unpublished. The runtime that committed publishes them, or else the outbox job does.","variables":[{"name":"pending","type":"boolean","initial":false}],"states":[{"id":"arc-od-idle","name":"Nothing pending"},{"id":"arc-od-pending","name":"Events pending"},{"id":"arc-od-done","name":"Published","terminal":true}],"transitions":[{"id":"arc-od-commit","from":"arc-od-idle","to":"arc-od-pending","on":"rt-committed","effects":[{"set":"pending","to":true}]},{"id":"arc-od-publish-now","from":"arc-od-pending","to":"arc-od-done","on":"arc-ob-publish-now","effects":[{"set":"pending","to":false},{"emit":"arc-ob-published"}]},{"id":"arc-od-sweep","from":"arc-od-pending","to":"arc-od-done","on":"arc-ob-sweep-due","effects":[{"set":"pending","to":false},{"emit":"arc-ob-published"}]}]},
     {
@@ -36181,7 +36255,7 @@
       "subject": "runtime",
       "level": "implementation",
       "initial": "arc-od-idle-i",
-      "description": "A commit leaves its domain events (rec-event, keyed by seq) unpublished. The runtime that committed publishes them at once, or else the outbox job finds them on its next sweep, 10 seconds after the commit (10000 ms, default), and publishes them. Publication is at least once; the consumer discards what it has seen.",
+      "description": "A commit leaves its domain events (rec-event, keyed by seq) in the outbox of their tenant, each with an outbox position of that tenant; positions of different tenants are not ordered against each other. The runtime that committed kicks the publisher at once (publish-now), or else the publisher finds the events on its next sweep, 500 ms after the commit (500 ms, the idle period of the publisher's pump; default). A sweep takes at most 256 outbox entries in one batch, hands them to subscribers and marks them published per tenant up to the last position it moved. Publication is at least once; the consumer discards what it has seen.",
       "transaction": {
         "scope": "transition",
         "isolation": "serializable"
@@ -36230,7 +36304,7 @@
             },
             {
               "timer": "sweep",
-              "after": 10000,
+              "after": 500,
               "emit": "arc-ob-sweep-due"
             }
           ]
@@ -36420,7 +36494,8 @@
         "record": "rec-rolling-change",
         "key": "release-id",
         "creates": true
-      }
+      },
+      "realisation": "target"
     },
     {"id":"preview-link-flow","name":"Preview link","subject":"gateway","initial":"pl-idle","description":"One preview link, valid for 15 ticks from the tick of its pl-issue event (the tick its link is issued).","variables":[{"name":"issuedAt","type":"number","initial":0},{"name":"shown","type":"number","initial":0}],"states":[{"id":"pl-idle","name":"Not issued"},{"id":"pl-issued","name":"Issued"}],"transitions":[{"id":"pl-link-issued","from":"pl-idle","to":"pl-issued","on":"pl-issue","effects":[{"set":"issuedAt","to":"time"}],"faultOnly":false},{"id":"pl-show-expired","from":"pl-issued","to":"pl-issued","on":"pl-presented","faultOnly":true,"description":"Defect: shows the draft after its expiry.","effects":[{"set":"shown","to":"shown + 1"},{"emit":"pl-shown"}]},{"id":"pl-show","from":"pl-issued","to":"pl-issued","on":"pl-presented","guard":"time - issuedAt < 15","effects":[{"set":"shown","to":"shown + 1"},{"emit":"pl-shown"}]},{"id":"pl-refuse","from":"pl-issued","to":"pl-issued","on":"pl-presented","effects":[{"emit":"pl-refused"}]}]},
     {
@@ -36530,7 +36605,8 @@
         "record": "rec-preview-link",
         "key": "link-id",
         "creates": true
-      }
+      },
+      "realisation": "target"
     },
     {"id":"inbound-run-flow","name":"Inbound delivery","subject":"automation-worker","initial":"iw-idle","description":"One event key. The first delivery starts a run and a repeated delivery of the same event starts nothing.","variables":[{"name":"runs","type":"number","initial":0}],"states":[{"id":"iw-idle","name":"No delivery"},{"id":"iw-accepted","name":"Run started"}],"transitions":[{"id":"iw-first","from":"iw-idle","to":"iw-accepted","on":"iw-received","effects":[{"set":"runs","to":"runs + 1"},{"emit":"iw-run-started"}]},{"id":"iw-accept-again","from":"iw-accepted","to":"iw-accepted","on":"iw-received","faultOnly":true,"description":"Defect: starts a second run for a repeated delivery.","effects":[{"set":"runs","to":"runs + 1"},{"emit":"iw-run-started"}]},{"id":"iw-repeat","from":"iw-accepted","to":"iw-accepted","on":"iw-received","effects":[{"emit":"iw-ignored"}]}]},
     {
@@ -36612,7 +36688,8 @@
         "record": "rec-effect-record",
         "key": "idempotency-key",
         "state": "run-state"
-      }
+      },
+      "realisation": "target"
     },
     {"id":"cv-change-flow","name":"Confirmed change","subject":"conversation-service","initial":"cf-idle","description":"One change proposed by the assistant: previewed, then applied only after the person confirms it.","variables":[{"name":"previewed","type":"boolean","initial":false},{"name":"confirmed","type":"boolean","initial":false},{"name":"applied","type":"boolean","initial":false}],"states":[{"id":"cf-idle","name":"No change"},{"id":"cf-previewed","name":"Preview shown"},{"id":"cf-confirmed","name":"Confirmed"},{"id":"cf-applied","name":"Applied","terminal":true},{"id":"cf-cancelled","name":"Cancelled","terminal":true}],"transitions":[{"id":"cf-propose","from":"cf-idle","to":"cf-previewed","on":"cv-proposed","effects":[{"set":"previewed","to":true},{"emit":"cv-previewed"}]},{"id":"cf-confirm","from":"cf-previewed","to":"cf-confirmed","on":"cv-confirmed","effects":[{"set":"confirmed","to":true}]},{"id":"cf-apply","from":"cf-confirmed","to":"cf-applied","on":"cv-apply-requested","effects":[{"set":"applied","to":true},{"emit":"cv-applied"}]},{"id":"cf-apply-unconfirmed","from":"cf-previewed","to":"cf-applied","on":"cv-apply-requested","faultOnly":true,"description":"Defect: applies a previewed change that the person has not confirmed.","effects":[{"set":"applied","to":true},{"emit":"cv-applied"}]},{"id":"cf-refuse-unconfirmed","from":"cf-previewed","to":"cf-previewed","on":"cv-apply-requested","effects":[{"emit":"cv-refused"}]},{"id":"cf-cancel","from":"cf-previewed","to":"cf-cancelled","on":"cv-cancel","effects":[{"emit":"cv-cancelled"}]},{"id":"cf-refuse-cancelled","from":"cf-cancelled","to":"cf-cancelled","on":"cv-apply-requested","effects":[{"emit":"cv-refused"}]}]},
     {
@@ -36798,7 +36875,8 @@
         "record": "rec-cnv-pending-action",
         "key": "pending-id",
         "state": "flow-state"
-      }
+      },
+      "realisation": "target"
     },
     {"id":"cv-authority-flow","name":"Operation under withdrawable permission","subject":"conversation-service","initial":"ca-waiting","description":"One operation the assistant runs for a person. It commits only while the permission the person holds at that moment allows it.","variables":[{"name":"permitted","type":"boolean","initial":true},{"name":"applied","type":"boolean","initial":false}],"states":[{"id":"ca-waiting","name":"Awaiting run"},{"id":"ca-done","name":"Committed","terminal":true}],"transitions":[{"id":"ca-withdraw","from":"ca-waiting","to":"ca-waiting","on":"cv-permission-withdrawn","effects":[{"set":"permitted","to":false}]},{"id":"ca-run","from":"ca-waiting","to":"ca-done","on":"cv-operation-run","guard":"permitted","effects":[{"set":"applied","to":true},{"emit":"cv-operation-committed"}]},{"id":"ca-run-stale","from":"ca-waiting","to":"ca-done","on":"cv-operation-run","faultOnly":true,"description":"Defect: runs the operation on the permission held when the preview was made.","effects":[{"set":"applied","to":true},{"emit":"cv-operation-committed"}]},{"id":"ca-refuse","from":"ca-waiting","to":"ca-waiting","on":"cv-operation-run","guard":"!permitted","effects":[{"emit":"cv-operation-refused"}]}]},
     {
@@ -36902,7 +36980,8 @@
         "record": "rec-cnv-operation",
         "key": "operation-id",
         "creates": true
-      }
+      },
+      "realisation": "target"
     },
     {"id":"saml-assertion-flow","name":"SAML assertion use","subject":"identity-service","initial":"sa-fresh","description":"One SAML assertion. The first presentation yields a session, and a presentation after it is refused.","variables":[{"name":"sessions","type":"number","initial":0}],"states":[{"id":"sa-fresh","name":"Not presented"},{"id":"sa-spent","name":"Presented"}],"transitions":[{"id":"sam-accept-replay","from":"sa-spent","to":"sa-spent","on":"saml-response","faultOnly":true,"description":"Defect: accepts an assertion that was already used.","effects":[{"set":"sessions","to":"sessions + 1"},{"emit":"saml-session-issued"}]},{"id":"sam-accept","from":"sa-fresh","to":"sa-spent","on":"saml-response","effects":[{"set":"sessions","to":"sessions + 1"},{"emit":"saml-session-issued"}]},{"id":"sam-refuse","from":"sa-spent","to":"sa-spent","on":"saml-response","effects":[{"emit":"saml-refused"}]}]},
     {
@@ -36983,12 +37062,13 @@
       "storage": {
         "record": "rec-challenge",
         "key": "challenge-id"
-      }
+      },
+      "realisation": "target"
     },
     {
       "id": "guess-throttle-flow",
       "name": "Password guessing throttle",
-      "subject": "identity-service",
+      "subject": "runtime",
       "initial": "gt-open",
       "description": "Password attempts for one realm. Three failures close the throttle, and an attempt evaluated while it is closed is counted. The three stands for the ten failures of D-700; the lockout of thirty seconds after which the account counts again from none is time, which the model does not measure.",
       "variables": [
@@ -37016,7 +37096,7 @@
           "to": "gt-open",
           "on": "pw-attempt",
           "faultOnly": true,
-          "guard": "failures >= 3",
+          "guard": "failures >= 10",
           "description": "Defect: evaluates an attempt after the throttle has closed.",
           "effects": [
             {
@@ -37033,7 +37113,7 @@
           "from": "gt-open",
           "to": "gt-open",
           "on": "pw-attempt",
-          "guard": "failures >= 3",
+          "guard": "failures >= 10",
           "effects": [
             {
               "emit": "pw-refused"
@@ -37045,7 +37125,7 @@
           "from": "gt-open",
           "to": "gt-open",
           "on": "pw-attempt",
-          "guard": "failures < 3 && event.guess == 'wrong'",
+          "guard": "failures < 10 && event.guess == 'wrong'",
           "effects": [
             {
               "set": "failures",
@@ -37061,10 +37141,27 @@
           "from": "gt-open",
           "to": "gt-open",
           "on": "pw-attempt",
-          "guard": "failures < 3 && event.guess == 'right'",
+          "guard": "failures < 10 && event.guess == 'right'",
           "effects": [
             {
+              "set": "failures",
+              "to": 0
+            },
+            {
               "emit": "pw-accepted"
+            }
+          ]
+        },
+        {
+          "id": "gt-reopen",
+          "from": "gt-open",
+          "to": "gt-open",
+          "on": "pw-lockout-ended",
+          "guard": "failures >= 10",
+          "effects": [
+            {
+              "set": "failures",
+              "to": 0
             }
           ]
         }
@@ -37074,7 +37171,7 @@
       "id": "guess-throttle-flow-impl",
       "name": "Password guessing throttle (implementation)",
       "level": "implementation",
-      "subject": "identity-service",
+      "subject": "runtime",
       "refines": "guess-throttle-flow",
       "description": "The counter of failed password attempts for one account, held in the limit store. Three failures close it, and a closed counter refuses every attempt without evaluating it. The three stands for the ten failures of D-700; an attempt is counted before it is evaluated, and the counter opens again after the lockout of thirty seconds, which the model does not measure.",
       "initial": "gti-open",
@@ -37098,7 +37195,10 @@
       "states": [
         {
           "id": "gti-open",
-          "name": "Accepting attempts"
+          "name": "Accepting attempts",
+          "ignores": [
+            "pw-lockout-ended"
+          ]
         },
         {
           "id": "gti-closed",
@@ -37111,7 +37211,7 @@
           "from": "gti-open",
           "to": "gti-open",
           "on": "pw-attempt",
-          "guard": "failures < 2 && event.guess == 'wrong'",
+          "guard": "failures < 9 && event.guess == 'wrong'",
           "effects": [
             {
               "set": "failures",
@@ -37128,11 +37228,16 @@
           "from": "gti-open",
           "to": "gti-closed",
           "on": "pw-attempt",
-          "guard": "failures == 2 && event.guess == 'wrong'",
+          "guard": "failures == 9 && event.guess == 'wrong'",
           "effects": [
             {
               "set": "failures",
               "to": "failures + 1"
+            },
+            {
+              "timer": "lockout",
+              "after": 30000,
+              "emit": "pw-lockout-ended"
             },
             {
               "emit": "pw-refused",
@@ -37147,6 +37252,10 @@
           "on": "pw-attempt",
           "guard": "event.guess == 'right'",
           "effects": [
+            {
+              "set": "failures",
+              "to": 0
+            },
             {
               "emit": "pw-accepted",
               "to": "gateway"
@@ -37165,6 +37274,19 @@
               "to": "gateway"
             }
           ]
+        },
+        {
+          "id": "gti-reopen",
+          "from": "gti-closed",
+          "to": "gti-open",
+          "on": "pw-lockout-ended",
+          "otherwise": true,
+          "effects": [
+            {
+              "set": "failures",
+              "to": 0
+            }
+          ]
         }
       ],
       "refinement": {
@@ -37180,7 +37302,8 @@
           "gti-wrong": "gt-wrong",
           "gti-wrong-last": "gt-wrong",
           "gti-right": "gt-right",
-          "gti-refuse": "gt-refuse"
+          "gti-refuse": "gt-refuse",
+          "gti-reopen": "gt-reopen"
         }
       },
       "storage": {
@@ -37280,7 +37403,8 @@
         "record": "rec-trigger-chain",
         "key": "correlation",
         "creates": true
-      }
+      },
+      "realisation": "target"
     },
     {"id":"gateway-outage-flow","name":"Gateway during identity outage","subject":"gateway","initial":"go-ready","description":"The gateway's copy of a session is refreshed from the identity service once it is 5 ticks old. While a lookup is unanswered, a request that needs a session is refused with the outage named, and is not accepted.","variables":[
         {
@@ -37583,7 +37707,8 @@
         },
         "state": "outage-state",
         "createdBy": "look-up-session"
-      }
+      },
+      "realisation": "target"
     },
     {"id":"erasure-copy-flow","name":"Erased copy","subject":"copy-store","initial":"er-holding","description":"One copy of the personal data of an erased principal. A purge drops it. Once the lifetime of 5 ticks has passed after the erasure committed, a read revalidates the copy and drops it before it answers. Every answer states whether it carried the held personal data after that bound: the flag leak.","variables":[{"name":"erased","type":"boolean","initial":false},{"name":"erasedAt","type":"number","initial":0},{"name":"held","type":"boolean","initial":true},{"name":"leak","type":"boolean","initial":false}],"states":[{"id":"er-holding","name":"Copy holds the data"},{"id":"er-dropped","name":"Copy dropped"}],"transitions":[{"id":"er-commit","from":"er-holding","to":"er-holding","on":"er-erase-committed","effects":[{"set":"erased","to":true},{"set":"erasedAt","to":"time"}]},{"id":"er-purge","from":"er-holding","to":"er-dropped","on":"er-purge-sent","effects":[{"set":"held","to":false}]},{"id":"er-serve-stale","from":"er-holding","to":"er-holding","on":"er-read","faultOnly":true,"guard":"erased && time - erasedAt >= 5","effects":[{"set":"leak","to":"leak || (held && erased && time - erasedAt >= 5)"},{"emit":"er-served"}]},{"id":"er-serve-fresh","from":"er-holding","to":"er-holding","on":"er-read","guard":"!(erased && time - erasedAt >= 5)","effects":[{"set":"leak","to":"leak || (held && erased && time - erasedAt >= 5)"},{"emit":"er-served"}]},{"id":"er-revalidate","from":"er-holding","to":"er-dropped","on":"er-read","guard":"erased && time - erasedAt >= 5","effects":[{"set":"held","to":false},{"set":"leak","to":"leak || (held && erased && time - erasedAt >= 5)"},{"emit":"er-served"}]},{"id":"er-serve-dropped","from":"er-dropped","to":"er-dropped","on":"er-read","effects":[{"set":"leak","to":"leak || (held && erased && time - erasedAt >= 5)"},{"emit":"er-served"}]}]},
     {
@@ -37739,7 +37864,8 @@
           "erasedAt": "erased-at"
         },
         "creates": true
-      }
+      },
+      "realisation": "target"
     },
     {"id":"subject-key-flow","name":"Subject key","subject":"key-service","initial":"sk-live","description":"The sealed personal fields of one subject. Destroying the subject key makes them unreadable, so a read after destruction returns only the sealed form.","variables":[{"name":"shredRequested","type":"boolean","initial":false},{"name":"plainAfterShred","type":"boolean","initial":false}],"states":[{"id":"sk-live","name":"Key held"},{"id":"sk-shredded","name":"Key destroyed","terminal":true}],"transitions":[{"id":"sk-destroy-ignored","from":"sk-live","to":"sk-live","on":"sk-shred","faultOnly":true,"description":"Defect: reports the key destroyed and keeps it.","effects":[{"set":"shredRequested","to":true},{"emit":"sk-destroyed"}]},{"id":"sk-destroy","from":"sk-live","to":"sk-shredded","on":"sk-shred","effects":[{"set":"shredRequested","to":true},{"emit":"sk-destroyed"}]},{"id":"sk-read-plain","from":"sk-live","to":"sk-live","on":"sk-read","effects":[{"set":"plainAfterShred","to":"plainAfterShred || shredRequested"},{"emit":"sk-plain"}]},{"id":"sk-read-sealed","from":"sk-shredded","to":"sk-shredded","on":"sk-read","effects":[{"emit":"sk-sealed"}]}]},
     {
@@ -37859,7 +37985,8 @@
           "ski-live": "live",
           "ski-shredded": "destroyed"
         }
-      }
+      },
+      "realisation": "target"
     },
     {"id":"audit-chain-flow","name":"Audit chain under erasure","subject":"audit-log","initial":"ac-open","description":"An append-only chain. Erasing a principal seals its entries, and the hash of each entry is computed over the sealed form, so the chain stays valid.","variables":[{"name":"chainOk","type":"boolean","initial":true},{"name":"sealed","type":"number","initial":0}],"states":[{"id":"ac-open","name":"Open"}],"transitions":[{"id":"ac-append","from":"ac-open","to":"ac-open","on":"au-append","effects":[{"emit":"au-appended"}]},{"id":"ac-rewrite","from":"ac-open","to":"ac-open","on":"au-erase","faultOnly":true,"description":"Defect: rewrites the entry in place, so the link of the next entry no longer matches.","effects":[{"set":"chainOk","to":false},{"emit":"au-sealed"}]},{"id":"ac-seal","from":"ac-open","to":"ac-open","on":"au-erase","effects":[{"set":"sealed","to":"sealed + 1"},{"emit":"au-sealed"}]}]},
     {
@@ -37955,7 +38082,8 @@
           "headSeq": "head-seq"
         },
         "creates": true
-      }
+      },
+      "realisation": "target"
     },
     {"id":"agent-halt-flow","name":"Agent halt","subject":"agent-gateway","initial":"ah-running","description":"One agent: an anomaly halts it, and a halted agent applies nothing until a principal other than the agent resumes it.","variables":[],"states":[{"id":"ah-running","name":"Running"},{"id":"ah-stopped","name":"Halted"}],"transitions":[{"id":"ah-trip","from":"ah-running","to":"ah-stopped","on":"ah-anomaly","effects":[{"emit":"ah-halted"}]},{"id":"ah-apply","from":"ah-running","to":"ah-running","on":"ah-operation","effects":[{"emit":"ah-applied"}]},{"id":"ah-apply-halted","from":"ah-stopped","to":"ah-stopped","on":"ah-operation","faultOnly":true,"description":"Defect: applies an operation while the agent is halted.","effects":[{"emit":"ah-applied"}]},{"id":"ah-refuse-halted","from":"ah-stopped","to":"ah-stopped","on":"ah-operation","effects":[{"emit":"ah-refused"}]},{"id":"ah-resume-agent","from":"ah-stopped","to":"ah-running","on":"ah-resume"}]},
     {
@@ -38060,7 +38188,8 @@
           "ahi-running": "active",
           "ahi-stopped": "suspended"
         }
-      }
+      },
+      "realisation": "target"
     },
     {"id":"approval-separation-flow","name":"Approval separation","subject":"agent-gateway","initial":"sp-idle","description":"A proposal is cleared only by an approval from a principal other than its author.","variables":[{"name":"author","type":"string","initial":""}],"states":[{"id":"sp-idle","name":"No proposal"},{"id":"sp-open","name":"Awaiting approval"},{"id":"sp-done","name":"Cleared","terminal":true}],"transitions":[{"id":"sp-open-proposal","from":"sp-idle","to":"sp-open","on":"sp-proposed","effects":[{"set":"author","to":"event.author"}]},{"id":"sp-accept-self","from":"sp-open","to":"sp-done","on":"sp-approve","guard":"event.by == author","faultOnly":true,"description":"Defect: lets the author of a proposal approve it.","effects":[{"emit":"sp-cleared"}]},{"id":"sp-approve-other","from":"sp-open","to":"sp-done","on":"sp-approve","guard":"event.by != author","effects":[{"emit":"sp-cleared"}]},{"id":"sp-refuse-self","from":"sp-open","to":"sp-open","on":"sp-approve","guard":"event.by == author","effects":[{"emit":"sp-refused"}]}]},
     {
@@ -38169,7 +38298,8 @@
         "record": "rec-proposal",
         "key": "proposal-id",
         "state": "approval-state"
-      }
+      },
+      "realisation": "target"
     },
     {"id":"token-render-flow","name":"Rendering a page with a reader-dependent token","subject":"runtime","initial":"tk-ready","description":"A page holds a token whose value depends on the reader. The design renders it for each reader and stores no shared copy.","variables":[{"name":"stored","type":"boolean","initial":false},{"name":"storedFor","type":"string","initial":""},{"name":"leak","type":"boolean","initial":false}],"states":[{"id":"tk-ready","name":"Ready"}],"transitions":[{"id":"tk-store-shared","from":"tk-ready","to":"tk-ready","on":"tk-request","faultOnly":true,"guard":"!stored","description":"Defect: stores the rendered page as a shared copy.","effects":[{"set":"stored","to":true},{"set":"storedFor","to":"event.reader"},{"emit":"tk-rendered"}]},{"id":"tk-serve-stored","from":"tk-ready","to":"tk-ready","on":"tk-request","guard":"stored","effects":[{"set":"leak","to":"leak || event.reader != storedFor"},{"emit":"tk-rendered"}]},{"id":"tk-render","from":"tk-ready","to":"tk-ready","on":"tk-request","effects":[{"emit":"tk-rendered"}]}]},
     {"id":"mail-dispatch-flow","name":"Mail dispatch","subject":"mail-dispatcher","initial":"md-idle","description":"One message with its idempotency key. The dispatcher submits it, and submits it again with the same key when no acknowledgement comes.","variables":[{"name":"submissions","type":"number","initial":0},{"name":"key","type":"string","initial":""}],"states":[{"id":"md-idle","name":"Idle"},{"id":"md-waiting","name":"Waiting for an acknowledgement"},{"id":"md-sent","name":"Recorded as sent"}],"transitions":[{"id":"md-submit","from":"md-idle","to":"md-waiting","on":"em-due","effects":[{"set":"submissions","to":"submissions + 1"},{"set":"key","to":"event.key"},{"emit":"em-submit","payload":{"key":"key"}}]},{"id":"md-resubmit","from":"md-waiting","to":"md-waiting","on":"em-timeout","effects":[{"set":"submissions","to":"submissions + 1"},{"emit":"em-submit","payload":{"key":"key"}}]},{"id":"md-record","from":"md-waiting","to":"md-sent","on":"em-ack","effects":[{"emit":"em-recorded"}]},{"id":"md-ignore-late-ack","from":"md-sent","to":"md-sent","on":"em-ack","effects":[]}]},
@@ -38343,7 +38473,8 @@
           "mdi-waiting": "submitted",
           "mdi-sent": "sent"
         }
-      }
+      },
+      "realisation": "target"
     },
     {"id":"mail-adapter-flow","name":"Mail adapter","subject":"mail-service","initial":"ma-ready","description":"The adapter of the mail contract. It keeps a table of idempotency keys with two slots, k1 and k2. It delivers a key once and acknowledges every submission of it; a submission with the other key is a different message.","variables":[{"name":"seenK1","type":"boolean","initial":false},{"name":"seenK2","type":"boolean","initial":false},{"name":"delivered","type":"number","initial":0},{"name":"deliveredK1","type":"number","initial":0},{"name":"deliveredK2","type":"number","initial":0}],"states":[{"id":"ma-ready","name":"Ready"}],"transitions":[{"id":"ma-deliver-again","from":"ma-ready","to":"ma-ready","on":"em-submit","faultOnly":true,"guard":"event.key == 'k1' && seenK1","effects":[{"set":"delivered","to":"delivered + 1"},{"set":"deliveredK1","to":"deliveredK1 + 1"},{"emit":"em-ack"}]},{"id":"ma-deliver-again-k2","from":"ma-ready","to":"ma-ready","on":"em-submit","faultOnly":true,"guard":"event.key == 'k2' && seenK2","effects":[{"set":"delivered","to":"delivered + 1"},{"set":"deliveredK2","to":"deliveredK2 + 1"},{"emit":"em-ack"}]},{"id":"ma-treat-keys-alike","from":"ma-ready","to":"ma-ready","on":"em-submit","faultOnly":true,"guard":"event.key == 'k2' && seenK1 && !seenK2","effects":[{"set":"seenK2","to":true},{"emit":"em-ack","after":2}]},{"id":"ma-deliver-k1","from":"ma-ready","to":"ma-ready","on":"em-submit","guard":"event.key == 'k1' && !seenK1","effects":[{"set":"seenK1","to":true},{"set":"delivered","to":"delivered + 1"},{"set":"deliveredK1","to":"deliveredK1 + 1"},{"emit":"em-ack","after":2}]},{"id":"ma-deliver-k2","from":"ma-ready","to":"ma-ready","on":"em-submit","guard":"event.key == 'k2' && !seenK2","effects":[{"set":"seenK2","to":true},{"set":"delivered","to":"delivered + 1"},{"set":"deliveredK2","to":"deliveredK2 + 1"},{"emit":"em-ack","after":2}]},{"id":"ma-acknowledge-repeat","from":"ma-ready","to":"ma-ready","on":"em-submit","guard":"(event.key == 'k1' && seenK1) || (event.key == 'k2' && seenK2)","effects":[{"emit":"em-ack","after":2}]}]},
     {"id":"colour-switch-flow","name":"Colour switch","subject":"traffic-switch","initial":"cs-blue","description":"One component at the traffic switch. Blue is live. A release deploys green, green is verified, and a switch makes green live. A switch back returns to blue, which is still running. A withdrawn colour serves nothing.","variables":[{"name":"verified","type":"boolean","initial":false},{"name":"withdrawn","type":"boolean","initial":false}],"states":[{"id":"cs-blue","name":"Blue serves"},{"id":"cs-verifying","name":"Green deployed and verifying"},{"id":"cs-green","name":"Green serves"}],"transitions":[{"id":"cs-switch-unverified","from":"cs-verifying","to":"cs-green","on":"cs-switch-requested","guard":"!verified","faultOnly":true,"description":"Defect: moves public traffic to green before its verification has passed.","effects":[{"emit":"cs-traffic-green"}]},{"id":"cs-serve-withdrawn","from":"cs-blue","to":"cs-blue","on":"cs-request","guard":"withdrawn","faultOnly":true,"description":"Defect: serves a request from the withdrawn green colour after a switch back.","effects":[{"emit":"cs-served-withdrawn"}]},{"id":"cs-deploy","from":"cs-blue","to":"cs-verifying","on":"cs-green-deployed","effects":[]},{"id":"cs-verify","from":"cs-verifying","to":"cs-verifying","on":"cs-green-verified","effects":[{"set":"verified","to":true}]},{"id":"cs-refuse-unverified","from":"cs-verifying","to":"cs-verifying","on":"cs-switch-requested","guard":"!verified","effects":[{"emit":"cs-switch-refused"}]},{"id":"cs-switch","from":"cs-verifying","to":"cs-green","on":"cs-switch-requested","guard":"verified","effects":[{"emit":"cs-traffic-green"}]},{"id":"cs-serve-blue","from":"cs-blue","to":"cs-blue","on":"cs-request","effects":[{"emit":"cs-served-blue"}]},{"id":"cs-serve-verifying","from":"cs-verifying","to":"cs-verifying","on":"cs-request","effects":[{"emit":"cs-served-blue"}]},{"id":"cs-serve-green","from":"cs-green","to":"cs-green","on":"cs-request","effects":[{"emit":"cs-served-green"}]},{"id":"cs-rollback","from":"cs-green","to":"cs-blue","on":"cs-rollback-requested","effects":[{"set":"withdrawn","to":true},{"emit":"cs-traffic-blue"}]}]},
@@ -38554,7 +38685,8 @@
           "withdrawn": "green-withdrawn",
           "liveColour": "live-colour"
         }
-      }
+      },
+      "realisation": "target"
     },
     {"id":"release-promotion-flow","name":"Release promotion","subject":"release-controller","initial":"rp-idle","description":"One release on its way to production. It is gated in stage, approved by two principals, and promoted. Production receives it only when both conditions hold.","variables":[{"name":"gated","type":"boolean","initial":false},{"name":"approvals","type":"number","initial":0},{"name":"live","type":"boolean","initial":false},{"name":"approver","type":"string","initial":""}],"states":[{"id":"rp-idle","name":"Not gated"},{"id":"rp-staged","name":"Gated in stage"},{"id":"rp-live","name":"Production live"}],"transitions":[{"id":"rp-promote-ungated","from":"rp-idle","to":"rp-live","on":"rp-promote-requested","guard":"approvals >= 2","faultOnly":true,"description":"Defect: promotes a release that has not passed its gate.","effects":[{"set":"live","to":true},{"emit":"rp-production-received"}]},{"id":"rp-promote-unapproved","from":"rp-staged","to":"rp-live","on":"rp-promote-requested","guard":"approvals < 2","faultOnly":true,"description":"Defect: promotes a release with fewer than two approvals.","effects":[{"set":"live","to":true},{"emit":"rp-production-received"}]},{"id":"rp-stage","from":"rp-idle","to":"rp-staged","on":"rp-stage-gated","effects":[{"set":"gated","to":true}]},{"id":"rp-approve-idle-first","from":"rp-idle","to":"rp-idle","on":"rp-approved","effects":[{"set":"approvals","to":"approvals + 1"},{"set":"approver","to":"event.by"}],"guard":"approvals == 0"},{"id":"rp-approve-idle-second","from":"rp-idle","to":"rp-idle","on":"rp-approved","effects":[{"set":"approvals","to":"approvals + 1"}],"guard":"approvals == 1 && event.by != approver"},{"id":"rp-approve-staged-first","from":"rp-staged","to":"rp-staged","on":"rp-approved","effects":[{"set":"approvals","to":"approvals + 1"},{"set":"approver","to":"event.by"}],"guard":"approvals == 0"},{"id":"rp-approve-staged-second","from":"rp-staged","to":"rp-staged","on":"rp-approved","effects":[{"set":"approvals","to":"approvals + 1"}],"guard":"approvals == 1 && event.by != approver"},{"id":"rp-refuse-idle","from":"rp-idle","to":"rp-idle","on":"rp-promote-requested","effects":[{"emit":"rp-promotion-refused"}]},{"id":"rp-refuse-staged","from":"rp-staged","to":"rp-staged","on":"rp-promote-requested","guard":"approvals < 2","effects":[{"emit":"rp-promotion-refused"}]},{"id":"rp-promote","from":"rp-staged","to":"rp-live","on":"rp-promote-requested","guard":"gated && approvals >= 2","effects":[{"set":"live","to":true},{"emit":"rp-production-received"}]}]},
     {
@@ -38770,7 +38902,8 @@
           "rpi-staged": "staged",
           "rpi-live": "live"
         }
-      }
+      },
+      "realisation": "target"
     },
     {"id":"migration-batch-flow","name":"Migration run in batches","subject":"automation-worker","initial":"mg-idle","description":"One migration run over three records. Each batch converts one record and commits the cursor with it. A run that stops resumes from its cursor.","variables":[{"name":"cursor","type":"number","initial":0},{"name":"converted","type":"number","initial":0}],"states":[{"id":"mg-idle","name":"Not started"},{"id":"mg-running","name":"Running"},{"id":"mg-stopped","name":"Stopped"},{"id":"mg-complete","name":"Complete"}],"transitions":[{"id":"mg-resume-restart","from":"mg-stopped","to":"mg-running","on":"mg-resumed","faultOnly":true,"description":"Defect: resumes from the first record, so records already converted are converted again.","effects":[{"set":"cursor","to":0}]},{"id":"mg-start","from":"mg-idle","to":"mg-running","on":"mg-started","effects":[]},{"id":"mg-batch-unsaved","from":"mg-running","to":"mg-stopped","on":"mg-batch-run","guard":"cursor == 1 && converted == 1","effects":[{"set":"converted","to":"converted + 1"}],"faultOnly":true},{"id":"mg-batch","from":"mg-running","to":"mg-running","on":"mg-batch-run","guard":"cursor < 3","effects":[{"set":"cursor","to":"cursor + 1"},{"set":"converted","to":"converted + 1"}]},{"id":"mg-finish","from":"mg-running","to":"mg-complete","on":"mg-batch-run","guard":"cursor >= 3","effects":[{"emit":"mg-done"}]},{"id":"mg-interrupt","from":"mg-running","to":"mg-stopped","on":"mg-interrupted","effects":[]},{"id":"mg-resume","from":"mg-stopped","to":"mg-running","on":"mg-resumed","effects":[]}]},
     {
@@ -38911,7 +39044,8 @@
           "mgi-stopped": "stopped",
           "mgi-complete": "complete"
         }
-      }
+      },
+      "realisation": "target"
     },
     {"id":"tenant-move-flow","name":"Tenant move","subject":"control-plane","initial":"tm-source","description":"One tenant moving between placements. The source serves while the copy runs, and a writer may write while it does. The source is frozen, the writes the copy missed are applied to the target (the final synchronisation), and the two state hashes are compared. A hash is modelled as the number of writes a side holds. The directory switches only when the comparison finds them equal.","variables":[{"name":"frozen","type":"boolean","initial":false},{"name":"sourceVersion","type":"number","initial":0},{"name":"targetVersion","type":"number","initial":0},{"name":"matched","type":"boolean","initial":false},{"name":"switched","type":"boolean","initial":false}],"states":[{"id":"tm-source","name":"Source serves"},{"id":"tm-copying","name":"Copying"},{"id":"tm-frozen","name":"Source frozen"},{"id":"tm-verified","name":"Hashes equal"},{"id":"tm-target","name":"Target serves"}],"transitions":[{"id":"tm-write-while-frozen","from":"tm-frozen","to":"tm-frozen","on":"tm-write-requested","faultOnly":true,"effects":[{"set":"sourceVersion","to":"sourceVersion + 1"},{"emit":"tm-write-accepted"}]},{"id":"tm-switch-unverified","from":"tm-frozen","to":"tm-target","on":"tm-switch-requested","faultOnly":true,"effects":[{"set":"switched","to":true},{"emit":"tm-directory-switched"}]},{"id":"tm-switch-on-failure","from":"tm-copying","to":"tm-target","on":"tm-copy-failed","faultOnly":true,"effects":[{"set":"switched","to":true},{"emit":"tm-directory-switched"}]},{"id":"tm-begin","from":"tm-source","to":"tm-copying","on":"tm-move-requested","effects":[{"set":"targetVersion","to":"sourceVersion"}]},{"id":"tm-write-source","from":"tm-source","to":"tm-source","on":"tm-write-requested","effects":[{"set":"sourceVersion","to":"sourceVersion + 1"},{"emit":"tm-write-accepted"}]},{"id":"tm-write-copying","from":"tm-copying","to":"tm-copying","on":"tm-write-requested","effects":[{"set":"sourceVersion","to":"sourceVersion + 1"},{"emit":"tm-write-accepted"}]},{"id":"tm-write-frozen","from":"tm-frozen","to":"tm-frozen","on":"tm-write-requested","effects":[{"emit":"tm-write-refused"}]},{"id":"tm-write-verified","from":"tm-verified","to":"tm-verified","on":"tm-write-requested","effects":[{"emit":"tm-write-refused"}]},{"id":"tm-freeze","from":"tm-copying","to":"tm-frozen","on":"tm-freeze-requested","effects":[{"set":"frozen","to":true}]},{"id":"tm-reconcile","from":"tm-frozen","to":"tm-frozen","on":"tm-reconcile-requested","effects":[{"set":"targetVersion","to":"sourceVersion"}]},{"id":"tm-hash-match","from":"tm-frozen","to":"tm-verified","on":"tm-hash-checked","guard":"sourceVersion == targetVersion","effects":[{"set":"matched","to":true}]},{"id":"tm-hash-mismatch","from":"tm-frozen","to":"tm-source","on":"tm-hash-checked","guard":"sourceVersion != targetVersion","effects":[{"set":"frozen","to":false},{"emit":"tm-move-failed"}]},{"id":"tm-abandon-copy","from":"tm-copying","to":"tm-source","on":"tm-copy-failed","effects":[{"emit":"tm-move-failed"}]},{"id":"tm-switch","from":"tm-verified","to":"tm-target","on":"tm-switch-requested","guard":"matched","effects":[{"set":"switched","to":true},{"emit":"tm-directory-switched"}]}]},
     {
@@ -39216,7 +39350,8 @@
           "tmi-verified": "verified",
           "tmi-target": "target-serves"
         }
-      }
+      },
+      "realisation": "target"
     },
     {"id":"commit-flow","name":"Commit and publication","subject":"runtime","initial":"rc-idle","description":"An accepted intent is committed, and only then is its event published.","variables":[{"name":"committed","type":"boolean","initial":false},{"name":"published","type":"boolean","initial":false}],"states":[{"id":"rc-idle","name":"Idle"},{"id":"rc-deciding","name":"Deciding"},{"id":"rc-committing","name":"Committing"},{"id":"rc-done","name":"Published","terminal":true}],"transitions":[{"id":"rc-decide","from":"rc-idle","to":"rc-deciding","on":"rt-intent","effects":[{"emit":"rt-decided"}]},{"id":"rc-publish-early","from":"rc-deciding","to":"rc-committing","on":"rt-decided","faultOnly":true,"description":"Defect: publishes the event before the commit is confirmed.","effects":[{"set":"published","to":true},{"emit":"rt-published"},{"emit":"rt-committed","after":1}]},{"id":"rc-commit","from":"rc-deciding","to":"rc-committing","on":"rt-decided","effects":[{"emit":"rt-committed","after":1}]},{"id":"rc-publish","from":"rc-committing","to":"rc-done","on":"rt-committed","effects":[{"set":"committed","to":true},{"set":"published","to":true},{"emit":"rt-published"}]}]},
     {"id":"source-throttle-flow","name":"Per-source sign-in throttle","subject":"identity-service","initial":"st-open","description":"Password attempts from two sources, a and b, across many accounts. Once the failures from one source reach the threshold of 3, an attempt from that source is refused whatever its account. The threshold of 3 stands for the 100 failures of D-700, and the window of fifteen minutes is not modelled.","variables":[{"name":"failuresA","type":"number","initial":0},{"name":"failuresB","type":"number","initial":0},{"name":"evaluatedWhileThrottled","type":"number","initial":0}],"states":[{"id":"st-open","name":"Open"}],"transitions":[{"id":"st-evaluate-throttled","from":"st-open","to":"st-open","on":"src-attempt","faultOnly":true,"guard":"(event.source == 'a' && failuresA >= 3) || (event.source == 'b' && failuresB >= 3)","effects":[{"set":"evaluatedWhileThrottled","to":"evaluatedWhileThrottled + 1"},{"emit":"src-accepted"}]},{"id":"st-refuse-throttled","from":"st-open","to":"st-open","on":"src-attempt","guard":"(event.source == 'a' && failuresA >= 3) || (event.source == 'b' && failuresB >= 3)","effects":[{"emit":"src-refused"}]},{"id":"st-fail-a","from":"st-open","to":"st-open","on":"src-attempt","guard":"event.source == 'a' && event.guess == 'wrong'","effects":[{"set":"failuresA","to":"failuresA + 1"},{"emit":"src-refused"}]},{"id":"st-fail-b","from":"st-open","to":"st-open","on":"src-attempt","guard":"event.source == 'b' && event.guess == 'wrong'","effects":[{"set":"failuresB","to":"failuresB + 1"},{"emit":"src-refused"}]},{"id":"st-accept","from":"st-open","to":"st-open","on":"src-attempt","guard":"event.guess == 'right'","effects":[{"emit":"src-accepted"}]}]},
@@ -39337,7 +39472,8 @@
           "failuresA": "failures-a",
           "failuresB": "failures-b"
         }
-      }
+      },
+      "realisation": "target"
     },
     {"id":"client-session-flow","name":"Client session","subject":"web-application","initial":"cs-unknown","description":"The session the web application believes it holds. It is unknown until the first read; signing in and out move it; a session frame that says the session ended clears the request token at once and asks for the session again.","variables":[{"name":"holdsToken","type":"number","initial":0},{"name":"warnings","type":"number","initial":0}],"states":[{"id":"cs-unknown","name":"Not read yet"},{"id":"cs-out","name":"Signed out"},{"id":"cs-in","name":"Signed in"},{"id":"cs-ended","name":"Ended, read pending"}],"transitions":[{"id":"cs-read-in","from":"cs-unknown","to":"cs-in","on":"ui-session-read","guard":"event.authenticated == 1","effects":[{"set":"holdsToken","to":"1"}]},{"id":"cs-read-out","from":"cs-unknown","to":"cs-out","on":"ui-session-read","effects":[{"set":"holdsToken","to":"0"}]},{"id":"cs-sign-in","from":"cs-out","to":"cs-in","on":"ui-signed-in","effects":[{"set":"holdsToken","to":"1"}]},{"id":"cs-sign-out","from":"cs-in","to":"cs-out","on":"ui-signed-out","effects":[{"set":"holdsToken","to":"0"}]},{"id":"cs-end","from":"cs-in","to":"cs-ended","on":"ui-session-ended","effects":[{"set":"holdsToken","to":"0"},{"set":"warnings","to":"warnings + 1"},{"emit":"ui-session-requested"}]},{"id":"cs-confirm-end","from":"cs-ended","to":"cs-out","on":"ui-session-read","guard":"event.authenticated == 0"},{"id":"cs-resign","from":"cs-ended","to":"cs-in","on":"ui-signed-in","effects":[{"set":"holdsToken","to":"1"}]}]},
     {
@@ -43170,7 +43306,8 @@
           "ti-installed-i": "installed"
         },
         "creates": true
-      }
+      },
+      "realisation": "target"
     },
     {
       "id": "workflow-run-flow",
@@ -47343,7 +47480,8 @@
           "rawMarkup": "raw-markup"
         },
         "creates": true
-      }
+      },
+      "realisation": "target"
     },
     {
       "id": "delivery-report-flow",
@@ -50468,7 +50606,8 @@
         "key": "tenant-id",
         "storedIn": "rec-runtime-credential",
         "max": 16
-      }
+      },
+      "realisation": "target"
     },
     {
       "id": "export-restore-flow",
@@ -51300,7 +51439,8 @@
         "key": "tenant-id",
         "storedIn": "rec-kernel-upgrade",
         "max": 16
-      }
+      },
+      "realisation": "target"
     },
     {
       "id": "placement-switch-flow",
@@ -57070,7 +57210,8 @@
         "record": "rec-identity-decision",
         "key": "decision-id",
         "creates": true
-      }
+      },
+      "realisation": "target"
     },
     {
       "id": "session-lifetime-flow",
@@ -60566,7 +60707,8 @@
           "checked": "checked"
         },
         "creates": true
-      }
+      },
+      "realisation": "target"
     },
     {
       "id": "signing-key-flow",
@@ -63034,7 +63176,7 @@
     {
       "id": "arc-publisher-crashed-after-commit-impl",
       "name": "The publisher stops after a commit (implementation)",
-      "description": "The runtime that committed stops before it publishes. The outbox job publishes at its sweep, 10 seconds after the commit. Times are in milliseconds. The same scenario run on the implementation machines.",
+      "description": "The runtime that committed stops before it publishes. The publisher publishes at its sweep, 500 ms after the commit. Times are in milliseconds. The same scenario run on the implementation machines.",
       "behaviors": [
         "arc-outbox-delivery-flow-impl"
       ],
@@ -63109,11 +63251,67 @@
           "payload": {
             "guess": "wrong",
             "limit-key": "account-1"
-          },
-          "note": "The fourth guess, after the throttle has closed."
+          }
         },
         {
           "at": 4,
+          "event": "pw-attempt",
+          "payload": {
+            "guess": "wrong",
+            "limit-key": "account-1"
+          }
+        },
+        {
+          "at": 5,
+          "event": "pw-attempt",
+          "payload": {
+            "guess": "wrong",
+            "limit-key": "account-1"
+          }
+        },
+        {
+          "at": 6,
+          "event": "pw-attempt",
+          "payload": {
+            "guess": "wrong",
+            "limit-key": "account-1"
+          }
+        },
+        {
+          "at": 7,
+          "event": "pw-attempt",
+          "payload": {
+            "guess": "wrong",
+            "limit-key": "account-1"
+          }
+        },
+        {
+          "at": 8,
+          "event": "pw-attempt",
+          "payload": {
+            "guess": "wrong",
+            "limit-key": "account-1"
+          }
+        },
+        {
+          "at": 9,
+          "event": "pw-attempt",
+          "payload": {
+            "guess": "wrong",
+            "limit-key": "account-1"
+          }
+        },
+        {
+          "at": 10,
+          "event": "pw-attempt",
+          "payload": {
+            "guess": "wrong",
+            "limit-key": "account-1"
+          },
+          "note": "The eleventh guess, after the throttle has closed."
+        },
+        {
+          "at": 11,
           "event": "pw-attempt",
           "payload": {
             "guess": "right",
@@ -63160,11 +63358,67 @@
           "payload": {
             "guess": "wrong",
             "limit-key": "account-1"
-          },
-          "note": "The fourth guess, after the throttle has closed."
+          }
         },
         {
           "at": 4,
+          "event": "pw-attempt",
+          "payload": {
+            "guess": "wrong",
+            "limit-key": "account-1"
+          }
+        },
+        {
+          "at": 5,
+          "event": "pw-attempt",
+          "payload": {
+            "guess": "wrong",
+            "limit-key": "account-1"
+          }
+        },
+        {
+          "at": 6,
+          "event": "pw-attempt",
+          "payload": {
+            "guess": "wrong",
+            "limit-key": "account-1"
+          }
+        },
+        {
+          "at": 7,
+          "event": "pw-attempt",
+          "payload": {
+            "guess": "wrong",
+            "limit-key": "account-1"
+          }
+        },
+        {
+          "at": 8,
+          "event": "pw-attempt",
+          "payload": {
+            "guess": "wrong",
+            "limit-key": "account-1"
+          }
+        },
+        {
+          "at": 9,
+          "event": "pw-attempt",
+          "payload": {
+            "guess": "wrong",
+            "limit-key": "account-1"
+          }
+        },
+        {
+          "at": 10,
+          "event": "pw-attempt",
+          "payload": {
+            "guess": "wrong",
+            "limit-key": "account-1"
+          },
+          "note": "The eleventh guess, after the throttle has closed."
+        },
+        {
+          "at": 11,
           "event": "pw-attempt",
           "payload": {
             "guess": "right",
@@ -64392,7 +64646,7 @@
     {
       "id": "guesses-on-parallel-connections",
       "name": "A parallel connection adds a failure",
-      "description": "Two scripted wrong guesses and one on a parallel connection reach the threshold before the right guess at tick 4.",
+      "description": "Nine scripted wrong guesses and one on a parallel connection reach the threshold of ten before the right guess at tick 18.",
       "behaviors": [
         "guess-throttle-flow"
       ],
@@ -64420,6 +64674,62 @@
           "at": 4,
           "event": "pw-attempt",
           "payload": {
+            "guess": "wrong",
+            "limit-key": "account-1"
+          }
+        },
+        {
+          "at": 6,
+          "event": "pw-attempt",
+          "payload": {
+            "guess": "wrong",
+            "limit-key": "account-1"
+          }
+        },
+        {
+          "at": 8,
+          "event": "pw-attempt",
+          "payload": {
+            "guess": "wrong",
+            "limit-key": "account-1"
+          }
+        },
+        {
+          "at": 10,
+          "event": "pw-attempt",
+          "payload": {
+            "guess": "wrong",
+            "limit-key": "account-1"
+          }
+        },
+        {
+          "at": 12,
+          "event": "pw-attempt",
+          "payload": {
+            "guess": "wrong",
+            "limit-key": "account-1"
+          }
+        },
+        {
+          "at": 14,
+          "event": "pw-attempt",
+          "payload": {
+            "guess": "wrong",
+            "limit-key": "account-1"
+          }
+        },
+        {
+          "at": 16,
+          "event": "pw-attempt",
+          "payload": {
+            "guess": "wrong",
+            "limit-key": "account-1"
+          }
+        },
+        {
+          "at": 18,
+          "event": "pw-attempt",
+          "payload": {
             "guess": "right",
             "limit-key": "account-1"
           }
@@ -64429,7 +64739,7 @@
     {
       "id": "guesses-on-parallel-connections-impl",
       "name": "A parallel connection adds a failure (implementation)",
-      "description": "Two scripted wrong guesses and one on a parallel connection reach the threshold before the right guess at tick 4.",
+      "description": "Nine scripted wrong guesses and one on a parallel connection reach the threshold of ten before the right guess at tick 18.",
       "behaviors": [
         "guess-throttle-flow-impl"
       ],
@@ -64455,6 +64765,62 @@
         },
         {
           "at": 4,
+          "event": "pw-attempt",
+          "payload": {
+            "guess": "wrong",
+            "limit-key": "account-1"
+          }
+        },
+        {
+          "at": 6,
+          "event": "pw-attempt",
+          "payload": {
+            "guess": "wrong",
+            "limit-key": "account-1"
+          }
+        },
+        {
+          "at": 8,
+          "event": "pw-attempt",
+          "payload": {
+            "guess": "wrong",
+            "limit-key": "account-1"
+          }
+        },
+        {
+          "at": 10,
+          "event": "pw-attempt",
+          "payload": {
+            "guess": "wrong",
+            "limit-key": "account-1"
+          }
+        },
+        {
+          "at": 12,
+          "event": "pw-attempt",
+          "payload": {
+            "guess": "wrong",
+            "limit-key": "account-1"
+          }
+        },
+        {
+          "at": 14,
+          "event": "pw-attempt",
+          "payload": {
+            "guess": "wrong",
+            "limit-key": "account-1"
+          }
+        },
+        {
+          "at": 16,
+          "event": "pw-attempt",
+          "payload": {
+            "guess": "wrong",
+            "limit-key": "account-1"
+          }
+        },
+        {
+          "at": 18,
           "event": "pw-attempt",
           "payload": {
             "guess": "right",
