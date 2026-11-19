@@ -2218,7 +2218,10 @@
         ],
         "csrf": true,
         "origin": true,
-        "description": "Platform operator, or a person starting a sandbox (see start-sandbox)"
+        "description": "Platform operator, or a person starting a sandbox (see start-sandbox)",
+        "requires": [
+          "tenant-provision"
+        ]
       },"idempotent":false,"timeoutMs":30000,"inputs":[{"name":"name","type":"string"},{"name":"template","type":"template-id"},{"name":"plan","type":"plan-id"},{"name":"region","type":"region-id","optional":true},{"name":"owner","type":"principal-id"}],"outputs":[{"name":"tenant","type":"tenant-id"},{"name":"state","type":"tenant-state"},{"name":"bootstrap-credential","type":"secret"}],"postconditions":["A database that holds the data of this tenant alone exists (TEN-001), in the region asked for (TEN-005).","The tenant is reported as active only after its layout and template are installed; a failed run leaves no active tenant (TEN-002, TEN-003).","One bootstrap credential for the first owner is issued; it is refused after its first use and after its expiry (TEN-500).","An audit entry is written and a dry run is offered (AGT-415)."],"errors":[
         {
           "name": "unauthenticated",
@@ -2249,7 +2252,10 @@
     },
     {"id":"get-tenant","name":"Read a tenant directory entry","ref":"CT-034","realisation":"generated","implementedBy":"control-plane","auth":{
         "scheme": "service",
-        "description": "Service credential of a platform component"
+        "description": "Service credential of a platform component",
+        "requires": [
+          "tenant-resolve"
+        ]
       },"idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"}],"outputs":[{"name":"tenant","type":"tenant-directory-entry"}],"postconditions":["The entry is served for at most 15 minutes after the control plane was last reached (ARC-500).","The control database holds no field of a tenant record (TEN-006)."],"errors":[
         {
           "name": "not-found",
@@ -2269,7 +2275,10 @@
     },
     {"id":"resolve-host","name":"Resolve a host name to a tenant and placement","ref":"CT-035","realisation":"generated","implementedBy":"control-plane","auth":{
         "scheme": "service",
-        "description": "Service credential of a platform component"
+        "description": "Service credential of a platform component",
+        "requires": [
+          "tenant-resolve"
+        ]
       },"idempotent":true,"inputs":[{"name":"host","type":"host"}],"outputs":[{"name":"tenant","type":"tenant-id"},{"name":"placement","type":"placement-id"}],"postconditions":["The same name resolves to the same tenant before and after a move (TEN-013)."],"errors":[
         {
           "name": "not-found",
@@ -2288,7 +2297,10 @@
         ],
         "csrf": true,
         "origin": true,
-        "description": "A platform operator"
+        "description": "A platform operator",
+        "requires": [
+          "tenant-suspend"
+        ]
       },"idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"reason","type":"string"}],"outputs":[{"name":"state","type":"tenant-state"}],"postconditions":["A suspended tenant refuses state-changing requests (TEN-009).","All of its data is kept (BIL-154)."],"errors":[
         {
           "name": "unauthenticated",
@@ -2318,7 +2330,10 @@
         ],
         "csrf": true,
         "origin": true,
-        "description": "A platform operator"
+        "description": "A platform operator",
+        "requires": [
+          "tenant-suspend"
+        ]
       },"idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"}],"outputs":[{"name":"state","type":"tenant-state"}],"errors":[
         {
           "name": "unauthenticated",
@@ -2354,7 +2369,10 @@
         ],
         "csrf": true,
         "origin": true,
-        "description": "An owner of the tenant"
+        "description": "An owner of the tenant",
+        "requires": [
+          "tenant-export"
+        ]
       },"idempotent":false,"inputs":[{"name":"tenant","type":"tenant-id"}],"outputs":[{"name":"archive","type":"archive-ref"}],"postconditions":["The export restores into an empty installation as a state with the same canonical hash (TEN-010)."],"errors":[
         {
           "name": "unauthenticated",
@@ -2385,7 +2403,10 @@
         ],
         "csrf": true,
         "origin": true,
-        "description": "An owner of the tenant"
+        "description": "An owner of the tenant",
+        "requires": [
+          "tenant-delete"
+        ]
       },"idempotent":false,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"confirm-tenant","type":"tenant-id"}],"outputs":[{"name":"certificate","type":"deletion-certificate"}],"preconditions":["The grace period that the plan states has ended, unless the platform operator deletes it."],"postconditions":["The database, stored files and encryption key of the tenant are removed (TEN-011).","The certificate states when the key was destroyed and when each backup image and export was removed (PRV-354)."],"errors":[
         {
           "name": "unauthenticated",
@@ -2422,7 +2443,10 @@
         ],
         "csrf": true,
         "origin": true,
-        "description": "An owner of the tenant"
+        "description": "An owner of the tenant",
+        "requires": [
+          "tenant-delete"
+        ]
       },"idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"}],"outputs":[{"name":"state","type":"tenant-state"}],"postconditions":["A deletion requested by the owner stays cancellable until the grace period ends (ADM-160)."],"errors":[
         {
           "name": "unauthenticated",
@@ -2459,7 +2483,10 @@
         ],
         "csrf": true,
         "origin": true,
-        "description": "An owner of the tenant"
+        "description": "An owner of the tenant",
+        "requires": [
+          "tenant-restore"
+        ]
       },"idempotent":false,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"at","type":"timestamp"}],"outputs":[{"name":"revision","type":"u64"},{"name":"first-lost-change","type":"u64","optional":true},{"name":"last-lost-change","type":"u64","optional":true}],"postconditions":["The restored state has the hash that the journal records at that point (TEN-015).","The first and last committed change that was not restored are reported (MIG-573).","A backup of one tenant is unreadable with the key of any other tenant (TEN-252)."],"errors":[
         {
           "name": "unauthenticated",
@@ -2493,7 +2520,10 @@
         "scheme": "session",
         "csrf": true,
         "origin": true,
-        "description": "A signed-in principal"
+        "description": "A signed-in principal",
+        "requires": [
+          "sandbox-start"
+        ]
       },"idempotent":false,"timeoutMs":30000,"inputs":[{"name":"template","type":"template-id"}],"outputs":[{"name":"tenant","type":"tenant-id"}],"postconditions":["The person becomes the owner with no step by a platform operator (ADM-154).","The sandbox is deleted at the end of the period its plan states unless kept (ADM-155)."],"errors":[
         {
           "name": "unauthenticated",
@@ -2524,7 +2554,10 @@
         ],
         "csrf": true,
         "origin": true,
-        "description": "An owner of the tenant"
+        "description": "An owner of the tenant",
+        "requires": [
+          "sandbox-keep"
+        ]
       },"idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"}],"outputs":[{"name":"kind","type":"tenant-kind"}],"postconditions":["The kind changes to production without copying records (ADM-156)."],"errors":[
         {
           "name": "unauthenticated",
@@ -2555,7 +2588,10 @@
         ],
         "csrf": true,
         "origin": true,
-        "description": "An owner of the tenant"
+        "description": "An owner of the tenant",
+        "requires": [
+          "domain-manage"
+        ]
       },"idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"host","type":"host"}],"outputs":[{"name":"binding","type":"domain-binding"}],"postconditions":["The tenant serves its site from the name only after proof of control (EDG-009).","A name that a removed tenant held is bound to another tenant only after proof is given again (EDG-253)."],"errors":[
         {
           "name": "unauthenticated",
@@ -2592,7 +2628,10 @@
         ],
         "csrf": true,
         "origin": true,
-        "description": "An owner of the tenant"
+        "description": "An owner of the tenant",
+        "requires": [
+          "domain-manage"
+        ]
       },"idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"host","type":"host"}],"outputs":[],"postconditions":["Every edge copy stored under the host name is purged (EDG-008)."],"errors":[
         {
           "name": "unauthenticated",
@@ -2623,7 +2662,10 @@
         ],
         "csrf": true,
         "origin": true,
-        "description": "An owner of the tenant"
+        "description": "An owner of the tenant",
+        "requires": [
+          "plan-change"
+        ]
       },"idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"plan","type":"plan-id"}],"outputs":[{"name":"plan","type":"plan-id"}],"errors":[
         {
           "name": "unauthenticated",
@@ -2649,7 +2691,10 @@
     },
     {"id":"find-due-tenants","name":"Find tenants that have due work","ref":"CT-047","realisation":"generated","implementedBy":"control-plane","auth":{
         "scheme": "service",
-        "description": "Service credential of a platform component"
+        "description": "Service credential of a platform component",
+        "requires": [
+          "tenant-resolve"
+        ]
       },"idempotent":true,"inputs":[{"name":"now","type":"timestamp"},{"name":"limit","type":"u32"}],"outputs":[{"name":"tenants","type":"list<wake-entry>"}],"postconditions":["Each entry holds a tenant identifier and a due time and no content of a job (SCH-008).","The index is rebuildable from the tenant databases (ARC-101)."],"errors":[
         {
           "name": "unauthenticated",
@@ -2663,7 +2708,10 @@
     },
     {"id":"record-next-due","name":"Record when a tenant next has work","ref":"CT-048","realisation":"generated","implementedBy":"control-plane","auth":{
         "scheme": "service",
-        "description": "Service credential of a platform component"
+        "description": "Service credential of a platform component",
+        "requires": [
+          "tenant-resolve"
+        ]
       },"idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"due-at","type":"timestamp","optional":true}],"outputs":[],"postconditions":["The previous entry of the tenant is replaced."],"errors":[
         {
           "name": "unauthenticated",
@@ -2687,7 +2735,10 @@
         ],
         "csrf": true,
         "origin": true,
-        "description": "A platform operator"
+        "description": "A platform operator",
+        "requires": [
+          "layout-apply"
+        ]
       },"idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"layout-version","type":"u32"},{"name":"phase","type":"layout-phase"}],"outputs":[{"name":"outcome","type":"layout-outcome"}],"postconditions":["The outcome is recorded per tenant (TEN-014).","A tenant whose change fails stays on its previous layout and keeps serving (MIG-565).","The expanding phase runs on all tenants before any tenant runs the contracting phase (OPS-324)."],"errors":[
         {
           "name": "unauthenticated",
@@ -2713,7 +2764,10 @@
     {"id":"health-check","name":"Report the health of a component","ref":"CT-050","realisation":"generated","implementedBy":"runtime","auth":{
         "scheme": "anonymous",
         "justification": "Health probes reach it before any credential exists (RUN-003); it reports only liveness.",
-        "description": "Anyone with network reach; the only call that needs no service credential (RUN-003)"
+        "description": "Anyone with network reach; the only call that needs no service credential (RUN-003)",
+        "requires": [
+          "health-read"
+        ]
       },"idempotent":true,"inputs":[],"outputs":[{"name":"ok","type":"bool"},{"name":"detail","type":"string"}],"postconditions":["A component reports ready only while its dependencies answer (OBS-004)."],"errors":[
         {
           "name": "unavailable",
@@ -2730,7 +2784,10 @@
         "csrf": true,
         "origin": true,
         "justification": "Signing in is how a visitor gets a session.",
-        "description": "Anyone; no session is needed"
+        "description": "Anyone; no session is needed",
+        "requires": [
+          "identity-sign-in"
+        ]
       },"idempotent":false,"timeoutMs":2000,"inputs":[{"name":"login","type":"string"},{"name":"password","type":"secret"}],"outputs":[{"name":"token","type":"secret"},{"name":"session","type":"session-view"}],"preconditions":["The request carries the request token that the gateway issued to the browser (GWY-257)."],"postconditions":["A session is issued for this tenant only; the session the browser held before ends (IDN-011).","Repeated failures for one account delay further attempts (IDN-008); failures from one source are refused across accounts at the threshold (IDN-250).","A login that does not exist costs as long to answer as a wrong password (IDN-255).","An audit entry names the method, outcome and checks (IDN-021).","A realm policy asking for a second factor withholds the session until one is verified (IDN-018)."],"errors":[
         {
           "name": "unauthenticated",
@@ -2759,7 +2816,10 @@
         "csrf": true,
         "origin": true,
         "justification": "A visitor without a session asks for a sign-in link.",
-        "description": "Anyone; no session is needed"
+        "description": "Anyone; no session is needed",
+        "requires": [
+          "identity-sign-in"
+        ]
       },"idempotent":false,"inputs":[{"name":"email","type":"email-address"}],"outputs":[],"postconditions":["The response is the same whether or not the address belongs to an account (IDN-006).","Requests per address and per browser are limited (IDN-269).","The challenge holds the principal identifier and no email address (PRV-365)."],"errors":[
         {
           "name": "throttled",
@@ -2776,7 +2836,10 @@
         "csrf": true,
         "origin": true,
         "justification": "Signing in is how a visitor gets a session; the emailed token proves the address.",
-        "description": "Anyone; no session is needed"
+        "description": "Anyone; no session is needed",
+        "requires": [
+          "identity-sign-in"
+        ]
       },"idempotent":false,"inputs":[{"name":"challenge","type":"challenge-id"},{"name":"token","type":"secret"}],"outputs":[{"name":"token","type":"secret"},{"name":"session","type":"session-view"}],"postconditions":["The link is accepted once, within its lifetime and only in the browser that requested it (IDN-003, IDN-004, IDN-005)."],"errors":[
         {
           "name": "unauthenticated",
@@ -2799,7 +2862,10 @@
         "csrf": true,
         "origin": true,
         "justification": "Signing in is how a visitor gets a session; the passkey assertion proves the account.",
-        "description": "Anyone; no session is needed"
+        "description": "Anyone; no session is needed",
+        "requires": [
+          "identity-sign-in"
+        ]
       },"idempotent":false,"inputs":[{"name":"challenge","type":"challenge-id"},{"name":"assertion","type":"bytes"}],"outputs":[{"name":"token","type":"secret"},{"name":"session","type":"session-view"}],"postconditions":["The assertion carries a challenge issued for this sign-in and bound to the address it was requested at (IDN-264)."],"errors":[
         {
           "name": "unauthenticated",
@@ -2822,7 +2888,10 @@
         "csrf": true,
         "origin": true,
         "stepUp": "15 min",
-        "description": "A signed-in principal"
+        "description": "A signed-in principal",
+        "requires": [
+          "account-manage"
+        ]
       },"idempotent":false,"inputs":[{"name":"attestation","type":"bytes"}],"outputs":[{"name":"credential","type":"credential-id"}],"postconditions":["The credential is bound to the address of the tenant as the relying party (IDN-007)."],"errors":[
         {
           "name": "unauthenticated",
@@ -2845,7 +2914,10 @@
         "csrf": true,
         "origin": true,
         "justification": "The second step of signing in, before a session exists.",
-        "description": "Anyone; no session is needed"
+        "description": "Anyone; no session is needed",
+        "requires": [
+          "identity-sign-in"
+        ]
       },"idempotent":false,"inputs":[{"name":"challenge","type":"challenge-id"},{"name":"code","type":"secret"}],"outputs":[{"name":"token","type":"secret"},{"name":"session","type":"session-view"}],"postconditions":["A one-time code is spent when its failed presentations reach the limit (IDN-253).","Prompts sent to one account are limited within the window (IDN-268)."],"errors":[
         {
           "name": "unauthenticated",
@@ -2868,7 +2940,10 @@
         "csrf": true,
         "origin": true,
         "justification": "Signing up is how a visitor gets an account.",
-        "description": "Anyone; no session is needed"
+        "description": "Anyone; no session is needed",
+        "requires": [
+          "identity-sign-in"
+        ]
       },"idempotent":false,"inputs":[{"name":"email","type":"email-address"},{"name":"password","type":"secret"},{"name":"display-name","type":"display-name"}],"outputs":[],"postconditions":["An address that already has an account receives the response that a new address receives (IDN-256).","The owner of the address is sent a notice (IDN-257)."],"errors":[
         {
           "name": "invalid",
@@ -2890,7 +2965,10 @@
         "scheme": "session",
         "csrf": true,
         "origin": true,
-        "description": "A signed-in principal"
+        "description": "A signed-in principal",
+        "requires": [
+          "session-manage"
+        ]
       },"idempotent":true,"inputs":[{"name":"session-id","type":"session-id"}],"outputs":[],"preconditions":["The request carries the request token that the gateway issued (GWY-257)."],"postconditions":["The session is revoked at the identity service, not only the cookie in the browser (IDN-263)."],"errors":[
         {
           "name": "unauthenticated",
@@ -2904,7 +2982,10 @@
     },
     {"id":"look-up-session","name":"Look up a session","ref":"CT-059","realisation":"generated","implementedBy":"identity-service","auth":{
         "scheme": "service",
-        "description": "Service credential of a platform component"
+        "description": "Service credential of a platform component",
+        "requires": [
+          "session-verify"
+        ]
       },"idempotent":true,"timeoutMs":2000,"inputs":[{"name":"token","type":"secret"},{"name":"host","type":"host"}],"outputs":[{"name":"assertion","type":"identity-assertion"}],"postconditions":["A session issued for one tenant carries no identity at the address of another (RUN-002).","The answer is a signed assertion; a component accepts a caller identity only from one (IDN-017).","A revoked session is refused within 5 seconds by every gateway instance (IDN-014).","The session ends at the shorter of its idle and absolute lifetimes (IDN-259)."],"errors":[
         {
           "name": "unauthenticated",
@@ -2924,7 +3005,10 @@
     },
     {"id":"list-sessions","name":"List the sessions of the caller","ref":"CT-060","realisation":"generated","implementedBy":"identity-service","auth":{
         "scheme": "session",
-        "description": "A signed-in principal"
+        "description": "A signed-in principal",
+        "requires": [
+          "session-manage"
+        ]
       },"idempotent":true,"inputs":[],"outputs":[{"name":"sessions","type":"list<session-summary>"}],"postconditions":["A session record holds no user agent string and no network address except as a keyed hash (PRV-364)."],"errors":[
         {
           "name": "unauthenticated",
@@ -2941,7 +3025,10 @@
         "scheme": "session",
         "csrf": true,
         "origin": true,
-        "description": "A signed-in principal"
+        "description": "A signed-in principal",
+        "requires": [
+          "session-manage"
+        ]
       },"idempotent":true,"inputs":[{"name":"session-id","type":"session-id"}],"outputs":[],"postconditions":["The session is refused from then on (IDN-012)."],"errors":[
         {
           "name": "unauthenticated",
@@ -2964,7 +3051,10 @@
         "csrf": true,
         "origin": true,
         "stepUp": "15 min",
-        "description": "A signed-in principal"
+        "description": "A signed-in principal",
+        "requires": [
+          "account-manage"
+        ]
       },"idempotent":false,"inputs":[{"name":"current","type":"secret"},{"name":"new","type":"secret"}],"outputs":[],"postconditions":["The other sessions of the account are revoked (IDN-016)."],"errors":[
         {
           "name": "unauthenticated",
@@ -2987,7 +3077,10 @@
         "csrf": true,
         "origin": true,
         "justification": "Recovery is for a person who cannot sign in.",
-        "description": "Anyone; no session is needed"
+        "description": "Anyone; no session is needed",
+        "requires": [
+          "identity-sign-in"
+        ]
       },"idempotent":false,"inputs":[{"name":"email","type":"email-address"}],"outputs":[],"postconditions":["Every registered contact is notified before recovery completes, after the delay the platform states (IDN-265).","Every existing session of the account is revoked (IDN-020).","The second factor of the realm stays in force at the next sign-in (IDN-266)."],"errors":[
         {
           "name": "throttled",
@@ -3004,7 +3097,10 @@
         "csrf": true,
         "origin": true,
         "justification": "An invited person has no account yet; the invitation token names them.",
-        "description": "Anyone; no session is needed"
+        "description": "Anyone; no session is needed",
+        "requires": [
+          "invitation-redeem"
+        ]
       },"idempotent":false,"inputs":[{"name":"invitation","type":"secret"},{"name":"email","type":"email-address"}],"outputs":[{"name":"principal","type":"principal-id"}],"postconditions":["The invitation grants its roles to the one person who redeems it with the address it names and to no one else (ADM-153)."],"errors":[
         {
           "name": "invalid",
@@ -3023,7 +3119,10 @@
         ],
         "csrf": true,
         "origin": true,
-        "description": "An owner of the tenant"
+        "description": "An owner of the tenant",
+        "requires": [
+          "realm-configure"
+        ]
       },"idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"policy","type":"realm-policy"},{"name":"dry-run","type":"bool","optional":true}],"outputs":[{"name":"projection","type":"projection-summary"}],"postconditions":["Each change is projected before it applies (AGT-425)."],"errors":[
         {
           "name": "unauthenticated",
@@ -3049,7 +3148,10 @@
     },
     {"id":"end-principal-sessions","name":"End every session of a principal","ref":"CT-066","realisation":"generated","implementedBy":"identity-service","auth":{
         "scheme": "service",
-        "description": "Service credential of a platform component"
+        "description": "Service credential of a platform component",
+        "requires": [
+          "session-verify"
+        ]
       },"idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"principal","type":"principal-id"}],"outputs":[{"name":"ended","type":"u64"}],"postconditions":["A principal that no longer holds a role in the tenant has no session (kernel effect RevokeSessions)."],"errors":[
         {
           "name": "unauthenticated",
@@ -3065,7 +3167,10 @@
         "csrf": true,
         "origin": true,
         "justification": "Signing in with a provider starts before any session exists.",
-        "description": "Anyone; no session is needed"
+        "description": "Anyone; no session is needed",
+        "requires": [
+          "identity-sign-in"
+        ]
       },"idempotent":false,"inputs":[{"name":"provider","type":"provider-id"},{"name":"return-to","type":"string","optional":true}],"outputs":[{"name":"redirect","type":"url"}],"postconditions":["The authorization code flow with a proof key is used (FED-002).","A pending request is bound to the browser."],"errors":[
         {
           "name": "invalid",
@@ -3080,7 +3185,10 @@
     {"id":"complete-oidc-sign-in","name":"Complete an OpenID Connect sign-in","ref":"CT-068","realisation":"generated","implementedBy":"identity-service","auth":{
         "scheme": "signature",
         "secret": "oidc-provider-signing-keys",
-        "description": "Anyone; no session is needed"
+        "description": "Anyone; no session is needed",
+        "requires": [
+          "identity-federate"
+        ]
       },"idempotent":false,"inputs":[{"name":"state","type":"secret"},{"name":"code","type":"secret"}],"outputs":[{"name":"token","type":"secret"},{"name":"return-to","type":"string"}],"postconditions":["An identity token whose issuer, audience, signature or nonce fails verification is refused (FED-003).","Provider signing keys refresh from the metadata when a token names an unknown key (FED-004).","A first sign-in creates a principal only when the realm enabled it, with only the default role (FED-011, FED-258).","An asserted address links to an existing principal only when the provider marks it verified (FED-257)."],"errors":[
         {
           "name": "unauthenticated",
@@ -3106,7 +3214,10 @@
     },
     {"id":"serve-saml-metadata","name":"Serve SAML service provider metadata","ref":"CT-069","realisation":"generated","implementedBy":"identity-service","auth":{
         "scheme": "anonymous",
-        "description": "Anyone; no session is needed"
+        "description": "Anyone; no session is needed",
+        "requires": [
+          "identity-sign-in"
+        ]
       },"idempotent":true,"inputs":[{"name":"provider","type":"provider-id"}],"outputs":[{"name":"metadata","type":"bytes"}],"errors":[
         {
           "name": "not-found",
@@ -3122,7 +3233,10 @@
     {"id":"consume-saml-assertion","name":"Consume a SAML assertion","ref":"CT-070","realisation":"generated","implementedBy":"identity-service","auth":{
         "scheme": "signature",
         "secret": "saml-provider-certificate",
-        "description": "Anyone; no session is needed"
+        "description": "Anyone; no session is needed",
+        "requires": [
+          "identity-federate"
+        ]
       },"idempotent":false,"inputs":[{"name":"response","type":"bytes"},{"name":"relay-state","type":"secret","optional":true}],"outputs":[{"name":"token","type":"secret"},{"name":"return-to","type":"string"}],"postconditions":["The assertion is accepted only when signed by the certificate the tenant configured (FED-005).","A repeated assertion is refused (FED-006).","The message is read with external entities and document type processing off (FED-251).","The subject is the complete text of the name identifier (FED-253)."],"errors":[
         {
           "name": "unauthenticated",
@@ -3142,7 +3256,10 @@
     },
     {"id":"provision-user","name":"Provision or update a person by SCIM","ref":"CT-071","realisation":"generated","implementedBy":"identity-service","auth":{
         "scheme": "provisioning-token",
-        "description": "A provisioning token of one realm (FED-259)"
+        "description": "A provisioning token of one realm (FED-259)",
+        "requires": [
+          "directory-provision"
+        ]
       },"idempotent":true,"inputs":[{"name":"user","type":"scim-user"}],"outputs":[{"name":"principal","type":"principal-id"}],"postconditions":["Deactivating a person revokes that person's sessions (FED-015)."],"errors":[
         {
           "name": "unauthenticated",
@@ -3162,7 +3279,10 @@
     },
     {"id":"deprovision-user","name":"Deactivate a person by SCIM","ref":"CT-072","realisation":"generated","implementedBy":"identity-service","auth":{
         "scheme": "provisioning-token",
-        "description": "A provisioning token of one realm"
+        "description": "A provisioning token of one realm",
+        "requires": [
+          "directory-provision"
+        ]
       },"idempotent":true,"inputs":[{"name":"principal","type":"principal-id"}],"outputs":[],"postconditions":["Every session of the person is revoked (FED-015)."],"errors":[
         {
           "name": "unauthenticated",
@@ -3182,7 +3302,10 @@
     },
     {"id":"map-group","name":"Change the roles of a principal through a SCIM group","ref":"CT-073","realisation":"generated","implementedBy":"identity-service","auth":{
         "scheme": "provisioning-token",
-        "description": "A provisioning token of one realm"
+        "description": "A provisioning token of one realm",
+        "requires": [
+          "directory-provision"
+        ]
       },"idempotent":true,"inputs":[{"name":"group","type":"string"},{"name":"members","type":"list<principal-id>"}],"outputs":[],"postconditions":["Roles change only through the group mapping the realm declares (FED-260)."],"errors":[
         {
           "name": "unauthenticated",
@@ -3203,7 +3326,10 @@
     {"id":"issue-access-token","name":"Issue an access token by client credentials","ref":"CT-074","realisation":"generated","implementedBy":"identity-service","auth":{
         "scheme": "signature",
         "secret": "client-secret",
-        "description": "A service account presenting its client secret"
+        "description": "A service account presenting its client secret",
+        "requires": [
+          "token-issue"
+        ]
       },"idempotent":false,"inputs":[{"name":"client","type":"principal-id"},{"name":"secret","type":"secret"},{"name":"scope","type":"list<string>","optional":true},{"name":"audience","type":"string"}],"outputs":[{"name":"access-token","type":"secret"},{"name":"expires-at","type":"timestamp"},{"name":"scope","type":"list<string>"}],"postconditions":["The token grants no scope beyond those of the grant (TOK-002) and is valid for at most 5 minutes (TOK-005).","The token is for one tenant and refused by every other (TOK-006)."],"errors":[
         {
           "name": "unauthenticated",
@@ -3223,7 +3349,10 @@
     },
     {"id":"exchange-token","name":"Exchange a token for a delegated token","ref":"CT-075","realisation":"generated","implementedBy":"identity-service","auth":{
         "scheme": "delegation",
-        "description": "An agent holding a delegation from a person"
+        "description": "An agent holding a delegation from a person",
+        "requires": [
+          "token-exchange"
+        ]
       },"idempotent":false,"inputs":[{"name":"subject-token","type":"secret"},{"name":"agent","type":"principal-id"},{"name":"purpose","type":"string"},{"name":"expires-at","type":"timestamp"}],"outputs":[{"name":"access-token","type":"secret"},{"name":"expires-at","type":"timestamp"}],"postconditions":["The token names both the agent and the person (TOK-003).","It grants no permission the person lacks (TOK-004).","It is refused for an operation outside its purpose (AGS-408)."],"errors":[
         {
           "name": "unauthenticated",
@@ -3249,7 +3378,10 @@
     },
     {"id":"introspect-token","name":"Introspect a token","ref":"CT-076","realisation":"generated","implementedBy":"identity-service","auth":{
         "scheme": "service",
-        "description": "A caller permitted to ask"
+        "description": "A caller permitted to ask",
+        "requires": [
+          "session-verify"
+        ]
       },"idempotent":true,"inputs":[{"name":"token","type":"secret"}],"outputs":[{"name":"active","type":"bool"},{"name":"scope","type":"list<string>","optional":true},{"name":"subject","type":"principal-id","optional":true},{"name":"expires-at","type":"timestamp","optional":true}],"postconditions":["A revoked grant makes tokens issued from it inactive within the revocation bound of sessions (TOK-007)."],"errors":[
         {
           "name": "unauthenticated",
@@ -3269,7 +3401,10 @@
       "implementedBy": "identity-service",
       "auth": {
         "scheme": "anonymous",
-        "description": "Anyone; no session is needed"
+        "description": "Anyone; no session is needed",
+        "requires": [
+          "identity-sign-in"
+        ]
       },
       "idempotent": true,
       "inputs": [],
@@ -3293,7 +3428,10 @@
         "tenantPolicies": true,
         "csrf": true,
         "origin": true,
-        "description": "A principal whose policies permit the operation"
+        "description": "A principal whose policies permit the operation",
+        "requires": [
+          "grant-manage"
+        ]
       },"idempotent":true,"inputs":[{"name":"grant","type":"grant-id"}],"outputs":[],"errors":[
         {
           "name": "unauthenticated",
@@ -3322,7 +3460,10 @@
         "tenantPolicies": true,
         "csrf": true,
         "origin": true,
-        "description": "A principal whose policies permit the operation"
+        "description": "A principal whose policies permit the operation",
+        "requires": [
+          "grant-manage"
+        ]
       },"idempotent":false,"inputs":[{"name":"principal","type":"principal-id"},{"name":"scopes","type":"list<string>"},{"name":"expires-at","type":"timestamp"}],"outputs":[{"name":"grant","type":"grant-id"}],"errors":[
         {
           "name": "unauthenticated",
@@ -3352,7 +3493,10 @@
         "csrf": true,
         "origin": true,
         "stepUp": "15 min",
-        "description": "A principal whose policies permit the operation"
+        "description": "A principal whose policies permit the operation",
+        "requires": [
+          "grant-manage"
+        ]
       },"idempotent":false,"inputs":[{"name":"client","type":"principal-id"}],"outputs":[{"name":"secret","type":"secret"}],"postconditions":["The secret is stored only as a hash and shown once, when created (TOK-252)."],"errors":[
         {
           "name": "unauthenticated",
@@ -3375,7 +3519,10 @@
         "tenantPolicies": true,
         "csrf": true,
         "origin": true,
-        "description": "A principal whose policies permit the operation"
+        "description": "A principal whose policies permit the operation",
+        "requires": [
+          "jobs-manage"
+        ]
       },"idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"kind","type":"string"},{"name":"due-at","type":"timestamp"},{"name":"idempotency-key","type":"string"},{"name":"payload","type":"value-map"}],"outputs":[{"name":"job","type":"job-id"}],"postconditions":["The job is offered to a worker no earlier than its time (SCH-001).","An effect with an idempotency key is applied once however many times its job is attempted (SCH-015).","A request to send mail becomes a job in the transaction that commits its change (EML-005)."],"errors":[
         {
           "name": "unauthenticated",
@@ -3401,7 +3548,10 @@
     },
     {"id":"lease-job","name":"Take a lease on a due job","ref":"CT-082","realisation":"generated","implementedBy":"automation-worker","auth":{
         "scheme": "service",
-        "description": "Service credential of a platform component"
+        "description": "Service credential of a platform component",
+        "requires": [
+          "jobs-run"
+        ]
       },"idempotent":false,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"worker","type":"string"}],"outputs":[{"name":"job","type":"job-id","optional":true},{"name":"lease-token","type":"u64","optional":true},{"name":"expires-at","type":"timestamp","optional":true}],"postconditions":["A due job starts within 5 seconds of its due time at the 99th percentile (SCH-002).","A worker that cannot reach the tenant database takes no lease (SCH-301).","A job whose worker stops responding is offered to another worker after the lease expires (SCH-010)."],"errors":[
         {
           "name": "unauthenticated",
@@ -3420,7 +3570,10 @@
     },
     {"id":"report-job-result","name":"Report the result of a job attempt","ref":"CT-083","realisation":"generated","implementedBy":"automation-worker","auth":{
         "scheme": "service",
-        "description": "Service credential of a platform component"
+        "description": "Service credential of a platform component",
+        "requires": [
+          "jobs-run"
+        ]
       },"idempotent":true,"inputs":[{"name":"job","type":"job-id"},{"name":"lease-token","type":"u64"},{"name":"outcome","type":"job-outcome"},{"name":"error","type":"string","optional":true}],"outputs":[{"name":"state","type":"job-state"}],"postconditions":["A job ends in exactly one recorded outcome (SCH-012).","A failed attempt is retried after a delay that grows with the attempt count; a job that exhausts its attempts is recorded as failed with each error (SCH-013, SCH-014).","A recurring schedule creates its next job in the transaction that completes the current one (SCH-003)."],"errors":[
         {
           "name": "unauthenticated",
@@ -3442,7 +3595,10 @@
         "tenantPolicies": true,
         "csrf": true,
         "origin": true,
-        "description": "A principal whose policies permit the operation"
+        "description": "A principal whose policies permit the operation",
+        "requires": [
+          "jobs-manage"
+        ]
       },"idempotent":true,"inputs":[{"name":"job","type":"job-id"},{"name":"reason","type":"string"}],"outputs":[],"postconditions":["No later attempt happens (SCH-006).","The requester and the reason are recorded (AGT-417)."],"errors":[
         {
           "name": "unauthenticated",
@@ -3471,7 +3627,10 @@
         "tenantPolicies": true,
         "csrf": true,
         "origin": true,
-        "description": "A principal whose policies permit the operation"
+        "description": "A principal whose policies permit the operation",
+        "requires": [
+          "jobs-manage"
+        ]
       },"idempotent":false,"inputs":[{"name":"job","type":"job-id"}],"outputs":[{"name":"attempt","type":"u32"}],"postconditions":["A new attempt is created and the outcomes of earlier attempts are unchanged (AGT-418)."],"errors":[
         {
           "name": "unauthenticated",
@@ -3504,7 +3663,10 @@
     {"id":"list-jobs","name":"List jobs and schedules","ref":"CT-086","realisation":"generated","implementedBy":"automation-worker","auth":{
         "scheme": "session",
         "tenantPolicies": true,
-        "description": "A principal whose policies permit the operation"
+        "description": "A principal whose policies permit the operation",
+        "requires": [
+          "jobs-read"
+        ]
       },"idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"cursor","type":"string","optional":true}],"outputs":[{"name":"jobs","type":"list<job-summary>"},{"name":"next","type":"string","optional":true}],"postconditions":["Each entry shows its state, attempts and the error of each (AGT-416)."],"errors":[
         {
           "name": "unauthenticated",
@@ -3528,7 +3690,10 @@
         "tenantPolicies": true,
         "csrf": true,
         "origin": true,
-        "description": "A principal whose policies permit the operation"
+        "description": "A principal whose policies permit the operation",
+        "requires": [
+          "jobs-manage"
+        ]
       },"idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"schedule","type":"schedule-id"},{"name":"rule","type":"recurrence"},{"name":"paused","type":"bool","optional":true}],"outputs":[{"name":"next-due","type":"timestamp"}],"postconditions":["A paused schedule creates no job (SCH-005)."],"errors":[
         {
           "name": "unauthenticated",
@@ -3597,7 +3762,10 @@
         ],
         "csrf": true,
         "origin": true,
-        "description": "An owner of the tenant"
+        "description": "An owner of the tenant",
+        "requires": [
+          "workflow-activate"
+        ]
       },"idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"workflow","type":"workflow-id"},{"name":"projection","type":"projection-summary"}],"outputs":[{"name":"version","type":"u64"}],"postconditions":["The definition is stored as tenant metadata under the schema version (WFL-001)."],"errors":[
         {
           "name": "unauthenticated",
@@ -3623,7 +3791,10 @@
     },
     {"id":"start-workflow-run","name":"Start a workflow run","ref":"CT-090","realisation":"generated","implementedBy":"automation-worker","auth":{
         "scheme": "service",
-        "description": "Service credential of a platform component"
+        "description": "Service credential of a platform component",
+        "requires": [
+          "jobs-run"
+        ]
       },"idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"workflow","type":"workflow-id"},{"name":"input","type":"value-map"},{"name":"idempotency-key","type":"string","optional":true}],"outputs":[{"name":"run","type":"run-id"}],"postconditions":["The run continues under the definition version that started it (MIG-562)."],"errors":[
         {
           "name": "unauthenticated",
@@ -3642,7 +3813,10 @@
     },
     {"id":"advance-workflow-run","name":"Advance a workflow run by one step","ref":"CT-091","realisation":"generated","implementedBy":"automation-worker","auth":{
         "scheme": "service",
-        "description": "Service credential of a platform component"
+        "description": "Service credential of a platform component",
+        "requires": [
+          "jobs-run"
+        ]
       },"idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"run","type":"run-id"}],"outputs":[{"name":"state","type":"run-state"},{"name":"step","type":"u32"}],"postconditions":["The step is decided by the kernel from the recorded state of the run (WFL-003).","After a restart the run continues from its last recorded step (WFL-004).","A failed step runs the declared compensations of the completed steps in reverse order (WFL-005).","A step runs as a job under the lease and retry rules (ARC-700)."],"errors":[
         {
           "name": "unauthenticated",
@@ -3664,7 +3838,10 @@
         "tenantPolicies": true,
         "csrf": true,
         "origin": true,
-        "description": "A principal that the policy of the step names"
+        "description": "A principal that the policy of the step names",
+        "requires": [
+          "workflow-approve"
+        ]
       },"idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"run","type":"run-id"}],"outputs":[{"name":"state","type":"run-state"}],"postconditions":["The run continues only after such a principal approves (WFL-006)."],"errors":[
         {
           "name": "unauthenticated",
@@ -3690,7 +3867,10 @@
     },
     {"id":"deliver-view","name":"Deliver a view of published content","ref":"CT-093","realisation":"generated","implementedBy":"gateway","auth":{
         "scheme": "anonymous",
-        "description": "Anyone; no session is needed"
+        "description": "Anyone; no session is needed",
+        "requires": [
+          "content-read"
+        ]
       },"idempotent":true,"timeoutMs":10000,"inputs":[{"name":"host","type":"host"},{"name":"path","type":"string"},{"name":"request","type":"value-map","optional":true},{"name":"fields","type":"list<string>","optional":true},{"name":"cursor","type":"string","optional":true},{"name":"language","type":"string","optional":true}],"outputs":[{"name":"view","type":"view-data"},{"name":"next","type":"string","optional":true}],"postconditions":["The tenant is resolved from the host name alone (GWY-001).","The response is produced from named queries and view definitions held as tenant metadata (CMS-002).","Only the fields named in the field selection are returned, and a page comes with a cursor (CMS-163, CMS-164).","Drafts are invisible to principals whose policies permit published content alone (CMS-003).","A committed change is visible within 2 seconds at the 99th percentile (CPY-009).","A request answered from a stored copy completes within 100 ms at the 99th percentile (OPS-333)."],"errors":[
         {
           "name": "not-found",
@@ -3717,7 +3897,10 @@
     },
     {"id":"run-named-query","name":"Run a named query","ref":"CT-094","realisation":"generated","implementedBy":"gateway","auth":{
         "scheme": "anonymous",
-        "description": "Anyone; no session is needed"
+        "description": "Anyone; no session is needed",
+        "requires": [
+          "content-read"
+        ]
       },"idempotent":true,"inputs":[{"name":"host","type":"host"},{"name":"query","type":"string"},{"name":"filter","type":"value-map","optional":true},{"name":"fields","type":"list<string>","optional":true},{"name":"cursor","type":"string","optional":true}],"outputs":[{"name":"rows","type":"list<value-map>"},{"name":"next","type":"string","optional":true}],"postconditions":["The throttled response names the limit and the time after which the next request is permitted (CMS-168)."],"errors":[
         {
           "name": "not-found",
@@ -3745,7 +3928,10 @@
     {"id":"list-record-versions","name":"List the published versions of a record","ref":"CT-095","realisation":"generated","implementedBy":"gateway","auth":{
         "scheme": "session",
         "tenantPolicies": true,
-        "description": "A principal whose policies permit the operation"
+        "description": "A principal whose policies permit the operation",
+        "requires": [
+          "content-draft-read"
+        ]
       },"idempotent":true,"inputs":[{"name":"record","type":"record-id"}],"outputs":[{"name":"versions","type":"list<record-version>"}],"postconditions":["Each published version is retrievable (CMS-006)."],"errors":[
         {
           "name": "unauthenticated",
@@ -3775,7 +3961,10 @@
         "tenantPolicies": true,
         "csrf": true,
         "origin": true,
-        "description": "A principal whose policies permit the operation"
+        "description": "A principal whose policies permit the operation",
+        "requires": [
+          "content-restore"
+        ]
       },"idempotent":false,"inputs":[{"name":"record","type":"record-id"},{"name":"version","type":"u64"}],"outputs":[{"name":"version","type":"u64"}],"postconditions":["A new version with the earlier content is created (CMS-007)."],"errors":[
         {
           "name": "unauthenticated",
@@ -3802,7 +3991,10 @@
     {"id":"show-preview","name":"Show a preview of unpublished content","ref":"CT-097","realisation":"generated","implementedBy":"gateway","auth":{
         "scheme": "session",
         "tenantPolicies": true,
-        "description": "A principal that may read the draft, or a holder of a preview link"
+        "description": "A principal that may read the draft, or a holder of a preview link",
+        "requires": [
+          "content-draft-read"
+        ]
       },"idempotent":true,"inputs":[{"name":"host","type":"host"},{"name":"path","type":"string"},{"name":"preview-token","type":"secret","optional":true}],"outputs":[{"name":"view","type":"view-data"}],"postconditions":["A preview link shows one stated draft version of one record and no other record or screen (CMS-159, CMS-160)."],"errors":[
         {
           "name": "unauthenticated",
@@ -3823,7 +4015,10 @@
     },
     {"id":"subscribe-events","name":"Subscribe to the events a principal may read","ref":"CT-098","realisation":"generated","implementedBy":"gateway","auth":{
         "scheme": "session",
-        "description": "A signed-in principal"
+        "description": "A signed-in principal",
+        "requires": [
+          "events-subscribe"
+        ]
       },"idempotent":true,"inputs":[{"name":"selector","type":"selector"},{"name":"after","type":"u64","optional":true}],"outputs":[{"name":"stream","type":"event-stream"}],"preconditions":["The WebSocket upgrade comes from an allowed origin and carries the request token of the session (GWY-004, GWY-256)."],"postconditions":["A notice about a record reaches a subscriber only when its principal may read the record (RUN-001).","A slow subscriber does not delay the others (OPS-311)."],"errors":[
         {
           "name": "unauthenticated",
@@ -3850,7 +4045,10 @@
     },
     {"id":"serve-sitemap","name":"Serve the sitemap of a site","ref":"CT-099","realisation":"generated","implementedBy":"gateway","auth":{
         "scheme": "anonymous",
-        "description": "Anyone; no session is needed"
+        "description": "Anyone; no session is needed",
+        "requires": [
+          "content-read"
+        ]
       },"idempotent":true,"inputs":[{"name":"host","type":"host"}],"outputs":[{"name":"sitemap","type":"bytes"}],"postconditions":["It lists the address of each published page (EDG-150)."],"errors":[
         {
           "name": "not-found",
@@ -3865,7 +4063,10 @@
     },
     {"id":"serve-feed","name":"Serve a syndication feed of a collection","ref":"CT-100","realisation":"generated","implementedBy":"gateway","auth":{
         "scheme": "anonymous",
-        "description": "Anyone; no session is needed"
+        "description": "Anyone; no session is needed",
+        "requires": [
+          "content-read"
+        ]
       },"idempotent":true,"inputs":[{"name":"host","type":"host"},{"name":"collection","type":"string"}],"outputs":[{"name":"feed","type":"bytes"}],"postconditions":["It names the address and publication time of each entry (EDG-151)."],"errors":[
         {
           "name": "not-found",
@@ -3883,7 +4084,10 @@
         "csrf": true,
         "origin": true,
         "justification": "A visitor records cookie consent before any session exists.",
-        "description": "Anyone; no session is needed"
+        "description": "Anyone; no session is needed",
+        "requires": [
+          "consent-record"
+        ]
       },"idempotent":false,"inputs":[{"name":"host","type":"host"},{"name":"visitor","type":"visitor-id"},{"name":"purpose","type":"string"},{"name":"decision","type":"string"},{"name":"text","type":"string"}],"outputs":[{"name":"consent","type":"consent-id"}],"postconditions":["The decision is recorded with its purpose, time and the text the visitor was shown (PRV-375)."],"errors":[
         {
           "name": "invalid",
@@ -3903,7 +4107,10 @@
       "implementedBy": "gateway",
       "auth": {
         "scheme": "anonymous",
-        "description": "Anyone; no session is needed"
+        "description": "Anyone; no session is needed",
+        "requires": [
+          "content-read"
+        ]
       },
       "idempotent": true,
       "inputs": [
@@ -3929,7 +4136,10 @@
     },
     {"id":"purge-by-surrogate-key","name":"Purge edge copies by surrogate key","ref":"CT-103","realisation":"generated","implementedBy":"delivery-network-control","auth":{
         "scheme": "service",
-        "description": "Service credential of a platform component"
+        "description": "Service credential of a platform component",
+        "requires": [
+          "edge-control"
+        ]
       },"idempotent":true,"timeoutMs":5000,"inputs":[{"name":"keys","type":"list<string>"}],"outputs":[],"postconditions":["The purge takes effect at the edge within 5 seconds at the 99th percentile (EDG-007).","A committed change purges the surrogate keys of the records it changed (EDG-005)."],"errors":[
         {
           "name": "unavailable",
@@ -3942,7 +4152,10 @@
     },
     {"id":"purge-host","name":"Purge every edge copy of a host","ref":"CT-104","realisation":"generated","implementedBy":"delivery-network-control","auth":{
         "scheme": "service",
-        "description": "Service credential of a platform component"
+        "description": "Service credential of a platform component",
+        "requires": [
+          "edge-control"
+        ]
       },"idempotent":true,"timeoutMs":5000,"inputs":[{"name":"host","type":"host"}],"outputs":[],"postconditions":["Every edge copy stored under the host name is purged (EDG-008, THR-262)."],"errors":[
         {
           "name": "unavailable",
@@ -3955,7 +4168,10 @@
     },
     {"id":"register-edge-domain","name":"Register or remove a tenant domain at the edge","ref":"CT-105","realisation":"generated","implementedBy":"delivery-network-control","auth":{
         "scheme": "service",
-        "description": "Service credential of a platform component"
+        "description": "Service credential of a platform component",
+        "requires": [
+          "edge-control"
+        ]
       },"idempotent":true,"inputs":[{"name":"host","type":"host"},{"name":"action","type":"string"}],"outputs":[{"name":"certificate-state","type":"certificate-state"}],"postconditions":["The certificate is renewed before it expires (EDG-010)."],"errors":[
         {
           "name": "invalid",
@@ -3970,7 +4186,10 @@
         "scheme": "session",
         "csrf": true,
         "origin": true,
-        "description": "A signed-in principal"
+        "description": "A signed-in principal",
+        "requires": [
+          "media-sign"
+        ]
       },"idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"file","type":"string"},{"name":"principal","type":"principal-id"},{"name":"expires-at","type":"timestamp"}],"outputs":[{"name":"address","type":"url"}],"postconditions":["A private media file is delivered only through an address signed for the principal with an expiry (EDG-012)."],"errors":[
         {
           "name": "unauthenticated",
@@ -4004,7 +4223,10 @@
     {"id":"list-operations","name":"List the operations of the catalogue","ref":"CT-108","realisation":"generated","implementedBy":"agent-gateway","auth":{
         "scheme": "delegation",
         "tenantPolicies": true,
-        "description": "A principal whose policies permit the operation"
+        "description": "A principal whose policies permit the operation",
+        "requires": [
+          "catalogue-read"
+        ]
       },"idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"cursor","type":"string","optional":true}],"outputs":[{"name":"operations","type":"list<operation-entry>"},{"name":"next","type":"string","optional":true}],"postconditions":["Every operation of the authoring application is listed with a stable name, a version and a deprecation state (AGT-001, AGT-400).","Each operation is marked as permitted or not for the requesting principal (AGT-002).","A change of schema version shows without a deployment (AGT-003).","Tenant-defined names appear only as quoted data inside a description (AGS-405)."],"errors":[
         {
           "name": "unauthenticated",
@@ -4020,7 +4242,10 @@
     {"id":"describe-operation","name":"Describe one operation","ref":"CT-109","realisation":"generated","implementedBy":"agent-gateway","auth":{
         "scheme": "delegation",
         "tenantPolicies": true,
-        "description": "A principal whose policies permit the operation"
+        "description": "A principal whose policies permit the operation",
+        "requires": [
+          "catalogue-read"
+        ]
       },"idempotent":true,"inputs":[{"name":"name","type":"string"},{"name":"version","type":"string","optional":true}],"outputs":[{"name":"operation","type":"operation-entry"}],"postconditions":["The entry names the requirements it implements (AGT-005).","The meaning of an operation at one version stays unchanged in every later release (AGT-401).","A deprecated operation keeps answering until its removal date (AGT-402)."],"errors":[
         {
           "name": "unauthenticated",
@@ -4042,7 +4267,10 @@
     {"id":"invoke-operation","name":"Invoke an operation","ref":"CT-110","realisation":"generated","implementedBy":"agent-gateway","auth":{
         "scheme": "delegation",
         "tenantPolicies": true,
-        "description": "A principal whose policies permit the operation"
+        "description": "A principal whose policies permit the operation",
+        "requires": [
+          "operation-invoke"
+        ]
       },"idempotent":true,"inputs":[{"name":"name","type":"string"},{"name":"input","type":"value-map"},{"name":"idempotency-key","type":"string","optional":true},{"name":"dry-run","type":"bool","optional":true},{"name":"expected-revision","type":"u64","optional":true}],"outputs":[{"name":"result","type":"operation-result"}],"postconditions":["A dry run returns the state changes without committing them (AGT-008).","A rejected operation returns the failed checks in machine-readable form with a stable error code and a flag that says whether repeating is safe (AGT-009, AGT-407).","The result of an applied change names an inverse operation or states that none exists (AGT-010).","An operation by an agent is authorised by the same policies as the same operation by a person (AGT-014).","A repeat with the same idempotency key has the effect of one call (AGT-403).","A write that would exceed a quota is refused with the quota named (BIL-151)."],"errors":[
         {
           "name": "unauthenticated",
@@ -4087,7 +4315,10 @@
     {"id":"get-operation-handle","name":"Read the state of a long operation","ref":"CT-111","realisation":"generated","implementedBy":"agent-gateway","auth":{
         "scheme": "delegation",
         "tenantPolicies": true,
-        "description": "A principal whose policies permit the operation"
+        "description": "A principal whose policies permit the operation",
+        "requires": [
+          "catalogue-read"
+        ]
       },"idempotent":true,"inputs":[{"name":"handle","type":"string"}],"outputs":[{"name":"state","type":"string"},{"name":"result","type":"operation-result","optional":true}],"postconditions":["The state of an operation whose work outlasts its request stays readable (AGT-406)."],"errors":[
         {
           "name": "unauthenticated",
@@ -4109,7 +4340,10 @@
     {"id":"propose-change","name":"Propose a change","ref":"CT-112","realisation":"generated","implementedBy":"agent-gateway","auth":{
         "scheme": "delegation",
         "tenantPolicies": true,
-        "description": "A principal whose policies permit the operation"
+        "description": "A principal whose policies permit the operation",
+        "requires": [
+          "change-propose"
+        ]
       },"idempotent":false,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"change","type":"change-set"}],"outputs":[{"name":"proposal","type":"proposal-id"},{"name":"projection","type":"projection-summary"}],"postconditions":["The proposal carries the projection of the change against the recorded history (AGT-012).","A change that tenant policy classes as risky is applied only from an approved proposal (AGT-011)."],"errors":[
         {
           "name": "unauthenticated",
@@ -4132,7 +4366,10 @@
         "tenantPolicies": true,
         "csrf": true,
         "origin": true,
-        "description": "A principal other than its author, and a person where policy assigns human approval"
+        "description": "A principal other than its author, and a person where policy assigns human approval",
+        "requires": [
+          "change-approve"
+        ]
       },"idempotent":false,"inputs":[{"name":"proposal","type":"proposal-id"}],"outputs":[{"name":"state","type":"proposal-state"}],"postconditions":["The approvals that count toward a quorum come from distinct principals the policy names (AGS-411)."],"errors":[
         {
           "name": "unauthenticated",
@@ -4159,7 +4396,10 @@
     {"id":"subscribe-agent-events","name":"Subscribe to domain events as an agent","ref":"CT-114","realisation":"generated","implementedBy":"agent-gateway","auth":{
         "scheme": "delegation",
         "tenantPolicies": true,
-        "description": "A principal whose policies permit the operation"
+        "description": "A principal whose policies permit the operation",
+        "requires": [
+          "events-subscribe"
+        ]
       },"idempotent":true,"inputs":[{"name":"selector","type":"selector"},{"name":"after","type":"u64","optional":true}],"outputs":[{"name":"stream","type":"event-stream"}],"postconditions":["Only events the principal may read are delivered, in the commit order of the tenant (AGT-007, AGT-409).","A subscription resumes from the last acknowledged position after a disconnect (AGT-408)."],"errors":[
         {
           "name": "unauthenticated",
@@ -4181,7 +4421,10 @@
     {"id":"get-platform-description","name":"Describe the platform topology and health","ref":"CT-115","realisation":"generated","implementedBy":"agent-gateway","auth":{
         "scheme": "delegation",
         "tenantPolicies": true,
-        "description": "A principal whose policies permit the operation"
+        "description": "A principal whose policies permit the operation",
+        "requires": [
+          "platform-describe"
+        ]
       },"idempotent":true,"inputs":[],"outputs":[{"name":"description","type":"platform-description"}],"postconditions":["Component topology, configuration and health are published in machine-readable form (AGT-006)."],"errors":[
         {
           "name": "unauthenticated",
@@ -4197,7 +4440,10 @@
     {"id":"list-records","name":"List records in pages","ref":"CT-116","realisation":"generated","implementedBy":"agent-gateway","auth":{
         "scheme": "delegation",
         "tenantPolicies": true,
-        "description": "A principal whose policies permit the operation"
+        "description": "A principal whose policies permit the operation",
+        "requires": [
+          "records-read"
+        ]
       },"idempotent":true,"inputs":[{"name":"object","type":"object-type-id"},{"name":"cursor","type":"string","optional":true},{"name":"limit","type":"u32","optional":true}],"outputs":[{"name":"rows","type":"list<value-map>"},{"name":"next","type":"string","optional":true}],"postconditions":["Each page has a cursor that resumes the same listing (AGT-405).","Only records the principal may read are returned (AGT-254)."],"errors":[
         {
           "name": "unauthenticated",
@@ -4221,7 +4467,10 @@
         "tenantPolicies": true,
         "csrf": true,
         "origin": true,
-        "description": "A principal other than the agent concerned (AGS-413, AGS-419)"
+        "description": "A principal other than the agent concerned (AGS-413, AGS-419)",
+        "requires": [
+          "agent-manage"
+        ]
       },"idempotent":true,"inputs":[{"name":"agent","type":"principal-id"},{"name":"state","type":"string"}],"outputs":[],"postconditions":["A disabled agent is refused by every gateway instance within 5 seconds (AGT-500).","A tripped anomaly rule halts the agent automatically (AGS-418)."],"errors":[
         {
           "name": "unauthenticated",
@@ -4242,7 +4491,10 @@
     {"id":"undo-change","name":"Undo an applied agent change","ref":"CT-118","realisation":"generated","implementedBy":"agent-gateway","auth":{
         "scheme": "delegation",
         "tenantPolicies": true,
-        "description": "A principal whose policies permit the operation"
+        "description": "A principal whose policies permit the operation",
+        "requires": [
+          "change-undo"
+        ]
       },"idempotent":false,"inputs":[{"name":"change","type":"string"}],"outputs":[{"name":"result","type":"operation-result"}],"postconditions":["A change whose operation declares a reversal is reversible within the undo window (AGS-421)."],"errors":[
         {
           "name": "unauthenticated",
@@ -4269,7 +4521,10 @@
     {"id":"list-agents","name":"List the agent registry","ref":"CT-119","realisation":"generated","implementedBy":"agent-gateway","auth":{
         "scheme": "delegation",
         "tenantPolicies": true,
-        "description": "A principal whose policies permit the operation"
+        "description": "A principal whose policies permit the operation",
+        "requires": [
+          "agents-read"
+        ]
       },"idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"}],"outputs":[{"name":"agents","type":"list<agent-entry>"}],"postconditions":["Each agent is listed with its owner, purpose, scopes and tier (OBS-406)."],"errors":[
         {
           "name": "unauthenticated",
@@ -4291,7 +4546,10 @@
     {"id":"report-agent-spend","name":"Report spend by agent and tenant","ref":"CT-120","realisation":"generated","implementedBy":"agent-gateway","auth":{
         "scheme": "delegation",
         "tenantPolicies": true,
-        "description": "A principal whose policies permit the operation"
+        "description": "A principal whose policies permit the operation",
+        "requires": [
+          "agent-spend-report"
+        ]
       },"idempotent":true,"inputs":[{"name":"period","type":"string"}],"outputs":[{"name":"spend","type":"list<spend-entry>"}],"postconditions":["Spend is attributed to each agent and each tenant (AGT-423)."],"errors":[
         {
           "name": "unauthenticated",
@@ -4312,7 +4570,10 @@
     {"id":"get-requirement-status","name":"Read the verification status of requirements","ref":"CT-121","realisation":"generated","implementedBy":"agent-gateway","auth":{
         "scheme": "delegation",
         "tenantPolicies": true,
-        "description": "A principal whose policies permit the operation"
+        "description": "A principal whose policies permit the operation",
+        "requires": [
+          "requirements-read"
+        ]
       },"idempotent":true,"inputs":[{"name":"ref","type":"string","optional":true}],"outputs":[{"name":"statuses","type":"list<requirement-status>"}],"postconditions":["The verification status of each requirement is readable (AGT-414)."],"errors":[
         {
           "name": "unauthenticated",
@@ -4328,7 +4589,10 @@
     {"id":"set-feature-flag","name":"Read or change a feature flag or quota","ref":"CT-122","realisation":"generated","implementedBy":"agent-gateway","auth":{
         "scheme": "delegation",
         "tenantPolicies": true,
-        "description": "A principal whose policies permit the operation"
+        "description": "A principal whose policies permit the operation",
+        "requires": [
+          "flags-manage"
+        ]
       },"idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"name","type":"string"},{"name":"value","type":"string"}],"outputs":[],"postconditions":["A flag is off for a tenant unless the release record enables it for that tenant (OPS-328)."],"errors":[
         {
           "name": "unauthenticated",
@@ -4349,7 +4613,10 @@
     {"id":"run-diagnostic","name":"Run a read-only diagnostic operation for one tenant","ref":"CT-123","realisation":"generated","implementedBy":"agent-gateway","auth":{
         "scheme": "delegation",
         "tenantPolicies": true,
-        "description": "A principal whose policies permit the operation"
+        "description": "A principal whose policies permit the operation",
+        "requires": [
+          "diagnostics-run"
+        ]
       },"idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"name","type":"string"}],"outputs":[{"name":"report","type":"value-map"}],"postconditions":["The operation reads health, configuration and the like and changes nothing (OPS-342).","An alert names the operation that carries its runbook, and that runs as a dry run first (OPS-341)."],"errors":[
         {
           "name": "unauthenticated",
@@ -4370,7 +4637,10 @@
     {"id":"list-releases","name":"List production releases","ref":"CT-124","realisation":"generated","implementedBy":"agent-gateway","auth":{
         "scheme": "delegation",
         "tenantPolicies": true,
-        "description": "A principal whose policies permit the operation"
+        "description": "A principal whose policies permit the operation",
+        "requires": [
+          "releases-read"
+        ]
       },"idempotent":true,"inputs":[],"outputs":[{"name":"releases","type":"list<release-id>"}],"postconditions":["Each release record is listed with its digests and gate results (REL-581)."],"errors":[
         {
           "name": "unauthenticated",
@@ -4385,7 +4655,10 @@
     },
     {"id":"append-audit-entry","name":"Append an audit entry","ref":"CT-125","realisation":"generated","implementedBy":"audit-log","auth":{
         "scheme": "service",
-        "description": "Service credential of a platform component"
+        "description": "Service credential of a platform component",
+        "requires": [
+          "audit-append"
+        ]
       },"idempotent":false,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"actor","type":"principal-id"},{"name":"on-behalf-of","type":"principal-id","optional":true},{"name":"action","type":"string"},{"name":"outcome","type":"string"},{"name":"correlation","type":"correlation-id"},{"name":"checks","type":"list<check>"}],"outputs":[{"name":"seq","type":"u64"},{"name":"hash","type":"hash"}],"postconditions":["The entry contains the hash of the entry before it, computed over the sealed form (OBS-006, PRV-360).","It contains no password, session secret, token or one-time code (IDN-022).","An erasure of a principal leaves the chain verifiable (PRV-359).","No agent may write to the audit log (AGS-425)."],"errors":[
         {
           "name": "unavailable",
@@ -4399,7 +4672,10 @@
     {"id":"query-audit-log","name":"Query the audit log","ref":"CT-126","realisation":"generated","implementedBy":"audit-log","auth":{
         "scheme": "session",
         "tenantPolicies": true,
-        "description": "A principal whose policies permit the operation"
+        "description": "A principal whose policies permit the operation",
+        "requires": [
+          "audit-read"
+        ]
       },"idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"after","type":"u64","optional":true},{"name":"limit","type":"u32","optional":true}],"outputs":[{"name":"entries","type":"list<audit-entry>"},{"name":"withheld","type":"bool"}],"postconditions":["An agent receives only entries its principal may read, and a result that withholds entries says so (AGT-412, AGT-413)."],"errors":[
         {
           "name": "unauthenticated",
@@ -4425,7 +4701,10 @@
         ],
         "csrf": true,
         "origin": true,
-        "description": "An owner of the tenant"
+        "description": "An owner of the tenant",
+        "requires": [
+          "audit-export"
+        ]
       },"idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"}],"outputs":[{"name":"archive","type":"archive-ref"}],"postconditions":["The owner can export the audit log (OBS-008)."],"errors":[
         {
           "name": "unauthenticated",
@@ -4446,7 +4725,10 @@
     {"id":"verify-audit-chain","name":"Verify the audit chain","ref":"CT-128","realisation":"generated","implementedBy":"audit-log","auth":{
         "scheme": "session",
         "tenantPolicies": true,
-        "description": "A principal whose policies permit the operation"
+        "description": "A principal whose policies permit the operation",
+        "requires": [
+          "audit-read"
+        ]
       },"idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"}],"outputs":[{"name":"intact","type":"bool"},{"name":"first-break","type":"u64","optional":true}],"postconditions":["A log from which an entry was removed is reported as broken (OBS-007)."],"errors":[
         {
           "name": "unauthenticated",
@@ -4467,7 +4749,10 @@
     },
     {"id":"export-telemetry","name":"Export telemetry","ref":"CT-129","realisation":"generated","implementedBy":"telemetry-pipeline","auth":{
         "scheme": "service",
-        "description": "Service credential of a platform component"
+        "description": "Service credential of a platform component",
+        "requires": [
+          "telemetry-export"
+        ]
       },"idempotent":false,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"signal","type":"string"},{"name":"batch","type":"bytes"}],"outputs":[],"postconditions":["Telemetry carries the tenant identifier and no content of a tenant record (OBS-003).","Every log line, span and audit entry carries the correlation identifier (OBS-001).","No sampling rule discards an error record, an alert or an audit entry (OPS-347)."],"errors":[
         {
           "name": "unavailable",
@@ -4481,7 +4766,10 @@
     {"id":"query-telemetry","name":"Query metrics, logs and traces","ref":"CT-130","realisation":"generated","implementedBy":"telemetry-pipeline","auth":{
         "scheme": "session",
         "tenantPolicies": true,
-        "description": "A principal whose policies permit the operation"
+        "description": "A principal whose policies permit the operation",
+        "requires": [
+          "telemetry-read"
+        ]
       },"idempotent":true,"inputs":[{"name":"query","type":"string"},{"name":"tenant","type":"tenant-id","optional":true}],"outputs":[{"name":"series","type":"list<value-map>"}],"postconditions":["Only series, lines and spans the principal may read are returned (AGT-411)."],"errors":[
         {
           "name": "unauthenticated",
@@ -4508,7 +4796,10 @@
       "implementedBy": "telemetry-pipeline",
       "auth": {
         "scheme": "service",
-        "description": "Service credential of a platform component"
+        "description": "Service credential of a platform component",
+        "requires": [
+          "telemetry-export"
+        ]
       },
       "idempotent": true,
       "inputs": [
@@ -4542,7 +4833,10 @@
         "roles": [
           "owner"
         ],
-        "description": "An owner of the tenant"
+        "description": "An owner of the tenant",
+        "requires": [
+          "audit-read"
+        ]
       },"idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"}],"outputs":[{"name":"report","type":"access-report"}],"postconditions":["The report lists each grant made to the data of the tenant (PRV-370)."],"errors":[
         {
           "name": "unauthenticated",
@@ -4566,7 +4860,10 @@
         "roles": [
           "owner"
         ],
-        "description": "An owner of the tenant"
+        "description": "An owner of the tenant",
+        "requires": [
+          "audit-read"
+        ]
       },"idempotent":true,"inputs":[{"name":"run","type":"request-id"}],"outputs":[{"name":"trace","type":"run-trace"}],"postconditions":["The trace names each input read and each operation called (OBS-400).","It is visible to the owner of each tenant the run touched and to no principal that lacks the right (OBS-403).","The platform-side steps are replayable from the recorded inputs (OBS-402)."],"errors":[
         {
           "name": "unauthenticated",
@@ -4596,7 +4893,10 @@
         "roles": [
           "platform-operator"
         ],
-        "description": "A platform operator"
+        "description": "A platform operator",
+        "requires": [
+          "fleet-report"
+        ]
       },"idempotent":true,"inputs":[{"name":"report","type":"string"}],"outputs":[{"name":"report","type":"value-map"}],"postconditions":["A report spanning tenants is answered from telemetry, published summaries and the directory only (ARC-110)."],"errors":[
         {
           "name": "unauthenticated",
@@ -4621,7 +4921,10 @@
         ],
         "csrf": true,
         "origin": true,
-        "description": "A platform operator"
+        "description": "A platform operator",
+        "requires": [
+          "breach-notify"
+        ]
       },"idempotent":false,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"records","type":"list<record-id>"}],"outputs":[],"postconditions":["The owner receives a report naming the records and categories concerned (PRV-380)."],"errors":[
         {
           "name": "unauthenticated",
@@ -4640,7 +4943,10 @@
     },
     {"id":"show-sign-in-page","name":"Show the sign-in page","ref":"CT-136","realisation":"generated","implementedBy":"web-application","auth":{
         "scheme": "anonymous",
-        "description": "Anyone; no session is needed"
+        "description": "Anyone; no session is needed",
+        "requires": [
+          "identity-sign-in"
+        ]
       },"idempotent":true,"timeoutMs":1000,"inputs":[{"name":"host","type":"host"}],"outputs":[{"name":"page","type":"html-page"}],"postconditions":["It offers the identity providers configured for the realm of the address, and recovery beside every method (FED-010, UXA-203).","The first content shows within 1 second at the 95th percentile (UXA-213).","The page response carries a content security policy that allows no inline script and requires Trusted Types (GWY-005, GWY-253)."],"errors":[
         {
           "name": "not-found",
@@ -4656,7 +4962,10 @@
     {"id":"show-authoring-view","name":"Show a view of the authoring application","ref":"CT-137","realisation":"generated","implementedBy":"web-application","auth":{
         "scheme": "session",
         "tenantPolicies": true,
-        "description": "A principal whose policies permit the operation"
+        "description": "A principal whose policies permit the operation",
+        "requires": [
+          "content-draft-read"
+        ]
       },"idempotent":true,"inputs":[{"name":"view","type":"string"},{"name":"selection","type":"string","optional":true}],"outputs":[{"name":"page","type":"html-page"}],"postconditions":["The view reflows without horizontal scrolling at 360 CSS pixels (UXA-214)."],"errors":[
         {
           "name": "unauthenticated",
@@ -4680,7 +4989,10 @@
         "tenantPolicies": true,
         "csrf": true,
         "origin": true,
-        "description": "A principal whose policies permit the operation"
+        "description": "A principal whose policies permit the operation",
+        "requires": [
+          "content-write"
+        ]
       },"idempotent":true,"inputs":[{"name":"record","type":"record-id"},{"name":"based-on-version","type":"u64"},{"name":"fields","type":"value-map"},{"name":"schema-version","type":"u64"}],"outputs":[{"name":"version","type":"u64"}],"postconditions":["A record created in the application starts as a draft (CMS-154).","A draft is saved within 2 seconds after the last edit (UXA-204)."],"errors":[
         {
           "name": "unauthenticated",
@@ -4707,7 +5019,10 @@
     {"id":"show-review-diff","name":"Show the differences between a draft and the published version","ref":"CT-139","realisation":"generated","implementedBy":"web-application","auth":{
         "scheme": "session",
         "tenantPolicies": true,
-        "description": "A principal whose policies permit the operation"
+        "description": "A principal whose policies permit the operation",
+        "requires": [
+          "content-draft-read"
+        ]
       },"idempotent":true,"inputs":[{"name":"record","type":"record-id"}],"outputs":[{"name":"diff","type":"list<field-difference>"}],"postconditions":["A reviewer sees the differences before approving (CMS-157)."],"errors":[
         {
           "name": "unauthenticated",
@@ -4735,7 +5050,10 @@
     {"id":"preview-tokens","name":"Preview the tokens of a draft","ref":"CT-140","realisation":"generated","implementedBy":"web-application","auth":{
         "scheme": "session",
         "tenantPolicies": true,
-        "description": "A principal whose policies permit the operation"
+        "description": "A principal whose policies permit the operation",
+        "requires": [
+          "content-draft-read"
+        ]
       },"idempotent":true,"inputs":[{"name":"record","type":"record-id"},{"name":"as-reader","type":"principal-id"}],"outputs":[{"name":"values","type":"value-map"}],"postconditions":["The values are the ones the chosen reader would see (CTK-016)."],"errors":[
         {
           "name": "unauthenticated",
@@ -4992,7 +5310,10 @@
     {"id":"receive-delivery-report","name":"Receive a delivery report","ref":"CT-157","realisation":"generated","implementedBy":"mail-dispatcher","auth":{
         "scheme": "signature",
         "secret": "mail-provider-signing-key",
-        "description": "The mail provider, proved by its signature (EML-019)"
+        "description": "The mail provider, proved by its signature (EML-019)",
+        "requires": [
+          "mail-report"
+        ]
       },"idempotent":true,"inputs":[{"name":"report","type":"bytes"},{"name":"signature","type":"bytes"}],"outputs":[],"postconditions":["A permanent bounce or a complaint adds the address to the suppression list of the tenant (EML-017)."],"errors":[
         {
           "name": "unauthenticated",
@@ -5019,7 +5340,10 @@
     },
     {"id":"build-component-image","name":"Build a component image","ref":"CT-159","realisation":"generated","implementedBy":"release-pipeline","auth":{
         "scheme": "service",
-        "description": "Service credential of a platform component"
+        "description": "Service credential of a platform component",
+        "requires": [
+          "release-build"
+        ]
       },"idempotent":true,"inputs":[{"name":"commit","type":"string"},{"name":"component","type":"string"}],"outputs":[{"name":"digest","type":"hash"},{"name":"sbom","type":"bytes"},{"name":"signature","type":"bytes"}],"postconditions":["The image is addressed by its content digest (REL-550), signed, with a software bill of materials (THR-255, THR-256)."],"errors":[
         {
           "name": "vulnerable-dependency",
@@ -5042,7 +5366,10 @@
         ],
         "csrf": true,
         "origin": true,
-        "description": "Release engineer or platform-operating agent with approval (AGS-426)"
+        "description": "Release engineer or platform-operating agent with approval (AGS-426)",
+        "requires": [
+          "release-deploy"
+        ]
       },"idempotent":true,"inputs":[{"name":"environment","type":"environment-id"},{"name":"descriptor","type":"bytes"},{"name":"dry-run","type":"bool","optional":true}],"outputs":[{"name":"drift","type":"list<string>"}],"postconditions":["A dry run is offered and an audit entry written (AGT-424).","A component runs under a cloud identity that grants only the actions its descriptor needs (THR-258)."],"errors":[
         {
           "name": "forbidden",
@@ -5066,7 +5393,10 @@
         ],
         "csrf": true,
         "origin": true,
-        "description": "A platform owner"
+        "description": "A platform owner",
+        "requires": [
+          "release-freeze"
+        ]
       },"idempotent":true,"inputs":[{"name":"from","type":"timestamp"},{"name":"to","type":"timestamp"}],"outputs":[],"postconditions":["Every deployment and configuration change is refused while it lasts (AGS-427)."],"errors":[
         {
           "name": "unauthenticated",
@@ -5111,7 +5441,10 @@
     {"id":"project-change","name":"Project a proposed change","ref":"CT-164","realisation":"generated","implementedBy":"simulator","auth":{
         "scheme": "session",
         "tenantPolicies": true,
-        "description": "A principal whose policies permit the operation"
+        "description": "A principal whose policies permit the operation",
+        "requires": [
+          "change-project"
+        ]
       },"idempotent":true,"inputs":[{"name":"scenario","type":"scenario"},{"name":"proposal","type":"projection-proposal"}],"outputs":[{"name":"projection","type":"projection"}],"postconditions":["A change that alters no behaviour reports no divergence (SIM-002).","The first scheduled operation whose outcome differs is reported (SIM-003).","A projection is requestable through the catalogue against the history of a tenant at a revision (AGT-422)."],"errors":[
         {
           "name": "cancelled",
@@ -5144,7 +5477,10 @@
       "auth": {
         "scheme": "session",
         "tenantPolicies": true,
-        "description": "A principal whose policies permit the operation"
+        "description": "A principal whose policies permit the operation",
+        "requires": [
+          "change-project"
+        ]
       },
       "idempotent": true,
       "inputs": [
@@ -5184,7 +5520,10 @@
         ],
         "csrf": true,
         "origin": true,
-        "description": "An owner of the tenant"
+        "description": "An owner of the tenant",
+        "requires": [
+          "tenant-fork"
+        ]
       },"idempotent":false,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"at-revision","type":"u64","optional":true}],"outputs":[{"name":"fork","type":"tenant-id"}],"postconditions":["The fork is a copy on which a change is previewed before it is applied (MIG-550)."],"errors":[
         {
           "name": "unauthenticated",
@@ -5282,7 +5621,10 @@
     {"id":"receive-inbound-webhook","name":"Receive an inbound webhook delivery","ref":"CT-172","realisation":"generated","implementedBy":"runtime","auth":{
         "scheme": "signature",
         "secret": "webhook-endpoint-secret",
-        "description": "The external system, proved by the signature of its endpoint secret"
+        "description": "The external system, proved by the signature of its endpoint secret",
+        "requires": [
+          "webhook-receive"
+        ]
       },"idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"endpoint","type":"string"},{"name":"body","type":"bytes"},{"name":"signature","type":"bytes"},{"name":"event-id","type":"string"}],"outputs":[{"name":"run","type":"run-id","optional":true}],"postconditions":["A delivery starts a workflow run only when the signature matches (INT-150).","A repeated delivery of one event leaves the number of runs unchanged (INT-151)."],"errors":[
         {
           "name": "unauthenticated",
@@ -5299,7 +5641,10 @@
         "roles": [
           "owner"
         ],
-        "description": "An owner of the tenant"
+        "description": "An owner of the tenant",
+        "requires": [
+          "webhooks-read"
+        ]
       },"idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"cursor","type":"string","optional":true}],"outputs":[{"name":"deliveries","type":"list<webhook-delivery>"},{"name":"next","type":"string","optional":true}],"postconditions":["Each entry shows the response status and attempt count (INT-152)."],"errors":[
         {
           "name": "unauthenticated",
@@ -5333,7 +5678,10 @@
     },
     {"id":"search","name":"Search a tenant","ref":"CT-175","realisation":"generated","implementedBy":"search-index","auth":{
         "scheme": "anonymous",
-        "description": "Anyone; no session is needed"
+        "description": "Anyone; no session is needed",
+        "requires": [
+          "content-read"
+        ]
       },"idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"query","type":"string"},{"name":"audience","type":"string"}],"outputs":[{"name":"hits","type":"list<search-hit>"}],"postconditions":["Only published records the audience class permits are returned (SRH-150).","An editor also sees the drafts the roles permit, each with its status (SRH-151)."],"errors":[
         {
           "name": "unavailable",
@@ -5349,7 +5697,10 @@
     {"id":"issue-submission-token","name":"Issue a submission token for a form","ref":"CT-176","realisation":"generated","implementedBy":"runtime","auth":{
         "scheme": "anonymous",
         "justification": "It issues a signed submission token for a public form and stores nothing.",
-        "description": "Anyone; no session is needed"
+        "description": "Anyone; no session is needed",
+        "requires": [
+          "form-submit"
+        ]
       },"idempotent":false,"inputs":[{"name":"host","type":"host"},{"name":"form","type":"form-id"}],"outputs":[{"name":"token","type":"secret"}],"errors":[
         {
           "name": "not-found",
@@ -5367,7 +5718,10 @@
         "csrf": true,
         "origin": true,
         "justification": "Public forms are for visitors; the submission token is the request token.",
-        "description": "Anyone; no session is needed"
+        "description": "Anyone; no session is needed",
+        "requires": [
+          "form-submit"
+        ]
       },"idempotent":false,"inputs":[{"name":"host","type":"host"},{"name":"form","type":"form-id"},{"name":"token","type":"secret"},{"name":"values","type":"value-map"}],"outputs":[{"name":"submission","type":"submission-id"}],"postconditions":["The submission is stored in the tenant database before the reader is told it was received (FRM-150).","The notice goes through the subscriptions the form names (FRM-152)."],"errors":[
         {
           "name": "invalid",
@@ -5392,7 +5746,10 @@
         ],
         "csrf": true,
         "origin": true,
-        "description": "An owner of the tenant"
+        "description": "An owner of the tenant",
+        "requires": [
+          "records-import"
+        ]
       },"idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"archive","type":"archive-ref"}],"outputs":[{"name":"report","type":"mapping-report"}],"postconditions":["An import updates a record the tenant already holds, so that it can be run again (MIG-574).","It keeps the identifiers, versions, timestamps and authors the archive names (MIG-576).","It produces a mapping report naming each source field, its target and each unmapped value (MIG-575).","A redirect is created from each former page address (MIG-577)."],"errors":[
         {
           "name": "unauthenticated",
@@ -5421,7 +5778,10 @@
         "roles": [
           "submissions-reader"
         ],
-        "description": "A person with the role that reads submissions"
+        "description": "A person with the role that reads submissions",
+        "requires": [
+          "submissions-export"
+        ]
       },"idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"form","type":"form-id"}],"outputs":[{"name":"document","type":"bytes"}],"postconditions":["A cell that begins with a formula character is prefixed so a spreadsheet reads it as text (GWY-262)."],"errors":[
         {
           "name": "unauthenticated",
@@ -5471,7 +5831,10 @@
     },
     {"id":"subscribe-notifications","name":"Subscribe to notifications","ref":"CT-181","realisation":"generated","implementedBy":"notification-service","auth":{
         "scheme": "session",
-        "description": "A signed-in principal"
+        "description": "A signed-in principal",
+        "requires": [
+          "notifications-read"
+        ]
       },"idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"topic","type":"string"},{"name":"delivery","type":"string"}],"outputs":[{"name":"subscription","type":"string"}],"postconditions":["Delivery is by email, by inbox or by both (NTF-151)."],"errors":[
         {
           "name": "unauthenticated",
@@ -5492,7 +5855,10 @@
     },
     {"id":"list-inbox","name":"List the inbox of the caller","ref":"CT-182","realisation":"generated","implementedBy":"notification-service","auth":{
         "scheme": "session",
-        "description": "A signed-in principal"
+        "description": "A signed-in principal",
+        "requires": [
+          "notifications-read"
+        ]
       },"idempotent":true,"inputs":[{"name":"cursor","type":"string","optional":true}],"outputs":[{"name":"notices","type":"list<inbox-notice>"},{"name":"next","type":"string","optional":true}],"postconditions":["An approval step is in the inbox of each principal its policy names and in no other (NTF-152)."],"errors":[
         {
           "name": "unauthenticated",
@@ -5591,7 +5957,10 @@
       "implementedBy": "web-application",
       "auth": {
         "scheme": "anonymous",
-        "description": "Anyone; no session is needed"
+        "description": "Anyone; no session is needed",
+        "requires": [
+          "content-read"
+        ]
       },
       "idempotent": true,
       "inputs": [],
@@ -5617,7 +5986,10 @@
       "implementedBy": "web-application",
       "auth": {
         "scheme": "anonymous",
-        "description": "Anyone; no session is needed"
+        "description": "Anyone; no session is needed",
+        "requires": [
+          "content-read"
+        ]
       },
       "idempotent": true,
       "inputs": [],
@@ -5643,7 +6015,10 @@
       "implementedBy": "web-application",
       "auth": {
         "scheme": "anonymous",
-        "description": "Anyone; no session is needed"
+        "description": "Anyone; no session is needed",
+        "requires": [
+          "content-read"
+        ]
       },
       "idempotent": true,
       "inputs": [
@@ -5671,7 +6046,10 @@
         "scheme": "session",
         "csrf": true,
         "origin": true,
-        "description": "A signed-in principal"
+        "description": "A signed-in principal",
+        "requires": [
+          "assistant-converse"
+        ]
       },"idempotent":false,"inputs":[{"name":"conversation","type":"conversation-id"},{"name":"message","type":"string"},{"name":"context","type":"value-map","optional":true}],"outputs":[{"name":"turn","type":"turn-id"}],"postconditions":["A new tenant has the assistant off until an owner turns it on (CNV-500).","A refusal names the policy that refused and the next step (CNV-212)."],"errors":[
         {
           "name": "unauthenticated",
@@ -5697,7 +6075,10 @@
     },
     {"id":"stream-reply","name":"Stream a reply","ref":"CT-190","realisation":"generated","implementedBy":"conversation-service","auth":{
         "scheme": "session",
-        "description": "A signed-in principal"
+        "description": "A signed-in principal",
+        "requires": [
+          "assistant-converse"
+        ]
       },"idempotent":true,"inputs":[{"name":"conversation","type":"conversation-id"},{"name":"after","type":"u64","optional":true}],"outputs":[{"name":"stream","type":"event-stream"}],"postconditions":["A reply streams as produced and ends in one recorded state: complete, interrupted or failed (CNV-220).","The first part is sent within 1 second at the 95th percentile (CNV-224).","A reload resumes from the last recorded part (CNV-223)."],"errors":[
         {
           "name": "unauthenticated",
@@ -5720,7 +6101,10 @@
         "scheme": "session",
         "csrf": true,
         "origin": true,
-        "description": "A signed-in principal"
+        "description": "A signed-in principal",
+        "requires": [
+          "assistant-converse"
+        ]
       },"idempotent":true,"timeoutMs":1000,"inputs":[{"name":"turn","type":"turn-id"}],"outputs":[],"postconditions":["Model output and every operation not yet committed stop within 1 second at the 99th percentile (CNV-221, CNV-225)."],"errors":[
         {
           "name": "unauthenticated",
@@ -5740,7 +6124,10 @@
     },
     {"id":"get-pending-action","name":"Preview a pending action","ref":"CT-192","realisation":"generated","implementedBy":"conversation-service","auth":{
         "scheme": "session",
-        "description": "A signed-in principal"
+        "description": "A signed-in principal",
+        "requires": [
+          "assistant-converse"
+        ]
       },"idempotent":true,"timeoutMs":3000,"inputs":[{"name":"pending","type":"pending-id"}],"outputs":[{"name":"preview","type":"action-preview"}],"postconditions":["The preview lists the records the change creates, changes and removes and the views it affects (CNV-205)."],"errors":[
         {
           "name": "unauthenticated",
@@ -5763,7 +6150,10 @@
         "scheme": "session",
         "csrf": true,
         "origin": true,
-        "description": "A signed-in principal"
+        "description": "A signed-in principal",
+        "requires": [
+          "assistant-converse"
+        ]
       },"idempotent":false,"inputs":[{"name":"pending","type":"pending-id"},{"name":"preview-hash","type":"hash"}],"outputs":[{"name":"result","type":"operation-result"}],"postconditions":["A change is applied only after the person confirms the preview that shows it (CNV-206).","The confirmation binds to the preview it answers (CNV-207)."],"errors":[
         {
           "name": "unauthenticated",
@@ -5785,7 +6175,10 @@
         "scheme": "session",
         "csrf": true,
         "origin": true,
-        "description": "A signed-in principal"
+        "description": "A signed-in principal",
+        "requires": [
+          "assistant-converse"
+        ]
       },"idempotent":true,"inputs":[{"name":"pending","type":"pending-id"}],"outputs":[],"postconditions":["No change is applied to any record (CNV-210)."],"errors":[
         {
           "name": "unauthenticated",
@@ -5807,7 +6200,10 @@
         "scheme": "session",
         "csrf": true,
         "origin": true,
-        "description": "A signed-in principal"
+        "description": "A signed-in principal",
+        "requires": [
+          "assistant-converse"
+        ]
       },"idempotent":false,"inputs":[{"name":"turn","type":"turn-id"}],"outputs":[{"name":"pending","type":"pending-id"}],"postconditions":["The inverse operation is previewed and applied only after confirmation (CNV-209)."],"errors":[
         {
           "name": "unauthenticated",
@@ -5828,7 +6224,10 @@
     {"id":"get-conversation","name":"Read a conversation","ref":"CT-196","realisation":"generated","implementedBy":"conversation-service","auth":{
         "scheme": "session",
         "tenantPolicies": true,
-        "description": "The principal that started it, and holders of the tenant right"
+        "description": "The principal that started it, and holders of the tenant right",
+        "requires": [
+          "assistant-converse"
+        ]
       },"idempotent":true,"inputs":[{"name":"conversation","type":"conversation-id"}],"outputs":[{"name":"turns","type":"list<turn-id>"}],"errors":[
         {
           "name": "unauthenticated",
@@ -5858,7 +6257,10 @@
         "tenantPolicies": true,
         "csrf": true,
         "origin": true,
-        "description": "The principal that started it, or the tenant"
+        "description": "The principal that started it, or the tenant",
+        "requires": [
+          "assistant-converse"
+        ]
       },"idempotent":true,"inputs":[{"name":"conversation","type":"conversation-id"}],"outputs":[],"postconditions":["Its turns, pending actions and model request content are removed (CNV-229)."],"errors":[
         {
           "name": "unauthenticated",
@@ -5878,7 +6280,10 @@
     },
     {"id":"generate-reply","name":"Generate a reply","ref":"CT-198","realisation":"generated","implementedBy":"model-provider","auth":{
         "scheme": "service",
-        "description": "Service credential of a platform component"
+        "description": "Service credential of a platform component",
+        "requires": [
+          "model-generate"
+        ]
       },"idempotent":false,"inputs":[{"name":"messages","type":"list<string>"},{"name":"operations","type":"list<operation-entry>"},{"name":"stream","type":"bool"}],"outputs":[{"name":"reply","type":"string"},{"name":"usage","type":"model-usage"}],"postconditions":["The content sent is only what the tenant policy permits for the read of the person served (CNV-233).","Each reply names the provider and model that produced it (CNV-236).","Content is sent only under a contract that forbids training on it (CNV-235)."],"errors":[
         {
           "name": "provider-unavailable",
@@ -5895,7 +6300,10 @@
     },
     {"id":"report-model-usage","name":"Report the usage of a request","ref":"CT-199","realisation":"generated","implementedBy":"model-provider","auth":{
         "scheme": "service",
-        "description": "Service credential of a platform component"
+        "description": "Service credential of a platform component",
+        "requires": [
+          "model-generate"
+        ]
       },"idempotent":true,"inputs":[{"name":"request","type":"request-id"}],"outputs":[{"name":"usage","type":"model-usage"}],"errors":[
         {
           "name": "unknown-request",
@@ -5910,7 +6318,10 @@
         "tenantPolicies": true,
         "csrf": true,
         "origin": true,
-        "description": "A principal whose policies permit the operation"
+        "description": "A principal whose policies permit the operation",
+        "requires": [
+          "content-write"
+        ]
       },"idempotent":false,"inputs":[{"name":"record","type":"record-id"},{"name":"based-on-version","type":"u64"},{"name":"fields","type":"value-map"}],"outputs":[{"name":"version","type":"u64"}],"postconditions":["A resolved conflict becomes a new version in which the person chose the value of each field (UXA-207)."],"errors":[
         {
           "name": "unauthenticated",
@@ -5938,7 +6349,10 @@
         "scheme": "session",
         "csrf": true,
         "origin": true,
-        "description": "A signed-in principal"
+        "description": "A signed-in principal",
+        "requires": [
+          "content-write"
+        ]
       },"idempotent":true,"timeoutMs":3000,"inputs":[{"name":"record","type":"record-id"}],"outputs":[{"name":"others","type":"list<display-name>"}],"postconditions":["Each other person editing a record shows by display name before the person saves (UXA-209).","A change of presence appears within 3 seconds (UXA-208)."],"errors":[
         {
           "name": "unauthenticated",
@@ -5957,7 +6371,10 @@
           "support"
         ],
         "tenantPolicies": true,
-        "description": "An operator or support member on the operations network, holding a grant for the tenant (THR-253)"
+        "description": "An operator or support member on the operations network, holding a grant for the tenant (THR-253)",
+        "requires": [
+          "tenant-support-read"
+        ]
       },"idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"grant","type":"grant-id"}],"outputs":[{"name":"session","type":"session-id"}],"postconditions":["An act of the operator in a tenant leaves an audit entry naming the operator and the grant (ADM-164)."],"errors":[
         {
           "name": "unauthenticated",
@@ -5980,7 +6397,10 @@
         "tenantPolicies": true,
         "csrf": true,
         "origin": true,
-        "description": "A principal whose policies permit the operation"
+        "description": "A principal whose policies permit the operation",
+        "requires": [
+          "content-write"
+        ]
       },"idempotent":false,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"content","type":"bytes"},{"name":"declared-type","type":"string"},{"name":"name","type":"string"}],"outputs":[{"name":"file","type":"hash"},{"name":"state","type":"string"}],"postconditions":["The file name is stored as data and escaped wherever shown (CMS-257)."],"errors":[
         {
           "name": "unauthenticated",
@@ -6006,7 +6426,10 @@
     },
     {"id":"scan-upload","name":"Scan an uploaded file","ref":"CT-204","realisation":"generated","implementedBy":"upload-scanner","auth":{
         "scheme": "service",
-        "description": "Service credential of a platform component"
+        "description": "Service credential of a platform component",
+        "requires": [
+          "upload-scan"
+        ]
       },"idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"file","type":"hash"}],"outputs":[{"name":"clean","type":"bool"},{"name":"media-type","type":"string"},{"name":"renditions","type":"list<hash>"}],"postconditions":["A file is released for delivery only after a clean result (CMS-260).","Renditions are produced by a process with no connector secret and no network access (CMS-262)."],"errors":[
         {
           "name": "unavailable",
@@ -6020,7 +6443,10 @@
     {"id":"deliver-file","name":"Deliver an uploaded file","ref":"CT-205","realisation":"generated","implementedBy":"gateway","auth":{
         "scheme": "signed-address",
         "secret": "file-address-key",
-        "description": "Anyone holding a signed address"
+        "description": "Anyone holding a signed address",
+        "requires": [
+          "media-deliver"
+        ]
       },"idempotent":true,"inputs":[{"name":"file-host","type":"host"},{"name":"address","type":"url"}],"outputs":[{"name":"content","type":"bytes"},{"name":"media-type","type":"string"}],"postconditions":["A file of a markup- or script-capable type is delivered only from the file domain (CMS-258).","A tenant host name serves no uploaded file (CMS-259)."],"errors":[
         {
           "name": "not-found",
@@ -6041,7 +6467,10 @@
     },
     {"id":"call-external-address","name":"Call an external address","ref":"CT-206","realisation":"generated","implementedBy":"outbound-gate","auth":{
         "scheme": "service",
-        "description": "The connector runner"
+        "description": "The connector runner",
+        "requires": [
+          "outbound-call"
+        ]
       },"idempotent":false,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"method","type":"string"},{"name":"target","type":"url"},{"name":"headers","type":"value-map"},{"name":"body","type":"bytes","optional":true},{"name":"idempotency-key","type":"string","optional":true},{"name":"max-bytes","type":"u64"}],"outputs":[{"name":"status","type":"u16"},{"name":"headers","type":"value-map"},{"name":"body","type":"bytes"}],"postconditions":["The call connects only to the address the gate resolved and judged (WFL-250).","The call is recorded with target address, outcome and idempotency key and no body (PRV-366).","A slow call occupies connector capacity only for its tenant (OPS-304)."],"errors":[
         {
           "name": "address-refused",
@@ -6068,7 +6497,10 @@
     },
     {"id":"fetch-provider-metadata","name":"Fetch identity provider metadata","ref":"CT-207","realisation":"generated","implementedBy":"outbound-gate","auth":{
         "scheme": "service",
-        "description": "Service credential of a platform component"
+        "description": "Service credential of a platform component",
+        "requires": [
+          "outbound-call"
+        ]
       },"idempotent":true,"inputs":[{"name":"provider","type":"provider-id"}],"outputs":[{"name":"metadata","type":"bytes"}],"errors":[
         {
           "name": "address-refused",
@@ -6085,7 +6517,10 @@
         ],
         "csrf": true,
         "origin": true,
-        "description": "An owner of the tenant"
+        "description": "An owner of the tenant",
+        "requires": [
+          "support-grant-issue"
+        ]
       },"idempotent":false,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"grantee","type":"principal-id"},{"name":"scope","type":"list<string>"},{"name":"expires-at","type":"timestamp"}],"outputs":[{"name":"grant","type":"grant-id"}],"postconditions":["The grant appears in the audit log before the first read made under it (PRV-368).","Platform staff reach personal data only through a grant that names them (PRV-367)."],"errors":[
         {
           "name": "unauthenticated",
@@ -6116,7 +6551,10 @@
         ],
         "csrf": true,
         "origin": true,
-        "description": "An owner of the tenant"
+        "description": "An owner of the tenant",
+        "requires": [
+          "support-grant-issue"
+        ]
       },"idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"grant","type":"grant-id"}],"outputs":[],"postconditions":["Every later request made under the grant is refused (ADM-165)."],"errors":[
         {
           "name": "unauthenticated",
@@ -6147,7 +6585,10 @@
         ],
         "csrf": true,
         "origin": true,
-        "description": "An owner of the tenant"
+        "description": "An owner of the tenant",
+        "requires": [
+          "subject-rights"
+        ]
       },"idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"principal","type":"principal-id"}],"outputs":[{"name":"archive","type":"archive-ref"}],"postconditions":["Every field of every record concerning the principal is included (PRV-350)."],"errors":[
         {
           "name": "unauthenticated",
@@ -6178,7 +6619,10 @@
         ],
         "csrf": true,
         "origin": true,
-        "description": "An owner of the tenant"
+        "description": "An owner of the tenant",
+        "requires": [
+          "subject-rights"
+        ]
       },"idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"principal","type":"principal-id"},{"name":"record","type":"record-id"},{"name":"field","type":"string"},{"name":"value","type":"string"}],"outputs":[{"name":"version","type":"u64"}],"postconditions":["The field is replaced in its record, in every copy and in the search index (PRV-351)."],"errors":[
         {
           "name": "unauthenticated",
@@ -6209,7 +6653,10 @@
         ],
         "csrf": true,
         "origin": true,
-        "description": "An owner of the tenant"
+        "description": "An owner of the tenant",
+        "requires": [
+          "subject-rights"
+        ]
       },"idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"principal","type":"principal-id"}],"outputs":[],"postconditions":["Every read that does not serve the restriction is refused (PRV-352)."],"errors":[
         {
           "name": "unauthenticated",
@@ -6240,7 +6687,10 @@
         ],
         "csrf": true,
         "origin": true,
-        "description": "An owner of the tenant"
+        "description": "An owner of the tenant",
+        "requires": [
+          "subject-rights"
+        ]
       },"idempotent":false,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"principal","type":"principal-id"}],"outputs":[{"name":"receipt","type":"erasure-receipt"}],"postconditions":["The receipt names each record changed (PRV-353).","The audit chain stays verifiable (PRV-359)."],"errors":[
         {
           "name": "unauthenticated",
@@ -6269,7 +6719,10 @@
         "roles": [
           "owner"
         ],
-        "description": "An owner of the tenant"
+        "description": "An owner of the tenant",
+        "requires": [
+          "subject-rights"
+        ]
       },"idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"}],"outputs":[{"name":"record","type":"value-map"}],"postconditions":["The record lists each record type that holds personal data and the subprocessors that receive it (PRV-378, PRV-373)."],"errors":[
         {
           "name": "unauthenticated",
@@ -6295,7 +6748,10 @@
         ],
         "csrf": true,
         "origin": true,
-        "description": "An owner of the tenant"
+        "description": "An owner of the tenant",
+        "requires": [
+          "subject-rights"
+        ]
       },"idempotent":false,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"records","type":"list<record-id>"},{"name":"reason","type":"string"}],"outputs":[{"name":"hold","type":"hold-id"}],"postconditions":["Erasure and expiry of each named record are suspended until the hold ends (PRV-355)."],"errors":[
         {
           "name": "unauthenticated",
@@ -6320,7 +6776,10 @@
         ],
         "csrf": true,
         "origin": true,
-        "description": "An owner of the tenant"
+        "description": "An owner of the tenant",
+        "requires": [
+          "tokens-define"
+        ]
       },"idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"name","type":"string"},{"name":"expression","type":"expression"},{"name":"fallback","type":"string"}],"outputs":[{"name":"version","type":"u64"}],"postconditions":["The token is stored as tenant metadata under the schema version (CTK-001).","A change is offered with a projection listing the content whose rendered text differs (CTK-006)."],"errors":[
         {
           "name": "unauthenticated",
@@ -6351,7 +6810,10 @@
         ],
         "csrf": true,
         "origin": true,
-        "description": "An owner of the tenant"
+        "description": "An owner of the tenant",
+        "requires": [
+          "tokens-define"
+        ]
       },"idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"name","type":"string"}],"outputs":[],"errors":[
         {
           "name": "unauthenticated",
@@ -6428,7 +6890,10 @@
         "tenantPolicies": true,
         "csrf": true,
         "origin": true,
-        "description": "A principal whose policies permit the operation"
+        "description": "A principal whose policies permit the operation",
+        "requires": [
+          "mail-configure"
+        ]
       },"idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"template","type":"template-id"},{"name":"subject","type":"string"},{"name":"body","type":"structured-blocks"}],"outputs":[{"name":"version","type":"u64"}],"postconditions":["The template is stored as tenant metadata (EML-012)."],"errors":[
         {
           "name": "unauthenticated",
@@ -6501,7 +6966,10 @@
         ],
         "csrf": true,
         "origin": true,
-        "description": "An owner of the tenant"
+        "description": "An owner of the tenant",
+        "requires": [
+          "mail-configure"
+        ]
       },"idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"domain","type":"domain"}],"outputs":[{"name":"state","type":"domain-state"}],"postconditions":["Mail carries a sender address on a tenant domain only after its proof (EML-013).","Without proof, mail is sent from a platform address (EML-014)."],"errors":[
         {
           "name": "unauthenticated",
@@ -6522,7 +6990,10 @@
     {"id":"list-mail-messages","name":"List the mail log","ref":"CT-222","realisation":"generated","implementedBy":"mail-dispatcher","auth":{
         "scheme": "session",
         "tenantPolicies": true,
-        "description": "A principal whose policies permit the operation"
+        "description": "A principal whose policies permit the operation",
+        "requires": [
+          "mail-read"
+        ]
       },"idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"cursor","type":"string","optional":true}],"outputs":[{"name":"messages","type":"list<mail-log-entry>"},{"name":"next","type":"string","optional":true}],"postconditions":["The log keeps state and recipient and drops the body once the provider has accepted the message (EML-011)."],"errors":[
         {
           "name": "unauthenticated",
@@ -6546,7 +7017,10 @@
         "tenantPolicies": true,
         "csrf": true,
         "origin": true,
-        "description": "A principal whose policies permit the operation"
+        "description": "A principal whose policies permit the operation",
+        "requires": [
+          "mail-configure"
+        ]
       },"idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"address","type":"email-address"},{"name":"action","type":"string"}],"outputs":[],"errors":[
         {
           "name": "unauthenticated",
@@ -6566,7 +7040,10 @@
     },
     {"id":"create-release","name":"Create a release record","ref":"CT-224","realisation":"generated","implementedBy":"release-controller","auth":{
         "scheme": "service",
-        "description": "The release pipeline"
+        "description": "The release pipeline",
+        "requires": [
+          "release-build"
+        ]
       },"idempotent":true,"inputs":[{"name":"commit","type":"string"},{"name":"digests","type":"list<hash>"},{"name":"classification","type":"string"}],"outputs":[{"name":"release","type":"release-id"}],"postconditions":["The record names each configuration value and holds no secret value (REL-553).","It classifies the release as rollback-safe or roll-forward-only (REL-575)."],"errors":[
         {
           "name": "unauthenticated",
@@ -6591,7 +7068,10 @@
         "stepUp": "15 min",
         "csrf": true,
         "origin": true,
-        "description": "Two distinct approving principals, neither its author (REL-560)"
+        "description": "Two distinct approving principals, neither its author (REL-560)",
+        "requires": [
+          "release-promote"
+        ]
       },"idempotent":false,"inputs":[{"name":"release","type":"release-id"},{"name":"to","type":"environment-id"}],"outputs":[{"name":"state","type":"release-state"}],"postconditions":["The image that passes the gate in stage is the one that reaches production (REL-551).","The stage soak lasts at least 24 hours (REL-559)."],"errors":[
         {
           "name": "unauthenticated",
@@ -6621,7 +7101,10 @@
         ],
         "csrf": true,
         "origin": true,
-        "description": "A release engineer"
+        "description": "A release engineer",
+        "requires": [
+          "release-switch"
+        ]
       },"idempotent":false,"timeoutMs":30000,"inputs":[{"name":"release","type":"release-id"},{"name":"component","type":"string"}],"outputs":[{"name":"live","type":"colour-id"}],"postconditions":["A colour switch first sends at most 5 percent of requests to the new colour for a period (REL-565).","It takes effect at the traffic switch within 30 seconds (REL-567)."],"errors":[
         {
           "name": "unauthenticated",
@@ -6651,7 +7134,10 @@
         ],
         "csrf": true,
         "origin": true,
-        "description": "A release engineer"
+        "description": "A release engineer",
+        "requires": [
+          "release-switch"
+        ]
       },"idempotent":true,"timeoutMs":30000,"inputs":[{"name":"component","type":"string"}],"outputs":[{"name":"live","type":"colour-id"}],"postconditions":["It deploys nothing (REL-568).","The traffic switch sends no public request to the withdrawn colour afterwards (REL-577)."],"errors":[
         {
           "name": "unauthenticated",
@@ -6673,7 +7159,10 @@
         "tenantPolicies": true,
         "csrf": true,
         "origin": true,
-        "description": "A principal whose policies permit the operation"
+        "description": "A principal whose policies permit the operation",
+        "requires": [
+          "release-drift-report"
+        ]
       },"idempotent":true,"inputs":[{"name":"environment","type":"environment-id"}],"outputs":[{"name":"differences","type":"list<string>"}],"postconditions":["Each difference between the definitions and the live environment is reported (REL-562)."],"errors":[
         {
           "name": "unauthenticated",
@@ -6686,7 +7175,10 @@
     },
     {"id":"set-listener-rule","name":"Set the listener rule of a component","ref":"CT-229","realisation":"generated","implementedBy":"traffic-switch","auth":{
         "scheme": "service",
-        "description": "The release controller"
+        "description": "The release controller",
+        "requires": [
+          "listener-rule-set"
+        ]
       },"idempotent":true,"timeoutMs":30000,"inputs":[{"name":"component","type":"string"},{"name":"live","type":"colour-id"},{"name":"canary-share","type":"u8"}],"outputs":[],"postconditions":["A new colour takes no public traffic until its release record names it verified (REL-566).","The previous colour keeps running for at least 24 hours (REL-569)."],"errors":[
         {
           "name": "unauthenticated",
@@ -6708,7 +7200,10 @@
         "roles": [
           "owner"
         ],
-        "description": "An owner of the tenant"
+        "description": "An owner of the tenant",
+        "requires": [
+          "migration-run"
+        ]
       },"idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"changes","type":"list<schema-change>"}],"outputs":[{"name":"plan","type":"migration-plan"}],"postconditions":["A change that removes a field or a constraint is marked irreversible (MIG-557)."],"errors":[
         {
           "name": "unauthenticated",
@@ -6734,7 +7229,10 @@
         ],
         "csrf": true,
         "origin": true,
-        "description": "An owner of the tenant"
+        "description": "An owner of the tenant",
+        "requires": [
+          "migration-run"
+        ]
       },"idempotent":false,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"preview","type":"hash"}],"outputs":[{"name":"run","type":"migration-id"}],"postconditions":["The run records the preview it was applied from, its batches and its outcome (MIG-556)."],"errors":[
         {
           "name": "unauthenticated",
@@ -6760,7 +7258,10 @@
     },
     {"id":"run-migration-batch","name":"Run one batch of a migration run","ref":"CT-232","realisation":"generated","implementedBy":"migration-job","auth":{
         "scheme": "service",
-        "description": "Service credential of a platform component"
+        "description": "Service credential of a platform component",
+        "requires": [
+          "migration-batch"
+        ]
       },"idempotent":true,"timeoutMs":1000,"inputs":[{"name":"run","type":"migration-id"}],"outputs":[{"name":"cursor","type":"string"},{"name":"state","type":"migration-state"}],"postconditions":["A batch reads and writes records of its own tenant only (MIG-580).","A batch holds the writes of its tenant for no longer than 1 second at the 99th percentile (MIG-553).","A run that stops resumes from its last committed cursor, so each record is converted once (MIG-554).","A reader sees each record in its prior or migrated form and in no mixture (MIG-552)."],"errors":[
         {
           "name": "unauthenticated",
@@ -6778,7 +7279,10 @@
         ],
         "csrf": true,
         "origin": true,
-        "description": "An owner of the tenant"
+        "description": "An owner of the tenant",
+        "requires": [
+          "migration-run"
+        ]
       },"idempotent":true,"inputs":[{"name":"run","type":"migration-id"}],"outputs":[{"name":"cursor","type":"string"}],"postconditions":["The cursor is recorded and the tenant stays in a form that serves its readers (MIG-581, MIG-555)."],"errors":[
         {
           "name": "unauthenticated",
@@ -6803,7 +7307,10 @@
         ],
         "csrf": true,
         "origin": true,
-        "description": "A platform operator"
+        "description": "A platform operator",
+        "requires": [
+          "tenant-move"
+        ]
       },"idempotent":false,"timeoutMs":60000,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"target","type":"placement-id"}],"outputs":[{"name":"move","type":"move-id"}],"postconditions":["The canonical hash of the state is preserved (TEN-012).","Writes are refused for no longer than 60 seconds at the 99th percentile (MIG-568).","The owner is told of the read-only window at least 48 hours ahead (MIG-569).","A move whose copy fails leaves the source serving and the directory unchanged (MIG-571)."],"errors":[
         {
           "name": "unauthenticated",
@@ -6828,7 +7335,10 @@
     },
     {"id":"switch-placement","name":"Switch a tenant to its target placement","ref":"CT-235","realisation":"generated","implementedBy":"control-plane","auth":{
         "scheme": "service",
-        "description": "Service credential of a platform component"
+        "description": "Service credential of a platform component",
+        "requires": [
+          "tenant-move"
+        ]
       },"idempotent":true,"inputs":[{"name":"move","type":"move-id"}],"outputs":[{"name":"placement","type":"placement-id"}],"postconditions":["A request that began before the switch completes on the source (MIG-586).","Stored and edge copies stay valid (MIG-587).","After the switch the backups and files are those of the target (MIG-588).","The source database is kept for at least 7 days (MIG-572)."],"errors":[
         {
           "name": "unauthenticated",
@@ -6852,7 +7362,10 @@
         ],
         "csrf": true,
         "origin": true,
-        "description": "An owner of the tenant"
+        "description": "An owner of the tenant",
+        "requires": [
+          "bundle-install"
+        ]
       },"idempotent":false,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"bundle","type":"tenant-bundle"}],"outputs":[{"name":"schema-version","type":"u64"}],"postconditions":["Installing the same bundles into an empty store produces the same state (RUN-004).","The bundle installs as tenant metadata through kernel intents (CMS-001)."],"errors":[
         {
           "name": "invalid-bundle",
@@ -6888,7 +7401,10 @@
         ],
         "csrf": true,
         "origin": true,
-        "description": "A platform operator"
+        "description": "A platform operator",
+        "requires": [
+          "template-upgrade-offer"
+        ]
       },"idempotent":false,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"template","type":"template-id"},{"name":"version","type":"string"}],"outputs":[{"name":"proposal","type":"proposal-id"}],"postconditions":["The upgrade reaches a tenant only as a proposal carrying its projection that the tenant approves (MIG-564)."],"errors":[
         {
           "name": "unauthenticated",
@@ -7616,7 +8132,10 @@
     },
     {"id":"read-front-page","name":"Read the front page view","ref":"CT-239","realisation":"generated","implementedBy":"gateway","bffRoute":"GET /api/view view","auth":{
         "scheme": "anonymous",
-        "description": "Anyone; no session is needed"
+        "description": "Anyone; no session is needed",
+        "requires": [
+          "content-read"
+        ]
       },"idempotent":true,"timeoutMs":10000,"inputs":[],"outputs":[{"name":"view","type":"string"},{"name":"title","type":"string"},{"name":"path","type":"string"},{"name":"params","type":"json"},{"name":"data","type":"front-page-data"},{"name":"depends-on","type":"list<string>"},{"name":"revision","type":"state-revision"},{"name":"schema-version","type":"schema-version"},{"name":"theme","type":"view-theme"}],"postconditions":["The view is the one the tenant's view definition for this page names (CMS-002); it holds the publication, the featured article, the recent articles and the topics.","The outputs are the members of the view model the BFF answers as JSON, under the names it uses: view (the view definition), title, path (the address asked for), params, data (the sections of the view, each a row or a list of rows, as the type of data says), depends_on (the object types whose changes alter the view), revision, schema_version and theme."],"errors":[
         {
           "name": "unavailable",
@@ -7631,7 +8150,10 @@
     },
     {"id":"read-article-page","name":"Read the view of one article","ref":"CT-240","realisation":"generated","implementedBy":"gateway","bffRoute":"GET /api/view view","auth":{
         "scheme": "anonymous",
-        "description": "Anyone; no session is needed"
+        "description": "Anyone; no session is needed",
+        "requires": [
+          "content-read"
+        ]
       },"idempotent":true,"timeoutMs":10000,"inputs":[{"name":"slug","type":"string"}],"outputs":[{"name":"view","type":"string"},{"name":"title","type":"string"},{"name":"path","type":"string"},{"name":"params","type":"json"},{"name":"data","type":"article-page-data"},{"name":"depends-on","type":"list<string>"},{"name":"revision","type":"state-revision"},{"name":"schema-version","type":"schema-version"},{"name":"theme","type":"view-theme"}],"postconditions":["The view is the one the tenant's view definition for this page names (CMS-002); it holds the article with this address and the recent articles.","A draft is invisible to principals whose policies permit published content alone (CMS-003).","The outputs are the members of the view model the BFF answers as JSON, under the names it uses: view (the view definition), title, path (the address asked for), params, data (the sections of the view, each a row or a list of rows, as the type of data says), depends_on (the object types whose changes alter the view), revision, schema_version and theme."],"errors":[
         {
           "name": "not-found",
@@ -7652,7 +8174,10 @@
     },
     {"id":"read-topics-page","name":"Read the view of the topic index","ref":"CT-241","realisation":"generated","implementedBy":"gateway","bffRoute":"GET /api/view view","auth":{
         "scheme": "anonymous",
-        "description": "Anyone; no session is needed"
+        "description": "Anyone; no session is needed",
+        "requires": [
+          "content-read"
+        ]
       },"idempotent":true,"timeoutMs":10000,"inputs":[],"outputs":[{"name":"view","type":"string"},{"name":"title","type":"string"},{"name":"path","type":"string"},{"name":"params","type":"json"},{"name":"data","type":"topics-page-data"},{"name":"depends-on","type":"list<string>"},{"name":"revision","type":"state-revision"},{"name":"schema-version","type":"schema-version"},{"name":"theme","type":"view-theme"}],"postconditions":["The view is the one the tenant's view definition for this page names (CMS-002); it holds every topic and the recent articles, from which the page counts the articles of each topic.","The outputs are the members of the view model the BFF answers as JSON, under the names it uses: view (the view definition), title, path (the address asked for), params, data (the sections of the view, each a row or a list of rows, as the type of data says), depends_on (the object types whose changes alter the view), revision, schema_version and theme."],"errors":[
         {
           "name": "unavailable",
@@ -7667,7 +8192,10 @@
     },
     {"id":"read-topic-page","name":"Read the view of one topic","ref":"CT-242","realisation":"generated","implementedBy":"gateway","bffRoute":"GET /api/view view","auth":{
         "scheme": "anonymous",
-        "description": "Anyone; no session is needed"
+        "description": "Anyone; no session is needed",
+        "requires": [
+          "content-read"
+        ]
       },"idempotent":true,"timeoutMs":10000,"inputs":[{"name":"slug","type":"string"}],"outputs":[{"name":"view","type":"string"},{"name":"title","type":"string"},{"name":"path","type":"string"},{"name":"params","type":"json"},{"name":"data","type":"topic-page-data"},{"name":"depends-on","type":"list<string>"},{"name":"revision","type":"state-revision"},{"name":"schema-version","type":"schema-version"},{"name":"theme","type":"view-theme"}],"postconditions":["The view is the one the tenant's view definition for this page names (CMS-002); it holds the topic with this address, its published articles and every topic.","The outputs are the members of the view model the BFF answers as JSON, under the names it uses: view (the view definition), title, path (the address asked for), params, data (the sections of the view, each a row or a list of rows, as the type of data says), depends_on (the object types whose changes alter the view), revision, schema_version and theme."],"errors":[
         {
           "name": "not-found",
@@ -7688,7 +8216,10 @@
     },
     {"id":"read-authors-page","name":"Read the view of the author index","ref":"CT-243","realisation":"generated","implementedBy":"gateway","bffRoute":"GET /api/view view","auth":{
         "scheme": "anonymous",
-        "description": "Anyone; no session is needed"
+        "description": "Anyone; no session is needed",
+        "requires": [
+          "content-read"
+        ]
       },"idempotent":true,"timeoutMs":10000,"inputs":[],"outputs":[{"name":"view","type":"string"},{"name":"title","type":"string"},{"name":"path","type":"string"},{"name":"params","type":"json"},{"name":"data","type":"authors-page-data"},{"name":"depends-on","type":"list<string>"},{"name":"revision","type":"state-revision"},{"name":"schema-version","type":"schema-version"},{"name":"theme","type":"view-theme"}],"postconditions":["The view is the one the tenant's view definition for this page names (CMS-002); it holds every author.","The outputs are the members of the view model the BFF answers as JSON, under the names it uses: view (the view definition), title, path (the address asked for), params, data (the sections of the view, each a row or a list of rows, as the type of data says), depends_on (the object types whose changes alter the view), revision, schema_version and theme."],"errors":[
         {
           "name": "unavailable",
@@ -7703,7 +8234,10 @@
     },
     {"id":"read-author-page","name":"Read the view of one author","ref":"CT-244","realisation":"generated","implementedBy":"gateway","bffRoute":"GET /api/view view","auth":{
         "scheme": "anonymous",
-        "description": "Anyone; no session is needed"
+        "description": "Anyone; no session is needed",
+        "requires": [
+          "content-read"
+        ]
       },"idempotent":true,"timeoutMs":10000,"inputs":[{"name":"slug","type":"string"}],"outputs":[{"name":"view","type":"string"},{"name":"title","type":"string"},{"name":"path","type":"string"},{"name":"params","type":"json"},{"name":"data","type":"author-page-data"},{"name":"depends-on","type":"list<string>"},{"name":"revision","type":"state-revision"},{"name":"schema-version","type":"schema-version"},{"name":"theme","type":"view-theme"}],"postconditions":["The view is the one the tenant's view definition for this page names (CMS-002); it holds the author with this address and the author's published articles.","The outputs are the members of the view model the BFF answers as JSON, under the names it uses: view (the view definition), title, path (the address asked for), params, data (the sections of the view, each a row or a list of rows, as the type of data says), depends_on (the object types whose changes alter the view), revision, schema_version and theme."],"errors":[
         {
           "name": "not-found",
@@ -7724,7 +8258,10 @@
     },
     {"id":"read-search-page","name":"Read the view of the search results","ref":"CT-245","realisation":"generated","implementedBy":"gateway","bffRoute":"GET /api/view view","auth":{
         "scheme": "anonymous",
-        "description": "Anyone; no session is needed"
+        "description": "Anyone; no session is needed",
+        "requires": [
+          "content-read"
+        ]
       },"idempotent":true,"timeoutMs":10000,"inputs":[{"name":"q","type":"string","optional":true}],"outputs":[{"name":"view","type":"string"},{"name":"title","type":"string"},{"name":"path","type":"string"},{"name":"params","type":"json"},{"name":"data","type":"search-page-data"},{"name":"depends-on","type":"list<string>"},{"name":"revision","type":"state-revision"},{"name":"schema-version","type":"schema-version"},{"name":"theme","type":"view-theme"},{"name":"q","type":"string"}],"postconditions":["The view is the one the tenant's view definition for this page names (CMS-002); it holds the published articles whose title, excerpt or text contain the query, when the query has at least two characters.","The output q repeats the query, so that a search form can address the results page.","The outputs are the members of the view model the BFF answers as JSON, under the names it uses: view (the view definition), title, path (the address asked for), params, data (the sections of the view, each a row or a list of rows, as the type of data says), depends_on (the object types whose changes alter the view), revision, schema_version and theme."],"errors":[
         {
           "name": "unavailable",
@@ -7739,7 +8276,10 @@
     },
     {"id":"read-about-page","name":"Read the view of the about page","ref":"CT-246","realisation":"generated","implementedBy":"gateway","bffRoute":"GET /api/view view","auth":{
         "scheme": "anonymous",
-        "description": "Anyone; no session is needed"
+        "description": "Anyone; no session is needed",
+        "requires": [
+          "content-read"
+        ]
       },"idempotent":true,"timeoutMs":10000,"inputs":[],"outputs":[{"name":"view","type":"string"},{"name":"title","type":"string"},{"name":"path","type":"string"},{"name":"params","type":"json"},{"name":"data","type":"about-page-data"},{"name":"depends-on","type":"list<string>"},{"name":"revision","type":"state-revision"},{"name":"schema-version","type":"schema-version"},{"name":"theme","type":"view-theme"}],"postconditions":["The view is the one the tenant's view definition for this page names (CMS-002); it holds the publication with its about and colophon text, and every author.","The outputs are the members of the view model the BFF answers as JSON, under the names it uses: view (the view definition), title, path (the address asked for), params, data (the sections of the view, each a row or a list of rows, as the type of data says), depends_on (the object types whose changes alter the view), revision, schema_version and theme."],"errors":[
         {
           "name": "unavailable",
@@ -7754,7 +8294,10 @@
     },
     {"id":"read-missing-page","name":"Read the view of an address no page answers","ref":"CT-247","realisation":"generated","implementedBy":"gateway","bffRoute":"GET /api/view view","auth":{
         "scheme": "anonymous",
-        "description": "Anyone; no session is needed"
+        "description": "Anyone; no session is needed",
+        "requires": [
+          "content-read"
+        ]
       },"idempotent":true,"timeoutMs":10000,"inputs":[{"name":"missing","type":"string"}],"outputs":[{"name":"path","type":"string"}],"postconditions":["No page of the tenant answers this address: the answer is not-found, and the web application shows the page \"There is nothing at this address\" for the path it asked for."],"errors":[
         {
           "name": "not-found",
@@ -7769,7 +8312,10 @@
     },
     {"id":"read-sign-in-view","name":"Read the view of the sign-in page","ref":"CT-248","realisation":"generated","implementedBy":"gateway","bffRoute":"GET /api/view view","auth":{
         "scheme": "anonymous",
-        "description": "Anyone; no session is needed"
+        "description": "Anyone; no session is needed",
+        "requires": [
+          "identity-sign-in"
+        ]
       },"idempotent":true,"timeoutMs":10000,"inputs":[{"name":"next","type":"string","optional":true}],"outputs":[{"name":"view","type":"string"},{"name":"title","type":"string"},{"name":"path","type":"string"},{"name":"params","type":"json"},{"name":"data","type":"site-page-data"},{"name":"depends-on","type":"list<string>"},{"name":"revision","type":"state-revision"},{"name":"schema-version","type":"schema-version"},{"name":"theme","type":"view-theme"}],"postconditions":["The view is the one the tenant's view definition for this page names (CMS-002); it holds the publication.","The query parameter next names the address to open after signing in; the web application follows it only when it starts with one \"/\" (it refuses \"//\").","The outputs are the members of the view model the BFF answers as JSON, under the names it uses: view (the view definition), title, path (the address asked for), params, data (the sections of the view, each a row or a list of rows, as the type of data says), depends_on (the object types whose changes alter the view), revision, schema_version and theme."],"errors":[
         {
           "name": "unavailable",
@@ -7785,7 +8331,10 @@
     {"id":"read-desk-view","name":"Read the view of the writing desk","ref":"CT-249","realisation":"generated","implementedBy":"gateway","bffRoute":"GET /api/view view","auth":{
         "scheme": "session",
         "tenantPolicies": true,
-        "description": "A signed-in principal whose policies permit the operation"
+        "description": "A signed-in principal whose policies permit the operation",
+        "requires": [
+          "content-draft-read"
+        ]
       },"idempotent":true,"timeoutMs":10000,"inputs":[],"outputs":[{"name":"view","type":"string"},{"name":"title","type":"string"},{"name":"path","type":"string"},{"name":"params","type":"json"},{"name":"data","type":"desk-page-data"},{"name":"depends-on","type":"list<string>"},{"name":"revision","type":"state-revision"},{"name":"schema-version","type":"schema-version"},{"name":"theme","type":"view-theme"},{"name":"articles","type":"list<desk-article>"}],"postconditions":["The view holds the publication and the articles the principal wrote, or every article for an editor or the owner (CMS-003).","The output articles lists the articles of the view, each with its identifier, its version, its title, its address, its text and its status, so that a change made from the list names the version it started from.","The outputs are the members of the view model the BFF answers as JSON, under the names it uses: view (the view definition), title, path (the address asked for), params, data (the sections of the view, each a row or a list of rows, as the type of data says), depends_on (the object types whose changes alter the view), revision, schema_version and theme."],"errors":[
         {
           "name": "unauthenticated",
@@ -7813,7 +8362,10 @@
     {"id":"read-new-article-view","name":"Read the view for a new article","ref":"CT-250","realisation":"generated","implementedBy":"gateway","bffRoute":"GET /api/view view","auth":{
         "scheme": "session",
         "tenantPolicies": true,
-        "description": "A signed-in principal whose policies permit the operation"
+        "description": "A signed-in principal whose policies permit the operation",
+        "requires": [
+          "content-draft-read"
+        ]
       },"idempotent":true,"timeoutMs":10000,"inputs":[],"outputs":[{"name":"view","type":"string"},{"name":"title","type":"string"},{"name":"path","type":"string"},{"name":"params","type":"json"},{"name":"data","type":"new-article-page-data"},{"name":"depends-on","type":"list<string>"},{"name":"revision","type":"state-revision"},{"name":"schema-version","type":"schema-version"},{"name":"theme","type":"view-theme"},{"name":"topics","type":"list<option-choice>"},{"name":"authors","type":"list<option-choice>"}],"postconditions":["The view holds the publication, every topic and every author.","The outputs are the members of the view model the BFF answers as JSON, under the names it uses: view (the view definition), title, path (the address asked for), params, data (the sections of the view, each a row or a list of rows, as the type of data says), depends_on (the object types whose changes alter the view), revision, schema_version and theme.","The outputs topics and authors list the choices of the topic and author controls: one entry per topic (its identifier as text, its name), led by an entry with an empty value and the label \"No topic\", and one per author (its identifier as text, its name). The BFF builds them from the data of the same view, as it projects the desk's articles."],"errors":[
         {
           "name": "unauthenticated",
@@ -7841,7 +8393,10 @@
     {"id":"read-edit-article-view","name":"Read the view for editing an article","ref":"CT-251","realisation":"generated","implementedBy":"gateway","bffRoute":"GET /api/view view","auth":{
         "scheme": "session",
         "tenantPolicies": true,
-        "description": "A signed-in principal whose policies permit the operation"
+        "description": "A signed-in principal whose policies permit the operation",
+        "requires": [
+          "content-draft-read"
+        ]
       },"idempotent":true,"timeoutMs":10000,"inputs":[{"name":"slug","type":"string"}],"outputs":[{"name":"view","type":"string"},{"name":"title","type":"string"},{"name":"path","type":"string"},{"name":"params","type":"json"},{"name":"data","type":"edit-article-page-data"},{"name":"depends-on","type":"list<string>"},{"name":"revision","type":"state-revision"},{"name":"schema-version","type":"schema-version"},{"name":"theme","type":"view-theme"},{"name":"article-id","type":"record-id"},{"name":"article-version","type":"u64"},{"name":"topics","type":"list<option-choice>"},{"name":"authors","type":"list<option-choice>"}],"postconditions":["The view holds the publication, the article with this address, every topic and every author.","The outputs article-id and article-version repeat the identifier and the version of the article held in the view, so that a save names the version it started from.","The outputs are the members of the view model the BFF answers as JSON, under the names it uses: view (the view definition), title, path (the address asked for), params, data (the sections of the view, each a row or a list of rows, as the type of data says), depends_on (the object types whose changes alter the view), revision, schema_version and theme.","The outputs topics and authors list the choices of the topic and author controls, as for a new article. The BFF builds them from the data of the same view."],"errors":[
         {
           "name": "not-found",
@@ -7875,7 +8430,10 @@
     {"id":"read-settings-view","name":"Read the view of the publication settings","ref":"CT-252","realisation":"generated","implementedBy":"gateway","bffRoute":"GET /api/view view","auth":{
         "scheme": "session",
         "tenantPolicies": true,
-        "description": "A signed-in principal whose policies permit the operation"
+        "description": "A signed-in principal whose policies permit the operation",
+        "requires": [
+          "site-configure"
+        ]
       },"idempotent":true,"timeoutMs":10000,"inputs":[],"outputs":[{"name":"view","type":"string"},{"name":"title","type":"string"},{"name":"path","type":"string"},{"name":"params","type":"json"},{"name":"data","type":"site-page-data"},{"name":"depends-on","type":"list<string>"},{"name":"revision","type":"state-revision"},{"name":"schema-version","type":"schema-version"},{"name":"theme","type":"view-theme"},{"name":"publication-id","type":"record-id"},{"name":"publication-version","type":"u64"},{"name":"accents","type":"list<string>"},{"name":"papers","type":"list<string>"}],"postconditions":["The view holds the publication record.","The outputs publication-id and publication-version repeat the identifier and the version of the publication record held in the view, so that a save names the version it started from.","The outputs are the members of the view model the BFF answers as JSON, under the names it uses: view (the view definition), title, path (the address asked for), params, data (the sections of the view, each a row or a list of rows, as the type of data says), depends_on (the object types whose changes alter the view), revision, schema_version and theme.","The outputs accents and papers list the names a swatch can take (the accent tokens moss, clay, ink, ochre and plum; the paper tokens linen, stone and chalk). The BFF puts them in the view model from the theme schema."],"errors":[
         {
           "name": "unauthenticated",
@@ -7903,7 +8461,10 @@
     {"id":"read-lab-view","name":"Read the view of the impact lab","ref":"CT-253","realisation":"generated","implementedBy":"gateway","bffRoute":"GET /api/view view","auth":{
         "scheme": "session",
         "tenantPolicies": true,
-        "description": "A signed-in principal whose policies permit the operation"
+        "description": "A signed-in principal whose policies permit the operation",
+        "requires": [
+          "content-draft-read"
+        ]
       },"idempotent":true,"timeoutMs":10000,"inputs":[],"outputs":[{"name":"view","type":"string"},{"name":"title","type":"string"},{"name":"path","type":"string"},{"name":"params","type":"json"},{"name":"data","type":"site-page-data"},{"name":"depends-on","type":"list<string>"},{"name":"revision","type":"state-revision"},{"name":"schema-version","type":"schema-version"},{"name":"theme","type":"view-theme"}],"postconditions":["The view holds the publication. The page itself is drawn only for a principal who may manage the schema.","The outputs are the members of the view model the BFF answers as JSON, under the names it uses: view (the view definition), title, path (the address asked for), params, data (the sections of the view, each a row or a list of rows, as the type of data says), depends_on (the object types whose changes alter the view), revision, schema_version and theme."],"errors":[
         {
           "name": "unauthenticated",
@@ -7933,7 +8494,10 @@
         "csrf": true,
         "origin": true,
         "justification": "Signing in is how a visitor gets a session.",
-        "description": "Anyone; no session is needed"
+        "description": "Anyone; no session is needed",
+        "requires": [
+          "identity-sign-in"
+        ]
       },"idempotent":false,"timeoutMs":2000,"inputs":[{"name":"login","type":"string"},{"name":"password","type":"string"}],"outputs":[{"name":"session","type":"session-view"}],"preconditions":["The request carries the request token that the gateway issued to the browser (GWY-257)."],"postconditions":["It signs in through sign-in-with-password and answers the session as the browser may see it; the secret token travels only in the session cookie."],"errors":[
         {
           "name": "unauthenticated",
@@ -7961,7 +8525,10 @@
         "scheme": "session",
         "csrf": true,
         "origin": true,
-        "description": "A signed-in principal"
+        "description": "A signed-in principal",
+        "requires": [
+          "session-manage"
+        ]
       },"idempotent":true,"timeoutMs":2000,"inputs":[],"outputs":[{"name":"session","type":"session-view"}],"preconditions":["The request carries the request token of the session (GWY-257)."],"postconditions":["The session named by the cookie is revoked through sign-out, and the answer is the session of an anonymous visitor."],"errors":[
         {
           "name": "unauthenticated",
@@ -7975,7 +8542,10 @@
     },
     {"id":"read-session-view","name":"Read the session of the visit","ref":"CT-256","realisation":"generated","implementedBy":"gateway","bffRoute":"GET /api/session","auth":{
         "scheme": "anonymous",
-        "description": "Anyone; no session is needed"
+        "description": "Anyone; no session is needed",
+        "requires": [
+          "identity-sign-in"
+        ]
       },"idempotent":true,"timeoutMs":2000,"inputs":[],"outputs":[{"name":"session","type":"session-view"}],"postconditions":["The answer is the session the cookie names as the browser may see it, with the request token while it is signed in, or the session of an anonymous visitor."],"errors":[
         {
           "name": "unavailable",
@@ -7993,7 +8563,10 @@
         "tenantPolicies": true,
         "csrf": true,
         "origin": true,
-        "description": "A signed-in principal whose policies permit the operation"
+        "description": "A signed-in principal whose policies permit the operation",
+        "requires": [
+          "content-write"
+        ]
       },"idempotent":false,"timeoutMs":10000,"inputs":[{"name":"title","type":"string"},{"name":"slug","type":"string"},{"name":"excerpt","type":"string","optional":true},{"name":"body","type":"string"},{"name":"category","type":"string","optional":true},{"name":"author","type":"string","optional":true},{"name":"tags","type":"string","optional":true},{"name":"cover","type":"string","optional":true},{"name":"cover-alt","type":"string","optional":true},{"name":"featured","type":"bool","optional":true},{"name":"status","type":"string","optional":true}],"outputs":[{"name":"article-id","type":"record-id"},{"name":"version","type":"u64"},{"name":"slug","type":"string"}],"preconditions":["The request carries the request token of the session (GWY-002)."],"postconditions":["The article is created as a draft whatever status is asked (CMS-154); a status of published is applied as a second step that the post workflow allows, so that a refusal of publishing leaves the draft saved.","The input category and author hold a record identifier as text, or are empty; tags are separated by commas; an empty optional input leaves the field unset.","The output slug repeats the address that was saved."],"errors":[
         {
           "name": "unauthenticated",
@@ -8034,7 +8607,10 @@
         "tenantPolicies": true,
         "csrf": true,
         "origin": true,
-        "description": "A signed-in principal whose policies permit the operation"
+        "description": "A signed-in principal whose policies permit the operation",
+        "requires": [
+          "content-write"
+        ]
       },"idempotent":false,"timeoutMs":10000,"inputs":[{"name":"article","type":"record-id"},{"name":"expected-version","type":"u64"},{"name":"title","type":"string"},{"name":"slug","type":"string"},{"name":"excerpt","type":"string","optional":true},{"name":"body","type":"string"},{"name":"category","type":"string","optional":true},{"name":"author","type":"string","optional":true},{"name":"tags","type":"string","optional":true},{"name":"cover","type":"string","optional":true},{"name":"cover-alt","type":"string","optional":true},{"name":"featured","type":"bool","optional":true},{"name":"status","type":"string","optional":true}],"outputs":[{"name":"article-id","type":"record-id"},{"name":"version","type":"u64"},{"name":"slug","type":"string"}],"preconditions":["The request carries the request token of the session (GWY-002)."],"postconditions":["The change is applied only when expected-version is the stored version of the article; otherwise it is refused with conflict.","A status of published or draft moves the article through the post workflow in the same request.","The output slug repeats the address that was saved."],"errors":[
         {
           "name": "unauthenticated",
@@ -8081,7 +8657,10 @@
         "tenantPolicies": true,
         "csrf": true,
         "origin": true,
-        "description": "A signed-in principal whose policies permit the operation"
+        "description": "A signed-in principal whose policies permit the operation",
+        "requires": [
+          "content-delete"
+        ]
       },"idempotent":false,"timeoutMs":10000,"inputs":[{"name":"article","type":"record-id"},{"name":"expected-version","type":"u64"}],"outputs":[],"preconditions":["The request carries the request token of the session (GWY-002)."],"postconditions":["The article is removed only when expected-version is its stored version; otherwise the delete is refused with conflict."],"errors":[
         {
           "name": "unauthenticated",
@@ -8122,7 +8701,10 @@
         "tenantPolicies": true,
         "csrf": true,
         "origin": true,
-        "description": "A signed-in principal whose policies permit the operation"
+        "description": "A signed-in principal whose policies permit the operation",
+        "requires": [
+          "site-configure"
+        ]
       },"idempotent":false,"timeoutMs":10000,"inputs":[{"name":"publication","type":"record-id"},{"name":"expected-version","type":"u64"},{"name":"name","type":"string"},{"name":"tagline","type":"string","optional":true},{"name":"accent","type":"string"},{"name":"paper","type":"string"}],"outputs":[{"name":"version","type":"u64"}],"preconditions":["The request carries the request token of the session (GWY-002)."],"postconditions":["The change is applied only when expected-version is the stored version of the publication record; otherwise it is refused with conflict.","Every open page of the tenant refreshes from the committed change."],"errors":[
         {
           "name": "unauthenticated",
@@ -8168,7 +8750,10 @@
         "scheme": "session",
         "tenantPolicies": true,
         "origin": true,
-        "description": "A signed-in principal whose policies permit the operation"
+        "description": "A signed-in principal whose policies permit the operation",
+        "requires": [
+          "content-draft-read"
+        ]
       },"idempotent":true,"timeoutMs":2000,"inputs":[{"name":"markdown","type":"string"}],"outputs":[{"name":"blocks","type":"json"}],"preconditions":["The request carries an allowed origin."],"postconditions":["The blocks are a pure function of the text through parse-markdown; nothing is stored."],"errors":[
         {
           "name": "unauthenticated",
@@ -10684,7 +11269,166 @@
     {"id":"view-data","name":"View Data","kind":"struct","fields":[{"name":"view","type":"string"},{"name":"title","type":"string"},{"name":"params","type":"json"},{"name":"sections","type":"value-map"},{"name":"depends-on","type":"list<object-type-id>"},{"name":"revision","type":"state-revision"},{"name":"schema-version","type":"schema-version"}],"description":"strata_substrate::project::ViewData: the raw result of a view."},
     {"id":"violation","name":"Violation","kind":"struct","fields":[{"name":"object","type":"object-type-id"},{"name":"id","type":"record-id"},{"name":"check","type":"check"},{"name":"kind","type":"error-kind"}],"description":"strata_kernel::Violation: an existing record that does not conform to a proposed schema."},
     {"id":"wake-entry","name":"Wake Entry","kind":"struct","fields":[{"name":"tenant","type":"tenant-id"},{"name":"due-at","type":"timestamp"}],"description":"A wake index entry: a tenant and its next due time, with no content of a job."},
-    {"id":"webhook-delivery","name":"Webhook Delivery","kind":"struct","fields":[{"name":"id","type":"string"},{"name":"endpoint","type":"string"},{"name":"status","type":"u16"},{"name":"attempts","type":"u32"},{"name":"at","type":"timestamp"}],"description":"One outbound webhook delivery."}
+    {"id":"webhook-delivery","name":"Webhook Delivery","kind":"struct","fields":[{"name":"id","type":"string"},{"name":"endpoint","type":"string"},{"name":"status","type":"u16"},{"name":"attempts","type":"u32"},{"name":"at","type":"timestamp"}],"description":"One outbound webhook delivery."},
+    {
+      "id": "role-id",
+      "name": "role-id",
+      "kind": "id",
+      "repr": "string",
+      "description": "The id of a tenant role (kernel RoleId)."
+    },
+    {
+      "id": "team-id",
+      "name": "team-id",
+      "kind": "id",
+      "repr": "string",
+      "description": "The id of a team of a tenant (kernel TeamId)."
+    },
+    {
+      "id": "invitation-id",
+      "name": "invitation-id",
+      "kind": "id",
+      "repr": "string",
+      "description": "The id of an invitation (kernel InvitationId)."
+    },
+    {
+      "id": "capability-name",
+      "name": "capability-name",
+      "kind": "id",
+      "repr": "string",
+      "description": "The id of one of the platform's capabilities (a capability of this specification)."
+    },
+    {
+      "id": "object-action",
+      "name": "Object action",
+      "kind": "enum",
+      "values": [
+        "read",
+        "create",
+        "update",
+        "delete"
+      ],
+      "description": "An action on the records of one object type (kernel Verb)."
+    },
+    {
+      "id": "tenant-permission",
+      "name": "Tenant permission",
+      "kind": "struct",
+      "metamodel": "definition",
+      "fields": [
+        {
+          "name": "capability",
+          "type": "capability-name",
+          "optional": true
+        },
+        {
+          "name": "object",
+          "type": "object-type-id",
+          "optional": true
+        },
+        {
+          "name": "actions",
+          "type": "list<object-action>",
+          "optional": true
+        }
+      ],
+      "description": "One permission of a tenant role (ADM-150): a capability, or actions on the records of an object type of the tenant's schema; exactly one of capability and object, and actions with object (kernel Permission)."
+    },
+    {
+      "id": "tenant-role",
+      "name": "Tenant role",
+      "kind": "struct",
+      "metamodel": "definition",
+      "fields": [
+        {
+          "name": "id",
+          "type": "role-id"
+        },
+        {
+          "name": "label",
+          "type": "string"
+        },
+        {
+          "name": "permissions",
+          "type": "list<tenant-permission>"
+        }
+      ],
+      "description": "A role of a tenant, held as tenant data (ADM-150): a named set of permissions over the capabilities and the object types of the tenant's schema. The template's roles (the tenant roles of this specification) are where a tenant starts."
+    },
+    {
+      "id": "role-assignment",
+      "name": "Role assignment",
+      "kind": "struct",
+      "metamodel": "definition",
+      "fields": [
+        {
+          "name": "role",
+          "type": "role-id"
+        },
+        {
+          "name": "principal",
+          "type": "principal-id",
+          "optional": true
+        },
+        {
+          "name": "team",
+          "type": "team-id",
+          "optional": true
+        }
+      ],
+      "description": "A tenant role assigned to a principal (a person, service or agent) or to a team; exactly one of principal and team (ADM-150). Refused unless the assigner holds a permission the role grants (ADM-152)."
+    },
+    {
+      "id": "tenant-team",
+      "name": "Team",
+      "kind": "struct",
+      "metamodel": "definition",
+      "fields": [
+        {
+          "name": "id",
+          "type": "team-id"
+        },
+        {
+          "name": "label",
+          "type": "string"
+        },
+        {
+          "name": "members",
+          "type": "list<principal-id>"
+        },
+        {
+          "name": "roles",
+          "type": "list<role-id>"
+        }
+      ],
+      "description": "A team of a tenant, held as tenant data: its members hold its roles (ADM-151). A principal holds exactly the permissions of its own roles and of its teams' roles."
+    },
+    {
+      "id": "tenant-invitation",
+      "name": "Invitation",
+      "kind": "struct",
+      "metamodel": "definition",
+      "fields": [
+        {
+          "name": "id",
+          "type": "invitation-id"
+        },
+        {
+          "name": "address",
+          "type": "email-address"
+        },
+        {
+          "name": "roles",
+          "type": "list<role-id>"
+        },
+        {
+          "name": "redeemed-by",
+          "type": "principal-id",
+          "optional": true
+        }
+      ],
+      "description": "An invitation of a tenant: grants its roles to the one person who redeems it with the address it names, once (ADM-153)."
+    }
   ],
   "records": [
     {"id":"rec-tenant","name":"Tenant","owner":"control-plane","key":["tenant-id"],"fields":[{"name":"tenant-id","type":"tenant-id","constraints":{"pattern":"^[a-z][a-z0-9_]*$","maxLength":64}},{"name":"state","type":"tenant-state"},{"name":"plan","type":"plan-id"},{"name":"placement-id","type":"placement-id","refersTo":"rec-placement","onDelete":"restrict"},{"name":"database-created","type":"bool","optional":true},{"name":"layout-applied","type":"bool","optional":true},{"name":"template-installed","type":"bool","optional":true},{"name":"activated","type":"bool","optional":true},{"name":"flow-state","type":"string"}],"retention":"Until the tenant is deleted (TEN-011), with the certificate of PRV-354.","schemaVersion":1},
@@ -11149,6 +11893,1044 @@
       "window": "1 min",
       "onExceed": "throttle",
       "heldBy": "limit-store"
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "tenant-provision",
+      "name": "Provision a tenant",
+      "description": "Create a tenant with its database, layout and template.",
+      "core": true
+    },
+    {
+      "id": "tenant-resolve",
+      "name": "Resolve tenants",
+      "description": "Read the tenant directory: entries, host names and due work.",
+      "core": true
+    },
+    {
+      "id": "tenant-suspend",
+      "name": "Suspend and resume a tenant",
+      "description": "Suspend a tenant and resume it.",
+      "core": true
+    },
+    {
+      "id": "tenant-export",
+      "name": "Export a tenant",
+      "description": "Export the whole of a tenant.",
+      "core": true
+    },
+    {
+      "id": "tenant-delete",
+      "name": "Delete a tenant",
+      "description": "Request the deletion of a tenant and cancel it within the grace period.",
+      "core": true
+    },
+    {
+      "id": "tenant-restore",
+      "name": "Restore a tenant",
+      "description": "Restore a tenant to a point in time.",
+      "core": true
+    },
+    {
+      "id": "tenant-fork",
+      "name": "Fork a tenant",
+      "description": "Fork a tenant for a projection.",
+      "core": true
+    },
+    {
+      "id": "tenant-move",
+      "name": "Move a tenant",
+      "description": "Move a tenant to another placement and switch it there.",
+      "core": true
+    },
+    {
+      "id": "placement-dedicated",
+      "name": "Dedicated database instance",
+      "description": "Be placed on a database instance of its own (D-503): a placement with a cluster of one."
+    },
+    {
+      "id": "layout-apply",
+      "name": "Apply a layout change",
+      "description": "Apply a storage layout change to one tenant database.",
+      "core": true
+    },
+    {
+      "id": "sandbox-start",
+      "name": "Start a sandbox",
+      "description": "Start a sandbox tenant.",
+      "core": true
+    },
+    {
+      "id": "sandbox-keep",
+      "name": "Keep a sandbox",
+      "description": "Keep a sandbox tenant past its period.",
+      "core": true
+    },
+    {
+      "id": "domain-manage",
+      "name": "Manage domains",
+      "description": "Bind a domain name to a tenant and remove the binding.",
+      "core": true
+    },
+    {
+      "id": "plan-change",
+      "name": "Change the plan",
+      "description": "Change the plan of a tenant.",
+      "core": true
+    },
+    {
+      "id": "identity-sign-in",
+      "name": "Sign in",
+      "description": "Sign in, sign up, recover an account and read the public sign-in pages and keys.",
+      "core": true
+    },
+    {
+      "id": "invitation-redeem",
+      "name": "Redeem an invitation",
+      "description": "Accept an invitation with the address it names (ADM-153).",
+      "core": true
+    },
+    {
+      "id": "identity-federate",
+      "name": "Assert a federated identity",
+      "description": "Complete an OpenID Connect sign-in or deliver a SAML assertion, signed by the identity provider.",
+      "core": true
+    },
+    {
+      "id": "account-manage",
+      "name": "Manage one's own account",
+      "description": "Register a passkey and change a password.",
+      "core": true
+    },
+    {
+      "id": "session-manage",
+      "name": "Manage one's own sessions",
+      "description": "Sign out, list and revoke one's own sessions.",
+      "core": true
+    },
+    {
+      "id": "session-verify",
+      "name": "Verify sessions and tokens",
+      "description": "Look up a session, introspect a token and end the sessions of a principal.",
+      "core": true
+    },
+    {
+      "id": "realm-configure",
+      "name": "Configure the realm",
+      "description": "Change the sign-in configuration of a tenant's realm.",
+      "core": true
+    },
+    {
+      "id": "directory-provision",
+      "name": "Provision the directory",
+      "description": "Provision, update and deactivate people and map groups to roles by SCIM.",
+      "core": true
+    },
+    {
+      "id": "token-issue",
+      "name": "Issue an access token",
+      "description": "Obtain an access token by client credentials.",
+      "core": true
+    },
+    {
+      "id": "token-exchange",
+      "name": "Exchange a token",
+      "description": "Exchange a token for a delegated token (TOK-004).",
+      "core": true
+    },
+    {
+      "id": "grant-manage",
+      "name": "Manage one's own grants",
+      "description": "Create and revoke grants and rotate client secrets.",
+      "core": true
+    },
+    {
+      "id": "jobs-manage",
+      "name": "Manage jobs",
+      "description": "Schedule, cancel and retry jobs and define schedules.",
+      "core": true
+    },
+    {
+      "id": "jobs-read",
+      "name": "Read jobs",
+      "description": "List jobs and schedules.",
+      "core": true
+    },
+    {
+      "id": "jobs-run",
+      "name": "Run jobs",
+      "description": "Lease due jobs, report results and run workflows.",
+      "core": true
+    },
+    {
+      "id": "workflow-activate",
+      "name": "Activate a workflow",
+      "description": "Activate a workflow definition.",
+      "core": true
+    },
+    {
+      "id": "workflow-approve",
+      "name": "Approve a workflow step",
+      "description": "Approve a waiting workflow step.",
+      "core": true
+    },
+    {
+      "id": "content-read",
+      "name": "Read published content",
+      "description": "Read published views, queries, feeds, sitemaps, search and the public pages.",
+      "core": true
+    },
+    {
+      "id": "consent-record",
+      "name": "Record consent",
+      "description": "Record a consent decision of a visitor.",
+      "core": true
+    },
+    {
+      "id": "form-submit",
+      "name": "Submit a form",
+      "description": "Obtain a submission token and submit a form.",
+      "core": true
+    },
+    {
+      "id": "media-deliver",
+      "name": "Receive a private file",
+      "description": "Receive an uploaded file at a signed address.",
+      "core": true
+    },
+    {
+      "id": "health-read",
+      "name": "Read health",
+      "description": "Report the health of a component.",
+      "core": true
+    },
+    {
+      "id": "content-draft-read",
+      "name": "Read unpublished content",
+      "description": "Read the authoring views, previews, diffs and versions of unpublished content.",
+      "core": true
+    },
+    {
+      "id": "content-write",
+      "name": "Write content",
+      "description": "Save drafts and record edits, create and change articles, upload files and announce presence.",
+      "core": true
+    },
+    {
+      "id": "content-delete",
+      "name": "Delete content",
+      "description": "Delete an article.",
+      "core": true
+    },
+    {
+      "id": "content-restore",
+      "name": "Restore a version",
+      "description": "Restore an earlier version of a record.",
+      "core": true
+    },
+    {
+      "id": "site-configure",
+      "name": "Configure the site",
+      "description": "Read and save the publication settings.",
+      "core": true
+    },
+    {
+      "id": "media-sign",
+      "name": "Sign a media address",
+      "description": "Sign an address for a private media file.",
+      "core": true
+    },
+    {
+      "id": "events-subscribe",
+      "name": "Subscribe to events",
+      "description": "Subscribe to the domain events the principal may read.",
+      "core": true
+    },
+    {
+      "id": "edge-control",
+      "name": "Control the edge",
+      "description": "Purge edge copies and register tenant domains at the edge.",
+      "core": true
+    },
+    {
+      "id": "catalogue-read",
+      "name": "Read the operation catalogue",
+      "description": "List and describe the operations of the catalogue and read a long operation (AGT-001..003).",
+      "core": true
+    },
+    {
+      "id": "operation-invoke",
+      "name": "Invoke an operation",
+      "description": "Invoke an operation of the catalogue (CNV-202).",
+      "core": true
+    },
+    {
+      "id": "change-propose",
+      "name": "Propose a change",
+      "description": "Propose a change for approval.",
+      "core": true
+    },
+    {
+      "id": "change-approve",
+      "name": "Approve a change",
+      "description": "Approve a proposal of another principal (AGS-409).",
+      "core": true
+    },
+    {
+      "id": "change-undo",
+      "name": "Undo an agent change",
+      "description": "Undo an applied agent change.",
+      "core": true
+    },
+    {
+      "id": "records-read",
+      "name": "Read records",
+      "description": "List tenant records in pages.",
+      "core": true
+    },
+    {
+      "id": "agent-manage",
+      "name": "Manage agents",
+      "description": "Disable, enable, halt or resume an agent (AGS-413).",
+      "core": true
+    },
+    {
+      "id": "agents-read",
+      "name": "Read the agent registry",
+      "description": "List the agent registry.",
+      "core": true
+    },
+    {
+      "id": "agent-spend-report",
+      "name": "Report agent spend",
+      "description": "Report spend by agent and tenant.",
+      "core": true
+    },
+    {
+      "id": "platform-describe",
+      "name": "Describe the platform",
+      "description": "Describe the platform topology and health.",
+      "core": true
+    },
+    {
+      "id": "requirements-read",
+      "name": "Read requirement status",
+      "description": "Read the verification status of requirements.",
+      "core": true
+    },
+    {
+      "id": "flags-manage",
+      "name": "Manage flags and quotas",
+      "description": "Read or change a feature flag or quota as tenant metadata (AGT-420).",
+      "core": true
+    },
+    {
+      "id": "diagnostics-run",
+      "name": "Run diagnostics",
+      "description": "Run a read-only diagnostic operation for one tenant.",
+      "core": true
+    },
+    {
+      "id": "releases-read",
+      "name": "Read releases",
+      "description": "List production releases.",
+      "core": true
+    },
+    {
+      "id": "audit-append",
+      "name": "Append to the audit log",
+      "description": "Append an audit entry.",
+      "core": true
+    },
+    {
+      "id": "audit-read",
+      "name": "Read the audit log",
+      "description": "Query and verify the audit log and read access reports and run traces.",
+      "core": true
+    },
+    {
+      "id": "audit-export",
+      "name": "Export the audit log",
+      "description": "Export the audit log of a tenant.",
+      "core": true
+    },
+    {
+      "id": "telemetry-export",
+      "name": "Export telemetry",
+      "description": "Export telemetry and raise alerts.",
+      "core": true
+    },
+    {
+      "id": "telemetry-read",
+      "name": "Read telemetry",
+      "description": "Query metrics, logs and traces.",
+      "core": true
+    },
+    {
+      "id": "fleet-report",
+      "name": "Report across tenants",
+      "description": "Report across tenants.",
+      "core": true
+    },
+    {
+      "id": "breach-notify",
+      "name": "Notify a breach",
+      "description": "Report a breach of personal data to the owner.",
+      "core": true
+    },
+    {
+      "id": "mail-report",
+      "name": "Report mail delivery",
+      "description": "Deliver a signed delivery report.",
+      "core": true
+    },
+    {
+      "id": "mail-configure",
+      "name": "Configure mail",
+      "description": "Define mail templates, prove sender domains and manage the suppression list.",
+      "core": true
+    },
+    {
+      "id": "mail-read",
+      "name": "Read the mail log",
+      "description": "List the mail log.",
+      "core": true
+    },
+    {
+      "id": "release-build",
+      "name": "Build releases",
+      "description": "Build component images and create release records.",
+      "core": true
+    },
+    {
+      "id": "release-deploy",
+      "name": "Deploy",
+      "description": "Apply a deployment descriptor.",
+      "core": true
+    },
+    {
+      "id": "release-freeze",
+      "name": "Freeze changes",
+      "description": "Declare a change freeze.",
+      "core": true
+    },
+    {
+      "id": "release-promote",
+      "name": "Promote a release",
+      "description": "Promote a release.",
+      "core": true
+    },
+    {
+      "id": "release-switch",
+      "name": "Switch colours",
+      "description": "Switch the live colour of a component and switch back.",
+      "core": true
+    },
+    {
+      "id": "release-drift-report",
+      "name": "Report drift",
+      "description": "Report drift of an environment.",
+      "core": true
+    },
+    {
+      "id": "listener-rule-set",
+      "name": "Set listener rules",
+      "description": "Set the listener rule of a component.",
+      "core": true
+    },
+    {
+      "id": "change-project",
+      "name": "Project a change",
+      "description": "Project a proposed change and replay the journal.",
+      "core": true
+    },
+    {
+      "id": "webhook-receive",
+      "name": "Deliver an inbound webhook",
+      "description": "Deliver a signed inbound webhook.",
+      "core": true
+    },
+    {
+      "id": "webhooks-read",
+      "name": "Read webhook deliveries",
+      "description": "List outbound webhook deliveries.",
+      "core": true
+    },
+    {
+      "id": "submissions-export",
+      "name": "Export form submissions",
+      "description": "Export the submissions of a form.",
+      "core": true
+    },
+    {
+      "id": "notifications-read",
+      "name": "Read notifications",
+      "description": "Subscribe to notifications and list one's inbox.",
+      "core": true
+    },
+    {
+      "id": "assistant-converse",
+      "name": "Converse with the assistant",
+      "description": "Post turns to the assistant, read and confirm its pending actions and manage conversations (CNV-200..209).",
+      "core": true
+    },
+    {
+      "id": "model-generate",
+      "name": "Generate replies",
+      "description": "Generate a reply with the model provider and report its usage.",
+      "core": true
+    },
+    {
+      "id": "tenant-support-read",
+      "name": "Read a tenant for support",
+      "description": "Open the operator console for one tenant, under a support grant for platform staff (G-165, ADM-163..165).",
+      "core": true
+    },
+    {
+      "id": "upload-scan",
+      "name": "Scan uploads",
+      "description": "Scan an uploaded file.",
+      "core": true
+    },
+    {
+      "id": "outbound-call",
+      "name": "Call out",
+      "description": "Call an external address and fetch identity provider metadata through the outbound gate.",
+      "core": true
+    },
+    {
+      "id": "support-grant-issue",
+      "name": "Issue support grants",
+      "description": "Issue and withdraw a support grant (ADM-163, ADM-165).",
+      "core": true
+    },
+    {
+      "id": "subject-rights",
+      "name": "Act on subject rights",
+      "description": "Export, rectify, restrict and erase the data of one principal, export the processing record and place legal holds.",
+      "core": true
+    },
+    {
+      "id": "tokens-define",
+      "name": "Define content tokens",
+      "description": "Define and remove content tokens.",
+      "core": true
+    },
+    {
+      "id": "records-import",
+      "name": "Import records",
+      "description": "Import records from an archive.",
+      "core": true
+    },
+    {
+      "id": "migration-run",
+      "name": "Run migrations",
+      "description": "Preview, start and stop a migration run.",
+      "core": true
+    },
+    {
+      "id": "migration-batch",
+      "name": "Run a migration batch",
+      "description": "Run one batch of a migration run.",
+      "core": true
+    },
+    {
+      "id": "bundle-install",
+      "name": "Install a bundle",
+      "description": "Install a tenant bundle.",
+      "core": true
+    },
+    {
+      "id": "template-upgrade-offer",
+      "name": "Offer a template upgrade",
+      "description": "Offer a newer template version to a tenant.",
+      "core": true
+    }
+  ],
+  "plans": [
+    {
+      "id": "standard",
+      "name": "Standard",
+      "description": "D-508: 20 database connections, 50 requests a second, 10 GB stored, 10,000 jobs a day, 5,000 emails a month. The core capabilities only.",
+      "capabilities": [],
+      "source": "bil-150"
+    },
+    {
+      "id": "business",
+      "name": "Business",
+      "description": "D-508: 50 connections, 200 requests a second, 100 GB, 100,000 jobs a day, 50,000 emails a month. The core capabilities only.",
+      "capabilities": [],
+      "source": "bil-150"
+    },
+    {
+      "id": "enterprise",
+      "name": "Enterprise",
+      "description": "D-508: quotas set by contract, and a dedicated database instance available (D-503).",
+      "capabilities": [
+        "placement-dedicated"
+      ],
+      "source": "bil-150"
+    }
+  ],
+  "roles": [
+    {
+      "id": "visitor",
+      "name": "Visitor",
+      "description": "Anyone, without a session: the built-in public role of every tenant, which a tenant cannot narrow below what its published site serves.",
+      "level": "platform",
+      "holders": [
+        "anonymous"
+      ],
+      "capabilities": [
+        "content-read",
+        "identity-sign-in",
+        "invitation-redeem",
+        "consent-record",
+        "form-submit",
+        "media-deliver",
+        "health-read"
+      ]
+    },
+    {
+      "id": "account-holder",
+      "name": "Account holder",
+      "description": "Every signed-in person, in any tenant: what one may do with one's own account, sessions, grants and inbox.",
+      "level": "platform",
+      "holders": [
+        "person"
+      ],
+      "capabilities": [
+        "account-manage",
+        "session-manage",
+        "grant-manage",
+        "token-exchange",
+        "notifications-read",
+        "sandbox-start"
+      ]
+    },
+    {
+      "id": "platform-service",
+      "name": "Platform service",
+      "description": "A platform component presenting the service credential on the service network.",
+      "level": "platform",
+      "holders": [
+        "service"
+      ],
+      "capabilities": [
+        "tenant-resolve",
+        "tenant-move",
+        "session-verify",
+        "jobs-run",
+        "edge-control",
+        "audit-append",
+        "telemetry-export",
+        "release-build",
+        "listener-rule-set",
+        "model-generate",
+        "upload-scan",
+        "outbound-call",
+        "migration-batch"
+      ]
+    },
+    {
+      "id": "identity-provider",
+      "name": "Identity provider",
+      "description": "An identity provider a realm trusts, proving itself by a signed response.",
+      "level": "platform",
+      "holders": [
+        "external"
+      ],
+      "capabilities": [
+        "identity-federate"
+      ]
+    },
+    {
+      "id": "directory-provisioner",
+      "name": "Directory provisioner",
+      "description": "The SCIM client of one realm, proving itself by the realm's provisioning token.",
+      "level": "platform",
+      "holders": [
+        "external"
+      ],
+      "capabilities": [
+        "directory-provision"
+      ]
+    },
+    {
+      "id": "api-client",
+      "name": "API client",
+      "description": "A registered client proving itself by its client credentials.",
+      "level": "platform",
+      "holders": [
+        "external"
+      ],
+      "capabilities": [
+        "token-issue"
+      ]
+    },
+    {
+      "id": "mail-provider",
+      "name": "Mail provider",
+      "description": "The mail provider, proving itself by signing its delivery reports.",
+      "level": "platform",
+      "holders": [
+        "external"
+      ],
+      "capabilities": [
+        "mail-report"
+      ]
+    },
+    {
+      "id": "webhook-sender",
+      "name": "Webhook sender",
+      "description": "A sender of inbound webhooks, proving itself by the endpoint's signing secret.",
+      "level": "platform",
+      "holders": [
+        "external"
+      ],
+      "capabilities": [
+        "webhook-receive"
+      ]
+    },
+    {
+      "id": "platform-operator",
+      "name": "Platform operator",
+      "description": "Platform staff who run the fleet. An operator acts inside a tenant only under a support grant (G-165).",
+      "level": "platform",
+      "holders": [
+        "person"
+      ],
+      "capabilities": [
+        "tenant-provision",
+        "tenant-suspend",
+        "tenant-move",
+        "placement-dedicated",
+        "layout-apply",
+        "template-upgrade-offer",
+        "fleet-report",
+        "breach-notify",
+        "platform-describe",
+        "requirements-read",
+        "releases-read",
+        "diagnostics-run",
+        "agent-spend-report",
+        "flags-manage"
+      ]
+    },
+    {
+      "id": "support",
+      "name": "Support",
+      "description": "Platform staff acting inside one tenant: holds nothing of its own and receives what a live support grant of that tenant confers (G-165, ADM-163..165).",
+      "level": "platform",
+      "holders": [
+        "person"
+      ],
+      "capabilities": []
+    },
+    {
+      "id": "release-engineer",
+      "name": "Release engineer",
+      "description": "Platform staff who deploy and switch releases.",
+      "level": "platform",
+      "holders": [
+        "person"
+      ],
+      "capabilities": [
+        "release-deploy",
+        "release-switch",
+        "release-drift-report",
+        "releases-read"
+      ]
+    },
+    {
+      "id": "release-approver",
+      "name": "Release approver",
+      "description": "Platform staff who approve the promotion of a release.",
+      "level": "platform",
+      "holders": [
+        "person"
+      ],
+      "capabilities": [
+        "release-promote",
+        "releases-read"
+      ]
+    },
+    {
+      "id": "platform-owner",
+      "name": "Platform owner",
+      "description": "The owner of the platform, who declares change freezes.",
+      "level": "platform",
+      "holders": [
+        "person"
+      ],
+      "capabilities": [
+        "release-freeze",
+        "releases-read"
+      ]
+    },
+    {
+      "id": "platform-operating-agent",
+      "name": "Platform operating agent",
+      "description": "The platform's own operating agent, acting under a delegation from an operator.",
+      "level": "platform",
+      "holders": [
+        "agent"
+      ],
+      "capabilities": [
+        "release-deploy",
+        "release-drift-report",
+        "platform-describe",
+        "requirements-read",
+        "releases-read",
+        "diagnostics-run",
+        "agent-spend-report"
+      ]
+    },
+    {
+      "id": "owner",
+      "name": "Owner",
+      "description": "The owner of a tenant: built in to every tenant, holds every tenant capability and is the only role that confers owner.",
+      "level": "tenant",
+      "holders": [
+        "person",
+        "team"
+      ],
+      "capabilities": [
+        "content-read",
+        "content-draft-read",
+        "content-write",
+        "media-sign",
+        "events-subscribe",
+        "catalogue-read",
+        "operation-invoke",
+        "change-propose",
+        "change-undo",
+        "records-read",
+        "change-project",
+        "assistant-converse",
+        "content-delete",
+        "content-restore",
+        "site-configure",
+        "change-approve",
+        "workflow-approve",
+        "jobs-read",
+        "mail-read",
+        "tenant-export",
+        "tenant-delete",
+        "tenant-restore",
+        "tenant-fork",
+        "sandbox-keep",
+        "domain-manage",
+        "plan-change",
+        "realm-configure",
+        "jobs-manage",
+        "workflow-activate",
+        "agent-manage",
+        "agents-read",
+        "flags-manage",
+        "audit-read",
+        "audit-export",
+        "telemetry-read",
+        "mail-configure",
+        "webhooks-read",
+        "submissions-export",
+        "support-grant-issue",
+        "tenant-support-read",
+        "subject-rights",
+        "tokens-define",
+        "records-import",
+        "migration-run",
+        "bundle-install"
+      ],
+      "source": "adm-150"
+    },
+    {
+      "id": "editor",
+      "name": "Editor",
+      "description": "The publication template's editor: edits and publishes everyone's content and the site settings.",
+      "level": "tenant",
+      "holders": [
+        "person",
+        "service",
+        "agent",
+        "team"
+      ],
+      "capabilities": [
+        "content-read",
+        "content-draft-read",
+        "content-write",
+        "media-sign",
+        "events-subscribe",
+        "catalogue-read",
+        "operation-invoke",
+        "change-propose",
+        "change-undo",
+        "records-read",
+        "change-project",
+        "assistant-converse",
+        "content-delete",
+        "content-restore",
+        "site-configure",
+        "change-approve",
+        "workflow-approve",
+        "jobs-read",
+        "mail-read"
+      ],
+      "source": "adm-150"
+    },
+    {
+      "id": "author",
+      "name": "Author",
+      "description": "The publication template's author: writes and edits content.",
+      "level": "tenant",
+      "holders": [
+        "person",
+        "service",
+        "agent",
+        "team"
+      ],
+      "capabilities": [
+        "content-read",
+        "content-draft-read",
+        "content-write",
+        "media-sign",
+        "events-subscribe",
+        "catalogue-read",
+        "operation-invoke",
+        "change-propose",
+        "change-undo",
+        "records-read",
+        "change-project",
+        "assistant-converse"
+      ],
+      "source": "adm-150"
+    },
+    {
+      "id": "submissions-reader",
+      "name": "Submissions reader",
+      "description": "Reads the submissions of the tenant's forms.",
+      "level": "tenant",
+      "holders": [
+        "person",
+        "team"
+      ],
+      "capabilities": [
+        "submissions-export"
+      ],
+      "source": "adm-150"
+    }
+  ],
+  "grants": [
+    {
+      "id": "support-grant",
+      "name": "Support grant",
+      "description": "An owner of a tenant lets platform support read that one tenant for a stated purpose, until the grant's own expiry or its withdrawal (D-253, G-165, ADM-163..165). Every act under it is audited with the grant (ADM-164).",
+      "issuer": "owner",
+      "grantee": "support",
+      "capabilities": [
+        "tenant-support-read"
+      ],
+      "perTenant": true,
+      "source": "adm-163"
+    }
+  ],
+  "tokenScopes": [
+    {
+      "id": "operations",
+      "name": "operations",
+      "description": "The scope of a delegated token for the operation catalogue of one tenant.",
+      "capabilities": [
+        "catalogue-read",
+        "operation-invoke",
+        "change-propose",
+        "change-undo",
+        "records-read",
+        "events-subscribe",
+        "agents-read",
+        "flags-manage",
+        "token-exchange"
+      ],
+      "source": "tok-004"
+    },
+    {
+      "id": "platform-operations",
+      "name": "platform:operations",
+      "description": "The scope of a delegated token for the platform's own operations.",
+      "capabilities": [
+        "platform-describe",
+        "requirements-read",
+        "releases-read",
+        "diagnostics-run",
+        "agent-spend-report",
+        "release-deploy",
+        "release-drift-report"
+      ]
+    }
+  ],
+  "delegations": [
+    {
+      "id": "assistant",
+      "name": "Assistant",
+      "description": "The conversation service acts for a person with a delegated token that names the person (D-200, TOK-003, CNV-201): it calls only catalogue operations, and never more than the person holds (TOK-004, CNV-202).",
+      "from": "operations",
+      "to": "agent",
+      "capabilities": [
+        "catalogue-read",
+        "operation-invoke",
+        "change-propose",
+        "change-undo",
+        "records-read",
+        "token-exchange"
+      ],
+      "source": "cnv-201"
+    },
+    {
+      "id": "tenant-agent",
+      "name": "Tenant agent",
+      "description": "An agent of a tenant acts through the agent gateway for the person who registered it, within the scopes of its token and the purpose of its delegation (AGS-406..408).",
+      "from": "operations",
+      "to": "agent",
+      "capabilities": [
+        "catalogue-read",
+        "operation-invoke",
+        "change-propose",
+        "change-undo",
+        "records-read",
+        "events-subscribe",
+        "agents-read",
+        "flags-manage",
+        "token-exchange"
+      ],
+      "source": "ags-406"
+    },
+    {
+      "id": "operating-agent",
+      "name": "Platform operating agent",
+      "description": "The platform operating agent acts for an operator, within the platform operations scope.",
+      "from": "platform-operations",
+      "to": "agent",
+      "capabilities": [
+        "platform-describe",
+        "requirements-read",
+        "releases-read",
+        "diagnostics-run",
+        "agent-spend-report",
+        "release-deploy",
+        "release-drift-report"
+      ]
+    }
+  ],
+  "featureFlags": [
+    {
+      "id": "assistant-flag",
+      "name": "Assistant",
+      "description": "The conversational assistant is released per tenant: off for a tenant unless the release record of the flag enables it there (OPS-328).",
+      "gates": [
+        "assistant-converse"
+      ],
+      "default": "off",
+      "source": "ops-328"
     }
   ]
 }
