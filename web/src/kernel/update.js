@@ -147,10 +147,10 @@ function screenOf(state) {
 }
 
 /** The principal as the generated policy checks read it. */
-function principalOf(session) {
+export function principalOf(session) {
   if (!session?.authenticated) return null;
   const roles = session.roles ?? [];
-  return { id: session.principal, tenant: session.tenant, kind: 'member', roles, role: roles.find((r) => r !== 'public') ?? 'public' };
+  return { id: session.principal, tenant: session.tenant, kind: 'member', roles };
 }
 
 /** The scope the generated expressions read on the current screen. */
@@ -252,6 +252,8 @@ function acceptView(state, model) {
     ...state,
     ready: true,
     view: { status: 'ready', model, error: null, request: 0 },
+    // A confirmation belongs to the view it was asked on; a view that replaces it disarms it.
+    confirmDelete: null,
     site: site ? { name: site.name ?? '', tagline: site.tagline ?? '' } : state.site,
     theme: { ...state.theme, accent: model.theme?.accent ?? 'moss', paper: model.theme?.paper ?? 'linen' },
     optimistic: {},
@@ -339,12 +341,16 @@ function onSocket(state, frame, msg) {
       // A frame went missing on this connection: the machine starts over rather than carry on stale.
       if (stepped.effects.some((e) => e.type === 'ws_close')) return stepped;
       const notice = frame.notice;
+      // Whether the view is read again is the generated live binding's decision, for every kind
+      // of notice; a change of membership also changes what the session may do, so it is read too.
+      const relevant = state.view.status === 'ready'
+        && live.refreshes(screenOf(state)?.screen ?? '', 'ui-notice-received', { kind: notice.kind, object: notice.object }, state.view.model);
+      let current = { state: stepped.state, effects: stepped.effects };
       if (notice.kind === 'membership') {
         const [withRequest, effect] = readSession(stepped.state, msg);
-        return refreshAfter({ state: withRequest, effects: [...stepped.effects, effect] }, msg);
+        current = { state: withRequest, effects: [...stepped.effects, effect] };
       }
-      const relevant = live.refreshes(screenOf(state)?.screen ?? '', 'ui-notice-received', { kind: notice.kind, object: notice.object }, state.view.model);
-      return relevant && state.view.status === 'ready' ? refreshAfter(stepped, msg) : stepped;
+      return relevant ? refreshAfter(current, msg) : current;
     }
     case 'resync':
       // Too far behind to replay: carry on from the server's head, with the view read again.
@@ -517,7 +523,7 @@ function onHttp(state, msg) {
 function navigate(state, href, replace, msg) {
   const route = parseHref(href);
   const same = hrefOf(route) === hrefOf(state.route);
-  const moved = { ...state, route, menuOpen: false, focus: { target: 'main', token: state.nextId } };
+  const moved = { ...state, route, menuOpen: false, confirmDelete: null, focus: { target: 'main', token: state.nextId } };
   const fetched = fetchView(moved, msg, false);
   /** @type {Effect[]} */
   const effects = same && !replace ? [] : [{ type: 'push_url', href: hrefOf(route), replace }];
@@ -736,7 +742,7 @@ function step(state, msg) {
       return navigate(state, msg.href, msg.replace ?? false, msg);
     case 'popstate': {
       const route = parseHref(msg.path + msg.search);
-      return fetchView({ ...state, route, menuOpen: false }, msg, false);
+      return fetchView({ ...state, route, menuOpen: false, confirmDelete: null }, msg, false);
     }
     case 'input':
       if (msg.form.startsWith('lab')) return labUpdate(state, msg, { request, toast }) ?? { state, effects: [] };

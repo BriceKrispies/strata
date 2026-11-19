@@ -1,0 +1,147 @@
+{
+  "about": "What a validation accepts, as the server decides it and as the page decides it. Read by crates/spec-compiler/tests/web.rs, which checks the pattern cases against the regex crate (the server's engine) and runs every case through the JavaScript the generator emits.",
+  "patterns": [
+    {
+      "pattern": "[\\s\\S]*\\S[\\s\\S]*",
+      "js": "[\\p{White_Space}\\P{White_Space}]*\\P{White_Space}[\\p{White_Space}\\P{White_Space}]*",
+      "cases": [
+        ["", false],
+        ["   ", false],
+        ["\u0085", false],
+        ["  ", false],
+        ["﻿", true],
+        ["​", true],
+        ["ines", true],
+        ["  ines  ", true]
+      ]
+    },
+    {
+      "pattern": "^[a-z][a-z0-9_]*$",
+      "js": "^[a-z][a-z0-9_]*$",
+      "cases": [
+        ["abc_1", true],
+        ["Abc", false],
+        ["1abc", false],
+        ["abc\n", false],
+        ["abc\nabc", false],
+        ["", false]
+      ]
+    },
+    {
+      "pattern": "[A-Za-z0-9_:.-]+",
+      "js": "[A-Za-z0-9_:.-]+",
+      "cases": [
+        ["a:b.c-d", true],
+        ["a b", false],
+        ["", false]
+      ]
+    },
+    {
+      "pattern": "a.b",
+      "js": "a[^\\n]b",
+      "cases": [
+        ["axb", true],
+        ["a\rb", true],
+        ["a b", true],
+        ["a\nb", false]
+      ]
+    },
+    {
+      "pattern": "\\d+",
+      "js": "\\p{Nd}+",
+      "cases": [
+        ["12", true],
+        ["١٢", true],
+        ["1a", false]
+      ]
+    },
+    {
+      "pattern": "\\w+",
+      "js": "[\\p{Alphabetic}\\p{M}\\p{Nd}\\p{Pc}\\p{Join_Control}]+",
+      "cases": [
+        ["café", true],
+        ["_", true],
+        ["a-b", false]
+      ]
+    },
+    {
+      "pattern": "\\W",
+      "js": "[^\\p{Alphabetic}\\p{M}\\p{Nd}\\p{Pc}\\p{Join_Control}]",
+      "cases": [
+        ["-", true],
+        ["a", false],
+        ["é", false]
+      ]
+    },
+    {
+      "pattern": "a|bc",
+      "js": "a|bc",
+      "cases": [
+        ["a", true],
+        ["bc", true],
+        ["abc", false],
+        ["b", false]
+      ]
+    }
+  ],
+  "refused": [
+    "\\bfoo\\b",
+    "(?i)abc",
+    "[[:alpha:]]",
+    "\\p{L}+",
+    "[a&&b]",
+    "(?P<n>a)",
+    "a{x}",
+    "[\\W]"
+  ],
+  "ranges": [
+    {
+      "min": 1,
+      "max": 10,
+      "cases": [
+        ["5", true],
+        [5, true],
+        ["1", true],
+        ["10", true],
+        ["1e1", true],
+        ["0", false],
+        ["11", false],
+        ["abc", false],
+        ["", false],
+        ["  ", false],
+        ["NaN", false],
+        ["Infinity", false],
+        ["0x5", false],
+        ["5px", false]
+      ]
+    },
+    {
+      "min": 0,
+      "cases": [
+        ["0", true],
+        ["-1", false],
+        ["1e400", false]
+      ]
+    }
+  ],
+  "oneOf": [
+    {
+      "values": [1, 2, 3],
+      "cases": [
+        ["2", true],
+        [2, true],
+        ["4", false],
+        ["", false],
+        ["two", false]
+      ]
+    },
+    {
+      "values": ["draft", "published"],
+      "cases": [
+        ["draft", true],
+        ["Draft", false],
+        ["", false]
+      ]
+    }
+  ]
+}

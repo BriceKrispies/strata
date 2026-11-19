@@ -5,6 +5,7 @@
 // case; `edited` lists the derived fields the person has edited.
 
 import { hrefFor } from './routes.js';
+import { sameSite } from './site-path.js';
 
 /**
  * A field: the input it fills, its accessible name, its control, and whether it is derived.
@@ -122,6 +123,18 @@ function empty(value) {
 }
 
 /**
+ * A value as the number it states, or NaN when it states none.
+ * @param {unknown} value
+ * @returns {number}
+ */
+function numeric(value) {
+  if (typeof value === 'number') return value;
+  if (typeof value !== 'string') return Number.NaN;
+  const text = value.trim();
+  return /^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/.test(text) ? Number(text) : Number.NaN;
+}
+
+/**
  * A text as an address segment: Unicode NFKD, combining marks removed, lower case, every run of
  * characters other than a-z and 0-9 replaced by `-`, `-` trimmed at both ends, cut to 80
  * characters, a trailing `-` trimmed again.
@@ -137,16 +150,6 @@ export function slug(value) {
     .replace(/^-+|-+$/g, '')
     .slice(0, 80)
     .replace(/-+$/, '');
-}
-
-/**
- * Where a success goes: `path` when it is a same-site absolute path, else the fallback.
- * @param {unknown} path
- * @param {string} fallback
- * @returns {string}
- */
-function sameSite(path, fallback) {
-  return typeof path === 'string' && path.startsWith('/') && !path.startsWith('//') ? path : fallback;
 }
 
 /** Form `form-sign-in` of screen `screen-sign-in`: calls `sign-in-at-site`. */
@@ -171,7 +174,7 @@ const formSignIn = {
   validate(values) {
     /** @type {Record<string, string>} */
     const errors = {};
-    if (errors.login === undefined && (!new RegExp('^(?:[\\s\\S]*\\S[\\s\\S]*)$').test(String(values.login)))) errors.login = 'Enter your name and password.';
+    if (errors.login === undefined && (!new RegExp('^(?:[\\p{White_Space}\\P{White_Space}]*\\P{White_Space}[\\p{White_Space}\\P{White_Space}]*)$', 'u').test(String(values.login)))) errors.login = 'Enter your name and password.';
     if (errors.password === undefined && (empty(values.password))) errors.password = 'Enter your name and password.';
     return errors;
   },

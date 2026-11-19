@@ -366,7 +366,7 @@ fn compile(
                     format!("{} a string; the target is {type_name}.", kind("pattern")),
                 ));
             };
-            let anchored = format!("\\A(?:{pattern})\\z");
+            let anchored = crate::rules::anchored(pattern);
             if let Err(e) = regex::Regex::new(&anchored) {
                 let reason = e
                     .to_string()

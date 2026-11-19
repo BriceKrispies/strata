@@ -4,6 +4,7 @@
 // visibility decided by the policies on the contract, and what a success does.
 
 import { hrefFor } from './routes.js';
+import { sameSite } from './site-path.js';
 
 /**
  * `screens` are the screens it is offered on: its own, and with `alsoOn` every other screen of
@@ -30,16 +31,6 @@ export const ACTIONS = {
  */
 function text(value) {
   return value == null ? '' : String(value);
-}
-
-/**
- * Where a success goes: `path` when it is a same-site absolute path, else the fallback.
- * @param {unknown} path
- * @param {string} fallback
- * @returns {string}
- */
-function sameSite(path, fallback) {
-  return typeof path === 'string' && path.startsWith('/') && !path.startsWith('//') ? path : fallback;
 }
 
 /**

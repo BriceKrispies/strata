@@ -154,6 +154,10 @@ pub struct MutationReply {
     /// subscription has seen the effect of its own request.
     pub event_seq: u64,
     pub checks_passed: usize,
+    /// The field values the accepted create or update carried, so that a caller reads what was
+    /// saved (the address of an article, say) from the reply rather than from its own request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fields: Option<serde_json::Map<String, Json>>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

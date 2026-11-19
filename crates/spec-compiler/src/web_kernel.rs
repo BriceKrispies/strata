@@ -27,6 +27,8 @@
 //!   of a per-row action), `label(action, item)`, `confirmText(action, item)`,
 //!   `args(action, scope)`, `visible(action, scope, inputs)` (the policy decision on its
 //!   contract), `succeeded(action, scope)` and `placeResult(action, local, outputs)`.
+//! - `site-path.js`: the one same-site check (`sitePath`, `sameSite`) the forms, the actions and
+//!   the page's address attributes share.
 //! - `live.js`: the live bindings (`BINDINGS`) and `refreshes(screen, event, payload, view)`.
 //! - `errors.js`: the wording of refusals (`MESSAGES`, the `errorMessages`), `explain(owner,
 //!   check)` -> `{field, text}` for one failed check and `refusal(owner, error)` -> `{errors,
@@ -41,15 +43,16 @@
 //! model. `records <op> <object>` is the records endpoint: the body is `{op, object, id, fields,
 //! expected_version}`, where `id` is the input whose type is `record-id`, `expected_version` the
 //! input `expected-version`, and `fields` the other inputs that have a value; its reply is
-//! `{id, version}`, so an output of type `record-id` decodes from `id`, the output `version` from
-//! `version`, and an output that repeats an input of the same name from that input. A contract a
-//! module needs that names no `bffRoute` is refused with [`ROUTE`].
+//! `{id, version, fields}`, so an output of type `record-id` decodes from `id`, the output `version`
+//! from `version`, and an output that repeats an input of the same name from the reply's
+//! `fields`. A contract a module needs that names no `bffRoute` is refused with [`ROUTE`].
 //!
 //! **Expressions** (arguments, navigation parameters and addresses, derivations, policy
 //! conditions, live-binding conditions, toast and label placeholders) are compiled with
 //! `strata-spec-expr`'s JavaScript target. They read a scope object the kernel passes:
 //! `{route, query, view, local, item, form, response, principal}`, where `principal` is `{id,
-//! tenant, kind, role, roles}`. A policy condition that reads `record.<field>` cannot be decided
+//! tenant, kind, roles}`; a policy is judged by all of `roles`, so no expression reads a single
+//! role. A policy condition that reads `record.<field>` cannot be decided
 //! on the page and counts as matching; a contract without a matching policy and without a
 //! `policyDefault` is shown (the server's decision is final).
 
@@ -66,6 +69,7 @@ use crate::ir::{Behavior, Contract, Effect, Spec, TypeKind};
 use crate::jsonc;
 use crate::naming;
 use crate::resolve::TypeRef;
+use crate::rules;
 use crate::web::{expr_ty, js_type, key, member, object_type, raw_ty, sq, Cases};
 use crate::wire::{self, WireCase};
 
@@ -324,6 +328,7 @@ pub fn generate(
         ("forms.js", k.forms()),
         ("actions.js", k.actions()),
         ("live.js", k.live()),
+        ("site-path.js", SITE_PATH.to_string()),
         ("errors.js", k.errors()),
     ];
     if !k.out.is_empty() {
@@ -337,6 +342,49 @@ pub fn generate(
         })
         .collect())
 }
+
+/// The one same-site check: forms, actions and the page's own address attributes use it.
+/// A path counts only when the URL parser, given the page's origin as base, keeps the origin: the
+/// parser drops tabs and line breaks and reads a backslash as a slash, so `/\evil.com` and
+/// `/<TAB>/evil.com` are other sites, not paths.
+const SITE_PATH: &str = r#"// @ts-check
+// The one check that an address stays on this site.
+
+/** The origin addresses are resolved against; outside a page, a placeholder one. */
+function origin() {
+  return typeof location === 'object' && location !== null && location.origin && location.origin !== 'null'
+    ? location.origin
+    : 'http://site.invalid';
+}
+
+/**
+ * The address as the URL parser reads it (path, query and fragment), when it is a path on this
+ * site; otherwise null.
+ * @param {unknown} text
+ * @returns {string | null}
+ */
+export function sitePath(text) {
+  if (typeof text !== 'string' || !text.startsWith('/')) return null;
+  let url;
+  try {
+    url = new URL(text, origin());
+  } catch {
+    return null;
+  }
+  if (url.origin !== origin()) return null;
+  return `${url.pathname}${url.search}${url.hash}`;
+}
+
+/**
+ * Where a success goes: `path` when it is a path on this site, else the fallback.
+ * @param {unknown} path
+ * @param {string} fallback
+ * @returns {string}
+ */
+export function sameSite(path, fallback) {
+  return sitePath(path) ?? fallback;
+}
+"#;
 
 /// `camelCase` of an id, for a JavaScript name.
 fn camel(id: &str) -> String {
@@ -630,7 +678,7 @@ impl<'a> Kernel<'a> {
                 optional: true,
             })
             .collect();
-        let principal = ["id", "tenant", "role"]
+        let principal = ["id", "tenant"]
             .iter()
             .map(|n| Slot {
                 name: (*n).to_string(),
@@ -894,6 +942,7 @@ impl<'a> Kernel<'a> {
                 "More than one screen is the catch-all.".to_string(),
             );
         }
+        self.refuse_route_ties();
         format!(
             r#"// @ts-check
 // The routes of the screens: which screen answers an address, with its parameters.
@@ -920,16 +969,26 @@ export function route(screen) {{
   return BY_SCREEN.get(screen) ?? null;
 }}
 
+/** A path as text, escapes decoded; one that is not valid is kept as written. @param {{string}} text */
+function decoded(text) {{
+  try {{
+    return decodeURIComponent(text);
+  }} catch {{
+    return text;
+  }}
+}}
+
 /**
  * The screen that answers an address, with its route and query parameters. Of the routes that
- * answer the path, the one with the most literal segments wins; the catch-all answers every
- * other path. Only the screen's own query parameters are kept.
+ * answer the path, the one with the most literal segments wins (the generator refuses two that
+ * tie); the catch-all answers every other path. Only the screen's own query parameters are kept.
  * @param {{string}} path
  * @param {{string | Record<string, string>}} [search] The query string (`?q=kiln`) or its parameters.
  * @returns {{{{ screen: string, params: Record<string, string>, query: Record<string, string> }} | null}}
  */
 export function matchRoute(path, search = '') {{
-  const parts = path.split('/').filter((s) => s !== '');
+  // An empty segment is a segment: `//` is not `/`, and answers only the catch-all.
+  const parts = path === '/' ? [] : path.replace(/^\//, '').split('/');
   /** @type {{{{ entry: Route, params: Record<string, string>, literals: number }} | null}} */
   let best = null;
   for (const entry of ROUTES) {{
@@ -943,6 +1002,7 @@ export function matchRoute(path, search = '') {{
       if (pattern.startsWith(':')) {{
         try {{
           params[pattern.slice(1)] = decodeURIComponent(parts[i]);
+          if (parts[i] === '') ok = false;
         }} catch {{
           ok = false;
         }}
@@ -957,7 +1017,7 @@ export function matchRoute(path, search = '') {{
   const entry = best?.entry ?? ROUTES.find((r) => r.catchAll) ?? null;
   if (!entry) return null;
   /** @type {{Record<string, string>}} */
-  const params = best ? best.params : entry.params.length ? {{ [entry.params[0]]: path }} : {{}};
+  const params = best ? best.params : entry.params.length ? {{ [entry.params[0]]: decoded(path) }} : {{}};
   const given = typeof search === 'string' ? new URLSearchParams(search) : new URLSearchParams(Object.entries(search));
   /** @type {{Record<string, string>}} */
   const query = {{}};
@@ -987,6 +1047,45 @@ export function hrefFor(screen, params = {{}}) {{
 "#,
             entries = entries.join("\n")
         )
+    }
+
+    /// Refuse two routes that answer the same path with the same specificity (the same number of
+    /// literal segments): which of them wins would be the order they are declared in.
+    fn refuse_route_ties(&mut self) {
+        let routes: Vec<(&str, Vec<&str>)> = self
+            .ui
+            .screens
+            .iter()
+            .filter(|s| !s.route.starts_with('*'))
+            .map(|s| {
+                (
+                    s.id.as_str(),
+                    s.route.split('/').filter(|p| !p.is_empty()).collect(),
+                )
+            })
+            .collect();
+        let literals = |segments: &[&str]| segments.iter().filter(|p| !p.starts_with(':')).count();
+        let mut refusals = Vec::new();
+        for (i, (a, sa)) in routes.iter().enumerate() {
+            for (b, sb) in &routes[i + 1..] {
+                let overlap = sa.len() == sb.len()
+                    && sa
+                        .iter()
+                        .zip(sb)
+                        .all(|(x, y)| x.starts_with(':') || y.starts_with(':') || x == y);
+                if overlap && literals(sa) == literals(sb) {
+                    refusals.push((
+                        (*b).to_string(),
+                        format!(
+                            "Screens \"{a}\" and \"{b}\" have routes that answer the same path with the same number of literal segments, so which one opens would depend on the order they are declared in."
+                        ),
+                    ));
+                }
+            }
+        }
+        for (entity, message) in refusals {
+            self.refuse(&entity, message);
+        }
     }
 
     // -----------------------------------------------------------------------------------------
@@ -1254,13 +1353,11 @@ function encoded(value, how) {
                                 "body?.id".to_string()
                             } else if o.name == "version" {
                                 "body?.version".to_string()
-                            } else if let Some(i) = inputs.iter().find(|i| i.name == o.name) {
-                                // The input as it was sent.
-                                self.encoded_from(
-                                    &c.id,
-                                    i,
-                                    format!("inputs{}", optional_member(&o.wire)),
-                                )
+                            } else if inputs.iter().any(|i| i.name == o.name) {
+                                // The value the server saved, which its reply repeats under
+                                // `fields`; never the request, which the server may have refused
+                                // or changed.
+                                format!("body?.fields{}", optional_member(&o.wire))
                             } else {
                                 format!("body{}", optional_member(&o.wire))
                             };
@@ -1625,27 +1722,26 @@ export const BFF = {{
                     let value = format!("values{}", member(&wire));
                     let fails = match v.rule {
                         Rule::Required => Some(format!("empty({value})")),
-                        Rule::Pattern => v.pattern.as_ref().map(|p| {
-                            format!("!new RegExp({}).test(String({value}))", sq(&format!("^(?:{p})$")))
+                        Rule::Pattern => v.pattern.as_ref().and_then(|p| match rules::pattern_fails(p, &value) {
+                            Ok(fails) => Some(fails),
+                            Err(why) => {
+                                self.out.push(Diagnostic::new(
+                                    KERNEL,
+                                    &v.id,
+                                    format!(
+                                        "The pattern of validation \"{}\" cannot be given the same meaning in the page as on the server: it uses {why}.",
+                                        v.id
+                                    ),
+                                ));
+                                None
+                            }
                         }),
                         Rule::MaxLength => v.max_length.as_ref().map(|n| match v.unit {
                             Some(Unit::Bytes) => format!("new TextEncoder().encode(String({value})).length > {n}"),
                             _ => format!("(Array.isArray({value}) ? {value}.length : [...String({value})].length) > {n}"),
                         }),
-                        Rule::Range => {
-                            let mut parts = Vec::new();
-                            if let Some(min) = &v.min {
-                                parts.push(format!("Number({value}) < {min}"));
-                            }
-                            if let Some(max) = &v.max {
-                                parts.push(format!("Number({value}) > {max}"));
-                            }
-                            (!parts.is_empty()).then(|| parts.join(" || "))
-                        }
-                        Rule::OneOf => Some(format!(
-                            "![{}].includes({value})",
-                            v.values.iter().map(json_js).collect::<Vec<_>>().join(", ")
-                        )),
+                        Rule::Range => rules::range_fails(&value, v.min.as_ref(), v.max.as_ref()),
+                        Rule::OneOf => rules::one_of_fails(&value, &v.values),
                         Rule::Custom => {
                             let Some(src) = &v.expr else { continue };
                             // `value` is the validated input; `request.<input>` the other inputs,
@@ -1815,6 +1911,7 @@ export const BFF = {{
 // case; `edited` lists the derived fields the person has edited.
 
 import {{ hrefFor }} from './routes.js';
+import {{ sameSite }} from './site-path.js';
 
 /**
  * A field: the input it fills, its accessible name, its control, and whether it is derived.
@@ -1847,6 +1944,7 @@ function empty(value) {{
   return value == null || value === '' || (Array.isArray(value) && value.length === 0);
 }}
 
+{numeric}
 /**
  * A text as an address segment: Unicode NFKD, combining marks removed, lower case, every run of
  * characters other than a-z and 0-9 replaced by `-`, `-` trimmed at both ends, cut to 80
@@ -1863,16 +1961,6 @@ export function slug(value) {{
     .replace(/^-+|-+$/g, '')
     .slice(0, 80)
     .replace(/-+$/, '');
-}}
-
-/**
- * Where a success goes: `path` when it is a same-site absolute path, else the fallback.
- * @param {{unknown}} path
- * @param {{string}} fallback
- * @returns {{string}}
- */
-function sameSite(path, fallback) {{
-  return typeof path === 'string' && path.startsWith('/') && !path.startsWith('//') ? path : fallback;
 }}
 
 {code}
@@ -2010,6 +2098,7 @@ export function held(form, view) {{
 }}
 "#,
             table = table.join("\n"),
+            numeric = rules::NUMERIC_JS,
             code = code.join("\n"),
             cases = cases.join("\n"),
         )
@@ -2428,6 +2517,7 @@ export function held(form, view) {{
 // visibility decided by the policies on the contract, and what a success does.
 
 import {{ hrefFor }} from './routes.js';
+import {{ sameSite }} from './site-path.js';
 
 /**
  * `screens` are the screens it is offered on: its own, and with `alsoOn` every other screen of
@@ -2448,16 +2538,6 @@ export const ACTIONS = {{
  */
 function text(value) {{
   return value == null ? '' : String(value);
-}}
-
-/**
- * Where a success goes: `path` when it is a same-site absolute path, else the fallback.
- * @param {{unknown}} path
- * @param {{string}} fallback
- * @returns {{string}}
- */
-function sameSite(path, fallback) {{
-  return typeof path === 'string' && path.startsWith('/') && !path.startsWith('//') ? path : fallback;
 }}
 
 /**
@@ -2597,7 +2677,7 @@ export function placeResult(action, local, outputs) {{
             Root {
                 name: "principal",
                 js: "scope.principal".into(),
-                slots: ["id", "tenant", "role"]
+                slots: ["id", "tenant"]
                     .iter()
                     .map(|n| Slot {
                         name: (*n).into(),
