@@ -228,6 +228,106 @@ static REC_AUDIT_CHAIN_TENANT_ID_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new("^[a-z][a-z0-9_]*$").expect("specc checked that the pattern compiles")
 });
 
+/// The pattern of field `tenant-id` of record `rec-tenant-suspension`.
+static REC_TENANT_SUSPENSION_TENANT_ID_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new("^[a-z][a-z0-9_]*$").expect("specc checked that the pattern compiles")
+});
+
+/// The pattern of field `tenant-id` of record `rec-write-quota`.
+static REC_WRITE_QUOTA_TENANT_ID_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new("^[a-z][a-z0-9_]*$").expect("specc checked that the pattern compiles")
+});
+
+/// The pattern of field `tenant-id` of record `rec-plan-change`.
+static REC_PLAN_CHANGE_TENANT_ID_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new("^[a-z][a-z0-9_]*$").expect("specc checked that the pattern compiles")
+});
+
+/// The pattern of field `tenant-id` of record `rec-bootstrap-credential`.
+static REC_BOOTSTRAP_CREDENTIAL_TENANT_ID_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new("^[a-z][a-z0-9_]*$").expect("specc checked that the pattern compiles")
+});
+
+/// The pattern of field `tenant-id` of record `rec-placement-choice`.
+static REC_PLACEMENT_CHOICE_TENANT_ID_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new("^[a-z][a-z0-9_]*$").expect("specc checked that the pattern compiles")
+});
+
+/// The pattern of field `tenant-id` of record `rec-tenant-deletion`.
+static REC_TENANT_DELETION_TENANT_ID_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new("^[a-z][a-z0-9_]*$").expect("specc checked that the pattern compiles")
+});
+
+/// The pattern of field `tenant-id` of record `rec-backup-key`.
+static REC_BACKUP_KEY_TENANT_ID_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new("^[a-z][a-z0-9_]*$").expect("specc checked that the pattern compiles")
+});
+
+/// The pattern of field `tenant-id` of record `rec-runtime-credential`.
+static REC_RUNTIME_CREDENTIAL_TENANT_ID_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new("^[a-z][a-z0-9_]*$").expect("specc checked that the pattern compiles")
+});
+
+/// The pattern of field `tenant-id` of record `rec-export-restore`.
+static REC_EXPORT_RESTORE_TENANT_ID_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new("^[a-z][a-z0-9_]*$").expect("specc checked that the pattern compiles")
+});
+
+/// The pattern of field `tenant-id` of record `rec-point-in-time`.
+static REC_POINT_IN_TIME_TENANT_ID_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new("^[a-z][a-z0-9_]*$").expect("specc checked that the pattern compiles")
+});
+
+/// The pattern of field `tenant-id` of record `rec-kernel-upgrade`.
+static REC_KERNEL_UPGRADE_TENANT_ID_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new("^[a-z][a-z0-9_]*$").expect("specc checked that the pattern compiles")
+});
+
+/// The pattern of field `tenant-id` of record `rec-placement-switch`.
+static REC_PLACEMENT_SWITCH_TENANT_ID_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new("^[a-z][a-z0-9_]*$").expect("specc checked that the pattern compiles")
+});
+
+/// The pattern of field `tenant-id` of record `rec-schema-change`.
+static REC_SCHEMA_CHANGE_TENANT_ID_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new("^[a-z][a-z0-9_]*$").expect("specc checked that the pattern compiles")
+});
+
+/// The pattern of field `tenant-id` of record `rec-staging-promotion`.
+static REC_STAGING_PROMOTION_TENANT_ID_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new("^[a-z][a-z0-9_]*$").expect("specc checked that the pattern compiles")
+});
+
+/// The pattern of field `tenant-id` of record `rec-field-change`.
+static REC_FIELD_CHANGE_TENANT_ID_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new("^[a-z][a-z0-9_]*$").expect("specc checked that the pattern compiles")
+});
+
+/// The pattern of field `tenant-id` of record `rec-draft-save`.
+static REC_DRAFT_SAVE_TENANT_ID_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new("^[a-z][a-z0-9_]*$").expect("specc checked that the pattern compiles")
+});
+
+/// The pattern of field `tenant-id` of record `rec-workflow-version`.
+static REC_WORKFLOW_VERSION_TENANT_ID_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new("^[a-z][a-z0-9_]*$").expect("specc checked that the pattern compiles")
+});
+
+/// The pattern of field `tenant-id` of record `rec-scheduled-job-check`.
+static REC_SCHEDULED_JOB_CHECK_TENANT_ID_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new("^[a-z][a-z0-9_]*$").expect("specc checked that the pattern compiles")
+});
+
+/// The pattern of field `tenant-id` of record `rec-template-proposal`.
+static REC_TEMPLATE_PROPOSAL_TENANT_ID_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new("^[a-z][a-z0-9_]*$").expect("specc checked that the pattern compiles")
+});
+
+/// The pattern of field `tenant-id` of record `rec-import`.
+static REC_IMPORT_TENANT_ID_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new("^[a-z][a-z0-9_]*$").expect("specc checked that the pattern compiles")
+});
+
 /// Tenant
 ///
 /// Retention: Until the tenant is deleted (TEN-011), with the certificate of PRV-354.
@@ -7330,6 +7430,2002 @@ impl RecAudienceMail {
 
     /// Checks the field constraints, returning the first one the record breaks.
     pub fn validate(&self) -> Result<(), prelude::ConstraintViolation> {
+        Ok(())
+    }
+}
+
+/// Tenant suspension
+///
+/// Retention: Until the tenant is deleted (TEN-011).
+///
+/// Record `rec-tenant-suspension`, owned by component `control-plane`, schema version 1.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecTenantSuspension {
+    /// Field `tenant-id`.
+    ///
+    /// Holds the key of record `rec-tenant`. On delete: cascade.
+    ///
+    /// Constraints: at most 64 characters, matches `^[a-z][a-z0-9_]*$`.
+    #[serde(rename = "tenant-id")]
+    pub tenant_id: types::TenantId,
+    /// Field `records`.
+    pub records: u64,
+    /// Field `suspended`.
+    pub suspended: bool,
+    /// Field `recordsAtSuspend`.
+    #[serde(rename = "recordsAtSuspend")]
+    pub records_at_suspend: u64,
+    /// Field `planChosen`.
+    #[serde(rename = "planChosen")]
+    pub plan_chosen: bool,
+    /// Field `state`.
+    pub state: String,
+}
+
+/// The key of a [`RecTenantSuspension`]: `tenant-id`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecTenantSuspensionKey {
+    /// Field `tenant-id`.
+    ///
+    /// Holds the key of record `rec-tenant`. On delete: cascade.
+    ///
+    /// Constraints: at most 64 characters, matches `^[a-z][a-z0-9_]*$`.
+    #[serde(rename = "tenant-id")]
+    pub tenant_id: types::TenantId,
+}
+
+impl RecTenantSuspension {
+    /// The record's id in the specification.
+    pub const ID: &str = "rec-tenant-suspension";
+
+    /// The version of the record's stored shape.
+    pub const SCHEMA_VERSION: u32 = 1;
+
+    /// The key fields, by their specification names.
+    pub const KEY: &[&str] = &["tenant-id"];
+
+    /// Sets of fields whose combined values are unique, by their specification names.
+    pub const UNIQUE: &[&[&str]] = &[];
+
+    /// The record's indexes.
+    pub const INDEXES: &[prelude::Index] = &[];
+
+    /// The fields that hold the key of another record, and what deleting it does.
+    pub const REFERENCES: &[prelude::Reference] = &[prelude::Reference {
+        field: "tenant-id",
+        record: "rec-tenant",
+        on_delete: prelude::OnDelete::Cascade,
+    }];
+
+    /// The record's key.
+    pub fn key(&self) -> RecTenantSuspensionKey {
+        RecTenantSuspensionKey {
+            tenant_id: self.tenant_id.clone(),
+        }
+    }
+
+    /// Checks the field constraints, returning the first one the record breaks.
+    pub fn validate(&self) -> Result<(), prelude::ConstraintViolation> {
+        if self.tenant_id.0.chars().count() > 64 {
+            return Err(prelude::ConstraintViolation {
+                record: Self::ID,
+                field: "tenant-id",
+                constraint: prelude::Constraint::MaxLength,
+            });
+        }
+        if !REC_TENANT_SUSPENSION_TENANT_ID_PATTERN.is_match(&self.tenant_id.0) {
+            return Err(prelude::ConstraintViolation {
+                record: Self::ID,
+                field: "tenant-id",
+                constraint: prelude::Constraint::Pattern,
+            });
+        }
+        Ok(())
+    }
+}
+
+/// Write quota check
+///
+/// Retention: Until the tenant is deleted (TEN-011).
+///
+/// Record `rec-write-quota`, owned by component `limit-store`, schema version 1.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecWriteQuota {
+    /// Field `tenant-id`.
+    ///
+    /// Holds the key of record `rec-tenant`. On delete: cascade.
+    ///
+    /// Constraints: at most 64 characters, matches `^[a-z][a-z0-9_]*$`.
+    #[serde(rename = "tenant-id")]
+    pub tenant_id: types::TenantId,
+    /// Field `recordsUsed`.
+    #[serde(rename = "recordsUsed")]
+    pub records_used: u64,
+    /// Field `filesUsed`.
+    #[serde(rename = "filesUsed")]
+    pub files_used: u64,
+    /// Field `refusedFor`.
+    #[serde(rename = "refusedFor")]
+    pub refused_for: String,
+    /// Field `state`.
+    pub state: String,
+}
+
+/// The key of a [`RecWriteQuota`]: `tenant-id`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecWriteQuotaKey {
+    /// Field `tenant-id`.
+    ///
+    /// Holds the key of record `rec-tenant`. On delete: cascade.
+    ///
+    /// Constraints: at most 64 characters, matches `^[a-z][a-z0-9_]*$`.
+    #[serde(rename = "tenant-id")]
+    pub tenant_id: types::TenantId,
+}
+
+impl RecWriteQuota {
+    /// The record's id in the specification.
+    pub const ID: &str = "rec-write-quota";
+
+    /// The version of the record's stored shape.
+    pub const SCHEMA_VERSION: u32 = 1;
+
+    /// The key fields, by their specification names.
+    pub const KEY: &[&str] = &["tenant-id"];
+
+    /// Sets of fields whose combined values are unique, by their specification names.
+    pub const UNIQUE: &[&[&str]] = &[];
+
+    /// The record's indexes.
+    pub const INDEXES: &[prelude::Index] = &[];
+
+    /// The fields that hold the key of another record, and what deleting it does.
+    pub const REFERENCES: &[prelude::Reference] = &[prelude::Reference {
+        field: "tenant-id",
+        record: "rec-tenant",
+        on_delete: prelude::OnDelete::Cascade,
+    }];
+
+    /// The record's key.
+    pub fn key(&self) -> RecWriteQuotaKey {
+        RecWriteQuotaKey {
+            tenant_id: self.tenant_id.clone(),
+        }
+    }
+
+    /// Checks the field constraints, returning the first one the record breaks.
+    pub fn validate(&self) -> Result<(), prelude::ConstraintViolation> {
+        if self.tenant_id.0.chars().count() > 64 {
+            return Err(prelude::ConstraintViolation {
+                record: Self::ID,
+                field: "tenant-id",
+                constraint: prelude::Constraint::MaxLength,
+            });
+        }
+        if !REC_WRITE_QUOTA_TENANT_ID_PATTERN.is_match(&self.tenant_id.0) {
+            return Err(prelude::ConstraintViolation {
+                record: Self::ID,
+                field: "tenant-id",
+                constraint: prelude::Constraint::Pattern,
+            });
+        }
+        Ok(())
+    }
+}
+
+/// Plan change
+///
+/// Retention: Until the tenant is deleted (TEN-011).
+///
+/// Record `rec-plan-change`, owned by component `control-plane`, schema version 1.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecPlanChange {
+    /// Field `tenant-id`.
+    ///
+    /// Holds the key of record `rec-tenant`. On delete: cascade.
+    ///
+    /// Constraints: at most 64 characters, matches `^[a-z][a-z0-9_]*$`.
+    #[serde(rename = "tenant-id")]
+    pub tenant_id: types::TenantId,
+    /// Field `holdsRecords`.
+    #[serde(rename = "holdsRecords")]
+    pub holds_records: u64,
+    /// Field `holdsFiles`.
+    #[serde(rename = "holdsFiles")]
+    pub holds_files: u64,
+    /// Field `planRecords`.
+    #[serde(rename = "planRecords")]
+    pub plan_records: u64,
+    /// Field `planFiles`.
+    #[serde(rename = "planFiles")]
+    pub plan_files: u64,
+    /// Field `refusedFor`.
+    #[serde(rename = "refusedFor")]
+    pub refused_for: String,
+    /// Field `state`.
+    pub state: String,
+}
+
+/// The key of a [`RecPlanChange`]: `tenant-id`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecPlanChangeKey {
+    /// Field `tenant-id`.
+    ///
+    /// Holds the key of record `rec-tenant`. On delete: cascade.
+    ///
+    /// Constraints: at most 64 characters, matches `^[a-z][a-z0-9_]*$`.
+    #[serde(rename = "tenant-id")]
+    pub tenant_id: types::TenantId,
+}
+
+impl RecPlanChange {
+    /// The record's id in the specification.
+    pub const ID: &str = "rec-plan-change";
+
+    /// The version of the record's stored shape.
+    pub const SCHEMA_VERSION: u32 = 1;
+
+    /// The key fields, by their specification names.
+    pub const KEY: &[&str] = &["tenant-id"];
+
+    /// Sets of fields whose combined values are unique, by their specification names.
+    pub const UNIQUE: &[&[&str]] = &[];
+
+    /// The record's indexes.
+    pub const INDEXES: &[prelude::Index] = &[];
+
+    /// The fields that hold the key of another record, and what deleting it does.
+    pub const REFERENCES: &[prelude::Reference] = &[prelude::Reference {
+        field: "tenant-id",
+        record: "rec-tenant",
+        on_delete: prelude::OnDelete::Cascade,
+    }];
+
+    /// The record's key.
+    pub fn key(&self) -> RecPlanChangeKey {
+        RecPlanChangeKey {
+            tenant_id: self.tenant_id.clone(),
+        }
+    }
+
+    /// Checks the field constraints, returning the first one the record breaks.
+    pub fn validate(&self) -> Result<(), prelude::ConstraintViolation> {
+        if self.tenant_id.0.chars().count() > 64 {
+            return Err(prelude::ConstraintViolation {
+                record: Self::ID,
+                field: "tenant-id",
+                constraint: prelude::Constraint::MaxLength,
+            });
+        }
+        if !REC_PLAN_CHANGE_TENANT_ID_PATTERN.is_match(&self.tenant_id.0) {
+            return Err(prelude::ConstraintViolation {
+                record: Self::ID,
+                field: "tenant-id",
+                constraint: prelude::Constraint::Pattern,
+            });
+        }
+        Ok(())
+    }
+}
+
+/// Connection quota
+///
+/// Retention: Until the tenant is deleted (TEN-011).
+///
+/// Record `rec-connection-quota`, owned by component `limit-store`, schema version 1.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecConnectionQuota {
+    /// Field `scope`.
+    pub scope: String,
+    /// Field `connsA`.
+    #[serde(rename = "connsA")]
+    pub conns_a: u64,
+    /// Field `connsB`.
+    #[serde(rename = "connsB")]
+    pub conns_b: u64,
+    /// Field `state`.
+    pub state: String,
+}
+
+/// The key of a [`RecConnectionQuota`]: `scope`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecConnectionQuotaKey {
+    /// Field `scope`.
+    pub scope: String,
+}
+
+impl RecConnectionQuota {
+    /// The record's id in the specification.
+    pub const ID: &str = "rec-connection-quota";
+
+    /// The version of the record's stored shape.
+    pub const SCHEMA_VERSION: u32 = 1;
+
+    /// The key fields, by their specification names.
+    pub const KEY: &[&str] = &["scope"];
+
+    /// Sets of fields whose combined values are unique, by their specification names.
+    pub const UNIQUE: &[&[&str]] = &[];
+
+    /// The record's indexes.
+    pub const INDEXES: &[prelude::Index] = &[];
+
+    /// The fields that hold the key of another record, and what deleting it does.
+    pub const REFERENCES: &[prelude::Reference] = &[];
+
+    /// The record's key.
+    pub fn key(&self) -> RecConnectionQuotaKey {
+        RecConnectionQuotaKey {
+            scope: self.scope.clone(),
+        }
+    }
+
+    /// Checks the field constraints, returning the first one the record breaks.
+    pub fn validate(&self) -> Result<(), prelude::ConstraintViolation> {
+        Ok(())
+    }
+}
+
+/// Bootstrap credential
+///
+/// Retention: Until the tenant is deleted (TEN-011).
+///
+/// Record `rec-bootstrap-credential`, owned by component `control-plane`, schema version 1.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecBootstrapCredential {
+    /// Field `tenant-id`.
+    ///
+    /// Holds the key of record `rec-tenant`. On delete: cascade.
+    ///
+    /// Constraints: at most 64 characters, matches `^[a-z][a-z0-9_]*$`.
+    #[serde(rename = "tenant-id")]
+    pub tenant_id: types::TenantId,
+    /// Field `issued`.
+    pub issued: u64,
+    /// Field `accepted`.
+    pub accepted: u64,
+    /// Field `expired`.
+    pub expired: bool,
+    /// Field `state`.
+    pub state: String,
+}
+
+/// The key of a [`RecBootstrapCredential`]: `tenant-id`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecBootstrapCredentialKey {
+    /// Field `tenant-id`.
+    ///
+    /// Holds the key of record `rec-tenant`. On delete: cascade.
+    ///
+    /// Constraints: at most 64 characters, matches `^[a-z][a-z0-9_]*$`.
+    #[serde(rename = "tenant-id")]
+    pub tenant_id: types::TenantId,
+}
+
+impl RecBootstrapCredential {
+    /// The record's id in the specification.
+    pub const ID: &str = "rec-bootstrap-credential";
+
+    /// The version of the record's stored shape.
+    pub const SCHEMA_VERSION: u32 = 1;
+
+    /// The key fields, by their specification names.
+    pub const KEY: &[&str] = &["tenant-id"];
+
+    /// Sets of fields whose combined values are unique, by their specification names.
+    pub const UNIQUE: &[&[&str]] = &[];
+
+    /// The record's indexes.
+    pub const INDEXES: &[prelude::Index] = &[];
+
+    /// The fields that hold the key of another record, and what deleting it does.
+    pub const REFERENCES: &[prelude::Reference] = &[prelude::Reference {
+        field: "tenant-id",
+        record: "rec-tenant",
+        on_delete: prelude::OnDelete::Cascade,
+    }];
+
+    /// The record's key.
+    pub fn key(&self) -> RecBootstrapCredentialKey {
+        RecBootstrapCredentialKey {
+            tenant_id: self.tenant_id.clone(),
+        }
+    }
+
+    /// Checks the field constraints, returning the first one the record breaks.
+    pub fn validate(&self) -> Result<(), prelude::ConstraintViolation> {
+        if self.tenant_id.0.chars().count() > 64 {
+            return Err(prelude::ConstraintViolation {
+                record: Self::ID,
+                field: "tenant-id",
+                constraint: prelude::Constraint::MaxLength,
+            });
+        }
+        if !REC_BOOTSTRAP_CREDENTIAL_TENANT_ID_PATTERN.is_match(&self.tenant_id.0) {
+            return Err(prelude::ConstraintViolation {
+                record: Self::ID,
+                field: "tenant-id",
+                constraint: prelude::Constraint::Pattern,
+            });
+        }
+        Ok(())
+    }
+}
+
+/// Placement by region
+///
+/// Retention: Until the tenant is deleted (TEN-011).
+///
+/// Record `rec-placement-choice`, owned by component `control-plane`, schema version 1.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecPlacementChoice {
+    /// Field `tenant-id`.
+    ///
+    /// Holds the key of record `rec-tenant`. On delete: cascade.
+    ///
+    /// Constraints: at most 64 characters, matches `^[a-z][a-z0-9_]*$`.
+    #[serde(rename = "tenant-id")]
+    pub tenant_id: types::TenantId,
+    /// Field `requested`.
+    pub requested: String,
+    /// Field `dbRegion`.
+    #[serde(rename = "dbRegion")]
+    pub db_region: String,
+    /// Field `filesRegion`.
+    #[serde(rename = "filesRegion")]
+    pub files_region: String,
+    /// Field `placed`.
+    pub placed: bool,
+    /// Field `state`.
+    pub state: String,
+}
+
+/// The key of a [`RecPlacementChoice`]: `tenant-id`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecPlacementChoiceKey {
+    /// Field `tenant-id`.
+    ///
+    /// Holds the key of record `rec-tenant`. On delete: cascade.
+    ///
+    /// Constraints: at most 64 characters, matches `^[a-z][a-z0-9_]*$`.
+    #[serde(rename = "tenant-id")]
+    pub tenant_id: types::TenantId,
+}
+
+impl RecPlacementChoice {
+    /// The record's id in the specification.
+    pub const ID: &str = "rec-placement-choice";
+
+    /// The version of the record's stored shape.
+    pub const SCHEMA_VERSION: u32 = 1;
+
+    /// The key fields, by their specification names.
+    pub const KEY: &[&str] = &["tenant-id"];
+
+    /// Sets of fields whose combined values are unique, by their specification names.
+    pub const UNIQUE: &[&[&str]] = &[];
+
+    /// The record's indexes.
+    pub const INDEXES: &[prelude::Index] = &[];
+
+    /// The fields that hold the key of another record, and what deleting it does.
+    pub const REFERENCES: &[prelude::Reference] = &[prelude::Reference {
+        field: "tenant-id",
+        record: "rec-tenant",
+        on_delete: prelude::OnDelete::Cascade,
+    }];
+
+    /// The record's key.
+    pub fn key(&self) -> RecPlacementChoiceKey {
+        RecPlacementChoiceKey {
+            tenant_id: self.tenant_id.clone(),
+        }
+    }
+
+    /// Checks the field constraints, returning the first one the record breaks.
+    pub fn validate(&self) -> Result<(), prelude::ConstraintViolation> {
+        if self.tenant_id.0.chars().count() > 64 {
+            return Err(prelude::ConstraintViolation {
+                record: Self::ID,
+                field: "tenant-id",
+                constraint: prelude::Constraint::MaxLength,
+            });
+        }
+        if !REC_PLACEMENT_CHOICE_TENANT_ID_PATTERN.is_match(&self.tenant_id.0) {
+            return Err(prelude::ConstraintViolation {
+                record: Self::ID,
+                field: "tenant-id",
+                constraint: prelude::Constraint::Pattern,
+            });
+        }
+        Ok(())
+    }
+}
+
+/// Tenant deletion
+///
+/// Retention: Until the tenant is deleted (TEN-011).
+///
+/// Record `rec-tenant-deletion`, owned by component `control-plane`, schema version 1.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecTenantDeletion {
+    /// Field `tenant-id`.
+    ///
+    /// Holds the key of record `rec-tenant`. On delete: cascade.
+    ///
+    /// Constraints: at most 64 characters, matches `^[a-z][a-z0-9_]*$`.
+    #[serde(rename = "tenant-id")]
+    pub tenant_id: types::TenantId,
+    /// Field `database`.
+    pub database: bool,
+    /// Field `files`.
+    pub files: bool,
+    /// Field `key`.
+    pub key: bool,
+    /// Field `deleted`.
+    pub deleted: bool,
+    /// Field `state`.
+    pub state: String,
+}
+
+/// The key of a [`RecTenantDeletion`]: `tenant-id`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecTenantDeletionKey {
+    /// Field `tenant-id`.
+    ///
+    /// Holds the key of record `rec-tenant`. On delete: cascade.
+    ///
+    /// Constraints: at most 64 characters, matches `^[a-z][a-z0-9_]*$`.
+    #[serde(rename = "tenant-id")]
+    pub tenant_id: types::TenantId,
+}
+
+impl RecTenantDeletion {
+    /// The record's id in the specification.
+    pub const ID: &str = "rec-tenant-deletion";
+
+    /// The version of the record's stored shape.
+    pub const SCHEMA_VERSION: u32 = 1;
+
+    /// The key fields, by their specification names.
+    pub const KEY: &[&str] = &["tenant-id"];
+
+    /// Sets of fields whose combined values are unique, by their specification names.
+    pub const UNIQUE: &[&[&str]] = &[];
+
+    /// The record's indexes.
+    pub const INDEXES: &[prelude::Index] = &[];
+
+    /// The fields that hold the key of another record, and what deleting it does.
+    pub const REFERENCES: &[prelude::Reference] = &[prelude::Reference {
+        field: "tenant-id",
+        record: "rec-tenant",
+        on_delete: prelude::OnDelete::Cascade,
+    }];
+
+    /// The record's key.
+    pub fn key(&self) -> RecTenantDeletionKey {
+        RecTenantDeletionKey {
+            tenant_id: self.tenant_id.clone(),
+        }
+    }
+
+    /// Checks the field constraints, returning the first one the record breaks.
+    pub fn validate(&self) -> Result<(), prelude::ConstraintViolation> {
+        if self.tenant_id.0.chars().count() > 64 {
+            return Err(prelude::ConstraintViolation {
+                record: Self::ID,
+                field: "tenant-id",
+                constraint: prelude::Constraint::MaxLength,
+            });
+        }
+        if !REC_TENANT_DELETION_TENANT_ID_PATTERN.is_match(&self.tenant_id.0) {
+            return Err(prelude::ConstraintViolation {
+                record: Self::ID,
+                field: "tenant-id",
+                constraint: prelude::Constraint::Pattern,
+            });
+        }
+        Ok(())
+    }
+}
+
+/// Backup reads
+///
+/// Retention: Until the tenant is deleted (TEN-011).
+///
+/// Record `rec-backup-key`, owned by component `backup-archive`, schema version 1.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecBackupKey {
+    /// Field `tenant-id`.
+    ///
+    /// Holds the key of record `rec-tenant`. On delete: cascade.
+    ///
+    /// Constraints: at most 64 characters, matches `^[a-z][a-z0-9_]*$`.
+    #[serde(rename = "tenant-id")]
+    pub tenant_id: types::TenantId,
+    /// Field `backupOwner`.
+    #[serde(rename = "backupOwner")]
+    pub backup_owner: String,
+    /// Field `readsAccepted`.
+    #[serde(rename = "readsAccepted")]
+    pub reads_accepted: u64,
+    /// Field `lastReadKeyOwner`.
+    #[serde(rename = "lastReadKeyOwner")]
+    pub last_read_key_owner: String,
+    /// Field `state`.
+    pub state: String,
+}
+
+/// The key of a [`RecBackupKey`]: `tenant-id`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecBackupKeyKey {
+    /// Field `tenant-id`.
+    ///
+    /// Holds the key of record `rec-tenant`. On delete: cascade.
+    ///
+    /// Constraints: at most 64 characters, matches `^[a-z][a-z0-9_]*$`.
+    #[serde(rename = "tenant-id")]
+    pub tenant_id: types::TenantId,
+}
+
+impl RecBackupKey {
+    /// The record's id in the specification.
+    pub const ID: &str = "rec-backup-key";
+
+    /// The version of the record's stored shape.
+    pub const SCHEMA_VERSION: u32 = 1;
+
+    /// The key fields, by their specification names.
+    pub const KEY: &[&str] = &["tenant-id"];
+
+    /// Sets of fields whose combined values are unique, by their specification names.
+    pub const UNIQUE: &[&[&str]] = &[];
+
+    /// The record's indexes.
+    pub const INDEXES: &[prelude::Index] = &[];
+
+    /// The fields that hold the key of another record, and what deleting it does.
+    pub const REFERENCES: &[prelude::Reference] = &[prelude::Reference {
+        field: "tenant-id",
+        record: "rec-tenant",
+        on_delete: prelude::OnDelete::Cascade,
+    }];
+
+    /// The record's key.
+    pub fn key(&self) -> RecBackupKeyKey {
+        RecBackupKeyKey {
+            tenant_id: self.tenant_id.clone(),
+        }
+    }
+
+    /// Checks the field constraints, returning the first one the record breaks.
+    pub fn validate(&self) -> Result<(), prelude::ConstraintViolation> {
+        if self.tenant_id.0.chars().count() > 64 {
+            return Err(prelude::ConstraintViolation {
+                record: Self::ID,
+                field: "tenant-id",
+                constraint: prelude::Constraint::MaxLength,
+            });
+        }
+        if !REC_BACKUP_KEY_TENANT_ID_PATTERN.is_match(&self.tenant_id.0) {
+            return Err(prelude::ConstraintViolation {
+                record: Self::ID,
+                field: "tenant-id",
+                constraint: prelude::Constraint::Pattern,
+            });
+        }
+        Ok(())
+    }
+}
+
+/// Runtime credentials
+///
+/// Retention: Until the tenant is deleted (TEN-011).
+///
+/// Record `rec-runtime-credential`, owned by component `runtime`, schema version 1.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecRuntimeCredential {
+    /// Field `tenant-id`.
+    ///
+    /// Holds the key of record `rec-tenant`. On delete: cascade.
+    ///
+    /// Constraints: at most 64 characters, matches `^[a-z][a-z0-9_]*$`.
+    #[serde(rename = "tenant-id")]
+    pub tenant_id: types::TenantId,
+    /// Field `servedPlacement`.
+    #[serde(rename = "servedPlacement")]
+    pub served_placement: String,
+    /// Field `credentialFor`.
+    #[serde(rename = "credentialFor")]
+    pub credential_for: String,
+    /// Field `state`.
+    pub state: String,
+}
+
+/// The key of a [`RecRuntimeCredential`]: `tenant-id`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecRuntimeCredentialKey {
+    /// Field `tenant-id`.
+    ///
+    /// Holds the key of record `rec-tenant`. On delete: cascade.
+    ///
+    /// Constraints: at most 64 characters, matches `^[a-z][a-z0-9_]*$`.
+    #[serde(rename = "tenant-id")]
+    pub tenant_id: types::TenantId,
+}
+
+impl RecRuntimeCredential {
+    /// The record's id in the specification.
+    pub const ID: &str = "rec-runtime-credential";
+
+    /// The version of the record's stored shape.
+    pub const SCHEMA_VERSION: u32 = 1;
+
+    /// The key fields, by their specification names.
+    pub const KEY: &[&str] = &["tenant-id"];
+
+    /// Sets of fields whose combined values are unique, by their specification names.
+    pub const UNIQUE: &[&[&str]] = &[];
+
+    /// The record's indexes.
+    pub const INDEXES: &[prelude::Index] = &[];
+
+    /// The fields that hold the key of another record, and what deleting it does.
+    pub const REFERENCES: &[prelude::Reference] = &[prelude::Reference {
+        field: "tenant-id",
+        record: "rec-tenant",
+        on_delete: prelude::OnDelete::Cascade,
+    }];
+
+    /// The record's key.
+    pub fn key(&self) -> RecRuntimeCredentialKey {
+        RecRuntimeCredentialKey {
+            tenant_id: self.tenant_id.clone(),
+        }
+    }
+
+    /// Checks the field constraints, returning the first one the record breaks.
+    pub fn validate(&self) -> Result<(), prelude::ConstraintViolation> {
+        if self.tenant_id.0.chars().count() > 64 {
+            return Err(prelude::ConstraintViolation {
+                record: Self::ID,
+                field: "tenant-id",
+                constraint: prelude::Constraint::MaxLength,
+            });
+        }
+        if !REC_RUNTIME_CREDENTIAL_TENANT_ID_PATTERN.is_match(&self.tenant_id.0) {
+            return Err(prelude::ConstraintViolation {
+                record: Self::ID,
+                field: "tenant-id",
+                constraint: prelude::Constraint::Pattern,
+            });
+        }
+        Ok(())
+    }
+}
+
+/// Export and restore
+///
+/// Retention: Until the tenant is deleted (TEN-011).
+///
+/// Record `rec-export-restore`, owned by component `control-plane`, schema version 1.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecExportRestore {
+    /// Field `tenant-id`.
+    ///
+    /// Holds the key of record `rec-tenant`. On delete: cascade.
+    ///
+    /// Constraints: at most 64 characters, matches `^[a-z][a-z0-9_]*$`.
+    #[serde(rename = "tenant-id")]
+    pub tenant_id: types::TenantId,
+    /// Field `version`.
+    pub version: u64,
+    /// Field `exportedVersion`.
+    #[serde(rename = "exportedVersion")]
+    pub exported_version: u64,
+    /// Field `restoredVersion`.
+    #[serde(rename = "restoredVersion")]
+    pub restored_version: u64,
+    /// Field `restored`.
+    pub restored: bool,
+    /// Field `state`.
+    pub state: String,
+}
+
+/// The key of a [`RecExportRestore`]: `tenant-id`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecExportRestoreKey {
+    /// Field `tenant-id`.
+    ///
+    /// Holds the key of record `rec-tenant`. On delete: cascade.
+    ///
+    /// Constraints: at most 64 characters, matches `^[a-z][a-z0-9_]*$`.
+    #[serde(rename = "tenant-id")]
+    pub tenant_id: types::TenantId,
+}
+
+impl RecExportRestore {
+    /// The record's id in the specification.
+    pub const ID: &str = "rec-export-restore";
+
+    /// The version of the record's stored shape.
+    pub const SCHEMA_VERSION: u32 = 1;
+
+    /// The key fields, by their specification names.
+    pub const KEY: &[&str] = &["tenant-id"];
+
+    /// Sets of fields whose combined values are unique, by their specification names.
+    pub const UNIQUE: &[&[&str]] = &[];
+
+    /// The record's indexes.
+    pub const INDEXES: &[prelude::Index] = &[];
+
+    /// The fields that hold the key of another record, and what deleting it does.
+    pub const REFERENCES: &[prelude::Reference] = &[prelude::Reference {
+        field: "tenant-id",
+        record: "rec-tenant",
+        on_delete: prelude::OnDelete::Cascade,
+    }];
+
+    /// The record's key.
+    pub fn key(&self) -> RecExportRestoreKey {
+        RecExportRestoreKey {
+            tenant_id: self.tenant_id.clone(),
+        }
+    }
+
+    /// Checks the field constraints, returning the first one the record breaks.
+    pub fn validate(&self) -> Result<(), prelude::ConstraintViolation> {
+        if self.tenant_id.0.chars().count() > 64 {
+            return Err(prelude::ConstraintViolation {
+                record: Self::ID,
+                field: "tenant-id",
+                constraint: prelude::Constraint::MaxLength,
+            });
+        }
+        if !REC_EXPORT_RESTORE_TENANT_ID_PATTERN.is_match(&self.tenant_id.0) {
+            return Err(prelude::ConstraintViolation {
+                record: Self::ID,
+                field: "tenant-id",
+                constraint: prelude::Constraint::Pattern,
+            });
+        }
+        Ok(())
+    }
+}
+
+/// Point-in-time restore
+///
+/// Retention: Until the tenant is deleted (TEN-011).
+///
+/// Record `rec-point-in-time`, owned by component `control-plane`, schema version 1.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecPointInTime {
+    /// Field `tenant-id`.
+    ///
+    /// Holds the key of record `rec-tenant`. On delete: cascade.
+    ///
+    /// Constraints: at most 64 characters, matches `^[a-z][a-z0-9_]*$`.
+    #[serde(rename = "tenant-id")]
+    pub tenant_id: types::TenantId,
+    /// Field `version`.
+    pub version: u64,
+    /// Field `journalPoint`.
+    #[serde(rename = "journalPoint")]
+    pub journal_point: u64,
+    /// Field `pointMarked`.
+    #[serde(rename = "pointMarked")]
+    pub point_marked: bool,
+    /// Field `restoredTo`.
+    #[serde(rename = "restoredTo")]
+    pub restored_to: u64,
+    /// Field `restored`.
+    pub restored: bool,
+    /// Field `state`.
+    pub state: String,
+}
+
+/// The key of a [`RecPointInTime`]: `tenant-id`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecPointInTimeKey {
+    /// Field `tenant-id`.
+    ///
+    /// Holds the key of record `rec-tenant`. On delete: cascade.
+    ///
+    /// Constraints: at most 64 characters, matches `^[a-z][a-z0-9_]*$`.
+    #[serde(rename = "tenant-id")]
+    pub tenant_id: types::TenantId,
+}
+
+impl RecPointInTime {
+    /// The record's id in the specification.
+    pub const ID: &str = "rec-point-in-time";
+
+    /// The version of the record's stored shape.
+    pub const SCHEMA_VERSION: u32 = 1;
+
+    /// The key fields, by their specification names.
+    pub const KEY: &[&str] = &["tenant-id"];
+
+    /// Sets of fields whose combined values are unique, by their specification names.
+    pub const UNIQUE: &[&[&str]] = &[];
+
+    /// The record's indexes.
+    pub const INDEXES: &[prelude::Index] = &[];
+
+    /// The fields that hold the key of another record, and what deleting it does.
+    pub const REFERENCES: &[prelude::Reference] = &[prelude::Reference {
+        field: "tenant-id",
+        record: "rec-tenant",
+        on_delete: prelude::OnDelete::Cascade,
+    }];
+
+    /// The record's key.
+    pub fn key(&self) -> RecPointInTimeKey {
+        RecPointInTimeKey {
+            tenant_id: self.tenant_id.clone(),
+        }
+    }
+
+    /// Checks the field constraints, returning the first one the record breaks.
+    pub fn validate(&self) -> Result<(), prelude::ConstraintViolation> {
+        if self.tenant_id.0.chars().count() > 64 {
+            return Err(prelude::ConstraintViolation {
+                record: Self::ID,
+                field: "tenant-id",
+                constraint: prelude::Constraint::MaxLength,
+            });
+        }
+        if !REC_POINT_IN_TIME_TENANT_ID_PATTERN.is_match(&self.tenant_id.0) {
+            return Err(prelude::ConstraintViolation {
+                record: Self::ID,
+                field: "tenant-id",
+                constraint: prelude::Constraint::Pattern,
+            });
+        }
+        Ok(())
+    }
+}
+
+/// Kernel upgrade
+///
+/// Retention: Until the tenant is deleted (TEN-011).
+///
+/// Record `rec-kernel-upgrade`, owned by component `runtime`, schema version 1.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecKernelUpgrade {
+    /// Field `tenant-id`.
+    ///
+    /// Holds the key of record `rec-tenant`. On delete: cascade.
+    ///
+    /// Constraints: at most 64 characters, matches `^[a-z][a-z0-9_]*$`.
+    #[serde(rename = "tenant-id")]
+    pub tenant_id: types::TenantId,
+    /// Field `journalHash`.
+    #[serde(rename = "journalHash")]
+    pub journal_hash: u64,
+    /// Field `replayed`.
+    pub replayed: bool,
+    /// Field `replayedHash`.
+    #[serde(rename = "replayedHash")]
+    pub replayed_hash: u64,
+    /// Field `servedByNew`.
+    #[serde(rename = "servedByNew")]
+    pub served_by_new: bool,
+    /// Field `state`.
+    pub state: String,
+}
+
+/// The key of a [`RecKernelUpgrade`]: `tenant-id`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecKernelUpgradeKey {
+    /// Field `tenant-id`.
+    ///
+    /// Holds the key of record `rec-tenant`. On delete: cascade.
+    ///
+    /// Constraints: at most 64 characters, matches `^[a-z][a-z0-9_]*$`.
+    #[serde(rename = "tenant-id")]
+    pub tenant_id: types::TenantId,
+}
+
+impl RecKernelUpgrade {
+    /// The record's id in the specification.
+    pub const ID: &str = "rec-kernel-upgrade";
+
+    /// The version of the record's stored shape.
+    pub const SCHEMA_VERSION: u32 = 1;
+
+    /// The key fields, by their specification names.
+    pub const KEY: &[&str] = &["tenant-id"];
+
+    /// Sets of fields whose combined values are unique, by their specification names.
+    pub const UNIQUE: &[&[&str]] = &[];
+
+    /// The record's indexes.
+    pub const INDEXES: &[prelude::Index] = &[];
+
+    /// The fields that hold the key of another record, and what deleting it does.
+    pub const REFERENCES: &[prelude::Reference] = &[prelude::Reference {
+        field: "tenant-id",
+        record: "rec-tenant",
+        on_delete: prelude::OnDelete::Cascade,
+    }];
+
+    /// The record's key.
+    pub fn key(&self) -> RecKernelUpgradeKey {
+        RecKernelUpgradeKey {
+            tenant_id: self.tenant_id.clone(),
+        }
+    }
+
+    /// Checks the field constraints, returning the first one the record breaks.
+    pub fn validate(&self) -> Result<(), prelude::ConstraintViolation> {
+        if self.tenant_id.0.chars().count() > 64 {
+            return Err(prelude::ConstraintViolation {
+                record: Self::ID,
+                field: "tenant-id",
+                constraint: prelude::Constraint::MaxLength,
+            });
+        }
+        if !REC_KERNEL_UPGRADE_TENANT_ID_PATTERN.is_match(&self.tenant_id.0) {
+            return Err(prelude::ConstraintViolation {
+                record: Self::ID,
+                field: "tenant-id",
+                constraint: prelude::Constraint::Pattern,
+            });
+        }
+        Ok(())
+    }
+}
+
+/// Placement switch
+///
+/// Retention: Until the tenant is deleted (TEN-011).
+///
+/// Record `rec-placement-switch`, owned by component `control-plane`, schema version 1.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecPlacementSwitch {
+    /// Field `tenant-id`.
+    ///
+    /// Holds the key of record `rec-tenant`. On delete: cascade.
+    ///
+    /// Constraints: at most 64 characters, matches `^[a-z][a-z0-9_]*$`.
+    #[serde(rename = "tenant-id")]
+    pub tenant_id: types::TenantId,
+    /// Field `placement`.
+    pub placement: String,
+    /// Field `addressTenant`.
+    #[serde(rename = "addressTenant")]
+    pub address_tenant: String,
+    /// Field `r1On`.
+    #[serde(rename = "r1On")]
+    pub r1_on: String,
+    /// Field `r2On`.
+    #[serde(rename = "r2On")]
+    pub r2_on: String,
+    /// Field `r1DoneOn`.
+    #[serde(rename = "r1DoneOn")]
+    pub r1_done_on: String,
+    /// Field `r2DoneOn`.
+    #[serde(rename = "r2DoneOn")]
+    pub r2_done_on: String,
+    /// Field `resolvedTenant`.
+    #[serde(rename = "resolvedTenant")]
+    pub resolved_tenant: String,
+    /// Field `state`.
+    pub state: String,
+}
+
+/// The key of a [`RecPlacementSwitch`]: `tenant-id`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecPlacementSwitchKey {
+    /// Field `tenant-id`.
+    ///
+    /// Holds the key of record `rec-tenant`. On delete: cascade.
+    ///
+    /// Constraints: at most 64 characters, matches `^[a-z][a-z0-9_]*$`.
+    #[serde(rename = "tenant-id")]
+    pub tenant_id: types::TenantId,
+}
+
+impl RecPlacementSwitch {
+    /// The record's id in the specification.
+    pub const ID: &str = "rec-placement-switch";
+
+    /// The version of the record's stored shape.
+    pub const SCHEMA_VERSION: u32 = 1;
+
+    /// The key fields, by their specification names.
+    pub const KEY: &[&str] = &["tenant-id"];
+
+    /// Sets of fields whose combined values are unique, by their specification names.
+    pub const UNIQUE: &[&[&str]] = &[];
+
+    /// The record's indexes.
+    pub const INDEXES: &[prelude::Index] = &[];
+
+    /// The fields that hold the key of another record, and what deleting it does.
+    pub const REFERENCES: &[prelude::Reference] = &[prelude::Reference {
+        field: "tenant-id",
+        record: "rec-tenant",
+        on_delete: prelude::OnDelete::Cascade,
+    }];
+
+    /// The record's key.
+    pub fn key(&self) -> RecPlacementSwitchKey {
+        RecPlacementSwitchKey {
+            tenant_id: self.tenant_id.clone(),
+        }
+    }
+
+    /// Checks the field constraints, returning the first one the record breaks.
+    pub fn validate(&self) -> Result<(), prelude::ConstraintViolation> {
+        if self.tenant_id.0.chars().count() > 64 {
+            return Err(prelude::ConstraintViolation {
+                record: Self::ID,
+                field: "tenant-id",
+                constraint: prelude::Constraint::MaxLength,
+            });
+        }
+        if !REC_PLACEMENT_SWITCH_TENANT_ID_PATTERN.is_match(&self.tenant_id.0) {
+            return Err(prelude::ConstraintViolation {
+                record: Self::ID,
+                field: "tenant-id",
+                constraint: prelude::Constraint::Pattern,
+            });
+        }
+        Ok(())
+    }
+}
+
+/// Schema change run
+///
+/// Retention: Until the tenant is deleted (TEN-011).
+///
+/// Record `rec-schema-change`, owned by component `migration-job`, schema version 1.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecSchemaChange {
+    /// Field `tenant-id`.
+    ///
+    /// Holds the key of record `rec-tenant`. On delete: cascade.
+    ///
+    /// Constraints: at most 64 characters, matches `^[a-z][a-z0-9_]*$`.
+    #[serde(rename = "tenant-id")]
+    pub tenant_id: types::TenantId,
+    /// Field `previewRef`.
+    #[serde(rename = "previewRef")]
+    pub preview_ref: String,
+    /// Field `startedBy`.
+    #[serde(rename = "startedBy")]
+    pub started_by: String,
+    /// Field `started`.
+    pub started: bool,
+    /// Field `batches`.
+    pub batches: u64,
+    /// Field `layoutVersion`.
+    #[serde(rename = "layoutVersion")]
+    pub layout_version: u64,
+    /// Field `priorVersion`.
+    #[serde(rename = "priorVersion")]
+    pub prior_version: u64,
+    /// Field `failure`.
+    pub failure: String,
+    /// Field `stopped`.
+    pub stopped: bool,
+    /// Field `cursorRecorded`.
+    #[serde(rename = "cursorRecorded")]
+    pub cursor_recorded: u64,
+    /// Field `serving`.
+    pub serving: bool,
+    /// Field `state`.
+    pub state: String,
+}
+
+/// The key of a [`RecSchemaChange`]: `tenant-id`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecSchemaChangeKey {
+    /// Field `tenant-id`.
+    ///
+    /// Holds the key of record `rec-tenant`. On delete: cascade.
+    ///
+    /// Constraints: at most 64 characters, matches `^[a-z][a-z0-9_]*$`.
+    #[serde(rename = "tenant-id")]
+    pub tenant_id: types::TenantId,
+}
+
+impl RecSchemaChange {
+    /// The record's id in the specification.
+    pub const ID: &str = "rec-schema-change";
+
+    /// The version of the record's stored shape.
+    pub const SCHEMA_VERSION: u32 = 1;
+
+    /// The key fields, by their specification names.
+    pub const KEY: &[&str] = &["tenant-id"];
+
+    /// Sets of fields whose combined values are unique, by their specification names.
+    pub const UNIQUE: &[&[&str]] = &[];
+
+    /// The record's indexes.
+    pub const INDEXES: &[prelude::Index] = &[];
+
+    /// The fields that hold the key of another record, and what deleting it does.
+    pub const REFERENCES: &[prelude::Reference] = &[prelude::Reference {
+        field: "tenant-id",
+        record: "rec-tenant",
+        on_delete: prelude::OnDelete::Cascade,
+    }];
+
+    /// The record's key.
+    pub fn key(&self) -> RecSchemaChangeKey {
+        RecSchemaChangeKey {
+            tenant_id: self.tenant_id.clone(),
+        }
+    }
+
+    /// Checks the field constraints, returning the first one the record breaks.
+    pub fn validate(&self) -> Result<(), prelude::ConstraintViolation> {
+        if self.tenant_id.0.chars().count() > 64 {
+            return Err(prelude::ConstraintViolation {
+                record: Self::ID,
+                field: "tenant-id",
+                constraint: prelude::Constraint::MaxLength,
+            });
+        }
+        if !REC_SCHEMA_CHANGE_TENANT_ID_PATTERN.is_match(&self.tenant_id.0) {
+            return Err(prelude::ConstraintViolation {
+                record: Self::ID,
+                field: "tenant-id",
+                constraint: prelude::Constraint::Pattern,
+            });
+        }
+        Ok(())
+    }
+}
+
+/// Layout change per tenant
+///
+/// Retention: Until the tenant is deleted (TEN-011).
+///
+/// Record `rec-layout-rollout`, owned by component `migration-job`, schema version 1.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecLayoutRollout {
+    /// Field `scope`.
+    pub scope: String,
+    /// Field `layoutA`.
+    #[serde(rename = "layoutA")]
+    pub layout_a: u64,
+    /// Field `layoutB`.
+    #[serde(rename = "layoutB")]
+    pub layout_b: u64,
+    /// Field `outcomeA`.
+    #[serde(rename = "outcomeA")]
+    pub outcome_a: String,
+    /// Field `outcomeB`.
+    #[serde(rename = "outcomeB")]
+    pub outcome_b: String,
+    /// Field `servingA`.
+    #[serde(rename = "servingA")]
+    pub serving_a: bool,
+    /// Field `servingB`.
+    #[serde(rename = "servingB")]
+    pub serving_b: bool,
+    /// Field `state`.
+    pub state: String,
+}
+
+/// The key of a [`RecLayoutRollout`]: `scope`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecLayoutRolloutKey {
+    /// Field `scope`.
+    pub scope: String,
+}
+
+impl RecLayoutRollout {
+    /// The record's id in the specification.
+    pub const ID: &str = "rec-layout-rollout";
+
+    /// The version of the record's stored shape.
+    pub const SCHEMA_VERSION: u32 = 1;
+
+    /// The key fields, by their specification names.
+    pub const KEY: &[&str] = &["scope"];
+
+    /// Sets of fields whose combined values are unique, by their specification names.
+    pub const UNIQUE: &[&[&str]] = &[];
+
+    /// The record's indexes.
+    pub const INDEXES: &[prelude::Index] = &[];
+
+    /// The fields that hold the key of another record, and what deleting it does.
+    pub const REFERENCES: &[prelude::Reference] = &[];
+
+    /// The record's key.
+    pub fn key(&self) -> RecLayoutRolloutKey {
+        RecLayoutRolloutKey {
+            scope: self.scope.clone(),
+        }
+    }
+
+    /// Checks the field constraints, returning the first one the record breaks.
+    pub fn validate(&self) -> Result<(), prelude::ConstraintViolation> {
+        Ok(())
+    }
+}
+
+/// Promotion of a staging migration
+///
+/// Retention: Until the tenant is deleted (TEN-011).
+///
+/// Record `rec-staging-promotion`, owned by component `migration-job`, schema version 1.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecStagingPromotion {
+    /// Field `tenant-id`.
+    ///
+    /// Holds the key of record `rec-tenant`. On delete: cascade.
+    ///
+    /// Constraints: at most 64 characters, matches `^[a-z][a-z0-9_]*$`.
+    #[serde(rename = "tenant-id")]
+    pub tenant_id: types::TenantId,
+    /// Field `stagingApplied`.
+    #[serde(rename = "stagingApplied")]
+    pub staging_applied: bool,
+    /// Field `prodPreviewed`.
+    #[serde(rename = "prodPreviewed")]
+    pub prod_previewed: bool,
+    /// Field `prodRunStarted`.
+    #[serde(rename = "prodRunStarted")]
+    pub prod_run_started: bool,
+    /// Field `prodChanged`.
+    #[serde(rename = "prodChanged")]
+    pub prod_changed: bool,
+    /// Field `state`.
+    pub state: String,
+}
+
+/// The key of a [`RecStagingPromotion`]: `tenant-id`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecStagingPromotionKey {
+    /// Field `tenant-id`.
+    ///
+    /// Holds the key of record `rec-tenant`. On delete: cascade.
+    ///
+    /// Constraints: at most 64 characters, matches `^[a-z][a-z0-9_]*$`.
+    #[serde(rename = "tenant-id")]
+    pub tenant_id: types::TenantId,
+}
+
+impl RecStagingPromotion {
+    /// The record's id in the specification.
+    pub const ID: &str = "rec-staging-promotion";
+
+    /// The version of the record's stored shape.
+    pub const SCHEMA_VERSION: u32 = 1;
+
+    /// The key fields, by their specification names.
+    pub const KEY: &[&str] = &["tenant-id"];
+
+    /// Sets of fields whose combined values are unique, by their specification names.
+    pub const UNIQUE: &[&[&str]] = &[];
+
+    /// The record's indexes.
+    pub const INDEXES: &[prelude::Index] = &[];
+
+    /// The fields that hold the key of another record, and what deleting it does.
+    pub const REFERENCES: &[prelude::Reference] = &[prelude::Reference {
+        field: "tenant-id",
+        record: "rec-tenant",
+        on_delete: prelude::OnDelete::Cascade,
+    }];
+
+    /// The record's key.
+    pub fn key(&self) -> RecStagingPromotionKey {
+        RecStagingPromotionKey {
+            tenant_id: self.tenant_id.clone(),
+        }
+    }
+
+    /// Checks the field constraints, returning the first one the record breaks.
+    pub fn validate(&self) -> Result<(), prelude::ConstraintViolation> {
+        if self.tenant_id.0.chars().count() > 64 {
+            return Err(prelude::ConstraintViolation {
+                record: Self::ID,
+                field: "tenant-id",
+                constraint: prelude::Constraint::MaxLength,
+            });
+        }
+        if !REC_STAGING_PROMOTION_TENANT_ID_PATTERN.is_match(&self.tenant_id.0) {
+            return Err(prelude::ConstraintViolation {
+                record: Self::ID,
+                field: "tenant-id",
+                constraint: prelude::Constraint::Pattern,
+            });
+        }
+        Ok(())
+    }
+}
+
+/// Field changes
+///
+/// Retention: Until the tenant is deleted (TEN-011).
+///
+/// Record `rec-field-change`, owned by component `migration-job`, schema version 1.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecFieldChange {
+    /// Field `tenant-id`.
+    ///
+    /// Holds the key of record `rec-tenant`. On delete: cascade.
+    ///
+    /// Constraints: at most 64 characters, matches `^[a-z][a-z0-9_]*$`.
+    #[serde(rename = "tenant-id")]
+    pub tenant_id: types::TenantId,
+    /// Field `base1`.
+    pub base1: u64,
+    /// Field `base2`.
+    pub base2: u64,
+    /// Field `factor`.
+    pub factor: u64,
+    /// Field `newField1`.
+    #[serde(rename = "newField1")]
+    pub new_field1: u64,
+    /// Field `newField2`.
+    #[serde(rename = "newField2")]
+    pub new_field2: u64,
+    /// Field `added`.
+    pub added: bool,
+    /// Field `oldName`.
+    #[serde(rename = "oldName")]
+    pub old_name: String,
+    /// Field `fieldName`.
+    #[serde(rename = "fieldName")]
+    pub field_name: String,
+    /// Field `value`.
+    pub value: String,
+    /// Field `renamed`.
+    pub renamed: bool,
+    /// Field `lastServedName`.
+    #[serde(rename = "lastServedName")]
+    pub last_served_name: String,
+    /// Field `lastServedValue`.
+    #[serde(rename = "lastServedValue")]
+    pub last_served_value: String,
+    /// Field `state`.
+    pub state: String,
+}
+
+/// The key of a [`RecFieldChange`]: `tenant-id`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecFieldChangeKey {
+    /// Field `tenant-id`.
+    ///
+    /// Holds the key of record `rec-tenant`. On delete: cascade.
+    ///
+    /// Constraints: at most 64 characters, matches `^[a-z][a-z0-9_]*$`.
+    #[serde(rename = "tenant-id")]
+    pub tenant_id: types::TenantId,
+}
+
+impl RecFieldChange {
+    /// The record's id in the specification.
+    pub const ID: &str = "rec-field-change";
+
+    /// The version of the record's stored shape.
+    pub const SCHEMA_VERSION: u32 = 1;
+
+    /// The key fields, by their specification names.
+    pub const KEY: &[&str] = &["tenant-id"];
+
+    /// Sets of fields whose combined values are unique, by their specification names.
+    pub const UNIQUE: &[&[&str]] = &[];
+
+    /// The record's indexes.
+    pub const INDEXES: &[prelude::Index] = &[];
+
+    /// The fields that hold the key of another record, and what deleting it does.
+    pub const REFERENCES: &[prelude::Reference] = &[prelude::Reference {
+        field: "tenant-id",
+        record: "rec-tenant",
+        on_delete: prelude::OnDelete::Cascade,
+    }];
+
+    /// The record's key.
+    pub fn key(&self) -> RecFieldChangeKey {
+        RecFieldChangeKey {
+            tenant_id: self.tenant_id.clone(),
+        }
+    }
+
+    /// Checks the field constraints, returning the first one the record breaks.
+    pub fn validate(&self) -> Result<(), prelude::ConstraintViolation> {
+        if self.tenant_id.0.chars().count() > 64 {
+            return Err(prelude::ConstraintViolation {
+                record: Self::ID,
+                field: "tenant-id",
+                constraint: prelude::Constraint::MaxLength,
+            });
+        }
+        if !REC_FIELD_CHANGE_TENANT_ID_PATTERN.is_match(&self.tenant_id.0) {
+            return Err(prelude::ConstraintViolation {
+                record: Self::ID,
+                field: "tenant-id",
+                constraint: prelude::Constraint::Pattern,
+            });
+        }
+        Ok(())
+    }
+}
+
+/// Draft save
+///
+/// Retention: Until the tenant is deleted (TEN-011).
+///
+/// Record `rec-draft-save`, owned by component `runtime`, schema version 1.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecDraftSave {
+    /// Field `tenant-id`.
+    ///
+    /// Holds the key of record `rec-tenant`. On delete: cascade.
+    ///
+    /// Constraints: at most 64 characters, matches `^[a-z][a-z0-9_]*$`.
+    #[serde(rename = "tenant-id")]
+    pub tenant_id: types::TenantId,
+    /// Field `schemaVersion`.
+    #[serde(rename = "schemaVersion")]
+    pub schema_version: u64,
+    /// Field `saved`.
+    pub saved: u64,
+    /// Field `lastSavedAgainst`.
+    #[serde(rename = "lastSavedAgainst")]
+    pub last_saved_against: u64,
+    /// Field `schemaAtSave`.
+    #[serde(rename = "schemaAtSave")]
+    pub schema_at_save: u64,
+    /// Field `refusedNamed`.
+    #[serde(rename = "refusedNamed")]
+    pub refused_named: u64,
+    /// Field `draftText`.
+    #[serde(rename = "draftText")]
+    pub draft_text: String,
+    /// Field `state`.
+    pub state: String,
+}
+
+/// The key of a [`RecDraftSave`]: `tenant-id`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecDraftSaveKey {
+    /// Field `tenant-id`.
+    ///
+    /// Holds the key of record `rec-tenant`. On delete: cascade.
+    ///
+    /// Constraints: at most 64 characters, matches `^[a-z][a-z0-9_]*$`.
+    #[serde(rename = "tenant-id")]
+    pub tenant_id: types::TenantId,
+}
+
+impl RecDraftSave {
+    /// The record's id in the specification.
+    pub const ID: &str = "rec-draft-save";
+
+    /// The version of the record's stored shape.
+    pub const SCHEMA_VERSION: u32 = 1;
+
+    /// The key fields, by their specification names.
+    pub const KEY: &[&str] = &["tenant-id"];
+
+    /// Sets of fields whose combined values are unique, by their specification names.
+    pub const UNIQUE: &[&[&str]] = &[];
+
+    /// The record's indexes.
+    pub const INDEXES: &[prelude::Index] = &[];
+
+    /// The fields that hold the key of another record, and what deleting it does.
+    pub const REFERENCES: &[prelude::Reference] = &[prelude::Reference {
+        field: "tenant-id",
+        record: "rec-tenant",
+        on_delete: prelude::OnDelete::Cascade,
+    }];
+
+    /// The record's key.
+    pub fn key(&self) -> RecDraftSaveKey {
+        RecDraftSaveKey {
+            tenant_id: self.tenant_id.clone(),
+        }
+    }
+
+    /// Checks the field constraints, returning the first one the record breaks.
+    pub fn validate(&self) -> Result<(), prelude::ConstraintViolation> {
+        if self.tenant_id.0.chars().count() > 64 {
+            return Err(prelude::ConstraintViolation {
+                record: Self::ID,
+                field: "tenant-id",
+                constraint: prelude::Constraint::MaxLength,
+            });
+        }
+        if !REC_DRAFT_SAVE_TENANT_ID_PATTERN.is_match(&self.tenant_id.0) {
+            return Err(prelude::ConstraintViolation {
+                record: Self::ID,
+                field: "tenant-id",
+                constraint: prelude::Constraint::Pattern,
+            });
+        }
+        Ok(())
+    }
+}
+
+/// Workflow run versions
+///
+/// Retention: Until the tenant is deleted (TEN-011).
+///
+/// Record `rec-workflow-version`, owned by component `automation-worker`, schema version 1.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecWorkflowVersion {
+    /// Field `tenant-id`.
+    ///
+    /// Holds the key of record `rec-tenant`. On delete: cascade.
+    ///
+    /// Constraints: at most 64 characters, matches `^[a-z][a-z0-9_]*$`.
+    #[serde(rename = "tenant-id")]
+    pub tenant_id: types::TenantId,
+    /// Field `definitionVersion`.
+    #[serde(rename = "definitionVersion")]
+    pub definition_version: u64,
+    /// Field `runVersion`.
+    #[serde(rename = "runVersion")]
+    pub run_version: u64,
+    /// Field `lastStepVersion`.
+    #[serde(rename = "lastStepVersion")]
+    pub last_step_version: u64,
+    /// Field `steps`.
+    pub steps: u64,
+    /// Field `stopped`.
+    pub stopped: bool,
+    /// Field `recordedSteps`.
+    #[serde(rename = "recordedSteps")]
+    pub recorded_steps: u64,
+    /// Field `state`.
+    pub state: String,
+}
+
+/// The key of a [`RecWorkflowVersion`]: `tenant-id`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecWorkflowVersionKey {
+    /// Field `tenant-id`.
+    ///
+    /// Holds the key of record `rec-tenant`. On delete: cascade.
+    ///
+    /// Constraints: at most 64 characters, matches `^[a-z][a-z0-9_]*$`.
+    #[serde(rename = "tenant-id")]
+    pub tenant_id: types::TenantId,
+}
+
+impl RecWorkflowVersion {
+    /// The record's id in the specification.
+    pub const ID: &str = "rec-workflow-version";
+
+    /// The version of the record's stored shape.
+    pub const SCHEMA_VERSION: u32 = 1;
+
+    /// The key fields, by their specification names.
+    pub const KEY: &[&str] = &["tenant-id"];
+
+    /// Sets of fields whose combined values are unique, by their specification names.
+    pub const UNIQUE: &[&[&str]] = &[];
+
+    /// The record's indexes.
+    pub const INDEXES: &[prelude::Index] = &[];
+
+    /// The fields that hold the key of another record, and what deleting it does.
+    pub const REFERENCES: &[prelude::Reference] = &[prelude::Reference {
+        field: "tenant-id",
+        record: "rec-tenant",
+        on_delete: prelude::OnDelete::Cascade,
+    }];
+
+    /// The record's key.
+    pub fn key(&self) -> RecWorkflowVersionKey {
+        RecWorkflowVersionKey {
+            tenant_id: self.tenant_id.clone(),
+        }
+    }
+
+    /// Checks the field constraints, returning the first one the record breaks.
+    pub fn validate(&self) -> Result<(), prelude::ConstraintViolation> {
+        if self.tenant_id.0.chars().count() > 64 {
+            return Err(prelude::ConstraintViolation {
+                record: Self::ID,
+                field: "tenant-id",
+                constraint: prelude::Constraint::MaxLength,
+            });
+        }
+        if !REC_WORKFLOW_VERSION_TENANT_ID_PATTERN.is_match(&self.tenant_id.0) {
+            return Err(prelude::ConstraintViolation {
+                record: Self::ID,
+                field: "tenant-id",
+                constraint: prelude::Constraint::Pattern,
+            });
+        }
+        Ok(())
+    }
+}
+
+/// Scheduled job check
+///
+/// Retention: Until the tenant is deleted (TEN-011).
+///
+/// Record `rec-scheduled-job-check`, owned by component `automation-worker`, schema version 1.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecScheduledJobCheck {
+    /// Field `tenant-id`.
+    ///
+    /// Holds the key of record `rec-tenant`. On delete: cascade.
+    ///
+    /// Constraints: at most 64 characters, matches `^[a-z][a-z0-9_]*$`.
+    #[serde(rename = "tenant-id")]
+    pub tenant_id: types::TenantId,
+    /// Field `schemaVersion`.
+    #[serde(rename = "schemaVersion")]
+    pub schema_version: u64,
+    /// Field `jobDefinedAgainst`.
+    #[serde(rename = "jobDefinedAgainst")]
+    pub job_defined_against: u64,
+    /// Field `changedField`.
+    #[serde(rename = "changedField")]
+    pub changed_field: String,
+    /// Field `runs`.
+    pub runs: u64,
+    /// Field `lastRunSchema`.
+    #[serde(rename = "lastRunSchema")]
+    pub last_run_schema: u64,
+    /// Field `lastRunDefinedAgainst`.
+    #[serde(rename = "lastRunDefinedAgainst")]
+    pub last_run_defined_against: u64,
+    /// Field `refusedNaming`.
+    #[serde(rename = "refusedNaming")]
+    pub refused_naming: String,
+    /// Field `state`.
+    pub state: String,
+}
+
+/// The key of a [`RecScheduledJobCheck`]: `tenant-id`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecScheduledJobCheckKey {
+    /// Field `tenant-id`.
+    ///
+    /// Holds the key of record `rec-tenant`. On delete: cascade.
+    ///
+    /// Constraints: at most 64 characters, matches `^[a-z][a-z0-9_]*$`.
+    #[serde(rename = "tenant-id")]
+    pub tenant_id: types::TenantId,
+}
+
+impl RecScheduledJobCheck {
+    /// The record's id in the specification.
+    pub const ID: &str = "rec-scheduled-job-check";
+
+    /// The version of the record's stored shape.
+    pub const SCHEMA_VERSION: u32 = 1;
+
+    /// The key fields, by their specification names.
+    pub const KEY: &[&str] = &["tenant-id"];
+
+    /// Sets of fields whose combined values are unique, by their specification names.
+    pub const UNIQUE: &[&[&str]] = &[];
+
+    /// The record's indexes.
+    pub const INDEXES: &[prelude::Index] = &[];
+
+    /// The fields that hold the key of another record, and what deleting it does.
+    pub const REFERENCES: &[prelude::Reference] = &[prelude::Reference {
+        field: "tenant-id",
+        record: "rec-tenant",
+        on_delete: prelude::OnDelete::Cascade,
+    }];
+
+    /// The record's key.
+    pub fn key(&self) -> RecScheduledJobCheckKey {
+        RecScheduledJobCheckKey {
+            tenant_id: self.tenant_id.clone(),
+        }
+    }
+
+    /// Checks the field constraints, returning the first one the record breaks.
+    pub fn validate(&self) -> Result<(), prelude::ConstraintViolation> {
+        if self.tenant_id.0.chars().count() > 64 {
+            return Err(prelude::ConstraintViolation {
+                record: Self::ID,
+                field: "tenant-id",
+                constraint: prelude::Constraint::MaxLength,
+            });
+        }
+        if !REC_SCHEDULED_JOB_CHECK_TENANT_ID_PATTERN.is_match(&self.tenant_id.0) {
+            return Err(prelude::ConstraintViolation {
+                record: Self::ID,
+                field: "tenant-id",
+                constraint: prelude::Constraint::Pattern,
+            });
+        }
+        Ok(())
+    }
+}
+
+/// Template proposal
+///
+/// Retention: Until the tenant is deleted (TEN-011).
+///
+/// Record `rec-template-proposal`, owned by component `control-plane`, schema version 1.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecTemplateProposal {
+    /// Field `tenant-id`.
+    ///
+    /// Holds the key of record `rec-tenant`. On delete: cascade.
+    ///
+    /// Constraints: at most 64 characters, matches `^[a-z][a-z0-9_]*$`.
+    #[serde(rename = "tenant-id")]
+    pub tenant_id: types::TenantId,
+    /// Field `projected`.
+    pub projected: bool,
+    /// Field `approved`.
+    pub approved: bool,
+    /// Field `applied`.
+    pub applied: bool,
+    /// Field `state`.
+    pub state: String,
+}
+
+/// The key of a [`RecTemplateProposal`]: `tenant-id`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecTemplateProposalKey {
+    /// Field `tenant-id`.
+    ///
+    /// Holds the key of record `rec-tenant`. On delete: cascade.
+    ///
+    /// Constraints: at most 64 characters, matches `^[a-z][a-z0-9_]*$`.
+    #[serde(rename = "tenant-id")]
+    pub tenant_id: types::TenantId,
+}
+
+impl RecTemplateProposal {
+    /// The record's id in the specification.
+    pub const ID: &str = "rec-template-proposal";
+
+    /// The version of the record's stored shape.
+    pub const SCHEMA_VERSION: u32 = 1;
+
+    /// The key fields, by their specification names.
+    pub const KEY: &[&str] = &["tenant-id"];
+
+    /// Sets of fields whose combined values are unique, by their specification names.
+    pub const UNIQUE: &[&[&str]] = &[];
+
+    /// The record's indexes.
+    pub const INDEXES: &[prelude::Index] = &[];
+
+    /// The fields that hold the key of another record, and what deleting it does.
+    pub const REFERENCES: &[prelude::Reference] = &[prelude::Reference {
+        field: "tenant-id",
+        record: "rec-tenant",
+        on_delete: prelude::OnDelete::Cascade,
+    }];
+
+    /// The record's key.
+    pub fn key(&self) -> RecTemplateProposalKey {
+        RecTemplateProposalKey {
+            tenant_id: self.tenant_id.clone(),
+        }
+    }
+
+    /// Checks the field constraints, returning the first one the record breaks.
+    pub fn validate(&self) -> Result<(), prelude::ConstraintViolation> {
+        if self.tenant_id.0.chars().count() > 64 {
+            return Err(prelude::ConstraintViolation {
+                record: Self::ID,
+                field: "tenant-id",
+                constraint: prelude::Constraint::MaxLength,
+            });
+        }
+        if !REC_TEMPLATE_PROPOSAL_TENANT_ID_PATTERN.is_match(&self.tenant_id.0) {
+            return Err(prelude::ConstraintViolation {
+                record: Self::ID,
+                field: "tenant-id",
+                constraint: prelude::Constraint::Pattern,
+            });
+        }
+        Ok(())
+    }
+}
+
+/// Import
+///
+/// Retention: Until the tenant is deleted (TEN-011).
+///
+/// Record `rec-import`, owned by component `migration-job`, schema version 1.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecImport {
+    /// Field `tenant-id`.
+    ///
+    /// Holds the key of record `rec-tenant`. On delete: cascade.
+    ///
+    /// Constraints: at most 64 characters, matches `^[a-z][a-z0-9_]*$`.
+    #[serde(rename = "tenant-id")]
+    pub tenant_id: types::TenantId,
+    /// Field `holdsR1`.
+    #[serde(rename = "holdsR1")]
+    pub holds_r1: bool,
+    /// Field `holdsR2`.
+    #[serde(rename = "holdsR2")]
+    pub holds_r2: bool,
+    /// Field `held`.
+    pub held: u64,
+    /// Field `updates`.
+    pub updates: u64,
+    /// Field `formerAddresses`.
+    #[serde(rename = "formerAddresses")]
+    pub former_addresses: u64,
+    /// Field `redirects`.
+    pub redirects: u64,
+    /// Field `state`.
+    pub state: String,
+}
+
+/// The key of a [`RecImport`]: `tenant-id`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecImportKey {
+    /// Field `tenant-id`.
+    ///
+    /// Holds the key of record `rec-tenant`. On delete: cascade.
+    ///
+    /// Constraints: at most 64 characters, matches `^[a-z][a-z0-9_]*$`.
+    #[serde(rename = "tenant-id")]
+    pub tenant_id: types::TenantId,
+}
+
+impl RecImport {
+    /// The record's id in the specification.
+    pub const ID: &str = "rec-import";
+
+    /// The version of the record's stored shape.
+    pub const SCHEMA_VERSION: u32 = 1;
+
+    /// The key fields, by their specification names.
+    pub const KEY: &[&str] = &["tenant-id"];
+
+    /// Sets of fields whose combined values are unique, by their specification names.
+    pub const UNIQUE: &[&[&str]] = &[];
+
+    /// The record's indexes.
+    pub const INDEXES: &[prelude::Index] = &[];
+
+    /// The fields that hold the key of another record, and what deleting it does.
+    pub const REFERENCES: &[prelude::Reference] = &[prelude::Reference {
+        field: "tenant-id",
+        record: "rec-tenant",
+        on_delete: prelude::OnDelete::Cascade,
+    }];
+
+    /// The record's key.
+    pub fn key(&self) -> RecImportKey {
+        RecImportKey {
+            tenant_id: self.tenant_id.clone(),
+        }
+    }
+
+    /// Checks the field constraints, returning the first one the record breaks.
+    pub fn validate(&self) -> Result<(), prelude::ConstraintViolation> {
+        if self.tenant_id.0.chars().count() > 64 {
+            return Err(prelude::ConstraintViolation {
+                record: Self::ID,
+                field: "tenant-id",
+                constraint: prelude::Constraint::MaxLength,
+            });
+        }
+        if !REC_IMPORT_TENANT_ID_PATTERN.is_match(&self.tenant_id.0) {
+            return Err(prelude::ConstraintViolation {
+                record: Self::ID,
+                field: "tenant-id",
+                constraint: prelude::Constraint::Pattern,
+            });
+        }
         Ok(())
     }
 }
