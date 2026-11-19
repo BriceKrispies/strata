@@ -169,7 +169,9 @@ fn walk(spec: &Spec) -> (BTreeMap<String, (WireCase, String)>, Vec<Diagnostic>) 
         let mut stack = vec![TypeRef::parse(&root)];
         while let Some(t) = stack.pop() {
             match t {
-                TypeRef::List(inner) | TypeRef::Option(inner) => stack.push(*inner),
+                TypeRef::List(inner) | TypeRef::Set(inner) | TypeRef::Option(inner) => {
+                    stack.push(*inner)
+                }
                 TypeRef::Map(key, value) => {
                     stack.push(*key);
                     stack.push(*value);
@@ -249,7 +251,7 @@ impl<'a> WireValues<'a> {
     pub fn value(&self, t: &TypeRef, v: &Value) -> Value {
         match (t, v) {
             (TypeRef::Option(inner), v) => self.value(inner, v),
-            (TypeRef::List(inner), Value::Array(items)) => {
+            (TypeRef::List(inner) | TypeRef::Set(inner), Value::Array(items)) => {
                 Value::Array(items.iter().map(|i| self.value(inner, i)).collect())
             }
             (TypeRef::Map(_, value), Value::Object(map)) => Value::Object(

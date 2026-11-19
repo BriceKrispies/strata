@@ -166,6 +166,9 @@ pub struct Variant {
     pub fields: Vec<StructField>,
     /// `newtype: true`: the one field is written without its name.
     pub newtype: bool,
+    /// `tuple: true`: two or more positional fields, written as a JSON array of their values in
+    /// order (serde's tuple variant); the field names are not written.
+    pub tuple: bool,
 }
 
 /// How a union is tagged on the wire, in serde's forms.

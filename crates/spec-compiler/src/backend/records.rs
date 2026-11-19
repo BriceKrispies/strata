@@ -288,7 +288,7 @@ fn constraint_base(spec: &Spec, f: &RecordField) -> Option<(Vec<Step>, Builtin)>
                 steps.push(Step::Option);
                 t = *inner;
             }
-            TypeRef::List(_) | TypeRef::Map(..) => return None,
+            TypeRef::List(_) | TypeRef::Set(_) | TypeRef::Map(..) => return None,
             TypeRef::Declared(id) => {
                 let decl = spec.type_decl(&id)?;
                 let (TypeKind::Id { repr } | TypeKind::Scalar { repr }) = &decl.kind else {
@@ -545,6 +545,7 @@ fn record_items(
             ty: field_type(f, uses),
             optional: f.optional,
             doc: field_doc(f),
+            deserialize_with: None,
         }
         .tokens()
     };

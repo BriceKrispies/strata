@@ -208,7 +208,7 @@ pub fn leaf(spec: &Spec, t: &TypeRef) -> Option<Leaf> {
                 TypeKind::Struct { .. } | TypeKind::Union { .. } => None,
             }
         }
-        TypeRef::List(_) | TypeRef::Option(_) | TypeRef::Map(..) => None,
+        TypeRef::List(_) | TypeRef::Set(_) | TypeRef::Option(_) | TypeRef::Map(..) => None,
     }
 }
 
@@ -234,6 +234,7 @@ pub fn zero_value(spec: &Spec, t: &TypeRef, uses: &mut Uses) -> Option<TokenStre
     match t {
         TypeRef::Option(_) => Some(quote! { None }),
         TypeRef::List(_) => Some(quote! { Vec::new() }),
+        TypeRef::Set(_) => Some(quote! { std::collections::BTreeSet::new() }),
         TypeRef::Map(..) => Some(quote! { std::collections::BTreeMap::new() }),
         _ => {
             let l = leaf(spec, t)?;

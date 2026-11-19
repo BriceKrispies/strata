@@ -136,6 +136,8 @@ pub enum TypeRef {
     Declared(String),
     /// `list<T>`
     List(Box<TypeRef>),
+    /// `set<T>`: a JSON array of distinct items, in order; a `BTreeSet` in Rust.
+    Set(Box<TypeRef>),
     /// `option<T>`
     Option(Box<TypeRef>),
     /// `map<K, V>`: a JSON object, a `BTreeMap` in Rust.
@@ -154,6 +156,9 @@ impl TypeRef {
         };
         if let Some(inner) = wrapped("list<") {
             return TypeRef::List(inner);
+        }
+        if let Some(inner) = wrapped("set<") {
+            return TypeRef::Set(inner);
         }
         if let Some(inner) = wrapped("option<") {
             return TypeRef::Option(inner);
@@ -203,6 +208,7 @@ impl TypeRef {
             TypeRef::Builtin(b) => b.as_str().to_string(),
             TypeRef::Declared(id) => id.clone(),
             TypeRef::List(inner) => format!("list<{}>", inner.text()),
+            TypeRef::Set(inner) => format!("set<{}>", inner.text()),
             TypeRef::Option(inner) => format!("option<{}>", inner.text()),
             TypeRef::Map(k, v) => format!("map<{}, {}>", k.text(), v.text()),
         }
@@ -247,7 +253,9 @@ pub fn ref_resolves(spec: &Spec, t: &TypeRef) -> bool {
     match t {
         TypeRef::Builtin(_) => true,
         TypeRef::Declared(id) => spec.type_decl(id).is_some(),
-        TypeRef::List(inner) | TypeRef::Option(inner) => ref_resolves(spec, inner),
+        TypeRef::List(inner) | TypeRef::Set(inner) | TypeRef::Option(inner) => {
+            ref_resolves(spec, inner)
+        }
         TypeRef::Map(k, v) => ref_resolves(spec, k) && ref_resolves(spec, v),
     }
 }
@@ -269,7 +277,9 @@ pub fn is_total(spec: &Spec, t: &TypeRef) -> bool {
 fn total(spec: &Spec, t: &TypeRef, visiting: &mut BTreeSet<String>) -> bool {
     match t {
         TypeRef::Builtin(b) => b.is_total(),
-        TypeRef::List(inner) | TypeRef::Option(inner) => total(spec, inner, visiting),
+        TypeRef::List(inner) | TypeRef::Set(inner) | TypeRef::Option(inner) => {
+            total(spec, inner, visiting)
+        }
         TypeRef::Map(k, v) => total(spec, k, visiting) && total(spec, v, visiting),
         TypeRef::Declared(id) => {
             let Some(decl) = spec.type_decl(id) else {
@@ -304,7 +314,7 @@ pub fn is_copy(t: &TypeRef) -> bool {
     match t {
         TypeRef::Builtin(b) => b.is_copy(),
         TypeRef::Option(inner) => is_copy(inner),
-        TypeRef::Declared(_) | TypeRef::List(_) | TypeRef::Map(..) => false,
+        TypeRef::Declared(_) | TypeRef::List(_) | TypeRef::Set(_) | TypeRef::Map(..) => false,
     }
 }
 

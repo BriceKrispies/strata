@@ -476,11 +476,13 @@ impl Loader {
                     let name = self.req_str(v, "name", id);
                     let fields = self.struct_fields(v, id);
                     let newtype = self.opt_bool(v, "newtype", id).unwrap_or(false);
+                    let tuple = self.opt_bool(v, "tuple", id).unwrap_or(false);
                     if let Some(name) = name {
                         variants.push(Variant {
                             name,
                             fields,
                             newtype,
+                            tuple,
                         });
                     }
                 }

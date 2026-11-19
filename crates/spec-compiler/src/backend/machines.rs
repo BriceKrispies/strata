@@ -400,7 +400,7 @@ fn raw_ty(t: &TypeRef) -> Ty {
         TypeRef::Builtin(b) => builtin_ty(*b),
         TypeRef::Declared(id) => Ty::Named(id.clone()),
         TypeRef::Option(inner) => Ty::Option(Box::new(raw_ty(inner))),
-        TypeRef::List(inner) => Ty::List(Box::new(raw_ty(inner))),
+        TypeRef::List(inner) | TypeRef::Set(inner) => Ty::List(Box::new(raw_ty(inner))),
         // A map is opaque to expressions, like json: compared only with == and !=.
         TypeRef::Map(..) => Ty::Named(t.text()),
     }
@@ -448,7 +448,9 @@ fn view(spec: &Spec, t: &TypeRef, uses: &mut Uses) -> View {
                 None => View::plain(Ty::Named(id.clone())),
             }
         }
-        TypeRef::Option(_) | TypeRef::List(_) | TypeRef::Map(..) => View::plain(raw_ty(t)),
+        TypeRef::Option(_) | TypeRef::List(_) | TypeRef::Set(_) | TypeRef::Map(..) => {
+            View::plain(raw_ty(t))
+        }
     }
 }
 
@@ -1406,6 +1408,13 @@ impl<'a> Gen<'a> {
                 let inner = self.literal(v, inner)?;
                 Ok(quote! { Some(#inner) })
             }
+            (TypeRef::Set(inner), Value::Array(items)) => {
+                let items = items
+                    .iter()
+                    .map(|i| self.literal(i, inner))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(quote! { [#(#items),*].into_iter().collect::<std::collections::BTreeSet<_>>() })
+            }
             (TypeRef::List(inner), Value::Array(items)) => {
                 if items.is_empty() {
                     return Ok(quote! { Vec::new() });
@@ -1857,6 +1866,7 @@ impl<'a> Gen<'a> {
                     ty,
                     optional: false,
                     doc: Doc::new(&format!("Variable `{}`.", v.name)),
+                    deserialize_with: None,
                 }
                 .tokens()
             })
@@ -1925,6 +1935,7 @@ impl<'a> Gen<'a> {
                         ty,
                         optional: f.optional,
                         doc: Doc::new(&format!("Field `{}`.", f.name)),
+                        deserialize_with: None,
                     }
                     .tokens();
                     // A u64 or i64 beyond +-(2^53 - 1) is refused when the payload is decoded,

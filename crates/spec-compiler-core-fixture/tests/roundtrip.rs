@@ -3,13 +3,14 @@
 //! equal value. The types are generated from
 //! `crates/spec-compiler/tests/fixtures/core/spec.jsonc`.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
 
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use strata_spec_compiler_core_fixture::types::{
-    Chain, Change, Expr, SeatCount, Seats, Slug, TenantRef, Token, TypeConstraintViolation, Value,
+    AccountId, Chain, Change, Cmp, Cond, Expr, Owner, SeatCount, Seats, Slug, TenantRef, Token,
+    TypeConstraintViolation, Value,
 };
 
 /// `value` serialises to exactly `json`, and `json` deserialises to `value`.
@@ -142,8 +143,11 @@ fn maps_are_keyed_by_strings_ids_and_integers() {
         by_slug: BTreeMap::from([(slug("beta"), SeatCount(2)), (slug("acme"), SeatCount(5))]),
         by_ref: BTreeMap::from([(TenantRef(10), SeatCount(1)), (TenantRef(9), SeatCount(3))]),
         labels: BTreeMap::from([(2, "two".to_string())]),
+        tags: BTreeSet::new(),
+        groups: BTreeMap::new(),
+        nested: BTreeMap::new(),
     };
-    let json = r#"{"by-slug":{"acme":5,"beta":2},"by-ref":{"9":3,"10":1},"labels":{"2":"two"}}"#;
+    let json = r#"{"by-slug":{"acme":5,"beta":2},"by-ref":{"9":3,"10":1},"labels":{"2":"two"},"tags":[],"groups":{},"nested":{}}"#;
     round_trip(seats.clone(), json);
     round_trip(
         Change::Moved(seats),
@@ -153,9 +157,9 @@ fn maps_are_keyed_by_strings_ids_and_integers() {
 
 #[test]
 fn a_map_key_is_checked_against_its_type() {
-    let bad = r#"{"by-slug":{"Acme":1},"by-ref":{},"labels":{}}"#;
+    let bad = r#"{"by-slug":{"Acme":1},"by-ref":{},"labels":{},"tags":[],"groups":{},"nested":{}}"#;
     assert!(serde_json::from_str::<Seats>(bad).is_err());
-    let bad = r#"{"by-slug":{},"by-ref":{"nine":1},"labels":{}}"#;
+    let bad = r#"{"by-slug":{},"by-ref":{"nine":1},"labels":{},"tags":[],"groups":{},"nested":{}}"#;
     assert!(serde_json::from_str::<Seats>(bad).is_err());
 }
 
@@ -169,9 +173,114 @@ fn a_struct_recurses_through_an_option() {
             next: Some(Box::new(Chain {
                 label: "b".to_string(),
                 next: None,
+                marks: None,
             })),
+            marks: None,
         },
         r#"{"label":"a","next":{"label":"b","next":null}}"#,
+    );
+}
+
+// Sets (WG-4956): a JSON array of distinct items in ascending order; decoding refuses a repeat,
+// also inside an option, a map and a tuple variant.
+
+fn seats_with(tags: &[&str], groups: &[(&str, &[u32])]) -> Seats {
+    Seats {
+        by_slug: BTreeMap::new(),
+        by_ref: BTreeMap::new(),
+        labels: BTreeMap::new(),
+        tags: tags.iter().map(|t| slug(t)).collect(),
+        groups: groups
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.iter().copied().collect()))
+            .collect(),
+        nested: BTreeMap::new(),
+    }
+}
+
+#[test]
+fn a_set_is_an_array_of_distinct_items_in_order() {
+    round_trip(
+        seats_with(&["beta", "acme"], &[("x", &[3, 1])]),
+        r#"{"by-slug":{},"by-ref":{},"labels":{},"tags":["acme","beta"],"groups":{"x":[1,3]},"nested":{}}"#,
+    );
+    round_trip(
+        Chain {
+            label: "a".to_string(),
+            next: None,
+            marks: Some(BTreeSet::from(["m".to_string()])),
+        },
+        r#"{"label":"a","next":null,"marks":["m"]}"#,
+    );
+}
+
+#[test]
+fn a_set_that_repeats_an_item_is_refused() {
+    let repeated =
+        r#"{"by-slug":{},"by-ref":{},"labels":{},"tags":["acme","acme"],"groups":{},"nested":{}}"#;
+    let error = serde_json::from_str::<Seats>(repeated)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("repeats"), "{error}");
+    let in_a_map =
+        r#"{"by-slug":{},"by-ref":{},"labels":{},"tags":[],"groups":{"x":[1,1]},"nested":{}}"#;
+    assert!(serde_json::from_str::<Seats>(in_a_map).is_err());
+    assert!(
+        serde_json::from_str::<Chain>(r#"{"label":"a","next":null,"marks":["m","m"]}"#).is_err()
+    );
+    assert!(serde_json::from_str::<Chain>(r#"{"label":"a","next":null}"#).is_ok());
+    assert!(serde_json::from_str::<Cond>(r#"{"AnyOf":[["acme","acme"],null]}"#).is_err());
+}
+
+// Tuple variants (WG-4956): {"Variant": [values]}, under the external and the adjacent tag.
+
+#[test]
+fn a_tuple_variant_is_an_array_of_its_values() {
+    let leaf = |b: bool| Box::new(Cond::Leaf(b));
+    round_trip(
+        Cond::Cmp(Cmp::Eq, leaf(true), leaf(false)),
+        r#"{"Cmp":["Eq",{"Leaf":true},{"Leaf":false}]}"#,
+    );
+    round_trip(
+        Cond::AnyOf(BTreeSet::from([slug("b"), slug("a")]), None),
+        r#"{"AnyOf":[["a","b"],null]}"#,
+    );
+    round_trip(
+        Change::Swapped(slug("a"), slug("b")),
+        r#"{"type":"swapped","data":["a","b"]}"#,
+    );
+}
+
+#[test]
+fn a_tuple_variant_with_the_wrong_number_of_values_is_refused() {
+    assert!(serde_json::from_str::<Cond>(r#"{"Cmp":["Eq",{"Leaf":true}]}"#).is_err());
+    assert!(serde_json::from_str::<Cond>(r#"{"Cmp":["Ne",{"Leaf":true},{"Leaf":true}]}"#).is_err());
+    assert!(serde_json::from_str::<Change>(r#"{"type":"swapped","data":["a"]}"#).is_err());
+}
+
+// A map of maps (WG-4956).
+
+#[test]
+fn a_map_of_maps_nests_json_objects() {
+    let mut seats = seats_with(&[], &[]);
+    seats.nested = BTreeMap::from([(slug("acme"), BTreeMap::from([(TenantRef(2), SeatCount(4))]))]);
+    round_trip(
+        seats,
+        r#"{"by-slug":{},"by-ref":{},"labels":{},"tags":[],"groups":{},"nested":{"acme":{"2":4}}}"#,
+    );
+}
+
+// uuid ids are in the pure crate (WG-4956), as uuid::Uuid strings.
+
+#[test]
+fn a_uuid_id_is_its_hyphenated_text() {
+    let text = "67e55044-10b1-426f-9247-bb680e5fe0c8";
+    round_trip(
+        Owner {
+            account: AccountId(text.parse().unwrap()),
+            slug: slug("acme"),
+        },
+        &format!(r#"{{"account":"{text}","slug":"acme"}}"#),
     );
 }
 

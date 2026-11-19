@@ -149,10 +149,11 @@ fn core_golden_output_matches_its_fixture_crate() {
     );
 }
 
-/// Split into two crates, the pure crate holds the types that reach no uuid, the model crate
-/// depends on it, re-exports them and its representation types, and declares the rest.
+/// Split into two crates, the pure crate holds every declared type, uuid ids included (through the
+/// uuid crate with its serde feature only, no v4), and the model crate depends on it and
+/// re-exports them and its representation types.
 #[test]
-fn a_split_generation_puts_uuid_types_in_the_model_crate() {
+fn a_split_generation_puts_every_type_in_the_pure_crate() {
     let options = Options {
         crate_name: "fixture-model".to_string(),
         runtime: RuntimeDependency::Workspace,
@@ -166,21 +167,26 @@ fn a_split_generation_puts_uuid_types_in_the_model_crate() {
     let model_types = file_text(&model, "src/types.rs");
     let pure_types = file_text(&pure, "src/types.rs");
     assert!(model_types.contains("pub use fixture_model_core::types::*;"));
-    assert!(model_types.contains("pub struct AccountId(pub uuid::Uuid);"));
-    assert!(model_types.contains("pub struct Owner {"));
+    assert!(!model_types.contains("pub struct AccountId"));
+    assert!(!model_types.contains("pub struct Owner {"));
     assert!(!model_types.contains("pub enum Expr"));
     assert!(pure_types.contains("pub enum Expr"));
-    assert!(!pure_types.contains("AccountId"));
+    assert!(pure_types.contains("pub struct AccountId(pub uuid::Uuid);"));
+    assert!(pure_types.contains("pub struct Owner {"));
     assert!(file_text(&model, "src/prelude.rs").contains("pub use fixture_model_core::prelude::"));
     assert!(file_text(&model, "Cargo.toml")
         .contains("fixture-model-core = { path = \"../model-core\" }"));
     let pure_manifest = file_text(&pure, "Cargo.toml");
-    for forbidden in ["strata-runtime", "uuid", "tokio"] {
+    for forbidden in ["strata-runtime", "tokio", "v4"] {
         assert!(
             !pure_manifest.contains(forbidden),
             "{forbidden} in {pure_manifest}"
         );
     }
+    assert!(
+        pure_manifest.contains("default-features = false, features = [\"serde\"]"),
+        "uuid with the serde feature only: {pure_manifest}"
+    );
     // The pure crate alone is the same pure crate.
     let alone =
         strata_spec_compiler::generate_core(CORE_SPEC, &core_text(), "fixture-model-core").unwrap();

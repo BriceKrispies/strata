@@ -360,7 +360,8 @@ pub(crate) fn raw_ty(t: &TypeRef) -> Ty {
         TypeRef::Builtin(b) => builtin_ty(*b),
         TypeRef::Declared(id) => Ty::Named(id.clone()),
         TypeRef::Option(inner) => Ty::Option(Box::new(raw_ty(inner))),
-        TypeRef::List(inner) => Ty::List(Box::new(raw_ty(inner))),
+        // A set is a list of distinct items to expressions, as in Exegra (class list).
+        TypeRef::List(inner) | TypeRef::Set(inner) => Ty::List(Box::new(raw_ty(inner))),
         // A map is opaque to expressions, like json: compared only with == and !=.
         TypeRef::Map(..) => Ty::Named(t.text()),
     }
@@ -385,7 +386,7 @@ pub(crate) fn expr_ty(spec: &Spec, t: &TypeRef) -> Ty {
                 None => Ty::Named(id.clone()),
             }
         }
-        TypeRef::Option(_) | TypeRef::List(_) | TypeRef::Map(..) => raw_ty(t),
+        TypeRef::Option(_) | TypeRef::List(_) | TypeRef::Set(_) | TypeRef::Map(..) => raw_ty(t),
     }
 }
 
@@ -412,7 +413,10 @@ pub(crate) fn js_check(spec: &Spec, cases: &Cases, t: &TypeRef, depth: usize) ->
                 None => "check.any".to_string(),
             },
         },
-        TypeRef::List(inner) => format!("check.list({})", js_check(spec, cases, inner, depth + 1)),
+        // A set's distinct items are checked by the Rust decode, as a map's values are.
+        TypeRef::List(inner) | TypeRef::Set(inner) => {
+            format!("check.list({})", js_check(spec, cases, inner, depth + 1))
+        }
         TypeRef::Option(inner) => {
             format!("check.option({})", js_check(spec, cases, inner, depth + 1))
         }
@@ -498,7 +502,9 @@ pub(crate) fn js_type(
             _ => "number",
         }
         .to_string(),
-        TypeRef::List(inner) => format!("{}[]", js_type(spec, cases, inner, true, depth + 1)),
+        TypeRef::List(inner) | TypeRef::Set(inner) => {
+            format!("{}[]", js_type(spec, cases, inner, true, depth + 1))
+        }
         TypeRef::Option(inner) => wrap(format!(
             "{} | null",
             js_type(spec, cases, inner, false, depth + 1)
@@ -1097,7 +1103,7 @@ impl<'a> Gen<'a> {
         match (t, value) {
             (TypeRef::Option(_), Value::Null) => Ok("null".to_string()),
             (TypeRef::Option(inner), v) => self.literal(v, inner),
-            (TypeRef::List(inner), Value::Array(items)) => {
+            (TypeRef::List(inner) | TypeRef::Set(inner), Value::Array(items)) => {
                 let items = items
                     .iter()
                     .map(|i| self.literal(i, inner))

@@ -3,9 +3,12 @@
 // their declared case and in snake_case and kebab-case; maps keyed by string, by an id over a string
 // (with constraints) and by an id and a built-in over integers; a union recursive through a list and
 // a map (value) and through a box (expr); a struct recursive through an option (chain); id and
-// scalar constraints (slug, token). account-id is a uuid and owner reaches it, so neither is in the
-// pure crate. The expected output is the crate crates/spec-compiler-core-fixture, whose tests
-// (roundtrip.rs) pin the JSON serde writes for each form.
+// scalar constraints (slug, token). account-id is a uuid and owner reaches it; both are in the pure
+// crate, which depends on uuid with its serde feature only. WG-4956 adds sets (a set field, an
+// optional set, a map of sets, a set in a variant), tuple variants under the external and adjacent
+// tags (cond, change), and a map of maps (seats.nested). The expected output is the crate
+// crates/spec-compiler-core-fixture, whose tests (roundtrip.rs) pin the JSON serde writes for each
+// form.
 {
   "exegra": "0.1",
   "system": { "id": "core-fixture", "name": "Core fixture", "generation": { "target": "rust" } },
@@ -36,18 +39,30 @@
         { "name": "Started" },
         { "name": "RenamedTo", "fields": [{ "name": "old-name", "type": "slug" }, { "name": "new-name", "type": "slug" }] },
         { "name": "Scored", "newtype": true, "fields": [{ "name": "score", "type": "u32" }] },
-        { "name": "Moved", "newtype": true, "fields": [{ "name": "seats", "type": "seats" }] }
+        { "name": "Moved", "newtype": true, "fields": [{ "name": "seats", "type": "seats" }] },
+        { "name": "Swapped", "tuple": true, "fields": [{ "name": "from", "type": "slug" }, { "name": "to", "type": "slug" }] }
+      ] },
+    { "id": "cmp", "name": "Comparison", "kind": "enum", "values": ["Eq", "Lt"] },
+    { "id": "cond", "name": "Condition", "kind": "union", "description": "Tuple variants written as serde writes them: {\"Cmp\": [\"Eq\", a, b]}.",
+      "variants": [
+        { "name": "Leaf", "newtype": true, "fields": [{ "name": "value", "type": "bool" }] },
+        { "name": "Cmp", "tuple": true, "fields": [{ "name": "op", "type": "cmp" }, { "name": "left", "type": "cond" }, { "name": "right", "type": "cond" }] },
+        { "name": "AnyOf", "tuple": true, "fields": [{ "name": "labels", "type": "set<slug>" }, { "name": "fallback", "type": "option<cond>" }] }
       ] },
     { "id": "seats", "name": "Seats", "kind": "struct",
       "fields": [
         { "name": "by-slug", "type": "map<slug, seat-count>" },
         { "name": "by-ref", "type": "map<tenant-ref, seat-count>" },
-        { "name": "labels", "type": "map<u32, string>" }
+        { "name": "labels", "type": "map<u32, string>" },
+        { "name": "tags", "type": "set<slug>" },
+        { "name": "groups", "type": "map<string, set<u32>>" },
+        { "name": "nested", "type": "map<slug, map<tenant-ref, seat-count>>" }
       ] },
     { "id": "chain", "name": "Chain", "kind": "struct",
       "fields": [
         { "name": "label", "type": "string" },
-        { "name": "next", "type": "option<chain>" }
+        { "name": "next", "type": "option<chain>" },
+        { "name": "marks", "type": "set<string>", "optional": true }
       ] },
     { "id": "account-id", "name": "Account id", "kind": "id", "repr": "uuid" },
     { "id": "owner", "name": "Owner", "kind": "struct", "fields": [{ "name": "account", "type": "account-id" }, { "name": "slug", "type": "slug" }] }

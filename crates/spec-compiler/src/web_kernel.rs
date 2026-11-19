@@ -832,7 +832,7 @@ impl<'a> Kernel<'a> {
     /// The struct id of the items of a list type.
     fn list_item(t: &TypeRef) -> Option<&TypeRef> {
         match t {
-            TypeRef::List(inner) => Some(inner),
+            TypeRef::List(inner) | TypeRef::Set(inner) => Some(inner),
             TypeRef::Option(inner) => Self::list_item(inner),
             _ => None,
         }

@@ -71,6 +71,10 @@ pub fn rust_type(spec: &Spec, t: &TypeRef, scope: Scope, uses: &mut Uses) -> Tok
             let inner = rust_type(spec, inner, scope, uses);
             quote! { Vec<#inner> }
         }
+        TypeRef::Set(inner) => {
+            let inner = rust_type(spec, inner, scope, uses);
+            quote! { std::collections::BTreeSet<#inner> }
+        }
         TypeRef::Option(inner) => {
             let inner = rust_type(spec, inner, scope, uses);
             quote! { Option<#inner> }
@@ -210,6 +214,7 @@ fn clean(text: &str) -> String {
 }
 
 /// A struct field to emit.
+#[derive(Default)]
 pub struct Field {
     /// The name on the wire, kept through `serde(rename)`: the specification's name, converted
     /// to the wire case where the field crosses a contract ([`crate::wire`]).
@@ -222,6 +227,9 @@ pub struct Field {
     pub optional: bool,
     /// Its documentation.
     pub doc: Doc,
+    /// The function that decodes it, when serde's own decoding is not enough (a `set<T>` that
+    /// must refuse a repeated item): `#[serde(deserialize_with = "...")]`.
+    pub deserialize_with: Option<String>,
 }
 
 impl Field {
@@ -256,9 +264,14 @@ impl Field {
         } else {
             quote! { #ty }
         };
+        let decode = match &self.deserialize_with {
+            Some(path) => quote! { #[serde(deserialize_with = #path)] },
+            None => TokenStream::new(),
+        };
         quote! {
             #doc
             #serde
+            #decode
             #vis #name: #ty,
         }
     }
