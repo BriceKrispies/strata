@@ -674,6 +674,66 @@ async fn views_are_projected_to_plain_json_with_markdown_as_blocks() {
     );
 }
 
+/// The desk views carry what the specification declares beyond the projected view: the topic
+/// and author choices of the editor, the article and publication a save starts from, and the
+/// names a theme swatch can take (read-new-article-view, read-edit-article-view,
+/// read-settings-view).
+#[tokio::test]
+async fn desk_views_carry_their_choices_and_the_versions_a_save_starts_from() {
+    let edge = start().await;
+    let (token, _) = edge.login("127.0.0.1", "admin", "strata-dev-admin").await;
+
+    let (status, new, _) = edge
+        .get("127.0.0.1", "/api/view?path=/desk/new", Some(&token))
+        .await;
+    assert_eq!(status, 200);
+    let topics = new["topics"].as_array().unwrap();
+    assert_eq!(topics[0], json!({ "value": "", "label": "No topic" }));
+    assert_eq!(
+        topics.len(),
+        new["data"]["categories"].as_array().unwrap().len() + 1
+    );
+    assert!(topics
+        .iter()
+        .skip(1)
+        .all(|t| t["value"].is_string() && t["label"].is_string()));
+    let authors = new["authors"].as_array().unwrap();
+    assert_eq!(
+        authors.len(),
+        new["data"]["authors"].as_array().unwrap().len()
+    );
+    assert!(authors.iter().any(|a| a["label"] == "Tomasz Wren"));
+    assert!(new.get("article_id").is_none());
+
+    let (status, edit, _) = edge
+        .get(
+            "127.0.0.1",
+            "/api/view?path=/desk/edit/the-jig-is-the-work",
+            Some(&token),
+        )
+        .await;
+    assert_eq!(status, 200);
+    assert_eq!(edit["article_id"], edit["data"]["post"]["id"]);
+    assert_eq!(edit["article_version"], edit["data"]["post"]["version"]);
+    assert!(edit["article_version"].is_u64());
+    assert_eq!(edit["topics"][0]["label"], "No topic");
+
+    let (status, settings, _) = edge
+        .get("127.0.0.1", "/api/view?path=/desk/settings", Some(&token))
+        .await;
+    assert_eq!(status, 200);
+    assert_eq!(
+        settings["accents"],
+        json!(["moss", "clay", "ink", "ochre", "plum"])
+    );
+    assert_eq!(settings["papers"], json!(["linen", "stone", "chalk"]));
+    assert_eq!(settings["publication_id"], settings["data"]["site"]["id"]);
+    assert_eq!(
+        settings["publication_version"],
+        settings["data"]["site"]["version"]
+    );
+}
+
 /// Verifies: CMS-004
 ///
 /// A tenant author writes markup into an essay. What reaches a reader's browser, through the

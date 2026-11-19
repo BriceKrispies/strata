@@ -376,7 +376,47 @@ async fn view_model(
                 .collect::<Vec<_>>())
             .unwrap_or_default());
     }
+    if matches!(data.view.as_str(), "desk_new" | "desk_edit") {
+        // The choices of the topic and author controls (read-new-article-view,
+        // read-edit-article-view, option-choice): the topics led by "No topic", then the authors.
+        let topics = choices(&model["data"]["categories"]);
+        model["topics"] = json!(std::iter::once(json!({ "value": "", "label": "No topic" }))
+            .chain(topics)
+            .collect::<Vec<_>>());
+        model["authors"] = json!(choices(&model["data"]["authors"]));
+    }
+    if data.view.as_str() == "desk_edit" && model["data"]["post"].is_object() {
+        // The article the editor saves, with the version a save starts from.
+        model["article_id"] = model["data"]["post"]["id"].clone();
+        model["article_version"] = model["data"]["post"]["version"].clone();
+    }
+    if data.view.as_str() == "desk_settings" {
+        // The names a swatch can take, and the publication record a save starts from.
+        model["accents"] = json!(theme::ACCENTS);
+        model["papers"] = json!(theme::PAPERS);
+        if model["data"]["site"].is_object() {
+            model["publication_id"] = model["data"]["site"]["id"].clone();
+            model["publication_version"] = model["data"]["site"]["version"].clone();
+        }
+    }
     Ok(model)
+}
+
+/// One choice per row of a projected section: the record's identifier as text and its name.
+fn choices(rows: &Json_) -> Vec<Json_> {
+    rows.as_array()
+        .map(|rows| {
+            rows.iter()
+                .map(|row| {
+                    let value = match &row["id"] {
+                        Json_::String(id) => id.clone(),
+                        other => other.to_string(),
+                    };
+                    json!({ "value": value, "label": row["fields"]["name"] })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 async fn view(

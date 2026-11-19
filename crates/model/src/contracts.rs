@@ -13863,7 +13863,7 @@ pub trait Gateway {
     ///
     /// - The view holds the publication, every topic and every author.
     /// - The outputs are the members of the view model the BFF answers as JSON, under the names it uses: view (the view definition), title, path (the address asked for), params, data (the sections of the view, each a row or a list of rows, as the type of data says), depends_on (the object types whose changes alter the view), revision, schema_version and theme.
-    /// - The outputs topics and authors list the choices of the topic and author controls: one entry per topic (its identifier as text, its name), led by an entry with an empty value and the label "No topic", and one per author (its identifier as text, its name). The web application builds them from the data of the same view; the BFF does not yet put them in the view model (its desk projection of articles is the model for it).
+    /// - The outputs topics and authors list the choices of the topic and author controls: one entry per topic (its identifier as text, its name), led by an entry with an empty value and the label "No topic", and one per author (its identifier as text, its name). The BFF builds them from the data of the same view, as it projects the desk's articles.
     ///
     /// Authorisation: A signed-in principal whose policies permit the operation
     ///
@@ -13885,7 +13885,7 @@ pub trait Gateway {
     /// - The view holds the publication, the article with this address, every topic and every author.
     /// - The outputs article-id and article-version repeat the identifier and the version of the article held in the view, so that a save names the version it started from.
     /// - The outputs are the members of the view model the BFF answers as JSON, under the names it uses: view (the view definition), title, path (the address asked for), params, data (the sections of the view, each a row or a list of rows, as the type of data says), depends_on (the object types whose changes alter the view), revision, schema_version and theme.
-    /// - The outputs topics and authors list the choices of the topic and author controls, as for a new article. The web application builds them from the data of the same view; the BFF does not yet put them in the view model.
+    /// - The outputs topics and authors list the choices of the topic and author controls, as for a new article. The BFF builds them from the data of the same view.
     ///
     /// Authorisation: A signed-in principal whose policies permit the operation
     ///
@@ -13908,7 +13908,7 @@ pub trait Gateway {
     /// - The view holds the publication record.
     /// - The outputs publication-id and publication-version repeat the identifier and the version of the publication record held in the view, so that a save names the version it started from.
     /// - The outputs are the members of the view model the BFF answers as JSON, under the names it uses: view (the view definition), title, path (the address asked for), params, data (the sections of the view, each a row or a list of rows, as the type of data says), depends_on (the object types whose changes alter the view), revision, schema_version and theme.
-    /// - The outputs accents and papers list the names a swatch can take (the accent tokens moss, clay, ink, ochre and plum; the paper tokens linen, stone and chalk). The web application holds them as constants; the BFF does not yet put them in the view model.
+    /// - The outputs accents and papers list the names a swatch can take (the accent tokens moss, clay, ink, ochre and plum; the paper tokens linen, stone and chalk). The BFF puts them in the view model from the theme schema.
     ///
     /// Authorisation: A signed-in principal whose policies permit the operation
     ///
