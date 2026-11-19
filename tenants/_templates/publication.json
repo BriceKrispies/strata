@@ -4,7 +4,19 @@
       "id": "author",
       "label": "Author",
       "permissions": [
-        { "object": "post", "actions": ["create"] }
+        { "object": "post", "actions": ["create"] },
+        "content-read",
+        "content-draft-read",
+        "content-write",
+        "media-sign",
+        "events-subscribe",
+        "catalogue-read",
+        "operation-invoke",
+        "change-propose",
+        "change-undo",
+        "records-read",
+        "change-project",
+        "assistant-converse"
       ]
     },
     {
@@ -14,8 +26,32 @@
         { "object": "post", "actions": ["read", "create", "update", "delete"] },
         { "object": "category", "actions": ["create", "update", "delete"] },
         { "object": "author", "actions": ["create", "update"] },
-        { "object": "publication", "actions": ["update"] }
+        { "object": "publication", "actions": ["update"] },
+        "content-read",
+        "content-draft-read",
+        "content-write",
+        "media-sign",
+        "events-subscribe",
+        "catalogue-read",
+        "operation-invoke",
+        "change-propose",
+        "change-undo",
+        "records-read",
+        "change-project",
+        "assistant-converse",
+        "content-delete",
+        "content-restore",
+        "site-configure",
+        "change-approve",
+        "workflow-approve",
+        "jobs-read",
+        "mail-read"
       ]
+    },
+    {
+      "id": "moderator",
+      "label": "Moderator",
+      "permissions": ["members-manage"]
     }
   ],
   "objects": [
@@ -110,6 +146,12 @@
     }
   ],
   "policies": [
+    {
+      "id": "moderators_manage_members",
+      "role": "moderator",
+      "on": "$members",
+      "actions": ["manage"]
+    },
     { "id": "public_reads_settings", "role": "public", "on": "publication", "actions": ["read"] },
     { "id": "public_reads_authors", "role": "public", "on": "author", "actions": ["read"] },
     { "id": "public_reads_categories", "role": "public", "on": "category", "actions": ["read"] },

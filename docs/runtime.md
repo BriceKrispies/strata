@@ -410,6 +410,17 @@ description, access and the JSON Schema of its input; `routes::catalogue` marks 
 principal with whether it may be attempted, by the same check. `ServiceToken` does not read
 `requires`.
 
+**Tenant capabilities.** A tenant role is tenant data: its permissions are capability strings
+and actions on object types. `strata_kernel::rules::held_capabilities` gives the capabilities a
+principal holds in a tenant, exactly those named by a role assigned to it or by a role of a team
+it belongs to; the deployment's `holding` hole fills `Holding::tenant_roles` and `Holding::teams`
+from it (`role_capabilities` gives one role's). A role confers a capability only by naming it.
+Assigning a role, a team's role, a team membership or an invitation's roles is refused unless the
+assigner holds **every** permission and capability the role grants (ADM-152; the owner holds all).
+An invitation is redeemed with the signed-in account's verified address, which the backend puts in
+the kernel `Context` (`verified_address`, from the account store); the intent carries none
+(ADM-153). `POST /api/members/<operation>` is the route to these intents.
+
 `Routes::new` is the service network's listener (public and internal contracts);
 `Routes::gateway` faces browsers and the internet and serves public contracts only, so an
 internal contract has no route there and its path answers 404. A local contract is never served.

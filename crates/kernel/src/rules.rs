@@ -131,9 +131,35 @@ pub fn holds_any(tenant: &TenantState, principal: &Principal, wanted: &BTreeSet<
         || !effective_permissions(tenant, principal).is_disjoint(wanted)
 }
 
-/// ADM-152: whether `principal` may confer `role`, which it may when it holds at least one of
-/// the permissions the role grants. A role that grants nothing has nothing to over-grant, except
-/// the built-in `owner`, which only an owner confers. The check names the rule and the role.
+/// The grants of `wanted` the principal does not hold. The owner holds every one, so for the
+/// owner this is empty.
+pub fn missing_grants(
+    tenant: &TenantState,
+    principal: &Principal,
+    wanted: &BTreeSet<Grant>,
+) -> BTreeSet<Grant> {
+    if roles_of(tenant, principal).contains(&owner_role()) {
+        return BTreeSet::new();
+    }
+    let held = effective_permissions(tenant, principal);
+    wanted.difference(&held).cloned().collect()
+}
+
+/// A grant as a sentence fragment: `capability <name>` or `<object>:<verb>`.
+fn describe_grant(grant: &Grant) -> String {
+    match grant {
+        Grant::Capability(name) => format!("capability {name}"),
+        Grant::Object(object, verb) => {
+            let verb = format!("{verb:?}").to_lowercase();
+            format!("{object}:{verb}")
+        }
+    }
+}
+
+/// ADM-152: whether `principal` may confer `role`, which it may only when it holds **every**
+/// permission and capability the role grants (a strict superset, not an overlap). A role that
+/// grants nothing has nothing to over-grant, except the built-in `owner`, which only an owner
+/// confers. The check names the rule and the role; a refusal names what the principal lacks.
 pub fn may_confer(tenant: &TenantState, principal: &Principal, role: &RoleId) -> Check {
     let rule = format!("permission:confer:{role}");
     if *role == owner_role() {
@@ -147,14 +173,49 @@ pub fn may_confer(tenant: &TenantState, principal: &Principal, role: &RoleId) ->
     if grants.is_empty() {
         return Check::pass(rule, format!("role {role} grants no permission"));
     }
-    if holds_any(tenant, principal, &grants) {
-        Check::pass(rule, format!("holds a permission that role {role} grants"))
+    let missing = missing_grants(tenant, principal, &grants);
+    if missing.is_empty() {
+        Check::pass(
+            rule,
+            format!("holds every permission that role {role} grants"),
+        )
     } else {
+        let lacking: Vec<String> = missing.iter().map(describe_grant).collect();
         Check::fail(
             rule,
-            format!("holds none of the permissions that role {role} grants"),
+            format!(
+                "lacks {} of the {} permissions that role {role} grants: {}",
+                missing.len(),
+                grants.len(),
+                lacking.join(", ")
+            ),
         )
     }
+}
+
+/// The capabilities a role names among its permissions: its capability strings, and nothing of
+/// its object-type permissions.
+pub fn role_capabilities(schema: &TenantSchema, role: &RoleId) -> BTreeSet<String> {
+    schema
+        .grants_of(role)
+        .into_iter()
+        .filter_map(|grant| match grant {
+            Grant::Capability(name) => Some(name),
+            Grant::Object(..) => None,
+        })
+        .collect()
+}
+
+/// The tenant capabilities a principal holds (ADM-151): those named by a role assigned to it
+/// directly or by a role of a team it belongs to, and no other. This is what the generated
+/// authorizer's `AuthHoles::holding` fills a principal's tenant roles and teams from; a
+/// capability is never held because of a role's name, only because a role names it. The owner
+/// holds what its own role names, like any role.
+pub fn held_capabilities(tenant: &TenantState, principal: &Principal) -> BTreeSet<String> {
+    roles_of(tenant, principal)
+        .iter()
+        .flat_map(|role| role_capabilities(&tenant.schema, role))
+        .collect()
 }
 
 /// The records a policy condition may read.

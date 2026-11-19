@@ -1488,6 +1488,93 @@ async fn the_authorizer_refuses_a_capability_outside_the_plan_the_roles_or_a_del
     );
 }
 
+/// Verifies: ADM-151
+///
+/// A tenant capability is held only through a tenant role that names it, assigned to the
+/// principal or held by a team it belongs to: not through a role that has the capability's name,
+/// not through a tenant role that shares its id with a platform role, not through a team's role
+/// that names others. The one check and the authorizer agree.
+#[tokio::test(flavor = "current_thread")]
+async fn a_tenant_capability_is_held_only_through_a_role_that_names_it() {
+    use routes::{held, Asker, Holding};
+    let holds = |holding: &Holding, capability: &str| {
+        held(Asker::Principal(holding), Some("t1"), NOW).contains(capability)
+    };
+    let with_roles = |roles: Vec<routes::TenantRole>| Holding {
+        tenant_roles: roles,
+        ..Holding::default()
+    };
+    let with_team = |roles: Vec<routes::TenantRole>| Holding {
+        teams: vec![routes::Team {
+            id: "desk".into(),
+            roles,
+        }],
+        ..Holding::default()
+    };
+
+    // A role that names the capability confers it, directly and through a team.
+    assert!(holds(
+        &with_roles(vec![tenant_role("editor", &["reports-premium"])]),
+        "reports-premium"
+    ));
+    assert!(holds(
+        &with_team(vec![tenant_role("editor", &["reports-premium"])]),
+        "reports-premium"
+    ));
+    // A role called by the capability's name, but naming none, confers nothing; nor does a role
+    // that names another capability, directly or through a team.
+    for holding in [
+        with_roles(vec![tenant_role("reports-premium", &[])]),
+        with_roles(vec![tenant_role("editor", &["ping"])]),
+        with_team(vec![tenant_role("reports-premium", &["ping"])]),
+        with_team(vec![tenant_role("editor", &[])]),
+        Holding::default(),
+    ] {
+        assert!(!holds(&holding, "reports-premium"), "{holding:?}");
+    }
+    // A tenant role that shares its id with a platform role confers what the tenant says it
+    // does, not what the platform role confers: the operator's own capability is not held.
+    let platform_operator_holds = held(
+        Asker::Principal(&Holding {
+            platform_roles: vec!["operator".into()],
+            ..Holding::default()
+        }),
+        Some("t1"),
+        NOW,
+    );
+    assert!(platform_operator_holds.contains("ping"));
+    assert!(!holds(
+        &with_roles(vec![tenant_role("operator", &[])]),
+        "ping"
+    ));
+    assert!(!holds(
+        &with_team(vec![tenant_role("operator", &[])]),
+        "ping"
+    ));
+
+    // The generated authorizer admits a call needing it exactly when a role names it.
+    let premium: &'static [&'static str] = &["reports-premium"];
+    let admitted = |holding: Holding| {
+        ask_entitled(
+            Entitled {
+                plan: "pro",
+                premium_on: true,
+                holding,
+            },
+            Scheme::Session,
+            premium,
+        )
+    };
+    assert_eq!(
+        admitted(with_team(vec![tenant_role("editor", &["reports-premium"])])).await,
+        None
+    );
+    assert_eq!(
+        admitted(with_roles(vec![tenant_role("reports-premium", &[])])).await,
+        Some(FailureCode::Forbidden)
+    );
+}
+
 /// The operation catalogue lists every contract reachable from outside its process with its
 /// description and input schema, and marks each for a principal with whether it may be
 /// attempted, by the same check.

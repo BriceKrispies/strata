@@ -57,6 +57,7 @@ fn ctx(principal: Principal) -> Context {
         session: None,
         now: Timestamp(1_800_000_000_000),
         correlation: "t".into(),
+        verified_address: None,
     }
 }
 
@@ -456,9 +457,10 @@ fn an_author_cannot_touch_another_authors_post() {
 
 /// Verifies: ADM-150
 ///
-/// The template's roles state their permissions, as data, and what they state is what the
-/// template's own policies already let the role do without a condition: no permission without a
-/// policy and no unconditional policy without a permission, so that behaviour is unchanged.
+/// The template's roles state their permissions, as data, and what they state about object types
+/// is what the template's own policies already let the role do without a condition: no object
+/// permission without a policy and no unconditional policy without one, so that behaviour is
+/// unchanged. The capabilities a role names are the platform capabilities it confers.
 #[test]
 fn the_templates_roles_state_the_permissions_their_policies_grant() {
     let world = world();
@@ -467,7 +469,11 @@ fn the_templates_roles_state_the_permissions_their_policies_grant() {
     let bundle = bundle();
     assert!(bundle.roles.iter().all(|r| !r.permissions.is_empty()));
     for role in &bundle.roles {
-        let stated = schema.grants_of(&role.id);
+        let stated: BTreeSet<Grant> = schema
+            .grants_of(&role.id)
+            .into_iter()
+            .filter(|grant| matches!(grant, Grant::Object(..)))
+            .collect();
         let by_policy: BTreeSet<Grant> = schema
             .policies
             .values()
@@ -485,10 +491,45 @@ fn the_templates_roles_state_the_permissions_their_policies_grant() {
         assert_eq!(stated, by_policy, "permissions of {}", role.id);
     }
     let post = ObjectTypeId::new("post").unwrap();
+    let object_grants = |who: &str| -> BTreeSet<Grant> {
+        strata_kernel::rules::effective_permissions(tenant, &user(who))
+            .into_iter()
+            .filter(|grant| matches!(grant, Grant::Object(..)))
+            .collect()
+    };
     assert_eq!(
-        strata_kernel::rules::effective_permissions(tenant, &user("ann")),
+        object_grants("ann"),
         BTreeSet::from([Grant::Object(post, Verb::Create)])
     );
+}
+
+/// Verifies: ADM-150
+/// Verifies: ADM-151
+///
+/// The template's roles name the capabilities they confer, as data: an editor holds every
+/// capability an author does and more, the moderator holds only the one that lets it manage
+/// members, and a person holds a capability only through a role (or a team's role) that names it.
+#[test]
+fn the_templates_roles_name_their_capabilities() {
+    let world = world();
+    let tenant = &world.tenants[&TenantId::new("gazette").unwrap()];
+    let schema = &tenant.schema;
+    let capabilities =
+        |role: &str| strata_kernel::rules::role_capabilities(schema, &RoleId::new(role).unwrap());
+    let author = capabilities("author");
+    let editor = capabilities("editor");
+    assert!(author.contains("content-write") && !author.contains("content-delete"));
+    assert!(author.is_subset(&editor) && editor.len() > author.len());
+    assert_eq!(
+        capabilities("moderator"),
+        BTreeSet::from(["members-manage".to_string()])
+    );
+    let held = |who: &str| strata_kernel::rules::held_capabilities(tenant, &user(who));
+    assert_eq!(held("ann"), author);
+    assert_eq!(held("ed"), editor);
+    // A member of the news desk team holds the editor's capabilities through the team alone.
+    assert_eq!(held("cy"), editor);
+    assert!(held("dee").is_empty());
 }
 
 /// Verifies: ADM-151

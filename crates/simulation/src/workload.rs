@@ -326,6 +326,7 @@ pub fn generate(
             session: None,
             now: Timestamp(now),
             correlation: format!("sim-{seed}-{serial}"),
+            verified_address: None,
         };
         if let Ok((next, _)) = scratch.step(&intent, &context) {
             scratch = next;

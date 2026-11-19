@@ -14,7 +14,7 @@ use serde::Serialize;
 use serde_json::{json, Value as Json_};
 use std::time::Instant;
 use strata_protocol::api::{
-    Empty, ErrorCode, IdRequest, LoginRequest, Mutation, SessionReply, ViewRequest,
+    Empty, ErrorCode, IdRequest, LoginRequest, MembersRequest, Mutation, SessionReply, ViewRequest,
     HEADER_CORRELATION,
 };
 use strata_protocol::ws::{SessionState, MAX_FRAME};
@@ -101,6 +101,17 @@ async fn mutate(
 ) -> Result<impl IntoResponse, ApiError> {
     as_caller(&app, &headers, move |app, identity| {
         ops::mutate(app, identity, &mutation)
+    })
+    .await
+}
+
+async fn members(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Json(request): Json<MembersRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    as_caller(&app, &headers, move |app, identity| {
+        ops::members(app, identity, &request)
     })
     .await
 }
@@ -274,6 +285,7 @@ pub fn router(app: Shared) -> Router {
         .route("/internal/session/logout", post(logout))
         .route("/internal/view", post(view))
         .route("/internal/mutate", post(mutate))
+        .route("/internal/members", post(members))
         .route("/internal/diagnostics", post(diagnostics))
         .route("/internal/lab/overview", post(lab_overview))
         .route("/internal/lab/run", post(lab_run))

@@ -56,6 +56,7 @@ pub fn seed(app: &App) -> Result<Vec<String>, String> {
                     &account.password,
                     principal,
                     &account.display_name,
+                    account.email.as_deref(),
                 )
                 .map_err(|e| e.0.message)?;
                 LOG.info(

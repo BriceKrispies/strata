@@ -197,6 +197,9 @@ pub struct Account {
     pub display_name: String,
     /// An Argon2id PHC string.
     pub password_hash: String,
+    /// The e-mail address of the person, once the identity service has verified that the person
+    /// controls it. `None` until then: an account with none redeems no invitation (ADM-153).
+    pub verified_email: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -279,6 +282,13 @@ pub trait Store: Send + Sync {
 
     fn put_account(&self, account: &Account) -> StoreResult<()>;
     fn account(&self, tenant: &TenantId, login: &str) -> StoreResult<Option<Account>>;
+    /// The verified e-mail address of the account of `principal` in `tenant`, if it has an
+    /// account and the account has one.
+    fn verified_address(
+        &self,
+        tenant: &TenantId,
+        principal: &PrincipalId,
+    ) -> StoreResult<Option<String>>;
 
     /// Keep a copy of the tenant's complete state as it is now.
     fn create_snapshot(

@@ -602,6 +602,7 @@ fn a_journal_of_real_commits_replays_to_the_live_state() {
         session: None,
         now: Timestamp(now),
         correlation: format!("t-{now}"),
+        verified_address: None,
     };
     let role_of = |name: &str| RoleId::new(name).unwrap();
     let mut work: Vec<(Context, Intent)> =

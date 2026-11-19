@@ -8771,6 +8771,455 @@
       "exposure": "public",
       "readOnly": true,
       "tenantScope": "request"
+    },
+    {
+      "id": "assign-role",
+      "name": "Give a person a role",
+      "ref": "CT-262",
+      "realisation": "generated",
+      "implementedBy": "gateway",
+      "bffRoute": "POST /api/members/assign-role",
+      "auth": {
+        "scheme": "session",
+        "tenantPolicies": true,
+        "csrf": true,
+        "origin": true,
+        "description": "A signed-in person whose tenant policies let them manage members",
+        "requires": [
+          "members-manage"
+        ]
+      },
+      "idempotent": false,
+      "timeoutMs": 10000,
+      "inputs": [
+        {
+          "name": "principal",
+          "type": "principal-id"
+        },
+        {
+          "name": "role",
+          "type": "role-id"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "revision",
+          "type": "u64"
+        },
+        {
+          "name": "event-seq",
+          "type": "u64"
+        }
+      ],
+      "preconditions": [
+        "The request carries the request token of the session (GWY-002)."
+      ],
+      "postconditions": [
+        "The person holds the role, directly, when the call is accepted (ADM-150).",
+        "The call is refused unless the caller holds every permission and capability the role grants; the owner holds all of them, and only an owner confers owner (ADM-152)."
+      ],
+      "errors": [
+        {
+          "name": "unauthenticated",
+          "condition": "No valid session or credential accompanies the request.",
+          "type": "api-error",
+          "kind": "unauthenticated"
+        },
+        {
+          "name": "forbidden",
+          "condition": "The caller may not manage members, or the role is one whose permissions and capabilities the caller does not hold in full; the failed check names the role (ADM-152).",
+          "type": "api-error",
+          "kind": "forbidden"
+        },
+        {
+          "name": "invalid",
+          "condition": "The role is unknown, or it is public, which everyone holds.",
+          "type": "api-error",
+          "kind": "invalid"
+        },
+        {
+          "name": "unavailable",
+          "condition": "A dependency of the operation did not answer.",
+          "type": "api-error",
+          "kind": "unavailable"
+        }
+      ],
+      "exposure": "public",
+      "tenantScope": "request"
+    },
+    {
+      "id": "revoke-role",
+      "name": "Take a role from a person",
+      "ref": "CT-263",
+      "realisation": "generated",
+      "implementedBy": "gateway",
+      "bffRoute": "POST /api/members/revoke-role",
+      "auth": {
+        "scheme": "session",
+        "tenantPolicies": true,
+        "csrf": true,
+        "origin": true,
+        "description": "A signed-in person whose tenant policies let them manage members",
+        "requires": [
+          "members-manage"
+        ]
+      },
+      "idempotent": false,
+      "timeoutMs": 10000,
+      "inputs": [
+        {
+          "name": "principal",
+          "type": "principal-id"
+        },
+        {
+          "name": "role",
+          "type": "role-id"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "revision",
+          "type": "u64"
+        },
+        {
+          "name": "event-seq",
+          "type": "u64"
+        }
+      ],
+      "preconditions": [
+        "The request carries the request token of the session (GWY-002)."
+      ],
+      "postconditions": [
+        "The person no longer holds the role directly; a person who then holds no role has its sessions ended.",
+        "The last owner of a tenant keeps the owner role."
+      ],
+      "errors": [
+        {
+          "name": "unauthenticated",
+          "condition": "No valid session or credential accompanies the request.",
+          "type": "api-error",
+          "kind": "unauthenticated"
+        },
+        {
+          "name": "forbidden",
+          "condition": "The caller may not manage members.",
+          "type": "api-error",
+          "kind": "forbidden"
+        },
+        {
+          "name": "invalid",
+          "condition": "The role is unknown, or it is the owner role of the last owner.",
+          "type": "api-error",
+          "kind": "invalid"
+        },
+        {
+          "name": "unavailable",
+          "condition": "A dependency of the operation did not answer.",
+          "type": "api-error",
+          "kind": "unavailable"
+        }
+      ],
+      "exposure": "public",
+      "tenantScope": "request"
+    },
+    {
+      "id": "add-team-member",
+      "name": "Put a person in a team",
+      "ref": "CT-264",
+      "realisation": "generated",
+      "implementedBy": "gateway",
+      "bffRoute": "POST /api/members/add-team-member",
+      "auth": {
+        "scheme": "session",
+        "tenantPolicies": true,
+        "csrf": true,
+        "origin": true,
+        "description": "A signed-in person whose tenant policies let them manage members",
+        "requires": [
+          "members-manage"
+        ]
+      },
+      "idempotent": false,
+      "timeoutMs": 10000,
+      "inputs": [
+        {
+          "name": "team",
+          "type": "team-id"
+        },
+        {
+          "name": "principal",
+          "type": "principal-id"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "revision",
+          "type": "u64"
+        },
+        {
+          "name": "event-seq",
+          "type": "u64"
+        }
+      ],
+      "preconditions": [
+        "The request carries the request token of the session (GWY-002)."
+      ],
+      "postconditions": [
+        "The person holds the roles of the team for as long as they belong to it, and no other (ADM-151).",
+        "The call is refused unless the caller holds every permission and capability of each role of the team (ADM-152)."
+      ],
+      "errors": [
+        {
+          "name": "unauthenticated",
+          "condition": "No valid session or credential accompanies the request.",
+          "type": "api-error",
+          "kind": "unauthenticated"
+        },
+        {
+          "name": "forbidden",
+          "condition": "The caller may not manage members, or the role is one whose permissions and capabilities the caller does not hold in full; the failed check names the role (ADM-152).",
+          "type": "api-error",
+          "kind": "forbidden"
+        },
+        {
+          "name": "invalid",
+          "condition": "The team is unknown.",
+          "type": "api-error",
+          "kind": "invalid"
+        },
+        {
+          "name": "unavailable",
+          "condition": "A dependency of the operation did not answer.",
+          "type": "api-error",
+          "kind": "unavailable"
+        }
+      ],
+      "exposure": "public",
+      "tenantScope": "request"
+    },
+    {
+      "id": "remove-team-member",
+      "name": "Take a person out of a team",
+      "ref": "CT-265",
+      "realisation": "generated",
+      "implementedBy": "gateway",
+      "bffRoute": "POST /api/members/remove-team-member",
+      "auth": {
+        "scheme": "session",
+        "tenantPolicies": true,
+        "csrf": true,
+        "origin": true,
+        "description": "A signed-in person whose tenant policies let them manage members",
+        "requires": [
+          "members-manage"
+        ]
+      },
+      "idempotent": false,
+      "timeoutMs": 10000,
+      "inputs": [
+        {
+          "name": "team",
+          "type": "team-id"
+        },
+        {
+          "name": "principal",
+          "type": "principal-id"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "revision",
+          "type": "u64"
+        },
+        {
+          "name": "event-seq",
+          "type": "u64"
+        }
+      ],
+      "preconditions": [
+        "The request carries the request token of the session (GWY-002)."
+      ],
+      "postconditions": [
+        "The person no longer holds the roles of the team through it; a person who then holds no role has its sessions ended."
+      ],
+      "errors": [
+        {
+          "name": "unauthenticated",
+          "condition": "No valid session or credential accompanies the request.",
+          "type": "api-error",
+          "kind": "unauthenticated"
+        },
+        {
+          "name": "forbidden",
+          "condition": "The caller may not manage members.",
+          "type": "api-error",
+          "kind": "forbidden"
+        },
+        {
+          "name": "invalid",
+          "condition": "The team is unknown.",
+          "type": "api-error",
+          "kind": "invalid"
+        },
+        {
+          "name": "unavailable",
+          "condition": "A dependency of the operation did not answer.",
+          "type": "api-error",
+          "kind": "unavailable"
+        }
+      ],
+      "exposure": "public",
+      "tenantScope": "request"
+    },
+    {
+      "id": "invite-person",
+      "name": "Invite a person to hold roles",
+      "ref": "CT-266",
+      "realisation": "generated",
+      "implementedBy": "gateway",
+      "bffRoute": "POST /api/members/invite",
+      "auth": {
+        "scheme": "session",
+        "tenantPolicies": true,
+        "csrf": true,
+        "origin": true,
+        "description": "A signed-in person whose tenant policies let them manage members",
+        "requires": [
+          "members-manage"
+        ]
+      },
+      "idempotent": false,
+      "timeoutMs": 10000,
+      "inputs": [
+        {
+          "name": "invitation",
+          "type": "invitation-id"
+        },
+        {
+          "name": "address",
+          "type": "email-address"
+        },
+        {
+          "name": "roles",
+          "type": "list<role-id>"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "revision",
+          "type": "u64"
+        },
+        {
+          "name": "event-seq",
+          "type": "u64"
+        }
+      ],
+      "preconditions": [
+        "The request carries the request token of the session (GWY-002)."
+      ],
+      "postconditions": [
+        "The invitation offers its roles to whoever redeems it with the address it names, once (ADM-153).",
+        "The call is refused unless the caller holds every permission and capability each role grants (ADM-152)."
+      ],
+      "errors": [
+        {
+          "name": "unauthenticated",
+          "condition": "No valid session or credential accompanies the request.",
+          "type": "api-error",
+          "kind": "unauthenticated"
+        },
+        {
+          "name": "forbidden",
+          "condition": "The caller may not manage members, or the role is one whose permissions and capabilities the caller does not hold in full; the failed check names the role (ADM-152).",
+          "type": "api-error",
+          "kind": "forbidden"
+        },
+        {
+          "name": "invalid",
+          "condition": "The invitation exists already, names no address or no role, or a role is unknown or public.",
+          "type": "api-error",
+          "kind": "invalid"
+        },
+        {
+          "name": "unavailable",
+          "condition": "A dependency of the operation did not answer.",
+          "type": "api-error",
+          "kind": "unavailable"
+        }
+      ],
+      "exposure": "public",
+      "tenantScope": "request"
+    },
+    {
+      "id": "redeem-invitation",
+      "name": "Redeem an invitation as the signed-in person",
+      "ref": "CT-267",
+      "realisation": "generated",
+      "implementedBy": "gateway",
+      "bffRoute": "POST /api/members/redeem",
+      "auth": {
+        "scheme": "session",
+        "tenantPolicies": true,
+        "csrf": true,
+        "origin": true,
+        "description": "A signed-in person",
+        "requires": [
+          "invitation-redeem"
+        ]
+      },
+      "idempotent": false,
+      "timeoutMs": 10000,
+      "inputs": [
+        {
+          "name": "invitation",
+          "type": "invitation-id"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "revision",
+          "type": "u64"
+        },
+        {
+          "name": "event-seq",
+          "type": "u64"
+        }
+      ],
+      "preconditions": [
+        "The request carries the request token of the session (GWY-002)."
+      ],
+      "postconditions": [
+        "The invitation's roles go to the caller only when the verified address of the caller's account is the address the invitation names, and only once; the request names no address (ADM-153).",
+        "The refusal does not say which address the invitation names."
+      ],
+      "errors": [
+        {
+          "name": "unauthenticated",
+          "condition": "No valid session or credential accompanies the request.",
+          "type": "api-error",
+          "kind": "unauthenticated"
+        },
+        {
+          "name": "forbidden",
+          "condition": "The caller's account has no verified address, or it is not the address the invitation names.",
+          "type": "api-error",
+          "kind": "forbidden"
+        },
+        {
+          "name": "invalid",
+          "condition": "The invitation is unknown or was redeemed already.",
+          "type": "api-error",
+          "kind": "invalid"
+        },
+        {
+          "name": "unavailable",
+          "condition": "A dependency of the operation did not answer.",
+          "type": "api-error",
+          "kind": "unavailable"
+        }
+      ],
+      "exposure": "public",
+      "tenantScope": "request"
     }
   ],
   "decisions": [
@@ -9300,8 +9749,8 @@
     {"id":"m-backup-archive-private","kind":"structural","models":"arc-111","statement":"No component other than the tenant database, the control plane, the PostgreSQL adapter and the file store has a data relationship to the backup archive (telemetry observation excepted, OBS-003).","evaluate":{"method":"no-relationship","from":["kernel","substrate","store-contract","sqlite-adapter","control-database","identity-service","runtime","gateway","automation-worker","connector-runner","copy-store","delivery-network","delivery-network-control","agent-gateway","telemetry-pipeline","audit-log","key-service","mail-service","external-identity-provider","web-application","simulator","verification","agent","limit-store","fleet-reporting","product-module","external-endpoint","notice-queue","search-index","notification-service","conversation-service","model-provider","local-model-adapter","operator-console","outbound-gate","upload-scanner","mail-dispatcher","release-controller","release-pipeline","image-registry","traffic-switch","subject-rights-service","agent-traffic-switch","migration-job","platform-audit-store"],"to":"backup-archive","transitive":false,"kinds":["depends-on","calls","data-flow","publishes","subscribes","reads","writes"]},"assumptions":["a-model-abstraction"]},
     {"id":"adm-150","kind":"requirement","statement":"A tenant SHALL define roles as named sets of permissions over the operations and object types of its schema, and assign each role to people, services, agents and teams.","rationale":"Custom roles fit a tenant's own organisation into the one policy model.","evaluate":{"method":"scenario"},"ref":"ADM-150","area":"09-administration","section":"Roles and teams","lifecycle":"active","boundary":"b-4","boundaryDetail":"`role assignment`","traces":["g-153","k-13"],"milestone":3,"inSection":"sec-administration-2","realisation":"checked"},
     {"id":"adm-151","kind":"requirement","statement":"A principal SHALL hold the permissions of each role assigned to it directly and of each role of each team it belongs to, and no other permission.","rationale":"Team membership grants roles through the same decision as a direct assignment.","evaluate":{"method":"property"},"ref":"ADM-151","area":"09-administration","section":"Roles and teams","lifecycle":"active","boundary":"b-1","boundaryDetail":"`strata_kernel::transition`","traces":["g-153"],"milestone":3,"inSection":"sec-administration-2","realisation":"checked"},
-    {"id":"adm-152","kind":"requirement","statement":"Assigning a role SHALL be refused when the assigning principal holds none of the permissions that the role grants.","rationale":"Nobody raises their own reach by handing out a role they could not use.","evaluate":{"method":"scenario"},"ref":"ADM-152","area":"09-administration","section":"Roles and teams","lifecycle":"active","boundary":"b-4","boundaryDetail":"`role assignment`","traces":["g-153","k-13"],"milestone":3,"inSection":"sec-administration-2","realisation":"checked"},
-    {"id":"adm-153","kind":"requirement","statement":"An invitation SHALL grant its roles to the one person who redeems it with the address it names, and to no one else.","rationale":"An invitation is a grant of roles, so it binds to one address and one redemption.","evaluate":{"method":"scenario"},"ref":"ADM-153","area":"09-administration","section":"Invitations and onboarding","lifecycle":"active","boundary":"b-4","boundaryDetail":"`POST /invitations/accept`","traces":["g-153"],"milestone":3,"inSection":"sec-administration-3","realisation":"checked"},
+    {"id":"adm-152","kind":"requirement","statement":"Assigning a role SHALL be refused unless the assigning principal holds every permission and every capability that the role grants.","rationale":"Nobody raises their own reach, or anyone else�s, by handing out a role they could not fully use: holding some of what a role grants is not holding it.","evaluate":{"method":"scenario"},"ref":"ADM-152","area":"09-administration","section":"Roles and teams","lifecycle":"active","boundary":"b-4","boundaryDetail":"`role assignment`","traces":["g-153","k-13"],"milestone":3,"inSection":"sec-administration-2","realisation":"checked"},
+    {"id":"adm-153","kind":"requirement","statement":"An invitation SHALL grant its roles to the one person who redeems it with the address it names, as verified for the signed-in account and never as the request gives it, and to no one else.","rationale":"An invitation is a grant of roles, so it binds to one address and one redemption.","evaluate":{"method":"scenario"},"ref":"ADM-153","area":"09-administration","section":"Invitations and onboarding","lifecycle":"active","boundary":"b-4","boundaryDetail":"`POST /invitations/accept`","traces":["g-153"],"milestone":3,"inSection":"sec-administration-3","realisation":"checked"},
     {"id":"adm-154","kind":"requirement","statement":"A person SHALL start a sandbox tenant from a published template and become its owner, with no step taken by the platform operator.","rationale":"A buyer who has to wait for a sales call does not try the product first.","evaluate":{"method":"scenario"},"ref":"ADM-154","area":"09-administration","section":"Invitations and onboarding","lifecycle":"active","boundary":"b-3","boundaryDetail":"`POST /sandboxes`","traces":["g-154"],"milestone":3,"inSection":"sec-administration-3","realisation":"checked"},
     {"id":"adm-155","kind":"requirement","statement":"A sandbox tenant SHALL be deleted at the end of the period that its plan states, unless its owner has kept it.","rationale":"An abandoned sandbox holds personal data and storage that nobody uses.","evaluate":{"method":"scenario"},"ref":"ADM-155","area":"09-administration","section":"Invitations and onboarding","lifecycle":"active","boundary":"b-3","boundaryDetail":"`sandbox expiry`","traces":["g-154","g-157","d-705"],"milestone":3,"inSection":"sec-administration-3","realisation":"checked"},
     {"id":"adm-156","kind":"requirement","statement":"Keeping a sandbox tenant SHALL change its kind to production without copying its records.","rationale":"The kept tenant is the one the customer keeps using, so nothing has to move.","evaluate":{"method":"scenario"},"ref":"ADM-156","area":"09-administration","section":"Invitations and onboarding","lifecycle":"active","boundary":"b-3","boundaryDetail":"`keep sandbox`","traces":["g-154"],"milestone":3,"inSection":"sec-administration-3","realisation":"checked"},
@@ -12446,6 +12895,12 @@
       "name": "Offer a template upgrade",
       "description": "Offer a newer template version to a tenant.",
       "core": true
+    },
+    {
+      "id": "members-manage",
+      "name": "Manage members",
+      "description": "Assign and revoke the roles of people, add people to teams and remove them, and invite people to hold roles. Conferring a role also needs every permission and capability the role grants (ADM-152).",
+      "core": true
     }
   ],
   "plans": [
@@ -12506,7 +12961,8 @@
         "grant-manage",
         "token-exchange",
         "notifications-read",
-        "sandbox-start"
+        "sandbox-start",
+        "invitation-redeem"
       ]
     },
     {
@@ -12741,7 +13197,8 @@
         "tokens-define",
         "records-import",
         "migration-run",
-        "bundle-install"
+        "bundle-install",
+        "members-manage"
       ],
       "source": "adm-150"
     },
@@ -12817,6 +13274,20 @@
       ],
       "capabilities": [
         "submissions-export"
+      ],
+      "source": "adm-150"
+    },
+    {
+      "id": "moderator",
+      "name": "Moderator",
+      "description": "A role a tenant may define to let people manage members: it manages members and holds no other permission of its own, so a moderator confers only roles whose permissions it holds in full through its other roles (ADM-152).",
+      "level": "tenant",
+      "holders": [
+        "person",
+        "team"
+      ],
+      "capabilities": [
+        "members-manage"
       ],
       "source": "adm-150"
     }

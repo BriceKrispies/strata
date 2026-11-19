@@ -97,10 +97,7 @@ pub fn transition(
             address,
             roles,
         } => create_invitation(&mut draft, invitation, address, roles)?,
-        Intent::RedeemInvitation {
-            invitation,
-            verified_address,
-        } => redeem_invitation(&mut draft, invitation, verified_address)?,
+        Intent::RedeemInvitation { invitation } => redeem_invitation(&mut draft, invitation)?,
         Intent::CreateRecord { object, fields } => {
             create_record(&mut draft, lookup, object, fields)?
         }
@@ -811,8 +808,8 @@ fn change_member(
 }
 
 /// ADM-152: every role in `roles` must be one the acting principal may confer, which is to say
-/// the principal holds at least one permission the role grants. The first role it may not
-/// confer refuses the intent.
+/// the principal holds every permission and capability the role grants. The first role it may
+/// not confer refuses the intent.
 fn require_conferrable<'r>(
     draft: &mut Draft<'_>,
     roles: impl IntoIterator<Item = &'r RoleId>,
@@ -1012,11 +1009,12 @@ fn create_invitation(
 }
 
 /// ADM-153: the roles of an invitation go to the one person who redeems it with the address it
-/// names, once. The refusal for a wrong address does not say which address the invitation names.
+/// names, once. The address is the one the shell verified for the acting person
+/// (`Context::verified_address`); the intent carries none. The refusal for a wrong address does
+/// not say which address the invitation names.
 fn redeem_invitation(
     draft: &mut Draft<'_>,
     invitation: &InvitationId,
-    verified_address: &str,
 ) -> Result<Output, DomainError> {
     let ctx = draft.ctx;
     let Principal::User(redeemer) = &ctx.principal else {
@@ -1034,6 +1032,16 @@ fn redeem_invitation(
         return Err(draft.reject(
             ErrorKind::InvalidIntent,
             format!("no invitation {invitation}"),
+        ));
+    };
+    let Some(verified_address) = ctx.verified_address.as_deref() else {
+        draft.evidence.push(Check::fail(
+            "invitation:address_matches",
+            "the redeemer has no verified address",
+        ));
+        return Err(draft.reject(
+            ErrorKind::Unauthorized,
+            "the invitation needs a verified address",
         ));
     };
     if normalise_address(verified_address) != offer.address {

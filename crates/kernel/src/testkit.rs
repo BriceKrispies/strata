@@ -38,6 +38,7 @@ pub fn ctx(tenant: &str, principal: Principal, now: i64) -> Context {
         session: None,
         now: Timestamp(now),
         correlation: format!("test-{now}"),
+        verified_address: None,
     }
 }
 

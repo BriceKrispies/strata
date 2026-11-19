@@ -184,6 +184,7 @@ fn initial_world() -> World {
                 session: None,
                 now: Timestamp(at),
                 correlation: "fixture".into(),
+                verified_address: None,
             };
             world
                 .step(&intent, &ctx)
@@ -390,6 +391,7 @@ pub fn kernel_output(scenarios: &str) -> String {
                     session: None,
                     now: Timestamp(at),
                     correlation: "fixture".into(),
+                    verified_address: None,
                 };
                 let intent = match rest {
                     ["create", fields @ ..] => Intent::CreateRecord {

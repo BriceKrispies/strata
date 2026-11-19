@@ -34,10 +34,11 @@ use strata_storage_api::{
 const LEDGER: &str = "storage_migrations";
 
 /// The storage layout, one step per entry. Steps are only ever appended.
-const MIGRATIONS: &[Migration] = &[Migration {
-    version: 1,
-    name: "initial layout",
-    sql: "
+const MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        name: "initial layout",
+        sql: "
     CREATE TABLE tenants (
         id          TEXT PRIMARY KEY,
         name        TEXT NOT NULL,
@@ -119,7 +120,13 @@ const MIGRATIONS: &[Migration] = &[Migration {
         PRIMARY KEY (tenant, id)
     );
     ",
-}];
+    },
+    Migration {
+        version: 2,
+        name: "verified e-mail address of an account",
+        sql: "ALTER TABLE accounts ADD COLUMN verified_email TEXT;",
+    },
+];
 
 /// Index values longer than this are not indexed; lookups for them scan the object type.
 const MAX_INDEXED: usize = 240;
@@ -826,15 +833,17 @@ impl Store for SqliteStore {
             return Err(StoreError::NotFound(format!("tenant {}", account.tenant)));
         }
         conn.execute(
-            "INSERT INTO accounts (tenant, login, principal, display_name, password_hash) VALUES (?1, ?2, ?3, ?4, ?5)
+            "INSERT INTO accounts (tenant, login, principal, display_name, password_hash, verified_email) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
              ON CONFLICT (tenant, login) DO UPDATE SET principal = excluded.principal,
-                display_name = excluded.display_name, password_hash = excluded.password_hash",
+                display_name = excluded.display_name, password_hash = excluded.password_hash,
+                verified_email = excluded.verified_email",
             params![
                 account.tenant.as_str(),
                 account.login,
                 account.principal.as_str(),
                 account.display_name,
-                account.password_hash
+                account.password_hash,
+                account.verified_email
             ],
         )
         .map_err(db)?;
@@ -845,13 +854,20 @@ impl Store for SqliteStore {
         let conn = self.lock()?;
         let row = conn
             .query_row(
-                "SELECT principal, display_name, password_hash FROM accounts WHERE tenant = ?1 AND login = ?2",
+                "SELECT principal, display_name, password_hash, verified_email FROM accounts WHERE tenant = ?1 AND login = ?2",
                 params![tenant.as_str(), login],
-                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?)),
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                    ))
+                },
             )
             .optional()
             .map_err(db)?;
-        row.map(|(principal, display_name, password_hash)| {
+        row.map(|(principal, display_name, password_hash, verified_email)| {
             Ok(Account {
                 tenant: tenant.clone(),
                 login: login.to_string(),
@@ -859,9 +875,27 @@ impl Store for SqliteStore {
                     .map_err(|e| StoreError::Corrupt(e.to_string()))?,
                 display_name,
                 password_hash,
+                verified_email,
             })
         })
         .transpose()
+    }
+
+    fn verified_address(
+        &self,
+        tenant: &TenantId,
+        principal: &PrincipalId,
+    ) -> StoreResult<Option<String>> {
+        let conn = self.lock()?;
+        let address: Option<Option<String>> = conn
+            .query_row(
+                "SELECT verified_email FROM accounts WHERE tenant = ?1 AND principal = ?2 ORDER BY login LIMIT 1",
+                params![tenant.as_str(), principal.as_str()],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()
+            .map_err(db)?;
+        Ok(address.flatten())
     }
 
     fn create_snapshot(

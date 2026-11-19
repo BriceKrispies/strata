@@ -262,6 +262,7 @@ fn owner_changes(store: &MemoryStore, now: i64, changes: Vec<SchemaChange>) {
         session: None,
         now: Timestamp(now),
         correlation: "t-metadata".into(),
+        verified_address: None,
     };
     let intent = Intent::ChangeSchema {
         changes,

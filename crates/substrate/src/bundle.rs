@@ -466,6 +466,7 @@ pub fn install<E>(
             session: None,
             now: Timestamp(at),
             correlation: format!("install:{}:{steps}", bundle.id),
+            verified_address: None,
         };
         execute(ctx, intent).map_err(|error| InstallError::Step { step, error })
     };

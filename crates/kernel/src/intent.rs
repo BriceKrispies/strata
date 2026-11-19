@@ -25,6 +25,12 @@ pub struct Context {
     pub now: Timestamp,
     /// Follows one user intent from the browser through to the resulting events.
     pub correlation: String,
+    /// The address the shell has verified for the acting person: the verified address of the
+    /// signed-in account, filled by the shell and never by an intent or its caller. `None` when
+    /// the account has no verified address, or nobody is signed in. Only an invitation's
+    /// redemption reads it (ADM-153).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verified_address: Option<String>,
 }
 
 /// One edit to a tenant's schema. Every `Define*` is define-or-replace.
@@ -134,12 +140,12 @@ pub enum Intent {
         address: String,
         roles: BTreeSet<RoleId>,
     },
-    /// Redeem an invitation as the acting person. `verified_address` is the address the shell
-    /// has verified for the acting person; the roles are granted only if it is the address the
-    /// invitation names, and only once.
+    /// Redeem an invitation as the acting person. The roles are granted only if the address the
+    /// shell verified for the acting person (`Context::verified_address`) is the address the
+    /// invitation names, and only once. The intent carries no address: nothing the caller
+    /// controls decides who the redeemer is.
     RedeemInvitation {
         invitation: InvitationId,
-        verified_address: String,
     },
     CreateRecord {
         object: ObjectTypeId,

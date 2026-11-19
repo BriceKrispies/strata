@@ -26,6 +26,9 @@ pub struct DevAccount {
     pub password: String,
     pub principal: String,
     pub display_name: String,
+    /// The address the account counts as having verified, for the invitations of the fixture.
+    #[serde(default)]
+    pub email: Option<String>,
 }
 
 #[derive(Clone, Debug)]

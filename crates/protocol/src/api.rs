@@ -156,6 +156,51 @@ pub struct MutationReply {
     pub checks_passed: usize,
 }
 
+/// A change of who holds which role (ADM-150 to ADM-153), as plain strings the backend parses
+/// into kernel intents. There is no field for the address an invitation is redeemed with: the
+/// backend takes it from the signed-in account.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
+pub enum MembersRequest {
+    /// Give a person a role.
+    AssignRole { principal: String, role: String },
+    /// Take a role from a person.
+    RevokeRole { principal: String, role: String },
+    /// Put a person in a team, which gives them the team's roles.
+    AddTeamMember { team: String, principal: String },
+    /// Take a person out of a team.
+    RemoveTeamMember { team: String, principal: String },
+    /// Offer roles to whoever redeems the invitation with `address`.
+    Invite {
+        invitation: String,
+        address: String,
+        roles: Vec<String>,
+    },
+    /// Redeem an invitation as the signed-in person.
+    Redeem { invitation: String },
+}
+
+impl MembersRequest {
+    /// The operations, as the names the browser-facing route and the request's `op` use.
+    pub const OPS: [&'static str; 6] = [
+        "assign_role",
+        "revoke_role",
+        "add_team_member",
+        "remove_team_member",
+        "invite",
+        "redeem",
+    ];
+}
+
+/// What a members change reports: the revision it produced and the event sequence a client has
+/// seen once it has seen its own change.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MembersReply {
+    pub revision: u64,
+    pub event_seq: u64,
+    pub checks_passed: usize,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct IdRequest {
     pub id: String,

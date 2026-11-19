@@ -11,7 +11,8 @@ use crate::{
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, MutexGuard};
 use strata_kernel::{
-    apply_delta, canon, DomainEvent, Need, SessionId, State, TenantId, TenantState, Timestamp,
+    apply_delta, canon, DomainEvent, Need, PrincipalId, SessionId, State, TenantId, TenantState,
+    Timestamp,
 };
 
 #[derive(Default)]
@@ -267,6 +268,19 @@ impl Store for MemoryStore {
             .accounts
             .get(&(tenant.clone(), login.to_string()))
             .cloned())
+    }
+
+    fn verified_address(
+        &self,
+        tenant: &TenantId,
+        principal: &PrincipalId,
+    ) -> StoreResult<Option<String>> {
+        Ok(self
+            .lock()?
+            .accounts
+            .values()
+            .find(|account| account.tenant == *tenant && account.principal == *principal)
+            .and_then(|account| account.verified_email.clone()))
     }
 
     fn create_snapshot(

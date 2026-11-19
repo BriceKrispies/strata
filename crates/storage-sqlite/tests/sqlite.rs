@@ -75,6 +75,7 @@ fn committed_data_survives_a_reopen() {
         principal: principal_id("alpha:owner"),
         display_name: "Owner".into(),
         password_hash: "$argon2id$placeholder".into(),
+        verified_email: Some("owner@example.org".into()),
     };
     let (hash_before, snapshot) = {
         let store = SqliteStore::open(&path, Timestamp(1)).unwrap();
@@ -134,10 +135,16 @@ fn committed_data_survives_a_reopen() {
     );
     assert_eq!(store.session(&session.id).unwrap(), Some(session));
     assert_eq!(store.account(&alpha, "owner").unwrap(), Some(account));
+    assert_eq!(
+        store
+            .verified_address(&alpha, &principal_id("alpha:owner"))
+            .unwrap(),
+        Some("owner@example.org".to_string())
+    );
     assert_eq!(store.snapshots(&alpha).unwrap(), vec![snapshot]);
     assert_eq!(store.journal_after(&alpha, 0, 10).unwrap().len(), 3);
     let migrations = store.migrations().unwrap();
-    assert_eq!(migrations.len(), 1);
+    assert_eq!(migrations.len(), 2);
     assert_eq!(
         migrations[0].applied_at,
         Timestamp(1),
@@ -201,6 +208,7 @@ fn query_values_are_bound_as_data_and_an_unopenable_file_is_unavailable() {
         principal: owner.clone(),
         display_name: "Owner".into(),
         password_hash: "$argon2id$placeholder".into(),
+        verified_email: None,
     };
     store.put_account(&account("owner")).unwrap();
     let hostile = "x' OR '1'='1'; DROP TABLE accounts; --";

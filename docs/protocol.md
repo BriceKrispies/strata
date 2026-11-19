@@ -22,6 +22,7 @@ All under `/api`, JSON in and out. The tenant is taken from the request's host n
 | `POST /api/logout` | End the session; clears the cookie | allowed origin, request token |
 | `GET /api/view?path=/posts/x&q=...` | The view model for an address | none (rows are filtered by policy) |
 | `POST /api/records` | Create, update or delete a record | allowed origin, CSRF token |
+| `POST /api/members/<operation>` | Change who holds which role: `assign-role`, `revoke-role`, `add-team-member`, `remove-team-member`, `invite`, `redeem` (inputs as the JSON body) | allowed origin, CSRF token; the kernel decides |
 | `POST /api/preview` | Constrained Markdown to blocks | allowed origin |
 | `GET /api/lab/overview`, `GET /api/lab/runs/:id` | Impact Lab reads | may manage schema |
 | `POST /api/lab/run`, `/api/lab/replay`, `/api/lab/verify` | Impact Lab actions | allowed origin, CSRF token, may manage schema |

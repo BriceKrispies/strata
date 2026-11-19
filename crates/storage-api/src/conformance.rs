@@ -588,6 +588,7 @@ fn accounts_are_scoped_to_their_tenant(store: &dyn Store) {
         principal: principal_id("alpha:editor"),
         display_name: "Ines".into(),
         password_hash: "$argon2id$placeholder".into(),
+        verified_email: Some("ines@example.org".into()),
     };
     store.put_account(&account).unwrap();
     assert_eq!(
@@ -596,6 +597,25 @@ fn accounts_are_scoped_to_their_tenant(store: &dyn Store) {
     );
     assert_eq!(store.account(&tenant_id("beta"), "ines").unwrap(), None);
     assert_eq!(store.account(&tenant_id("alpha"), "INES").unwrap(), None);
+    // The verified address belongs to the account's principal in its own tenant.
+    assert_eq!(
+        store
+            .verified_address(&tenant_id("alpha"), &principal_id("alpha:editor"))
+            .unwrap(),
+        Some("ines@example.org".to_string())
+    );
+    assert_eq!(
+        store
+            .verified_address(&tenant_id("beta"), &principal_id("alpha:editor"))
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        store
+            .verified_address(&tenant_id("alpha"), &principal_id("alpha:nobody"))
+            .unwrap(),
+        None
+    );
     let changed = Account {
         display_name: "Inès".into(),
         ..account
