@@ -183,3 +183,113 @@ pub mod commit_flow_impl {}
 ///
 /// The specification does not say how these events arrive, so nothing is generated for them: `src-attempt`.
 pub mod source_throttle_flow_impl {}
+
+/// How events reach machine `tenant-suspension-flow-impl` (Tenant suspension (implementation)).
+///
+/// The specification does not say how these events arrive, so nothing is generated for them: `ts-write-requested`, `ts-plan-chosen`, `ts-trial-ended`.
+pub mod tenant_suspension_flow_impl {}
+
+/// How events reach machine `write-quota-flow-impl` (Write against plan quotas (implementation)).
+///
+/// The specification does not say how these events arrive, so nothing is generated for them: `wq-write-requested`.
+pub mod write_quota_flow_impl {}
+
+/// How events reach machine `plan-change-flow-impl` (Plan change (implementation)).
+///
+/// The specification does not say how these events arrive, so nothing is generated for them: `pc-change-requested`.
+pub mod plan_change_flow_impl {}
+
+/// How events reach machine `connection-quota-flow-impl` (Connection quota per tenant (implementation)).
+///
+/// The specification does not say how these events arrive, so nothing is generated for them: `cq-connection-requested`.
+pub mod connection_quota_flow_impl {}
+
+/// How events reach machine `bootstrap-credential-flow-impl` (Bootstrap credential (implementation)).
+///
+/// The specification does not say how these events arrive, so nothing is generated for them: `bc-issue-requested`, `bc-presented`, `bc-expiry-reached`.
+pub mod bootstrap_credential_flow_impl {}
+
+/// How events reach machine `placement-choice-flow-impl` (Placement by region (implementation)).
+///
+/// The specification does not say how these events arrive, so nothing is generated for them: `rg-create-requested`.
+pub mod placement_choice_flow_impl {}
+
+/// How events reach machine `tenant-deletion-flow-impl` (Tenant deletion (implementation)).
+///
+/// The specification does not say how these events arrive, so nothing is generated for them: `td-delete-requested`, `td-database-removed`, `td-files-removed`, `td-key-destroyed`, `td-step-failed`.
+pub mod tenant_deletion_flow_impl {}
+
+/// How events reach machine `backup-key-flow-impl` (Reading a backup (implementation)).
+///
+/// The specification does not say how these events arrive, so nothing is generated for them: `bk-read-requested`.
+pub mod backup_key_flow_impl {}
+
+/// How events reach machine `runtime-credential-flow-impl` (Runtime database credentials (implementation)).
+///
+/// The specification does not say how these events arrive, so nothing is generated for them: `rc-serve-requested`, `rc-stop-serving`, `rc-open-requested`.
+pub mod runtime_credential_flow_impl {}
+
+/// How events reach machine `export-restore-flow-impl` (Export and restore of a tenant (implementation)).
+///
+/// The specification does not say how these events arrive, so nothing is generated for them: `er-write-requested`, `er-export-requested`, `er-restore-requested`.
+pub mod export_restore_flow_impl {}
+
+/// How events reach machine `point-in-time-flow-impl` (Point-in-time restore (implementation)).
+///
+/// The specification does not say how these events arrive, so nothing is generated for them: `pt-write-requested`, `pt-point-reached`, `pt-restore-requested`.
+pub mod point_in_time_flow_impl {}
+
+/// How events reach machine `kernel-upgrade-flow-impl` (Serving under a newer kernel (implementation)).
+///
+/// The specification does not say how these events arrive, so nothing is generated for them: `ku-replay-finished`, `ku-serve-requested`.
+pub mod kernel_upgrade_flow_impl {}
+
+/// How events reach machine `placement-switch-flow-impl` (Directory switch of a tenant placement (implementation)).
+///
+/// The specification does not say how these events arrive, so nothing is generated for them: `ps-switched`, `ps-request-begun`, `ps-request-completed`, `ps-address-resolved`.
+pub mod placement_switch_flow_impl {}
+
+/// How events reach machine `schema-change-flow-impl` (Schema change run (implementation)).
+///
+/// The specification does not say how these events arrive, so nothing is generated for them: `sc-preview-requested`, `sc-apply-requested`, `sc-batch-committed`, `sc-batch-failed`, `sc-stop-requested`.
+pub mod schema_change_flow_impl {}
+
+/// How events reach machine `layout-rollout-flow-impl` (Layout change across tenants (implementation)).
+///
+/// The specification does not say how these events arrive, so nothing is generated for them: `lr-apply-requested`.
+pub mod layout_rollout_flow_impl {}
+
+/// How events reach machine `staging-promotion-flow-impl` (Promotion of a staging migration (implementation)).
+///
+/// The specification does not say how these events arrive, so nothing is generated for them: `sp-staging-applied`, `sp-prod-preview-requested`, `sp-promote-requested`.
+pub mod staging_promotion_flow_impl {}
+
+/// How events reach machine `field-change-flow-impl` (Field added and field renamed (implementation)).
+///
+/// The specification does not say how these events arrive, so nothing is generated for them: `fc-field-added`, `fc-rename-applied`, `fc-read-requested`.
+pub mod field_change_flow_impl {}
+
+/// How events reach machine `draft-save-flow-impl` (Saving a draft across a schema change (implementation)).
+///
+/// The specification does not say how these events arrive, so nothing is generated for them: `ds-schema-changed`, `ds-save-requested`.
+pub mod draft_save_flow_impl {}
+
+/// How events reach machine `workflow-version-flow-impl` (Workflow run across a definition change (implementation)).
+///
+/// The specification does not say how these events arrive, so nothing is generated for them: `wf-run-started`, `wf-definition-changed`, `wf-step-due`.
+pub mod workflow_version_flow_impl {}
+
+/// How events reach machine `scheduled-job-check-flow-impl` (Scheduled job against the schema (implementation)).
+///
+/// The specification does not say how these events arrive, so nothing is generated for them: `sj-schema-changed`, `sj-job-due`.
+pub mod scheduled_job_check_flow_impl {}
+
+/// How events reach machine `template-proposal-flow-impl` (Template version proposal (implementation)).
+///
+/// The specification does not say how these events arrive, so nothing is generated for them: `tp-version-published`, `tp-tenant-approved`, `tp-apply-requested`.
+pub mod template_proposal_flow_impl {}
+
+/// How events reach machine `import-flow-impl` (Import of records and pages (implementation)).
+///
+/// The specification does not say how these events arrive, so nothing is generated for them: `im-record-imported`, `im-page-imported`.
+pub mod import_flow_impl {}
