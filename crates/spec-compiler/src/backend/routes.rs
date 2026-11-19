@@ -5,9 +5,10 @@
 //! For every contract with an `implementedBy` component:
 //!
 //! - a unit type named after the contract implements `strata_runtime::Contract`, with
-//!   `SPEC = ContractSpec { id, path, auth, timeout, idempotent }`: `id` is the contract's `ref`
-//!   (its id when it has none), `auth` its `auth` (the empty requirement when it states none, which
-//!   an authorizer must refuse unless it recognises it), `timeout` its `timeoutMs`
+//!   `SPEC = ContractSpec { id, path, access, timeout, idempotent }`: `id` is the contract's `ref`
+//!   (its id when it has none), `access` its exposure and structured auth as a
+//!   `strata_runtime::Access` (scheme, roles, tenant policies, CSRF, origin, step-up, secret,
+//!   tenant scope, development condition), `timeout` its `timeoutMs`
 //!   ([`DEFAULT_TIMEOUT_MS`] when it states none) and `idempotent` its `idempotent` (false when it
 //!   states none). Its error type implements `strata_runtime::ContractError`: each error travels
 //!   with its status, which is its own `status`, else the status of its `kind`
@@ -58,10 +59,33 @@
 //! - `<C>Client`, a typed client with one method per contract over `strata_runtime::Client`;
 //!   a contract with a retry policy is called under it.
 //!
-//! Who calls is established by the `strata_runtime::Authorizer` of the `Routes`, from the
-//! contract's `auth` and the request headers: that is the seam a deployment fills. The caller
-//! policies and audits read is built from the runtime's `Caller`: its subject is the principal's
-//! id, and its attributes `kind`, `tenant` and `role` the rest.
+//! **Exposure and auth.** A served contract states its `exposure` and its `auth` as
+//! `{scheme, ...}`; one that does not is refused (`contract.exposure`,
+//! `contract.auth-structured`), as is a sentence for an auth: nothing an authorizer would have to
+//! read as words is generated. The in-process scheme is exactly the scheme of local contracts, and
+//! a signature or signed address names its secret.
+//!
+//! **The authorizer.** `SpecAuthorizer<H>` is the `strata_runtime::Authorizer` generated from
+//! the schemes: one arm per scheme, with no fallback, so a scheme the generator does not know
+//! does not compile, and nothing is admitted that the contract's `Access` does not state. A local
+//! contract is refused on any route. Per scheme it establishes the principal: anonymous nothing,
+//! session through the hole `AuthHoles::session` (the runtime cannot know the deployment's session
+//! store), service by comparing the service credential in constant time, a provisioning token or
+//! a delegation (the bearer token) through their holes, a signature or signed address through the
+//! hole that verifies it with the named secret. Then, generated: the development condition, the
+//! origin of a browser call against the origins of the site it addresses (`AuthHoles::site`), the
+//! request token against the session's or, for a visitor, `AuthHoles::visitor_token`, the roles
+//! (any one admits), the step-up age, and for tenant scope `request` that a principal's tenant
+//! is the site's. Every hole has a default that establishes nothing, so a deployment that fills no
+//! hole admits only anonymous calls that ask for no browser check.
+//!
+//! **The gateway.** `GATEWAY_ROUTES` lists the routes through the gateway: the public contracts
+//! and no other. `strata_runtime::Routes::gateway` serves only public contracts, so an internal
+//! contract has no route facing the internet.
+//!
+//! The caller policies and audits read is built from the runtime's `Caller` the authorizer
+//! established: its subject is the principal's id, and its attributes `kind`, `tenant` and `role`
+//! the rest.
 
 use std::collections::BTreeMap;
 
@@ -71,7 +95,9 @@ use quote::quote;
 use super::{view, Backend};
 use crate::constructs::OnExceed;
 use crate::diagnostic::Diagnostic;
-use crate::ir::{Component, Contract, ErrorBody, Spec, TypeKind};
+use crate::ir::{
+    Auth, Component, Contract, ErrorBody, Exposure, Scheme, Spec, TenantScope, TypeKind,
+};
 use crate::naming;
 use crate::render::{self, Doc, Namespace, Scope, Uses};
 use crate::resolve::TypeRef;
@@ -89,6 +115,11 @@ pub const ERROR_STATUS_MISSING: &str = "ready.error-status-missing";
 pub const ERROR_KIND_MISSING: &str = "ready.error-kind-missing";
 /// Code of an error kind that `system.generation.errorKinds` does not declare (Exegra's code).
 pub const ERROR_KIND_UNKNOWN: &str = "contract.error-kind-unknown";
+/// Code of a served contract whose auth is missing, prose or malformed (Exegra's code).
+pub const AUTH_STRUCTURED: &str = "contract.auth-structured";
+/// Code of a served contract that states no exposure, or whose scheme does not fit it (Exegra's
+/// code).
+pub const EXPOSURE: &str = "contract.exposure";
 /// Code of an error body that cannot be generated: its type, fields or runtime mapping (Exegra's
 /// `generation.error-body-*` rules, under one code).
 pub const ERROR_BODY_INVALID: &str = "specc.error-body-invalid";
@@ -159,6 +190,22 @@ fn served(spec: &Spec) -> Vec<&Contract> {
                 .is_some_and(|id| spec.component(id).is_some())
         })
         .collect()
+}
+
+/// The routes through the gateway: the served contracts whose exposure is public, in
+/// declaration order. No internal or local contract is ever in it.
+pub fn gateway_table(spec: &Spec) -> Vec<&Contract> {
+    served(spec)
+        .into_iter()
+        .filter(|c| c.exposure == Some(Exposure::Public))
+        .collect()
+}
+
+/// The step-up age of a structured auth, in milliseconds, when it states one that is a duration.
+fn step_up_ms(auth: &Auth) -> Option<Result<u64, String>> {
+    auth.step_up
+        .as_deref()
+        .map(|text| view::duration_ns(text).map(|ns| ns.div_ceil(1_000_000)))
 }
 
 /// The path a served contract is at, by the path rule in the module documentation.
@@ -352,6 +399,76 @@ fn check_body(spec: &Spec, body: &ErrorBody) -> Vec<String> {
     problems
 }
 
+/// What stops the access of served contract `c` from being generated: a missing exposure, an
+/// auth that is missing, a sentence or incomplete, a scheme that does not fit the exposure.
+fn check_access(c: &Contract) -> Vec<Diagnostic> {
+    let mut out = Vec::new();
+    let Some(exposure) = c.exposure else {
+        out.push(Diagnostic::new(
+            EXPOSURE,
+            &c.id,
+            format!(
+                "Contract \"{}\" states no exposure (public, internal or local), so nothing says where it may be served.",
+                c.id
+            ),
+        ));
+        return out;
+    };
+    let Some(auth) = &c.auth else {
+        let why = match &c.auth_prose {
+            Some(text) => format!("states its auth as a sentence (\"{text}\")"),
+            None => "states no auth".to_string(),
+        };
+        out.push(Diagnostic::new(
+            AUTH_STRUCTURED,
+            &c.id,
+            format!(
+                "Contract \"{}\" {why}; the authorizer is generated from a structured auth {{scheme, ...}} and admits nothing unstated.",
+                c.id
+            ),
+        ));
+        return out;
+    };
+    if (auth.scheme == Scheme::InProcess) != (exposure == Exposure::Local) {
+        out.push(Diagnostic::new(
+            EXPOSURE,
+            &c.id,
+            format!(
+                "Contract \"{}\" is {} with the scheme {}; the in-process scheme is exactly the scheme of local contracts.",
+                c.id,
+                match exposure {
+                    Exposure::Public => "public",
+                    Exposure::Internal => "internal",
+                    Exposure::Local => "local",
+                },
+                auth.scheme.name()
+            ),
+        ));
+    }
+    if matches!(auth.scheme, Scheme::Signature | Scheme::SignedAddress) && auth.secret.is_none() {
+        out.push(Diagnostic::new(
+            AUTH_STRUCTURED,
+            &c.id,
+            format!(
+                "Contract \"{}\" is verified by {} but names no secret.",
+                c.id,
+                auth.scheme.name()
+            ),
+        ));
+    }
+    if let Some(Err(why)) = step_up_ms(auth) {
+        out.push(Diagnostic::new(
+            AUTH_STRUCTURED,
+            &c.id,
+            format!(
+                "The step-up age of contract \"{}\" is not a duration: {why}.",
+                c.id
+            ),
+        ));
+    }
+    out
+}
+
 impl Backend for RoutesBackend {
     fn module(&self) -> &'static str {
         "routes"
@@ -372,6 +489,8 @@ impl Backend for RoutesBackend {
             "error_body",
             "runtime_body",
             "runtime_code",
+            "authorize_access",
+            "GATEWAY_ROUTES",
         ] {
             module.claim(&mut out, "", "a helper of the module", helper);
         }
@@ -381,6 +500,8 @@ impl Backend for RoutesBackend {
             QUOTA_WAIT,
             "ErrorBody",
             "BodyError",
+            "AuthHoles",
+            "SpecAuthorizer",
         ] {
             module.claim_type(&mut out, "", "a trait or type of the module", fixed);
         }
@@ -409,6 +530,7 @@ impl Backend for RoutesBackend {
         }
         let mut paths: BTreeMap<String, String> = BTreeMap::new();
         for c in &served {
+            out.extend(check_access(c));
             let what = format!("contract \"{}\"", c.id);
             if let Ok(name) = naming::pascal(&c.id) {
                 module.claim_type(&mut out, &c.id, &format!("the wire type of {what}"), &name);
@@ -657,11 +779,17 @@ impl Backend for RoutesBackend {
             .map(|b| body_items(spec, b))
             .unwrap_or_default();
         let crate_uses = uses.import();
+        let authorizer = authorizer_items();
+        let gateway = gateway_items(spec);
         quote! {
             #![doc = " The contracts on the wire: one `strata_runtime::Contract` per contract a component implements, the route of each contract with the handler and hooks it needs, and per implementing component the routes of all its contracts and a typed client."]
             #![doc = ""]
             #![doc = " A contract is served at its `binding.path` when the specification states one, otherwise at `/<implementing component>/<contract id>`, always as a POST of a JSON body."]
+            #![doc = ""]
+            #![doc = " Who may call is decided by `SpecAuthorizer`, generated from the auth schemes; `GATEWAY_ROUTES` lists the public contracts, the only ones routed through the gateway."]
             #crate_uses
+            #authorizer
+            #gateway
             #fixed_hooks
             #body_items
             #(#wire)*
@@ -931,7 +1059,7 @@ fn wire_type(spec: &Spec, c: &Contract, body: Option<&BodyNames>) -> TokenStream
     let error_name = naming::ident(&format!("{}Error", pascal(&c.id)));
     let id = c.reference.clone().unwrap_or_else(|| c.id.clone());
     let path = contract_path(c);
-    let auth = c.auth.clone().unwrap_or_default();
+    let access = access_tokens(c);
     let timeout = Literal::u64_unsuffixed(
         c.timeout_ms
             .as_ref()
@@ -985,7 +1113,7 @@ fn wire_type(spec: &Spec, c: &Contract, body: Option<&BodyNames>) -> TokenStream
             const SPEC: strata_runtime::ContractSpec = strata_runtime::ContractSpec {
                 id: #id,
                 path: #path,
-                auth: #auth,
+                access: #access,
                 timeout: std::time::Duration::from_millis(#timeout),
                 idempotent: #idempotent,
             };
@@ -1002,6 +1130,395 @@ fn wire_type(spec: &Spec, c: &Contract, body: Option<&BodyNames>) -> TokenStream
         }
 
         #body_impl
+    }
+}
+
+/// The `strata_runtime::Access` of served contract `c`. `check_access` refuses a contract without
+/// an exposure or a structured auth before anything is emitted; should one get here, it is given
+/// the access no route serves (local, in-process), so nothing unstated is ever admitted.
+fn access_tokens(c: &Contract) -> TokenStream {
+    let (exposure, auth) = match (c.exposure, &c.auth) {
+        (Some(exposure), Some(auth)) => (exposure, auth),
+        _ => return quote! { strata_runtime::Access::LOCAL },
+    };
+    let exposure = match exposure {
+        Exposure::Public => quote! { strata_runtime::Exposure::Public },
+        Exposure::Internal => quote! { strata_runtime::Exposure::Internal },
+        Exposure::Local => quote! { strata_runtime::Exposure::Local },
+    };
+    let scheme = match auth.scheme {
+        Scheme::Anonymous => quote! { strata_runtime::Scheme::Anonymous },
+        Scheme::Session => quote! { strata_runtime::Scheme::Session },
+        Scheme::Service => quote! { strata_runtime::Scheme::Service },
+        Scheme::ProvisioningToken => quote! { strata_runtime::Scheme::ProvisioningToken },
+        Scheme::Signature => quote! { strata_runtime::Scheme::Signature },
+        Scheme::SignedAddress => quote! { strata_runtime::Scheme::SignedAddress },
+        Scheme::Delegation => quote! { strata_runtime::Scheme::Delegation },
+        Scheme::InProcess => quote! { strata_runtime::Scheme::InProcess },
+    };
+    let roles = &auth.roles;
+    let tenant_policies = auth.tenant_policies;
+    let csrf = auth.csrf;
+    let origin = auth.origin;
+    let step_up = match step_up_ms(auth) {
+        Some(Ok(ms)) => {
+            let ms = Literal::u64_unsuffixed(ms);
+            quote! { Some(std::time::Duration::from_millis(#ms)) }
+        }
+        _ => quote! { None },
+    };
+    let secret = match &auth.secret {
+        Some(name) => quote! { Some(#name) },
+        None => quote! { None },
+    };
+    let tenant_scope = match c.tenant_scope {
+        Some(TenantScope::Request) => quote! { Some(strata_runtime::TenantScope::Request) },
+        Some(TenantScope::None) => quote! { Some(strata_runtime::TenantScope::None) },
+        Some(TenantScope::Platform) => quote! { Some(strata_runtime::TenantScope::Platform) },
+        None => quote! { None },
+    };
+    let development = match &c.development {
+        Some(name) => quote! { Some(#name) },
+        None => quote! { None },
+    };
+    quote! {
+        strata_runtime::Access {
+            exposure: #exposure,
+            scheme: #scheme,
+            roles: &[#(#roles),*],
+            tenant_policies: #tenant_policies,
+            csrf: #csrf,
+            origin: #origin,
+            step_up: #step_up,
+            secret: #secret,
+            tenant_scope: #tenant_scope,
+            development: #development,
+        }
+    }
+}
+
+/// The routes through the gateway: one `strata_runtime::GatewayRoute` per public contract.
+fn gateway_items(spec: &Spec) -> TokenStream {
+    let routes: Vec<TokenStream> = gateway_table(spec)
+        .into_iter()
+        .map(|c| {
+            let path = contract_path(c);
+            let id = c.reference.clone().unwrap_or_else(|| c.id.clone());
+            let component = c.implemented_by.clone().unwrap_or_default();
+            quote! {
+                strata_runtime::GatewayRoute { path: #path, contract: #id, component: #component }
+            }
+        })
+        .collect();
+    quote! {
+        /// The routes through the gateway: every public contract a component serves, and only
+        /// those. An internal or local contract is never routed through the gateway.
+        pub const GATEWAY_ROUTES: &[strata_runtime::GatewayRoute] = &[#(#routes),*];
+    }
+}
+
+/// The authorizer generated from the auth schemes: the holes a deployment fills, and
+/// `SpecAuthorizer`, which checks everything a contract's `Access` states.
+fn authorizer_items() -> TokenStream {
+    quote! {
+        /// What the generated authorizer needs from the deployment: what no specification
+        /// states, such as the session store, the sites and the secrets. Every method has a
+        /// default that establishes nothing, so a scheme whose hole the deployment does not fill
+        /// is refused.
+        pub trait AuthHoles: Send + Sync + 'static {
+            /// The site the request addresses, from its host: its tenant and the origins its pages
+            /// are served from. `None` for a host that serves no site.
+            fn site(&self, request: &strata_runtime::Presented<'_>) -> Option<strata_runtime::Site> {
+                let _ = request;
+                None
+            }
+
+            /// The principal of the live session the request presents (its cookie or header),
+            /// looked up in the deployment's session store, with the session's request token.
+            /// `Ok(None)` when it presents none or one that is not live; an `Err` answers
+            /// `unavailable`.
+            fn session(
+                &self,
+                request: &strata_runtime::Presented<'_>,
+            ) -> impl std::future::Future<Output = Result<Option<strata_runtime::Principal>, String>> + Send {
+                let _ = request;
+                async { Ok(None) }
+            }
+
+            /// Whether `token` is a request token the deployment issued to a visitor of `site`,
+            /// for an anonymous call that asks for one.
+            fn visitor_token(&self, site: &strata_runtime::Site, token: &str) -> bool {
+                let _ = (site, token);
+                false
+            }
+
+            /// The header the service credential is presented in.
+            fn service_header(&self) -> &'static str {
+                "x-service-token"
+            }
+
+            /// The service credential, or `None` when this deployment admits no service.
+            fn service_secret(&self) -> Option<String> {
+                None
+            }
+
+            /// The principal a provisioning token (the bearer token) stands for: the provisioning
+            /// principal of one realm, with its tenant. `Ok(None)` when the token is not one.
+            fn provisioning(
+                &self,
+                token: &str,
+            ) -> impl std::future::Future<Output = Result<Option<strata_runtime::Principal>, String>> + Send {
+                let _ = token;
+                async { Ok(None) }
+            }
+
+            /// The principal a delegation token (the bearer token) acts for. `Ok(None)` when the
+            /// token is not a live delegation.
+            fn delegation(
+                &self,
+                token: &str,
+            ) -> impl std::future::Future<Output = Result<Option<strata_runtime::Principal>, String>> + Send {
+                let _ = token;
+                async { Ok(None) }
+            }
+
+            /// Who signed the request with the secret named `secret`, when its signature verifies.
+            /// `Ok(None)` when it does not.
+            fn signature(
+                &self,
+                secret: &'static str,
+                request: &strata_runtime::Presented<'_>,
+            ) -> impl std::future::Future<Output = Result<Option<strata_runtime::Principal>, String>> + Send {
+                let _ = (secret, request);
+                async { Ok(None) }
+            }
+
+            /// Whether the request's target is an address signed with the secret named `secret`
+            /// and still valid.
+            fn signed_address(&self, secret: &'static str, request: &strata_runtime::Presented<'_>) -> bool {
+                let _ = (secret, request);
+                false
+            }
+
+            /// Whether the development condition named `condition` holds in this deployment.
+            fn development(&self, condition: &'static str) -> bool {
+                let _ = condition;
+                false
+            }
+
+            /// The time now, in milliseconds since the Unix epoch, against which a step-up age is
+            /// judged. The system clock unless overridden.
+            fn now_ms(&self) -> i64 {
+                strata_runtime::Clock::now(&strata_runtime::SystemClock).0
+            }
+        }
+
+        /// The authorizer generated from the specification's auth schemes. It admits a call only
+        /// when everything the contract's `Access` states holds, and refuses a local contract on
+        /// any route.
+        #[derive(Debug, Clone, Default)]
+        pub struct SpecAuthorizer<H: AuthHoles> {
+            /// The deployment's holes.
+            pub holes: H,
+        }
+
+        impl<H: AuthHoles> SpecAuthorizer<H> {
+            /// An authorizer over `holes`.
+            pub fn new(holes: H) -> Self {
+                Self { holes }
+            }
+        }
+
+        impl<H: AuthHoles> strata_runtime::Authorizer for SpecAuthorizer<H> {
+            async fn authorize(
+                &self,
+                access: &strata_runtime::Access,
+                request: &strata_runtime::Presented<'_>,
+            ) -> Result<strata_runtime::Caller, strata_runtime::Refusal> {
+                authorize_access(&self.holes, access, request).await
+            }
+        }
+
+        /// The checks of one call, in order: exposure, development condition, the scheme's
+        /// credential, origin, request token, roles, step-up, tenant scope.
+        async fn authorize_access<H: AuthHoles>(
+            holes: &H,
+            access: &strata_runtime::Access,
+            request: &strata_runtime::Presented<'_>,
+        ) -> Result<strata_runtime::Caller, strata_runtime::Refusal> {
+            use strata_runtime::{Exposure, FailureCode, Scheme, TenantScope};
+            let refuse = |code: FailureCode, message: &str| strata_runtime::Refusal {
+                code,
+                message: message.to_string(),
+            };
+            let correlation = request
+                .header(strata_runtime::routes::CORRELATION)
+                .unwrap_or("")
+                .to_string();
+            if access.exposure == Exposure::Local {
+                return Err(refuse(FailureCode::Forbidden, "a local contract is not served on a route"));
+            }
+            if let Some(condition) = access.development {
+                if !holes.development(condition) {
+                    return Err(refuse(FailureCode::Forbidden, "this is not available here"));
+                }
+            }
+            let site = holes.site(request);
+            let unauthenticated = |message: &str| refuse(FailureCode::Unauthenticated, message);
+            let principal: Option<strata_runtime::Principal> = match access.scheme {
+                Scheme::Anonymous => None,
+                Scheme::Session => Some(
+                    holes
+                        .session(request)
+                        .await
+                        .map_err(|why| refuse(FailureCode::Unavailable, why.as_str()))?
+                        .ok_or_else(|| unauthenticated("sign in to do this"))?,
+                ),
+                Scheme::Service => {
+                    let given = request.header(holes.service_header());
+                    match (holes.service_secret(), given) {
+                        (Some(secret), Some(given)) if strata_runtime::routes::same_secret(given, &secret) => {
+                            Some(strata_runtime::Principal {
+                                subject: "service".to_string(),
+                                kind: "service".to_string(),
+                                ..strata_runtime::Principal::default()
+                            })
+                        }
+                        _ => return Err(unauthenticated("the service credential is missing or wrong")),
+                    }
+                }
+                Scheme::ProvisioningToken => {
+                    let token = request
+                        .bearer()
+                        .ok_or_else(|| unauthenticated("a provisioning token is required"))?;
+                    Some(
+                        holes
+                            .provisioning(token)
+                            .await
+                            .map_err(|why| refuse(FailureCode::Unavailable, why.as_str()))?
+                            .ok_or_else(|| unauthenticated("the provisioning token is not valid"))?,
+                    )
+                }
+                Scheme::Delegation => {
+                    let token = request
+                        .bearer()
+                        .ok_or_else(|| unauthenticated("a delegation token is required"))?;
+                    Some(
+                        holes
+                            .delegation(token)
+                            .await
+                            .map_err(|why| refuse(FailureCode::Unavailable, why.as_str()))?
+                            .ok_or_else(|| unauthenticated("the delegation token is not valid"))?,
+                    )
+                }
+                Scheme::Signature => {
+                    let secret = access
+                        .secret
+                        .ok_or_else(|| refuse(FailureCode::Forbidden, "no secret verifies this call"))?;
+                    Some(
+                        holes
+                            .signature(secret, request)
+                            .await
+                            .map_err(|why| refuse(FailureCode::Unavailable, why.as_str()))?
+                            .ok_or_else(|| unauthenticated("the signature is missing or does not verify"))?,
+                    )
+                }
+                Scheme::SignedAddress => {
+                    let secret = access
+                        .secret
+                        .ok_or_else(|| refuse(FailureCode::Forbidden, "no secret verifies this address"))?;
+                    if !holes.signed_address(secret, request) {
+                        return Err(refuse(FailureCode::Forbidden, "the address is not signed or has expired"));
+                    }
+                    None
+                }
+                Scheme::InProcess => {
+                    return Err(refuse(FailureCode::Forbidden, "an in-process contract is not served on a route"));
+                }
+            };
+            if access.origin {
+                let allowed = match (&site, request.header("origin")) {
+                    (Some(site), Some(origin)) => site.origins.iter().any(|known| known == origin),
+                    _ => false,
+                };
+                if !allowed {
+                    return Err(refuse(FailureCode::Forbidden, "this request did not come from the site"));
+                }
+            }
+            if access.csrf {
+                let given = request.header(strata_runtime::CSRF_TOKEN).unwrap_or("");
+                let valid = !given.is_empty()
+                    && match &principal {
+                        Some(principal) => principal
+                            .csrf_token
+                            .as_deref()
+                            .is_some_and(|expected| strata_runtime::routes::same_secret(given, expected)),
+                        None => site.as_ref().is_some_and(|site| holes.visitor_token(site, given)),
+                    };
+                if !valid {
+                    return Err(refuse(FailureCode::Forbidden, "the request token is missing or stale"));
+                }
+            }
+            let role = match &principal {
+                Some(principal) => access
+                    .roles
+                    .iter()
+                    .find(|role| principal.roles.iter().any(|held| held == *role))
+                    .map(|role| role.to_string())
+                    .or_else(|| principal.roles.first().cloned()),
+                None => None,
+            };
+            if !access.roles.is_empty() {
+                let held = principal.as_ref().is_some_and(|principal| {
+                    access.roles.iter().any(|role| principal.roles.iter().any(|held| held == role))
+                });
+                if !held {
+                    return Err(match principal {
+                        Some(_) => refuse(FailureCode::Forbidden, "the caller holds no role this needs"),
+                        None => unauthenticated("sign in to do this"),
+                    });
+                }
+            }
+            if let Some(age) = access.step_up {
+                let age = i64::try_from(age.as_millis()).unwrap_or(i64::MAX);
+                let now = holes.now_ms();
+                let fresh = principal
+                    .as_ref()
+                    .and_then(|principal| principal.authenticated_at_ms)
+                    .is_some_and(|at| at <= now && now.saturating_sub(at) <= age);
+                if !fresh {
+                    return Err(unauthenticated("prove who you are again to do this"));
+                }
+            }
+            if access.tenant_scope == Some(TenantScope::Request) {
+                let Some(site) = &site else {
+                    return Err(refuse(FailureCode::Forbidden, "the request addresses no site"));
+                };
+                let own = principal.as_ref().and_then(|principal| principal.tenant.as_deref());
+                if own.is_some_and(|tenant| tenant != site.tenant) {
+                    return Err(refuse(FailureCode::Forbidden, "the caller belongs to another tenant"));
+                }
+            }
+            let mut attributes = std::collections::BTreeMap::new();
+            let tenant = principal
+                .as_ref()
+                .and_then(|principal| principal.tenant.clone())
+                .or_else(|| site.as_ref().map(|site| site.tenant.clone()));
+            if let Some(tenant) = tenant {
+                attributes.insert("tenant".to_string(), tenant);
+            }
+            if let Some(role) = role {
+                attributes.insert("role".to_string(), role);
+            }
+            if let Some(principal) = &principal {
+                attributes.insert("kind".to_string(), principal.kind.clone());
+            }
+            Ok(strata_runtime::Caller {
+                subject: principal.map(|principal| principal.subject),
+                correlation,
+                attributes,
+            })
+        }
     }
 }
 
@@ -1491,7 +2008,17 @@ mod tests {
         spec_with("", "", contracts)
     }
 
+    /// The contracts with the access every test but the access tests takes for granted: internal,
+    /// with the service credential.
+    const SERVICE: &str =
+        r#""implementedBy": "svc", "exposure": "internal", "auth": { "scheme": "service" }"#;
+
     fn spec_with(generation: &str, types: &str, contracts: &str) -> Spec {
+        let contracts = if contracts.contains("\"exposure\"") {
+            contracts.to_string()
+        } else {
+            contracts.replace(r#""implementedBy": "svc""#, SERVICE)
+        };
         load(
             "s",
             &format!(
@@ -1617,5 +2144,103 @@ mod tests {
                 "errors": [ { "name": "odd", "status": 418 } ] }"#,
         );
         assert_eq!(codes(&s), [ERROR_KIND_MISSING]);
+    }
+
+    /// Removes the whitespace of emitted code, so it can be searched whatever the formatting.
+    fn squeezed(tokens: TokenStream) -> String {
+        tokens
+            .to_string()
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .collect()
+    }
+
+    /// Negative fixtures of `contract.exposure` and `contract.auth-structured`: a served contract
+    /// without an exposure, with its auth as a sentence, with no auth, with the in-process scheme
+    /// on an internal contract, and with a signature that names no secret.
+    #[test]
+    fn a_served_contract_without_exposure_or_structured_auth_is_refused() {
+        let s = spec(
+            r#"{ "id": "a", "name": "A", "realisation": "generated", "implementedBy": "svc", "auth": { "scheme": "service" } },
+               { "id": "b", "name": "B", "realisation": "generated", "implementedBy": "svc", "exposure": "internal", "auth": "Any operator." },
+               { "id": "c", "name": "C", "realisation": "generated", "implementedBy": "svc", "exposure": "internal" },
+               { "id": "d", "name": "D", "realisation": "generated", "implementedBy": "svc", "exposure": "internal", "auth": { "scheme": "in-process" } },
+               { "id": "e", "name": "E", "realisation": "generated", "implementedBy": "svc", "exposure": "public", "auth": { "scheme": "signature" } }"#,
+        );
+        assert_eq!(
+            codes(&s),
+            [
+                EXPOSURE,
+                AUTH_STRUCTURED,
+                AUTH_STRUCTURED,
+                EXPOSURE,
+                AUTH_STRUCTURED
+            ]
+        );
+    }
+
+    const EXPOSED: &str = r#"{ "id": "pub", "name": "Pub", "realisation": "generated", "implementedBy": "svc", "exposure": "public", "readOnly": true, "tenantScope": "request", "auth": { "scheme": "anonymous" } },
+        { "id": "int", "name": "Int", "realisation": "generated", "implementedBy": "svc", "exposure": "internal", "auth": { "scheme": "service" } },
+        { "id": "loc", "name": "Loc", "realisation": "generated", "implementedBy": "svc", "exposure": "local", "auth": { "scheme": "in-process" } },
+        { "id": "own", "name": "Own", "realisation": "generated", "implementedBy": "svc", "exposure": "public", "tenantScope": "request", "development": "DEV",
+          "auth": { "scheme": "session", "roles": ["owner"], "csrf": true, "origin": true, "stepUp": "15 min" } }"#;
+
+    #[test]
+    fn only_public_contracts_are_routed_through_the_gateway() {
+        let s = spec(EXPOSED);
+        assert!(codes(&s).is_empty(), "{:?}", codes(&s));
+        let ids: Vec<&str> = gateway_table(&s).iter().map(|c| c.id.as_str()).collect();
+        assert_eq!(ids, ["pub", "own"]);
+        let text = squeezed(RoutesBackend.emit(&s));
+        let table = text
+            .split("GATEWAY_ROUTES")
+            .nth(1)
+            .and_then(|rest| rest.split("];").next())
+            .unwrap_or_default()
+            .to_string();
+        assert!(table.contains(r#"path:"/svc/pub""#), "{table}");
+        assert!(table.contains(r#"path:"/svc/own""#), "{table}");
+        assert!(!table.contains("/svc/int"), "{table}");
+        assert!(!table.contains("/svc/loc"), "{table}");
+    }
+
+    /// The access of each contract is data in its `ContractSpec`, and the authorizer is a match
+    /// over the schemes with an arm for each and no fallback: nothing reads the auth as words.
+    #[test]
+    fn the_authorizer_is_generated_from_the_schemes_without_string_matching() {
+        let s = spec(EXPOSED);
+        let text = squeezed(RoutesBackend.emit(&s));
+        assert!(text.contains("access:strata_runtime::Access{exposure:strata_runtime::Exposure::Internal,scheme:strata_runtime::Scheme::Service,roles:&[],"), "{text}");
+        assert!(text.contains(r#"scheme:strata_runtime::Scheme::Session,roles:&["owner"],tenant_policies:false,csrf:true,origin:true,step_up:Some(std::time::Duration::from_millis(900000)),secret:None,tenant_scope:Some(strata_runtime::TenantScope::Request),development:Some("DEV"),"#), "{text}");
+        assert!(
+            !text.contains("auth:\""),
+            "no ContractSpec carries words: {text}"
+        );
+        let authorize = text
+            .split("asyncfnauthorize_access")
+            .nth(1)
+            .unwrap_or_default();
+        for scheme in Scheme::ALL {
+            let variant = match scheme {
+                Scheme::Anonymous => "Anonymous",
+                Scheme::Session => "Session",
+                Scheme::Service => "Service",
+                Scheme::ProvisioningToken => "ProvisioningToken",
+                Scheme::Signature => "Signature",
+                Scheme::SignedAddress => "SignedAddress",
+                Scheme::Delegation => "Delegation",
+                Scheme::InProcess => "InProcess",
+            };
+            assert!(
+                authorize.contains(&format!("Scheme::{variant}=>")),
+                "{variant}"
+            );
+        }
+        assert!(
+            !authorize.contains("_=>Some"),
+            "no scheme falls through to an admission"
+        );
+        assert!(text.contains("pubtraitAuthHoles"));
+        assert!(text.contains("pubstructSpecAuthorizer"));
     }
 }

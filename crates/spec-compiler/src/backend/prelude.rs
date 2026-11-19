@@ -141,7 +141,7 @@ pub fn emit() -> TokenStream {
             pub realisation: Realisation,
             /// The id of the implementing component.
             pub implemented_by: Option<&'static str>,
-            /// Who may call it, in the specification's words.
+            /// How a caller proves who it is: the scheme of its auth, such as `session`.
             pub auth: Option<&'static str>,
             /// Whether repeating a call has the effect of making it once.
             pub idempotent: Option<bool>,

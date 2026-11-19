@@ -46,8 +46,9 @@ pub use machine::{
 };
 pub use memory::MemoryStore;
 pub use routes::{
-    Authorizer, Caller, Contract, ContractError, ContractSpec, Failure, FailureBody, FailureCode,
-    Refusal, Routes, RuntimeBody, ServiceToken, TENANT,
+    Access, Authorizer, Caller, Contract, ContractError, ContractSpec, Exposure, Facing, Failure,
+    FailureBody, FailureCode, GatewayRoute, Presented, Principal, Refusal, Routes, RuntimeBody,
+    Scheme, ServiceToken, Site, TenantScope, CSRF_TOKEN, TENANT,
 };
 pub use sqlite::{Database, SqliteMachineStore};
 pub use store::{

@@ -8,8 +8,8 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use strata_runtime::{
-    CallError, Client, Contract, ContractError, ContractSpec, NoCredentials, Routes, RuntimeBody,
-    ServiceToken,
+    Access, CallError, Client, Contract, ContractError, ContractSpec, NoCredentials, Routes,
+    RuntimeBody, ServiceToken,
 };
 
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
@@ -42,7 +42,7 @@ impl Contract for Fast {
     const SPEC: ContractSpec = ContractSpec {
         id: "CT-T1",
         path: "/fast",
-        auth: "none",
+        access: Access::INTERNAL_ANONYMOUS,
         timeout: Duration::from_secs(5),
         idempotent: true,
     };
@@ -59,7 +59,7 @@ impl Contract for Slow {
     const SPEC: ContractSpec = ContractSpec {
         id: "CT-T2",
         path: "/slow",
-        auth: "none",
+        access: Access::INTERNAL_ANONYMOUS,
         timeout: Duration::from_millis(100),
         idempotent: true,
     };

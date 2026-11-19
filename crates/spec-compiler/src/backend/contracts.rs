@@ -4,14 +4,14 @@
 //! `<Name>Error` (one variant per error condition, carrying its payload type when it declares
 //! one). Each component named in `implementedBy` becomes a trait with one async method per
 //! contract it implements. The `meta` module describes every contract as a
-//! `prelude::ContractMeta` (reference, realisation, authorisation, idempotency, timeout).
+//! `prelude::ContractMeta` (reference, realisation, auth scheme, idempotency, timeout).
 
 use proc_macro2::{Literal, TokenStream};
 use quote::quote;
 
 use super::Backend;
 use crate::diagnostic::Diagnostic;
-use crate::ir::{Contract, ContractField, Realisation, Spec};
+use crate::ir::{Contract, ContractField, Exposure, Realisation, Spec};
 use crate::naming;
 use crate::render::{self, Doc, Field, Namespace, Scope, Uses};
 use crate::resolve::{self, TypeRef};
@@ -418,8 +418,8 @@ fn contract_doc(c: &Contract) -> Doc {
     }
     doc.list("Preconditions:", &c.preconditions);
     doc.list("Postconditions:", &c.postconditions);
-    if let Some(auth) = &c.auth {
-        doc.paragraph(&format!("Authorisation: {auth}"));
+    if let Some(text) = access_text(c) {
+        doc.paragraph(&format!("Authorisation: {text}"));
     }
     match c.idempotent {
         Some(true) => {
@@ -446,6 +446,44 @@ fn contract_doc(c: &Contract) -> Doc {
         ));
     }
     doc
+}
+
+/// Who may call contract `c`, in words built from its exposure and structured auth (the prose
+/// auth when that is all it states).
+pub fn access_text(c: &Contract) -> Option<String> {
+    let Some(auth) = &c.auth else {
+        return c.auth_prose.clone();
+    };
+    let exposure = match c.exposure {
+        Some(Exposure::Public) => "public",
+        Some(Exposure::Internal) => "internal",
+        Some(Exposure::Local) => "local",
+        None => "of unstated exposure",
+    };
+    let mut text = format!("{exposure}, scheme {}", auth.scheme.name());
+    if !auth.roles.is_empty() {
+        text.push_str(&format!(", roles {}", auth.roles.join(" or ")));
+    }
+    if auth.tenant_policies {
+        text.push_str(", the tenant's policies decide");
+    }
+    if auth.csrf {
+        text.push_str(", request token checked");
+    }
+    if auth.origin {
+        text.push_str(", origin checked");
+    }
+    if let Some(age) = &auth.step_up {
+        text.push_str(&format!(", authenticated within {age}"));
+    }
+    if let Some(secret) = &auth.secret {
+        text.push_str(&format!(", verified with the secret {secret}"));
+    }
+    text.push('.');
+    if let Some(words) = &auth.description {
+        text.push_str(&format!(" {words}"));
+    }
+    Some(text)
 }
 
 fn component_trait(spec: &Spec, component: &crate::ir::Component) -> TokenStream {
@@ -502,7 +540,7 @@ fn meta_module(spec: &Spec) -> TokenStream {
             _ => quote! { Realisation::Generated },
         };
         let implemented_by = option_str(c.implemented_by.as_deref());
-        let auth = option_str(c.auth.as_deref());
+        let auth = option_str(c.auth.as_ref().map(|a| a.scheme.name()));
         let idempotent = match c.idempotent {
             Some(true) => quote! { Some(true) },
             Some(false) => quote! { Some(false) },

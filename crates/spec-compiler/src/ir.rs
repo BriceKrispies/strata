@@ -339,8 +339,19 @@ pub struct Contract {
     pub realisation: Option<Realisation>,
     /// The implementing component.
     pub implemented_by: Option<String>,
-    /// Who may call it.
-    pub auth: Option<String>,
+    /// Who may call it, as `{scheme, ...}`: `None` when it states no auth or states it as a
+    /// sentence (`auth_prose`), which generated routes refuse to serve.
+    pub auth: Option<Auth>,
+    /// The auth as a sentence, when the specification states it so.
+    pub auth_prose: Option<String>,
+    /// `exposure`: where it can be reached from.
+    pub exposure: Option<Exposure>,
+    /// `readOnly`: true when a call changes no state.
+    pub read_only: bool,
+    /// `tenantScope`: what tenant data it returns.
+    pub tenant_scope: Option<TenantScope>,
+    /// `development`: the development condition without which it does not exist.
+    pub development: Option<String>,
     /// Whether repeating a call has the effect of one call.
     pub idempotent: Option<bool>,
     /// How long a caller waits, as written.
@@ -351,6 +362,131 @@ pub struct Contract {
     pub binding_path: Option<String>,
     /// `binding.case`: the contract's own wire case, overriding the system's.
     pub binding_case: Option<crate::wire::WireCase>,
+}
+
+/// Where a contract can be reached from (`contract.exposure`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Exposure {
+    /// Browsers and the internet, through the gateway.
+    Public,
+    /// The service network only.
+    Internal,
+    /// An in-process call, never a route.
+    Local,
+}
+
+impl Exposure {
+    /// Reads the specification's value.
+    pub fn parse(text: &str) -> Option<Self> {
+        match text {
+            "public" => Some(Self::Public),
+            "internal" => Some(Self::Internal),
+            "local" => Some(Self::Local),
+            _ => None,
+        }
+    }
+}
+
+/// How a caller proves who it is (`contract.auth.scheme`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Scheme {
+    /// Nothing.
+    Anonymous,
+    /// A session established by signing in.
+    Session,
+    /// The credential of a platform component.
+    Service,
+    /// The provisioning token of one realm.
+    ProvisioningToken,
+    /// A request signed with a named secret.
+    Signature,
+    /// An address signed with a named secret.
+    SignedAddress,
+    /// A token an agent holds on behalf of a person.
+    Delegation,
+    /// A local call inside the process.
+    InProcess,
+}
+
+impl Scheme {
+    /// Every scheme, in the order the format lists them.
+    pub const ALL: [Scheme; 8] = [
+        Scheme::Anonymous,
+        Scheme::Session,
+        Scheme::Service,
+        Scheme::ProvisioningToken,
+        Scheme::Signature,
+        Scheme::SignedAddress,
+        Scheme::Delegation,
+        Scheme::InProcess,
+    ];
+
+    /// Reads the specification's value.
+    pub fn parse(text: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|s| s.name() == text)
+    }
+
+    /// The specification's name of the scheme.
+    pub fn name(self) -> &'static str {
+        match self {
+            Scheme::Anonymous => "anonymous",
+            Scheme::Session => "session",
+            Scheme::Service => "service",
+            Scheme::ProvisioningToken => "provisioning-token",
+            Scheme::Signature => "signature",
+            Scheme::SignedAddress => "signed-address",
+            Scheme::Delegation => "delegation",
+            Scheme::InProcess => "in-process",
+        }
+    }
+}
+
+/// What tenant data a contract returns (`contract.tenantScope`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TenantScope {
+    /// Only the tenant the request is made in.
+    Request,
+    /// No tenant's data.
+    None,
+    /// Data across tenants.
+    Platform,
+}
+
+impl TenantScope {
+    /// Reads the specification's value.
+    pub fn parse(text: &str) -> Option<Self> {
+        match text {
+            "request" => Some(Self::Request),
+            "none" => Some(Self::None),
+            "platform" => Some(Self::Platform),
+            _ => None,
+        }
+    }
+}
+
+/// A structured `contract.auth`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Auth {
+    /// How the caller proves who it is.
+    pub scheme: Scheme,
+    /// The roles any one of which admits the caller.
+    pub roles: Vec<String>,
+    /// The policies of the contract that must permit the call.
+    pub policies: Vec<String>,
+    /// Whether the tenant's own policies decide in the handler.
+    pub tenant_policies: bool,
+    /// Whether a browser call carries the request token of its session or visit.
+    pub csrf: bool,
+    /// Whether a browser call comes from an origin of the site it addresses.
+    pub origin: bool,
+    /// `stepUp`, as written: how recently the caller proved who it is.
+    pub step_up: Option<String>,
+    /// The name of the secret a signature or signed address is verified with.
+    pub secret: Option<String>,
+    /// Why an anonymous contract is open to anyone.
+    pub justification: Option<String>,
+    /// The auth in words.
+    pub description: Option<String>,
 }
 
 /// An input or output of a contract.

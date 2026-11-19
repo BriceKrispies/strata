@@ -40,15 +40,21 @@
 //! by default). The oldest answers are forgotten first; an answer larger than the bound is not
 //! recorded, and a repeated call then runs the handler again.
 //!
-//! Who may call is decided by an [`Authorizer`], written by hand per deployment, which reads the
-//! contract's `auth` requirement and the request headers. It is the one seam through which a route
-//! asks who the caller is. An authorizer refuses a requirement it does not recognise; a contract
-//! that states no requirement carries the empty one, which [`ServiceToken`] admits only with the
-//! token.
+//! Who may call is decided by an [`Authorizer`] from the contract's [`Access`]: its [`Exposure`]
+//! and its auth, a [`Scheme`] with the roles, CSRF, origin, step-up and secret the specification
+//! states, all data, never words. It is the one seam through which a route asks who the caller is.
+//! Generated code supplies an authorizer built from the schemes; [`ServiceToken`] is the small one
+//! for a service network, which admits the service credential and anonymous calls that ask for no
+//! browser check, and refuses every other scheme.
+//!
+//! Where a contract is served depends on its exposure. [`Routes::new`] is the service network's
+//! listener: public and internal contracts. [`Routes::gateway`] faces browsers and the internet:
+//! public contracts only, so an internal contract has no route there at all. A local contract is
+//! an in-process call and is never served on either.
 
 use crate::telemetry::{NoTelemetry, Span, Telemetry};
 use axum::body::Bytes;
-use axum::http::{header::CONTENT_TYPE, HeaderMap, HeaderValue, StatusCode};
+use axum::http::{header::CONTENT_TYPE, HeaderMap, HeaderValue, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use axum::Router;
@@ -71,6 +77,178 @@ pub const TENANT: &str = "x-tenant-id";
 /// The header carrying a request's correlation id.
 pub const CORRELATION: &str = "x-correlation-id";
 
+/// The header carrying the request token of a browser's session or visit (an auth with `csrf`).
+pub const CSRF_TOKEN: &str = "x-csrf-token";
+
+/// Where a contract can be reached from (`contract.exposure`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Exposure {
+    /// Browsers and the internet, through the gateway.
+    Public,
+    /// The service network only.
+    Internal,
+    /// An in-process call; never served on a route.
+    Local,
+}
+
+/// How a caller proves who it is (`contract.auth.scheme`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Scheme {
+    /// Nothing: anyone may call.
+    Anonymous,
+    /// A session established by signing in.
+    Session,
+    /// The credential of a platform component.
+    Service,
+    /// The provisioning token of one realm.
+    ProvisioningToken,
+    /// A request signed with the named secret.
+    Signature,
+    /// An address signed with the named secret.
+    SignedAddress,
+    /// A token an agent holds on behalf of a person.
+    Delegation,
+    /// A local call inside the process.
+    InProcess,
+}
+
+/// What tenant data a contract reads and returns (`contract.tenantScope`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TenantScope {
+    /// Only the tenant the request is made in; a principal's own tenant must be that one.
+    Request,
+    /// No tenant's data.
+    None,
+    /// Data across tenants.
+    Platform,
+}
+
+/// Who may call a contract and from where, as the specification states it (`contract.exposure`,
+/// `contract.auth`, `contract.tenantScope`, `contract.development`). Every member is data the
+/// authorizer checks; a member left at its empty value asks for no check of its own, and the
+/// scheme alone decides what credential is needed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Access {
+    /// Where it can be reached from.
+    pub exposure: Exposure,
+    /// How the caller proves who it is.
+    pub scheme: Scheme,
+    /// The roles any one of which admits the caller; empty when the scheme alone decides.
+    pub roles: &'static [&'static str],
+    /// Whether the tenant's own policies decide in the handler (the route then only establishes
+    /// the principal).
+    pub tenant_policies: bool,
+    /// Whether a browser call carries the request token of its session or visit
+    /// ([`CSRF_TOKEN`]).
+    pub csrf: bool,
+    /// Whether a browser call comes from an origin of the site it addresses.
+    pub origin: bool,
+    /// How recently the caller must have proved who it is, when the contract asks for it.
+    pub step_up: Option<Duration>,
+    /// The name of the secret a signature or a signed address is verified with.
+    pub secret: Option<&'static str>,
+    /// What tenant data it returns, when the specification states it.
+    pub tenant_scope: Option<TenantScope>,
+    /// The development condition without which it does not exist, for a development fixture.
+    pub development: Option<&'static str>,
+}
+
+impl Access {
+    /// The access of an in-process call: local, no credential.
+    pub const LOCAL: Access = Access {
+        exposure: Exposure::Local,
+        scheme: Scheme::InProcess,
+        roles: &[],
+        tenant_policies: false,
+        csrf: false,
+        origin: false,
+        step_up: None,
+        secret: None,
+        tenant_scope: None,
+        development: None,
+    };
+
+    /// An internal contract taking the service credential.
+    pub const SERVICE: Access = Access {
+        exposure: Exposure::Internal,
+        scheme: Scheme::Service,
+        ..Access::LOCAL
+    };
+
+    /// An internal contract anyone on the service network may call, such as a health check.
+    pub const INTERNAL_ANONYMOUS: Access = Access {
+        exposure: Exposure::Internal,
+        scheme: Scheme::Anonymous,
+        ..Access::LOCAL
+    };
+}
+
+/// What a request presents to the authorizer: its headers, its target (path and query) and its
+/// body, for a scheme that verifies a signature over it.
+#[derive(Clone, Copy, Debug)]
+pub struct Presented<'a> {
+    /// The request headers.
+    pub headers: &'a HeaderMap,
+    /// The path and query the request was made to.
+    pub target: &'a str,
+    /// The request body, as received.
+    pub body: &'a [u8],
+}
+
+impl<'a> Presented<'a> {
+    /// The value of header `name`, when it is present, text and not empty.
+    pub fn header(&self, name: &str) -> Option<&'a str> {
+        header(self.headers, name)
+    }
+
+    /// The bearer token of the `authorization` header, when it carries one.
+    pub fn bearer(&self) -> Option<&'a str> {
+        self.header("authorization")
+            .and_then(|value| value.strip_prefix("Bearer "))
+            .map(str::trim)
+            .filter(|token| !token.is_empty())
+    }
+}
+
+/// A site the gateway serves, as the deployment knows it: the tenant whose site it is and the
+/// origins its pages are served from.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Site {
+    /// The tenant whose site it is.
+    pub tenant: String,
+    /// The origins (`scheme://host[:port]`) its pages are served from.
+    pub origins: Vec<String>,
+}
+
+/// Who a credential established, as the deployment's lookup returns it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Principal {
+    /// Its id.
+    pub subject: String,
+    /// What kind of principal it is, such as `person`, `agent` or `service`.
+    pub kind: String,
+    /// The tenant it belongs to, when it belongs to one.
+    pub tenant: Option<String>,
+    /// The roles it holds.
+    pub roles: Vec<String>,
+    /// When it last proved who it is, in milliseconds since the Unix epoch, when known.
+    pub authenticated_at_ms: Option<i64>,
+    /// The request token of its session, for a session.
+    pub csrf_token: Option<String>,
+}
+
+/// One route through the gateway: the path of a public contract, the contract's reference and
+/// the component that serves it. Generated code lists exactly the public contracts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GatewayRoute {
+    /// The path it is served at.
+    pub path: &'static str,
+    /// The contract's reference, such as `CT-012`.
+    pub contract: &'static str,
+    /// The component that serves it.
+    pub component: &'static str,
+}
+
 /// What the specification states about one contract operation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ContractSpec {
@@ -78,8 +256,8 @@ pub struct ContractSpec {
     pub id: &'static str,
     /// The route it is served at, such as `/internal/leases/grant`.
     pub path: &'static str,
-    /// The authorization requirement (`auth`), interpreted by the [`Authorizer`].
-    pub auth: &'static str,
+    /// Who may call it and from where, checked by the [`Authorizer`].
+    pub access: Access,
     /// How long the handler may run (`timeoutMs`). The server answers [`FailureCode::Timeout`]
     /// after this.
     pub timeout: Duration,
@@ -225,13 +403,15 @@ pub struct Caller {
     pub attributes: BTreeMap<String, String>,
 }
 
-/// Decides who may call a contract. Written by hand per deployment.
+/// Decides who may call a contract. Generated from the specification's schemes, or written by
+/// hand for a small service network ([`ServiceToken`]).
 pub trait Authorizer: Send + Sync + 'static {
-    /// Check `headers` against the contract's `requirement` and say who is calling.
+    /// Check what `request` presents against the contract's `access` and say who is calling. An
+    /// authorizer refuses any scheme it cannot check in full.
     fn authorize(
         &self,
-        requirement: &str,
-        headers: &HeaderMap,
+        access: &Access,
+        request: &Presented<'_>,
     ) -> impl Future<Output = Result<Caller, Refusal>> + Send;
 }
 
@@ -251,8 +431,12 @@ fn header<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
         .filter(|value| !value.is_empty())
 }
 
-/// A shared secret in a header: the requirement `none` lets anyone call, any other requirement
-/// needs the secret, and a caller who presents it is subject `service` of kind `service`. Also the matching [`Credentials`](crate::Credentials) on the client side.
+/// A shared secret in a header, for a service network: [`Scheme::Service`] needs the secret, and
+/// a caller who presents it is subject `service` of kind `service`; [`Scheme::Anonymous`] admits
+/// anyone when the contract asks for no CSRF or origin check, which this authorizer cannot make;
+/// every other scheme, anything local, and any contract asking for roles, step-up or a
+/// development condition is refused. Also the matching [`Credentials`](crate::Credentials) on the
+/// client side.
 #[derive(Clone)]
 pub struct ServiceToken {
     /// The header that carries the secret.
@@ -277,26 +461,42 @@ impl ServiceToken {
 }
 
 impl Authorizer for ServiceToken {
-    async fn authorize(&self, requirement: &str, headers: &HeaderMap) -> Result<Caller, Refusal> {
-        let correlation = header(headers, CORRELATION).unwrap_or("").to_string();
-        if requirement == "none" {
-            return Ok(Caller {
+    async fn authorize(&self, access: &Access, request: &Presented<'_>) -> Result<Caller, Refusal> {
+        let correlation = request.header(CORRELATION).unwrap_or("").to_string();
+        let refused = |message: &str| Refusal {
+            code: FailureCode::Forbidden,
+            message: message.into(),
+        };
+        if access.exposure == Exposure::Local {
+            return Err(refused("a local contract is not served on a route"));
+        }
+        if access.development.is_some() || !access.roles.is_empty() || access.step_up.is_some() {
+            return Err(refused(
+                "this service network cannot check what the contract asks",
+            ));
+        }
+        match access.scheme {
+            Scheme::Anonymous if !access.csrf && !access.origin => Ok(Caller {
                 subject: None,
                 correlation,
                 attributes: BTreeMap::new(),
-            });
-        }
-        if self.presented(headers) {
-            Ok(Caller {
+            }),
+            Scheme::Service if self.presented(request.headers) => Ok(Caller {
                 subject: Some("service".into()),
                 correlation,
                 attributes: BTreeMap::from([("kind".to_string(), "service".to_string())]),
-            })
-        } else {
-            Err(Refusal {
+            }),
+            Scheme::Service => Err(Refusal {
                 code: FailureCode::Unauthenticated,
                 message: "service token required".into(),
-            })
+            }),
+            Scheme::Anonymous
+            | Scheme::Session
+            | Scheme::ProvisioningToken
+            | Scheme::Signature
+            | Scheme::SignedAddress
+            | Scheme::Delegation
+            | Scheme::InProcess => Err(refused("this service network does not admit the scheme")),
         }
     }
 }
@@ -522,23 +722,62 @@ fn runtime_failure<C: Contract>(
     )
 }
 
+/// Which listener a [`Routes`] is: the service network's, or the gateway's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Facing {
+    /// The service network: public and internal contracts.
+    Service,
+    /// Browsers and the internet: public contracts only.
+    Gateway,
+}
+
+impl Facing {
+    /// Whether a contract of `exposure` is served on this listener. A local contract never is.
+    pub fn serves(self, exposure: Exposure) -> bool {
+        match (self, exposure) {
+            (_, Exposure::Local) => false,
+            (Facing::Service, Exposure::Public | Exposure::Internal) => true,
+            (Facing::Gateway, Exposure::Public) => true,
+            (Facing::Gateway, Exposure::Internal) => false,
+        }
+    }
+}
+
 /// Contract handlers collected into an axum router.
 pub struct Routes<A: Authorizer> {
     router: Router,
     authorizer: Arc<A>,
     replay: Arc<Replay>,
     telemetry: Arc<dyn Telemetry>,
+    facing: Facing,
 }
 
 impl<A: Authorizer> Routes<A> {
-    /// No routes yet; every call will be checked by `authorizer`.
+    /// No routes yet, on the service network: every public and internal contract served is
+    /// checked by `authorizer`; a local contract is not served.
     pub fn new(authorizer: A) -> Self {
         Routes {
             router: Router::new(),
             authorizer: Arc::new(authorizer),
             replay: Arc::new(Replay::new(DEFAULT_REPLAY_BYTES)),
             telemetry: Arc::new(NoTelemetry),
+            facing: Facing::Service,
         }
+    }
+
+    /// No routes yet, facing browsers and the internet: only public contracts are served, so an
+    /// internal or local contract given to [`Routes::serve`] has no route here and a call to its
+    /// path is answered 404 by the router.
+    pub fn gateway(authorizer: A) -> Self {
+        Routes {
+            facing: Facing::Gateway,
+            ..Routes::new(authorizer)
+        }
+    }
+
+    /// The listener these routes are.
+    pub fn facing(&self) -> Facing {
+        self.facing
     }
 
     /// Keep at most `max_bytes` of recorded answers for replay (8 MiB by default), counting each
@@ -555,9 +794,11 @@ impl<A: Authorizer> Routes<A> {
         self
     }
 
-    /// Serve contract `C` with `handler`.
+    /// Serve contract `C` with `handler`, when its exposure is served on this listener ([`Facing`]);
+    /// otherwise the routes are returned unchanged and the contract has no route here.
     ///
-    /// Per call: the authorizer checks `C::SPEC.auth` (a refusal answers at once); for an
+    /// Per call: the authorizer checks `C::SPEC.access` against the request's headers, target and
+    /// body (a refusal answers at once); for an
     /// idempotent contract with an `idempotency-key` header, an answer already given to the same
     /// tenant and subject under the same key and request is replayed without running the handler,
     /// the same key with another request is refused (`idempotency_conflict`), and a call of the
@@ -589,10 +830,13 @@ impl<A: Authorizer> Routes<A> {
         F: Fn(Caller, C::Request) -> Fut + Clone + Send + Sync + 'static,
         Fut: Future<Output = Result<C::Response, Failure<C::Error>>> + Send + 'static,
     {
+        if !self.facing.serves(C::SPEC.access.exposure) {
+            return self;
+        }
         let authorizer = self.authorizer.clone();
         let replay = self.replay.clone();
         let telemetry = self.telemetry.clone();
-        let route = move |headers: HeaderMap, body: Bytes| {
+        let route = move |uri: Uri, headers: HeaderMap, body: Bytes| {
             let (authorizer, replay, telemetry, handler) = (
                 authorizer.clone(),
                 replay.clone(),
@@ -601,8 +845,12 @@ impl<A: Authorizer> Routes<A> {
             );
             async move {
                 let span = Span::start(&telemetry, "contract.call");
+                let target = uri
+                    .path_and_query()
+                    .map_or_else(|| uri.path().to_string(), |p| p.as_str().to_string());
                 let (status, body) =
-                    answer::<C, A, F, Fut>(&authorizer, &replay, handler, headers, body).await;
+                    answer::<C, A, F, Fut>(&authorizer, &replay, handler, &target, headers, body)
+                        .await;
                 span.finish(
                     status < 500,
                     &[
@@ -627,6 +875,7 @@ async fn answer<C, A, F, Fut>(
     authorizer: &A,
     replay: &Arc<Replay>,
     handler: F,
+    target: &str,
     headers: HeaderMap,
     body: Bytes,
 ) -> (u16, Bytes)
@@ -636,7 +885,12 @@ where
     F: Fn(Caller, C::Request) -> Fut,
     Fut: Future<Output = Result<C::Response, Failure<C::Error>>> + Send + 'static,
 {
-    let caller = match authorizer.authorize(C::SPEC.auth, &headers).await {
+    let presented = Presented {
+        headers: &headers,
+        target,
+        body: &body,
+    };
+    let caller = match authorizer.authorize(&C::SPEC.access, &presented).await {
         Ok(caller) => caller,
         Err(refusal) => {
             let correlation = header(&headers, CORRELATION).unwrap_or("");
@@ -778,7 +1032,7 @@ mod tests {
         const SPEC: ContractSpec = ContractSpec {
             id: "CT-0",
             path: "/probe",
-            auth: "",
+            access: Access::SERVICE,
             timeout: Duration::from_secs(1),
             idempotent: false,
         };
@@ -852,8 +1106,16 @@ mod tests {
         );
     }
 
+    fn presented<'a>(headers: &'a HeaderMap) -> Presented<'a> {
+        Presented {
+            headers,
+            target: "/probe",
+            body: b"{}",
+        }
+    }
+
     #[test]
-    fn the_service_token_refuses_an_unstated_requirement_without_the_token() {
+    fn the_service_token_admits_the_service_scheme_only_with_the_token() {
         let token = ServiceToken {
             header: "x-token",
             secret: "s".into(),
@@ -862,7 +1124,89 @@ mod tests {
             .build()
             .unwrap();
         let empty = HeaderMap::new();
-        assert!(runtime.block_on(token.authorize("", &empty)).is_err());
-        assert!(runtime.block_on(token.authorize("none", &empty)).is_ok());
+        let mut wrong = HeaderMap::new();
+        wrong.insert("x-token", HeaderValue::from_static("t"));
+        let mut right = HeaderMap::new();
+        right.insert("x-token", HeaderValue::from_static("s"));
+        let service = Access::SERVICE;
+        let refused = runtime
+            .block_on(token.authorize(&service, &presented(&empty)))
+            .unwrap_err();
+        assert_eq!(refused.code, FailureCode::Unauthenticated);
+        assert!(runtime
+            .block_on(token.authorize(&service, &presented(&wrong)))
+            .is_err());
+        let caller = runtime
+            .block_on(token.authorize(&service, &presented(&right)))
+            .unwrap();
+        assert_eq!(caller.subject.as_deref(), Some("service"));
+        assert!(runtime
+            .block_on(token.authorize(&Access::INTERNAL_ANONYMOUS, &presented(&empty)))
+            .is_ok());
+    }
+
+    /// Default deny: every scheme the service token cannot check in full is refused, even with
+    /// the token; so is anything local, and an anonymous call that asks for browser checks.
+    #[test]
+    fn the_service_token_refuses_every_scheme_it_cannot_check() {
+        let token = ServiceToken {
+            header: "x-token",
+            secret: "s".into(),
+        };
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        let mut right = HeaderMap::new();
+        right.insert("x-token", HeaderValue::from_static("s"));
+        for scheme in [
+            Scheme::Session,
+            Scheme::ProvisioningToken,
+            Scheme::Signature,
+            Scheme::SignedAddress,
+            Scheme::Delegation,
+            Scheme::InProcess,
+        ] {
+            let access = Access {
+                scheme,
+                ..Access::SERVICE
+            };
+            assert!(
+                runtime
+                    .block_on(token.authorize(&access, &presented(&right)))
+                    .is_err(),
+                "{scheme:?}"
+            );
+        }
+        let local = Access {
+            scheme: Scheme::Service,
+            ..Access::LOCAL
+        };
+        assert!(runtime
+            .block_on(token.authorize(&local, &presented(&right)))
+            .is_err());
+        let checked = Access {
+            csrf: true,
+            ..Access::INTERNAL_ANONYMOUS
+        };
+        assert!(runtime
+            .block_on(token.authorize(&checked, &presented(&right)))
+            .is_err());
+        let with_roles = Access {
+            roles: &["operator"],
+            ..Access::SERVICE
+        };
+        assert!(runtime
+            .block_on(token.authorize(&with_roles, &presented(&right)))
+            .is_err());
+    }
+
+    #[test]
+    fn the_gateway_serves_public_contracts_only_and_nothing_serves_a_local_one() {
+        assert!(Facing::Gateway.serves(Exposure::Public));
+        assert!(!Facing::Gateway.serves(Exposure::Internal));
+        assert!(!Facing::Gateway.serves(Exposure::Local));
+        assert!(Facing::Service.serves(Exposure::Public));
+        assert!(Facing::Service.serves(Exposure::Internal));
+        assert!(!Facing::Service.serves(Exposure::Local));
     }
 }

@@ -7,7 +7,10 @@
 //! - one contract served on its own through its handler trait, and every failure answered with
 //!   the specification's error body at the status of its kind, byte for byte (WG-4893);
 //! - the machine handlers bringing contract requests and another machine's emitted event to the
-//!   machines, through the memory store.
+//!   machines, through the memory store;
+//! - exposure and auth (WG-4908): an internal contract has no route through the gateway, only the
+//!   public contract is in `GATEWAY_ROUTES`, and the generated `SpecAuthorizer` refuses a missing
+//!   or wrong credential for every scheme.
 //!
 //! That an undeclared call does not compile is the `compile_fail` example in
 //! `src/backend/deps.rs`.
@@ -15,10 +18,11 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
-use axum::http::HeaderMap;
+use axum::http::{HeaderMap, HeaderValue};
 use strata_runtime::{
-    Authorizer, CallError, Caller, Client, Contract, DispatchError, Dispatcher, Envelope,
-    FailureCode, Host, MemoryStore, NoCredentials, Refusal, Routes, ServiceToken, TestClock, Time,
+    Access, Authorizer, CallError, Caller, Client, Contract, DispatchError, Dispatcher, Envelope,
+    Exposure, FailureCode, Host, MemoryStore, NoCredentials, Presented, Principal, Refusal, Routes,
+    Scheme, ServiceToken, Site, TenantScope, TestClock, Time,
 };
 use strata_spec_compiler_wiring_fixture::contracts::{
     self, CancelJobRequest, CancelJobResponse, MakeReportRequest, MakeReportResponse,
@@ -31,26 +35,36 @@ use strata_spec_compiler_wiring_fixture::{
 /// The header the test's callers name themselves in: `kind/subject` or `kind/subject/role`.
 const PRINCIPAL: &str = "x-principal";
 
-/// Admits anyone to a contract whose requirement is `none`, and otherwise the principal named in
-/// the `x-principal` header; refuses any other requirement without one, the empty requirement of a
-/// contract that states none included. The correlation id is the `x-correlation-id` header.
+/// Admits anyone to an anonymous contract, and to a session contract the principal named in the
+/// `x-principal` header; refuses a session contract without one, and every other scheme. The
+/// correlation id is the `x-correlation-id` header.
 struct Principals;
 
 impl Authorizer for Principals {
-    async fn authorize(&self, requirement: &str, headers: &HeaderMap) -> Result<Caller, Refusal> {
-        let named = headers.get(PRINCIPAL).and_then(|v| v.to_str().ok());
-        let correlation = headers
-            .get("x-correlation-id")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("")
-            .to_string();
-        let Some(named) = named else {
-            if requirement == "none" {
+    async fn authorize(&self, access: &Access, request: &Presented<'_>) -> Result<Caller, Refusal> {
+        let named = request.header(PRINCIPAL);
+        let correlation = request.header("x-correlation-id").unwrap_or("").to_string();
+        match access.scheme {
+            Scheme::Anonymous => {
                 return Ok(Caller {
                     correlation,
                     ..Caller::default()
-                });
+                })
             }
+            Scheme::Session => {}
+            Scheme::Service
+            | Scheme::ProvisioningToken
+            | Scheme::Signature
+            | Scheme::SignedAddress
+            | Scheme::Delegation
+            | Scheme::InProcess => {
+                return Err(Refusal {
+                    code: FailureCode::Forbidden,
+                    message: "this test admits sessions only".into(),
+                })
+            }
+        }
+        let Some(named) = named else {
             return Err(Refusal {
                 code: FailureCode::Unauthenticated,
                 message: "name a principal".into(),
@@ -542,8 +556,7 @@ async fn one_contract_is_served_alone_and_answers_with_the_error_body() {
 
 /// Refusals of the runtime and of the specification's checks answer with the error body at the
 /// status of their kind: no principal 401, a policy 403, a quota refusal (kind throttled) 429.
-/// A contract that states no requirement is refused without a principal: the authorizer does not
-/// recognise the empty requirement.
+/// Ping takes a session, so it is refused without a principal.
 #[tokio::test(flavor = "current_thread")]
 async fn refusals_answer_with_the_error_body_at_the_status_of_their_kind() {
     let scheduler = Arc::new(Scheduler {
@@ -599,4 +612,553 @@ async fn refusals_answer_with_the_error_body_at_the_status_of_their_kind() {
     assert_eq!(status, 401);
     let (status, body) = post(&base, "/gateway/ping", &[(PRINCIPAL, "member/mia")], "{}").await;
     assert_eq!((status, body.as_str()), (200, r#"{"pong":"pong"}"#));
+}
+
+/// The gateway serves public contracts only: submit-job and cancel-job are internal, so through
+/// `Routes::gateway` their paths have no route (404) even for a principal the authorizer admits,
+/// while public ping is served; the same contracts are served on the service network. The
+/// generated gateway table lists ping alone.
+#[tokio::test(flavor = "current_thread")]
+async fn an_internal_contract_is_unreachable_through_the_gateway() {
+    assert_eq!(
+        routes::GATEWAY_ROUTES
+            .iter()
+            .map(|r| (r.path, r.contract, r.component))
+            .collect::<Vec<_>>(),
+        [("/gateway/ping", "CT-3", "gateway")]
+    );
+    assert_eq!(
+        <routes::SubmitJob as Contract>::SPEC.access.exposure,
+        Exposure::Internal
+    );
+    let scheduler = || {
+        Arc::new(Scheduler {
+            deps: deps::SchedulerDeps::new(routes::ReportsClient::new(
+                Client::new("http://127.0.0.1:9", NoCredentials).unwrap(),
+            )),
+            submitted: Mutex::new(Vec::new()),
+        })
+    };
+    let gateway = routes::scheduler_routes(
+        Routes::gateway(Principals),
+        scheduler(),
+        Arc::new(Hooks::default()),
+    );
+    let gateway = routes::serve_ping(gateway, Arc::new(Pong), Arc::new(()));
+    let base = serve(gateway.into_router()).await;
+    let job = r#"{"job":"j1","priority":3}"#;
+    let (status, _) = post(
+        &base,
+        "/api/jobs/submit",
+        &[(PRINCIPAL, "operator/ann")],
+        job,
+    )
+    .await;
+    assert_eq!(status, 404);
+    let (status, _) = post(&base, "/scheduler/cancel-job", &[], r#"{"job":"j1"}"#).await;
+    assert_eq!(status, 404);
+    let (status, _) = post(&base, "/gateway/ping", &[(PRINCIPAL, "member/mia")], "{}").await;
+    assert_eq!(status, 200);
+
+    let service = routes::scheduler_routes(
+        Routes::new(Principals),
+        scheduler(),
+        Arc::new(Hooks::default()),
+    );
+    let base = serve(service.into_router()).await;
+    let (status, body) = post(
+        &base,
+        "/api/jobs/submit",
+        &[(PRINCIPAL, "operator/ann")],
+        job,
+    )
+    .await;
+    assert_eq!(status, 200, "{body}");
+}
+
+/// The deployment's part of the generated authorizer, for the tests: one site `t1.example` of
+/// tenant `t1`, sessions by the `x-session` header, the visitor token `visit`, the service secret
+/// `svc`, provisioning token `prov`, delegation token `deleg`, a signature header naming its
+/// secret, signed addresses ending in `sig=good`, and the development condition `DEV` when `dev`.
+struct Holes {
+    dev: bool,
+}
+
+const NOW: i64 = 10_000_000;
+
+fn person(tenant: &str, authenticated_at_ms: i64) -> Principal {
+    Principal {
+        subject: "ann".into(),
+        kind: "person".into(),
+        tenant: Some(tenant.into()),
+        roles: vec!["author".into()],
+        authenticated_at_ms: Some(authenticated_at_ms),
+        csrf_token: Some("tok".into()),
+    }
+}
+
+impl routes::AuthHoles for Holes {
+    fn site(&self, request: &Presented<'_>) -> Option<Site> {
+        (request.header("host") == Some("t1.example")).then(|| Site {
+            tenant: "t1".into(),
+            origins: vec!["https://t1.example".into()],
+        })
+    }
+
+    async fn session(&self, request: &Presented<'_>) -> Result<Option<Principal>, String> {
+        Ok(match request.header("x-session") {
+            Some("s-good") => Some(person("t1", NOW - 1_000)),
+            Some("s-stale") => Some(person("t1", NOW - 3_600_000)),
+            Some("s-other") => Some(person("t2", NOW - 1_000)),
+            _ => None,
+        })
+    }
+
+    fn visitor_token(&self, site: &Site, token: &str) -> bool {
+        site.tenant == "t1" && token == "visit"
+    }
+
+    fn service_secret(&self) -> Option<String> {
+        Some("svc".into())
+    }
+
+    async fn provisioning(&self, token: &str) -> Result<Option<Principal>, String> {
+        Ok((token == "prov").then(|| Principal {
+            subject: "scim".into(),
+            kind: "provisioner".into(),
+            tenant: Some("t1".into()),
+            ..Principal::default()
+        }))
+    }
+
+    async fn delegation(&self, token: &str) -> Result<Option<Principal>, String> {
+        Ok((token == "deleg").then(|| Principal {
+            subject: "agent".into(),
+            kind: "agent".into(),
+            tenant: Some("t1".into()),
+            ..Principal::default()
+        }))
+    }
+
+    async fn signature(
+        &self,
+        secret: &'static str,
+        request: &Presented<'_>,
+    ) -> Result<Option<Principal>, String> {
+        let expected = format!("{secret}:ok");
+        Ok(
+            (request.header("x-signature") == Some(expected.as_str())).then(|| Principal {
+                subject: "sender".into(),
+                kind: "external".into(),
+                ..Principal::default()
+            }),
+        )
+    }
+
+    fn signed_address(&self, secret: &'static str, request: &Presented<'_>) -> bool {
+        secret == "file-key" && request.target.ends_with("sig=good")
+    }
+
+    fn development(&self, condition: &'static str) -> bool {
+        self.dev && condition == "DEV"
+    }
+
+    fn now_ms(&self) -> i64 {
+        NOW
+    }
+}
+
+/// Asks the generated authorizer about `access` for a request to `target` with `headers`.
+async fn ask(
+    authorizer: &routes::SpecAuthorizer<Holes>,
+    access: Access,
+    target: &str,
+    headers: &[(&'static str, &'static str)],
+) -> Result<Caller, Refusal> {
+    let mut map = HeaderMap::new();
+    for (name, value) in headers {
+        map.insert(*name, HeaderValue::from_static(*value));
+    }
+    let presented = Presented {
+        headers: &map,
+        target,
+        body: b"{}",
+    };
+    authorizer.authorize(&access, &presented).await
+}
+
+/// The code of a refusal, or `None` when the call was admitted.
+fn refused(answer: Result<Caller, Refusal>) -> Option<FailureCode> {
+    answer.err().map(|r| r.code)
+}
+
+/// Every scheme of the generated authorizer refuses a missing credential and a wrong one and
+/// admits the right one; and around the scheme, a local contract, a development fixture outside
+/// development, a missing or foreign origin, a missing or wrong request token, a role not held, a
+/// stale authentication and a principal of another tenant are refused.
+#[tokio::test(flavor = "current_thread")]
+async fn each_scheme_refuses_a_missing_or_wrong_credential() {
+    let authorizer = routes::SpecAuthorizer::new(Holes { dev: false });
+    let public = |scheme| Access {
+        exposure: Exposure::Public,
+        scheme,
+        ..Access::LOCAL
+    };
+    let host = ("host", "t1.example");
+    let unauthenticated = Some(FailureCode::Unauthenticated);
+    let forbidden = Some(FailureCode::Forbidden);
+
+    // Anonymous: nothing to present, so nothing is refused for the lack of it.
+    assert_eq!(
+        refused(ask(&authorizer, public(Scheme::Anonymous), "/", &[]).await),
+        None
+    );
+
+    // Session.
+    let session = public(Scheme::Session);
+    assert_eq!(
+        refused(ask(&authorizer, session, "/", &[]).await),
+        unauthenticated
+    );
+    assert_eq!(
+        refused(ask(&authorizer, session, "/", &[("x-session", "s-forged")]).await),
+        unauthenticated
+    );
+    let caller = ask(&authorizer, session, "/", &[("x-session", "s-good")])
+        .await
+        .unwrap();
+    assert_eq!(caller.subject.as_deref(), Some("ann"));
+    assert_eq!(
+        caller.attributes.get("tenant").map(String::as_str),
+        Some("t1")
+    );
+    assert_eq!(
+        caller.attributes.get("kind").map(String::as_str),
+        Some("person")
+    );
+
+    // Service.
+    let service = Access::SERVICE;
+    assert_eq!(
+        refused(ask(&authorizer, service, "/", &[]).await),
+        unauthenticated
+    );
+    assert_eq!(
+        refused(ask(&authorizer, service, "/", &[("x-service-token", "wrong")]).await),
+        unauthenticated
+    );
+    let caller = ask(&authorizer, service, "/", &[("x-service-token", "svc")])
+        .await
+        .unwrap();
+    assert_eq!(caller.subject.as_deref(), Some("service"));
+
+    // Provisioning token and delegation: the bearer token.
+    for (scheme, token) in [
+        (Scheme::ProvisioningToken, "Bearer prov"),
+        (Scheme::Delegation, "Bearer deleg"),
+    ] {
+        let access = public(scheme);
+        assert_eq!(
+            refused(ask(&authorizer, access, "/", &[]).await),
+            unauthenticated,
+            "{scheme:?}"
+        );
+        assert_eq!(
+            refused(
+                ask(
+                    &authorizer,
+                    access,
+                    "/",
+                    &[("authorization", "Bearer forged")]
+                )
+                .await
+            ),
+            unauthenticated,
+            "{scheme:?}"
+        );
+        assert_eq!(
+            refused(ask(&authorizer, access, "/", &[("authorization", "Basic prov")]).await),
+            unauthenticated,
+            "{scheme:?}"
+        );
+        assert_eq!(
+            refused(ask(&authorizer, access, "/", &[("authorization", token)]).await),
+            None,
+            "{scheme:?}"
+        );
+    }
+
+    // Signature of a named secret.
+    let signed = Access {
+        secret: Some("hook-key"),
+        ..public(Scheme::Signature)
+    };
+    assert_eq!(
+        refused(ask(&authorizer, signed, "/", &[]).await),
+        unauthenticated
+    );
+    assert_eq!(
+        refused(ask(&authorizer, signed, "/", &[("x-signature", "other-key:ok")]).await),
+        unauthenticated
+    );
+    assert_eq!(
+        refused(ask(&authorizer, signed, "/", &[("x-signature", "hook-key:ok")]).await),
+        None
+    );
+    assert_eq!(
+        refused(
+            ask(
+                &authorizer,
+                public(Scheme::Signature),
+                "/",
+                &[("x-signature", "hook-key:ok")]
+            )
+            .await
+        ),
+        forbidden
+    );
+
+    // Signed address.
+    let address = Access {
+        secret: Some("file-key"),
+        ..public(Scheme::SignedAddress)
+    };
+    assert_eq!(
+        refused(ask(&authorizer, address, "/files/a", &[]).await),
+        forbidden
+    );
+    assert_eq!(
+        refused(ask(&authorizer, address, "/files/a?sig=bad", &[]).await),
+        forbidden
+    );
+    assert_eq!(
+        refused(ask(&authorizer, address, "/files/a?sig=good", &[]).await),
+        None
+    );
+
+    // In-process and anything local: never on a route, whatever is presented.
+    assert_eq!(
+        refused(
+            ask(
+                &authorizer,
+                public(Scheme::InProcess),
+                "/",
+                &[("x-service-token", "svc")]
+            )
+            .await
+        ),
+        forbidden
+    );
+    let local_service = Access {
+        scheme: Scheme::Service,
+        ..Access::LOCAL
+    };
+    assert_eq!(
+        refused(
+            ask(
+                &authorizer,
+                local_service,
+                "/",
+                &[("x-service-token", "svc")]
+            )
+            .await
+        ),
+        forbidden
+    );
+
+    // A browser write: origin of the site, then the request token of the session or visit.
+    let write = Access {
+        csrf: true,
+        origin: true,
+        tenant_scope: Some(TenantScope::Request),
+        ..session
+    };
+    let good = [
+        host,
+        ("x-session", "s-good"),
+        ("origin", "https://t1.example"),
+        ("x-csrf-token", "tok"),
+    ];
+    assert_eq!(refused(ask(&authorizer, write, "/", &good).await), None);
+    assert_eq!(
+        refused(
+            ask(
+                &authorizer,
+                write,
+                "/",
+                &[host, ("x-session", "s-good"), ("x-csrf-token", "tok")]
+            )
+            .await
+        ),
+        forbidden
+    );
+    assert_eq!(
+        refused(
+            ask(
+                &authorizer,
+                write,
+                "/",
+                &[
+                    host,
+                    ("x-session", "s-good"),
+                    ("origin", "https://evil.example"),
+                    ("x-csrf-token", "tok")
+                ]
+            )
+            .await
+        ),
+        forbidden
+    );
+    assert_eq!(
+        refused(
+            ask(
+                &authorizer,
+                write,
+                "/",
+                &[
+                    host,
+                    ("x-session", "s-good"),
+                    ("origin", "https://t1.example")
+                ]
+            )
+            .await
+        ),
+        forbidden
+    );
+    assert_eq!(
+        refused(
+            ask(
+                &authorizer,
+                write,
+                "/",
+                &[
+                    host,
+                    ("x-session", "s-good"),
+                    ("origin", "https://t1.example"),
+                    ("x-csrf-token", "visit")
+                ]
+            )
+            .await
+        ),
+        forbidden
+    );
+    // A session of another tenant on this tenant's site.
+    assert_eq!(
+        refused(
+            ask(
+                &authorizer,
+                write,
+                "/",
+                &[
+                    host,
+                    ("x-session", "s-other"),
+                    ("origin", "https://t1.example"),
+                    ("x-csrf-token", "tok")
+                ]
+            )
+            .await
+        ),
+        forbidden
+    );
+    // A visitor's write carries the visitor token.
+    let visit = Access {
+        csrf: true,
+        origin: true,
+        ..public(Scheme::Anonymous)
+    };
+    assert_eq!(
+        refused(
+            ask(
+                &authorizer,
+                visit,
+                "/",
+                &[
+                    host,
+                    ("origin", "https://t1.example"),
+                    ("x-csrf-token", "visit")
+                ]
+            )
+            .await
+        ),
+        None
+    );
+    assert_eq!(
+        refused(
+            ask(
+                &authorizer,
+                visit,
+                "/",
+                &[
+                    host,
+                    ("origin", "https://t1.example"),
+                    ("x-csrf-token", "tok")
+                ]
+            )
+            .await
+        ),
+        forbidden
+    );
+    assert_eq!(
+        refused(
+            ask(
+                &authorizer,
+                visit,
+                "/",
+                &[host, ("origin", "https://t1.example")]
+            )
+            .await
+        ),
+        forbidden
+    );
+
+    // Roles: any one admits; none held is refused.
+    let authors = Access {
+        roles: &["editor", "author"],
+        ..session
+    };
+    let owners = Access {
+        roles: &["owner"],
+        ..session
+    };
+    assert_eq!(
+        refused(ask(&authorizer, authors, "/", &[("x-session", "s-good")]).await),
+        None
+    );
+    assert_eq!(
+        refused(ask(&authorizer, owners, "/", &[("x-session", "s-good")]).await),
+        forbidden
+    );
+
+    // Step-up: an authentication older than the age is refused.
+    let fresh = Access {
+        step_up: Some(std::time::Duration::from_secs(900)),
+        ..session
+    };
+    assert_eq!(
+        refused(ask(&authorizer, fresh, "/", &[("x-session", "s-good")]).await),
+        None
+    );
+    assert_eq!(
+        refused(ask(&authorizer, fresh, "/", &[("x-session", "s-stale")]).await),
+        unauthenticated
+    );
+
+    // A development fixture exists only under its condition.
+    let fixture = Access {
+        development: Some("DEV"),
+        ..owners
+    };
+    assert_eq!(
+        refused(ask(&authorizer, fixture, "/", &[("x-session", "s-good")]).await),
+        forbidden
+    );
+    let developing = routes::SpecAuthorizer::new(Holes { dev: true });
+    let dev_fixture = Access {
+        development: Some("DEV"),
+        ..authors
+    };
+    assert_eq!(
+        refused(ask(&developing, dev_fixture, "/", &[("x-session", "s-good")]).await),
+        None
+    );
 }

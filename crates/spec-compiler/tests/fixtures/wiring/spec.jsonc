@@ -14,9 +14,11 @@
 //   extra-info are json.
 // - contract errors on the wire (WG-4893): every failure is answered with the error body
 //   api-error {code, message, detail?, correlation}; busy is of kind throttled (429) and
-//   make-report's not-found of kind not_found (404) carrying an api-error. cancel-job and
-//   make-report state the requirement none, which the test's authorizer admits without a
-//   principal; a contract that states no requirement is refused without one.
+//   make-report's not-found of kind not_found (404) carrying an api-error.
+// - exposure and auth (WG-4908): ping is public with the session scheme, the only contract routed
+//   through the gateway; submit-job is internal with the session scheme; cancel-job and
+//   make-report are internal and anonymous, which the test's authorizer admits without a
+//   principal.
 {
   "exegra": "0.1",
   "system": { "id": "wiring-fixture", "name": "Wiring fixture", "generation": { "target": "rust", "wireCase": "snake_case",
@@ -64,16 +66,16 @@
   "contracts": [
     { "id": "submit-job", "name": "Submit job", "ref": "CT-1", "realisation": "generated", "implementedBy": "scheduler",
       "binding": { "protocol": "http", "method": "POST", "path": "/api/jobs/submit" },
-      "auth": "An operator.", "idempotent": true, "timeoutMs": 2000, "policyDefault": "deny",
+      "exposure": "internal", "auth": { "scheme": "session", "description": "An operator." }, "idempotent": true, "timeoutMs": 2000, "policyDefault": "deny",
       "inputs": [{ "name": "job", "type": "string" }, { "name": "priority", "type": "u32" }],
       "outputs": [{ "name": "accepted", "type": "bool" }],
       "errors": [{ "name": "busy", "condition": "Too many jobs were submitted in the last minute.", "kind": "throttled" }] },
-    { "id": "cancel-job", "name": "Cancel job", "ref": "CT-2", "realisation": "generated", "implementedBy": "scheduler", "auth": "none", "idempotent": true, "timeoutMs": 1000,
+    { "id": "cancel-job", "name": "Cancel job", "ref": "CT-2", "realisation": "generated", "implementedBy": "scheduler", "exposure": "internal", "auth": { "scheme": "anonymous", "justification": "Cancelling is safe to repeat and names only a job." }, "idempotent": true, "timeoutMs": 1000,
       "inputs": [{ "name": "job", "type": "string" }],
       "outputs": [] },
-    { "id": "ping", "name": "Ping", "ref": "CT-3", "realisation": "generated", "implementedBy": "gateway", "idempotent": false, "policyDefault": "allow",
+    { "id": "ping", "name": "Ping", "ref": "CT-3", "realisation": "generated", "implementedBy": "gateway", "exposure": "public", "readOnly": true, "tenantScope": "request", "auth": { "scheme": "session" }, "idempotent": false, "policyDefault": "allow",
       "outputs": [{ "name": "pong", "type": "string" }] },
-    { "id": "make-report", "name": "Make report", "ref": "CT-4", "realisation": "generated", "implementedBy": "reports", "auth": "none", "idempotent": true, "timeoutMs": 1000,
+    { "id": "make-report", "name": "Make report", "ref": "CT-4", "realisation": "generated", "implementedBy": "reports", "exposure": "internal", "auth": { "scheme": "anonymous", "justification": "Reports are asked for by the scheduler on the service network." }, "idempotent": true, "timeoutMs": 1000,
       "inputs": [{ "name": "job", "type": "string" }],
       "outputs": [{ "name": "text", "type": "string" }],
       "errors": [{ "name": "not-found", "condition": "No job has the id.", "type": "api-error", "kind": "not_found" }] },

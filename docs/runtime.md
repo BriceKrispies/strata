@@ -109,7 +109,7 @@ its event back at the same instance. Neither stands in for the other.
 pub struct ContractSpec {
     pub id: &'static str,        // ref, e.g. "CT-012"
     pub path: &'static str,      // the route it is served at
-    pub auth: &'static str,      // auth
+    pub access: Access,          // exposure, auth, tenantScope, development
     pub timeout: Duration,       // timeoutMs
     pub idempotent: bool,        // idempotent
 }
@@ -130,7 +130,7 @@ The generated async trait for a contract (methods returning `impl Future + Send`
 registering one handler per operation:
 
 ```rust
-Routes::new(authorizer)
+Routes::new(authorizer)   // or Routes::gateway(authorizer): public contracts only
     .serve::<GrantLease, _, _>(move |caller, request| { let s = service.clone(); async move { s.grant(caller, request).await } })
     .into_router()   // an axum Router, merged into the service's router
 ```
@@ -170,19 +170,23 @@ Per deployment, outside generated code:
 
   `Envelope { id: Option<u64>, source, key, receiver, delivery, event }`. `id` is the outbox id
   of an `at-least-once` event and stays the same on every redelivery.
-- An `Authorizer`: interprets a contract's `auth` requirement against the request headers.
+- An `Authorizer`: checks a contract's `Access` against what the request presents.
 
   ```rust
   pub trait Authorizer: Send + Sync + 'static {
-      fn authorize(&self, requirement: &str, headers: &HeaderMap)
+      fn authorize(&self, access: &Access, request: &Presented<'_>)
           -> impl Future<Output = Result<Caller, Refusal>> + Send;
   }
   ```
 
-  `ServiceToken { header, secret }` is provided: the requirement `none` admits anyone, any other
-  requirement needs the secret in the header, and a caller presenting it is subject `service`
-  with the attribute `kind = service`. Session- and tenant-based authorization stays in the
-  services. `Caller { subject, correlation, attributes }`: `attributes` is whatever else the
+  Generated code provides `routes::SpecAuthorizer<H: routes::AuthHoles>`, built from the
+  specification's schemes: the deployment fills the holes (`site`, `session`, `visitor_token`,
+  `service_secret`, `provisioning`, `delegation`, `signature`, `signed_address`, `development`),
+  each of which admits nobody by default, and the CSRF, origin, role, step-up and tenant checks
+  are generated. `ServiceToken { header, secret }` is provided for a service network: the service
+  scheme needs the secret in the header, and a caller presenting it is subject `service` with the
+  attribute `kind = service`; an anonymous contract that asks for no browser check admits anyone;
+  every other scheme is refused. `Caller { subject, correlation, attributes }`: `attributes` is whatever else the
   authorizer established, by name; the runtime never reads it, and generated routes read
   `kind`, `tenant` and `role` from it for the specification's policies and audits.
 - `Credentials` for outgoing calls (`fn apply(&self, RequestBuilder) -> RequestBuilder`);
@@ -376,11 +380,27 @@ pub trait FailureBody<E>: Send + Sync + 'static {
 }
 ```
 
-The `Authorizer` is the one seam through which a route asks who the caller is. It must refuse a
-requirement it does not recognise. A contract that states no `auth` carries the empty
-requirement, which `ServiceToken` admits only with the token (`none` admits anyone).
+`Access` is the contract's exposure (`Public`, `Internal`, `Local`) and its auth as data: a
+`Scheme` (`Anonymous`, `Session`, `Service`, `ProvisioningToken`, `Signature`, `SignedAddress`,
+`Delegation`, `InProcess`), the roles any one of which admits the caller, whether the tenant's
+own policies decide in the handler, the CSRF and origin checks of a browser call, the step-up age,
+the name of the secret a signature is verified with, the tenant scope and the development
+condition. Nothing is a sentence and nothing is matched as a string.
 
-Per call, the server: asks the `Authorizer` about `SPEC.auth` and answers its refusal at once;
+The `Authorizer` is the one seam through which a route asks who the caller is:
+`authorize(&Access, &Presented)`, where `Presented` is the request's headers, target (path and
+query) and body. It refuses any scheme it cannot check in full. Generated code supplies
+`routes::SpecAuthorizer`, built from the schemes, with the deployment's part (the session store,
+the sites and their origins, the secrets) behind the `routes::AuthHoles` trait, every method of
+which admits nobody until the deployment says otherwise. `ServiceToken` is the small authorizer
+of a service network: the service scheme with the token, and anonymous calls that ask for no
+browser check; everything else is refused.
+
+`Routes::new` is the service network's listener (public and internal contracts);
+`Routes::gateway` faces browsers and the internet and serves public contracts only, so an
+internal contract has no route there and its path answers 404. A local contract is never served.
+
+Per call, the server: asks the `Authorizer` about `SPEC.access` and answers its refusal at once;
 for an idempotent contract with an `idempotency-key` header, replays an answer already given
 under the same scope (contract, tenant, caller subject, key) to the same request (its SHA-256
 digest) without running the handler. The tenant is the authorizer's `tenant` attribute, else the

@@ -11,9 +11,10 @@ use serde_json::{Map, Number, Value};
 
 use crate::diagnostic::{Diagnostic, SPEC_ENTITY};
 use crate::ir::{
-    Behavior, Component, Constraints, Contract, ContractError, ContractField, Effect, ErrorBody,
-    ErrorWire, Event, Index, Instances, OnDelete, PayloadField, Realisation, Record, RecordField,
-    Spec, State, Storage, StructField, System, Transition, TypeDecl, TypeKind, Variable,
+    Auth, Behavior, Component, Constraints, Contract, ContractError, ContractField, Effect,
+    ErrorBody, ErrorWire, Event, Exposure, Index, Instances, OnDelete, PayloadField, Realisation,
+    Record, RecordField, Scheme, Spec, State, Storage, StructField, System, TenantScope,
+    Transition, TypeDecl, TypeKind, Variable,
 };
 use crate::jsonc;
 
@@ -606,7 +607,45 @@ impl Loader {
             }
         };
         let implemented_by = self.opt_str(obj, "implementedBy", id);
-        let auth = self.opt_str(obj, "auth", id);
+        let (auth, auth_prose) = match obj.get("auth") {
+            None | Some(Value::Null) => (None, None),
+            Some(Value::String(text)) => (None, Some(text.clone())),
+            Some(Value::Object(a)) => (self.auth(a, id), None),
+            Some(_) => {
+                self.shape(id, "\"auth\" must be an object {scheme, ...} or a sentence");
+                (None, None)
+            }
+        };
+        let exposure = match self.opt_str(obj, "exposure", id) {
+            None => None,
+            Some(text) => {
+                let parsed = Exposure::parse(&text);
+                if parsed.is_none() {
+                    self.shape(
+                        id,
+                        format!("\"exposure\" is \"{text}\"; it must be public, internal or local"),
+                    );
+                }
+                parsed
+            }
+        };
+        let read_only = self.opt_bool(obj, "readOnly", id).unwrap_or(false);
+        let tenant_scope = match self.opt_str(obj, "tenantScope", id) {
+            None => None,
+            Some(text) => {
+                let parsed = TenantScope::parse(&text);
+                if parsed.is_none() {
+                    self.shape(
+                        id,
+                        format!(
+                            "\"tenantScope\" is \"{text}\"; it must be request, none or platform"
+                        ),
+                    );
+                }
+                parsed
+            }
+        };
+        let development = self.opt_str(obj, "development", id);
         let idempotent = self.opt_bool(obj, "idempotent", id);
         let timeout_ms = self.opt_number(obj, "timeoutMs", id);
         let (binding_method, binding_path, binding_case) = match obj.get("binding") {
@@ -634,11 +673,55 @@ impl Loader {
             realisation,
             implemented_by,
             auth,
+            auth_prose,
+            exposure,
+            read_only,
+            tenant_scope,
+            development,
             idempotent,
             timeout_ms,
             binding_method,
             binding_path,
             binding_case,
+        })
+    }
+
+    /// A structured auth: its scheme and the members the format gives it. An unknown scheme is a
+    /// shape error and no auth; Exegra checks which members apply to which scheme.
+    fn auth(&mut self, a: &Obj, id: &str) -> Option<Auth> {
+        let scheme = match self.req_str(a, "scheme", id) {
+            None => None,
+            Some(text) => {
+                let parsed = Scheme::parse(&text);
+                if parsed.is_none() {
+                    self.shape(
+                        id,
+                        format!("the auth scheme \"{text}\" is not one of anonymous, session, service, provisioning-token, signature, signed-address, delegation, in-process"),
+                    );
+                }
+                parsed
+            }
+        };
+        let roles = self.opt_str_list(a, "roles", id).unwrap_or_default();
+        let policies = self.opt_str_list(a, "policies", id).unwrap_or_default();
+        let tenant_policies = self.opt_bool(a, "tenantPolicies", id).unwrap_or(false);
+        let csrf = self.opt_bool(a, "csrf", id).unwrap_or(false);
+        let origin = self.opt_bool(a, "origin", id).unwrap_or(false);
+        let step_up = self.opt_str(a, "stepUp", id);
+        let secret = self.opt_str(a, "secret", id);
+        let justification = self.opt_str(a, "justification", id);
+        let description = self.opt_str(a, "description", id);
+        Some(Auth {
+            scheme: scheme?,
+            roles,
+            policies,
+            tenant_policies,
+            csrf,
+            origin,
+            step_up,
+            secret,
+            justification,
+            description,
         })
     }
 
