@@ -23,7 +23,7 @@ export default defineConfig({
   ],
   webServer: [
     {
-      command: 'node scripts/dev.mjs --no-vite --no-build --fresh --quiet --db var/e2e.db --backend-port 4201 --bff-port 4200',
+      command: 'node scripts/dev.mjs --no-vite --no-build --fresh --quiet --db var/e2e.db --tenant-files var/e2e-tenants --backend-port 4201 --bff-port 4200',
       cwd: root,
       url: 'http://127.0.0.1:4200/api/session',
       reuseExistingServer: false,

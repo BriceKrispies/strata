@@ -217,14 +217,20 @@ fn log_published(event: &DomainEvent, tenant: &TenantState) {
 }
 
 /// Move one batch of committed events from the outbox to the hub. Returns how many moved.
+///
+/// Outbox positions are per tenant (each tenant may have a database of its own), so this is the
+/// fan-in: the batch holds the waiting events of every tenant, each tenant's in its commit order,
+/// and each tenant's outbox is marked published up to the last of its events in the batch.
 pub fn publish_pending(app: &crate::app::App) -> Result<usize, strata_storage_api::StoreError> {
     let pending = app.store.outbox(256)?;
-    let Some(last) = pending.last().map(|entry| entry.position) else {
+    if pending.is_empty() {
         return Ok(0);
-    };
+    }
+    let mut last: BTreeMap<TenantId, u64> = BTreeMap::new();
     let mut headers: BTreeMap<TenantId, Arc<TenantState>> = BTreeMap::new();
     for entry in &pending {
         let tenant = entry.event.tenant.clone();
+        last.insert(tenant.clone(), entry.position);
         let header = match headers.get(&tenant) {
             Some(header) => header.clone(),
             None => {
@@ -243,7 +249,9 @@ pub fn publish_pending(app: &crate::app::App) -> Result<usize, strata_storage_ap
             tenant: header,
         }));
     }
-    app.store.mark_published(last)?;
+    for (tenant, position) in &last {
+        app.store.mark_published(tenant, *position)?;
+    }
     Ok(pending.len())
 }
 

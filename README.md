@@ -30,8 +30,8 @@ npm install            # once
 npm run dev            # or: nu scripts/dev.nu
 ```
 
-That one command builds and starts the backend, the BFF and Vite, creates the SQLite database
-at `var/strata.db`, installs the tenants on first start, and stops everything on Ctrl+C.
+That one command builds and starts the backend, the BFF and Vite, creates the SQLite control database
+at `var/strata.db` with one database file per tenant in `var/strata-tenants/`, installs the tenants on first start, and stops everything on Ctrl+C.
 
 | What | Where |
 |---|---|

@@ -5,7 +5,8 @@
 //! | `STRATA_BACKEND_ADDR` | `127.0.0.1:4101` | Listen address. Must be loopback. |
 //! | `STRATA_SERVICE_TOKEN` | none, required | Shared secret the BFF presents. |
 //! | `STRATA_STORE` | `sqlite` | `sqlite` or `memory`. |
-//! | `STRATA_DB` | `var/strata.db` | SQLite database file. |
+//! | `STRATA_DB` | `var/strata.db` | SQLite control database (the tenant directory). |
+//! | `STRATA_TENANT_FILES` | `<STRATA_DB stem>-tenants` beside it | Directory of the per-tenant SQLite files. |
 //! | `STRATA_TENANTS` | `tenants` | Directory of tenant bundles to install. |
 //! | `STRATA_DEV` | unset | `1` enables development logins and fixture endpoints. |
 //! | `STRATA_LEAN_DIR` | `lean` | The Lean project, for verification runs. |
@@ -20,7 +21,7 @@ use strata_kernel::Timestamp;
 use strata_protocol::log::now_ms;
 use strata_storage_api::memory::MemoryStore;
 use strata_storage_api::Store;
-use strata_storage_sqlite::SqliteStore;
+use strata_storage_sqlite::{default_tenants_dir, SqliteStore};
 
 use strata_runtime::server::{self, env_number as number, env_var as var};
 
@@ -43,7 +44,14 @@ fn start() -> Result<(Config, Arc<dyn Store>), String> {
                 std::fs::create_dir_all(parent)
                     .map_err(|e| format!("{}: {e}", parent.display()))?;
             }
-            Arc::new(SqliteStore::open(&path, Timestamp(now_ms())).map_err(|e| e.to_string())?)
+            let tenant_files = match var("STRATA_TENANT_FILES", "").as_str() {
+                "" => default_tenants_dir(&path),
+                dir => PathBuf::from(dir),
+            };
+            Arc::new(
+                SqliteStore::open_with(&path, &tenant_files, Timestamp(now_ms()))
+                    .map_err(|e| e.to_string())?,
+            )
         }
         other => return Err(format!("STRATA_STORE: unknown adapter {other:?}")),
     };

@@ -4,7 +4,9 @@
 //! holds with a `World` that received the same intents, so "the adapter stores what the kernel
 //! decided" is checked by canonical hash rather than field by field.
 
-use crate::{execute, query, Account, Commit, ExecuteError, SessionRecord, Store, StoreError};
+use crate::{
+    execute, query, Account, Commit, ExecuteError, OutboxEntry, SessionRecord, Store, StoreError,
+};
 use std::collections::BTreeMap;
 use strata_kernel::testkit::*;
 use strata_kernel::*;
@@ -415,29 +417,68 @@ fn tenants_are_isolated(store: &dyn Store) {
         .all(|e| e.tenant == tenant_id("beta")));
 }
 
+/// The outbox entries of one tenant, in the order the store returned them.
+fn of_tenant(entries: &[OutboxEntry], tenant: &str) -> Vec<OutboxEntry> {
+    entries
+        .iter()
+        .filter(|e| e.event.tenant.as_str() == tenant)
+        .cloned()
+        .collect()
+}
+
+/// Mark everything waiting as published, tenant by tenant.
+fn publish_everything(store: &dyn Store) {
+    let waiting = store.outbox(100_000).unwrap();
+    let mut last: BTreeMap<TenantId, u64> = BTreeMap::new();
+    for entry in &waiting {
+        last.insert(entry.event.tenant.clone(), entry.position);
+    }
+    for (tenant, position) in last {
+        store.mark_published(&tenant, position).unwrap();
+    }
+    assert!(store.outbox(10).unwrap().is_empty());
+}
+
 fn events_are_ordered_and_stay_in_the_outbox_until_published(store: &dyn Store) {
     let mut pair = Pair::new(store);
     let setup = store.outbox(1_000).unwrap();
-    assert!(setup.windows(2).all(|w| w[0].position < w[1].position));
-    store
-        .mark_published(setup.last().unwrap().position)
-        .unwrap();
-    assert!(store.outbox(10).unwrap().is_empty());
+    for tenant in TENANTS {
+        let mine = of_tenant(&setup, tenant);
+        assert!(!mine.is_empty());
+        assert!(
+            mine.windows(2)
+                .all(|w| w[0].position < w[1].position && w[0].event.seq < w[1].event.seq),
+            "each tenant's outbox follows its commit order"
+        );
+    }
+    publish_everything(store);
 
     pair.note("alpha", "A", "a");
     pair.note("beta", "B", "b");
     pair.note("alpha", "C", "c");
     let pending = store.outbox(10).unwrap();
-    let order: Vec<&str> = pending.iter().map(|e| e.event.tenant.as_str()).collect();
-    assert_eq!(
-        order,
-        ["alpha", "beta", "alpha"],
-        "the outbox follows commit order across tenants"
+    assert_eq!(pending.len(), 3);
+    let alpha_pending = of_tenant(&pending, "alpha");
+    let beta_pending = of_tenant(&pending, "beta");
+    assert_eq!(alpha_pending.len(), 2);
+    assert_eq!(beta_pending.len(), 1);
+    assert!(
+        alpha_pending[0].position < alpha_pending[1].position
+            && alpha_pending[0].event.seq < alpha_pending[1].event.seq,
+        "the outbox follows commit order within a tenant"
     );
     assert_eq!(store.outbox(2).unwrap().len(), 2);
-    store.mark_published(pending[1].position).unwrap();
-    assert_eq!(store.outbox(10).unwrap(), pending[2..].to_vec());
-    assert_eq!(store.health().unwrap().outbox_pending, 1);
+    store
+        .mark_published(&tenant_id("alpha"), alpha_pending[0].position)
+        .unwrap();
+    let left = store.outbox(10).unwrap();
+    assert_eq!(of_tenant(&left, "alpha"), alpha_pending[1..].to_vec());
+    assert_eq!(
+        of_tenant(&left, "beta"),
+        beta_pending,
+        "marking one tenant's outbox leaves the other's waiting"
+    );
+    assert_eq!(store.health().unwrap().outbox_pending, 2);
 
     let alpha = tenant_id("alpha");
     let all = store.events_after(&alpha, 0, 1_000).unwrap();
@@ -455,6 +496,96 @@ fn events_are_ordered_and_stay_in_the_outbox_until_published(store: &dyn Store) 
         1
     );
     assert_eq!(store.events_after(&alpha, 0, 2).unwrap().len(), 2);
+}
+
+fn events_are_published_only_after_their_commit(store: &dyn Store) {
+    let mut pair = Pair::new(store);
+    publish_everything(store);
+    let alpha = tenant_id("alpha");
+
+    // A commit that loses the race, and one that is malformed, leave nothing in the outbox.
+    let intent = new_note("Late", "late");
+    let schema = store
+        .load(&alpha, &[])
+        .unwrap()
+        .tenant
+        .unwrap()
+        .schema
+        .clone();
+    let stale_state = store.load(&alpha, &needs(Some(&schema), &intent)).unwrap();
+    let context = ctx("alpha", user("alpha:writer1"), 9_000);
+    let stale = transition(&stale_state, &intent, &context).unwrap();
+    let mut malformed = Commit::of(&intent, &context, &stale);
+    malformed.events[0].seq += 7;
+    assert!(matches!(
+        store.commit(&malformed),
+        Err(StoreError::Invalid(_))
+    ));
+    assert!(
+        store.outbox(10).unwrap().is_empty(),
+        "a refused commit publishes nothing"
+    );
+    pair.note("alpha", "Winner", "winner");
+    publish_everything(store);
+    assert!(matches!(
+        store.commit(&Commit::of(&intent, &context, &stale)),
+        Err(StoreError::Conflict { .. })
+    ));
+    assert!(
+        store.outbox(10).unwrap().is_empty(),
+        "a conflicting commit publishes nothing"
+    );
+
+    // An accepted commit's events are waiting exactly when its state is visible, with the
+    // positions its receipt names.
+    pair.note("beta", "Beta", "beta");
+    publish_everything(store);
+    let state = store.load(&alpha, &[]).unwrap();
+    let decided = transition(
+        &store
+            .load(&alpha, &needs(Some(&schema), &new_note("Next", "next")))
+            .unwrap(),
+        &new_note("Next", "next"),
+        &ctx("alpha", user("alpha:writer1"), 9_100),
+    )
+    .unwrap();
+    assert_eq!(
+        decided.delta.base_revision,
+        Some(state.tenant.unwrap().revision)
+    );
+    let receipt = store
+        .commit(&Commit::of(
+            &new_note("Next", "next"),
+            &ctx("alpha", user("alpha:writer1"), 9_100),
+            &decided,
+        ))
+        .unwrap();
+    let waiting = store.outbox(10).unwrap();
+    assert_eq!(waiting.len(), decided.events.len());
+    assert!(waiting.iter().all(|e| e.event.tenant == alpha));
+    assert_eq!(
+        waiting.last().map(|e| e.position),
+        receipt.last_position,
+        "the receipt names the position of the commit's last event"
+    );
+    let stored = store.load(&alpha, &[]).unwrap().tenant.unwrap();
+    assert_eq!(stored.revision, receipt.revision);
+    assert!(
+        waiting.iter().all(|e| e.event.revision <= stored.revision),
+        "every waiting event belongs to a commit the store already shows"
+    );
+    assert_eq!(
+        waiting.iter().map(|e| e.event.clone()).collect::<Vec<_>>(),
+        store
+            .events_after(&alpha, stored.event_seq - waiting.len() as u64, 100)
+            .unwrap(),
+        "the waiting events are the newest of the tenant's log"
+    );
+    // Marking another tenant's outbox does not publish them.
+    store
+        .mark_published(&tenant_id("beta"), u64::MAX >> 1)
+        .unwrap();
+    assert_eq!(store.outbox(10).unwrap(), waiting);
 }
 
 fn the_journal_replays_to_the_stored_state(store: &dyn Store) {
@@ -792,6 +923,11 @@ pub const CHECKS: &[Check] = &[
         "outbox-order",
         "events_are_ordered_and_stay_in_the_outbox_until_published",
         events_are_ordered_and_stay_in_the_outbox_until_published,
+    ),
+    (
+        "publish-after-commit",
+        "events_are_published_only_after_their_commit",
+        events_are_published_only_after_their_commit,
     ),
     (
         "journal-replay",

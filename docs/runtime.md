@@ -353,9 +353,10 @@ impl Database {
 
 `migrate` applies, in one `IMMEDIATE` transaction, the steps above the highest version recorded
 in the named ledger table. `write` runs an `IMMEDIATE` transaction and commits on `Ok`; `read`
-runs a read transaction that sees only whole commits. The tenant store (`SqliteStore`) runs on a
-`Database` with the ledger `storage_migrations`, and `SqliteStore::database()` hands the same
-database to `SqliteMachineStore`, so machine state can live in the tenant store's file.
+runs a read transaction that sees only whole commits. The tenant store (`SqliteStore`) runs on one
+`Database` per file: a control database with the ledger `control_migrations` (the tenant and
+session directories) and one database per tenant with the ledger `tenant_migrations` (TEN-001).
+Machine state reaches the tenant store through `strata-machine-store`, as records of a tenant.
 
 ## Contracts on the wire
 

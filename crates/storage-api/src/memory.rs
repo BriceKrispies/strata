@@ -17,8 +17,11 @@ use strata_kernel::{
 #[derive(Default)]
 struct Inner {
     tenants: BTreeMap<TenantId, Arc<TenantState>>,
+    /// Every event in commit order, with its position in its tenant's outbox and whether it was
+    /// published.
     events: Vec<(u64, DomainEvent, bool)>,
-    next_position: u64,
+    /// The last outbox position given out, per tenant.
+    positions: BTreeMap<TenantId, u64>,
     journal: Vec<JournalEntry>,
     sessions: BTreeMap<SessionId, SessionRecord>,
     accounts: BTreeMap<(TenantId, String), Account>,
@@ -120,8 +123,9 @@ impl Store for MemoryStore {
         inner.tenants.insert(tenant.clone(), Arc::new(next));
         let mut last_position = None;
         for event in &commit.events {
-            inner.next_position += 1;
-            let position = inner.next_position;
+            let next = inner.positions.entry(tenant.clone()).or_insert(0);
+            *next += 1;
+            let position = *next;
             inner.events.push((position, event.clone(), false));
             last_position = Some(position);
         }
@@ -171,12 +175,12 @@ impl Store for MemoryStore {
             .collect())
     }
 
-    fn mark_published(&self, position: u64) -> StoreResult<()> {
+    fn mark_published(&self, tenant: &TenantId, position: u64) -> StoreResult<()> {
         for entry in self
             .lock()?
             .events
             .iter_mut()
-            .filter(|(p, _, _)| *p <= position)
+            .filter(|(p, event, _)| event.tenant == *tenant && *p <= position)
         {
             entry.2 = true;
         }
@@ -354,6 +358,7 @@ impl Store for MemoryStore {
     fn reset_tenant(&self, tenant: &TenantId) -> StoreResult<()> {
         let mut inner = self.lock()?;
         inner.tenants.remove(tenant);
+        inner.positions.remove(tenant);
         inner.events.retain(|(_, event, _)| event.tenant != *tenant);
         inner.journal.retain(|entry| entry.tenant != *tenant);
         inner.sessions.retain(|_, s| s.tenant != *tenant);
