@@ -3689,3 +3689,12 @@ pub struct WebhookDelivery {
     /// Field `at`.
     pub at: prelude::Timestamp,
 }
+
+/// session-token
+///
+/// The secret a session cookie carries; only its hash is stored, and it is never logged.
+///
+/// Specification type `session-token`: a scalar represented as `string`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct SessionToken(pub String);

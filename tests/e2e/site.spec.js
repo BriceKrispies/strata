@@ -711,3 +711,71 @@ test('no log line holds a password, a session token or a CSRF token', async ({ p
   expect(correlation).toBeTruthy();
   expect(logs.split('\n').filter((line) => line.includes(correlation)).map((line) => JSON.parse(line).service)).toEqual(expect.arrayContaining(['backend', 'bff']));
 });
+
+test('sign-in, publish and unpublish are logged as domain events, with their allowlisted fields and correlation', async ({ page }) => {
+  const { readFileSync } = await import('node:fs');
+  const root = new URL('../../var/logs/', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1');
+  const bytes = (service) => {
+    try {
+      return readFileSync(`${root}${service}.jsonl`);
+    } catch {
+      return Buffer.alloc(0);
+    }
+  };
+  // Only the lines written during this test: the files hold the whole run.
+  const from = { backend: bytes('backend').length, bff: bytes('bff').length };
+  const lines = (service) => bytes(service).subarray(from[service]).toString('utf8').split('\n').flatMap((text) => {
+    try {
+      return [JSON.parse(text)];
+    } catch {
+      return [];
+    }
+  });
+  // The backend writes its lines asynchronously, so each expected line is polled for.
+  const line = async (event, fields) => {
+    const find = () => lines('backend').find((l) => l.event === event && Object.entries(fields).every(([k, v]) => l[k] === v));
+    await expect.poll(() => find() !== undefined, { message: `a backend line ${event} with ${JSON.stringify(fields)}`, timeout: 5_000 }).toBe(true);
+    return find();
+  };
+  // The line carries the request's correlation id, which the BFF logged for the same request.
+  const correlated = (found) => {
+    expect(found.correlation).toMatch(/^c-\d+-[0-9a-f]{6}$/);
+    expect(lines('bff').some((l) => l.correlation === found.correlation)).toBe(true);
+  };
+  const common = ['correlation', 'event', 'level', 'service', 'tenant', 'ts'];
+
+  await signIn(page, 'tomasz');
+  const signedIn = await line('session.started', { service: 'backend', level: 'info', tenant: 'fieldnotes', principal: 'user:tomasz', method: 'password' });
+  expect(signedIn.session).toMatch(/^s_/);
+  expect(typeof signedIn.ts).toBe('number');
+  expect(Object.keys(signedIn).sort()).toEqual([...common, 'method', 'principal', 'session'].sort());
+  correlated(signedIn);
+
+  await writeDraft(page, 'Logged Along The Way');
+  const created = await line('record.created', { tenant: 'fieldnotes', object: 'post' });
+  expect(Object.keys(created).sort()).toEqual([...common, 'id', 'object', 'revision', 'seq', 'version'].sort());
+  correlated(created);
+
+  await page.getByRole('button', { name: 'Publish' }).click();
+  await expect(page.locator('.toast', { hasText: 'Published.' })).toBeVisible();
+  const published = await line('record.updated', { tenant: 'fieldnotes', object: 'post', id: created.id, transition: 'publish' });
+  expect(Object.keys(published).sort()).toEqual([...common, 'id', 'object', 'revision', 'seq', 'transition', 'version'].sort());
+  expect(published.seq).toBeGreaterThan(created.seq);
+  correlated(published);
+
+  await page.getByRole('link', { name: 'Back to the desk' }).click();
+  await page.getByRole('button', { name: 'Unpublish Logged Along The Way' }).click();
+  await expect(page.locator('.toast', { hasText: 'Moved back to drafts.' })).toBeVisible();
+  const unpublished = await line('record.updated', { tenant: 'fieldnotes', object: 'post', id: created.id, transition: 'unpublish' });
+  expect(unpublished.seq).toBeGreaterThan(published.seq);
+  expect(unpublished.correlation).not.toBe(published.correlation);
+  correlated(unpublished);
+
+  // No line of these events holds the article's text.
+  expect(lines('backend').filter((l) => JSON.stringify(l).includes('A first paragraph written by a test'))).toEqual([]);
+
+  await page.getByRole('button', { name: 'Delete Logged Along The Way', exact: true }).click();
+  await page.getByRole('button', { name: 'Confirm deleting Logged Along The Way' }).click();
+  await expect(page.locator('.toast', { hasText: 'Deleted.' })).toBeVisible();
+  await line('record.deleted', { tenant: 'fieldnotes', object: 'post', id: created.id });
+});

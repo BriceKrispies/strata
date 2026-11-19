@@ -1823,6 +1823,36 @@ impl<'a> Gen<'a> {
         } else {
             quote! { use crate::{#(#crate_mods),*}; }
         };
+        // Logging: the events it emits that the specification logs (telemetry.rs).
+        let log_arms: Vec<TokenStream> = self
+            .emitted
+            .iter()
+            .filter_map(|e| {
+                let fields: Vec<(String, Ident)> = e
+                    .fields
+                    .iter()
+                    .map(|f| (f.name.clone(), f.field.clone()))
+                    .collect();
+                super::telemetry::emitted_arm(self.spec, e.event, &e.variant, &fields)
+            })
+            .collect();
+        let log_emitted = if log_arms.is_empty() {
+            TokenStream::new()
+        } else {
+            let rest = if log_arms.len() < self.emitted.len() {
+                quote! { _ => {} }
+            } else {
+                TokenStream::new()
+            };
+            quote! {
+                fn log_emitted(emitted: &Emitted, telemetry: &dyn strata_runtime::Telemetry) {
+                    match emitted {
+                        #(#log_arms)*
+                        #rest
+                    }
+                }
+            }
+        };
         let machine_doc = format!(
             " Machine `{}`, stored in record `{}` by `{}`.",
             b.id, record_id, storage.key_field
@@ -1922,6 +1952,8 @@ impl<'a> Gen<'a> {
                         #fallback
                     }
                 }
+
+                #log_emitted
             }
         }
     }

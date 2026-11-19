@@ -29,6 +29,51 @@ pub struct Spec {
     pub machines: Vec<Behavior>,
     /// The cross-cutting constructs: policies, validations, retentions, quotas, retries, audits.
     pub constructs: crate::constructs::Constructs,
+    /// `system.telemetry` and the sensitive types: what the telemetry backend needs.
+    pub telemetry: Telemetry,
+}
+
+/// `system.telemetry` and the types a log line may never hold.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Telemetry {
+    /// The services that write a structured log, in declaration order.
+    pub services: Vec<TelemetryService>,
+    /// `(type id, kind)` of every declared type marked `sensitive`, or with a struct field
+    /// marked `sensitive`.
+    pub sensitive_types: Vec<(String, String)>,
+}
+
+/// A service of `system.telemetry`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TelemetryService {
+    /// The service name written on every line.
+    pub id: String,
+    /// Where the deployment keeps its log, relative to its working directory.
+    pub log: Option<String>,
+}
+
+/// `event.logging` of an event that is logged (`logged: true`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Logging {
+    /// The service whose log holds the event.
+    pub service: String,
+    /// `debug`, `info`, `warn` or `error`.
+    pub level: String,
+    /// The line's `event` member: `name`, or the event id.
+    pub name: String,
+    /// The payload field written as the line's `tenant`.
+    pub tenant: Option<String>,
+    /// The allowlisted payload fields, in order.
+    pub fields: Vec<LoggedField>,
+}
+
+/// One allowlisted payload field of a logged event.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoggedField {
+    /// The payload field.
+    pub field: String,
+    /// The member name it is written under (`as`, or the field name).
+    pub written_as: String,
 }
 
 impl Spec {
@@ -359,6 +404,10 @@ pub struct Event {
     pub contract: Option<String>,
     /// `role`: which message of its contract the event is (`request`, `response`, `error`).
     pub role: Option<String>,
+    /// `domain`: a fact the running system records.
+    pub domain: bool,
+    /// `logging`, when the event is logged; `None` when it is not or does not say.
+    pub logging: Option<Logging>,
 }
 
 /// A payload field of an event.
@@ -370,6 +419,8 @@ pub struct PayloadField {
     pub type_name: Option<String>,
     /// True when the field may be left out.
     pub optional: bool,
+    /// `sensitive`: the kind of sensitive data the field holds, which is never logged.
+    pub sensitive: Option<String>,
 }
 
 /// A `behavior` entity with `level: "implementation"`.

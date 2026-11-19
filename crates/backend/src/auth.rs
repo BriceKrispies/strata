@@ -13,6 +13,7 @@ use strata_kernel::rules::{may_attempt, roles_of};
 use strata_kernel::{
     canon, Action, Context, Principal, PrincipalId, Resource, SessionId, TenantId, TenantState,
 };
+use strata_model::telemetry;
 use strata_protocol::api::{
     valid_correlation, ErrorCode, LoginReply, LoginRequest, SessionView, HEADER_CORRELATION,
     HEADER_SERVICE, HEADER_SESSION, HEADER_SITE,
@@ -301,10 +302,15 @@ pub fn login(app: &App, caller: &Caller, request: &LoginRequest) -> Result<Login
         revoked_at: None,
     };
     app.store.put_session(&session)?;
-    LOG.info(
-        "login.accepted",
-        &caller.correlation,
-        json!({ "tenant": caller.site.as_str(), "session": session.id.as_str(), "principal": session.principal.as_str() }),
+    telemetry::session_started(
+        &telemetry::BACKEND,
+        &telemetry::SessionStarted {
+            correlation: &caller.correlation,
+            tenant: caller.site.as_str(),
+            session: session.id.as_str(),
+            principal: session.principal.as_str(),
+            method: "password",
+        },
     );
     let identity = Identity {
         tenant: caller.site.clone(),
@@ -325,10 +331,13 @@ pub fn end_session(app: &App, token: &str, correlation: &str) -> Result<(), ApiE
         if session.revoked_at.is_none() {
             session.revoked_at = Some(app.now());
             app.store.put_session(&session)?;
-            LOG.info(
-                "session.ended",
-                correlation,
-                json!({ "session": session.id.as_str() }),
+            telemetry::session_ended(
+                &telemetry::BACKEND,
+                &telemetry::SessionEnded {
+                    correlation,
+                    tenant: session.tenant.as_str(),
+                    session: session.id.as_str(),
+                },
             );
         }
         let _ = app.hub.sessions.send((session.id, SessionState::Revoked));

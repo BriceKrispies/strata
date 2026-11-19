@@ -300,4 +300,9 @@ pub trait Machine: Send + Sync + 'static {
         event: &Self::Event,
         now: Time,
     ) -> Result<Outcome<Self>, StepError>;
+
+    /// Write the log line of an emitted event the specification logs (`event.logging`), after
+    /// the transition that emitted it has committed. The default logs nothing; generated
+    /// machines call their crate's `telemetry` functions for the events they log.
+    fn log_emitted(_emitted: &Self::Emitted, _telemetry: &dyn crate::telemetry::Telemetry) {}
 }

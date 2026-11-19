@@ -54,6 +54,13 @@ Both services write one JSON object per line: `ts`, `level`, `service`, `event`,
 and event-specific fields. `scripts/dev.mjs` shows a short form on screen and appends the full
 lines to `var/logs/backend.jsonl`, `bff.jsonl` and `vite.jsonl`.
 
+The domain events (`tenant.created`, `schema.changed`, `member.changed`, `record.created`,
+`record.updated`, `record.deleted`, `session.started`, `session.ended`) are written through the
+generated `strata_model::telemetry` functions. Which fields each line holds is stated in the
+specification (`event.logging`): the tenant and an allowlist of scalar fields, never record
+contents, tokens or secrets. `record.updated` names the workflow `transition` an update took, such
+as `publish` or `unpublish`. End-to-end journeys check these lines with `expectLog`.
+
 To follow one request end to end, search for its correlation id:
 
 ```sh
@@ -65,7 +72,7 @@ bff      bff.request        POST /api/records 200
 backend  api.request        /internal/session 200        (the CSRF check)
 backend  kernel.accepted    update_record revision 31, 22 checks
 backend  api.request        /internal/mutate 200
-backend  event.published    record_updated post 9 seq 31
+backend  record.updated     tenant=fieldnotes seq=31 revision=31 object=post id=9 version=4 transition=publish
 ```
 
 The same id is in the `correlation` field of the `event` frame each subscriber receives. In
