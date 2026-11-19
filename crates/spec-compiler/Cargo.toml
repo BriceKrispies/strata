@@ -27,6 +27,7 @@ strata-spec-expr.workspace = true
 
 [dev-dependencies]
 axum.workspace = true
+strata-kernel = { workspace = true, features = ["testkit"] }
 strata-model = { path = "../model" }
 strata-runtime.workspace = true
 strata-spec-compiler-machines-fixture = { path = "../spec-compiler-machines-fixture" }
