@@ -418,15 +418,15 @@ impl Backend for TelemetryBackend {
     }
 }
 
-/// The arm of `Machine::log_emitted` that logs emitted event `e`, whose payload struct is
-/// matched as `payload` with the given Rust field names (payload field name, Rust field), or
-/// `None` when the event is not logged. Machines report no correlation id.
+/// The pattern and the call of `Machine::log_emitted` that log emitted event `e`, whose payload
+/// struct is bound as `payload` with the given Rust field names (payload field name, Rust
+/// field), or `None` when the event is not logged. Machines report no correlation id.
 pub fn emitted_arm(
     spec: &Spec,
     e: &Event,
     variant: &proc_macro2::Ident,
     payload_fields: &[(String, proc_macro2::Ident)],
-) -> Option<TokenStream> {
+) -> Option<(TokenStream, TokenStream)> {
     let l = e.logging.as_ref()?;
     let mut ignored = Vec::new();
     let all = members(spec, e, l, &mut ignored);
@@ -460,12 +460,15 @@ pub fn emitted_arm(
     } else {
         quote! { payload }
     };
-    Some(quote! {
-        Emitted::#variant(#bind) => crate::telemetry::#func(
-            telemetry,
-            &crate::telemetry::#ty { correlation: "", #(#values)* },
-        ),
-    })
+    Some((
+        quote! { Emitted::#variant(#bind) },
+        quote! {
+            crate::telemetry::#func(
+                telemetry,
+                &crate::telemetry::#ty { correlation: "", #(#values)* },
+            )
+        },
+    ))
 }
 
 /// The expression that turns a typed payload value into its logged representation. `value` is a

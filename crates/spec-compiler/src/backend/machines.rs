@@ -1824,7 +1824,7 @@ impl<'a> Gen<'a> {
             quote! { use crate::{#(#crate_mods),*}; }
         };
         // Logging: the events it emits that the specification logs (telemetry.rs).
-        let log_arms: Vec<TokenStream> = self
+        let log_arms: Vec<(TokenStream, TokenStream)> = self
             .emitted
             .iter()
             .filter_map(|e| {
@@ -1836,20 +1836,35 @@ impl<'a> Gen<'a> {
                 super::telemetry::emitted_arm(self.spec, e.event, &e.variant, &fields)
             })
             .collect();
+        let partial = log_arms.len() < self.emitted.len();
+        let log_body = match log_arms.as_slice() {
+            [] => TokenStream::new(),
+            [(pattern, call)] if partial => quote! {
+                if let #pattern = emitted {
+                    #call;
+                }
+            },
+            arms => {
+                let rest = if partial {
+                    quote! { _ => {} }
+                } else {
+                    TokenStream::new()
+                };
+                let (patterns, calls): (Vec<_>, Vec<_>) = arms.iter().cloned().unzip();
+                quote! {
+                    match emitted {
+                        #( #patterns => #calls, )*
+                        #rest
+                    }
+                }
+            }
+        };
         let log_emitted = if log_arms.is_empty() {
             TokenStream::new()
         } else {
-            let rest = if log_arms.len() < self.emitted.len() {
-                quote! { _ => {} }
-            } else {
-                TokenStream::new()
-            };
             quote! {
                 fn log_emitted(emitted: &Emitted, telemetry: &dyn strata_runtime::Telemetry) {
-                    match emitted {
-                        #(#log_arms)*
-                        #rest
-                    }
+                    #log_body
                 }
             }
         };
