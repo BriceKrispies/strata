@@ -11589,7 +11589,7 @@ pub trait StoreContract {
     /// Postconditions:
     ///
     /// - The state delta, events, journal entry, counters and session revocations are all applied or none is (atomicity).
-    /// - Events continue the per-tenant sequence without gaps and receive a global outbox position in commit order.
+    /// - Events continue the per-tenant sequence without gaps and receive an outbox position of their tenant, increasing in that tenant's commit order; an event is in the outbox only once its commit is.
     /// - Commits to one tenant are serialisable.
     /// - The caller learns that the commit happened or did not, never both (OPS-317).
     ///

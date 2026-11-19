@@ -1723,10 +1723,10 @@ pub mod origin_content_flow_impl {
         EcOriginAnswer(EcOriginAnswerPayload),
     }
 
-    /// The instance key: field `record-id` of record `rec-content`.
+    /// The instance key: field `record-id` of record `rec-published-page`.
     pub type Key = types::RecordId;
 
-    /// Machine `origin-content-flow-impl`, stored in record `rec-content` by `record-id`.
+    /// Machine `origin-content-flow-impl`, stored in record `rec-published-page` by `record-id`.
     #[derive(Debug, Clone, Copy, Default)]
     pub struct OriginContentFlowImpl;
 
@@ -1740,7 +1740,7 @@ pub mod origin_content_flow_impl {
     impl Machine for OriginContentFlowImpl {
         const NAME: &'static str = "origin-content-flow-impl";
 
-        const RECORD: &'static str = "rec-content";
+        const RECORD: &'static str = "rec-published-page";
 
         const ISOLATION: Isolation = Isolation::Serializable;
 
@@ -1756,7 +1756,7 @@ pub mod origin_content_flow_impl {
 
         type Key = Key;
 
-        type Record = records::RecContent;
+        type Record = records::RecPublishedPage;
 
         fn initial(_key: &Key) -> (State, Vars) {
             (
@@ -1768,7 +1768,7 @@ pub mod origin_content_flow_impl {
             )
         }
 
-        fn from_record(record: &records::RecContent) -> Result<(State, Vars), RecordError> {
+        fn from_record(record: &records::RecPublishedPage) -> Result<(State, Vars), RecordError> {
             let state = State::OcLiveI;
             Ok((
                 state,
@@ -1786,24 +1786,19 @@ pub mod origin_content_flow_impl {
             key: &Key,
             _state: &State,
             vars: &Vars,
-            previous: Option<&records::RecContent>,
-        ) -> Result<records::RecContent, RecordError> {
+            previous: Option<&records::RecPublishedPage>,
+        ) -> Result<records::RecPublishedPage, RecordError> {
             let Some(previous) = previous else {
                 return Err(
                     RecordError(
-                        "machine `origin-content-flow-impl` does not create records of `rec-content`, and the key has none"
+                        "machine `origin-content-flow-impl` does not create records of `rec-published-page`, and the key has none"
                             .to_string(),
                     ),
                 );
             };
-            Ok(records::RecContent {
-                object: previous.object.clone(),
+            Ok(records::RecPublishedPage {
                 record_id: key.clone(),
                 version: vars.version,
-                status: previous.status.clone(),
-                fields: previous.fields.clone(),
-                public_fields: previous.public_fields.clone(),
-                created_by: previous.created_by.clone(),
                 changed_at: Some(vars.changed_at),
                 held: previous.held,
                 stored_at: previous.stored_at,
@@ -1817,7 +1812,7 @@ pub mod origin_content_flow_impl {
             false
         }
 
-        fn validate_record(record: &records::RecContent) -> Result<(), String> {
+        fn validate_record(record: &records::RecPublishedPage) -> Result<(), String> {
             record.validate().map_err(|violation| violation.to_string())
         }
 
@@ -1973,10 +1968,10 @@ pub mod edge_copy_flow_impl {
         EcServed(EcServedPayload),
     }
 
-    /// The instance key: field `record-id` of record `rec-content`.
+    /// The instance key: field `record-id` of record `rec-published-page`.
     pub type Key = types::RecordId;
 
-    /// Machine `edge-copy-flow-impl`, stored in record `rec-content` by `record-id`.
+    /// Machine `edge-copy-flow-impl`, stored in record `rec-published-page` by `record-id`.
     #[derive(Debug, Clone, Copy, Default)]
     pub struct EdgeCopyFlowImpl;
 
@@ -1990,7 +1985,7 @@ pub mod edge_copy_flow_impl {
     impl Machine for EdgeCopyFlowImpl {
         const NAME: &'static str = "edge-copy-flow-impl";
 
-        const RECORD: &'static str = "rec-content";
+        const RECORD: &'static str = "rec-published-page";
 
         const ISOLATION: Isolation = Isolation::Serializable;
 
@@ -2006,7 +2001,7 @@ pub mod edge_copy_flow_impl {
 
         type Key = Key;
 
-        type Record = records::RecContent;
+        type Record = records::RecPublishedPage;
 
         fn initial(_key: &Key) -> (State, Vars) {
             (
@@ -2019,7 +2014,7 @@ pub mod edge_copy_flow_impl {
             )
         }
 
-        fn from_record(record: &records::RecContent) -> Result<(State, Vars), RecordError> {
+        fn from_record(record: &records::RecPublishedPage) -> Result<(State, Vars), RecordError> {
             let state = State::from_id(&record.copy_state).ok_or_else(|| {
                 RecordError(format!(
                     "{:?} is not a state of machine `edge-copy-flow-impl`",
@@ -2049,24 +2044,19 @@ pub mod edge_copy_flow_impl {
             key: &Key,
             state: &State,
             vars: &Vars,
-            previous: Option<&records::RecContent>,
-        ) -> Result<records::RecContent, RecordError> {
+            previous: Option<&records::RecPublishedPage>,
+        ) -> Result<records::RecPublishedPage, RecordError> {
             let Some(previous) = previous else {
                 return Err(
                     RecordError(
-                        "machine `edge-copy-flow-impl` does not create records of `rec-content`, and the key has none"
+                        "machine `edge-copy-flow-impl` does not create records of `rec-published-page`, and the key has none"
                             .to_string(),
                     ),
                 );
             };
-            Ok(records::RecContent {
-                object: previous.object.clone(),
+            Ok(records::RecPublishedPage {
                 record_id: key.clone(),
                 version: previous.version,
-                status: previous.status.clone(),
-                fields: previous.fields.clone(),
-                public_fields: previous.public_fields.clone(),
-                created_by: previous.created_by.clone(),
                 changed_at: previous.changed_at,
                 held: Some(vars.held),
                 stored_at: Some(vars.stored_at),
@@ -2080,7 +2070,7 @@ pub mod edge_copy_flow_impl {
             false
         }
 
-        fn validate_record(record: &records::RecContent) -> Result<(), String> {
+        fn validate_record(record: &records::RecPublishedPage) -> Result<(), String> {
             record.validate().map_err(|violation| violation.to_string())
         }
 

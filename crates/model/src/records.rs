@@ -63,16 +63,6 @@ static REC_GRANT_DELEGATOR_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new("^[A-Za-z0-9_:.-]+$").expect("specc checked that the pattern compiles")
 });
 
-/// The pattern of field `object` of record `rec-content`.
-static REC_CONTENT_OBJECT_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new("^[a-z][a-z0-9_]*$").expect("specc checked that the pattern compiles")
-});
-
-/// The pattern of field `created-by` of record `rec-content`.
-static REC_CONTENT_CREATED_BY_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new("^[A-Za-z0-9_:.-]+$").expect("specc checked that the pattern compiles")
-});
-
 /// The pattern of field `actor` of record `rec-event`.
 static REC_EVENT_ACTOR_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new("^[A-Za-z0-9_:.-]+$").expect("specc checked that the pattern compiles")
@@ -1337,92 +1327,20 @@ impl RecGrant {
     }
 }
 
-/// Tenant schema
+/// Published page (delivery model)
 ///
-/// Retention: Every version is kept in the schema history.
+/// What the target delivery machines (origin-content-flow-impl, edge-copy-flow-impl) hold about one published page: its version and the state of its edge copy. The page content itself is a tenant record in tbl-records, described by the tenant schema.
 ///
-/// Record `rec-schema`, owned by component `runtime`, schema version 1.
+/// Retention: Held by the origin and the edge for as long as the page is published.
+///
+/// Record `rec-published-page`, owned by component `runtime`, schema version 1.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub struct RecSchema {
-    /// Field `schema-version`.
-    #[serde(rename = "schema-version")]
-    pub schema_version: u64,
-    /// Field `definition`.
-    pub definition: types::Schema,
-}
-
-/// The key of a [`RecSchema`]: `schema-version`.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub struct RecSchemaKey {
-    /// Field `schema-version`.
-    #[serde(rename = "schema-version")]
-    pub schema_version: u64,
-}
-
-impl RecSchema {
-    /// The record's id in the specification.
-    pub const ID: &str = "rec-schema";
-
-    /// The version of the record's stored shape.
-    pub const SCHEMA_VERSION: u32 = 1;
-
-    /// The key fields, by their specification names.
-    pub const KEY: &[&str] = &["schema-version"];
-
-    /// Sets of fields whose combined values are unique, by their specification names.
-    pub const UNIQUE: &[&[&str]] = &[];
-
-    /// The record's indexes.
-    pub const INDEXES: &[prelude::Index] = &[];
-
-    /// The fields that hold the key of another record, and what deleting it does.
-    pub const REFERENCES: &[prelude::Reference] = &[];
-
-    /// The record's key.
-    pub fn key(&self) -> RecSchemaKey {
-        RecSchemaKey {
-            schema_version: self.schema_version,
-        }
-    }
-
-    /// Checks the field constraints, returning the first one the record breaks.
-    pub fn validate(&self) -> Result<(), prelude::ConstraintViolation> {
-        Ok(())
-    }
-}
-
-/// Content record
-///
-/// Retention: Until deleted by the tenant or removed by its retention rule (PRV-356), with every version (CMS-006).
-///
-/// Record `rec-content`, owned by component `runtime`, schema version 1.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub struct RecContent {
-    /// Field `object`.
-    ///
-    /// Constraints: at most 64 characters, matches `^[a-z][a-z0-9_]*$`.
-    pub object: types::ObjectTypeId,
+pub struct RecPublishedPage {
     /// Field `record-id`.
     #[serde(rename = "record-id")]
     pub record_id: types::RecordId,
     /// Field `version`.
     pub version: u64,
-    /// Field `status`.
-    pub status: types::WorkflowState,
-    /// Field `fields`.
-    ///
-    /// Personal data: other.
-    pub fields: types::ValueMap,
-    /// Field `public-fields`.
-    #[serde(rename = "public-fields")]
-    pub public_fields: types::ValueMap,
-    /// Field `created-by`.
-    ///
-    /// Holds a principal id. On delete: restrict.
-    ///
-    /// Constraints: at most 96 characters, matches `^[A-Za-z0-9_:.-]+$`.
-    #[serde(rename = "created-by")]
-    pub created_by: types::PrincipalId,
     /// Field `changed-at`.
     #[serde(
         rename = "changed-at",
@@ -1444,27 +1362,23 @@ pub struct RecContent {
     pub stored: Option<bool>,
 }
 
-/// The key of a [`RecContent`]: `object`, `record-id`.
+/// The key of a [`RecPublishedPage`]: `record-id`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub struct RecContentKey {
-    /// Field `object`.
-    ///
-    /// Constraints: at most 64 characters, matches `^[a-z][a-z0-9_]*$`.
-    pub object: types::ObjectTypeId,
+pub struct RecPublishedPageKey {
     /// Field `record-id`.
     #[serde(rename = "record-id")]
     pub record_id: types::RecordId,
 }
 
-impl RecContent {
+impl RecPublishedPage {
     /// The record's id in the specification.
-    pub const ID: &str = "rec-content";
+    pub const ID: &str = "rec-published-page";
 
     /// The version of the record's stored shape.
     pub const SCHEMA_VERSION: u32 = 1;
 
     /// The key fields, by their specification names.
-    pub const KEY: &[&str] = &["object", "record-id"];
+    pub const KEY: &[&str] = &["record-id"];
 
     /// Sets of fields whose combined values are unique, by their specification names.
     pub const UNIQUE: &[&[&str]] = &[];
@@ -1473,50 +1387,17 @@ impl RecContent {
     pub const INDEXES: &[prelude::Index] = &[];
 
     /// The fields that hold the key of another record, and what deleting it does.
-    pub const REFERENCES: &[prelude::Reference] = &[prelude::Reference {
-        field: "created-by",
-        record: "principal",
-        on_delete: prelude::OnDelete::Restrict,
-    }];
+    pub const REFERENCES: &[prelude::Reference] = &[];
 
     /// The record's key.
-    pub fn key(&self) -> RecContentKey {
-        RecContentKey {
-            object: self.object.clone(),
+    pub fn key(&self) -> RecPublishedPageKey {
+        RecPublishedPageKey {
             record_id: self.record_id.clone(),
         }
     }
 
     /// Checks the field constraints, returning the first one the record breaks.
     pub fn validate(&self) -> Result<(), prelude::ConstraintViolation> {
-        if self.object.0.chars().count() > 64 {
-            return Err(prelude::ConstraintViolation {
-                record: Self::ID,
-                field: "object",
-                constraint: prelude::Constraint::MaxLength,
-            });
-        }
-        if !REC_CONTENT_OBJECT_PATTERN.is_match(&self.object.0) {
-            return Err(prelude::ConstraintViolation {
-                record: Self::ID,
-                field: "object",
-                constraint: prelude::Constraint::Pattern,
-            });
-        }
-        if self.created_by.0.chars().count() > 96 {
-            return Err(prelude::ConstraintViolation {
-                record: Self::ID,
-                field: "created-by",
-                constraint: prelude::Constraint::MaxLength,
-            });
-        }
-        if !REC_CONTENT_CREATED_BY_PATTERN.is_match(&self.created_by.0) {
-            return Err(prelude::ConstraintViolation {
-                record: Self::ID,
-                field: "created-by",
-                constraint: prelude::Constraint::Pattern,
-            });
-        }
         Ok(())
     }
 }
@@ -2221,71 +2102,6 @@ impl RecProposal {
                 });
             }
         }
-        Ok(())
-    }
-}
-
-/// Form submission
-///
-/// Retention: Until the retention period of its form ends (PRV-357).
-///
-/// Record `rec-submission`, owned by component `runtime`, schema version 1.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub struct RecSubmission {
-    /// Field `submission-id`.
-    #[serde(rename = "submission-id")]
-    pub submission_id: types::SubmissionId,
-    /// Field `form`.
-    pub form: types::FormId,
-    /// Field `submitted-at`.
-    #[serde(rename = "submitted-at")]
-    pub submitted_at: prelude::Timestamp,
-    /// Field `email`.
-    ///
-    /// Personal data: contact.
-    pub email: types::EmailAddress,
-    /// Field `values`.
-    ///
-    /// Personal data: contact.
-    pub values: types::ValueMap,
-}
-
-/// The key of a [`RecSubmission`]: `submission-id`.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub struct RecSubmissionKey {
-    /// Field `submission-id`.
-    #[serde(rename = "submission-id")]
-    pub submission_id: types::SubmissionId,
-}
-
-impl RecSubmission {
-    /// The record's id in the specification.
-    pub const ID: &str = "rec-submission";
-
-    /// The version of the record's stored shape.
-    pub const SCHEMA_VERSION: u32 = 1;
-
-    /// The key fields, by their specification names.
-    pub const KEY: &[&str] = &["submission-id"];
-
-    /// Sets of fields whose combined values are unique, by their specification names.
-    pub const UNIQUE: &[&[&str]] = &[];
-
-    /// The record's indexes.
-    pub const INDEXES: &[prelude::Index] = &[];
-
-    /// The fields that hold the key of another record, and what deleting it does.
-    pub const REFERENCES: &[prelude::Reference] = &[];
-
-    /// The record's key.
-    pub fn key(&self) -> RecSubmissionKey {
-        RecSubmissionKey {
-            submission_id: self.submission_id.clone(),
-        }
-    }
-
-    /// Checks the field constraints, returning the first one the record breaks.
-    pub fn validate(&self) -> Result<(), prelude::ConstraintViolation> {
         Ok(())
     }
 }
@@ -10218,6 +10034,829 @@ impl RecIdentityDecision {
     pub fn key(&self) -> RecIdentityDecisionKey {
         RecIdentityDecisionKey {
             decision_id: self.decision_id.clone(),
+        }
+    }
+
+    /// Checks the field constraints, returning the first one the record breaks.
+    pub fn validate(&self) -> Result<(), prelude::ConstraintViolation> {
+        Ok(())
+    }
+}
+
+/// Tenant directory (control database)
+///
+/// Table tenant_directory of the control database: one row per tenant naming the file that holds everything the tenant owns (TEN-001). It holds no tenant content.
+///
+/// Retention: Until the tenant is deleted; the row goes after its file.
+///
+/// Record `tbl-tenant-directory`, owned by component `sqlite-adapter`, schema version 1.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct TblTenantDirectory {
+    /// Field `id`.
+    pub id: types::TenantId,
+    /// Field `state`.
+    pub state: types::TenantFileState,
+    /// The tenant database file, relative to the tenants directory.
+    pub file: String,
+    /// Field `created-at`.
+    #[serde(rename = "created-at")]
+    pub created_at: prelude::Timestamp,
+}
+
+/// The key of a [`TblTenantDirectory`]: `id`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct TblTenantDirectoryKey {
+    /// Field `id`.
+    pub id: types::TenantId,
+}
+
+impl TblTenantDirectory {
+    /// The record's id in the specification.
+    pub const ID: &str = "tbl-tenant-directory";
+
+    /// The version of the record's stored shape.
+    pub const SCHEMA_VERSION: u32 = 1;
+
+    /// The key fields, by their specification names.
+    pub const KEY: &[&str] = &["id"];
+
+    /// Sets of fields whose combined values are unique, by their specification names.
+    pub const UNIQUE: &[&[&str]] = &[];
+
+    /// The record's indexes.
+    pub const INDEXES: &[prelude::Index] = &[];
+
+    /// The fields that hold the key of another record, and what deleting it does.
+    pub const REFERENCES: &[prelude::Reference] = &[];
+
+    /// The record's key.
+    pub fn key(&self) -> TblTenantDirectoryKey {
+        TblTenantDirectoryKey {
+            id: self.id.clone(),
+        }
+    }
+
+    /// Checks the field constraints, returning the first one the record breaks.
+    pub fn validate(&self) -> Result<(), prelude::ConstraintViolation> {
+        Ok(())
+    }
+}
+
+/// Session directory (control database)
+///
+/// Table session_directory of the control database: which tenant file holds a session, so that a session is found by its token hash or id without opening every tenant file. Token hashes are unique across tenants.
+///
+/// Retention: As long as the session it points at.
+///
+/// Record `tbl-session-directory`, owned by component `sqlite-adapter`, schema version 1.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct TblSessionDirectory {
+    /// Field `id`.
+    pub id: types::SessionId,
+    /// Field `token-hash`.
+    #[serde(rename = "token-hash")]
+    pub token_hash: types::Hash,
+    /// Field `tenant`.
+    pub tenant: types::TenantId,
+}
+
+/// The key of a [`TblSessionDirectory`]: `id`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct TblSessionDirectoryKey {
+    /// Field `id`.
+    pub id: types::SessionId,
+}
+
+impl TblSessionDirectory {
+    /// The record's id in the specification.
+    pub const ID: &str = "tbl-session-directory";
+
+    /// The version of the record's stored shape.
+    pub const SCHEMA_VERSION: u32 = 1;
+
+    /// The key fields, by their specification names.
+    pub const KEY: &[&str] = &["id"];
+
+    /// Sets of fields whose combined values are unique, by their specification names.
+    pub const UNIQUE: &[&[&str]] = &[&["token-hash"]];
+
+    /// The record's indexes.
+    pub const INDEXES: &[prelude::Index] = &[];
+
+    /// The fields that hold the key of another record, and what deleting it does.
+    pub const REFERENCES: &[prelude::Reference] = &[];
+
+    /// The record's key.
+    pub fn key(&self) -> TblSessionDirectoryKey {
+        TblSessionDirectoryKey {
+            id: self.id.clone(),
+        }
+    }
+
+    /// Checks the field constraints, returning the first one the record breaks.
+    pub fn validate(&self) -> Result<(), prelude::ConstraintViolation> {
+        Ok(())
+    }
+}
+
+/// Control migrations (control database)
+///
+/// Table control_migrations of the control database: the layout steps applied to it, each once. A file that has the old table storage_migrations or tenants is the old single-file layout and is refused with a message to delete it.
+///
+/// Record `tbl-control-migrations`, owned by component `sqlite-adapter`, schema version 1.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct TblControlMigrations {
+    /// Field `version`.
+    pub version: u32,
+    /// Field `name`.
+    pub name: String,
+    /// Field `applied-at`.
+    #[serde(rename = "applied-at")]
+    pub applied_at: prelude::Timestamp,
+}
+
+/// The key of a [`TblControlMigrations`]: `version`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct TblControlMigrationsKey {
+    /// Field `version`.
+    pub version: u32,
+}
+
+impl TblControlMigrations {
+    /// The record's id in the specification.
+    pub const ID: &str = "tbl-control-migrations";
+
+    /// The version of the record's stored shape.
+    pub const SCHEMA_VERSION: u32 = 1;
+
+    /// The key fields, by their specification names.
+    pub const KEY: &[&str] = &["version"];
+
+    /// Sets of fields whose combined values are unique, by their specification names.
+    pub const UNIQUE: &[&[&str]] = &[];
+
+    /// The record's indexes.
+    pub const INDEXES: &[prelude::Index] = &[];
+
+    /// The fields that hold the key of another record, and what deleting it does.
+    pub const REFERENCES: &[prelude::Reference] = &[];
+
+    /// The record's key.
+    pub fn key(&self) -> TblControlMigrationsKey {
+        TblControlMigrationsKey {
+            version: self.version,
+        }
+    }
+
+    /// Checks the field constraints, returning the first one the record breaks.
+    pub fn validate(&self) -> Result<(), prelude::ConstraintViolation> {
+        Ok(())
+    }
+}
+
+/// Tenant migrations (tenant file)
+///
+/// Table tenant_migrations of a tenant file: the layout steps applied to that file, each once.
+///
+/// Record `tbl-tenant-migrations`, owned by component `sqlite-adapter`, schema version 1.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct TblTenantMigrations {
+    /// Field `version`.
+    pub version: u32,
+    /// Field `name`.
+    pub name: String,
+    /// Field `applied-at`.
+    #[serde(rename = "applied-at")]
+    pub applied_at: prelude::Timestamp,
+}
+
+/// The key of a [`TblTenantMigrations`]: `version`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct TblTenantMigrationsKey {
+    /// Field `version`.
+    pub version: u32,
+}
+
+impl TblTenantMigrations {
+    /// The record's id in the specification.
+    pub const ID: &str = "tbl-tenant-migrations";
+
+    /// The version of the record's stored shape.
+    pub const SCHEMA_VERSION: u32 = 1;
+
+    /// The key fields, by their specification names.
+    pub const KEY: &[&str] = &["version"];
+
+    /// Sets of fields whose combined values are unique, by their specification names.
+    pub const UNIQUE: &[&[&str]] = &[];
+
+    /// The record's indexes.
+    pub const INDEXES: &[prelude::Index] = &[];
+
+    /// The fields that hold the key of another record, and what deleting it does.
+    pub const REFERENCES: &[prelude::Reference] = &[];
+
+    /// The record's key.
+    pub fn key(&self) -> TblTenantMigrationsKey {
+        TblTenantMigrationsKey {
+            version: self.version,
+        }
+    }
+
+    /// Checks the field constraints, returning the first one the record breaks.
+    pub fn validate(&self) -> Result<(), prelude::ConstraintViolation> {
+        Ok(())
+    }
+}
+
+/// Tenant header (tenant file)
+///
+/// Table tenant of a tenant file: its single row holds the tenant header, with the current tenant schema as data. The row exists once the tenant is created.
+///
+/// Record `tbl-tenant-header`, owned by component `sqlite-adapter`, schema version 1.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TblTenantHeader {
+    /// Field `id`.
+    pub id: types::TenantId,
+    /// Field `name`.
+    pub name: String,
+    /// Field `revision`.
+    pub revision: u64,
+    /// Field `next-record`.
+    #[serde(rename = "next-record")]
+    pub next_record: u64,
+    /// Field `event-seq`.
+    #[serde(rename = "event-seq")]
+    pub event_seq: u64,
+    /// Field `schema`.
+    pub schema: types::TenantSchema,
+    /// Principal ids with their role sets.
+    pub members: serde_json::Value,
+}
+
+/// The key of a [`TblTenantHeader`]: `id`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct TblTenantHeaderKey {
+    /// Field `id`.
+    pub id: types::TenantId,
+}
+
+impl TblTenantHeader {
+    /// The record's id in the specification.
+    pub const ID: &str = "tbl-tenant-header";
+
+    /// The version of the record's stored shape.
+    pub const SCHEMA_VERSION: u32 = 1;
+
+    /// The key fields, by their specification names.
+    pub const KEY: &[&str] = &["id"];
+
+    /// Sets of fields whose combined values are unique, by their specification names.
+    pub const UNIQUE: &[&[&str]] = &[];
+
+    /// The record's indexes.
+    pub const INDEXES: &[prelude::Index] = &[];
+
+    /// The fields that hold the key of another record, and what deleting it does.
+    pub const REFERENCES: &[prelude::Reference] = &[];
+
+    /// The record's key.
+    pub fn key(&self) -> TblTenantHeaderKey {
+        TblTenantHeaderKey {
+            id: self.id.clone(),
+        }
+    }
+
+    /// Checks the field constraints, returning the first one the record breaks.
+    pub fn validate(&self) -> Result<(), prelude::ConstraintViolation> {
+        Ok(())
+    }
+}
+
+/// Schema history (tenant file)
+///
+/// Table schema_history of a tenant file: every version of the tenant schema, with the revision that introduced it.
+///
+/// Retention: Every version is kept in the schema history.
+///
+/// Record `tbl-schema-history`, owned by component `sqlite-adapter`, schema version 1.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TblSchemaHistory {
+    /// Field `version`.
+    pub version: u64,
+    /// Field `revision`.
+    pub revision: u64,
+    /// Field `schema`.
+    pub schema: types::TenantSchema,
+}
+
+/// The key of a [`TblSchemaHistory`]: `version`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct TblSchemaHistoryKey {
+    /// Field `version`.
+    pub version: u64,
+}
+
+impl TblSchemaHistory {
+    /// The record's id in the specification.
+    pub const ID: &str = "tbl-schema-history";
+
+    /// The version of the record's stored shape.
+    pub const SCHEMA_VERSION: u32 = 1;
+
+    /// The key fields, by their specification names.
+    pub const KEY: &[&str] = &["version"];
+
+    /// Sets of fields whose combined values are unique, by their specification names.
+    pub const UNIQUE: &[&[&str]] = &[];
+
+    /// The record's indexes.
+    pub const INDEXES: &[prelude::Index] = &[];
+
+    /// The fields that hold the key of another record, and what deleting it does.
+    pub const REFERENCES: &[prelude::Reference] = &[];
+
+    /// The record's key.
+    pub fn key(&self) -> TblSchemaHistoryKey {
+        TblSchemaHistoryKey {
+            version: self.version,
+        }
+    }
+
+    /// Checks the field constraints, returning the first one the record breaks.
+    pub fn validate(&self) -> Result<(), prelude::ConstraintViolation> {
+        Ok(())
+    }
+}
+
+/// Records (tenant file)
+///
+/// Table records of a tenant file: every record of every tenant object type, generically. Which object types exist and what fields they have is tenant data (the tenant schema), never a table of its own.
+///
+/// Retention: Until deleted by the tenant or removed by its retention rule (PRV-356), with every version (CMS-006).
+///
+/// Record `tbl-records`, owned by component `sqlite-adapter`, schema version 1.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct TblRecords {
+    /// Field `object`.
+    pub object: types::ObjectTypeId,
+    /// Field `id`.
+    pub id: types::RecordId,
+    /// Field `version`.
+    pub version: u64,
+    /// The canonical JSON of the record; its fields are those the tenant schema gives its object type.
+    pub data: types::StoredRecord,
+}
+
+/// The key of a [`TblRecords`]: `object`, `id`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct TblRecordsKey {
+    /// Field `object`.
+    pub object: types::ObjectTypeId,
+    /// Field `id`.
+    pub id: types::RecordId,
+}
+
+impl TblRecords {
+    /// The record's id in the specification.
+    pub const ID: &str = "tbl-records";
+
+    /// The version of the record's stored shape.
+    pub const SCHEMA_VERSION: u32 = 1;
+
+    /// The key fields, by their specification names.
+    pub const KEY: &[&str] = &["object", "id"];
+
+    /// Sets of fields whose combined values are unique, by their specification names.
+    pub const UNIQUE: &[&[&str]] = &[];
+
+    /// The record's indexes.
+    pub const INDEXES: &[prelude::Index] = &[];
+
+    /// The fields that hold the key of another record, and what deleting it does.
+    pub const REFERENCES: &[prelude::Reference] = &[];
+
+    /// The record's key.
+    pub fn key(&self) -> TblRecordsKey {
+        TblRecordsKey {
+            object: self.object.clone(),
+            id: self.id.clone(),
+        }
+    }
+
+    /// Checks the field constraints, returning the first one the record breaks.
+    pub fn validate(&self) -> Result<(), prelude::ConstraintViolation> {
+        Ok(())
+    }
+}
+
+/// Record index (tenant file)
+///
+/// Table record_index of a tenant file: one row per scalar field value and list element, so that uniqueness and reference lookups do not scan.
+///
+/// Record `tbl-record-index`, owned by component `sqlite-adapter`, schema version 1.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct TblRecordIndex {
+    /// Field `object`.
+    pub object: types::ObjectTypeId,
+    /// Field `field`.
+    pub field: types::FieldId,
+    /// The canonical JSON of one scalar field value or list element, up to 240 bytes.
+    pub value: String,
+    /// Field `id`.
+    ///
+    /// Holds the key of record `tbl-records`. On delete: cascade.
+    pub id: types::RecordId,
+}
+
+/// The key of a [`TblRecordIndex`]: `object`, `field`, `value`, `id`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct TblRecordIndexKey {
+    /// Field `object`.
+    pub object: types::ObjectTypeId,
+    /// Field `field`.
+    pub field: types::FieldId,
+    /// The canonical JSON of one scalar field value or list element, up to 240 bytes.
+    pub value: String,
+    /// Field `id`.
+    ///
+    /// Holds the key of record `tbl-records`. On delete: cascade.
+    pub id: types::RecordId,
+}
+
+impl TblRecordIndex {
+    /// The record's id in the specification.
+    pub const ID: &str = "tbl-record-index";
+
+    /// The version of the record's stored shape.
+    pub const SCHEMA_VERSION: u32 = 1;
+
+    /// The key fields, by their specification names.
+    pub const KEY: &[&str] = &["object", "field", "value", "id"];
+
+    /// Sets of fields whose combined values are unique, by their specification names.
+    pub const UNIQUE: &[&[&str]] = &[];
+
+    /// The record's indexes.
+    pub const INDEXES: &[prelude::Index] = &[];
+
+    /// The fields that hold the key of another record, and what deleting it does.
+    pub const REFERENCES: &[prelude::Reference] = &[prelude::Reference {
+        field: "id",
+        record: "tbl-records",
+        on_delete: prelude::OnDelete::Cascade,
+    }];
+
+    /// The record's key.
+    pub fn key(&self) -> TblRecordIndexKey {
+        TblRecordIndexKey {
+            object: self.object.clone(),
+            field: self.field.clone(),
+            value: self.value.clone(),
+            id: self.id.clone(),
+        }
+    }
+
+    /// Checks the field constraints, returning the first one the record breaks.
+    pub fn validate(&self) -> Result<(), prelude::ConstraintViolation> {
+        Ok(())
+    }
+}
+
+/// Events and outbox (tenant file)
+///
+/// Table events of a tenant file: the event log, doubling as the tenant outbox through published, written in the same transaction as the state it describes.
+///
+/// Retention: Until the tenant file is deleted, or a snapshot restore discards the events after it.
+///
+/// Record `tbl-events`, owned by component `sqlite-adapter`, schema version 1.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct TblEvents {
+    /// The outbox position in this tenant file, increasing in commit order and never reused.
+    pub position: u64,
+    /// Field `seq`.
+    pub seq: u64,
+    /// Field `revision`.
+    pub revision: u64,
+    /// Field `data`.
+    ///
+    /// Personal data: other.
+    pub data: types::DomainEvent,
+    /// Field `published`.
+    pub published: bool,
+}
+
+/// The key of a [`TblEvents`]: `position`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct TblEventsKey {
+    /// The outbox position in this tenant file, increasing in commit order and never reused.
+    pub position: u64,
+}
+
+impl TblEvents {
+    /// The record's id in the specification.
+    pub const ID: &str = "tbl-events";
+
+    /// The version of the record's stored shape.
+    pub const SCHEMA_VERSION: u32 = 1;
+
+    /// The key fields, by their specification names.
+    pub const KEY: &[&str] = &["position"];
+
+    /// Sets of fields whose combined values are unique, by their specification names.
+    pub const UNIQUE: &[&[&str]] = &[&["seq"]];
+
+    /// The record's indexes.
+    pub const INDEXES: &[prelude::Index] = &[];
+
+    /// The fields that hold the key of another record, and what deleting it does.
+    pub const REFERENCES: &[prelude::Reference] = &[];
+
+    /// The record's key.
+    pub fn key(&self) -> TblEventsKey {
+        TblEventsKey {
+            position: self.position,
+        }
+    }
+
+    /// Checks the field constraints, returning the first one the record breaks.
+    pub fn validate(&self) -> Result<(), prelude::ConstraintViolation> {
+        Ok(())
+    }
+}
+
+/// Journal (tenant file)
+///
+/// Table journal of a tenant file: every accepted transition as decided, enough to run it again.
+///
+/// Retention: Until the tenant file is deleted, or a snapshot restore discards the entries after it.
+///
+/// Record `tbl-journal`, owned by component `sqlite-adapter`, schema version 1.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct TblJournal {
+    /// Field `revision`.
+    pub revision: u64,
+    /// Field `data`.
+    ///
+    /// Personal data: other.
+    pub data: types::JournalEntry,
+}
+
+/// The key of a [`TblJournal`]: `revision`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct TblJournalKey {
+    /// Field `revision`.
+    pub revision: u64,
+}
+
+impl TblJournal {
+    /// The record's id in the specification.
+    pub const ID: &str = "tbl-journal";
+
+    /// The version of the record's stored shape.
+    pub const SCHEMA_VERSION: u32 = 1;
+
+    /// The key fields, by their specification names.
+    pub const KEY: &[&str] = &["revision"];
+
+    /// Sets of fields whose combined values are unique, by their specification names.
+    pub const UNIQUE: &[&[&str]] = &[];
+
+    /// The record's indexes.
+    pub const INDEXES: &[prelude::Index] = &[];
+
+    /// The fields that hold the key of another record, and what deleting it does.
+    pub const REFERENCES: &[prelude::Reference] = &[];
+
+    /// The record's key.
+    pub fn key(&self) -> TblJournalKey {
+        TblJournalKey {
+            revision: self.revision,
+        }
+    }
+
+    /// Checks the field constraints, returning the first one the record breaks.
+    pub fn validate(&self) -> Result<(), prelude::ConstraintViolation> {
+        Ok(())
+    }
+}
+
+/// Snapshots (tenant file)
+///
+/// Table snapshots of a tenant file: copies of the complete tenant state.
+///
+/// Retention: Until the tenant file is deleted.
+///
+/// Record `tbl-snapshots`, owned by component `sqlite-adapter`, schema version 1.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct TblSnapshots {
+    /// Field `id`.
+    pub id: u64,
+    /// Field `label`.
+    pub label: String,
+    /// Field `revision`.
+    pub revision: u64,
+    /// Field `hash`.
+    pub hash: types::Hash,
+    /// Field `created-at`.
+    #[serde(rename = "created-at")]
+    pub created_at: prelude::Timestamp,
+    /// Field `data`.
+    ///
+    /// Personal data: other.
+    pub data: types::TenantSnapshot,
+}
+
+/// The key of a [`TblSnapshots`]: `id`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct TblSnapshotsKey {
+    /// Field `id`.
+    pub id: u64,
+}
+
+impl TblSnapshots {
+    /// The record's id in the specification.
+    pub const ID: &str = "tbl-snapshots";
+
+    /// The version of the record's stored shape.
+    pub const SCHEMA_VERSION: u32 = 1;
+
+    /// The key fields, by their specification names.
+    pub const KEY: &[&str] = &["id"];
+
+    /// Sets of fields whose combined values are unique, by their specification names.
+    pub const UNIQUE: &[&[&str]] = &[];
+
+    /// The record's indexes.
+    pub const INDEXES: &[prelude::Index] = &[];
+
+    /// The fields that hold the key of another record, and what deleting it does.
+    pub const REFERENCES: &[prelude::Reference] = &[];
+
+    /// The record's key.
+    pub fn key(&self) -> TblSnapshotsKey {
+        TblSnapshotsKey { id: self.id }
+    }
+
+    /// Checks the field constraints, returning the first one the record breaks.
+    pub fn validate(&self) -> Result<(), prelude::ConstraintViolation> {
+        Ok(())
+    }
+}
+
+/// Sessions (tenant file)
+///
+/// Table sessions of a tenant file: server-side sessions of the tenant; only the hash of the token is stored.
+///
+/// Retention: Until purged after it ends, or the tenant file is deleted.
+///
+/// Record `tbl-sessions`, owned by component `sqlite-adapter`, schema version 1.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct TblSessions {
+    /// Field `id`.
+    pub id: types::SessionId,
+    /// Field `token-hash`.
+    #[serde(rename = "token-hash")]
+    pub token_hash: types::Hash,
+    /// Field `csrf-token`.
+    #[serde(rename = "csrf-token")]
+    pub csrf_token: types::Secret,
+    /// Field `principal`.
+    ///
+    /// Holds a principal id. On delete: restrict.
+    pub principal: types::PrincipalId,
+    /// Field `display-name`.
+    ///
+    /// Personal data: name.
+    #[serde(rename = "display-name")]
+    pub display_name: types::DisplayName,
+    /// Field `created-at`.
+    #[serde(rename = "created-at")]
+    pub created_at: prelude::Timestamp,
+    /// Field `last-seen-at`.
+    #[serde(rename = "last-seen-at")]
+    pub last_seen_at: prelude::Timestamp,
+    /// Field `expires-at`.
+    #[serde(rename = "expires-at")]
+    pub expires_at: prelude::Timestamp,
+    /// Field `revoked-at`.
+    #[serde(
+        rename = "revoked-at",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub revoked_at: Option<prelude::Timestamp>,
+}
+
+/// The key of a [`TblSessions`]: `id`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct TblSessionsKey {
+    /// Field `id`.
+    pub id: types::SessionId,
+}
+
+impl TblSessions {
+    /// The record's id in the specification.
+    pub const ID: &str = "tbl-sessions";
+
+    /// The version of the record's stored shape.
+    pub const SCHEMA_VERSION: u32 = 1;
+
+    /// The key fields, by their specification names.
+    pub const KEY: &[&str] = &["id"];
+
+    /// Sets of fields whose combined values are unique, by their specification names.
+    pub const UNIQUE: &[&[&str]] = &[&["token-hash"]];
+
+    /// The record's indexes.
+    pub const INDEXES: &[prelude::Index] = &[prelude::Index {
+        name: "sessions_principal",
+        fields: &["principal"],
+    }];
+
+    /// The fields that hold the key of another record, and what deleting it does.
+    pub const REFERENCES: &[prelude::Reference] = &[prelude::Reference {
+        field: "principal",
+        record: "principal",
+        on_delete: prelude::OnDelete::Restrict,
+    }];
+
+    /// The record's key.
+    pub fn key(&self) -> TblSessionsKey {
+        TblSessionsKey {
+            id: self.id.clone(),
+        }
+    }
+
+    /// Checks the field constraints, returning the first one the record breaks.
+    pub fn validate(&self) -> Result<(), prelude::ConstraintViolation> {
+        Ok(())
+    }
+}
+
+/// Accounts (tenant file)
+///
+/// Table accounts of a tenant file: locally managed logins with their Argon2id password hash.
+///
+/// Retention: Until the login is removed or the tenant file is deleted.
+///
+/// Record `tbl-accounts`, owned by component `sqlite-adapter`, schema version 1.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct TblAccounts {
+    /// Field `login`.
+    ///
+    /// Personal data: identifier.
+    pub login: String,
+    /// Field `principal`.
+    ///
+    /// Holds a principal id. On delete: restrict.
+    pub principal: types::PrincipalId,
+    /// Field `display-name`.
+    ///
+    /// Personal data: name.
+    #[serde(rename = "display-name")]
+    pub display_name: types::DisplayName,
+    /// Field `password-hash`.
+    #[serde(rename = "password-hash")]
+    pub password_hash: types::Hash,
+}
+
+/// The key of a [`TblAccounts`]: `login`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct TblAccountsKey {
+    /// Field `login`.
+    ///
+    /// Personal data: identifier.
+    pub login: String,
+}
+
+impl TblAccounts {
+    /// The record's id in the specification.
+    pub const ID: &str = "tbl-accounts";
+
+    /// The version of the record's stored shape.
+    pub const SCHEMA_VERSION: u32 = 1;
+
+    /// The key fields, by their specification names.
+    pub const KEY: &[&str] = &["login"];
+
+    /// Sets of fields whose combined values are unique, by their specification names.
+    pub const UNIQUE: &[&[&str]] = &[];
+
+    /// The record's indexes.
+    pub const INDEXES: &[prelude::Index] = &[];
+
+    /// The fields that hold the key of another record, and what deleting it does.
+    pub const REFERENCES: &[prelude::Reference] = &[prelude::Reference {
+        field: "principal",
+        record: "principal",
+        on_delete: prelude::OnDelete::Restrict,
+    }];
+
+    /// The record's key.
+    pub fn key(&self) -> TblAccountsKey {
+        TblAccountsKey {
+            login: self.login.clone(),
         }
     }
 

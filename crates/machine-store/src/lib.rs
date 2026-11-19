@@ -14,7 +14,7 @@
 //!   state delta with its events and journal entry. When the work returns `Err` nothing is
 //!   committed. A transaction that wrote nothing commits nothing.
 //! - **A machine record** is a store record of the object type named after its collection
-//!   (`rec-content` becomes `rec_content`), with two fields: `key`, the instance key's JSON text,
+//!   (`rec-published-page` becomes `rec_published_page`), with two fields: `key`, the instance key's JSON text,
 //!   and `data`, the record's JSON text. It is found by a `ByField` need on `key`. The store
 //!   assigns the numeric record id; the runtime's key maps to it through the `key` field.
 //! - **The record version** is the store record's own `version`: 1 on the first save, one more
