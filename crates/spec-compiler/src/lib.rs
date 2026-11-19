@@ -16,6 +16,8 @@
 
 pub mod backend;
 pub mod constructs;
+pub mod budget;
+pub mod deploy;
 pub mod diagnostic;
 pub mod emit;
 pub mod ir;

@@ -1,11 +1,16 @@
 //! The `specc` command.
 //!
 //! ```text
-//! specc generate --spec <file> --out <dir> [--crate-name <name>] [--runtime <dir>]
-//! specc check    --spec <file> --out <dir> [--crate-name <name>] [--runtime <dir>]
+//! specc generate     --spec <file> --out <dir> [--crate-name <name>] [--runtime <dir>]
+//! specc check        --spec <file> --out <dir> [--crate-name <name>] [--runtime <dir>]
+//! specc deploy       --spec <file> --out <dir>
+//! specc check-deploy --spec <file> --out <dir>
 //! ```
 //!
-//! `generate` writes the crate into `<dir>` and removes generated files it no longer writes.
+//! `deploy` and `check-deploy` do for the deployment files (a compose stack, Kubernetes
+//! manifests and Prometheus alert rules; see `strata_spec_compiler::deploy`) what `generate`
+//! and `check` do for the crate; their warnings go to standard error and do not change the exit
+//! code. `generate` writes the crate into `<dir>` and removes generated files it no longer writes.
 //! `check` exits 1 and lists the paths that differ when `<dir>` is not what `generate` would
 //! leave. A specification that is not ready is refused with one `error[<code>] <entity>:
 //! <message>` line per diagnostic and exit code 1. Usage errors exit with 2. The crate name
@@ -19,11 +24,13 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use strata_spec_compiler::emit::relative_path;
-use strata_spec_compiler::{generate, output, GeneratedFile, Options, RuntimeDependency};
+use strata_spec_compiler::{deploy, generate, output, GeneratedFile, Options, RuntimeDependency};
 
 const USAGE: &str = "usage:
-  specc generate --spec <file> --out <dir> [--crate-name <name>] [--runtime <dir>]
-  specc check    --spec <file> --out <dir> [--crate-name <name>] [--runtime <dir>]";
+  specc generate     --spec <file> --out <dir> [--crate-name <name>] [--runtime <dir>]
+  specc check        --spec <file> --out <dir> [--crate-name <name>] [--runtime <dir>]
+  specc deploy       --spec <file> --out <dir>
+  specc check-deploy --spec <file> --out <dir>";
 
 /// The runtime crate of the checkout specc was built from.
 const DEFAULT_RUNTIME: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../runtime");
@@ -32,6 +39,8 @@ const DEFAULT_RUNTIME: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../runtime")
 enum Command {
     Generate,
     Check,
+    Deploy,
+    CheckDeploy,
 }
 
 struct Args {
@@ -46,6 +55,8 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
     let (command, rest) = match raw.split_first() {
         Some((c, rest)) if c == "generate" => (Command::Generate, rest),
         Some((c, rest)) if c == "check" => (Command::Check, rest),
+        Some((c, rest)) if c == "deploy" => (Command::Deploy, rest),
+        Some((c, rest)) if c == "check-deploy" => (Command::CheckDeploy, rest),
         Some((c, _)) => return Err(format!("unknown command \"{c}\"")),
         None => return Err("no command given".to_string()),
     };
@@ -71,7 +82,12 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
     }
     let spec = spec.ok_or("--spec is required")?;
     let out = PathBuf::from(out.ok_or("--out is required")?);
+    let deploys = matches!(command, Command::Deploy | Command::CheckDeploy);
+    if deploys && crate_name.is_some() {
+        return Err("--crate-name does not apply to deploy".to_string());
+    }
     let crate_name = match crate_name {
+        _ if deploys => String::new(),
         Some(name) => name,
         None => out
             .file_name()
@@ -103,6 +119,9 @@ fn main() -> ExitCode {
             return ExitCode::from(1);
         }
     };
+    if matches!(args.command, Command::Deploy | Command::CheckDeploy) {
+        return run_deploy(&args, &text);
+    }
     let runtime = match runtime_path(&args.out, &args.runtime) {
         Ok(path) => path,
         Err(message) => {
@@ -131,6 +150,32 @@ fn main() -> ExitCode {
     match args.command {
         Command::Generate => run_generate(&args.out, &files),
         Command::Check => run_check(&args.out, &files),
+        // Handled before generation.
+        Command::Deploy | Command::CheckDeploy => ExitCode::from(2),
+    }
+}
+
+fn run_deploy(args: &Args, text: &str) -> ExitCode {
+    let output = match deploy::generate(&args.spec, text) {
+        Ok(output) => output,
+        Err(diagnostics) => {
+            for d in &diagnostics {
+                eprintln!("{d}");
+            }
+            eprintln!(
+                "specc: refused {} with {} diagnostic(s); nothing was written",
+                args.spec,
+                diagnostics.len()
+            );
+            return ExitCode::from(1);
+        }
+    };
+    for warning in &output.warnings {
+        eprintln!("{warning}");
+    }
+    match args.command {
+        Command::CheckDeploy => run_check(&args.out, &output.files),
+        _ => run_generate(&args.out, &output.files),
     }
 }
 
