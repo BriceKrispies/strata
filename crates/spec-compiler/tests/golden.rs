@@ -391,6 +391,69 @@ fn the_command_generates_checks_and_refuses() {
 }
 
 #[test]
+fn the_spec_hash_is_in_the_headers_and_a_stale_one_fails_the_check() {
+    let dir = scratch_dir("spec-hash");
+    let out = dir.join("generated-crate");
+    let spec = manifest_dir().join("tests/fixtures/full/spec.jsonc");
+    let (spec_arg, out_arg) = (path_arg(&spec), path_arg(&out));
+
+    let generated = specc(&[
+        "generate",
+        "--spec",
+        &spec_arg,
+        "--out",
+        &out_arg,
+        "--spec-hash",
+        "aaaa1111",
+    ]);
+    assert!(generated.status.success(), "{generated:?}");
+    let lib = fs::read_to_string(out.join("src/lib.rs")).unwrap();
+    let header = lib.lines().next().unwrap();
+    assert!(header.contains("(semantic hash aaaa1111)"), "{header}");
+    let manifest = fs::read_to_string(out.join("Cargo.toml")).unwrap();
+    assert!(manifest
+        .lines()
+        .next()
+        .unwrap()
+        .contains("(semantic hash aaaa1111)"));
+
+    let same = specc(&[
+        "check",
+        "--spec",
+        &spec_arg,
+        "--out",
+        &out_arg,
+        "--spec-hash",
+        "aaaa1111",
+    ]);
+    assert_eq!(same.status.code(), Some(0), "{same:?}");
+    let stale = specc(&[
+        "check",
+        "--spec",
+        &spec_arg,
+        "--out",
+        &out_arg,
+        "--spec-hash",
+        "bbbb2222",
+    ]);
+    assert_eq!(stale.status.code(), Some(1), "{stale:?}");
+    let without = specc(&["check", "--spec", &spec_arg, "--out", &out_arg]);
+    assert_eq!(without.status.code(), Some(1), "{without:?}");
+    let bad = specc(&[
+        "check",
+        "--spec",
+        &spec_arg,
+        "--out",
+        &out_arg,
+        "--spec-hash",
+        "a b",
+    ]);
+    assert_eq!(bad.status.code(), Some(2));
+
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
 fn the_wiring_reaches_the_generated_crate() {
     let files = wiring_files();
     let routes = file_text(&files, "src/routes.rs");

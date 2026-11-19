@@ -26,6 +26,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import { generatedTests, rustLineShare } from './generated-share.mjs';
+import { savedTraces, semanticHash, traceFreshness } from './spec-hash.mjs';
 
 const root = resolve(import.meta.dirname, '..');
 const exegraHome = resolve(root, process.env.EXEGRA_HOME ?? '../exegra');
@@ -183,19 +184,35 @@ if (!startedMatch || started.size === 0) check('concordance.toml names started m
 // 0. Generated code: crates/model is what specc writes from the specification, byte for byte.
 // ---------------------------------------------------------------------------------------------
 {
+  // The semantic hash the generated files must name: the specification as Exegra reads it now.
+  const hash = existsSync(resolve(exegraHome, 'cli/exegra.js')) ? semanticHash(exegraHome, exegraProject) : null;
+  check('exegra reports the specification semantic hash (generated files and saved traces name it)', hash !== null,
+    hash ?? `no hash from ${exegraHome} (set EXEGRA_HOME and EXEGRA_PROJECT)`);
+  const hashArgs = hash ? ['--spec-hash', hash] : [];
   const specc = run('cargo', ['run', '--quiet', '-p', 'strata-spec-compiler', '--bin', 'specc', '--',
-    'check', '--spec', 'specifications/spec.jsonc', '--out', 'crates/model', '--crate-name', 'strata-model', '--runtime', 'crates/runtime'], {
+    'check', '--spec', 'specifications/spec.jsonc', '--out', 'crates/model', '--crate-name', 'strata-model', '--runtime', 'crates/runtime', ...hashArgs], {
     env: { CARGO_BUILD_JOBS: '2', CARGO_TARGET_DIR: 'target/gate' },
   });
-  check('specc check (crates/model is generated from the specification)', specc.ok,
+  check('specc check (crates/model is generated from the specification at its semantic hash)', specc.ok,
     specc.ok ? 'up to date' : `${exitText(specc)}: ${lastLine(specc.out)}; run npm run generate and commit`);
 
   const web = run('cargo', ['run', '--quiet', '-p', 'strata-spec-compiler', '--bin', 'specc', '--',
-    'check-web', '--spec', 'specifications/spec.jsonc', '--out', 'web/src/generated'], {
+    'check-web', '--spec', 'specifications/spec.jsonc', '--out', 'web/src/generated', ...hashArgs], {
     env: { CARGO_BUILD_JOBS: '2', CARGO_TARGET_DIR: 'target/gate' },
   });
-  check('specc check-web (web/src/generated is generated from the specification)', web.ok,
+  check('specc check-web (web/src/generated is generated from the specification at its semantic hash)', web.ok,
     web.ok ? 'up to date' : `${exitText(web)}: ${lastLine(web.out)}; run npm run generate and commit`);
+
+  // A saved Exegra trace records the hash of the specification it was run on, and must equal the
+  // trace Exegra runs now (record it again with node scripts/record-trace.mjs).
+  if (existsSync(resolve(exegraHome, 'cli/exegra.js'))) {
+    for (const file of savedTraces(root)) {
+      const fresh = traceFreshness(exegraHome, root, file);
+      check(`saved trace is current (${fresh.detail.split(' ')[0]})`, fresh.ok, fresh.detail);
+    }
+  } else {
+    check('saved traces are current', false, 'no Exegra checkout to compare them with');
+  }
 }
 
 // ---------------------------------------------------------------------------------------------

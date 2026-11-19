@@ -16,7 +16,11 @@
 //! `afterMs`, which the kernel waits before delivering it; `event` in an emit or timer is the event
 //! id. A timer whose delay is read at run time (`after: {expr, simulate}`) evaluates `expr`, an
 //! unsigned integer over the variables as the effects before it left them and the payload, for
-//! its `afterMs`; `simulate` is for simulations only. Nothing is stored: the machine's state and variables live in the kernel's state, so there
+//! its `afterMs`; `simulate` is what Exegra simulates. One rule for all three tools: the delay a
+//! machine runs with is `expr`. The Rust backend refuses a computed delay (`specc.timer-after`);
+//! the browser uses `expr`; Exegra must find `simulate` equal to `expr` on each scenario's inputs
+//! (or refuse the construct for an implementation machine), so the simulated trace and the
+//! browser agree. The web differential compares each timer's `afterMs` with the trace. Nothing is stored: the machine's state and variables live in the kernel's state, so there
 //! is no `to_record` or `from_record`.
 //!
 //! `step` has the semantics of the Rust backend (`backend/machines.rs`) and of Exegra

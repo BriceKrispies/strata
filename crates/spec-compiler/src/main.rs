@@ -1,17 +1,21 @@
 //! The `specc` command.
 //!
 //! ```text
-//! specc generate     --spec <file> --out <dir> [--crate-name <name>] [--runtime <dir>]
-//! specc check        --spec <file> --out <dir> [--crate-name <name>] [--runtime <dir>]
-//! specc deploy       --spec <file> --out <dir>
-//! specc check-deploy --spec <file> --out <dir>
-//! specc e2e          --spec <file> --out <dir>
-//! specc check-e2e    --spec <file> --out <dir>
-//! specc scenarios       --spec <file> --out <dir> [--crate-name <name>] [--exegra-project <id>] [--exegra-specs <dir>]
-//! specc check-scenarios --spec <file> --out <dir> [--crate-name <name>] [--exegra-project <id>] [--exegra-specs <dir>]
-//! specc web          --spec <file> --out <dir>
-//! specc check-web    --spec <file> --out <dir>
+//! specc generate     --spec <file> --out <dir> [--spec-hash <hash>] [--crate-name <name>] [--runtime <dir>]
+//! specc check        --spec <file> --out <dir> [--spec-hash <hash>] [--crate-name <name>] [--runtime <dir>]
+//! specc deploy       --spec <file> --out <dir> [--spec-hash <hash>]
+//! specc check-deploy --spec <file> --out <dir> [--spec-hash <hash>]
+//! specc e2e          --spec <file> --out <dir> [--spec-hash <hash>]
+//! specc check-e2e    --spec <file> --out <dir> [--spec-hash <hash>]
+//! specc scenarios       --spec <file> --out <dir> [--spec-hash <hash>] [--crate-name <name>] [--exegra-project <id>] [--exegra-specs <dir>]
+//! specc check-scenarios --spec <file> --out <dir> [--spec-hash <hash>] [--crate-name <name>] [--exegra-project <id>] [--exegra-specs <dir>]
+//! specc web          --spec <file> --out <dir> [--spec-hash <hash>]
+//! specc check-web    --spec <file> --out <dir> [--spec-hash <hash>]
 //! ```
+//!
+//! `--spec-hash <hash>` is the specification's semantic hash as `exegra validate` reports it
+//! (`semanticHash`). It is written into the header of every generated file, so a file generated
+//! from another version of the specification differs and `check` and `check-web` fail on it.
 //!
 //! `web` and `check-web` generate the machines of client components as JavaScript modules for
 //! the browser (`strata_spec_compiler::web`), conventionally into `web/src/generated`; `generate`
@@ -47,16 +51,16 @@ use strata_spec_compiler::{
 };
 
 const USAGE: &str = "usage:
-  specc generate     --spec <file> --out <dir> [--crate-name <name>] [--runtime <dir>]
-  specc check        --spec <file> --out <dir> [--crate-name <name>] [--runtime <dir>]
-  specc deploy       --spec <file> --out <dir>
-  specc check-deploy --spec <file> --out <dir>
-  specc e2e          --spec <file> --out <dir>
-  specc check-e2e    --spec <file> --out <dir>
-  specc scenarios       --spec <file> --out <dir> [--crate-name <name>] [--exegra-project <id>] [--exegra-specs <dir>]
-  specc check-scenarios --spec <file> --out <dir> [--crate-name <name>] [--exegra-project <id>] [--exegra-specs <dir>]
-  specc web          --spec <file> --out <dir>
-  specc check-web    --spec <file> --out <dir>";
+  specc generate     --spec <file> --out <dir> [--spec-hash <hash>] [--crate-name <name>] [--runtime <dir>]
+  specc check        --spec <file> --out <dir> [--spec-hash <hash>] [--crate-name <name>] [--runtime <dir>]
+  specc deploy       --spec <file> --out <dir> [--spec-hash <hash>]
+  specc check-deploy --spec <file> --out <dir> [--spec-hash <hash>]
+  specc e2e          --spec <file> --out <dir> [--spec-hash <hash>]
+  specc check-e2e    --spec <file> --out <dir> [--spec-hash <hash>]
+  specc scenarios       --spec <file> --out <dir> [--spec-hash <hash>] [--crate-name <name>] [--exegra-project <id>] [--exegra-specs <dir>]
+  specc check-scenarios --spec <file> --out <dir> [--spec-hash <hash>] [--crate-name <name>] [--exegra-project <id>] [--exegra-specs <dir>]
+  specc web          --spec <file> --out <dir> [--spec-hash <hash>]
+  specc check-web    --spec <file> --out <dir> [--spec-hash <hash>]";
 
 /// The runtime crate of the checkout specc was built from.
 const DEFAULT_RUNTIME: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../runtime");
@@ -81,6 +85,8 @@ struct Args {
     out: PathBuf,
     crate_name: String,
     runtime: PathBuf,
+    /// The specification's semantic hash, written into every header when given.
+    spec_hash: Option<String>,
     exegra_project: Option<String>,
     exegra_specs: Option<PathBuf>,
 }
@@ -104,6 +110,7 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
     let mut out = None;
     let mut crate_name = None;
     let mut runtime = None;
+    let mut spec_hash = None;
     let mut exegra_project = None;
     let mut exegra_specs = None;
     let mut iter = rest.iter();
@@ -113,6 +120,7 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
             "--out" => &mut out,
             "--crate-name" => &mut crate_name,
             "--runtime" => &mut runtime,
+            "--spec-hash" => &mut spec_hash,
             "--exegra-project" => &mut exegra_project,
             "--exegra-specs" => &mut exegra_specs,
             other => return Err(format!("unknown argument \"{other}\"")),
@@ -122,6 +130,13 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
         };
         if slot.replace(value.clone()).is_some() {
             return Err(format!("{flag} is given twice"));
+        }
+    }
+    if let Some(hash) = &spec_hash {
+        if hash.is_empty() || !hash.chars().all(|c| c.is_ascii_alphanumeric()) {
+            return Err(
+                "--spec-hash must be letters and digits (Exegra's semanticHash)".to_string(),
+            );
         }
     }
     let spec = spec.ok_or("--spec is required")?;
@@ -161,9 +176,21 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
         out,
         crate_name,
         runtime: PathBuf::from(runtime.unwrap_or_else(|| DEFAULT_RUNTIME.to_string())),
+        spec_hash,
         exegra_project,
         exegra_specs: exegra_specs.map(PathBuf::from),
     })
+}
+
+impl Args {
+    /// What the headers of generated files name as their source: the specification's path, and
+    /// its semantic hash when `--spec-hash` gave one.
+    fn header_source(&self) -> String {
+        match &self.spec_hash {
+            Some(hash) => format!("{} (semantic hash {hash})", self.spec),
+            None => self.spec.clone(),
+        }
+    }
 }
 
 fn main() -> ExitCode {
@@ -205,7 +232,7 @@ fn main() -> ExitCode {
         crate_name: args.crate_name.clone(),
         runtime: RuntimeDependency::Path(runtime),
     };
-    let files = match generate(&args.spec, &text, &options) {
+    let files = match generate(&args.header_source(), &text, &options) {
         Ok(files) => files,
         Err(diagnostics) => {
             for d in &diagnostics {
@@ -235,7 +262,7 @@ fn main() -> ExitCode {
 }
 
 fn run_deploy(args: &Args, text: &str) -> ExitCode {
-    let output = match deploy::generate(&args.spec, text) {
+    let output = match deploy::generate(&args.header_source(), text) {
         Ok(output) => output,
         Err(diagnostics) => {
             for d in &diagnostics {
@@ -259,7 +286,7 @@ fn run_deploy(args: &Args, text: &str) -> ExitCode {
 }
 
 fn run_web(args: &Args, text: &str) -> ExitCode {
-    let files = match web::generate(&args.spec, text) {
+    let files = match web::generate(&args.header_source(), text) {
         Ok(files) => files,
         Err(diagnostics) => {
             for d in &diagnostics {
@@ -280,7 +307,7 @@ fn run_web(args: &Args, text: &str) -> ExitCode {
 }
 
 fn run_e2e(args: &Args, text: &str) -> ExitCode {
-    let output = match e2e::generate(&args.spec, text) {
+    let output = match e2e::generate(&args.header_source(), text) {
         Ok(output) => output,
         Err(diagnostics) => {
             for d in &diagnostics {
@@ -321,7 +348,7 @@ fn run_scenarios(args: &Args, text: &str) -> ExitCode {
         _ => None,
     };
     let result = scenarios::generate(
-        &args.spec,
+        &args.header_source(),
         text,
         &args.crate_name,
         source.as_ref().map(|s| s as scenarios::TraceSource),
