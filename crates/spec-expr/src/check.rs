@@ -45,7 +45,7 @@ pub enum Ty {
 }
 
 impl Ty {
-    fn int_info(&self) -> Option<(bool, u32, &'static str)> {
+    pub(crate) fn int_info(&self) -> Option<(bool, u32, &'static str)> {
         Some(match self {
             Ty::U8 => (false, 8, "u8"),
             Ty::U16 => (false, 16, "u16"),
