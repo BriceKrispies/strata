@@ -208,7 +208,11 @@ pub fn leaf(spec: &Spec, t: &TypeRef) -> Option<Leaf> {
                 TypeKind::Struct { .. } | TypeKind::Union { .. } => None,
             }
         }
-        TypeRef::List(_) | TypeRef::Set(_) | TypeRef::Option(_) | TypeRef::Map(..) => None,
+        TypeRef::List(_)
+        | TypeRef::Set(_)
+        | TypeRef::Option(_)
+        | TypeRef::Map(..)
+        | TypeRef::Shared(_) => None,
     }
 }
 

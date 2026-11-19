@@ -89,7 +89,11 @@ fn repr_of(spec: &Spec, t: &TypeRef) -> Option<Repr> {
             TypeKind::Enum { .. } => Some(Repr::Str),
             TypeKind::Struct { .. } | TypeKind::Union { .. } => None,
         },
-        TypeRef::List(_) | TypeRef::Set(_) | TypeRef::Option(_) | TypeRef::Map(..) => None,
+        TypeRef::List(_)
+        | TypeRef::Set(_)
+        | TypeRef::Option(_)
+        | TypeRef::Map(..)
+        | TypeRef::Shared(_) => None,
     }
 }
 
@@ -114,9 +118,10 @@ fn sensitivity(spec: &Spec, t: &TypeRef, depth: usize) -> Option<String> {
     }
     match t {
         TypeRef::Builtin(_) => None,
-        TypeRef::List(inner) | TypeRef::Set(inner) | TypeRef::Option(inner) => {
-            sensitivity(spec, inner, depth + 1)
-        }
+        TypeRef::List(inner)
+        | TypeRef::Set(inner)
+        | TypeRef::Option(inner)
+        | TypeRef::Shared(inner) => sensitivity(spec, inner, depth + 1),
         TypeRef::Map(key, value) => {
             sensitivity(spec, key, depth + 1).or_else(|| sensitivity(spec, value, depth + 1))
         }

@@ -288,7 +288,9 @@ fn constraint_base(spec: &Spec, f: &RecordField) -> Option<(Vec<Step>, Builtin)>
                 steps.push(Step::Option);
                 t = *inner;
             }
-            TypeRef::List(_) | TypeRef::Set(_) | TypeRef::Map(..) => return None,
+            TypeRef::List(_) | TypeRef::Set(_) | TypeRef::Map(..) | TypeRef::Shared(_) => {
+                return None
+            }
             TypeRef::Declared(id) => {
                 let decl = spec.type_decl(&id)?;
                 let (TypeKind::Id { repr } | TypeKind::Scalar { repr }) = &decl.kind else {
@@ -575,7 +577,7 @@ fn record_items(
         .iter()
         .map(|f| {
             let field = naming::ident(&naming::snake(&f.name).unwrap_or_default());
-            if resolve::is_copy(&TypeRef::parse(&f.type_name)) {
+            if resolve::is_copy(spec, &TypeRef::parse(&f.type_name)) {
                 quote! { #field: self.#field }
             } else {
                 quote! { #field: self.#field.clone() }

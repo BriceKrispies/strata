@@ -56,6 +56,12 @@ fn cargo_toml(spec: &Spec, crate_name: &str) -> String {
     } else {
         String::new()
     };
+    // `rc` lets serde read and write a `shared<T>` (an `Arc<T>`) as the `T` it holds.
+    let serde_features = if types::core_uses_shared(spec) {
+        r#"["derive", "rc"]"#
+    } else {
+        r#"["derive"]"#
+    };
     format!(
         "{header}\n\
          [package]\n\
@@ -66,7 +72,7 @@ fn cargo_toml(spec: &Spec, crate_name: &str) -> String {
          \n\
          [dependencies]\n\
          regex = \"{REGEX_VERSION}\"\n\
-         serde = {{ version = \"{SERDE_VERSION}\", features = [\"derive\"] }}\n\
+         serde = {{ version = \"{SERDE_VERSION}\", features = {serde_features} }}\n\
          serde_json = \"{SERDE_JSON_VERSION}\"\n\
          {uuid}",
         header = emit::toml_header(&spec.path),

@@ -84,6 +84,10 @@ pub fn rust_type(spec: &Spec, t: &TypeRef, scope: Scope, uses: &mut Uses) -> Tok
             let value = rust_type(spec, value, scope, uses);
             quote! { std::collections::BTreeMap<#key, #value> }
         }
+        TypeRef::Shared(inner) => {
+            let inner = rust_type(spec, inner, scope, uses);
+            quote! { std::sync::Arc<#inner> }
+        }
     }
 }
 
@@ -139,7 +143,16 @@ pub fn builtin_type(b: Builtin, uses: &mut Uses) -> TokenStream {
 /// The derives of every generated data type: `Eq`, `Ord` and `Hash` only when nothing in the
 /// type is an `f64`.
 pub fn derives(total: bool) -> TokenStream {
-    if total {
+    derives_copy(total, false)
+}
+
+/// As [`derives`], with `Copy` as well when `copy` ([`crate::resolve::declared_is_copy`]).
+pub fn derives_copy(total: bool, copy: bool) -> TokenStream {
+    if copy && total {
+        quote! { #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)] }
+    } else if copy {
+        quote! { #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)] }
+    } else if total {
         quote! { #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)] }
     } else {
         quote! { #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)] }

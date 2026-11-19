@@ -129,7 +129,7 @@ fn compile_capture(
             if entry.eff == eff && !entry.place.is_empty() {
                 let place = &entry.place;
                 let heads = BTreeSet::from([path[0].clone()]);
-                return Ok(if resolve::is_copy(&eff) {
+                return Ok(if resolve::is_copy(spec, &eff) {
                     (quote! { #place }, heads)
                 } else {
                     (quote! { #place.clone() }, heads)

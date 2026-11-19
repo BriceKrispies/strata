@@ -403,6 +403,8 @@ fn raw_ty(t: &TypeRef) -> Ty {
         TypeRef::List(inner) | TypeRef::Set(inner) => Ty::List(Box::new(raw_ty(inner))),
         // A map is opaque to expressions, like json: compared only with == and !=.
         TypeRef::Map(..) => Ty::Named(t.text()),
+        // So is a shared value, whose Rust type is not its inner type.
+        TypeRef::Shared(..) => Ty::Named(t.text()),
     }
 }
 
@@ -448,9 +450,11 @@ fn view(spec: &Spec, t: &TypeRef, uses: &mut Uses) -> View {
                 None => View::plain(Ty::Named(id.clone())),
             }
         }
-        TypeRef::Option(_) | TypeRef::List(_) | TypeRef::Set(_) | TypeRef::Map(..) => {
-            View::plain(raw_ty(t))
-        }
+        TypeRef::Option(_)
+        | TypeRef::List(_)
+        | TypeRef::Set(_)
+        | TypeRef::Map(..)
+        | TypeRef::Shared(_) => View::plain(raw_ty(t)),
     }
 }
 
@@ -1041,7 +1045,7 @@ impl<'a> Gen<'a> {
         };
         let key_ref = TypeRef::parse(&key_field.type_name);
         let mut key_ty = render::rust_type(spec, &key_ref, TypeScope::Other, &mut self.uses);
-        let key_copy = resolve::is_copy(&key_ref);
+        let key_copy = resolve::is_copy(spec, &key_ref);
         if key_field.optional {
             key_ty = quote! { Option<#key_ty> };
         }
@@ -1178,7 +1182,7 @@ impl<'a> Gen<'a> {
         let mut uses_state = false;
         for f in &record.fields {
             let field = naming::ident(&naming::snake(&f.name).unwrap_or_default());
-            let field_copy = resolve::is_copy(&TypeRef::parse(&f.type_name));
+            let field_copy = resolve::is_copy(spec, &TypeRef::parse(&f.type_name));
             let value = if f.name == key {
                 if key_copy && !key_field.optional {
                     quote! { *key }
@@ -1237,7 +1241,7 @@ impl<'a> Gen<'a> {
     /// The value of record field `f` holding the variable of `slot`, in `to_record`.
     fn write_field(&mut self, slot: &Slot, f: &RecordField) -> TokenStream {
         let vf = &slot.field;
-        let value = if resolve::is_copy(&TypeRef::parse(&slot.type_name)) {
+        let value = if resolve::is_copy(self.spec, &TypeRef::parse(&slot.type_name)) {
             quote! { vars.#vf }
         } else {
             quote! { vars.#vf.clone() }
@@ -1261,7 +1265,7 @@ impl<'a> Gen<'a> {
     /// unset optional field gives the variable its initial value.
     fn read_field(&mut self, slot: &Slot, f: &RecordField) -> TokenStream {
         let rf = naming::ident(&naming::snake(&f.name).unwrap_or_default());
-        let copy = resolve::is_copy(&TypeRef::parse(&slot.type_name));
+        let copy = resolve::is_copy(self.spec, &TypeRef::parse(&slot.type_name));
         let (optional, declared) = match fit(self.spec, &slot.type_name, f) {
             Some(Fit::Option) | None => {
                 return if copy {

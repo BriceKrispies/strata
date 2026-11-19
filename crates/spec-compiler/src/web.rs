@@ -364,6 +364,8 @@ pub(crate) fn raw_ty(t: &TypeRef) -> Ty {
         TypeRef::List(inner) | TypeRef::Set(inner) => Ty::List(Box::new(raw_ty(inner))),
         // A map is opaque to expressions, like json: compared only with == and !=.
         TypeRef::Map(..) => Ty::Named(t.text()),
+        // A shared value is its inner value everywhere but in Rust.
+        TypeRef::Shared(inner) => raw_ty(inner),
     }
 }
 
@@ -386,6 +388,7 @@ pub(crate) fn expr_ty(spec: &Spec, t: &TypeRef) -> Ty {
                 None => Ty::Named(id.clone()),
             }
         }
+        TypeRef::Shared(inner) => expr_ty(spec, inner),
         TypeRef::Option(_) | TypeRef::List(_) | TypeRef::Set(_) | TypeRef::Map(..) => raw_ty(t),
     }
 }
@@ -422,6 +425,7 @@ pub(crate) fn js_check(spec: &Spec, cases: &Cases, t: &TypeRef, depth: usize) ->
         }
         // A map's value is checked by the Rust decode; the browser passes it on as it is.
         TypeRef::Map(..) => "check.any".to_string(),
+        TypeRef::Shared(inner) => js_check(spec, cases, inner, depth),
         TypeRef::Declared(id) => match spec.type_decl(id).map(|d| &d.kind) {
             Some(TypeKind::Id { repr } | TypeKind::Scalar { repr }) => {
                 match repr.as_deref().and_then(Builtin::parse) {
@@ -513,6 +517,7 @@ pub(crate) fn js_type(
             "Record<string, {}>",
             js_type(spec, cases, value, false, depth + 1)
         ),
+        TypeRef::Shared(inner) => js_type(spec, cases, inner, nested, depth + 1),
         TypeRef::Declared(id) => match spec.type_decl(id).map(|d| &d.kind) {
             Some(TypeKind::Id { repr } | TypeKind::Scalar { repr }) => {
                 match repr.as_deref().and_then(Builtin::parse) {

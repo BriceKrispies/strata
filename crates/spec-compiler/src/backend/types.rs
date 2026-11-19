@@ -206,7 +206,7 @@ pub fn check(spec: &Spec) -> Vec<Diagnostic> {
 pub fn has_set(t: &TypeRef) -> bool {
     match t {
         TypeRef::Set(_) => true,
-        TypeRef::List(inner) | TypeRef::Option(inner) => has_set(inner),
+        TypeRef::List(inner) | TypeRef::Option(inner) | TypeRef::Shared(inner) => has_set(inner),
         TypeRef::Map(k, v) => has_set(k) || has_set(v),
         TypeRef::Builtin(_) | TypeRef::Declared(_) => false,
     }
@@ -219,7 +219,9 @@ fn set_items(t: &TypeRef, found: &mut Vec<TypeRef>) {
             found.push((**inner).clone());
             set_items(inner, found);
         }
-        TypeRef::List(inner) | TypeRef::Option(inner) => set_items(inner, found),
+        TypeRef::List(inner) | TypeRef::Option(inner) | TypeRef::Shared(inner) => {
+            set_items(inner, found)
+        }
         TypeRef::Map(k, v) => {
             set_items(k, found);
             set_items(v, found);
@@ -582,9 +584,10 @@ fn type_texts(spec: &Spec) -> Vec<(&str, &str)> {
 fn check_map_keys(spec: &Spec, out: &mut Vec<Diagnostic>) {
     fn keys(t: &TypeRef, found: &mut Vec<TypeRef>) {
         match t {
-            TypeRef::List(inner) | TypeRef::Set(inner) | TypeRef::Option(inner) => {
-                keys(inner, found)
-            }
+            TypeRef::List(inner)
+            | TypeRef::Set(inner)
+            | TypeRef::Option(inner)
+            | TypeRef::Shared(inner) => keys(inner, found),
             TypeRef::Map(k, v) => {
                 found.push((**k).clone());
                 keys(k, found);
@@ -709,9 +712,10 @@ pub fn core_reaches_uuid(spec: &Spec) -> bool {
 fn reaches_uuid(spec: &Spec, t: &TypeRef, seen: &mut BTreeSet<String>) -> bool {
     match t {
         TypeRef::Builtin(b) => *b == Builtin::Uuid,
-        TypeRef::List(inner) | TypeRef::Set(inner) | TypeRef::Option(inner) => {
-            reaches_uuid(spec, inner, seen)
-        }
+        TypeRef::List(inner)
+        | TypeRef::Set(inner)
+        | TypeRef::Option(inner)
+        | TypeRef::Shared(inner) => reaches_uuid(spec, inner, seen),
         TypeRef::Map(k, v) => reaches_uuid(spec, k, seen) || reaches_uuid(spec, v, seen),
         TypeRef::Declared(id) => {
             if !seen.insert(id.clone()) {
@@ -735,6 +739,32 @@ fn reaches_uuid(spec: &Spec, t: &TypeRef, seen: &mut BTreeSet<String>) -> bool {
                 .any(|f| reaches_uuid(spec, &TypeRef::parse(&f.type_name), seen))
         }
     }
+}
+
+/// True when some field of a declared type of the pure crate is written with `shared<T>`, so the
+/// crate turns on serde's `rc` feature.
+pub fn core_uses_shared(spec: &Spec) -> bool {
+    fn shared(t: &TypeRef) -> bool {
+        match t {
+            TypeRef::Shared(_) => true,
+            TypeRef::List(inner) | TypeRef::Set(inner) | TypeRef::Option(inner) => shared(inner),
+            TypeRef::Map(k, v) => shared(k) || shared(v),
+            TypeRef::Builtin(_) | TypeRef::Declared(_) => false,
+        }
+    }
+    spec.types
+        .iter()
+        .filter(|t| is_core_type(spec, &t.id))
+        .flat_map(|t| -> Vec<&StructField> {
+            match &t.kind {
+                TypeKind::Struct { fields } => fields.iter().collect(),
+                TypeKind::Union { variants, .. } => {
+                    variants.iter().flat_map(|v| &v.fields).collect()
+                }
+                TypeKind::Id { .. } | TypeKind::Scalar { .. } | TypeKind::Enum { .. } => vec![],
+            }
+        })
+        .any(|f| shared(&TypeRef::parse(&f.type_name)))
 }
 
 /// The `types` module for the selection.
@@ -931,6 +961,8 @@ fn raw_type(spec: &Spec, t: &TypeRef) -> TokenStream {
             let inner = raw_type(spec, inner);
             quote! { Option<#inner> }
         }
+        // Decoded as the inner type, then shared.
+        TypeRef::Shared(inner) => raw_type(spec, inner),
         TypeRef::Map(k, v) => {
             let k = render::rust_type(spec, k, Scope::Types, &mut uses);
             let v = raw_type(spec, v);
@@ -961,6 +993,10 @@ fn convert(t: &TypeRef, value: TokenStream) -> TokenStream {
         TypeRef::Option(inner) => {
             let item = item(inner);
             quote! { #value.map(|x| #item) }
+        }
+        TypeRef::Shared(inner) => {
+            let inner = convert(inner, value);
+            quote! { std::sync::Arc::new(#inner) }
         }
         TypeRef::Map(_, v) => {
             let item = item(v);
@@ -1020,7 +1056,9 @@ fn type_item(
             ));
             let builtin = Builtin::parse(repr_name).unwrap_or(Builtin::String);
             let ty = render::builtin_type(builtin, uses);
-            let derives = render::derives(builtin.is_total());
+            let derives =
+                render::derives_copy(builtin.is_total(), resolve::declared_is_copy(spec, &t.id));
+            let methods = value_methods(t, &name, builtin);
             if t.constraints.is_empty() {
                 let doc = doc.tokens();
                 return quote! {
@@ -1028,16 +1066,23 @@ fn type_item(
                     #derives
                     #[serde(transparent)]
                     pub struct #name(pub #ty);
+
+                    #methods
                 };
             }
-            constrained_item(t, &name, doc, derives, ty, builtin)
+            let item = constrained_item(t, &name, doc, derives, ty, builtin);
+            quote! {
+                #item
+
+                #methods
+            }
         }
         TypeKind::Enum { values } => {
             doc.paragraph(&format!(
                 "Specification type `{}`: an enumeration, serialised as the specification's values.",
                 t.id
             ));
-            let derives = render::derives(true);
+            let derives = render::derives_copy(true, true);
             let doc = doc.tokens();
             let variants: Vec<_> = values
                 .iter()
@@ -1103,7 +1148,7 @@ fn type_item(
                 t.id
             ));
             let total = resolve::is_total(spec, &TypeRef::Declared(t.id.clone()));
-            let derives = render::derives(total);
+            let derives = render::derives_copy(total, resolve::declared_is_copy(spec, &t.id));
             let doc = doc.tokens();
             let container = match encoding.tag {
                 UnionTag::External => TokenStream::new(),
@@ -1221,6 +1266,47 @@ fn field(
     }
 }
 
+/// What every id or scalar offers beyond its derives: `as_str` when it is a string, and for an
+/// identifier `Display`, which writes the value as it is (the text of a string id, the number of
+/// an integer id, the hyphenated form of a uuid).
+fn value_methods(t: &TypeDecl, name: &Ident, builtin: Builtin) -> TokenStream {
+    let mut out = TokenStream::new();
+    if builtin == Builtin::String {
+        out.extend(quote! {
+            impl #name {
+                /// The value as text.
+                pub fn as_str(&self) -> &str {
+                    &self.0
+                }
+            }
+        });
+    }
+    if matches!(t.kind, TypeKind::Id { .. }) {
+        let body = match builtin {
+            Builtin::String => Some(quote! { f.write_str(&self.0) }),
+            Builtin::Bool
+            | Builtin::U8
+            | Builtin::U16
+            | Builtin::U32
+            | Builtin::U64
+            | Builtin::I32
+            | Builtin::I64
+            | Builtin::Uuid => Some(quote! { std::fmt::Display::fmt(&self.0, f) }),
+            _ => None,
+        };
+        if let Some(body) = body {
+            out.extend(quote! {
+                impl std::fmt::Display for #name {
+                    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        #body
+                    }
+                }
+            });
+        }
+    }
+    out
+}
+
 /// An id or scalar with `constraints`: decoded through `TryFrom` so a wire value always meets
 /// them, with `new` and `validate`.
 fn constrained_item(
@@ -1301,8 +1387,8 @@ fn constrained_item(
 
         impl #name {
             /// The value, when it meets the type's constraints.
-            pub fn new(value: #repr_ty) -> Result<Self, #violation> {
-                let value = Self(value);
+            pub fn new(value: impl Into<#repr_ty>) -> Result<Self, #violation> {
+                let value = Self(value.into());
                 value.validate()?;
                 Ok(value)
             }
