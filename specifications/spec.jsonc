@@ -2981,7 +2981,7 @@
       "errors": [
         {
           "name": "domain",
-          "condition": "The kernel rejected the intent; the store is unchanged.",
+          "condition": "The kernel rejected the intent; the store is unchanged. Its HTTP status, where one is served, is error-code-of of its kind.",
           "type": "domain-error",
           "kind": "invalid"
         },
@@ -2990,12 +2990,6 @@
           "condition": "The store failed.",
           "type": "store-error",
           "kind": "unavailable"
-        },
-        {
-          "name": "domain",
-          "condition": "The kernel rejected the intent; the store is unchanged. Its HTTP status, where one is served, is error-code-of of its kind.",
-          "type": "domain-error",
-          "kind": "invalid"
         },
         {
           "name": "insufficient-state",
@@ -14510,12 +14504,6 @@
         "The response reports success, and its assertion answers the request that was made (FED-007)."
       ],
       "errors": [
-        {
-          "name": "invalid",
-          "condition": "The signature, issuer, audience or recipient is wrong.",
-          "type": "api-error",
-          "kind": "invalid"
-        },
         {
           "name": "invalid",
           "condition": "The signature, issuer, audience, recipient, destination, time or request is wrong, or the message is not one that is read.",
