@@ -11,7 +11,7 @@ use serde_json::json;
 use std::collections::{BTreeMap, VecDeque};
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::sync::atomic::AtomicI64;
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 use strata_kernel::{DomainError, ErrorKind, Timestamp};
 use strata_protocol::api::{ErrorCode, ErrorReply};
@@ -179,6 +179,11 @@ pub struct App {
     pub started_at: i64,
     /// Recent security-relevant events, newest last. Reported by the platform diagnostics only.
     pub audit: Recent<serde_json::Value>,
+    /// Milliseconds added to the clock. Zero except in development, where a test moves time
+    /// forward to see a lifetime or a revocation bound pass.
+    pub clock_skew_ms: AtomicI64,
+    /// Development only: the identity service is made to answer as if it could not be reached.
+    pub identity_outage: AtomicBool,
 }
 
 pub type Shared = Arc<App>;
@@ -193,6 +198,8 @@ impl App {
             lab: Lab::new(),
             started_at: now_ms(),
             audit: Recent::new(1000),
+            clock_skew_ms: AtomicI64::new(0),
+            identity_outage: AtomicBool::new(false),
         })
     }
 
@@ -222,7 +229,7 @@ impl App {
 
     /// The one place the backend reads the clock for domain purposes.
     pub fn now(&self) -> Timestamp {
-        Timestamp(now_ms())
+        Timestamp(now_ms() + self.clock_skew_ms.load(Ordering::Relaxed))
     }
 
     /// Run store work off the async threads.

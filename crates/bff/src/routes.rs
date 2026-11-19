@@ -12,7 +12,7 @@ use axum::http::header::{
 use axum::http::{HeaderMap, HeaderValue, Method, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{any, get, post};
 use axum::{Json, Router};
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value as Json_};
@@ -1403,6 +1403,214 @@ async fn api_not_found(headers: HeaderMap) -> Failure {
     Failure::new(ErrorCode::NotFound, "No such endpoint.", &correlation)
 }
 
+/// A JSON answer that no cache keeps.
+fn uncached(body: Json_) -> Response {
+    let mut response = Json(body).into_response();
+    response
+        .headers_mut()
+        .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
+}
+
+/// The body of a token request: JSON, or the form that OAuth clients send.
+fn oauth_body(headers: &HeaderMap, body: &[u8]) -> Json_ {
+    let json = text(headers, CONTENT_TYPE).is_some_and(|kind| kind.contains("json"));
+    if json {
+        return serde_json::from_slice(body).unwrap_or(Json_::Null);
+    }
+    Json_::Object(
+        form_fields(body)
+            .into_iter()
+            .map(|(name, value)| (name, Json_::String(value)))
+            .collect(),
+    )
+}
+
+/// The token endpoint. A service account presents its credentials in the body, so nothing here
+/// rests on a cookie: the request is made as no one's session.
+///
+/// Implements: TOK-001
+async fn oauth_token(
+    State(bff): State<Shared>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Result<Response, Failure> {
+    let mut visit = visit(&bff, &headers)?;
+    visit.token = None;
+    let reply: Json_ = backend(
+        &bff,
+        &visit,
+        "/internal/token",
+        &oauth_body(&headers, &body),
+    )
+    .await?;
+    Ok(uncached(reply))
+}
+
+/// Introspection, by a service account with its credentials or by the site's signed-in owner.
+///
+/// Implements: TOK-009
+async fn oauth_introspect(
+    State(bff): State<Shared>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Result<Response, Failure> {
+    let visit = visit(&bff, &headers)?;
+    let reply: Json_ = backend(
+        &bff,
+        &visit,
+        "/internal/token/introspect",
+        &oauth_body(&headers, &body),
+    )
+    .await?;
+    Ok(uncached(reply))
+}
+
+/// The public keys the site's tokens verify with.
+///
+/// Implements: TOK-008
+async fn signing_keys(State(bff): State<Shared>, headers: HeaderMap) -> Result<Response, Failure> {
+    let mut visit = visit(&bff, &headers)?;
+    visit.token = None;
+    let reply: Json_ = backend(&bff, &visit, "/internal/keys", &json!({})).await?;
+    Ok(uncached(reply))
+}
+
+fn scim_reply(status: u16, body: Json_) -> Response {
+    let code = StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    if code == StatusCode::NO_CONTENT {
+        return code.into_response();
+    }
+    let mut response = (code, body.to_string()).into_response();
+    let out = response.headers_mut();
+    out.insert(
+        CONTENT_TYPE,
+        HeaderValue::from_static("application/scim+json"),
+    );
+    out.insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
+}
+
+/// SCIM provisioning. The provisioning token in `Authorization` is the credential, and it opens
+/// this route and no other: the cookie is not read, and nothing else looks for the token.
+///
+/// Implements: FED-259
+async fn scim(
+    State(bff): State<Shared>,
+    headers: HeaderMap,
+    method: Method,
+    Path(rest): Path<String>,
+    Query(query): Query<BTreeMap<String, String>>,
+    body: axum::body::Bytes,
+) -> Result<Response, Failure> {
+    let mut visit = visit(&bff, &headers)?;
+    visit.token = None;
+    let parsed = if body.is_empty() {
+        Json_::Null
+    } else {
+        match serde_json::from_slice::<Json_>(&body) {
+            Ok(parsed) => parsed,
+            Err(_) => {
+                return Ok(scim_reply(
+                    400,
+                    json!({
+                        "schemas": ["urn:ietf:params:scim:api:messages:2.0:Error"],
+                        "status": "400",
+                        "scimType": "invalidSyntax",
+                        "detail": "The body is not JSON.",
+                    }),
+                ))
+            }
+        }
+    };
+    let envelope = json!({
+        "method": method.as_str(),
+        "path": rest,
+        "query": query,
+        "authorization": text(&headers, axum::http::header::AUTHORIZATION),
+        "body": parsed,
+    });
+    let reply: Json_ = backend(&bff, &visit, "/internal/scim", &envelope).await?;
+    let status = reply["status"].as_u64().unwrap_or(500) as u16;
+    Ok(scim_reply(status, reply["body"].clone()))
+}
+
+/// What the desk may read of the identity service, and where it is at the backend.
+const IDENTITY_READS: &[(&str, &str)] = &[
+    ("clients", "/internal/clients"),
+    ("provisioning/groups", "/internal/provisioning/groups"),
+];
+
+/// What the desk may change of the identity service. Each is the owner's, and the backend
+/// checks that again.
+const IDENTITY_WRITES: &[(&str, &str)] = &[
+    ("clients/create", "/internal/clients/create"),
+    ("clients/rotate-secret", "/internal/clients/rotate-secret"),
+    ("clients/revoke", "/internal/clients/revoke"),
+    ("keys/rotate", "/internal/keys/rotate"),
+    ("keys/compromise", "/internal/keys/compromise"),
+    ("grants/create", "/internal/grants/create"),
+    ("grants/revoke", "/internal/grants/revoke"),
+    (
+        "provisioning/tokens/create",
+        "/internal/provisioning/tokens/create",
+    ),
+    (
+        "provisioning/tokens/revoke",
+        "/internal/provisioning/tokens/revoke",
+    ),
+    (
+        "provisioning/groups/set",
+        "/internal/provisioning/groups/set",
+    ),
+    (
+        "provisioning/groups/remove",
+        "/internal/provisioning/groups/remove",
+    ),
+];
+
+async fn identity_read(
+    State(bff): State<Shared>,
+    headers: HeaderMap,
+    Path(action): Path<String>,
+) -> Result<Response, Failure> {
+    let visit = visit(&bff, &headers)?;
+    let Some((_, path)) = IDENTITY_READS
+        .iter()
+        .find(|(name, _)| *name == action.trim_start_matches('/'))
+    else {
+        return Err(Failure::new(
+            ErrorCode::NotFound,
+            "No such endpoint.",
+            &visit.correlation,
+        ));
+    };
+    let reply: Json_ = backend(&bff, &visit, path, &json!({})).await?;
+    Ok(uncached(reply))
+}
+
+async fn identity_write(
+    State(bff): State<Shared>,
+    headers: HeaderMap,
+    Path(action): Path<String>,
+    Json(body): Json<Json_>,
+) -> Result<Response, Failure> {
+    let visit = visit(&bff, &headers)?;
+    let Some((_, path)) = IDENTITY_WRITES
+        .iter()
+        .find(|(name, _)| *name == action.trim_start_matches('/'))
+    else {
+        return Err(Failure::new(
+            ErrorCode::NotFound,
+            "No such endpoint.",
+            &visit.correlation,
+        ));
+    };
+    guard_write(&bff, &visit, &headers).await?;
+    let reply: Json_ = backend(&bff, &visit, path, &body).await?;
+    Ok(uncached(reply))
+}
+
 pub fn router(bff: Shared) -> Router {
     let api = Router::new()
         .route("/session", get(session))
@@ -1431,6 +1639,7 @@ pub fn router(bff: Shared) -> Router {
         .route("/lab/verify", post(lab_verify))
         .route("/diagnostics", get(diagnostics))
         .route("/dev/:action", post(dev))
+        .route("/identity/*action", get(identity_read).post(identity_write))
         .fallback(api_not_found);
     Router::new()
         .nest("/api", api)
@@ -1438,6 +1647,11 @@ pub fn router(bff: Shared) -> Router {
         .route("/federation/oidc/callback", get(oidc_callback))
         .route("/federation/saml/acs", post(saml_acs))
         .route("/federation/saml/metadata/:provider", get(saml_metadata))
+        .route("/token", post(oauth_token))
+        .route("/introspect", post(oauth_introspect))
+        .route("/keys", get(signing_keys))
+        .route("/.well-known/jwks.json", get(signing_keys))
+        .route("/scim/v2/*rest", any(scim))
         .nest_service("/assets", ServeDir::new(bff.cfg.dist.join("assets")))
         .nest_service("/media", ServeDir::new(bff.cfg.dist.join("media")))
         .fallback(get(page))

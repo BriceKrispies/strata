@@ -33,6 +33,7 @@ struct Inner {
     saml_requests: BTreeMap<(TenantId, String), SamlRequest>,
     saml_assertions: BTreeMap<(TenantId, String, String), Timestamp>,
     identities: BTreeMap<(TenantId, String, String), FederatedIdentity>,
+    docs: BTreeMap<(TenantId, String, String), String>,
     snapshots: BTreeMap<(TenantId, u64), (SnapshotInfo, Arc<TenantState>)>,
 }
 
@@ -591,6 +592,52 @@ impl Store for MemoryStore {
             .is_some())
     }
 
+    fn doc_put(
+        &self,
+        tenant: &TenantId,
+        kind: &str,
+        key: &str,
+        value: &str,
+        create_only: bool,
+    ) -> StoreResult<bool> {
+        let mut inner = self.lock()?;
+        if !inner.tenants.contains_key(tenant) {
+            return Err(StoreError::NotFound(format!("tenant {tenant}")));
+        }
+        let slot = (tenant.clone(), kind.to_string(), key.to_string());
+        if create_only && inner.docs.contains_key(&slot) {
+            return Ok(false);
+        }
+        inner.docs.insert(slot, value.to_string());
+        Ok(true)
+    }
+
+    fn doc_get(&self, tenant: &TenantId, kind: &str, key: &str) -> StoreResult<Option<String>> {
+        Ok(self
+            .lock()?
+            .docs
+            .get(&(tenant.clone(), kind.to_string(), key.to_string()))
+            .cloned())
+    }
+
+    fn doc_list(&self, tenant: &TenantId, kind: &str) -> StoreResult<Vec<(String, String)>> {
+        Ok(self
+            .lock()?
+            .docs
+            .iter()
+            .filter(|((t, k, _), _)| t == tenant && k == kind)
+            .map(|((_, _, key), value)| (key.clone(), value.clone()))
+            .collect())
+    }
+
+    fn doc_remove(&self, tenant: &TenantId, kind: &str, key: &str) -> StoreResult<bool> {
+        Ok(self
+            .lock()?
+            .docs
+            .remove(&(tenant.clone(), kind.to_string(), key.to_string()))
+            .is_some())
+    }
+
     fn create_snapshot(
         &self,
         tenant: &TenantId,
@@ -680,6 +727,7 @@ impl Store for MemoryStore {
         inner.saml_requests.retain(|(t, _), _| t != tenant);
         inner.saml_assertions.retain(|(t, _, _), _| t != tenant);
         inner.identities.retain(|(t, _, _), _| t != tenant);
+        inner.docs.retain(|(t, _, _), _| t != tenant);
         inner.snapshots.retain(|(t, _), _| t != tenant);
         Ok(())
     }

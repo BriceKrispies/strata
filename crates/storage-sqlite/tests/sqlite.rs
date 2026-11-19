@@ -52,6 +52,13 @@ fn sqlite_store_conforms_on_disk() {
     );
 }
 
+/// The identity service's documents are kept per tenant and kind, on a database file.
+#[test]
+fn sqlite_store_keeps_documents() {
+    let store = SqliteStore::open(&fresh_path("documents"), Timestamp(1)).unwrap();
+    conformance::documents_are_scoped_to_their_tenant_and_kind(&store);
+}
+
 /// Verifies: STO-003
 ///
 /// Everything the adapter acknowledges is there after the file is closed and opened again: the
@@ -141,8 +148,8 @@ fn committed_data_survives_a_reopen() {
     assert_eq!(store.snapshots(&alpha).unwrap(), vec![snapshot]);
     assert_eq!(store.journal_after(&alpha, 0, 10).unwrap().len(), 3);
     let migrations = store.migrations().unwrap();
-    // Versions 1 to 5 and 7: version 6 is the second-factor change's, made on its own branch.
-    assert_eq!(migrations.len(), 6);
+    // Versions 1 to 5, 7 and 8: version 6 is the second-factor change's, made on its own branch.
+    assert_eq!(migrations.len(), 7);
     assert_eq!(
         migrations[0].applied_at,
         Timestamp(1),

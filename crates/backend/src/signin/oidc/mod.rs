@@ -32,7 +32,7 @@ pub use token::{Asserted, Refusal};
 
 use super::federated::{self, Admission};
 use super::link::{encode, same_site_path, site_origin, well_formed};
-use super::{rules, throttled, SignInMethod};
+use super::{start_rules, throttled, SignInMethod};
 use crate::app::{ApiError, App, LOG};
 use crate::auth::{identify, random_hex, same_secret, token_hash, Caller, Identity};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -141,7 +141,9 @@ pub fn start(
         _ => None,
     };
 
-    let rules = rules(app, "oidc-start", &provider.id, &caller.source);
+    // Counted by source and realm only: a start names no account, so a count per provider would
+    // lock the provider's button for everyone after a few starts of anyone's.
+    let rules = start_rules(app, "oidc-start", &caller.source);
     if let ThrottleVerdict::Refused { .. } =
         app.store
             .throttle_reserve(&caller.site, &rules, app.now())?

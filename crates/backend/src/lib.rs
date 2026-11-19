@@ -12,6 +12,7 @@ pub mod lab;
 pub mod mail;
 pub mod ops;
 pub mod seed;
+pub mod service;
 pub mod signin;
 pub mod ws;
 
