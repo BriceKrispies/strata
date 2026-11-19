@@ -7,6 +7,7 @@
 
 import './styles/main.css';
 import { holdValues, render } from './components/dom.js';
+import { passkeysSupported, runPasskey } from './passkey.js';
 import { shell } from './views/shell.js';
 
 const app = /** @type {HTMLElement} */ (document.getElementById('app'));
@@ -81,6 +82,13 @@ worker.onmessage = (event) => {
     case 'scroll_top':
       window.scrollTo(0, 0);
       break;
+    case 'navigate_away':
+      // Only to a web address: the identity provider's, which the gateway checked.
+      if (/^https?:\/\//.test(effect.href)) window.location.assign(effect.href);
+      break;
+    case 'passkey':
+      void runPasskey(effect).then(send);
+      break;
     default:
   }
 };
@@ -92,6 +100,8 @@ send({
   bootstrap: bootstrap(),
   systemDark: darkQuery.matches,
   storedTheme: stored('strata.theme'),
+  passkeys: passkeysSupported(),
+  hash: window.location.hash,
 });
 
 darkQuery.addEventListener('change', (event) => send({ type: 'system_theme', dark: event.matches }));

@@ -1,6 +1,7 @@
 // End-to-end tests in a real browser, against the built frontend served by the BFF.
 import AxeBuilder from '@axe-core/playwright';
 import { expect, test } from '@playwright/test';
+import { createHmac } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 
 const BASE = 'http://127.0.0.1:4200';
@@ -21,7 +22,7 @@ async function signIn(page, name) {
   await open(page, '/login');
   await page.getByLabel('Name').fill(name);
   await page.getByLabel('Password').fill(`strata-dev-${name}`);
-  await page.getByRole('button', { name: 'Sign in' }).click();
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click();
   await expect(page.getByRole('heading', { level: 1, name: 'Writing desk' })).toBeVisible();
 }
 
@@ -170,7 +171,7 @@ test('signing in with a wrong password explains itself; signing in and out works
   await open(page, '/login');
   await page.getByLabel('Name').fill('ines');
   await page.getByLabel('Password').fill('not-the-password');
-  await page.getByRole('button', { name: 'Sign in' }).click();
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click();
   await expect(page.getByRole('alert')).toHaveText('The name or password is not right.');
   await expect(page.getByLabel('Password')).toBeFocused();
   await expect(page.getByLabel('Password')).toHaveValue('');
@@ -615,7 +616,7 @@ test('a second tenant on the same substrate shares nothing with the first', asyn
   await ready(page);
   await page.getByLabel('Name').fill('ines');
   await page.getByLabel('Password').fill('strata-dev-ines');
-  await page.getByRole('button', { name: 'Sign in' }).click();
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click();
   await expect(page.getByRole('alert')).toHaveText('The name or password is not right.');
 
   // A Fieldnotes owner's session, replayed against the Tidewater host, is nobody there.
@@ -899,4 +900,739 @@ test('a visitor learns no login name from the authors, and a signed-in author is
   const selected = await inesPage.getByLabel('Author').evaluate((select) => select.selectedOptions[0].textContent);
   expect(selected).toMatch(/In[eè]s Okafor/);
   await ines.close();
+});
+
+/** Sign out every other session of the person at the desk, so that a test starts from one. */
+async function leaveOnlyThisSession(page) {
+  await open(page, '/desk');
+  const section = page.getByRole('region', { name: 'Where you are signed in' });
+  await expect(section).toBeVisible();
+  const others = section.getByRole('button', { name: 'Sign out all other sessions' });
+  if (await others.count()) {
+    await others.click();
+    await expect(section.getByText('This is the only place you are signed in.')).toBeVisible();
+  }
+}
+
+test('a person sees where they are signed in and signs out another session from the desk', async ({ page, browser }) => {
+  await signIn(page, 'tomasz');
+  await leaveOnlyThisSession(page);
+  const section = page.getByRole('region', { name: 'Where you are signed in' });
+  await expect(section.getByRole('row')).toHaveCount(2); // the header and this device
+
+  const elsewhere = await (await browser.newContext({ baseURL: BASE })).newPage();
+  await signIn(elsewhere, 'tomasz');
+  await expect(elsewhere.getByRole('region', { name: 'Where you are signed in' }).getByRole('row')).toHaveCount(3);
+  await expect(elsewhere.locator('.colophon__live')).toHaveAttribute('data-connection', 'open');
+
+  await open(page, '/desk');
+  await expect(section.getByRole('row')).toHaveCount(3);
+  await expect(section.locator('tr[data-current="true"]')).toHaveCount(1);
+  await expect(section.locator('tr[data-current="false"]')).toContainText('Another device');
+  // Nothing of the session's secret is on the page.
+  expect(await page.content()).not.toContain('csrf');
+
+  await section.getByRole('button', { name: 'Sign out that session' }).click();
+  await expect(page.locator('.toast', { hasText: 'That session has been signed out.' })).toBeVisible();
+  await expect(section.getByRole('row')).toHaveCount(2);
+  await expect(section.getByText('This is the only place you are signed in.')).toBeVisible();
+
+  // The session that was ended is noticed where it is open, and its page falls back to signed out.
+  await expect(elsewhere.getByRole('heading', { level: 1, name: 'Sign in to continue' })).toBeVisible();
+  // This one was not touched.
+  await expect(page.getByRole('heading', { level: 1, name: 'Writing desk' })).toBeVisible();
+});
+
+test('a person signs out all their other sessions at once', async ({ page, browser }) => {
+  await signIn(page, 'mirela');
+  await leaveOnlyThisSession(page);
+  const others = [];
+  for (let i = 0; i < 2; i++) {
+    const elsewhere = await (await browser.newContext({ baseURL: BASE })).newPage();
+    await signIn(elsewhere, 'mirela');
+    others.push(elsewhere);
+  }
+  await open(page, '/desk');
+  const section = page.getByRole('region', { name: 'Where you are signed in' });
+  await expect(section.getByRole('row')).toHaveCount(4);
+  await section.getByRole('button', { name: 'Sign out all other sessions' }).click();
+  await expect(page.locator('.toast', { hasText: 'Signed out 2 other sessions.' })).toBeVisible();
+  await expect(section.getByRole('row')).toHaveCount(2);
+  for (const elsewhere of others) {
+    await expect(elsewhere.getByRole('heading', { level: 1, name: 'Sign in to continue' })).toBeVisible();
+  }
+  await expect(page.getByRole('heading', { level: 1, name: 'Writing desk' })).toBeVisible();
+});
+
+test('ten wrong passwords lock a login for a while, whether or not it exists', async ({ page }) => {
+  await open(page, '/login');
+  // A login that does not exist, so that no real account is locked for the tests that follow:
+  // the limit counts the name that was typed, and nothing about it says whether it has an account.
+  const csrf = (await (await page.request.get('/api/session')).json()).session.csrf_token;
+  const attempt = () =>
+    page.request.post('/api/login', {
+      data: { login: '  Lockout-Probe ', password: 'not-the-password' },
+      headers: { origin: BASE, 'x-csrf-token': csrf },
+    });
+  for (let i = 0; i < 10; i++) {
+    const refused = await attempt();
+    expect(refused.status()).toBe(401);
+    expect((await refused.json()).message).toBe('The name or password is not right.');
+  }
+  // The eleventh, another spelling of the same login, through the page.
+  await page.getByLabel('Name').fill('LOCKOUT-PROBE');
+  await page.getByLabel('Password').fill('not-the-password');
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+  await expect(page.getByRole('alert')).toContainText('Too many attempts');
+  const locked = await attempt();
+  expect(locked.status()).toBe(429);
+  expect(locked.headers()['set-cookie']).toBeUndefined();
+
+  // Another login is not affected, and signing in still works.
+  await signIn(page, 'ines');
+});
+
+// Passkeys. A virtual authenticator (the Chrome DevTools Protocol's WebAuthn domain) stands in
+// for the person's device. WebAuthn needs the site to be reached by a name, so these use
+// `localhost`; at the address `127.0.0.1` the site offers no passkeys, which the first test checks.
+const NAMED = 'http://localhost:4200';
+
+async function virtualAuthenticator(page) {
+  const client = await page.context().newCDPSession(page);
+  await client.send('WebAuthn.enable');
+  const { authenticatorId } = await client.send('WebAuthn.addVirtualAuthenticator', {
+    options: { protocol: 'ctap2', transport: 'internal', hasResidentKey: true, hasUserVerification: true, isUserVerified: true, automaticPresenceSimulation: true },
+  });
+  return { client, authenticatorId, credentials: async () => (await client.send('WebAuthn.getCredentials', { authenticatorId })).credentials };
+}
+
+async function signInNamed(page, name) {
+  await open(page, `${NAMED}/login`);
+  await page.getByLabel('Name').fill(name);
+  await page.getByLabel('Password').fill(`strata-dev-${name}`);
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+  await expect(page.getByRole('heading', { level: 1, name: 'Writing desk' })).toBeVisible();
+}
+
+test('a site reached by an address that is not a name offers no passkeys', async ({ page }) => {
+  await open(page, '/login');
+  await expect(page.getByRole('button', { name: 'Sign in with a passkey' })).toHaveCount(0);
+  await signIn(page, 'ines');
+  await expect(page.getByRole('region', { name: 'Passkeys' })).toHaveCount(0);
+});
+
+test('a person adds a passkey at the desk, signs out, signs in with it and removes it', async ({ page }) => {
+  const authenticator = await virtualAuthenticator(page);
+  await signInNamed(page, 'ines');
+  const section = page.getByRole('region', { name: 'Passkeys' });
+  await expect(section.getByText('You have no passkeys.')).toBeVisible();
+
+  await section.getByRole('button', { name: 'Add a passkey' }).click();
+  await expect(page.locator('.toast', { hasText: 'Passkey added.' })).toBeVisible();
+  await expect(section.locator('tr[data-passkey]')).toHaveCount(1);
+  await expect(section.locator('tr[data-passkey]')).toContainText('Never');
+  expect(await authenticator.credentials()).toHaveLength(1);
+  // The server's relying party is the address the person is at.
+  expect((await authenticator.credentials())[0].rpId).toBe('localhost');
+
+  await page.getByRole('button', { name: 'Sign out', exact: true }).click();
+  await open(page, `${NAMED}/login`);
+  await page.getByRole('button', { name: 'Sign in with a passkey' }).click();
+  await expect(page.getByRole('heading', { level: 1, name: 'Writing desk' })).toBeVisible();
+  await expect(page.getByText('Signed in as Ines')).toBeVisible();
+  // The use is noted, and the signature counter moved on.
+  await expect(section.locator('tr[data-passkey]')).not.toContainText('Never');
+  expect((await authenticator.credentials())[0].signCount).toBeGreaterThan(0);
+
+  await section.getByRole('button', { name: /^Remove/ }).click();
+  await expect(page.locator('.toast', { hasText: 'That passkey has been removed.' })).toBeVisible();
+  await expect(section.getByText('You have no passkeys.')).toBeVisible();
+
+  // A removed passkey signs no one in: the authenticator still holds it, the server does not.
+  await page.getByRole('button', { name: 'Sign out', exact: true }).click();
+  await open(page, `${NAMED}/login`);
+  await page.getByRole('button', { name: 'Sign in with a passkey' }).click();
+  await expect(page.getByRole('alert')).toContainText('not accepted');
+});
+
+test('an assertion made for one address is refused at another', async ({ page }) => {
+  const authenticator = await virtualAuthenticator(page);
+  await signInNamed(page, 'ines');
+  const section = page.getByRole('region', { name: 'Passkeys' });
+  await section.getByRole('button', { name: 'Add a passkey' }).click();
+  await expect(section.locator('tr[data-passkey]')).toHaveCount(1);
+  await page.getByRole('button', { name: 'Sign out', exact: true }).click();
+  expect(await authenticator.credentials()).toHaveLength(1);
+
+  // The browser answers a challenge issued at localhost, as a page at localhost.
+  const answer = await page.evaluate(async () => {
+    const bytes = (text) => Uint8Array.from(atob(text.replace(/-/g, '+').replace(/_/g, '/')), (c) => c.charCodeAt(0));
+    const text = (buffer) => btoa(String.fromCharCode(...new Uint8Array(buffer))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    const csrf = (await (await fetch('/api/session')).json()).session.csrf_token;
+    const issued = await (await fetch('/api/passkeys/challenge', { method: 'POST', headers: { 'content-type': 'application/json', 'x-csrf-token': csrf }, body: '{}' })).json();
+    const options = issued.options.publicKey;
+    const credential = await navigator.credentials.get({ publicKey: { challenge: bytes(options.challenge), rpId: options.rpId, userVerification: 'required' } });
+    const response = credential.response;
+    return {
+      challenge: issued.challenge,
+      assertion: {
+        id: credential.id,
+        rawId: text(credential.rawId),
+        type: credential.type,
+        response: { authenticatorData: text(response.authenticatorData), clientDataJSON: text(response.clientDataJSON), signature: text(response.signature), userHandle: text(response.userHandle) },
+        extensions: credential.getClientExtensionResults(),
+      },
+    };
+  });
+
+  // Presented from another address of the same site, it is refused and starts no session.
+  const other = 'http://127.0.0.1:4200';
+  const csrf = (await (await page.request.get(`${other}/api/session`)).json()).session.csrf_token;
+  const refused = await page.request.post(`${other}/api/sign-in/passkey`, { data: answer, headers: { origin: other, 'x-csrf-token': csrf }, failOnStatusCode: false });
+  expect(refused.status()).toBe(401);
+  expect(refused.headers()['set-cookie']).toBeUndefined();
+
+  // The challenge was spent by that attempt, so the right address cannot use it either.
+  const csrfHere = (await (await page.request.get(`${NAMED}/api/session`)).json()).session.csrf_token;
+  const replay = await page.request.post(`${NAMED}/api/sign-in/passkey`, { data: answer, headers: { origin: NAMED, 'x-csrf-token': csrfHere }, failOnStatusCode: false });
+  expect(replay.status()).toBe(401);
+
+  // Clean up: the passkey goes, so that no later test finds it.
+  await signInNamed(page, 'ines');
+  await page.getByRole('region', { name: 'Passkeys' }).getByRole('button', { name: /^Remove/ }).click();
+  await expect(page.locator('.toast', { hasText: 'That passkey has been removed.' })).toBeVisible();
+});
+
+// Emailed sign-in links. Nothing is sent to a real address: the development sink keeps the
+// message, and the site's owner reads it through the development route.
+const LINK_ADDRESS = 'mirela@fieldnotes.example';
+
+/** The links in the messages the development sink holds for an address, oldest first. */
+async function linksSent(owner, address) {
+  const reply = await owner.evaluate(async () => {
+    const csrf = (await (await fetch('/api/session')).json()).session.csrf_token;
+    const response = await fetch('/api/dev/mail-outbox', { method: 'POST', headers: { 'content-type': 'application/json', 'x-csrf-token': csrf }, body: '{}' });
+    return response.json();
+  });
+  return reply.messages.filter((mail) => mail.to === address).map((mail) => mail.text.match(/https?:\/\/\S+/)?.[0]);
+}
+
+async function askForLink(page, address) {
+  await open(page, '/login');
+  await page.getByLabel('Email address').fill(address);
+  await page.getByRole('button', { name: 'Email me a sign-in link' }).click();
+  await expect(page.getByRole('status').filter({ hasText: 'a sign-in link is on its way' })).toBeVisible();
+}
+
+test('an emailed link signs in once, in the browser that asked for it and in no other', async ({ page, browser }) => {
+  const ownerContext = await browser.newContext();
+  const owner = await ownerContext.newPage();
+  await signIn(owner, 'admin');
+
+  // The answer is the same for an address with no account, and no message is kept for it.
+  await askForLink(page, 'nobody@fieldnotes.example');
+  expect(await linksSent(owner, 'nobody@fieldnotes.example')).toEqual([]);
+
+  // A link opened in another browser is refused, and its token does not stay in the address bar.
+  await askForLink(page, LINK_ADDRESS);
+  await expect.poll(async () => (await linksSent(owner, LINK_ADDRESS)).length).toBe(1);
+  const [first] = await linksSent(owner, LINK_ADDRESS);
+  expect(first).toContain('#c=');
+  const otherContext = await browser.newContext();
+  const other = await otherContext.newPage();
+  await other.goto(first);
+  await expect(other.getByRole('alert')).toContainText('not accepted');
+  expect(other.url()).not.toContain('t=');
+  await expect(other.getByRole('heading', { level: 1, name: 'Sign in' })).toBeVisible();
+  await otherContext.close();
+
+  // A second request from the first browser keeps its binding; its link signs in, once.
+  await askForLink(page, LINK_ADDRESS);
+  await expect.poll(async () => (await linksSent(owner, LINK_ADDRESS)).length).toBe(2);
+  const second = (await linksSent(owner, LINK_ADDRESS))[1];
+  await page.goto(second);
+  await expect(page.getByRole('heading', { level: 1, name: 'Writing desk' })).toBeVisible();
+  await expect(page.getByText('Signed in as Mirela Ashby')).toBeVisible();
+  expect(page.url()).not.toContain('#');
+
+  // The same link, a second time, in the same browser: refused.
+  await page.getByRole('button', { name: 'Sign out', exact: true }).click();
+  await page.goto(second);
+  await expect(page.getByRole('alert')).toContainText('not accepted');
+  await expect(page.getByRole('heading', { level: 1, name: 'Sign in' })).toBeVisible();
+
+  await ownerContext.close();
+});
+
+// Sign-in at an identity provider. A mock OpenID Connect provider (tests/e2e/mock-oidc.mjs) stands
+// in for it: it approves at once, as whoever the test says, and the site is configured to trust it
+// for Fieldnotes and to let its first sign-ins in as authors. It is also bound to the address
+// domain `bound.example`, so a password for an address there is refused.
+const PROVIDER = 'http://127.0.0.1:4290';
+
+/** Tell the mock provider who signs in next and what, if anything, is wrong with the token. */
+async function provider(request, fields = {}) {
+  const reply = await request.post(`${PROVIDER}/__control`, { data: { reset: true, ...fields } });
+  expect(reply.ok()).toBe(true);
+}
+
+async function chooseProvider(page) {
+  await open(page, '/login');
+  await page.getByRole('button', { name: 'Sign in with Mock Provider' }).click();
+}
+
+test('a password for an address in a domain the provider decides for is refused', async ({ page }) => {
+  await open(page, '/login');
+  await page.getByLabel('Name').fill('ines@bound.example');
+  await page.getByLabel('Password').fill('strata-dev-ines');
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+  await expect(page.getByRole('alert')).toHaveText('The name or password is not right.');
+  await expect(page.getByRole('heading', { level: 1, name: 'Sign in' })).toBeVisible();
+
+  // The same password for the same person's own login is accepted: only the bound domain is closed.
+  await page.getByLabel('Name').fill('ines');
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+  await expect(page.getByRole('heading', { level: 1, name: 'Writing desk' })).toBeVisible();
+});
+
+test('the sign-in page offers the provider, and signing in through it makes the person once', async ({ page, request }) => {
+  const subject = `e2e-${Date.now()}`;
+  await provider(request, { sub: subject, email: 'nora@bound.example', email_verified: true, name: 'Nora Newcomer' });
+  const callbacks = [];
+  page.on('request', (r) => r.url().includes('/federation/oidc/callback') && callbacks.push(r.url()));
+
+  await chooseProvider(page);
+  await expect(page.getByRole('heading', { level: 1, name: 'Writing desk' })).toBeVisible();
+  await expect(page.getByText('Signed in as Nora Newcomer')).toBeVisible();
+  expect(page.url()).not.toContain('#');
+  expect(page.url()).not.toContain('code=');
+  expect(callbacks).toHaveLength(1);
+
+  // The second time the provider names the same person by another name, and the site keeps its own.
+  await page.getByRole('button', { name: 'Sign out', exact: true }).click();
+  await provider(request, { sub: subject, email: 'nora@bound.example', email_verified: true, name: 'Someone Else' });
+  await chooseProvider(page);
+  await expect(page.getByText('Signed in as Nora Newcomer')).toBeVisible();
+  await page.getByRole('button', { name: 'Sign out', exact: true }).click();
+
+  // A callback that was answered once is not answered again.
+  await page.goto(callbacks[0]);
+  await expect(page.getByRole('alert')).toContainText('not accepted');
+  await expect(page.getByRole('heading', { level: 1, name: 'Sign in' })).toBeVisible();
+});
+
+test('an identity token that is wrong in any way signs no one in', async ({ page, request }) => {
+  const wrong = [
+    { name: 'audience', fields: { aud: 'another-client' } },
+    { name: 'nonce', fields: { nonce: 'a-nonce-that-was-never-asked-for' } },
+    { name: 'expiry', fields: { exp_offset: -3600 } },
+    { name: 'key', fields: { kid: 'a-key-that-is-not-published' } },
+  ];
+  for (const { name, fields } of wrong) {
+    await provider(request, { sub: `e2e-wrong-${name}`, email: 'x@bound.example', email_verified: true, name: 'Nobody', ...fields });
+    await chooseProvider(page);
+    await expect(page.getByRole('alert'), name).toContainText('not accepted');
+    await expect(page.getByRole('heading', { level: 1, name: 'Sign in' }), name).toBeVisible();
+    expect(page.url(), name).not.toContain('#');
+  }
+
+  // A provider that refuses the person sends no code at all.
+  await provider(request, { deny: true });
+  await chooseProvider(page);
+  await expect(page.getByRole('alert')).toContainText('did not sign you in');
+});
+
+test('a callback that no sign-in of this browser started is refused', async ({ page }) => {
+  await open(page, '/login');
+  const forged = `${'0123456789abcdef'.repeat(4)}`;
+  await page.goto(`/federation/oidc/callback?state=${forged}&code=a-code-nobody-issued`);
+  await expect(page.getByRole('alert')).toContainText('not accepted');
+  await expect(page.getByRole('heading', { level: 1, name: 'Sign in' })).toBeVisible();
+  expect(page.url()).not.toContain('code=');
+});
+
+// ---- Second factors, recovery codes and step-up (IDN-018, IDN-019) ----
+
+/** RFC 4648 base32, as an authenticator application reads the secret. */
+function base32Bytes(text) {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+  let bits = '';
+  for (const c of text.replace(/=+$/, '').toUpperCase()) bits += alphabet.indexOf(c).toString(2).padStart(5, '0');
+  const bytes = [];
+  for (let i = 0; i + 8 <= bits.length; i += 8) bytes.push(parseInt(bits.slice(i, i + 8), 2));
+  return Buffer.from(bytes);
+}
+
+/** RFC 6238 with SHA-1, six digits, thirty-second steps: the algorithm of the `totp-rs` crate. */
+function totpAt(secret, step) {
+  const counter = Buffer.alloc(8);
+  counter.writeBigUInt64BE(BigInt(step));
+  const mac = createHmac('sha1', base32Bytes(secret)).update(counter).digest();
+  const offset = mac[mac.length - 1] & 15;
+  const value = mac.readUInt32BE(offset) & 0x7fffffff;
+  return String(value % 1_000_000).padStart(6, '0');
+}
+
+let lastStep = -1;
+/** A code the server has not seen: the earliest step after the last one used that it accepts. */
+async function nextCode(secret) {
+  for (;;) {
+    const now = Math.floor(Date.now() / 30_000);
+    const step = Math.max(lastStep + 1, now - 1);
+    if (step <= now + 1) {
+      lastStep = step;
+      return totpAt(secret, step);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+}
+
+async function passwordSignInOf(page, name) {
+  await page.getByRole('button', { name: 'Sign out', exact: true }).click();
+  await open(page, '/login');
+  await page.getByLabel('Name').fill(name);
+  await page.getByLabel('Password').fill(`strata-dev-${name}`);
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+}
+
+test('a person adds an authenticator, signs in with it, uses a recovery code once, and steps up before a sensitive operation', async ({ page }) => {
+  test.setTimeout(150_000);
+  await signIn(page, 'tomasz');
+  const section = page.getByRole('region', { name: 'Second factor' });
+  await expect(section.getByText('You sign in with one factor.')).toBeVisible();
+
+  // Enrol: a QR code and the secret in text; the factor counts only once a code proves it.
+  await section.getByRole('button', { name: 'Set up an authenticator' }).click();
+  await expect(section.getByRole('img', { name: 'QR code for your authenticator' })).toBeVisible();
+  const secret = (await section.locator('[data-totp-secret]').textContent()).trim();
+  expect(secret).toMatch(/^[A-Z2-7]{32}$/);
+  await section.getByLabel('Code from your authenticator').fill('000000');
+  await section.getByRole('button', { name: 'Turn on' }).click();
+  await expect(section.getByRole('alert')).toContainText('not accepted');
+  await section.getByLabel('Code from your authenticator').fill(await nextCode(secret));
+  await section.getByRole('button', { name: 'Turn on' }).click();
+  await expect(page.locator('.toast', { hasText: 'Authenticator added.' })).toBeVisible();
+  await expect(section.getByText('An authenticator is set up.')).toBeVisible();
+
+  // Recovery codes: shown once.
+  await section.getByRole('button', { name: 'Make new recovery codes' }).click();
+  const shown = section.locator('[data-recovery-codes] li');
+  await expect(shown).toHaveCount(10);
+  const codes = (await shown.allTextContents()).map((c) => c.trim());
+  await section.getByRole('button', { name: 'I have saved them' }).click();
+  await expect(section.locator('[data-recovery-codes]')).toHaveCount(0);
+  await expect(section.getByText('10 recovery codes left.')).toBeVisible();
+
+  // Signing in now yields no session until the second factor is given.
+  await passwordSignInOf(page, 'tomasz');
+  await expect(page.getByRole('heading', { level: 1, name: 'One more step' })).toBeVisible();
+  expect((await (await page.request.get('/api/session')).json()).session.authenticated).toBe(false);
+  await page.getByLabel('Code', { exact: true }).fill('000000');
+  await page.getByRole('button', { name: 'Continue' }).click();
+  await expect(page.getByRole('alert')).toContainText('not accepted');
+  await page.getByLabel('Code', { exact: true }).fill(await nextCode(secret));
+  await page.getByRole('button', { name: 'Continue' }).click();
+  await expect(page.getByRole('heading', { level: 1, name: 'Writing desk' })).toBeVisible();
+
+  // A recovery code signs in once.
+  await passwordSignInOf(page, 'tomasz');
+  await page.getByRole('button', { name: 'Use a recovery code' }).click();
+  await page.getByLabel('Recovery code').fill(codes[0]);
+  await page.getByRole('button', { name: 'Continue' }).click();
+  await expect(page.getByRole('heading', { level: 1, name: 'Writing desk' })).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Second factor' }).getByText('9 recovery codes left.')).toBeVisible();
+
+  await passwordSignInOf(page, 'tomasz');
+  await page.getByRole('button', { name: 'Use a recovery code' }).click();
+  await page.getByLabel('Recovery code').fill(codes[0]);
+  await page.getByRole('button', { name: 'Continue' }).click();
+  await expect(page.getByRole('alert')).toContainText('not accepted');
+  await expect(page.getByRole('heading', { level: 1, name: 'One more step' })).toBeVisible();
+  // Another code of the set still works.
+  await page.getByLabel('Recovery code').fill(codes[1]);
+  await page.getByRole('button', { name: 'Continue' }).click();
+  await expect(page.getByRole('heading', { level: 1, name: 'Writing desk' })).toBeVisible();
+
+  // Step-up: an old authentication is refused for a sensitive operation, and a fresh code lets it
+  // through, asked again by the page itself.
+  const csrf = (await (await page.request.get('/api/session')).json()).session.csrf_token;
+  const aged = await page.request.post('/api/dev/age-authentication', { headers: { origin: BASE, 'x-csrf-token': csrf } });
+  expect((await aged.json()).aged).toBe(true);
+  const factors = page.getByRole('region', { name: 'Second factor' });
+  await factors.getByRole('button', { name: 'Make new recovery codes' }).click();
+  const prompt = factors.getByRole('alertdialog', { name: 'Confirm that it is you' });
+  await expect(prompt).toBeVisible();
+  await expect(factors.locator('[data-recovery-codes]')).toHaveCount(0);
+  await prompt.getByLabel('Authenticator code').fill('000000');
+  await prompt.getByRole('button', { name: 'Confirm' }).click();
+  await expect(prompt.getByRole('alert')).toBeVisible();
+  await prompt.getByLabel('Authenticator code').fill(await nextCode(secret));
+  await prompt.getByRole('button', { name: 'Confirm' }).click();
+  await expect(factors.locator('[data-recovery-codes] li')).toHaveCount(10);
+  await expect(prompt).toHaveCount(0);
+
+  // Leave the person as found: no authenticator.
+  await factors.getByRole('button', { name: 'I have saved them' }).click();
+  await factors.getByRole('button', { name: 'Remove the authenticator' }).click();
+  await expect(page.locator('.toast', { hasText: 'Authenticator removed.' })).toBeVisible();
+  await expect(factors.getByText('You sign in with one factor.')).toBeVisible();
+});
+
+test('a person without an authenticator steps up with the password before a sensitive operation', async ({ page }) => {
+  await signIn(page, 'tomasz');
+  const csrf = (await (await page.request.get('/api/session')).json()).session.csrf_token;
+  await page.request.post('/api/dev/age-authentication', { headers: { origin: BASE, 'x-csrf-token': csrf } });
+  // The backend refuses the operation, with the kind the page answers.
+  const refused = await page.request.post('/api/sessions/revoke-others', { headers: { origin: BASE, 'x-csrf-token': csrf }, data: {} });
+  expect(refused.status()).toBe(403);
+  expect((await refused.json()).kind).toBe('step_up_required');
+
+  const section = page.getByRole('region', { name: 'Where you are signed in' });
+  await expect(section).toBeVisible();
+  await page.getByRole('region', { name: 'Second factor' }).getByRole('button', { name: 'Set up an authenticator' }).click();
+  const prompt = page.getByRole('alertdialog', { name: 'Confirm that it is you' });
+  await expect(prompt).toBeVisible();
+  await prompt.getByLabel('Password').fill('not the password');
+  await prompt.getByRole('button', { name: 'Confirm' }).click();
+  await expect(prompt.getByRole('alert')).toBeVisible();
+  await prompt.getByLabel('Password').fill('strata-dev-tomasz');
+  await prompt.getByRole('button', { name: 'Confirm' }).click();
+  // The operation that was refused goes through: the enrolment starts.
+  await expect(page.getByRole('img', { name: 'QR code for your authenticator' })).toBeVisible();
+  await page.getByRole('button', { name: 'Cancel' }).click();
+});
+
+// Sign-in at a SAML provider. A mock SAML provider (tests/e2e/mock-saml.mjs) stands in for it: it
+// reads the authentication request, signs an assertion with a test key and posts the response to
+// the site's assertion consumer address at once, as whoever the test says. The site is configured
+// to trust it for Fieldnotes, to let its first sign-ins in as authors and to require addresses in
+// `saml.example` of it.
+const SAML_PROVIDER = 'http://127.0.0.1:4291';
+
+/** Tell the mock SAML provider who signs in next and what, if anything, is wrong with the assertion. */
+async function samlProvider(request, fields = {}) {
+  const reply = await request.post(`${SAML_PROVIDER}/__control`, { data: { reset: true, ...fields } });
+  expect(reply.ok()).toBe(true);
+}
+
+async function chooseSamlProvider(page) {
+  await open(page, '/login');
+  await page.getByRole('button', { name: 'Sign in with Mock SAML Provider' }).click();
+}
+
+test('the sign-in page offers the SAML provider, and signing in through it makes the person once', async ({ page, request }) => {
+  const subject = `e2e-saml-${Date.now()}`;
+  await samlProvider(request, { sub: subject, email: 'sam@saml.example', name: 'Sam Saml' });
+  const posts = [];
+  page.on('request', (r) => r.url().includes('/federation/saml/acs') && r.method() === 'POST' && posts.push(r.url()));
+
+  await chooseSamlProvider(page);
+  await expect(page.getByRole('heading', { level: 1, name: 'Writing desk' })).toBeVisible();
+  await expect(page.getByText('Signed in as Sam Saml')).toBeVisible();
+  // The response is not left in the address bar, nor anywhere the page keeps.
+  expect(page.url()).not.toContain('#');
+  expect(page.url()).not.toContain('SAMLResponse');
+  expect(posts).toHaveLength(1);
+
+  // The request the service made is the one a provider reads: for this site, for this provider.
+  const asked = (await (await request.get(`${SAML_PROVIDER}/__seen`)).json()).sso;
+  expect(asked).toHaveLength(1);
+  expect(asked[0].acs).toBe(`${BASE}/federation/saml/acs`);
+  expect(asked[0].issuer).toBe(`${BASE}/federation/saml/metadata/mock`);
+
+  // The second time the provider names the same person by another name, and the site keeps its own.
+  await page.getByRole('button', { name: 'Sign out', exact: true }).click();
+  await samlProvider(request, { sub: subject, email: 'sam@saml.example', name: 'Someone Else' });
+  await chooseSamlProvider(page);
+  await expect(page.getByText('Signed in as Sam Saml')).toBeVisible();
+  await page.getByRole('button', { name: 'Sign out', exact: true }).click();
+});
+
+test('an assertion that is wrong in any way signs no one in', async ({ page, request }) => {
+  const wrong = [
+    { name: 'unsigned', fields: { unsigned: true } },
+    { name: 'signer', fields: { signer: 'other' } },
+    { name: 'tampered', fields: { tamper: true } },
+    { name: 'audience', fields: { audience: 'http://127.0.0.1:4200/federation/saml/metadata/another' } },
+    { name: 'recipient', fields: { recipient: 'http://127.0.0.1:4200/federation/saml/other' } },
+    { name: 'issuer', fields: { issuer: 'http://127.0.0.1:4291/another-provider' } },
+    { name: 'expiry', fields: { exp_offset: -3600 } },
+    { name: 'status', fields: { deny: true } },
+  ];
+  for (const { name, fields } of wrong) {
+    await samlProvider(request, { sub: `e2e-saml-wrong-${name}`, email: 'x@saml.example', name: 'Nobody', ...fields });
+    await chooseSamlProvider(page);
+    await expect(page.getByRole('alert'), name).toContainText('not accepted');
+    await expect(page.getByRole('heading', { level: 1, name: 'Sign in' }), name).toBeVisible();
+    expect(page.url(), name).not.toContain('#');
+  }
+});
+
+test('an assertion that was accepted once is not accepted again', async ({ page, request }) => {
+  const identifier = `_e2e-replayed-${Date.now()}`;
+  const subject = `e2e-saml-replay-${Date.now()}`;
+  await samlProvider(request, { sub: subject, email: 'r@saml.example', name: 'Ria Replay', assertion_id: identifier });
+  await chooseSamlProvider(page);
+  await expect(page.getByText('Signed in as Ria Replay')).toBeVisible();
+  await page.getByRole('button', { name: 'Sign out', exact: true }).click();
+
+  // The provider answers a new request with the same assertion identifier.
+  await samlProvider(request, { sub: subject, email: 'r@saml.example', name: 'Ria Replay', assertion_id: identifier });
+  await chooseSamlProvider(page);
+  await expect(page.getByRole('alert')).toContainText('not accepted');
+  await expect(page.getByRole('heading', { level: 1, name: 'Sign in' })).toBeVisible();
+});
+
+test('a response posted to the assertion consumer address that no sign-in of this browser started is refused', async ({ page }) => {
+  await open(page, '/login');
+  const forged = '0123456789abcdef'.repeat(4);
+  await page.evaluate((relay) => {
+    const form = document.createElement('form');
+    form.method = 'post';
+    form.action = '/federation/saml/acs';
+    for (const [name, value] of [
+      ['SAMLResponse', btoa('<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol"/>')],
+      ['RelayState', relay],
+    ]) {
+      const input = document.createElement('input');
+      input.type = 'hidden';
+      input.name = name;
+      input.value = value;
+      form.append(input);
+    }
+    document.body.append(form);
+    form.submit();
+  }, forged);
+  await expect(page.getByRole('alert')).toContainText('not accepted');
+  await expect(page.getByRole('heading', { level: 1, name: 'Sign in' })).toBeVisible();
+  expect(page.url()).not.toContain('SAMLResponse');
+  expect(page.url()).not.toContain('#');
+});
+
+test('the metadata names this service and its assertion consumer address', async ({ request }) => {
+  const reply = await request.get('/federation/saml/metadata/mock');
+  expect(reply.status()).toBe(200);
+  expect(reply.headers()['content-type']).toContain('samlmetadata+xml');
+  const xml = await reply.text();
+  expect(xml).toContain(`entityID="${BASE}/federation/saml/metadata/mock"`);
+  expect(xml).toContain(`Location="${BASE}/federation/saml/acs"`);
+  expect(xml).toContain('WantAssertionsSigned="true"');
+  expect((await request.get('/federation/saml/metadata/nobody')).status()).toBe(404);
+});
+
+// Service accounts, tokens and provisioning. There is no desk page for these yet, so they are
+// tested at the BFF's own endpoints, as a service account, an agent and an identity provider
+// reach them: the token endpoint and the key set, introspection, and the SCIM endpoint.
+async function ownerHeaders(page) {
+  await signIn(page, 'admin');
+  const csrf = (await (await page.request.get('/api/session')).json()).session.csrf_token;
+  return { origin: BASE, 'x-csrf-token': csrf };
+}
+
+test('a service account is made on the desk side, gets a token, and rotating its secret ends the old one', async ({ page, request }) => {
+  const headers = await ownerHeaders(page);
+  const made = await (await page.request.post('/api/identity/clients/create', {
+    data: { name: 'Feed reader', scopes: ['read:post'] },
+    headers,
+  })).json();
+  expect(made.secret).toMatch(/^scs_/);
+  const listed = await (await page.request.get('/api/identity/clients')).text();
+  expect(listed).toContain(made.id);
+  expect(listed).not.toContain(made.secret);
+
+  const token = async (secret) =>
+    request.post('/token', { form: { grant_type: 'client_credentials', client_id: made.id, client_secret: secret } });
+  const issued = await token(made.secret);
+  expect(issued.status()).toBe(200);
+  const body = await issued.json();
+  expect(body.token_type).toBe('Bearer');
+  expect(body.expires_in).toBeLessThanOrEqual(300);
+  expect(issued.headers()['cache-control']).toBe('no-store');
+
+  // The access token is verifiable with the published keys: its key is in the set.
+  const kid = JSON.parse(Buffer.from(body.access_token.split('.')[0], 'base64url').toString()).kid;
+  const keys = await (await request.get('/.well-known/jwks.json')).json();
+  expect(keys.keys.map((key) => key.kid)).toContain(kid);
+  expect(keys.keys[0]).toMatchObject({ kty: 'EC', crv: 'P-256', alg: 'ES256' });
+
+  // The service account asks about its own token.
+  const seen = await (await request.post('/introspect', {
+    form: { token: body.access_token, client_id: made.id, client_secret: made.secret },
+  })).json();
+  expect(seen).toMatchObject({ active: true, scope: 'read:post', sub: made.id });
+
+  const rotated = await (await page.request.post('/api/identity/clients/rotate-secret', { data: { id: made.id }, headers })).json();
+  expect(rotated.secret).not.toBe(made.secret);
+  expect((await token(made.secret)).status()).toBe(401);
+  expect((await token(rotated.secret)).status()).toBe(200);
+
+  // Revoked, the account and the token it was given are refused at once.
+  await page.request.post('/api/identity/clients/revoke', { data: { id: made.id }, headers });
+  expect((await token(rotated.secret)).status()).toBe(401);
+  const after = await (await request.post('/introspect', {
+    form: { token: body.access_token, client_id: made.id, client_secret: rotated.secret },
+  }));
+  expect(after.status()).toBe(401);
+});
+
+test('a visitor cannot make a service account, rotate a key or read the clients', async ({ page }) => {
+  await open(page, '/login');
+  const csrf = (await (await page.request.get('/api/session')).json()).session.csrf_token;
+  const headers = { origin: BASE, 'x-csrf-token': csrf };
+  for (const action of ['clients/create', 'keys/rotate', 'provisioning/tokens/create']) {
+    const refused = await page.request.post(`/api/identity/${action}`, { data: {}, headers, failOnStatusCode: false });
+    expect([401, 403]).toContain(refused.status());
+  }
+  expect((await page.request.get('/api/identity/clients', { failOnStatusCode: false })).status()).toBe(401);
+});
+
+test('an identity provider provisions a person with its token and a deactivation takes effect', async ({ page, request }) => {
+  const headers = await ownerHeaders(page);
+  const { token } = await (await page.request.post('/api/identity/provisioning/tokens/create', { data: {}, headers })).json();
+  expect(token).toMatch(/^scimt_/);
+  const scim = { Authorization: `Bearer ${token}`, 'content-type': 'application/scim+json' };
+
+  const unauthorised = await request.get('/scim/v2/Users', { failOnStatusCode: false });
+  expect(unauthorised.status()).toBe(401);
+
+  const created = await request.post('/scim/v2/Users', {
+    headers: scim,
+    data: { userName: 'pw-test@acme.example', externalId: 'pw-ext-1', displayName: 'Playwright Person', active: true },
+  });
+  expect(created.status()).toBe(201);
+  expect(created.headers()['content-type']).toContain('application/scim+json');
+  const user = await created.json();
+  expect(user.userName).toBe('pw-test@acme.example');
+
+  const duplicate = await request.post('/scim/v2/Users', {
+    headers: scim,
+    data: { userName: 'PW-TEST@acme.example' },
+    failOnStatusCode: false,
+  });
+  expect(duplicate.status()).toBe(409);
+
+  const found = await (await request.get('/scim/v2/Users', {
+    headers: scim,
+    params: { filter: 'userName eq "pw-test@acme.example"' },
+  })).json();
+  expect(found.totalResults).toBe(1);
+
+  // A group the realm did not map changes no role.
+  const unmapped = await request.patch('/scim/v2/Groups/unmapped', {
+    headers: scim,
+    data: { Operations: [{ op: 'add', path: 'members', value: [{ value: user.id }] }] },
+    failOnStatusCode: false,
+  });
+  expect(unmapped.status()).toBe(400);
+
+  const off = await request.patch(`/scim/v2/Users/${user.id}`, {
+    headers: scim,
+    data: { Operations: [{ op: 'replace', path: 'active', value: false }] },
+  });
+  expect((await off.json()).active).toBe(false);
+  expect((await request.delete(`/scim/v2/Users/${user.id}`, { headers: scim })).status()).toBe(204);
+
+  // The token is no session and opens nothing else.
+  const asCookie = await request.get('/api/identity/clients', { headers: { Cookie: `__Host-strata_sid=${token}` }, failOnStatusCode: false });
+  expect(asCookie.status()).toBe(401);
 });

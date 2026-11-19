@@ -136,6 +136,8 @@ fn session(id: &str, tenant: &str, principal: &str, expires: i64) -> SessionReco
         last_seen_at: Timestamp(10),
         expires_at: Timestamp(expires),
         revoked_at: None,
+        authenticated_at: Timestamp(10),
+        network: None,
     }
 }
 
@@ -709,6 +711,48 @@ fn sessions_are_stored_revoked_and_purged(store: &dyn Store) {
         .session(&SessionId::new("s3").unwrap())
         .unwrap()
         .is_none());
+}
+
+/// The identity service's documents. Not a row of the conformance table: the table states the
+/// storage guarantees, and this one is a mechanism of the identity service. Run by each adapter's
+/// own test.
+pub fn documents_are_scoped_to_their_tenant_and_kind(store: &dyn Store) {
+    let _pair = Pair::new(store);
+    let (alpha, beta) = (tenant_id("alpha"), tenant_id("beta"));
+    assert!(store
+        .doc_put(&alpha, "client", "c1", "{\"n\":1}", true)
+        .unwrap());
+    assert!(
+        !store
+            .doc_put(&alpha, "client", "c1", "{\"n\":2}", true)
+            .unwrap(),
+        "create-only keeps the first"
+    );
+    assert_eq!(
+        store.doc_get(&alpha, "client", "c1").unwrap().as_deref(),
+        Some("{\"n\":1}")
+    );
+    assert!(store
+        .doc_put(&alpha, "client", "c1", "{\"n\":3}", false)
+        .unwrap());
+    assert_eq!(
+        store.doc_get(&alpha, "client", "c1").unwrap().as_deref(),
+        Some("{\"n\":3}")
+    );
+    assert_eq!(store.doc_get(&beta, "client", "c1").unwrap(), None);
+    assert_eq!(store.doc_get(&alpha, "key", "c1").unwrap(), None);
+    store.doc_put(&alpha, "client", "c0", "x", false).unwrap();
+    let listed = store.doc_list(&alpha, "client").unwrap();
+    assert_eq!(
+        listed.iter().map(|(k, _)| k.as_str()).collect::<Vec<_>>(),
+        ["c0", "c1"]
+    );
+    assert!(store.doc_list(&beta, "client").unwrap().is_empty());
+    assert!(store.doc_remove(&alpha, "client", "c0").unwrap());
+    assert!(!store.doc_remove(&alpha, "client", "c0").unwrap());
+    assert!(store
+        .doc_put(&tenant_id("nowhere"), "client", "c", "x", false)
+        .is_err());
 }
 
 fn accounts_are_scoped_to_their_tenant(store: &dyn Store) {

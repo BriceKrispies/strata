@@ -2,9 +2,174 @@
 // @ts-check
 
 import { h } from '../components/dom.js';
-import { control, date, prose } from '../components/parts.js';
+import { control, date, prose, qrCode } from '../components/parts.js';
 
 const STATUS = { draft: 'Draft', published: 'Published' };
+
+/** The signed-in person's own sessions, with a way to end each of the others. */
+function sessionsSection(sessions) {
+  if (!sessions?.loaded && !sessions?.error) return null;
+  const others = sessions.list.filter((s) => !s.current).length;
+  return h(
+    'section',
+    { class: 'sessions', 'data-sessions': true, 'aria-labelledby': 'sessions-title' },
+    h('h2', { id: 'sessions-title', class: 'section-title' }, 'Where you are signed in'),
+    sessions.error ? h('p', { class: 'form__error', role: 'alert' }, sessions.error) : null,
+    h(
+      'table',
+      { class: 'table' },
+      h('caption', { class: 'visually-hidden' }, 'Your sessions'),
+      h('thead', null, h('tr', null, h('th', { scope: 'col' }, 'Session'), h('th', { scope: 'col' }, 'Signed in'), h('th', { scope: 'col' }, 'Last used'), h('th', { scope: 'col' }, 'Actions'))),
+      h(
+        'tbody',
+        null,
+        sessions.list.map((s) =>
+          h(
+            'tr',
+            { key: s.id, 'data-session': s.id, 'data-current': s.current ? 'true' : 'false' },
+            h('th', { scope: 'row' }, s.current ? 'This device' : 'Another device'),
+            h('td', null, date(s.created_at, 'stamp')),
+            h('td', null, date(s.last_seen_at, 'stamp')),
+            h(
+              'td',
+              { class: 'table__actions' },
+              s.current
+                ? null
+                : h('button', { class: 'button button--small button--quiet', type: 'button', disabled: sessions.busy, 'data-action': 'sessions.revoke', 'data-arg': arg({ id: s.id }), 'aria-label': 'Sign out that session' }, 'Sign out'),
+            ),
+          ),
+        ),
+      ),
+    ),
+    others
+      ? h('p', { class: 'toolbar' }, h('button', { class: 'button button--quiet', type: 'button', disabled: sessions.busy, 'data-action': 'sessions.revoke_others' }, 'Sign out all other sessions'))
+      : h('p', { class: 'empty' }, 'This is the only place you are signed in.'),
+  );
+}
+
+/** The signed-in person's own passkeys: add one on this device, remove any. */
+function passkeysSection(passkeys) {
+  if (!passkeys?.supported || (!passkeys.loaded && !passkeys.error)) return null;
+  return h(
+    'section',
+    { class: 'sessions', 'data-passkeys': true, 'aria-labelledby': 'passkeys-title' },
+    h('h2', { id: 'passkeys-title', class: 'section-title' }, 'Passkeys'),
+    passkeys.error ? h('p', { class: 'form__error', role: 'alert' }, passkeys.error) : null,
+    passkeys.list.length
+      ? h(
+          'table',
+          { class: 'table' },
+          h('caption', { class: 'visually-hidden' }, 'Your passkeys'),
+          h('thead', null, h('tr', null, h('th', { scope: 'col' }, 'Passkey'), h('th', { scope: 'col' }, 'Added'), h('th', { scope: 'col' }, 'Last used'), h('th', { scope: 'col' }, 'Actions'))),
+          h(
+            'tbody',
+            null,
+            passkeys.list.map((p) =>
+              h(
+                'tr',
+                { key: p.id, 'data-passkey': p.id },
+                h('th', { scope: 'row' }, p.name),
+                h('td', null, date(p.created_at, 'stamp')),
+                h('td', null, p.last_used_at ? date(p.last_used_at, 'stamp') : 'Never'),
+                h(
+                  'td',
+                  { class: 'table__actions' },
+                  h('button', { class: 'button button--small button--quiet', type: 'button', disabled: passkeys.busy, 'data-action': 'passkeys.remove', 'data-arg': arg({ id: p.id }), 'aria-label': `Remove ${p.name}` }, 'Remove'),
+                ),
+              ),
+            ),
+          ),
+        )
+      : h('p', { class: 'empty' }, 'You have no passkeys. Add one to sign in without a password.'),
+    h('p', { class: 'toolbar' }, h('button', { class: 'button button--quiet', type: 'button', disabled: passkeys.busy, 'data-action': 'passkeys.add' }, 'Add a passkey')),
+  );
+}
+
+/** The step-up prompt: an operation was refused for want of a fresh authentication. */
+function stepUpPrompt(f) {
+  const code = f.summary?.totp;
+  return h(
+    'form',
+    { class: 'form form--narrow', 'data-form': 'stepup', role: 'alertdialog', 'aria-labelledby': 'stepup-title', novalidate: true },
+    h('h3', { id: 'stepup-title', class: 'section-title' }, 'Confirm that it is you'),
+    h('p', null, code ? 'Enter the code your authenticator shows to go on.' : 'Enter your password to go on.'),
+    f.stepUp.error ? h('p', { class: 'form__error', role: 'alert' }, f.stepUp.error) : null,
+    h(
+      'div',
+      { class: 'field' },
+      h('label', { for: 'stepup-secret' }, code ? 'Authenticator code' : 'Password'),
+      h('input', { id: 'stepup-secret', name: 'secret', type: code ? 'text' : 'password', value: f.fields.secret, autocomplete: code ? 'one-time-code' : 'current-password', inputmode: code ? 'numeric' : null, required: true }),
+    ),
+    h(
+      'p',
+      { class: 'toolbar' },
+      h('button', { class: 'button', type: 'submit', disabled: f.stepUp.busy }, 'Confirm'),
+      h('button', { class: 'button button--quiet', type: 'button', 'data-action': 'factors.stepup_cancel' }, 'Cancel'),
+    ),
+  );
+}
+
+/** The signed-in person's second factors: an authenticator, recovery codes, and the prompts. */
+function factorsSection(f) {
+  if (!f?.loaded && !f?.error) return null;
+  const s = f.summary;
+  return h(
+    'section',
+    { class: 'sessions', 'data-factors': true, 'aria-labelledby': 'factors-title' },
+    h('h2', { id: 'factors-title', class: 'section-title' }, 'Second factor'),
+    f.error ? h('p', { class: 'form__error', role: 'alert' }, f.error) : null,
+    f.stepUp ? stepUpPrompt(f) : null,
+    f.codes
+      ? h(
+          'div',
+          { class: 'banner', role: 'status', 'data-recovery-codes': true },
+          h('p', null, 'Keep these recovery codes somewhere safe. Each one works once, and they are not shown again.'),
+          h('ul', { class: 'codes' }, f.codes.map((c) => h('li', { key: c }, h('code', null, c)))),
+          h('p', { class: 'toolbar' }, h('button', { class: 'button button--small', type: 'button', 'data-action': 'factors.dismiss_codes' }, 'I have saved them')),
+        )
+      : null,
+    f.enrol
+      ? h(
+          'form',
+          { class: 'form form--narrow', 'data-form': 'totpconfirm', novalidate: true },
+          h('p', null, 'Scan this code with an authenticator application, then enter the code it shows.'),
+          qrCode(f.enrol.qr, 'QR code for your authenticator'),
+          h('p', null, 'Or type this secret: ', h('code', { 'data-totp-secret': true }, f.enrol.secret)),
+          f.enrol.error ? h('p', { class: 'form__error', role: 'alert' }, f.enrol.error) : null,
+          h(
+            'div',
+            { class: 'field' },
+            h('label', { for: 'totp-confirm' }, 'Code from your authenticator'),
+            h('input', { id: 'totp-confirm', name: 'confirm', type: 'text', value: f.fields.confirm, autocomplete: 'one-time-code', inputmode: 'numeric', required: true }),
+          ),
+          h(
+            'p',
+            { class: 'toolbar' },
+            h('button', { class: 'button', type: 'submit', disabled: f.busy }, 'Turn on'),
+            h('button', { class: 'button button--quiet', type: 'button', 'data-action': 'factors.enrol_cancel' }, 'Cancel'),
+          ),
+        )
+      : s?.totp
+        ? h(
+            'div',
+            null,
+            h('p', { role: 'status' }, 'An authenticator is set up.'),
+            h('p', { 'data-recovery-left': s.recovery_codes }, s.recovery_codes === 1 ? '1 recovery code left.' : `${s.recovery_codes} recovery codes left.`),
+            h(
+              'p',
+              { class: 'toolbar' },
+              h('button', { class: 'button button--quiet', type: 'button', disabled: f.busy, 'data-action': 'factors.new_codes' }, 'Make new recovery codes'),
+              h('button', { class: 'button button--quiet', type: 'button', disabled: f.busy, 'data-action': 'factors.remove_totp' }, 'Remove the authenticator'),
+            ),
+          )
+        : h(
+            'div',
+            null,
+            h('p', { class: 'empty' }, 'You sign in with one factor. Add an authenticator for a second.'),
+            h('p', { class: 'toolbar' }, h('button', { class: 'button button--quiet', type: 'button', disabled: f.busy, 'data-action': 'factors.enrol_start' }, 'Set up an authenticator')),
+          ),
+  );
+}
 
 function arg(value) {
   return JSON.stringify(value);
@@ -59,6 +224,9 @@ export function desk(page) {
           ),
         )
       : h('p', { class: 'empty' }, 'You have not written anything yet. Start with a draft; nobody sees it until you publish.'),
+    sessionsSection(page.sessions),
+    passkeysSection(page.passkeys),
+    factorsSection(page.factors),
   ];
 }
 

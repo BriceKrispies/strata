@@ -11,7 +11,8 @@
 //!   (`tenant`), the schema history, its records (each stored as its canonical JSON document)
 //!   with their field index, its events (which double as its outbox through their `published`
 //!   flag, written in the same transaction as the state they describe), its journal, snapshots,
-//!   sessions and logins.
+//!   sessions and logins, and what its sign-in methods keep (throttle counters, passkeys, links,
+//!   identity-provider flows, federated identities, second factors and recoveries).
 //!
 //! A tenant file is created by the commit that creates the tenant, and removed by
 //! [`Store::reset_tenant`] and [`Store::reset`]. Removal marks the directory row `deleting`
@@ -45,9 +46,11 @@ use strata_kernel::{
 };
 use strata_runtime::sqlite::{Database, DbError, Migration};
 use strata_storage_api::{
-    check_event_sequence, field_matches, Account, Capabilities, Commit, Health, JournalEntry,
-    OutboxEntry, Receipt, SessionRecord, SnapshotInfo, StorageMigration, Store, StoreError,
-    StoreResult, TenantSummary,
+    check_event_sequence, field_matches, throttle_refund, throttle_step, Account, Capabilities,
+    Commit, FederatedIdentity, Health, JournalEntry, OidcFlow, OutboxEntry, PasskeyCeremony,
+    PasskeyChallenge, PasskeyRecord, PendingSignIn, Receipt, RecoveryRequest, SamlRequest,
+    SessionRecord, SignInLink, SnapshotInfo, StorageMigration, Store, StoreError, StoreResult,
+    TenantSummary, ThrottleRow, ThrottleRule, ThrottleSettle, ThrottleVerdict, TotpRecord,
 };
 
 /// The ledger table of the control database's migrations.
@@ -76,10 +79,16 @@ const CONTROL_MIGRATIONS: &[Migration] = &[Migration {
 }];
 
 /// A tenant file's layout, one step per entry. Steps are only ever appended.
-const TENANT_MIGRATIONS: &[Migration] = &[Migration {
-    version: 1,
-    name: "tenant file layout",
-    sql: "
+///
+/// Everything a sign-in method keeps (throttle counters, passkeys and their challenges, emailed
+/// links, identity-provider flows and the identities they tie, second factors, recovery codes,
+/// waiting sign-ins and recovery requests) belongs to one tenant and is looked up with the tenant
+/// known, so it lives in the tenant's file and goes with it when the tenant is removed.
+const TENANT_MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        name: "tenant file layout",
+        sql: "
     CREATE TABLE tenant (
         id          TEXT PRIMARY KEY,
         name        TEXT NOT NULL,
@@ -148,7 +157,167 @@ const TENANT_MIGRATIONS: &[Migration] = &[Migration {
         data       TEXT NOT NULL
     );
     ",
-}];
+    },
+    Migration {
+        version: 2,
+        name: "login throttle",
+        sql: "
+    CREATE TABLE login_throttle (
+        key          TEXT PRIMARY KEY,
+        failures     INTEGER NOT NULL,
+        window_start INTEGER NOT NULL,
+        locked_until INTEGER NOT NULL,
+        expires_at   INTEGER NOT NULL
+    );
+    CREATE INDEX login_throttle_expiry ON login_throttle(expires_at);
+    ",
+    },
+    Migration {
+        version: 3,
+        name: "passkeys",
+        sql: "
+    CREATE TABLE passkeys (
+        id           TEXT PRIMARY KEY,
+        principal    TEXT NOT NULL,
+        rp_id        TEXT NOT NULL,
+        label        TEXT NOT NULL,
+        credential   TEXT NOT NULL,
+        created_at   INTEGER NOT NULL,
+        last_used_at INTEGER
+    );
+    CREATE INDEX passkeys_principal ON passkeys(principal, created_at);
+    CREATE TABLE passkey_challenges (
+        id_hash    TEXT PRIMARY KEY,
+        ceremony   TEXT NOT NULL,
+        session    TEXT,
+        principal  TEXT,
+        origin     TEXT NOT NULL,
+        state      TEXT NOT NULL,
+        expires_at INTEGER NOT NULL
+    );
+    CREATE INDEX passkey_challenges_expiry ON passkey_challenges(expires_at);
+    CREATE INDEX accounts_principal ON accounts(principal);
+    ",
+    },
+    Migration {
+        version: 4,
+        name: "sign-in links",
+        sql: "
+    CREATE TABLE sign_in_links (
+        id_hash      TEXT PRIMARY KEY,
+        principal    TEXT NOT NULL,
+        token_hash   TEXT NOT NULL,
+        binding_hash TEXT NOT NULL,
+        origin       TEXT NOT NULL,
+        expires_at   INTEGER NOT NULL
+    );
+    CREATE INDEX sign_in_links_expiry ON sign_in_links(expires_at);
+    ",
+    },
+    Migration {
+        version: 5,
+        name: "identity-provider sign-ins and federated identities",
+        sql: "
+    CREATE TABLE oidc_flows (
+        id_hash      TEXT PRIMARY KEY,
+        provider     TEXT NOT NULL,
+        nonce        TEXT NOT NULL,
+        verifier     TEXT NOT NULL,
+        binding_hash TEXT NOT NULL,
+        origin       TEXT NOT NULL,
+        principal    TEXT,
+        expires_at   INTEGER NOT NULL
+    );
+    CREATE INDEX oidc_flows_expiry ON oidc_flows(expires_at);
+    CREATE TABLE federated_identities (
+        provider   TEXT NOT NULL,
+        subject    TEXT NOT NULL,
+        principal  TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (provider, subject)
+    );
+    CREATE INDEX federated_identities_principal ON federated_identities(principal);
+    ",
+    },
+    Migration {
+        version: 6,
+        name: "second factors, recovery codes, pending sign-ins, recovery requests and session authentication",
+        sql: "
+    CREATE TABLE totp_factors (
+        principal  TEXT PRIMARY KEY,
+        secret     TEXT NOT NULL,
+        confirmed  INTEGER NOT NULL,
+        last_step  INTEGER NOT NULL,
+        created_at INTEGER NOT NULL
+    );
+    CREATE TABLE recovery_codes (
+        principal  TEXT NOT NULL,
+        code_hash  TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (principal, code_hash)
+    );
+    CREATE TABLE pending_sign_ins (
+        id_hash    TEXT PRIMARY KEY,
+        principal  TEXT NOT NULL,
+        method     TEXT NOT NULL,
+        factors    INTEGER NOT NULL,
+        attempts   INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL
+    );
+    CREATE INDEX pending_sign_ins_expiry ON pending_sign_ins(expires_at);
+    CREATE TABLE recovery_requests (
+        id_hash      TEXT PRIMARY KEY,
+        principal    TEXT NOT NULL,
+        login        TEXT NOT NULL,
+        token_hash   TEXT NOT NULL,
+        cancel_hash  TEXT NOT NULL,
+        requested_at INTEGER NOT NULL,
+        completes_at INTEGER NOT NULL,
+        expires_at   INTEGER NOT NULL
+    );
+    CREATE INDEX recovery_requests_principal ON recovery_requests(principal);
+    CREATE INDEX recovery_requests_expiry ON recovery_requests(expires_at);
+    ALTER TABLE sessions ADD COLUMN authenticated_at INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE sessions ADD COLUMN network TEXT;
+    UPDATE sessions SET authenticated_at = created_at;
+    ",
+    },
+    Migration {
+        version: 7,
+        name: "SAML sign-ins and accepted assertions",
+        sql: "
+    CREATE TABLE saml_requests (
+        id_hash      TEXT PRIMARY KEY,
+        provider     TEXT NOT NULL,
+        request_id   TEXT NOT NULL,
+        binding_hash TEXT NOT NULL,
+        origin       TEXT NOT NULL,
+        principal    TEXT,
+        expires_at   INTEGER NOT NULL
+    );
+    CREATE INDEX saml_requests_expiry ON saml_requests(expires_at);
+    CREATE TABLE saml_assertions (
+        provider   TEXT NOT NULL,
+        id_hash    TEXT NOT NULL,
+        expires_at INTEGER NOT NULL,
+        PRIMARY KEY (provider, id_hash)
+    );
+    CREATE INDEX saml_assertions_expiry ON saml_assertions(expires_at);
+    ",
+    },
+    Migration {
+        version: 8,
+        name: "identity service documents",
+        sql: "
+    CREATE TABLE identity_docs (
+        kind  TEXT NOT NULL,
+        key   TEXT NOT NULL,
+        value TEXT NOT NULL,
+        PRIMARY KEY (kind, key)
+    );
+    ",
+    },
+];
 
 /// Index values longer than this are not indexed; lookups for them scan the object type.
 const MAX_INDEXED: usize = 240;
@@ -351,8 +520,118 @@ fn write_record(tx: &Transaction<'_>, record: &Record) -> StoreResult<()> {
     Ok(())
 }
 
+/// A throttle counter of an open tenant file.
+fn throttle_row(conn: &Connection, key: &str) -> StoreResult<Option<ThrottleRow>> {
+    conn.query_row(
+        "SELECT failures, window_start, locked_until, expires_at FROM login_throttle WHERE key = ?1",
+        params![key],
+        |r| {
+            Ok(ThrottleRow {
+                failures: r.get::<_, i64>(0)? as u32,
+                window_start: r.get(1)?,
+                locked_until: r.get(2)?,
+                expires_at: r.get(3)?,
+            })
+        },
+    )
+    .optional()
+    .map_err(db)
+}
+
+const PASSKEY_COLUMNS: &str = "id, principal, rp_id, label, credential, created_at, last_used_at";
+
+type PasskeyRow = (String, String, String, String, String, i64, Option<i64>);
+
+fn passkey_from(row: &rusqlite::Row<'_>) -> rusqlite::Result<PasskeyRow> {
+    Ok((
+        row.get(0)?,
+        row.get(1)?,
+        row.get(2)?,
+        row.get(3)?,
+        row.get(4)?,
+        row.get(5)?,
+        row.get(6)?,
+    ))
+}
+
+fn passkey_record(
+    tenant: &TenantId,
+    (id, principal, rp_id, label, credential, created_at, last_used_at): PasskeyRow,
+) -> StoreResult<PasskeyRecord> {
+    Ok(PasskeyRecord {
+        tenant: tenant.clone(),
+        principal: PrincipalId::new(principal).map_err(corrupt_id)?,
+        id,
+        rp_id,
+        label,
+        credential,
+        created_at: Timestamp(created_at),
+        last_used_at: last_used_at.map(Timestamp),
+    })
+}
+
+type RecoveryRow = (String, String, String, String, i64, i64, i64);
+
+fn recovery_from(row: &rusqlite::Row<'_>) -> rusqlite::Result<RecoveryRow> {
+    Ok((
+        row.get(0)?,
+        row.get(1)?,
+        row.get(2)?,
+        row.get(3)?,
+        row.get(4)?,
+        row.get(5)?,
+        row.get(6)?,
+    ))
+}
+
+fn recovery_request(
+    tenant: &TenantId,
+    id_hash: &str,
+    (principal, login, token_hash, cancel_hash, requested_at, completes_at, expires_at): RecoveryRow,
+) -> StoreResult<RecoveryRequest> {
+    Ok(RecoveryRequest {
+        tenant: tenant.clone(),
+        id_hash: id_hash.to_string(),
+        principal: PrincipalId::new(principal).map_err(corrupt_id)?,
+        login,
+        token_hash,
+        cancel_hash,
+        requested_at: Timestamp(requested_at),
+        completes_at: Timestamp(completes_at),
+        expires_at: Timestamp(expires_at),
+    })
+}
+
+type PendingRow = (String, String, i64, i64, i64);
+
+fn pending_from(row: &rusqlite::Row<'_>) -> rusqlite::Result<PendingRow> {
+    Ok((
+        row.get(0)?,
+        row.get(1)?,
+        row.get(2)?,
+        row.get(3)?,
+        row.get(4)?,
+    ))
+}
+
+fn pending_sign_in(
+    tenant: &TenantId,
+    id_hash: &str,
+    (principal, method, factors, attempts, expires_at): PendingRow,
+) -> StoreResult<PendingSignIn> {
+    Ok(PendingSignIn {
+        tenant: tenant.clone(),
+        id_hash: id_hash.to_string(),
+        principal: PrincipalId::new(principal).map_err(corrupt_id)?,
+        method,
+        factors: factors as u8,
+        attempts: attempts as u32,
+        expires_at: Timestamp(expires_at),
+    })
+}
+
 const SESSION_COLUMNS: &str =
-    "id, token_hash, csrf_token, principal, display_name, created_at, last_seen_at, expires_at, revoked_at";
+    "id, token_hash, csrf_token, principal, display_name, created_at, last_seen_at, expires_at, revoked_at, authenticated_at, network";
 
 type SessionRow = (
     String,
@@ -364,6 +643,8 @@ type SessionRow = (
     i64,
     i64,
     Option<i64>,
+    i64,
+    Option<String>,
 );
 
 fn session_from(row: &rusqlite::Row<'_>) -> rusqlite::Result<SessionRow> {
@@ -377,6 +658,8 @@ fn session_from(row: &rusqlite::Row<'_>) -> rusqlite::Result<SessionRow> {
         row.get(6)?,
         row.get(7)?,
         row.get(8)?,
+        row.get(9)?,
+        row.get(10)?,
     ))
 }
 
@@ -406,6 +689,8 @@ fn sessions_where(
                 seen,
                 expires,
                 revoked,
+                authenticated,
+                network,
             )| {
                 Ok(SessionRecord {
                     id: SessionId::new(id).map_err(corrupt_id)?,
@@ -418,6 +703,8 @@ fn sessions_where(
                     last_seen_at: Timestamp(seen),
                     expires_at: Timestamp(expires),
                     revoked_at: revoked.map(Timestamp),
+                    authenticated_at: Timestamp(authenticated),
+                    network,
                 })
             },
         )
@@ -709,6 +996,43 @@ impl SqliteStore {
         };
         let conn = file.lock().map_err(dbe)?;
         Ok(sessions_where(&conn, &tenant, &format!("{clause} = ?1"), &[&value])?.pop())
+    }
+
+    /// Run `work` on the file of a tenant, or answer `None` when the tenant has no file.
+    fn on_tenant<T>(
+        &self,
+        tenant: &TenantId,
+        work: impl FnOnce(&Connection) -> StoreResult<T>,
+    ) -> StoreResult<Option<T>> {
+        let Some(file) = self.tenant_db(tenant)? else {
+            return Ok(None);
+        };
+        let conn = file.lock().map_err(dbe)?;
+        work(&conn).map(Some)
+    }
+
+    /// Run `work` on the file of a tenant that exists, or answer `NotFound`.
+    fn on_existing<T>(
+        &self,
+        tenant: &TenantId,
+        work: impl FnOnce(&Connection) -> StoreResult<T>,
+    ) -> StoreResult<T> {
+        let file = self.existing(tenant)?;
+        let conn = file.lock().map_err(dbe)?;
+        work(&conn)
+    }
+
+    /// Run one statement on every tenant's file and count the rows it changed: the purges of
+    /// what lapses, which are not about one tenant.
+    fn on_every_tenant(&self, sql: &str, args: &[&dyn rusqlite::ToSql]) -> StoreResult<u64> {
+        let mut changed = 0u64;
+        for tenant in self.directory()? {
+            let Some(file) = self.tenant_db(&tenant)? else {
+                continue;
+            };
+            changed += file.lock().map_err(dbe)?.execute(sql, args).map_err(db)? as u64;
+        }
+        Ok(changed)
     }
 
     fn apply(tx: &Transaction<'_>, commit: &Commit) -> StoreResult<Receipt> {
@@ -1165,10 +1489,11 @@ impl Store for SqliteStore {
             .map_err(dbe)?
             .execute(
                 &format!(
-                    "INSERT INTO sessions ({SESSION_COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                    "INSERT INTO sessions ({SESSION_COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
                      ON CONFLICT (id) DO UPDATE SET token_hash = excluded.token_hash, csrf_token = excluded.csrf_token,
                         display_name = excluded.display_name, last_seen_at = excluded.last_seen_at,
-                        expires_at = excluded.expires_at, revoked_at = excluded.revoked_at"
+                        expires_at = excluded.expires_at, revoked_at = excluded.revoked_at,
+                        authenticated_at = excluded.authenticated_at, network = excluded.network"
                 ),
                 params![
                     session.id.as_str(),
@@ -1179,7 +1504,9 @@ impl Store for SqliteStore {
                     session.created_at.0,
                     session.last_seen_at.0,
                     session.expires_at.0,
-                    session.revoked_at.map(|t| t.0)
+                    session.revoked_at.map(|t| t.0),
+                    session.authenticated_at.0,
+                    session.network
                 ],
             )
             .map_err(db)?;
@@ -1243,6 +1570,894 @@ impl Store for SqliteStore {
         Ok(removed.len() as u64)
     }
 
+    fn throttle_reserve(
+        &self,
+        tenant: &TenantId,
+        rules: &[ThrottleRule],
+        now: Timestamp,
+    ) -> StoreResult<ThrottleVerdict> {
+        self.existing(tenant)?.write(dbe, |tx| {
+            let mut next = Vec::with_capacity(rules.len());
+            let mut until: Option<i64> = None;
+            for rule in rules {
+                let row = throttle_row(tx, &rule.key)?;
+                match throttle_step(row, rule, now.0) {
+                    Ok(row) => next.push((rule.key.as_str(), row)),
+                    Err(locked) => until = Some(until.map_or(locked, |u| u.max(locked))),
+                }
+            }
+            if let Some(until) = until {
+                return Ok(ThrottleVerdict::Refused {
+                    until: Timestamp(until),
+                });
+            }
+            for (key, row) in next {
+                tx.execute(
+                    "INSERT INTO login_throttle (key, failures, window_start, locked_until, expires_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5)
+                     ON CONFLICT (key) DO UPDATE SET failures = excluded.failures,
+                        window_start = excluded.window_start, locked_until = excluded.locked_until,
+                        expires_at = excluded.expires_at",
+                    params![
+                        key,
+                        i64::from(row.failures),
+                        row.window_start,
+                        row.locked_until,
+                        row.expires_at
+                    ],
+                )
+                .map_err(db)?;
+            }
+            Ok(ThrottleVerdict::Allowed)
+        })
+    }
+
+    fn throttle_settle(
+        &self,
+        tenant: &TenantId,
+        key: &str,
+        max: u32,
+        how: ThrottleSettle,
+    ) -> StoreResult<()> {
+        self.existing(tenant)?.write(dbe, |tx| {
+            match how {
+                ThrottleSettle::Clear => {
+                    tx.execute("DELETE FROM login_throttle WHERE key = ?1", params![key])
+                        .map_err(db)?;
+                }
+                ThrottleSettle::Refund => {
+                    if let Some(row) = throttle_row(tx, key)? {
+                        let row = throttle_refund(row, max);
+                        tx.execute(
+                            "UPDATE login_throttle SET failures = ?2, locked_until = ?3 WHERE key = ?1",
+                            params![key, i64::from(row.failures), row.locked_until],
+                        )
+                        .map_err(db)?;
+                    }
+                }
+            }
+            Ok(())
+        })
+    }
+
+    fn purge_throttle(&self, now: Timestamp) -> StoreResult<u64> {
+        self.on_every_tenant(
+            "DELETE FROM login_throttle WHERE expires_at <= ?1",
+            &[&now.0],
+        )
+    }
+
+    fn account_of(
+        &self,
+        tenant: &TenantId,
+        principal: &PrincipalId,
+    ) -> StoreResult<Option<Account>> {
+        let row = self.on_tenant(tenant, |conn| {
+            conn.query_row(
+                "SELECT login, display_name, password_hash FROM accounts WHERE principal = ?1 ORDER BY login LIMIT 1",
+                params![principal.as_str()],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(db)
+        })?;
+        Ok(row
+            .flatten()
+            .map(|(login, display_name, password_hash)| Account {
+                tenant: tenant.clone(),
+                login,
+                principal: principal.clone(),
+                display_name,
+                password_hash,
+            }))
+    }
+
+    fn put_passkey(&self, passkey: &PasskeyRecord) -> StoreResult<bool> {
+        let added = self.on_existing(&passkey.tenant, |conn| {
+            conn.execute(
+                &format!(
+                    "INSERT OR IGNORE INTO passkeys ({PASSKEY_COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)"
+                ),
+                params![
+                    passkey.id,
+                    passkey.principal.as_str(),
+                    passkey.rp_id,
+                    passkey.label,
+                    passkey.credential,
+                    passkey.created_at.0,
+                    passkey.last_used_at.map(|at| at.0),
+                ],
+            )
+            .map_err(db)
+        })?;
+        Ok(added == 1)
+    }
+
+    fn passkey(&self, tenant: &TenantId, id: &str) -> StoreResult<Option<PasskeyRecord>> {
+        let row = self.on_tenant(tenant, |conn| {
+            conn.query_row(
+                &format!("SELECT {PASSKEY_COLUMNS} FROM passkeys WHERE id = ?1"),
+                params![id],
+                passkey_from,
+            )
+            .optional()
+            .map_err(db)
+        })?;
+        row.flatten()
+            .map(|row| passkey_record(tenant, row))
+            .transpose()
+    }
+
+    fn passkeys(
+        &self,
+        tenant: &TenantId,
+        principal: &PrincipalId,
+    ) -> StoreResult<Vec<PasskeyRecord>> {
+        let rows = self.on_tenant(tenant, |conn| {
+            let mut statement = conn
+                .prepare(&format!(
+                    "SELECT {PASSKEY_COLUMNS} FROM passkeys WHERE principal = ?1 ORDER BY created_at, id"
+                ))
+                .map_err(db)?;
+            let rows = statement
+                .query_map(params![principal.as_str()], passkey_from)
+                .map_err(db)?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(db)?;
+            Ok(rows)
+        })?;
+        rows.unwrap_or_default()
+            .into_iter()
+            .map(|row| passkey_record(tenant, row))
+            .collect()
+    }
+
+    fn update_passkey(
+        &self,
+        tenant: &TenantId,
+        id: &str,
+        credential: &str,
+        used_at: Timestamp,
+    ) -> StoreResult<bool> {
+        let changed = self.on_tenant(tenant, |conn| {
+            conn.execute(
+                "UPDATE passkeys SET credential = ?2, last_used_at = ?3 WHERE id = ?1",
+                params![id, credential, used_at.0],
+            )
+            .map_err(db)
+        })?;
+        Ok(changed == Some(1))
+    }
+
+    fn remove_passkey(
+        &self,
+        tenant: &TenantId,
+        principal: &PrincipalId,
+        id: &str,
+    ) -> StoreResult<bool> {
+        let removed = self.on_tenant(tenant, |conn| {
+            conn.execute(
+                "DELETE FROM passkeys WHERE principal = ?1 AND id = ?2",
+                params![principal.as_str(), id],
+            )
+            .map_err(db)
+        })?;
+        Ok(removed == Some(1))
+    }
+
+    fn put_passkey_challenge(&self, challenge: &PasskeyChallenge) -> StoreResult<()> {
+        self.on_existing(&challenge.tenant, |conn| {
+            conn.execute(
+                "INSERT OR REPLACE INTO passkey_challenges (id_hash, ceremony, session, principal, origin, state, expires_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![
+                    challenge.id_hash,
+                    match challenge.ceremony {
+                        PasskeyCeremony::Register => "register",
+                        PasskeyCeremony::SignIn => "sign-in",
+                    },
+                    challenge.session.as_ref().map(|s| s.as_str().to_string()),
+                    challenge.principal.as_ref().map(|p| p.as_str().to_string()),
+                    challenge.origin,
+                    challenge.state,
+                    challenge.expires_at.0,
+                ],
+            )
+            .map_err(db)
+        })?;
+        Ok(())
+    }
+
+    fn take_passkey_challenge(
+        &self,
+        tenant: &TenantId,
+        id_hash: &str,
+        now: Timestamp,
+    ) -> StoreResult<Option<PasskeyChallenge>> {
+        // One statement reads and removes the row, so two answers to one challenge cannot both
+        // take it.
+        let row = self.on_tenant(tenant, |conn| {
+            conn.query_row(
+                "DELETE FROM passkey_challenges WHERE id_hash = ?1
+                 RETURNING ceremony, session, principal, origin, state, expires_at",
+                params![id_hash],
+                |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, Option<String>>(1)?,
+                        r.get::<_, Option<String>>(2)?,
+                        r.get::<_, String>(3)?,
+                        r.get::<_, String>(4)?,
+                        r.get::<_, i64>(5)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(db)
+        })?;
+        let Some((ceremony, session, principal, origin, state, expires_at)) = row.flatten() else {
+            return Ok(None);
+        };
+        if expires_at <= now.0 {
+            return Ok(None);
+        }
+        Ok(Some(PasskeyChallenge {
+            tenant: tenant.clone(),
+            id_hash: id_hash.to_string(),
+            ceremony: if ceremony == "register" {
+                PasskeyCeremony::Register
+            } else {
+                PasskeyCeremony::SignIn
+            },
+            session: session
+                .map(SessionId::new)
+                .transpose()
+                .map_err(corrupt_id)?,
+            principal: principal
+                .map(PrincipalId::new)
+                .transpose()
+                .map_err(corrupt_id)?,
+            origin,
+            state,
+            expires_at: Timestamp(expires_at),
+        }))
+    }
+
+    fn purge_passkey_challenges(&self, now: Timestamp) -> StoreResult<u64> {
+        self.on_every_tenant(
+            "DELETE FROM passkey_challenges WHERE expires_at <= ?1",
+            &[&now.0],
+        )
+    }
+
+    fn put_sign_in_link(&self, link: &SignInLink) -> StoreResult<()> {
+        self.on_existing(&link.tenant, |conn| {
+            conn.execute(
+                "INSERT OR REPLACE INTO sign_in_links (id_hash, principal, token_hash, binding_hash, origin, expires_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    link.id_hash,
+                    link.principal.as_str(),
+                    link.token_hash,
+                    link.binding_hash,
+                    link.origin,
+                    link.expires_at.0,
+                ],
+            )
+            .map_err(db)
+        })?;
+        Ok(())
+    }
+
+    fn take_sign_in_link(
+        &self,
+        tenant: &TenantId,
+        id_hash: &str,
+    ) -> StoreResult<Option<SignInLink>> {
+        // One statement reads and removes the row, so two uses of one link cannot both take it.
+        let row = self.on_tenant(tenant, |conn| {
+            conn.query_row(
+                "DELETE FROM sign_in_links WHERE id_hash = ?1
+                 RETURNING principal, token_hash, binding_hash, origin, expires_at",
+                params![id_hash],
+                |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, String>(2)?,
+                        r.get::<_, String>(3)?,
+                        r.get::<_, i64>(4)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(db)
+        })?;
+        let Some((principal, token_hash, binding_hash, origin, expires_at)) = row.flatten() else {
+            return Ok(None);
+        };
+        Ok(Some(SignInLink {
+            tenant: tenant.clone(),
+            id_hash: id_hash.to_string(),
+            principal: PrincipalId::new(principal).map_err(corrupt_id)?,
+            token_hash,
+            binding_hash,
+            origin,
+            expires_at: Timestamp(expires_at),
+        }))
+    }
+
+    fn purge_sign_in_links(&self, now: Timestamp) -> StoreResult<u64> {
+        self.on_every_tenant("DELETE FROM sign_in_links WHERE expires_at < ?1", &[&now.0])
+    }
+
+    fn put_oidc_flow(&self, flow: &OidcFlow) -> StoreResult<()> {
+        self.on_existing(&flow.tenant, |conn| {
+            conn.execute(
+                "INSERT OR REPLACE INTO oidc_flows (id_hash, provider, nonce, verifier, binding_hash, origin, principal, expires_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![
+                    flow.id_hash,
+                    flow.provider,
+                    flow.nonce,
+                    flow.verifier,
+                    flow.binding_hash,
+                    flow.origin,
+                    flow.principal.as_ref().map(|p| p.as_str()),
+                    flow.expires_at.0,
+                ],
+            )
+            .map_err(db)
+        })?;
+        Ok(())
+    }
+
+    fn take_oidc_flow(&self, tenant: &TenantId, id_hash: &str) -> StoreResult<Option<OidcFlow>> {
+        // One statement reads and removes the row, so two callbacks cannot both take it.
+        let row = self.on_tenant(tenant, |conn| {
+            conn.query_row(
+                "DELETE FROM oidc_flows WHERE id_hash = ?1
+                 RETURNING provider, nonce, verifier, binding_hash, origin, principal, expires_at",
+                params![id_hash],
+                |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, String>(2)?,
+                        r.get::<_, String>(3)?,
+                        r.get::<_, String>(4)?,
+                        r.get::<_, Option<String>>(5)?,
+                        r.get::<_, i64>(6)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(db)
+        })?;
+        let Some((provider, nonce, verifier, binding_hash, origin, principal, expires_at)) =
+            row.flatten()
+        else {
+            return Ok(None);
+        };
+        Ok(Some(OidcFlow {
+            tenant: tenant.clone(),
+            id_hash: id_hash.to_string(),
+            provider,
+            nonce,
+            verifier,
+            binding_hash,
+            origin,
+            principal: principal
+                .map(PrincipalId::new)
+                .transpose()
+                .map_err(corrupt_id)?,
+            expires_at: Timestamp(expires_at),
+        }))
+    }
+
+    fn purge_oidc_flows(&self, now: Timestamp) -> StoreResult<u64> {
+        self.on_every_tenant("DELETE FROM oidc_flows WHERE expires_at < ?1", &[&now.0])
+    }
+
+    fn put_saml_request(&self, request: &SamlRequest) -> StoreResult<()> {
+        self.on_existing(&request.tenant, |conn| {
+            conn.execute(
+                "INSERT OR REPLACE INTO saml_requests (id_hash, provider, request_id, binding_hash, origin, principal, expires_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![
+                    request.id_hash,
+                    request.provider,
+                    request.request_id,
+                    request.binding_hash,
+                    request.origin,
+                    request.principal.as_ref().map(|p| p.as_str()),
+                    request.expires_at.0,
+                ],
+            )
+            .map_err(db)
+        })?;
+        Ok(())
+    }
+
+    fn take_saml_request(
+        &self,
+        tenant: &TenantId,
+        id_hash: &str,
+    ) -> StoreResult<Option<SamlRequest>> {
+        // One statement reads and removes the row, so two responses cannot both take it.
+        let row = self.on_tenant(tenant, |conn| {
+            conn.query_row(
+                "DELETE FROM saml_requests WHERE id_hash = ?1
+                 RETURNING provider, request_id, binding_hash, origin, principal, expires_at",
+                params![id_hash],
+                |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, String>(2)?,
+                        r.get::<_, String>(3)?,
+                        r.get::<_, Option<String>>(4)?,
+                        r.get::<_, i64>(5)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(db)
+        })?;
+        let Some((provider, request_id, binding_hash, origin, principal, expires_at)) =
+            row.flatten()
+        else {
+            return Ok(None);
+        };
+        Ok(Some(SamlRequest {
+            tenant: tenant.clone(),
+            id_hash: id_hash.to_string(),
+            provider,
+            request_id,
+            binding_hash,
+            origin,
+            principal: principal
+                .map(PrincipalId::new)
+                .transpose()
+                .map_err(corrupt_id)?,
+            expires_at: Timestamp(expires_at),
+        }))
+    }
+
+    fn purge_saml_requests(&self, now: Timestamp) -> StoreResult<u64> {
+        self.on_every_tenant("DELETE FROM saml_requests WHERE expires_at < ?1", &[&now.0])
+    }
+
+    fn put_saml_assertion(
+        &self,
+        tenant: &TenantId,
+        provider: &str,
+        id_hash: &str,
+        expires_at: Timestamp,
+    ) -> StoreResult<bool> {
+        // One statement, so that two presentations at once are one: the second changes no row.
+        let added = self.on_existing(tenant, |conn| {
+            conn.execute(
+                "INSERT OR IGNORE INTO saml_assertions (provider, id_hash, expires_at)
+                 VALUES (?1, ?2, ?3)",
+                params![provider, id_hash, expires_at.0],
+            )
+            .map_err(db)
+        })?;
+        Ok(added == 1)
+    }
+
+    fn purge_saml_assertions(&self, now: Timestamp) -> StoreResult<u64> {
+        self.on_every_tenant(
+            "DELETE FROM saml_assertions WHERE expires_at < ?1",
+            &[&now.0],
+        )
+    }
+
+    fn put_identity(&self, identity: &FederatedIdentity) -> StoreResult<bool> {
+        let added = self.on_existing(&identity.tenant, |conn| {
+            conn.execute(
+                "INSERT OR IGNORE INTO federated_identities (provider, subject, principal, created_at)
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![
+                    identity.provider,
+                    identity.subject,
+                    identity.principal.as_str(),
+                    identity.created_at.0,
+                ],
+            )
+            .map_err(db)
+        })?;
+        Ok(added == 1)
+    }
+
+    fn identity(
+        &self,
+        tenant: &TenantId,
+        provider: &str,
+        subject: &str,
+    ) -> StoreResult<Option<FederatedIdentity>> {
+        let row = self.on_tenant(tenant, |conn| {
+            conn.query_row(
+                "SELECT principal, created_at FROM federated_identities
+                 WHERE provider = ?1 AND subject = ?2",
+                params![provider, subject],
+                |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)),
+            )
+            .optional()
+            .map_err(db)
+        })?;
+        let Some((principal, created_at)) = row.flatten() else {
+            return Ok(None);
+        };
+        Ok(Some(FederatedIdentity {
+            tenant: tenant.clone(),
+            provider: provider.to_string(),
+            subject: subject.to_string(),
+            principal: PrincipalId::new(principal).map_err(corrupt_id)?,
+            created_at: Timestamp(created_at),
+        }))
+    }
+
+    fn put_totp(&self, totp: &TotpRecord) -> StoreResult<bool> {
+        // An unconfirmed enrolment is replaced; a confirmed one is not.
+        let changed = self.on_existing(&totp.tenant, |conn| {
+            conn.execute(
+                "INSERT INTO totp_factors (principal, secret, confirmed, last_step, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5)
+                 ON CONFLICT (principal) DO UPDATE SET secret = excluded.secret,
+                    confirmed = excluded.confirmed, last_step = excluded.last_step,
+                    created_at = excluded.created_at
+                 WHERE totp_factors.confirmed = 0",
+                params![
+                    totp.principal.as_str(),
+                    totp.secret,
+                    totp.confirmed,
+                    totp.last_step,
+                    totp.created_at.0,
+                ],
+            )
+            .map_err(db)
+        })?;
+        Ok(changed == 1)
+    }
+
+    fn totp(&self, tenant: &TenantId, principal: &PrincipalId) -> StoreResult<Option<TotpRecord>> {
+        let row = self.on_tenant(tenant, |conn| {
+            conn.query_row(
+                "SELECT secret, confirmed, last_step, created_at FROM totp_factors WHERE principal = ?1",
+                params![principal.as_str()],
+                |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, bool>(1)?,
+                        r.get::<_, i64>(2)?,
+                        r.get::<_, i64>(3)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(db)
+        })?;
+        Ok(row
+            .flatten()
+            .map(|(secret, confirmed, last_step, created_at)| TotpRecord {
+                tenant: tenant.clone(),
+                principal: principal.clone(),
+                secret,
+                confirmed,
+                last_step,
+                created_at: Timestamp(created_at),
+            }))
+    }
+
+    fn confirm_totp(
+        &self,
+        tenant: &TenantId,
+        principal: &PrincipalId,
+        step: i64,
+    ) -> StoreResult<bool> {
+        let changed = self.on_tenant(tenant, |conn| {
+            conn.execute(
+                "UPDATE totp_factors SET confirmed = 1, last_step = ?2
+                 WHERE principal = ?1 AND confirmed = 0",
+                params![principal.as_str(), step],
+            )
+            .map_err(db)
+        })?;
+        Ok(changed == Some(1))
+    }
+
+    fn use_totp_step(
+        &self,
+        tenant: &TenantId,
+        principal: &PrincipalId,
+        step: i64,
+    ) -> StoreResult<bool> {
+        // One statement checks the step and remembers it, so two uses of one code cannot both win.
+        let changed = self.on_tenant(tenant, |conn| {
+            conn.execute(
+                "UPDATE totp_factors SET last_step = ?2
+                 WHERE principal = ?1 AND confirmed = 1 AND last_step < ?2",
+                params![principal.as_str(), step],
+            )
+            .map_err(db)
+        })?;
+        Ok(changed == Some(1))
+    }
+
+    fn remove_totp(&self, tenant: &TenantId, principal: &PrincipalId) -> StoreResult<bool> {
+        let removed = self.on_tenant(tenant, |conn| {
+            conn.execute(
+                "DELETE FROM totp_factors WHERE principal = ?1",
+                params![principal.as_str()],
+            )
+            .map_err(db)
+        })?;
+        Ok(removed == Some(1))
+    }
+
+    fn replace_recovery_codes(
+        &self,
+        tenant: &TenantId,
+        principal: &PrincipalId,
+        hashes: &[String],
+        at: Timestamp,
+    ) -> StoreResult<()> {
+        self.existing(tenant)?.write(dbe, |tx| {
+            tx.execute(
+                "DELETE FROM recovery_codes WHERE principal = ?1",
+                params![principal.as_str()],
+            )
+            .map_err(db)?;
+            for hash in hashes {
+                tx.execute(
+                    "INSERT OR IGNORE INTO recovery_codes (principal, code_hash, created_at)
+                     VALUES (?1, ?2, ?3)",
+                    params![principal.as_str(), hash, at.0],
+                )
+                .map_err(db)?;
+            }
+            Ok(())
+        })
+    }
+
+    fn spend_recovery_code(
+        &self,
+        tenant: &TenantId,
+        principal: &PrincipalId,
+        hash: &str,
+    ) -> StoreResult<bool> {
+        // One statement removes the row, so two presentations of one code cannot both win.
+        let removed = self.on_tenant(tenant, |conn| {
+            conn.execute(
+                "DELETE FROM recovery_codes WHERE principal = ?1 AND code_hash = ?2",
+                params![principal.as_str(), hash],
+            )
+            .map_err(db)
+        })?;
+        Ok(removed == Some(1))
+    }
+
+    fn recovery_codes_left(&self, tenant: &TenantId, principal: &PrincipalId) -> StoreResult<u32> {
+        let left = self.on_tenant(tenant, |conn| {
+            conn.query_row(
+                "SELECT COUNT(*) FROM recovery_codes WHERE principal = ?1",
+                params![principal.as_str()],
+                |r| r.get::<_, i64>(0),
+            )
+            .map_err(db)
+        })?;
+        Ok(left.unwrap_or(0) as u32)
+    }
+
+    fn put_pending(&self, pending: &PendingSignIn) -> StoreResult<()> {
+        self.on_existing(&pending.tenant, |conn| {
+            conn.execute(
+                "INSERT OR REPLACE INTO pending_sign_ins (id_hash, principal, method, factors, attempts, expires_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    pending.id_hash,
+                    pending.principal.as_str(),
+                    pending.method,
+                    i64::from(pending.factors),
+                    i64::from(pending.attempts),
+                    pending.expires_at.0,
+                ],
+            )
+            .map_err(db)
+        })?;
+        Ok(())
+    }
+
+    fn attempt_pending(
+        &self,
+        tenant: &TenantId,
+        id_hash: &str,
+        now: Timestamp,
+        max: u32,
+    ) -> StoreResult<Option<PendingSignIn>> {
+        let Some(file) = self.tenant_db(tenant)? else {
+            return Ok(None);
+        };
+        file.write(dbe, |tx| {
+            let row = tx
+                .query_row(
+                    "SELECT principal, method, factors, attempts, expires_at FROM pending_sign_ins
+                     WHERE id_hash = ?1",
+                    params![id_hash],
+                    pending_from,
+                )
+                .optional()
+                .map_err(db)?;
+            let Some((principal, method, factors, attempts, expires_at)) = row else {
+                return Ok(None);
+            };
+            if expires_at <= now.0 || attempts >= i64::from(max) {
+                tx.execute(
+                    "DELETE FROM pending_sign_ins WHERE id_hash = ?1",
+                    params![id_hash],
+                )
+                .map_err(db)?;
+                return Ok(None);
+            }
+            tx.execute(
+                "UPDATE pending_sign_ins SET attempts = attempts + 1 WHERE id_hash = ?1",
+                params![id_hash],
+            )
+            .map_err(db)?;
+            pending_sign_in(
+                tenant,
+                id_hash,
+                (principal, method, factors, attempts + 1, expires_at),
+            )
+            .map(Some)
+        })
+    }
+
+    fn take_pending(
+        &self,
+        tenant: &TenantId,
+        id_hash: &str,
+        now: Timestamp,
+    ) -> StoreResult<Option<PendingSignIn>> {
+        // One statement reads and removes the row, so two answers cannot both take it.
+        let row = self.on_tenant(tenant, |conn| {
+            conn.query_row(
+                "DELETE FROM pending_sign_ins WHERE id_hash = ?1
+                 RETURNING principal, method, factors, attempts, expires_at",
+                params![id_hash],
+                pending_from,
+            )
+            .optional()
+            .map_err(db)
+        })?;
+        let Some(row) = row.flatten() else {
+            return Ok(None);
+        };
+        if row.4 <= now.0 {
+            return Ok(None);
+        }
+        pending_sign_in(tenant, id_hash, row).map(Some)
+    }
+
+    fn put_recovery(&self, request: &RecoveryRequest) -> StoreResult<()> {
+        self.existing(&request.tenant)?.write(dbe, |tx| {
+            tx.execute(
+                "DELETE FROM recovery_requests WHERE principal = ?1",
+                params![request.principal.as_str()],
+            )
+            .map_err(db)?;
+            tx.execute(
+                "INSERT OR REPLACE INTO recovery_requests
+                    (id_hash, principal, login, token_hash, cancel_hash, requested_at, completes_at, expires_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![
+                    request.id_hash,
+                    request.principal.as_str(),
+                    request.login,
+                    request.token_hash,
+                    request.cancel_hash,
+                    request.requested_at.0,
+                    request.completes_at.0,
+                    request.expires_at.0,
+                ],
+            )
+            .map_err(db)?;
+            Ok(())
+        })
+    }
+
+    fn recovery(&self, tenant: &TenantId, id_hash: &str) -> StoreResult<Option<RecoveryRequest>> {
+        let row = self.on_tenant(tenant, |conn| {
+            conn.query_row(
+                "SELECT principal, login, token_hash, cancel_hash, requested_at, completes_at, expires_at
+                 FROM recovery_requests WHERE id_hash = ?1",
+                params![id_hash],
+                recovery_from,
+            )
+            .optional()
+            .map_err(db)
+        })?;
+        row.flatten()
+            .map(|row| recovery_request(tenant, id_hash, row))
+            .transpose()
+    }
+
+    fn take_recovery(
+        &self,
+        tenant: &TenantId,
+        id_hash: &str,
+    ) -> StoreResult<Option<RecoveryRequest>> {
+        let row = self.on_tenant(tenant, |conn| {
+            conn.query_row(
+                "DELETE FROM recovery_requests WHERE id_hash = ?1
+                 RETURNING principal, login, token_hash, cancel_hash, requested_at, completes_at, expires_at",
+                params![id_hash],
+                recovery_from,
+            )
+            .optional()
+            .map_err(db)
+        })?;
+        row.flatten()
+            .map(|row| recovery_request(tenant, id_hash, row))
+            .transpose()
+    }
+
+    fn cancel_recovery(
+        &self,
+        tenant: &TenantId,
+        id_hash: &str,
+        cancel_hash: &str,
+    ) -> StoreResult<bool> {
+        let removed = self.on_tenant(tenant, |conn| {
+            conn.execute(
+                "DELETE FROM recovery_requests WHERE id_hash = ?1 AND cancel_hash = ?2",
+                params![id_hash, cancel_hash],
+            )
+            .map_err(db)
+        })?;
+        Ok(removed == Some(1))
+    }
+
+    fn purge_factor_challenges(&self, now: Timestamp) -> StoreResult<u64> {
+        let pending = self.on_every_tenant(
+            "DELETE FROM pending_sign_ins WHERE expires_at <= ?1",
+            &[&now.0],
+        )?;
+        let recoveries = self.on_every_tenant(
+            "DELETE FROM recovery_requests WHERE expires_at <= ?1",
+            &[&now.0],
+        )?;
+        Ok(pending + recoveries)
+    }
+
     fn put_account(&self, account: &Account) -> StoreResult<()> {
         let file = self.existing(&account.tenant)?;
         file.lock()
@@ -1303,6 +2518,68 @@ impl Store for SqliteStore {
             .execute("DELETE FROM accounts WHERE login = ?1", params![login])
             .map_err(db)?;
         Ok(removed > 0)
+    }
+
+    fn doc_put(
+        &self,
+        tenant: &TenantId,
+        kind: &str,
+        key: &str,
+        value: &str,
+        create_only: bool,
+    ) -> StoreResult<bool> {
+        let sql = if create_only {
+            "INSERT OR IGNORE INTO identity_docs (kind, key, value) VALUES (?1, ?2, ?3)"
+        } else {
+            "INSERT INTO identity_docs (kind, key, value) VALUES (?1, ?2, ?3)
+             ON CONFLICT (kind, key) DO UPDATE SET value = excluded.value"
+        };
+        // A tenant that does not exist has no file, and is refused as not found.
+        let changed = self.on_existing(tenant, |conn| {
+            conn.execute(sql, params![kind, key, value]).map_err(db)
+        })?;
+        Ok(changed == 1)
+    }
+
+    fn doc_get(&self, tenant: &TenantId, kind: &str, key: &str) -> StoreResult<Option<String>> {
+        let value = self.on_tenant(tenant, |conn| {
+            conn.query_row(
+                "SELECT value FROM identity_docs WHERE kind = ?1 AND key = ?2",
+                params![kind, key],
+                |r| r.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(db)
+        })?;
+        Ok(value.flatten())
+    }
+
+    fn doc_list(&self, tenant: &TenantId, kind: &str) -> StoreResult<Vec<(String, String)>> {
+        let rows = self.on_tenant(tenant, |conn| {
+            let mut statement = conn
+                .prepare("SELECT key, value FROM identity_docs WHERE kind = ?1 ORDER BY key")
+                .map_err(db)?;
+            let rows = statement
+                .query_map(params![kind], |r| {
+                    Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+                })
+                .map_err(db)?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(db)?;
+            Ok(rows)
+        })?;
+        Ok(rows.unwrap_or_default())
+    }
+
+    fn doc_remove(&self, tenant: &TenantId, kind: &str, key: &str) -> StoreResult<bool> {
+        let removed = self.on_tenant(tenant, |conn| {
+            conn.execute(
+                "DELETE FROM identity_docs WHERE kind = ?1 AND key = ?2",
+                params![kind, key],
+            )
+            .map_err(db)
+        })?;
+        Ok(removed == Some(1))
     }
 
     fn create_snapshot(

@@ -9,9 +9,13 @@ pub mod auth;
 pub mod http;
 pub mod hub;
 pub mod lab;
+pub mod limits;
+pub mod mail;
 pub mod ops;
 pub mod outbox;
 pub mod seed;
+pub mod service;
+pub mod signin;
 pub mod ws;
 
 use app::{App, Config, Shared, LOG};
@@ -59,6 +63,15 @@ pub async fn run(
         jobs::every(Duration::from_secs(600), || async {
             let _ = janitor
                 .blocking(|app| {
+                    // Counters of failed sign-ins that have run out, and sessions that ended
+                    // a day ago.
+                    let _ = app.store.purge_throttle(app.now());
+                    let _ = app.store.purge_passkey_challenges(app.now());
+                    let _ = app.store.purge_sign_in_links(app.now());
+                    let _ = app.store.purge_oidc_flows(app.now());
+                    let _ = app.store.purge_factor_challenges(app.now());
+                    let _ = app.store.purge_saml_requests(app.now());
+                    let _ = app.store.purge_saml_assertions(app.now());
                     app.store
                         .purge_sessions(strata_kernel::Timestamp(app.now().0 - 86_400_000))
                 })

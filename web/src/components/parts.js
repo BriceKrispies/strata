@@ -117,3 +117,32 @@ export function control(id, label, field, input, hint) {
     field.error ? h('p', { class: 'field__error', id: `${id}-error` }, field.error) : null,
   );
 }
+
+/**
+ * A QR code from a matrix of modules (true is dark). The code is always dark on white, because
+ * scanners read that and not the page's theme; the matrix already holds its quiet border.
+ * @param {boolean[][]} modules @param {string} label
+ */
+export function qrCode(modules, label) {
+  const size = modules.length;
+  let path = '';
+  modules.forEach((row, y) => {
+    let x = 0;
+    while (x < size) {
+      if (!row[x]) {
+        x += 1;
+        continue;
+      }
+      let end = x;
+      while (end < size && row[end]) end += 1;
+      path += `M${x} ${y}h${end - x}v1h-${end - x}z`;
+      x = end;
+    }
+  });
+  return h(
+    'svg',
+    { class: 'qr', viewBox: `0 0 ${size} ${size}`, width: 192, height: 192, role: 'img', 'aria-label': label, 'shape-rendering': 'crispEdges' },
+    h('rect', { width: size, height: size, fill: '#ffffff' }),
+    h('path', { d: path, fill: '#000000' }),
+  );
+}

@@ -20,10 +20,18 @@ struct Edge {
 }
 
 async fn start() -> Edge {
+    start_with(|_| {}, |_| {}).await
+}
+
+/// Start the edge, with the BFF's and the backend's configuration adjusted by the caller.
+async fn start_with(
+    adjust_bff: impl FnOnce(&mut Config),
+    adjust_backend: impl FnOnce(&mut strata_backend::app::Config),
+) -> Edge {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let backend_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let backend_addr = backend_listener.local_addr().unwrap();
-    let backend_cfg = strata_backend::app::Config {
+    let mut backend_cfg = strata_backend::app::Config {
         addr: backend_addr,
         service_token: TOKEN.into(),
         dev: true,
@@ -31,7 +39,14 @@ async fn start() -> Edge {
         lean_dir: root.join("lean"),
         session_ttl_ms: 3_600_000,
         session_idle_ms: 3_600_000,
+        passkey_challenge_ttl_ms: 300_000,
+        link_ttl_ms: 900_000,
+        mail: std::sync::Arc::new(strata_backend::mail::DevSink::memory()),
+        federation: std::sync::Arc::new(strata_backend::signin::oidc::Federation::none()),
+        factors: Default::default(),
+        limits: Default::default(),
     };
+    adjust_backend(&mut backend_cfg);
     tokio::spawn(strata_backend::run(
         backend_cfg,
         Arc::new(MemoryStore::new()),
@@ -49,7 +64,7 @@ async fn start() -> Edge {
     .unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
-    let cfg = Config {
+    let mut cfg = Config {
         addr: listener.local_addr().unwrap(),
         backend: format!("http://{backend_addr}"),
         service_token: TOKEN.into(),
@@ -60,7 +75,10 @@ async fn start() -> Edge {
         ],
         dist,
         dev: true,
+        trusted_proxies: Vec::new(),
+        limits: Default::default(),
     };
+    adjust_bff(&mut cfg);
     tokio::spawn(strata_bff::run(cfg, listener, std::future::pending()));
     let edge = Edge {
         port,
@@ -280,13 +298,16 @@ async fn the_session_cookie_carries_the_host_prefix_and_secure() {
     assert_eq!(body["session"]["authenticated"], false);
 }
 
-/// The `POST` routes of the browser-facing router, read from its definition so that a route
-/// added later is covered without anyone remembering to list it. `:action` stands for the two
-/// development actions.
+/// The `POST` routes of the browser-facing API, read from its definition so that a route added
+/// later is covered without anyone remembering to list it. `:action` stands for the two
+/// development actions. The routes outside `/api` are a provider's own posts, which come from
+/// another site and carry no session of the person's: they are tested on their own.
 fn post_routes() -> Vec<String> {
     include_str!("../src/routes.rs")
         .lines()
-        .filter(|line| line.contains(".route(\"") && line.contains("post("))
+        .filter(|line| {
+            line.contains(".route(\"") && line.contains("post(") && !line.contains("\"/federation/")
+        })
         .map(|line| line.split('"').nth(1).expect("a route path").to_string())
         .flat_map(|path| {
             if path.contains(":action") {
@@ -952,6 +973,17 @@ async fn connect(
     cookie: Option<&str>,
     csrf: Option<&str>,
 ) -> Upgrade {
+    connect_with(edge, origin, cookie, csrf, &[]).await
+}
+
+/// `connect`, with extra request headers.
+async fn connect_with(
+    edge: &Edge,
+    origin: Option<String>,
+    cookie: Option<&str>,
+    csrf: Option<&str>,
+    extra: &[(&'static str, &str)],
+) -> Upgrade {
     let address = match csrf {
         Some(csrf) => format!("ws://127.0.0.1:{}/ws?csrf={csrf}", edge.port),
         None => format!("ws://127.0.0.1:{}/ws", edge.port),
@@ -967,6 +999,9 @@ async fn connect(
             "cookie",
             format!("{SESSION_COOKIE}={cookie}").parse().unwrap(),
         );
+    }
+    for (name, value) in extra {
+        request.headers_mut().insert(*name, value.parse().unwrap());
     }
     tokio_tungstenite::connect_async(request).await
 }
@@ -1243,4 +1278,474 @@ async fn diagnostics_name_no_other_site() {
         assert!(!text.contains(other), "{other} is in the report: {text}");
     }
     assert!(report["bff"]["open_sockets"].is_number());
+}
+
+/// One sign-in attempt through the edge, from a browser that says it comes from `claimed`.
+async fn attempt_from(
+    edge: &Edge,
+    claimed: Option<&str>,
+    login: &str,
+    password: &str,
+) -> (u16, Json, Reply) {
+    let mut request = edge
+        .post(
+            "127.0.0.1",
+            "/api/login",
+            json!({ "login": login, "password": password }),
+        )
+        .header("x-csrf-token", edge.request_token("127.0.0.1").await);
+    if let Some(claimed) = claimed {
+        request = request.header("x-strata-source", claimed);
+    }
+    edge.send(request).await
+}
+
+/// Verifies: IDN-012
+#[tokio::test]
+async fn a_person_lists_and_revokes_their_sessions_behind_the_origin_and_token_checks() {
+    let edge = start().await;
+    let (here, here_csrf) = edge.login("127.0.0.1", "ines", "strata-dev-ines").await;
+    let (there, _) = edge.login("127.0.0.1", "ines", "strata-dev-ines").await;
+    let ours = edge.origin("127.0.0.1");
+
+    let (status, listed, _) = edge.get("127.0.0.1", "/api/sessions", Some(&here)).await;
+    assert_eq!(status, 200, "{listed}");
+    let list = listed["sessions"].as_array().unwrap();
+    assert_eq!(list.len(), 2);
+    assert_eq!(list.iter().filter(|s| s["current"] == true).count(), 1);
+    let text = listed.to_string();
+    assert!(!text.contains(&here) && !text.contains(&there) && !text.contains("csrf"));
+    assert_eq!(
+        edge.get("127.0.0.1", "/api/sessions", None).await.0,
+        401,
+        "no session, nothing to list"
+    );
+
+    let (_, there_view, _) = edge.get("127.0.0.1", "/api/session", Some(&there)).await;
+    let there_id = there_view["session"]["session_id"].as_str().unwrap();
+    let revoke = |origin: Option<&str>, csrf: Option<&str>| {
+        let mut request = edge
+            .http
+            .post(format!("{ours}/api/sessions/revoke"))
+            .header("cookie", format!("{SESSION_COOKIE}={here}"))
+            .json(&json!({ "id": there_id }));
+        if let Some(origin) = origin {
+            request = request.header("origin", origin);
+        }
+        if let Some(csrf) = csrf {
+            request = request.header("x-csrf-token", csrf);
+        }
+        request
+    };
+    assert_eq!(
+        edge.send(revoke(Some(&ours), None)).await.0,
+        403,
+        "no token"
+    );
+    assert_eq!(
+        edge.send(revoke(Some(&ours), Some("0000"))).await.0,
+        403,
+        "wrong token"
+    );
+    assert_eq!(
+        edge.send(revoke(Some("http://evil.example"), Some(&here_csrf)))
+            .await
+            .0,
+        403,
+        "foreign origin"
+    );
+    assert_eq!(
+        edge.send(revoke(None, Some(&here_csrf))).await.0,
+        403,
+        "no origin"
+    );
+    let (_, still, _) = edge.get("127.0.0.1", "/api/session", Some(&there)).await;
+    assert_eq!(
+        still["session"]["authenticated"], true,
+        "the refusals ended nothing"
+    );
+
+    assert_eq!(
+        edge.send(revoke(Some(&ours), Some(&here_csrf))).await.0,
+        200
+    );
+    let (_, gone, reply) = edge.get("127.0.0.1", "/api/session", Some(&there)).await;
+    assert_eq!(gone["state"], "revoked");
+    assert!(
+        reply.cookie.unwrap().contains("Max-Age=0"),
+        "its cookie is cleared"
+    );
+
+    // Ending the session that makes the request clears its own cookie in the same answer.
+    let (_, here_view, _) = edge.get("127.0.0.1", "/api/session", Some(&here)).await;
+    let own_id = here_view["session"]["session_id"].as_str().unwrap();
+    let (status, _, reply) = edge
+        .send(
+            edge.post("127.0.0.1", "/api/sessions/revoke", json!({ "id": own_id }))
+                .header("cookie", format!("{SESSION_COOKIE}={here}"))
+                .header("x-csrf-token", &here_csrf),
+        )
+        .await;
+    assert_eq!(status, 200);
+    assert!(reply.cookie.expect("a cookie header").contains("Max-Age=0"));
+
+    // The others, all at once.
+    let (first, first_csrf) = edge.login("127.0.0.1", "ines", "strata-dev-ines").await;
+    let (second, _) = edge.login("127.0.0.1", "ines", "strata-dev-ines").await;
+    let (third, _) = edge.login("127.0.0.1", "ines", "strata-dev-ines").await;
+    let (status, reply, _) = edge
+        .send(
+            edge.post("127.0.0.1", "/api/sessions/revoke-others", json!({}))
+                .header("cookie", format!("{SESSION_COOKIE}={first}"))
+                .header("x-csrf-token", &first_csrf),
+        )
+        .await;
+    assert_eq!((status, &reply["revoked"]), (200, &json!(2)));
+    for gone in [&second, &third] {
+        let (_, view, _) = edge.get("127.0.0.1", "/api/session", Some(gone)).await;
+        assert_eq!(view["session"]["authenticated"], false);
+    }
+    let (_, kept, _) = edge.get("127.0.0.1", "/api/session", Some(&first)).await;
+    assert_eq!(kept["session"]["authenticated"], true);
+}
+
+/// Verifies: IDN-250
+///
+/// The address a sign-in is limited by is the one the connection came from. A browser that
+/// writes another into a header does not get a count of its own for each.
+#[tokio::test]
+async fn the_source_of_a_sign_in_is_the_connection_and_not_what_the_browser_says() {
+    let edge = start_with(
+        |_| {},
+        |backend| {
+            backend.throttle = strata_backend::app::ThrottleLimits {
+                source_max: 3,
+                ..Default::default()
+            }
+        },
+    )
+    .await;
+    for (i, claimed) in ["203.0.113.1", "203.0.113.2", "203.0.113.3"]
+        .iter()
+        .enumerate()
+    {
+        let (status, _, _) = attempt_from(&edge, Some(claimed), &format!("nobody{i}"), "x").await;
+        assert_eq!(status, 401);
+    }
+    let (status, body, reply) =
+        attempt_from(&edge, Some("203.0.113.4"), "tomasz", "strata-dev-tomasz").await;
+    assert_eq!(status, 429, "{body}");
+    assert!(reply.cookie.is_none(), "a refused sign-in sets no cookie");
+}
+
+/// Verifies: IDN-008
+/// Verifies: IDN-255
+#[tokio::test]
+async fn a_throttled_sign_in_is_answered_the_same_for_an_account_that_does_not_exist() {
+    let edge = start().await;
+    let mut wrong = Vec::new();
+    for login in ["tomasz", "nobody-at-all"] {
+        for _ in 0..10 {
+            let (status, body, reply) = attempt_from(&edge, None, login, "wrong").await;
+            assert_eq!(status, 401);
+            assert!(reply.cookie.is_none());
+            wrong.push(body["message"].clone());
+        }
+    }
+    assert!(wrong.windows(2).all(|pair| pair[0] == pair[1]), "{wrong:?}");
+    let mut refused = Vec::new();
+    for login in ["tomasz", "nobody-at-all"] {
+        let (status, body, reply) = attempt_from(&edge, None, login, "strata-dev-tomasz").await;
+        assert_eq!(status, 429, "{login}: {body}");
+        assert!(reply.cookie.is_none(), "a refused sign-in sets no cookie");
+        refused.push((body["code"].clone(), body["message"].clone()));
+    }
+    assert_eq!(
+        refused[0], refused[1],
+        "the refusal does not say which exists"
+    );
+}
+
+/// Verifies: IDN-001
+#[tokio::test]
+async fn sign_in_goes_through_the_method_named_and_passes_on_only_its_own_fields() {
+    let edge = start().await;
+    let token = edge.request_token("127.0.0.1").await;
+    let (status, body, reply) = edge
+        .send(
+            edge.post(
+                "127.0.0.1",
+                "/api/sign-in/password",
+                json!({ "login": "ines", "password": "strata-dev-ines", "tenant": "tidewater", "admin": true }),
+            )
+            .header("x-csrf-token", &token),
+        )
+        .await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(
+        body["session"]["tenant"], "fieldnotes",
+        "the site is the host's"
+    );
+    assert!(reply.cookie.unwrap().starts_with(SESSION_COOKIE));
+    for (path, payload, expected) in [
+        (
+            "/api/sign-in/telepathy",
+            json!({ "login": "ines", "password": "x" }),
+            404,
+        ),
+        ("/api/sign-in/password", json!({ "login": "ines" }), 401),
+        ("/api/sign-in/password", json!({}), 401),
+    ] {
+        let (status, _, reply) = edge
+            .send(
+                edge.post("127.0.0.1", path, payload)
+                    .header("x-csrf-token", &token),
+            )
+            .await;
+        assert_eq!(status, expected, "{path}");
+        assert!(reply.cookie.is_none());
+    }
+}
+
+/// Verifies: FED-005, FED-250
+///
+/// The assertion consumer address takes the provider's post, from another site and without any
+/// cookie of the person's but the return address, and signs no one in: it moves the response and
+/// the relay state into the fragment of the sign-in page, with the return address as a query
+/// that is a path on the site, and clears that cookie. A post that is not a response, or whose
+/// relay state is not one this service makes, sends the page to say so. A site that is not served
+/// is not answered, and the metadata of a provider nobody configured is not found.
+#[tokio::test]
+async fn the_assertion_consumer_address_moves_the_response_to_the_page_and_signs_no_one_in() {
+    let edge = start().await;
+    let relay = "ab".repeat(32);
+    let post = |host: &str, body: String, cookie: Option<&str>| {
+        let mut request = edge
+            .http
+            .post(format!("{}/federation/saml/acs", edge.origin(host)))
+            .header("origin", "https://idp.acme.example")
+            .header("content-type", "application/x-www-form-urlencoded")
+            .body(body);
+        if let Some(cookie) = cookie {
+            request = request.header("cookie", cookie);
+        }
+        request
+    };
+    let sent = edge
+        .send(post(
+            "127.0.0.1",
+            format!("SAMLResponse=PHNhbWw%2BKw%3D%3D&RelayState={relay}&extra=ignored"),
+            Some("__Host-strata-return=%2Fdesk"),
+        ))
+        .await;
+    assert_eq!(sent.0, 303);
+    assert_eq!(
+        sent.2.headers["location"].to_str().unwrap(),
+        format!("/login?next=%2Fdesk#m=saml&r=PHNhbWw%2BKw%3D%3D&t={relay}")
+    );
+    let cookies: Vec<_> = sent
+        .2
+        .headers
+        .get_all("set-cookie")
+        .iter()
+        .map(|value| value.to_str().unwrap().to_string())
+        .collect();
+    assert!(
+        cookies
+            .iter()
+            .all(|cookie| !cookie.starts_with(SESSION_COOKIE)),
+        "the provider's post signs no one in: {cookies:?}"
+    );
+    assert!(
+        cookies
+            .iter()
+            .any(|cookie| cookie.starts_with("__Host-strata-return=;")
+                && cookie.contains("Max-Age=0")),
+        "{cookies:?}"
+    );
+
+    for (why, body, cookie) in [
+        (
+            "a relay state that is not one this service makes",
+            "SAMLResponse=PHNhbWw%2BKw%3D%3D&RelayState=short".to_string(),
+            None,
+        ),
+        ("no response", format!("RelayState={relay}"), None),
+        (
+            "a response that is not base64",
+            format!("SAMLResponse=%3Cscript%3E&RelayState={relay}"),
+            None,
+        ),
+        (
+            "a return address that is not a path on the site",
+            format!("SAMLResponse=PHNhbWw%2BKw%3D%3D&RelayState={relay}"),
+            Some("__Host-strata-return=%2F%2Fevil.example"),
+        ),
+    ] {
+        let sent = edge.send(post("127.0.0.1", body, cookie)).await;
+        assert_eq!(sent.0, 303, "{why}");
+        let location = sent.2.headers["location"].to_str().unwrap().to_string();
+        if why.starts_with("a return address") {
+            assert!(location.starts_with("/login#m=saml&"), "{why}: {location}");
+        } else {
+            assert_eq!(location, "/login#e=1", "{why}");
+        }
+    }
+
+    let (status, _, _) = edge
+        .send(
+            edge.post("127.0.0.1", "/federation/saml/acs", json!({}))
+                .header("host", "not-a-site.example"),
+        )
+        .await;
+    assert_eq!(status, 404, "a host that is not served");
+
+    let (status, _, _) = edge
+        .get("127.0.0.1", "/federation/saml/metadata/nobody", None)
+        .await;
+    assert_eq!(status, 404, "no such provider");
+}
+
+/// A socket opened as an anonymous visitor, with extra request headers.
+async fn anonymous_socket(edge: &Edge, extra: &[(&'static str, &str)]) -> Upgrade {
+    let token = edge.request_token("127.0.0.1").await;
+    connect_with(
+        edge,
+        Some(edge.origin("127.0.0.1")),
+        None,
+        Some(token.as_str()),
+        extra,
+    )
+    .await
+}
+
+fn throttled(upgrade: &Upgrade) -> bool {
+    matches!(
+        upgrade,
+        Err(tokio_tungstenite::tungstenite::Error::Http(response)) if response.status().as_u16() == 429
+    )
+}
+
+/// Sockets are capped per source address at the BFF. A browser cannot change its source by
+/// sending `X-Forwarded-For` or `x-strata-source` itself: no proxy is trusted, so the peer's
+/// address is the source whatever the headers say.
+#[tokio::test]
+async fn forwarded_headers_from_an_untrusted_peer_do_not_change_the_source() {
+    let edge = start_with(
+        |bff| {
+            bff.limits.sockets_per_source = 2;
+            bff.limits.sockets_per_session = 8;
+        },
+        |_| {},
+    )
+    .await;
+    let mut held = Vec::new();
+    for spoofed in ["203.0.113.1", "203.0.113.2"] {
+        held.push(
+            anonymous_socket(
+                &edge,
+                &[("x-forwarded-for", spoofed), ("x-strata-source", spoofed)],
+            )
+            .await
+            .expect("within the cap"),
+        );
+    }
+    let third = anonymous_socket(
+        &edge,
+        &[
+            ("x-forwarded-for", "203.0.113.3"),
+            ("x-strata-source", "203.0.113.3"),
+        ],
+    )
+    .await;
+    assert!(
+        throttled(&third),
+        "a third socket from one peer, however it signs itself: {third:?}"
+    );
+}
+
+/// Behind a trusted proxy the visitor is the rightmost hop of `X-Forwarded-For` that is not a
+/// trusted proxy: two visitors behind it have their own caps, and a client cannot pass as
+/// another by writing the left of the chain.
+#[tokio::test]
+async fn a_trusted_proxy_passes_the_visitor_through_x_forwarded_for() {
+    let edge = start_with(
+        |bff| {
+            bff.trusted_proxies = vec!["127.0.0.1".parse().unwrap()];
+            bff.limits.sockets_per_source = 1;
+        },
+        |_| {},
+    )
+    .await;
+    let first = anonymous_socket(&edge, &[("x-forwarded-for", "203.0.113.1")]).await;
+    assert!(first.is_ok(), "{first:?}");
+    let other = anonymous_socket(&edge, &[("x-forwarded-for", "203.0.113.2")]).await;
+    assert!(
+        other.is_ok(),
+        "another visitor behind the same proxy: {other:?}"
+    );
+    let again = anonymous_socket(&edge, &[("x-forwarded-for", "203.0.113.1")]).await;
+    assert!(
+        throttled(&again),
+        "the first visitor's second socket: {again:?}"
+    );
+    // The left of the chain is whatever the client wrote; the proxy appended the right.
+    let forged = anonymous_socket(
+        &edge,
+        &[("x-forwarded-for", "198.51.100.77, 203.0.113.1, 127.0.0.1")],
+    )
+    .await;
+    assert!(
+        throttled(&forged),
+        "a chain through the proxy resolves to the rightmost untrusted hop: {forged:?}"
+    );
+    let fresh = anonymous_socket(
+        &edge,
+        &[("x-forwarded-for", "198.51.100.77, 203.0.113.9, 127.0.0.1")],
+    )
+    .await;
+    assert!(fresh.is_ok(), "{fresh:?}");
+    // Without the header the proxy itself is the source, and it has no socket of its own yet.
+    let bare = anonymous_socket(&edge, &[]).await;
+    assert!(bare.is_ok(), "{bare:?}");
+    drop((first, other, fresh, bare));
+}
+
+/// One session may hold only so many sockets through the BFF, and the cap is the BFF's own: the
+/// backend's limits are out of the way here.
+#[tokio::test]
+async fn sockets_are_capped_per_session_at_the_bff() {
+    let edge = start_with(
+        |bff| {
+            bff.limits.sockets_per_session = 2;
+            bff.limits.sockets_per_source = 50;
+        },
+        |backend| {
+            backend.limits.sockets_per_session = 50;
+            backend.limits.sockets_per_source = 50;
+        },
+    )
+    .await;
+    let (token, csrf) = edge.login("127.0.0.1", "ines", "strata-dev-ines").await;
+    let mut held = Vec::new();
+    for _ in 0..2 {
+        held.push(
+            connect(
+                &edge,
+                Some(edge.origin("127.0.0.1")),
+                Some(token.as_str()),
+                Some(csrf.as_str()),
+            )
+            .await
+            .expect("within the cap"),
+        );
+    }
+    let third = connect(
+        &edge,
+        Some(edge.origin("127.0.0.1")),
+        Some(token.as_str()),
+        Some(csrf.as_str()),
+    )
+    .await;
+    assert!(throttled(&third), "{third:?}");
 }

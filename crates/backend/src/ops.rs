@@ -34,6 +34,17 @@ pub fn run_intent(
     intent: &Intent,
     anonymous: bool,
 ) -> Result<Executed, ApiError> {
+    // A change of someone's roles ends their sessions in the commit itself. The ones that are
+    // live now are noted first, to be announced and to have their sockets closed.
+    let affected = match intent {
+        Intent::AssignRole { principal, .. } | Intent::RevokeRole { principal, .. } => app
+            .store
+            .live_sessions(ctx.now)?
+            .into_iter()
+            .filter(|s| s.tenant == ctx.tenant && s.principal == *principal)
+            .collect(),
+        _ => Vec::new(),
+    };
     app.stats.in_flight.fetch_add(1, Ordering::Relaxed);
     let result = execute(app.store.as_ref(), intent, ctx);
     app.stats.in_flight.fetch_sub(1, Ordering::Relaxed);
@@ -54,6 +65,7 @@ pub fn run_intent(
                 }),
             );
             app.hub.committed();
+            crate::auth::announce_ended(app, affected, &ctx.correlation);
         }
         Err(ExecuteError::Domain(error)) => {
             app.stats

@@ -30,6 +30,12 @@ fn memory_store_conforms() {
     );
 }
 
+/// The identity service's documents are kept per tenant and kind.
+#[test]
+fn memory_store_keeps_documents() {
+    conformance::documents_are_scoped_to_their_tenant_and_kind(&MemoryStore::new());
+}
+
 #[test]
 fn the_table_is_read_from_its_markdown() {
     let text = "{\"id\":\"cases-storage-conformance\",\"body\":\"# T\\n\\n## Cases\\n\\n| Case | Establishes |\\n|---|---|\\n| one | a |\\n| two | b |\\n\"},";

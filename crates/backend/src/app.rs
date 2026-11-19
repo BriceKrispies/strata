@@ -2,16 +2,19 @@
 
 use crate::hub::Hub;
 use crate::lab::Lab;
+use crate::limits::{Admission, Limits};
+use crate::mail::Mailer;
+use crate::signin::oidc::Federation;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde_json::json;
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::sync::atomic::AtomicI64;
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
-use strata_kernel::{DomainError, ErrorKind, Timestamp};
+use strata_kernel::{DomainError, ErrorKind, TenantId, Timestamp};
 use strata_protocol::api::{ErrorCode, ErrorReply};
 use strata_protocol::log::{now_ms, Logger};
 use strata_storage_api::{ExecuteError, Store, StoreError};
@@ -32,6 +35,119 @@ pub struct Config {
     pub session_ttl_ms: i64,
     /// A session unused for this long ends.
     pub session_idle_ms: i64,
+    /// How many failed attempts are let through, and for how long a limit holds.
+    pub throttle: ThrottleLimits,
+    /// How long an issued passkey challenge can be answered.
+    pub passkey_challenge_ttl_ms: i64,
+    /// How long an emailed sign-in link is accepted (D-9: fifteen minutes).
+    pub link_ttl_ms: i64,
+    /// Where mail goes. A development sink unless an SMTP server was configured.
+    pub mail: Arc<dyn Mailer>,
+    /// The identity providers of each tenant, and what has been fetched from them.
+    pub federation: Arc<Federation>,
+    /// Second factors, step-up and recovery: which realms ask for a second factor and the
+    /// platform defaults of D-700 for them.
+    pub factors: FactorPolicy,
+    /// What one visitor, session or tenant may cost. See [`Limits`].
+    pub limits: Limits,
+}
+
+/// The key that seals TOTP secrets at rest. It is derived from a platform secret and kept out of
+/// the store, so that a copy of the database alone opens no second factor.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct SealKey(pub [u8; 32]);
+
+impl SealKey {
+    /// A key derived from a platform secret, in a domain of its own.
+    pub fn derive(secret: &str) -> Self {
+        let hex =
+            strata_kernel::canon::hash_bytes(format!("strata/seal-key/v1\0{secret}").as_bytes());
+        let mut key = [0u8; 32];
+        for (slot, pair) in key.iter_mut().zip(hex.as_bytes().chunks(2)) {
+            let pair = std::str::from_utf8(pair).unwrap_or("00");
+            *slot = u8::from_str_radix(pair, 16).unwrap_or(0);
+        }
+        SealKey(key)
+    }
+}
+
+impl std::fmt::Debug for SealKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("SealKey(..)")
+    }
+}
+
+/// What a realm asks of second factors, and the platform defaults of D-700 that go with it.
+#[derive(Clone, Debug)]
+pub struct FactorPolicy {
+    /// The realms whose policy asks for a second factor (IDN-018). An account that has enrolled
+    /// one is asked for it in every realm.
+    pub realm_required: BTreeSet<TenantId>,
+    /// A fresh authentication is one made within this long (D-700: fifteen minutes).
+    pub step_up_age_ms: i64,
+    /// Account recovery completes this long after it was asked for (D-700: twenty-four hours).
+    pub recovery_delay_ms: i64,
+    /// How long a recovery request can be completed once its delay has passed.
+    pub recovery_window_ms: i64,
+    /// Second-factor prompts sent to one account within the window (D-700: five in an hour,
+    /// IDN-268).
+    pub prompts_max: u32,
+    pub prompts_window_ms: i64,
+    /// A waiting sign-in is spent after this many presentations of a second factor (D-700: five,
+    /// IDN-253).
+    pub code_attempts_max: u32,
+    /// How long a sign-in waits for its second factor.
+    pub pending_ttl_ms: i64,
+    /// The key TOTP secrets are sealed under.
+    pub seal_key: SealKey,
+}
+
+impl Default for FactorPolicy {
+    fn default() -> Self {
+        FactorPolicy {
+            realm_required: BTreeSet::new(),
+            step_up_age_ms: 15 * 60_000,
+            recovery_delay_ms: 24 * 3_600_000,
+            recovery_window_ms: 24 * 3_600_000,
+            prompts_max: 5,
+            prompts_window_ms: 3_600_000,
+            code_attempts_max: 5,
+            pending_ttl_ms: 5 * 60_000,
+            seal_key: SealKey::derive("strata development seal key"),
+        }
+    }
+}
+
+/// The limits on failed sign-in attempts. The defaults are the platform defaults of D-700; a
+/// realm may tighten them (D-535).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ThrottleLimits {
+    /// Failed attempts for one account before it is locked (IDN-008).
+    pub account_max: u32,
+    /// How long a locked account refuses attempts.
+    pub account_lock_ms: i64,
+    /// Failures older than this are forgotten, for an account, a source and a realm alike.
+    pub window_ms: i64,
+    /// Failed attempts from one source, across all accounts, before it is refused (IDN-250).
+    pub source_max: u32,
+    /// Failed attempts across one realm within the window after which attempts are slowed
+    /// (IDN-251).
+    pub realm_max: u32,
+    /// The gap kept between attempts of a realm that is slowed.
+    pub realm_interval_ms: i64,
+}
+
+impl Default for ThrottleLimits {
+    fn default() -> Self {
+        ThrottleLimits {
+            account_max: 10,
+            account_lock_ms: 30_000,
+            window_ms: 15 * 60_000,
+            source_max: 100,
+            realm_max: 1000,
+            realm_interval_ms: 1000,
+        }
+    }
 }
 
 /// A bounded list of recent things, newest last.
@@ -132,11 +248,16 @@ pub struct App {
     pub hub: Hub,
     pub stats: Stats,
     pub lab: Lab,
+    /// Socket, sign-in and hashing limits in force.
+    pub admission: Admission,
     pub started_at: i64,
-    /// Failed logins per `tenant/login`: `(count, locked until)`.
-    pub throttle: Mutex<BTreeMap<String, (u32, i64)>>,
     /// Recent security-relevant events, newest last. Reported by the platform diagnostics only.
     pub audit: Recent<serde_json::Value>,
+    /// Milliseconds added to the clock. Zero except in development, where a test moves time
+    /// forward to see a lifetime or a revocation bound pass.
+    pub clock_skew_ms: AtomicI64,
+    /// Development only: the identity service is made to answer as if it could not be reached.
+    pub identity_outage: AtomicBool,
 }
 
 pub type Shared = Arc<App>;
@@ -144,14 +265,16 @@ pub type Shared = Arc<App>;
 impl App {
     pub fn new(cfg: Config, store: Arc<dyn Store>) -> Shared {
         Arc::new(App {
+            lab: Lab::with_limits(&cfg.limits),
+            admission: Admission::new(&cfg.limits),
             cfg,
             store,
             hub: Hub::new(),
             stats: Stats::new(),
-            lab: Lab::new(),
             started_at: now_ms(),
-            throttle: Mutex::new(BTreeMap::new()),
-            audit: Recent::new(200),
+            audit: Recent::new(1000),
+            clock_skew_ms: AtomicI64::new(0),
+            identity_outage: AtomicBool::new(false),
         })
     }
 
@@ -166,9 +289,22 @@ impl App {
         self.audit.push(entry);
     }
 
+    /// Record an authentication decision: the method, the outcome and the checks evaluated
+    /// (IDN-021). It names no secret, and no account that was not signed in (IDN-022).
+    pub fn decision(&self, method: &str, outcome: &str, checks: &[&str], correlation: &str) {
+        self.audit.push(json!({
+            "at": now_ms(),
+            "event": "auth.decision",
+            "correlation": correlation,
+            "method": method,
+            "outcome": outcome,
+            "checks": checks,
+        }));
+    }
+
     /// The one place the backend reads the clock for domain purposes.
     pub fn now(&self) -> Timestamp {
-        Timestamp(now_ms())
+        Timestamp(now_ms() + self.clock_skew_ms.load(Ordering::Relaxed))
     }
 
     /// Run store work off the async threads.
