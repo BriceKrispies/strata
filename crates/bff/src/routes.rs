@@ -120,6 +120,8 @@ pub fn origin_allowed(bff: &Bff, headers: &HeaderMap) -> bool {
 }
 
 /// Call the backend's internal API as this visit.
+///
+/// Implements: H-007
 pub async fn backend<T: DeserializeOwned>(
     bff: &Bff,
     visit: &Visit,
@@ -169,6 +171,7 @@ pub async fn backend<T: DeserializeOwned>(
 
 /// The session cookie, as `__Host-` requires: `Secure`, `Path=/` and no `Domain`. Browsers treat
 /// `http://localhost` and `http://127.0.0.1` as secure contexts and accept it there.
+/// Implements: H-006
 fn session_cookie(token: &str, max_age: i64) -> HeaderValue {
     HeaderValue::from_str(&format!(
         "{COOKIE}={token}; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age={max_age}"

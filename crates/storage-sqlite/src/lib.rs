@@ -118,6 +118,7 @@ const MIGRATIONS: &[(u32, &str, &str)] = &[(
 /// Index values longer than this are not indexed; lookups for them scan the object type.
 const MAX_INDEXED: usize = 240;
 
+/// Implements: H-008
 pub struct SqliteStore {
     conn: Mutex<Connection>,
     location: String,

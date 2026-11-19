@@ -51,6 +51,8 @@ pub fn hash_of<T: Serialize>(value: &T) -> String {
 }
 
 /// Lower-case hex SHA-256 of raw bytes.
+///
+/// Implements: H-010
 pub fn hash_bytes(bytes: &[u8]) -> String {
     let digest = Sha256::digest(bytes);
     let mut hex = String::with_capacity(64);

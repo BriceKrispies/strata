@@ -60,6 +60,7 @@ impl Issuer {
     }
 
     /// A fresh token for the browser of `site`, good until `now_ms` plus its lifetime.
+    /// Implements: H-004
     pub fn issue(&self, site: &str, now_ms: i64) -> String {
         let mut nonce = [0u8; 8];
         let _ = getrandom::getrandom(&mut nonce);
@@ -68,6 +69,7 @@ impl Issuer {
     }
 
     /// Whether this process issued `token` for `site` and it has not expired.
+    /// Implements: H-005
     pub fn check(&self, site: &str, token: &str, now_ms: i64) -> bool {
         let mut parts = token.split('.');
         let (Some(expires), Some(nonce), Some(mac), None) =
