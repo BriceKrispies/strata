@@ -33,7 +33,7 @@ pub mod sqlite;
 pub mod store;
 pub mod telemetry;
 
-pub use client::{CallError, Client, Credentials, NoCredentials};
+pub use client::{CallBackoff, CallError, CallRetry, Client, Credentials, NoCredentials};
 pub use clock::{Clock, SystemClock, TestClock, Time};
 pub use host::{
     Committed, DispatchError, DispatchReport, Dispatcher, Envelope, Handled, Host, HostError,
