@@ -24,6 +24,16 @@ pub const SHAPE: &str = "specc.spec-shape";
 
 /// Loads a specification. `path` is the path to print in headers and diagnostics.
 pub fn load(path: &str, text: &str) -> Result<Spec, Vec<Diagnostic>> {
+    load_with_client_machines(path, text).map(|(spec, _)| spec)
+}
+
+/// Loads a specification and, apart from it, the implementation-level machines whose `subject`
+/// is a component of category `client`. Those are not in `Spec::machines`: the browser runs
+/// them, and [`crate::web`] generates them as JavaScript instead of the Rust backend.
+pub fn load_with_client_machines(
+    path: &str,
+    text: &str,
+) -> Result<(Spec, Vec<Behavior>), Vec<Diagnostic>> {
     let value = jsonc::parse(text).map_err(|e| {
         vec![Diagnostic::new(
             SYNTAX,
@@ -35,7 +45,7 @@ pub fn load(path: &str, text: &str) -> Result<Spec, Vec<Diagnostic>> {
     let spec = loader.spec(path, &value);
     if loader.diagnostics.is_empty() {
         if let Some(spec) = spec {
-            return Ok(spec);
+            return Ok((spec, loader.client_machines));
         }
     }
     Err(loader.diagnostics)
@@ -44,6 +54,7 @@ pub fn load(path: &str, text: &str) -> Result<Spec, Vec<Diagnostic>> {
 #[derive(Default)]
 pub(crate) struct Loader {
     diagnostics: Vec<Diagnostic>,
+    client_machines: Vec<Behavior>,
 }
 
 pub(crate) type Obj = Map<String, Value>;
@@ -109,12 +120,31 @@ impl Loader {
             .into_iter()
             .filter_map(|(entity, obj)| self.event(&entity, obj))
             .collect();
-        let machines = self
-            .section(top, "behaviors")
+        let client_components: Vec<&str> = top
+            .get("components")
+            .and_then(Value::as_array)
             .into_iter()
-            .filter(|(_, obj)| obj.get("level").and_then(Value::as_str) == Some("implementation"))
-            .filter_map(|(entity, obj)| self.behavior(&entity, obj))
+            .flatten()
+            .filter(|c| c.get("category").and_then(Value::as_str) == Some("client"))
+            .filter_map(|c| c.get("id").and_then(Value::as_str))
             .collect();
+        let mut machines = Vec::new();
+        for (entity, obj) in self.section(top, "behaviors") {
+            if obj.get("level").and_then(Value::as_str) != Some("implementation") {
+                continue;
+            }
+            let client = obj
+                .get("subject")
+                .and_then(Value::as_str)
+                .is_some_and(|s| client_components.contains(&s));
+            if let Some(b) = self.behavior(&entity, obj) {
+                if client {
+                    self.client_machines.push(b);
+                } else {
+                    machines.push(b);
+                }
+            }
+        }
         let constructs = self.constructs(top);
         Some(Spec {
             path: path.replace('\\', "/"),

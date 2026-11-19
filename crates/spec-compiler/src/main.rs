@@ -9,7 +9,13 @@
 //! specc check-e2e    --spec <file> --out <dir>
 //! specc scenarios       --spec <file> --out <dir> [--crate-name <name>] [--exegra-project <id>] [--exegra-specs <dir>]
 //! specc check-scenarios --spec <file> --out <dir> [--crate-name <name>] [--exegra-project <id>] [--exegra-specs <dir>]
+//! specc web          --spec <file> --out <dir>
+//! specc check-web    --spec <file> --out <dir>
 //! ```
+//!
+//! `web` and `check-web` generate the machines of client components as JavaScript modules for
+//! the browser (`strata_spec_compiler::web`), conventionally into `web/src/generated`; `generate`
+//! leaves those machines out of the Rust crate.
 //!
 //! `scenarios` writes `scenarios.rs` into `<dir>` (a generated crate's `tests` directory): one
 //! test per scenario that runs only implementation machines, with the expectations Exegra
@@ -37,7 +43,7 @@ use std::process::ExitCode;
 
 use strata_spec_compiler::emit::relative_path;
 use strata_spec_compiler::{
-    deploy, e2e, generate, output, scenarios, GeneratedFile, Options, RuntimeDependency,
+    deploy, e2e, generate, output, scenarios, web, GeneratedFile, Options, RuntimeDependency,
 };
 
 const USAGE: &str = "usage:
@@ -48,7 +54,9 @@ const USAGE: &str = "usage:
   specc e2e          --spec <file> --out <dir>
   specc check-e2e    --spec <file> --out <dir>
   specc scenarios       --spec <file> --out <dir> [--crate-name <name>] [--exegra-project <id>] [--exegra-specs <dir>]
-  specc check-scenarios --spec <file> --out <dir> [--crate-name <name>] [--exegra-project <id>] [--exegra-specs <dir>]";
+  specc check-scenarios --spec <file> --out <dir> [--crate-name <name>] [--exegra-project <id>] [--exegra-specs <dir>]
+  specc web          --spec <file> --out <dir>
+  specc check-web    --spec <file> --out <dir>";
 
 /// The runtime crate of the checkout specc was built from.
 const DEFAULT_RUNTIME: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../runtime");
@@ -63,6 +71,8 @@ enum Command {
     CheckE2e,
     Scenarios,
     CheckScenarios,
+    Web,
+    CheckWeb,
 }
 
 struct Args {
@@ -85,6 +95,8 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
         Some((c, rest)) if c == "check-e2e" => (Command::CheckE2e, rest),
         Some((c, rest)) if c == "scenarios" => (Command::Scenarios, rest),
         Some((c, rest)) if c == "check-scenarios" => (Command::CheckScenarios, rest),
+        Some((c, rest)) if c == "web" => (Command::Web, rest),
+        Some((c, rest)) if c == "check-web" => (Command::CheckWeb, rest),
         Some((c, _)) => return Err(format!("unknown command \"{c}\"")),
         None => return Err("no command given".to_string()),
     };
@@ -116,7 +128,12 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
     let out = PathBuf::from(out.ok_or("--out is required")?);
     let deploys = matches!(
         command,
-        Command::Deploy | Command::CheckDeploy | Command::E2e | Command::CheckE2e
+        Command::Deploy
+            | Command::CheckDeploy
+            | Command::E2e
+            | Command::CheckE2e
+            | Command::Web
+            | Command::CheckWeb
     );
     if deploys && crate_name.is_some() {
         return Err("--crate-name does not apply to deploy or e2e".to_string());
@@ -171,6 +188,9 @@ fn main() -> ExitCode {
     if matches!(args.command, Command::E2e | Command::CheckE2e) {
         return run_e2e(&args, &text);
     }
+    if matches!(args.command, Command::Web | Command::CheckWeb) {
+        return run_web(&args, &text);
+    }
     if matches!(args.command, Command::Scenarios | Command::CheckScenarios) {
         return run_scenarios(&args, &text);
     }
@@ -208,7 +228,9 @@ fn main() -> ExitCode {
         | Command::E2e
         | Command::CheckE2e
         | Command::Scenarios
-        | Command::CheckScenarios => ExitCode::from(2),
+        | Command::CheckScenarios
+        | Command::Web
+        | Command::CheckWeb => ExitCode::from(2),
     }
 }
 
@@ -233,6 +255,27 @@ fn run_deploy(args: &Args, text: &str) -> ExitCode {
     match args.command {
         Command::CheckDeploy => run_check(&args.out, &output.files),
         _ => run_generate(&args.out, &output.files),
+    }
+}
+
+fn run_web(args: &Args, text: &str) -> ExitCode {
+    let files = match web::generate(&args.spec, text) {
+        Ok(files) => files,
+        Err(diagnostics) => {
+            for d in &diagnostics {
+                eprintln!("{d}");
+            }
+            eprintln!(
+                "specc: refused {} with {} diagnostic(s); nothing was written",
+                args.spec,
+                diagnostics.len()
+            );
+            return ExitCode::from(1);
+        }
+    };
+    match args.command {
+        Command::CheckWeb => run_check(&args.out, &files),
+        _ => run_generate(&args.out, &files),
     }
 }
 
