@@ -64,7 +64,20 @@ for (const step of trace.steps) {
   }
 
   const before = JSON.stringify(vars);
-  const outcome = machine.step(state, vars, { event: id, payload: step.event.payload ?? {} }, time);
+  let outcome;
+  try {
+    outcome = machine.step(state, vars, { event: id, payload: step.event.payload ?? {} }, time);
+  } catch (error) {
+    // Exegra lists every machine of the scenario that did not fire as ignored, including one that
+    // has no transition on the event at all. The generated machine refuses an event it does not
+    // receive (as the Rust machine does), which is the same outcome: nothing changes. Any other
+    // error, or a refusal where Exegra fired, is a disagreement.
+    if (!fired && error?.name === 'StepError' && error.kind === 'invalid-event') {
+      checkMachine(`${context}, not received`, state, vars, step.config);
+      continue;
+    }
+    throw error;
+  }
   assert.equal(JSON.stringify(vars), before, `${context}: the step changed its input variables`);
 
   if (!fired) {
