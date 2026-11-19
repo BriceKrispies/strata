@@ -1466,3 +1466,64 @@ async fn authorship_is_shown_to_the_author_only() {
         Json::Null
     );
 }
+
+/// An author record's login identity is read by the author it names, by editors and by owners,
+/// and by nobody else, in every view a visitor can open.
+#[tokio::test]
+async fn an_authors_login_name_is_not_in_any_public_view() {
+    let backend = start().await;
+    let paths = [
+        "/",
+        "/about",
+        "/topics",
+        "/topics/craft",
+        "/authors",
+        "/authors/ines-okafor",
+        "/authors/tomasz-wren",
+        "/posts/the-jig-is-the-work",
+        "/posts/what-the-kiln-decides",
+        "/search",
+    ];
+    for path in paths {
+        let view = backend.view("fieldnotes", None, path).await;
+        let text = view.to_string();
+        for login in ["user:ines", "user:tomasz", "user:mirela", "user:admin"] {
+            assert!(!text.contains(login), "{path} told a visitor {login}");
+        }
+    }
+    // The authors are still there, only without the field.
+    let authors = backend.view("fieldnotes", None, "/authors").await;
+    let rows = authors["sections"]["authors"]["rows"].as_array().unwrap();
+    assert_eq!(rows.len(), 3);
+    assert!(rows
+        .iter()
+        .all(|row| row["fields"].get("principal").is_none()));
+
+    // An author reads her own login identity, and only hers.
+    let tomasz = backend
+        .login("fieldnotes", "tomasz", "strata-dev-tomasz")
+        .await;
+    let own = backend
+        .view("fieldnotes", Some(&tomasz), "/authors")
+        .await
+        .to_string();
+    assert!(own.contains("user:tomasz"));
+    assert!(!own.contains("user:ines") && !own.contains("user:mirela"));
+    let desk = backend
+        .view("fieldnotes", Some(&tomasz), "/desk/new")
+        .await
+        .to_string();
+    assert!(
+        desk.contains("user:tomasz"),
+        "the new-article form can preselect her"
+    );
+    assert!(!desk.contains("user:ines") && !desk.contains("user:mirela"));
+
+    // An editor reads them all.
+    let ines = backend.login("fieldnotes", "ines", "strata-dev-ines").await;
+    let all = backend
+        .view("fieldnotes", Some(&ines), "/authors")
+        .await
+        .to_string();
+    assert!(all.contains("user:tomasz") && all.contains("user:mirela"));
+}

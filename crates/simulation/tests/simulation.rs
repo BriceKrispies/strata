@@ -59,6 +59,7 @@ fn require_excerpt(existing: ExistingData, before_step: usize) -> Proposal {
                 required: true,
                 unique: false,
                 default: None,
+                read: None,
             },
         }],
         existing,

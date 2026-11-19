@@ -59,6 +59,7 @@ pub fn field_def(id: &str, ty: FieldType, required: bool) -> FieldDef {
         required,
         unique: false,
         default: None,
+        read: None,
     }
 }
 

@@ -839,3 +839,36 @@ test('sign-in, publish and unpublish are logged as domain events, with their all
   await expect(page.locator('.toast', { hasText: 'Deleted.' })).toBeVisible();
   await line('record.deleted', { tenant: 'fieldnotes', object: 'post', id: created.id });
 });
+
+test('a visitor learns no login name from the authors, and a signed-in author is still preselected', async ({ page, browser }) => {
+  // Anonymous: the authors page, its data and a post's byline carry no login identity.
+  await open(page, '/authors');
+  await expect(page.getByRole('link', { name: 'Tomasz Wren' })).toBeVisible();
+  expect(await page.locator('body').innerText()).not.toContain('user:');
+  for (const path of ['/authors', '/authors/tomasz-wren', '/', '/posts/the-jig-is-the-work']) {
+    const text = await (await page.request.get(`/api/view?path=${path}`)).text();
+    expect(text, `the view of ${path}`).not.toContain('user:');
+  }
+
+  // An author is preselected in the new-article form: the hidden author field holds her own record.
+  const tomasz = await browser.newContext();
+  const tomaszPage = await tomasz.newPage();
+  await signIn(tomaszPage, 'tomasz');
+  const authors = (await (await tomaszPage.request.get('/api/view?path=/authors')).json()).data.authors;
+  const mine = authors.find((a) => a.fields.slug === 'tomasz-wren');
+  expect(mine.fields.principal).toBe('user:tomasz');
+  expect(authors.filter((a) => a.fields.principal != null)).toHaveLength(1);
+  await open(tomaszPage, '/desk/new');
+  await expect(tomaszPage.locator('input[name="author"]')).toHaveValue(String(mine.id));
+  await tomasz.close();
+
+  // An editor chooses the author, and her own is the one selected.
+  const ines = await browser.newContext();
+  const inesPage = await ines.newPage();
+  await signIn(inesPage, 'ines');
+  await open(inesPage, '/desk/new');
+  await expect(inesPage.getByLabel('Author')).toHaveText(/Tomasz Wren/);
+  const selected = await inesPage.getByLabel('Author').evaluate((select) => select.selectedOptions[0].textContent);
+  expect(selected).toMatch(/In[eè]s Okafor/);
+  await ines.close();
+});

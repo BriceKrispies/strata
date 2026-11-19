@@ -192,6 +192,7 @@ pub fn overview(app: &App, identity: &Identity) -> Result<Json, ApiError> {
                     "required": f.required,
                     "unique": f.unique,
                     "default": f.default.as_ref().map(|d| d.to_string()),
+                    "read": f.read.as_ref().map(|r| r.to_string()),
                 })).collect::<Vec<_>>(),
                 "constraints": object.constraints.values().map(|c| json!({
                     "id": c.id.as_str(), "rule": c.expr.to_string(), "message": c.message,

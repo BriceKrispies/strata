@@ -831,6 +831,7 @@ fn apply_change(schema: &mut TenantSchema, change: &SchemaChange) -> Result<Stri
                 required: *required,
                 unique: false,
                 default: None,
+                read: None,
             };
             object(schema, id)?.fields.insert(field.clone(), def);
             format!("define relationship {id}.{field} -> {target}")

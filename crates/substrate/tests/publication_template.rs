@@ -660,3 +660,99 @@ fn an_author_publishes_only_her_own_post_and_the_time_is_stamped_not_chosen() {
     // An editor publishes anyone's.
     assert!(world.step(&publish(&[]), &ctx(user("ed"))).is_ok());
 }
+
+/// The author's `principal` is the login identity. It is readable by the author it names, by
+/// editors and by owners, and left out of every read for anyone else: direct reads, every named
+/// query, and the included authors of a post. Notices carry no record contents at all.
+#[test]
+fn an_authors_login_identity_is_read_only_by_that_author_and_editors() {
+    let world = world();
+    let principal = FieldId::new("principal").unwrap();
+    let gazette = TenantId::new("gazette").unwrap();
+    let schema = &world.tenants[&gazette].schema;
+    let author = ObjectTypeId::new("author").unwrap();
+
+    let all_authors = ReadRequest::Named {
+        query: QueryId::new("authors").unwrap(),
+        params: BTreeMap::new(),
+    };
+    let principals_seen_by = |who: Principal| -> Vec<Option<String>> {
+        world
+            .read(&all_authors, &ctx(who))
+            .unwrap()
+            .rows
+            .iter()
+            .map(|row| {
+                row.fields
+                    .get(&principal)
+                    .and_then(|v| v.as_str())
+                    .map(String::from)
+            })
+            .collect()
+    };
+    for who in [Principal::Anonymous, user("nobody-at-all")] {
+        assert_eq!(principals_seen_by(who.clone()), [None, None], "{who:?}");
+    }
+    // Bob is an author: he reads his own and not Ann's. Rows are ordered by name: Ann, Bob.
+    assert_eq!(
+        principals_seen_by(user("bob")),
+        [None, Some("user:bob".to_string())]
+    );
+    assert_eq!(
+        principals_seen_by(user("ann")),
+        [Some("user:ann".to_string()), None]
+    );
+    assert_eq!(
+        principals_seen_by(user("ed")),
+        [Some("user:ann".to_string()), Some("user:bob".to_string())]
+    );
+    assert_eq!(
+        principals_seen_by(user("admin")),
+        [Some("user:ann".to_string()), Some("user:bob".to_string())]
+    );
+
+    // A direct read by id says the same.
+    let direct = ReadRequest::Records {
+        object: author.clone(),
+        ids: world.tenants[&gazette].records[&author]
+            .keys()
+            .copied()
+            .collect(),
+    };
+    let rows = world
+        .read(&direct, &ctx(Principal::Anonymous))
+        .unwrap()
+        .rows;
+    assert_eq!(rows.len(), 2);
+    assert!(rows.iter().all(|r| !r.fields.contains_key(&principal)));
+
+    // Every public view, every section: no login name in any row.
+    for path in ["/", "/authors", "/authors/ann", "/topics/craft", "/search"] {
+        let (view, route) = match_route(schema, path).expect("route matches");
+        let mut done = BTreeMap::new();
+        for name in section_order(view) {
+            let request = section_request(&view.sections[name], &route, &BTreeMap::new(), &done);
+            let rows = world
+                .read(&request, &ctx(Principal::Anonymous))
+                .unwrap()
+                .rows;
+            for row in &rows {
+                // Authorship (`created_by`) is trimmed by the backend; the fields are the kernel's.
+                let fields = format!("{:?}", row.fields);
+                assert!(!fields.contains("user:"), "{path}: {fields}");
+            }
+            if view.sections[name].single {
+                done.insert(name.clone(), rows.first().cloned());
+            }
+        }
+    }
+
+    // The policy that matches a post's author to the writer still holds: it reads the whole
+    // record on the server.
+    assert!(world
+        .step(&new_post("by-ann", ANN_AUTHOR, &[]), &ctx(user("ann")))
+        .is_ok());
+    assert!(world
+        .step(&new_post("as-ann", ANN_AUTHOR, &[]), &ctx(user("bob")))
+        .is_err());
+}

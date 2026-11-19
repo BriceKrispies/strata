@@ -21,6 +21,13 @@ pub struct FieldDef {
     pub unique: bool,
     /// Evaluated on create when the intent leaves the field out.
     pub default: Option<Expr>,
+    /// Who may read the field's value. Evaluated per record on every read, with `record`, the
+    /// principal and its roles in scope; where it is not `true` the value is left out of what
+    /// the reader receives (views, included records, lookups by id). Policy conditions, queries
+    /// and constraints run server-side on the whole record and are not affected. `None` means
+    /// every reader of the record reads the field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub read: Option<Expr>,
 }
 
 /// A rule every record of the object type must satisfy. Violated only when it evaluates to
@@ -263,6 +270,15 @@ impl TenantSchema {
                     };
                     if let Err(e) = expr::check(default, &env) {
                         problems.push(format!("{at}: default: {e}"));
+                    }
+                }
+                if let Some(read) = &field.read {
+                    match expr::check(read, &env) {
+                        Ok(expr::Shape::Bool | expr::Shape::Any) => {}
+                        Ok(shape) => {
+                            problems.push(format!("{at}: read is {shape:?}, not a truth value"))
+                        }
+                        Err(e) => problems.push(format!("{at}: read: {e}")),
                     }
                 }
             }

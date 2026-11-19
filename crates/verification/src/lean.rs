@@ -162,6 +162,7 @@ fn field_def(n: u64, required: bool) -> FieldDef {
         required,
         unique: false,
         default: None,
+        read: None,
     }
 }
 
