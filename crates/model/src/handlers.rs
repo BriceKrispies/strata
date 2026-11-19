@@ -183,23 +183,3 @@ pub mod commit_flow_impl {}
 ///
 /// The specification does not say how these events arrive, so nothing is generated for them: `src-attempt`.
 pub mod source_throttle_flow_impl {}
-
-/// How events reach machine `client-session-flow-impl` (Client session (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `ui-session-read`, `ui-signed-in`, `ui-signed-out`, `ui-session-ended`.
-pub mod client_session_flow_impl {}
-
-/// How events reach machine `client-live-flow-impl` (Live connection (implementation)).
-///
-/// Arrivals:
-///
-/// - `ui-live-heartbeat-due`: fired by the machine's own timers.
-/// - `ui-live-reconnect-due`: fired by the machine's own timers.
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `ui-live-start`, `ui-live-welcome`, `ui-live-frame`, `ui-live-pong`, `ui-live-closed`, `ui-live-reset`.
-pub mod client_live_flow_impl {}
-
-/// How events reach machine `client-submit-flow-impl` (Form submission (implementation)).
-///
-/// The specification does not say how these events arrive, so nothing is generated for them: `ui-form-submitted`, `ui-form-accepted`, `ui-form-refused`.
-pub mod client_submit_flow_impl {}
