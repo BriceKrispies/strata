@@ -9179,7 +9179,15 @@
         }
       ]},
     {"id":"ui-forged-requests-refused","name":"Requests that skip the page are refused","verifies":["gwy-002"],"browsers":["visitor"],"description":"Journey of tests/e2e/site.spec.js, test 8: \"requests that skip the page are refused: no session, no CSRF token, foreign origin\".","steps":[{"apiCall":{"method":"POST","path":"/api/records","anonymous":true,"headers":{"origin":"http://127.0.0.1:4200"},"body":{"op":"create","object":"category","fields":{"name":"Forged","slug":"forged"}},"expectStatus":401}},{"goto":{"screen":"screen-sign-in"}},{"fill":{"form":"form-sign-in","field":"login","value":"ines"}},{"fill":{"form":"form-sign-in","field":"password","value":"strata-dev-ines"}},{"submit":{"form":"form-sign-in"}},{"expectRole":{"role":"heading","level":1,"name":"Writing desk"}},{"apiCall":{"method":"POST","path":"/api/records","headers":{"origin":"http://127.0.0.1:4200"},"body":{"op":"create","object":"category","fields":{"name":"Forged","slug":"forged"}},"expectStatus":403}},{"apiCall":{"method":"POST","path":"/api/records","headers":{"origin":"http://evil.example","x-csrf-token":"x"},"body":{"op":"create","object":"category","fields":{"name":"Forged","slug":"forged"}},"expectStatus":403}},{"goto":{"screen":"screen-topics"}},{"expectNoText":{"text":"Forged"}}]},
-    {"id":"ui-author-writes-publishes-live","name":"An author writes a draft, sees validation from the kernel, publishes, and readers see it live","verifies":["cms-154","cms-003","cms-011","uxa-201","uxa-212","run-001"],"browsers":["reader","author","visitor"],"description":"Journey of tests/e2e/site.spec.js, test 9: \"an author writes a draft, sees validation from the kernel, publishes, and readers see it live\". Hand-written test keeps: the screenshots, which assert nothing.","steps":[
+    {"id":"ui-author-writes-publishes-live","name":"An author signs in, writes a draft, publishes it live to readers, unpublishes, deletes and signs out, and the backend logs each step","verifies":[
+        "cms-154",
+        "cms-003",
+        "cms-011",
+        "uxa-201",
+        "uxa-212",
+        "run-001",
+        "obs-001"
+      ],"browsers":["reader","author","visitor"],"description":"Journey of tests/e2e/site.spec.js, test 9: \"an author writes a draft, sees validation from the kernel, publishes, and readers see it live\", extended into the whole round trip with the backend's structured log lines after each step (WG-4897): sign-in, draft, publish, the reader refreshed live, unpublish, delete and sign-out, each line linked by its correlation to a request a browser sent, and no secret in any line. Hand-written test keeps: the screenshots, which assert nothing.","steps":[
         {
           "goto": {
             "screen": "screen-front-page"
@@ -9238,6 +9246,23 @@
               "tenant": "fieldnotes",
               "principal": "user:tomasz",
               "method": "password"
+            }
+          }
+        },
+        {
+          "capture": {
+            "name": "authorSession",
+            "from": "cookie",
+            "cookie": "__Host-strata_sid"
+          }
+        },
+        {
+          "apiCall": {
+            "method": "GET",
+            "path": "/api/session",
+            "expectStatus": 200,
+            "capture": {
+              "authorCsrf": "session.csrf_token"
             }
           }
         },
@@ -9494,6 +9519,11 @@
           "switchBrowser": "reader"
         },
         {
+          "waitFor": {
+            "event": "ui-notice-received"
+          }
+        },
+        {
           "expectRole": {
             "role": "heading",
             "name": "On Sharpening"
@@ -9562,6 +9592,11 @@
           "switchBrowser": "reader"
         },
         {
+          "waitFor": {
+            "event": "ui-notice-received"
+          }
+        },
+        {
           "expectRole": {
             "role": "heading",
             "level": 1,
@@ -9608,10 +9643,285 @@
             "namePattern": "On Sharpening",
             "count": 0
           }
+        },
+        {
+          "clickAction": {
+            "action": "act-sign-out-desk"
+          }
+        },
+        {
+          "expectText": {
+            "text": "Signed out.",
+            "within": {
+              "role": "region",
+              "name": "Messages"
+            }
+          }
+        },
+        {
+          "expectLog": {
+            "service": "backend",
+            "event": "session-ended",
+            "fields": {
+              "tenant": "fieldnotes"
+            }
+          }
+        },
+        {
+          "expectCookie": {
+            "name": "__Host-strata_sid",
+            "absent": true
+          }
+        },
+        {
+          "logScan": {
+            "forbid": [
+              "${authorSession}",
+              "${authorCsrf}",
+              "strata-dev-"
+            ]
+          }
         }
       ]},
-    {"id":"ui-author-cannot-edit-others","name":"An author cannot edit another author’s article; an editor can","verifies":["krn-003","krn-004"],"description":"Journey of tests/e2e/site.spec.js, test 10: \"an author cannot edit another author’s article; an editor can\".","steps":[{"goto":{"screen":"screen-sign-in"}},{"fill":{"form":"form-sign-in","field":"login","value":"mirela"}},{"fill":{"form":"form-sign-in","field":"password","value":"strata-dev-mirela"}},{"submit":{"form":"form-sign-in"}},{"expectRole":{"role":"heading","level":1,"name":"Writing desk"}},{"expectCount":{"role":"row","namePattern":"The Jig Is the Work","count":0}},{"expectRole":{"role":"row","namePattern":"What the Kiln Decides"}},{"goto":{"screen":"screen-desk-edit","params":{"slug":"notes-toward-a-workbench"}}},{"expectRole":{"role":"heading","level":1,"name":"There is nothing at this address"}},{"apiCall":{"method":"GET","path":"/api/session","expectStatus":200,"capture":{"csrf":"session.csrf_token"}}},{"apiCall":{"method":"POST","path":"/api/records","headers":{"origin":"http://127.0.0.1:4200","x-csrf-token":"${csrf}"},"body":{"op":"update","object":"post","id":15,"fields":{"title":"Taken over"}},"expectStatus":403,"expectJson":{"failed.0.rule":"policy:authors_own_posts"}}}]},
-    {"id":"ui-session-ends","name":"A session that ends is noticed at once and the page falls back to signed out","verifies":["idn-013"],"description":"Journey of tests/e2e/site.spec.js, test 11: \"a session that ends is noticed at once and the page falls back to signed out\".","steps":[{"goto":{"screen":"screen-sign-in"}},{"fill":{"form":"form-sign-in","field":"login","value":"tomasz"}},{"fill":{"form":"form-sign-in","field":"password","value":"strata-dev-tomasz"}},{"submit":{"form":"form-sign-in"}},{"expectRole":{"role":"heading","level":1,"name":"Writing desk"}},{"expectAttribute":{"role":"status","name":"Live connection","attribute":"data-connection","value":"open"}},{"mark":"loaded"},{"apiCall":{"method":"GET","path":"/api/session","expectStatus":200,"capture":{"csrf":"session.csrf_token"}}},{"apiCall":{"method":"POST","path":"/api/dev/expire-session","headers":{"origin":"http://127.0.0.1:4200","x-csrf-token":"${csrf}"},"expectJson":{"expired":true}}},{"expectText":{"text":"Your session has expired. Sign in again to keep writing.","within":{"role":"region","name":"Messages"}}},{"expectRole":{"role":"heading","level":1,"name":"Sign in to continue"}},{"expectNoReload":"loaded"},{"apiCall":{"method":"POST","path":"/api/records","headers":{"origin":"http://127.0.0.1:4200","x-csrf-token":"stale"},"body":{"op":"delete","object":"post","id":9},"expectStatus":401}}]},
+    {"id":"ui-author-cannot-edit-others","name":"An author cannot edit another author’s article; an editor can","verifies":["krn-003","krn-004"],"description":"Journey of tests/e2e/site.spec.js, test 10: \"an author cannot edit another author’s article; an editor can\".","steps":[
+        {
+          "goto": {
+            "screen": "screen-sign-in"
+          }
+        },
+        {
+          "fill": {
+            "form": "form-sign-in",
+            "field": "login",
+            "value": "mirela"
+          }
+        },
+        {
+          "fill": {
+            "form": "form-sign-in",
+            "field": "password",
+            "value": "strata-dev-mirela"
+          }
+        },
+        {
+          "submit": {
+            "form": "form-sign-in"
+          }
+        },
+        {
+          "expectRole": {
+            "role": "heading",
+            "level": 1,
+            "name": "Writing desk"
+          }
+        },
+        {
+          "expectCount": {
+            "role": "row",
+            "namePattern": "The Jig Is the Work",
+            "count": 0
+          }
+        },
+        {
+          "expectRole": {
+            "role": "row",
+            "namePattern": "What the Kiln Decides"
+          }
+        },
+        {
+          "goto": {
+            "screen": "screen-desk-edit",
+            "params": {
+              "slug": "notes-toward-a-workbench"
+            }
+          }
+        },
+        {
+          "expectRole": {
+            "role": "heading",
+            "level": 1,
+            "name": "There is nothing at this address"
+          }
+        },
+        {
+          "apiCall": {
+            "method": "GET",
+            "path": "/api/session",
+            "expectStatus": 200,
+            "capture": {
+              "csrf": "session.csrf_token"
+            }
+          }
+        },
+        {
+          "apiCall": {
+            "method": "POST",
+            "path": "/api/records",
+            "headers": {
+              "origin": "http://127.0.0.1:4200",
+              "x-csrf-token": "${csrf}"
+            },
+            "body": {
+              "op": "update",
+              "object": "post",
+              "id": 15,
+              "fields": {
+                "title": "Taken over"
+              }
+            },
+            "expectStatus": 404,
+            "expectJson": {
+              "code": "not_found"
+            }
+          }
+        },
+        {
+          "apiCall": {
+            "method": "POST",
+            "path": "/api/records",
+            "headers": {
+              "origin": "http://127.0.0.1:4200",
+              "x-csrf-token": "${csrf}"
+            },
+            "body": {
+              "op": "update",
+              "object": "post",
+              "id": 9999,
+              "fields": {
+                "title": "Taken over"
+              }
+            },
+            "expectStatus": 404,
+            "expectJson": {
+              "code": "not_found"
+            }
+          }
+        },
+        {
+          "apiCall": {
+            "method": "POST",
+            "path": "/api/records",
+            "headers": {
+              "origin": "http://127.0.0.1:4200",
+              "x-csrf-token": "${csrf}"
+            },
+            "body": {
+              "op": "update",
+              "object": "post",
+              "id": 14,
+              "fields": {
+                "title": "Taken over"
+              }
+            },
+            "expectStatus": 403,
+            "expectJson": {
+              "failed.0.rule": "policy:authors_own_posts"
+            }
+          }
+        }
+      ]},
+    {"id":"ui-session-ends","name":"A session that ends is noticed at once and the page falls back to signed out","verifies":["idn-013"],"description":"Journey of tests/e2e/site.spec.js, test 11: \"a session that ends is noticed at once and the page falls back to signed out\".","steps":[
+        {
+          "goto": {
+            "screen": "screen-sign-in"
+          }
+        },
+        {
+          "fill": {
+            "form": "form-sign-in",
+            "field": "login",
+            "value": "admin"
+          }
+        },
+        {
+          "fill": {
+            "form": "form-sign-in",
+            "field": "password",
+            "value": "strata-dev-admin"
+          }
+        },
+        {
+          "submit": {
+            "form": "form-sign-in"
+          }
+        },
+        {
+          "expectRole": {
+            "role": "heading",
+            "level": 1,
+            "name": "Writing desk"
+          }
+        },
+        {
+          "expectAttribute": {
+            "role": "status",
+            "name": "Live connection",
+            "attribute": "data-connection",
+            "value": "open"
+          }
+        },
+        {
+          "mark": "loaded"
+        },
+        {
+          "apiCall": {
+            "method": "GET",
+            "path": "/api/session",
+            "expectStatus": 200,
+            "capture": {
+              "csrf": "session.csrf_token"
+            }
+          }
+        },
+        {
+          "apiCall": {
+            "method": "POST",
+            "path": "/api/dev/expire-session",
+            "headers": {
+              "origin": "http://127.0.0.1:4200",
+              "x-csrf-token": "${csrf}"
+            },
+            "expectJson": {
+              "expired": true
+            }
+          }
+        },
+        {
+          "expectText": {
+            "text": "Your session has expired. Sign in again to keep writing.",
+            "within": {
+              "role": "region",
+              "name": "Messages"
+            }
+          }
+        },
+        {
+          "expectRole": {
+            "role": "heading",
+            "level": 1,
+            "name": "Sign in to continue"
+          }
+        },
+        {
+          "expectNoReload": "loaded"
+        },
+        {
+          "apiCall": {
+            "method": "POST",
+            "path": "/api/records",
+            "headers": {
+              "origin": "http://127.0.0.1:4200",
+              "x-csrf-token": "stale"
+            },
+            "body": {
+              "op": "delete",
+              "object": "post",
+              "id": 9
+            },
+            "expectStatus": 401
+          }
+        }
+      ]},
     {"id":"ui-reconnect-catches-up","name":"After losing the connection the page reconnects and catches up on what it missed","verifies":["run-001"],"browsers":["reader","author"],"description":"Journey of tests/e2e/site.spec.js, test 12: \"after losing the connection the page reconnects and catches up on what it missed\". Hand-written test keeps: the drop of the socket through the page's test hook (window.__strataDropSocket) and the check that the connection then reads \"waiting\"; offline alone does not close an open socket, so the scenario goes offline and publishes, then back online, and asserts only what the reader shows afterwards.","steps":[{"goto":{"screen":"screen-front-page"}},{"mark":"loaded"},{"expectAttribute":{"role":"status","name":"Live connection","attribute":"data-connection","value":"open"}},{"goOffline":{}},{"switchBrowser":"author"},{"goto":{"screen":"screen-sign-in"}},{"fill":{"form":"form-sign-in","field":"login","value":"mirela"}},{"fill":{"form":"form-sign-in","field":"password","value":"strata-dev-mirela"}},{"submit":{"form":"form-sign-in"}},{"expectRole":{"role":"heading","level":1,"name":"Writing desk"}},{"click":{"role":"link","name":"Write a new article"}},{"expectRole":{"role":"heading","level":1,"name":"New article"}},{"fill":{"form":"form-new-article-save","field":"title","value":"While You Were Away"}},{"fill":{"form":"form-new-article-save","field":"body","value":"A first paragraph written by a test.\n\n## A heading\n\nAnd a second one."}},{"submit":{"form":"form-new-article-save"}},{"expectText":{"text":"Draft saved.","within":{"role":"region","name":"Messages"}}},{"expectRole":{"role":"heading","level":1,"name":"Edit article"}},{"submit":{"form":"form-edit-article-publish"}},{"expectText":{"text":"Published.","within":{"role":"region","name":"Messages"}}},{"switchBrowser":"reader"},{"expectNoText":{"text":"While You Were Away"}},{"goOnline":{}},{"expectAttribute":{"role":"status","name":"Live connection","attribute":"data-connection","value":"open","timeoutMs":20000}},{"expectRole":{"role":"heading","name":"While You Were Away"}},{"expectNoReload":"loaded"},{"switchBrowser":"author"},{"submit":{"form":"form-edit-article-unpublish"}},{"switchBrowser":"reader"},{"expectCount":{"role":"heading","name":"While You Were Away","count":0}}]},
     {"id":"ui-settings-restyle-live","name":"Tenant settings are data: changing the accent restyles every open page live","verifies":["cms-005"],"browsers":["reader","editor"],"description":"Journey of tests/e2e/site.spec.js, test 13: \"tenant settings are data: changing the accent restyles every open page live\". Hand-written test keeps: the computed value of the --accent custom property (#4f6140 for moss, #6b3f5b for plum), which is computed CSS; the data-accent attribute is asserted instead; the screenshot.","steps":[{"goto":{"screen":"screen-about"}},{"mark":"loaded"},{"switchBrowser":"editor"},{"goto":{"screen":"screen-sign-in"}},{"fill":{"form":"form-sign-in","field":"login","value":"ines"}},{"fill":{"form":"form-sign-in","field":"password","value":"strata-dev-ines"}},{"submit":{"form":"form-sign-in"}},{"expectRole":{"role":"heading","level":1,"name":"Writing desk"}},{"click":{"role":"link","name":"Publication settings"}},{"click":{"role":"radio","name":"Plum"}},{"fill":{"form":"form-settings","field":"tagline","value":"Essays on making things, and what they teach."}},{"submit":{"form":"form-settings"}},{"expectText":{"text":"Settings saved.","within":{"role":"region","name":"Messages"}}},{"switchBrowser":"reader"},{"expectAttribute":{"attribute":"data-accent","value":"plum"}},{"expectText":{"text":"Essays on making things, and what they teach.","within":{"role":"contentinfo"}}},{"expectNoReload":"loaded"},{"switchBrowser":"editor"},{"apiCall":{"method":"GET","path":"/api/session","expectStatus":200,"capture":{"csrf":"session.csrf_token"}}},{"apiCall":{"method":"POST","path":"/api/records","headers":{"origin":"http://127.0.0.1:4200","x-csrf-token":"${csrf}"},"body":{"op":"update","object":"publication","id":1,"fields":{"accent":"red;background:url(//evil)"}},"expectStatus":422,"expectJson":{"failed.0.rule":"constraint:publication.accent_token"}}},{"click":{"role":"radio","name":"Moss"}},{"fill":{"form":"form-settings","field":"tagline","value":"Essays on making things, and on what making them teaches."}},{"submit":{"form":"form-settings"}},{"switchBrowser":"reader"},{"expectAttribute":{"attribute":"data-accent","value":"moss"}}]},
     {"id":"ui-theme-cycle","name":"The theme control cycles device, light and dark, and is remembered","description":"Journey of tests/e2e/site.spec.js, test 14: \"the theme control cycles device, light and dark, and is remembered\". Hand-written test keeps: the full-page screenshot.","steps":[{"emulate":{"colorScheme":"dark"}},{"goto":{"screen":"screen-front-page"}},{"expectAttribute":{"attribute":"data-scheme","value":"dark"}},{"click":{"role":"button","namePattern":"Change theme"}},{"expectAttribute":{"attribute":"data-scheme","value":"light"}},{"click":{"role":"button","namePattern":"Change theme"}},{"expectAttribute":{"attribute":"data-scheme","value":"dark"}},{"emulate":{"colorScheme":"light"}},{"reload":{}},{"expectAttribute":{"attribute":"data-scheme","value":"dark"}},{"axeScan":{}}]},
