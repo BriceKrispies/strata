@@ -598,6 +598,9 @@ pub enum JobState {
     /// The value `cancelled`.
     #[serde(rename = "cancelled")]
     Cancelled,
+    /// The value `unscheduled`.
+    #[serde(rename = "unscheduled")]
+    Unscheduled,
 }
 
 impl JobState {
@@ -609,6 +612,7 @@ impl JobState {
             Self::Completed => "completed",
             Self::Failed => "failed",
             Self::Cancelled => "cancelled",
+            Self::Unscheduled => "unscheduled",
         }
     }
 }
@@ -3701,3 +3705,12 @@ pub struct WebhookDelivery {
     /// Field `at`.
     pub at: prelude::Timestamp,
 }
+
+/// session-token
+///
+/// The secret a session cookie carries; only its hash is stored, and it is never logged.
+///
+/// Specification type `session-token`: a scalar represented as `string`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct SessionToken(pub String);

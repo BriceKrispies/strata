@@ -25,10 +25,28 @@ fn json_compares_with_json_and_null() {
 }
 
 #[test]
-fn json_equality_in_rust_is_value_equality() {
+fn json_equality_in_rust_is_structural_with_numbers_by_value() {
     let e = env();
-    assert_eq!(rust("j == k", &e), tok("j == k"));
+    // serde_json's own == tells 1 from 1.0; the emitted comparison compares numbers by value.
+    let eq = rust("j == k", &e);
+    assert!(eq.contains("__json_eq") && eq.contains("as_f64"), "{eq}");
+    let ne = rust("j != k", &e);
+    assert!(ne.starts_with('!'), "{ne}");
     assert_eq!(rust("j != null", &e), tok("j != ::serde_json::Value::Null"));
+}
+
+#[test]
+fn lists_and_structs_compare_structurally_in_javascript() {
+    let e = strata_spec_expr_test_scope();
+    let eq = js("l == m", &e);
+    assert!(eq.contains("Object.keys") && eq.ends_with("(l, m)"), "{eq}");
+}
+
+fn strata_spec_expr_test_scope() -> TestScope {
+    scope(&[
+        ("l", Ty::List(Box::new(Ty::U32))),
+        ("m", Ty::List(Box::new(Ty::U32))),
+    ])
 }
 
 #[test]

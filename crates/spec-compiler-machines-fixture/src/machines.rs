@@ -296,6 +296,19 @@ pub mod lease {
                 _ => Ok(Outcome::to(*state, vars.clone())),
             }
         }
+
+        fn log_emitted(emitted: &Emitted, telemetry: &dyn strata_runtime::Telemetry) {
+            if let Emitted::LeaseGranted(payload) = emitted {
+                crate::telemetry::lease_granted(
+                    telemetry,
+                    &crate::telemetry::LeaseGranted {
+                        correlation: "",
+                        holder: payload.holder.as_str(),
+                        token: payload.token,
+                    },
+                );
+            }
+        }
     }
 }
 

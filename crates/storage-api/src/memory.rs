@@ -269,6 +269,14 @@ impl Store for MemoryStore {
             .cloned())
     }
 
+    fn remove_account(&self, tenant: &TenantId, login: &str) -> StoreResult<bool> {
+        Ok(self
+            .lock()?
+            .accounts
+            .remove(&(tenant.clone(), login.to_string()))
+            .is_some())
+    }
+
     fn create_snapshot(
         &self,
         tenant: &TenantId,
@@ -340,6 +348,17 @@ impl Store for MemoryStore {
 
     fn reset(&self) -> StoreResult<()> {
         *self.lock()? = Inner::default();
+        Ok(())
+    }
+
+    fn reset_tenant(&self, tenant: &TenantId) -> StoreResult<()> {
+        let mut inner = self.lock()?;
+        inner.tenants.remove(tenant);
+        inner.events.retain(|(_, event, _)| event.tenant != *tenant);
+        inner.journal.retain(|entry| entry.tenant != *tenant);
+        inner.sessions.retain(|_, s| s.tenant != *tenant);
+        inner.accounts.retain(|(t, _), _| t != tenant);
+        inner.snapshots.retain(|(t, _), _| t != tenant);
         Ok(())
     }
 }

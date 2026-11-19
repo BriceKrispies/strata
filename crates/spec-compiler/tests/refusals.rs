@@ -447,3 +447,107 @@ fn an_id_represented_as_json_is_refused() {
     }));
     assert_refused_with(&text, "type.repr-json", "doc-id");
 }
+
+/// A specification with one logged event: the base of the telemetry refusals, each of which
+/// changes exactly one thing.
+fn telemetry_spec(edit: impl Fn(&mut Value)) -> String {
+    let mut sections = json!({
+        "system": { "id": "sys", "name": "System",
+            "telemetry": { "services": [ { "id": "backend", "log": "var/logs/backend.jsonl" } ] } },
+        "types": [
+            { "id": "tenant-id", "name": "Tenant", "kind": "id", "repr": "string" },
+            { "id": "session-token", "name": "Session token", "kind": "scalar", "repr": "string", "sensitive": "token" },
+            { "id": "login", "name": "Login", "kind": "struct", "fields": [ { "name": "password", "type": "string", "sensitive": "password" } ] }
+        ],
+        "events": [ {
+            "id": "signed-in", "name": "Signed in", "domain": true,
+            "payload": [
+                { "name": "tenant", "type": "tenant-id" }, { "name": "session", "type": "string" },
+                { "name": "attempts", "type": "u8" }, { "name": "at", "type": "timestamp" },
+                { "name": "device", "type": "option<uuid>", "optional": true },
+                { "name": "token", "type": "session-token" }, { "name": "secret", "type": "string", "sensitive": "secret" },
+                { "name": "credentials", "type": "list<login>" }, { "name": "roles", "type": "list<string>" }
+            ],
+            "logging": { "logged": true, "service": "backend", "level": "info", "name": "session.started", "tenant": "tenant",
+                "fields": [ { "field": "session" }, { "field": "attempts", "as": "tries" }, { "field": "at" }, { "field": "device" } ] }
+        } ]
+    });
+    edit(&mut sections);
+    spec(sections)
+}
+
+fn logged_fields(v: &mut Value) -> &mut Vec<Value> {
+    v["events"][0]["logging"]["fields"].as_array_mut().unwrap()
+}
+
+#[test]
+fn a_logged_event_generates_its_telemetry_function() {
+    let files = generate("spec.jsonc", &telemetry_spec(|_| {}), &options()).unwrap();
+    let module = &files
+        .iter()
+        .find(|f| f.path == "src/telemetry.rs")
+        .expect("a telemetry module")
+        .contents;
+    assert!(module.contains("pub const BACKEND: JsonLines = JsonLines { service: \"backend\" };"));
+    assert!(module.contains("pub struct SignedIn<'a>"));
+    assert!(module.contains("pub fn signed_in(telemetry: &dyn Telemetry, line: &SignedIn<'_>)"));
+    assert!(module.contains("fields.push((\"tries\", line.attempts.into()));"));
+    assert!(module.contains("telemetry.event(Level::Info, \"session.started\", &fields);"));
+    // Exactly the allowlist: nothing of the rest of the payload reaches the struct.
+    for absent in ["pub token", "pub secret", "pub credentials", "pub roles"] {
+        assert!(
+            !module.contains(absent),
+            "{absent} is in the telemetry module"
+        );
+    }
+    let manifest = &files
+        .iter()
+        .find(|f| f.path == "Cargo.toml")
+        .unwrap()
+        .contents;
+    assert!(manifest.contains("strata-runtime.workspace = true"));
+}
+
+#[test]
+fn a_logged_field_that_is_not_in_the_payload_is_refused() {
+    let text = telemetry_spec(|v| logged_fields(v).push(json!({ "field": "missing" })));
+    assert_refused_with(&text, "specc.telemetry-field-unknown", "signed-in");
+    let text = telemetry_spec(|v| v["events"][0]["logging"]["tenant"] = json!("site"));
+    assert_refused_with(&text, "specc.telemetry-field-unknown", "signed-in");
+}
+
+#[test]
+fn a_logged_field_of_a_sensitive_type_is_refused() {
+    let text = telemetry_spec(|v| logged_fields(v).push(json!({ "field": "token" })));
+    assert_eq!(codes(&text), ["specc.telemetry-field-sensitive"]);
+}
+
+#[test]
+fn a_logged_field_marked_sensitive_is_refused() {
+    let text = telemetry_spec(|v| logged_fields(v).push(json!({ "field": "secret" })));
+    assert_eq!(codes(&text), ["specc.telemetry-field-sensitive"]);
+}
+
+#[test]
+fn a_logged_list_of_a_struct_with_a_sensitive_field_is_refused() {
+    let text = telemetry_spec(|v| logged_fields(v).push(json!({ "field": "credentials" })));
+    assert_eq!(codes(&text), ["specc.telemetry-field-sensitive"]);
+}
+
+#[test]
+fn a_logged_field_that_is_not_a_scalar_is_refused() {
+    let text = telemetry_spec(|v| logged_fields(v).push(json!({ "field": "roles" })));
+    assert_eq!(codes(&text), ["specc.telemetry-field-type"]);
+}
+
+#[test]
+fn a_logged_event_of_an_undeclared_service_is_refused() {
+    let text = telemetry_spec(|v| v["events"][0]["logging"]["service"] = json!("worker"));
+    assert_eq!(codes(&text), ["specc.telemetry-service-unknown"]);
+}
+
+#[test]
+fn a_logging_level_that_is_not_known_is_refused() {
+    let text = telemetry_spec(|v| v["events"][0]["logging"]["level"] = json!("notice"));
+    assert_eq!(codes(&text), ["specc.telemetry-level"]);
+}

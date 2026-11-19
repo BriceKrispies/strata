@@ -33,7 +33,7 @@ pub async fn run(
     let created = app
         .blocking(seed::seed)
         .await
-        .map_err(|e| e.0.message)?
+        .map_err(|e| e.describe())?
         .map_err(|e| format!("seeding failed: {e}"))?;
     let address = listener.local_addr().map_err(|e| e.to_string())?;
     LOG.info(

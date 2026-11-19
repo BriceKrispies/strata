@@ -1,11 +1,17 @@
 {
-  "system": { "id": "fieldnotes" },
+  "system": { "id": "fieldnotes", "telemetry": { "services": [ { "id": "backend", "log": "var/logs/backend.jsonl" } ] } },
   "claims": [
     { "id": "req-read", "ref": "R-10", "kind": "requirement", "statement": "A reader can open an essay." },
     { "id": "req-live", "ref": "R-11", "kind": "requirement", "statement": "Open pages update live." },
     { "id": "req-a11y", "ref": "R-12", "kind": "requirement", "statement": "Pages are accessible." }
   ],
-  "events": [{ "id": "post-published", "name": "Post published" }],
+  "events": [
+    { "id": "post-published", "name": "Post published" },
+    { "id": "record-updated", "name": "Record updated", "domain": true,
+      "payload": [{ "name": "tenant", "type": "string" }, { "name": "object", "type": "string" }, { "name": "transition", "type": "option<string>" }],
+      "logging": { "logged": true, "service": "backend", "level": "info", "name": "record.updated", "tenant": "tenant", "fields": [{ "field": "object" }, { "field": "transition" }] } },
+    { "id": "page-pinged", "name": "Page pinged", "domain": true, "logging": { "logged": false, "reason": "A heartbeat." } }
+  ],
   "screens": [
     { "id": "home", "name": "Front page", "route": "/", "query": ["q"] },
     { "id": "post", "name": "Essay", "route": "/posts/:slug" },
@@ -60,6 +66,7 @@
         { "fill": { "form": "login-form", "field": "count", "value": 3 } },
         { "submit": { "form": "login-form" } },
         { "expectScreen": "desk" },
+        { "expectLog": { "service": "backend", "event": "record-updated", "fields": { "tenant": "fieldnotes", "transition": "publish" }, "timeoutMs": 8000 } },
         { "fill": { "role": "searchbox", "name": "Search the essays", "value": "kiln" } },
         { "press": "Enter" },
         { "expectRole": { "role": "button", "name": "Save", "state": "disabled" } },
@@ -81,6 +88,7 @@
         { "expectStatus": 200 },
         { "switchBrowser": "reader" },
         { "waitFor": { "event": "post-published" } },
+        { "expectLog": { "service": "backend", "event": "record-updated", "fields": { "object": "post" } } },
         { "expectText": { "text": "On Sharpening" } }
       ]
     }

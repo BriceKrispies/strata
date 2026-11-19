@@ -28,13 +28,17 @@ fn bundle() -> Bundle {
             { "object": "category", "key": "craft", "as": "user:ed", "at": "2026-01-02", "fields": { "name": "Craft", "slug": "craft" } },
             {
                 "object": "post", "key": "first", "as": "user:ann", "at": "2026-01-03T10:00:00Z",
-                "fields": { "title": "First", "slug": "first", "body": "Hello *there*.", "author": "@ann", "category": "@craft", "featured": true },
-                "then": [{ "as": "user:ann", "at": "2026-01-04T08:00:00Z", "set": { "status": "published" } }]
+                "fields": { "title": "First", "slug": "first", "body": "Hello *there*.", "author": "@ann", "category": "@craft" },
+                "then": [
+                    { "as": "user:ann", "at": "2026-01-04T08:00:00Z", "set": { "status": "published" } },
+                    { "as": "user:ed", "at": "2026-01-04T09:00:00Z", "set": { "featured": true } }
+                ]
             },
             {
                 "object": "post", "key": "draft", "as": "user:ann", "at": "2026-01-05T10:00:00Z",
                 "fields": { "title": "Unfinished", "slug": "unfinished", "body": "Not yet.", "author": "@ann" }
-            }
+            },
+            { "object": "author", "key": "bob", "as": "user:ed", "at": "2026-01-06", "fields": { "name": "Bob", "slug": "bob", "principal": "user:bob" } }
         ]
     });
     doc.as_object_mut()
@@ -449,4 +453,210 @@ fn an_author_cannot_touch_another_authors_post() {
     );
     assert!(world.step(&edit, &ctx(user("ann"))).is_ok());
     assert!(world.step(&edit, &ctx(user("ed"))).is_ok());
+}
+
+const ANN_AUTHOR: u64 = 2;
+const BOB_AUTHOR: u64 = 6;
+const FEATURED_PUBLISHED_POST: u64 = 4;
+const ANN_DRAFT: u64 = 5;
+const FAR_FUTURE: i64 = 4_102_444_800_000;
+
+fn new_post(slug: &str, author: u64, extra: &[(&str, Value)]) -> Intent {
+    let mut fields = BTreeMap::from([
+        (FieldId::new("title").unwrap(), Value::Str(slug.into())),
+        (FieldId::new("slug").unwrap(), Value::Str(slug.into())),
+        (FieldId::new("body").unwrap(), Value::Str("Text.".into())),
+        (
+            FieldId::new("author").unwrap(),
+            Value::Ref(RecordId(author)),
+        ),
+    ]);
+    for (field, value) in extra {
+        fields.insert(FieldId::new(*field).unwrap(), value.clone());
+    }
+    Intent::CreateRecord {
+        object: ObjectTypeId::new("post").unwrap(),
+        fields,
+    }
+}
+
+fn change_post(id: u64, fields: &[(&str, Value)]) -> Intent {
+    Intent::UpdateRecord {
+        object: ObjectTypeId::new("post").unwrap(),
+        id: RecordId(id),
+        fields: fields
+            .iter()
+            .map(|(field, value)| (FieldId::new(*field).unwrap(), value.clone()))
+            .collect(),
+        expected_version: None,
+    }
+}
+
+/// Refused with `kind`, and the failed check named `rule` is in the evidence.
+fn assert_refused(world: &World, intent: &Intent, who: &str, kind: ErrorKind, rule: &str) {
+    let refused = world
+        .step(intent, &ctx(user(who)))
+        .err()
+        .unwrap_or_else(|| panic!("{who} was allowed {intent:?}"));
+    assert_eq!(refused.kind, kind, "{who}: {intent:?}");
+    assert!(
+        refused.evidence.iter().any(|c| c.rule == rule && !c.passed),
+        "{who} was not refused by {rule}: {:?}",
+        refused.evidence
+    );
+}
+
+#[test]
+fn an_author_cannot_publish_under_another_authors_byline() {
+    let world = world();
+    // Under her own byline she may write; under Bob's she may not, and the policy says so.
+    assert!(world
+        .step(&new_post("mine", ANN_AUTHOR, &[]), &ctx(user("ann")))
+        .is_ok());
+    assert_refused(
+        &world,
+        &new_post("forged", BOB_AUTHOR, &[]),
+        "ann",
+        ErrorKind::Unauthorized,
+        "policy:authors_write_posts",
+    );
+    // An editor may file a post under any byline.
+    assert!(world
+        .step(&new_post("for-bob", BOB_AUTHOR, &[]), &ctx(user("ed")))
+        .is_ok());
+    // Changing the byline of a post she owns is refused too.
+    let rebyline = change_post(ANN_DRAFT, &[("author", Value::Ref(RecordId(BOB_AUTHOR)))]);
+    assert_refused(
+        &world,
+        &rebyline,
+        "ann",
+        ErrorKind::ConstraintViolated,
+        "constraint:post.author_fixed",
+    );
+    assert!(world.step(&rebyline, &ctx(user("ed"))).is_ok());
+}
+
+#[test]
+fn only_an_editor_features_a_post_or_sets_when_it_was_published() {
+    let world = world();
+    let far = Value::Time(FAR_FUTURE);
+    // On creation.
+    assert_refused(
+        &world,
+        &new_post("loud", ANN_AUTHOR, &[("featured", Value::Bool(true))]),
+        "ann",
+        ErrorKind::ConstraintViolated,
+        "constraint:post.featured_by_editors",
+    );
+    assert_refused(
+        &world,
+        &new_post("early", ANN_AUTHOR, &[("published_at", far.clone())]),
+        "ann",
+        ErrorKind::ConstraintViolated,
+        "constraint:post.published_at_by_editors",
+    );
+    // An author may leave the box unticked, which the form sends as false.
+    assert!(world
+        .step(
+            &new_post("quiet", ANN_AUTHOR, &[("featured", Value::Bool(false))]),
+            &ctx(user("ann"))
+        )
+        .is_ok());
+    // On update of her own draft.
+    assert_refused(
+        &world,
+        &change_post(ANN_DRAFT, &[("featured", Value::Bool(true))]),
+        "ann",
+        ErrorKind::ConstraintViolated,
+        "constraint:post.featured_by_editors",
+    );
+    assert_refused(
+        &world,
+        &change_post(ANN_DRAFT, &[("published_at", far.clone())]),
+        "ann",
+        ErrorKind::ConstraintViolated,
+        "constraint:post.published_at_by_editors",
+    );
+    // A post an editor featured stays featured when its author edits it, and she cannot
+    // take the feature away.
+    assert!(world
+        .step(
+            &change_post(
+                FEATURED_PUBLISHED_POST,
+                &[
+                    ("title", Value::Str("Retitled".into())),
+                    ("featured", Value::Bool(true))
+                ]
+            ),
+            &ctx(user("ann"))
+        )
+        .is_ok());
+    assert_refused(
+        &world,
+        &change_post(FEATURED_PUBLISHED_POST, &[("featured", Value::Bool(false))]),
+        "ann",
+        ErrorKind::ConstraintViolated,
+        "constraint:post.featured_by_editors",
+    );
+    assert_refused(
+        &world,
+        &change_post(FEATURED_PUBLISHED_POST, &[("published_at", far.clone())]),
+        "ann",
+        ErrorKind::ConstraintViolated,
+        "constraint:post.published_at_by_editors",
+    );
+    // Editors may do all of it.
+    for intent in [
+        new_post("pinned", ANN_AUTHOR, &[("featured", Value::Bool(true))]),
+        change_post(ANN_DRAFT, &[("featured", Value::Bool(true))]),
+        change_post(ANN_DRAFT, &[("published_at", far.clone())]),
+    ] {
+        assert!(world.step(&intent, &ctx(user("ed"))).is_ok(), "{intent:?}");
+    }
+}
+
+#[test]
+fn an_author_publishes_only_her_own_post_and_the_time_is_stamped_not_chosen() {
+    let world = world();
+    let publish = |extra: &[(&str, Value)]| {
+        let mut fields = vec![("status", Value::Str("published".into()))];
+        fields.extend(extra.iter().map(|(f, v)| (*f, v.clone())));
+        change_post(ANN_DRAFT, &fields)
+    };
+    // Another author's post: refused before the workflow is reached.
+    assert_refused(
+        &world,
+        &publish(&[]),
+        "bob",
+        ErrorKind::Unauthorized,
+        "policy:authors_own_posts",
+    );
+    // Her own: allowed, and a far-future date she supplies along the way is replaced by the
+    // time of publication.
+    let (published, _) = world
+        .step(
+            &publish(&[("published_at", Value::Time(FAR_FUTURE))]),
+            &ctx(user("ann")),
+        )
+        .expect("an author publishes her own post");
+    let post = published.tenants[&TenantId::new("gazette").unwrap()]
+        .record(&ObjectTypeId::new("post").unwrap(), RecordId(ANN_DRAFT))
+        .unwrap()
+        .clone();
+    assert_eq!(
+        post.get(&FieldId::new("published_at").unwrap()),
+        &Value::Time(1_800_000_000_000)
+    );
+    // Unpublishing is hers too, and not Bob's.
+    let back = change_post(ANN_DRAFT, &[("status", Value::Str("draft".into()))]);
+    assert_refused(
+        &published,
+        &back,
+        "bob",
+        ErrorKind::Unauthorized,
+        "policy:authors_own_posts",
+    );
+    assert!(published.step(&back, &ctx(user("ann"))).is_ok());
+    // An editor publishes anyone's.
+    assert!(world.step(&publish(&[]), &ctx(user("ed"))).is_ok());
 }

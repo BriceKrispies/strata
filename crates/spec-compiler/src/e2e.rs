@@ -68,6 +68,9 @@ pub const STATUS_WITHOUT_GOTO: &str = "e2e.status-without-navigation";
 pub const WAIT_UNOBSERVABLE: &str = "e2e.wait-unobservable";
 /// Code of a verified claim that is missing, not a requirement or has no `ref`.
 pub const VERIFIES: &str = "e2e.verifies-invalid";
+/// Code of an `expectLog` of an event that is not logged, by another service, or of a member
+/// its line does not hold.
+pub const LOG_EVENT: &str = "e2e.log-event";
 
 /// WAI-ARIA 1.2 roles a step may select by (the list Exegra checks).
 pub const ARIA_ROLES: &[&str] = &[
@@ -223,8 +226,26 @@ pub struct Plan {
     pub bindings: Vec<(String, String)>,
     /// Event ids.
     pub events: Vec<String>,
+    /// The logged events: what an `expectLog` step reads.
+    pub logged: Vec<LoggedEvent>,
+    /// `(service, log file)` of every telemetry service with a log file.
+    pub logs: Vec<(String, String)>,
     /// The journeys in declaration order.
     pub scenarios: Vec<Scenario>,
+}
+
+/// A logged event (`event.logging` with `logged: true`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoggedEvent {
+    /// The event id.
+    pub id: String,
+    /// The service whose log holds it.
+    pub service: String,
+    /// The line's `event` member.
+    pub name: String,
+    /// The members a test may expect: `tenant` when the event logs one, then the names its
+    /// allowlisted fields are written as.
+    pub members: Vec<String>,
 }
 
 /// The generated files.
@@ -396,11 +417,50 @@ pub fn load(text: &str) -> Result<Plan, Vec<Diagnostic>> {
     }
 
     let mut events = Vec::new();
+    let mut logged = Vec::new();
     for item in array(top, "events", &mut d) {
-        if let Some(id) = item.as_object().and_then(|o| string(o, "id")) {
-            events.push(id.to_string());
+        let Some(o) = item.as_object() else { continue };
+        let Some(id) = string(o, "id") else { continue };
+        events.push(id.to_string());
+        let Some(l) = o.get("logging").and_then(Value::as_object) else {
+            continue;
+        };
+        if l.get("logged").and_then(Value::as_bool) != Some(true) {
+            continue;
         }
+        let mut members = Vec::new();
+        if l.get("tenant").and_then(Value::as_str).is_some() {
+            members.push("tenant".to_string());
+        }
+        for f in l
+            .get("fields")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            if let Some(fo) = f.as_object() {
+                if let Some(name) = string(fo, "as").or_else(|| string(fo, "field")) {
+                    members.push(name.to_string());
+                }
+            }
+        }
+        logged.push(LoggedEvent {
+            id: id.to_string(),
+            service: string(l, "service").unwrap_or("").to_string(),
+            name: string(l, "name").unwrap_or(id).to_string(),
+            members,
+        });
     }
+    let logs = top
+        .get("system")
+        .and_then(|s| s.get("telemetry"))
+        .and_then(|t| t.get("services"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_object)
+        .filter_map(|s| Some((string(s, "id")?.to_string(), string(s, "log")?.to_string())))
+        .collect();
     let mut bindings = Vec::new();
     for item in array(top, "liveBindings", &mut d) {
         if let Some(o) = item.as_object() {
@@ -513,6 +573,8 @@ pub fn load(text: &str) -> Result<Plan, Vec<Diagnostic>> {
         forms,
         bindings,
         events,
+        logged,
+        logs,
         scenarios,
     })
 }
@@ -628,6 +690,7 @@ struct Uses {
     axe: bool,
     logs: bool,
     views: bool,
+    log_lines: bool,
 }
 
 /// The JavaScript lines of one step. The mapping, step by step:
@@ -649,6 +712,7 @@ struct Uses {
 /// | `setViewport` | `page.setViewportSize` |
 /// | `axeScan` | `AxeBuilder` with the suite's tags, no violations |
 /// | `logScan` | no line of `var/logs/*.jsonl` matches a pattern |
+/// | `expectLog` | poll until a line written since the test began to the service's log file has the event's log name and the expected members |
 /// | `waitFor` | a refetch of the open screen's view, see the module documentation |
 fn lower_step(
     plan: &Plan,
@@ -913,6 +977,61 @@ fn lower_step(
                 "marks.set(page, refreshes(page));".to_string(),
             ])
         }
+        "expectLog" => {
+            let (Some(service), Some(event)) = (text("service"), text("event")) else {
+                return fail(STEP, "expectLog is {service, event, fields?, timeoutMs?}.".into());
+            };
+            if !plan.events.iter().any(|e| e == event) {
+                return fail(REFERENCE, format!("\"{event}\" is not an event."));
+            }
+            let Some(logged) = plan.logged.iter().find(|l| l.id == event) else {
+                return fail(LOG_EVENT, format!("event \"{event}\" is not logged."));
+            };
+            if logged.service != service {
+                return fail(
+                    LOG_EVENT,
+                    format!(
+                        "event \"{event}\" is logged by service \"{}\", not \"{service}\".",
+                        logged.service
+                    ),
+                );
+            }
+            let Some((_, file)) = plan.logs.iter().find(|(s, _)| s == service) else {
+                return fail(
+                    LOG_EVENT,
+                    format!("service \"{service}\" names no log file (system.telemetry)."),
+                );
+            };
+            let mut expected = Map::new();
+            if let Some(fields) = o.and_then(|o| o.get("fields")) {
+                let Some(fields) = fields.as_object() else {
+                    return fail(STEP, "expectLog fields map members to values.".into());
+                };
+                for (k, value) in fields {
+                    if !logged.members.contains(k) {
+                        return fail(
+                            LOG_EVENT,
+                            format!("the line of event \"{event}\" holds no member \"{k}\"."),
+                        );
+                    }
+                    if value.is_array() || value.is_object() {
+                        return fail(STEP, format!("the expected value of \"{k}\" is a scalar."));
+                    }
+                    expected.insert(k.clone(), value.clone());
+                }
+            }
+            let timeout = o
+                .and_then(|o| o.get("timeoutMs"))
+                .and_then(Value::as_u64)
+                .unwrap_or(5_000);
+            Ok(vec![format!(
+                "await expectLogLine({}, {}, {}, {}, {timeout});",
+                js(file),
+                js(service),
+                js(&logged.name),
+                Value::Object(expected)
+            )])
+        }
         other => fail(
             STEP,
             format!("\"{other}\" is not a step (elements are selected by role and accessible name only)."),
@@ -1048,6 +1167,7 @@ fn uses_of(steps: &[Value]) -> Uses {
         axe: has("axeScan"),
         logs: has("logScan"),
         views: has("waitFor"),
+        log_lines: has("expectLog"),
     }
 }
 
@@ -1084,7 +1204,7 @@ fn scenario_file(plan: &Plan, sc: &Scenario) -> Result<String, Vec<Diagnostic>> 
     if uses.axe {
         out.push_str("import AxeBuilder from '@axe-core/playwright';\n");
     }
-    if uses.logs {
+    if uses.logs || uses.log_lines {
         out.push_str("import { readFileSync } from 'node:fs';\n");
     }
     out.push('\n');
@@ -1098,6 +1218,11 @@ fn scenario_file(plan: &Plan, sc: &Scenario) -> Result<String, Vec<Diagnostic>> 
     if uses.views {
         out.push_str(VIEWS);
     }
+    if uses.log_lines {
+        let files: Vec<String> = plan.logs.iter().map(|(_, f)| js(f)).collect();
+        out.push_str(&format!("const LOG_FILES = [{}];\n", files.join(", ")));
+        out.push_str(LOG_LINES);
+    }
     if multi {
         out.push_str(SESSION);
     }
@@ -1110,11 +1235,17 @@ fn scenario_file(plan: &Plan, sc: &Scenario) -> Result<String, Vec<Diagnostic>> 
         out.push_str(&format!("// Verifies: {r}\n"));
     }
     let indent = if multi { "    " } else { "  " };
+    let log_start = if uses.log_lines {
+        "  logFrom = logSizes();\n"
+    } else {
+        ""
+    };
     if multi {
         out.push_str(&format!(
             "test({}, async ({{ browser, baseURL, page: firstPage, context: firstContext }}) => {{\n",
             js(&sc.name)
         ));
+        out.push_str(log_start);
         out.push_str("  const sessions = {};\n");
         for (i, b) in sc.browsers.iter().enumerate() {
             if i == 0 {
@@ -1141,6 +1272,7 @@ fn scenario_file(plan: &Plan, sc: &Scenario) -> Result<String, Vec<Diagnostic>> 
             "test({}, async ({{ page, context }}) => {{\n  let response = null;\n",
             js(&sc.name)
         ));
+        out.push_str(log_start);
         if uses.views {
             out.push_str("  watch(page);\n");
         }
@@ -1182,6 +1314,35 @@ function noForbiddenLogLines(patterns) {
   for (const pattern of patterns) {
     expect(lines.filter((line) => pattern.test(line)), `log lines matching ${pattern}`).toEqual([]);
   }
+}
+
+";
+
+const LOG_LINES: &str = "\
+// Services write their logs asynchronously (and one file may hold several runs), so an expected line
+// is polled for among the lines written since the test began.
+const ROOT = new URL('../../../', import.meta.url);
+const logPath = (file) => new URL(file, ROOT).pathname.replace(/^\\/([A-Za-z]:)/, '$1');
+const logBytes = (file) => {
+  try {
+    return readFileSync(logPath(file));
+  } catch {
+    return Buffer.alloc(0);
+  }
+};
+let logFrom = {};
+const logSizes = () => Object.fromEntries(LOG_FILES.map((file) => [file, logBytes(file).length]));
+
+async function expectLogLine(file, service, event, fields, timeout) {
+  const matches = () => logBytes(file).subarray(logFrom[file] ?? 0).toString('utf8').split('\\n').some((text) => {
+    try {
+      const line = JSON.parse(text);
+      return line.service === service && line.event === event && Object.entries(fields).every(([k, v]) => line[k] === v);
+    } catch {
+      return false;
+    }
+  });
+  await expect.poll(matches, { message: `a ${service} log line ${event} with ${JSON.stringify(fields)}`, timeout }).toBe(true);
 }
 
 ";
@@ -1284,6 +1445,8 @@ mod tests {
             }],
             bindings: vec![("home".into(), "ev".into())],
             events: vec!["ev".into(), "other".into()],
+            logged: vec![],
+            logs: vec![],
             scenarios: vec![],
         }
     }

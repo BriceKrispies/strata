@@ -7,8 +7,31 @@
 import * as live from '../generated/client-live-flow-impl.js';
 import * as session from '../generated/client-session-flow-impl.js';
 import * as submit from '../generated/client-submit-flow-impl.js';
+import { StepError } from '../generated/machine-runtime.js';
 
 /** @typedef {import('./types.js').Effect} Effect */
+
+/**
+ * One step of a generated machine. An event the machine refuses (a payload of the wrong types,
+ * an event it does not receive, an overflow) leaves it where it was, as an ignored event does,
+ * instead of throwing into the kernel.
+ * @template S, V, R
+ * @param {{ step: (state: S, vars: V, event: any, now: number) => R }} machine
+ * @param {S} state
+ * @param {V} vars
+ * @param {string} event
+ * @param {unknown} payload
+ * @param {number} at
+ * @returns {R | { ignored: true }}
+ */
+function stepOrIgnore(machine, state, vars, event, payload, at) {
+  try {
+    return machine.step(state, vars, { event, payload }, at);
+  } catch (error) {
+    if (error instanceof StepError) return { ignored: true };
+    throw error;
+  }
+}
 
 // ---------------------------------------------------------------------------------------------
 // The live connection.
@@ -39,16 +62,6 @@ export function liveInit() {
 }
 
 /**
- * The connection with its last sequence set from outside the machine: a resync names the head
- * to read from (the machine has no event for it).
- * @param {any} ws
- * @param {number} head
- */
-export function liveResync(ws, head) {
-  return project({ ...ws, machine: { ...ws.machine, vars: { ...ws.machine.vars, lastSeq: head } } });
-}
-
-/**
  * Step the live connection on an event. Returns the new state and the effects the machine's
  * emits and timers ask for (a reconnect waits a random half to all of the machine's delay), and
  * a `ws_connect` when it moves from waiting to connecting; null when the machine ignores it.
@@ -60,7 +73,7 @@ export function liveResync(ws, head) {
  */
 export function liveStep(state, event, payload, msg) {
   const ws = state.ws;
-  const out = live.step(ws.machine.state, ws.machine.vars, /** @type {any} */ ({ event, payload }), msg.at);
+  const out = stepOrIgnore(live, ws.machine.state, ws.machine.vars, event, payload, msg.at);
   if ('ignored' in out) return null;
   /** @type {Effect[]} */
   const effects = [];
@@ -136,7 +149,7 @@ export function sessionInit() {
  */
 export function sessionStep(state, event, payload, at) {
   const flow = state.sessionFlow;
-  const out = session.step(flow.state, flow.vars, /** @type {any} */ ({ event, payload }), at);
+  const out = stepOrIgnore(session, flow.state, flow.vars, event, payload, at);
   if ('ignored' in out) return null;
   return {
     state: { ...state, sessionFlow: { state: out.state, vars: out.vars } },
@@ -172,7 +185,7 @@ export function submitInit() {
  * @returns {{ flow: { state: any, vars: any }, sends: boolean } | null}
  */
 export function submitStep(flow, event, payload, at) {
-  const out = submit.step(flow.state, flow.vars, /** @type {any} */ ({ event, payload }), at);
+  const out = stepOrIgnore(submit, flow.state, flow.vars, event, payload, at);
   if ('ignored' in out) return null;
   return { flow: { state: out.state, vars: out.vars }, sends: out.emits.some((e) => e.event === 'ui-request-sent') };
 }

@@ -186,7 +186,7 @@ pub mod source_throttle_flow_impl {}
 
 /// How events reach machine `job-run-flow-impl` (Job run (implementation)).
 ///
-/// The specification does not say how these events arrive, so nothing is generated for them: `jr-poll`, `jr-attempt-failed`, `jr-attempt-succeeded`, `jr-cancel`.
+/// The specification does not say how these events arrive, so nothing is generated for them: `jr-poll`, `jr-attempt-failed`, `jr-attempt-succeeded`, `jr-cancel`, `jr-created`.
 pub mod job_run_flow_impl {}
 
 /// How events reach machine `schedule-flow-impl` (Recurring schedule (implementation)).

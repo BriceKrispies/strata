@@ -33,3 +33,5 @@ pub mod routes;
 pub mod deps;
 
 pub mod handlers;
+
+pub mod telemetry;

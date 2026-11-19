@@ -9,6 +9,19 @@ const SVG_NS = 'http://www.w3.org/2000/svg';
 const URL_ATTRS = new Set(['href', 'src', 'action']);
 const PROPS = new Set(['value', 'checked', 'selected']);
 
+// True while the picture being drawn is older than what the person has typed since: the worker
+// has not yet answered their latest keystrokes, so its `value` and `checked` are stale.
+let holding = false;
+
+/**
+ * Tell the renderer whether the next render was made before the latest input was applied. While
+ * it was, controls keep what they hold instead of being rewound to an earlier value.
+ * @param {boolean} stale
+ */
+export function holdValues(stale) {
+  holding = stale;
+}
+
 /**
  * @typedef {{ tag: string, attrs: Record<string, any>, children: Child[], key: string | null, el?: Element }} VNode
  * @typedef {VNode | string} Child
@@ -48,7 +61,7 @@ function setAttr(el, name, value, previous) {
   if (PROPS.has(name)) {
     // Never fight the person typing: the focused control keeps what it holds unless the
     // form itself was replaced (signalled by a changed `data-rev`).
-    const typing = el === document.activeElement && name === 'value';
+    const typing = (el === document.activeElement && name === 'value') || (holding && (name === 'value' || name === 'checked'));
     if (!typing && /** @type {any} */ (el)[name] !== value) /** @type {any} */ (el)[name] = value;
     return;
   }

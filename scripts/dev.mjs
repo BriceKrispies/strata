@@ -58,13 +58,17 @@ function stop(code = 0) {
 process.on('SIGINT', () => stop(0));
 process.on('SIGTERM', () => stop(0));
 
+// The kernel's acceptances and the domain events the backend logs through the generated telemetry
+// functions (strata_model::telemetry, specified as event.logging in specifications/spec.jsonc).
+const INSTALL_NOISE = new Set(['kernel.accepted', 'tenant.created', 'schema.changed', 'member.changed', 'record.created', 'record.updated', 'record.deleted']);
+
 /** One log line for the screen: time, service, event and the fields worth a glance. */
 function brief(name, line) {
   try {
     const entry = JSON.parse(line);
     if (flag('quiet') && entry.level === 'info') return null;
-    if (entry.event === 'event.published' && String(entry.correlation).startsWith('install:')) return null;
-    if (entry.event === 'kernel.accepted' && String(entry.correlation).startsWith('install:')) return null;
+    // Installing the tenants commits many records; their domain events and acceptances stay in the file only.
+    if (INSTALL_NOISE.has(entry.event) && String(entry.correlation).startsWith('install:')) return null;
     const { ts, level, service, event, correlation, ...rest } = entry;
     const fields = Object.entries(rest).map(([k, v]) => `${k}=${typeof v === 'object' ? JSON.stringify(v) : v}`).join(' ');
     return `${new Date(ts).toISOString().slice(11, 23)} ${String(service ?? name).padEnd(7)} ${level === 'info' ? '' : `${level.toUpperCase()} `}${event}${correlation ? ` [${correlation}]` : ''} ${fields}`;

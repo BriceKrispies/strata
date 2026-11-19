@@ -224,7 +224,12 @@ pub mod emailed_link_flow_impl {
                 (State::MlIdleI, Event::MlRequested(_)) => {
                     let mut next = vars.clone();
                     next.expires_at = prelude::Timestamp(
-                        now.0.checked_add(900000i64).ok_or(overflow("ml-issue-i"))?,
+                        now.0
+                            .checked_add(900000i64)
+                            .filter(|__v| {
+                                (-9007199254740991i64..=9007199254740991i64).contains(__v)
+                            })
+                            .ok_or(overflow("ml-issue-i"))?,
                     );
                     let emitted_2 = Emitted::MlMailed(MlMailedPayload {});
                     Ok(Outcome::to(State::MlPendingI, next).emit(
@@ -805,6 +810,8 @@ pub mod gateway_session_flow_impl {
         /// Variable `checkedAt`.
         #[serde(rename = "checkedAt")]
         pub checked_at: prelude::Timestamp,
+        /// Variable `checked`.
+        pub checked: bool,
     }
 
     /// The payload of event `sr-notice`: Revocation notice.
@@ -921,6 +928,7 @@ pub mod gateway_session_flow_impl {
                 Vars {
                     valid: true,
                     checked_at: prelude::Timestamp(0i64),
+                    checked: false,
                 },
             )
         }
@@ -940,6 +948,10 @@ pub mod gateway_session_flow_impl {
                         None => true,
                     },
                     checked_at: record.checked_at,
+                    checked: match &record.checked {
+                        Some(v) => *v,
+                        None => false,
+                    },
                 },
             ))
         }
@@ -964,6 +976,7 @@ pub mod gateway_session_flow_impl {
                 valid: Some(vars.valid),
                 session_state: state.id().to_string(),
                 outage_state: previous.outage_state.clone(),
+                checked: Some(vars.checked),
             })
         }
 
@@ -981,9 +994,14 @@ pub mod gateway_session_flow_impl {
                 }
                 (State::GsReadyI, Event::SrRequest(_)) => {
                     if vars.valid
+                        && vars.checked
+                        && vars.checked_at.0 <= now.0
                         && now
                             .0
                             .checked_sub(vars.checked_at.0)
+                            .filter(|__v| {
+                                (-9007199254740991i64..=9007199254740991i64).contains(__v)
+                            })
                             .ok_or(overflow("gs-accept-fresh-i"))?
                             < 5000i64
                     {
@@ -1001,11 +1019,17 @@ pub mod gateway_session_flow_impl {
                             ))
                         } else {
                             if vars.valid
-                                && now
-                                    .0
-                                    .checked_sub(vars.checked_at.0)
-                                    .ok_or(overflow("gs-recheck-i"))?
-                                    >= 5000i64
+                                && !(vars.checked
+                                    && vars.checked_at.0 <= now.0
+                                    && now
+                                        .0
+                                        .checked_sub(vars.checked_at.0)
+                                        .filter(|__v| {
+                                            (-9007199254740991i64..=9007199254740991i64)
+                                                .contains(__v)
+                                        })
+                                        .ok_or(overflow("gs-recheck-i"))?
+                                        < 5000i64)
                             {
                                 Ok(Outcome::to(State::GsCheckingI, vars.clone()).emit(
                                     "identity-service",
@@ -1021,12 +1045,13 @@ pub mod gateway_session_flow_impl {
                 (State::GsCheckingI, Event::SrLookupAnswer(payload)) => {
                     if payload.valid == true {
                         let mut next = vars.clone();
+                        next.checked = true;
                         next.checked_at = prelude::Timestamp(now.0);
-                        let emitted_2 = Emitted::SrAccepted(SrAcceptedPayload {});
+                        let emitted_3 = Emitted::SrAccepted(SrAcceptedPayload {});
                         Ok(Outcome::to(State::GsReadyI, next).emit(
                             "web-application",
                             Delivery::AtMostOnce,
-                            emitted_2,
+                            emitted_3,
                         ))
                     } else {
                         if payload.valid == false {
@@ -1061,7 +1086,7 @@ pub mod job_lease_flow_impl {
 
     use strata_runtime::{Delivery, Isolation, Machine, Outcome, RecordError, StepError, Time};
 
-    use crate::{records, types};
+    use crate::{prelude, records, types};
 
     /// The states of machine `job-lease-flow-impl`.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -1128,6 +1153,7 @@ pub mod job_lease_flow_impl {
     /// A worker reports a result with the token it holds.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
     pub struct WorkReportedPayload {
+        #[serde(deserialize_with = "prelude::safe_u64")]
         /// Field `token`.
         pub token: u64,
     }
@@ -1287,6 +1313,7 @@ pub mod job_lease_flow_impl {
                 offered_at: previous.offered_at,
                 cancelled: previous.cancelled,
                 attempts_at_cancel: previous.attempts_at_cancel,
+                failed: previous.failed,
             })
         }
 
@@ -1299,7 +1326,11 @@ pub mod job_lease_flow_impl {
             match (state, event) {
                 (State::JlWaitingI, Event::JobDue(_)) => {
                     let mut next = vars.clone();
-                    next.token = next.token.checked_add(1u64).ok_or(overflow("jl-grant-i"))?;
+                    next.token = next
+                        .token
+                        .checked_add(1u64)
+                        .filter(|__v| *__v <= 9007199254740991u64)
+                        .ok_or(overflow("jl-grant-i"))?;
                     let emitted_2 = Emitted::LeaseGranted(LeaseGrantedPayload {});
                     let timer_3 = Event::LeaseExpired(LeaseExpiredPayload {});
                     Ok(Outcome::to(State::JlLeasedI, next)
@@ -1311,6 +1342,7 @@ pub mod job_lease_flow_impl {
                     next.token = next
                         .token
                         .checked_add(1u64)
+                        .filter(|__v| *__v <= 9007199254740991u64)
                         .ok_or(overflow("jl-regrant-i"))?;
                     let emitted_2 = Emitted::LeaseGranted(LeaseGrantedPayload {});
                     let timer_3 = Event::LeaseExpired(LeaseExpiredPayload {});
@@ -1422,6 +1454,7 @@ pub mod origin_content_flow_impl {
     /// The origin answers with the current version.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
     pub struct EcOriginAnswerPayload {
+        #[serde(deserialize_with = "prelude::safe_u64")]
         /// Field `version`.
         pub version: u64,
     }
@@ -1535,6 +1568,7 @@ pub mod origin_content_flow_impl {
                 held: previous.held,
                 stored_at: previous.stored_at,
                 copy_state: previous.copy_state.clone(),
+                stored: previous.stored,
             })
         }
 
@@ -1550,6 +1584,7 @@ pub mod origin_content_flow_impl {
                     next.version = next
                         .version
                         .checked_add(1u64)
+                        .filter(|__v| *__v <= 9007199254740991u64)
                         .ok_or(overflow("oc-publish-i"))?;
                     next.changed_at = prelude::Timestamp(now.0);
                     let emitted_3 = Emitted::EcPurge(EcPurgePayload {});
@@ -1624,6 +1659,8 @@ pub mod edge_copy_flow_impl {
         /// Variable `storedAt`.
         #[serde(rename = "storedAt")]
         pub stored_at: prelude::Timestamp,
+        /// Variable `stored`.
+        pub stored: bool,
     }
 
     /// The payload of event `ec-purge`: Purge.
@@ -1643,6 +1680,7 @@ pub mod edge_copy_flow_impl {
     /// The origin answers with the current version.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
     pub struct EcOriginAnswerPayload {
+        #[serde(deserialize_with = "prelude::safe_u64")]
         /// Field `version`.
         pub version: u64,
     }
@@ -1727,6 +1765,7 @@ pub mod edge_copy_flow_impl {
                 Vars {
                     held: 1u64,
                     stored_at: prelude::Timestamp(0i64),
+                    stored: false,
                 },
             )
         }
@@ -1748,6 +1787,10 @@ pub mod edge_copy_flow_impl {
                     stored_at: match &record.stored_at {
                         Some(v) => *v,
                         None => prelude::Timestamp(0i64),
+                    },
+                    stored: match &record.stored {
+                        Some(v) => *v,
+                        None => false,
                     },
                 },
             ))
@@ -1779,6 +1822,7 @@ pub mod edge_copy_flow_impl {
                 held: Some(vars.held),
                 stored_at: Some(vars.stored_at),
                 copy_state: state.id().to_string(),
+                stored: Some(vars.stored),
             })
         }
 
@@ -1796,9 +1840,14 @@ pub mod edge_copy_flow_impl {
                 }
                 (State::EgReadyI, Event::EcRequest(_)) => {
                     if vars.held > 0u64
+                        && vars.stored
+                        && vars.stored_at.0 <= now.0
                         && now
                             .0
                             .checked_sub(vars.stored_at.0)
+                            .filter(|__v| {
+                                (-9007199254740991i64..=9007199254740991i64).contains(__v)
+                            })
                             .ok_or(overflow("eg-serve-i"))?
                             < 5000i64
                     {
@@ -1817,13 +1866,14 @@ pub mod edge_copy_flow_impl {
                 }
                 (State::EgFetchingI, Event::EcOriginAnswer(payload)) => {
                     let mut next = vars.clone();
+                    next.stored = true;
                     next.held = payload.version;
                     next.stored_at = prelude::Timestamp(now.0);
-                    let emitted_3 = Emitted::EcServed(EcServedPayload {});
+                    let emitted_4 = Emitted::EcServed(EcServedPayload {});
                     Ok(Outcome::to(State::EgReadyI, next).emit(
                         "web-application",
                         Delivery::AtMostOnce,
-                        emitted_3,
+                        emitted_4,
                     ))
                 }
                 _ => Ok(Outcome::to(*state, vars.clone())),
@@ -2503,7 +2553,7 @@ pub mod arc_outbox_consumer_flow_impl {
 
     use strata_runtime::{Delivery, Isolation, Machine, Outcome, RecordError, StepError, Time};
 
-    use crate::records;
+    use crate::{prelude, records};
 
     /// The states of machine `arc-outbox-consumer-flow-impl`.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -2545,6 +2595,7 @@ pub mod arc_outbox_consumer_flow_impl {
     /// The notice queue delivers an event notice to a subscriber.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
     pub struct ArcObDeliveredPayload {
+        #[serde(deserialize_with = "prelude::safe_u64")]
         /// Field `seq`.
         pub seq: u64,
     }
@@ -3310,6 +3361,9 @@ pub mod preview_link_flow_impl {
                     next.expires_at = prelude::Timestamp(
                         now.0
                             .checked_add(900000i64)
+                            .filter(|__v| {
+                                (-9007199254740991i64..=9007199254740991i64).contains(__v)
+                            })
                             .ok_or(overflow("pl-link-issued-i"))?,
                     );
                     Ok(Outcome::to(State::PlIssuedI, next))
@@ -4446,6 +4500,7 @@ pub mod guess_throttle_flow_impl {
                         next.failures = next
                             .failures
                             .checked_add(1u64)
+                            .filter(|__v| *__v <= 9007199254740991u64)
                             .ok_or(overflow("gti-wrong"))?;
                         let emitted_2 = Emitted::PwRefused(PwRefusedPayload {});
                         Ok(Outcome::to(State::GtiOpen, next).emit(
@@ -4459,6 +4514,7 @@ pub mod guess_throttle_flow_impl {
                             next.failures = next
                                 .failures
                                 .checked_add(1u64)
+                                .filter(|__v| *__v <= 9007199254740991u64)
                                 .ok_or(overflow("gti-wrong-last"))?;
                             let emitted_2 = Emitted::PwRefused(PwRefusedPayload {});
                             Ok(Outcome::to(State::GtiClosed, next).emit(
@@ -4503,7 +4559,7 @@ pub mod trigger_chain_flow_impl {
 
     use strata_runtime::{Delivery, Isolation, Machine, Outcome, RecordError, StepError, Time};
 
-    use crate::{records, types};
+    use crate::{prelude, records, types};
 
     /// The states of machine `trigger-chain-flow-impl`.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -4543,6 +4599,7 @@ pub mod trigger_chain_flow_impl {
     /// A committed change that may start a chain of triggers.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
     pub struct TcChangePayload {
+        #[serde(deserialize_with = "prelude::safe_u64")]
         /// Field `hop`.
         pub hop: u64,
         /// Field `correlation`.
@@ -4659,12 +4716,14 @@ pub mod trigger_chain_flow_impl {
                         next.accepted = next
                             .accepted
                             .checked_add(1u64)
+                            .filter(|__v| *__v <= 9007199254740991u64)
                             .ok_or(overflow("tci-accept"))?;
                         let emitted_2 = Emitted::TcJobCreated(TcJobCreatedPayload {});
                         let emitted_3 = Emitted::TcChange(TcChangePayload {
                             hop: payload
                                 .hop
                                 .checked_add(1u64)
+                                .filter(|__v| *__v <= 9007199254740991u64)
                                 .ok_or(overflow("tci-accept"))?,
                             correlation: types::CorrelationId(payload.correlation.0),
                         });
@@ -4738,6 +4797,8 @@ pub mod gateway_outage_flow_impl {
         /// Variable `checkedAt`.
         #[serde(rename = "checkedAt")]
         pub checked_at: prelude::Timestamp,
+        /// Variable `checked`.
+        pub checked: bool,
     }
 
     /// The payload of event `sr-request`: Request with the session.
@@ -4853,6 +4914,7 @@ pub mod gateway_outage_flow_impl {
                 State::GwiReady,
                 Vars {
                     checked_at: prelude::Timestamp(0i64),
+                    checked: false,
                 },
             )
         }
@@ -4868,6 +4930,10 @@ pub mod gateway_outage_flow_impl {
                 state,
                 Vars {
                     checked_at: record.checked_at,
+                    checked: match &record.checked {
+                        Some(v) => *v,
+                        None => false,
+                    },
                 },
             ))
         }
@@ -4892,6 +4958,7 @@ pub mod gateway_outage_flow_impl {
                 valid: previous.valid,
                 session_state: previous.session_state.clone(),
                 outage_state: state.id().to_string(),
+                checked: Some(vars.checked),
             })
         }
 
@@ -4903,11 +4970,16 @@ pub mod gateway_outage_flow_impl {
         ) -> Result<Outcome<Self>, StepError> {
             match (state, event) {
                 (State::GwiReady, Event::SrRequest(_)) => {
-                    if now
-                        .0
-                        .checked_sub(vars.checked_at.0)
-                        .ok_or(overflow("gwi-accept-fresh"))?
-                        < 5000i64
+                    if vars.checked
+                        && vars.checked_at.0 <= now.0
+                        && now
+                            .0
+                            .checked_sub(vars.checked_at.0)
+                            .filter(|__v| {
+                                (-9007199254740991i64..=9007199254740991i64).contains(__v)
+                            })
+                            .ok_or(overflow("gwi-accept-fresh"))?
+                            < 5000i64
                     {
                         Ok(Outcome::to(State::GwiReady, vars.clone()).emit(
                             "web-application",
@@ -4925,12 +4997,13 @@ pub mod gateway_outage_flow_impl {
                 (State::GwiChecking, Event::SrLookupAnswer(payload)) => {
                     if payload.valid == true {
                         let mut next = vars.clone();
+                        next.checked = true;
                         next.checked_at = prelude::Timestamp(now.0);
-                        let emitted_2 = Emitted::SrAccepted(SrAcceptedPayload {});
+                        let emitted_3 = Emitted::SrAccepted(SrAcceptedPayload {});
                         Ok(Outcome::to(State::GwiReady, next).emit(
                             "web-application",
                             Delivery::AtMostOnce,
-                            emitted_2,
+                            emitted_3,
                         ))
                     } else {
                         if payload.valid == false {
@@ -5173,9 +5246,13 @@ pub mod erasure_copy_flow_impl {
                 }
                 (State::EriHolding, Event::ErRead(_)) => {
                     if vars.erased
+                        && vars.erased_at.0 <= now.0
                         && now
                             .0
                             .checked_sub(vars.erased_at.0)
+                            .filter(|__v| {
+                                (-9007199254740991i64..=9007199254740991i64).contains(__v)
+                            })
                             .ok_or(overflow("eri-revalidate"))?
                             >= 2000i64
                     {
@@ -5634,6 +5711,7 @@ pub mod audit_chain_flow_impl {
                     next.head_seq = next
                         .head_seq
                         .checked_add(1u64)
+                        .filter(|__v| *__v <= 9007199254740991u64)
                         .ok_or(overflow("aci-append"))?;
                     let emitted_2 = Emitted::AuAppended(AuAppendedPayload {});
                     Ok(Outcome::to(State::AciOpen, next).emit(
@@ -5644,7 +5722,11 @@ pub mod audit_chain_flow_impl {
                 }
                 (State::AciOpen, Event::AuErase(_)) => {
                     let mut next = vars.clone();
-                    next.sealed = next.sealed.checked_add(1u64).ok_or(overflow("aci-seal"))?;
+                    next.sealed = next
+                        .sealed
+                        .checked_add(1u64)
+                        .filter(|__v| *__v <= 9007199254740991u64)
+                        .ok_or(overflow("aci-seal"))?;
                     let emitted_2 = Emitted::AuSealed(AuSealedPayload {});
                     Ok(Outcome::to(State::AciOpen, next).emit(
                         "subject-rights-service",
@@ -6505,6 +6587,7 @@ pub mod mail_dispatch_flow_impl {
                     next.attempts = next
                         .attempts
                         .checked_add(1u64)
+                        .filter(|__v| *__v <= 9007199254740991u64)
                         .ok_or(overflow("mdi-submit"))?;
                     next.key = payload.key.clone();
                     let emitted_3 = Emitted::EmSubmit(EmSubmitPayload {
@@ -6522,6 +6605,7 @@ pub mod mail_dispatch_flow_impl {
                     next.attempts = next
                         .attempts
                         .checked_add(1u64)
+                        .filter(|__v| *__v <= 9007199254740991u64)
                         .ok_or(overflow("mdi-resubmit"))?;
                     let emitted_2 = Emitted::EmSubmit(EmSubmitPayload {
                         key: next.key.clone(),
@@ -6735,6 +6819,7 @@ pub mod mail_adapter_flow_impl {
                         next.delivered_k1 = next
                             .delivered_k1
                             .checked_add(1u64)
+                            .filter(|__v| *__v <= 9007199254740991u64)
                             .ok_or(overflow("mai-deliver-k1"))?;
                         let emitted_2 = Emitted::EmAck(EmAckPayload {});
                         Ok(Outcome::to(State::MaiReady, next).emit_after(
@@ -6749,6 +6834,7 @@ pub mod mail_adapter_flow_impl {
                             next.delivered_k2 = next
                                 .delivered_k2
                                 .checked_add(1u64)
+                                .filter(|__v| *__v <= 9007199254740991u64)
                                 .ok_or(overflow("mai-deliver-k2"))?;
                             let emitted_2 = Emitted::EmAck(EmAckPayload {});
                             Ok(Outcome::to(State::MaiReady, next).emit_after(
@@ -7691,7 +7777,11 @@ pub mod migration_batch_flow_impl {
                 (State::MgiRunning, Event::MgBatchRun(_)) => {
                     if vars.cursor < 3u64 {
                         let mut next = vars.clone();
-                        next.cursor = next.cursor.checked_add(1u64).ok_or(overflow("mgi-batch"))?;
+                        next.cursor = next
+                            .cursor
+                            .checked_add(1u64)
+                            .filter(|__v| *__v <= 9007199254740991u64)
+                            .ok_or(overflow("mgi-batch"))?;
                         Ok(Outcome::to(State::MgiRunning, next))
                     } else {
                         if vars.cursor >= 3u64 {
@@ -8068,6 +8158,7 @@ pub mod tenant_move_flow_impl {
                     next.source_version = next
                         .source_version
                         .checked_add(1u64)
+                        .filter(|__v| *__v <= 9007199254740991u64)
                         .ok_or(overflow("tmi-write-source"))?;
                     let emitted_2 = Emitted::TmWriteAccepted(TmWriteAcceptedPayload {});
                     Ok(Outcome::to(State::TmiSource, next).emit(
@@ -8081,6 +8172,7 @@ pub mod tenant_move_flow_impl {
                     next.source_version = next
                         .source_version
                         .checked_add(1u64)
+                        .filter(|__v| *__v <= 9007199254740991u64)
                         .ok_or(overflow("tmi-write-copying"))?;
                     let emitted_2 = Emitted::TmWriteAccepted(TmWriteAcceptedPayload {});
                     Ok(Outcome::to(State::TmiCopying, next).emit(
@@ -8591,6 +8683,7 @@ pub mod source_throttle_flow_impl {
                             next.failures_a = next
                                 .failures_a
                                 .checked_add(1u64)
+                                .filter(|__v| *__v <= 9007199254740991u64)
                                 .ok_or(overflow("sti-fail-a"))?;
                             let emitted_2 = Emitted::SrcRefused(SrcRefusedPayload {});
                             Ok(Outcome::to(State::StiOpen, next).emit(
@@ -8604,6 +8697,7 @@ pub mod source_throttle_flow_impl {
                                 next.failures_b = next
                                     .failures_b
                                     .checked_add(1u64)
+                                    .filter(|__v| *__v <= 9007199254740991u64)
                                     .ok_or(overflow("sti-fail-b"))?;
                                 let emitted_2 = Emitted::SrcRefused(SrcRefusedPayload {});
                                 Ok(Outcome::to(State::StiOpen, next).emit(
@@ -8632,7 +8726,7 @@ pub mod source_throttle_flow_impl {
 
 /// Job run (implementation)
 ///
-/// One job as the automation worker keeps it (rec-job, keyed by job-id). The job is offered to a worker only when the time of the poll is at or after its due time (due-at). A failed attempt records its error, moves due-at ahead by 5 seconds after the first failure and 10 seconds after the second, and schedules a poll for then; the third failure ends the job as failed. A cancel ends the job as cancelled and a cancelled job takes no attempt. Times are in milliseconds.
+/// One job as the automation worker keeps it (rec-job, keyed by job-id). Creating the job sets its due time ten seconds ahead of the clock. The job is offered to a worker only when the time of the poll is at or after its due time (due-at). A failed attempt records its error, moves due-at ahead by 5 seconds after the first failure and 10 seconds after the second, and schedules a poll for then; the third failure ends the job as failed. A cancel ends the job as cancelled and a cancelled job takes no attempt. Times are in milliseconds.
 ///
 /// Specification behavior `job-run-flow-impl`, an implementation-level machine.
 pub mod job_run_flow_impl {
@@ -8648,19 +8742,22 @@ pub mod job_run_flow_impl {
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 
     pub enum State {
-        /// State `jr-waiting-i`: Waiting for its due time. Ignores `jr-attempt-failed`, `jr-attempt-succeeded`.
+        /// State `jr-new-i`: Not yet created. Ignores `jr-poll`, `jr-attempt-failed`, `jr-attempt-succeeded`, `jr-cancel`.
+        #[serde(rename = "jr-new-i")]
+        JrNewI,
+        /// State `jr-waiting-i`: Waiting for its due time. Ignores `jr-attempt-failed`, `jr-attempt-succeeded`, `jr-created`.
         #[serde(rename = "jr-waiting-i")]
         JrWaitingI,
-        /// State `jr-leased-i`: Offered to a worker. Ignores `jr-poll`.
+        /// State `jr-leased-i`: Offered to a worker. Ignores `jr-poll`, `jr-created`.
         #[serde(rename = "jr-leased-i")]
         JrLeasedI,
-        /// State `jr-completed-i`: Completed. Ignores `jr-poll`, `jr-attempt-failed`, `jr-attempt-succeeded`, `jr-cancel`.
+        /// State `jr-completed-i`: Completed. Ignores `jr-poll`, `jr-attempt-failed`, `jr-attempt-succeeded`, `jr-cancel`, `jr-created`.
         #[serde(rename = "jr-completed-i")]
         JrCompletedI,
-        /// State `jr-failed-i`: Failed. Ignores `jr-poll`, `jr-attempt-failed`, `jr-attempt-succeeded`, `jr-cancel`.
+        /// State `jr-failed-i`: Failed. Ignores `jr-poll`, `jr-attempt-failed`, `jr-attempt-succeeded`, `jr-cancel`, `jr-created`.
         #[serde(rename = "jr-failed-i")]
         JrFailedI,
-        /// State `jr-cancelled-i`: Cancelled. Ignores `jr-poll`, `jr-attempt-failed`, `jr-attempt-succeeded`, `jr-cancel`.
+        /// State `jr-cancelled-i`: Cancelled. Ignores `jr-poll`, `jr-attempt-failed`, `jr-attempt-succeeded`, `jr-cancel`, `jr-created`.
         #[serde(rename = "jr-cancelled-i")]
         JrCancelledI,
     }
@@ -8669,6 +8766,7 @@ pub mod job_run_flow_impl {
         /// The state's id in the specification.
         pub fn id(self) -> &'static str {
             match self {
+                State::JrNewI => "jr-new-i",
                 State::JrWaitingI => "jr-waiting-i",
                 State::JrLeasedI => "jr-leased-i",
                 State::JrCompletedI => "jr-completed-i",
@@ -8680,6 +8778,7 @@ pub mod job_run_flow_impl {
         /// The state with this id in the specification.
         pub fn from_id(id: &str) -> Option<State> {
             match id {
+                "jr-new-i" => Some(State::JrNewI),
                 "jr-waiting-i" => Some(State::JrWaitingI),
                 "jr-leased-i" => Some(State::JrLeasedI),
                 "jr-completed-i" => Some(State::JrCompletedI),
@@ -8716,6 +8815,8 @@ pub mod job_run_flow_impl {
         /// Variable `attemptsAtCancel`.
         #[serde(rename = "attemptsAtCancel")]
         pub attempts_at_cancel: u64,
+        /// Variable `failed`.
+        pub failed: bool,
     }
 
     /// The payload of event `jr-poll`: Job poll.
@@ -8745,6 +8846,12 @@ pub mod job_run_flow_impl {
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
     pub struct JrCancelPayload {}
 
+    /// The payload of event `jr-created`: Job created.
+    ///
+    /// A job is created with a due time ten seconds after its creation.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct JrCreatedPayload {}
+
     /// The payload of event `jr-offered`: Job offered.
     ///
     /// The job was offered to a worker.
@@ -8773,6 +8880,9 @@ pub mod job_run_flow_impl {
         /// Event `jr-cancel`: Job cancelled.
         #[serde(rename = "jr-cancel")]
         JrCancel(JrCancelPayload),
+        /// Event `jr-created`: Job created.
+        #[serde(rename = "jr-created")]
+        JrCreated(JrCreatedPayload),
     }
 
     /// The events machine `job-run-flow-impl` emits.
@@ -8827,9 +8937,9 @@ pub mod job_run_flow_impl {
 
         fn initial(_key: &Key) -> (State, Vars) {
             (
-                State::JrWaitingI,
+                State::JrNewI,
                 Vars {
-                    due_at: prelude::Timestamp(10000i64),
+                    due_at: prelude::Timestamp(0i64),
                     attempts: 0u64,
                     errors: 0u32,
                     failed_at: prelude::Timestamp(0i64),
@@ -8838,12 +8948,14 @@ pub mod job_run_flow_impl {
                     offered_at: prelude::Timestamp(0i64),
                     cancelled: false,
                     attempts_at_cancel: 0u64,
+                    failed: false,
                 },
             )
         }
 
         fn from_record(record: &records::RecJob) -> Result<(State, Vars), RecordError> {
             let state = match &record.state {
+                types::JobState::Unscheduled => State::JrNewI,
                 types::JobState::Waiting => State::JrWaitingI,
                 types::JobState::Leased => State::JrLeasedI,
                 types::JobState::Completed => State::JrCompletedI,
@@ -8883,6 +8995,10 @@ pub mod job_run_flow_impl {
                         Some(v) => *v,
                         None => 0u64,
                     },
+                    failed: match &record.failed {
+                        Some(v) => *v,
+                        None => false,
+                    },
                 },
             ))
         }
@@ -8905,6 +9021,7 @@ pub mod job_run_flow_impl {
                 job_id: key.clone(),
                 due_at: vars.due_at,
                 state: match state {
+                    State::JrNewI => types::JobState::Unscheduled,
                     State::JrWaitingI => types::JobState::Waiting,
                     State::JrLeasedI => types::JobState::Leased,
                     State::JrCompletedI => types::JobState::Completed,
@@ -8923,6 +9040,7 @@ pub mod job_run_flow_impl {
                 offered_at: Some(vars.offered_at),
                 cancelled: Some(vars.cancelled),
                 attempts_at_cancel: Some(vars.attempts_at_cancel),
+                failed: Some(vars.failed),
             })
         }
 
@@ -8933,12 +9051,25 @@ pub mod job_run_flow_impl {
             now: Time,
         ) -> Result<Outcome<Self>, StepError> {
             match (state, event) {
+                (State::JrNewI, Event::JrCreated(_)) => {
+                    let mut next = vars.clone();
+                    next.due_at = prelude::Timestamp(
+                        now.0
+                            .checked_add(10000i64)
+                            .filter(|__v| {
+                                (-9007199254740991i64..=9007199254740991i64).contains(__v)
+                            })
+                            .ok_or(overflow("jr-create-i"))?,
+                    );
+                    Ok(Outcome::to(State::JrWaitingI, next))
+                }
                 (State::JrWaitingI, Event::JrPoll(_)) => {
                     if now.0 >= vars.due_at.0 && vars.attempts == 0u64 {
                         let mut next = vars.clone();
                         next.attempts = next
                             .attempts
                             .checked_add(1u64)
+                            .filter(|__v| *__v <= 9007199254740991u64)
                             .ok_or(overflow("jr-offer-first-i"))?;
                         next.offered_at = prelude::Timestamp(now.0);
                         let emitted_3 = Emitted::JrOffered(JrOfferedPayload {});
@@ -8948,17 +9079,25 @@ pub mod job_run_flow_impl {
                             emitted_3,
                         ))
                     } else {
-                        if now.0 >= vars.due_at.0 && vars.attempts > 0u64 {
+                        if vars.failed
+                            && vars.failed_at.0 <= now.0
+                            && now.0 >= vars.due_at.0
+                            && vars.attempts > 0u64
+                        {
                             let mut next = vars.clone();
                             next.attempts = next
                                 .attempts
                                 .checked_add(1u64)
+                                .filter(|__v| *__v <= 9007199254740991u64)
                                 .ok_or(overflow("jr-offer-retry-i"))?;
                             next.offered_at = prelude::Timestamp(now.0);
                             next.prev_gap = next.gap;
                             next.gap = now
                                 .0
                                 .checked_sub(next.failed_at.0)
+                                .filter(|__v| {
+                                    (-9007199254740991i64..=9007199254740991i64).contains(__v)
+                                })
                                 .ok_or(overflow("jr-offer-retry-i"))?;
                             let emitted_5 = Emitted::JrOffered(JrOfferedPayload {});
                             Ok(Outcome::to(State::JrLeasedI, next).emit(
@@ -8985,16 +9124,20 @@ pub mod job_run_flow_impl {
                             .checked_add(1u32)
                             .ok_or(overflow("jr-retry-first-i"))?;
                         next.failed_at = prelude::Timestamp(now.0);
+                        next.failed = true;
                         next.due_at = prelude::Timestamp(
                             now.0
                                 .checked_add(5000i64)
+                                .filter(|__v| {
+                                    (-9007199254740991i64..=9007199254740991i64).contains(__v)
+                                })
                                 .ok_or(overflow("jr-retry-first-i"))?,
                         );
-                        let emitted_4 = Emitted::JrPoll(JrPollPayload {});
+                        let emitted_5 = Emitted::JrPoll(JrPollPayload {});
                         Ok(Outcome::to(State::JrWaitingI, next).emit_after(
                             "automation-worker",
                             Delivery::AtLeastOnce,
-                            emitted_4,
+                            emitted_5,
                             Duration::from_millis(5000),
                         ))
                     } else {
@@ -9005,16 +9148,20 @@ pub mod job_run_flow_impl {
                                 .checked_add(1u32)
                                 .ok_or(overflow("jr-retry-second-i"))?;
                             next.failed_at = prelude::Timestamp(now.0);
+                            next.failed = true;
                             next.due_at = prelude::Timestamp(
                                 now.0
                                     .checked_add(10000i64)
+                                    .filter(|__v| {
+                                        (-9007199254740991i64..=9007199254740991i64).contains(__v)
+                                    })
                                     .ok_or(overflow("jr-retry-second-i"))?,
                             );
-                            let emitted_4 = Emitted::JrPoll(JrPollPayload {});
+                            let emitted_5 = Emitted::JrPoll(JrPollPayload {});
                             Ok(Outcome::to(State::JrWaitingI, next).emit_after(
                                 "automation-worker",
                                 Delivery::AtLeastOnce,
-                                emitted_4,
+                                emitted_5,
                                 Duration::from_millis(10000),
                             ))
                         } else {
@@ -9258,6 +9405,7 @@ pub mod schedule_flow_impl {
                         next.completions = next
                             .completions
                             .checked_add(1u64)
+                            .filter(|__v| *__v <= 9007199254740991u64)
                             .ok_or(overflow("sc-complete-paused-i"))?;
                         Ok(Outcome::to(State::ScLiveI, next))
                     } else {
@@ -9266,10 +9414,12 @@ pub mod schedule_flow_impl {
                             next.completions = next
                                 .completions
                                 .checked_add(1u64)
+                                .filter(|__v| *__v <= 9007199254740991u64)
                                 .ok_or(overflow("sc-complete-i"))?;
                             next.created = next
                                 .created
                                 .checked_add(1u64)
+                                .filter(|__v| *__v <= 9007199254740991u64)
                                 .ok_or(overflow("sc-complete-i"))?;
                             let emitted_3 = Emitted::ScJobCreated(ScJobCreatedPayload {});
                             Ok(Outcome::to(State::ScLiveI, next).emit(
@@ -9295,6 +9445,7 @@ pub mod schedule_flow_impl {
                         next.created = next
                             .created
                             .checked_add(1u64)
+                            .filter(|__v| *__v <= 9007199254740991u64)
                             .ok_or(overflow("sc-resume-without-job-i"))?;
                         let emitted_3 = Emitted::ScJobCreated(ScJobCreatedPayload {});
                         Ok(Outcome::to(State::ScLiveI, next).emit(
@@ -9498,10 +9649,12 @@ pub mod trigger_commit_flow_impl {
                     next.committed = next
                         .committed
                         .checked_add(1u64)
+                        .filter(|__v| *__v <= 9007199254740991u64)
                         .ok_or(overflow("tg-commit-t-i"))?;
                     next.jobs = next
                         .jobs
                         .checked_add(next.subscribers)
+                        .filter(|__v| *__v <= 9007199254740991u64)
                         .ok_or(overflow("tg-commit-t-i"))?;
                     let emitted_3 = Emitted::TgJobsCreated(TgJobsCreatedPayload {});
                     Ok(Outcome::to(State::TgLiveI, next).emit(
@@ -9707,7 +9860,11 @@ pub mod lease_reach_flow_impl {
                 (State::LrLiveI, Event::LrJobDue(_)) => {
                     if vars.reachable {
                         let mut next = vars.clone();
-                        next.token = next.token.checked_add(1u64).ok_or(overflow("lr-grant-i"))?;
+                        next.token = next
+                            .token
+                            .checked_add(1u64)
+                            .filter(|__v| *__v <= 9007199254740991u64)
+                            .ok_or(overflow("lr-grant-i"))?;
                         let emitted_2 = Emitted::LrLeaseGranted(LrLeaseGrantedPayload {});
                         Ok(Outcome::to(State::LrLiveI, next).emit(
                             "automation-worker",
@@ -9809,6 +9966,7 @@ pub mod job_admission_flow_impl {
     /// A number of jobs of the tenant become due at once.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
     pub struct AdBurstPayload {
+        #[serde(deserialize_with = "prelude::safe_u64")]
         /// Field `jobs`.
         pub jobs: u64,
     }
@@ -9982,6 +10140,7 @@ pub mod job_admission_flow_impl {
                         next.backlog = next
                             .backlog
                             .checked_add(payload.jobs)
+                            .filter(|__v| *__v <= 9007199254740991u64)
                             .ok_or(overflow("ad-burst-first-i"))?;
                         next.ticking = true;
                         let emitted_3 = Emitted::AdTick(AdTickPayload {});
@@ -9996,6 +10155,7 @@ pub mod job_admission_flow_impl {
                         next.backlog = next
                             .backlog
                             .checked_add(payload.jobs)
+                            .filter(|__v| *__v <= 9007199254740991u64)
                             .ok_or(overflow("ad-burst-more-i"))?;
                         Ok(Outcome::to(State::AdLiveI, next))
                     }
@@ -10006,11 +10166,13 @@ pub mod job_admission_flow_impl {
                         next.released = next
                             .released
                             .checked_add(next.rate)
+                            .filter(|__v| *__v <= 9007199254740991u64)
                             .ok_or(overflow("ad-release-full-i"))?;
                         next.batch = next.rate;
                         next.backlog = next
                             .backlog
                             .checked_sub(next.rate)
+                            .filter(|__v| *__v <= 9007199254740991u64)
                             .ok_or(overflow("ad-release-full-i"))?;
                         let emitted_4 = Emitted::AdTick(AdTickPayload {});
                         Ok(Outcome::to(State::AdLiveI, next).emit_after(
@@ -10025,6 +10187,7 @@ pub mod job_admission_flow_impl {
                             next.released = next
                                 .released
                                 .checked_add(next.backlog)
+                                .filter(|__v| *__v <= 9007199254740991u64)
                                 .ok_or(overflow("ad-release-rest-i"))?;
                             next.batch = next.backlog;
                             next.backlog = 0u64;
@@ -10230,14 +10393,17 @@ pub mod wake_flow_impl {
                         next.scans = next
                             .scans
                             .checked_add(1u64)
+                            .filter(|__v| *__v <= 9007199254740991u64)
                             .ok_or(overflow("wk-scan-awake-i"))?;
                         next.awake_scans = next
                             .awake_scans
                             .checked_add(1u64)
+                            .filter(|__v| *__v <= 9007199254740991u64)
                             .ok_or(overflow("wk-scan-awake-i"))?;
                         next.queries = next
                             .queries
                             .checked_add(1u64)
+                            .filter(|__v| *__v <= 9007199254740991u64)
                             .ok_or(overflow("wk-scan-awake-i"))?;
                         let emitted_4 = Emitted::WkQuery(WkQueryPayload {});
                         Ok(Outcome::to(State::WkLiveI, next).emit(
@@ -10250,6 +10416,7 @@ pub mod wake_flow_impl {
                         next.scans = next
                             .scans
                             .checked_add(1u64)
+                            .filter(|__v| *__v <= 9007199254740991u64)
                             .ok_or(overflow("wk-scan-idle-i"))?;
                         Ok(Outcome::to(State::WkLiveI, next))
                     }
@@ -10471,10 +10638,12 @@ pub mod bulk_change_flow_impl {
                         next.processed = next
                             .processed
                             .checked_add(1u64)
+                            .filter(|__v| *__v <= 9007199254740991u64)
                             .ok_or(overflow("bk-process-ok-i"))?;
                         next.recorded = next
                             .recorded
                             .checked_add(1u64)
+                            .filter(|__v| *__v <= 9007199254740991u64)
                             .ok_or(overflow("bk-process-ok-i"))?;
                         let emitted_3 = Emitted::BkOutcomeRecorded(BkOutcomeRecordedPayload {});
                         Ok(Outcome::to(State::BkRunningI, next).emit(
@@ -10487,14 +10656,17 @@ pub mod bulk_change_flow_impl {
                         next.processed = next
                             .processed
                             .checked_add(1u64)
+                            .filter(|__v| *__v <= 9007199254740991u64)
                             .ok_or(overflow("bk-process-failed-i"))?;
                         next.recorded = next
                             .recorded
                             .checked_add(1u64)
+                            .filter(|__v| *__v <= 9007199254740991u64)
                             .ok_or(overflow("bk-process-failed-i"))?;
                         next.failed = next
                             .failed
                             .checked_add(1u64)
+                            .filter(|__v| *__v <= 9007199254740991u64)
                             .ok_or(overflow("bk-process-failed-i"))?;
                         let emitted_4 = Emitted::BkOutcomeRecorded(BkOutcomeRecordedPayload {});
                         Ok(Outcome::to(State::BkRunningI, next).emit(
@@ -10526,7 +10698,7 @@ pub mod workflow_definition_flow_impl {
 
     use strata_runtime::{Isolation, Machine, Outcome, RecordError, StepError, Time};
 
-    use crate::{records, types};
+    use crate::{prelude, records, types};
 
     /// The states of machine `workflow-definition-flow-impl`.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -10578,6 +10750,7 @@ pub mod workflow_definition_flow_impl {
     /// The tenant schema moves to a new version.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
     pub struct WdMigratePayload {
+        #[serde(deserialize_with = "prelude::safe_u64")]
         /// Field `version`.
         pub version: u64,
     }
@@ -11354,8 +11527,13 @@ pub mod workflow_run_flow_impl {
                         next.executions = next
                             .executions
                             .checked_add(1u64)
+                            .filter(|__v| *__v <= 9007199254740991u64)
                             .ok_or(overflow("wr-finish-i"))?;
-                        next.step = next.step.checked_add(1u64).ok_or(overflow("wr-finish-i"))?;
+                        next.step = next
+                            .step
+                            .checked_add(1u64)
+                            .filter(|__v| *__v <= 9007199254740991u64)
+                            .ok_or(overflow("wr-finish-i"))?;
                         let emitted_3 = Emitted::WrRunFinished(WrRunFinishedPayload {});
                         Ok(Outcome::to(State::WrCompletedI, next).emit(
                             "automation-worker",
@@ -11368,10 +11546,12 @@ pub mod workflow_run_flow_impl {
                             next.executions = next
                                 .executions
                                 .checked_add(1u64)
+                                .filter(|__v| *__v <= 9007199254740991u64)
                                 .ok_or(overflow("wr-advance-t-i"))?;
                             next.step = next
                                 .step
                                 .checked_add(1u64)
+                                .filter(|__v| *__v <= 9007199254740991u64)
                                 .ok_or(overflow("wr-advance-t-i"))?;
                             Ok(Outcome::to(State::WrRunningI, next))
                         } else {
@@ -11397,7 +11577,7 @@ pub mod workflow_compensation_flow_impl {
 
     use strata_runtime::{Delivery, Isolation, Machine, Outcome, RecordError, StepError, Time};
 
-    use crate::{records, types};
+    use crate::{prelude, records, types};
 
     /// The states of machine `workflow-compensation-flow-impl`.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -11467,6 +11647,7 @@ pub mod workflow_compensation_flow_impl {
     /// The declared compensation of one completed step runs.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
     pub struct WcCompensatePayload {
+        #[serde(deserialize_with = "prelude::safe_u64")]
         /// Field `step`.
         pub step: u64,
     }
@@ -11630,6 +11811,7 @@ pub mod workflow_compensation_flow_impl {
                     next.completed = next
                         .completed
                         .checked_add(1u64)
+                        .filter(|__v| *__v <= 9007199254740991u64)
                         .ok_or(overflow("wc-count-step-i"))?;
                     Ok(Outcome::to(State::WcRunningI, next))
                 }
@@ -11703,6 +11885,7 @@ pub mod workflow_compensation_flow_impl {
                     if vars
                         .compensated
                         .checked_add(1u64)
+                        .filter(|__v| *__v <= 9007199254740991u64)
                         .ok_or(overflow("wc-compensate-last-i"))?
                         == vars.completed
                     {
@@ -11710,6 +11893,7 @@ pub mod workflow_compensation_flow_impl {
                         next.compensated = next
                             .compensated
                             .checked_add(1u64)
+                            .filter(|__v| *__v <= 9007199254740991u64)
                             .ok_or(overflow("wc-compensate-last-i"))?;
                         next.prev_comp = next.last_comp;
                         next.last_comp = payload.step;
@@ -11725,6 +11909,7 @@ pub mod workflow_compensation_flow_impl {
                         next.compensated = next
                             .compensated
                             .checked_add(1u64)
+                            .filter(|__v| *__v <= 9007199254740991u64)
                             .ok_or(overflow("wc-compensate-step-i"))?;
                         next.prev_comp = next.last_comp;
                         next.last_comp = payload.step;
@@ -12397,7 +12582,7 @@ pub mod outbound_call_flow_impl {
 
     use strata_runtime::{Delivery, Isolation, Machine, Outcome, RecordError, StepError, Time};
 
-    use crate::{records, types};
+    use crate::{prelude, records, types};
 
     /// The states of machine `outbound-call-flow-impl`.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -12473,6 +12658,7 @@ pub mod outbound_call_flow_impl {
     /// A part of the response arrives.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
     pub struct OcChunkPayload {
+        #[serde(deserialize_with = "prelude::safe_u64")]
         /// Field `bytes`.
         pub bytes: u64,
     }
@@ -12694,6 +12880,7 @@ pub mod outbound_call_flow_impl {
                     if vars
                         .received
                         .checked_add(payload.bytes)
+                        .filter(|__v| *__v <= 9007199254740991u64)
                         .ok_or(overflow("oc-receive-i"))?
                         <= vars.limit
                     {
@@ -12701,6 +12888,7 @@ pub mod outbound_call_flow_impl {
                         next.received = next
                             .received
                             .checked_add(payload.bytes)
+                            .filter(|__v| *__v <= 9007199254740991u64)
                             .ok_or(overflow("oc-receive-i"))?;
                         Ok(Outcome::to(State::OcOpenI, next))
                     } else {
@@ -13124,7 +13312,7 @@ pub mod scheduled_publication_flow_impl {
             (
                 State::SpDraftI,
                 Vars {
-                    publish_at: prelude::Timestamp(10000i64),
+                    publish_at: prelude::Timestamp(0i64),
                     job_runs: 0u32,
                     published_at: prelude::Timestamp(0i64),
                 },
@@ -13149,7 +13337,7 @@ pub mod scheduled_publication_flow_impl {
                 Vars {
                     publish_at: match &record.publish_at {
                         Some(v) => *v,
-                        None => prelude::Timestamp(10000i64),
+                        None => prelude::Timestamp(0i64),
                     },
                     job_runs: match &record.job_runs {
                         Some(v) => *v,
@@ -13191,7 +13379,16 @@ pub mod scheduled_publication_flow_impl {
         ) -> Result<Outcome<Self>, StepError> {
             match (state, event) {
                 (State::SpDraftI, Event::SpSave(_)) => {
-                    Ok(Outcome::to(State::SpScheduledI, vars.clone()))
+                    let mut next = vars.clone();
+                    next.publish_at = prelude::Timestamp(
+                        now.0
+                            .checked_add(8000i64)
+                            .filter(|__v| {
+                                (-9007199254740991i64..=9007199254740991i64).contains(__v)
+                            })
+                            .ok_or(overflow("sp-schedule-i"))?,
+                    );
+                    Ok(Outcome::to(State::SpScheduledI, next))
                 }
                 (State::SpScheduledI, Event::SpJobRun(_)) => {
                     if now.0 >= vars.publish_at.0 {
@@ -13590,10 +13787,12 @@ pub mod mail_enqueue_flow_impl {
                     next.committed = next
                         .committed
                         .checked_add(1u64)
+                        .filter(|__v| *__v <= 9007199254740991u64)
                         .ok_or(overflow("me-commit-t-i"))?;
                     next.jobs = next
                         .jobs
                         .checked_add(1u64)
+                        .filter(|__v| *__v <= 9007199254740991u64)
                         .ok_or(overflow("me-commit-t-i"))?;
                     let emitted_3 = Emitted::MeJobCreated(MeJobCreatedPayload {});
                     Ok(Outcome::to(State::MeLiveI, next).emit(
@@ -13879,10 +14078,12 @@ pub mod mail_attempt_flow_impl {
                             next.attempts = next
                                 .attempts
                                 .checked_add(1u64)
+                                .filter(|__v| *__v <= 9007199254740991u64)
                                 .ok_or(overflow("mt-accepted-i"))?;
                             next.credential_reads = next
                                 .credential_reads
                                 .checked_add(1u64)
+                                .filter(|__v| *__v <= 9007199254740991u64)
                                 .ok_or(overflow("mt-accepted-i"))?;
                             let emitted_3 = Emitted::MtCredentialRead(MtCredentialReadPayload {});
                             let emitted_4 = Emitted::MtMessageSent(MtMessageSentPayload {});
@@ -13895,10 +14096,12 @@ pub mod mail_attempt_flow_impl {
                                 next.attempts = next
                                     .attempts
                                     .checked_add(1u64)
+                                    .filter(|__v| *__v <= 9007199254740991u64)
                                     .ok_or(overflow("mt-temporary-i"))?;
                                 next.credential_reads = next
                                     .credential_reads
                                     .checked_add(1u64)
+                                    .filter(|__v| *__v <= 9007199254740991u64)
                                     .ok_or(overflow("mt-temporary-i"))?;
                                 let emitted_3 =
                                     Emitted::MtCredentialRead(MtCredentialReadPayload {});
@@ -13913,10 +14116,12 @@ pub mod mail_attempt_flow_impl {
                                     next.attempts = next
                                         .attempts
                                         .checked_add(1u64)
+                                        .filter(|__v| *__v <= 9007199254740991u64)
                                         .ok_or(overflow("mt-permanent-i"))?;
                                     next.credential_reads = next
                                         .credential_reads
                                         .checked_add(1u64)
+                                        .filter(|__v| *__v <= 9007199254740991u64)
                                         .ok_or(overflow("mt-permanent-i"))?;
                                     next.fail_reason = payload.reason.clone();
                                     next.attempts_at_fail = next.attempts;

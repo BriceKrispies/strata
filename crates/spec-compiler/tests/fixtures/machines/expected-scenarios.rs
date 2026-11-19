@@ -40,8 +40,22 @@ struct Run<M: Machine> {
     timers: BTreeMap<String, (i64, Value)>,
 }
 
+/// A value with every number that is a whole number written as an integer, so that values
+/// compare by value: an `f64` variable holding `1` equals `1.0`.
+fn norm(value: Value) -> Value {
+    match value {
+        Value::Number(n) if n.is_f64() => match n.as_f64() {
+            Some(f) if f.fract() == 0.0 && f.abs() < 9.0e15 => Value::from(f as i64),
+            _ => Value::Number(n),
+        },
+        Value::Array(items) => Value::Array(items.into_iter().map(norm).collect()),
+        Value::Object(map) => Value::Object(map.into_iter().map(|(k, v)| (k, norm(v))).collect()),
+        other => other,
+    }
+}
+
 fn to_json<T: Serialize>(value: &T) -> Value {
-    serde_json::to_value(value).expect("serialisable")
+    norm(serde_json::to_value(value).expect("serialisable"))
 }
 
 impl<M: Machine> Run<M>
@@ -59,7 +73,7 @@ where
             Value::String(state.to_string()),
             "initial state"
         );
-        assert_eq!(to_json(&initial_vars), vars, "initial variables");
+        assert_eq!(to_json(&initial_vars), norm(vars), "initial variables");
         Run {
             state: initial_state,
             vars: initial_vars,
@@ -76,7 +90,11 @@ where
                 .remove(name)
                 .unwrap_or_else(|| panic!("{at}: timer {name} is not pending"));
             assert_eq!(due, now, "{at}: when timer {name} is due");
-            assert_eq!(scheduled, event, "{at}: the event of timer {name}");
+            assert_eq!(
+                norm(scheduled),
+                norm(event.clone()),
+                "{at}: the event of timer {name}"
+            );
         }
         let event: M::Event = serde_json::from_value(event)
             .unwrap_or_else(|e| panic!("{at}: not an event of the machine: {e}"));
@@ -110,11 +128,19 @@ where
                     Value::String(to.to_string()),
                     "{at}: state"
                 );
-                assert_eq!(to_json(&outcome.vars), vars, "{at}: variables");
+                assert_eq!(to_json(&outcome.vars), norm(vars), "{at}: variables");
                 let emitted: Vec<(&str, &str, Value)> = outcome
                     .emits
                     .iter()
                     .map(|e| (e.receiver.as_str(), e.delivery.name(), to_json(&e.event)))
+                    .collect();
+                let emits: Vec<(&str, &str, Value)> = emits
+                    .into_iter()
+                    .map(|(to, d, e)| (to, d, norm(e)))
+                    .collect();
+                let timers: Vec<(&str, i64, Value)> = timers
+                    .into_iter()
+                    .map(|(n, a, e)| (n, a, norm(e)))
                     .collect();
                 assert_eq!(emitted, emits, "{at}: emitted events");
                 assert_eq!(set, timers, "{at}: timers set");
