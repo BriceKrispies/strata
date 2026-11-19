@@ -144,7 +144,7 @@ impl App {
         F: FnOnce(&App) -> T + Send + 'static,
     {
         let app = self.clone();
-        tokio::task::spawn_blocking(move || work(&app))
+        strata_runtime::server::blocking(move || work(&app))
             .await
             .map_err(|e| ApiError::new(ErrorCode::Internal, format!("worker failed: {e}")))
     }

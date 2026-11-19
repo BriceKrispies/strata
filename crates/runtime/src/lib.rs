@@ -13,6 +13,7 @@
 //! - [`clock`]: the [`Clock`] every timer and retry reads, with a [`TestClock`] for tests.
 //! - [`routes`] and [`client`]: serving a contract over axum and calling one from another
 //!   component.
+//! - [`server`] and [`jobs`]: process bootstrap and background loops shared by the services.
 //! - [`telemetry`]: the [`Telemetry`] hooks the runtime reports through.
 //!
 //! The crate knows nothing about tenants, identity or content: it depends on no other Strata
@@ -23,9 +24,11 @@
 pub mod client;
 pub mod clock;
 pub mod host;
+pub mod jobs;
 pub mod machine;
 pub mod memory;
 pub mod routes;
+pub mod server;
 pub mod sqlite;
 pub mod store;
 pub mod telemetry;
