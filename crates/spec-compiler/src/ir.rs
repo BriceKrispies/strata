@@ -64,13 +64,16 @@ pub struct System {
     pub generation_target: Option<String>,
 }
 
-/// A component; only what the contract backend names.
+/// A component; only what the contract and wiring backends name.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Component {
     /// The component id.
     pub id: String,
     /// The component name.
     pub name: String,
+    /// The `to` of every relationship of kind `calls` from this component, in the order of the
+    /// relationships section, each once.
+    pub calls: Vec<String>,
 }
 
 /// A `type` entity.
@@ -282,6 +285,10 @@ pub struct Contract {
     pub idempotent: Option<bool>,
     /// How long a caller waits, as written.
     pub timeout_ms: Option<Number>,
+    /// `binding.method`, as written.
+    pub binding_method: Option<String>,
+    /// `binding.path`, as written: the route the contract is served at.
+    pub binding_path: Option<String>,
 }
 
 /// An input or output of a contract.
@@ -343,6 +350,10 @@ pub struct Event {
     pub delivery: Option<String>,
     /// `elapsed`: the event stands for elapsed time and is fired by a timer.
     pub elapsed: bool,
+    /// `contract`: the contract whose message the event is.
+    pub contract: Option<String>,
+    /// `role`: which message of its contract the event is (`request`, `response`, `error`).
+    pub role: Option<String>,
 }
 
 /// A payload field of an event.
