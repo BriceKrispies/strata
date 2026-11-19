@@ -897,6 +897,8 @@ pub struct Instances {
     pub stored_in: Option<String>,
     /// True when the instances are counted (`count`) rather than keyed.
     pub counted: bool,
+    /// `max`: the most instances there may be, when it is a whole number.
+    pub max: Option<u64>,
 }
 
 #[cfg(test)]

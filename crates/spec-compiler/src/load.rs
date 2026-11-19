@@ -1061,6 +1061,7 @@ impl Loader {
                 key: self.opt_str(i, "key", id),
                 stored_in: self.opt_str(i, "storedIn", id),
                 counted: i.contains_key("count"),
+                max: i.get("max").and_then(Value::as_u64),
             }),
             Some(_) => {
                 self.shape(id, "\"instances\" must be an object");

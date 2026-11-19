@@ -147,6 +147,14 @@ pub enum HostError {
         /// The key (JSON text).
         key: String,
     },
+    /// The event would create an instance beyond the machine's `instances.max`
+    /// ([`Machine::MAX_INSTANCES`]): it is refused and nothing was stored, scheduled or emitted.
+    InstanceLimit {
+        /// The machine.
+        machine: &'static str,
+        /// Its bound.
+        max: u64,
+    },
     /// A key, record or event could not be encoded or decoded.
     Codec(String),
     /// The store cannot run the machine's declared isolation.
@@ -183,6 +191,10 @@ impl fmt::Display for HostError {
                     "{machine} has no record for key {key} and does not create records"
                 )
             }
+            HostError::InstanceLimit { machine, max } => write!(
+                f,
+                "{machine} already has {max} instances, its instances.max, and creates no more"
+            ),
             HostError::Codec(why) => write!(f, "encoding: {why}"),
             HostError::Unsupported { machine, isolation } => {
                 write!(
@@ -240,6 +252,36 @@ pub(crate) fn event_name<T: Serialize>(event: &T) -> String {
         .or(external.map(String::as_str))
         .unwrap_or("an event")
         .to_string()
+}
+
+/// Refuse to start a new instance of a creating machine that already has
+/// [`Machine::MAX_INSTANCES`] instances: the records of its collection that hold one of its
+/// instances (a record another machine of a shared collection holds is not counted). Called for
+/// an event to a key with no record, before the step, as Exegra fails the step whose route would
+/// create instance `max + 1` whether or not a transition fires.
+pub(crate) fn admit_new_instance<M: Machine>(tx: &mut dyn Tx) -> Result<(), HostError> {
+    let Some(max) = M::MAX_INSTANCES else {
+        return Ok(());
+    };
+    let mut count = 0u64;
+    for key in tx.keys(M::RECORD)? {
+        let Some(stored) = tx.load(M::RECORD, &key)? else {
+            continue;
+        };
+        let held = decode::<M::Record>(&stored.data)
+            .ok()
+            .is_some_and(|record| M::from_record(&record).is_ok());
+        if held {
+            count += 1;
+        }
+    }
+    if count >= max {
+        return Err(HostError::InstanceLimit {
+            machine: M::NAME,
+            max,
+        });
+    }
+    Ok(())
 }
 
 /// How many times a step is tried when a concurrent writer wins the commit.
@@ -368,7 +410,10 @@ fn transition<M: Machine>(
     let previous: Option<M::Record> = stored.as_ref().map(|s| decode(&s.data)).transpose()?;
     let (state, vars) = match &previous {
         Some(record) => M::from_record(record)?,
-        None if M::CREATES => M::initial(key),
+        None if M::CREATES => {
+            admit_new_instance::<M>(tx)?;
+            M::initial(key)
+        }
         None => {
             return Err(HostError::RecordMissing {
                 machine: M::NAME,

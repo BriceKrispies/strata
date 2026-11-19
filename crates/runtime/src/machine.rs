@@ -418,6 +418,11 @@ pub trait Machine: Send + Sync + 'static {
     /// key with no record with [`HostError::RecordMissing`](crate::HostError::RecordMissing),
     /// storing, scheduling and emitting nothing.
     const CREATES: bool;
+    /// The most instances a creating machine may have (`instances.max`), or `None` for no bound.
+    /// The hosts refuse an event that would create one instance more with
+    /// [`HostError::InstanceLimit`](crate::HostError::InstanceLimit), as Exegra fails the step that
+    /// would create instance `max + 1`; an event for an existing instance is never refused by it.
+    const MAX_INSTANCES: Option<u64> = None;
 
     /// The machine's control states.
     type State: Clone + Debug + Send + Sync + 'static;
