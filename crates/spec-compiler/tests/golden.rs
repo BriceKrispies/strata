@@ -411,3 +411,16 @@ fn the_wiring_reaches_the_generated_crate() {
     assert!(handlers.contains("pub async fn deliver_from_job<S, D>("));
     assert!(handlers.contains("nothing is generated for them: `tracker-reset`."));
 }
+
+#[test]
+fn a_machine_logs_the_emitted_events_the_specification_logs() {
+    let files = machines_files();
+    let telemetry = file_text(&files, "src/telemetry.rs");
+    assert!(telemetry.contains("pub const WORKER: JsonLines = JsonLines { service: \"worker\" };"));
+    assert!(telemetry.contains("fields.push((\"lease\", line.token.into()));"));
+    let machines = file_text(&files, "src/machines.rs");
+    // Only lease-granted is logged among what the lease machine emits.
+    assert!(machines.contains("if let Emitted::LeaseGranted(payload) = emitted {"));
+    assert!(machines.contains("holder: payload.holder.as_str(),"));
+    assert_eq!(machines.matches("fn log_emitted(").count(), 1);
+}

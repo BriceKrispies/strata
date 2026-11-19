@@ -286,18 +286,69 @@ test('an author cannot edit another author’s article; an editor can', async ({
   // Guessing the address of someone else's draft finds nothing.
   await open(page, '/desk/edit/notes-toward-a-workbench');
   await expect(page.getByRole('heading', { level: 1, name: 'There is nothing at this address' })).toBeVisible();
-  // And a forged write is refused by the kernel's policy, not by the page.
+  // A forged write to that draft finds nothing either: it answers exactly as an article that
+  // does not exist, so it does not tell her the draft is there.
   const csrf = (await (await page.request.get('/api/session')).json()).session.csrf_token;
-  const forged = await page.request.post('/api/records', {
-    data: { op: 'update', object: 'post', id: 15, fields: { title: 'Taken over' } },
-    headers: { origin: BASE, 'x-csrf-token': csrf },
-  });
+  const forge = (id) =>
+    page.request.post('/api/records', {
+      data: { op: 'update', object: 'post', id, fields: { title: 'Taken over' } },
+      headers: { origin: BASE, 'x-csrf-token': csrf },
+    });
+  const hidden = await forge(15);
+  const missing = await forge(9999);
+  expect(hidden.status()).toBe(404);
+  expect(missing.status()).toBe(404);
+  const [hiddenBody, missingBody] = [await hidden.json(), await missing.json()];
+  expect({ ...hiddenBody, message: '', failed: [], correlation: '' }).toEqual({ ...missingBody, message: '', failed: [], correlation: '' });
+  expect(hiddenBody.failed.map((c) => c.rule)).toEqual(missingBody.failed.map((c) => c.rule));
+  // An article she can read but did not write is refused by the kernel's policy, not by the page.
+  const forged = await forge(14);
   expect(forged.status()).toBe(403);
   expect((await forged.json()).failed[0].rule).toBe('policy:authors_own_posts');
 });
 
-test('a session that ends is noticed at once and the page falls back to signed out', async ({ page }) => {
+test('an author cannot write under another byline, feature a post or choose when it was published', async ({ page }) => {
   await signIn(page, 'tomasz');
+  const csrf = (await (await page.request.get('/api/session')).json()).session.csrf_token;
+  const headers = { origin: BASE, 'x-csrf-token': csrf };
+  const INES = 2; // author records: Inès is the first, Tomasz the second
+  const TOMASZ = 3;
+  const OWN_DRAFT = 15; // "Notes Toward a Workbench", Tomasz's own unpublished draft
+  const farFuture = Date.UTC(2099, 0, 1);
+  const rules = async (response) => (await response.json()).failed.map((check) => check.rule);
+  const create = (fields) =>
+    page.request.post('/api/records', {
+      data: { op: 'create', object: 'post', fields: { title: 'Forged', slug: 'forged-byline', body: 'Text.', author: TOMASZ, ...fields } },
+      headers,
+    });
+  const update = (fields) => page.request.post('/api/records', { data: { op: 'update', object: 'post', id: OWN_DRAFT, fields }, headers });
+
+  // A post under Inès's byline is refused by the policy that grants authors creation.
+  const byline = await create({ author: INES });
+  expect(byline.ok()).toBe(false);
+  expect(await rules(byline)).toContain('policy:authors_write_posts');
+  // Featuring, or dating a post in the far future, is for editors.
+  const featured = await create({ featured: true });
+  expect(featured.ok()).toBe(false);
+  expect(await rules(featured)).toContain('constraint:post.featured_by_editors');
+  const dated = await create({ published_at: farFuture });
+  expect(dated.ok()).toBe(false);
+  expect(await rules(dated)).toContain('constraint:post.published_at_by_editors');
+  // The same on a post he does own: its byline, its feature and its date stay as they are.
+  expect(await rules(await update({ author: INES }))).toContain('constraint:post.author_fixed');
+  expect(await rules(await update({ featured: true }))).toContain('constraint:post.featured_by_editors');
+  expect(await rules(await update({ published_at: farFuture }))).toContain('constraint:post.published_at_by_editors');
+
+  // Nothing above got through: the front page still shows the editor's feature, and the draft is a draft.
+  await open(page, '/');
+  await expect(page.getByRole('heading', { level: 2, name: 'The Jig Is the Work' })).toBeVisible();
+  await open(page, '/desk');
+  await expect(page.getByRole('row', { name: /Notes Toward a Workbench/ })).toContainText('Draft');
+});
+
+test('a session that ends is noticed at once and the page falls back to signed out', async ({ page }) => {
+  // The session-expiry fixture is the owner's.
+  await signIn(page, 'admin');
   await expect(page.locator('.colophon__live')).toHaveAttribute('data-connection', 'open');
   await mark(page);
   const csrf = (await (await page.request.get('/api/session')).json()).session.csrf_token;
@@ -414,6 +465,45 @@ test('the whole site can be used from the keyboard', async ({ page }) => {
     return getComputedStyle(link).outlineStyle;
   });
   expect(focusRing).not.toBe('none');
+});
+
+test('a slow render never rewinds what was typed into a field', async ({ page }) => {
+  // Hold every message from the kernel worker back, so each draw reaches the page after the
+  // keystrokes that came later than the state it shows.
+  await page.addInitScript(() => {
+    const Native = window.Worker;
+    const own = Object.getOwnPropertyDescriptor(Native.prototype, 'onmessage');
+    window.Worker = class extends Native {
+      constructor(...args) {
+        super(...args);
+        Object.defineProperty(this, 'onmessage', {
+          set: (fn) => own.set.call(this, fn && ((event) => setTimeout(() => fn.call(this, event), 150))),
+          get: () => own.get.call(this),
+        });
+      }
+    };
+  });
+  await open(page, '/login');
+  const name = page.getByLabel('Name');
+  await name.focus();
+  await page.keyboard.type('tomasz');
+  // Leave the field, so the focused-field rule no longer protects it, and watch it while the
+  // delayed draws of the earlier keystrokes arrive.
+  await page.keyboard.press('Tab');
+  const seen = await page.evaluate(
+    () =>
+      new Promise((resolve) => {
+        const input = document.getElementById('login-name');
+        const values = new Set([input.value]);
+        const timer = setInterval(() => values.add(input.value), 2);
+        setTimeout(() => {
+          clearInterval(timer);
+          resolve([...values]);
+        }, 600);
+      }),
+  );
+  expect(seen).toEqual(['tomasz']);
+  await expect(name).toHaveValue('tomasz');
 });
 
 test('on a phone the layout folds, the menu opens and closes, and nothing overflows', async ({ browser }) => {
@@ -671,4 +761,81 @@ test('no log line holds a password, a session token or a CSRF token', async ({ p
   const correlation = logs.match(/"correlation":"(c-\d+-[0-9a-f]{6})"/)?.[1];
   expect(correlation).toBeTruthy();
   expect(logs.split('\n').filter((line) => line.includes(correlation)).map((line) => JSON.parse(line).service)).toEqual(expect.arrayContaining(['backend', 'bff']));
+});
+
+test('the development fixtures refuse a visitor who holds only the request token', async ({ request }) => {
+  const { session } = await (await request.get('/api/session')).json();
+  expect(session.authenticated).toBe(false);
+  for (const action of ['reset', 'expire-session']) {
+    const refused = await request.post(`/api/dev/${action}`, { headers: { origin: BASE, 'x-csrf-token': session.csrf_token } });
+    expect(refused.status()).toBe(401);
+  }
+});
+
+test('sign-in, publish and unpublish are logged as domain events, with their allowlisted fields and correlation', async ({ page }) => {
+  const { readFileSync } = await import('node:fs');
+  const root = new URL('../../var/logs/', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1');
+  const bytes = (service) => {
+    try {
+      return readFileSync(`${root}${service}.jsonl`);
+    } catch {
+      return Buffer.alloc(0);
+    }
+  };
+  // Only the lines written during this test: the files hold the whole run.
+  const from = { backend: bytes('backend').length, bff: bytes('bff').length };
+  const lines = (service) => bytes(service).subarray(from[service]).toString('utf8').split('\n').flatMap((text) => {
+    try {
+      return [JSON.parse(text)];
+    } catch {
+      return [];
+    }
+  });
+  // The backend writes its lines asynchronously, so each expected line is polled for.
+  const line = async (event, fields) => {
+    const find = () => lines('backend').find((l) => l.event === event && Object.entries(fields).every(([k, v]) => l[k] === v));
+    await expect.poll(() => find() !== undefined, { message: `a backend line ${event} with ${JSON.stringify(fields)}`, timeout: 5_000 }).toBe(true);
+    return find();
+  };
+  // The line carries the request's correlation id, which the BFF logged for the same request.
+  const correlated = (found) => {
+    expect(found.correlation).toMatch(/^c-\d+-[0-9a-f]{6}$/);
+    expect(lines('bff').some((l) => l.correlation === found.correlation)).toBe(true);
+  };
+  const common = ['correlation', 'event', 'level', 'service', 'tenant', 'ts'];
+
+  await signIn(page, 'tomasz');
+  const signedIn = await line('session.started', { service: 'backend', level: 'info', tenant: 'fieldnotes', principal: 'user:tomasz', method: 'password' });
+  expect(signedIn.session).toMatch(/^s_/);
+  expect(typeof signedIn.ts).toBe('number');
+  expect(Object.keys(signedIn).sort()).toEqual([...common, 'method', 'principal', 'session'].sort());
+  correlated(signedIn);
+
+  await writeDraft(page, 'Logged Along The Way');
+  const created = await line('record.created', { tenant: 'fieldnotes', object: 'post' });
+  expect(Object.keys(created).sort()).toEqual([...common, 'id', 'object', 'revision', 'seq', 'version'].sort());
+  correlated(created);
+
+  await page.getByRole('button', { name: 'Publish' }).click();
+  await expect(page.locator('.toast', { hasText: 'Published.' })).toBeVisible();
+  const published = await line('record.updated', { tenant: 'fieldnotes', object: 'post', id: created.id, transition: 'publish' });
+  expect(Object.keys(published).sort()).toEqual([...common, 'id', 'object', 'revision', 'seq', 'transition', 'version'].sort());
+  expect(published.seq).toBeGreaterThan(created.seq);
+  correlated(published);
+
+  await page.getByRole('link', { name: 'Back to the desk' }).click();
+  await page.getByRole('button', { name: 'Unpublish Logged Along The Way' }).click();
+  await expect(page.locator('.toast', { hasText: 'Moved back to drafts.' })).toBeVisible();
+  const unpublished = await line('record.updated', { tenant: 'fieldnotes', object: 'post', id: created.id, transition: 'unpublish' });
+  expect(unpublished.seq).toBeGreaterThan(published.seq);
+  expect(unpublished.correlation).not.toBe(published.correlation);
+  correlated(unpublished);
+
+  // No line of these events holds the article's text.
+  expect(lines('backend').filter((l) => JSON.stringify(l).includes('A first paragraph written by a test'))).toEqual([]);
+
+  await page.getByRole('button', { name: 'Delete Logged Along The Way', exact: true }).click();
+  await page.getByRole('button', { name: 'Confirm deleting Logged Along The Way' }).click();
+  await expect(page.locator('.toast', { hasText: 'Deleted.' })).toBeVisible();
+  await line('record.deleted', { tenant: 'fieldnotes', object: 'post', id: created.id });
 });

@@ -474,19 +474,53 @@ async fn login_logout_and_authorized_writes() {
     assert_eq!(body["failed"][0]["rule"], "constraint:post.slug_format");
     assert_eq!(body["correlation"], "t-corr-1");
 
-    // Another author may not edit it; the editor may.
+    // Another author may not edit it, and cannot tell it is there: a draft she may not read
+    // answers exactly as an article that does not exist. The editor may edit it.
     let other = backend
         .login("fieldnotes", "mirela", "strata-dev-mirela")
         .await;
     let edit =
         json!({ "op": "update", "object": "post", "id": id, "fields": { "title": "Edited" } });
-    assert_eq!(
-        backend
-            .call("fieldnotes", Some(&other), "/internal/mutate", edit.clone())
-            .await
-            .0,
-        403
-    );
+    let (status, hidden) = backend
+        .call("fieldnotes", Some(&other), "/internal/mutate", edit.clone())
+        .await;
+    let nowhere =
+        json!({ "op": "update", "object": "post", "id": 9_999, "fields": { "title": "Edited" } });
+    let (missing_status, missing) = backend
+        .call("fieldnotes", Some(&other), "/internal/mutate", nowhere)
+        .await;
+    assert_eq!((status, missing_status), (404, 404), "{hidden} {missing}");
+    let same = |reply: &Json, id: u64| {
+        reply
+            .to_string()
+            .replace(&format!("no post {id}"), "no post N")
+    };
+    assert_eq!(same(&hidden, id), same(&missing, 9_999));
+    let delete = json!({ "op": "delete", "object": "post", "id": id });
+    let (status, hidden) = backend
+        .call("fieldnotes", Some(&other), "/internal/mutate", delete)
+        .await;
+    let (_, missing) = backend
+        .call(
+            "fieldnotes",
+            Some(&other),
+            "/internal/mutate",
+            json!({ "op": "delete", "object": "post", "id": 9_999 }),
+        )
+        .await;
+    assert_eq!(status, 404);
+    assert_eq!(same(&hidden, id), same(&missing, 9_999));
+    // An article she can read but may not change is refused as such: post 10 is Tomasz's,
+    // published.
+    let (status, refused) = backend
+        .call(
+            "fieldnotes",
+            Some(&other),
+            "/internal/mutate",
+            json!({ "op": "update", "object": "post", "id": 10, "fields": { "title": "Mine now" } }),
+        )
+        .await;
+    assert_eq!(status, 403, "{refused}");
     let editor = backend.login("fieldnotes", "ines", "strata-dev-ines").await;
     assert_eq!(
         backend
@@ -711,6 +745,10 @@ async fn subscribers_hear_only_what_they_may_read_and_can_resume() {
     let editor_heard = next(&mut editor).await;
     assert_eq!(editor_heard["notice"]["kind"], "upsert");
     assert_eq!(editor_heard["notice"]["id"], id);
+    assert_eq!(
+        editor_heard["correlation"], "",
+        "the correlation id the author's client chose is not passed to another principal"
+    );
 
     // Publishing it: now the public hears, as its first event.
     let publish =
@@ -811,7 +849,7 @@ async fn sessions_expire_and_diagnostics_hold_no_secrets() {
         "no credentials in diagnostics"
     );
     assert_eq!(diagnostics["sessions"].as_array().unwrap().len(), 1);
-    assert!(diagnostics["tenants"].as_array().unwrap().len() >= 2);
+    assert_eq!(diagnostics["tenants"].as_array().unwrap().len(), 1);
     assert!(
         diagnostics["transitions"]["create_record"][0]
             .as_u64()
@@ -842,7 +880,8 @@ async fn sessions_expire_and_diagnostics_hold_no_secrets() {
         401
     );
 
-    let (_, expired) = backend
+    // The session-expiry fixture is the owner's, and ends the owner's own session.
+    let (status, _) = backend
         .call(
             "fieldnotes",
             Some(&author),
@@ -850,7 +889,21 @@ async fn sessions_expire_and_diagnostics_hold_no_secrets() {
             json!({}),
         )
         .await;
-    assert_eq!(expired["expired"], true);
+    assert_eq!(status, 403, "an author may not use the fixtures");
+    let (status, expired) = backend
+        .call(
+            "fieldnotes",
+            Some(&admin),
+            "/internal/dev/expire-session",
+            json!({}),
+        )
+        .await;
+    assert_eq!((status, &expired["expired"]), (200, &json!(true)));
+    let (_, still) = backend
+        .call("fieldnotes", Some(&author), "/internal/session", json!({}))
+        .await;
+    assert_eq!(still["session"]["authenticated"], true, "only its own");
+    let author = admin;
     let (_, after) = backend
         .call("fieldnotes", Some(&author), "/internal/session", json!({}))
         .await;
@@ -960,10 +1013,10 @@ async fn installing_the_same_bundles_into_an_empty_store_gives_the_same_state() 
         200
     );
     assert_ne!(stored_state(&first), installed);
-    let (status, _) = backend
-        .call("fieldnotes", None, "/internal/dev/reset", json!({}))
+    let (status, reply) = backend
+        .call("fieldnotes", Some(&admin), "/internal/dev/reset", json!({}))
         .await;
-    assert_eq!(status, 200);
+    assert_eq!(status, 200, "{reply}");
     assert_eq!(stored_state(&first), installed, "seeding is deterministic");
 }
 
@@ -1162,4 +1215,254 @@ async fn the_impact_lab_projects_a_change_without_touching_live_state() {
     assert_eq!(replayed["report"]["matches_live"], true);
     assert_eq!(replayed["report"]["agreed"], replayed["report"]["entries"]);
     assert_eq!(replayed["class"], "reproduced");
+}
+
+/// The anonymous request token is no key to the fixtures: a visitor, a member who is not the
+/// owner and the owner of another tenant are all refused, and nothing is reset. The owner's reset
+/// reinstalls the owner's own tenant and leaves every other tenant exactly as it was.
+#[tokio::test]
+async fn only_a_signed_in_owner_resets_and_only_their_own_tenant() {
+    let store = Arc::new(MemoryStore::new());
+    let backend = start_on(store.clone(), |_| {}).await;
+    let tidewater = TenantId::new("tidewater").unwrap();
+    let fieldnotes = TenantId::new("fieldnotes").unwrap();
+
+    // Work in both tenants, so that a reset of either would show.
+    let tide = backend
+        .login("tidewater", "admin", "strata-dev-tidewater")
+        .await;
+    let extra = json!({ "op": "create", "object": "category", "fields": { "name": "Extra", "slug": "extra" } });
+    let (status, body) = backend
+        .call("tidewater", Some(&tide), "/internal/mutate", extra.clone())
+        .await;
+    assert_eq!(status, 200, "{body}");
+    let admin = backend
+        .login("fieldnotes", "admin", "strata-dev-admin")
+        .await;
+    let (status, body) = backend
+        .call("fieldnotes", Some(&admin), "/internal/mutate", extra)
+        .await;
+    assert_eq!(status, 200, "{body}");
+    let hash = |tenant: &TenantId| canon::hash_of(&store.load_complete(tenant).unwrap().tenant);
+    let (fieldnotes_before, tidewater_before) = (hash(&fieldnotes), hash(&tidewater));
+
+    let editor = backend.login("fieldnotes", "ines", "strata-dev-ines").await;
+    for (who, session, expected) in [
+        ("a visitor", None, 401),
+        ("an editor", Some(editor.as_str()), 403),
+        ("tidewater's owner, on fieldnotes", Some(tide.as_str()), 401),
+    ] {
+        let (status, body) = backend
+            .call("fieldnotes", session, "/internal/dev/reset", json!({}))
+            .await;
+        assert_eq!(status, expected, "{who}: {body}");
+    }
+    assert_eq!(hash(&fieldnotes), fieldnotes_before, "nothing was reset");
+    assert_eq!(hash(&tidewater), tidewater_before);
+
+    let (status, body) = backend
+        .call("fieldnotes", Some(&admin), "/internal/dev/reset", json!({}))
+        .await;
+    assert_eq!(status, 200, "{body}");
+    assert_ne!(
+        hash(&fieldnotes),
+        fieldnotes_before,
+        "fieldnotes is reinstalled"
+    );
+    assert_eq!(
+        hash(&tidewater),
+        tidewater_before,
+        "tidewater, its extra category included, is untouched"
+    );
+    let (_, session) = backend
+        .call("tidewater", Some(&tide), "/internal/session", json!({}))
+        .await;
+    assert_eq!(
+        session["session"]["authenticated"], true,
+        "tidewater's sessions survive"
+    );
+
+    // Outside development mode the fixtures are not there at all, not even for the owner.
+    let production = start_on(store.clone(), |cfg| cfg.dev = false).await;
+    let (status, _) = production
+        .call("tidewater", Some(&tide), "/internal/dev/reset", json!({}))
+        .await;
+    assert_eq!(status, 404);
+}
+
+/// Development logins have their passwords in the repository. A start outside development mode
+/// on a store a development run used takes them away and ends their sessions.
+#[tokio::test]
+async fn development_logins_are_withdrawn_when_development_mode_is_off() {
+    let store = Arc::new(MemoryStore::new());
+    let development = start_on(store.clone(), |_| {}).await;
+    let owner = development
+        .login("fieldnotes", "admin", "strata-dev-admin")
+        .await;
+
+    let production = start_on(store.clone(), |cfg| cfg.dev = false).await;
+    for (site, login, password) in [
+        ("fieldnotes", "admin", "strata-dev-admin"),
+        ("fieldnotes", "ines", "strata-dev-ines"),
+        ("tidewater", "admin", "strata-dev-tidewater"),
+    ] {
+        let (status, _) = production
+            .call(
+                site,
+                None,
+                "/internal/session/login",
+                json!({ "login": login, "password": password }),
+            )
+            .await;
+        assert_eq!(status, 401, "{site}/{login} still opens");
+        assert!(store
+            .account(&TenantId::new(site).unwrap(), login)
+            .unwrap()
+            .is_none());
+    }
+    let (_, session) = production
+        .call("fieldnotes", Some(&owner), "/internal/session", json!({}))
+        .await;
+    assert_eq!(
+        session["session"]["authenticated"], false,
+        "a session opened with a development login has ended"
+    );
+}
+
+/// A tenant's diagnostics hold that tenant and nothing of any other: no sessions, principals,
+/// events, connections, rejections or runs. The platform report, every tenant and the audit
+/// entries, is on its own route and needs nothing but the service credential.
+#[tokio::test]
+async fn diagnostics_hold_only_the_callers_tenant() {
+    let backend = start().await;
+    // Fieldnotes activity of every kind the report covers.
+    let admin = backend
+        .login("fieldnotes", "admin", "strata-dev-admin")
+        .await;
+    let author = backend
+        .login("fieldnotes", "mirela", "strata-dev-mirela")
+        .await;
+    let mut socket = backend.socket("fieldnotes", Some(&author)).await;
+    next(&mut socket).await;
+    let draft = json!({ "op": "create", "object": "post", "fields": { "title": "Diagnosed", "slug": "diagnosed", "body": "Text.", "author": 4 } });
+    backend
+        .call("fieldnotes", Some(&author), "/internal/mutate", draft)
+        .await;
+    backend
+        .call(
+            "fieldnotes",
+            Some(&author),
+            "/internal/mutate",
+            json!({ "op": "update", "object": "post", "id": 10, "fields": { "title": "Refused" } }),
+        )
+        .await;
+    let (status, _) = backend
+        .call(
+            "fieldnotes",
+            Some(&admin),
+            "/internal/lab/run",
+            json!({ "change": "require post.excerpt", "existing": "grandfather", "source": "journal" }),
+        )
+        .await;
+    assert_eq!(status, 200);
+
+    let tide = backend
+        .login("tidewater", "admin", "strata-dev-tidewater")
+        .await;
+    // A fieldnotes token presented on tidewater is nobody there, and is audited.
+    backend
+        .call("tidewater", Some(&admin), "/internal/session", json!({}))
+        .await;
+    let (status, report) = backend
+        .call("tidewater", Some(&tide), "/internal/diagnostics", json!({}))
+        .await;
+    assert_eq!(status, 200, "{report}");
+    let text = report.to_string();
+    for other in [
+        "fieldnotes",
+        "user:mirela",
+        "Diagnosed",
+        "require post.excerpt",
+    ] {
+        assert!(
+            !text.contains(other),
+            "{other} is in tidewater's report: {text}"
+        );
+    }
+    assert_eq!(report["tenants"].as_array().unwrap().len(), 1);
+    assert!(report["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|s| s["tenant"] == "tidewater"));
+
+    // The platform report sees everything, the replayed token included.
+    let (status, platform) = backend
+        .call(
+            "tidewater",
+            None,
+            "/internal/platform/diagnostics",
+            json!({}),
+        )
+        .await;
+    assert_eq!(status, 200, "{platform}");
+    assert!(platform["tenants"].as_array().unwrap().len() >= 2);
+    assert!(platform["audit"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|entry| entry["event"] == "session.wrong_site"
+            && entry["session_tenant"] == "fieldnotes"
+            && entry["site"] == "tidewater"));
+}
+
+/// Who created a record is part of a projected row only for its creator. Principal ids are
+/// login identities.
+#[tokio::test]
+async fn authorship_is_shown_to_the_author_only() {
+    let backend = start().await;
+    let created_by = |view: &Json| -> Vec<Json> {
+        view["sections"]
+            .as_object()
+            .unwrap()
+            .values()
+            .flat_map(|section| {
+                let rows = section["rows"].as_array().unwrap().iter();
+                let included = section["included"]
+                    .as_object()
+                    .unwrap()
+                    .values()
+                    .flat_map(|records| records.as_object().unwrap().values());
+                rows.chain(included)
+                    .map(|record| record["created_by"].clone())
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    };
+    for path in ["/", "/authors", "/posts/the-jig-is-the-work"] {
+        let view = backend.view("fieldnotes", None, path).await;
+        let seen = created_by(&view);
+        assert!(!seen.is_empty(), "{path} has rows");
+        assert!(
+            seen.iter().all(Json::is_null),
+            "{path} told a visitor who wrote what: {seen:?}"
+        );
+    }
+    let author = backend
+        .login("fieldnotes", "tomasz", "strata-dev-tomasz")
+        .await;
+    let own = backend
+        .view("fieldnotes", Some(&author), "/posts/the-jig-is-the-work")
+        .await;
+    assert_eq!(
+        own["sections"]["post"]["rows"][0]["created_by"],
+        "user:tomasz"
+    );
+    let other = backend
+        .view("fieldnotes", Some(&author), "/posts/what-the-kiln-decides")
+        .await;
+    assert_eq!(
+        other["sections"]["post"]["rows"][0]["created_by"],
+        Json::Null
+    );
 }

@@ -76,13 +76,11 @@ fn checked_integer_arithmetic() {
     assert_eq!(js("a * 3", &e), u32c("a * 3"));
     assert_eq!(
         js("a % 3", &e),
-        format!("(($l, $r) => $r === 0 ? {OV} : $l % $r)(a, 3)")
+        format!("(($l, $r) => $r === 0 ? {OV} : $l % $r + 0)(a, 3)")
     );
     assert_eq!(
         js("signed % 3", &e),
-        format!(
-            "(($l, $r) => $r === 0 || ($r === -1 && $l === -2147483648) ? {OV} : $l % $r)(signed, 3)"
-        )
+        format!("(($l, $r) => $r === 0 ? {OV} : $l % $r + 0)(signed, 3)")
     );
     assert_eq!(
         js("-signed", &e),
@@ -165,7 +163,7 @@ fn logic_short_circuits_and_implies_is_not_or() {
     // The right operand stays inside its own branch: no helper evaluates both sides.
     assert_eq!(
         js("p && a % 2 == 0", &e),
-        format!("p && (($l, $r) => $r === 0 ? {OV} : $l % $r)(a, 2) === 0")
+        format!("p && (($l, $r) => $r === 0 ? {OV} : $l % $r + 0)(a, 2) === 0")
     );
 }
 
@@ -182,8 +180,6 @@ fn string_concatenation() {
 fn refusals_match_the_rust_target() {
     let e = env();
     let cases: &[(&str, TypeErrorKind)] = &[
-        ("a / b", TypeErrorKind::Unsupported),
-        ("n / 2", TypeErrorKind::Unsupported),
         ("ts1 + ts2", TypeErrorKind::Unsupported),
         ("a == s", TypeErrorKind::Mismatch),
         ("a + f", TypeErrorKind::Mismatch),
@@ -237,12 +233,15 @@ fn literal_range_is_enforced_per_type() {
 
 #[test]
 fn sixty_four_bit_literals_stop_at_the_safe_integer_limit() {
-    // Tighter than the Rust target by design: a double cannot hold more.
+    // The same bound as the Rust target and Exegra: a double cannot hold more.
     let e = env();
     let ex = parse("9007199254740992").unwrap();
     let err = to_js_as(&ex, &e, &Ty::U64).unwrap_err();
     assert_eq!(err.kind, TypeErrorKind::LiteralDoesNotFit);
-    assert!(to_rust_as(&ex, &e, &Ty::U64).is_ok());
+    assert_eq!(
+        to_rust_as(&ex, &e, &Ty::U64).unwrap_err().kind,
+        TypeErrorKind::LiteralDoesNotFit
+    );
     let ex = parse("-9007199254740992").unwrap();
     assert_eq!(
         to_js_as(&ex, &e, &Ty::I64).unwrap_err().kind,

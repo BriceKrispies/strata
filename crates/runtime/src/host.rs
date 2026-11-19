@@ -219,6 +219,9 @@ pub struct Committed<M: Machine> {
     pub emits: Vec<Envelope<M::Emitted>>,
     /// The outbox ids of the delayed emits, in order: the outbox drain dispatches them when due.
     pub delayed: Vec<u64>,
+    /// Every event the step emitted, immediate and delayed, in order: what
+    /// [`Machine::log_emitted`] logs once the transition has committed.
+    pub emitted: Vec<M::Emitted>,
 }
 
 /// What happened to a batch of dispatches.
@@ -341,6 +344,7 @@ fn transition<M: Machine>(
             }
         }
     }
+    let emitted: Vec<M::Emitted> = outcome.emits.iter().map(|e| e.event.clone()).collect();
     let mut emits = Vec::with_capacity(outcome.emits.len());
     let mut delayed = Vec::new();
     for emit in outcome.emits {
@@ -387,6 +391,7 @@ fn transition<M: Machine>(
         version,
         emits,
         delayed,
+        emitted,
     }))
 }
 
@@ -472,7 +477,17 @@ impl<M: Machine, S: MachineStore, D: Dispatcher<M::Emitted>> Host<M, S, D> {
             .and_then(|inner| inner)
             .map(|committed| committed.expect("a transition without a timer always commits"));
         span.finish(result.is_ok(), &[("machine", M::NAME.into())]);
+        if let Ok(committed) = &result {
+            self.log_committed(committed);
+        }
         result
+    }
+
+    /// Log the events a committed transition emitted, through [`Machine::log_emitted`].
+    fn log_committed(&self, committed: &Committed<M>) {
+        for emitted in &committed.emitted {
+            M::log_emitted(emitted, self.telemetry.as_ref());
+        }
     }
 
     /// Dispatch a committed transition's emits, in order.
@@ -644,6 +659,7 @@ impl<M: Machine, S: MachineStore, D: Dispatcher<M::Emitted>> Host<M, S, D> {
                 .await?;
             match fired {
                 Ok(Some(committed)) => {
+                    self.log_committed(&committed);
                     report.fired += 1;
                     report.dispatched.add(self.dispatch(committed).await);
                 }

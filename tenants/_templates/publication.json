@@ -73,6 +73,9 @@
         { "id": "excerpt_length", "check": "len(new.excerpt) <= 280", "message": "An excerpt has at most 280 characters" },
         { "id": "body_present", "check": "len(new.body) >= 1", "message": "A post needs some text" },
         { "id": "cover_is_local", "check": "is_null(new.cover) or starts_with(new.cover, '/media/')", "message": "A cover image comes from the publication's own media" },
+        { "id": "author_fixed", "check": "is_null(principal) or has_role(editor) or has_role(owner) or is_null(old.$id) or new.author == old.author", "message": "Only an editor changes whose byline a post carries" },
+        { "id": "featured_by_editors", "check": "is_null(principal) or has_role(editor) or has_role(owner) or ((not(is_null(new.featured)) and new.featured == true) == (not(is_null(old.featured)) and old.featured == true))", "message": "Only an editor features a post" },
+        { "id": "published_at_by_editors", "check": "is_null(principal) or has_role(editor) or has_role(owner) or if(is_null(old.published_at), is_null(new.published_at), not(is_null(new.published_at)) and new.published_at == old.published_at) or (not(is_null(old.status)) and old.status == 'draft' and new.status == 'published' and new.published_at == now)", "message": "Only an editor sets when a post was published; publishing stamps the time itself" },
         { "id": "cover_is_described", "check": "is_null(new.cover) or (not is_null(new.cover_alt) and len(new.cover_alt) >= 1)", "message": "A cover image needs a description for readers who cannot see it" }
       ]
     }
@@ -88,9 +91,10 @@
           "name": "publish",
           "from": "draft",
           "to": "published",
+          "guard": "has_role(editor) or has_role(owner) or old.$created_by == principal",
           "set": { "published_at": "if(is_null(old.published_at), now, old.published_at)" }
         },
-        { "name": "unpublish", "from": "published", "to": "draft" }
+        { "name": "unpublish", "from": "published", "to": "draft", "guard": "has_role(editor) or has_role(owner) or old.$created_by == principal" }
       ]
     }
   ],
@@ -99,7 +103,7 @@
     { "id": "public_reads_authors", "role": "public", "on": "author", "actions": ["read"] },
     { "id": "public_reads_categories", "role": "public", "on": "category", "actions": ["read"] },
     { "id": "public_reads_published", "role": "public", "on": "post", "actions": ["read"], "when": "record.status == 'published'" },
-    { "id": "authors_write_posts", "role": "author", "on": "post", "actions": ["create"] },
+    { "id": "authors_write_posts", "role": "author", "on": "post", "actions": ["create"], "when": "new.author.principal == principal" },
     { "id": "authors_own_posts", "role": "author", "on": "post", "actions": ["read", "update", "delete"], "when": "record.$created_by == principal" },
     { "id": "editors_run_posts", "role": "editor", "on": "post", "actions": ["read", "create", "update", "delete"] },
     { "id": "editors_run_categories", "role": "editor", "on": "category", "actions": ["create", "update", "delete"] },

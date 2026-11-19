@@ -25,8 +25,14 @@
 //!
 //! The test builds each machine's initial state with `Machine::initial` and checks it against the
 //! trace's initial configuration. It then replays the trace's deliveries in order: each is one
-//! `Machine::step` with `now` equal to the delivery's time (Exegra's milliseconds), for every
-//! machine of the scenario that receives the event. A delivery that Exegra made because a timer
+//! `Machine::step` with `now` equal to the delivery's time (Exegra's milliseconds), for exactly
+//! the machines Exegra routed the event to: those of the step's `fired` and `ignored` lists. A
+//! machine Exegra did not route the event to is not stepped, however many events it receives; a
+//! machine Exegra routed an event to that its generated `Event` has no variant for (an event it
+//! neither has a transition on nor ignores) is not stepped either, since the type cannot hold it,
+//! and Exegra must have ignored it (a firing on such an event is a trace mismatch). A step, a
+//! time or an event id the trace does not carry is a trace mismatch, never a default. A delivery
+//! that Exegra made because a timer
 //! fired is checked against the test's own timer table, which applies the `TimerCommand`s of the
 //! steps exactly as the runtime host does (a set replaces a timer of the same name, a cancel
 //! removes it): the timer must be pending, due at that time, with that event.
@@ -565,21 +571,51 @@ fn test_of(plan: &Plan, sc: &ScenarioPlan, trace: &Value) -> Result<String, Vec<
                 format!("the trace has no machine \"{}\"", m.id),
             ));
         };
+        let Some(initial_state) = initial["state"].as_str() else {
+            return Err(mismatch(
+                sc,
+                format!(
+                    "the trace's initial configuration of \"{}\" has no state",
+                    m.id
+                ),
+            ));
+        };
         out.push_str(&format!(
             "    let mut {var} = Run::<{ty}>::new({key}, {state}, {vars});\n",
             var = var(m),
             ty = m.ty,
             key = str_lit(&m.id),
-            state = str_lit(initial["state"].as_str().unwrap_or_default()),
+            state = str_lit(initial_state),
             vars = lit(&plan.wire_vars(&m.id, &initial["vars"])),
         ));
     }
-    for step in steps {
-        let index = step["index"].as_u64().unwrap_or_default();
-        let time = step["time"].as_i64().unwrap_or_default();
-        let event = step["event"]["id"].as_str().unwrap_or_default();
+    for (position, step) in steps.iter().enumerate() {
+        let Some(index) = step["index"].as_u64() else {
+            return Err(mismatch(
+                sc,
+                format!("step {position} of the trace has no index"),
+            ));
+        };
+        let Some(time) = step["time"].as_i64() else {
+            return Err(mismatch(
+                sc,
+                format!("step {index} of the trace has no time"),
+            ));
+        };
+        let Some(event) = step["event"]["id"].as_str() else {
+            return Err(mismatch(
+                sc,
+                format!("step {index} of the trace has no event id"),
+            ));
+        };
+        let Some(kind) = step["kind"].as_str() else {
+            return Err(mismatch(
+                sc,
+                format!("step {index} of the trace has no kind"),
+            ));
+        };
         out.push_str(&format!("\n    // Step {index}, t={time}: {event}"));
-        match step["kind"].as_str().unwrap_or("deliver") {
+        match kind {
             "drop" | "delay" => {
                 let kind = step["kind"].as_str().unwrap_or_default();
                 let faults: Vec<String> = step["faults"]
@@ -620,7 +656,9 @@ fn deliveries(
     time: i64,
     event: &str,
 ) -> Result<String, Vec<Diagnostic>> {
-    let index = step["index"].as_u64().unwrap_or_default();
+    let Some(index) = step["index"].as_u64() else {
+        return Err(mismatch(sc, "a step of the trace has no index".to_string()));
+    };
     let source = &step["event"]["source"];
     let timer = (source["kind"] == json!("timer")).then(|| source["timer"].as_str());
     let payload = if step["event"]["payload"].is_null() {
@@ -631,10 +669,26 @@ fn deliveries(
     let input = json!({ "event": event, "payload": plan.wire_payload(event, &payload) });
     let mut out = String::new();
     for m in &sc.machines {
-        if timer.is_some() && source["behavior"].as_str() != Some(&m.id) {
+        // Exegra's routing decides who receives the event: the machines it fired a transition of
+        // or ignored the event in. Every other machine is not delivered to.
+        let fired = step["fired"]
+            .as_array()
+            .and_then(|f| f.iter().find(|f| f["behavior"].as_str() == Some(&m.id)));
+        let ignored = step["ignored"]
+            .as_array()
+            .is_some_and(|i| i.iter().any(|i| i["behavior"].as_str() == Some(&m.id)));
+        if fired.is_none() && !ignored {
             continue;
         }
         if !m.events.contains(event) {
+            // The machine's `Event` has no variant for this event: it cannot be stepped, and
+            // Exegra can only have ignored it.
+            if fired.is_some() {
+                return Err(mismatch(
+                    sc,
+                    format!("step {index}: the trace fired a transition of \"{}\" on \"{event}\", which it neither has a transition on nor ignores", m.id),
+                ));
+            }
             continue;
         }
         let context = format!("step {index} (t={time}, {event})");
@@ -654,13 +708,21 @@ fn deliveries(
                 .collect::<Vec<_>>()
                 .join(", ")
         );
-        let fired = step["fired"]
-            .as_array()
-            .and_then(|f| f.iter().find(|f| f["behavior"].as_str() == Some(&m.id)));
         let expect = match fired {
             None => format!("Expect::Ignored {{ pending: {pending} }}"),
             Some(fired) => {
-                let transition = fired["transition"].as_str().unwrap_or_default();
+                let Some(transition) = fired["transition"].as_str() else {
+                    return Err(mismatch(
+                        sc,
+                        format!("step {index}: a firing of \"{}\" names no transition", m.id),
+                    ));
+                };
+                let Some(fired_to) = fired["to"].as_str() else {
+                    return Err(mismatch(
+                        sc,
+                        format!("step {index}: the firing of \"{transition}\" has no target state"),
+                    ));
+                };
                 let Some((_, effects)) = m.transitions.iter().find(|(id, _)| id == transition)
                 else {
                     return Err(mismatch(
@@ -687,7 +749,12 @@ fn deliveries(
                 let mut emits = Vec::new();
                 let mut timers = Vec::new();
                 for (effect, e) in effects.iter().zip(&emitted) {
-                    let id = e["event"].as_str().unwrap_or_default();
+                    let Some(id) = e["event"].as_str() else {
+                        return Err(mismatch(
+                            sc,
+                            format!("step {index}: transition \"{transition}\" emitted an event with no id"),
+                        ));
+                    };
                     if effect["emit"].as_str() != Some(id) {
                         return Err(mismatch(
                             sc,
@@ -696,8 +763,14 @@ fn deliveries(
                     }
                     let value =
                         json!({ "event": id, "payload": plan.wire_payload(id, &e["payload"]) });
+                    let Some(due) = e["time"].as_i64() else {
+                        return Err(mismatch(
+                            sc,
+                            format!("step {index}: the emitted \"{id}\" of \"{transition}\" has no time"),
+                        ));
+                    };
                     if let Some(name) = effect["timer"].as_str() {
-                        let after = e["time"].as_i64().unwrap_or(time) - time;
+                        let after = due - time;
                         timers.push(format!("({}, {after}, {})", str_lit(name), lit(&value)));
                     } else {
                         let to = effect["to"].as_str().unwrap_or_default();
@@ -724,15 +797,18 @@ fn deliveries(
                 let after = &step["config"]["machines"][&m.id];
                 format!(
                     "Expect::Fired {{ to: {to}, vars: {vars}, emits: vec![{emits}], timers: vec![{timers}], pending: {pending} }}",
-                    to = str_lit(fired["to"].as_str().unwrap_or_default()),
+                    to = str_lit(fired_to),
                     vars = lit(&plan.wire_vars(&m.id, &after["vars"])),
                     emits = emits.join(", "),
                     timers = timers.join(", "),
                 )
             }
         };
+        // A timer's event is checked against the timer table of the machine that set the timer.
         let timer_arg = match timer {
-            Some(Some(name)) => format!("Some({})", str_lit(name)),
+            Some(Some(name)) if source["behavior"].as_str() == Some(&m.id) => {
+                format!("Some({})", str_lit(name))
+            }
             _ => "None".to_string(),
         };
         out.push_str(&format!(
@@ -819,8 +895,22 @@ struct Run<M: Machine> {
     timers: BTreeMap<String, (i64, Value)>,
 }
 
+/// A value with every number that is a whole number written as an integer, so that values
+/// compare by value: an `f64` variable holding `1` equals `1.0`.
+fn norm(value: Value) -> Value {
+    match value {
+        Value::Number(n) if n.is_f64() => match n.as_f64() {
+            Some(f) if f.fract() == 0.0 && f.abs() < 9.0e15 => Value::from(f as i64),
+            _ => Value::Number(n),
+        },
+        Value::Array(items) => Value::Array(items.into_iter().map(norm).collect()),
+        Value::Object(map) => Value::Object(map.into_iter().map(|(k, v)| (k, norm(v))).collect()),
+        other => other,
+    }
+}
+
 fn to_json<T: Serialize>(value: &T) -> Value {
-    serde_json::to_value(value).expect("serialisable")
+    norm(serde_json::to_value(value).expect("serialisable"))
 }
 
 impl<M: Machine> Run<M>
@@ -834,7 +924,7 @@ where
             .expect("the instance key is the behavior id");
         let (initial_state, initial_vars) = M::initial(&key);
         assert_eq!(to_json(&initial_state), Value::String(state.to_string()), "initial state");
-        assert_eq!(to_json(&initial_vars), vars, "initial variables");
+        assert_eq!(to_json(&initial_vars), norm(vars), "initial variables");
         Run {
             state: initial_state,
             vars: initial_vars,
@@ -851,7 +941,7 @@ where
                 .remove(name)
                 .unwrap_or_else(|| panic!("{at}: timer {name} is not pending"));
             assert_eq!(due, now, "{at}: when timer {name} is due");
-            assert_eq!(scheduled, event, "{at}: the event of timer {name}");
+            assert_eq!(norm(scheduled), norm(event.clone()), "{at}: the event of timer {name}");
         }
         let event: M::Event = serde_json::from_value(event)
             .unwrap_or_else(|e| panic!("{at}: not an event of the machine: {e}"));
@@ -880,12 +970,16 @@ where
                 pending: expected,
             } => {
                 assert_eq!(to_json(&outcome.state), Value::String(to.to_string()), "{at}: state");
-                assert_eq!(to_json(&outcome.vars), vars, "{at}: variables");
+                assert_eq!(to_json(&outcome.vars), norm(vars), "{at}: variables");
                 let emitted: Vec<(&str, &str, Value)> = outcome
                     .emits
                     .iter()
                     .map(|e| (e.receiver.as_str(), e.delivery.name(), to_json(&e.event)))
                     .collect();
+                let emits: Vec<(&str, &str, Value)> =
+                    emits.into_iter().map(|(to, d, e)| (to, d, norm(e))).collect();
+                let timers: Vec<(&str, i64, Value)> =
+                    timers.into_iter().map(|(n, a, e)| (n, a, norm(e))).collect();
                 assert_eq!(emitted, emits, "{at}: emitted events");
                 assert_eq!(set, timers, "{at}: timers set");
                 assert_eq!(pending, expected, "{at}: timers pending");

@@ -77,12 +77,20 @@ impl Lab {
             .collect()
     }
 
-    pub fn cancel(&self, id: &str, identity: &Identity) -> bool {
+    /// Cancel a running run. Only the person who started it, or someone who may change the
+    /// tenant's schema (`may_manage_schema`), may cancel it; for anyone else the run is not there.
+    pub fn cancel(&self, id: &str, identity: &Identity, may_manage_schema: bool) -> bool {
         let Ok(runs) = self.runs.lock() else {
             return false;
         };
+        let starter = |run: &Run| matches!(&identity.principal, Principal::User(who) if *who == run.principal);
         match runs.get(id) {
-            Some(run) if run.tenant == identity.tenant && run.status == "running" => {
+            Some(run)
+                if run.tenant == identity.tenant
+                    && run.status == "running"
+                    && !identity.anonymous()
+                    && (starter(run) || may_manage_schema) =>
+            {
                 run.cancel.store(true, Ordering::Relaxed);
                 true
             }
@@ -603,4 +611,73 @@ pub fn verify(shared: &Shared, app: &App, identity: &Identity) -> Result<Json, A
         });
     });
     Ok(json!({ "run": id }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use strata_kernel::{SessionId, Timestamp};
+    use strata_protocol::ws::SessionState;
+    use strata_storage_api::SessionRecord;
+
+    fn identity(tenant: &str, principal: Option<&str>) -> Identity {
+        let tenant = TenantId::new(tenant).unwrap();
+        let session = principal.map(|p| SessionRecord {
+            id: SessionId::new(format!("s_{}", p.replace(':', "_"))).unwrap(),
+            token_hash: String::new(),
+            csrf_token: String::new(),
+            tenant: tenant.clone(),
+            principal: PrincipalId::new(p).unwrap(),
+            display_name: p.to_string(),
+            created_at: Timestamp(0),
+            last_seen_at: Timestamp(0),
+            expires_at: Timestamp(i64::MAX),
+            revoked_at: None,
+        });
+        Identity {
+            tenant,
+            principal: principal.map_or(Principal::Anonymous, |p| {
+                Principal::User(PrincipalId::new(p).unwrap())
+            }),
+            session,
+            state: SessionState::Active,
+            correlation: "t".into(),
+        }
+    }
+
+    fn running(lab: &Lab, id: &str, tenant: &str, starter: &str) -> Arc<AtomicBool> {
+        let cancel = Arc::new(AtomicBool::new(false));
+        lab.insert(
+            id,
+            Run {
+                tenant: TenantId::new(tenant).unwrap(),
+                principal: PrincipalId::new(starter).unwrap(),
+                status: "running",
+                started_at: 0,
+                summary: Json::Null,
+                result: None,
+                cancel: cancel.clone(),
+            },
+        );
+        cancel
+    }
+
+    /// A run is cancelled by the person who started it or by someone who may change the schema
+    /// of its tenant. Anyone else, a visitor with no session included, finds no such run, and
+    /// the run goes on.
+    #[test]
+    fn only_the_starter_or_a_schema_manager_cancels_a_run() {
+        let lab = Lab::new();
+        let flag = running(&lab, "run_a", "fieldnotes", "user:admin");
+        assert!(!lab.cancel("run_a", &identity("fieldnotes", None), false));
+        assert!(!lab.cancel("run_a", &identity("fieldnotes", Some("user:mirela")), false));
+        assert!(!lab.cancel("run_a", &identity("tidewater", Some("user:admin")), true));
+        assert!(!flag.load(Ordering::Relaxed), "nobody else stopped it");
+        assert!(lab.cancel("run_a", &identity("fieldnotes", Some("user:admin")), false));
+        assert!(flag.load(Ordering::Relaxed));
+
+        let flag = running(&lab, "run_b", "fieldnotes", "user:admin");
+        assert!(lab.cancel("run_b", &identity("fieldnotes", Some("user:ines")), true));
+        assert!(flag.load(Ordering::Relaxed));
+    }
 }

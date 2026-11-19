@@ -1141,3 +1141,106 @@ async fn a_socket_upgrade_without_the_request_token_of_its_session_is_refused() 
         "the session's own token opens the socket"
     );
 }
+
+/// The development fixtures need a signed-in owner of the site. The request token the gateway
+/// hands to every visitor, sent from our own origin, opens nothing: the reset is refused and the
+/// site is as it was.
+#[tokio::test]
+async fn the_fixtures_refuse_a_visitor_and_anyone_but_the_owner() {
+    let edge = start().await;
+    let admin = edge.login("127.0.0.1", "admin", "strata-dev-admin").await;
+    // A change, so that a reset would show.
+    let change = json!({ "op": "create", "object": "category", "fields": { "name": "Before reset", "slug": "before-reset" } });
+    let write = edge
+        .post("127.0.0.1", "/api/records", change)
+        .header("cookie", format!("{SESSION_COOKIE}={}", admin.0))
+        .header("x-csrf-token", &admin.1);
+    assert_eq!(edge.send(write).await.0, 200);
+    let topics = || edge.get("127.0.0.1", "/api/view?path=/topics", None);
+    let before = topics().await.1;
+    assert!(before.to_string().contains("Before reset"));
+
+    for action in ["reset", "expire-session"] {
+        let path = format!("/api/dev/{action}");
+        // A visitor, with the token the gateway issued to it, from our own origin.
+        let anonymous = edge
+            .post("127.0.0.1", &path, json!({}))
+            .header("x-csrf-token", edge.request_token("127.0.0.1").await);
+        let (status, body, _) = edge.send(anonymous).await;
+        assert_eq!(status, 401, "a visitor's {action}: {body}");
+        // An editor, with the token of her own session.
+        let (token, csrf) = edge.login("127.0.0.1", "ines", "strata-dev-ines").await;
+        let editor = edge
+            .post("127.0.0.1", &path, json!({}))
+            .header("cookie", format!("{SESSION_COOKIE}={token}"))
+            .header("x-csrf-token", csrf);
+        let (status, body, _) = edge.send(editor).await;
+        assert_eq!(status, 403, "an editor's {action}: {body}");
+    }
+    assert_eq!(topics().await.1, before, "nothing was reset");
+
+    // The owner, signed in, with the session's token: the site is installed again.
+    let owner = edge
+        .post("127.0.0.1", "/api/dev/reset", json!({}))
+        .header("cookie", format!("{SESSION_COOKIE}={}", admin.0))
+        .header("x-csrf-token", &admin.1);
+    let (status, body, _) = edge.send(owner).await;
+    assert_eq!(status, 200, "{body}");
+    assert!(!topics().await.1.to_string().contains("Before reset"));
+}
+
+/// An origin is accepted only on the site its host serves: a page of one tenant cannot act on
+/// another tenant served by the same gateway, even though both origins are configured.
+#[tokio::test]
+async fn an_origin_counts_only_for_its_own_site() {
+    let edge = start().await;
+    let fieldnotes_token = edge.request_token("127.0.0.1").await;
+    // Fieldnotes is served at 127.0.0.1; `localhost` is tidewater's origin.
+    let sign_in = |origin: String| {
+        edge.http
+            .post(format!("{}/api/login", edge.origin("127.0.0.1")))
+            .header("origin", origin)
+            .header("x-csrf-token", &fieldnotes_token)
+            .json(&json!({ "login": "ines", "password": "strata-dev-ines" }))
+    };
+    let (status, _, reply) = edge.send(sign_in(edge.origin("localhost"))).await;
+    assert_eq!(status, 403, "tidewater's origin signed in on fieldnotes");
+    assert!(reply.cookie.is_none());
+    assert!(
+        connect(
+            &edge,
+            Some(edge.origin("localhost")),
+            None,
+            Some(fieldnotes_token.as_str())
+        )
+        .await
+        .is_err(),
+        "tidewater's origin opened a fieldnotes socket"
+    );
+    let preview = edge
+        .http
+        .post(format!("{}/api/preview", edge.origin("127.0.0.1")))
+        .header("origin", edge.origin("localhost"))
+        .json(&json!({ "markdown": "a" }));
+    assert_eq!(edge.send(preview).await.0, 403);
+    // The control: the site's own origin.
+    let (status, _, _) = edge.send(sign_in(edge.origin("127.0.0.1"))).await;
+    assert_eq!(status, 200);
+}
+
+/// The gateway's part of the diagnostics names no other site and no configuration: not the host
+/// map and not the allowed origins.
+#[tokio::test]
+async fn diagnostics_name_no_other_site() {
+    let edge = start().await;
+    let (token, _) = edge.login("127.0.0.1", "admin", "strata-dev-admin").await;
+    let (status, report, _) = edge
+        .get("127.0.0.1", "/api/diagnostics", Some(&token))
+        .await;
+    assert_eq!(status, 200, "{report}");
+    let text = report.to_string();
+    for other in ["tidewater", "localhost", "allowed_origins", "\"sites\""] {
+        assert!(!text.contains(other), "{other} is in the report: {text}");
+    }
+    assert!(report["bff"]["open_sockets"].is_number());
+}

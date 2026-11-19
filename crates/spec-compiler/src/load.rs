@@ -12,8 +12,9 @@ use serde_json::{Map, Number, Value};
 use crate::diagnostic::{Diagnostic, SPEC_ENTITY};
 use crate::ir::{
     Behavior, Component, Constraints, Contract, ContractError, ContractField, Effect, Event, Index,
-    Instances, OnDelete, PayloadField, Realisation, Record, RecordField, Spec, State, Storage,
-    StructField, System, Transition, TypeDecl, TypeKind, Variable,
+    Instances, LoggedField, Logging, OnDelete, PayloadField, Realisation, Record, RecordField,
+    Spec, State, Storage, StructField, System, Telemetry, TelemetryService, Transition, TypeDecl,
+    TypeKind, Variable,
 };
 use crate::jsonc;
 
@@ -137,7 +138,8 @@ impl Loader {
                 .get("subject")
                 .and_then(Value::as_str)
                 .is_some_and(|s| client_components.contains(&s));
-            if let Some(b) = self.behavior(&entity, obj) {
+            if let Some(mut b) = self.behavior(&entity, obj) {
+                b.time_units = scenario_time_units(top, &entity);
                 if client {
                     self.client_machines.push(b);
                 } else {
@@ -146,6 +148,7 @@ impl Loader {
             }
         }
         let constructs = self.constructs(top);
+        let telemetry = self.telemetry(top);
         Some(Spec {
             path: path.replace('\\', "/"),
             system: system?,
@@ -156,6 +159,81 @@ impl Loader {
             events,
             machines,
             constructs,
+            telemetry,
+        })
+    }
+
+    /// `system.telemetry.services` and the types marked sensitive (directly or by a struct
+    /// field). Exegra checks their shape; values of the wrong JSON type are skipped here.
+    fn telemetry(&mut self, top: &Obj) -> Telemetry {
+        let mut services = Vec::new();
+        let listed = top
+            .get("system")
+            .and_then(|s| s.get("telemetry"))
+            .and_then(|t| t.get("services"))
+            .and_then(Value::as_array);
+        for s in listed.into_iter().flatten().filter_map(Value::as_object) {
+            if let Some(id) = s.get("id").and_then(Value::as_str) {
+                services.push(TelemetryService {
+                    id: id.to_string(),
+                    log: s.get("log").and_then(Value::as_str).map(str::to_string),
+                });
+            }
+        }
+        let mut sensitive_types = Vec::new();
+        let types = top.get("types").and_then(Value::as_array);
+        for t in types.into_iter().flatten().filter_map(Value::as_object) {
+            let Some(id) = t.get("id").and_then(Value::as_str) else {
+                continue;
+            };
+            let field_mark = t
+                .get("fields")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .find_map(|f| f.get("sensitive").and_then(Value::as_str));
+            if let Some(kind) = t.get("sensitive").and_then(Value::as_str).or(field_mark) {
+                sensitive_types.push((id.to_string(), kind.to_string()));
+            }
+        }
+        Telemetry {
+            services,
+            sensitive_types,
+        }
+    }
+
+    /// `event.logging` when the event is logged.
+    fn logging(&mut self, obj: &Obj, id: &str) -> Option<Logging> {
+        let l = match obj.get("logging") {
+            None | Some(Value::Null) => return None,
+            Some(Value::Object(l)) => l,
+            Some(_) => {
+                self.shape(id, "\"logging\" must be an object");
+                return None;
+            }
+        };
+        if self.opt_bool(l, "logged", id) != Some(true) {
+            return None;
+        }
+        let service = self.req_str(l, "service", id);
+        let level = self.req_str(l, "level", id);
+        let name = self
+            .opt_str(l, "name", id)
+            .unwrap_or_else(|| id.to_string());
+        let tenant = self.opt_str(l, "tenant", id);
+        let mut fields = Vec::new();
+        for f in self.obj_list(l, "fields", id) {
+            if let Some(field) = self.req_str(f, "field", id) {
+                let written_as = self.opt_str(f, "as", id).unwrap_or_else(|| field.clone());
+                fields.push(LoggedField { field, written_as });
+            }
+        }
+        Some(Logging {
+            service: service?,
+            level: level?,
+            name,
+            tenant,
+            fields,
         })
     }
 
@@ -563,11 +641,13 @@ impl Loader {
             let fname = self.req_str(f, "name", id);
             let type_name = self.opt_str(f, "type", id);
             let optional = self.opt_bool(f, "optional", id).unwrap_or(false);
+            let sensitive = self.opt_str(f, "sensitive", id);
             if let Some(name) = fname {
                 payload.push(PayloadField {
                     name,
                     type_name,
                     optional,
+                    sensitive,
                 });
             }
         }
@@ -575,6 +655,8 @@ impl Loader {
         let elapsed = self.opt_bool(obj, "elapsed", id).unwrap_or(false);
         let contract = self.opt_str(obj, "contract", id);
         let role = self.opt_str(obj, "role", id);
+        let domain = self.opt_bool(obj, "domain", id).unwrap_or(false);
+        let logging = self.logging(obj, id);
         Some(Event {
             id: id.to_string(),
             name: name?,
@@ -584,6 +666,8 @@ impl Loader {
             elapsed,
             contract,
             role,
+            domain,
+            logging,
         })
     }
 
@@ -687,6 +771,7 @@ impl Loader {
             storage,
             instances,
             isolation,
+            time_units: Vec::new(),
         })
     }
 
@@ -797,6 +882,61 @@ impl Loader {
             );
         Some(Effect::Other { kind })
     }
+}
+
+/// The distinct time units of the scenarios that run behavior `id`, in specification order, as
+/// Exegra's `machineTimeUnit` (`src/core/sim-input.js`) finds them: a scenario that needs format 2
+/// (`needsFormat2`) counts in its `timeUnit`, by default `us`; a format-1 scenario only when it
+/// names a `timeUnit`.
+fn scenario_time_units(top: &serde_json::Map<String, Value>, id: &str) -> Vec<String> {
+    let list = |v: Option<&Value>| v.and_then(Value::as_array).cloned().unwrap_or_default();
+    let behaviors = list(top.get("behaviors"));
+    let behavior = |bid: &str| {
+        behaviors
+            .iter()
+            .find(|b| b.get("id").and_then(Value::as_str) == Some(bid))
+    };
+    let format2 = |s: &Value| {
+        if !list(s.get("workloads")).is_empty()
+            || s.get("seed").is_some()
+            || s.get("horizon").is_some()
+        {
+            return true;
+        }
+        list(s.get("behaviors"))
+            .iter()
+            .filter_map(Value::as_str)
+            .any(|bid| {
+                behavior(bid).is_some_and(|b| {
+                    b.get("instances").is_some_and(|i| !i.is_null())
+                        || list(b.get("transitions")).iter().any(|t| {
+                            list(t.get("effects")).iter().any(|fx| {
+                                ["use", "acquire", "release", "timer", "cancel", "via"]
+                                    .iter()
+                                    .any(|k| fx.get(*k).is_some())
+                            })
+                        })
+                })
+            })
+    };
+    let mut units: Vec<String> = Vec::new();
+    for s in list(top.get("scenarios")) {
+        if !list(s.get("behaviors"))
+            .iter()
+            .any(|b| b.as_str() == Some(id))
+        {
+            continue;
+        }
+        let unit = match s.get("timeUnit").and_then(Value::as_str) {
+            Some(u) => u.to_string(),
+            None if format2(&s) => "us".to_string(),
+            None => continue,
+        };
+        if !units.contains(&unit) {
+            units.push(unit);
+        }
+    }
+    units
 }
 
 #[cfg(test)]

@@ -6,13 +6,16 @@
 // @ts-check
 
 import './styles/main.css';
-import { render } from './components/dom.js';
+import { holdValues, render } from './components/dom.js';
 import { shell } from './views/shell.js';
 
 const app = /** @type {HTMLElement} */ (document.getElementById('app'));
 const worker = new Worker(new URL('./worker/main.js', import.meta.url), { type: 'module', name: 'strata-kernel' });
 const darkQuery = window.matchMedia('(prefers-color-scheme: dark)');
 let lastFocus = 0;
+// Inputs sent, and the latest the worker has said it applied. Renders made before it caught up
+// are older than what is on screen, so they must not rewrite the controls.
+let inputsSent = 0;
 
 /** @param {any} message */
 function send(message) {
@@ -36,13 +39,18 @@ function bootstrap() {
   }
 }
 
-function draw(model) {
+function draw(model, applied) {
   const root = document.documentElement;
   root.dataset.accent = model.theme.accent;
   root.dataset.paper = model.theme.paper;
   root.dataset.scheme = model.theme.scheme;
   if (model.title) document.title = model.title;
-  render(app, shell(model));
+  holdValues(applied < inputsSent);
+  try {
+    render(app, shell(model));
+  } finally {
+    holdValues(false);
+  }
   if (model.focus.token !== lastFocus) {
     lastFocus = model.focus.token;
     // After a navigation, move focus to the new page so keyboard and screen-reader users
@@ -54,7 +62,7 @@ function draw(model) {
 worker.onmessage = (event) => {
   const message = event.data;
   if (message.type === 'render') {
-    draw(message.model);
+    draw(message.model, message.applied ?? 0);
     return;
   }
   const effect = message.effect;
@@ -124,7 +132,7 @@ document.addEventListener('input', (event) => {
   const control = /** @type {HTMLInputElement} */ (event.target);
   const form = control.closest?.('form[data-form]');
   if (!form || !control.name || form.getAttribute('data-form') === 'search') return;
-  send({ type: 'input', form: form.getAttribute('data-form'), name: control.name, value: fieldValue(control) });
+  send({ type: 'input', seq: ++inputsSent, form: form.getAttribute('data-form'), name: control.name, value: fieldValue(control) });
 });
 
 document.addEventListener('submit', (event) => {
@@ -188,7 +196,7 @@ function applyMark(mark) {
       return;
   }
   area.focus();
-  send({ type: 'input', form: 'editor', name: 'body', value: area.value });
+  send({ type: 'input', seq: ++inputsSent, form: 'editor', name: 'body', value: area.value });
 }
 
 // Development aid for the browser tests: a way to lose the socket as a bad network would.

@@ -10,8 +10,10 @@
 //! timers set and the timers pending must agree with the trace. Exegra's time is read as
 //! milliseconds.
 //!
-//! Skipped, with a message, when `EXEGRA_HOME` is not set to an Exegra checkout or `node` cannot
-//! be run.
+//! Fails when Exegra or `node` is missing (see `support`); skipped, with a loud banner, only when
+//! `SPECC_SKIP_EXEGRA_TESTS=1` says so.
+
+mod support;
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -29,34 +31,20 @@ fn manifest_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
 
-/// The Exegra CLI script, when `EXEGRA_HOME` names a checkout that has one.
-fn exegra_cli() -> Option<PathBuf> {
-    let home = PathBuf::from(std::env::var_os("EXEGRA_HOME")?);
-    let cli = home.join("cli").join("exegra.js");
-    cli.is_file().then_some(cli)
-}
-
-/// The trace of the scenario, or `None` (with the reason printed) when Exegra is not available.
+/// The trace of the scenario, or `None` only when `SPECC_SKIP_EXEGRA_TESTS=1` opted out (a banner
+/// is printed). A missing Exegra or `node` fails the test.
 fn exegra_trace() -> Option<Value> {
-    let Some(cli) = exegra_cli() else {
-        eprintln!(
-            "skipped: set EXEGRA_HOME to an Exegra checkout (one with cli/exegra.js) to compare the generated lease with Exegra"
-        );
+    let cli = support::exegra_cli("the comparison of the generated lease with Exegra")?;
+    if !support::node_required("the comparison of the generated lease with Exegra") {
         return None;
-    };
+    }
     let specs = manifest_dir().join("tests").join("fixtures");
-    let output = match Command::new("node")
+    let output = Command::new("node")
         .arg(&cli)
         .args(["trace", SCENARIO, "--project", "machines", "--specs"])
         .arg(&specs)
         .output()
-    {
-        Ok(output) => output,
-        Err(e) => {
-            eprintln!("skipped: node could not be run ({e})");
-            return None;
-        }
-    };
+        .unwrap_or_else(|e| panic!("node could not be run ({e})"));
     let envelope: Value = serde_json::from_slice(&output.stdout).unwrap_or_else(|e| {
         panic!(
             "the Exegra CLI did not print JSON ({e}):\n{}\n{}",
@@ -159,8 +147,8 @@ fn assert_machine(context: &str, state: State, vars: &Vars, config: &Value) {
     let (expected_state, expected_vars) = machine_of(config);
     assert_eq!(state.id(), expected_state, "{context}: state");
     assert_eq!(
-        serde_json::to_value(vars).unwrap(),
-        expected_vars,
+        support::norm(serde_json::to_value(vars).unwrap()),
+        support::norm(expected_vars),
         "{context}: variables"
     );
 }
@@ -189,7 +177,10 @@ fn the_generated_lease_steps_as_exegra_runs_it() {
     for step in trace["steps"].as_array().unwrap() {
         let index = &step["index"];
         let time = step["time"].as_i64().unwrap();
-        let event_id = step["event"]["id"].as_str().unwrap_or_default().to_string();
+        let event_id = step["event"]["id"]
+            .as_str()
+            .unwrap_or_else(|| panic!("step {index} of the trace has no event id"))
+            .to_string();
         let context = format!("step {index} (t={time}, {event_id})");
         let fired = step["fired"]
             .as_array()

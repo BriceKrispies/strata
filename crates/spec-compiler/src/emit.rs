@@ -213,7 +213,9 @@ fn lib_rs<'a>(spec: &Spec, modules: impl Iterator<Item = &'a str>) -> TokenStrea
 }
 
 fn cargo_toml(spec: &Spec, options: &Options) -> String {
-    let runtime = if !crate::backend::routes::uses_runtime(spec) {
+    let runtime = if !(crate::backend::routes::uses_runtime(spec)
+        || crate::backend::telemetry::wanted(spec))
+    {
         String::new()
     } else {
         match &options.runtime {

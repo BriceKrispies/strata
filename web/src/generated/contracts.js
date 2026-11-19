@@ -44,6 +44,35 @@ function pick(body, names) {
 }
 
 /**
+ * A value as text: empty when absent.
+ * @param {unknown} value
+ * @returns {string}
+ */
+function text(value) {
+  return value == null ? '' : String(value);
+}
+
+/**
+ * A value as an endpoint takes it (an input's `encode`): trimmed, split into its trimmed
+ * non-empty parts, made a number, and an empty value (an empty text, an empty list, false or
+ * nothing) sent as null or left out. A value not given stays left out.
+ * @param {unknown} value
+ * @param {{ trim?: boolean, split?: string, number?: boolean, empty?: string }} how
+ * @returns {any}
+ */
+function encoded(value, how) {
+  if (value === undefined) return undefined;
+  /** @type {any} */
+  let v = value;
+  if (how.trim) v = text(v).trim();
+  if (how.split !== undefined) v = text(v).split(how.split).map((part) => part.trim()).filter(Boolean);
+  if (how.number && v != null && v !== '') v = Number(v);
+  const empty = v == null || v === '' || v === false || (Array.isArray(v) && v.length === 0);
+  if (how.empty !== undefined && empty) return how.empty === 'null' ? null : undefined;
+  return v;
+}
+
+/**
  * Contract `read-front-page`: Read the front page view. GET /api/view (the view endpoint); the address carries the route parameters.
  * @param {string} address
  * @param {{}} inputs
@@ -406,7 +435,7 @@ export function decodeReadSessionView(body, _inputs) {
  * @returns {Request}
  */
 export function createArticle(inputs) {
-  return { method: 'POST', path: '/api/records', body: { op: 'create', object: 'post', fields: defined({ title: inputs.title, slug: inputs.slug, excerpt: inputs.excerpt, body: inputs.body, category: inputs.category, author: inputs.author, tags: inputs.tags, cover: inputs.cover, cover_alt: inputs.cover_alt, featured: inputs.featured, status: inputs.status }) }, write: true };
+  return { method: 'POST', path: '/api/records', body: { op: 'create', object: 'post', fields: defined({ title: encoded(inputs.title, { trim: true }), slug: encoded(inputs.slug, { trim: true }), excerpt: encoded(inputs.excerpt, { trim: true, empty: 'omit' }), body: inputs.body, category: encoded(inputs.category, { number: true, empty: 'omit' }), author: encoded(inputs.author, { number: true, empty: 'omit' }), tags: encoded(inputs.tags, { split: ',', empty: 'omit' }), cover: encoded(inputs.cover, { empty: 'omit' }), cover_alt: encoded(inputs.cover_alt, { trim: true, empty: 'omit' }), featured: encoded(inputs.featured, { empty: 'omit' }), status: inputs.status }) }, write: true };
 }
 
 /**
@@ -416,7 +445,7 @@ export function createArticle(inputs) {
  * @returns {{ article_id: number, version: number, slug: string }}
  */
 export function decodeCreateArticle(body, inputs) {
-  return { article_id: body?.id, version: body?.version, slug: inputs?.slug };
+  return { article_id: body?.id, version: body?.version, slug: encoded(inputs?.slug, { trim: true }) };
 }
 
 /**
@@ -425,7 +454,7 @@ export function decodeCreateArticle(body, inputs) {
  * @returns {Request}
  */
 export function updateArticle(inputs) {
-  return { method: 'POST', path: '/api/records', body: { op: 'update', object: 'post', id: inputs.article, fields: defined({ title: inputs.title, slug: inputs.slug, excerpt: inputs.excerpt, body: inputs.body, category: inputs.category, author: inputs.author, tags: inputs.tags, cover: inputs.cover, cover_alt: inputs.cover_alt, featured: inputs.featured, status: inputs.status }), expected_version: inputs.expected_version }, write: true };
+  return { method: 'POST', path: '/api/records', body: { op: 'update', object: 'post', id: inputs.article, fields: defined({ title: encoded(inputs.title, { trim: true }), slug: encoded(inputs.slug, { trim: true }), excerpt: encoded(inputs.excerpt, { trim: true, empty: 'null' }), body: inputs.body, category: encoded(inputs.category, { number: true, empty: 'null' }), author: encoded(inputs.author, { number: true, empty: 'null' }), tags: encoded(inputs.tags, { split: ',', empty: 'null' }), cover: encoded(inputs.cover, { empty: 'null' }), cover_alt: encoded(inputs.cover_alt, { trim: true, empty: 'null' }), featured: encoded(inputs.featured, { empty: 'null' }), status: inputs.status }), expected_version: inputs.expected_version }, write: true };
 }
 
 /**
@@ -435,7 +464,7 @@ export function updateArticle(inputs) {
  * @returns {{ article_id: number, version: number, slug: string }}
  */
 export function decodeUpdateArticle(body, inputs) {
-  return { article_id: body?.id, version: body?.version, slug: inputs?.slug };
+  return { article_id: body?.id, version: body?.version, slug: encoded(inputs?.slug, { trim: true }) };
 }
 
 /**
@@ -463,7 +492,7 @@ export function decodeDeleteArticle(_body, _inputs) {
  * @returns {Request}
  */
 export function saveSiteSettings(inputs) {
-  return { method: 'POST', path: '/api/records', body: { op: 'update', object: 'publication', id: inputs.publication, fields: defined({ name: inputs.name, tagline: inputs.tagline, accent: inputs.accent, paper: inputs.paper }), expected_version: inputs.expected_version }, write: true };
+  return { method: 'POST', path: '/api/records', body: { op: 'update', object: 'publication', id: inputs.publication, fields: defined({ name: encoded(inputs.name, { trim: true }), tagline: encoded(inputs.tagline, { trim: true, empty: 'null' }), accent: inputs.accent, paper: inputs.paper }), expected_version: inputs.expected_version }, write: true };
 }
 
 /**

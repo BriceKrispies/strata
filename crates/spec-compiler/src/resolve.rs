@@ -248,6 +248,7 @@ mod tests {
             events: vec![],
             machines: vec![],
             constructs: Default::default(),
+            telemetry: Default::default(),
         }
     }
 

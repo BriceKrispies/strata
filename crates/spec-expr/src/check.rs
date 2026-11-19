@@ -1,12 +1,19 @@
 //! Type checking against representation types and translation to Rust tokens.
 //!
-//! Exegra evaluates every number as an IEEE double. Rust has distinct integer widths, so the
-//! checker accepts only what both languages agree on:
+//! The semantics are Exegra's for an implementation-level machine (`docs/semantics.md`, "Values,
+//! numbers and time", WG-4902), which evaluates with the declared types; the shared case table
+//! `crates/spec-expr-cases/cases.json` states them as cases:
 //!
 //! * operands of arithmetic and comparison have the same type; there are no implicit conversions;
 //! * an integer literal takes the type of the other operand and must fit it; a fractional literal
-//!   is only an `f64`;
-//! * integer `/` is refused: Exegra computes the exact quotient (`7 / 2` is `3.5`), Rust truncates;
+//!   is only an `f64`; `u64` and `i64` are limited to the integers a double holds exactly,
+//!   `-(2^53 - 1) ..= 2^53 - 1`, for literals and for every result;
+//! * integer arithmetic is checked: a result outside the type is the scope's overflow error;
+//! * integer `/` truncates toward zero and is checked (zero divisor, or the `i32` minimum by `-1`,
+//!   is the overflow error); integer `%` takes the sign of the dividend, a zero divisor is the
+//!   overflow error, and the `i32` minimum `% -1` is `0`, as the exact remainder is;
+//! * `==` is structural: lists and structs by their derived `PartialEq`, `json` values by an inline
+//!   structural comparison that compares numbers by value (`1` equals `1.0`);
 //! * `Timestamp` and `Duration` compare but have no arithmetic (their Rust representation is not
 //!   fixed by the language);
 //! * `null` is an option value and is only compared with, or used as, an `option<T>`; a `json`
@@ -65,7 +72,24 @@ impl Ty {
     pub fn is_integer(&self) -> bool {
         self.int_info().is_some()
     }
+
+    /// The inclusive range a value of this integer type must lie in: the type's own range, with
+    /// `u64` and `i64` limited to `+-(2^53 - 1)` (`docs/semantics.md`, "Numbers").
+    pub fn int_range(&self) -> Option<(i128, i128)> {
+        let (signed, bits, _) = self.int_info()?;
+        Some(if bits >= 64 {
+            (if signed { -SAFE_INT } else { 0 }, SAFE_INT)
+        } else if signed {
+            (-(1i128 << (bits - 1)), (1i128 << (bits - 1)) - 1)
+        } else {
+            (0, (1i128 << bits) - 1)
+        })
+    }
 }
+
+/// The largest integer a double holds exactly together with every smaller one, `2^53 - 1`: the
+/// bound of `u64` and `i64` in the simulator, in Rust and in JavaScript.
+pub const SAFE_INT: i128 = (1 << 53) - 1;
 
 impl fmt::Display for Ty {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -279,7 +303,7 @@ impl Cx<'_> {
         } else {
             text.to_string()
         };
-        if let Some((signed, bits, suffix)) = ty.int_info() {
+        if let Some((_, _, suffix)) = ty.int_info() {
             if fractional {
                 return Err(self.err(
                     e,
@@ -287,11 +311,10 @@ impl Cx<'_> {
                     format!("literal {shown} is not an integer and cannot be a {ty}"),
                 ));
             }
-            let fits = text.parse::<u128>().is_ok_and(|v| match (signed, neg) {
-                (false, false) => v < 1u128 << bits,
-                (false, true) => v == 0,
-                (true, false) => v < 1u128 << (bits - 1),
-                (true, true) => v <= 1u128 << (bits - 1),
+            let (lo, hi) = ty.int_range().unwrap_or((0, 0));
+            let fits = text.parse::<i128>().is_ok_and(|v| {
+                let v = if neg { -v } else { v };
+                v >= lo && v <= hi
             });
             if !fits {
                 return Err(self.err(
@@ -428,7 +451,8 @@ impl Cx<'_> {
     fn checked_neg(&self, ty: Ty, o: Out) -> Out {
         let v = o.at(ATOM);
         let ov = self.scope.overflow_error();
-        Out::known(ty, quote!(#v.checked_neg().ok_or(#ov)?))
+        let bound = Self::safe_bound(&ty);
+        Out::known(ty, quote!(#v.checked_neg()#bound.ok_or(#ov)?))
     }
 
     #[inline(never)]
@@ -616,6 +640,9 @@ impl Cx<'_> {
                 format!("operator \"{}\" needs numbers, got {ty}", op.symbol()),
             ));
         }
+        if ty == Ty::Json && !(Self::is_null_lit(&l) || Self::is_null_lit(&r)) {
+            return Ok(Self::json_eq(op, l, r));
+        }
         // Comparison operators do not chain in Rust: a comparison operand is parenthesised.
         let (l, r) = (l.at(ADD), r.at(ADD));
         let t = match op {
@@ -627,6 +654,19 @@ impl Cx<'_> {
             _ => quote!(#l >= #r),
         };
         Ok(Out::known_at(Ty::Bool, t, CMP))
+    }
+
+    /// For `u64` and `i64`, the filter that refuses a result beyond `+-(2^53 - 1)`; nothing for the
+    /// narrower types, whose checked operations already stop at their own range.
+    #[inline(never)]
+    fn safe_bound(ty: &Ty) -> TokenStream {
+        match ty {
+            Ty::U64 => quote!(.filter(|__v| *__v <= 9007199254740991u64)),
+            Ty::I64 => {
+                quote!(.filter(|__v| (-9007199254740991i64..=9007199254740991i64).contains(__v)))
+            }
+            _ => TokenStream::new(),
+        }
     }
 
     #[inline(never)]
@@ -659,21 +699,29 @@ impl Cx<'_> {
         }
         let ov = self.scope.overflow_error();
         if ty.is_integer() {
+            let bound = Self::safe_bound(&ty);
+            if op == BinOp::Rem {
+                // The exact remainder: `wrapping_rem` is it for every divisor but zero (the `i32`
+                // minimum `% -1` is 0, where `checked_rem` would refuse).
+                let (l, r) = (l.tokens, r.tokens);
+                return Ok(Out::known(
+                    ty,
+                    quote!({
+                        let __l = #l;
+                        let __r = #r;
+                        if __r == 0 {
+                            return ::core::result::Result::Err(#ov);
+                        }
+                        __l.wrapping_rem(__r)
+                    }),
+                ));
+            }
             let (l, arg) = (l.at(ATOM), r.tokens);
             let t = match op {
-                BinOp::Add => quote!(#l.checked_add(#arg).ok_or(#ov)?),
-                BinOp::Sub => quote!(#l.checked_sub(#arg).ok_or(#ov)?),
-                BinOp::Mul => quote!(#l.checked_mul(#arg).ok_or(#ov)?),
-                BinOp::Rem => quote!(#l.checked_rem(#arg).ok_or(#ov)?),
-                _ => {
-                    return Err(self.err(
-                        e,
-                        TypeErrorKind::Unsupported,
-                        format!(
-                            "integer division is not supported: Exegra's \"/\" on {ty} is the exact quotient (7 / 2 is 3.5) while Rust truncates"
-                        ),
-                    ))
-                }
+                BinOp::Add => quote!(#l.checked_add(#arg)#bound.ok_or(#ov)?),
+                BinOp::Sub => quote!(#l.checked_sub(#arg)#bound.ok_or(#ov)?),
+                BinOp::Mul => quote!(#l.checked_mul(#arg)#bound.ok_or(#ov)?),
+                _ => quote!(#l.checked_div(#arg)#bound.ok_or(#ov)?),
             };
             return Ok(Out::known(ty, t));
         }
@@ -727,6 +775,41 @@ impl Cx<'_> {
             TypeErrorKind::BadOperand,
             format!("operator \"{sym}\" needs numbers, got {ty}"),
         ))
+    }
+}
+
+impl Cx<'_> {
+    fn is_null_lit(o: &Out) -> bool {
+        o.tokens.to_string() == quote!(::serde_json::Value::Null).to_string()
+    }
+
+    /// Structural equality of two JSON values with numbers compared by value, so `1` equals `1.0`
+    /// (`serde_json::Value`'s own `==` tells them apart).
+    #[inline(never)]
+    fn json_eq(op: BinOp, l: Out, r: Out) -> Out {
+        let (l, r) = (l.tokens, r.tokens);
+        let not = if op == BinOp::Ne { quote!(!) } else { quote!() };
+        Out::known_at(
+            Ty::Bool,
+            quote!(#not {
+                fn __json_eq(a: &::serde_json::Value, b: &::serde_json::Value) -> bool {
+                    use ::serde_json::Value as J;
+                    match (a, b) {
+                        (J::Number(x), J::Number(y)) => x.as_f64() == y.as_f64(),
+                        (J::Array(x), J::Array(y)) => {
+                            x.len() == y.len() && x.iter().zip(y).all(|(p, q)| __json_eq(p, q))
+                        }
+                        (J::Object(x), J::Object(y)) => {
+                            x.len() == y.len()
+                                && x.iter().all(|(k, p)| y.get(k).is_some_and(|q| __json_eq(p, q)))
+                        }
+                        _ => a == b,
+                    }
+                }
+                __json_eq(&#l, &#r)
+            }),
+            if op == BinOp::Ne { UNARY } else { ATOM },
+        )
     }
 }
 

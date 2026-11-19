@@ -605,6 +605,22 @@ fn accounts_are_scoped_to_their_tenant(store: &dyn Store) {
         store.account(&tenant_id("alpha"), "ines").unwrap(),
         Some(changed)
     );
+    // Removing a login removes that one only, in its own tenant.
+    let other = Account {
+        tenant: tenant_id("beta"),
+        login: "ines".into(),
+        principal: principal_id("beta:editor"),
+        display_name: "Ines".into(),
+        password_hash: "$argon2id$placeholder".into(),
+    };
+    store.put_account(&other).unwrap();
+    assert!(store.remove_account(&tenant_id("alpha"), "ines").unwrap());
+    assert!(!store.remove_account(&tenant_id("alpha"), "ines").unwrap());
+    assert_eq!(store.account(&tenant_id("alpha"), "ines").unwrap(), None);
+    assert_eq!(
+        store.account(&tenant_id("beta"), "ines").unwrap(),
+        Some(other)
+    );
 }
 
 fn snapshots_restore_to_the_same_hash(store: &dyn Store) {
@@ -658,9 +674,65 @@ fn snapshots_restore_to_the_same_hash(store: &dyn Store) {
 fn reset_removes_everything(store: &dyn Store) {
     let mut pair = Pair::new(store);
     pair.note("alpha", "Gone", "gone");
+    pair.note("beta", "Kept", "kept");
     store
         .put_session(&session("s1", "alpha", "alpha:editor", 5_000))
         .unwrap();
+    store
+        .put_session(&session("s2", "beta", "beta:editor", 5_000))
+        .unwrap();
+    let account = |tenant: &str| Account {
+        tenant: tenant_id(tenant),
+        login: "editor".into(),
+        principal: principal_id(&format!("{tenant}:editor")),
+        display_name: "Editor".into(),
+        password_hash: "$argon2id$placeholder".into(),
+    };
+    store.put_account(&account("alpha")).unwrap();
+    store.put_account(&account("beta")).unwrap();
+    let beta = tenant_id("beta");
+    let beta_before = (
+        canon::hash_of(&store.load_complete(&beta).unwrap().tenant),
+        store.events_after(&beta, 0, 1_000).unwrap(),
+        store.journal_after(&beta, 0, 1_000).unwrap(),
+    );
+
+    // One tenant reset: it is gone with everything that was its own, the other is as it was.
+    store.reset_tenant(&tenant_id("alpha")).unwrap();
+    assert!(store
+        .load(&tenant_id("alpha"), &[])
+        .unwrap()
+        .tenant
+        .is_none());
+    assert!(store
+        .events_after(&tenant_id("alpha"), 0, 1_000)
+        .unwrap()
+        .is_empty());
+    assert!(store
+        .journal_after(&tenant_id("alpha"), 0, 1_000)
+        .unwrap()
+        .is_empty());
+    assert!(store.session_by_token("hash-of-s1").unwrap().is_none());
+    assert_eq!(store.account(&tenant_id("alpha"), "editor").unwrap(), None);
+    assert!(store
+        .outbox(1_000)
+        .unwrap()
+        .iter()
+        .all(|entry| entry.event.tenant == beta));
+    assert_eq!(
+        (
+            canon::hash_of(&store.load_complete(&beta).unwrap().tenant),
+            store.events_after(&beta, 0, 1_000).unwrap(),
+            store.journal_after(&beta, 0, 1_000).unwrap(),
+        ),
+        beta_before
+    );
+    assert!(store.session_by_token("hash-of-s2").unwrap().is_some());
+    assert_eq!(
+        store.account(&beta, "editor").unwrap(),
+        Some(account("beta"))
+    );
+
     store.reset().unwrap();
     assert!(store.tenants().unwrap().is_empty());
     assert!(store.outbox(10).unwrap().is_empty());

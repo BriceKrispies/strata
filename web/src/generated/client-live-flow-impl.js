@@ -4,7 +4,7 @@
 // The ws state of the kernel (status, attempts, lastSeq, lastN, missedPongs). A heartbeat timer whose interval the welcome frame announces (heartbeatMs; 10 seconds until the first welcome) pings and gives up after two pings without a pong. A closed socket waits 0.5, 1, 2, 4 seconds and then 8 seconds, the cap of the back-off (a reconnect after the fifth failure waits 8 seconds; the random jitter between half and all of the wait is not modelled, the wait is its upper bound). The state is kept in memory for the life of the tab.
 // Specification behavior `client-live-flow-impl`, an implementation-level machine run in the browser.
 
-import { overflow, StepError } from './machine-runtime.js';
+import { check, overflow, StepError } from './machine-runtime.js';
 
 /**
  * The states of machine `client-live-flow-impl`.
@@ -25,7 +25,8 @@ import { overflow, StepError } from './machine-runtime.js';
  *   | { event: 'ui-live-heartbeat-due', payload?: {} }
  *   | { event: 'ui-live-closed', payload?: {} }
  *   | { event: 'ui-live-reconnect-due', payload?: {} }
- *   | { event: 'ui-live-reset', payload?: {} }} ClientLiveFlowImplEvent
+ *   | { event: 'ui-live-reset', payload?: {} }
+ *   | { event: 'ui-live-resync', payload: { head: number } }} ClientLiveFlowImplEvent
  */
 
 /**
@@ -50,6 +51,21 @@ import { overflow, StepError } from './machine-runtime.js';
  */
 
 /**
+ * What each event the machine receives must hold, as the Rust machine's decode requires it.
+ * @type {Map<string, import('./machine-runtime.js').Check>}
+ */
+const PAYLOADS = new Map([
+  ['ui-live-start', check.payload({})],
+  ['ui-live-welcome', check.payload({ head: check.integer(0, 9007199254740991), 'heartbeat-ms': check.integer(0, 4294967295) })],
+  ['ui-live-frame', check.payload({ n: check.integer(0, 9007199254740991), seq: check.integer(0, 9007199254740991) })],
+  ['ui-live-pong', check.payload({ head: check.integer(0, 9007199254740991) })],
+  ['ui-live-heartbeat-due', check.payload({})],
+  ['ui-live-closed', check.payload({})],
+  ['ui-live-reconnect-due', check.payload({})],
+  ['ui-live-reset', check.payload({})],
+]);
+
+/**
  * The state and variables of a new instance.
  * @param {string} [_key] The instance key; unused, the state lives in the kernel.
  * @returns {{ state: ClientLiveFlowImplState, vars: ClientLiveFlowImplVars }}
@@ -65,9 +81,12 @@ export function initial(_key) {
  * @param {ClientLiveFlowImplEvent} event
  * @param {number} now
  * @returns {ClientLiveFlowImplOutcome}
- * @throws {StepError} when arithmetic overflows or divides by zero.
+ * @throws {StepError} when arithmetic overflows or divides by zero, or the event is not one the machine receives or its payload is not of the declared types (integers beyond +-(2^53 - 1) included).
  */
 export function step(state, vars, event, now) {
+  const payloadCheck = PAYLOADS.get(event.event);
+  if (payloadCheck === undefined) throw new StepError('invalid-event', `machine client-live-flow-impl receives no event ${event.event}`);
+  payloadCheck(event.payload, event.event);
   switch (state) {
     case 'lv-idle-i':
       switch (event.event) {
@@ -98,9 +117,9 @@ export function step(state, vars, event, now) {
             next.lastN = 0;
             next.missedPongs = 0;
             emits.push({ to: 'subscribe-events', delivery: 'at-least-once', event: 'ui-live-subscribe', payload: { after: next.lastSeq } });
-            next.lastSeq = event.payload.head;
-            next.heartbeatMs = event.payload['heartbeat-ms'];
-            timers.push({ set: 'heartbeat', afterMs: event.payload['heartbeat-ms'], event: 'ui-live-heartbeat-due', payload: {} });
+            next.lastSeq = (event.payload.head ?? (() => { throw new StepError('absent', 'event field head is absent'); })());
+            next.heartbeatMs = (event.payload['heartbeat-ms'] ?? (() => { throw new StepError('absent', 'event field heartbeat-ms is absent'); })());
+            timers.push({ set: 'heartbeat', afterMs: (event.payload['heartbeat-ms'] ?? (() => { throw new StepError('absent', 'event field heartbeat-ms is absent'); })()), event: 'ui-live-heartbeat-due', payload: {} });
             return { state: 'lv-open-i', vars: next, emits, timers };
           }
           // lv-resume-welcome-i
@@ -113,8 +132,8 @@ export function step(state, vars, event, now) {
           next.lastN = 0;
           next.missedPongs = 0;
           emits.push({ to: 'subscribe-events', delivery: 'at-least-once', event: 'ui-live-subscribe', payload: { after: next.lastSeq } });
-          next.heartbeatMs = event.payload['heartbeat-ms'];
-          timers.push({ set: 'heartbeat', afterMs: event.payload['heartbeat-ms'], event: 'ui-live-heartbeat-due', payload: {} });
+          next.heartbeatMs = (event.payload['heartbeat-ms'] ?? (() => { throw new StepError('absent', 'event field heartbeat-ms is absent'); })());
+          timers.push({ set: 'heartbeat', afterMs: (event.payload['heartbeat-ms'] ?? (() => { throw new StepError('absent', 'event field heartbeat-ms is absent'); })()), event: 'ui-live-heartbeat-due', payload: {} });
           return { state: 'lv-open-i', vars: next, emits, timers };
         }
         case 'ui-live-closed': {
@@ -195,27 +214,27 @@ export function step(state, vars, event, now) {
     case 'lv-open-i':
       switch (event.event) {
         case 'ui-live-frame': {
-          if (event.payload.n === (($v) => $v >= 0 && $v <= 9007199254740991 ? $v : overflow('lv-frame-advance-i'))(vars.lastN + 1) && event.payload.seq > vars.lastSeq) {
+          if ((event.payload.n ?? (() => { throw new StepError('absent', 'event field n is absent'); })()) === (($v) => $v >= 0 && $v <= 9007199254740991 ? $v : overflow('lv-frame-advance-i'))(vars.lastN + 1) && (event.payload.seq ?? (() => { throw new StepError('absent', 'event field seq is absent'); })()) > vars.lastSeq) {
             // lv-frame-advance-i
             const next = { ...vars };
             /** @type {ClientLiveFlowImplEmit[]} */
             const emits = [];
             /** @type {ClientLiveFlowImplTimer[]} */
             const timers = [];
-            next.lastN = event.payload.n;
-            next.lastSeq = event.payload.seq;
-            emits.push({ to: 'subscribe-events', delivery: 'at-most-once', event: 'ui-live-ack', payload: { n: event.payload.n } });
+            next.lastN = (event.payload.n ?? (() => { throw new StepError('absent', 'event field n is absent'); })());
+            next.lastSeq = (event.payload.seq ?? (() => { throw new StepError('absent', 'event field seq is absent'); })());
+            emits.push({ to: 'subscribe-events', delivery: 'at-most-once', event: 'ui-live-ack', payload: { n: (event.payload.n ?? (() => { throw new StepError('absent', 'event field n is absent'); })()) } });
             return { state: 'lv-open-i', vars: next, emits, timers };
           }
-          if (event.payload.n === (($v) => $v >= 0 && $v <= 9007199254740991 ? $v : overflow('lv-frame-same-i'))(vars.lastN + 1)) {
+          if ((event.payload.n ?? (() => { throw new StepError('absent', 'event field n is absent'); })()) === (($v) => $v >= 0 && $v <= 9007199254740991 ? $v : overflow('lv-frame-same-i'))(vars.lastN + 1)) {
             // lv-frame-same-i
             const next = { ...vars };
             /** @type {ClientLiveFlowImplEmit[]} */
             const emits = [];
             /** @type {ClientLiveFlowImplTimer[]} */
             const timers = [];
-            next.lastN = event.payload.n;
-            emits.push({ to: 'subscribe-events', delivery: 'at-most-once', event: 'ui-live-ack', payload: { n: event.payload.n } });
+            next.lastN = (event.payload.n ?? (() => { throw new StepError('absent', 'event field n is absent'); })());
+            emits.push({ to: 'subscribe-events', delivery: 'at-most-once', event: 'ui-live-ack', payload: { n: (event.payload.n ?? (() => { throw new StepError('absent', 'event field n is absent'); })()) } });
             return { state: 'lv-open-i', vars: next, emits, timers };
           }
           // lv-frame-gap-i
@@ -229,7 +248,7 @@ export function step(state, vars, event, now) {
           return { state: 'lv-open-i', vars: next, emits, timers };
         }
         case 'ui-live-pong': {
-          if (event.payload.head > vars.lastSeq) {
+          if ((event.payload.head ?? (() => { throw new StepError('absent', 'event field head is absent'); })()) > vars.lastSeq) {
             // lv-pong-advance-i
             const next = { ...vars };
             /** @type {ClientLiveFlowImplEmit[]} */
@@ -237,7 +256,7 @@ export function step(state, vars, event, now) {
             /** @type {ClientLiveFlowImplTimer[]} */
             const timers = [];
             next.missedPongs = 0;
-            next.lastSeq = event.payload.head;
+            next.lastSeq = (event.payload.head ?? (() => { throw new StepError('absent', 'event field head is absent'); })());
             return { state: 'lv-open-i', vars: next, emits, timers };
           }
           // lv-pong-same-i
@@ -340,6 +359,16 @@ export function step(state, vars, event, now) {
           const timers = [];
           next.lastSeq = 0;
           emits.push({ to: 'subscribe-events', delivery: 'at-most-once', event: 'ui-live-close-requested', payload: {} });
+          return { state: 'lv-open-i', vars: next, emits, timers };
+        }
+        case 'ui-live-resync': {
+          // lv-resync-i
+          const next = { ...vars };
+          /** @type {ClientLiveFlowImplEmit[]} */
+          const emits = [];
+          /** @type {ClientLiveFlowImplTimer[]} */
+          const timers = [];
+          next.lastSeq = event.payload.head;
           return { state: 'lv-open-i', vars: next, emits, timers };
         }
         default:

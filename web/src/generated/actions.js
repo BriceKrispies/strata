@@ -6,18 +6,21 @@
 import { hrefFor } from './routes.js';
 
 /**
- * @typedef {{ screen: string, contract: string, forEach: string | null, form: string | null, confirm: boolean, optimistic: boolean, result: { into: string, output: string } | null, show: string, navigates: boolean }} ActionInfo
+ * `screens` are the screens it is offered on: its own, and with `alsoOn` every other screen of
+ * that authentication. `confirmAnnounce` is what is announced when a first press asks for the
+ * second.
+ * @typedef {{ screen: string, screens: string[], contract: string, forEach: string | null, form: string | null, confirm: boolean, confirmAnnounce: string | null, optimistic: boolean, result: { into: string, output: string } | null, show: string, navigates: boolean }} ActionInfo
  */
 
 /** @type {Record<string, ActionInfo>} */
 export const ACTIONS = {
-  'act-sign-out-desk': { screen: 'screen-desk', contract: 'sign-out-of-site', forEach: null, form: null, confirm: false, optimistic: false, result: null, show: 'toast', navigates: true },
-  'act-sign-out-front-page': { screen: 'screen-front-page', contract: 'sign-out-of-site', forEach: null, form: null, confirm: false, optimistic: false, result: null, show: 'toast', navigates: false },
-  'act-preview-new': { screen: 'screen-desk-new', contract: 'preview-markdown', forEach: null, form: 'form-new-article-save', confirm: false, optimistic: false, result: { into: 'preview', output: 'blocks' }, show: 'inline', navigates: false },
-  'act-preview-edit': { screen: 'screen-desk-edit', contract: 'preview-markdown', forEach: null, form: 'form-edit-article-save-draft', confirm: false, optimistic: false, result: { into: 'preview', output: 'blocks' }, show: 'inline', navigates: false },
-  'act-desk-publish': { screen: 'screen-desk', contract: 'update-article', forEach: 'articles', form: null, confirm: false, optimistic: false, result: null, show: 'toast', navigates: false },
-  'act-desk-unpublish': { screen: 'screen-desk', contract: 'update-article', forEach: 'articles', form: null, confirm: false, optimistic: false, result: null, show: 'toast', navigates: false },
-  'act-desk-delete': { screen: 'screen-desk', contract: 'delete-article', forEach: 'articles', form: null, confirm: true, optimistic: false, result: null, show: 'toast', navigates: false },
+  'act-sign-out-desk': { screen: 'screen-desk', screens: ['screen-desk', 'screen-desk-new', 'screen-desk-edit', 'screen-desk-settings', 'screen-lab'], contract: 'sign-out-of-site', forEach: null, form: null, confirm: false, confirmAnnounce: null, optimistic: false, result: null, show: 'toast', navigates: true },
+  'act-sign-out-front-page': { screen: 'screen-front-page', screens: ['screen-front-page', 'screen-article', 'screen-topics', 'screen-topic', 'screen-authors', 'screen-author', 'screen-search', 'screen-about', 'screen-sign-in', 'screen-not-found'], contract: 'sign-out-of-site', forEach: null, form: null, confirm: false, confirmAnnounce: null, optimistic: false, result: null, show: 'toast', navigates: false },
+  'act-preview-new': { screen: 'screen-desk-new', screens: ['screen-desk-new'], contract: 'preview-markdown', forEach: null, form: 'form-new-article-save', confirm: false, confirmAnnounce: null, optimistic: false, result: { into: 'preview', output: 'blocks' }, show: 'inline', navigates: false },
+  'act-preview-edit': { screen: 'screen-desk-edit', screens: ['screen-desk-edit'], contract: 'preview-markdown', forEach: null, form: 'form-edit-article-save-draft', confirm: false, confirmAnnounce: null, optimistic: false, result: { into: 'preview', output: 'blocks' }, show: 'inline', navigates: false },
+  'act-desk-publish': { screen: 'screen-desk', screens: ['screen-desk'], contract: 'update-article', forEach: 'articles', form: null, confirm: false, confirmAnnounce: null, optimistic: false, result: null, show: 'toast', navigates: false },
+  'act-desk-unpublish': { screen: 'screen-desk', screens: ['screen-desk'], contract: 'update-article', forEach: 'articles', form: null, confirm: false, confirmAnnounce: null, optimistic: false, result: null, show: 'toast', navigates: false },
+  'act-desk-delete': { screen: 'screen-desk', screens: ['screen-desk'], contract: 'delete-article', forEach: 'articles', form: null, confirm: true, confirmAnnounce: 'Press Confirm delete to remove the article for good.', optimistic: false, result: null, show: 'toast', navigates: false },
 };
 
 /**
@@ -78,7 +81,7 @@ const actSignOutDesk = {
   },
   /** @param {any} _scope */
   succeeded(_scope) {
-    return { navigate: hrefFor('screen-front-page', {}), toast: 'Signed out.' };
+    return { navigate: hrefFor('screen-front-page', {}), toast: 'Signed out.', view: null };
   },
   /**
    * @param {Record<string, any>} local
@@ -117,7 +120,7 @@ const actSignOutFrontPage = {
   },
   /** @param {any} _scope */
   succeeded(_scope) {
-    return { navigate: null, toast: 'Signed out.' };
+    return { navigate: null, toast: 'Signed out.', view: null };
   },
   /**
    * @param {Record<string, any>} local
@@ -156,7 +159,7 @@ const actPreviewNew = {
   },
   /** @param {any} _scope */
   succeeded(_scope) {
-    return { navigate: null, toast: null };
+    return { navigate: null, toast: null, view: null };
   },
   /**
    * @param {Record<string, any>} local
@@ -195,7 +198,7 @@ const actPreviewEdit = {
   },
   /** @param {any} _scope */
   succeeded(_scope) {
-    return { navigate: null, toast: null };
+    return { navigate: null, toast: null, view: null };
   },
   /**
    * @param {Record<string, any>} local
@@ -234,7 +237,7 @@ const actDeskPublish = {
   },
   /** @param {any} _scope */
   succeeded(_scope) {
-    return { navigate: null, toast: 'Published.' };
+    return { navigate: null, toast: 'Published.', view: null };
   },
   /**
    * @param {Record<string, any>} local
@@ -273,7 +276,7 @@ const actDeskUnpublish = {
   },
   /** @param {any} _scope */
   succeeded(_scope) {
-    return { navigate: null, toast: 'Moved back to drafts.' };
+    return { navigate: null, toast: 'Moved back to drafts.', view: null };
   },
   /**
    * @param {Record<string, any>} local
@@ -312,7 +315,7 @@ const actDeskDelete = {
   },
   /** @param {any} _scope */
   succeeded(_scope) {
-    return { navigate: null, toast: 'Deleted.' };
+    return { navigate: null, toast: 'Deleted.', view: null };
   },
   /**
    * @param {Record<string, any>} local
@@ -345,12 +348,12 @@ function of(action) {
 }
 
 /**
- * The actions of a screen, in declaration order.
+ * The actions offered on a screen, in declaration order.
  * @param {string} screen
  * @returns {string[]}
  */
 export function actionsOn(screen) {
-  return Object.keys(ACTIONS).filter((id) => ACTIONS[id].screen === screen);
+  return Object.keys(ACTIONS).filter((id) => ACTIONS[id].screens.includes(screen));
 }
 
 /**
@@ -407,10 +410,11 @@ export function visible(action, scope, inputs) {
 }
 
 /**
- * What a success does: the address to open (or null) and the message to show (or null).
+ * What a success does: the address to open (or null), the message to show (or null) and the
+ * view-model outputs it sets until the view model is read again (or null).
  * @param {string} action
  * @param {any} scope
- * @returns {{ navigate: string | null, toast: string | null }}
+ * @returns {{ navigate: string | null, toast: string | null, view: Record<string, any> | null }}
  */
 export function succeeded(action, scope) {
   return of(action).succeeded(scope);

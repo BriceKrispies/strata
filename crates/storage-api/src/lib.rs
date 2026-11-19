@@ -279,6 +279,8 @@ pub trait Store: Send + Sync {
 
     fn put_account(&self, account: &Account) -> StoreResult<()>;
     fn account(&self, tenant: &TenantId, login: &str) -> StoreResult<Option<Account>>;
+    /// Remove a login. Returns whether it was there.
+    fn remove_account(&self, tenant: &TenantId, login: &str) -> StoreResult<bool>;
 
     /// Keep a copy of the tenant's complete state as it is now.
     fn create_snapshot(
@@ -295,6 +297,10 @@ pub trait Store: Send + Sync {
 
     /// Remove everything. For development fixtures.
     fn reset(&self) -> StoreResult<()>;
+
+    /// Remove one tenant and everything that belongs to it: its state, events, journal,
+    /// sessions, logins and snapshots. Other tenants are untouched. For development fixtures.
+    fn reset_tenant(&self, tenant: &TenantId) -> StoreResult<()>;
 }
 
 /// Check that a commit's events continue a tenant's sequence. Shared by adapters.

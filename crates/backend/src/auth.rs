@@ -13,6 +13,7 @@ use strata_kernel::rules::{may_attempt, roles_of};
 use strata_kernel::{
     canon, Action, Context, Principal, PrincipalId, Resource, SessionId, TenantId, TenantState,
 };
+use strata_model::telemetry;
 use strata_protocol::api::{
     valid_correlation, ErrorCode, LoginReply, LoginRequest, SessionView, HEADER_CORRELATION,
     HEADER_SERVICE, HEADER_SESSION, HEADER_SITE,
@@ -130,10 +131,16 @@ pub fn identify(app: &App, caller: &Caller) -> Result<Identity, ApiError> {
     };
     let now = app.now().0;
     if session.tenant != caller.site {
-        LOG.warn(
+        // A token is only ever sent to the site that issued it, so this is a token that was
+        // taken somewhere and replayed: an audit entry, not just a log line.
+        app.audit(
             "session.wrong_site",
             &caller.correlation,
-            json!({ "session": session.id.as_str(), "site": caller.site.as_str() }),
+            json!({
+                "session": session.id.as_str(),
+                "session_tenant": session.tenant.as_str(),
+                "site": caller.site.as_str(),
+            }),
         );
         return Ok(anonymous(SessionState::Anonymous));
     }
@@ -212,6 +219,11 @@ fn verify_password(password: &str, stored: &str) -> bool {
                 .is_ok()
         })
         .unwrap_or(false)
+}
+
+/// Whether `password` opens the stored hash.
+pub(crate) fn is_password(password: &str, stored: &str) -> bool {
+    verify_password(password, stored)
 }
 
 /// A hash to verify against when the login does not exist, so that a miss costs the same as a
@@ -301,10 +313,15 @@ pub fn login(app: &App, caller: &Caller, request: &LoginRequest) -> Result<Login
         revoked_at: None,
     };
     app.store.put_session(&session)?;
-    LOG.info(
-        "login.accepted",
-        &caller.correlation,
-        json!({ "tenant": caller.site.as_str(), "session": session.id.as_str(), "principal": session.principal.as_str() }),
+    telemetry::session_started(
+        &telemetry::BACKEND,
+        &telemetry::SessionStarted {
+            correlation: &caller.correlation,
+            tenant: caller.site.as_str(),
+            session: session.id.as_str(),
+            principal: session.principal.as_str(),
+            method: "password",
+        },
     );
     let identity = Identity {
         tenant: caller.site.clone(),
@@ -325,10 +342,13 @@ pub fn end_session(app: &App, token: &str, correlation: &str) -> Result<(), ApiE
         if session.revoked_at.is_none() {
             session.revoked_at = Some(app.now());
             app.store.put_session(&session)?;
-            LOG.info(
-                "session.ended",
-                correlation,
-                json!({ "session": session.id.as_str() }),
+            telemetry::session_ended(
+                &telemetry::BACKEND,
+                &telemetry::SessionEnded {
+                    correlation,
+                    tenant: session.tenant.as_str(),
+                    session: session.id.as_str(),
+                },
             );
         }
         let _ = app.hub.sessions.send((session.id, SessionState::Revoked));

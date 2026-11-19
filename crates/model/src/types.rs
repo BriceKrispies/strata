@@ -598,6 +598,9 @@ pub enum JobState {
     /// The value `cancelled`.
     #[serde(rename = "cancelled")]
     Cancelled,
+    /// The value `unscheduled`.
+    #[serde(rename = "unscheduled")]
+    Unscheduled,
 }
 
 impl JobState {
@@ -609,6 +612,7 @@ impl JobState {
             Self::Completed => "completed",
             Self::Failed => "failed",
             Self::Cancelled => "cancelled",
+            Self::Unscheduled => "unscheduled",
         }
     }
 }
@@ -630,6 +634,12 @@ pub enum RunState {
     /// The value `cancelled`.
     #[serde(rename = "cancelled")]
     Cancelled,
+    /// The value `compensating`.
+    #[serde(rename = "compensating")]
+    Compensating,
+    /// The value `awaiting-approval`.
+    #[serde(rename = "awaiting-approval")]
+    AwaitingApproval,
 }
 
 impl RunState {
@@ -640,6 +650,8 @@ impl RunState {
             Self::Completed => "completed",
             Self::Failed => "failed",
             Self::Cancelled => "cancelled",
+            Self::Compensating => "compensating",
+            Self::AwaitingApproval => "awaiting-approval",
         }
     }
 }
@@ -696,6 +708,9 @@ pub enum MessageState {
     /// The value `failed`.
     #[serde(rename = "failed")]
     Failed,
+    /// The value `discarded`.
+    #[serde(rename = "discarded")]
+    Discarded,
 }
 
 impl MessageState {
@@ -706,6 +721,7 @@ impl MessageState {
             Self::Submitted => "submitted",
             Self::Sent => "sent",
             Self::Failed => "failed",
+            Self::Discarded => "discarded",
         }
     }
 }
@@ -3689,3 +3705,12 @@ pub struct WebhookDelivery {
     /// Field `at`.
     pub at: prelude::Timestamp,
 }
+
+/// session-token
+///
+/// The secret a session cookie carries; only its hash is stored, and it is never logged.
+///
+/// Specification type `session-token`: a scalar represented as `string`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct SessionToken(pub String);

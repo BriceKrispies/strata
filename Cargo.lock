@@ -1238,6 +1238,7 @@ dependencies = [
  "serde",
  "serde_json",
  "strata-kernel",
+ "strata-model",
  "strata-protocol",
  "strata-runtime",
  "strata-simulation",
@@ -1280,6 +1281,19 @@ dependencies = [
  "serde_json",
  "sha2",
  "strata-kernel",
+]
+
+[[package]]
+name = "strata-machine-store"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "strata-kernel",
+ "strata-runtime",
+ "strata-storage-api",
+ "strata-storage-sqlite",
+ "tokio",
 ]
 
 [[package]]
@@ -1339,6 +1353,7 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
+ "strata-model",
  "strata-runtime",
  "strata-spec-compiler-machines-fixture",
  "strata-spec-compiler-wiring-fixture",
@@ -1388,6 +1403,17 @@ dependencies = [
  "proc-macro2",
  "quote",
  "serde_json",
+]
+
+[[package]]
+name = "strata-spec-expr-cases"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "serde",
+ "serde_json",
+ "strata-spec-expr",
 ]
 
 [[package]]
