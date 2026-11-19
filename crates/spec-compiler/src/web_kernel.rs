@@ -15,10 +15,9 @@
 //! - `contracts.js`: one request builder per contract a screen, form, action or client machine
 //!   uses, which returns `{method, path, body?, write}` for the kernel's HTTP effect, and one
 //!   decoder of its reply into the contract's outputs; `request(contract, inputs, address)` and
-//!   `decode(contract, body, inputs)` dispatch on the contract id, and `BFF` records each one's route.
-//!   Inputs and outputs are named in
-//!   the contract's wire case. `write` (the request carries the session's request token) is true
-//!   for every `POST`.
+//!   `decode(contract, body, inputs)` dispatch on the contract id, and `BFF` records each one's
+//!   route. Inputs and outputs are named in the contract's wire case. `write` (the request
+//!   carries the session's request token) is true for every `POST`.
 //! - `forms.js`: the forms (`FORMS`), `initialValues(form, view)`, `options(form, field, view)`,
 //!   `input(form, values, edited, name, value)` (a change, re-deriving the derived fields),
 //!   `validate(form, values)` (the validations of the contract inputs the fields fill: field ->
