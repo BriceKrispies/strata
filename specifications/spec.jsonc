@@ -192702,6 +192702,708 @@
           }
         }
       ]
+    },
+    {
+      "id": "object-def",
+      "description": "transition.rs object_def: the object type of the tenant's schema, or UnknownObject.",
+      "params": [
+        {
+          "name": "d",
+          "type": "draft"
+        },
+        {
+          "name": "object",
+          "type": "object-type-id"
+        }
+      ],
+      "returns": "object-type-def",
+      "errors": "rejection",
+      "body": "match get(d.tenant.schema.objects, object) { Some(o) => o, None => fail(call draft-reject(d.evidence, error-kind.unknown-object, format('no object type {}', object))) }",
+      "examples": [
+        {
+          "args": {
+            "d": {
+              "tenant": {
+                "id": "alpha",
+                "name": "alpha",
+                "revision": 5,
+                "next-record": 1,
+                "event-seq": 5,
+                "schema": {
+                  "version": 2,
+                  "objects": {
+                    "note": {
+                      "id": "note",
+                      "label": "Note",
+                      "fields": {
+                        "author": {
+                          "id": "author",
+                          "label": "Author",
+                          "ty": {
+                            "ref": {
+                              "target": "person",
+                              "on-delete": "set-null"
+                            }
+                          },
+                          "required": false,
+                          "unique": false
+                        },
+                        "body": {
+                          "id": "body",
+                          "label": "body",
+                          "ty": "str",
+                          "required": false,
+                          "unique": false
+                        },
+                        "published_at": {
+                          "id": "published_at",
+                          "label": "published_at",
+                          "ty": "time",
+                          "required": false,
+                          "unique": false
+                        },
+                        "rank": {
+                          "id": "rank",
+                          "label": "rank",
+                          "ty": "int",
+                          "required": false,
+                          "unique": false
+                        },
+                        "slug": {
+                          "id": "slug",
+                          "label": "slug",
+                          "ty": "str",
+                          "required": true,
+                          "unique": true
+                        },
+                        "status": {
+                          "id": "status",
+                          "label": "status",
+                          "ty": "str",
+                          "required": true,
+                          "unique": false,
+                          "default": {
+                            "lit": {
+                              "str": "draft"
+                            }
+                          }
+                        },
+                        "title": {
+                          "id": "title",
+                          "label": "title",
+                          "ty": "str",
+                          "required": true,
+                          "unique": false
+                        }
+                      },
+                      "constraints": {
+                        "title_length": {
+                          "id": "title_length",
+                          "expr": {
+                            "cmp": {
+                              "op": "le",
+                              "left": {
+                                "len": {
+                                  "var": {
+                                    "scope": "new",
+                                    "field": "title"
+                                  }
+                                }
+                              },
+                              "right": {
+                                "lit": {
+                                  "int": 24
+                                }
+                              }
+                            }
+                          },
+                          "message": "A title has at most 24 characters"
+                        }
+                      }
+                    },
+                    "person": {
+                      "id": "person",
+                      "label": "Person",
+                      "fields": {
+                        "name": {
+                          "id": "name",
+                          "label": "name",
+                          "ty": "str",
+                          "required": true,
+                          "unique": false
+                        }
+                      },
+                      "constraints": {}
+                    }
+                  },
+                  "roles": {
+                    "editor": {
+                      "id": "editor",
+                      "label": "Editor"
+                    },
+                    "owner": {
+                      "id": "owner",
+                      "label": "Owner"
+                    },
+                    "public": {
+                      "id": "public",
+                      "label": "Everyone"
+                    },
+                    "writer": {
+                      "id": "writer",
+                      "label": "Writer"
+                    }
+                  },
+                  "policies": {
+                    "editors_manage_notes": {
+                      "id": "editors_manage_notes",
+                      "role": "editor",
+                      "resource": {
+                        "object": "note"
+                      },
+                      "actions": [
+                        "read",
+                        "create",
+                        "update",
+                        "delete"
+                      ],
+                      "condition": null
+                    },
+                    "editors_manage_people": {
+                      "id": "editors_manage_people",
+                      "role": "editor",
+                      "resource": {
+                        "object": "person"
+                      },
+                      "actions": [
+                        "read",
+                        "create",
+                        "update",
+                        "delete"
+                      ],
+                      "condition": null
+                    },
+                    "public_reads_people": {
+                      "id": "public_reads_people",
+                      "role": "public",
+                      "resource": {
+                        "object": "person"
+                      },
+                      "actions": [
+                        "read"
+                      ],
+                      "condition": null
+                    },
+                    "public_reads_published": {
+                      "id": "public_reads_published",
+                      "role": "public",
+                      "resource": {
+                        "object": "note"
+                      },
+                      "actions": [
+                        "read"
+                      ],
+                      "condition": {
+                        "cmp": {
+                          "op": "eq",
+                          "left": {
+                            "var": {
+                              "scope": "record",
+                              "field": "status"
+                            }
+                          },
+                          "right": {
+                            "lit": {
+                              "str": "published"
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "writers_add_people": {
+                      "id": "writers_add_people",
+                      "role": "writer",
+                      "resource": {
+                        "object": "person"
+                      },
+                      "actions": [
+                        "create"
+                      ],
+                      "condition": null
+                    },
+                    "writers_edit_own": {
+                      "id": "writers_edit_own",
+                      "role": "writer",
+                      "resource": {
+                        "object": "note"
+                      },
+                      "actions": [
+                        "update",
+                        "delete"
+                      ],
+                      "condition": {
+                        "cmp": {
+                          "op": "eq",
+                          "left": {
+                            "var": {
+                              "scope": "record",
+                              "field": "$created_by"
+                            }
+                          },
+                          "right": "principal"
+                        }
+                      }
+                    },
+                    "writers_read_notes": {
+                      "id": "writers_read_notes",
+                      "role": "writer",
+                      "resource": {
+                        "object": "note"
+                      },
+                      "actions": [
+                        "read",
+                        "create"
+                      ],
+                      "condition": null
+                    }
+                  },
+                  "workflows": {
+                    "note_status": {
+                      "id": "note_status",
+                      "object": "note",
+                      "field": "status",
+                      "initial": [
+                        "draft"
+                      ],
+                      "transitions": [
+                        {
+                          "name": "publish",
+                          "from": "draft",
+                          "to": "published",
+                          "guard": {
+                            "cmp": {
+                              "op": "eq",
+                              "left": "principal",
+                              "right": {
+                                "lit": {
+                                  "str": "alpha:editor"
+                                }
+                              }
+                            }
+                          },
+                          "set": {
+                            "published_at": "now"
+                          }
+                        },
+                        {
+                          "name": "unpublish",
+                          "from": "published",
+                          "to": "draft",
+                          "guard": null,
+                          "set": {
+                            "published_at": {
+                              "lit": "null"
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  },
+                  "queries": {},
+                  "views": {}
+                },
+                "members": {
+                  "alpha:editor": [
+                    "editor"
+                  ],
+                  "alpha:owner": [
+                    "owner"
+                  ],
+                  "alpha:writer1": [
+                    "writer"
+                  ],
+                  "alpha:writer2": [
+                    "writer"
+                  ]
+                },
+                "records": {}
+              },
+              "ctx": {
+                "tenant": "alpha",
+                "principal": {
+                  "user": "alpha:owner"
+                },
+                "session": null,
+                "now": 5001,
+                "correlation": "test-5001"
+              },
+              "coverage": "complete",
+              "ops": [],
+              "events": [],
+              "effects": [],
+              "evidence": [],
+              "next-record": 1
+            },
+            "object": "person"
+          },
+          "result": {
+            "id": "person",
+            "label": "Person",
+            "fields": {
+              "name": {
+                "id": "name",
+                "label": "name",
+                "ty": "str",
+                "required": true,
+                "unique": false
+              }
+            },
+            "constraints": {}
+          }
+        },
+        {
+          "description": "behaviour.rs every_rejection_lists_at_least_one_failed_check: unknown object type.",
+          "args": {
+            "d": {
+              "tenant": {
+                "id": "alpha",
+                "name": "alpha",
+                "revision": 5,
+                "next-record": 1,
+                "event-seq": 5,
+                "schema": {
+                  "version": 2,
+                  "objects": {
+                    "note": {
+                      "id": "note",
+                      "label": "Note",
+                      "fields": {
+                        "author": {
+                          "id": "author",
+                          "label": "Author",
+                          "ty": {
+                            "ref": {
+                              "target": "person",
+                              "on-delete": "set-null"
+                            }
+                          },
+                          "required": false,
+                          "unique": false
+                        },
+                        "body": {
+                          "id": "body",
+                          "label": "body",
+                          "ty": "str",
+                          "required": false,
+                          "unique": false
+                        },
+                        "published_at": {
+                          "id": "published_at",
+                          "label": "published_at",
+                          "ty": "time",
+                          "required": false,
+                          "unique": false
+                        },
+                        "rank": {
+                          "id": "rank",
+                          "label": "rank",
+                          "ty": "int",
+                          "required": false,
+                          "unique": false
+                        },
+                        "slug": {
+                          "id": "slug",
+                          "label": "slug",
+                          "ty": "str",
+                          "required": true,
+                          "unique": true
+                        },
+                        "status": {
+                          "id": "status",
+                          "label": "status",
+                          "ty": "str",
+                          "required": true,
+                          "unique": false,
+                          "default": {
+                            "lit": {
+                              "str": "draft"
+                            }
+                          }
+                        },
+                        "title": {
+                          "id": "title",
+                          "label": "title",
+                          "ty": "str",
+                          "required": true,
+                          "unique": false
+                        }
+                      },
+                      "constraints": {
+                        "title_length": {
+                          "id": "title_length",
+                          "expr": {
+                            "cmp": {
+                              "op": "le",
+                              "left": {
+                                "len": {
+                                  "var": {
+                                    "scope": "new",
+                                    "field": "title"
+                                  }
+                                }
+                              },
+                              "right": {
+                                "lit": {
+                                  "int": 24
+                                }
+                              }
+                            }
+                          },
+                          "message": "A title has at most 24 characters"
+                        }
+                      }
+                    },
+                    "person": {
+                      "id": "person",
+                      "label": "Person",
+                      "fields": {
+                        "name": {
+                          "id": "name",
+                          "label": "name",
+                          "ty": "str",
+                          "required": true,
+                          "unique": false
+                        }
+                      },
+                      "constraints": {}
+                    }
+                  },
+                  "roles": {
+                    "editor": {
+                      "id": "editor",
+                      "label": "Editor"
+                    },
+                    "owner": {
+                      "id": "owner",
+                      "label": "Owner"
+                    },
+                    "public": {
+                      "id": "public",
+                      "label": "Everyone"
+                    },
+                    "writer": {
+                      "id": "writer",
+                      "label": "Writer"
+                    }
+                  },
+                  "policies": {
+                    "editors_manage_notes": {
+                      "id": "editors_manage_notes",
+                      "role": "editor",
+                      "resource": {
+                        "object": "note"
+                      },
+                      "actions": [
+                        "read",
+                        "create",
+                        "update",
+                        "delete"
+                      ],
+                      "condition": null
+                    },
+                    "editors_manage_people": {
+                      "id": "editors_manage_people",
+                      "role": "editor",
+                      "resource": {
+                        "object": "person"
+                      },
+                      "actions": [
+                        "read",
+                        "create",
+                        "update",
+                        "delete"
+                      ],
+                      "condition": null
+                    },
+                    "public_reads_people": {
+                      "id": "public_reads_people",
+                      "role": "public",
+                      "resource": {
+                        "object": "person"
+                      },
+                      "actions": [
+                        "read"
+                      ],
+                      "condition": null
+                    },
+                    "public_reads_published": {
+                      "id": "public_reads_published",
+                      "role": "public",
+                      "resource": {
+                        "object": "note"
+                      },
+                      "actions": [
+                        "read"
+                      ],
+                      "condition": {
+                        "cmp": {
+                          "op": "eq",
+                          "left": {
+                            "var": {
+                              "scope": "record",
+                              "field": "status"
+                            }
+                          },
+                          "right": {
+                            "lit": {
+                              "str": "published"
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "writers_add_people": {
+                      "id": "writers_add_people",
+                      "role": "writer",
+                      "resource": {
+                        "object": "person"
+                      },
+                      "actions": [
+                        "create"
+                      ],
+                      "condition": null
+                    },
+                    "writers_edit_own": {
+                      "id": "writers_edit_own",
+                      "role": "writer",
+                      "resource": {
+                        "object": "note"
+                      },
+                      "actions": [
+                        "update",
+                        "delete"
+                      ],
+                      "condition": {
+                        "cmp": {
+                          "op": "eq",
+                          "left": {
+                            "var": {
+                              "scope": "record",
+                              "field": "$created_by"
+                            }
+                          },
+                          "right": "principal"
+                        }
+                      }
+                    },
+                    "writers_read_notes": {
+                      "id": "writers_read_notes",
+                      "role": "writer",
+                      "resource": {
+                        "object": "note"
+                      },
+                      "actions": [
+                        "read",
+                        "create"
+                      ],
+                      "condition": null
+                    }
+                  },
+                  "workflows": {
+                    "note_status": {
+                      "id": "note_status",
+                      "object": "note",
+                      "field": "status",
+                      "initial": [
+                        "draft"
+                      ],
+                      "transitions": [
+                        {
+                          "name": "publish",
+                          "from": "draft",
+                          "to": "published",
+                          "guard": {
+                            "cmp": {
+                              "op": "eq",
+                              "left": "principal",
+                              "right": {
+                                "lit": {
+                                  "str": "alpha:editor"
+                                }
+                              }
+                            }
+                          },
+                          "set": {
+                            "published_at": "now"
+                          }
+                        },
+                        {
+                          "name": "unpublish",
+                          "from": "published",
+                          "to": "draft",
+                          "guard": null,
+                          "set": {
+                            "published_at": {
+                              "lit": "null"
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  },
+                  "queries": {},
+                  "views": {}
+                },
+                "members": {
+                  "alpha:editor": [
+                    "editor"
+                  ],
+                  "alpha:owner": [
+                    "owner"
+                  ],
+                  "alpha:writer1": [
+                    "writer"
+                  ],
+                  "alpha:writer2": [
+                    "writer"
+                  ]
+                },
+                "records": {}
+              },
+              "ctx": {
+                "tenant": "alpha",
+                "principal": {
+                  "user": "alpha:owner"
+                },
+                "session": null,
+                "now": 5001,
+                "correlation": "test-5001"
+              },
+              "coverage": "complete",
+              "ops": [],
+              "events": [],
+              "effects": [],
+              "evidence": [],
+              "next-record": 1
+            },
+            "object": "nothing"
+          },
+          "error": {
+            "rejected": {
+              "kind": "unknown-object",
+              "message": "no object type nothing",
+              "evidence": [
+                {
+                  "rule": "intent:unknown_object",
+                  "passed": false,
+                  "detail": "no object type nothing"
+                }
+              ],
+              "missing": null
+            }
+          }
+        }
+      ]
     }
   ]
 ,
