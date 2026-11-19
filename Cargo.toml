@@ -92,6 +92,35 @@ debug = "line-tables-only"
 [profile.dev.package."*"]
 opt-level = 2
 
+# Generated crates (specc output): no debug info. Nobody steps through generated code, and the
+# largest of them (strata-model, about 80,000 lines) is the build's peak of memory.
+[profile.dev.package.strata-model]
+debug = false
+
+[profile.dev.package.strata-model-core]
+debug = false
+
+[profile.dev.package.strata-spec-compiler-fixture]
+debug = false
+
+[profile.dev.package.strata-spec-compiler-machines-fixture]
+debug = false
+
+[profile.dev.package.strata-spec-compiler-wiring-fixture]
+debug = false
+
+[profile.dev.package.strata-spec-compiler-core-fixture]
+debug = false
+
+[profile.dev.package.strata-spec-compiler-language-fixture]
+debug = false
+
+[profile.dev.package.strata-spec-compiler-functions-fixture]
+debug = false
+
+[profile.dev.package.strata-spec-compiler-derived-fixture]
+debug = false
+
 [workspace.lints.clippy]
 # A rejection carries the whole evidence trail by design; it is returned rarely and by value.
 result_large_err = "allow"
