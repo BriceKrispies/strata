@@ -1817,12 +1817,18 @@
           "condition": "The kernel refused the read: a DomainError of kind tenant-mismatch, tenant-not-found, unknown-object, unknown-query, invalid-intent, insufficient-state or evaluation, with the checks that led to it; insufficient-state names the need the snapshot lacked. Its HTTP status, where one is served, is error-code-of of its kind (backend ApiError::domain).",
           "type": "domain-error",
           "kind": "invalid"
+        },
+        {
+          "name": "fault",
+          "condition": "A checked conversion or integer operation inside the derivation overflowed or broke a type constraint; nothing was changed.",
+          "kind": "internal"
         }
       ],
       "exposure": "local",
       "derivation": {
         "kind": "pure",
-        "function": "kernel-read"
+        "function": "kernel-read",
+        "fault": "fault"
       }
     },
     {
@@ -1900,11 +1906,18 @@
       "postconditions": [
         "The answer is the one answer that a read makes for each row; the runtime uses it to decide who receives an event about the record."
       ],
-      "errors": [],
+      "errors": [
+        {
+          "name": "fault",
+          "condition": "A checked conversion or integer operation inside the derivation overflowed or broke a type constraint; nothing was changed.",
+          "kind": "internal"
+        }
+      ],
       "exposure": "local",
       "derivation": {
         "kind": "pure",
-        "function": "visible"
+        "function": "visible",
+        "fault": "fault"
       }
     },
     {
@@ -3106,6 +3119,11 @@
           "condition": "Stored data could not be read back; not safe to ignore.",
           "type": "store-error",
           "kind": "internal"
+        },
+        {
+          "name": "fault",
+          "condition": "A checked conversion or integer operation inside the derivation overflowed or broke a type constraint; nothing was changed.",
+          "kind": "internal"
         }
       ],
       "exposure": "local",
@@ -3115,7 +3133,8 @@
         "load": "load-decision-snapshot",
         "decide": "execute-read-decide",
         "insufficient": "insufficient-state",
-        "needRounds": 32
+        "needRounds": 32,
+        "fault": "fault"
       }
     },
     {
