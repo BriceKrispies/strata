@@ -176,8 +176,8 @@ fn comparisons() {
     assert_eq!(rust("ts1 < ts2", &e), tok("ts1 < ts2"));
     assert_eq!(rust("p == q", &e), tok("p == q"));
     assert_eq!(
+        rust("s == 'x'", &e),
         tok("s == \"x\"")
-        tok("s == ::std::string::String::from(\"x\")")
     );
     assert_eq!(
         rust("o == null", &e),
