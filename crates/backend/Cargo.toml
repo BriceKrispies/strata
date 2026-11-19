@@ -37,7 +37,9 @@ uppsala.workspace = true
 flate2.workspace = true
 sha2.workspace = true
 reqwest = { workspace = true, features = ["native-tls"] }
-openssl = { version = "0.10", features = ["vendored"] }
+# Pure-Rust cryptography (RustCrypto), as the SAML and RSA code uses: no C library to build.
+p256 = { version = "=0.13.2", features = ["pkcs8", "pem", "ecdsa"] }
+aes-gcm = "=0.10.3"
 
 [dev-dependencies]
 webauthn-authenticator-rs = { version = "=0.6.2", default-features = false, features = ["softpasskey"] }

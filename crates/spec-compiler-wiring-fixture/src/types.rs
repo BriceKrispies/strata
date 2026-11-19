@@ -7,7 +7,8 @@ use crate::prelude;
 /// Error code
 ///
 /// Specification type `error-code`: an enumeration, serialised as the specification's values.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+
 pub enum ErrorCode {
     /// The value `unauthenticated`.
     #[serde(rename = "unauthenticated")]
@@ -18,6 +19,9 @@ pub enum ErrorCode {
     /// The value `not_found`.
     #[serde(rename = "not_found")]
     NotFound,
+    /// The value `conflict`.
+    #[serde(rename = "conflict")]
+    Conflict,
     /// The value `throttled`.
     #[serde(rename = "throttled")]
     Throttled,
@@ -39,6 +43,7 @@ impl ErrorCode {
             Self::Unauthenticated => "unauthenticated",
             Self::Forbidden => "forbidden",
             Self::NotFound => "not_found",
+            Self::Conflict => "conflict",
             Self::Throttled => "throttled",
             Self::Invalid => "invalid",
             Self::Unavailable => "unavailable",

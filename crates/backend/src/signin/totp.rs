@@ -25,7 +25,8 @@ use crate::app::{ApiError, App};
 use crate::auth::{random_hex, same_secret, Caller, Identity};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
-use openssl::symm::{decrypt_aead, encrypt_aead, Cipher};
+use aes_gcm::aead::{Aead, Payload};
+use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
 use serde_json::{json, Value as Json};
 use strata_kernel::{PrincipalId, TenantId};
 use strata_protocol::api::ErrorCode;
@@ -65,20 +66,17 @@ pub(super) fn seal(
     let mut nonce = [0u8; NONCE_BYTES];
     getrandom::getrandom(&mut nonce)
         .map_err(|e| ApiError::new(ErrorCode::Unavailable, format!("no randomness: {e}")))?;
-    let mut tag = [0u8; TAG_BYTES];
-    let sealed = encrypt_aead(
-        Cipher::aes_256_gcm(),
-        &app.cfg.factors.seal_key.0,
-        Some(&nonce),
-        &bound_to(tenant, principal),
-        secret,
-        &mut tag,
-    )
-    .map_err(|e| ApiError::hidden(ErrorCode::Internal, format!("sealing a secret: {e}")))?;
-    let mut out = Vec::with_capacity(NONCE_BYTES + sealed.len() + TAG_BYTES);
+    let cipher = Aes256Gcm::new_from_slice(&app.cfg.factors.seal_key.0)
+        .map_err(|e| ApiError::hidden(ErrorCode::Internal, format!("sealing a secret: {e}")))?;
+    let aad = bound_to(tenant, principal);
+    // AES-256-GCM's output is the ciphertext followed by its 16-byte tag, so the sealed form is
+    // nonce, ciphertext, tag: the same layout as before.
+    let sealed = cipher
+        .encrypt(Nonce::from_slice(&nonce), Payload { msg: secret, aad: &aad })
+        .map_err(|e| ApiError::hidden(ErrorCode::Internal, format!("sealing a secret: {e}")))?;
+    let mut out = Vec::with_capacity(NONCE_BYTES + sealed.len());
     out.extend_from_slice(&nonce);
     out.extend_from_slice(&sealed);
-    out.extend_from_slice(&tag);
     Ok(URL_SAFE_NO_PAD.encode(out))
 }
 
@@ -93,17 +91,12 @@ pub(super) fn open(
     if bytes.len() < NONCE_BYTES + TAG_BYTES {
         return None;
     }
-    let (nonce, rest) = bytes.split_at(NONCE_BYTES);
-    let (text, tag) = rest.split_at(rest.len() - TAG_BYTES);
-    decrypt_aead(
-        Cipher::aes_256_gcm(),
-        &app.cfg.factors.seal_key.0,
-        Some(nonce),
-        &bound_to(tenant, principal),
-        text,
-        tag,
-    )
-    .ok()
+    let (nonce, sealed_and_tag) = bytes.split_at(NONCE_BYTES);
+    let cipher = Aes256Gcm::new_from_slice(&app.cfg.factors.seal_key.0).ok()?;
+    let aad = bound_to(tenant, principal);
+    cipher
+        .decrypt(Nonce::from_slice(nonce), Payload { msg: sealed_and_tag, aad: &aad })
+        .ok()
 }
 
 fn engine(secret: Vec<u8>) -> Option<TOTP> {

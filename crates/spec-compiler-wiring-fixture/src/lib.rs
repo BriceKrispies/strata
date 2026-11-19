@@ -33,3 +33,11 @@ pub mod routes;
 pub mod deps;
 
 pub mod handlers;
+
+/// Calls the macro `$callback` as `$callback! { machines::<module>::<Type>, ... }`, with every shipped stored implementation machine of the specification, in declaration order.
+#[macro_export]
+macro_rules! for_each_shipped_machine {
+    ($callback:ident) => {
+        $callback! { machines::job::Job, machines::tracker::Tracker, }
+    };
+}

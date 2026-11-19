@@ -2,7 +2,934 @@
 //! The contracts on the wire: one `strata_runtime::Contract` per contract a component implements, the route of each contract with the handler and hooks it needs, and per implementing component the routes of all its contracts and a typed client.
 //!
 //! A contract is served at its `binding.path` when the specification states one, otherwise at `/<implementing component>/<contract id>`, always as a POST of a JSON body.
+//!
+//! Who may call is decided by `SpecAuthorizer`, generated from the auth schemes; `GATEWAY_ROUTES` lists the public contracts, the only ones routed through the gateway.
 use crate::types;
+
+/// What the generated authorizer needs from the deployment: what no specification
+/// states, such as the session store, the sites and the secrets. Every method has a
+/// default that establishes nothing, so a scheme whose hole the deployment does not fill
+/// is refused.
+pub trait AuthHoles: Send + Sync + 'static {
+    /// The site the request addresses, from its host: its tenant and the origins its pages
+    /// are served from. `None` for a host that serves no site.
+    fn site(&self, request: &strata_runtime::Presented<'_>) -> Option<strata_runtime::Site> {
+        let _ = request;
+        None
+    }
+
+    /// The principal of the live session the request presents (its cookie or header),
+    /// looked up in the deployment's session store, with the session's request token.
+    /// `Ok(None)` when it presents none or one that is not live; an `Err` answers
+    /// `unavailable`.
+    fn session(
+        &self,
+        request: &strata_runtime::Presented<'_>,
+    ) -> impl std::future::Future<Output = Result<Option<strata_runtime::Principal>, String>> + Send
+    {
+        let _ = request;
+        async { Ok(None) }
+    }
+
+    /// Whether `token` is a request token the deployment issued to a visitor of `site`,
+    /// for an anonymous call that asks for one.
+    fn visitor_token(&self, site: &strata_runtime::Site, token: &str) -> bool {
+        let _ = (site, token);
+        false
+    }
+
+    /// The header the service credential is presented in.
+    fn service_header(&self) -> &'static str {
+        "x-service-token"
+    }
+
+    /// The service credential, or `None` when this deployment admits no service.
+    fn service_secret(&self) -> Option<String> {
+        None
+    }
+
+    /// The principal a provisioning token (the bearer token) stands for: the provisioning
+    /// principal of one realm, with its tenant. `Ok(None)` when the token is not one.
+    fn provisioning(
+        &self,
+        token: &str,
+    ) -> impl std::future::Future<Output = Result<Option<strata_runtime::Principal>, String>> + Send
+    {
+        let _ = token;
+        async { Ok(None) }
+    }
+
+    /// The principal a delegation token (the bearer token) acts for. `Ok(None)` when the
+    /// token is not a live delegation.
+    fn delegation(
+        &self,
+        token: &str,
+    ) -> impl std::future::Future<Output = Result<Option<strata_runtime::Principal>, String>> + Send
+    {
+        let _ = token;
+        async { Ok(None) }
+    }
+
+    /// Who signed the request with the secret named `secret`, when its signature verifies.
+    /// `Ok(None)` when it does not.
+    fn signature(
+        &self,
+        secret: &'static str,
+        request: &strata_runtime::Presented<'_>,
+    ) -> impl std::future::Future<Output = Result<Option<strata_runtime::Principal>, String>> + Send
+    {
+        let _ = (secret, request);
+        async { Ok(None) }
+    }
+
+    /// Whether the request's target is an address signed with the secret named `secret`
+    /// and still valid.
+    fn signed_address(
+        &self,
+        secret: &'static str,
+        request: &strata_runtime::Presented<'_>,
+    ) -> bool {
+        let _ = (secret, request);
+        false
+    }
+
+    /// Whether the development condition named `condition` holds in this deployment.
+    fn development(&self, condition: &'static str) -> bool {
+        let _ = condition;
+        false
+    }
+
+    /// The plan and the flag settings of `tenant`, for a call requiring a capability that
+    /// is not core or that a flag gates. `Ok(None)` when the tenant is not known, which
+    /// entitles it to the core capabilities only, with every flag at its default.
+    fn entitlement(
+        &self,
+        tenant: &str,
+    ) -> impl std::future::Future<Output = Result<Option<Entitlement>, String>> + Send {
+        let _ = tenant;
+        async { Ok(None) }
+    }
+
+    /// What `principal`, established by a session or a delegation, holds: its platform
+    /// roles, its tenant roles and its teams with their roles' permissions (tenant data),
+    /// its live grants and, under a delegation, the delegation and its token's scopes.
+    /// The default holds nothing, so every capability is refused.
+    fn holding(
+        &self,
+        principal: &strata_runtime::Principal,
+    ) -> impl std::future::Future<Output = Result<Holding, String>> + Send {
+        let _ = principal;
+        async { Ok(Holding::default()) }
+    }
+
+    /// The time now, in milliseconds since the Unix epoch, against which a step-up age is
+    /// judged. The system clock unless overridden.
+    fn now_ms(&self) -> i64 {
+        strata_runtime::Clock::now(&strata_runtime::SystemClock).0
+    }
+}
+
+/// The authorizer generated from the specification's auth schemes. It admits a call only
+/// when everything the contract's `Access` states holds, and refuses a local contract on
+/// any route.
+#[derive(Debug, Clone, Default)]
+pub struct SpecAuthorizer<H: AuthHoles> {
+    /// The deployment's holes.
+    pub holes: H,
+}
+
+impl<H: AuthHoles> SpecAuthorizer<H> {
+    /// An authorizer over `holes`.
+    pub fn new(holes: H) -> Self {
+        Self { holes }
+    }
+}
+
+impl<H: AuthHoles> strata_runtime::Authorizer for SpecAuthorizer<H> {
+    async fn authorize(
+        &self,
+        access: &strata_runtime::Access,
+        request: &strata_runtime::Presented<'_>,
+    ) -> Result<strata_runtime::Caller, strata_runtime::Refusal> {
+        authorize_access(&self.holes, access, request).await
+    }
+}
+
+/// The checks of one call, in order: exposure, development condition, the scheme's
+/// credential, origin, request token, roles, step-up, tenant scope, and the capabilities
+/// the contract requires ([`permitted`]: plan entitlement, flag rollout, the principal's
+/// permission, delegation bounds).
+async fn authorize_access<H: AuthHoles>(
+    holes: &H,
+    access: &strata_runtime::Access,
+    request: &strata_runtime::Presented<'_>,
+) -> Result<strata_runtime::Caller, strata_runtime::Refusal> {
+    use strata_runtime::{Exposure, FailureCode, Scheme, TenantScope};
+    let refuse = |code: FailureCode, message: &str| strata_runtime::Refusal {
+        code,
+        message: message.to_string(),
+    };
+    let correlation = request
+        .header(strata_runtime::routes::CORRELATION)
+        .unwrap_or("")
+        .to_string();
+    if access.exposure == Exposure::Local {
+        return Err(refuse(
+            FailureCode::Forbidden,
+            "a local contract is not served on a route",
+        ));
+    }
+    if let Some(condition) = access.development {
+        if !holes.development(condition) {
+            return Err(refuse(FailureCode::Forbidden, "this is not available here"));
+        }
+    }
+    let site = holes.site(request);
+    let unauthenticated = |message: &str| refuse(FailureCode::Unauthenticated, message);
+    let principal: Option<strata_runtime::Principal> = match access.scheme {
+        Scheme::Anonymous => None,
+        Scheme::Session => Some(
+            holes
+                .session(request)
+                .await
+                .map_err(|why| refuse(FailureCode::Unavailable, why.as_str()))?
+                .ok_or_else(|| unauthenticated("sign in to do this"))?,
+        ),
+        Scheme::Service => {
+            let given = request.header(holes.service_header());
+            match (holes.service_secret(), given) {
+                (Some(secret), Some(given))
+                    if strata_runtime::routes::same_secret(given, &secret) =>
+                {
+                    Some(strata_runtime::Principal {
+                        subject: "service".to_string(),
+                        kind: "service".to_string(),
+                        ..strata_runtime::Principal::default()
+                    })
+                }
+                _ => {
+                    return Err(unauthenticated(
+                        "the service credential is missing or wrong",
+                    ));
+                }
+            }
+        }
+        Scheme::ProvisioningToken => {
+            let token = request
+                .bearer()
+                .ok_or_else(|| unauthenticated("a provisioning token is required"))?;
+            Some(
+                holes
+                    .provisioning(token)
+                    .await
+                    .map_err(|why| refuse(FailureCode::Unavailable, why.as_str()))?
+                    .ok_or_else(|| unauthenticated("the provisioning token is not valid"))?,
+            )
+        }
+        Scheme::Delegation => {
+            let token = request
+                .bearer()
+                .ok_or_else(|| unauthenticated("a delegation token is required"))?;
+            Some(
+                holes
+                    .delegation(token)
+                    .await
+                    .map_err(|why| refuse(FailureCode::Unavailable, why.as_str()))?
+                    .ok_or_else(|| unauthenticated("the delegation token is not valid"))?,
+            )
+        }
+        Scheme::Signature => {
+            let secret = access
+                .secret
+                .ok_or_else(|| refuse(FailureCode::Forbidden, "no secret verifies this call"))?;
+            Some(
+                holes
+                    .signature(secret, request)
+                    .await
+                    .map_err(|why| refuse(FailureCode::Unavailable, why.as_str()))?
+                    .ok_or_else(|| {
+                        unauthenticated("the signature is missing or does not verify")
+                    })?,
+            )
+        }
+        Scheme::SignedAddress => {
+            let secret = access
+                .secret
+                .ok_or_else(|| refuse(FailureCode::Forbidden, "no secret verifies this address"))?;
+            if !holes.signed_address(secret, request) {
+                return Err(refuse(
+                    FailureCode::Forbidden,
+                    "the address is not signed or has expired",
+                ));
+            }
+            None
+        }
+        Scheme::InProcess => {
+            return Err(refuse(
+                FailureCode::Forbidden,
+                "an in-process contract is not served on a route",
+            ));
+        }
+    };
+    if access.origin {
+        let allowed = match (&site, request.header("origin")) {
+            (Some(site), Some(origin)) => site.origins.iter().any(|known| known == origin),
+            _ => false,
+        };
+        if !allowed {
+            return Err(refuse(
+                FailureCode::Forbidden,
+                "this request did not come from the site",
+            ));
+        }
+    }
+    if access.csrf {
+        let given = request.header(strata_runtime::CSRF_TOKEN).unwrap_or("");
+        let valid = !given.is_empty()
+            && match &principal {
+                Some(principal) => principal
+                    .csrf_token
+                    .as_deref()
+                    .is_some_and(|expected| strata_runtime::routes::same_secret(given, expected)),
+                None => site
+                    .as_ref()
+                    .is_some_and(|site| holes.visitor_token(site, given)),
+            };
+        if !valid {
+            return Err(refuse(
+                FailureCode::Forbidden,
+                "the request token is missing or stale",
+            ));
+        }
+    }
+    let role = match &principal {
+        Some(principal) => access
+            .roles
+            .iter()
+            .find(|role| principal.roles.iter().any(|held| held == *role))
+            .map(|role| role.to_string())
+            .or_else(|| principal.roles.first().cloned()),
+        None => None,
+    };
+    if !access.roles.is_empty() {
+        let held = principal.as_ref().is_some_and(|principal| {
+            access
+                .roles
+                .iter()
+                .any(|role| principal.roles.iter().any(|held| held == role))
+        });
+        if !held {
+            return Err(match principal {
+                Some(_) => refuse(
+                    FailureCode::Forbidden,
+                    "the caller holds no role this needs",
+                ),
+                None => unauthenticated("sign in to do this"),
+            });
+        }
+    }
+    if let Some(age) = access.step_up {
+        let age = i64::try_from(age.as_millis()).unwrap_or(i64::MAX);
+        let now = holes.now_ms();
+        let fresh = principal
+            .as_ref()
+            .and_then(|principal| principal.authenticated_at_ms)
+            .is_some_and(|at| at <= now && now.saturating_sub(at) <= age);
+        if !fresh {
+            return Err(unauthenticated("prove who you are again to do this"));
+        }
+    }
+    if access.tenant_scope == Some(TenantScope::Request) {
+        let Some(site) = &site else {
+            return Err(refuse(
+                FailureCode::Forbidden,
+                "the request addresses no site",
+            ));
+        };
+        let own = principal
+            .as_ref()
+            .and_then(|principal| principal.tenant.as_deref());
+        if own.is_some_and(|tenant| tenant != site.tenant) {
+            return Err(refuse(
+                FailureCode::Forbidden,
+                "the caller belongs to another tenant",
+            ));
+        }
+    }
+    if !access.requires.is_empty() {
+        let tenant = principal
+            .as_ref()
+            .and_then(|principal| principal.tenant.clone())
+            .or_else(|| site.as_ref().map(|site| site.tenant.clone()));
+        let holding = match (&principal, access.scheme) {
+            (Some(principal), Scheme::Session | Scheme::Delegation) => Some(
+                holes
+                    .holding(principal)
+                    .await
+                    .map_err(|why| refuse(FailureCode::Unavailable, why.as_str()))?,
+            ),
+            _ => None,
+        };
+        if access.scheme == Scheme::Delegation
+            && !holding
+                .as_ref()
+                .is_some_and(|holding| holding.acting_for.is_some())
+        {
+            return Err(refuse(
+                FailureCode::Forbidden,
+                CapabilityRefusal::BeyondDelegation("").message(),
+            ));
+        }
+        let asker = match (&holding, access.scheme) {
+            (Some(holding), _) => Asker::Principal(holding),
+            (None, Scheme::Service) => Asker::Service,
+            (None, Scheme::Signature | Scheme::ProvisioningToken) => Asker::External,
+            (None, _) => Asker::Anonymous,
+        };
+        let needs_tenant = access.requires.iter().any(|required| {
+            CAPABILITIES
+                .iter()
+                .find(|capability| capability.id == *required)
+                .is_none_or(|capability| !capability.core || !capability.flags.is_empty())
+        });
+        let entitlement = match (&tenant, needs_tenant) {
+            (Some(tenant), true) => holes
+                .entitlement(tenant)
+                .await
+                .map_err(|why| refuse(FailureCode::Unavailable, why.as_str()))?,
+            _ => None,
+        };
+        permitted(
+            access.requires,
+            asker,
+            tenant.as_deref(),
+            entitlement.as_ref(),
+            holes.now_ms(),
+        )
+        .map_err(|refusal| refuse(FailureCode::Forbidden, refusal.message()))?;
+    }
+    let mut attributes = std::collections::BTreeMap::new();
+    let tenant = principal
+        .as_ref()
+        .and_then(|principal| principal.tenant.clone())
+        .or_else(|| site.as_ref().map(|site| site.tenant.clone()));
+    if let Some(tenant) = tenant {
+        attributes.insert("tenant".to_string(), tenant);
+    }
+    if let Some(role) = role {
+        attributes.insert("role".to_string(), role);
+    }
+    if let Some(principal) = &principal {
+        attributes.insert("kind".to_string(), principal.kind.clone());
+    }
+    Ok(strata_runtime::Caller {
+        subject: principal.map(|principal| principal.subject),
+        correlation,
+        attributes,
+    })
+}
+
+/// One capability of the specification: whether every plan has it (`core`), and the
+/// feature flags that gate it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CapabilitySpec {
+    /// The capability id.
+    pub id: &'static str,
+    /// Whether every plan entitles it.
+    pub core: bool,
+    /// The flags that gate it per tenant.
+    pub flags: &'static [&'static str],
+}
+
+/// One grant of the specification: the role that receives it, what it confers, and
+/// whether it confers it in one tenant only.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GrantSpec {
+    /// The grant id.
+    pub id: &'static str,
+    /// The role whose holders receive it.
+    pub grantee: &'static str,
+    /// The capabilities it confers while it lasts.
+    pub capabilities: &'static [&'static str],
+    /// Whether it confers them in the one tenant it names.
+    pub per_tenant: bool,
+}
+
+/// One feature flag of the specification and its value for a tenant with no setting.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FlagSpec {
+    /// The flag id.
+    pub id: &'static str,
+    /// Whether it is on for a tenant that has no setting of its own.
+    pub default_on: bool,
+}
+
+/// The capabilities of the specification.
+pub const CAPABILITIES: &[CapabilitySpec] = &[
+    CapabilitySpec {
+        id: "jobs-submit",
+        core: true,
+        flags: &[],
+    },
+    CapabilitySpec {
+        id: "jobs-cancel",
+        core: true,
+        flags: &[],
+    },
+    CapabilitySpec {
+        id: "ping",
+        core: true,
+        flags: &[],
+    },
+    CapabilitySpec {
+        id: "reports-make",
+        core: true,
+        flags: &[],
+    },
+    CapabilitySpec {
+        id: "reports-premium",
+        core: false,
+        flags: &["premium-reports"],
+    },
+];
+
+/// Each plan and the capabilities it entitles beyond the core ones.
+pub const PLANS: &[(&str, &[&str])] = &[("basic", &[]), ("pro", &["reports-premium"])];
+
+/// Each platform role and the capabilities it confers. Tenant roles are tenant data:
+/// `AuthHoles::holding` supplies them with their permissions.
+pub const PLATFORM_ROLES: &[(&str, &[&str])] = &[
+    ("operator", &["jobs-submit", "ping"]),
+    ("visitor", &["jobs-cancel", "reports-make"]),
+    ("support", &[]),
+];
+
+/// What an anonymous caller, or the bearer of a signed address, holds: the capabilities
+/// of the platform roles anonymous callers hold.
+pub const ANONYMOUS_CAPABILITIES: &[&str] = &["jobs-cancel", "reports-make"];
+
+/// What a platform service holds: the capabilities of the platform roles services hold.
+pub const SERVICE_CAPABILITIES: &[&str] = &[];
+
+/// What a party proved by signature or provisioning token holds: the capabilities of the
+/// platform roles external parties hold.
+pub const EXTERNAL_CAPABILITIES: &[&str] = &[];
+
+/// The grants of the specification.
+pub const GRANTS: &[GrantSpec] = &[GrantSpec {
+    id: "support-access",
+    grantee: "support",
+    capabilities: &["reports-premium"],
+    per_tenant: true,
+}];
+
+/// Each token scope, by the name a token carries it under, and the capabilities it allows.
+pub const TOKEN_SCOPES: &[(&str, &[&str])] = &[("reports:read", &["ping", "reports-premium"])];
+
+/// Each delegation and the capabilities it passes on.
+pub const DELEGATIONS: &[(&str, &[&str])] = &[("report-agent", &["ping"])];
+
+/// The feature flags of the specification.
+pub const FLAGS: &[FlagSpec] = &[FlagSpec {
+    id: "premium-reports",
+    default_on: false,
+}];
+
+/// What a tenant is entitled to: its plan and its own flag settings, as the deployment
+/// holds them.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Entitlement {
+    /// The id of the tenant's plan.
+    pub plan: String,
+    /// The tenant's own setting of each flag it has one for: on or off.
+    pub flags: Vec<(String, bool)>,
+}
+
+/// A tenant role as the tenant holds it: its id and the capabilities among its
+/// permissions (its object-type permissions are the kernel's to check).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TenantRole {
+    /// The role id.
+    pub id: String,
+    /// The capabilities it grants.
+    pub capabilities: Vec<String>,
+}
+
+/// A team of a tenant a principal belongs to, with the roles the team holds.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Team {
+    /// The team id.
+    pub id: String,
+    /// The roles the team holds, which its members hold through it.
+    pub roles: Vec<TenantRole>,
+}
+
+/// A grant a principal has received, as the deployment holds it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct HeldGrant {
+    /// The id of the grant of the specification it is one of.
+    pub grant: String,
+    /// The tenant it names, for a grant per tenant.
+    pub tenant: Option<String>,
+    /// When it ends, in milliseconds since the Unix epoch.
+    pub expires_ms: i64,
+}
+
+/// The delegation a principal acts under and the scopes of its token.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ActingFor {
+    /// The id of the delegation of the specification it is one of.
+    pub delegation: String,
+    /// The scopes its token carries.
+    pub scopes: Vec<String>,
+    /// When it ends, in milliseconds since the Unix epoch.
+    pub expires_ms: i64,
+}
+
+/// What a principal holds, as the deployment knows it: under a delegation, what the
+/// person it acts for holds, and the delegation.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Holding {
+    /// The platform roles it holds.
+    pub platform_roles: Vec<String>,
+    /// The tenant roles assigned to it directly.
+    pub tenant_roles: Vec<TenantRole>,
+    /// The teams it belongs to.
+    pub teams: Vec<Team>,
+    /// The grants it has received and not had withdrawn.
+    pub grants: Vec<HeldGrant>,
+    /// The delegation it acts under, when it acts for someone.
+    pub acting_for: Option<ActingFor>,
+}
+
+/// Who asks, as far as capabilities go.
+#[derive(Clone, Copy, Debug)]
+pub enum Asker<'a> {
+    /// Nobody: an anonymous call, or the bearer of a signed address.
+    Anonymous,
+    /// A platform service.
+    Service,
+    /// A party proved by signature or provisioning token.
+    External,
+    /// A principal established by a session or a delegation, with what it holds.
+    Principal(&'a Holding),
+}
+
+/// Why a call is refused a capability it requires.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CapabilityRefusal {
+    /// The tenant's plan does not entitle it (or the specification does not declare it).
+    NotEntitled(&'static str),
+    /// A flag that gates it is off for the tenant.
+    FlagOff {
+        /// The capability.
+        capability: &'static str,
+        /// The flag.
+        flag: &'static str,
+    },
+    /// The caller does not hold it.
+    NotHeld(&'static str),
+    /// The delegation the caller acts under does not pass it on.
+    BeyondDelegation(&'static str),
+}
+
+impl CapabilityRefusal {
+    /// A message safe to show the caller.
+    pub fn message(&self) -> &'static str {
+        match self {
+            CapabilityRefusal::NotEntitled(_) => "the tenant's plan does not include this",
+            CapabilityRefusal::FlagOff { .. } => "this is not switched on for the tenant",
+            CapabilityRefusal::NotHeld(_) => "the caller does not hold the permission this needs",
+            CapabilityRefusal::BeyondDelegation(_) => "the delegation does not extend to this",
+        }
+    }
+}
+
+/// The list a table gives `key`, or none.
+fn listed(
+    table: &'static [(&'static str, &'static [&'static str])],
+    key: &str,
+) -> &'static [&'static str] {
+    table
+        .iter()
+        .find(|(k, _)| *k == key)
+        .map(|(_, v)| *v)
+        .unwrap_or(&[])
+}
+
+/// The capabilities `asker` holds in `tenant` at `now_ms`: its roles', its teams' roles'
+/// and its live grants' (each only for a holder of its grantee role, and for a grant per
+/// tenant only in that tenant).
+pub fn held(
+    asker: Asker<'_>,
+    tenant: Option<&str>,
+    now_ms: i64,
+) -> std::collections::BTreeSet<String> {
+    let mut out = std::collections::BTreeSet::new();
+
+    fn fixed(list: &[&str], out: &mut std::collections::BTreeSet<String>) {
+        out.extend(list.iter().map(|c| c.to_string()));
+    }
+    match asker {
+        Asker::Anonymous => fixed(ANONYMOUS_CAPABILITIES, &mut out),
+        Asker::Service => fixed(SERVICE_CAPABILITIES, &mut out),
+        Asker::External => fixed(EXTERNAL_CAPABILITIES, &mut out),
+        Asker::Principal(holding) => {
+            for role in &holding.platform_roles {
+                fixed(listed(PLATFORM_ROLES, role), &mut out);
+            }
+            for role in &holding.tenant_roles {
+                out.extend(role.capabilities.iter().cloned());
+            }
+            for team in &holding.teams {
+                for role in &team.roles {
+                    out.extend(role.capabilities.iter().cloned());
+                }
+            }
+            for held in &holding.grants {
+                let Some(grant) = GRANTS.iter().find(|g| g.id == held.grant) else {
+                    continue;
+                };
+                let live = now_ms < held.expires_ms;
+                let grantee = holding.platform_roles.iter().any(|r| r == grant.grantee)
+                    || holding.tenant_roles.iter().any(|r| r.id == grant.grantee);
+                let here = !grant.per_tenant
+                    || (held.tenant.is_some() && held.tenant.as_deref() == tenant);
+                if live && grantee && here {
+                    fixed(grant.capabilities, &mut out);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// The one check of capabilities: whether a call requiring `requires`, made by `asker`
+/// in `tenant` (whose plan and flags `entitlement` gives) at `now_ms`, is admitted. Per
+/// capability, in order: plan entitlement, flag rollout, the principal's permission,
+/// delegation bounds.
+pub fn permitted(
+    requires: &[&'static str],
+    asker: Asker<'_>,
+    tenant: Option<&str>,
+    entitlement: Option<&Entitlement>,
+    now_ms: i64,
+) -> Result<(), CapabilityRefusal> {
+    if requires.is_empty() {
+        return Ok(());
+    }
+    let holds = held(asker, tenant, now_ms);
+    let bound: Option<std::collections::BTreeSet<&'static str>> = match asker {
+        Asker::Principal(holding) => holding.acting_for.as_ref().map(|acting| {
+            if now_ms >= acting.expires_ms {
+                return std::collections::BTreeSet::new();
+            }
+            let scoped: std::collections::BTreeSet<&'static str> = acting
+                .scopes
+                .iter()
+                .flat_map(|scope| listed(TOKEN_SCOPES, scope).iter().copied())
+                .collect();
+            listed(DELEGATIONS, &acting.delegation)
+                .iter()
+                .copied()
+                .filter(|c| scoped.contains(c))
+                .collect()
+        }),
+        _ => None,
+    };
+    for &capability in requires {
+        let Some(spec) = CAPABILITIES.iter().find(|c| c.id == capability) else {
+            return Err(CapabilityRefusal::NotEntitled(capability));
+        };
+        if !spec.core && !entitlement.is_some_and(|e| listed(PLANS, &e.plan).contains(&capability))
+        {
+            return Err(CapabilityRefusal::NotEntitled(capability));
+        }
+        for &flag in spec.flags {
+            let default_on = FLAGS
+                .iter()
+                .find(|f| f.id == flag)
+                .is_some_and(|f| f.default_on);
+            let on = entitlement
+                .and_then(|e| e.flags.iter().find(|(id, _)| id == flag).map(|(_, on)| *on))
+                .unwrap_or(default_on);
+            if !on {
+                return Err(CapabilityRefusal::FlagOff { capability, flag });
+            }
+        }
+        if !holds.contains(capability) {
+            return Err(CapabilityRefusal::NotHeld(capability));
+        }
+        if let Some(bound) = &bound {
+            if !bound.contains(capability) {
+                return Err(CapabilityRefusal::BeyondDelegation(capability));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// One operation of the catalogue (AGT-001): a contract reachable from outside its
+/// process, with its description and the JSON Schema of its input.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Operation {
+    /// The contract's reference, such as `CT-012`.
+    pub id: &'static str,
+    /// The contract's id in the specification.
+    pub contract: &'static str,
+    /// Its name.
+    pub name: &'static str,
+    /// Its description.
+    pub description: &'static str,
+    /// Who may call it and from where, with the capabilities it requires.
+    pub access: strata_runtime::Access,
+    /// The JSON Schema of its request body.
+    pub input_schema: &'static str,
+}
+
+/// Every operation of the catalogue, in the specification's order.
+pub const OPERATIONS: &[Operation] = &[
+    Operation {
+        id: "CT-1",
+        contract: "submit-job",
+        name: "Submit job",
+        description: "",
+        access: strata_runtime::Access {
+            exposure: strata_runtime::Exposure::Internal,
+            scheme: strata_runtime::Scheme::Session,
+            roles: &[],
+            requires: &["jobs-submit"],
+            tenant_policies: false,
+            csrf: false,
+            origin: false,
+            step_up: None,
+            secret: None,
+            tenant_scope: None,
+            development: None,
+        },
+        input_schema: "{\"additionalProperties\":false,\"properties\":{\"job\":{\"type\":\"string\"},\"priority\":{\"type\":\"integer\"}},\"required\":[\"job\",\"priority\"],\"type\":\"object\"}",
+    },
+    Operation {
+        id: "CT-2",
+        contract: "cancel-job",
+        name: "Cancel job",
+        description: "",
+        access: strata_runtime::Access {
+            exposure: strata_runtime::Exposure::Internal,
+            scheme: strata_runtime::Scheme::Anonymous,
+            roles: &[],
+            requires: &["jobs-cancel"],
+            tenant_policies: false,
+            csrf: false,
+            origin: false,
+            step_up: None,
+            secret: None,
+            tenant_scope: None,
+            development: None,
+        },
+        input_schema: "{\"additionalProperties\":false,\"properties\":{\"job\":{\"type\":\"string\"}},\"required\":[\"job\"],\"type\":\"object\"}",
+    },
+    Operation {
+        id: "CT-3",
+        contract: "ping",
+        name: "Ping",
+        description: "",
+        access: strata_runtime::Access {
+            exposure: strata_runtime::Exposure::Public,
+            scheme: strata_runtime::Scheme::Session,
+            roles: &[],
+            requires: &["ping"],
+            tenant_policies: false,
+            csrf: false,
+            origin: false,
+            step_up: None,
+            secret: None,
+            tenant_scope: Some(strata_runtime::TenantScope::Request),
+            development: None,
+        },
+        input_schema: "{\"additionalProperties\":false,\"properties\":{},\"required\":[],\"type\":\"object\"}",
+    },
+    Operation {
+        id: "CT-4",
+        contract: "make-report",
+        name: "Make report",
+        description: "",
+        access: strata_runtime::Access {
+            exposure: strata_runtime::Exposure::Internal,
+            scheme: strata_runtime::Scheme::Anonymous,
+            roles: &[],
+            requires: &["reports-make"],
+            tenant_policies: false,
+            csrf: false,
+            origin: false,
+            step_up: None,
+            secret: None,
+            tenant_scope: None,
+            development: None,
+        },
+        input_schema: "{\"additionalProperties\":false,\"properties\":{\"job\":{\"type\":\"string\"}},\"required\":[\"job\"],\"type\":\"object\"}",
+    },
+];
+
+/// One operation as the catalogue shows it to a principal (AGT-002).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CatalogueEntry {
+    /// The operation.
+    pub operation: &'static Operation,
+    /// Whether the principal may attempt it.
+    pub may_attempt: bool,
+}
+
+/// The operation with reference or id `id`.
+pub fn operation(id: &str) -> Option<&'static Operation> {
+    OPERATIONS.iter().find(|o| o.id == id || o.contract == id)
+}
+
+/// The catalogue as a principal holding `holding` sees it when it asks with `scheme` in
+/// `tenant` (whose plan and flags `entitlement` gives) at `now_ms`: every operation,
+/// marked with whether it may be attempted. It may when it is public, its scheme is the
+/// caller's (or anonymous), a delegated caller acts under a known delegation, and
+/// [`permitted`] admits its capabilities: the check the authorizer makes on the call.
+pub fn catalogue(
+    scheme: strata_runtime::Scheme,
+    holding: &Holding,
+    tenant: Option<&str>,
+    entitlement: Option<&Entitlement>,
+    now_ms: i64,
+) -> Vec<CatalogueEntry> {
+    use strata_runtime::{Exposure, Scheme};
+    OPERATIONS
+        .iter()
+        .map(|operation| {
+            let access = &operation.access;
+            let anonymous = access.scheme == Scheme::Anonymous;
+            let reachable =
+                access.exposure == Exposure::Public && (access.scheme == scheme || anonymous);
+            let delegated =
+                anonymous || scheme != Scheme::Delegation || holding.acting_for.is_some();
+            let asker = if anonymous {
+                Asker::Anonymous
+            } else {
+                Asker::Principal(holding)
+            };
+            let may_attempt = reachable
+                && delegated
+                && permitted(access.requires, asker, tenant, entitlement, now_ms).is_ok();
+            CatalogueEntry {
+                operation,
+                may_attempt,
+            }
+        })
+        .collect()
+}
+
+/// The routes through the gateway: every public contract a component serves, and only
+/// those. An internal or local contract is never routed through the gateway.
+pub const GATEWAY_ROUTES: &[strata_runtime::GatewayRoute] = &[strata_runtime::GatewayRoute {
+    path: "/gateway/ping",
+    contract: "CT-3",
+    component: "gateway",
+}];
 
 /// The time audits record, shared by the hooks of every contract with an audit.
 pub trait AuditClock: Send + Sync + 'static {
@@ -68,6 +995,9 @@ fn runtime_body(code: strata_runtime::FailureCode, message: String) -> (u16, typ
         strata_runtime::FailureCode::Internal => {
             (500, error_body(types::ErrorCode::Internal, message))
         }
+        strata_runtime::FailureCode::IdempotencyConflict => {
+            (409, error_body(types::ErrorCode::Conflict, message))
+        }
     }
 }
 
@@ -77,6 +1007,7 @@ fn runtime_code(code: &types::ErrorCode) -> strata_runtime::FailureCode {
         types::ErrorCode::Unauthenticated => strata_runtime::FailureCode::Unauthenticated,
         types::ErrorCode::Forbidden => strata_runtime::FailureCode::Forbidden,
         types::ErrorCode::NotFound => strata_runtime::FailureCode::Internal,
+        types::ErrorCode::Conflict => strata_runtime::FailureCode::IdempotencyConflict,
         types::ErrorCode::Throttled => strata_runtime::FailureCode::Internal,
         types::ErrorCode::Invalid => strata_runtime::FailureCode::InvalidRequest,
         types::ErrorCode::Unavailable => strata_runtime::FailureCode::Unavailable,
@@ -119,7 +1050,19 @@ impl strata_runtime::Contract for SubmitJob {
     const SPEC: strata_runtime::ContractSpec = strata_runtime::ContractSpec {
         id: "CT-1",
         path: "/api/jobs/submit",
-        auth: "An operator.",
+        access: strata_runtime::Access {
+            exposure: strata_runtime::Exposure::Internal,
+            scheme: strata_runtime::Scheme::Session,
+            roles: &[],
+            requires: &["jobs-submit"],
+            tenant_policies: false,
+            csrf: false,
+            origin: false,
+            step_up: None,
+            secret: None,
+            tenant_scope: None,
+            development: None,
+        },
         timeout: std::time::Duration::from_millis(2000),
         idempotent: true,
     };
@@ -162,7 +1105,19 @@ impl strata_runtime::Contract for CancelJob {
     const SPEC: strata_runtime::ContractSpec = strata_runtime::ContractSpec {
         id: "CT-2",
         path: "/scheduler/cancel-job",
-        auth: "none",
+        access: strata_runtime::Access {
+            exposure: strata_runtime::Exposure::Internal,
+            scheme: strata_runtime::Scheme::Anonymous,
+            roles: &[],
+            requires: &["jobs-cancel"],
+            tenant_policies: false,
+            csrf: false,
+            origin: false,
+            step_up: None,
+            secret: None,
+            tenant_scope: None,
+            development: None,
+        },
         timeout: std::time::Duration::from_millis(1000),
         idempotent: true,
     };
@@ -201,7 +1156,19 @@ impl strata_runtime::Contract for Ping {
     const SPEC: strata_runtime::ContractSpec = strata_runtime::ContractSpec {
         id: "CT-3",
         path: "/gateway/ping",
-        auth: "",
+        access: strata_runtime::Access {
+            exposure: strata_runtime::Exposure::Public,
+            scheme: strata_runtime::Scheme::Session,
+            roles: &[],
+            requires: &["ping"],
+            tenant_policies: false,
+            csrf: false,
+            origin: false,
+            step_up: None,
+            secret: None,
+            tenant_scope: Some(strata_runtime::TenantScope::Request),
+            development: None,
+        },
         timeout: std::time::Duration::from_millis(30000),
         idempotent: false,
     };
@@ -240,7 +1207,19 @@ impl strata_runtime::Contract for MakeReport {
     const SPEC: strata_runtime::ContractSpec = strata_runtime::ContractSpec {
         id: "CT-4",
         path: "/reports/make-report",
-        auth: "none",
+        access: strata_runtime::Access {
+            exposure: strata_runtime::Exposure::Internal,
+            scheme: strata_runtime::Scheme::Anonymous,
+            roles: &[],
+            requires: &["reports-make"],
+            tenant_policies: false,
+            csrf: false,
+            origin: false,
+            step_up: None,
+            secret: None,
+            tenant_scope: None,
+            development: None,
+        },
         timeout: std::time::Duration::from_millis(1000),
         idempotent: true,
     };

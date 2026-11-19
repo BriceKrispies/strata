@@ -1805,9 +1805,10 @@ async fn no_event_is_published_twice() {
     let (mut socket, head) = listening(&backend, "fieldnotes", &admin).await;
     // Commits at the same moment, each kicking, with the sweep timers of the earlier ones still
     // set: the publisher is offered the same events many times over.
-    let statuses = futures_util::future::join_all(
-        (0..8).map(|i| add_category(&backend, "fieldnotes", &admin, &format!("twice-{i}"))),
-    )
+    let (backend_ref, admin_ref) = (&backend, &admin);
+    let statuses = futures_util::future::join_all((0..8).map(|i| async move {
+        add_category(backend_ref, "fieldnotes", admin_ref, &format!("twice-{i}")).await
+    }))
     .await;
     assert!(statuses.iter().all(|status| *status == 200), "{statuses:?}");
     let mut heard = Vec::new();

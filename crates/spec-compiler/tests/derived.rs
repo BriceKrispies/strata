@@ -143,6 +143,14 @@ fn copy(source: &str, target: &str) -> contracts::CopyCounterRequest {
     }
 }
 
+/// The request of `copy-counter-once`, which has its own request type.
+fn copy_once(source: &str, target: &str) -> contracts::CopyCounterOnceRequest {
+    contracts::CopyCounterOnceRequest {
+        source: source.to_string(),
+        target: target.to_string(),
+    }
+}
+
 #[test]
 fn a_pure_contract_is_its_function() {
     for (a, b, larger) in [(3, 5, 5), (7, 2, 7), (4, 4, 4)] {
@@ -242,7 +250,7 @@ async fn need_rounds_run_out() {
     let store = Memory::with(&[("a", 3), ("b", 1)]);
     // needRounds 0: the target decide asks for is never loaded.
     assert_eq!(
-        derived::copy_counter_once(&store, copy("a", "b")).await,
+        derived::copy_counter_once(&store, copy_once("a", "b")).await,
         Err(contracts::CopyCounterOnceError::Missing(need("b")))
     );
     assert_eq!(store.loads(), names(&[&["a"]]));
@@ -250,7 +258,7 @@ async fn need_rounds_run_out() {
     // retries 0: the first conflict is the contract's error. Both counters loaded first.
     let store = Memory::with(&[("a", 3), ("b", 1)]).conflicting(1);
     assert_eq!(
-        derived::copy_counter_once(&store, copy("b", "b")).await,
+        derived::copy_counter_once(&store, copy_once("b", "b")).await,
         Err(contracts::CopyCounterOnceError::Conflict)
     );
     assert_eq!(store.commits(), 1);

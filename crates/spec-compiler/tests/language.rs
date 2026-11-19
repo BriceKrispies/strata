@@ -22,6 +22,7 @@ use std::path::PathBuf;
 
 use serde_json::Value as Json;
 use strata_kernel::expr as kexpr;
+use strata_kernel::ext::*;
 use strata_kernel::{
     FieldDef, FieldId, FieldType, ObjectTypeDef, ObjectTypeId, OnDelete, Principal, PrincipalId,
     Record as KRecord, RecordId, RoleId, Timestamp, Value as KValue,

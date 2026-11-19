@@ -17,9 +17,8 @@ use crate::app::{ApiError, App};
 use crate::auth::random_hex;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
-use openssl::ec::{EcGroup, EcKey};
-use openssl::nid::Nid;
-use openssl::pkey::PKey;
+use p256::elliptic_curve::sec1::ToEncodedPoint;
+use p256::pkcs8::{EncodePrivateKey, EncodePublicKey, LineEnding};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value as Json};
 use strata_kernel::TenantId;
@@ -58,21 +57,27 @@ fn internal(why: impl std::fmt::Display) -> ApiError {
 }
 
 fn generate(now: i64) -> Result<SigningKey, ApiError> {
-    let group = EcGroup::from_curve_name(Nid::X9_62_PRIME256V1).map_err(internal)?;
-    let ec = EcKey::generate(&group).map_err(internal)?;
-    let pkey = PKey::from_ec_key(ec).map_err(internal)?;
-    let private_pem =
-        String::from_utf8(pkey.private_key_to_pem_pkcs8().map_err(internal)?).map_err(internal)?;
-    let public_pem =
-        String::from_utf8(pkey.public_key_to_pem().map_err(internal)?).map_err(internal)?;
-    // The last 65 bytes of a P-256 public key's DER are the uncompressed point: 0x04, x, y.
-    let der = pkey.public_key_to_der().map_err(internal)?;
-    if der.len() < 65 || der[der.len() - 65] != 4 {
-        return Err(internal(
-            "the public key is not an uncompressed P-256 point",
-        ));
+    // A P-256 private scalar from the operating system's randomness. A 32-byte value is a valid
+    // scalar unless it is zero or not below the curve order, which is about one draw in 2^32;
+    // such a draw is taken again.
+    let secret = loop {
+        let mut bytes = [0u8; 32];
+        getrandom::getrandom(&mut bytes).map_err(internal)?;
+        if let Ok(key) = p256::SecretKey::from_slice(&bytes) {
+            break key;
+        }
+    };
+    // PKCS#8 and SubjectPublicKeyInfo PEM with LF line endings: the same text OpenSSL wrote, so
+    // keys stored before this change still load.
+    let private_pem = secret.to_pkcs8_pem(LineEnding::LF).map_err(internal)?.to_string();
+    let public = secret.public_key();
+    let public_pem = public.to_public_key_pem(LineEnding::LF).map_err(internal)?;
+    // The uncompressed point: 0x04, x, y.
+    let encoded = public.to_encoded_point(false);
+    let point = encoded.as_bytes();
+    if point.len() != 65 || point[0] != 4 {
+        return Err(internal("the public key is not an uncompressed P-256 point"));
     }
-    let point = &der[der.len() - 65..];
     Ok(SigningKey {
         kid: format!("k_{}", random_hex(8)?),
         private_pem,

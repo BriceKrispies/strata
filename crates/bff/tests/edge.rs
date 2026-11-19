@@ -45,6 +45,7 @@ async fn start_with(
         federation: std::sync::Arc::new(strata_backend::signin::oidc::Federation::none()),
         factors: Default::default(),
         limits: Default::default(),
+        throttle: Default::default(),
     };
     adjust_backend(&mut backend_cfg);
     tokio::spawn(strata_backend::run(

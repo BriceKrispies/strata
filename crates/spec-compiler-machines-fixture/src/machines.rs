@@ -742,7 +742,7 @@ pub mod hold {
                 ));
             };
             Ok(records::RecHold {
-                hold_id: key.clone(),
+                hold_id: *key,
                 status: match state {
                     State::HActive => types::HoldStatus::Active,
                     State::HReleased => types::HoldStatus::Released,

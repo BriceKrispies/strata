@@ -27,10 +27,38 @@
 //   the delegation report-agent passes on ping alone, from the scope reports:read.
 {
   "exegra": "0.1",
-  "system": { "id": "wiring-fixture", "name": "Wiring fixture", "generation": { "target": "rust", "wireCase": "snake_case",
-    "errorKinds": { "unauthenticated": 401, "forbidden": 403, "not_found": 404, "throttled": 429, "invalid": 422, "unavailable": 503, "internal": 500 },
-    "errorBody": { "type": "api-error", "code": "code", "message": "message", "correlation": "correlation",
-      "runtime": { "unauthenticated": "unauthenticated", "forbidden": "forbidden", "invalid-request": "invalid", "timeout": "unavailable", "unavailable": "unavailable", "internal": "internal" } } } },
+  "system": {
+    "id": "wiring-fixture",
+    "name": "Wiring fixture",
+    "generation": {
+      "target": "rust",
+      "wireCase": "snake_case",
+      "errorKinds": {
+        "unauthenticated": 401,
+        "forbidden": 403,
+        "not_found": 404,
+        "throttled": 429,
+        "invalid": 422,
+        "unavailable": 503,
+        "internal": 500,
+        "conflict": 409
+      },
+      "errorBody": {
+        "type": "api-error",
+        "code": "code",
+        "message": "message",
+        "correlation": "correlation",
+        "runtime": {
+          "unauthenticated": "unauthenticated",
+          "forbidden": "forbidden",
+          "invalid-request": "invalid",
+          "timeout": "unavailable",
+          "unavailable": "unavailable",
+          "internal": "internal"
+        }
+      }
+    }
+  },
   "components": [
     { "id": "gateway", "name": "Gateway", "category": "service", "purpose": "Takes requests from outside." },
     { "id": "scheduler", "name": "Scheduler", "category": "service", "purpose": "Runs jobs." },
@@ -44,7 +72,21 @@
     { "id": "reports-reads-scheduler", "kind": "reads", "from": "reports", "to": "scheduler", "description": "Not a call: gives no client." }
   ],
   "types": [
-    { "id": "error-code", "name": "Error code", "kind": "enum", "values": [ "unauthenticated", "forbidden", "not_found", "throttled", "invalid", "unavailable", "internal" ] },
+    {
+      "id": "error-code",
+      "name": "Error code",
+      "kind": "enum",
+      "values": [
+        "unauthenticated",
+        "forbidden",
+        "not_found",
+        "conflict",
+        "throttled",
+        "invalid",
+        "unavailable",
+        "internal"
+      ]
+    },
     { "id": "api-error", "name": "Api error", "kind": "struct", "fields": [ { "name": "code", "type": "error-code" }, { "name": "message", "type": "string" }, { "name": "detail", "type": "string", "optional": true }, { "name": "correlation", "type": "string" } ] },
     { "id": "job-summary", "name": "Job summary", "kind": "struct", "fields": [ { "name": "display-name", "type": "string" }, { "name": "started-at", "type": "option<timestamp>", "optional": true }, { "name": "extra-info", "type": "json" } ] }
   ],

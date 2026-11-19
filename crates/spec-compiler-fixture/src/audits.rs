@@ -51,7 +51,7 @@ pub fn audit_tenant_created(
         actor: caller.id.clone(),
         at: prelude::Timestamp(now.0),
         tenant: response.tenant_id.clone(),
-        state: response.state.clone(),
+        state: response.state,
         parent: request.parent.clone(),
     })
 }
@@ -143,7 +143,7 @@ pub fn audit_account_closing(
 ) -> Result<AccountClosingEntry, crate::support::Overflow> {
     Ok(AccountClosingEntry {
         actor: caller.id.clone(),
-        account: request.account_id.clone(),
+        account: request.account_id,
         grace: types::Ttl(prelude::DurationMs(request.grace.0)),
         at: prelude::Timestamp(now.0),
     })
@@ -232,7 +232,7 @@ pub fn audit_account_read(
 ) -> Result<AccountReadEntry, crate::support::Overflow> {
     Ok(AccountReadEntry {
         who: caller.id.clone(),
-        account: request.account_id.clone(),
+        account: request.account_id,
     })
 }
 

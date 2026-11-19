@@ -187,6 +187,8 @@ impl std::error::Error for InspectJobCamelError {}
 pub trait Gateway {
     /// Ping
     ///
+    /// Authorisation: public, scheme session.
+    ///
     /// Not idempotent: a repeated call may take effect again.
     ///
     /// Contract `ping`, reference CT-3.
@@ -200,7 +202,7 @@ pub trait Gateway {
 pub trait Scheduler {
     /// Submit job
     ///
-    /// Authorisation: An operator.
+    /// Authorisation: internal, scheme session. An operator.
     ///
     /// Idempotent: repeating a call has the effect of making it once.
     ///
@@ -214,7 +216,7 @@ pub trait Scheduler {
 
     /// Cancel job
     ///
-    /// Authorisation: none
+    /// Authorisation: internal, scheme anonymous.
     ///
     /// Idempotent: repeating a call has the effect of making it once.
     ///
@@ -231,7 +233,7 @@ pub trait Scheduler {
 pub trait Reports {
     /// Make report
     ///
-    /// Authorisation: none
+    /// Authorisation: internal, scheme anonymous.
     ///
     /// Idempotent: repeating a call has the effect of making it once.
     ///
@@ -255,7 +257,7 @@ pub mod meta {
         reference: Some("CT-1"),
         realisation: Realisation::Generated,
         implemented_by: Some("scheduler"),
-        auth: Some("An operator."),
+        auth: Some("session"),
         idempotent: Some(true),
         timeout_ms: Some(2000),
     };
@@ -267,7 +269,7 @@ pub mod meta {
         reference: Some("CT-2"),
         realisation: Realisation::Generated,
         implemented_by: Some("scheduler"),
-        auth: Some("none"),
+        auth: Some("anonymous"),
         idempotent: Some(true),
         timeout_ms: Some(1000),
     };
@@ -279,7 +281,7 @@ pub mod meta {
         reference: Some("CT-3"),
         realisation: Realisation::Generated,
         implemented_by: Some("gateway"),
-        auth: None,
+        auth: Some("session"),
         idempotent: Some(false),
         timeout_ms: None,
     };
@@ -291,7 +293,7 @@ pub mod meta {
         reference: Some("CT-4"),
         realisation: Realisation::Generated,
         implemented_by: Some("reports"),
-        auth: Some("none"),
+        auth: Some("anonymous"),
         idempotent: Some(true),
         timeout_ms: Some(1000),
     };

@@ -203,7 +203,7 @@ pub trait Gateway {
     /// - A tenant record exists in state active.
     /// - The slug is reserved for it.
     ///
-    /// Authorisation: An operator of the control plane.
+    /// Authorisation: internal, scheme session, roles operator, request token checked, origin checked. An operator of the control plane.
     ///
     /// Idempotent: repeating a call has the effect of making it once.
     ///
@@ -219,6 +219,8 @@ pub trait Gateway {
 /// The contracts component `ledger` (Ledger) implements.
 pub trait Ledger {
     /// Get account
+    ///
+    /// Authorisation: public, scheme session, authenticated within 15 min.
     ///
     /// Idempotent: repeating a call has the effect of making it once.
     ///
@@ -237,7 +239,7 @@ pub trait Ledger {
     /// - Exactly one ledger entry is appended with the next sequence number.
     /// - The account balance changes by the amount.
     ///
-    /// Authorisation: The ledger's own workers.
+    /// Authorisation: local, scheme in-process. The ledger's own workers.
     ///
     /// Not idempotent: a repeated call may take effect again.
     ///
@@ -253,6 +255,8 @@ pub trait Ledger {
 /// The contracts component `identity` (Identity) implements.
 pub trait Identity {
     /// Close account
+    ///
+    /// Authorisation: internal, scheme service.
     ///
     /// Timeout: 10000 ms.
     ///
@@ -274,7 +278,7 @@ pub mod meta {
         reference: Some("CT-001"),
         realisation: Realisation::Generated,
         implemented_by: Some("gateway"),
-        auth: Some("An operator of the control plane."),
+        auth: Some("session"),
         idempotent: Some(true),
         timeout_ms: Some(2000),
     };
@@ -286,7 +290,7 @@ pub mod meta {
         reference: Some("CT-002"),
         realisation: Realisation::Generated,
         implemented_by: Some("ledger"),
-        auth: None,
+        auth: Some("session"),
         idempotent: Some(true),
         timeout_ms: Some(500),
     };
@@ -298,7 +302,7 @@ pub mod meta {
         reference: Some("H-7"),
         realisation: Realisation::Hand,
         implemented_by: Some("ledger"),
-        auth: Some("The ledger's own workers."),
+        auth: Some("in-process"),
         idempotent: Some(false),
         timeout_ms: None,
     };
@@ -310,7 +314,7 @@ pub mod meta {
         reference: Some("CT-003"),
         realisation: Realisation::Generated,
         implemented_by: Some("identity"),
-        auth: None,
+        auth: Some("service"),
         idempotent: None,
         timeout_ms: Some(10000),
     };

@@ -176,7 +176,7 @@ impl RecHold {
     /// The record's key.
     pub fn key(&self) -> RecHoldKey {
         RecHoldKey {
-            hold_id: self.hold_id.clone(),
+            hold_id: self.hold_id,
         }
     }
 

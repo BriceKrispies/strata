@@ -18,6 +18,7 @@
 use std::collections::BTreeMap;
 
 use strata_kernel::expr as kexpr;
+use strata_kernel::ext::*;
 use strata_kernel::rules::{self, Subject as KSubject};
 use strata_kernel::testkit::{
     ctx, field, new_note, notes_world, object, principals, tenant_id, text, user,

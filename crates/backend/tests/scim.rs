@@ -321,6 +321,8 @@ async fn deactivating_a_person_revokes_their_sessions() {
             last_seen_at: Timestamp(now_ms()),
             expires_at: Timestamp(now_ms() + 3_600_000),
             revoked_at: None,
+            authenticated_at: Timestamp(now_ms()),
+            network: None,
         };
         backend.store.put_session(&session).unwrap();
     };
@@ -677,6 +679,8 @@ async fn deactivating_a_person_refuses_what_was_delegated_in_their_name() {
             last_seen_at: Timestamp(now_ms()),
             expires_at: Timestamp(now_ms() + 3_600_000),
             revoked_at: None,
+            authenticated_at: Timestamp(now_ms()),
+            network: None,
         })
         .unwrap();
 
