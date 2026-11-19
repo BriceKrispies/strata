@@ -5,11 +5,21 @@ members = [
     "crates/substrate",
     "crates/storage-api",
     "crates/storage-sqlite",
+    "crates/runtime",
+    "crates/machine-store",
     "crates/protocol",
     "crates/backend",
     "crates/bff",
     "crates/simulation",
     "crates/verification",
+    "crates/spec-compiler",
+    "crates/spec-compiler-fixture",
+    "crates/spec-compiler-machines-fixture",
+    "crates/spec-compiler-wiring-fixture",
+    "crates/spec-expr",
+    "crates/spec-expr-cases",
+    "crates/model",
+    "crates/system-differential",
 ]
 
 [workspace.package]
@@ -24,9 +34,13 @@ strata-kernel = { path = "crates/kernel" }
 strata-substrate = { path = "crates/substrate" }
 strata-storage-api = { path = "crates/storage-api" }
 strata-storage-sqlite = { path = "crates/storage-sqlite" }
+strata-runtime = { path = "crates/runtime" }
+strata-machine-store = { path = "crates/machine-store" }
 strata-protocol = { path = "crates/protocol" }
 strata-simulation = { path = "crates/simulation" }
 strata-verification = { path = "crates/verification" }
+strata-spec-expr = { path = "crates/spec-expr" }
+strata-model = { path = "crates/model" }
 
 serde = { version = "1.0.228", features = ["derive", "rc"] }
 serde_json = "1.0.146"
@@ -41,6 +55,12 @@ reqwest = { version = "0.12", default-features = false, features = ["json"] }
 argon2 = "0.5.3"
 getrandom = "0.2.16"
 tower-http = { version = "0.6.8", features = ["fs"] }
+proc-macro2 = "1.0.107"
+quote = "1.0.47"
+syn = { version = "2.0.119", features = ["full"] }
+prettyplease = "0.2.37"
+regex = "1.13.1"
+uuid = { version = "1.24.0", features = ["serde"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

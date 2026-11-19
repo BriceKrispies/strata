@@ -18,6 +18,7 @@ use serde_json::json;
 use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
+use strata_runtime::{jobs, server};
 use strata_storage_api::Store;
 use tokio::net::TcpListener;
 
@@ -32,7 +33,7 @@ pub async fn run(
     let created = app
         .blocking(seed::seed)
         .await
-        .map_err(|e| e.0.message)?
+        .map_err(|e| e.describe())?
         .map_err(|e| format!("seeding failed: {e}"))?;
     let address = listener.local_addr().map_err(|e| e.to_string())?;
     LOG.info(
@@ -49,19 +50,16 @@ pub async fn run(
     tokio::spawn(hub::publisher(app.clone()));
     let janitor = app.clone();
     tokio::spawn(async move {
-        loop {
-            tokio::time::sleep(Duration::from_secs(600)).await;
+        jobs::every(Duration::from_secs(600), || async {
             let _ = janitor
                 .blocking(|app| {
                     app.store
                         .purge_sessions(strata_kernel::Timestamp(app.now().0 - 86_400_000))
                 })
                 .await;
-        }
+        })
+        .await
     });
 
-    axum::serve(listener, http::router(app))
-        .with_graceful_shutdown(shutdown)
-        .await
-        .map_err(|e| e.to_string())
+    server::serve(listener, http::router(app), shutdown).await
 }

@@ -13,6 +13,8 @@ use axum::{Json, Router};
 use serde::Serialize;
 use serde_json::{json, Value as Json_};
 use std::time::Instant;
+use strata_kernel::owner_role;
+use strata_kernel::rules::roles_of;
 use strata_protocol::api::{
     Empty, ErrorCode, IdRequest, LoginRequest, Mutation, SessionReply, ViewRequest,
     HEADER_CORRELATION,
@@ -129,9 +131,16 @@ async fn diagnostics(
 ) -> Result<impl IntoResponse, ApiError> {
     as_caller(&app, &headers, |app, identity| {
         require_schema_manager(app, identity)?;
-        ops::diagnostics(app)
+        ops::diagnostics(app, &identity.tenant)
     })
     .await
+}
+
+/// Every tenant's diagnostics and the audit entries. The service credential is the only
+/// requirement, so this is for the operator's tools on the backend's own network; the BFF has no
+/// route to it.
+async fn platform_diagnostics(State(app): State<Shared>) -> Result<Json<Json_>, ApiError> {
+    app.blocking(ops::platform_diagnostics).await?.map(Json)
 }
 
 async fn lab_overview(
@@ -195,27 +204,56 @@ async fn lab_verify(
     .await
 }
 
-async fn dev_reset(State(app): State<Shared>) -> Result<Json<Json_>, ApiError> {
+/// Development fixtures are for the tenant's owner, signed in, on a backend in development mode.
+/// Outside development mode they do not exist.
+fn require_dev_owner(app: &App, identity: &Identity) -> Result<(), ApiError> {
     if !app.cfg.dev {
         return Err(ApiError::new(ErrorCode::NotFound, "not available"));
     }
-    let created = app
-        .blocking(seed::reset)
-        .await?
-        .map_err(|problem| ApiError::new(ErrorCode::Internal, problem))?;
-    app.hub.kick.notify_one();
-    Ok(Json(json!({ "reset": true, "tenants": created })))
+    if identity.anonymous() {
+        return Err(ApiError::new(
+            ErrorCode::Unauthenticated,
+            "Sign in as the site's owner to use this.",
+        ));
+    }
+    let tenant = ops::header(app, identity)?;
+    if roles_of(&tenant, &identity.principal).contains(&owner_role()) {
+        Ok(())
+    } else {
+        Err(ApiError::new(
+            ErrorCode::Forbidden,
+            "Only the site's owner may use this.",
+        ))
+    }
 }
 
-/// Development only: end the caller's session as if its time had run out.
+/// Development only: remove the caller's tenant and install its bundle again. Other tenants are
+/// not touched.
+async fn dev_reset(State(app): State<Shared>, headers: HeaderMap) -> Result<Json<Json_>, ApiError> {
+    let reply = as_caller(&app, &headers, |app, identity| {
+        require_dev_owner(app, identity)?;
+        let session = identity.session.as_ref().map(|s| s.id.as_str().to_string());
+        app.audit(
+            "dev.reset",
+            &identity.correlation,
+            json!({ "tenant": identity.tenant.as_str(), "session": session }),
+        );
+        seed::reset_tenant(app, &identity.tenant)
+            .map_err(|problem| ApiError::hidden(ErrorCode::Internal, problem))?;
+        Ok(json!({ "reset": true, "tenant": identity.tenant.as_str() }))
+    })
+    .await?;
+    app.hub.kick.notify_one();
+    Ok(reply)
+}
+
+/// Development only: end the caller's own session as if its time had run out.
 async fn dev_expire(
     State(app): State<Shared>,
     headers: HeaderMap,
 ) -> Result<Json<Json_>, ApiError> {
-    if !app.cfg.dev {
-        return Err(ApiError::new(ErrorCode::NotFound, "not available"));
-    }
     as_caller(&app, &headers, |app, identity| {
+        require_dev_owner(app, identity)?;
         let Some(mut session) = identity.session.clone() else {
             return Ok(json!({ "expired": false }));
         };
@@ -275,6 +313,7 @@ pub fn router(app: Shared) -> Router {
         .route("/internal/view", post(view))
         .route("/internal/mutate", post(mutate))
         .route("/internal/diagnostics", post(diagnostics))
+        .route("/internal/platform/diagnostics", post(platform_diagnostics))
         .route("/internal/lab/overview", post(lab_overview))
         .route("/internal/lab/run", post(lab_run))
         .route("/internal/lab/result", post(lab_result))

@@ -112,8 +112,5 @@ pub async fn run(
         index,
         tokens: token::Issuer::new()?,
     });
-    axum::serve(listener, routes::router(bff))
-        .with_graceful_shutdown(shutdown)
-        .await
-        .map_err(|e| e.to_string())
+    strata_runtime::server::serve(listener, routes::router(bff), shutdown).await
 }

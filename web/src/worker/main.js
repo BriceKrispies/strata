@@ -12,11 +12,15 @@ import { view } from '../kernel/view.js';
 
 let state = initialState();
 let lastRendered = '';
+// The newest input the main thread numbered that the kernel has taken in, sent back with every
+// render so the page can tell a stale picture from a current one.
+let applied = 0;
 /** @type {WebSocket | null} */
 let socket = null;
 
 /** Run one message through the kernel and carry out what it asks for. */
 function dispatch(message) {
+  if (message.type === 'input' && typeof message.seq === 'number') applied = message.seq;
   const stamped = { ...message, at: Date.now(), rand: Math.random() };
   const result = update(state, stamped);
   state = result.state;
@@ -26,10 +30,10 @@ function dispatch(message) {
 
 function render() {
   const model = view(state);
-  const encoded = JSON.stringify(model);
+  const encoded = JSON.stringify([model, applied]);
   if (encoded === lastRendered) return;
   lastRendered = encoded;
-  self.postMessage({ type: 'render', model });
+  self.postMessage({ type: 'render', model, applied });
 }
 
 function diag(level, event, correlation, detail) {

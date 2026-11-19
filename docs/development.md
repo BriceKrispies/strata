@@ -46,13 +46,23 @@ file; `{ "$file": "posts/x.md" }` reads a field from a file. On start, any bundl
 does not exist is installed by issuing its intents through the ordinary command path, with the
 timestamps written in the bundle, so the same bundles always produce the same state.
 
-`POST /api/dev/reset` (development only) empties the store and installs the bundles again.
+`POST /api/dev/reset` (development only, the site's owner signed in) removes the owner's own tenant
+and installs its bundle again; other tenants are not touched. Development logins
+(`accounts.dev.json`) are installed only in development mode, and a start without `STRATA_DEV=1`
+removes any that still open with their published password and ends their sessions.
 
 ## Logs
 
 Both services write one JSON object per line: `ts`, `level`, `service`, `event`, `correlation`
 and event-specific fields. `scripts/dev.mjs` shows a short form on screen and appends the full
 lines to `var/logs/backend.jsonl`, `bff.jsonl` and `vite.jsonl`.
+
+The domain events (`tenant.created`, `schema.changed`, `member.changed`, `record.created`,
+`record.updated`, `record.deleted`, `session.started`, `session.ended`) are written through the
+generated `strata_model::telemetry` functions. Which fields each line holds is stated in the
+specification (`event.logging`): the tenant and an allowlist of scalar fields, never record
+contents, tokens or secrets. `record.updated` names the workflow `transition` an update took, such
+as `publish` or `unpublish`. End-to-end journeys check these lines with `expectLog`.
 
 To follow one request end to end, search for its correlation id:
 
@@ -65,7 +75,7 @@ bff      bff.request        POST /api/records 200
 backend  api.request        /internal/session 200        (the CSRF check)
 backend  kernel.accepted    update_record revision 31, 22 checks
 backend  api.request        /internal/mutate 200
-backend  event.published    record_updated post 9 seq 31
+backend  record.updated     tenant=fieldnotes seq=31 revision=31 object=post id=9 version=4 transition=publish
 ```
 
 The same id is in the `correlation` field of the `event` frame each subscriber receives. In
@@ -77,13 +87,17 @@ the log files and fails if any of them appears.
 
 ## Diagnostics
 
-`GET /api/diagnostics` (schema managers only), or the Diagnostics tab of the Impact Lab:
-store capabilities, health and layout history; tenants with revision, schema version and event
-sequence; live sessions (ids, never tokens); WebSocket connections with their subscriptions and
-delivery counters; operations in flight; kernel transitions accepted and rejected by intent;
-rejections by kind; the last fifty rejections with the checks that failed; the last fifty
-published events; recent simulation runs. `GET /internal/health` on the backend needs no token
-and reports the store's own integrity check.
+`GET /api/diagnostics` (schema managers only), or the Diagnostics tab of the Impact Lab, reports
+the caller's own tenant and nothing of any other: store capabilities, health and layout history;
+the tenant's revision, schema version and event sequence; its live sessions (ids, never tokens);
+its WebSocket connections with their subscriptions and delivery counters; operations in flight;
+its kernel transitions accepted and rejected by intent; its rejections by kind; its recent
+rejections with the checks that failed; its recent published events; its recent simulation runs.
+
+`POST /internal/platform/diagnostics` on the backend reports every tenant, plus the audit entries
+(such as a session token presented on another tenant's site). It needs only the service token and
+the BFF has no route to it. `GET /internal/health` on the backend needs no token and reports the
+store's own integrity check.
 
 ## Tests
 

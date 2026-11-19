@@ -1,0 +1,115 @@
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 1 test
+test the_system_host_runs_every_scenario_as_exegra_does has been running for over 60 seconds
+covered (43):
+  link-used-twice-impl: 6 steps agree
+  link-presented-late-impl: 4 steps agree
+  link-presented-elsewhere-impl: 4 steps agree
+  oidc-sign-in-impl: 4 steps agree
+  oidc-forged-callback-impl: 4 steps agree
+  lease-takeover-impl: 8 steps agree
+  page-purged-impl: 8 steps agree
+  tenant-provisioned-impl: 5 steps agree
+  tenant-provisioning-fails-impl: 5 steps agree
+  safe-change-applied-impl: 4 steps agree
+  risky-change-approved-impl: 7 steps agree
+  risky-change-rejected-impl: 5 steps agree
+  arc-outbox-duplicate-delivery-impl: 4 steps agree
+  arc-rolling-deploy-with-commit-impl: 6 steps agree
+  inbound-repeated-delivery-impl: 4 steps agree
+  preview-presented-late-impl: 3 steps agree
+  cv-confirmed-apply-impl: 5 steps agree
+  cv-unconfirmed-apply-impl: 4 steps agree
+  cv-cancelled-preview-impl: 6 steps agree
+  cv-withdrawn-before-run-impl: 3 steps agree
+  cv-permitted-run-impl: 2 steps agree
+  saml-replayed-impl: 4 steps agree
+  guesses-from-one-source-impl: 10 steps agree
+  erasure-purged-impl: 6 steps agree
+  audit-erasure-impl: 6 steps agree
+  anomaly-then-operation-impl: 4 steps agree
+  operation-when-running-impl: 2 steps agree
+  token-two-readers-impl: 4 steps agree
+  switch-before-verification-impl: 3 steps agree
+  verified-switch-impl: 4 steps agree
+  rollback-then-request-impl: 8 steps agree
+  tenant-provisioning-fails-late-impl: 6 steps agree
+  link-presentation-duplicated-impl: 6 steps agree
+  link-intercepted-impl: 4 steps agree
+  rejected-change-apply-redelivered-impl: 5 steps agree
+  inbound-delivery-redelivered-impl: 4 steps agree
+  saml-response-redelivered-impl: 4 steps agree
+  guesses-on-parallel-connections-impl: 8 steps agree
+  token-reader-joins-concurrently-impl: 6 steps agree
+  mail-same-key-twice-impl: 4 steps agree
+  mail-two-keys-impl: 8 steps agree
+  audit-erasure-redelivered-impl: 6 steps agree
+  password-spray-one-source-impl: 12 steps agree
+skipped (32):
+  revocation-notice-lost-impl: fault revocation-notice-dropped (drop-event) is Exegra's doing, which the host cannot produce (WG-4903)
+  page-purge-lost-impl: fault purge-dropped (drop-event) is Exegra's doing, which the host cannot produce (WG-4903)
+  arc-publisher-crashed-after-commit-impl: fault arc-publisher-stops-impl (disable-transition) is Exegra's doing, which the host cannot produce (WG-4903)
+  identity-unreachable-impl: fault identity-answer-dropped (drop-event) is Exegra's doing, which the host cannot produce (WG-4903)
+  identity-unreachable-authority-impl: fault identity-answer-dropped (drop-event) is Exegra's doing, which the host cannot produce (WG-4903)
+  erasure-purge-lost-impl: fault erasure-purge-dropped (drop-event) is Exegra's doing, which the host cannot produce (WG-4903)
+  mail-timeout-then-retry-impl: fault first-acknowledgement-slow-impl (delay-event) is Exegra's doing, which the host cannot produce (WG-4903)
+  link-presented-after-delay-impl: fault link-presentation-in-transit-impl (delay-event) is Exegra's doing, which the host cannot produce (WG-4903)
+  preview-presentation-in-transit-impl: fault preview-presentation-delayed-impl (delay-event) is Exegra's doing, which the host cannot produce (WG-4903)
+  lease-report-in-transit-impl: fault work-report-delayed-past-expiry-impl (delay-event) is Exegra's doing, which the host cannot produce (WG-4903)
+  intent-commit-confirmation-delayed-impl: fault commit-confirmation-delayed (delay-event) is Exegra's doing, which the host cannot produce (WG-4903)
+  read-in-transit-past-shred-impl: fault read-delayed-past-shred (delay-event) is Exegra's doing, which the host cannot produce (WG-4903)
+  cv-confirmation-in-transit-impl: fault cv-confirmation-delayed (delay-event) is Exegra's doing, which the host cannot produce (WG-4903)
+  cv-run-in-transit-past-withdrawal-impl: fault cv-run-delayed-past-withdrawal (delay-event) is Exegra's doing, which the host cannot produce (WG-4903)
+  mail-first-acknowledgement-lost-impl: fault first-acknowledgement-lost (drop-event) is Exegra's doing, which the host cannot produce (WG-4903)
+  operation-in-transit-at-halt-impl: fault operation-delayed-past-halt (delay-event) is Exegra's doing, which the host cannot produce (WG-4903)
+  arc-outbox-delayed-first-delivery-impl: fault first-delivery-delayed (delay-event) is Exegra's doing, which the host cannot produce (WG-4903)
+  gate-result-arrives-late-impl: fault gate-result-late (delay-event) is Exegra's doing, which the host cannot produce (WG-4903)
+  oidc-provider-silent-forged-callback-impl: fault oidc-callback-dropped (drop-event) is Exegra's doing, which the host cannot produce (WG-4903)
+  risky-change-approval-in-transit-impl: fault approval-delayed (delay-event) is Exegra's doing, which the host cannot produce (WG-4903)
+  rolling-deploy-finish-delayed-impl: fault deploy-finish-notice-delayed (delay-event) is Exegra's doing, which the host cannot produce (WG-4903)
+  cv-apply-before-delayed-confirmation-impl: fault cv-confirmation-delayed (delay-event) is Exegra's doing, which the host cannot produce (WG-4903)
+  switch-before-delayed-verification-impl: fault verification-result-delayed (delay-event) is Exegra's doing, which the host cannot produce (WG-4903)
+  switch-instruction-lost-impl: fault switch-instruction-dropped (drop-event) is Exegra's doing, which the host cannot produce (WG-4903)
+  request-in-flight-at-switch-back-impl: fault public-request-delayed (delay-event) is Exegra's doing, which the host cannot produce (WG-4903)
+  move-write-in-flight-impl: fault move-write-delayed (delay-event) is Exegra's doing, which the host cannot produce (WG-4903)
+  lease-report-lost-in-partition-impl: fault worker-report-dropped (drop-event) is Exegra's doing, which the host cannot produce (WG-4903)
+  mail-first-submission-lost-impl: fault first-submission-lost (drop-event) is Exegra's doing, which the host cannot produce (WG-4903)
+  session-ends-and-person-signs-in-again-impl: behaviour client-session-flow-impl has no generated Rust machine (a model behaviour or a client machine)
+  live-catch-up-after-reconnect-impl: behaviour client-live-flow-impl has no generated Rust machine (a model behaviour or a client machine)
+  live-silent-server-impl: behaviour client-live-flow-impl has no generated Rust machine (a model behaviour or a client machine)
+  submit-refused-then-accepted-impl: behaviour client-submit-flow-impl has no generated Rust machine (a model behaviour or a client machine)
+skipped, inputs the generated types cannot hold (20):
+  revocation-heard-impl: input sr-request {} is not an event of gateway-session-flow-impl: missing field `session-id`
+  trigger-chain-runaway-impl: input tc-change {"correlation":"chain-1","hop":1} is not an event of trigger-chain-flow-impl: UUID parsing failed: invalid character: found `h` at 1
+  subject-shredded-impl: input sk-shred {"key-id":"key-1"} is not an event of subject-key-flow-impl: UUID parsing failed: invalid character: found `k` at 0
+  self-approval-attempted-impl: input sp-proposed {"author":"ada","proposal-id":"prop-1"} is not an event of approval-separation-flow-impl: UUID parsing failed: invalid character: found `p` at 0
+  other-approves-impl: input sp-proposed {"author":"ada","proposal-id":"prop-1"} is not an event of approval-separation-flow-impl: UUID parsing failed: invalid character: found `p` at 0
+  release-promoted-impl: input rp-stage-gated {"release-id":"rel-1"} is not an event of release-promotion-flow-impl: UUID parsing failed: invalid character: found `r` at 0
+  release-promote-without-gate-impl: input rp-approved {"by":"ada","release-id":"rel-1"} is not an event of release-promotion-flow-impl: UUID parsing failed: invalid character: found `r` at 0
+  release-promote-unapproved-impl: input rp-stage-gated {"release-id":"rel-1"} is not an event of release-promotion-flow-impl: UUID parsing failed: invalid character: found `r` at 0
+  migration-interrupted-resumed-impl: input mg-started {"run-id":"run-1"} is not an event of migration-batch-flow-impl: UUID parsing failed: invalid character: found `r` at 0
+  move-completes-impl: input tm-move-requested {"move-id":"move-1"} is not an event of tenant-move-flow-impl: UUID parsing failed: invalid character: found `m` at 0
+  move-switch-requested-early-impl: input tm-move-requested {"move-id":"move-1"} is not an event of tenant-move-flow-impl: UUID parsing failed: invalid character: found `m` at 0
+  move-write-during-freeze-impl: input tm-move-requested {"move-id":"move-1"} is not an event of tenant-move-flow-impl: UUID parsing failed: invalid character: found `m` at 0
+  move-copy-fails-impl: input tm-move-requested {"move-id":"move-1"} is not an event of tenant-move-flow-impl: UUID parsing failed: invalid character: found `m` at 0
+  release-approval-duplicated-impl: input rp-stage-gated {"release-id":"rel-1"} is not an event of release-promotion-flow-impl: UUID parsing failed: invalid character: found `r` at 0
+  intent-committed-impl: input rt-intent {"correlation":"c-1"} is not an event of commit-flow-impl: UUID parsing failed: invalid group count: expected 5, found 2
+  move-with-concurrent-write-impl: input tm-move-requested {"move-id":"move-1"} is not an event of tenant-move-flow-impl: UUID parsing failed: invalid character: found `m` at 0
+  move-concurrent-write-early-switch-impl: input tm-move-requested {"move-id":"move-1"} is not an event of tenant-move-flow-impl: UUID parsing failed: invalid character: found `m` at 0
+  move-switch-request-premature-impl: input tm-move-requested {"move-id":"move-1"} is not an event of tenant-move-flow-impl: UUID parsing failed: invalid character: found `m` at 0
+  trigger-chain-reentered-impl: input tc-change {"correlation":"chain-1","hop":1} is not an event of trigger-chain-flow-impl: UUID parsing failed: invalid character: found `h` at 1
+  self-approval-redelivered-impl: input sp-proposed {"author":"ada","proposal-id":"prop-1"} is not an event of approval-separation-flow-impl: UUID parsing failed: invalid character: found `p` at 0
+diverged (0):
+.
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 91.39s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

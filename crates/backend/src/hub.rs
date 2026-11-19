@@ -10,7 +10,10 @@ use serde_json::{json, Value as Json};
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use strata_kernel::{DomainEvent, EventBody, PrincipalId, SessionId, TenantId, TenantState};
+use strata_kernel::{
+    DomainEvent, EventBody, PrincipalId, Record, SessionId, TenantId, TenantState, Value,
+};
+use strata_model::telemetry;
 use strata_protocol::ws::SessionState;
 use tokio::sync::{broadcast, Notify};
 
@@ -103,6 +106,116 @@ fn describe(event: &DomainEvent) -> Json {
     })
 }
 
+/// The workflow transition an update took, when it moved a workflow field of the record's object
+/// type from one state to another along a declared transition (`publish`, `unpublish`).
+fn workflow_transition<'a>(
+    tenant: &'a TenantState,
+    before: &Record,
+    after: &'a Record,
+) -> Option<&'a str> {
+    tenant
+        .schema
+        .workflows_of(&after.object)
+        .find_map(|workflow| {
+            let (Value::Str(from), Value::Str(to)) =
+                (before.get(&workflow.field), after.get(&workflow.field))
+            else {
+                return None;
+            };
+            if from == to {
+                return None;
+            }
+            workflow
+                .transitions
+                .iter()
+                .find(|t| t.from == *from && t.to == *to)
+                .map(|t| t.name.as_str())
+        })
+}
+
+/// Write the log line of a published domain event through the generated telemetry functions
+/// (`strata_model::telemetry`): the tenant and the allowlisted fields the specification states,
+/// never record contents.
+fn log_published(event: &DomainEvent, tenant: &TenantState) {
+    let sink = &telemetry::BACKEND;
+    let correlation = event.correlation.as_str();
+    let (name, seq, revision) = (event.tenant.as_str(), event.seq, event.revision.0);
+    match &event.body {
+        EventBody::TenantCreated { name: title } => telemetry::tenant_created(
+            sink,
+            &telemetry::TenantCreated {
+                correlation,
+                tenant: name,
+                seq,
+                revision,
+                name: title,
+            },
+        ),
+        EventBody::SchemaChanged {
+            version,
+            summary,
+            grandfathered,
+        } => telemetry::schema_changed(
+            sink,
+            &telemetry::SchemaChanged {
+                correlation,
+                tenant: name,
+                seq,
+                revision,
+                version: version.0,
+                changes: summary.len() as u64,
+                grandfathered: *grandfathered,
+            },
+        ),
+        EventBody::MemberChanged { principal, .. } => telemetry::member_changed(
+            sink,
+            &telemetry::MemberChanged {
+                correlation,
+                tenant: name,
+                seq,
+                revision,
+                principal: principal.as_str(),
+            },
+        ),
+        EventBody::RecordCreated { record } => telemetry::record_created(
+            sink,
+            &telemetry::RecordCreated {
+                correlation,
+                tenant: name,
+                seq,
+                revision,
+                object: record.object.as_str(),
+                record: record.id.0,
+                version: record.version,
+            },
+        ),
+        EventBody::RecordUpdated { before, after } => telemetry::record_updated(
+            sink,
+            &telemetry::RecordUpdated {
+                correlation,
+                tenant: name,
+                seq,
+                revision,
+                object: after.object.as_str(),
+                record: after.id.0,
+                version: after.version,
+                transition: workflow_transition(tenant, before, after),
+            },
+        ),
+        EventBody::RecordDeleted { before } => telemetry::record_deleted(
+            sink,
+            &telemetry::RecordDeleted {
+                correlation,
+                tenant: name,
+                seq,
+                revision,
+                object: before.object.as_str(),
+                record: before.id.0,
+            },
+        ),
+    }
+}
+
 /// Move one batch of committed events from the outbox to the hub. Returns how many moved.
 pub fn publish_pending(app: &crate::app::App) -> Result<usize, strata_storage_api::StoreError> {
     let pending = app.store.outbox(256)?;
@@ -122,9 +235,8 @@ pub fn publish_pending(app: &crate::app::App) -> Result<usize, strata_storage_ap
                 header
             }
         };
-        let summary = describe(&entry.event);
-        LOG.info("event.published", &entry.event.correlation, summary.clone());
-        app.stats.recent_events.push(summary);
+        log_published(&entry.event, &header);
+        app.stats.recent_events.push(describe(&entry.event));
         // No receivers is fine: the event stays in the durable log for later replay.
         let _ = app.hub.events.send(Arc::new(Published {
             event: entry.event.clone(),
@@ -137,7 +249,9 @@ pub fn publish_pending(app: &crate::app::App) -> Result<usize, strata_storage_ap
 
 /// Publish committed events for as long as the process lives.
 pub async fn publisher(app: Shared) {
-    loop {
+    // A commit wakes the pump at once; the idle period covers commits made by another process.
+    let wake = app.clone();
+    strata_runtime::jobs::pump(&wake.hub.kick, Duration::from_millis(500), || async {
         let drained = app.blocking(|app| {
             let mut total = 0;
             loop {
@@ -151,7 +265,6 @@ pub async fn publisher(app: Shared) {
         if let Ok(Err(error)) = drained.await {
             LOG.error("outbox.failed", "", json!({ "error": error.to_string() }));
         }
-        // A commit wakes us at once; the timeout covers commits made by another process.
-        let _ = tokio::time::timeout(Duration::from_millis(500), app.hub.kick.notified()).await;
-    }
+    })
+    .await
 }

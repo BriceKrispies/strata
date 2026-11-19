@@ -4,7 +4,8 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { prose } from '../src/components/parts.js';
-import { explainCheck, initialState, parseHref, slugify, update } from '../src/kernel/update.js';
+import { explain } from '../src/generated/errors.js';
+import { initialState, parseHref, slugify, update } from '../src/kernel/update.js';
 import { view } from '../src/kernel/view.js';
 
 const stamp = { at: 1_000, rand: 0.5 };
@@ -244,15 +245,15 @@ test('the theme control cycles and is stored', () => {
 });
 
 test('kernel checks are explained in terms of the field they are about', () => {
-  const fields = ['title', 'slug', 'excerpt', 'cover', 'cover_alt'];
-  assert.deepEqual(explainCheck({ rule: 'required:post.title', detail: 'a value is required' }, 'post', fields), { field: 'title', text: 'This is required.' });
+  const form = 'form-new-article-save';
+  assert.deepEqual(explain(form, { rule: 'required:post.title', detail: 'a value is required' }), { field: 'title', text: 'This is required.' });
   assert.deepEqual(
-    explainCheck({ rule: 'constraint:post.excerpt_length', detail: 'An excerpt has at most 280 characters [(len(new.excerpt) <= 280)]' }, 'post', fields),
+    explain(form, { rule: 'constraint:post.excerpt_length', detail: 'An excerpt has at most 280 characters [(len(new.excerpt) <= 280)]' }),
     { field: 'excerpt', text: 'An excerpt has at most 280 characters.' },
   );
-  assert.equal(explainCheck({ rule: 'constraint:post.cover_is_described', detail: 'A cover needs a description [x]' }, 'post', fields).field, 'cover');
-  assert.equal(explainCheck({ rule: 'unique:post.slug', detail: 'record 3 already has this value' }, 'post', fields).field, 'slug');
-  assert.equal(explainCheck({ rule: 'policy:authors_own_posts', detail: '...' }, 'post', fields).field, null);
+  assert.equal(explain(form, { rule: 'constraint:post.cover_is_described', detail: 'A cover needs a description [x]' }).field, 'cover');
+  assert.equal(explain(form, { rule: 'unique:post.slug', detail: 'record 3 already has this value' }).field, 'slug');
+  assert.equal(explain(form, { rule: 'policy:authors_own_posts', detail: '...' }).field, null);
 });
 
 test('addresses and slugs', () => {

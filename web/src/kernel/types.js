@@ -58,7 +58,7 @@
  *   | { type: 'init', path: string, search: string, bootstrap: any, systemDark: boolean, storedTheme: string | null }
  *   | { type: 'navigate', href: string, replace?: boolean }
  *   | { type: 'popstate', path: string, search: string }
- *   | { type: 'input', form: string, name: string, value: string | boolean }
+ *   | { type: 'input', seq?: number, form: string, name: string, value: string | boolean }
  *   | { type: 'submit', form: string, values: Record<string, string | boolean> }
  *   | { type: 'action', name: string, arg?: any }
  *   | { type: 'system_theme', dark: boolean }

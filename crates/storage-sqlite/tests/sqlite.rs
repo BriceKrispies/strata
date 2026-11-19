@@ -175,3 +175,57 @@ fn a_second_connection_sees_only_whole_commits() {
         1
     );
 }
+
+/// Verifies: H-008
+///
+/// A value of a query is bound as data: a login that is SQL text is looked up as that text, finds
+/// only the account stored under it and damages nothing. A file that cannot be opened is
+/// unavailable.
+#[test]
+fn query_values_are_bound_as_data_and_an_unopenable_file_is_unavailable() {
+    let store = SqliteStore::open(&fresh_path("bound"), Timestamp(1)).unwrap();
+    let alpha = tenant_id("alpha");
+    let owner = principal_id("alpha:owner");
+    execute(
+        &store,
+        &Intent::CreateTenant {
+            name: "alpha".into(),
+            owner: owner.clone(),
+        },
+        &ctx("alpha", Principal::System, 10),
+    )
+    .unwrap();
+    let account = |login: &str| Account {
+        tenant: alpha.clone(),
+        login: login.into(),
+        principal: owner.clone(),
+        display_name: "Owner".into(),
+        password_hash: "$argon2id$placeholder".into(),
+    };
+    store.put_account(&account("owner")).unwrap();
+    let hostile = "x' OR '1'='1'; DROP TABLE accounts; --";
+    assert_eq!(
+        store.account(&alpha, hostile).unwrap(),
+        None,
+        "SQL text matches nothing"
+    );
+    store.put_account(&account(hostile)).unwrap();
+    assert_eq!(
+        store.account(&alpha, hostile).unwrap(),
+        Some(account(hostile)),
+        "it is stored and found as the text it is"
+    );
+    assert_eq!(
+        store.account(&alpha, "owner").unwrap(),
+        Some(account("owner")),
+        "the table is intact"
+    );
+
+    let missing = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join("no-such-directory")
+        .join("store.db");
+    assert!(matches!(
+        SqliteStore::open(&missing, Timestamp(1)),
+        Err(strata_storage_api::StoreError::Unavailable(_))
+    ));
+}

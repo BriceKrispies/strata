@@ -13,6 +13,7 @@ use strata_kernel::rules::{may_attempt, roles_of};
 use strata_kernel::{
     canon, Action, Context, Principal, PrincipalId, Resource, SessionId, TenantId, TenantState,
 };
+use strata_model::telemetry;
 use strata_protocol::api::{
     valid_correlation, ErrorCode, LoginReply, LoginRequest, SessionView, HEADER_CORRELATION,
     HEADER_SERVICE, HEADER_SESSION, HEADER_SITE,
@@ -63,18 +64,13 @@ fn header<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
 }
 
 /// Compare two secrets without stopping at the first difference.
-pub fn same_secret(a: &str, b: &str) -> bool {
-    a.len() == b.len()
-        && a.bytes()
-            .zip(b.bytes())
-            .fold(0u8, |acc, (x, y)| acc | (x ^ y))
-            == 0
-}
+pub use strata_runtime::routes::same_secret;
 
 pub fn has_service_token(app: &App, headers: &HeaderMap) -> bool {
     header(headers, HEADER_SERVICE).is_some_and(|given| same_secret(given, &app.cfg.service_token))
 }
 
+/// Implements: H-003
 pub fn random_hex(bytes: usize) -> Result<String, ApiError> {
     let mut buffer = vec![0u8; bytes];
     getrandom::getrandom(&mut buffer)
@@ -135,10 +131,16 @@ pub fn identify(app: &App, caller: &Caller) -> Result<Identity, ApiError> {
     };
     let now = app.now().0;
     if session.tenant != caller.site {
-        LOG.warn(
+        // A token is only ever sent to the site that issued it, so this is a token that was
+        // taken somewhere and replayed: an audit entry, not just a log line.
+        app.audit(
             "session.wrong_site",
             &caller.correlation,
-            json!({ "session": session.id.as_str(), "site": caller.site.as_str() }),
+            json!({
+                "session": session.id.as_str(),
+                "session_tenant": session.tenant.as_str(),
+                "site": caller.site.as_str(),
+            }),
         );
         return Ok(anonymous(SessionState::Anonymous));
     }
@@ -194,6 +196,7 @@ pub fn session_view(tenant: &TenantState, identity: &Identity) -> SessionView {
     }
 }
 
+/// Implements: H-001
 pub fn hash_password(password: &str) -> Result<String, ApiError> {
     let mut salt = [0u8; 16];
     getrandom::getrandom(&mut salt)
@@ -207,6 +210,7 @@ pub fn hash_password(password: &str) -> Result<String, ApiError> {
         .map_err(|e| ApiError::new(ErrorCode::Internal, e.to_string()))
 }
 
+/// Implements: H-002
 fn verify_password(password: &str, stored: &str) -> bool {
     PasswordHash::new(stored)
         .map(|hash| {
@@ -215,6 +219,11 @@ fn verify_password(password: &str, stored: &str) -> bool {
                 .is_ok()
         })
         .unwrap_or(false)
+}
+
+/// Whether `password` opens the stored hash.
+pub(crate) fn is_password(password: &str, stored: &str) -> bool {
+    verify_password(password, stored)
 }
 
 /// A hash to verify against when the login does not exist, so that a miss costs the same as a
@@ -304,10 +313,15 @@ pub fn login(app: &App, caller: &Caller, request: &LoginRequest) -> Result<Login
         revoked_at: None,
     };
     app.store.put_session(&session)?;
-    LOG.info(
-        "login.accepted",
-        &caller.correlation,
-        json!({ "tenant": caller.site.as_str(), "session": session.id.as_str(), "principal": session.principal.as_str() }),
+    telemetry::session_started(
+        &telemetry::BACKEND,
+        &telemetry::SessionStarted {
+            correlation: &caller.correlation,
+            tenant: caller.site.as_str(),
+            session: session.id.as_str(),
+            principal: session.principal.as_str(),
+            method: "password",
+        },
     );
     let identity = Identity {
         tenant: caller.site.clone(),
@@ -328,10 +342,13 @@ pub fn end_session(app: &App, token: &str, correlation: &str) -> Result<(), ApiE
         if session.revoked_at.is_none() {
             session.revoked_at = Some(app.now());
             app.store.put_session(&session)?;
-            LOG.info(
-                "session.ended",
-                correlation,
-                json!({ "session": session.id.as_str() }),
+            telemetry::session_ended(
+                &telemetry::BACKEND,
+                &telemetry::SessionEnded {
+                    correlation,
+                    tenant: session.tenant.as_str(),
+                    session: session.id.as_str(),
+                },
             );
         }
         let _ = app.hub.sessions.send((session.id, SessionState::Revoked));
@@ -363,4 +380,60 @@ pub fn put_dev_account(
         password_hash: hash_password(password)?,
     })?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifies: H-001
+    #[test]
+    fn a_password_hash_is_argon2id_with_a_fresh_salt_each_time() {
+        let first = hash_password("correct horse").unwrap();
+        let second = hash_password("correct horse").unwrap();
+        assert!(first.starts_with("$argon2id$"), "{first}");
+        assert_ne!(first, second, "two hashes of one password differ");
+        let parsed = PasswordHash::new(&first).expect("PHC string form");
+        assert!(parsed.salt.is_some());
+    }
+
+    /// Verifies: H-002
+    #[test]
+    fn a_password_matches_exactly_its_own_hash_and_a_bad_hash_is_no_match() {
+        let stored = hash_password("correct horse").unwrap();
+        assert!(verify_password("correct horse", &stored));
+        assert!(!verify_password("correct horse ", &stored));
+        assert!(!verify_password("Correct horse", &stored));
+        assert!(!verify_password(
+            "correct horse",
+            &hash_password("other").unwrap()
+        ));
+        for junk in [
+            "",
+            "plain text",
+            "$argon2id$broken",
+            "$argon2id$v=19$m=1,t=1,p=1$$",
+        ] {
+            assert!(!verify_password("correct horse", junk), "{junk:?}");
+        }
+    }
+
+    /// Verifies: H-003
+    #[test]
+    fn a_random_secret_is_lower_case_hex_of_the_requested_length_and_never_repeats() {
+        for bytes in [0usize, 1, 6, 32] {
+            let secret = random_hex(bytes).unwrap();
+            assert_eq!(secret.len(), bytes * 2);
+            assert!(secret
+                .chars()
+                .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c)));
+        }
+        let drawn: std::collections::BTreeSet<String> =
+            (0..50).map(|_| random_hex(16).unwrap()).collect();
+        assert_eq!(
+            drawn.len(),
+            50,
+            "a secret drawn for one challenge opens no other"
+        );
+    }
 }

@@ -25,8 +25,11 @@ All under `/api`, JSON in and out. The tenant is taken from the request's host n
 | `POST /api/preview` | Constrained Markdown to blocks | allowed origin |
 | `GET /api/lab/overview`, `GET /api/lab/runs/:id` | Impact Lab reads | may manage schema |
 | `POST /api/lab/run`, `/api/lab/replay`, `/api/lab/verify` | Impact Lab actions | allowed origin, CSRF token, may manage schema |
-| `GET /api/diagnostics` | Machine-readable state of both services | may manage schema |
-| `POST /api/dev/expire-session`, `/api/dev/reset` | Fixtures | `STRATA_DEV=1`, allowed origin, request token |
+| `GET /api/diagnostics` | Machine-readable state of both services, for the caller's tenant only | may manage schema |
+| `POST /api/dev/expire-session`, `/api/dev/reset` | Fixtures: end the caller's session; reinstall the caller's tenant | `STRATA_DEV=1`, allowed origin, CSRF token, the site's owner |
+
+An allowed origin is one of the configured origins (`STRATA_ORIGINS`) whose host name serves the
+same site as the request: a page of one tenant is not an allowed origin on another tenant's site.
 
 The session cookie is `__Host-strata_sid`: `Secure`, `HttpOnly`, `SameSite=Strict`, `Path=/`, no
 `Domain`. It holds a random token; the backend stores only its SHA-256. Browsers accept a `Secure`

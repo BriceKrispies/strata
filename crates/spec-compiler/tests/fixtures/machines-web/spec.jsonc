@@ -1,0 +1,99 @@
+// Golden fixture for specc's web backend: a machine of the web client, generated as JavaScript
+// (`specc web`, tests/web.rs; the expected output is the directory `web/` beside this file), and
+// the specification of the differential test against Exegra (tests/web.rs runs its scenario
+// "login-run" with the Exegra CLI). `exegra validate --specs crates/spec-compiler/tests/fixtures
+// --project machines-web` must report no error.
+//
+// login-form: a machine of the web client (category client), so it is not generated as Rust. A
+// guard that locks the form, otherwise, ignores, a timer and its cancel, an emit to the backend
+// API, `time`, terminal states and an optional payload field. It has no storage or transaction:
+// its state lives in the browser's kernel.
+{
+  "exegra": "0.1",
+  "system": { "id": "machines-web-fixture", "name": "Machines web fixture" },
+  "components": [
+    { "id": "web-client", "name": "Web client", "category": "client", "purpose": "The browser frontend." },
+    { "id": "api", "name": "API", "category": "external", "purpose": "The backend the web client calls." }
+  ],
+  "records": [
+    { "id": "rec-login-form", "name": "Login form state", "owner": "web-client", "key": ["form-id"], "schemaVersion": 1,
+      "retention": "Held in the memory of one browser tab; gone when the tab closes. It is never sent to the server.",
+      "fields": [
+        { "name": "form-id", "type": "string" },
+        { "name": "form-state", "type": "string" },
+        { "name": "name", "type": "string" },
+        { "name": "attempts", "type": "u32" },
+        { "name": "last-submit", "type": "timestamp" }
+      ] }
+  ],
+  "events": [
+    { "id": "login-typed", "name": "Name typed", "payload": [ { "name": "name", "type": "string" } ] },
+    { "id": "login-submitted", "name": "Login submitted", "payload": [ { "name": "chars", "type": "u32" } ] },
+    { "id": "login-accepted", "name": "Login accepted" },
+    { "id": "login-rejected", "name": "Login rejected", "payload": [ { "name": "reason", "type": "string" }, { "name": "note", "type": "option<string>" } ] },
+    { "id": "login-cancelled", "name": "Login cancelled" },
+    { "id": "login-timeout", "name": "Login timed out", "elapsed": true, "payload": [ { "name": "attempt", "type": "u32" } ] },
+    { "id": "credentials-sent", "name": "Credentials sent", "delivery": "at-least-once", "payload": [ { "name": "name", "type": "string" }, { "name": "attempt", "type": "u32" }, { "name": "hint", "type": "option<string>" } ] },
+    { "id": "login-abandoned", "name": "Login abandoned", "delivery": "at-most-once", "payload": [ { "name": "attempts", "type": "u32" } ] }
+  ],
+  "behaviors": [
+    {
+      "id": "login-form", "name": "Login form", "subject": "web-client", "initial": "editing", "level": "implementation",
+      "description": "The web client's login form: sends the credentials, times the answer out after 5 s, and locks after three attempts.",
+      "variables": [
+        { "name": "name", "type": "string", "initial": "", "repr": "string" },
+        { "name": "attempts", "type": "number", "initial": 0, "repr": "u32" },
+        { "name": "lastSubmit", "type": "number", "initial": 0, "repr": "timestamp" }
+      ],
+      "storage": { "record": "rec-login-form", "key": "form-id", "creates": true,
+        "fields": { "lastSubmit": "last-submit" }, "state": "form-state" },
+      "transaction": { "scope": "transition", "isolation": "serializable" },
+      "states": [
+        { "id": "editing", "name": "Editing", "ignores": ["login-accepted", "login-rejected", "login-cancelled", "login-timeout"] },
+        { "id": "sending", "name": "Sending", "ignores": ["login-typed", "login-submitted"] },
+        { "id": "locked", "name": "Locked", "terminal": true },
+        { "id": "signed-in", "name": "Signed in", "terminal": true }
+      ],
+      "transitions": [
+        { "id": "type", "from": "editing", "to": "editing", "on": "login-typed", "otherwise": true,
+          "effects": [ { "set": "name", "to": "event.name" } ] },
+        { "id": "lock", "from": "editing", "to": "locked", "on": "login-submitted", "guard": "attempts >= 3",
+          "effects": [
+            { "emit": "login-abandoned", "to": "api", "payload": { "attempts": "attempts" } }
+          ] },
+        { "id": "submit", "from": "editing", "to": "sending", "on": "login-submitted", "guard": "event.chars > 0",
+          "effects": [
+            { "set": "attempts", "to": "attempts + 1" },
+            { "set": "lastSubmit", "to": "time" },
+            { "emit": "credentials-sent", "to": "api", "payload": { "name": "name", "attempt": "attempts" } },
+            { "timer": "timeout", "after": 5000, "emit": "login-timeout", "payload": { "attempt": "attempts" } }
+          ] },
+        { "id": "submit-empty", "from": "editing", "to": "editing", "on": "login-submitted", "otherwise": true },
+        { "id": "accept", "from": "sending", "to": "signed-in", "on": "login-accepted", "otherwise": true,
+          "effects": [ { "cancel": "timeout" } ] },
+        { "id": "reject", "from": "sending", "to": "editing", "on": "login-rejected", "otherwise": true,
+          "effects": [ { "cancel": "timeout" } ] },
+        { "id": "cancel", "from": "sending", "to": "editing", "on": "login-cancelled", "otherwise": true,
+          "effects": [ { "cancel": "timeout" } ] },
+        { "id": "time-out", "from": "sending", "to": "editing", "on": "login-timeout", "guard": "event.attempt == attempts" },
+        { "id": "stale-timeout", "from": "sending", "to": "sending", "on": "login-timeout", "otherwise": true }
+      ]
+    }
+  ],
+  "scenarios": [
+    // An empty submit, a rejected attempt, an attempt that times out, a cancelled attempt and,
+    // with all three attempts used, a submit that locks the form. Times are milliseconds.
+    { "id": "login-run", "name": "Login run", "behaviors": ["login-form"], "timeUnit": "ms",
+      "steps": [
+        { "at": 0, "event": "login-typed", "payload": { "name": "ada" } },
+        { "at": 10, "event": "login-submitted", "payload": { "chars": 0 } },
+        { "at": 20, "event": "login-submitted", "payload": { "chars": 8 } },
+        { "at": 30, "event": "login-typed", "payload": { "name": "ignored" } },
+        { "at": 40, "event": "login-rejected", "payload": { "reason": "bad password" } },
+        { "at": 50, "event": "login-submitted", "payload": { "chars": 8 } },
+        { "at": 6000, "event": "login-submitted", "payload": { "chars": 8 } },
+        { "at": 6100, "event": "login-cancelled" },
+        { "at": 6200, "event": "login-submitted", "payload": { "chars": 8 } }
+      ] }
+  ]
+}

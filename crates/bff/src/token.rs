@@ -36,14 +36,8 @@ fn hmac(key: &[u8], message: &[u8]) -> Vec<u8> {
     outer.finalize().to_vec()
 }
 
-/// Whether two strings are equal, taking the same time whatever they hold.
-pub fn same(a: &str, b: &str) -> bool {
-    a.len() == b.len()
-        && a.bytes()
-            .zip(b.bytes())
-            .fold(0u8, |acc, (x, y)| acc | (x ^ y))
-            == 0
-}
+/// Compare two secrets without stopping at the first difference.
+pub use strata_runtime::routes::same_secret as same;
 
 impl Issuer {
     pub fn new() -> Result<Self, String> {
@@ -60,6 +54,7 @@ impl Issuer {
     }
 
     /// A fresh token for the browser of `site`, good until `now_ms` plus its lifetime.
+    /// Implements: H-004
     pub fn issue(&self, site: &str, now_ms: i64) -> String {
         let mut nonce = [0u8; 8];
         let _ = getrandom::getrandom(&mut nonce);
@@ -68,6 +63,7 @@ impl Issuer {
     }
 
     /// Whether this process issued `token` for `site` and it has not expired.
+    /// Implements: H-005
     pub fn check(&self, site: &str, token: &str, now_ms: i64) -> bool {
         let mut parts = token.split('.');
         let (Some(expires), Some(nonce), Some(mac), None) =
@@ -96,6 +92,8 @@ mod tests {
         );
     }
 
+    /// Verifies: H-004
+    /// Verifies: H-005
     #[test]
     fn a_token_is_good_for_its_site_until_it_expires_and_for_nothing_else() {
         let issuer = Issuer::new().unwrap();

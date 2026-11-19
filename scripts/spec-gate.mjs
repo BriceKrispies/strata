@@ -8,9 +8,11 @@
 // crashes, prints nothing parseable, or cannot be found is a failed check.
 //
 // Steps, in order:
+//   0. specc check: crates/model is exactly what the compiler writes from the specification.
 //   1. cargo test --workspace, lake build, node --test (web), npm run check (tsc), recorded under
 //      var/test-results (at most two jobs). Not run with --no-test.
-//   2. Exegra (EXEGRA_HOME, default ../exegra): validate the specification, evaluate its claims.
+//   2. Exegra (EXEGRA_HOME, default ../exegra; EXEGRA_PROJECT, default strata): validate the
+//      specification, evaluate its claims.
 //   3. Concordance: lint (strict), then scan with the recorded results and the Exegra results file.
 //   4. Counts read from the specification itself, compared with the last successful gate record.
 //
@@ -23,9 +25,12 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
+import { generatedTests, rustLineShare } from './generated-share.mjs';
 
 const root = resolve(import.meta.dirname, '..');
 const exegraHome = resolve(root, process.env.EXEGRA_HOME ?? '../exegra');
+// The Exegra project that links this checkout's specification (a worktree links its own).
+const exegraProject = process.env.EXEGRA_PROJECT ?? 'strata';
 const resultsDir = resolve(root, 'var/test-results');
 const recordPath = join(resultsDir, 'gate-record.json');
 const specPath = resolve(root, 'specifications/spec.jsonc');
@@ -175,6 +180,25 @@ console.log(`specification: ${requirements.length} requirements, ${modelClaims.l
 if (!startedMatch || started.size === 0) check('concordance.toml names started milestones', false, 'no [gate] started_milestones');
 
 // ---------------------------------------------------------------------------------------------
+// 0. Generated code: crates/model is what specc writes from the specification, byte for byte.
+// ---------------------------------------------------------------------------------------------
+{
+  const specc = run('cargo', ['run', '--quiet', '-p', 'strata-spec-compiler', '--bin', 'specc', '--',
+    'check', '--spec', 'specifications/spec.jsonc', '--out', 'crates/model', '--crate-name', 'strata-model', '--runtime', 'crates/runtime'], {
+    env: { CARGO_BUILD_JOBS: '2', CARGO_TARGET_DIR: 'target/gate' },
+  });
+  check('specc check (crates/model is generated from the specification)', specc.ok,
+    specc.ok ? 'up to date' : `${exitText(specc)}: ${lastLine(specc.out)}; run npm run generate and commit`);
+
+  const web = run('cargo', ['run', '--quiet', '-p', 'strata-spec-compiler', '--bin', 'specc', '--',
+    'check-web', '--spec', 'specifications/spec.jsonc', '--out', 'web/src/generated'], {
+    env: { CARGO_BUILD_JOBS: '2', CARGO_TARGET_DIR: 'target/gate' },
+  });
+  check('specc check-web (web/src/generated is generated from the specification)', web.ok,
+    web.ok ? 'up to date' : `${exitText(web)}: ${lastLine(web.out)}; run npm run generate and commit`);
+}
+
+// ---------------------------------------------------------------------------------------------
 // 1. Tests
 // ---------------------------------------------------------------------------------------------
 const specSha = sha256(specPath);
@@ -188,7 +212,8 @@ if (!noTest) {
   console.log('running tests (--no-test would reuse the recorded results instead)');
   // A private build directory, so a running development stack does not hold the binaries.
   const cargo = run('cargo', ['test', '--workspace', '--no-fail-fast'], {
-    env: { CARGO_BUILD_JOBS: '2', RUST_TEST_THREADS: '2', CARGO_TARGET_DIR: 'target/gate' },
+    // EXEGRA_HOME: the specc differential tests run Exegra and fail without it (no silent skip).
+    env: { CARGO_BUILD_JOBS: '2', RUST_TEST_THREADS: '2', CARGO_TARGET_DIR: 'target/gate', EXEGRA_HOME: exegraHome },
   });
   writeFileSync(join(resultsDir, 'cargo-test.txt'), cargo.out);
   const libtest = [...cargo.out.matchAll(/^test result: (?:ok|FAILED)\. (\d+) passed; (\d+) failed;/gm)];
@@ -254,7 +279,24 @@ if (!noTest) {
 const lint = run('concordance', ['lint', '--config', 'concordance.toml']);
 check('concordance lint (strict)', lint.ok, lint.ok ? lastLine(lint.out) : `${exitText(lint)}: ${lastLine(lint.out)}`);
 
-const scan = run('concordance', ['scan', '--config', 'concordance.toml', '--json', '--fail-on', 'unverified', '--exegra-results', 'var/concordance-results.json', '--no-generated-at']);
+// A construction requirement is verified by the Exegra claims that model it, so Concordance reads
+// their verdicts. The model claims do not depend on Concordance's results, so they are evaluated
+// first, here, and written where the scan reads them.
+{
+  const cli = resolve(exegraHome, 'cli/exegra.js');
+  const verdicts = existsSync(cli) ? run(process.execPath, [cli, 'claims', '--project', exegraProject], { cwd: exegraHome }) : null;
+  let claims = null;
+  try {
+    claims = verdicts ? JSON.parse(verdicts.stdout).result : null;
+  } catch {
+    claims = null;
+  }
+  const written = Array.isArray(claims);
+  if (written) writeFileSync(resolve(root, 'var/exegra-verdicts.json'), JSON.stringify({ results: claims }));
+  check('exegra claim verdicts for construction requirements', written, written ? `${claims.length} claims` : `no verdicts: ${verdicts ? exitText(verdicts) : 'no Exegra checkout'}`);
+}
+
+const scan = run('concordance', ['scan', '--config', 'concordance.toml', '--json', '--fail-on', 'unverified', '--exegra-results', 'var/concordance-results.json', '--exegra-verdicts', 'var/exegra-verdicts.json', '--no-generated-at']);
 let report = null;
 try {
   report = JSON.parse(scan.stdout);
@@ -299,7 +341,7 @@ if (!exegraFound) {
   check('Exegra checkout', false, `no cli/exegra.js under ${exegraHome} (set EXEGRA_HOME)`);
 } else {
   const exegra = (command) => {
-    const r = run(process.execPath, [exegraCli, command, '--project', 'strata'], { cwd: exegraHome });
+    const r = run(process.execPath, [exegraCli, command, '--project', exegraProject], { cwd: exegraHome });
     let json = null;
     try {
       json = JSON.parse(r.stdout);
@@ -372,6 +414,21 @@ const faultBased = behaviourClaims.filter((claim) => claim.faultBasis === 'fault
 const restatements = behaviourClaims.filter((claim) => claim.faultBasis === 'restatement');
 const unmarked = behaviourClaims.filter((claim) => claim.faultBasis !== 'fault' && claim.faultBasis !== 'restatement');
 console.log(`behaviour claims: ${behaviourClaims.length}; ${faultBased.length} hold under a modelled fault, ${restatements.length} are restatements${unmarked.length ? `; ${unmarked.length} carry no fault basis (${unmarked.map((claim) => claim.id).join(', ')})` : ''}.`);
+// Generated share: informational, never fails the gate (scripts/generated-share.mjs).
+const realised = { construction: 0, checked: 0, operational: 0, missing: 0 };
+for (const claim of requirements) {
+  if (['construction', 'checked', 'operational'].includes(claim.realisation)) realised[claim.realisation] += 1;
+  else realised.missing += 1;
+}
+const constructionPct = requirements.length ? ((realised.construction / requirements.length) * 100).toFixed(1) : '0.0';
+console.log(`construction share: ${realised.construction} of ${requirements.length} requirements (${constructionPct}%); checked ${realised.checked}, operational ${realised.operational}, missing ${realised.missing}`);
+const rust = rustLineShare(root);
+const generatedPct = rust.total ? ((rust.generated / rust.total) * 100).toFixed(1) : '0.0';
+console.log(`generated code: ${rust.generated} of ${rust.total} non-blank Rust lines linked into the shipped binaries (${generatedPct}%); hand-written ${rust.handWritten}; crates ${rust.crates.join(', ')}; generated modules ${rust.generatedModules.join(', ') || 'none'}`);
+const cargoRecord = existsSync(join(resultsDir, 'cargo-test.txt')) ? readFileSync(join(resultsDir, 'cargo-test.txt'), 'utf8') : '';
+const genTests = generatedTests(root, cargoRecord);
+if (genTests.total === 0 && genTests.unmapped === 0) console.log('generated tests: none yet');
+else console.log(`generated tests: ${genTests.passed} of ${genTests.total} passed${genTests.unmapped ? `; ${genTests.unmapped} tests of unmapped test binaries not counted` : ''}`);
 if (noTest) console.log('RECORDED TEST RESULTS, NOT A RUN OF THE TESTS ON THIS CODE. Accepted only because --allow-recorded was given.');
 for (const note of notes) console.log(`note: ${note}`);
 console.log(passed ? 'GATE PASSED' : `GATE FAILED: ${failures.join('; ') || 'recorded test results not accepted'}`);

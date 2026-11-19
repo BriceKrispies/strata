@@ -1,15 +1,38 @@
 // The frontend kernel's transition function. Pure: no fetch, no socket, no clock, no DOM.
 // @ts-check
+//
+// What the specification states about the pages is generated (web/src/generated): the routes,
+// the requests and replies of the contracts, the forms, the actions, the live bindings and the
+// client machines. This file holds the kernel state and wires those modules to the messages the
+// worker delivers and the effects it performs. The lab keeps its own hand-written logic (lab.js).
 
+import * as actions from '../generated/actions.js';
+import * as contracts from '../generated/contracts.js';
+import * as refusals from '../generated/errors.js';
+import * as forms from '../generated/forms.js';
+import * as live from '../generated/live.js';
+import { matchRoute, route as routeOf } from '../generated/routes.js';
 import { labEnter, labInit, labUpdate } from './lab.js';
+import {
+  busy,
+  liveInit,
+  liveStep,
+  liveTimer,
+  sessionInit,
+  sessionRead,
+  sessionStep,
+  submitInit,
+  submitStep,
+} from './machines.js';
 
 /** @typedef {import('./types.js').Message} Message */
 /** @typedef {import('./types.js').Effect} Effect */
 /** @typedef {{ state: any, effects: Effect[] }} Result */
 
 const THEME_MODES = ['auto', 'light', 'dark'];
-const DESK_VIEWS = ['desk', 'desk_new', 'desk_edit', 'desk_settings', 'lab'];
-const EDITOR_FIELDS = ['title', 'slug', 'excerpt', 'body', 'category', 'author', 'tags', 'cover', 'cover_alt', 'featured'];
+const LAB_SCREEN = 'screen-lab';
+const SIGN_IN = 'form-sign-in';
+const SETTINGS = 'form-settings';
 
 export function initialState() {
   return {
@@ -17,12 +40,13 @@ export function initialState() {
     route: { path: '/', query: {} },
     /** @type {import('./types.js').Session | null} */
     session: null,
+    sessionFlow: sessionInit(),
     site: { name: '', tagline: '' },
     theme: { mode: 'auto', systemDark: false, accent: 'moss', paper: 'linen' },
     view: { status: 'loading', model: null, error: null, request: 0 },
-    ws: { status: 'idle', attempts: 0, lastSeq: null, lastN: 0, heartbeatMs: 10000, timer: 0, missedPongs: 0 },
+    ws: liveInit(),
     forms: {
-      login: { values: { login: '', password: '' }, busy: false, error: '' },
+      login: { values: forms.initialValues(SIGN_IN, {}), busy: false, error: '', flow: submitInit() },
       editor: null,
       settings: null,
     },
@@ -64,16 +88,7 @@ export function hrefOf(route) {
 }
 
 /** Turn a title into a slug: lower-case letters and digits joined by single hyphens. */
-export function slugify(title) {
-  return title
-    .normalize('NFKD')
-    .replace(/[̀-ͯ]/g, '')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 80)
-    .replace(/-+$/, '');
-}
+export const slugify = forms.slug;
 
 /**
  * Register a request and return the state and its effect.
@@ -105,6 +120,17 @@ export function request(state, kind, spec, msg) {
   ];
 }
 
+/**
+ * Register the call of a contract, as the generated request builder describes it.
+ * @param {any} state @param {string} kind @param {string} contract
+ * @param {Record<string, any>} inputs @param {Message} msg @param {any} [meta]
+ * @returns {[any, Effect]}
+ */
+function call(state, kind, contract, inputs, msg, meta = {}) {
+  const req = contracts.request(contract, inputs, state.route.path);
+  return request(state, kind, { ...req, meta: { contract, inputs, ...meta } }, msg);
+}
+
 function toast(state, kind, text) {
   const id = state.nextId;
   return {
@@ -115,23 +141,54 @@ function toast(state, kind, text) {
   };
 }
 
+/** The screen the current address opens. */
+function screenOf(state) {
+  return matchRoute(state.route.path, state.route.query);
+}
+
+/** The principal as the generated policy checks read it. */
+function principalOf(session) {
+  if (!session?.authenticated) return null;
+  const roles = session.roles ?? [];
+  return { id: session.principal, tenant: session.tenant, kind: 'member', roles, role: roles.find((r) => r !== 'public') ?? 'public' };
+}
+
+/** The scope the generated expressions read on the current screen. */
+function scopeOf(state, extra = {}) {
+  const screen = screenOf(state);
+  return {
+    route: { ...(screen?.params ?? {}), ...(screen?.query ?? {}) },
+    query: screen?.query ?? {},
+    view: state.view.model,
+    local: {},
+    principal: principalOf(state.session),
+    ...extra,
+  };
+}
+
 /** Ask for the view of the current route. `quiet` keeps the current page on screen meanwhile. */
 /** @returns {Result} */
 function fetchView(state, msg, quiet) {
   const route = state.route;
-  const query = Object.entries({ path: route.path, ...route.query })
-    .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
-    .join('&');
-  const [next, effect] = request(state, 'view', { path: `/api/view?${query}`, meta: { href: hrefOf(route) } }, msg);
+  const screen = screenOf(state);
+  const viewModel = screen ? routeOf(screen.screen)?.viewModel : null;
+  const [next, effect] = viewModel
+    ? call(state, 'view', viewModel, { ...screen?.params, ...screen?.query }, msg, { href: hrefOf(route) })
+    : request(state, 'view', { path: `/api/view?path=${encodeURIComponent(route.path)}`, meta: { href: hrefOf(route) } }, msg);
   const view = quiet
     ? { ...state.view, request: effect.type === 'http' ? effect.id : 0 }
     : { status: 'loading', model: state.view.model, error: null, request: effect.type === 'http' ? effect.id : 0 };
   return { state: { ...next, view }, effects: [effect] };
 }
 
-function authorFor(session, authors) {
-  const own = (authors ?? []).find((a) => a.fields.principal && a.fields.principal === session?.principal);
-  return String((own ?? authors?.[0])?.id ?? '');
+/** Ask for the session again. */
+function readSession(state, msg) {
+  return call(state, 'session', 'read-session-view', {}, msg);
+}
+
+/** The form whose fields the editor shows: the new article's, or an existing one's. */
+function editorForm(editor) {
+  return editor.id == null ? 'form-new-article-save' : 'form-edit-article-save-draft';
 }
 
 /** The editor form for a view model, keeping unsaved edits to the same article. */
@@ -144,12 +201,8 @@ function editorFor(state, model) {
       id: null,
       version: null,
       status: 'draft',
-      values: {
-        title: '', slug: '', excerpt: '', body: '', category: '',
-        author: authorFor(state.session, model.data.authors),
-        tags: '', cover: '', cover_alt: '', featured: false,
-      },
-      slugTouched: false, dirty: false, busy: false, errors: {}, formError: '',
+      values: forms.initialValues('form-new-article-save', scopeOf(state)),
+      edited: [], dirty: false, busy: false, flow: submitInit(), errors: {}, formError: '',
       tab: 'write', preview: null, remoteChanged: false, rev: state.nextId,
     };
   }
@@ -159,19 +212,13 @@ function editorFor(state, model) {
     // Someone else saved while we were typing: keep our text, remember theirs exists.
     return current.version === post.version ? current : { ...current, remoteChanged: true };
   }
-  const f = post.fields;
   return {
-    key: f.slug,
+    key: post.fields.slug,
     id: post.id,
     version: post.version,
-    status: f.status,
-    values: {
-      title: f.title ?? '', slug: f.slug ?? '', excerpt: f.excerpt ?? '', body: f.body ?? '',
-      category: f.category == null ? '' : String(f.category),
-      author: f.author == null ? '' : String(f.author),
-      tags: (f.tags ?? []).join(', '), cover: f.cover ?? '', cover_alt: f.cover_alt ?? '', featured: f.featured === true,
-    },
-    slugTouched: true, dirty: false, busy: false, errors: {}, formError: '',
+    status: post.fields.status,
+    values: forms.initialValues('form-edit-article-save-draft', scopeOf(state)),
+    edited: [], dirty: false, busy: false, flow: submitInit(), errors: {}, formError: '',
     tab: current?.id === post.id ? current.tab : 'write',
     preview: current?.id === post.id ? current.preview : null,
     remoteChanged: false, rev: state.nextId,
@@ -183,12 +230,19 @@ function settingsFor(state, model) {
   const current = state.forms.settings;
   if (!site) return null;
   if (current?.dirty && current.id === site.id) return current;
-  const f = site.fields;
   return {
-    id: site.id, version: site.version,
-    values: { name: f.name ?? '', tagline: f.tagline ?? '', accent: f.accent ?? 'moss', paper: f.paper ?? 'linen' },
-    dirty: false, busy: false, errors: {}, formError: '', rev: state.nextId,
+    id: site.id,
+    values: forms.initialValues(SETTINGS, scopeOf(state)),
+    dirty: false, busy: false, flow: submitInit(), errors: {}, formError: '', rev: state.nextId,
   };
+}
+
+/** The view model as its contract types it; the lab's and an unknown page's are kept whole. */
+function decodeView(state, body) {
+  const screen = screenOf(state);
+  const entry = screen ? routeOf(screen.screen) : null;
+  if (!entry?.viewModel || entry.catchAll || entry.screen === LAB_SCREEN) return body;
+  return contracts.decode(entry.viewModel, body);
 }
 
 /** Take a view model in: page data, site chrome, theme, and the forms that edit it. */
@@ -202,177 +256,120 @@ function acceptView(state, model) {
     theme: { ...state.theme, accent: model.theme?.accent ?? 'moss', paper: model.theme?.paper ?? 'linen' },
     optimistic: {},
   };
-  const forms = { ...next.forms };
-  forms.editor = model.view === 'desk_new' || model.view === 'desk_edit' ? editorFor(next, model) : null;
-  forms.settings = model.view === 'desk_settings' ? settingsFor(next, model) : null;
-  next = { ...next, forms };
-  return next;
+  const formsState = { ...next.forms };
+  formsState.editor = model.view === 'desk_new' || model.view === 'desk_edit' ? editorFor(next, model) : null;
+  formsState.settings = model.view === 'desk_settings' ? settingsFor(next, model) : null;
+  // A form kept with unsaved changes holds the view-model values its saves set.
+  const kept = formsState.editor?.dirty ? editorForm(formsState.editor) : formsState.settings?.dirty ? SETTINGS : null;
+  if (kept) next = { ...next, view: { ...next.view, model: { ...model, ...forms.held(kept, state.view.model) } } };
+  return { ...next, forms: formsState };
 }
 
-/** Which form field a failed kernel check is about, and what to tell the writer. */
-export function explainCheck(check, object, fieldNames) {
-  const [kind, rest = ''] = check.rule.split(/:(.*)/s);
-  const name = rest.startsWith(`${object}.`) ? rest.slice(object.length + 1) : rest;
-  const direct = fieldNames.includes(name) ? name : null;
-  switch (kind) {
-    case 'required':
-      return { field: direct, text: 'This is required.' };
-    case 'unique':
-      return { field: direct, text: 'Another entry already uses this value.' };
-    case 'type':
-    case 'input':
-      return { field: direct, text: 'This value is not in the expected form.' };
-    case 'reference':
-      return { field: direct, text: 'The chosen entry no longer exists.' };
-    case 'constraint': {
-      // A constraint is named for the field it guards: `title_length` is about `title`.
-      const field = [...fieldNames].sort((a, b) => b.length - a.length).find((f) => name === f || name.startsWith(`${f}_`));
-      return { field: field ?? null, text: check.detail.replace(/\s*\[.*\]\s*$/s, '') + '.' };
-    }
-    case 'workflow':
-    case 'workflow_state':
-      return { field: null, text: 'That change of status is not allowed from here.' };
-    case 'policy':
-      return { field: null, text: 'You are not allowed to do this.' };
-    default:
-      return { field: null, text: check.detail };
-  }
+/** The names of a form's fields, in the order it shows them. */
+function fieldNames(form) {
+  return forms.FORMS[form].fields.map((f) => f.name);
 }
 
-function formErrors(error, object, fieldNames) {
-  /** @type {Record<string, string>} */
-  const errors = {};
-  const general = [];
-  for (const check of error?.failed ?? []) {
-    const { field, text } = explainCheck(check, object, fieldNames);
-    if (field && !errors[field]) errors[field] = text;
-    else if (!field) general.push(text);
-  }
-  let formError = general[0] ?? '';
-  if (!Object.keys(errors).length && !formError) {
-    formError =
-      error?.code === 'conflict'
-        ? 'This was changed somewhere else since you opened it. Reload to see the latest version.'
-        : error?.code === 'unauthenticated'
-          ? 'Your session has ended. Sign in again to save.'
-          : error?.message || 'That did not work. Try again.';
-  }
-  return { errors, formError };
-}
-
-function editorFields(values) {
-  const tags = values.tags.split(',').map((t) => t.trim()).filter(Boolean);
-  return {
-    title: values.title.trim(),
-    slug: values.slug.trim(),
-    excerpt: values.excerpt.trim() || null,
-    body: values.body,
-    category: values.category ? Number(values.category) : null,
-    author: values.author ? Number(values.author) : null,
-    tags: tags.length ? tags : null,
-    cover: values.cover || null,
-    cover_alt: values.cover_alt.trim() || null,
-    featured: values.featured ? true : null,
-  };
+/**
+ * The form a press of the editor's buttons submits: save (no status), publish or unpublish.
+ * @param {any} editor @param {string | null} status
+ */
+function editorSubmission(editor, status) {
+  if (editor.id == null) return status === 'published' ? 'form-new-article-publish' : 'form-new-article-save';
+  if (status === 'published') return 'form-edit-article-publish';
+  if (status === 'draft') return 'form-edit-article-unpublish';
+  return editor.status === 'published' ? 'form-edit-article-save-changes' : 'form-edit-article-save-draft';
 }
 
 /** Save the editor's article, optionally moving it to a new status in the same request. */
 /** @returns {Result} */
 function saveEditor(state, msg, status) {
   const editor = state.forms.editor;
-  if (!editor || editor.busy) return { state, effects: [] };
-  /** @type {Record<string, any>} */
-  const fields = editorFields(editor.values);
-  if (status) fields.status = status;
-  const body =
-    editor.id == null
-      ? { op: 'create', object: 'post', fields: Object.fromEntries(Object.entries(fields).filter(([, v]) => v !== null)) }
-      : { op: 'update', object: 'post', id: editor.id, fields, expected_version: editor.version };
-  // A new article is always created as a draft; publishing it is a second step the workflow allows.
-  if (editor.id == null) delete body.fields.status;
-  const [next, effect] = request(
-    state, 'editor.save',
-    { method: 'POST', path: '/api/records', body, write: true, meta: { status, publishAfterCreate: editor.id == null && status === 'published', slug: fields.slug } },
-    msg,
-  );
+  if (!editor) return { state, effects: [] };
+  const stepped = submitStep(editor.flow, 'ui-form-submitted', { complete: 1 }, msg.at);
+  if (!stepped?.sends) return { state, effects: [] };
+  const form = editorSubmission(editor, status);
+  const contract = forms.FORMS[form].contract;
+  const [next, effect] = call(state, 'editor.save', contract, forms.inputs(form, editor.values, scopeOf(state)), msg, { form, status });
   return {
-    state: { ...next, forms: { ...next.forms, editor: { ...editor, busy: true, errors: {}, formError: '' } } },
+    state: { ...next, forms: { ...next.forms, editor: { ...editor, flow: stepped.flow, busy: true, errors: {}, formError: '' } } },
     effects: [effect],
   };
 }
 
-/** @returns {Effect} */
-function wsSubscribe(state) {
-  return {
-    type: 'ws_send',
-    message: { type: 'subscribe', req: `r${state.nextId}`, sub: 'site', ...(state.ws.lastSeq == null ? {} : { after: state.ws.lastSeq }) },
-  };
+/** Where a form or an action leads after a success, and the message it shows. */
+/** @returns {Result} */
+function succeed(state, outcome, msg) {
+  const toasted = outcome.toast ? toast(state, 'ok', outcome.toast) : state;
+  // What the success says the view model now holds, until it is read again.
+  const done = outcome.view && toasted.view.model ? { ...toasted, view: { ...toasted.view, model: { ...toasted.view.model, ...outcome.view } } } : toasted;
+  if (!outcome.navigate) return fetchView(done, msg, true);
+  const target = parseHref(outcome.navigate);
+  if (hrefOf(state.route) === hrefOf(target)) return fetchView(done, msg, true);
+  const from = screenOf(state);
+  const to = matchRoute(target.path, target.query);
+  // Between two screens drawn by the same renderer (a new article becoming the article saved)
+  // the address is replaced and the page refreshed in place; elsewhere it is a navigation.
+  const sameKind = from && to && routeOf(from.screen)?.kind === routeOf(to.screen)?.kind;
+  if (!sameKind) return navigate(done, outcome.navigate, false, msg);
+  const refreshed = fetchView({ ...done, route: target }, msg, true);
+  return { state: refreshed.state, effects: [{ type: 'push_url', href: hrefOf(target), replace: true }, ...refreshed.effects] };
 }
 
-function reconnect(state) {
-  const attempts = state.ws.attempts + 1;
-  const token = state.ws.timer + 1;
-  return {
-    state: { ...state, ws: { ...state.ws, status: 'waiting', attempts, timer: token } },
-    token,
-    attempts,
-  };
+/** The live connection told that the identity it was opened with has ended. */
+function resetLive(state, msg) {
+  return liveStep(state, 'ui-live-reset', {}, msg) ?? { state, effects: [] };
+}
+
+/** A view refresh after a step of the live connection. @returns {Result} */
+function refreshAfter(stepped, msg) {
+  const refreshed = fetchView(stepped.state, msg, true);
+  return { state: refreshed.state, effects: [...stepped.effects, ...refreshed.effects] };
 }
 
 /** Handle one frame from the server. */
 /** @returns {Result} */
 function onSocket(state, frame, msg) {
-  const ws = state.ws;
   switch (frame.type) {
-    case 'welcome': {
-      const token = ws.timer + 1;
-      const next = { ...state, ws: { ...ws, status: 'open', attempts: 0, lastN: 0, heartbeatMs: frame.heartbeat_ms, timer: token, missedPongs: 0 } };
-      /** @type {Effect[]} */
-      const effects = [wsSubscribe(next), { type: 'timer', name: 'heartbeat', token, ms: frame.heartbeat_ms }];
-      // First connection: nothing was missed before `head`. Later ones resume from where we were.
-      if (ws.lastSeq == null) next.ws.lastSeq = frame.head;
-      return { state: next, effects };
-    }
+    case 'welcome':
+      return liveStep(state, 'ui-live-welcome', { head: frame.head, 'heartbeat-ms': frame.heartbeat_ms }, msg) ?? { state, effects: [] };
     case 'event': {
-      if (frame.n !== ws.lastN + 1) {
-        // A frame went missing on this connection. Start over rather than carry on stale.
-        return { state: { ...state, ws: { ...ws, lastSeq: null } }, effects: [{ type: 'ws_close' }] };
-      }
-      const next = { ...state, ws: { ...ws, lastN: frame.n, lastSeq: Math.max(ws.lastSeq ?? 0, frame.seq) } };
-      /** @type {Effect[]} */
-      const effects = [{ type: 'ws_send', message: { type: 'ack', n: frame.n } }];
+      const stepped = liveStep(state, 'ui-live-frame', { n: frame.n, seq: frame.seq }, msg);
+      if (!stepped) return { state, effects: [] };
+      // A frame went missing on this connection: the machine starts over rather than carry on stale.
+      if (stepped.effects.some((e) => e.type === 'ws_close')) return stepped;
       const notice = frame.notice;
-      const model = state.view.model;
-      const relevant =
-        notice.kind === 'schema' || notice.kind === 'membership' || (model?.depends_on ?? []).includes(notice.object);
       if (notice.kind === 'membership') {
-        const [withRequest, effect] = request(next, 'session', { path: '/api/session' }, msg);
-        const refreshed = fetchView(withRequest, msg, true);
-        return { state: refreshed.state, effects: [...effects, effect, ...refreshed.effects] };
+        const [withRequest, effect] = readSession(stepped.state, msg);
+        return refreshAfter({ state: withRequest, effects: [...stepped.effects, effect] }, msg);
       }
-      if (relevant && state.view.status === 'ready') {
-        const refreshed = fetchView(next, msg, true);
-        return { state: refreshed.state, effects: [...effects, ...refreshed.effects] };
-      }
-      return { state: next, effects };
+      const relevant = live.refreshes(screenOf(state)?.screen ?? '', 'ui-notice-received', { kind: notice.kind, object: notice.object }, state.view.model);
+      return relevant && state.view.status === 'ready' ? refreshAfter(stepped, msg) : stepped;
     }
-    case 'resync': {
-      const next = { ...state, ws: { ...ws, lastSeq: frame.head } };
-      const refreshed = fetchView(next, msg, true);
-      return { state: refreshed.state, effects: refreshed.effects };
-    }
+    case 'resync':
+      // Too far behind to replay: carry on from the server's head, with the view read again.
+      return refreshAfter(liveStep(state, 'ui-live-resync', { head: frame.head }, msg) ?? { state, effects: [] }, msg);
     case 'pong':
       // Everything visible up to `head` has already arrived on this ordered connection.
-      return { state: { ...state, ws: { ...ws, missedPongs: 0, lastSeq: Math.max(ws.lastSeq ?? 0, frame.head) } }, effects: [] };
+      return liveStep(state, 'ui-live-pong', { head: frame.head }, msg) ?? { state, effects: [] };
     case 'session': {
-      if (frame.state === 'active' || !state.session?.authenticated) return { state, effects: [] };
+      if (frame.state === 'active') return { state, effects: [] };
       // Our own sign-out ends the session too; its reply will say so, once.
       if (Object.values(state.pending).some((p) => p.kind === 'logout')) return { state, effects: [] };
+      const ended = sessionStep(state, 'ui-session-ended', {}, msg.at);
+      if (!ended) return { state, effects: [] };
       const text = frame.state === 'expired' ? 'Your session has expired. Sign in again to keep writing.' : 'You have been signed out.';
-      const [withRequest, effect] = request(toast(state, 'warn', text), 'session', { path: '/api/session' }, msg);
-      const signedOut = { ...withRequest, session: { ...state.session, authenticated: false, csrf_token: undefined, roles: ['public'], may: {}, may_manage_schema: false } };
-      const refreshed = fetchView(signedOut, msg, true);
-      return { state: refreshed.state, effects: [effect, ...refreshed.effects] };
+      let next = toast(ended.state, 'warn', text);
+      /** @type {Effect[]} */
+      const effects = [];
+      if (ended.readSession) {
+        const [withRequest, effect] = readSession(next, msg);
+        next = withRequest;
+        effects.push(effect);
+      }
+      next = { ...next, session: { ...state.session, authenticated: false, csrf_token: undefined, roles: ['public'], may: {}, may_manage_schema: false } };
+      const refresh = live.refreshes(screenOf(state)?.screen ?? '', 'ui-session-ended', {}, state.view.model);
+      return refresh ? refreshAfter({ state: next, effects }, msg) : { state: next, effects };
     }
     case 'run':
       return labUpdate(state, { ...msg, type: 'lab_run', frame }, { request, toast }) ?? { state, effects: [] };
@@ -388,6 +385,7 @@ function onHttp(state, msg) {
   const { [msg.id]: _done, ...rest } = state.pending;
   state = { ...state, pending: rest };
   const error = msg.ok ? null : msg.body && typeof msg.body === 'object' ? msg.body : { code: 'unavailable', message: 'The site could not be reached.' };
+  const outputs = msg.ok && pending.contract ? contracts.decode(pending.contract, msg.body, pending.inputs) : null;
 
   if (pending.kind.startsWith('lab.')) {
     return labUpdate(state, { ...msg, pending, error }, { request, toast }) ?? { state, effects: [] };
@@ -396,11 +394,11 @@ function onHttp(state, msg) {
   switch (pending.kind) {
     case 'session': {
       if (!msg.ok) return { state, effects: [] };
-      const known = { ...state, session: msg.body.session };
+      const known = sessionRead({ ...state, session: outputs.session }, outputs.session.authenticated === true, msg.at);
       // A cold start could not open the socket before it knew the request token the gateway
       // issued, so it opens it now.
       /** @type {Effect[]} */
-      const open = state.session ? [] : [{ type: 'ws_connect', csrf: msg.body.session.csrf_token }];
+      const open = state.session ? [] : [{ type: 'ws_connect', csrf: outputs.session.csrf_token }];
       if (state.view.model?.view === 'lab') {
         const entered = labEnter(known, msg, { request });
         return { state: entered.state, effects: [...open, ...entered.effects] };
@@ -410,7 +408,7 @@ function onHttp(state, msg) {
     case 'view': {
       if (state.view.request !== msg.id) return { state, effects: [] };
       if (msg.ok) {
-        const accepted = acceptView(state, msg.body);
+        const accepted = acceptView(state, decodeView(state, msg.body));
         return msg.body.view === 'lab' ? labEnter(accepted, msg, { request }) : { state: accepted, effects: [] };
       }
       const status = msg.status === 404 ? 'missing' : 'error';
@@ -422,88 +420,91 @@ function onHttp(state, msg) {
     case 'login': {
       const login = state.forms.login;
       if (!msg.ok) {
-        const text = error.code === 'throttled' || error.code === 'unauthenticated' ? error.message : 'Signing in did not work. Try again.';
+        const flow = submitStep(login.flow, 'ui-form-refused', {}, msg.at)?.flow ?? login.flow;
+        const text = refusals.refusal(SIGN_IN, error).formError;
         return {
-          state: { ...state, announce: text, forms: { ...state.forms, login: { ...login, busy: false, error: text, values: { ...login.values, password: '' } } }, focus: { target: 'login-password', token: msg.id } },
+          state: { ...state, announce: text, forms: { ...state.forms, login: { ...login, flow, busy: busy(flow), error: text, values: { ...login.values, password: '' } } }, focus: { target: 'login-password', token: msg.id } },
           effects: [],
         };
       }
-      const signedIn = toast(
-        { ...state, session: msg.body.session, forms: { ...state.forms, login: { values: { login: '', password: '' }, busy: false, error: '' } } },
-        'ok', `Signed in as ${msg.body.session.display_name}.`,
-      );
-      const target = state.route.query.next?.startsWith('/') && !state.route.query.next.startsWith('//') ? state.route.query.next : '/desk';
-      const moved = navigate({ ...signedIn, ws: { ...signedIn.ws, lastSeq: null } }, target, false, msg);
+      const flow = submitStep(login.flow, 'ui-form-accepted', {}, msg.at)?.flow ?? login.flow;
+      const outcome = forms.succeeded(SIGN_IN, scopeOf(state, { form: pending.values, response: outputs }));
+      let signedIn = { ...state, session: outputs.session, forms: { ...state.forms, login: { values: forms.initialValues(SIGN_IN, {}), busy: busy(flow), error: '', flow } } };
+      signedIn = sessionStep(signedIn, 'ui-signed-in', {}, msg.at)?.state ?? signedIn;
+      if (outcome.toast) signedIn = toast(signedIn, 'ok', outcome.toast);
       // The socket was opened as an anonymous visitor; open it again as this person.
-      return { state: moved.state, effects: [{ type: 'ws_close' }, ...moved.effects] };
+      const reset = resetLive(signedIn, msg);
+      const moved = navigate(reset.state, outcome.navigate ?? '/', false, msg);
+      return { state: moved.state, effects: [...reset.effects, ...moved.effects] };
     }
     case 'logout': {
-      if (!msg.ok) return { state: toast(state, 'warn', 'Signing out did not work. Try again.'), effects: [] };
-      const out = toast({ ...state, session: msg.body.session, ws: { ...state.ws, lastSeq: null } }, 'ok', 'Signed out.');
-      const moved = navigate(out, DESK_VIEWS.includes(state.view.model?.view) ? '/' : hrefOf(state.route), true, msg);
-      return { state: moved.state, effects: [{ type: 'ws_close' }, ...moved.effects] };
+      if (!msg.ok) return { state: toast(state, 'warn', refusals.refusal(pending.action, error).text), effects: [] };
+      const outcome = actions.succeeded(pending.action, scopeOf(state, { response: outputs }));
+      let out = sessionStep({ ...state, session: outputs.session }, 'ui-signed-out', {}, msg.at)?.state ?? { ...state, session: outputs.session };
+      if (outcome.toast) out = toast(out, 'ok', outcome.toast);
+      const reset = resetLive(out, msg);
+      // Signing out where the action says nowhere to go reads the same address again.
+      const moved = navigate(reset.state, outcome.navigate ?? hrefOf(state.route), true, msg);
+      return { state: moved.state, effects: [...reset.effects, ...moved.effects] };
     }
     case 'editor.save': {
       const editor = state.forms.editor;
       if (!editor) return { state, effects: [] };
       if (!msg.ok) {
-        const { errors, formError } = formErrors(error, 'post', EDITOR_FIELDS);
+        const flow = submitStep(editor.flow, 'ui-form-refused', {}, msg.at)?.flow ?? editor.flow;
+        const { errors, formError, announce } = refusals.refusal(pending.form, error);
         // Focus goes to the first failing field in the order the form shows them.
-        const first = EDITOR_FIELDS.find((name) => errors[name]);
+        const first = fieldNames(pending.form).find((name) => errors[name]);
         return {
           state: {
             ...state,
-            announce: formError || 'Some fields need attention.',
-            forms: { ...state.forms, editor: { ...editor, busy: false, errors, formError } },
+            announce,
+            forms: { ...state.forms, editor: { ...editor, flow, busy: busy(flow), errors, formError } },
             focus: first ? { target: `editor-${first}`, token: msg.id } : state.focus,
           },
           effects: [],
         };
       }
-      const saved = { ...editor, id: msg.body.id, version: msg.body.version, key: pending.slug, busy: false, dirty: false, remoteChanged: false };
-      if (pending.publishAfterCreate) {
-        const [next, effect] = request(
-          { ...state, forms: { ...state.forms, editor: { ...saved, busy: true } } }, 'editor.save',
-          { method: 'POST', path: '/api/records', write: true, body: { op: 'update', object: 'post', id: msg.body.id, fields: { status: 'published' }, expected_version: msg.body.version }, meta: { status: 'published', slug: pending.slug } },
-          msg,
-        );
+      let flow = submitStep(editor.flow, 'ui-form-accepted', {}, msg.at)?.flow ?? editor.flow;
+      const response = pending.first ? forms.bothResponses(pending.first, outputs) : outputs;
+      const saved = { ...editor, id: response.article_id, version: response.version, key: response.slug, dirty: false, remoteChanged: false };
+      const scope = scopeOf(state, { form: editor.values, response });
+      const second = pending.first ? null : forms.followUp(pending.form, scope);
+      if (second) {
+        const again = submitStep(flow, 'ui-form-submitted', { complete: 1 }, msg.at);
+        flow = again?.flow ?? flow;
+        const withSaved = { ...state, forms: { ...state.forms, editor: { ...saved, flow, busy: busy(flow) } } };
+        const [next, effect] = call(withSaved, 'editor.save', second.contract, second.inputs, msg, { form: pending.form, status: pending.status, first: response });
         return { state: next, effects: [effect] };
       }
       const status = pending.status ?? editor.status;
-      const text = pending.status === 'published' ? 'Published.' : pending.status === 'draft' ? 'Moved back to drafts.' : 'Draft saved.';
-      const done = toast({ ...state, forms: { ...state.forms, editor: { ...saved, status } } }, 'ok', editor.status === 'published' && !pending.status ? 'Changes saved.' : text);
-      const href = `/desk/edit/${pending.slug}`;
-      if (hrefOf(state.route) === href) return fetchView(done, msg, true);
-      const moved = { ...done, route: parseHref(href) };
-      const refreshed = fetchView(moved, msg, true);
-      return { state: refreshed.state, effects: [{ type: 'push_url', href, replace: true }, ...refreshed.effects] };
+      const outcome = forms.succeeded(pending.form, scope);
+      const done = { ...state, forms: { ...state.forms, editor: { ...saved, flow, busy: busy(flow), status } } };
+      return succeed(done, outcome, msg);
     }
     case 'editor.preview': {
       const editor = state.forms.editor;
       if (!editor || editor.preview?.request !== msg.id) return { state, effects: [] };
-      const preview = msg.ok ? { blocks: msg.body.blocks, request: 0, failed: false } : { blocks: editor.preview.blocks, request: 0, failed: true };
+      const local = msg.ok ? actions.placeResult(pending.action, {}, outputs) : null;
+      const preview = local ? { blocks: local.preview, request: 0, failed: false } : { blocks: editor.preview.blocks, request: 0, failed: true };
       return { state: { ...state, forms: { ...state.forms, editor: { ...editor, preview } } }, effects: [] };
     }
-    case 'post.status':
-    case 'post.delete': {
+    case 'post.action': {
       const { [pending.id]: _gone, ...optimistic } = state.optimistic;
-      if (msg.ok) {
-        const text = pending.kind === 'post.delete' ? 'Deleted.' : pending.status === 'published' ? 'Published.' : 'Moved back to drafts.';
-        return fetchView(toast(state, 'ok', text), msg, true);
-      }
-      const { formError } = formErrors(error, 'post', EDITOR_FIELDS);
-      const explained = error.failed?.length ? explainCheck(error.failed[0], 'post', EDITOR_FIELDS).text : formError;
-      return { state: toast({ ...state, optimistic }, 'warn', `Not done. ${explained}`), effects: [] };
+      if (msg.ok) return succeed(state, actions.succeeded(pending.action, scopeOf(state, { item: pending.item, response: outputs })), msg);
+      return { state: toast({ ...state, optimistic }, 'warn', refusals.refusal(pending.action, error).text), effects: [] };
     }
     case 'settings.save': {
       const settings = state.forms.settings;
       if (!settings) return { state, effects: [] };
       if (!msg.ok) {
-        const { errors, formError } = formErrors(error, 'publication', ['name', 'tagline', 'accent', 'paper']);
-        return { state: { ...state, announce: formError || 'Some fields need attention.', forms: { ...state.forms, settings: { ...settings, busy: false, errors, formError } } }, effects: [] };
+        const flow = submitStep(settings.flow, 'ui-form-refused', {}, msg.at)?.flow ?? settings.flow;
+        const { errors, formError, announce } = refusals.refusal(SETTINGS, error);
+        return { state: { ...state, announce, forms: { ...state.forms, settings: { ...settings, flow, busy: busy(flow), errors, formError } } }, effects: [] };
       }
-      const done = toast({ ...state, forms: { ...state.forms, settings: { ...settings, busy: false, dirty: false, version: msg.body.version } } }, 'ok', 'Settings saved.');
-      return fetchView(done, msg, true);
+      const flow = submitStep(settings.flow, 'ui-form-accepted', {}, msg.at)?.flow ?? settings.flow;
+      const done = { ...state, forms: { ...state.forms, settings: { ...settings, flow, busy: busy(flow), dirty: false } } };
+      return succeed(done, forms.succeeded(SETTINGS, scopeOf(done, { form: settings.values, response: outputs })), msg);
     }
     case 'dev':
       return { state: toast(state, msg.ok ? 'ok' : 'warn', msg.ok ? 'Done.' : 'That did not work.'), effects: [] };
@@ -524,22 +525,21 @@ function navigate(state, href, replace, msg) {
 }
 
 function onInput(state, msg) {
-  const forms = state.forms;
+  const f = state.forms;
   if (msg.form === 'login') {
-    return { ...state, forms: { ...forms, login: { ...forms.login, values: { ...forms.login.values, [msg.name]: msg.value } } } };
+    const { values } = forms.input(SIGN_IN, f.login.values, [], msg.name, msg.value);
+    return { ...state, forms: { ...f, login: { ...f.login, values } } };
   }
-  if (msg.form === 'editor' && forms.editor) {
-    const editor = forms.editor;
-    const values = { ...editor.values, [msg.name]: msg.value };
-    let slugTouched = editor.slugTouched;
-    if (msg.name === 'slug') slugTouched = true;
-    if (msg.name === 'title' && !slugTouched) values.slug = slugify(String(msg.value));
+  if (msg.form === 'editor' && f.editor) {
+    const editor = f.editor;
+    const { values, edited } = forms.input(editorForm(editor), editor.values, editor.edited, msg.name, msg.value, scopeOf(state));
     const { [msg.name]: _cleared, ...errors } = editor.errors;
-    return { ...state, forms: { ...forms, editor: { ...editor, values, slugTouched, dirty: true, errors, preview: editor.preview ? { ...editor.preview, stale: msg.name === 'body' || editor.preview.stale } : null } } };
+    return { ...state, forms: { ...f, editor: { ...editor, values, edited, dirty: true, errors, preview: editor.preview ? { ...editor.preview, stale: msg.name === 'body' || editor.preview.stale } : null } } };
   }
-  if (msg.form === 'settings' && forms.settings) {
-    const settings = forms.settings;
-    return { ...state, forms: { ...forms, settings: { ...settings, dirty: true, values: { ...settings.values, [msg.name]: msg.value } } } };
+  if (msg.form === 'settings' && f.settings) {
+    const settings = f.settings;
+    const { values } = forms.input(SETTINGS, settings.values, [], msg.name, msg.value);
+    return { ...state, forms: { ...f, settings: { ...settings, dirty: true, values } } };
   }
   return state;
 }
@@ -548,9 +548,31 @@ function onInput(state, msg) {
 function requestPreview(state, msg) {
   const editor = state.forms.editor;
   if (!editor) return { state, effects: [] };
-  const [next, effect] = request(state, 'editor.preview', { method: 'POST', path: '/api/preview', body: { markdown: editor.values.body } }, msg);
+  const action = editor.id == null ? 'act-preview-new' : 'act-preview-edit';
+  const contract = actions.ACTIONS[action].contract;
+  const inputs = actions.args(action, scopeOf(state, { form: editor.values }));
+  const [next, effect] = call(state, 'editor.preview', contract, inputs, msg, { action });
   const preview = { blocks: editor.preview?.blocks ?? null, request: effect.type === 'http' ? effect.id : 0, failed: false, stale: false };
   return { state: { ...next, forms: { ...next.forms, editor: { ...editor, tab: 'preview', preview } } }, effects: [effect] };
+}
+
+/** The action a desk row's button presses. */
+const ROW_ACTIONS = { 'post.publish': 'act-desk-publish', 'post.unpublish': 'act-desk-unpublish', 'post.delete': 'act-desk-delete' };
+
+/**
+ * Press a per-row action of the desk on the row of this article.
+ * @returns {Result}
+ */
+function rowAction(state, msg, action, arg, marker) {
+  const model = state.view.model;
+  const item = actions.rows(action, model).find((row) => row.article_id === arg.id) ?? { article_id: arg.id, version: arg.version };
+  const scope = scopeOf(state, { item });
+  const inputs = actions.args(action, scope);
+  if (!actions.visible(action, scope, inputs)) return { state, effects: [] };
+  const [next, effect] = call(
+    { ...state, optimistic: { ...state.optimistic, [arg.id]: marker } }, 'post.action', actions.ACTIONS[action].contract, inputs, msg, { id: arg.id, action, item },
+  );
+  return { state: next, effects: [effect] };
 }
 
 /** @returns {Result} */
@@ -568,7 +590,10 @@ function onAction(state, msg) {
     case 'dismiss':
       return { state: { ...state, toasts: state.toasts.filter((t) => t.id !== arg) }, effects: [] };
     case 'logout': {
-      const [next, effect] = request(state, 'logout', { method: 'POST', path: '/api/logout', body: {}, write: true }, msg);
+      // The page's sign-out: the action that signs out on this screen.
+      const action = actions.actionsOn(screenOf(state)?.screen ?? '').find((a) => actions.ACTIONS[a].contract === 'sign-out-of-site');
+      if (!action) return { state, effects: [] };
+      const [next, effect] = call(state, 'logout', actions.ACTIONS[action].contract, actions.args(action, scopeOf(state)), msg, { action });
       return { state: next, effects: [effect] };
     }
     case 'editor.tab':
@@ -584,28 +609,17 @@ function onAction(state, msg) {
       return fetchView(cleared, msg, true);
     }
     case 'post.publish':
-    case 'post.unpublish': {
-      const status = msg.name === 'post.publish' ? 'published' : 'draft';
-      const [next, effect] = request(
-        { ...state, optimistic: { ...state.optimistic, [arg.id]: status } }, 'post.status',
-        { method: 'POST', path: '/api/records', write: true, body: { op: 'update', object: 'post', id: arg.id, fields: { status }, expected_version: arg.version }, meta: { id: arg.id, status } },
-        msg,
-      );
-      return { state: next, effects: [effect] };
-    }
+      return rowAction(state, msg, ROW_ACTIONS[msg.name], arg, 'published');
+    case 'post.unpublish':
+      return rowAction(state, msg, ROW_ACTIONS[msg.name], arg, 'draft');
     case 'post.ask_delete':
       // Deleting takes two presses on the same row; any other action disarms it.
-      return { state: { ...state, confirmDelete: arg.id, announce: 'Press Confirm delete to remove the article for good.' }, effects: [] };
+      return { state: { ...state, confirmDelete: arg.id, announce: actions.ACTIONS[ROW_ACTIONS['post.delete']].confirmAnnounce ?? '' }, effects: [] };
     case 'reload':
       return fetchView(state, msg, false);
     case 'post.delete': {
-      if (state.confirmDelete !== arg.id) return { state, effects: [] };
-      const [next, effect] = request(
-        { ...state, confirmDelete: null, optimistic: { ...state.optimistic, [arg.id]: 'deleted' } }, 'post.delete',
-        { method: 'POST', path: '/api/records', write: true, body: { op: 'delete', object: 'post', id: arg.id, expected_version: arg.version }, meta: { id: arg.id } },
-        msg,
-      );
-      return { state: next, effects: [effect] };
+      if (!actions.ACTIONS[ROW_ACTIONS[msg.name]].confirm || state.confirmDelete !== arg.id) return { state, effects: [] };
+      return rowAction({ ...state, confirmDelete: null }, msg, ROW_ACTIONS[msg.name], arg, 'deleted');
     }
     case 'dev.expire': {
       const [next, effect] = request(state, 'dev', { method: 'POST', path: '/api/dev/expire-session', write: true, body: {} }, msg);
@@ -621,31 +635,36 @@ function onAction(state, msg) {
 function onSubmit(state, msg) {
   switch (msg.form) {
     case 'login': {
-      const values = { login: String(msg.values.login ?? ''), password: String(msg.values.password ?? '') };
-      if (!values.login.trim() || !values.password) {
-        const error = 'Enter your name and password.';
-        return { state: { ...state, announce: error, forms: { ...state.forms, login: { ...state.forms.login, values, error } } }, effects: [] };
+      const login = state.forms.login;
+      const values = forms.submitted(SIGN_IN, msg.values);
+      const errors = forms.validate(SIGN_IN, values);
+      const stepped = submitStep(login.flow, 'ui-form-submitted', { complete: Object.keys(errors).length ? 0 : 1 }, msg.at);
+      if (!stepped) return { state, effects: [] };
+      if (!stepped.sends) {
+        const message = fieldNames(SIGN_IN).map((name) => errors[name]).find(Boolean);
+        if (!message) return { state: { ...state, forms: { ...state.forms, login: { ...login, flow: stepped.flow } } }, effects: [] };
+        return { state: { ...state, announce: message, forms: { ...state.forms, login: { ...login, flow: stepped.flow, busy: busy(stepped.flow), values, error: message } } }, effects: [] };
       }
       // Signing in carries the request token too: the session's own, or the one the gateway issued to this browser.
-      const [next, effect] = request(state, 'login', { method: 'POST', path: '/api/login', write: true, body: values, meta: {} }, msg);
-      return { state: { ...next, forms: { ...next.forms, login: { values, busy: true, error: '' } } }, effects: [effect] };
+      const inputs = forms.inputs(SIGN_IN, values, scopeOf(state));
+      const [next, effect] = call(state, 'login', forms.FORMS[SIGN_IN].contract, inputs, msg, { values });
+      return { state: { ...next, forms: { ...next.forms, login: { values, flow: stepped.flow, busy: busy(stepped.flow), error: '' } } }, effects: [effect] };
     }
     case 'search': {
-      const q = String(msg.values.q ?? '').trim();
-      return navigate(state, q ? `/search?q=${encodeURIComponent(q)}` : '/search', false, msg);
+      // The search form calls the view model of the search page, which opening the page does.
+      const form = forms.submitted('form-search', msg.values);
+      const outcome = forms.succeeded('form-search', scopeOf(state, { form, response: form }));
+      return navigate(state, outcome.navigate ?? '/search', false, msg);
     }
     case 'editor':
       return saveEditor(state, msg, null);
     case 'settings': {
       const settings = state.forms.settings;
-      if (!settings || settings.busy) return { state, effects: [] };
-      const v = settings.values;
-      const [next, effect] = request(
-        state, 'settings.save',
-        { method: 'POST', path: '/api/records', write: true, body: { op: 'update', object: 'publication', id: settings.id, fields: { name: v.name.trim(), tagline: v.tagline.trim() || null, accent: v.accent, paper: v.paper }, expected_version: settings.version } },
-        msg,
-      );
-      return { state: { ...next, forms: { ...next.forms, settings: { ...settings, busy: true, errors: {}, formError: '' } } }, effects: [effect] };
+      if (!settings) return { state, effects: [] };
+      const stepped = submitStep(settings.flow, 'ui-form-submitted', { complete: 1 }, msg.at);
+      if (!stepped?.sends) return { state, effects: [] };
+      const [next, effect] = call(state, 'settings.save', forms.FORMS[SETTINGS].contract, forms.inputs(SETTINGS, settings.values, scopeOf(state)), msg);
+      return { state: { ...next, forms: { ...next.forms, settings: { ...settings, flow: stepped.flow, busy: true, errors: {}, formError: '' } } }, effects: [effect] };
     }
     default:
       if (msg.form.startsWith('lab')) return labUpdate(state, msg, { request, toast }) ?? { state, effects: [] };
@@ -688,14 +707,14 @@ function step(state, msg) {
       const effects = [];
       const boot = msg.bootstrap;
       if (boot?.session?.session) {
-        next = { ...next, session: boot.session.session };
+        next = sessionRead({ ...next, session: boot.session.session }, boot.session.session.authenticated === true, msg.at);
       } else {
-        const [withRequest, effect] = request(next, 'session', { path: '/api/session' }, msg);
+        const [withRequest, effect] = readSession(next, msg);
         next = withRequest;
         effects.push(effect);
       }
       if (boot?.view && boot.path === route.path) {
-        next = acceptView(next, boot.view);
+        next = acceptView(next, decodeView(next, boot.view));
         if (boot.view.view === 'lab') {
           const entered = labEnter(next, msg, { request });
           next = entered.state;
@@ -708,9 +727,10 @@ function step(state, msg) {
       }
       // The socket needs the request token, which a bootstrapped page already has. A cold start
       // gets it with the session reply and connects then.
+      next = liveStep(next, 'ui-live-start', {}, msg)?.state ?? next;
       /** @type {Effect[]} */
       const connect = next.session ? [{ type: 'ws_connect', csrf: next.session.csrf_token }] : [];
-      return { state: { ...next, ws: { ...next.ws, status: 'connecting' } }, effects: [...effects, ...connect] };
+      return { state: next, effects: [...effects, ...connect] };
     }
     case 'navigate':
       return navigate(state, msg.href, msg.replace ?? false, msg);
@@ -734,28 +754,14 @@ function step(state, msg) {
     case 'ws_message':
       return onSocket(state, msg.message, msg);
     case 'ws_closed': {
-      const { state: next, token, attempts } = reconnect(state);
-      // Exponential backoff with jitter, capped at eight seconds.
-      const ms = Math.min(8000, 250 * 2 ** Math.min(attempts, 5)) * (0.5 + msg.rand / 2);
-      return { state: next, effects: [{ type: 'timer', name: 'reconnect', token, ms: Math.round(ms) }] };
+      // A close while waiting to reconnect is an attempt that failed: it counts as one.
+      const waiting = state.ws.status === 'waiting' ? liveStep(state, 'ui-live-reconnect-due', {}, msg) : null;
+      const from = waiting ? { ...waiting.state, ws: { ...waiting.state.ws, timers: {} } } : state;
+      return liveStep(from, 'ui-live-closed', {}, msg) ?? { state, effects: [] };
     }
     case 'timer': {
       if (msg.name.startsWith('lab.')) return labUpdate(state, msg, { request, toast }) ?? { state, effects: [] };
-      if (msg.token !== state.ws.timer) return { state, effects: [] };
-      if (msg.name === 'reconnect') {
-        return { state: { ...state, ws: { ...state.ws, status: 'connecting' } }, effects: [{ type: 'ws_connect', csrf: state.session?.csrf_token }] };
-      }
-      if (msg.name === 'heartbeat' && state.ws.status === 'open') {
-        if (state.ws.missedPongs >= 2) return { state, effects: [{ type: 'ws_close' }] };
-        return {
-          state: { ...state, ws: { ...state.ws, missedPongs: state.ws.missedPongs + 1 } },
-          effects: [
-            { type: 'ws_send', message: { type: 'ping', nonce: msg.token } },
-            { type: 'timer', name: 'heartbeat', token: msg.token, ms: state.ws.heartbeatMs },
-          ],
-        };
-      }
-      return { state, effects: [] };
+      return liveTimer(state, msg) ?? { state, effects: [] };
     }
     default:
       return { state, effects: [] };

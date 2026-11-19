@@ -112,14 +112,32 @@ pub fn visit(bff: &Bff, headers: &HeaderMap) -> Result<Visit, Failure> {
     })
 }
 
-/// Whether the request's `Origin` is one of ours. Browsers send it on every cross-origin
-/// request and on every same-origin request that is not a plain GET.
-pub fn origin_allowed(bff: &Bff, headers: &HeaderMap) -> bool {
-    text(headers, ORIGIN)
-        .is_some_and(|origin| bff.cfg.origins.iter().any(|allowed| allowed == origin))
+/// The site an origin such as `http://tidewater.localhost:4100` belongs to: the tenant its host
+/// name serves.
+fn origin_site<'a>(bff: &'a Bff, origin: &str) -> Option<&'a TenantId> {
+    let authority = origin.split_once("://")?.1;
+    let authority = authority.split('/').next().unwrap_or(authority);
+    let host = match authority.rsplit_once(':') {
+        Some((name, port)) if !port.is_empty() && port.chars().all(|c| c.is_ascii_digit()) => name,
+        _ => authority,
+    };
+    bff.cfg.sites.get(&host.to_lowercase())
+}
+
+/// Whether the request's `Origin` is one of ours, and one of the site being served. Browsers send
+/// it on every cross-origin request and on every same-origin request that is not a plain GET. An
+/// origin of another site this process serves is not accepted: each site's pages act on that
+/// site only.
+pub fn origin_allowed(bff: &Bff, site: &TenantId, headers: &HeaderMap) -> bool {
+    text(headers, ORIGIN).is_some_and(|origin| {
+        bff.cfg.origins.iter().any(|allowed| allowed == origin)
+            && origin_site(bff, origin) == Some(site)
+    })
 }
 
 /// Call the backend's internal API as this visit.
+///
+/// Implements: H-007
 pub async fn backend<T: DeserializeOwned>(
     bff: &Bff,
     visit: &Visit,
@@ -169,6 +187,7 @@ pub async fn backend<T: DeserializeOwned>(
 
 /// The session cookie, as `__Host-` requires: `Secure`, `Path=/` and no `Domain`. Browsers treat
 /// `http://localhost` and `http://127.0.0.1` as secure contexts and accept it there.
+/// Implements: H-006
 fn session_cookie(token: &str, max_age: i64) -> HeaderValue {
     HeaderValue::from_str(&format!(
         "{COOKIE}={token}; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age={max_age}"
@@ -207,7 +226,7 @@ async fn presented_token(bff: &Bff, visit: &Visit, given: &str) -> Result<Option
 /// session, whether or not there is a session yet. Returns whether the session is live.
 async fn guard_request(bff: &Bff, visit: &Visit, headers: &HeaderMap) -> Result<bool, Failure> {
     let refuse = |message| Failure::new(ErrorCode::Forbidden, message, &visit.correlation);
-    if !origin_allowed(bff, headers) {
+    if !origin_allowed(bff, &visit.site, headers) {
         LOG.warn(
             "csrf.origin_refused",
             &visit.correlation,
@@ -233,7 +252,7 @@ async fn guard_write(
     headers: &HeaderMap,
 ) -> Result<SessionView, Failure> {
     let refuse = |message| Failure::new(ErrorCode::Forbidden, message, &visit.correlation);
-    if !origin_allowed(bff, headers) {
+    if !origin_allowed(bff, &visit.site, headers) {
         LOG.warn(
             "csrf.origin_refused",
             &visit.correlation,
@@ -355,7 +374,65 @@ async fn view_model(
     }
     model["theme"] = json!(resolved);
     model["path"] = json!(path);
+    if data.view.as_str() == "desk" {
+        // The writing desk's rows as its per-row actions name them: each article with the
+        // version a change starts from (read-desk-view, desk-article).
+        model["articles"] = json!(model["data"]["posts"]
+            .as_array()
+            .map(|rows| rows
+                .iter()
+                .map(|row| json!({
+                    "article_id": row["id"],
+                    "version": row["version"],
+                    "title": row["fields"]["title"],
+                    "slug": row["fields"]["slug"],
+                    "body": row["fields"]["body"],
+                    "status": row["fields"]["status"],
+                }))
+                .collect::<Vec<_>>())
+            .unwrap_or_default());
+    }
+    if matches!(data.view.as_str(), "desk_new" | "desk_edit") {
+        // The choices of the topic and author controls (read-new-article-view,
+        // read-edit-article-view, option-choice): the topics led by "No topic", then the authors.
+        let topics = choices(&model["data"]["categories"]);
+        model["topics"] = json!(std::iter::once(json!({ "value": "", "label": "No topic" }))
+            .chain(topics)
+            .collect::<Vec<_>>());
+        model["authors"] = json!(choices(&model["data"]["authors"]));
+    }
+    if data.view.as_str() == "desk_edit" && model["data"]["post"].is_object() {
+        // The article the editor saves, with the version a save starts from.
+        model["article_id"] = model["data"]["post"]["id"].clone();
+        model["article_version"] = model["data"]["post"]["version"].clone();
+    }
+    if data.view.as_str() == "desk_settings" {
+        // The names a swatch can take, and the publication record a save starts from.
+        model["accents"] = json!(theme::ACCENTS);
+        model["papers"] = json!(theme::PAPERS);
+        if model["data"]["site"].is_object() {
+            model["publication_id"] = model["data"]["site"]["id"].clone();
+            model["publication_version"] = model["data"]["site"]["version"].clone();
+        }
+    }
     Ok(model)
+}
+
+/// One choice per row of a projected section: the record's identifier as text and its name.
+fn choices(rows: &Json_) -> Vec<Json_> {
+    rows.as_array()
+        .map(|rows| {
+            rows.iter()
+                .map(|row| {
+                    let value = match &row["id"] {
+                        Json_::String(id) => id.clone(),
+                        other => other.to_string(),
+                    };
+                    json!({ "value": value, "label": row["fields"]["name"] })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 async fn view(
@@ -397,7 +474,7 @@ async fn preview(
     Json(request): Json<PreviewRequest>,
 ) -> Result<Json<Json_>, Failure> {
     let visit = visit(&bff, &headers)?;
-    if !origin_allowed(&bff, &headers) {
+    if !origin_allowed(&bff, &visit.site, &headers) {
         return Err(Failure::new(
             ErrorCode::Forbidden,
             "This request did not come from the site.",
@@ -476,8 +553,6 @@ async fn diagnostics(
             "service": "bff",
             "open_sockets": bff.sockets.load(Ordering::Relaxed),
             "pending_requests": bff.in_flight.load(Ordering::Relaxed),
-            "sites": bff.cfg.sites.iter().map(|(host, tenant)| json!({ "host": host, "tenant": tenant.as_str() })).collect::<Vec<_>>(),
-            "allowed_origins": bff.cfg.origins,
         },
         "backend": backend_report,
     })))
@@ -500,7 +575,16 @@ async fn dev(
             ))
         }
     };
-    guard_request(&bff, &visit, &headers).await?;
+    // A signed-in session with its own request token, and the site's owner: the request token
+    // handed to visitors without a session opens nothing here. The backend checks the owner too.
+    let session = guard_write(&bff, &visit, &headers).await?;
+    if !session.roles.iter().any(|role| role == "owner") {
+        return Err(Failure::new(
+            ErrorCode::Forbidden,
+            "Only the site's owner may use this.",
+            &visit.correlation,
+        ));
+    }
     backend(&bff, &visit, path, &json!({})).await.map(Json)
 }
 
@@ -511,7 +595,7 @@ async fn socket(
     upgrade: WebSocketUpgrade,
 ) -> Result<Response, Failure> {
     let visit = visit(&bff, &headers)?;
-    if !origin_allowed(&bff, &headers) {
+    if !origin_allowed(&bff, &visit.site, &headers) {
         LOG.warn(
             "ws.origin_refused",
             &visit.correlation,

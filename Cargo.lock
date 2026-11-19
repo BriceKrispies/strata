@@ -15,6 +15,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "aho-corasick"
+version = "1.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c982642fa9e8606056828ee9a8505737230110bb1099153c79efe865c59d12ba"
+dependencies = [
+ "memchr",
+]
+
+[[package]]
 name = "argon2"
 version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -850,6 +859,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "prettyplease"
+version = "0.2.37"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "479ca8adacdd7ce8f1fb39ce9ecccbfe93a3f1344b3d0d97f20bc0196208f62b"
+dependencies = [
+ "proc-macro2",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "proc-macro-crate"
 version = "3.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -961,6 +980,29 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "60aa6af80be32871323012e02e6e65f8a7cc7890931ae421d217ad8fe0df2ccf"
 dependencies = [
  "rand_core 0.10.1",
+]
+
+[[package]]
+name = "regex"
+version = "1.13.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9807af0e638c12e753aa1b4e601791bf2a8f71274023c8bbeec12fc149950857"
+dependencies = [
+ "aho-corasick",
+ "memchr",
+ "regex-automata",
+ "regex-syntax",
+]
+
+[[package]]
+name = "regex-automata"
+version = "0.4.19"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "41d60ef07df457506a0a1a2073112eb4aae5733dbd2813c3da77d1b0fd441158"
+dependencies = [
+ "aho-corasick",
+ "memchr",
+ "regex-syntax",
 ]
 
 [[package]]
@@ -1196,7 +1238,9 @@ dependencies = [
  "serde",
  "serde_json",
  "strata-kernel",
+ "strata-model",
  "strata-protocol",
+ "strata-runtime",
  "strata-simulation",
  "strata-storage-api",
  "strata-storage-sqlite",
@@ -1220,6 +1264,7 @@ dependencies = [
  "strata-backend",
  "strata-kernel",
  "strata-protocol",
+ "strata-runtime",
  "strata-storage-api",
  "strata-substrate",
  "tokio",
@@ -1239,6 +1284,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "strata-machine-store"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "strata-kernel",
+ "strata-runtime",
+ "strata-storage-api",
+ "strata-storage-sqlite",
+ "tokio",
+]
+
+[[package]]
+name = "strata-model"
+version = "0.1.0"
+dependencies = [
+ "regex",
+ "serde",
+ "serde_json",
+ "strata-runtime",
+ "uuid",
+]
+
+[[package]]
 name = "strata-protocol"
 version = "0.1.0"
 dependencies = [
@@ -1246,6 +1315,19 @@ dependencies = [
  "serde_json",
  "strata-kernel",
  "strata-substrate",
+]
+
+[[package]]
+name = "strata-runtime"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "getrandom 0.2.17",
+ "reqwest",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]
@@ -1258,6 +1340,80 @@ dependencies = [
  "strata-protocol",
  "strata-substrate",
  "strata-verification",
+]
+
+[[package]]
+name = "strata-spec-compiler"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "prettyplease",
+ "proc-macro2",
+ "quote",
+ "regex",
+ "serde",
+ "serde_json",
+ "strata-model",
+ "strata-runtime",
+ "strata-spec-compiler-machines-fixture",
+ "strata-spec-compiler-wiring-fixture",
+ "strata-spec-expr",
+ "syn 2.0.119",
+ "tokio",
+]
+
+[[package]]
+name = "strata-spec-compiler-fixture"
+version = "0.1.0"
+dependencies = [
+ "regex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "strata-runtime",
+ "uuid",
+]
+
+[[package]]
+name = "strata-spec-compiler-machines-fixture"
+version = "0.1.0"
+dependencies = [
+ "regex",
+ "serde",
+ "serde_json",
+ "strata-runtime",
+ "uuid",
+]
+
+[[package]]
+name = "strata-spec-compiler-wiring-fixture"
+version = "0.1.0"
+dependencies = [
+ "regex",
+ "serde",
+ "serde_json",
+ "strata-runtime",
+ "uuid",
+]
+
+[[package]]
+name = "strata-spec-expr"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "serde_json",
+]
+
+[[package]]
+name = "strata-spec-expr-cases"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "serde",
+ "serde_json",
+ "strata-spec-expr",
 ]
 
 [[package]]
@@ -1278,6 +1434,7 @@ dependencies = [
  "serde",
  "serde_json",
  "strata-kernel",
+ "strata-runtime",
  "strata-storage-api",
 ]
 
@@ -1288,6 +1445,17 @@ dependencies = [
  "serde",
  "serde_json",
  "strata-kernel",
+]
+
+[[package]]
+name = "strata-system-differential"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "strata-model",
+ "strata-runtime",
+ "strata-spec-compiler",
+ "tokio",
 ]
 
 [[package]]
@@ -1628,6 +1796,17 @@ name = "utf_types"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a3b425286980a367278453f3b6d28cdcb134b574e5a35824a6ff5eebad50bb6"
+
+[[package]]
+name = "uuid"
+version = "1.29.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3c14b15dffa2f4bd712103e857140aa04a4f2ff6e955c77d7eb8e53ee02a3b64"
+dependencies = [
+ "js-sys",
+ "serde_core",
+ "wasm-bindgen",
+]
 
 [[package]]
 name = "vcpkg"

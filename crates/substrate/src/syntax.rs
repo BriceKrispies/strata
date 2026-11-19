@@ -245,7 +245,12 @@ impl Parser {
                         "old" => Scope::Old,
                         _ => Scope::New,
                     };
-                    Ok(Expr::Var(scope, self.ident()?))
+                    let field = self.ident()?;
+                    if self.sym(".") {
+                        Ok(Expr::Through(scope, field, self.ident()?))
+                    } else {
+                        Ok(Expr::Var(scope, field))
+                    }
                 }
                 "param" => {
                     self.expect(".")?;
