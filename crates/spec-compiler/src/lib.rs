@@ -35,6 +35,7 @@ pub mod render;
 pub mod resolve;
 pub mod scenarios;
 pub mod web;
+pub mod web_kernel;
 pub mod wire;
 
 pub use diagnostic::Diagnostic;

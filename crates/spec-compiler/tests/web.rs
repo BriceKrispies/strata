@@ -248,3 +248,111 @@ fn the_generated_login_form_steps_as_exegra_runs_it() {
         String::from_utf8_lossy(&run.stderr)
     );
 }
+
+/// The Strata specification, from the repository root.
+fn strata_spec() -> (String, PathBuf) {
+    let root = manifest_dir().join("../..");
+    let text = fs::read_to_string(root.join("specifications/spec.jsonc")).unwrap();
+    (text, root)
+}
+
+#[test]
+fn the_web_application_holds_what_specc_web_generates_from_the_specification() {
+    let (text, root) = strata_spec();
+    let files = web::generate("specifications/spec.jsonc", &text).unwrap_or_else(|d| {
+        panic!(
+            "the specification was refused:\n{}",
+            d.iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("\n")
+        )
+    });
+    for name in [
+        "routes.js",
+        "contracts.js",
+        "forms.js",
+        "actions.js",
+        "live.js",
+    ] {
+        assert!(
+            files.iter().any(|f| f.path == name),
+            "{name} is not generated"
+        );
+    }
+    let differences = output::compare(&root.join("web/src/generated"), &files).unwrap();
+    assert!(
+        differences.is_empty(),
+        "web/src/generated is not what specc web generates from specifications/spec.jsonc: {differences:?}. \
+         Run specc web --spec specifications/spec.jsonc --out web/src/generated and commit."
+    );
+}
+
+#[test]
+fn the_generated_kernel_modules_route_derive_validate_and_refresh() {
+    if !node_available() {
+        eprintln!("skipped: node could not be run");
+        return;
+    }
+    let (_, root) = strata_spec();
+    let generated = root.join("web/src/generated");
+    let url = |name: &str| {
+        format!(
+            "file:///{}",
+            generated
+                .join(name)
+                .display()
+                .to_string()
+                .replace('\\', "/")
+                .trim_start_matches('/')
+        )
+    };
+    let script = format!(
+        r#"
+import assert from 'node:assert/strict';
+const routes = await import({routes:?});
+const forms = await import({forms:?});
+const contracts = await import({contracts:?});
+const live = await import({live:?});
+const actions = await import({actions:?});
+assert.deepEqual(routes.matchRoute('/posts/slow-software', ''), {{ screen: 'screen-article', params: {{ slug: 'slow-software' }}, query: {{}} }});
+assert.deepEqual(routes.matchRoute('/desk/new', ''), {{ screen: 'screen-desk-new', params: {{}}, query: {{}} }});
+assert.deepEqual(routes.matchRoute('/search', '?q=wood+kiln&x=1'), {{ screen: 'screen-search', params: {{}}, query: {{ q: 'wood kiln' }} }});
+assert.deepEqual(routes.matchRoute('/no/such/route', ''), {{ screen: 'screen-not-found', params: {{ missing: '/no/such/route' }}, query: {{}} }});
+assert.equal(routes.hrefFor('screen-search', {{ q: 'kiln' }}), '/search?q=kiln');
+assert.equal(routes.hrefFor('screen-search', {{ q: '' }}), '/search');
+assert.equal(routes.hrefFor('screen-desk-edit', {{ slug: 'on-sharpening' }}), '/desk/edit/on-sharpening');
+let {{ values, edited }} = forms.input('form-new-article-save', forms.initialValues('form-new-article-save', {{ topics: [{{ value: '', label: 'No topic' }}], authors: [] }}), [], 'title', 'Inès & the Café');
+assert.equal(values.slug, 'ines-the-cafe');
+({{ values, edited }} = forms.input('form-new-article-save', values, edited, 'slug', 'mine'));
+({{ values, edited }} = forms.input('form-new-article-save', values, edited, 'title', 'Other'));
+assert.equal(values.slug, 'mine');
+assert.deepEqual(forms.validate('form-sign-in', {{ login: '  ', password: 'x' }}), {{ login: 'Enter your name and password.' }});
+assert.deepEqual(forms.validate('form-sign-in', {{ login: 'ines', password: 'x' }}), {{}});
+assert.equal(forms.succeeded('form-sign-in', {{ query: {{ next: '//evil' }}, response: {{ session: {{ display_name: 'Inès' }} }} }}).navigate, '/desk');
+assert.deepEqual(contracts.request('read-front-page', {{}}, '/'), {{ method: 'GET', path: '/api/view?path=%2F', write: false }});
+assert.deepEqual(contracts.request('delete-article', {{ article: 9, expected_version: 2 }}).body, {{ op: 'delete', object: 'post', id: 9, expected_version: 2 }});
+assert.deepEqual(contracts.decode('create-article', {{ id: 4, version: 1 }}, {{ slug: 'x' }}), {{ article_id: 4, version: 1, slug: 'x' }});
+const view = {{ depends_on: ['post'] }};
+assert.equal(live.refreshes('screen-front-page', 'ui-notice-received', {{ kind: 'upsert', object: 'post' }}, view), true);
+assert.equal(live.refreshes('screen-front-page', 'ui-notice-received', {{ kind: 'upsert', object: 'invoice' }}, view), false);
+assert.equal(actions.label('act-desk-delete', {{ title: 'On Sharpening' }}), 'Delete On Sharpening');
+assert.equal(actions.confirmText('act-desk-delete', {{ title: 'On Sharpening' }}), 'Confirm deleting On Sharpening');
+"#,
+        routes = url("routes.js"),
+        forms = url("forms.js"),
+        contracts = url("contracts.js"),
+        live = url("live.js"),
+        actions = url("actions.js"),
+    );
+    let dir = scratch_dir("kernel");
+    let path = dir.join("kernel.mjs");
+    fs::write(&path, script).unwrap();
+    let run = Command::new("node").arg(&path).output().unwrap();
+    assert!(
+        run.status.success(),
+        "the generated kernel modules misbehave:\n{}\n{}",
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr)
+    );
+}

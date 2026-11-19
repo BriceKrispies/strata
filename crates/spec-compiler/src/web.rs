@@ -59,7 +59,7 @@ use crate::resolve::{self, Builtin, TypeRef};
 use crate::wire::{self, WireCase};
 
 /// The wire case of each struct type a contract payload reaches ([`wire::type_cases`]).
-type Cases = BTreeMap<String, WireCase>;
+pub(crate) type Cases = BTreeMap<String, WireCase>;
 
 /// Code of a machine id that cannot name a file or a set of type names.
 pub const NAME: &str = "specc.web-name";
@@ -67,16 +67,25 @@ pub const NAME: &str = "specc.web-name";
 /// The file shared by every generated machine.
 pub const RUNTIME_FILE: &str = "machine-runtime.js";
 
-/// Generates the JavaScript files of the client machines of a specification (paths relative to
-/// the output directory), or refuses with every diagnostic. A specification without client
-/// machines gives no files. `spec_path` is the path written into the headers.
+/// Generates the JavaScript files of the client machines of a specification and, when it states
+/// screens, the kernel modules of [`crate::web_kernel`] (paths relative to the output directory),
+/// or refuses with every diagnostic. A specification with neither gives no files. `spec_path` is
+/// the path written into the headers.
 pub fn generate(spec_path: &str, text: &str) -> Result<Vec<GeneratedFile>, Vec<Diagnostic>> {
     let (spec, machines) = load::load_with_client_machines(spec_path, text)?;
-    if machines.is_empty() {
-        return Ok(Vec::new());
-    }
     let mut files = Vec::new();
     let mut diagnostics = Vec::new();
+    match crate::web_kernel::generate(&spec, &machines, text) {
+        Ok(kernel) => files.extend(kernel),
+        Err(d) => diagnostics.extend(d),
+    }
+    if machines.is_empty() {
+        if !diagnostics.is_empty() {
+            return Err(dedup(diagnostics));
+        }
+        files.sort();
+        return Ok(files);
+    }
     let mut used = BTreeSet::new();
     for b in &machines {
         let valid = !b.id.is_empty()
@@ -157,14 +166,14 @@ export function overflow(transition) {
 // Names and types.
 
 /// True when `name` can be written as a JavaScript property without quotes.
-fn is_ident(name: &str) -> bool {
+pub(crate) fn is_ident(name: &str) -> bool {
     let mut chars = name.chars();
     matches!(chars.next(), Some(c) if c.is_ascii_alphabetic() || c == '_' || c == '$')
         && chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$')
 }
 
 /// A single-quoted JavaScript string literal.
-fn sq(s: &str) -> String {
+pub(crate) fn sq(s: &str) -> String {
     let mut out = String::from("'");
     for c in s.chars() {
         match c {
@@ -184,7 +193,7 @@ fn sq(s: &str) -> String {
 }
 
 /// A property name in an object literal or type.
-fn key(name: &str) -> String {
+pub(crate) fn key(name: &str) -> String {
     if is_ident(name) {
         name.to_string()
     } else {
@@ -193,7 +202,7 @@ fn key(name: &str) -> String {
 }
 
 /// A member access on a value.
-fn member(name: &str) -> String {
+pub(crate) fn member(name: &str) -> String {
     if is_ident(name) {
         format!(".{name}")
     } else {
@@ -221,7 +230,7 @@ fn builtin_ty(b: Builtin) -> Ty {
 }
 
 /// The expression type of a type nested in an option or list, where nothing is unwrapped.
-fn raw_ty(t: &TypeRef) -> Ty {
+pub(crate) fn raw_ty(t: &TypeRef) -> Ty {
     match t {
         TypeRef::Builtin(b) => builtin_ty(*b),
         TypeRef::Declared(id) => Ty::Named(id.clone()),
@@ -232,7 +241,7 @@ fn raw_ty(t: &TypeRef) -> Ty {
 
 /// How expressions see a value of type `t`: timestamps and durations as their integers,
 /// declared ids and scalars as their representation (as in the Rust backend).
-fn expr_ty(spec: &Spec, t: &TypeRef) -> Ty {
+pub(crate) fn expr_ty(spec: &Spec, t: &TypeRef) -> Ty {
     match t {
         TypeRef::Builtin(Builtin::Timestamp) => Ty::I64,
         TypeRef::Builtin(Builtin::Duration) => Ty::U64,
@@ -255,7 +264,13 @@ fn expr_ty(spec: &Spec, t: &TypeRef) -> Ty {
 
 /// The JSDoc type of a value of type `t`; `nested` parenthesises unions.
 /// Struct members are named in the struct's wire case (`cases`), as its Rust form serialises them.
-fn js_type(spec: &Spec, cases: &Cases, t: &TypeRef, nested: bool, depth: usize) -> String {
+pub(crate) fn js_type(
+    spec: &Spec,
+    cases: &Cases,
+    t: &TypeRef,
+    nested: bool,
+    depth: usize,
+) -> String {
     let wrap = |s: String| if nested { format!("({s})") } else { s };
     if depth > 16 {
         return "unknown".to_string();
@@ -313,7 +328,7 @@ fn js_type(spec: &Spec, cases: &Cases, t: &TypeRef, nested: bool, depth: usize) 
     }
 }
 
-fn object_type(items: &[String]) -> String {
+pub(crate) fn object_type(items: &[String]) -> String {
     if items.is_empty() {
         "{}".to_string()
     } else {
@@ -1421,7 +1436,7 @@ impl<'a> Gen<'a> {
 }
 
 /// An object literal from its `key: value` items.
-fn object_type_value(items: &[String]) -> String {
+pub(crate) fn object_type_value(items: &[String]) -> String {
     if items.is_empty() {
         "{}".to_string()
     } else {
@@ -1430,7 +1445,7 @@ fn object_type_value(items: &[String]) -> String {
 }
 
 /// A JSDoc `@typedef` of the union of `members`, with its description.
-fn typedef(doc: &str, name: &str, members: &[String]) -> String {
+pub(crate) fn typedef(doc: &str, name: &str, members: &[String]) -> String {
     let union = match members {
         [] => "never".to_string(),
         [only] => only.clone(),
