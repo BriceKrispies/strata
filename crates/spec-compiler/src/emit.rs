@@ -21,8 +21,8 @@ pub const UUID_VERSION: &str = "1.24.0";
 pub const REGEX_VERSION: &str = "1.13.1";
 /// The sha2 version a generated crate with a hash-chained audit depends on (the workspace's).
 pub const SHA2_VERSION: &str = "0.10.9";
-/// The serde_json version a generated crate with machines has as a dev-dependency, for its
-/// scenario tests (the workspace's).
+/// The serde_json version the generated crate depends on (the workspace's): `json` values are
+/// `serde_json::Value`, and the scenario tests of machines read their traces with it.
 pub const SERDE_JSON_VERSION: &str = "1.0.146";
 
 /// Code of a module that does not parse as Rust: a defect in specc, never in the specification.
@@ -223,11 +223,6 @@ fn cargo_toml(spec: &Spec, options: &Options) -> String {
             }
         }
     };
-    let dev = if spec.machines.is_empty() {
-        String::new()
-    } else {
-        format!("\n[dev-dependencies]\nserde_json = \"{SERDE_JSON_VERSION}\"\n")
-    };
     let crate_name = &options.crate_name;
     let chained = spec
         .constructs
@@ -250,10 +245,10 @@ fn cargo_toml(spec: &Spec, options: &Options) -> String {
          [dependencies]\n\
          regex = \"{REGEX_VERSION}\"\n\
          serde = {{ version = \"{SERDE_VERSION}\", features = [\"derive\"] }}\n\
+         serde_json = \"{SERDE_JSON_VERSION}\"\n\
          {runtime}\
          {sha2}\
-         uuid = {{ version = \"{UUID_VERSION}\", features = [\"serde\"] }}\n\
-         {dev}",
+         uuid = {{ version = \"{UUID_VERSION}\", features = [\"serde\"] }}\n",
         header = toml_header(&spec.path),
     )
 }
@@ -312,6 +307,10 @@ mod tests {
         assert!(line("serde").contains(&format!("version = \"{SERDE_VERSION}\"")));
         assert!(line("uuid").contains(&format!("version = \"{UUID_VERSION}\"")));
         assert_eq!(line("regex"), format!("regex = \"{REGEX_VERSION}\""));
+        assert_eq!(
+            line("serde_json"),
+            format!("serde_json = \"{SERDE_JSON_VERSION}\"")
+        );
         assert_eq!(line("sha2"), format!("sha2 = \"{SHA2_VERSION}\""));
     }
 

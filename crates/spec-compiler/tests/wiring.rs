@@ -362,3 +362,61 @@ async fn machine_handlers_bring_requests_and_published_events_to_the_machines() 
         .unwrap();
     assert_eq!(handled.state, machines::job::State::Done);
 }
+
+/// The system names JSON members in snake_case and inspect-job-camel overrides it with
+/// camelCase: a request whose specification names are kebab-case goes to JSON in the wire case
+/// and comes back unchanged (WG-4881); a json member is carried as it is.
+#[test]
+fn kebab_named_requests_cross_the_wire_in_their_wire_case_and_back() {
+    use serde_json::json;
+    use strata_spec_compiler_wiring_fixture::contracts::{
+        InspectJobCamelRequest, InspectJobRequest, InspectJobResponse, MakeReportError,
+    };
+    use strata_spec_compiler_wiring_fixture::types::JobSummary;
+
+    let request = InspectJobRequest {
+        job_id: "j-1".into(),
+        filter_params: Some(json!({ "page-size": 2, "tags": ["a"] })),
+    };
+    let wire = serde_json::to_value(&request).unwrap();
+    assert_eq!(
+        wire,
+        json!({ "job_id": "j-1", "filter_params": { "page-size": 2, "tags": ["a"] } })
+    );
+    assert_eq!(
+        serde_json::from_value::<InspectJobRequest>(wire).unwrap(),
+        request
+    );
+
+    let response = InspectJobResponse {
+        summary: JobSummary {
+            display_name: "Nightly".into(),
+            started_at: None,
+            extra_info: json!(null),
+        },
+    };
+    let wire = serde_json::to_value(&response).unwrap();
+    assert_eq!(
+        wire,
+        json!({ "summary": { "display_name": "Nightly", "extra_info": null } })
+    );
+    assert_eq!(
+        serde_json::from_value::<InspectJobResponse>(wire).unwrap(),
+        response
+    );
+
+    let camel = InspectJobCamelRequest {
+        job_id: "j-2".into(),
+    };
+    let wire = serde_json::to_value(&camel).unwrap();
+    assert_eq!(wire, json!({ "jobId": "j-2" }));
+    assert_eq!(
+        serde_json::from_value::<InspectJobCamelRequest>(wire).unwrap(),
+        camel
+    );
+
+    assert_eq!(
+        serde_json::to_value(MakeReportError::NotFound).unwrap(),
+        json!("not_found")
+    );
+}

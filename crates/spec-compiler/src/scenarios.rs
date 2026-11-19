@@ -142,7 +142,11 @@ pub fn generate(
     traces: Option<TraceSource>,
 ) -> Result<ScenariosOutput, Vec<Diagnostic>> {
     let spec_path = spec_path.replace('\\', "/");
-    let plan = load(text)?;
+    let mut plan = load(text)?;
+    plan.spec = crate::load::load(&spec_path, text).ok();
+    if let Some(spec) = &plan.spec {
+        plan.cases = crate::wire::type_cases(spec);
+    }
     let mut d = Vec::new();
     if !crate::emit::is_crate_name(crate_name) {
         d.push(Diagnostic::new(
@@ -252,6 +256,29 @@ struct Plan {
     fault_kinds: Vec<(String, String)>,
     /// Behaviors that run as several instances or that do not create their records.
     unsupported: Vec<(String, &'static str, &'static str)>,
+    /// The typed specification, when it loads: payloads and variables are written in the wire
+    /// form the machines serialise ([`crate::wire`]). Without it they are written as traced.
+    spec: Option<crate::ir::Spec>,
+    /// The wire case of each struct type a contract reaches, when `spec` loads.
+    cases: std::collections::BTreeMap<String, crate::wire::WireCase>,
+}
+
+impl Plan {
+    /// An event's payload in the wire form its machine serialises.
+    fn wire_payload(&self, event: &str, payload: &Value) -> Value {
+        match &self.spec {
+            Some(spec) => crate::wire::WireValues::new(spec, &self.cases).payload(event, payload),
+            None => payload.clone(),
+        }
+    }
+
+    /// A machine's variables in the wire form it serialises.
+    fn wire_vars(&self, machine: &str, vars: &Value) -> Value {
+        match &self.spec {
+            Some(spec) => crate::wire::WireValues::new(spec, &self.cases).vars(machine, vars),
+            None => vars.clone(),
+        }
+    }
 }
 
 fn string<'a>(obj: &'a Map<String, Value>, key: &str) -> Option<&'a str> {
@@ -443,6 +470,8 @@ fn load(text: &str) -> Result<Plan, Vec<Diagnostic>> {
         events,
         fault_kinds,
         unsupported,
+        spec: None,
+        cases: std::collections::BTreeMap::new(),
     })
 }
 
@@ -542,7 +571,7 @@ fn test_of(plan: &Plan, sc: &ScenarioPlan, trace: &Value) -> Result<String, Vec<
             ty = m.ty,
             key = str_lit(&m.id),
             state = str_lit(initial["state"].as_str().unwrap_or_default()),
-            vars = lit(&initial["vars"]),
+            vars = lit(&plan.wire_vars(&m.id, &initial["vars"])),
         ));
     }
     for step in steps {
@@ -599,7 +628,7 @@ fn deliveries(
     } else {
         step["event"]["payload"].clone()
     };
-    let input = json!({ "event": event, "payload": payload });
+    let input = json!({ "event": event, "payload": plan.wire_payload(event, &payload) });
     let mut out = String::new();
     for m in &sc.machines {
         if timer.is_some() && source["behavior"].as_str() != Some(&m.id) {
@@ -665,7 +694,8 @@ fn deliveries(
                             format!("step {index}: transition \"{transition}\" emits {} where the trace emitted \"{id}\"", effect["emit"]),
                         ));
                     }
-                    let value = json!({ "event": id, "payload": e["payload"] });
+                    let value =
+                        json!({ "event": id, "payload": plan.wire_payload(id, &e["payload"]) });
                     if let Some(name) = effect["timer"].as_str() {
                         let after = e["time"].as_i64().unwrap_or(time) - time;
                         timers.push(format!("({}, {after}, {})", str_lit(name), lit(&value)));
@@ -695,7 +725,7 @@ fn deliveries(
                 format!(
                     "Expect::Fired {{ to: {to}, vars: {vars}, emits: vec![{emits}], timers: vec![{timers}], pending: {pending} }}",
                     to = str_lit(fired["to"].as_str().unwrap_or_default()),
-                    vars = lit(&after["vars"]),
+                    vars = lit(&plan.wire_vars(&m.id, &after["vars"])),
                     emits = emits.join(", "),
                     timers = timers.join(", "),
                 )

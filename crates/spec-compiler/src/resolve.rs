@@ -22,6 +22,7 @@ pub const BUILTIN_TYPES: &[&str] = &[
     "timestamp",
     "duration",
     "uuid",
+    "json",
 ];
 
 /// A built-in representation type.
@@ -53,6 +54,8 @@ pub enum Builtin {
     Duration,
     /// `uuid`
     Uuid,
+    /// `json`: any JSON value, as a `serde_json::Value`.
+    Json,
 }
 
 impl Builtin {
@@ -72,6 +75,7 @@ impl Builtin {
             "timestamp" => Self::Timestamp,
             "duration" => Self::Duration,
             "uuid" => Self::Uuid,
+            "json" => Self::Json,
             _ => return None,
         })
     }
@@ -92,6 +96,7 @@ impl Builtin {
             Self::Timestamp => "timestamp",
             Self::Duration => "duration",
             Self::Uuid => "uuid",
+            Self::Json => "json",
         }
     }
 
@@ -111,12 +116,13 @@ impl Builtin {
 
     /// True when the generated Rust type is `Copy`.
     pub fn is_copy(self) -> bool {
-        !matches!(self, Self::String | Self::Bytes)
+        !matches!(self, Self::String | Self::Bytes | Self::Json)
     }
 
-    /// True when the generated Rust type is `Eq`, `Ord` and `Hash`.
+    /// True when the generated Rust type is `Eq`, `Ord` and `Hash` (`serde_json::Value` is
+    /// neither ordered nor hashable).
     pub fn is_total(self) -> bool {
-        self != Self::F64
+        !matches!(self, Self::F64 | Self::Json)
     }
 }
 
@@ -233,6 +239,7 @@ mod tests {
                 id: "s".into(),
                 name: "S".into(),
                 generation_target: None,
+                wire_case: Default::default(),
             },
             components: vec![],
             types,

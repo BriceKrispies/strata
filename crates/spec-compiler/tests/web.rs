@@ -131,6 +131,38 @@ fn an_omitted_option_payload_field_is_null() {
 }
 
 #[test]
+fn payload_members_of_an_event_that_crosses_a_contract_follow_its_wire_case() {
+    // credentials-sent becomes the request of a contract in camelCase, with a field hint-text.
+    let text = machines_text()
+        .replace(
+            r#"{ "id": "credentials-sent", "name": "Credentials sent", "delivery": "at-least-once","#,
+            r#"{ "id": "credentials-sent", "name": "Credentials sent", "delivery": "at-least-once", "contract": "send-credentials", "role": "request","#,
+        )
+        .replace(
+            r#"{ "name": "hint", "type": "option<string>" } ] },"#,
+            r#"{ "name": "hint-text", "type": "option<string>" } ] },"#,
+        )
+        .replace(
+            r#"  "events": ["#,
+            r#"  "contracts": [ { "id": "send-credentials", "name": "Send credentials", "binding": { "case": "camelCase" },
+      "inputs": [ { "name": "name", "type": "string" }, { "name": "attempt", "type": "u32" }, { "name": "hint-text", "type": "option<string>" } ] } ],
+  "events": ["#,
+        );
+    let files = web::generate(SPEC, &text).unwrap();
+    let js = &files
+        .iter()
+        .find(|f| f.path == "login-form.js")
+        .unwrap()
+        .contents;
+    assert!(
+        js.contains("attempt: next.attempts, hintText: null }"),
+        "{js}"
+    );
+    assert!(js.contains("hintText?: string | null"), "{js}");
+    assert!(!js.contains("hint-text"), "{js}");
+}
+
+#[test]
 fn a_specification_without_client_machines_gives_no_files() {
     let text = fs::read_to_string(manifest_dir().join("tests/fixtures/full/spec.jsonc")).unwrap();
     assert_eq!(web::generate("spec.jsonc", &text), Ok(Vec::new()));

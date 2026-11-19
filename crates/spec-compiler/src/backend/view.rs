@@ -151,8 +151,9 @@ impl Leaf {
     }
 }
 
-fn builtin_leaf(b: Builtin) -> (Ty, Class, Vec<Layer>) {
-    match b {
+/// `None` for `json`, which is no leaf: it has no class a construct can test.
+fn builtin_leaf(b: Builtin) -> Option<(Ty, Class, Vec<Layer>)> {
+    Some(match b {
         Builtin::Bool => (Ty::Bool, Class::Bool, vec![]),
         Builtin::U8 => (Ty::U8, Class::Number, vec![]),
         Builtin::U16 => (Ty::U16, Class::Number, vec![]),
@@ -166,15 +167,16 @@ fn builtin_leaf(b: Builtin) -> (Ty, Class, Vec<Layer>) {
         Builtin::Timestamp => (Ty::I64, Class::Number, vec![Layer::Timestamp]),
         Builtin::Duration => (Ty::U64, Class::Number, vec![Layer::Duration]),
         Builtin::Uuid => (Ty::String, Class::Text, vec![Layer::Uuid]),
-    }
+        Builtin::Json => return None,
+    })
 }
 
 /// The leaf of a type that is a built-in, a declared id or scalar, or a declared enum; `None`
-/// for options, lists, structs and names that do not resolve.
+/// for options, lists, structs, `json` and names that do not resolve.
 pub fn leaf(spec: &Spec, t: &TypeRef) -> Option<Leaf> {
     match t {
         TypeRef::Builtin(b) => {
-            let (ty, class, layers) = builtin_leaf(*b);
+            let (ty, class, layers) = builtin_leaf(*b)?;
             Some(Leaf {
                 ty,
                 class,
@@ -187,7 +189,7 @@ pub fn leaf(spec: &Spec, t: &TypeRef) -> Option<Leaf> {
             match &decl.kind {
                 TypeKind::Id { repr } | TypeKind::Scalar { repr } => {
                     let base = Builtin::parse(repr.as_deref()?)?;
-                    let (ty, class, inner) = builtin_leaf(base);
+                    let (ty, class, inner) = builtin_leaf(base)?;
                     let mut layers = vec![Layer::Newtype(id.clone())];
                     layers.extend(inner);
                     Some(Leaf {
@@ -642,6 +644,7 @@ mod tests {
                 id: "s".into(),
                 name: "S".into(),
                 generation_target: None,
+                wire_case: Default::default(),
             },
             components: vec![],
             types: vec![

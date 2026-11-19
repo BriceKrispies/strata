@@ -37,7 +37,7 @@
 //! declared ids and scalars are their representation.
 
 use std::cell::Cell;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use serde_json::Value;
@@ -54,6 +54,10 @@ use crate::ir::{Behavior, Effect, Event, Spec, Transition, TypeKind};
 use crate::load;
 use crate::naming;
 use crate::resolve::{self, Builtin, TypeRef};
+use crate::wire::{self, WireCase};
+
+/// The wire case of each struct type a contract payload reaches ([`wire::type_cases`]).
+type Cases = BTreeMap<String, WireCase>;
 
 /// Code of a machine id that cannot name a file or a set of type names.
 pub const NAME: &str = "specc.web-name";
@@ -210,6 +214,7 @@ fn builtin_ty(b: Builtin) -> Ty {
         Builtin::Timestamp => Ty::Timestamp,
         Builtin::Duration => Ty::Duration,
         Builtin::Uuid => Ty::Uuid,
+        Builtin::Json => Ty::Json,
     }
 }
 
@@ -247,7 +252,8 @@ fn expr_ty(spec: &Spec, t: &TypeRef) -> Ty {
 }
 
 /// The JSDoc type of a value of type `t`; `nested` parenthesises unions.
-fn js_type(spec: &Spec, t: &TypeRef, nested: bool, depth: usize) -> String {
+/// Struct members are named in the struct's wire case (`cases`), as its Rust form serialises them.
+fn js_type(spec: &Spec, cases: &Cases, t: &TypeRef, nested: bool, depth: usize) -> String {
     let wrap = |s: String| if nested { format!("({s})") } else { s };
     if depth > 16 {
         return "unknown".to_string();
@@ -257,17 +263,19 @@ fn js_type(spec: &Spec, t: &TypeRef, nested: bool, depth: usize) -> String {
             Builtin::Bool => "boolean",
             Builtin::String | Builtin::Uuid => "string",
             Builtin::Bytes => "Uint8Array",
+            Builtin::Json => "unknown",
             _ => "number",
         }
         .to_string(),
-        TypeRef::List(inner) => format!("{}[]", js_type(spec, inner, true, depth + 1)),
-        TypeRef::Option(inner) => {
-            wrap(format!("{} | null", js_type(spec, inner, false, depth + 1)))
-        }
+        TypeRef::List(inner) => format!("{}[]", js_type(spec, cases, inner, true, depth + 1)),
+        TypeRef::Option(inner) => wrap(format!(
+            "{} | null",
+            js_type(spec, cases, inner, false, depth + 1)
+        )),
         TypeRef::Declared(id) => match spec.type_decl(id).map(|d| &d.kind) {
             Some(TypeKind::Id { repr } | TypeKind::Scalar { repr }) => {
                 match repr.as_deref().and_then(Builtin::parse) {
-                    Some(b) => js_type(spec, &TypeRef::Builtin(b), nested, depth + 1),
+                    Some(b) => js_type(spec, cases, &TypeRef::Builtin(b), nested, depth + 1),
                     None => "unknown".to_string(),
                 }
             }
@@ -282,14 +290,16 @@ fn js_type(spec: &Spec, t: &TypeRef, nested: bool, depth: usize) -> String {
                 }
             }
             Some(TypeKind::Struct { fields }) => {
+                let case = cases.get(id).copied().unwrap_or_default();
                 let items: Vec<String> = fields
                     .iter()
                     .map(|f| {
-                        let t = js_type(spec, &TypeRef::parse(&f.type_name), false, depth + 1);
+                        let t =
+                            js_type(spec, cases, &TypeRef::parse(&f.type_name), false, depth + 1);
                         let option = f.type_name.trim_start().starts_with("option<");
                         format!(
                             "{}{}: {t}",
-                            key(&f.name),
+                            key(&case.name(&f.name)),
                             if f.optional || option { "?" } else { "" }
                         )
                     })
@@ -328,7 +338,11 @@ fn references(e: &expr::Expr, out: &mut Vec<Vec<String>>) {
 /// A named value an expression can read: a variable or a payload field.
 #[derive(Debug, Clone)]
 struct Slot {
+    /// The name expressions use: the specification's.
     name: String,
+    /// The member name in the JavaScript object: the specification's name, in the wire case of
+    /// the event's contract for a payload field ([`wire::event_case`]).
+    wire: String,
     type_name: String,
     optional: bool,
     /// How expressions see it.
@@ -367,7 +381,7 @@ impl JsScope for MachineScope {
             }
             ["event", name] => {
                 let slot = self.payload.iter().find(|s| s.name == *name)?;
-                let read = format!("event.payload{}", member(name));
+                let read = format!("event.payload{}", member(&slot.wire));
                 if slot.optional || matches!(slot.ty, Ty::Option(_)) {
                     // A field left out reads as the option's None.
                     let ty = if slot.optional {
@@ -403,16 +417,16 @@ struct EventInfo<'a> {
 }
 
 impl EventInfo<'_> {
-    fn payload_type(&self, spec: &Spec) -> String {
+    fn payload_type(&self, spec: &Spec, cases: &Cases) -> String {
         let items: Vec<String> = self
             .fields
             .iter()
             .map(|f| {
                 format!(
                     "{}{}: {}",
-                    key(&f.name),
+                    key(&f.wire),
                     if f.omittable() { "?" } else { "" },
-                    js_type(spec, &TypeRef::parse(&f.type_name), false, 0)
+                    js_type(spec, cases, &TypeRef::parse(&f.type_name), false, 0)
                 )
             })
             .collect();
@@ -432,6 +446,8 @@ struct Gen<'a> {
     used_overflow: Rc<Cell<bool>>,
     has_cancel: bool,
     timer_events: BTreeSet<String>,
+    /// The wire case of each struct type a contract payload reaches.
+    cases: Cases,
 }
 
 impl<'a> Gen<'a> {
@@ -447,6 +463,7 @@ impl<'a> Gen<'a> {
             used_overflow: Rc::default(),
             has_cancel: false,
             timer_events: BTreeSet::new(),
+            cases: wire::type_cases(spec),
         }
     }
 
@@ -528,6 +545,7 @@ impl<'a> Gen<'a> {
             }
             self.vars.push(Slot {
                 name: v.name.clone(),
+                wire: v.name.clone(),
                 type_name: repr.clone(),
                 optional: false,
                 ty: expr_ty(spec, &TypeRef::parse(repr)),
@@ -730,6 +748,7 @@ impl<'a> Gen<'a> {
             }
             fields.push(Slot {
                 name: f.name.clone(),
+                wire: wire::event_case(self.spec, e).name(&f.name),
                 type_name: type_name.to_string(),
                 optional: f.optional,
                 ty: expr_ty(self.spec, &TypeRef::parse(type_name)),
@@ -860,12 +879,13 @@ impl<'a> Gen<'a> {
                         {
                             return Err(format!("\"{extra}\" is not a field of \"{id}\""));
                         }
+                        let case = self.cases.get(id).copied().unwrap_or_default();
                         let mut items = Vec::new();
                         for f in fields {
                             match map.get(&f.name) {
                                 Some(v) => items.push(format!(
                                     "{}: {}",
-                                    key(&f.name),
+                                    key(&case.name(&f.name)),
                                     self.literal(v, &TypeRef::parse(&f.type_name))?
                                 )),
                                 None if f.optional => {}
@@ -937,7 +957,7 @@ impl<'a> Gen<'a> {
                 },
             };
             match value {
-                Some(v) => items.push(format!("{}: {v}", key(&f.name))),
+                Some(v) => items.push(format!("{}: {v}", key(&f.wire))),
                 None => ok = false,
             }
         }
@@ -1227,7 +1247,7 @@ impl<'a> Gen<'a> {
                 format!(
                     "{}: {}",
                     key(&v.name),
-                    js_type(spec, &TypeRef::parse(&v.type_name), false, 0)
+                    js_type(spec, &self.cases, &TypeRef::parse(&v.type_name), false, 0)
                 )
             })
             .collect();
@@ -1240,7 +1260,7 @@ impl<'a> Gen<'a> {
             .received
             .iter()
             .map(|e| {
-                let payload = e.payload_type(spec);
+                let payload = e.payload_type(spec, &self.cases);
                 if e.fields.is_empty() {
                     format!("{{ event: {}, payload?: {payload} }}", sq(&e.event.id))
                 } else {
@@ -1268,7 +1288,7 @@ impl<'a> Gen<'a> {
                     "{{ to: string, delivery: {}, event: {}, payload: {}, afterMs?: number }}",
                     sq(delivery),
                     sq(&e.event.id),
-                    e.payload_type(spec)
+                    e.payload_type(spec, &self.cases)
                 )
             })
             .collect();
@@ -1285,7 +1305,7 @@ impl<'a> Gen<'a> {
                 format!(
                     "{{ set: string, afterMs: number, event: {}, payload: {} }}",
                     sq(&e.event.id),
-                    e.payload_type(spec)
+                    e.payload_type(spec, &self.cases)
                 )
             })
             .collect();

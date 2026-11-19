@@ -272,19 +272,36 @@ impl Loader {
         let id = self.req_str(obj, "id", SPEC_ENTITY);
         let entity = id.clone().unwrap_or_else(|| SPEC_ENTITY.to_string());
         let name = self.req_str(obj, "name", &entity);
-        let generation_target = match obj.get("generation") {
-            None | Some(Value::Null) => None,
-            Some(Value::Object(g)) => self.opt_str(g, "target", &entity),
+        let (generation_target, wire_case) = match obj.get("generation") {
+            None | Some(Value::Null) => (None, None),
+            Some(Value::Object(g)) => (
+                self.opt_str(g, "target", &entity),
+                self.wire_case(g, "wireCase", &entity),
+            ),
             Some(_) => {
                 self.shape(&entity, "\"generation\" must be an object");
-                None
+                (None, None)
             }
         };
         Some(System {
             id: id?,
             name: name?,
             generation_target,
+            wire_case: wire_case.unwrap_or_default(),
         })
+    }
+
+    /// A wire case (`snake_case`, `kebab-case` or `camelCase`) under `key`, if stated.
+    fn wire_case(&mut self, obj: &Obj, key: &str, entity: &str) -> Option<crate::wire::WireCase> {
+        let text = self.opt_str(obj, key, entity)?;
+        let parsed = crate::wire::WireCase::parse(&text);
+        if parsed.is_none() {
+            self.shape(
+                entity,
+                format!("\"{key}\" is \"{text}\"; it must be snake_case, kebab-case or camelCase"),
+            );
+        }
+        parsed
     }
 
     fn component(&mut self, id: &str, obj: &Obj) -> Option<Component> {
@@ -505,12 +522,16 @@ impl Loader {
         let auth = self.opt_str(obj, "auth", id);
         let idempotent = self.opt_bool(obj, "idempotent", id);
         let timeout_ms = self.opt_number(obj, "timeoutMs", id);
-        let (binding_method, binding_path) = match obj.get("binding") {
-            None | Some(Value::Null) => (None, None),
-            Some(Value::Object(b)) => (self.opt_str(b, "method", id), self.opt_str(b, "path", id)),
+        let (binding_method, binding_path, binding_case) = match obj.get("binding") {
+            None | Some(Value::Null) => (None, None, None),
+            Some(Value::Object(b)) => (
+                self.opt_str(b, "method", id),
+                self.opt_str(b, "path", id),
+                self.wire_case(b, "case", id),
+            ),
             Some(_) => {
                 self.shape(id, "\"binding\" must be an object");
-                (None, None)
+                (None, None, None)
             }
         };
         Some(Contract {
@@ -530,6 +551,7 @@ impl Loader {
             timeout_ms,
             binding_method,
             binding_path,
+            binding_case,
         })
     }
 

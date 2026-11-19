@@ -203,6 +203,7 @@ fn builtin_ty(b: Builtin) -> Ty {
         Builtin::Timestamp => Ty::Timestamp,
         Builtin::Duration => Ty::Duration,
         Builtin::Uuid => Ty::Uuid,
+        Builtin::Json => Ty::Json,
     }
 }
 
@@ -1611,7 +1612,7 @@ impl<'a> Gen<'a> {
                     &mut self.uses,
                 );
                 Field {
-                    spec_name: v.name.clone(),
+                    wire_name: v.name.clone(),
                     rust_name: v.field.to_string(),
                     ty,
                     optional: false,
@@ -1679,7 +1680,7 @@ impl<'a> Gen<'a> {
                         &mut self.uses,
                     );
                     Field {
-                        spec_name: f.name.clone(),
+                        wire_name: crate::wire::event_case(spec, event).name(&f.name),
                         rust_name: f.field.to_string(),
                         ty,
                         optional: f.optional,

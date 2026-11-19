@@ -4,6 +4,8 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+use crate::{prelude, types};
+
 /// The request of contract `submit-job`: Submit job.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct SubmitJobRequest {
@@ -102,19 +104,84 @@ pub struct MakeReportResponse {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum MakeReportError {
     /// No job has the id.
-    #[serde(rename = "not-found")]
+    #[serde(rename = "not_found")]
     NotFound,
 }
 
 impl fmt::Display for MakeReportError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::NotFound => f.write_str("not-found"),
+            Self::NotFound => f.write_str("not_found"),
         }
     }
 }
 
 impl std::error::Error for MakeReportError {}
+
+/// The request of contract `inspect-job`: Inspect job.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct InspectJobRequest {
+    /// Field `job-id`.
+    pub job_id: String,
+    /// Field `filter-params`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub filter_params: Option<serde_json::Value>,
+}
+
+/// The response of contract `inspect-job`: Inspect job.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct InspectJobResponse {
+    /// Field `summary`.
+    pub summary: types::JobSummary,
+}
+
+/// The errors of contract `inspect-job`: Inspect job.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub enum InspectJobError {
+    /// No job has the id.
+    #[serde(rename = "not_found")]
+    NotFound,
+}
+
+impl fmt::Display for InspectJobError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NotFound => f.write_str("not_found"),
+        }
+    }
+}
+
+impl std::error::Error for InspectJobError {}
+
+/// The request of contract `inspect-job-camel`: Inspect job, camel case.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct InspectJobCamelRequest {
+    /// Field `job-id`.
+    #[serde(rename = "jobId")]
+    pub job_id: String,
+}
+
+/// The response of contract `inspect-job-camel`: Inspect job, camel case.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct InspectJobCamelResponse {
+    /// Field `last-seen`.
+    #[serde(rename = "lastSeen")]
+    pub last_seen: Option<prelude::Timestamp>,
+    /// Field `details`.
+    pub details: serde_json::Value,
+}
+
+/// The errors of contract `inspect-job-camel`: Inspect job, camel case.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub enum InspectJobCamelError {}
+
+impl fmt::Display for InspectJobCamelError {
+    fn fmt(&self, _: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match *self {}
+    }
+}
+
+impl std::error::Error for InspectJobCamelError {}
 
 /// The contracts component `gateway` (Gateway) implements.
 pub trait Gateway {
@@ -225,6 +292,37 @@ pub mod meta {
         timeout_ms: Some(1000),
     };
 
+    /// Contract `inspect-job`: Inspect job.
+    pub const INSPECT_JOB: ContractMeta = ContractMeta {
+        id: "inspect-job",
+        name: "Inspect job",
+        reference: Some("CT-5"),
+        realisation: Realisation::Generated,
+        implemented_by: None,
+        auth: None,
+        idempotent: Some(true),
+        timeout_ms: None,
+    };
+
+    /// Contract `inspect-job-camel`: Inspect job, camel case.
+    pub const INSPECT_JOB_CAMEL: ContractMeta = ContractMeta {
+        id: "inspect-job-camel",
+        name: "Inspect job, camel case",
+        reference: Some("CT-6"),
+        realisation: Realisation::Generated,
+        implemented_by: None,
+        auth: None,
+        idempotent: Some(true),
+        timeout_ms: None,
+    };
+
     /// Every contract, in declaration order.
-    pub const ALL: &[ContractMeta] = &[SUBMIT_JOB, CANCEL_JOB, PING, MAKE_REPORT];
+    pub const ALL: &[ContractMeta] = &[
+        SUBMIT_JOB,
+        CANCEL_JOB,
+        PING,
+        MAKE_REPORT,
+        INSPECT_JOB,
+        INSPECT_JOB_CAMEL,
+    ];
 }

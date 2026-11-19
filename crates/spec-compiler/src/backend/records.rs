@@ -540,7 +540,7 @@ fn record_items(
     };
     let field_tokens = |f: &RecordField, uses: &mut Uses| {
         Field {
-            spec_name: f.name.clone(),
+            wire_name: f.name.clone(),
             rust_name: naming::snake(&f.name).unwrap_or_default(),
             ty: field_type(f, uses),
             optional: f.optional,

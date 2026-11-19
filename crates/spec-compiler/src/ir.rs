@@ -62,6 +62,9 @@ pub struct System {
     pub name: String,
     /// `system.generation.target`, when the specification declares it ready to generate from.
     pub generation_target: Option<String>,
+    /// `system.generation.wireCase`: how contract payloads name their JSON members; kebab-case
+    /// (the names as written) when unstated.
+    pub wire_case: crate::wire::WireCase,
 }
 
 /// A component; only what the contract and wiring backends name.
@@ -289,6 +292,8 @@ pub struct Contract {
     pub binding_method: Option<String>,
     /// `binding.path`, as written: the route the contract is served at.
     pub binding_path: Option<String>,
+    /// `binding.case`: the contract's own wire case, overriding the system's.
+    pub binding_case: Option<crate::wire::WireCase>,
 }
 
 /// An input or output of a contract.

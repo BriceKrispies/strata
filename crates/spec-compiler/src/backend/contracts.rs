@@ -15,6 +15,7 @@ use crate::ir::{Contract, ContractField, Realisation, Spec};
 use crate::naming;
 use crate::render::{self, Doc, Field, Namespace, Scope, Uses};
 use crate::resolve::{self, TypeRef};
+use crate::wire::{self, WireCase};
 
 /// Code of an `implementedBy` that names no component.
 pub const COMPONENT_UNKNOWN: &str = "specc.component-unknown";
@@ -283,6 +284,7 @@ fn data_struct(
     name: &str,
     doc: Doc,
     fields: &[ContractField],
+    case: WireCase,
     uses: &mut Uses,
 ) -> TokenStream {
     let name = naming::ident(name);
@@ -303,7 +305,7 @@ fn data_struct(
                 uses,
             );
             Field {
-                spec_name: f.name.clone(),
+                wire_name: case.name(&f.name),
                 rust_name: naming::snake(&f.name).unwrap_or_default(),
                 ty,
                 optional: f.optional,
@@ -331,12 +333,14 @@ fn contract_items(spec: &Spec, c: &Contract, uses: &mut Uses) -> TokenStream {
     if let Some(d) = &c.description {
         request_doc.paragraph(d);
     }
-    let request = data_struct(spec, &request, request_doc, &c.inputs, uses);
+    let case = wire::contract_case(spec, c);
+    let request = data_struct(spec, &request, request_doc, &c.inputs, case, uses);
     let response = data_struct(
         spec,
         &response,
         Doc::new(&format!("The response of contract `{}`: {}.", c.id, c.name)),
         &c.outputs,
+        case,
         uses,
     );
 
@@ -358,7 +362,7 @@ fn contract_items(spec: &Spec, c: &Contract, uses: &mut Uses) -> TokenStream {
                 .unwrap_or(&format!("Error `{}`.", e.name)),
         )
         .tokens();
-        let wire = &e.name;
+        let wire = &case.name(&e.name);
         match &e.type_name {
             Some(t) => {
                 let ty = render::rust_type(spec, &TypeRef::parse(t), Scope::Other, uses);

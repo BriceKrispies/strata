@@ -7,9 +7,14 @@
 //   and an audit; make-report has a retry policy; the others take the default path.
 // - machine job receives job-submitted and job-cancel through contracts and job-tick from its own
 //   timer; it publishes job-started to machine tracker. tracker-reset arrives in no stated way.
+// - wire names (WG-4881): the system names JSON members in snake_case, so make-report's error
+//   not-found is not_found on the wire, and inspect-job (no implementer) sends job-id as job_id
+//   and its job-summary struct as display_name, started_at, extra_info; inspect-job-camel
+//   overrides the case with binding.case camelCase (jobId, lastSeen). filter-params, details and
+//   extra-info are json.
 {
   "exegra": "0.1",
-  "system": { "id": "wiring-fixture", "name": "Wiring fixture", "generation": { "target": "rust" } },
+  "system": { "id": "wiring-fixture", "name": "Wiring fixture", "generation": { "target": "rust", "wireCase": "snake_case" } },
   "components": [
     { "id": "gateway", "name": "Gateway", "category": "service", "purpose": "Takes requests from outside." },
     { "id": "scheduler", "name": "Scheduler", "category": "service", "purpose": "Runs jobs." },
@@ -21,6 +26,9 @@
     { "id": "gateway-calls-worker", "kind": "calls", "from": "gateway", "to": "worker", "description": "The gateway wakes workers." },
     { "id": "scheduler-calls-reports", "kind": "calls", "from": "scheduler", "to": "reports", "description": "A finished job gets a report." },
     { "id": "reports-reads-scheduler", "kind": "reads", "from": "reports", "to": "scheduler", "description": "Not a call: gives no client." }
+  ],
+  "types": [
+    { "id": "job-summary", "name": "Job summary", "kind": "struct", "fields": [ { "name": "display-name", "type": "string" }, { "name": "started-at", "type": "option<timestamp>", "optional": true }, { "name": "extra-info", "type": "json" } ] }
   ],
   "records": [
     { "id": "rec-job", "name": "Job", "owner": "scheduler", "key": ["job"], "schemaVersion": 1,
@@ -58,7 +66,15 @@
     { "id": "make-report", "name": "Make report", "ref": "CT-4", "realisation": "generated", "implementedBy": "reports", "idempotent": true, "timeoutMs": 1000,
       "inputs": [{ "name": "job", "type": "string" }],
       "outputs": [{ "name": "text", "type": "string" }],
-      "errors": [{ "name": "not-found", "condition": "No job has the id." }] }
+      "errors": [{ "name": "not-found", "condition": "No job has the id." }] },
+    { "id": "inspect-job", "name": "Inspect job", "ref": "CT-5", "realisation": "generated", "idempotent": true,
+      "inputs": [{ "name": "job-id", "type": "string" }, { "name": "filter-params", "type": "json", "optional": true }],
+      "outputs": [{ "name": "summary", "type": "job-summary" }],
+      "errors": [{ "name": "not-found", "condition": "No job has the id." }] },
+    { "id": "inspect-job-camel", "name": "Inspect job, camel case", "ref": "CT-6", "realisation": "generated", "idempotent": true,
+      "binding": { "case": "camelCase" },
+      "inputs": [{ "name": "job-id", "type": "string" }],
+      "outputs": [{ "name": "last-seen", "type": "option<timestamp>" }, { "name": "details", "type": "json" }] }
   ],
   "policies": [
     { "id": "pol-operator-submit", "subject": { "principal": "operator" }, "contract": "submit-job", "effect": "allow" },

@@ -100,6 +100,7 @@ pub fn builtin_type(b: Builtin, uses: &mut Uses) -> TokenStream {
             quote! { prelude::DurationMs }
         }
         Builtin::Uuid => quote! { uuid::Uuid },
+        Builtin::Json => quote! { serde_json::Value },
     }
 }
 
@@ -182,8 +183,9 @@ fn clean(text: &str) -> String {
 
 /// A struct field to emit.
 pub struct Field {
-    /// The name in the specification, kept on the wire through `serde(rename)`.
-    pub spec_name: String,
+    /// The name on the wire, kept through `serde(rename)`: the specification's name, converted
+    /// to the wire case where the field crosses a contract ([`crate::wire`]).
+    pub wire_name: String,
     /// The Rust name (from [`naming::snake`]).
     pub rust_name: String,
     /// The field's Rust type, before the optional wrapper.
@@ -200,7 +202,7 @@ impl Field {
         let doc = self.doc.tokens();
         let name = naming::ident(&self.rust_name);
         let ty = &self.ty;
-        let spec_name = &self.spec_name;
+        let spec_name = &self.wire_name;
         let renamed = self.rust_name != *spec_name;
         let serde = match (renamed, self.optional) {
             (false, false) => TokenStream::new(),

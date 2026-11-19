@@ -16,6 +16,7 @@ use crate::ir::{Spec, TypeDecl, TypeKind};
 use crate::naming;
 use crate::render::{self, Doc, Field, Namespace, Scope, Uses};
 use crate::resolve::{self, Builtin, TypeRef, BUILTIN_TYPES};
+use crate::wire::{self, WireCase};
 
 /// Code of a struct that contains itself other than through a list, so it has no finite size.
 pub const TYPE_RECURSIVE: &str = "specc.type-recursive";
@@ -72,6 +73,16 @@ impl Backend for TypesBackend {
                                 t.id
                             ),
                         )),
+                        Some(r) if Builtin::parse(r) == Some(Builtin::Json) => {
+                            out.push(Diagnostic::new(
+                                "type.repr-json",
+                                &t.id,
+                                format!(
+                                    "Type \"{}\" is {article} represented as json; an id or scalar has a representation of a single kind, so use json directly where any JSON value is meant.",
+                                    t.id
+                                ),
+                            ))
+                        }
                         Some(_) => {}
                     }
                 }
@@ -136,15 +147,20 @@ impl Backend for TypesBackend {
                 }
             }
         }
+        out.extend(wire::check(spec));
         out
     }
 
     fn emit(&self, spec: &Spec) -> TokenStream {
         let mut uses = Uses::default();
+        let cases = wire::type_cases(spec);
         let items: Vec<TokenStream> = spec
             .types
             .iter()
-            .map(|t| type_item(spec, t, &mut uses))
+            .map(|t| {
+                let case = cases.get(&t.id).copied().unwrap_or_default();
+                type_item(spec, t, case, &mut uses)
+            })
             .collect();
         let serde = if items.is_empty() {
             TokenStream::new()
@@ -196,7 +212,8 @@ fn ref_reaches(spec: &Spec, t: &TypeRef, target: &str, seen: &mut BTreeSet<Strin
     }
 }
 
-fn type_item(spec: &Spec, t: &TypeDecl, uses: &mut Uses) -> TokenStream {
+/// `case` names the fields of a struct on the wire ([`crate::wire`]).
+fn type_item(spec: &Spec, t: &TypeDecl, case: WireCase, uses: &mut Uses) -> TokenStream {
     let name = naming::ident(&naming::pascal(&t.id).unwrap_or_default());
     let mut doc = Doc::new(&t.name);
     if let Some(d) = &t.description {
@@ -271,7 +288,7 @@ fn type_item(spec: &Spec, t: &TypeDecl, uses: &mut Uses) -> TokenStream {
                 .map(|f| {
                     let ty = rust_type_of(spec, &f.type_name, uses);
                     Field {
-                        spec_name: f.name.clone(),
+                        wire_name: case.name(&f.name),
                         rust_name: naming::snake(&f.name).unwrap_or_default(),
                         ty,
                         optional: f.optional,

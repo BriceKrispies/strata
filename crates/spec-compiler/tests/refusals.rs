@@ -402,3 +402,48 @@ fn the_strata_specification_is_handled() {
         }
     }
 }
+
+// Wire naming and json (WG-4881).
+
+#[test]
+fn a_struct_crossing_contracts_of_two_wire_cases_is_refused() {
+    let text = spec(json!({
+        "system": { "id": "sys", "name": "System", "generation": { "target": "rust", "wireCase": "snake_case" } },
+        "types": [ { "id": "page", "name": "Page", "kind": "struct", "fields": [ { "name": "cover-alt", "type": "string" } ] } ],
+        "contracts": [
+            { "id": "get-page", "name": "Get page", "realisation": "generated", "outputs": [ { "name": "page", "type": "page" } ] },
+            { "id": "get-page-camel", "name": "Get page in camel case", "realisation": "generated", "binding": { "case": "camelCase" },
+              "outputs": [ { "name": "page", "type": "list<page>" } ] }
+        ]
+    }));
+    assert_refused_with(&text, "specc.wire-case-conflict", "page");
+}
+
+#[test]
+fn a_struct_whose_fields_read_the_same_in_both_cases_is_not_a_conflict() {
+    let text = spec(json!({
+        "system": { "id": "sys", "name": "System", "generation": { "target": "rust", "wireCase": "snake_case" } },
+        "types": [ { "id": "point", "name": "Point", "kind": "struct", "fields": [ { "name": "x", "type": "f64" } ] } ],
+        "contracts": [
+            { "id": "a", "name": "A", "realisation": "generated", "outputs": [ { "name": "p", "type": "point" } ] },
+            { "id": "b", "name": "B", "realisation": "generated", "binding": { "case": "camelCase" }, "outputs": [ { "name": "p", "type": "point" } ] }
+        ]
+    }));
+    assert!(generate("spec.jsonc", &text, &options()).is_ok());
+}
+
+#[test]
+fn a_wire_case_that_is_not_one_of_the_three_is_refused() {
+    let text = spec(json!({
+        "contracts": [ { "id": "a", "name": "A", "realisation": "generated", "binding": { "case": "PascalCase" } } ]
+    }));
+    assert_refused_with(&text, "specc.spec-shape", "a");
+}
+
+#[test]
+fn an_id_represented_as_json_is_refused() {
+    let text = spec(json!({
+        "types": [ { "id": "doc-id", "name": "Document id", "kind": "id", "repr": "json" } ]
+    }));
+    assert_refused_with(&text, "type.repr-json", "doc-id");
+}
