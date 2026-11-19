@@ -1765,7 +1765,7 @@ pub struct PostRefs {
 /// One publication record as a view section holds it (substrate project_row): the record members, refs (an empty object here), blocks of its markdown fields and reading_minutes when it has any.
 ///
 /// Specification type `publication-row`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PublicationRow {
     /// Field `id`.
     pub id: RecordId,
@@ -1783,10 +1783,10 @@ pub struct PublicationRow {
     /// Field `fields`.
     pub fields: PublicationFields,
     /// Field `refs`.
-    pub refs: ValueMap,
+    pub refs: serde_json::Value,
     /// Field `blocks`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub blocks: Option<ValueMap>,
+    pub blocks: Option<serde_json::Value>,
     /// Field `reading_minutes`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reading_minutes: Option<u32>,
@@ -1797,7 +1797,7 @@ pub struct PublicationRow {
 /// One author record as a view section holds it; the markdown field bio is in blocks.
 ///
 /// Specification type `author-row`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AuthorRow {
     /// Field `id`.
     pub id: RecordId,
@@ -1815,10 +1815,10 @@ pub struct AuthorRow {
     /// Field `fields`.
     pub fields: AuthorFields,
     /// Field `refs`.
-    pub refs: ValueMap,
+    pub refs: serde_json::Value,
     /// Field `blocks`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub blocks: Option<ValueMap>,
+    pub blocks: Option<serde_json::Value>,
     /// Field `reading_minutes`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reading_minutes: Option<u32>,
@@ -1829,7 +1829,7 @@ pub struct AuthorRow {
 /// One topic record as a view section holds it.
 ///
 /// Specification type `category-row`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CategoryRow {
     /// Field `id`.
     pub id: RecordId,
@@ -1847,10 +1847,10 @@ pub struct CategoryRow {
     /// Field `fields`.
     pub fields: CategoryFields,
     /// Field `refs`.
-    pub refs: ValueMap,
+    pub refs: serde_json::Value,
     /// Field `blocks`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub blocks: Option<ValueMap>,
+    pub blocks: Option<serde_json::Value>,
     /// Field `reading_minutes`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reading_minutes: Option<u32>,
@@ -1861,7 +1861,7 @@ pub struct CategoryRow {
 /// One article record as a view section holds it: its fields, the author and the topic it refers to (refs), and the blocks of its body with the reading time.
 ///
 /// Specification type `post-row`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PostRow {
     /// Field `id`.
     pub id: RecordId,
@@ -1882,7 +1882,7 @@ pub struct PostRow {
     pub refs: PostRefs,
     /// Field `blocks`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub blocks: Option<ValueMap>,
+    pub blocks: Option<serde_json::Value>,
     /// Field `reading_minutes`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reading_minutes: Option<u32>,
@@ -1919,7 +1919,7 @@ pub struct OptionChoice {
 /// The sections of the front page view: the publication, the featured article, the recent articles and the topics.
 ///
 /// Specification type `front-page-data`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FrontPageData {
     /// Field `site`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1938,7 +1938,7 @@ pub struct FrontPageData {
 /// The sections of an article view: the publication, the article with this address (null when none) and the recent articles.
 ///
 /// Specification type `article-page-data`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ArticlePageData {
     /// Field `site`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1955,7 +1955,7 @@ pub struct ArticlePageData {
 /// The sections of the topic index view.
 ///
 /// Specification type `topics-page-data`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TopicsPageData {
     /// Field `site`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1971,7 +1971,7 @@ pub struct TopicsPageData {
 /// The sections of a topic view.
 ///
 /// Specification type `topic-page-data`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TopicPageData {
     /// Field `site`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1990,7 +1990,7 @@ pub struct TopicPageData {
 /// The sections of the author index view.
 ///
 /// Specification type `authors-page-data`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AuthorsPageData {
     /// Field `site`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2004,7 +2004,7 @@ pub struct AuthorsPageData {
 /// The sections of an author view.
 ///
 /// Specification type `author-page-data`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AuthorPageData {
     /// Field `site`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2021,7 +2021,7 @@ pub struct AuthorPageData {
 /// The sections of the search view.
 ///
 /// Specification type `search-page-data`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SearchPageData {
     /// Field `site`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2035,7 +2035,7 @@ pub struct SearchPageData {
 /// The sections of the about view; the markdown fields about and colophon of the publication are in its blocks.
 ///
 /// Specification type `about-page-data`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AboutPageData {
     /// Field `site`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2049,7 +2049,7 @@ pub struct AboutPageData {
 /// The sections of a view that holds the publication alone (sign in, settings, the impact lab).
 ///
 /// Specification type `site-page-data`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SitePageData {
     /// Field `site`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2061,7 +2061,7 @@ pub struct SitePageData {
 /// The sections of the writing desk view.
 ///
 /// Specification type `desk-page-data`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DeskPageData {
     /// Field `site`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2075,7 +2075,7 @@ pub struct DeskPageData {
 /// The sections of the view for a new article.
 ///
 /// Specification type `new-article-page-data`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct NewArticlePageData {
     /// Field `site`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2091,7 +2091,7 @@ pub struct NewArticlePageData {
 /// The sections of the view for editing an article.
 ///
 /// Specification type `edit-article-page-data`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EditArticlePageData {
     /// Field `site`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2999,7 +2999,7 @@ impl ReadKind {
 /// strata_kernel::ReadRequest.
 ///
 /// Specification type `read-request`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ReadRequest {
     /// Field `kind`.
     pub kind: ReadKind,
@@ -3008,7 +3008,7 @@ pub struct ReadRequest {
     pub query: Option<String>,
     /// Field `params`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub params: Option<ValueMap>,
+    pub params: Option<serde_json::Value>,
     /// Field `object`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub object: Option<ObjectTypeId>,
@@ -3746,14 +3746,14 @@ pub struct UsageCount {
 /// strata_substrate::project::ViewData: the raw result of a view.
 ///
 /// Specification type `view-data`: a struct.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ViewData {
     /// Field `view`.
     pub view: String,
     /// Field `title`.
     pub title: String,
     /// Field `params`.
-    pub params: ValueMap,
+    pub params: serde_json::Value,
     /// Field `sections`.
     pub sections: ValueMap,
     /// Field `depends-on`.

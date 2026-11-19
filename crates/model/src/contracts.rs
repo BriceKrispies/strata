@@ -156,7 +156,7 @@ impl fmt::Display for PlanIntentNeedsError {
 impl std::error::Error for PlanIntentNeedsError {}
 
 /// The request of contract `answer-read`: Answer a read against a snapshot.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AnswerReadRequest {
     /// Field `state`.
     pub state: types::State,
@@ -212,7 +212,7 @@ impl fmt::Display for AnswerReadError {
 impl std::error::Error for AnswerReadError {}
 
 /// The request of contract `plan-read-needs`: Plan the state a read needs.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PlanReadNeedsRequest {
     /// Field `schema`.
     pub schema: types::Schema,
@@ -1182,7 +1182,7 @@ impl fmt::Display for ExecuteIntentError {
 impl std::error::Error for ExecuteIntentError {}
 
 /// The request of contract `execute-read`: Answer a read from the store.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ExecuteReadRequest {
     /// Field `request`.
     pub request: types::ReadRequest,
@@ -3646,7 +3646,7 @@ pub struct DeliverViewRequest {
 }
 
 /// The response of contract `deliver-view`: Deliver a view of published content.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DeliverViewResponse {
     /// Field `view`.
     pub view: types::ViewData,
@@ -3834,7 +3834,7 @@ pub struct ShowPreviewRequest {
 }
 
 /// The response of contract `show-preview`: Show a preview of unpublished content.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ShowPreviewResponse {
     /// Field `view`.
     pub view: types::ViewData,
@@ -9519,7 +9519,7 @@ impl fmt::Display for TerminateTlsError {
 impl std::error::Error for TerminateTlsError {}
 
 /// The request of contract `render-page`: Render a page to HTML.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RenderPageRequest {
     /// Field `view`.
     pub view: types::ViewData,
@@ -10161,7 +10161,7 @@ impl std::error::Error for IssueDomainCertificateError {}
 pub struct ReadFrontPageRequest {}
 
 /// The response of contract `read-front-page`: Read the front page view.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ReadFrontPageResponse {
     /// Field `view`.
     pub view: String,
@@ -10170,7 +10170,7 @@ pub struct ReadFrontPageResponse {
     /// Field `path`.
     pub path: String,
     /// Field `params`.
-    pub params: types::ValueMap,
+    pub params: serde_json::Value,
     /// Field `data`.
     pub data: types::FrontPageData,
     /// Field `depends_on`.
@@ -10209,7 +10209,7 @@ pub struct ReadArticlePageRequest {
 }
 
 /// The response of contract `read-article-page`: Read the view of one article.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ReadArticlePageResponse {
     /// Field `view`.
     pub view: String,
@@ -10218,7 +10218,7 @@ pub struct ReadArticlePageResponse {
     /// Field `path`.
     pub path: String,
     /// Field `params`.
-    pub params: types::ValueMap,
+    pub params: serde_json::Value,
     /// Field `data`.
     pub data: types::ArticlePageData,
     /// Field `depends_on`.
@@ -10258,7 +10258,7 @@ impl std::error::Error for ReadArticlePageError {}
 pub struct ReadTopicsPageRequest {}
 
 /// The response of contract `read-topics-page`: Read the view of the topic index.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ReadTopicsPageResponse {
     /// Field `view`.
     pub view: String,
@@ -10267,7 +10267,7 @@ pub struct ReadTopicsPageResponse {
     /// Field `path`.
     pub path: String,
     /// Field `params`.
-    pub params: types::ValueMap,
+    pub params: serde_json::Value,
     /// Field `data`.
     pub data: types::TopicsPageData,
     /// Field `depends_on`.
@@ -10306,7 +10306,7 @@ pub struct ReadTopicPageRequest {
 }
 
 /// The response of contract `read-topic-page`: Read the view of one topic.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ReadTopicPageResponse {
     /// Field `view`.
     pub view: String,
@@ -10315,7 +10315,7 @@ pub struct ReadTopicPageResponse {
     /// Field `path`.
     pub path: String,
     /// Field `params`.
-    pub params: types::ValueMap,
+    pub params: serde_json::Value,
     /// Field `data`.
     pub data: types::TopicPageData,
     /// Field `depends_on`.
@@ -10355,7 +10355,7 @@ impl std::error::Error for ReadTopicPageError {}
 pub struct ReadAuthorsPageRequest {}
 
 /// The response of contract `read-authors-page`: Read the view of the author index.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ReadAuthorsPageResponse {
     /// Field `view`.
     pub view: String,
@@ -10364,7 +10364,7 @@ pub struct ReadAuthorsPageResponse {
     /// Field `path`.
     pub path: String,
     /// Field `params`.
-    pub params: types::ValueMap,
+    pub params: serde_json::Value,
     /// Field `data`.
     pub data: types::AuthorsPageData,
     /// Field `depends_on`.
@@ -10403,7 +10403,7 @@ pub struct ReadAuthorPageRequest {
 }
 
 /// The response of contract `read-author-page`: Read the view of one author.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ReadAuthorPageResponse {
     /// Field `view`.
     pub view: String,
@@ -10412,7 +10412,7 @@ pub struct ReadAuthorPageResponse {
     /// Field `path`.
     pub path: String,
     /// Field `params`.
-    pub params: types::ValueMap,
+    pub params: serde_json::Value,
     /// Field `data`.
     pub data: types::AuthorPageData,
     /// Field `depends_on`.
@@ -10456,7 +10456,7 @@ pub struct ReadSearchPageRequest {
 }
 
 /// The response of contract `read-search-page`: Read the view of the search results.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ReadSearchPageResponse {
     /// Field `view`.
     pub view: String,
@@ -10465,7 +10465,7 @@ pub struct ReadSearchPageResponse {
     /// Field `path`.
     pub path: String,
     /// Field `params`.
-    pub params: types::ValueMap,
+    pub params: serde_json::Value,
     /// Field `data`.
     pub data: types::SearchPageData,
     /// Field `depends_on`.
@@ -10503,7 +10503,7 @@ impl std::error::Error for ReadSearchPageError {}
 pub struct ReadAboutPageRequest {}
 
 /// The response of contract `read-about-page`: Read the view of the about page.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ReadAboutPageResponse {
     /// Field `view`.
     pub view: String,
@@ -10512,7 +10512,7 @@ pub struct ReadAboutPageResponse {
     /// Field `path`.
     pub path: String,
     /// Field `params`.
-    pub params: types::ValueMap,
+    pub params: serde_json::Value,
     /// Field `data`.
     pub data: types::AboutPageData,
     /// Field `depends_on`.
@@ -10584,7 +10584,7 @@ pub struct ReadSignInViewRequest {
 }
 
 /// The response of contract `read-sign-in-view`: Read the view of the sign-in page.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ReadSignInViewResponse {
     /// Field `view`.
     pub view: String,
@@ -10593,7 +10593,7 @@ pub struct ReadSignInViewResponse {
     /// Field `path`.
     pub path: String,
     /// Field `params`.
-    pub params: types::ValueMap,
+    pub params: serde_json::Value,
     /// Field `data`.
     pub data: types::SitePageData,
     /// Field `depends_on`.
@@ -10629,7 +10629,7 @@ impl std::error::Error for ReadSignInViewError {}
 pub struct ReadDeskViewRequest {}
 
 /// The response of contract `read-desk-view`: Read the view of the writing desk.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ReadDeskViewResponse {
     /// Field `view`.
     pub view: String,
@@ -10638,7 +10638,7 @@ pub struct ReadDeskViewResponse {
     /// Field `path`.
     pub path: String,
     /// Field `params`.
-    pub params: types::ValueMap,
+    pub params: serde_json::Value,
     /// Field `data`.
     pub data: types::DeskPageData,
     /// Field `depends_on`.
@@ -10684,7 +10684,7 @@ impl std::error::Error for ReadDeskViewError {}
 pub struct ReadNewArticleViewRequest {}
 
 /// The response of contract `read-new-article-view`: Read the view for a new article.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ReadNewArticleViewResponse {
     /// Field `view`.
     pub view: String,
@@ -10693,7 +10693,7 @@ pub struct ReadNewArticleViewResponse {
     /// Field `path`.
     pub path: String,
     /// Field `params`.
-    pub params: types::ValueMap,
+    pub params: serde_json::Value,
     /// Field `data`.
     pub data: types::NewArticlePageData,
     /// Field `depends_on`.
@@ -10744,7 +10744,7 @@ pub struct ReadEditArticleViewRequest {
 }
 
 /// The response of contract `read-edit-article-view`: Read the view for editing an article.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ReadEditArticleViewResponse {
     /// Field `view`.
     pub view: String,
@@ -10753,7 +10753,7 @@ pub struct ReadEditArticleViewResponse {
     /// Field `path`.
     pub path: String,
     /// Field `params`.
-    pub params: types::ValueMap,
+    pub params: serde_json::Value,
     /// Field `data`.
     pub data: types::EditArticlePageData,
     /// Field `depends_on`.
@@ -10811,7 +10811,7 @@ impl std::error::Error for ReadEditArticleViewError {}
 pub struct ReadSettingsViewRequest {}
 
 /// The response of contract `read-settings-view`: Read the view of the publication settings.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ReadSettingsViewResponse {
     /// Field `view`.
     pub view: String,
@@ -10820,7 +10820,7 @@ pub struct ReadSettingsViewResponse {
     /// Field `path`.
     pub path: String,
     /// Field `params`.
-    pub params: types::ValueMap,
+    pub params: serde_json::Value,
     /// Field `data`.
     pub data: types::SitePageData,
     /// Field `depends_on`.
@@ -10874,7 +10874,7 @@ impl std::error::Error for ReadSettingsViewError {}
 pub struct ReadLabViewRequest {}
 
 /// The response of contract `read-lab-view`: Read the view of the impact lab.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ReadLabViewResponse {
     /// Field `view`.
     pub view: String,
@@ -10883,7 +10883,7 @@ pub struct ReadLabViewResponse {
     /// Field `path`.
     pub path: String,
     /// Field `params`.
-    pub params: types::ValueMap,
+    pub params: serde_json::Value,
     /// Field `data`.
     pub data: types::SitePageData,
     /// Field `depends_on`.
@@ -11313,10 +11313,10 @@ pub struct PreviewMarkdownRequest {
 }
 
 /// The response of contract `preview-markdown`: Preview constrained Markdown.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PreviewMarkdownResponse {
     /// Field `blocks`.
-    pub blocks: types::ValueMap,
+    pub blocks: serde_json::Value,
 }
 
 /// The errors of contract `preview-markdown`: Preview constrained Markdown.
