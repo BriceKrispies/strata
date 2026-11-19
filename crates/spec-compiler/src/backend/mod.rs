@@ -12,9 +12,16 @@ use crate::diagnostic::Diagnostic;
 use crate::ir::Spec;
 
 pub mod contracts;
+pub mod policies;
 pub mod prelude;
+pub mod quotas;
 pub mod records;
+pub mod retentions;
+pub mod retries;
+pub mod support;
 pub mod types;
+pub mod validations;
+pub mod view;
 
 /// One part of the specification compiled to one module of the generated crate.
 pub trait Backend {
@@ -35,4 +42,10 @@ pub const BACKENDS: &[&dyn Backend] = &[
     &types::TypesBackend,
     &records::RecordsBackend,
     &contracts::ContractsBackend,
+    &support::SupportBackend,
+    &policies::PoliciesBackend,
+    &validations::ValidationsBackend,
+    &retentions::RetentionsBackend,
+    &quotas::QuotasBackend,
+    &retries::RetriesBackend,
 ];

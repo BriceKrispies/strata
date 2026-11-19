@@ -14,6 +14,7 @@
 //! a time.
 
 pub mod backend;
+pub mod constructs;
 pub mod diagnostic;
 pub mod emit;
 pub mod ir;

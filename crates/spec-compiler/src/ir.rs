@@ -22,6 +22,8 @@ pub struct Spec {
     pub records: Vec<Record>,
     /// The `contracts` section.
     pub contracts: Vec<Contract>,
+    /// The cross-cutting constructs: policies, validations, retentions, quotas, retries, audits.
+    pub constructs: crate::constructs::Constructs,
 }
 
 impl Spec {

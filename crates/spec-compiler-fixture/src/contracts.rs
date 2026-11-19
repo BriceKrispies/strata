@@ -213,9 +213,7 @@ pub trait Gateway {
     fn create_tenant(
         &self,
         request: CreateTenantRequest,
-    ) -> impl std::future::Future<
-        Output = Result<CreateTenantResponse, CreateTenantError>,
-    > + Send;
+    ) -> impl std::future::Future<Output = Result<CreateTenantResponse, CreateTenantError>> + Send;
 }
 
 /// The contracts component `ledger` (Ledger) implements.
@@ -230,9 +228,7 @@ pub trait Ledger {
     fn get_account(
         &self,
         request: GetAccountRequest,
-    ) -> impl std::future::Future<
-        Output = Result<GetAccountResponse, GetAccountError>,
-    > + Send;
+    ) -> impl std::future::Future<Output = Result<GetAccountResponse, GetAccountError>> + Send;
 
     /// Post entry
     ///
@@ -251,9 +247,7 @@ pub trait Ledger {
     fn post_entry(
         &self,
         request: PostEntryRequest,
-    ) -> impl std::future::Future<
-        Output = Result<PostEntryResponse, PostEntryError>,
-    > + Send;
+    ) -> impl std::future::Future<Output = Result<PostEntryResponse, PostEntryError>> + Send;
 }
 
 /// The contracts component `identity` (Identity) implements.
@@ -266,9 +260,7 @@ pub trait Identity {
     fn close_account(
         &self,
         request: CloseAccountRequest,
-    ) -> impl std::future::Future<
-        Output = Result<CloseAccountResponse, CloseAccountError>,
-    > + Send;
+    ) -> impl std::future::Future<Output = Result<CloseAccountResponse, CloseAccountError>> + Send;
 }
 
 /// What the specification states about each contract beyond its data.
@@ -336,11 +328,5 @@ pub mod meta {
     };
 
     /// Every contract, in declaration order.
-    pub const ALL: &[ContractMeta] = &[
-        CREATE_TENANT,
-        GET_ACCOUNT,
-        POST_ENTRY,
-        CLOSE_ACCOUNT,
-        PING,
-    ];
+    pub const ALL: &[ContractMeta] = &[CREATE_TENANT, GET_ACCOUNT, POST_ENTRY, CLOSE_ACCOUNT, PING];
 }

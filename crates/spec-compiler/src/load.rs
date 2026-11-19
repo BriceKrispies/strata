@@ -39,14 +39,14 @@ pub fn load(path: &str, text: &str) -> Result<Spec, Vec<Diagnostic>> {
 }
 
 #[derive(Default)]
-struct Loader {
+pub(crate) struct Loader {
     diagnostics: Vec<Diagnostic>,
 }
 
-type Obj = Map<String, Value>;
+pub(crate) type Obj = Map<String, Value>;
 
 impl Loader {
-    fn shape(&mut self, entity: &str, message: impl Into<String>) {
+    pub(crate) fn shape(&mut self, entity: &str, message: impl Into<String>) {
         self.diagnostics
             .push(Diagnostic::new(SHAPE, entity, message.into()));
     }
@@ -87,6 +87,7 @@ impl Loader {
             .into_iter()
             .filter_map(|(entity, obj)| self.contract(&entity, obj))
             .collect();
+        let constructs = self.constructs(top);
         Some(Spec {
             path: path.replace('\\', "/"),
             system: system?,
@@ -94,12 +95,13 @@ impl Loader {
             types,
             records,
             contracts,
+            constructs,
         })
     }
 
     /// The entities of a section, each with the name diagnostics use for it: its id, or
     /// `<section>[<index>]` when it has none.
-    fn section<'a>(&mut self, top: &'a Obj, name: &str) -> Vec<(String, &'a Obj)> {
+    pub(crate) fn section<'a>(&mut self, top: &'a Obj, name: &str) -> Vec<(String, &'a Obj)> {
         let items = match top.get(name) {
             None => return Vec::new(),
             Some(Value::Array(items)) => items,
@@ -123,7 +125,7 @@ impl Loader {
         out
     }
 
-    fn opt_str(&mut self, obj: &Obj, key: &str, entity: &str) -> Option<String> {
+    pub(crate) fn opt_str(&mut self, obj: &Obj, key: &str, entity: &str) -> Option<String> {
         match obj.get(key) {
             None | Some(Value::Null) => None,
             Some(Value::String(s)) => Some(s.clone()),
@@ -134,7 +136,7 @@ impl Loader {
         }
     }
 
-    fn req_str(&mut self, obj: &Obj, key: &str, entity: &str) -> Option<String> {
+    pub(crate) fn req_str(&mut self, obj: &Obj, key: &str, entity: &str) -> Option<String> {
         if obj.get(key).is_none() {
             self.shape(entity, format!("\"{key}\" is required"));
             return None;
@@ -153,7 +155,7 @@ impl Loader {
         }
     }
 
-    fn opt_number(&mut self, obj: &Obj, key: &str, entity: &str) -> Option<Number> {
+    pub(crate) fn opt_number(&mut self, obj: &Obj, key: &str, entity: &str) -> Option<Number> {
         match obj.get(key) {
             None | Some(Value::Null) => None,
             Some(Value::Number(n)) => Some(n.clone()),
@@ -164,7 +166,12 @@ impl Loader {
         }
     }
 
-    fn opt_str_list(&mut self, obj: &Obj, key: &str, entity: &str) -> Option<Vec<String>> {
+    pub(crate) fn opt_str_list(
+        &mut self,
+        obj: &Obj,
+        key: &str,
+        entity: &str,
+    ) -> Option<Vec<String>> {
         let value = obj.get(key).filter(|v| !v.is_null())?;
         let Some(items) = value.as_array() else {
             self.shape(entity, format!("\"{key}\" must be a list of strings"));
@@ -183,7 +190,7 @@ impl Loader {
         Some(out)
     }
 
-    fn obj_list<'a>(&mut self, obj: &'a Obj, key: &str, entity: &str) -> Vec<&'a Obj> {
+    pub(crate) fn obj_list<'a>(&mut self, obj: &'a Obj, key: &str, entity: &str) -> Vec<&'a Obj> {
         let Some(value) = obj.get(key).filter(|v| !v.is_null()) else {
             return Vec::new();
         };

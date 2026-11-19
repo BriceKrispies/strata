@@ -238,6 +238,7 @@ mod tests {
             types,
             records: vec![],
             contracts: vec![],
+            constructs: Default::default(),
         }
     }
 

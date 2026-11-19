@@ -1327,6 +1327,7 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
+ "strata-spec-expr",
  "syn 2.0.119",
 ]
 
