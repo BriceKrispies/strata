@@ -5,7 +5,11 @@
 //! axum, rusqlite). The pure crate holds what needs none of that:
 //!
 //! - `prelude`: the representation types (`Timestamp`, `DurationMs`, the safe-integer decoders);
-//! - `types`: every declared type ([`types::is_core_type`]).
+//! - `types`: every declared type ([`types::is_core_type`]);
+//! - one module per declared `language` ([`crate::language`]): its parser, printer, static
+//!   checker and evaluator over the language's AST and value types;
+//! - `functions` when the specification declares functions ([`crate::function`]): each a pure
+//!   Rust function, each example a unit test.
 //!
 //! Its only dependencies are serde, serde_json and regex (sha2 is allowed for what later needs
 //! it), and uuid with its `serde` feature only when a declared type reaches a `uuid`: no `v4`, so
@@ -23,6 +27,7 @@ use crate::emit::{
     self, GeneratedFile, REGEX_VERSION, SERDE_JSON_VERSION, SERDE_VERSION, UUID_VERSION,
 };
 use crate::ir::Spec;
+use crate::{function, language};
 
 /// How the model crate names the pure crate beside it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -39,11 +44,20 @@ pub fn crate_files(spec: &Spec, crate_name: &str) -> Result<Vec<GeneratedFile>, 
         path: "Cargo.toml".to_string(),
         contents: cargo_toml(spec, crate_name),
     }];
-    let modules: Vec<(&str, TokenStream)> = vec![
+    let languages: Vec<String> = spec.languages.iter().map(language::module_name).collect();
+    let mut modules: Vec<(&str, TokenStream)> = vec![
         (prelude::MODULE, prelude::emit_core()),
         ("types", types::emit(spec, types::Selection::Core)),
-        ("lib", lib_rs(spec)),
     ];
+    for (lang, module) in spec.languages.iter().zip(&languages) {
+        modules.push((module.as_str(), language::emit(spec, lang)));
+    }
+    let mut names = languages.clone();
+    if function::wanted(spec) {
+        modules.push((function::MODULE, function::emit(spec)));
+        names.push(function::MODULE.to_string());
+    }
+    modules.push(("lib", lib_rs(spec, &names)));
     emit::rust_files(spec, files, modules)
 }
 
@@ -79,7 +93,7 @@ fn cargo_toml(spec: &Spec, crate_name: &str) -> String {
     )
 }
 
-fn lib_rs(spec: &Spec) -> TokenStream {
+fn lib_rs(spec: &Spec, languages: &[String]) -> TokenStream {
     let summary = format!(
         " {}: the pure part of its specification's model, as Rust: the declared types, which reach no runtime type.",
         spec.system.name
@@ -90,7 +104,8 @@ fn lib_rs(spec: &Spec) -> TokenStream {
         spec.system.id
     );
     let modules: Vec<Ident> = ["prelude", "types"]
-        .iter()
+        .into_iter()
+        .chain(languages.iter().map(String::as_str))
         .map(|m| Ident::new(m, Span::call_site()))
         .collect();
     quote! {

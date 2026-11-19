@@ -149,6 +149,95 @@ fn core_golden_output_matches_its_fixture_crate() {
     );
 }
 
+const FUNCTIONS_SPEC: &str = "crates/spec-compiler/tests/fixtures/functions/spec.jsonc";
+const FUNCTIONS_CRATE: &str = "strata-spec-compiler-functions-fixture";
+
+/// The pure crate of the functions fixture (WG-4934): `crates/spec-compiler-functions-fixture`,
+/// whose module `functions` holds the generated functions and, as its tests, their examples.
+/// It lives here rather than in `tests/functions.rs`, which uses the generated crate and so
+/// cannot compile before the crate is blessed.
+#[test]
+fn functions_golden_output_matches_its_fixture_crate() {
+    let dir = manifest_dir().join("../spec-compiler-functions-fixture");
+    let text =
+        fs::read_to_string(manifest_dir().join("tests/fixtures/functions/spec.jsonc")).unwrap();
+    let files = match strata_spec_compiler::generate_core(FUNCTIONS_SPEC, &text, FUNCTIONS_CRATE) {
+        Ok(files) => files,
+        Err(diagnostics) => panic!(
+            "the functions fixture was refused:\n{}",
+            diagnostics
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("\n")
+        ),
+    };
+    let functions = file_text(&files, "src/functions.rs");
+    for f in [
+        "pub fn set_of(",
+        "pub fn roles_of(",
+        "pub fn policy_applies(",
+        "pub fn may_attempt(",
+        "pub fn authorize(",
+        "pub fn check_version(",
+        "pub fn next_version(",
+        "fn check_version_example_1()",
+    ] {
+        assert!(functions.contains(f), "no {f} in src/functions.rs");
+    }
+    assert!(file_text(&files, "src/lib.rs").contains("pub mod functions;"));
+    let manifest = file_text(&files, "Cargo.toml");
+    for forbidden in ["strata-runtime", "uuid", "tokio", "[dev-dependencies]"] {
+        assert!(!manifest.contains(forbidden), "{forbidden} in {manifest}");
+    }
+    if std::env::var("SPECC_BLESS").as_deref() == Ok("1") {
+        output::write(&dir, &files).unwrap();
+        return;
+    }
+    let differences = output::compare(&dir, &files).unwrap();
+    assert!(
+        differences.is_empty(),
+        "crates/spec-compiler-functions-fixture is not what specc generates from the functions fixture: {differences:?}. Run the test with SPECC_BLESS=1 to rewrite it, and review the change."
+    );
+}
+
+/// A function specc cannot compile is refused with its code, and nothing is generated.
+#[test]
+fn a_function_specc_cannot_compile_is_refused() {
+    let text =
+        fs::read_to_string(manifest_dir().join("tests/fixtures/functions/spec.jsonc")).unwrap();
+    let refused =
+        |t: &str| match strata_spec_compiler::generate_core(FUNCTIONS_SPEC, t, FUNCTIONS_CRATE) {
+            Ok(_) => Vec::new(),
+            Err(d) => d.iter().map(ToString::to_string).collect::<Vec<_>>(),
+        };
+    assert_eq!(refused(&text), Vec::<String>::new());
+    // A parameter of a type functions do not compute with.
+    let float = text.replacen(
+        "{\"name\":\"version\",\"type\":\"u64\"}",
+        "{\"name\":\"version\",\"type\":\"f64\"}",
+        1,
+    );
+    assert_ne!(float, text);
+    assert!(
+        refused(&float)
+            .iter()
+            .any(|d| d.contains("specc.function-unsupported") && d.contains("check-version")),
+        "{:?}",
+        refused(&float)
+    );
+    // A body that does not type.
+    let mistyped = text.replacen("a == action", "a == resource", 1);
+    assert_ne!(mistyped, text);
+    assert!(
+        refused(&mistyped)
+            .iter()
+            .any(|d| d.contains("specc.function-invalid") && d.contains("policy-applies")),
+        "{:?}",
+        refused(&mistyped)
+    );
+}
+
 /// Split into two crates, the pure crate holds every declared type, uuid ids included (through the
 /// uuid crate with its serde feature only, no v4), and the model crate depends on it and
 /// re-exports them and its representation types.

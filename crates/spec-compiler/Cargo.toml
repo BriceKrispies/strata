@@ -30,8 +30,11 @@ axum.workspace = true
 strata-kernel = { workspace = true, features = ["testkit"] }
 strata-model = { path = "../model" }
 strata-runtime.workspace = true
+strata-spec-compiler-functions-fixture = { path = "../spec-compiler-functions-fixture" }
+strata-spec-compiler-language-fixture = { path = "../spec-compiler-language-fixture" }
 strata-spec-compiler-machines-fixture = { path = "../spec-compiler-machines-fixture" }
 strata-spec-compiler-wiring-fixture = { path = "../spec-compiler-wiring-fixture" }
+strata-substrate.workspace = true
 tokio.workspace = true
 
 [lints]

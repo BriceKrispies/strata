@@ -381,6 +381,8 @@ mod tests {
             machines: vec![],
             constructs: Default::default(),
             telemetry: Default::default(),
+            languages: Vec::new(),
+            functions: Vec::new(),
         }
     }
 
