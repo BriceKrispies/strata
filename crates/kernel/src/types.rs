@@ -4,8 +4,9 @@
 //! `specifications/spec.jsonc`, and re-exported so that `strata_kernel::Record` and the other
 //! kernel paths keep naming them. The kernel adds behaviour to them through extension traits
 //! (orphan rules forbid inherent methods on a foreign type): [`ValueExt`] and [`FieldTypeExt`]
-//! here, and the traits of [`crate::state`], [`crate::intent`], [`crate::schema`] and
-//! [`crate::expr`]. Bring them into scope with `use strata_kernel::*` or by name.
+//! here, and the traits of [`crate::state`], [`crate::intent`] and [`crate::schema`]. Bring them
+//! into scope with `use strata_kernel::*` or by name. [`Expr`] needs none: its parser, printer
+//! (`Display`), check and evaluator are generated beside it ([`crate::expr`]).
 
 pub use strata_model_core::prelude::Timestamp;
 pub use strata_model_core::types::{

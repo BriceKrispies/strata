@@ -4,11 +4,16 @@
 //!   exactly `crates/spec-compiler-language-fixture` (`SPECC_BLESS=1` rewrites it).
 //! - Printer equality: every expression of `tenants/_templates/publication.json` (field defaults,
 //!   constraints, workflow guards and assignments, policy conditions, query filters), parsed with
-//!   the generated parser and printed with the generated printer, is byte for byte what the
-//!   kernel's `Display` prints for the substrate parser's reading of it. Evidence strings embed
-//!   that text (crates/kernel/src/rules.rs).
-//! - Parse errors, evaluation and the static check agree with `strata_substrate::syntax::parse`,
+//!   the fixture's generated parser and printed with its generated printer, is byte for byte what
+//!   the kernel prints for its own reading of it. Evidence strings embed that text
+//!   (crates/kernel/src/rules.rs).
+//! - Parse errors, evaluation and the static check agree with `strata_kernel::expr::parse`,
 //!   `strata_kernel::expr::eval` and `strata_kernel::expr::check` on the same expressions.
+//!
+//! Since WG-4932 the kernel's side is itself generated: the specification's
+//! `tenant-rule-language` in `strata_model_core`, read through the kernel's adapters (its `Env`,
+//! `TypeEnv` and records). These tests were first run against the hand-written kernel
+//! (WG-4931), so they now pin the generated kernel language to the fixture that matched it.
 //! - A language specc cannot generate is refused with its diagnostics.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -204,7 +209,7 @@ fn the_generated_printer_prints_the_template_as_the_kernel_does() {
     let mut failures = Vec::new();
     for site in &sites {
         let source = site.source.as_str();
-        let kernel = strata_substrate::syntax::parse(source)
+        let kernel = kexpr::parse(source)
             .unwrap_or_else(|e| panic!("the kernel refuses {source}: {e}"))
             .to_string();
         let generated = match lang::parse(source) {
@@ -295,7 +300,7 @@ const BAD: &[&str] = &[
 fn parse_errors_are_the_kernels() {
     let mut failures = Vec::new();
     for source in BAD {
-        let kernel = strata_substrate::syntax::parse(source).map(|e| e.to_string());
+        let kernel = kexpr::parse(source).map(|e| e.to_string());
         let generated = lang::parse(source).map(|e| e.to_string());
         if kernel != generated {
             failures.push(format!(
@@ -498,7 +503,7 @@ fn evaluation_agrees_with_the_kernel() {
                     roles,
                 };
                 for source in &sources {
-                    let kexpr_ = strata_substrate::syntax::parse(source).unwrap();
+                    let kexpr_ = kexpr::parse(source).unwrap();
                     let gexpr = lang::parse(source).unwrap();
                     let kernel = kexpr::eval(&kexpr_, &kenv)
                         .map(|v| to_generated(&v))
@@ -685,8 +690,8 @@ fn the_static_check_agrees_with_the_kernel() {
                 roles: &roles,
             };
             let source = site.source.as_str();
-            let kernel = kexpr::check(&strata_substrate::syntax::parse(source).unwrap(), &kenv)
-                .map(|s| format!("{s:?}"));
+            let kernel =
+                kexpr::check(&kexpr::parse(source).unwrap(), &kenv).map(|s| format!("{s:?}"));
             let generated =
                 lang::check(&lang::parse(source).unwrap(), &genv).map(|s| format!("{s:?}"));
             if kernel != generated {

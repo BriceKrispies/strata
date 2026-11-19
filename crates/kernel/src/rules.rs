@@ -1,7 +1,7 @@
 //! Guarded state access, authorization and record validation. These are the rules every
 //! transition and read is built from.
 
-use crate::expr::{self, Env, ExprExt};
+use crate::expr::{self, Env};
 use crate::intent::{Check, CheckExt, DomainError, DomainErrorExt, ErrorKind};
 use crate::schema::{
     Action, ObjectTypeDef, Resource, TenantSchema, TenantSchemaExt, WorkflowDefExt,
@@ -171,21 +171,18 @@ pub fn authorize(
                 Ok(Value::Bool(true)) => {
                     return (
                         true,
-                        vec![Check::pass(
-                            rule,
-                            format!("{what} where {}", condition.printed()),
-                        )],
+                        vec![Check::pass(rule, format!("{what} where {condition}"))],
                     )
                 }
                 Ok(other) => checks.push(Check::fail(
                     rule,
                     format!(
                         "{} is {}",
-                        condition.printed(),
+                        condition,
                         if other.is_null() { "null" } else { "false" }
                     ),
                 )),
-                Err(e) => checks.push(Check::fail(rule, format!("{}: {e}", condition.printed()))),
+                Err(e) => checks.push(Check::fail(rule, format!("{condition}: {e}"))),
             },
         }
     }
@@ -384,13 +381,13 @@ pub fn validate_record(
                 Ok(Value::Bool(false)) => out.fail(
                     ErrorKind::ConstraintViolated,
                     rule,
-                    format!("{} [{}]", constraint.message, constraint.expr.printed()),
+                    format!("{} [{}]", constraint.message, constraint.expr),
                 ),
-                Ok(_) => out.pass(rule, constraint.expr.printed().to_string()),
+                Ok(_) => out.pass(rule, constraint.expr.to_string()),
                 Err(e) => out.fail(
                     ErrorKind::Evaluation,
                     rule,
-                    format!("{}: {e}", constraint.expr.printed()),
+                    format!("{}: {e}", constraint.expr),
                 ),
             }
         }

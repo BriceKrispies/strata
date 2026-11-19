@@ -1,7 +1,7 @@
 //! Authorized reads. A read never changes state and never returns a record the principal's
 //! policies do not grant.
 
-use crate::expr::{self, Env, ExprExt};
+use crate::expr::{self, Env};
 use crate::intent::{
     Check, CheckExt, Context, DomainError, DomainErrorExt, ErrorKind, ReadRequest, ReadResult,
 };
@@ -120,10 +120,7 @@ pub fn read(
                     };
                     let keep = expr::holds(filter, &env).map_err(|e| {
                         DomainError::new(ErrorKind::Evaluation, format!("query {query}: {e}")).with(
-                            vec![Check::fail(
-                                format!("query:{query}"),
-                                filter.printed().to_string(),
-                            )],
+                            vec![Check::fail(format!("query:{query}"), filter.to_string())],
                         )
                     })?;
                     if !keep {

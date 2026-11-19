@@ -30,7 +30,7 @@ pub mod transition;
 pub mod types;
 pub mod world;
 
-pub use expr::{CmpOp, Expr, ExprExt, Printed, Scope};
+pub use expr::{CmpOp, Expr, Scope};
 pub use intent::*;
 pub use read::{read, read_needs, visible};
 pub use schema::*;
@@ -42,7 +42,6 @@ pub use world::World;
 /// Every extension trait the kernel puts on the generated types, for `use strata_kernel::ext::*`
 /// in code that names the types one by one.
 pub mod ext {
-    pub use crate::expr::ExprExt;
     pub use crate::intent::{CheckExt, DomainErrorExt, IntentExt};
     pub use crate::schema::{TenantSchemaExt, WorkflowDefExt};
     pub use crate::state::{CoverageExt, RecordExt, StateExt, TenantStateExt};

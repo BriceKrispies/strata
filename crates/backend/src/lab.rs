@@ -192,10 +192,10 @@ pub fn overview(app: &App, identity: &Identity) -> Result<Json, ApiError> {
                     "type": f.ty.name(),
                     "required": f.required,
                     "unique": f.unique,
-                    "default": f.default.as_ref().map(|d| d.printed().to_string()),
+                    "default": f.default.as_ref().map(|d| d.to_string()),
                 })).collect::<Vec<_>>(),
                 "constraints": object.constraints.values().map(|c| json!({
-                    "id": c.id.as_str(), "rule": c.expr.printed().to_string(), "message": c.message,
+                    "id": c.id.as_str(), "rule": c.expr.to_string(), "message": c.message,
                 })).collect::<Vec<_>>(),
             })
         })
@@ -211,8 +211,8 @@ pub fn overview(app: &App, identity: &Identity) -> Result<Json, ApiError> {
                 "initial": w.initial,
                 "transitions": w.transitions.iter().map(|t| json!({
                     "name": t.name, "from": t.from, "to": t.to,
-                    "guard": t.guard.as_ref().map(|g| g.printed().to_string()),
-                    "sets": t.set.iter().map(|(field, value)| format!("{field} = {}", value.printed())).collect::<Vec<_>>(),
+                    "guard": t.guard.as_ref().map(|g| g.to_string()),
+                    "sets": t.set.iter().map(|(field, value)| format!("{field} = {value}")).collect::<Vec<_>>(),
                 })).collect::<Vec<_>>(),
             })
         })
@@ -229,14 +229,14 @@ pub fn overview(app: &App, identity: &Identity) -> Result<Json, ApiError> {
                     other => format!("{other:?}").to_lowercase(),
                 },
                 "actions": p.actions.iter().map(|a| format!("{a:?}").to_lowercase()).collect::<Vec<_>>(),
-                "when": p.condition.as_ref().map(|c| c.printed().to_string()),
+                "when": p.condition.as_ref().map(|c| c.to_string()),
             })
         })
         .collect();
     let queries: Vec<Json> = schema
         .queries
         .values()
-        .map(|q| json!({ "id": q.id.as_str(), "object": q.object.as_str(), "where": q.filter.as_ref().map(|f| f.printed().to_string()), "params": q.params, "limit": q.limit }))
+        .map(|q| json!({ "id": q.id.as_str(), "object": q.object.as_str(), "where": q.filter.as_ref().map(|f| f.to_string()), "params": q.params, "limit": q.limit }))
         .collect();
     let journal = app.store.journal_after(&identity.tenant, 0, 100_000)?.len();
     let classes: Vec<Json> = [

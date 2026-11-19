@@ -1,6 +1,6 @@
 //! `transition`: the one function that decides what an intent does to a tenant's state.
 
-use crate::expr::{self, Env, ExprExt};
+use crate::expr::{self, Env};
 use crate::intent::{
     Check, CheckExt, Context, DeltaOp, DomainError, DomainErrorExt, DomainEvent, Effect, ErrorKind,
     EventBody, ExistingData, Intent, Output, SchemaChange, StateDelta, Transition,
@@ -432,7 +432,7 @@ fn create_record(
             if !value.is_null() {
                 draft.evidence.push(Check::pass(
                     format!("default:{object}.{}", field.id),
-                    default.printed().to_string(),
+                    default.to_string(),
                 ));
                 values.insert(field.id.clone(), value);
             }

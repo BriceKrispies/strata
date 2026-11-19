@@ -1215,12 +1215,7 @@ fn resolve<'a>(spec: &'a Spec, lang: &'a Language) -> Result<Plan<'a>, Vec<Diagn
                         .all(|i| field_type(*i) == TypeRef::Builtin(Builtin::String))
                     && match field_type(others[0]) {
                         TypeRef::Declared(e) => match spec.type_decl(&e) {
-                            Some(
-                                t @ TypeDecl {
-                                    kind: TypeKind::Enum { .. },
-                                    ..
-                                },
-                            ) => {
+                            Some(t) if unit_values(t).is_some() => {
                                 if scope_enum.is_some_and(|s| s.id != t.id) {
                                     false
                                 } else {
@@ -1234,7 +1229,7 @@ fn resolve<'a>(spec: &'a Spec, lang: &'a Language) -> Result<Plan<'a>, Vec<Diagn
                     }
             }
             Prim::Param | Prim::HasRole => {
-                others.len() == 1 && field_type(others[0]) == TypeRef::Builtin(Builtin::String)
+                others.len() == 1 && is_text(spec, &field_type(others[0]))
             }
             _ => others.is_empty(),
         };
@@ -1322,9 +1317,20 @@ fn resolve<'a>(spec: &'a Spec, lang: &'a Language) -> Result<Plan<'a>, Vec<Diagn
                         .find(|(f, _, _)| *f == other)
                         .map(|(_, _, b)| *b)
                         .unwrap_or(&[]);
+                    // A time or a reference may also be an unconstrained id over one of the
+                    // allowed built-ins (`Ref(RecordId)`): printed through its `Display`, read
+                    // back by wrapping the number.
+                    let wrapped_ok = |id: &str| {
+                        ["time", "ref"].contains(&other)
+                            && wrapped_builtin(spec, id).is_some_and(|b| allowed.contains(&b))
+                    };
                     vv.newtype
                         && vv.fields.len() == 1
-                        && matches!(TypeRef::parse(&vv.fields[0].type_name), TypeRef::Builtin(b) if allowed.contains(&b))
+                        && match TypeRef::parse(&vv.fields[0].type_name) {
+                            TypeRef::Builtin(b) => allowed.contains(&b),
+                            TypeRef::Declared(id) => wrapped_ok(&id),
+                            _ => false,
+                        }
                 }
             };
             if !payload_ok {
@@ -1341,9 +1347,10 @@ fn resolve<'a>(spec: &'a Spec, lang: &'a Language) -> Result<Plan<'a>, Vec<Diagn
             value_shapes.push((value_name.clone(), op.result.clone().unwrap_or_default()));
         } else if let Some((ci, value)) = &case {
             let ok = match TypeRef::parse(&variant.fields[*ci].type_name) {
-                TypeRef::Declared(e) => {
-                    matches!(spec.type_decl(&e), Some(TypeDecl { kind: TypeKind::Enum { values }, .. }) if values.contains(value))
-                }
+                TypeRef::Declared(e) => spec
+                    .type_decl(&e)
+                    .and_then(unit_values)
+                    .is_some_and(|values| values.contains(value)),
                 _ => false,
             };
             if !ok {
@@ -1418,12 +1425,7 @@ fn resolve<'a>(spec: &'a Spec, lang: &'a Language) -> Result<Plan<'a>, Vec<Diagn
         .iter()
         .any(|o| matches!(o.info.prim, Prim::Var | Prim::Through))
     {
-        if let Some(TypeDecl {
-            kind: TypeKind::Enum { values: evs },
-            id: eid,
-            ..
-        }) = scope_enum
-        {
+        if let Some((evs, eid)) = scope_enum.and_then(|e| Some((unit_values(e)?, &e.id))) {
             let scoped: BTreeSet<&str> = record_scopes.iter().map(|s| s.value).collect();
             let all: BTreeSet<&str> = evs.iter().map(String::as_str).collect();
             if scoped != all || scoped.len() != record_scopes.len() {
@@ -1518,6 +1520,43 @@ fn resolve<'a>(spec: &'a Spec, lang: &'a Language) -> Result<Plan<'a>, Vec<Diagn
     })
 }
 
+/// The values of an enumeration, or the variant names of a union whose variants all have no
+/// fields: either is a Rust enum of unit variants named in PascalCase, which is all a language
+/// needs of a scope or a case field.
+fn unit_values(decl: &TypeDecl) -> Option<Vec<String>> {
+    match &decl.kind {
+        TypeKind::Enum { values } => Some(values.clone()),
+        TypeKind::Union { variants, .. } if variants.iter().all(|v| v.fields.is_empty()) => {
+            Some(variants.iter().map(|v| v.name.clone()).collect())
+        }
+        _ => None,
+    }
+}
+
+/// The built-in an unconstrained declared `id` wraps (`record-id` over `u64`), as a newtype
+/// struct `Name(pub T)`.
+fn wrapped_builtin(spec: &Spec, id: &str) -> Option<Builtin> {
+    let decl = spec.type_decl(id)?;
+    match &decl.kind {
+        TypeKind::Id { repr } if decl.constraints.is_empty() => {
+            repr.as_deref().and_then(Builtin::parse)
+        }
+        _ => None,
+    }
+}
+
+/// True when the type is text: `string`, or a declared `id` over `string` (`role-id`), which
+/// the generated type gives `as_str` and `Display`.
+fn is_text(spec: &Spec, t: &TypeRef) -> bool {
+    match t {
+        TypeRef::Builtin(b) => *b == Builtin::String,
+        TypeRef::Declared(id) => spec.type_decl(id).is_some_and(|d| {
+            matches!(&d.kind, TypeKind::Id { repr } if repr.as_deref().and_then(Builtin::parse) == Some(Builtin::String))
+        }),
+        _ => false,
+    }
+}
+
 fn is_word(token: &str) -> bool {
     let mut chars = token.chars();
     chars
@@ -1536,6 +1575,15 @@ pub fn emit(spec: &Spec, lang: &Language) -> TokenStream {
         Ok(plan) => plan.emit(),
         Err(_) => TokenStream::new(),
     }
+}
+
+/// The field index of the `k`-th field of an operator's variant that is neither an expression
+/// operand nor its case field.
+fn other_index(o: &Op, k: usize) -> usize {
+    (0..o.variant.fields.len())
+        .filter(|i| !o.exprs.contains(i) && o.case.as_ref().is_none_or(|c| c.0 != *i))
+        .nth(k)
+        .unwrap_or_default()
 }
 
 fn lit_str(s: &str) -> Literal {
@@ -1586,24 +1634,88 @@ impl<'a> Plan<'a> {
         self.value_forms.iter().any(|(_, f)| f == form)
     }
 
-    /// The payload builtin of a literal form's value variant.
-    fn payload(&self, form: &str) -> Option<Builtin> {
+    /// The payload type of a literal form's value variant, as written.
+    fn payload_ref(&self, form: &str) -> Option<TypeRef> {
         let (name, _) = self.value_forms.iter().find(|(_, f)| f == form)?;
         let TypeKind::Union { variants, .. } = &self.values.kind else {
             return None;
         };
         let vv = variants.iter().find(|v| &v.name == name)?;
-        match TypeRef::parse(&vv.fields.first()?.type_name) {
+        Some(TypeRef::parse(&vv.fields.first()?.type_name))
+    }
+
+    /// The payload builtin of a literal form's value variant: the built-in itself, or the one
+    /// a declared id wraps ([`wrapped_builtin`]).
+    fn payload(&self, form: &str) -> Option<Builtin> {
+        match self.payload_ref(form)? {
             TypeRef::Builtin(b) => Some(b),
+            TypeRef::Declared(id) => wrapped_builtin(self.spec, &id),
+            _ => None,
+        }
+    }
+
+    /// The declared id a literal form's payload is, when it is one.
+    fn payload_decl(&self, form: &str) -> Option<&'a TypeDecl> {
+        match self.payload_ref(form)? {
+            TypeRef::Declared(id) => self.spec.type_decl(&id),
             _ => None,
         }
     }
 
     fn payload_ty(&self, form: &str) -> TokenStream {
         let mut uses = Uses::default();
+        if let Some(decl) = self.payload_decl(form) {
+            return self.type_path(decl);
+        }
         match self.payload(form) {
             Some(b) => render::builtin_type(b, &mut uses),
             None => quote! { () },
+        }
+    }
+
+    /// `value` (of the payload's built-in) as the payload: wrapped when it is a declared id.
+    fn wrap_payload(&self, form: &str, value: TokenStream) -> TokenStream {
+        match self.payload_decl(form) {
+            Some(decl) => {
+                let path = self.type_path(decl);
+                quote! { #path(#value) }
+            }
+            None => value,
+        }
+    }
+
+    /// The declared text id of a field (`role-id`), when it is one rather than a `string`.
+    fn text_decl(&self, variant: &Variant, i: usize) -> Option<&'a TypeDecl> {
+        match TypeRef::parse(&variant.fields[i].type_name) {
+            TypeRef::Declared(id) => self.spec.type_decl(&id),
+            _ => None,
+        }
+    }
+
+    /// The field `v<i>` as a `&str`: itself for a `String`, `.as_str()` of a text id.
+    fn text_ref(&self, variant: &Variant, i: usize) -> TokenStream {
+        let b = v(i);
+        if self.text_decl(variant, i).is_some() {
+            quote! { #b.as_str() }
+        } else {
+            quote! { #b }
+        }
+    }
+
+    /// The statements that turn the `String` bound to `name` into the field's type in place:
+    /// nothing for a `string`, the id's constructor (its constraints checked, a violation
+    /// refused as the kernel refuses it) for a text id.
+    fn text_conversion(&self, variant: &Variant, i: usize, name: &Ident) -> TokenStream {
+        match self.text_decl(variant, i) {
+            None => TokenStream::new(),
+            Some(decl) => {
+                let path = self.type_path(decl);
+                if decl.constraints.is_empty() {
+                    quote! { let #name = #path(#name); }
+                } else {
+                    quote! { let #name = #path::new(#name).map_err(|e| e.to_string())?; }
+                }
+            }
         }
     }
 
@@ -1653,14 +1765,19 @@ impl<'a> Plan<'a> {
         if variant.fields.is_empty() {
             return quote! { #ty::#ident };
         }
-        if variant.newtype {
-            let bind = if used.contains(&0) {
-                let b = v(0);
-                quote! { #b }
-            } else {
-                quote! { _ }
-            };
-            return quote! { #ty::#ident(#bind) };
+        if variant.newtype || variant.tuple {
+            // Positional fields (a newtype's one, a tuple variant's two or more), in order.
+            let binds: Vec<TokenStream> = (0..variant.fields.len())
+                .map(|i| {
+                    if used.contains(&i) {
+                        let b = v(i);
+                        quote! { #b }
+                    } else {
+                        quote! { _ }
+                    }
+                })
+                .collect();
+            return quote! { #ty::#ident(#(#binds),*) };
         }
         let fields: Vec<TokenStream> = variant
             .fields
@@ -1697,9 +1814,8 @@ impl<'a> Plan<'a> {
         if variant.fields.is_empty() {
             return quote! { #ty::#ident };
         }
-        if variant.newtype {
-            let value = &values[0];
-            return quote! { #ty::#ident(#value) };
+        if variant.newtype || variant.tuple {
+            return quote! { #ty::#ident(#(#values),*) };
         }
         let fields: Vec<TokenStream> = variant
             .fields
@@ -2453,21 +2569,40 @@ impl<'a> Plan<'a> {
                 }
                 (Prim::Param, Some(t)) => {
                     let t = lit_str(t);
-                    let built = self.construct(o.variant, vec![quote! { self.ident()? }]);
-                    word_arms.push(quote! {
-                        #t => {
-                            self.expect(".")?;
-                            Ok(#built)
-                        }
-                    });
+                    if self.text_decl(o.variant, 0).is_some() {
+                        let name = format_ident!("name");
+                        let convert = self.text_conversion(o.variant, 0, &name);
+                        let built = self.construct(o.variant, vec![quote! { name }]);
+                        word_arms.push(quote! {
+                            #t => {
+                                self.expect(".")?;
+                                let name = self.ident()?;
+                                #convert
+                                Ok(#built)
+                            }
+                        });
+                    } else {
+                        let built = self.construct(o.variant, vec![quote! { self.ident()? }]);
+                        word_arms.push(quote! {
+                            #t => {
+                                self.expect(".")?;
+                                Ok(#built)
+                            }
+                        });
+                    }
                 }
                 (Prim::HasRole, Some(t)) => {
                     let t = lit_str(t);
+                    let name = format_ident!("name");
+                    // A text id is checked before the closing parenthesis, as the kernel's
+                    // parser checks a role id.
+                    let convert = self.text_conversion(o.variant, 0, &name);
                     let built = self.construct(o.variant, vec![quote! { name }]);
                     word_arms.push(quote! {
                         #t => {
                             self.expect("(")?;
                             let name = self.ident()?;
+                            #convert
                             self.expect(")")?;
                             Ok(#built)
                         }
@@ -2536,6 +2671,7 @@ impl<'a> Plan<'a> {
                 },
                 _ => quote! { self.int_arg()? },
             };
+            let value = self.wrap_payload("time", value);
             let lit = self.literal(quote! { #t(#value) });
             word_arms.push(quote! { "time" => Ok(#lit), });
         }
@@ -2547,6 +2683,7 @@ impl<'a> Plan<'a> {
                     u64::try_from(self.int_arg()?).map_err(|_| "a record id is not negative")?
                 },
             };
+            let value = self.wrap_payload("ref", value);
             let lit = self.literal(quote! { #r(#value) });
             word_arms.push(quote! { "ref" => Ok(#lit), });
         }
@@ -3024,7 +3161,7 @@ impl<'a> Plan<'a> {
                 }
             }
             Prim::Param => {
-                let name = &others[0];
+                let name = self.text_ref(o.variant, other_index(o, 0));
                 quote! { env.param(#name).unwrap_or(#null) }
             }
             Prim::Now => {
@@ -3041,7 +3178,7 @@ impl<'a> Plan<'a> {
                 }
             }
             Prim::HasRole => {
-                let role = &others[0];
+                let role = self.text_ref(o.variant, other_index(o, 0));
                 let b = b();
                 quote! { #b(env.has_role(#role)) }
             }
@@ -3331,10 +3468,11 @@ impl<'a> Plan<'a> {
             }
             Prim::Param => {
                 let name = &others[0];
+                let text = self.text_ref(o.variant, other_index(o, 0));
                 let r = result();
                 let message = lit_str(&format!("undeclared parameter {{{name}}}"));
                 quote! {
-                    if !env.has_param(#name) {
+                    if !env.has_param(#text) {
                         return Err(format!(#message));
                     }
                     #r
@@ -3342,10 +3480,11 @@ impl<'a> Plan<'a> {
             }
             Prim::HasRole => {
                 let role = &others[0];
+                let text = self.text_ref(o.variant, other_index(o, 0));
                 let r = result();
                 let message = lit_str(&format!("unknown role {{{role}}}"));
                 quote! {
-                    if !env.has_role(#role) {
+                    if !env.has_role(#text) {
                         return Err(format!(#message));
                     }
                     #r
