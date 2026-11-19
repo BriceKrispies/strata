@@ -97,6 +97,7 @@ send({
   systemDark: darkQuery.matches,
   storedTheme: stored('strata.theme'),
   passkeys: passkeysSupported(),
+  hash: window.location.hash,
 });
 
 darkQuery.addEventListener('change', (event) => send({ type: 'system_theme', dark: event.matches }));

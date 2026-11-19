@@ -1040,3 +1040,64 @@ test('an assertion made for one address is refused at another', async ({ page })
   await page.getByRole('region', { name: 'Passkeys' }).getByRole('button', { name: /^Remove/ }).click();
   await expect(page.locator('.toast', { hasText: 'That passkey has been removed.' })).toBeVisible();
 });
+
+// Emailed sign-in links. Nothing is sent to a real address: the development sink keeps the
+// message, and the site's owner reads it through the development route.
+const LINK_ADDRESS = 'mirela@fieldnotes.example';
+
+/** The links in the messages the development sink holds for an address, oldest first. */
+async function linksSent(owner, address) {
+  const reply = await owner.evaluate(async () => {
+    const csrf = (await (await fetch('/api/session')).json()).session.csrf_token;
+    const response = await fetch('/api/dev/mail-outbox', { method: 'POST', headers: { 'content-type': 'application/json', 'x-csrf-token': csrf }, body: '{}' });
+    return response.json();
+  });
+  return reply.messages.filter((mail) => mail.to === address).map((mail) => mail.text.match(/https?:\/\/\S+/)?.[0]);
+}
+
+async function askForLink(page, address) {
+  await open(page, '/login');
+  await page.getByLabel('Email address').fill(address);
+  await page.getByRole('button', { name: 'Email me a sign-in link' }).click();
+  await expect(page.getByRole('status').filter({ hasText: 'a sign-in link is on its way' })).toBeVisible();
+}
+
+test('an emailed link signs in once, in the browser that asked for it and in no other', async ({ page, browser }) => {
+  const ownerContext = await browser.newContext();
+  const owner = await ownerContext.newPage();
+  await signIn(owner, 'admin');
+
+  // The answer is the same for an address with no account, and no message is kept for it.
+  await askForLink(page, 'nobody@fieldnotes.example');
+  expect(await linksSent(owner, 'nobody@fieldnotes.example')).toEqual([]);
+
+  // A link opened in another browser is refused, and its token does not stay in the address bar.
+  await askForLink(page, LINK_ADDRESS);
+  await expect.poll(async () => (await linksSent(owner, LINK_ADDRESS)).length).toBe(1);
+  const [first] = await linksSent(owner, LINK_ADDRESS);
+  expect(first).toContain('#c=');
+  const otherContext = await browser.newContext();
+  const other = await otherContext.newPage();
+  await other.goto(first);
+  await expect(other.getByRole('alert')).toContainText('not accepted');
+  expect(other.url()).not.toContain('t=');
+  await expect(other.getByRole('heading', { level: 1, name: 'Sign in' })).toBeVisible();
+  await otherContext.close();
+
+  // A second request from the first browser keeps its binding; its link signs in, once.
+  await askForLink(page, LINK_ADDRESS);
+  await expect.poll(async () => (await linksSent(owner, LINK_ADDRESS)).length).toBe(2);
+  const second = (await linksSent(owner, LINK_ADDRESS))[1];
+  await page.goto(second);
+  await expect(page.getByRole('heading', { level: 1, name: 'Writing desk' })).toBeVisible();
+  await expect(page.getByText('Signed in as Mirela Ashby')).toBeVisible();
+  expect(page.url()).not.toContain('#');
+
+  // The same link, a second time, in the same browser: refused.
+  await page.getByRole('button', { name: 'Sign out', exact: true }).click();
+  await page.goto(second);
+  await expect(page.getByRole('alert')).toContainText('not accepted');
+  await expect(page.getByRole('heading', { level: 1, name: 'Sign in' })).toBeVisible();
+
+  await ownerContext.close();
+});

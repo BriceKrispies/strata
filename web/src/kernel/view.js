@@ -134,6 +134,7 @@ function page(state) {
         busy: forms.login.busy,
         error: forms.login.error,
         passkeys: { supported: state.passkeys.supported, busy: state.passkeys.signingIn, error: state.passkeys.signInError },
+        link: { ...state.links, landing: state.links.landingStatus },
       };
     case 'desk':
       return {

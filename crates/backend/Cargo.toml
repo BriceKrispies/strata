@@ -27,6 +27,7 @@ getrandom.workspace = true
 unicode-normalization.workspace = true
 webauthn-rs.workspace = true
 base64.workspace = true
+lettre.workspace = true
 openssl = { version = "0.10", features = ["vendored"] }
 
 [dev-dependencies]

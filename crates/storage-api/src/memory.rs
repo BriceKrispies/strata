@@ -6,8 +6,8 @@
 use crate::{
     check_event_sequence, partial_state, throttle_refund, throttle_step, Account, Capabilities,
     Commit, Health, JournalEntry, OutboxEntry, PasskeyChallenge, PasskeyRecord, Receipt,
-    SessionRecord, SnapshotInfo, StorageMigration, Store, StoreError, StoreResult, TenantSummary,
-    ThrottleRow, ThrottleRule, ThrottleSettle, ThrottleVerdict,
+    SessionRecord, SignInLink, SnapshotInfo, StorageMigration, Store, StoreError, StoreResult,
+    TenantSummary, ThrottleRow, ThrottleRule, ThrottleSettle, ThrottleVerdict,
 };
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -27,6 +27,7 @@ struct Inner {
     throttle: BTreeMap<(TenantId, String), ThrottleRow>,
     passkeys: BTreeMap<(TenantId, String), PasskeyRecord>,
     challenges: BTreeMap<(TenantId, String), PasskeyChallenge>,
+    links: BTreeMap<(TenantId, String), SignInLink>,
     snapshots: BTreeMap<(TenantId, u64), (SnapshotInfo, Arc<TenantState>)>,
 }
 
@@ -425,6 +426,31 @@ impl Store for MemoryStore {
         Ok((count - inner.challenges.len()) as u64)
     }
 
+    fn put_sign_in_link(&self, link: &SignInLink) -> StoreResult<()> {
+        self.lock()?
+            .links
+            .insert((link.tenant.clone(), link.id_hash.clone()), link.clone());
+        Ok(())
+    }
+
+    fn take_sign_in_link(
+        &self,
+        tenant: &TenantId,
+        id_hash: &str,
+    ) -> StoreResult<Option<SignInLink>> {
+        Ok(self
+            .lock()?
+            .links
+            .remove(&(tenant.clone(), id_hash.to_string())))
+    }
+
+    fn purge_sign_in_links(&self, now: Timestamp) -> StoreResult<u64> {
+        let mut inner = self.lock()?;
+        let count = inner.links.len();
+        inner.links.retain(|_, link| link.expires_at >= now);
+        Ok((count - inner.links.len()) as u64)
+    }
+
     fn put_account(&self, account: &Account) -> StoreResult<()> {
         let mut inner = self.lock()?;
         if !inner.tenants.contains_key(&account.tenant) {
@@ -537,6 +563,7 @@ impl Store for MemoryStore {
         inner.throttle.retain(|(t, _), _| t != tenant);
         inner.passkeys.retain(|(t, _), _| t != tenant);
         inner.challenges.retain(|(t, _), _| t != tenant);
+        inner.links.retain(|(t, _), _| t != tenant);
         inner.snapshots.retain(|(t, _), _| t != tenant);
         Ok(())
     }

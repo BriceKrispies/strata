@@ -8,6 +8,7 @@
 //!
 //! Implements: IDN-001
 
+pub mod link;
 pub mod passkey;
 pub mod password;
 
@@ -41,7 +42,11 @@ pub trait SignInMethod: Send + Sync {
 }
 
 /// Every method the backend offers.
-static METHODS: &[&dyn SignInMethod] = &[&password::Password, &passkey::PasskeyMethod];
+static METHODS: &[&dyn SignInMethod] = &[
+    &password::Password,
+    &passkey::PasskeyMethod,
+    &link::LinkMethod,
+];
 
 pub fn method(name: &str) -> Option<&'static dyn SignInMethod> {
     METHODS.iter().copied().find(|method| method.name() == name)
@@ -63,10 +68,10 @@ pub fn normalise_login(raw: &str) -> String {
 fn refused(method: &str) -> ApiError {
     ApiError::new(
         ErrorCode::Unauthenticated,
-        if method == "passkey" {
-            "The passkey was not accepted."
-        } else {
-            "The name or password is not right."
+        match method {
+            "passkey" => "The passkey was not accepted.",
+            "link" => "The link was not accepted. Ask for a new one.",
+            _ => "The name or password is not right.",
         },
     )
 }
@@ -81,7 +86,7 @@ pub(crate) fn throttled() -> ApiError {
 
 /// The limits an attempt counts against: the account, the source across all accounts and the
 /// realm across all sources. Each key is scoped by the tenant in the store.
-fn rules(app: &App, method: &str, subject: &str, source: &str) -> [ThrottleRule; 3] {
+pub(crate) fn rules(app: &App, method: &str, subject: &str, source: &str) -> [ThrottleRule; 3] {
     let limits = &app.cfg.throttle;
     [
         ThrottleRule {
@@ -226,6 +231,7 @@ mod tests {
         assert_eq!(names.len(), unique.len());
         assert!(method("password").is_some());
         assert!(method("passkey").is_some());
+        assert!(method("link").is_some());
         assert!(method("telepathy").is_none());
     }
 }

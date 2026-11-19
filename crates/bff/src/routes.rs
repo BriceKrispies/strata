@@ -71,6 +71,28 @@ fn text(headers: &HeaderMap, name: impl axum::http::header::AsHeaderName) -> Opt
     headers.get(name).and_then(|value| value.to_str().ok())
 }
 
+/// The cookie that holds the nonce binding an emailed link to the browser that asked for it.
+const LINK_COOKIE: &str = "__Host-strata-link";
+
+/// The nonce in the link cookie, when the browser holds a well-formed one.
+fn link_binding(headers: &HeaderMap) -> Option<String> {
+    text(headers, COOKIE_HEADER)?
+        .split(';')
+        .filter_map(|pair| pair.trim().split_once('='))
+        .find(|(name, _)| *name == LINK_COOKIE)
+        .map(|(_, value)| value.to_string())
+        .filter(|value| value.len() == 64 && value.chars().all(|c| c.is_ascii_hexdigit()))
+}
+
+/// The link cookie: `__Host-` (`Secure`, `Path=/`, no `Domain`), `HttpOnly` and `SameSite=Strict`,
+/// so that a page script cannot read it and a link opened from another site does not carry it.
+fn link_cookie(binding: &str, max_age: i64) -> HeaderValue {
+    HeaderValue::from_str(&format!(
+        "{LINK_COOKIE}={binding}; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age={max_age}"
+    ))
+    .expect("cookie values are ASCII")
+}
+
 pub fn cookie(headers: &HeaderMap) -> Option<String> {
     text(headers, COOKIE_HEADER)?
         .split(';')
@@ -331,13 +353,15 @@ async fn sign_in(
             &visit.correlation,
         )
     })?;
-    let credentials = route.credentials(&body).ok_or_else(|| {
-        Failure::new(
-            ErrorCode::Unauthenticated,
-            route.refusal(),
-            &visit.correlation,
-        )
-    })?;
+    let credentials = route
+        .credentials(&body, link_binding(headers).as_deref())
+        .ok_or_else(|| {
+            Failure::new(
+                ErrorCode::Unauthenticated,
+                route.refusal(),
+                &visit.correlation,
+            )
+        })?;
     let reply: LoginReply = backend(
         bff,
         &visit,
@@ -372,6 +396,37 @@ async fn login_with(
     Json(body): Json<Json_>,
 ) -> Result<Response, Failure> {
     sign_in(&bff, &headers, &method, body).await
+}
+
+/// Ask for an emailed sign-in link. Anyone may ask, from one of the site's own pages and with the
+/// request token that every sign-in carries. The answer is the same whether or not the address has
+/// an account, and it sets the cookie that binds the link to this browser.
+async fn link_request(
+    State(bff): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<Json_>,
+) -> Result<Response, Failure> {
+    let visit = visit(&bff, &headers)?;
+    guard_request(&bff, &visit, &headers).await?;
+    let Some(email) = body.get("email").and_then(Json_::as_str) else {
+        return Err(Failure::new(
+            ErrorCode::Invalid,
+            "Enter an email address.",
+            &visit.correlation,
+        ));
+    };
+    let mut sent = json!({ "email": email, "binding": link_binding(&headers) });
+    if let Some(next) = body.get("next").and_then(Json_::as_str) {
+        sent["next"] = json!(next);
+    }
+    let reply: Json_ = backend(&bff, &visit, "/internal/sign-in/link/request", &sent).await?;
+    let binding = reply["binding"].as_str().unwrap_or_default();
+    let max_age = reply["max_age"].as_i64().unwrap_or(900);
+    let mut response = Json(json!({ "sent": true })).into_response();
+    response
+        .headers_mut()
+        .insert(SET_COOKIE, link_cookie(binding, max_age));
+    Ok(response)
 }
 
 /// A challenge for signing in with a passkey. Anyone may ask, from one of the site's own pages
@@ -761,6 +816,7 @@ async fn dev(
     let path = match (bff.cfg.dev, action.as_str()) {
         (true, "expire-session") => "/internal/dev/expire-session",
         (true, "reset") => "/internal/dev/reset",
+        (true, "mail-outbox") => "/internal/dev/mail-outbox",
         _ => {
             return Err(Failure::new(
                 ErrorCode::NotFound,
@@ -1020,6 +1076,7 @@ pub fn router(bff: Shared) -> Router {
         .route("/session", get(session))
         .route("/login", post(login))
         .route("/sign-in/:method", post(login_with))
+        .route("/sign-in/link/request", post(link_request))
         .route("/passkeys", get(passkeys))
         .route("/passkeys/challenge", post(passkey_challenge))
         .route("/passkeys/register/start", post(passkey_register_start))

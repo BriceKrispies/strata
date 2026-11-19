@@ -55,7 +55,7 @@
  * @typedef {{ at: number, rand: number }} Stamp
  *
  * @typedef {(
- *   | { type: 'init', path: string, search: string, bootstrap: any, systemDark: boolean, storedTheme: string | null, passkeys?: boolean }
+ *   | { type: 'init', path: string, search: string, bootstrap: any, systemDark: boolean, storedTheme: string | null, passkeys?: boolean, hash?: string }
  *   | { type: 'navigate', href: string, replace?: boolean }
  *   | { type: 'popstate', path: string, search: string }
  *   | { type: 'input', seq?: number, form: string, name: string, value: string | boolean }

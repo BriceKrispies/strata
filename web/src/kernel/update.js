@@ -13,6 +13,7 @@ import * as forms from '../generated/forms.js';
 import * as live from '../generated/live.js';
 import { matchRoute, route as routeOf } from '../generated/routes.js';
 import { labEnter, labInit, labUpdate } from './lab.js';
+import { linksInit, linksInput, linksLand, linksOpened, linksUpdate } from './links.js';
 import { passkeysEnter, passkeysInit, passkeysUpdate } from './passkeys.js';
 import { sessionsEnter, sessionsInit, sessionsUpdate } from './sessions.js';
 import {
@@ -57,6 +58,7 @@ export function initialState() {
     lab: labInit(),
     sessions: sessionsInit(),
     passkeys: passkeysInit(),
+    links: linksInit(),
     /** @type {{ id: number, kind: string, text: string }[]} */
     toasts: [],
     announce: '',
@@ -401,6 +403,9 @@ function passkeySignedIn(state, msg) {
   return { state: moved.state, effects: [...reset.effects, ...moved.effects] };
 }
 
+/** An emailed link was accepted: the same as a passkey being accepted, from the session on. @returns {Result} */
+const linkSignedIn = passkeySignedIn;
+
 /** @returns {Result} */
 function onHttp(state, msg) {
   const pending = state.pending[msg.id];
@@ -419,6 +424,9 @@ function onHttp(state, msg) {
   if (pending.kind.startsWith('passkeys.')) {
     return passkeysUpdate(state, { ...msg, pending, error }, { request, toast, signedIn: passkeySignedIn }) ?? { state, effects: [] };
   }
+  if (pending.kind.startsWith('links.')) {
+    return linksUpdate(state, { ...msg, pending, error }, { request, signedIn: linkSignedIn }) ?? { state, effects: [] };
+  }
 
   switch (pending.kind) {
     case 'session': {
@@ -428,11 +436,13 @@ function onHttp(state, msg) {
       // issued, so it opens it now.
       /** @type {Effect[]} */
       const open = state.session ? [] : [{ type: 'ws_connect', csrf: outputs.session.csrf_token }];
+      // A link the page was opened with waits for the request token that this reply brings.
+      const landed = linksLand(known, msg, { request });
       if (state.view.model?.view === 'lab') {
-        const entered = labEnter(known, msg, { request });
-        return { state: entered.state, effects: [...open, ...entered.effects] };
+        const entered = labEnter(landed.state, msg, { request });
+        return { state: entered.state, effects: [...open, ...landed.effects, ...entered.effects] };
       }
-      return { state: known, effects: open };
+      return { state: landed.state, effects: [...open, ...landed.effects] };
     }
     case 'view': {
       if (state.view.request !== msg.id) return { state, effects: [] };
@@ -556,6 +566,7 @@ function navigate(state, href, replace, msg) {
 
 function onInput(state, msg) {
   const f = state.forms;
+  if (msg.form === 'link') return linksInput(state, msg.name, msg.value);
   if (msg.form === 'login') {
     const { values } = forms.input(SIGN_IN, f.login.values, [], msg.name, msg.value);
     return { ...state, forms: { ...f, login: { ...f.login, values } } };
@@ -666,6 +677,8 @@ function onAction(state, msg) {
 /** @returns {Result} */
 function onSubmit(state, msg) {
   switch (msg.form) {
+    case 'link':
+      return linksUpdate(state, msg, { request, signedIn: linkSignedIn }) ?? { state, effects: [] };
     case 'login': {
       const login = state.forms.login;
       const values = forms.submitted(SIGN_IN, msg.values);
@@ -762,6 +775,12 @@ function step(state, msg) {
         next = fetched.state;
         effects.push(...fetched.effects);
       }
+      // A link the page was opened with is taken out of the address bar and, once the request
+      // token is known, sent.
+      const opened = linksOpened(next, msg.hash ?? '', hrefOf(route));
+      const landed = linksLand(opened.state, msg, { request });
+      next = landed.state;
+      effects.push(...opened.effects, ...landed.effects);
       // The socket needs the request token, which a bootstrapped page already has. A cold start
       // gets it with the session reply and connects then.
       next = liveStep(next, 'ui-live-start', {}, msg)?.state ?? next;

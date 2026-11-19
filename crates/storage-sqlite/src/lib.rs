@@ -27,8 +27,8 @@ use strata_runtime::sqlite::{Database, DbError, Migration};
 use strata_storage_api::{
     check_event_sequence, field_matches, throttle_refund, throttle_step, Account, Capabilities,
     Commit, Health, JournalEntry, OutboxEntry, PasskeyCeremony, PasskeyChallenge, PasskeyRecord,
-    Receipt, SessionRecord, SnapshotInfo, StorageMigration, Store, StoreError, StoreResult,
-    TenantSummary, ThrottleRow, ThrottleRule, ThrottleSettle, ThrottleVerdict,
+    Receipt, SessionRecord, SignInLink, SnapshotInfo, StorageMigration, Store, StoreError,
+    StoreResult, TenantSummary, ThrottleRow, ThrottleRule, ThrottleSettle, ThrottleVerdict,
 };
 
 /// The ledger table of the tenant store's migrations.
@@ -167,6 +167,23 @@ const MIGRATIONS: &[Migration] = &[
     );
     CREATE INDEX passkey_challenges_expiry ON passkey_challenges(expires_at);
     CREATE INDEX accounts_principal ON accounts(tenant, principal);
+    ",
+    },
+    Migration {
+        version: 4,
+        name: "sign-in links",
+        sql: "
+    CREATE TABLE sign_in_links (
+        tenant       TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+        id_hash      TEXT NOT NULL,
+        principal    TEXT NOT NULL,
+        token_hash   TEXT NOT NULL,
+        binding_hash TEXT NOT NULL,
+        origin       TEXT NOT NULL,
+        expires_at   INTEGER NOT NULL,
+        PRIMARY KEY (tenant, id_hash)
+    );
+    CREATE INDEX sign_in_links_expiry ON sign_in_links(expires_at);
     ",
     },
 ];
@@ -1201,6 +1218,75 @@ impl Store for SqliteStore {
             .lock()?
             .execute(
                 "DELETE FROM passkey_challenges WHERE expires_at <= ?1",
+                params![now.0],
+            )
+            .map_err(db)?;
+        Ok(removed as u64)
+    }
+
+    fn put_sign_in_link(&self, link: &SignInLink) -> StoreResult<()> {
+        self.lock()?
+            .execute(
+                "INSERT OR REPLACE INTO sign_in_links (tenant, id_hash, principal, token_hash, binding_hash, origin, expires_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![
+                    link.tenant.as_str(),
+                    link.id_hash,
+                    link.principal.as_str(),
+                    link.token_hash,
+                    link.binding_hash,
+                    link.origin,
+                    link.expires_at.0,
+                ],
+            )
+            .map_err(db)?;
+        Ok(())
+    }
+
+    fn take_sign_in_link(
+        &self,
+        tenant: &TenantId,
+        id_hash: &str,
+    ) -> StoreResult<Option<SignInLink>> {
+        // One statement reads and removes the row, so two uses of one link cannot both take it.
+        let row = self
+            .lock()?
+            .query_row(
+                "DELETE FROM sign_in_links WHERE tenant = ?1 AND id_hash = ?2
+                 RETURNING principal, token_hash, binding_hash, origin, expires_at",
+                params![tenant.as_str(), id_hash],
+                |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, String>(2)?,
+                        r.get::<_, String>(3)?,
+                        r.get::<_, i64>(4)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(db)?;
+        let Some((principal, token_hash, binding_hash, origin, expires_at)) = row else {
+            return Ok(None);
+        };
+        Ok(Some(SignInLink {
+            tenant: tenant.clone(),
+            id_hash: id_hash.to_string(),
+            principal: PrincipalId::new(principal)
+                .map_err(|e| StoreError::Corrupt(e.to_string()))?,
+            token_hash,
+            binding_hash,
+            origin,
+            expires_at: Timestamp(expires_at),
+        }))
+    }
+
+    fn purge_sign_in_links(&self, now: Timestamp) -> StoreResult<u64> {
+        let removed = self
+            .lock()?
+            .execute(
+                "DELETE FROM sign_in_links WHERE expires_at < ?1",
                 params![now.0],
             )
             .map_err(db)?;

@@ -63,6 +63,7 @@ prettyplease = "0.2.37"
 regex = "1.13.1"
 uuid = { version = "1.24.0", features = ["serde"] }
 base64 = "0.22.1"
+lettre = { version = "=0.11.24", default-features = false, features = ["builder", "smtp-transport", "native-tls"] }
 webauthn-rs = { version = "=0.6.2", features = ["danger-allow-state-serialisation", "conditional-ui"] }
 
 [workspace.lints.rust]

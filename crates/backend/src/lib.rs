@@ -9,6 +9,7 @@ pub mod auth;
 pub mod http;
 pub mod hub;
 pub mod lab;
+pub mod mail;
 pub mod ops;
 pub mod seed;
 pub mod signin;
@@ -58,6 +59,7 @@ pub async fn run(
                     // a day ago.
                     let _ = app.store.purge_throttle(app.now());
                     let _ = app.store.purge_passkey_challenges(app.now());
+                    let _ = app.store.purge_sign_in_links(app.now());
                     app.store
                         .purge_sessions(strata_kernel::Timestamp(app.now().0 - 86_400_000))
                 })

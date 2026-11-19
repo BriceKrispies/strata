@@ -2028,6 +2028,72 @@
           "type": "api-error"
         }
       ]
+    },
+    {
+      "id": "deliver-sign-in-mail",
+      "name": "Deliver a sign-in message through the mail transport",
+      "ref": "H-034",
+      "realisation": "hand",
+      "milestone": 3,
+      "implementedBy": "identity-service",
+      "auth": "Local call inside the platform process; no network credential",
+      "idempotent": false,
+      "inputs": [
+        {
+          "name": "to",
+          "type": "email-address"
+        },
+        {
+          "name": "subject",
+          "type": "string"
+        },
+        {
+          "name": "text",
+          "type": "string"
+        }
+      ],
+      "outputs": [],
+      "postconditions": [
+        "The message goes to the mail transport, which is an SMTP server only when the operator configured one; otherwise it is the development sink, which keeps the message and sends nothing, so that no development or test run reaches a real address.",
+        "A transport that talks to a server delivers off the caller's thread and logs a delivery that fails, so that how long the call takes and whether it fails say nothing about whether the address has an account (IDN-006).",
+        "The message carries the sign-in link, whose token is in the fragment of its address (D-703) and whose challenge holds the principal and no email address (PRV-365)."
+      ],
+      "errors": [
+        {
+          "name": "unavailable",
+          "condition": "The transport did not accept the message.",
+          "type": "api-error"
+        }
+      ]
+    },
+    {
+      "id": "check-return-address",
+      "name": "Check a return address",
+      "ref": "H-035",
+      "realisation": "hand",
+      "milestone": 3,
+      "implementedBy": "identity-service",
+      "auth": "Local call inside the platform process; no network credential",
+      "idempotent": true,
+      "inputs": [
+        {
+          "name": "next",
+          "type": "string"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "path",
+          "type": "string",
+          "optional": true
+        }
+      ],
+      "postconditions": [
+        "The result is the address itself when it is a path on the host of the tenant: it starts with one slash, names no other host, holds no backslash and no control character, and is not longer than 512 bytes (FED-250).",
+        "Any other address gives no result, and the person lands on the default page instead of being sent on.",
+        "A sign-in link carries a return address only when this check passes, and the page that the link opens checks it again before it navigates."
+      ],
+      "errors": []
     }
   ],
   "decisions": [

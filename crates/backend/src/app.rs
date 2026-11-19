@@ -2,6 +2,7 @@
 
 use crate::hub::Hub;
 use crate::lab::Lab;
+use crate::mail::Mailer;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
@@ -36,6 +37,10 @@ pub struct Config {
     pub throttle: ThrottleLimits,
     /// How long an issued passkey challenge can be answered.
     pub passkey_challenge_ttl_ms: i64,
+    /// How long an emailed sign-in link is accepted (D-9: fifteen minutes).
+    pub link_ttl_ms: i64,
+    /// Where mail goes. A development sink unless an SMTP server was configured.
+    pub mail: Arc<dyn Mailer>,
 }
 
 /// The limits on failed sign-in attempts. The defaults are the platform defaults of D-700; a

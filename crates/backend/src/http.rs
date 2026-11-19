@@ -2,7 +2,7 @@
 
 use crate::app::{ApiError, App, Shared, LOG};
 use crate::auth::{self, has_service_token, Caller, Identity};
-use crate::signin::passkey;
+use crate::signin::{link, passkey};
 use crate::{lab, ops, seed, ws};
 use axum::extract::ws::WebSocketUpgrade;
 use axum::extract::{Path, Request, State};
@@ -120,6 +120,21 @@ async fn passkey_challenge(
     let caller = auth::caller(&headers)?;
     let correlation = caller.correlation.clone();
     app.blocking(move |app| passkey::sign_in_challenge(app, &caller))
+        .await?
+        .map(Json)
+        .map_err(|error| error.with_correlation(&correlation))
+}
+
+/// Ask for an emailed sign-in link. The answer is the same whether or not the address has an
+/// account.
+async fn link_request(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<Json_>,
+) -> Result<Json<Json_>, ApiError> {
+    let caller = auth::caller(&headers)?;
+    let correlation = caller.correlation.clone();
+    app.blocking(move |app| link::request(app, &caller, &body))
         .await?
         .map(Json)
         .map_err(|error| error.with_correlation(&correlation))
@@ -367,6 +382,26 @@ async fn dev_reset(State(app): State<Shared>, headers: HeaderMap) -> Result<Json
     Ok(reply)
 }
 
+/// Development only: the messages the development sink holds, so that a test can read the link in
+/// one.
+async fn dev_mail_outbox(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+) -> Result<Json<Json_>, ApiError> {
+    as_caller(&app, &headers, |app, identity| {
+        require_dev_owner(app, identity)?;
+        let messages: Vec<Json_> = app
+            .cfg
+            .mail
+            .outbox()
+            .into_iter()
+            .map(|mail| json!({ "to": mail.to, "subject": mail.subject, "text": mail.text }))
+            .collect();
+        Ok(json!({ "messages": messages }))
+    })
+    .await
+}
+
 /// Development only: end the caller's own session as if its time had run out.
 async fn dev_expire(
     State(app): State<Shared>,
@@ -430,6 +465,7 @@ pub fn router(app: Shared) -> Router {
         .route("/internal/session", post(session))
         .route("/internal/session/login", post(login))
         .route("/internal/session/sign-in/:method", post(login_with))
+        .route("/internal/sign-in/link/request", post(link_request))
         .route("/internal/passkeys", post(passkeys))
         .route("/internal/passkeys/challenge", post(passkey_challenge))
         .route(
@@ -459,6 +495,7 @@ pub fn router(app: Shared) -> Router {
         .route("/internal/lab/verify", post(lab_verify))
         .route("/internal/dev/reset", post(dev_reset))
         .route("/internal/dev/expire-session", post(dev_expire))
+        .route("/internal/dev/mail-outbox", post(dev_mail_outbox))
         .route("/internal/ws", get(socket))
         .layer(middleware::from_fn_with_state(app.clone(), gate))
         .with_state(app)

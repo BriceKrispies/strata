@@ -36,6 +36,8 @@ async fn start_with(throttle: strata_backend::app::ThrottleLimits) -> Edge {
         session_ttl_ms: 3_600_000,
         session_idle_ms: 3_600_000,
         passkey_challenge_ttl_ms: 300_000,
+        link_ttl_ms: 900_000,
+        mail: std::sync::Arc::new(strata_backend::mail::DevSink::memory()),
         throttle,
     };
     tokio::spawn(strata_backend::run(

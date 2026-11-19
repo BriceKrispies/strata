@@ -15,8 +15,9 @@ pub trait SignInRoute: Send + Sync {
     fn method(&self) -> &'static str;
 
     /// What of the browser's body goes to the backend, or `None` when it is not a request of
-    /// this method. Anything else in the body is dropped here.
-    fn credentials(&self, body: &Json) -> Option<Json>;
+    /// this method. Anything else in the body is dropped here. `binding` is the nonce the
+    /// browser holds in its link cookie, for the one method that uses it.
+    fn credentials(&self, body: &Json, binding: Option<&str>) -> Option<Json>;
 
     /// What a request that is not one of this method's is told.
     fn refusal(&self) -> &'static str {
@@ -32,7 +33,7 @@ impl SignInRoute for Password {
         "password"
     }
 
-    fn credentials(&self, body: &Json) -> Option<Json> {
+    fn credentials(&self, body: &Json, _binding: Option<&str>) -> Option<Json> {
         Some(json!({
             "login": body.get("login")?.as_str()?,
             "password": body.get("password")?.as_str()?,
@@ -48,7 +49,7 @@ impl SignInRoute for Passkey {
         "passkey"
     }
 
-    fn credentials(&self, body: &Json) -> Option<Json> {
+    fn credentials(&self, body: &Json, _binding: Option<&str>) -> Option<Json> {
         body.get("assertion")?.as_object()?;
         Some(json!({
             "challenge": body.get("challenge")?.as_str()?,
@@ -61,8 +62,30 @@ impl SignInRoute for Passkey {
     }
 }
 
+/// An emailed link: the challenge and token the link carried, and the nonce of the browser that
+/// asked for it, which is in a cookie and not in the body.
+struct Link;
+
+impl SignInRoute for Link {
+    fn method(&self) -> &'static str {
+        "link"
+    }
+
+    fn credentials(&self, body: &Json, binding: Option<&str>) -> Option<Json> {
+        Some(json!({
+            "challenge": body.get("challenge")?.as_str()?,
+            "token": body.get("token")?.as_str()?,
+            "binding": binding?,
+        }))
+    }
+
+    fn refusal(&self) -> &'static str {
+        "The link was not accepted. Ask for a new one."
+    }
+}
+
 /// Every method the site offers.
-static ROUTES: &[&dyn SignInRoute] = &[&Password, &Passkey];
+static ROUTES: &[&dyn SignInRoute] = &[&Password, &Passkey, &Link];
 
 pub fn route(method: &str) -> Option<&'static dyn SignInRoute> {
     ROUTES
@@ -81,12 +104,15 @@ mod tests {
         let sent = route
             .credentials(
                 &json!({ "login": "ines", "password": "x", "tenant": "other", "admin": true }),
+                None,
             )
             .expect("a complete request");
         assert_eq!(sent, json!({ "login": "ines", "password": "x" }));
-        assert!(route.credentials(&json!({ "login": "ines" })).is_none());
         assert!(route
-            .credentials(&json!({ "login": 4, "password": "x" }))
+            .credentials(&json!({ "login": "ines" }), None)
+            .is_none());
+        assert!(route
+            .credentials(&json!({ "login": 4, "password": "x" }), None)
             .is_none());
         assert!(super::route("telepathy").is_none());
     }
@@ -97,15 +123,32 @@ mod tests {
         let sent = route
             .credentials(
                 &json!({ "challenge": "c", "assertion": { "id": "x" }, "tenant": "other" }),
+                None,
             )
             .expect("a complete request");
         assert_eq!(
             sent,
             json!({ "challenge": "c", "assertion": { "id": "x" } })
         );
-        assert!(route.credentials(&json!({ "challenge": "c" })).is_none());
         assert!(route
-            .credentials(&json!({ "challenge": 4, "assertion": {} }))
+            .credentials(&json!({ "challenge": "c" }), None)
             .is_none());
+        assert!(route
+            .credentials(&json!({ "challenge": 4, "assertion": {} }), None)
+            .is_none());
+    }
+
+    #[test]
+    fn a_link_takes_its_browser_binding_from_the_cookie_and_never_from_the_body() {
+        let route = route("link").expect("links are offered");
+        let body = json!({ "challenge": "c", "token": "t", "binding": "from-the-body" });
+        assert_eq!(
+            route.credentials(&body, Some("from-the-cookie")),
+            Some(json!({ "challenge": "c", "token": "t", "binding": "from-the-cookie" }))
+        );
+        assert!(
+            route.credentials(&body, None).is_none(),
+            "a browser with no cookie is not the one that asked"
+        );
     }
 }

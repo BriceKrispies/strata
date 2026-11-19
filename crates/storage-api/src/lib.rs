@@ -347,6 +347,25 @@ pub struct PasskeyChallenge {
     pub expires_at: Timestamp,
 }
 
+/// An emailed sign-in link that has been sent and not yet used. The row holds the principal and
+/// no email address (PRV-365), the hash of the token and the hash of the binding nonce of the
+/// browser that asked, so the store holds nothing that opens the link.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SignInLink {
+    pub tenant: TenantId,
+    /// A hash of the challenge identifier the link carries.
+    pub id_hash: String,
+    pub principal: PrincipalId,
+    /// A hash of the single-use token the link carries.
+    pub token_hash: String,
+    /// A hash of the nonce kept in the requesting browser's cookie.
+    pub binding_hash: String,
+    /// The origin the link was requested at and points to.
+    pub origin: String,
+    /// The link is accepted through this time.
+    pub expires_at: Timestamp,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SnapshotInfo {
     pub tenant: TenantId,
@@ -497,6 +516,18 @@ pub trait Store: Send + Sync {
     ) -> StoreResult<Option<PasskeyChallenge>>;
     /// Remove challenges that have lapsed at `now`. Returns how many were removed.
     fn purge_passkey_challenges(&self, now: Timestamp) -> StoreResult<u64>;
+
+    /// Keep a sent sign-in link.
+    fn put_sign_in_link(&self, link: &SignInLink) -> StoreResult<()>;
+    /// Take a link, removing it in the same step, so that it is answered once whatever the
+    /// timing. The row is returned whether or not it has lapsed: the caller compares the time.
+    fn take_sign_in_link(
+        &self,
+        tenant: &TenantId,
+        id_hash: &str,
+    ) -> StoreResult<Option<SignInLink>>;
+    /// Remove links that have lapsed before `now`. Returns how many were removed.
+    fn purge_sign_in_links(&self, now: Timestamp) -> StoreResult<u64>;
 
     /// Keep a copy of the tenant's complete state as it is now.
     fn create_snapshot(

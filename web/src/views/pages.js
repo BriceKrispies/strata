@@ -218,9 +218,16 @@ export function login(page) {
       h('p', null, h('a', { class: 'button', href: '/desk' }, 'Go to the writing desk')),
     ];
   }
+  if (page.link?.landing === 'working') {
+    return [
+      h('h1', { class: 'page-title' }, 'Signing you in'),
+      h('p', { class: 'standfirst', role: 'status' }, 'Checking your link…'),
+    ];
+  }
   return [
     h('h1', { class: 'page-title' }, 'Sign in'),
     h('p', { class: 'standfirst' }, 'For the people who write and edit here. Readers do not need an account.'),
+    page.link?.landingError ? h('p', { class: 'form__error', role: 'alert', id: 'link-landing-error' }, page.link.landingError) : null,
     h(
       'form',
       { class: 'form form--narrow', 'data-form': 'login', novalidate: true },
@@ -248,6 +255,24 @@ export function login(page) {
           { class: 'form form--narrow', 'data-passkey-signin': true },
           page.passkeys.error ? h('p', { class: 'form__error', role: 'alert', id: 'passkey-error' }, page.passkeys.error) : null,
           h('button', { class: 'button button--quiet', type: 'button', disabled: page.passkeys.busy, 'data-action': 'passkeys.sign_in' }, page.passkeys.busy ? 'Waiting for your passkey…' : 'Sign in with a passkey'),
+        )
+      : null,
+    page.link
+      ? h(
+          'form',
+          { class: 'form form--narrow', 'data-form': 'link', novalidate: true },
+          h('h2', { class: 'section__title', id: 'link-title' }, 'Email me a sign-in link'),
+          page.link.error ? h('p', { class: 'form__error', role: 'alert', id: 'link-error' }, page.link.error) : null,
+          page.link.sent
+            ? h('p', { class: 'form__note', role: 'status', id: 'link-sent' }, 'If that address belongs to an account, a sign-in link is on its way. Open it in this browser within fifteen minutes.')
+            : null,
+          h(
+            'div',
+            { class: 'field' },
+            h('label', { for: 'link-email' }, 'Email address'),
+            h('input', { id: 'link-email', name: 'email', type: 'email', value: page.link.email, autocomplete: 'email', autocapitalize: 'none', spellcheck: 'false', required: true }),
+          ),
+          h('button', { class: 'button button--quiet', type: 'submit', disabled: page.link.busy }, page.link.busy ? 'Sending…' : 'Email me a sign-in link'),
         )
       : null,
   ];

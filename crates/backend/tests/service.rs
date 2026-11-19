@@ -49,6 +49,8 @@ async fn start_on(store: Arc<MemoryStore>, adjust: impl FnOnce(&mut Config)) -> 
         session_idle_ms: 3_600_000,
         throttle: Default::default(),
         passkey_challenge_ttl_ms: 300_000,
+        link_ttl_ms: 900_000,
+        mail: std::sync::Arc::new(strata_backend::mail::DevSink::memory()),
     };
     adjust(&mut cfg);
     tokio::spawn(strata_backend::run(
@@ -2891,4 +2893,448 @@ async fn passkey_attempts_are_limited_like_every_other_method() {
         statuses.push(status);
     }
     assert_eq!(statuses, [401, 401, 401, 429, 429]);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Emailed sign-in links (IDN-003, IDN-004, IDN-005, IDN-006, IDN-269, FED-250)
+
+/// The login of a development account that is an email address.
+const LINK_ADDRESS: &str = "mirela@fieldnotes.example";
+
+/// A backend whose mail goes to a sink the test can read.
+async fn linking(
+    adjust: impl FnOnce(&mut Config),
+) -> (Backend, Arc<strata_backend::mail::DevSink>) {
+    let sink = Arc::new(strata_backend::mail::DevSink::memory());
+    let kept = sink.clone();
+    let backend = start_with(move |cfg| {
+        cfg.mail = kept;
+        adjust(cfg);
+    })
+    .await;
+    (backend, sink)
+}
+
+/// What a sign-in link carries: the challenge and the token, from the fragment of its address, and
+/// the whole address.
+struct Link {
+    challenge: String,
+    token: String,
+    address: String,
+}
+
+fn link_in(sink: &strata_backend::mail::DevSink, index: usize) -> Link {
+    use strata_backend::mail::Mailer;
+    let mail = sink.outbox().remove(index);
+    let address = mail
+        .text
+        .split_whitespace()
+        .find(|word| word.starts_with("https://"))
+        .expect("the message holds a link")
+        .to_string();
+    let (_, fragment) = address
+        .split_once('#')
+        .expect("the token is in the fragment");
+    let part = |name: &str| {
+        fragment
+            .split('&')
+            .find_map(|pair| pair.strip_prefix(&format!("{name}=")))
+            .expect("fragment field")
+            .to_string()
+    };
+    Link {
+        challenge: part("c"),
+        token: part("t"),
+        address,
+    }
+}
+
+/// A well-formed nonce that no browser was given.
+fn nonce() -> String {
+    canon::hash_bytes(format!("{:?}", std::time::Instant::now()).as_bytes())
+}
+
+impl Backend {
+    /// Ask for a link from a browser at `SITE`.
+    async fn ask_link(
+        &self,
+        source: &str,
+        email: &str,
+        binding: Option<&str>,
+        next: Option<&str>,
+    ) -> (u16, Json) {
+        let mut body = json!({ "email": email });
+        if let Some(binding) = binding {
+            body["binding"] = json!(binding);
+        }
+        if let Some(next) = next {
+            body["next"] = json!(next);
+        }
+        self.call_at(
+            Some(SITE),
+            source,
+            "fieldnotes",
+            None,
+            "/internal/sign-in/link/request",
+            body,
+        )
+        .await
+    }
+
+    /// Open a link from the browser that holds `binding`, at `origin`.
+    async fn open_link(&self, link: &Link, binding: &str, origin: &str) -> (u16, Json) {
+        self.call_at(
+            Some(origin),
+            SOURCE,
+            "fieldnotes",
+            None,
+            "/internal/session/sign-in/link",
+            json!({ "challenge": link.challenge, "token": link.token, "binding": binding }),
+        )
+        .await
+    }
+}
+
+/// Verifies: IDN-003
+///
+/// Case link-first-use: a fresh link, opened in the browser that asked for it, signs the person
+/// in through the shared flow: a session of their own, and a decision audited under `link`. The
+/// token is in the fragment of the address and in no query, and the binding nonce is not in the
+/// message at all.
+#[tokio::test]
+async fn link_first_use_in_the_requesting_browser_signs_in() {
+    use strata_backend::mail::Mailer;
+    let (backend, sink) = linking(|_| {}).await;
+    let (status, reply) = backend.ask_link(SOURCE, LINK_ADDRESS, None, None).await;
+    assert_eq!(status, 200, "{reply}");
+    let binding = reply["binding"].as_str().unwrap().to_string();
+    assert_eq!(binding.len(), 64);
+
+    let sent = sink.outbox();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].to, LINK_ADDRESS);
+    assert!(
+        !sent[0].text.contains(&binding),
+        "the binding is not in the message"
+    );
+    let link = link_in(&sink, 0);
+    assert!(
+        link.address.starts_with(&format!("{SITE}/login#c=")),
+        "{}",
+        link.address
+    );
+    assert!(!link
+        .address
+        .split('#')
+        .next()
+        .unwrap()
+        .contains(&link.token));
+
+    let (status, reply) = backend.open_link(&link, &binding, SITE).await;
+    assert_eq!(status, 200, "{reply}");
+    assert_eq!(reply["session"]["authenticated"], true);
+    assert_eq!(reply["session"]["display_name"], "Mirela Ashby");
+    let token = reply["token"].as_str().unwrap();
+    let (_, session) = backend
+        .call("fieldnotes", Some(token), "/internal/session", json!({}))
+        .await;
+    assert_eq!(session["session"]["authenticated"], true);
+
+    let (_, platform) = backend
+        .call(
+            "fieldnotes",
+            None,
+            "/internal/platform/diagnostics",
+            json!({}),
+        )
+        .await;
+    assert!(platform["audit"].as_array().unwrap().iter().any(|entry| {
+        entry["event"] == "auth.decision"
+            && entry["method"] == "link"
+            && entry["outcome"] == "accepted"
+    }));
+    let trail = platform["audit"].to_string();
+    for secret in [&link.token, &link.challenge, &binding] {
+        assert!(
+            !trail.contains(secret.as_str()),
+            "the audit trail holds {secret}"
+        );
+    }
+    assert!(
+        !trail.contains(LINK_ADDRESS),
+        "the audit trail holds the address"
+    );
+}
+
+/// Verifies: IDN-003
+///
+/// Case link-second-use: a link that was used signs no one in again.
+#[tokio::test]
+async fn link_second_use_is_refused() {
+    let (backend, sink) = linking(|_| {}).await;
+    let (_, reply) = backend.ask_link(SOURCE, LINK_ADDRESS, None, None).await;
+    let binding = reply["binding"].as_str().unwrap().to_string();
+    let link = link_in(&sink, 0);
+    assert_eq!(backend.open_link(&link, &binding, SITE).await.0, 200);
+    let (status, reply) = backend.open_link(&link, &binding, SITE).await;
+    assert_eq!(status, 401, "{reply}");
+    assert!(reply["message"].as_str().unwrap().contains("link"));
+}
+
+/// Verifies: IDN-004
+///
+/// Case link-expired: a link is accepted through its lifetime and not after it, however fresh its
+/// token and however right its browser. The lifetime the platform states is fifteen minutes.
+#[tokio::test]
+async fn link_expired_is_refused() {
+    use strata_backend::mail::Mailer;
+    let (backend, sink) = linking(|cfg| cfg.link_ttl_ms = 150).await;
+    let (_, reply) = backend.ask_link(SOURCE, LINK_ADDRESS, None, None).await;
+    let binding = reply["binding"].as_str().unwrap().to_string();
+    let link = link_in(&sink, 0);
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    let (status, _) = backend.open_link(&link, &binding, SITE).await;
+    assert_eq!(status, 401);
+
+    let (backend, sink) = linking(|_| {}).await;
+    let (_, reply) = backend.ask_link(SOURCE, LINK_ADDRESS, None, None).await;
+    let binding = reply["binding"].as_str().unwrap().to_string();
+    assert!(sink.outbox()[0].text.contains("15 minutes"));
+    assert_eq!(
+        backend
+            .open_link(&link_in(&sink, 0), &binding, SITE)
+            .await
+            .0,
+        200
+    );
+}
+
+/// Verifies: IDN-005
+///
+/// Case link-other-browser: a link opened in a browser that did not ask for it signs no one in,
+/// whether that browser has no nonce or another one; and a link that was refused has been taken,
+/// so the browser that did ask must ask again, and keeps its binding when it does.
+#[tokio::test]
+async fn link_other_browser_is_refused() {
+    let (backend, sink) = linking(|_| {}).await;
+    let (_, reply) = backend.ask_link(SOURCE, LINK_ADDRESS, None, None).await;
+    let binding = reply["binding"].as_str().unwrap().to_string();
+    let link = link_in(&sink, 0);
+
+    let (status, _) = backend.open_link(&link, &nonce(), SITE).await;
+    assert_eq!(status, 401, "another browser's nonce");
+    let (status, _) = backend.open_link(&link, &binding, SITE).await;
+    assert_eq!(status, 401, "taken by the refusal");
+
+    let (_, again) = backend
+        .ask_link(SOURCE, LINK_ADDRESS, Some(&binding), None)
+        .await;
+    assert_eq!(again["binding"], reply["binding"]);
+    assert_eq!(
+        backend
+            .open_link(&link_in(&sink, 1), &binding, SITE)
+            .await
+            .0,
+        200
+    );
+
+    // A browser that sends no nonce at all is not the one that asked.
+    let (_, reply) = backend
+        .ask_link(SOURCE, LINK_ADDRESS, Some(&binding), None)
+        .await;
+    assert_eq!(reply["binding"], json!(binding));
+    let link = link_in(&sink, 2);
+    let (status, _) = backend
+        .call_at(
+            Some(SITE),
+            SOURCE,
+            "fieldnotes",
+            None,
+            "/internal/session/sign-in/link",
+            json!({ "challenge": link.challenge, "token": link.token }),
+        )
+        .await;
+    assert_eq!(status, 401);
+}
+
+/// Verifies: IDN-005, IDN-003
+///
+/// A link names the address it was asked for at, and a token that is not its own is refused
+/// whatever else is right; either refusal takes the link.
+#[tokio::test]
+async fn a_link_is_accepted_only_at_its_own_address_with_its_own_token() {
+    let (backend, sink) = linking(|_| {}).await;
+    let (_, reply) = backend.ask_link(SOURCE, LINK_ADDRESS, None, None).await;
+    let binding = reply["binding"].as_str().unwrap().to_string();
+    let link = link_in(&sink, 0);
+    let (status, _) = backend
+        .open_link(&link, &binding, "https://elsewhere.example")
+        .await;
+    assert_eq!(status, 401);
+
+    backend
+        .ask_link(SOURCE, LINK_ADDRESS, Some(&binding), None)
+        .await;
+    let link = link_in(&sink, 1);
+    let wrong = Link {
+        token: nonce(),
+        challenge: link.challenge.clone(),
+        address: String::new(),
+    };
+    assert_eq!(backend.open_link(&wrong, &binding, SITE).await.0, 401);
+    assert_eq!(
+        backend.open_link(&link, &binding, SITE).await.0,
+        401,
+        "the wrong token took it"
+    );
+}
+
+/// Verifies: IDN-006
+///
+/// The answer to a request for a link is the same whether or not the address has an account, and
+/// so is what is said for something that is not an address; mail goes only to an account.
+#[tokio::test]
+async fn the_answer_to_a_link_request_does_not_say_whether_there_is_an_account() {
+    use strata_backend::mail::Mailer;
+    let (backend, sink) = linking(|_| {}).await;
+    let binding = nonce();
+    let mut answers = Vec::new();
+    for address in [
+        LINK_ADDRESS,
+        "nobody@fieldnotes.example",
+        "not an address",
+        "",
+    ] {
+        answers.push(
+            backend
+                .ask_link(SOURCE, address, Some(&binding), None)
+                .await,
+        );
+    }
+    for answer in &answers {
+        assert_eq!(answer, &answers[0], "one answer for every address");
+    }
+    assert_eq!(answers[0].0, 200);
+    let sent = sink.outbox();
+    assert_eq!(
+        sent.len(),
+        1,
+        "mail went to the account and to nothing else"
+    );
+    assert_eq!(sent[0].to, LINK_ADDRESS);
+}
+
+/// Verifies: IDN-269
+///
+/// Requests are counted per address and per source, whether or not the address has an account,
+/// and they are not given back.
+#[tokio::test]
+async fn link_requests_are_limited_per_address_and_per_source() {
+    use strata_backend::mail::Mailer;
+    let (backend, _) = linking(|cfg| cfg.throttle.account_max = 2).await;
+    for address in [LINK_ADDRESS, "nobody@fieldnotes.example"] {
+        let mut statuses = Vec::new();
+        for n in 0..4 {
+            let source = format!("203.0.113.{}", 20 + n);
+            statuses.push(backend.ask_link(&source, address, None, None).await.0);
+        }
+        assert_eq!(
+            statuses,
+            [200, 200, 429, 429],
+            "{address}: the same for both"
+        );
+    }
+
+    let (backend, sink) = linking(|cfg| cfg.throttle.source_max = 3).await;
+    let mut statuses = Vec::new();
+    for n in 0..5 {
+        statuses.push(
+            backend
+                .ask_link(SOURCE, &format!("person{n}@fieldnotes.example"), None, None)
+                .await
+                .0,
+        );
+    }
+    assert_eq!(statuses, [200, 200, 200, 429, 429]);
+    assert_eq!(
+        backend
+            .ask_link("203.0.113.99", LINK_ADDRESS, None, None)
+            .await
+            .0,
+        200
+    );
+    assert_eq!(sink.outbox().len(), 1);
+}
+
+/// Verifies: FED-250
+///
+/// A return address goes into the link only when it is a path on the site.
+#[tokio::test]
+async fn a_return_address_is_followed_only_when_it_is_a_path_on_the_site() {
+    let (backend, sink) = linking(|cfg| cfg.throttle.account_max = 100).await;
+    let binding = nonce();
+    let nexts = [
+        Some("/desk/settings"),
+        Some("//evil.example/x"),
+        Some("https://evil.example"),
+        Some("/\\evil.example"),
+        Some("javascript:alert(1)"),
+        None,
+    ];
+    for next in nexts {
+        let (status, _) = backend
+            .ask_link("203.0.113.40", LINK_ADDRESS, Some(&binding), next)
+            .await;
+        assert_eq!(status, 200);
+    }
+    let addresses: Vec<String> = (0..6).map(|i| link_in(&sink, i).address).collect();
+    assert!(
+        addresses[0].contains("?next=%2Fdesk%2Fsettings#c="),
+        "{}",
+        addresses[0]
+    );
+    for dropped in &addresses[1..] {
+        assert!(!dropped.contains("next="), "{dropped}");
+        assert!(!dropped.contains("evil"), "{dropped}");
+    }
+}
+
+/// Verifies: IDN-003
+///
+/// The development outbox is the owner's, in development only: a visitor, or a person who is not
+/// the site's owner, is refused, and the owner reads the messages the sink holds.
+#[tokio::test]
+async fn the_development_outbox_is_for_the_owner() {
+    let (backend, _) = linking(|_| {}).await;
+    backend.ask_link(SOURCE, LINK_ADDRESS, None, None).await;
+    let (status, _) = backend
+        .call("fieldnotes", None, "/internal/dev/mail-outbox", json!({}))
+        .await;
+    assert_eq!(status, 401);
+    let mirela = backend
+        .login("fieldnotes", "mirela", "strata-dev-mirela")
+        .await;
+    let (status, _) = backend
+        .call(
+            "fieldnotes",
+            Some(&mirela),
+            "/internal/dev/mail-outbox",
+            json!({}),
+        )
+        .await;
+    assert_eq!(status, 403);
+    let admin = backend
+        .login("fieldnotes", "admin", "strata-dev-admin")
+        .await;
+    let (status, outbox) = backend
+        .call(
+            "fieldnotes",
+            Some(&admin),
+            "/internal/dev/mail-outbox",
+            json!({}),
+        )
+        .await;
+    assert_eq!(status, 200, "{outbox}");
+    assert_eq!(outbox["messages"].as_array().unwrap().len(), 1);
+    assert_eq!(outbox["messages"][0]["to"], LINK_ADDRESS);
 }
