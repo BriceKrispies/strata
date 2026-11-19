@@ -4,7 +4,10 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 use strata_kernel::testkit::*;
 use strata_kernel::*;
-use strata_storage_api::{conformance, execute, Account, SessionRecord, Store};
+use strata_storage_api::{
+    conformance, execute, Account, FederatedIdentity, OidcFlow, PasskeyCeremony, PasskeyChallenge,
+    PasskeyRecord, SessionRecord, Store, ThrottleRule, ThrottleSettle, ThrottleVerdict,
+};
 use strata_storage_sqlite::{default_tenants_dir, tenant_file_name, SqliteStore};
 
 static COUNTER: AtomicU32 = AtomicU32::new(0);
@@ -69,6 +72,8 @@ fn committed_data_survives_a_reopen() {
         last_seen_at: Timestamp(11),
         expires_at: Timestamp(1_000_000),
         revoked_at: None,
+        authenticated_at: Timestamp(10),
+        network: None,
     };
     let account = Account {
         tenant: alpha.clone(),
@@ -138,11 +143,17 @@ fn committed_data_survives_a_reopen() {
     assert_eq!(store.snapshots(&alpha).unwrap(), vec![snapshot]);
     assert_eq!(store.journal_after(&alpha, 0, 10).unwrap().len(), 3);
     let migrations = store.migrations().unwrap();
-    assert_eq!(migrations.len(), 1);
+    assert_eq!(migrations.len(), 1, "the control database's steps");
     assert_eq!(
         migrations[0].applied_at,
         Timestamp(1),
         "the layout step is recorded once, not on every open"
+    );
+    let file = store.tenant_file(&alpha).unwrap().unwrap();
+    assert_eq!(
+        count(&file, "SELECT COUNT(*) FROM tenant_migrations"),
+        6,
+        "the tenant file's steps"
     );
     assert!(store.health().unwrap().ok);
 }
@@ -302,6 +313,8 @@ fn two_tenants_data_live_in_different_files() {
                 last_seen_at: Timestamp(10),
                 expires_at: Timestamp(1_000_000),
                 revoked_at: None,
+                authenticated_at: Timestamp(10),
+                network: None,
             })
             .unwrap();
     }
@@ -357,7 +370,7 @@ fn two_tenants_data_live_in_different_files() {
         count(
             &path,
             "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' \
-             AND name IN ('records', 'events', 'journal', 'sessions', 'accounts', 'tenant')"
+             AND name IN ('records', 'events', 'journal', 'sessions', 'accounts', 'tenant',              'login_throttle', 'passkeys', 'passkey_challenges', 'sign_in_links', 'oidc_flows',              'federated_identities', 'totp_factors', 'recovery_codes', 'pending_sign_ins',              'recovery_requests')"
         ),
         0,
         "the control database holds no tenant content"
@@ -479,4 +492,436 @@ fn the_in_memory_store_conforms() {
     conformance::run(&|| {
         Box::new(SqliteStore::open_in_memory(Timestamp(1)).unwrap()) as Box<dyn Store>
     });
+}
+
+fn rule(key: &str, max: u32, lock_resets: bool) -> ThrottleRule {
+    ThrottleRule {
+        key: key.into(),
+        max,
+        window_ms: 1000,
+        lock_ms: 100,
+        lock_resets,
+    }
+}
+
+/// Verifies: IDN-008
+///
+/// The counters are rows: a reopened file holds them, a tenant reset takes them, a right
+/// password clears one, and an expired one is purged.
+#[test]
+fn login_throttle_counters_are_durable_atomic_and_purged() {
+    let path = fresh_path("throttle");
+    let alpha = tenant_id("alpha");
+    let account = rule("account:password:a", 3, true);
+    let source = rule("source:password:1.2.3.4", 2, false);
+    {
+        let store = SqliteStore::open(&path, Timestamp(1)).unwrap();
+        execute(
+            &store,
+            &Intent::CreateTenant {
+                name: "alpha".into(),
+                owner: principal_id("alpha:owner"),
+            },
+            &ctx("alpha", Principal::System, 10),
+        )
+        .unwrap();
+        let both = [account.clone(), source.clone()];
+        for _ in 0..2 {
+            assert_eq!(
+                store
+                    .throttle_reserve(&alpha, &both, Timestamp(100))
+                    .unwrap(),
+                ThrottleVerdict::Allowed
+            );
+        }
+        // The source is full: a refusal counts nothing on the account either.
+        assert!(matches!(
+            store
+                .throttle_reserve(&alpha, &both, Timestamp(100))
+                .unwrap(),
+            ThrottleVerdict::Refused { .. }
+        ));
+    }
+    let store = SqliteStore::open(&path, Timestamp(1)).unwrap();
+    let verdict = store
+        .throttle_reserve(&alpha, std::slice::from_ref(&account), Timestamp(100))
+        .unwrap();
+    assert_eq!(
+        verdict,
+        ThrottleVerdict::Allowed,
+        "the account had two, not three"
+    );
+    assert!(
+        matches!(
+            store
+                .throttle_reserve(&alpha, std::slice::from_ref(&source), Timestamp(100))
+                .unwrap(),
+            ThrottleVerdict::Refused {
+                until: Timestamp(200)
+            }
+        ),
+        "the source count survived the reopen, with its lock, which ends at 200"
+    );
+    store
+        .throttle_settle(&alpha, &account.key, 3, ThrottleSettle::Clear)
+        .unwrap();
+    assert_eq!(
+        store
+            .throttle_reserve(&alpha, std::slice::from_ref(&account), Timestamp(100))
+            .unwrap(),
+        ThrottleVerdict::Allowed
+    );
+    // After its window a counter starts again, and the expired rows can be purged.
+    assert_eq!(
+        store
+            .throttle_reserve(&alpha, std::slice::from_ref(&source), Timestamp(1200))
+            .unwrap(),
+        ThrottleVerdict::Allowed
+    );
+    assert_eq!(store.purge_throttle(Timestamp(1_000_000)).unwrap(), 2);
+    assert_eq!(store.purge_throttle(Timestamp(1_000_000)).unwrap(), 0);
+}
+
+/// Verifies: IDN-264
+///
+/// Passkeys and their challenges are rows: a reopened file holds them, a credential id is
+/// unique within a tenant, a challenge is taken once and not after it lapses, and a tenant reset
+/// takes them all.
+#[test]
+fn passkeys_and_challenges_are_durable_and_a_challenge_is_taken_once() {
+    let path = fresh_path("passkeys");
+    let alpha = tenant_id("alpha");
+    let ines = principal_id("user:ines");
+    let passkey = |id: &str, principal: &PrincipalId, at: i64| PasskeyRecord {
+        tenant: alpha.clone(),
+        principal: principal.clone(),
+        id: id.into(),
+        rp_id: "alpha.example".into(),
+        label: "Key".into(),
+        credential: "{}".into(),
+        created_at: Timestamp(at),
+        last_used_at: None,
+    };
+    let challenge = |hash: &str, expires: i64| PasskeyChallenge {
+        tenant: alpha.clone(),
+        id_hash: hash.into(),
+        ceremony: PasskeyCeremony::SignIn,
+        session: None,
+        principal: None,
+        origin: "https://alpha.example".into(),
+        state: "{}".into(),
+        expires_at: Timestamp(expires),
+    };
+    {
+        let store = SqliteStore::open(&path, Timestamp(1)).unwrap();
+        execute(
+            &store,
+            &Intent::CreateTenant {
+                name: "alpha".into(),
+                owner: principal_id("alpha:owner"),
+            },
+            &ctx("alpha", Principal::System, 10),
+        )
+        .unwrap();
+        assert!(store.put_passkey(&passkey("k2", &ines, 20)).unwrap());
+        assert!(store.put_passkey(&passkey("k1", &ines, 10)).unwrap());
+        assert!(
+            !store
+                .put_passkey(&passkey("k1", &principal_id("user:omar"), 30))
+                .unwrap(),
+            "a credential id is held once in a tenant, whoever brings it"
+        );
+        store
+            .put_passkey_challenge(&challenge("live", 1000))
+            .unwrap();
+        store
+            .put_passkey_challenge(&challenge("lapsed", 50))
+            .unwrap();
+    }
+    let store = SqliteStore::open(&path, Timestamp(1)).unwrap();
+    let held = store.passkeys(&alpha, &ines).unwrap();
+    assert_eq!(
+        held.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(),
+        ["k1", "k2"],
+        "oldest first, and only this person's"
+    );
+    assert_eq!(held[0].rp_id, "alpha.example");
+    assert!(store
+        .update_passkey(&alpha, "k1", "{\"cred\":1}", Timestamp(99))
+        .unwrap());
+    let used = store.passkey(&alpha, "k1").unwrap().unwrap();
+    assert_eq!(used.credential, "{\"cred\":1}");
+    assert_eq!(used.last_used_at, Some(Timestamp(99)));
+
+    assert!(store
+        .take_passkey_challenge(&alpha, "live", Timestamp(100))
+        .unwrap()
+        .is_some());
+    assert!(
+        store
+            .take_passkey_challenge(&alpha, "live", Timestamp(100))
+            .unwrap()
+            .is_none(),
+        "taken once"
+    );
+    assert!(
+        store
+            .take_passkey_challenge(&alpha, "lapsed", Timestamp(100))
+            .unwrap()
+            .is_none(),
+        "not after it lapsed"
+    );
+    store
+        .put_passkey_challenge(&challenge("later", 60))
+        .unwrap();
+    assert_eq!(store.purge_passkey_challenges(Timestamp(100)).unwrap(), 1);
+
+    assert!(!store
+        .remove_passkey(&alpha, &principal_id("user:omar"), "k1")
+        .unwrap());
+    assert!(store.remove_passkey(&alpha, &ines, "k1").unwrap());
+    store.reset_tenant(&alpha).unwrap();
+    assert!(store.passkey(&alpha, "k2").unwrap().is_none());
+}
+
+/// Verifies: STO-002
+///
+/// A started identity-provider sign-in is a row: it survives a reopen, is taken once, and is
+/// returned even when lapsed (the caller compares the time). A provider's subject is tied to one
+/// principal, once, and only within its own tenant and provider; a tenant reset takes them all.
+#[test]
+fn identity_provider_sign_ins_are_taken_once_and_identities_are_tied_once() {
+    let path = fresh_path("oidc");
+    let alpha = tenant_id("alpha");
+    let ines = principal_id("user:ines");
+    let flow = |hash: &str, expires: i64| OidcFlow {
+        tenant: alpha.clone(),
+        id_hash: hash.into(),
+        provider: "acme".into(),
+        nonce: "n".into(),
+        verifier: "v".into(),
+        binding_hash: "b".into(),
+        origin: "https://alpha.example".into(),
+        principal: Some(ines.clone()),
+        expires_at: Timestamp(expires),
+    };
+    let identity = |provider: &str, subject: &str, principal: &PrincipalId| FederatedIdentity {
+        tenant: alpha.clone(),
+        provider: provider.into(),
+        subject: subject.into(),
+        principal: principal.clone(),
+        created_at: Timestamp(5),
+    };
+    {
+        let store = SqliteStore::open(&path, Timestamp(1)).unwrap();
+        execute(
+            &store,
+            &Intent::CreateTenant {
+                name: "alpha".into(),
+                owner: principal_id("alpha:owner"),
+            },
+            &ctx("alpha", Principal::System, 10),
+        )
+        .unwrap();
+        store.put_oidc_flow(&flow("live", 1000)).unwrap();
+        store.put_oidc_flow(&flow("lapsed", 50)).unwrap();
+        assert!(store
+            .put_identity(&identity("acme", "sub-1", &ines))
+            .unwrap());
+    }
+    let store = SqliteStore::open(&path, Timestamp(1)).unwrap();
+    assert_eq!(
+        store.take_oidc_flow(&alpha, "live").unwrap(),
+        Some(flow("live", 1000))
+    );
+    assert!(
+        store.take_oidc_flow(&alpha, "live").unwrap().is_none(),
+        "taken once"
+    );
+    assert_eq!(
+        store
+            .take_oidc_flow(&alpha, "lapsed")
+            .unwrap()
+            .map(|f| f.expires_at),
+        Some(Timestamp(50)),
+        "a lapsed request is returned, for the caller to refuse"
+    );
+    store.put_oidc_flow(&flow("later", 60)).unwrap();
+    assert_eq!(store.purge_oidc_flows(Timestamp(100)).unwrap(), 1);
+
+    let known = store.identity(&alpha, "acme", "sub-1").unwrap().unwrap();
+    assert_eq!(known.principal, ines);
+    assert!(
+        !store
+            .put_identity(&identity("acme", "sub-1", &principal_id("user:omar")))
+            .unwrap(),
+        "a subject is tied to one principal"
+    );
+    assert_eq!(
+        store
+            .identity(&alpha, "acme", "sub-1")
+            .unwrap()
+            .unwrap()
+            .principal,
+        ines
+    );
+    assert!(
+        store.identity(&alpha, "other", "sub-1").unwrap().is_none(),
+        "one provider's subject is not another's"
+    );
+    store.reset_tenant(&alpha).unwrap();
+    assert!(store.identity(&alpha, "acme", "sub-1").unwrap().is_none());
+}
+
+/// Second-factor state: a confirmed authenticator is not replaced, a time step is accepted once,
+/// a recovery code is spent once, a waiting sign-in counts its presentations and is taken once,
+/// and a recovery is replaced by a newer one of the same person. All of it is durable.
+#[test]
+fn second_factor_state_is_durable_and_answers_once() {
+    use strata_storage_api::{PendingSignIn, RecoveryRequest, TotpRecord};
+    let path = fresh_path("factors");
+    let alpha = tenant_id("alpha");
+    let ines = principal_id("user:ines");
+    let totp = |confirmed: bool| TotpRecord {
+        tenant: alpha.clone(),
+        principal: ines.clone(),
+        secret: "sealed".into(),
+        confirmed,
+        last_step: -1,
+        created_at: Timestamp(1),
+    };
+    {
+        let store = SqliteStore::open(&path, Timestamp(1)).unwrap();
+        execute(
+            &store,
+            &Intent::CreateTenant {
+                name: "alpha".into(),
+                owner: principal_id("alpha:owner"),
+            },
+            &ctx("alpha", Principal::System, 10),
+        )
+        .unwrap();
+
+        assert!(store.put_totp(&totp(false)).unwrap());
+        assert!(
+            !store.use_totp_step(&alpha, &ines, 5).unwrap(),
+            "unconfirmed is no factor"
+        );
+        assert!(store.confirm_totp(&alpha, &ines, 10).unwrap());
+        assert!(
+            !store.put_totp(&totp(false)).unwrap(),
+            "a confirmed factor is not replaced"
+        );
+        assert!(
+            !store.use_totp_step(&alpha, &ines, 10).unwrap(),
+            "the step of the confirming code"
+        );
+        assert!(store.use_totp_step(&alpha, &ines, 11).unwrap());
+        assert!(
+            !store.use_totp_step(&alpha, &ines, 11).unwrap(),
+            "a step is accepted once"
+        );
+
+        let hashes = vec!["h1".to_string(), "h2".to_string()];
+        store
+            .replace_recovery_codes(&alpha, &ines, &hashes, Timestamp(5))
+            .unwrap();
+        assert!(store.spend_recovery_code(&alpha, &ines, "h1").unwrap());
+        assert!(
+            !store.spend_recovery_code(&alpha, &ines, "h1").unwrap(),
+            "a code is spent once"
+        );
+        assert_eq!(store.recovery_codes_left(&alpha, &ines).unwrap(), 1);
+
+        let waiting = PendingSignIn {
+            tenant: alpha.clone(),
+            id_hash: "w".into(),
+            principal: ines.clone(),
+            method: "password".into(),
+            factors: 1,
+            attempts: 0,
+            expires_at: Timestamp(100),
+        };
+        store.put_pending(&waiting).unwrap();
+        assert_eq!(
+            store
+                .attempt_pending(&alpha, "w", Timestamp(50), 2)
+                .unwrap()
+                .unwrap()
+                .attempts,
+            1
+        );
+        assert_eq!(
+            store
+                .attempt_pending(&alpha, "w", Timestamp(50), 2)
+                .unwrap()
+                .unwrap()
+                .attempts,
+            2
+        );
+        assert!(
+            store
+                .attempt_pending(&alpha, "w", Timestamp(50), 2)
+                .unwrap()
+                .is_none(),
+            "spent"
+        );
+        assert!(store
+            .take_pending(&alpha, "w", Timestamp(50))
+            .unwrap()
+            .is_none());
+        store.put_pending(&waiting).unwrap();
+        assert!(store
+            .take_pending(&alpha, "w", Timestamp(50))
+            .unwrap()
+            .is_some());
+        assert!(
+            store
+                .take_pending(&alpha, "w", Timestamp(50))
+                .unwrap()
+                .is_none(),
+            "taken once"
+        );
+        store.put_pending(&waiting).unwrap();
+        assert!(
+            store
+                .take_pending(&alpha, "w", Timestamp(100))
+                .unwrap()
+                .is_none(),
+            "lapsed"
+        );
+
+        let request = |id: &str| RecoveryRequest {
+            tenant: alpha.clone(),
+            id_hash: id.into(),
+            principal: ines.clone(),
+            login: "ines".into(),
+            token_hash: "t".into(),
+            cancel_hash: "c".into(),
+            requested_at: Timestamp(1),
+            completes_at: Timestamp(2),
+            expires_at: Timestamp(3),
+        };
+        store.put_recovery(&request("r1")).unwrap();
+        store.put_recovery(&request("r2")).unwrap();
+        assert!(
+            store.recovery(&alpha, "r1").unwrap().is_none(),
+            "replaced by the newer request"
+        );
+        assert!(!store.cancel_recovery(&alpha, "r2", "wrong").unwrap());
+        assert!(store.cancel_recovery(&alpha, "r2", "c").unwrap());
+        store.put_recovery(&request("r3")).unwrap();
+        assert_eq!(
+            store.take_recovery(&alpha, "r3").unwrap().unwrap().login,
+            "ines"
+        );
+        assert!(store.take_recovery(&alpha, "r3").unwrap().is_none());
+    }
+    // Reopened: what was kept is still there.
+    let store = SqliteStore::open(&path, Timestamp(2)).unwrap();
+    assert!(store.totp(&alpha, &ines).unwrap().unwrap().confirmed);
+    assert_eq!(store.totp(&alpha, &ines).unwrap().unwrap().last_step, 11);
+    assert_eq!(store.recovery_codes_left(&alpha, &ines).unwrap(), 1);
+    store.reset_tenant(&alpha).unwrap();
+    assert!(store.totp(&alpha, &ines).unwrap().is_none());
 }

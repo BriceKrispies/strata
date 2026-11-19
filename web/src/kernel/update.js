@@ -12,7 +12,12 @@ import * as refusals from '../generated/errors.js';
 import * as forms from '../generated/forms.js';
 import * as live from '../generated/live.js';
 import { matchRoute, route as routeOf } from '../generated/routes.js';
+import { factorsEnter, factorsInit, factorsInput, factorsRequireStepUp, factorsUpdate, factorsWaiting, isStepUp } from './factors.js';
 import { labEnter, labInit, labUpdate } from './lab.js';
+import { linksInit, linksInput, linksLand, linksOpened, linksUpdate } from './links.js';
+import { oidcEnter, oidcInit, oidcLand, oidcOpened, oidcUpdate } from './oidc.js';
+import { passkeysEnter, passkeysInit, passkeysUpdate } from './passkeys.js';
+import { sessionsEnter, sessionsInit, sessionsUpdate } from './sessions.js';
 import {
   busy,
   liveInit,
@@ -53,6 +58,11 @@ export function initialState() {
     optimistic: {},
     confirmDelete: null,
     lab: labInit(),
+    sessions: sessionsInit(),
+    passkeys: passkeysInit(),
+    factors: factorsInit(),
+    links: linksInit(),
+    oidc: oidcInit(),
     /** @type {{ id: number, kind: string, text: string }[]} */
     toasts: [],
     announce: '',
@@ -384,6 +394,39 @@ function onSocket(state, frame, msg) {
   }
 }
 
+/** What the desk asks for when it is shown: the person's sessions and passkeys. @returns {Result} */
+function deskEnter(state, msg) {
+  const sessions = sessionsEnter(state, msg, { request });
+  const passkeys = passkeysEnter(sessions.state, msg, { request });
+  const factors = factorsEnter(passkeys.state, msg, { request });
+  return { state: factors.state, effects: [...sessions.effects, ...passkeys.effects, ...factors.effects] };
+}
+
+/** A passkey was accepted: the same as a password being accepted, from the session on. @returns {Result} */
+function passkeySignedIn(state, msg) {
+  // A first factor that is not enough: no session yet, and the page asks for the second.
+  if (msg.body?.second_factor) return { state: factorsWaiting(state, msg.body), effects: [] };
+  const outputs = contracts.decode('sign-in-at-site', msg.body, {});
+  const outcome = forms.succeeded(SIGN_IN, scopeOf(state, { form: {}, response: outputs }));
+  let signedIn = { ...state, session: outputs.session };
+  signedIn = sessionStep(signedIn, 'ui-signed-in', {}, msg.at)?.state ?? signedIn;
+  if (outcome.toast) signedIn = toast(signedIn, 'ok', outcome.toast);
+  const reset = resetLive(signedIn, msg);
+  const moved = navigate(reset.state, outcome.navigate ?? '/', false, msg);
+  return { state: moved.state, effects: [...reset.effects, ...moved.effects] };
+}
+
+/** An emailed link was accepted: the same as a passkey being accepted, from the session on. @returns {Result} */
+const linkSignedIn = passkeySignedIn;
+
+/** An identity provider's answer was accepted: the same, from the session on. @returns {Result} */
+const oidcSignedIn = passkeySignedIn;
+
+/** Ask a refused action again, now that the person has authenticated. @returns {Result} */
+function redispatch(state, retry, msg) {
+  return onAction(state, { type: 'action', name: retry.name, arg: retry.arg, at: msg.at, rand: msg.rand });
+}
+
 /** @returns {Result} */
 function onHttp(state, msg) {
   const pending = state.pending[msg.id];
@@ -391,10 +434,31 @@ function onHttp(state, msg) {
   const { [msg.id]: _done, ...rest } = state.pending;
   state = { ...state, pending: rest };
   const error = msg.ok ? null : msg.body && typeof msg.body === 'object' ? msg.body : { code: 'unavailable', message: 'The site could not be reached.' };
-  const outputs = msg.ok && pending.contract ? contracts.decode(pending.contract, msg.body, pending.inputs) : null;
+  const waiting = msg.ok && msg.body?.second_factor ? msg.body : null;
+  const outputs = msg.ok && pending.contract && !waiting ? contracts.decode(pending.contract, msg.body, pending.inputs) : null;
+
+  // An operation that needs a fresh authentication is asked again once the person has given one.
+  if (isStepUp({ ...msg, error }) && pending.retry) {
+    return { state: factorsRequireStepUp(state, pending.retry), effects: [] };
+  }
+  if (pending.kind.startsWith('factors.')) {
+    return factorsUpdate(state, { ...msg, pending, error }, { request, toast, signedIn: passkeySignedIn, redispatch }) ?? { state, effects: [] };
+  }
 
   if (pending.kind.startsWith('lab.')) {
     return labUpdate(state, { ...msg, pending, error }, { request, toast }) ?? { state, effects: [] };
+  }
+  if (pending.kind.startsWith('sessions.')) {
+    return sessionsUpdate(state, { ...msg, pending, error }, { request, toast }) ?? { state, effects: [] };
+  }
+  if (pending.kind.startsWith('passkeys.')) {
+    return passkeysUpdate(state, { ...msg, pending, error }, { request, toast, signedIn: passkeySignedIn }) ?? { state, effects: [] };
+  }
+  if (pending.kind.startsWith('links.')) {
+    return linksUpdate(state, { ...msg, pending, error }, { request, signedIn: linkSignedIn }) ?? { state, effects: [] };
+  }
+  if (pending.kind.startsWith('oidc.')) {
+    return oidcUpdate(state, { ...msg, pending, error }, { request, signedIn: oidcSignedIn }) ?? { state, effects: [] };
   }
 
   switch (pending.kind) {
@@ -405,16 +469,20 @@ function onHttp(state, msg) {
       // issued, so it opens it now.
       /** @type {Effect[]} */
       const open = state.session ? [] : [{ type: 'ws_connect', csrf: outputs.session.csrf_token }];
+      // A link the page was opened with waits for the request token that this reply brings.
+      const linked = linksLand(known, msg, { request });
+      const landed = oidcLand(linked.state, msg, { request });
       if (state.view.model?.view === 'lab') {
-        const entered = labEnter(known, msg, { request });
-        return { state: entered.state, effects: [...open, ...entered.effects] };
+        const entered = labEnter(landed.state, msg, { request });
+        return { state: entered.state, effects: [...open, ...linked.effects, ...landed.effects, ...entered.effects] };
       }
-      return { state: known, effects: open };
+      return { state: landed.state, effects: [...open, ...linked.effects, ...landed.effects] };
     }
     case 'view': {
       if (state.view.request !== msg.id) return { state, effects: [] };
       if (msg.ok) {
         const accepted = acceptView(state, decodeView(state, msg.body));
+        if (msg.body.view === 'desk') return deskEnter(accepted, msg);
         return msg.body.view === 'lab' ? labEnter(accepted, msg, { request }) : { state: accepted, effects: [] };
       }
       const status = msg.status === 404 ? 'missing' : 'error';
@@ -434,6 +502,10 @@ function onHttp(state, msg) {
         };
       }
       const flow = submitStep(login.flow, 'ui-form-accepted', {}, msg.at)?.flow ?? login.flow;
+      if (waiting) {
+        const cleared = { ...state, forms: { ...state.forms, login: { ...login, flow, busy: busy(flow), error: '', values: { ...login.values, password: '' } } } };
+        return { state: factorsWaiting(cleared, waiting), effects: [] };
+      }
       const outcome = forms.succeeded(SIGN_IN, scopeOf(state, { form: pending.values, response: outputs }));
       let signedIn = { ...state, session: outputs.session, forms: { ...state.forms, login: { values: forms.initialValues(SIGN_IN, {}), busy: busy(flow), error: '', flow } } };
       signedIn = sessionStep(signedIn, 'ui-signed-in', {}, msg.at)?.state ?? signedIn;
@@ -525,13 +597,16 @@ function navigate(state, href, replace, msg) {
   const same = hrefOf(route) === hrefOf(state.route);
   const moved = { ...state, route, menuOpen: false, confirmDelete: null, focus: { target: 'main', token: state.nextId } };
   const fetched = fetchView(moved, msg, false);
+  const providers = oidcEnter(fetched.state, msg, { request });
   /** @type {Effect[]} */
   const effects = same && !replace ? [] : [{ type: 'push_url', href: hrefOf(route), replace }];
-  return { state: fetched.state, effects: [...effects, { type: 'scroll_top' }, ...fetched.effects] };
+  return { state: providers.state, effects: [...effects, { type: 'scroll_top' }, ...fetched.effects, ...providers.effects] };
 }
 
 function onInput(state, msg) {
   const f = state.forms;
+  if (msg.form === 'link') return linksInput(state, msg.name, msg.value);
+  if (msg.form === 'second' || msg.form === 'totpconfirm' || msg.form === 'stepup') return factorsInput(state, msg.name, msg.value);
   if (msg.form === 'login') {
     const { values } = forms.input(SIGN_IN, f.login.values, [], msg.name, msg.value);
     return { ...state, forms: { ...f, login: { ...f.login, values } } };
@@ -633,6 +708,10 @@ function onAction(state, msg) {
     }
     default:
       if (msg.name.startsWith('lab.')) return labUpdate(state, msg, { request, toast }) ?? { state, effects: [] };
+      if (msg.name.startsWith('sessions.')) return sessionsUpdate(state, msg, { request, toast }) ?? { state, effects: [] };
+      if (msg.name.startsWith('factors.')) return factorsUpdate(state, msg, { request, toast, signedIn: passkeySignedIn, redispatch }) ?? { state, effects: [] };
+      if (msg.name.startsWith('passkeys.')) return passkeysUpdate(state, msg, { request, toast, signedIn: passkeySignedIn }) ?? { state, effects: [] };
+      if (msg.name.startsWith('oidc.')) return oidcUpdate(state, msg, { request, signedIn: oidcSignedIn }) ?? { state, effects: [] };
       return { state, effects: [] };
   }
 }
@@ -640,6 +719,8 @@ function onAction(state, msg) {
 /** @returns {Result} */
 function onSubmit(state, msg) {
   switch (msg.form) {
+    case 'link':
+      return linksUpdate(state, msg, { request, signedIn: linkSignedIn }) ?? { state, effects: [] };
     case 'login': {
       const login = state.forms.login;
       const values = forms.submitted(SIGN_IN, msg.values);
@@ -656,6 +737,10 @@ function onSubmit(state, msg) {
       const [next, effect] = call(state, 'login', forms.FORMS[SIGN_IN].contract, inputs, msg, { values });
       return { state: { ...next, forms: { ...next.forms, login: { values, flow: stepped.flow, busy: busy(stepped.flow), error: '' } } }, effects: [effect] };
     }
+    case 'second':
+    case 'totpconfirm':
+    case 'stepup':
+      return factorsUpdate(state, msg, { request, toast, signedIn: passkeySignedIn, redispatch }) ?? { state, effects: [] };
     case 'search': {
       // The search form calls the view model of the search page, which opening the page does.
       const form = forms.submitted('form-search', msg.values);
@@ -708,7 +793,7 @@ function step(state, msg) {
     case 'init': {
       const route = parseHref(msg.path + msg.search);
       const mode = THEME_MODES.includes(msg.storedTheme ?? '') ? msg.storedTheme : 'auto';
-      let next = { ...state, route, theme: { ...state.theme, mode, systemDark: msg.systemDark } };
+      let next = { ...state, route, theme: { ...state.theme, mode, systemDark: msg.systemDark }, passkeys: { ...state.passkeys, supported: msg.passkeys === true } };
       /** @type {Effect[]} */
       const effects = [];
       const boot = msg.bootstrap;
@@ -726,11 +811,29 @@ function step(state, msg) {
           next = entered.state;
           effects.push(...entered.effects);
         }
+        if (boot.view.view === 'desk') {
+          const entered = deskEnter(next, msg);
+          next = entered.state;
+          effects.push(...entered.effects);
+        }
       } else {
         const fetched = fetchView(next, msg, false);
         next = fetched.state;
         effects.push(...fetched.effects);
       }
+      // A link the page was opened with is taken out of the address bar and, once the request
+      // token is known, sent.
+      const opened = linksOpened(next, msg.hash ?? '', hrefOf(route));
+      const landed = linksLand(opened.state, msg, { request });
+      next = landed.state;
+      effects.push(...opened.effects, ...landed.effects);
+      // The same for the answer of an identity provider, and the sign-in page asks which
+      // providers the site offers.
+      const returned = oidcOpened(next, msg.hash ?? '', hrefOf(route));
+      const answered = oidcLand(returned.state, msg, { request });
+      const offered = oidcEnter(answered.state, msg, { request });
+      next = offered.state;
+      effects.push(...returned.effects, ...answered.effects, ...offered.effects);
       // The socket needs the request token, which a bootstrapped page already has. A cold start
       // gets it with the session reply and connects then.
       next = liveStep(next, 'ui-live-start', {}, msg)?.state ?? next;
@@ -755,6 +858,9 @@ function step(state, msg) {
       return { state: { ...state, theme: { ...state.theme, systemDark: msg.dark } }, effects: [] };
     case 'http_result':
       return onHttp(state, msg);
+    case 'passkey_result':
+      if (state.factors.ceremony?.id === msg.id) return factorsUpdate(state, msg, { request, toast, signedIn: passkeySignedIn, redispatch }) ?? { state, effects: [] };
+      return passkeysUpdate(state, msg, { request, toast, signedIn: passkeySignedIn }) ?? { state, effects: [] };
     case 'ws_open':
       return { state, effects: [] };
     case 'ws_message':

@@ -11,7 +11,9 @@ use strata_kernel::{
     PrincipalId, QueryDef, QueryId, SchemaChange, Scope, TenantId, Timestamp, Value, ViewDef,
     ViewId, ViewSection,
 };
-use strata_protocol::api::{HEADER_CORRELATION, HEADER_SERVICE, HEADER_SESSION, HEADER_SITE};
+use strata_protocol::api::{
+    HEADER_CORRELATION, HEADER_ORIGIN, HEADER_SERVICE, HEADER_SESSION, HEADER_SITE, HEADER_SOURCE,
+};
 use strata_storage_api::memory::MemoryStore;
 use strata_storage_api::{execute, Store};
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
@@ -45,6 +47,12 @@ async fn start_on(store: Arc<MemoryStore>, adjust: impl FnOnce(&mut Config)) -> 
         lean_dir: root.join("lean"),
         session_ttl_ms: 3_600_000,
         session_idle_ms: 3_600_000,
+        throttle: Default::default(),
+        passkey_challenge_ttl_ms: 300_000,
+        link_ttl_ms: 900_000,
+        mail: std::sync::Arc::new(strata_backend::mail::DevSink::memory()),
+        federation: std::sync::Arc::new(strata_backend::signin::oidc::Federation::none()),
+        factors: Default::default(),
     };
     adjust(&mut cfg);
     tokio::spawn(strata_backend::run(
@@ -87,6 +95,71 @@ impl Backend {
         let response = request.send().await.unwrap();
         let status = response.status().as_u16();
         (status, response.json().await.unwrap_or(Json::Null))
+    }
+
+    /// A call that says which address it came from, as the BFF does for a browser.
+    async fn call_from(
+        &self,
+        source: &str,
+        site: &str,
+        session: Option<&str>,
+        path: &str,
+        body: Json,
+    ) -> (u16, Json) {
+        let mut request = self
+            .http
+            .post(format!("{}{path}", self.base))
+            .header(HEADER_SERVICE, TOKEN)
+            .header(HEADER_SITE, site)
+            .header(HEADER_SOURCE, source)
+            .json(&body);
+        if let Some(token) = session {
+            request = request.header(HEADER_SESSION, token);
+        }
+        let response = request.send().await.unwrap();
+        let status = response.status().as_u16();
+        (status, response.json().await.unwrap_or(Json::Null))
+    }
+
+    /// A call that says which origin the browser made it from, as the BFF does once it has checked
+    /// the origin is one of the site's own, and which address it came from.
+    async fn call_at(
+        &self,
+        origin: Option<&str>,
+        source: &str,
+        site: &str,
+        session: Option<&str>,
+        path: &str,
+        body: Json,
+    ) -> (u16, Json) {
+        let mut request = self
+            .http
+            .post(format!("{}{path}", self.base))
+            .header(HEADER_SERVICE, TOKEN)
+            .header(HEADER_SITE, site)
+            .header(HEADER_SOURCE, source)
+            .json(&body);
+        if let Some(origin) = origin {
+            request = request.header(HEADER_ORIGIN, origin);
+        }
+        if let Some(token) = session {
+            request = request.header(HEADER_SESSION, token);
+        }
+        let response = request.send().await.unwrap();
+        let status = response.status().as_u16();
+        (status, response.json().await.unwrap_or(Json::Null))
+    }
+
+    /// One password attempt, answered with its status.
+    async fn attempt(&self, site: &str, login: &str, password: &str) -> u16 {
+        self.call(
+            site,
+            None,
+            "/internal/session/login",
+            json!({ "login": login, "password": password }),
+        )
+        .await
+        .0
     }
 
     async fn login(&self, site: &str, login: &str, password: &str) -> String {
@@ -571,6 +644,7 @@ async fn login_logout_and_authorized_writes() {
     assert_eq!(after["state"], "revoked");
 }
 
+/// Verifies: IDN-011
 #[tokio::test]
 async fn a_new_login_ends_the_session_it_replaces() {
     let backend = start().await;
@@ -924,11 +998,13 @@ async fn sessions_expire_and_diagnostics_hold_no_secrets() {
     );
 }
 
+/// Verifies: IDN-008
 #[tokio::test]
 async fn repeated_wrong_passwords_are_throttled() {
     let backend = start().await;
     let attempt = json!({ "login": "ines", "password": "nope" });
-    for _ in 0..5 {
+    // D-700: ten failures lock the account; the tenth is still answered as a wrong password.
+    for _ in 0..10 {
         assert_eq!(
             backend
                 .call(
@@ -1557,6 +1633,7 @@ async fn add_category(backend: &Backend, site: &str, session: &str, slug: &str) 
             "/internal/mutate",
             json!({ "op": "create", "object": "category", "fields": { "name": slug, "slug": slug } }),
         )
+        .await
         .0
 }
 
@@ -1571,6 +1648,8 @@ async fn event_within(socket: &mut Socket, wait: Duration) -> Option<u64> {
             if message["type"] == "event" {
                 return message["seq"].as_u64();
             }
+        }
+    }
 }
 
 async fn dev_kick(backend: &Backend, kick: bool) {
@@ -1581,20 +1660,24 @@ async fn dev_kick(backend: &Backend, kick: bool) {
             "/internal/dev/outbox",
             json!({ "kick": kick }),
         )
+        .await;
     assert_eq!(status, 200, "{body}");
 }
 
+#[tokio::test]
 async fn an_event_is_published_only_after_its_commit() {
     let store = Arc::new(MemoryStore::new());
     let backend = start_on(store.clone(), |_| {}).await;
     let tenant = TenantId::new("fieldnotes").unwrap();
     let admin = backend
         .login("fieldnotes", "admin", "strata-dev-admin")
+        .await;
     let (mut socket, head) = listening(&backend, "fieldnotes", &admin).await;
     assert_eq!(
         event_within(&mut socket, Duration::from_millis(700)).await,
         None,
         "nothing is published while nothing is committed"
+    );
 
     // A refused write commits nothing, so nothing is published for it.
     let (status, _) = backend
@@ -1604,27 +1687,36 @@ async fn an_event_is_published_only_after_its_commit() {
             "/internal/mutate",
             json!({ "op": "create", "object": "no-such-object", "fields": {} }),
         )
+        .await;
     assert_ne!(status, 200);
     assert_eq!(
         event_within(&mut socket, Duration::from_millis(700)).await,
         None,
         "a rejected write publishes nothing"
+    );
 
     // An accepted one is published, and what is published is already in the store's log.
     assert_eq!(
         add_category(&backend, "fieldnotes", &admin, "after-commit").await,
         200
+    );
     let seq = event_within(&mut socket, Duration::from_secs(3))
+        .await
         .expect("the committed event is published");
     assert_eq!(seq, head + 1);
     let stored = store.events_after(&tenant, head, 100).unwrap();
+    assert!(
         stored.iter().any(|event| event.seq == seq),
         "the event was committed before it was published"
+    );
 }
 
+#[tokio::test]
 async fn every_commit_kicks_the_publisher_at_once() {
+    let backend = start().await;
     let admin = backend
         .login("fieldnotes", "admin", "strata-dev-admin")
+        .await;
     let (mut socket, head) = listening(&backend, "fieldnotes", &admin).await;
     for i in 1..=4u64 {
         let status = add_category(&backend, "fieldnotes", &admin, &format!("kick-{i}")).await;
@@ -1636,41 +1728,55 @@ async fn every_commit_kicks_the_publisher_at_once() {
             Some(head + i),
             "commit {i} was published without waiting"
         );
+    }
 }
 
+#[tokio::test]
 async fn the_sweep_publishes_what_a_missed_kick_left() {
+    let backend = start().await;
     let admin = backend
         .login("fieldnotes", "admin", "strata-dev-admin")
+        .await;
     let (mut socket, head) = listening(&backend, "fieldnotes", &admin).await;
     dev_kick(&backend, false).await;
     let committed = tokio::time::Instant::now();
     assert_eq!(
         add_category(&backend, "fieldnotes", &admin, "no-kick").await,
         200
+    );
     assert_eq!(
         event_within(&mut socket, Duration::from_millis(250)).await,
         None,
         "with no kick, the event waits for the sweep"
+    );
     let seq = event_within(&mut socket, Duration::from_secs(3))
+        .await
         .expect("the sweep publishes it");
     assert_eq!(seq, head + 1);
+    assert!(
         committed.elapsed() >= Duration::from_millis(400),
         "the sweep is 500 ms after the commit, not earlier: {:?}",
         committed.elapsed()
+    );
 
     // Kicks are back: the next commit is published at once.
     dev_kick(&backend, true).await;
     assert_eq!(
         add_category(&backend, "fieldnotes", &admin, "kick-again").await,
         200
+    );
     assert_eq!(
         event_within(&mut socket, Duration::from_millis(350)).await,
         Some(head + 2)
+    );
 }
 
+#[tokio::test]
 async fn no_event_is_published_twice() {
+    let backend = start().await;
     let admin = backend
         .login("fieldnotes", "admin", "strata-dev-admin")
+        .await;
     let (mut socket, head) = listening(&backend, "fieldnotes", &admin).await;
     // Commits at the same moment, each kicking, with the sweep timers of the earlier ones still
     // set: the publisher is offered the same events many times over.
@@ -1686,9 +1792,11 @@ async fn no_event_is_published_twice() {
                 .await
                 .expect("every commit is published"),
         );
+    }
     // Long enough for the sweeps of all of them to have come due.
     while let Some(seq) = event_within(&mut socket, Duration::from_millis(900)).await {
         heard.push(seq);
+    }
     let mut sorted = heard.clone();
     sorted.sort_unstable();
     sorted.dedup();
@@ -1696,11 +1804,15 @@ async fn no_event_is_published_twice() {
     assert_eq!(sorted, (head + 1..=head + 8).collect::<Vec<_>>());
 }
 
+#[tokio::test]
 async fn each_tenants_events_are_published_in_its_commit_order() {
+    let backend = start().await;
     let fieldnotes = backend
         .login("fieldnotes", "admin", "strata-dev-admin")
+        .await;
     let tidewater = backend
         .login("tidewater", "admin", "strata-dev-tidewater")
+        .await;
     let (mut fn_socket, fn_head) = listening(&backend, "fieldnotes", &fieldnotes).await;
     let (mut tw_socket, tw_head) = listening(&backend, "tidewater", &tidewater).await;
     // The tenants commit at the same time, one commit after another within each tenant.
@@ -1718,13 +1830,1815 @@ async fn each_tenants_events_are_published_in_its_commit_order() {
                     add_category(&backend, "tidewater", &tidewater, &format!("order-{i}")).await;
                 assert_eq!(status, 200);
             }
+        }
+    );
     for (socket, head) in [(&mut fn_socket, fn_head), (&mut tw_socket, tw_head)] {
         let mut heard = Vec::new();
         while let Some(seq) = event_within(socket, Duration::from_millis(900)).await {
             heard.push(seq);
+        }
         assert_eq!(
             heard,
             (head + 1..=head + 6).collect::<Vec<_>>(),
             "each tenant hears only its own events, once, in commit order"
         );
+    }
+}
+
+/// A password and a login that open nothing, for failing on purpose.
+const WRONG: &str = "not-the-password";
+
+/// Verifies: IDN-008
+///
+/// Attempts that arrive together are counted before they are checked. Without the reservation
+/// every one of them would pass the check of a count that is still low and be verified.
+#[tokio::test]
+async fn attempts_that_arrive_together_cannot_all_pass_the_count() {
+    let backend = Arc::new(start().await);
+    let mut calls = Vec::new();
+    for _ in 0..40 {
+        let backend = backend.clone();
+        calls.push(tokio::spawn(async move {
+            backend.attempt("fieldnotes", "ines", WRONG).await
+        }));
+    }
+    let mut checked = 0;
+    let mut refused = 0;
+    for call in calls {
+        match call.await.unwrap() {
+            401 => checked += 1,
+            429 => refused += 1,
+            other => panic!("unexpected status {other}"),
+        }
+    }
+    assert_eq!(checked, 10, "no more than the limit is ever checked");
+    assert_eq!(refused, 30);
+}
+
+/// Verifies: IDN-008
+///
+/// The counters are in the store, not in the process: a second backend on the same store (a
+/// replica, or this one after a restart) refuses what the first had counted.
+#[tokio::test]
+async fn the_throttle_is_in_the_store_and_shared_by_every_backend_on_it() {
+    let store = Arc::new(MemoryStore::new());
+    let first = start_on(store.clone(), |_| {}).await;
+    for _ in 0..10 {
+        assert_eq!(first.attempt("fieldnotes", "ines", WRONG).await, 401);
+    }
+    assert_eq!(first.attempt("fieldnotes", "ines", WRONG).await, 429);
+    let second = start_on(store.clone(), |_| {}).await;
+    assert_eq!(
+        second
+            .attempt("fieldnotes", "ines", "strata-dev-ines")
+            .await,
+        429,
+        "the other backend sees the lock, and the right password does not open it"
+    );
+    assert_eq!(
+        second.attempt("fieldnotes", "mirela", WRONG).await,
+        401,
+        "another account is not locked"
+    );
+    assert_eq!(
+        second.attempt("tidewater", "ines", WRONG).await,
+        401,
+        "nor is the same login of another site"
+    );
+}
+
+/// Verifies: IDN-008
+#[tokio::test]
+async fn a_right_password_clears_the_count_of_failures() {
+    let backend = start().await;
+    for _ in 0..9 {
+        assert_eq!(backend.attempt("fieldnotes", "mirela", WRONG).await, 401);
+    }
+    // The tenth attempt is right: it signs in, and what was counted is forgotten.
+    assert_eq!(
+        backend
+            .attempt("fieldnotes", "mirela", "strata-dev-mirela")
+            .await,
+        200
+    );
+    for _ in 0..10 {
+        assert_eq!(backend.attempt("fieldnotes", "mirela", WRONG).await, 401);
+    }
+    assert_eq!(backend.attempt("fieldnotes", "mirela", WRONG).await, 429);
+}
+
+/// Verifies: IDN-008
+///
+/// Case, width, ligatures and spaces do not make another account to count against.
+#[tokio::test]
+async fn spellings_of_one_login_share_one_throttle() {
+    let backend = start().await;
+    let spellings = [
+        "ines",
+        " INES ",
+        "Ines",
+        "\u{FF49}\u{FF4E}\u{FF45}\u{FF53}",
+        "\u{00A0}ines",
+        "ines\u{3000}",
+        "\u{FF29}nes",
+        "iNeS",
+        "  ines",
+        "INES\t",
+    ];
+    for spelling in spellings {
+        assert_eq!(backend.attempt("fieldnotes", spelling, WRONG).await, 401);
+    }
+    for spelling in ["ines", "\u{FF49}\u{FF4E}\u{FF45}\u{FF53}", " Ines "] {
+        assert_eq!(
+            backend
+                .attempt("fieldnotes", spelling, "strata-dev-ines")
+                .await,
+            429,
+            "{spelling:?} is the locked account"
+        );
+    }
+}
+
+/// Verifies: IDN-009
+#[tokio::test]
+async fn a_login_of_one_site_is_unknown_to_every_other() {
+    let backend = start().await;
+    assert_eq!(
+        backend
+            .attempt("tidewater", "ines", "strata-dev-ines")
+            .await,
+        401
+    );
+    assert_eq!(
+        backend
+            .attempt("fieldnotes", "ines", "strata-dev-ines")
+            .await,
+        200
+    );
+}
+
+/// Verifies: IDN-250
+#[tokio::test]
+async fn a_source_that_fails_too_often_is_refused_across_all_accounts() {
+    let backend = start_with(|cfg| cfg.throttle.source_max = 6).await;
+    let spray = ["ines", "tomasz", "mirela", "admin", "nobody", "nobody-else"];
+    for login in spray {
+        let (status, _) = backend
+            .call_from(
+                "203.0.113.9",
+                "fieldnotes",
+                None,
+                "/internal/session/login",
+                json!({ "login": login, "password": WRONG }),
+            )
+            .await;
+        assert_eq!(status, 401, "{login}");
+    }
+    // An account that was never tried from there, with the right password.
+    let right = json!({ "login": "tomasz", "password": "strata-dev-tomasz" });
+    let (status, refused) = backend
+        .call_from(
+            "203.0.113.9",
+            "fieldnotes",
+            None,
+            "/internal/session/login",
+            right.clone(),
+        )
+        .await;
+    assert_eq!(status, 429, "{refused}");
+    let (status, _) = backend
+        .call_from(
+            "203.0.113.10",
+            "fieldnotes",
+            None,
+            "/internal/session/login",
+            right,
+        )
+        .await;
+    assert_eq!(status, 200, "another source is not affected");
+
+    // The refusal of a source says what the refusal of an account says, and no more.
+    for _ in 0..10 {
+        backend.attempt("fieldnotes", "mirela", WRONG).await;
+    }
+    let (_, locked_account) = backend
+        .call(
+            "fieldnotes",
+            None,
+            "/internal/session/login",
+            json!({ "login": "mirela", "password": WRONG }),
+        )
+        .await;
+    assert_eq!(locked_account["message"], refused["message"]);
+    assert_eq!(locked_account["code"], refused["code"]);
+}
+
+/// Verifies: IDN-250
+///
+/// A right password gives its slot back: someone who signs in all day from one address does not
+/// use up the allowance of everyone who shares it.
+#[tokio::test]
+async fn right_passwords_do_not_use_up_the_allowance_of_a_source() {
+    let backend = start_with(|cfg| cfg.throttle.source_max = 3).await;
+    for _ in 0..8 {
+        let (status, _) = backend
+            .call_from(
+                "203.0.113.20",
+                "fieldnotes",
+                None,
+                "/internal/session/login",
+                json!({ "login": "ines", "password": "strata-dev-ines" }),
+            )
+            .await;
+        assert_eq!(status, 200);
+    }
+}
+
+/// Verifies: IDN-251
+#[tokio::test]
+async fn a_realm_under_a_spray_is_slowed_whatever_the_source() {
+    let backend = start_with(|cfg| {
+        cfg.throttle.realm_max = 4;
+        cfg.throttle.realm_interval_ms = 1500;
+    })
+    .await;
+    for (i, login) in ["ines", "tomasz", "mirela", "admin"].iter().enumerate() {
+        let (status, _) = backend
+            .call_from(
+                &format!("198.51.100.{i}"),
+                "fieldnotes",
+                None,
+                "/internal/session/login",
+                json!({ "login": login, "password": WRONG }),
+            )
+            .await;
+        assert_eq!(status, 401);
+    }
+    let right = json!({ "login": "ines", "password": "strata-dev-ines" });
+    let (status, _) = backend
+        .call_from(
+            "198.51.100.77",
+            "fieldnotes",
+            None,
+            "/internal/session/login",
+            right.clone(),
+        )
+        .await;
+    assert_eq!(
+        status, 429,
+        "the next attempt, from a source never seen, is slowed"
+    );
+    // Another realm is not slowed by this one.
+    assert_eq!(
+        backend.attempt("tidewater", "nobody", WRONG).await,
+        401,
+        "the other site"
+    );
+    tokio::time::sleep(Duration::from_millis(1700)).await;
+    let (status, _) = backend
+        .call_from(
+            "198.51.100.77",
+            "fieldnotes",
+            None,
+            "/internal/session/login",
+            right,
+        )
+        .await;
+    assert_eq!(status, 200, "slowed, not stopped");
+}
+
+/// Verifies: IDN-255
+#[tokio::test]
+async fn an_account_that_does_not_exist_is_answered_and_limited_like_one_that_does() {
+    let backend = start().await;
+    let time = |login: &'static str| {
+        let backend = &backend;
+        async move {
+            let started = std::time::Instant::now();
+            let (status, body) = backend
+                .call(
+                    "fieldnotes",
+                    None,
+                    "/internal/session/login",
+                    json!({ "login": login, "password": WRONG }),
+                )
+                .await;
+            (status, body, started.elapsed())
+        }
+    };
+    let (known_status, known_body, mut known_time) = time("tomasz").await;
+    let (unknown_status, unknown_body, mut unknown_time) = time("nobody-at-all").await;
+    assert_eq!(known_status, unknown_status);
+    assert_eq!(known_body["code"], unknown_body["code"]);
+    assert_eq!(known_body["message"], unknown_body["message"]);
+    for _ in 0..2 {
+        known_time += time("tomasz").await.2;
+        unknown_time += time("nobody-at-all").await.2;
+    }
+    assert!(
+        unknown_time * 3 >= known_time,
+        "a miss takes as long as a wrong password: {unknown_time:?} against {known_time:?}"
+    );
+    // The same limit applies to a login that does not exist.
+    for _ in 0..7 {
+        backend.attempt("fieldnotes", "nobody-at-all", WRONG).await;
+    }
+    for _ in 0..7 {
+        backend.attempt("fieldnotes", "tomasz", WRONG).await;
+    }
+    let (known_status, known_body, _) = time("tomasz").await;
+    let (unknown_status, unknown_body, _) = time("nobody-at-all").await;
+    assert_eq!((known_status, unknown_status), (429, 429));
+    assert_eq!(known_body["message"], unknown_body["message"]);
+}
+
+/// Verifies: IDN-001
+#[tokio::test]
+async fn sign_in_goes_through_the_method_named_and_no_other() {
+    let backend = start().await;
+    let (status, reply) = backend
+        .call(
+            "fieldnotes",
+            None,
+            "/internal/session/sign-in/password",
+            json!({ "login": "ines", "password": "strata-dev-ines" }),
+        )
+        .await;
+    assert_eq!(status, 200, "{reply}");
+    assert!(reply["token"].as_str().is_some());
+    let (status, _) = backend
+        .call(
+            "fieldnotes",
+            None,
+            "/internal/session/sign-in/telepathy",
+            json!({ "login": "ines", "password": "strata-dev-ines" }),
+        )
+        .await;
+    assert_eq!(
+        status, 404,
+        "a method that is not offered issues no session"
+    );
+    for malformed in [
+        json!({}),
+        json!({ "login": "ines" }),
+        json!({ "login": 7, "password": "x" }),
+        json!({ "login": "ines", "password": "x".repeat(300) }),
+        json!({ "login": "i".repeat(100), "password": "x" }),
+    ] {
+        let (status, _) = backend
+            .call(
+                "fieldnotes",
+                None,
+                "/internal/session/sign-in/password",
+                malformed,
+            )
+            .await;
+        assert_eq!(status, 401);
+    }
+}
+
+/// Verifies: IDN-021
+/// Verifies: IDN-022
+#[tokio::test]
+async fn every_sign_in_decision_is_audited_and_no_secret_is_in_the_trail() {
+    let backend = start().await;
+    let token = backend.login("fieldnotes", "ines", "strata-dev-ines").await;
+    backend
+        .attempt("fieldnotes", "ines", "hunter2-the-wrong-one")
+        .await;
+    for _ in 0..11 {
+        backend
+            .attempt("fieldnotes", "mirela", "hunter2-the-wrong-one")
+            .await;
+    }
+    let (status, platform) = backend
+        .call(
+            "fieldnotes",
+            None,
+            "/internal/platform/diagnostics",
+            json!({}),
+        )
+        .await;
+    assert_eq!(status, 200);
+    let decisions: Vec<&Json> = platform["audit"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|entry| entry["event"] == "auth.decision")
+        .collect();
+    let outcomes = |outcome: &str| decisions.iter().filter(|d| d["outcome"] == outcome).count();
+    assert_eq!(outcomes("accepted"), 1);
+    assert_eq!(outcomes("refused"), 11);
+    assert_eq!(outcomes("throttled"), 1);
+    for decision in &decisions {
+        assert_eq!(decision["method"], "password");
+        assert!(
+            decision["checks"].as_array().is_some_and(|c| !c.is_empty()),
+            "{decision}"
+        );
+    }
+    let trail = platform.to_string();
+    for secret in [
+        token.as_str(),
+        "hunter2-the-wrong-one",
+        "strata-dev-ines",
+        "argon2",
+    ] {
+        assert!(!trail.contains(secret), "the audit trail holds {secret}");
+    }
+}
+
+/// Verifies: IDN-010
+#[tokio::test]
+async fn a_session_secret_is_stored_only_as_a_hash() {
+    let store = Arc::new(MemoryStore::new());
+    let backend = start_on(store.clone(), |_| {}).await;
+    let token = backend.login("fieldnotes", "ines", "strata-dev-ines").await;
+    let (_, view) = backend
+        .call("fieldnotes", Some(&token), "/internal/session", json!({}))
+        .await;
+    let csrf = view["session"]["csrf_token"].as_str().unwrap().to_string();
+    assert!(store.session_by_token(&token).unwrap().is_none());
+    let held = store
+        .session_by_token(&canon::hash_bytes(token.as_bytes()))
+        .unwrap()
+        .expect("the session is found by the hash of its token");
+    assert_ne!(held.token_hash, token);
+    let stored = format!("{held:?}");
+    assert!(!stored.contains(&token), "the token is not in the record");
+    assert_eq!(held.csrf_token, csrf);
+}
+
+/// Verifies: IDN-259
+#[tokio::test]
+async fn a_session_ends_at_the_shorter_of_its_idle_and_absolute_lifetimes() {
+    // Used within its idle time, but past its absolute end.
+    let absolute = start_with(|cfg| {
+        cfg.session_ttl_ms = 500;
+        cfg.session_idle_ms = 3_600_000;
+    })
+    .await;
+    let token = absolute
+        .login("fieldnotes", "ines", "strata-dev-ines")
+        .await;
+    let (_, now) = absolute
+        .call("fieldnotes", Some(&token), "/internal/session", json!({}))
+        .await;
+    assert_eq!(now["session"]["authenticated"], true);
+    tokio::time::sleep(Duration::from_millis(700)).await;
+    let (_, later) = absolute
+        .call("fieldnotes", Some(&token), "/internal/session", json!({}))
+        .await;
+    assert_eq!(
+        (
+            later["session"]["authenticated"].as_bool(),
+            later["state"].as_str()
+        ),
+        (Some(false), Some("expired"))
+    );
+
+    // Within its absolute time, but unused for longer than its idle time.
+    let idle = start_with(|cfg| {
+        cfg.session_ttl_ms = 3_600_000;
+        cfg.session_idle_ms = 500;
+    })
+    .await;
+    let token = idle.login("fieldnotes", "ines", "strata-dev-ines").await;
+    tokio::time::sleep(Duration::from_millis(700)).await;
+    let (_, later) = idle
+        .call("fieldnotes", Some(&token), "/internal/session", json!({}))
+        .await;
+    assert_eq!(later["state"], "expired");
+}
+
+/// Verifies: IDN-012
+#[tokio::test]
+async fn a_person_lists_and_revokes_their_own_sessions_and_no_one_elses() {
+    let backend = start().await;
+    let here = backend.login("fieldnotes", "ines", "strata-dev-ines").await;
+    let there = backend.login("fieldnotes", "ines", "strata-dev-ines").await;
+    let third = backend.login("fieldnotes", "ines", "strata-dev-ines").await;
+    let admin = backend
+        .login("fieldnotes", "admin", "strata-dev-admin")
+        .await;
+
+    let (status, listed) = backend
+        .call("fieldnotes", Some(&here), "/internal/sessions", json!({}))
+        .await;
+    assert_eq!(status, 200, "{listed}");
+    let list = listed["sessions"].as_array().unwrap();
+    assert_eq!(
+        list.len(),
+        3,
+        "three of her own, and not the administrator's"
+    );
+    assert_eq!(list.iter().filter(|s| s["current"] == true).count(), 1);
+    let text = listed.to_string();
+    for secret in [&here, &there, &third] {
+        assert!(!text.contains(secret.as_str()), "a token is in the list");
+    }
+    assert!(!text.contains("token") && !text.contains("csrf"));
+    let current = list.iter().find(|s| s["current"] == true).unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let (_, own) = backend
+        .call("fieldnotes", Some(&here), "/internal/session", json!({}))
+        .await;
+    assert_eq!(own["session"]["session_id"], current.as_str());
+
+    // Anonymous callers have no sessions to list or revoke.
+    assert_eq!(
+        backend
+            .call("fieldnotes", None, "/internal/sessions", json!({}))
+            .await
+            .0,
+        401
+    );
+    assert_eq!(
+        backend
+            .call(
+                "fieldnotes",
+                None,
+                "/internal/sessions/revoke",
+                json!({ "id": current })
+            )
+            .await
+            .0,
+        401
+    );
+
+    // Someone else's session, or one that does not exist, is not found, and is not touched.
+    let (_, admin_view) = backend
+        .call("fieldnotes", Some(&admin), "/internal/session", json!({}))
+        .await;
+    let admin_id = admin_view["session"]["session_id"].as_str().unwrap();
+    for id in [admin_id, "s_0000000000000000"] {
+        let (status, _) = backend
+            .call(
+                "fieldnotes",
+                Some(&here),
+                "/internal/sessions/revoke",
+                json!({ "id": id }),
+            )
+            .await;
+        assert_eq!(status, 404, "{id}");
+    }
+    let (_, still) = backend
+        .call("fieldnotes", Some(&admin), "/internal/session", json!({}))
+        .await;
+    assert_eq!(still["session"]["authenticated"], true);
+
+    // Revoke one of her own: it is refused from then on, the others are not.
+    let (_, there_view) = backend
+        .call("fieldnotes", Some(&there), "/internal/session", json!({}))
+        .await;
+    let there_id = there_view["session"]["session_id"].as_str().unwrap();
+    let (status, _) = backend
+        .call(
+            "fieldnotes",
+            Some(&here),
+            "/internal/sessions/revoke",
+            json!({ "id": there_id }),
+        )
+        .await;
+    assert_eq!(status, 200);
+    let (_, gone) = backend
+        .call("fieldnotes", Some(&there), "/internal/session", json!({}))
+        .await;
+    assert_eq!(gone["session"]["authenticated"], false);
+    assert_eq!(gone["state"], "revoked");
+    let (_, kept) = backend
+        .call("fieldnotes", Some(&third), "/internal/session", json!({}))
+        .await;
+    assert_eq!(kept["session"]["authenticated"], true);
+
+    // Revoke all the others.
+    let (status, reply) = backend
+        .call(
+            "fieldnotes",
+            Some(&here),
+            "/internal/sessions/revoke-others",
+            json!({}),
+        )
+        .await;
+    assert_eq!((status, &reply["revoked"]), (200, &json!(1)));
+    let (_, third_view) = backend
+        .call("fieldnotes", Some(&third), "/internal/session", json!({}))
+        .await;
+    assert_eq!(third_view["state"], "revoked");
+    let (_, here_view) = backend
+        .call("fieldnotes", Some(&here), "/internal/session", json!({}))
+        .await;
+    assert_eq!(
+        here_view["session"]["authenticated"], true,
+        "this one stays"
+    );
+    let (_, listed) = backend
+        .call("fieldnotes", Some(&here), "/internal/sessions", json!({}))
+        .await;
+    assert_eq!(listed["sessions"].as_array().unwrap().len(), 1);
+}
+
+/// Verifies: IDN-012
+///
+/// A session that is revoked takes its open sockets with it, and a person's other sessions keep
+/// theirs.
+#[tokio::test]
+async fn revoking_a_session_closes_the_sockets_it_has_open() {
+    let backend = start().await;
+    let here = backend.login("fieldnotes", "ines", "strata-dev-ines").await;
+    let there = backend.login("fieldnotes", "ines", "strata-dev-ines").await;
+    let mut kept = backend.socket("fieldnotes", Some(&here)).await;
+    let mut doomed = backend.socket("fieldnotes", Some(&there)).await;
+    assert_eq!(next(&mut kept).await["type"], "welcome");
+    assert_eq!(next(&mut doomed).await["type"], "welcome");
+
+    let (_, view) = backend
+        .call("fieldnotes", Some(&there), "/internal/session", json!({}))
+        .await;
+    let id = view["session"]["session_id"].as_str().unwrap();
+    let (status, _) = backend
+        .call(
+            "fieldnotes",
+            Some(&here),
+            "/internal/sessions/revoke",
+            json!({ "id": id }),
+        )
+        .await;
+    assert_eq!(status, 200);
+    let frame = next(&mut doomed).await;
+    assert_eq!(
+        (frame["type"].as_str(), frame["state"].as_str()),
+        (Some("session"), Some("revoked"))
+    );
+    assert_eq!(next(&mut doomed).await["type"], "closed");
+    assert!(
+        quiet(&mut kept).await,
+        "the other session's socket is left alone"
+    );
+}
+
+/// Verifies: IDN-263
+#[tokio::test]
+async fn signing_out_revokes_the_session_at_the_backend() {
+    let store = Arc::new(MemoryStore::new());
+    let backend = start_on(store.clone(), |_| {}).await;
+    let token = backend.login("fieldnotes", "ines", "strata-dev-ines").await;
+    let id = backend
+        .call("fieldnotes", Some(&token), "/internal/session", json!({}))
+        .await
+        .1["session"]["session_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    backend
+        .call(
+            "fieldnotes",
+            Some(&token),
+            "/internal/session/logout",
+            json!({}),
+        )
+        .await;
+    let held = store
+        .session(&strata_kernel::SessionId::new(id).unwrap())
+        .unwrap()
+        .expect("the record is kept, revoked");
+    assert!(held.revoked_at.is_some());
+}
+
+/// Verifies: IDN-012
+///
+/// A change of someone's roles ends the sessions they hold, in the commit that changes them, and
+/// closes their sockets. The sessions of other people, and of the same person on another site,
+/// are not touched.
+#[tokio::test]
+async fn a_change_of_roles_ends_the_sessions_of_the_person_it_changes() {
+    let store = Arc::new(MemoryStore::new());
+    let backend = start_on(store.clone(), |_| {}).await;
+    let mirela = backend
+        .login("fieldnotes", "mirela", "strata-dev-mirela")
+        .await;
+    let tomasz = backend
+        .login("fieldnotes", "tomasz", "strata-dev-tomasz")
+        .await;
+    let mut socket = backend.socket("fieldnotes", Some(&mirela)).await;
+    assert_eq!(next(&mut socket).await["type"], "welcome");
+
+    let context = Context {
+        tenant: TenantId::new("fieldnotes").unwrap(),
+        principal: Principal::User(PrincipalId::new("user:admin").unwrap()),
+        session: None,
+        now: Timestamp(strata_protocol::log::now_ms()),
+        correlation: "t-promote".into(),
+    };
+    let promote = Intent::AssignRole {
+        principal: PrincipalId::new("user:mirela").unwrap(),
+        role: strata_kernel::RoleId::new("editor").unwrap(),
+    };
+    execute(store.as_ref(), &promote, &context)
+        .unwrap_or_else(|e| panic!("the owner's change was refused: {e}"));
+
+    let (_, after) = backend
+        .call("fieldnotes", Some(&mirela), "/internal/session", json!({}))
+        .await;
+    assert_eq!(after["session"]["authenticated"], false);
+    assert_eq!(after["state"], "revoked");
+    let (_, other) = backend
+        .call("fieldnotes", Some(&tomasz), "/internal/session", json!({}))
+        .await;
+    assert_eq!(other["session"]["authenticated"], true);
+    // She signs in again and has the new role.
+    let again = backend
+        .login("fieldnotes", "mirela", "strata-dev-mirela")
+        .await;
+    let (_, view) = backend
+        .call("fieldnotes", Some(&again), "/internal/session", json!({}))
+        .await;
+    assert!(view["session"]["roles"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|role| role == "editor"));
+    // Her open socket closes within the sweep of the connection, whichever way it was told.
+    loop {
+        let frame = next(&mut socket).await;
+        if frame["type"] == "closed" {
+            break;
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Passkeys (WebAuthn). The authenticator is the `webauthn-authenticator-rs` software passkey,
+// which makes real attestations and assertions with a real key; the server side is the
+// `webauthn-rs` library behind the sign-in method. The software authenticator only signs for
+// `https` origins and is handed the credential to use, so the tests give it the credential id
+// and add the user handle to the assertion as a discoverable credential would.
+// ---------------------------------------------------------------------------------------------
+
+use webauthn_authenticator_rs::softpasskey::SoftPasskey;
+use webauthn_authenticator_rs::WebauthnAuthenticator as _;
+use webauthn_rs::prelude::{CreationChallengeResponse, RequestChallengeResponse, Url};
+
+/// The address the tenant is reached at, in these tests.
+const SITE: &str = "https://fieldnotes.example";
+const SIBLING: &str = "https://evil.fieldnotes.example";
+const OTHER_HOST: &str = "https://elsewhere.example";
+const SOURCE: &str = "203.0.113.7";
+
+/// A passkey the software authenticator holds, as the server knows it.
+struct Registered {
+    /// The credential id, as the server writes it.
+    id: String,
+    /// The user handle the server gave the authenticator, as the server writes it.
+    handle: Json,
+}
+
+impl Backend {
+    /// Ask for a registration challenge as `session` at `origin`.
+    async fn passkey_register_start(&self, origin: &str, session: Option<&str>) -> (u16, Json) {
+        self.call_at(
+            Some(origin),
+            SOURCE,
+            "fieldnotes",
+            session,
+            "/internal/passkeys/register/start",
+            json!({}),
+        )
+        .await
+    }
+
+    /// Add a passkey for the person `session` belongs to: the authenticator makes it at
+    /// `made_at`, the server issues and takes it at `origin`.
+    async fn passkey_register(
+        &self,
+        authenticator: &mut SoftPasskey,
+        origin: &str,
+        made_at: &str,
+        session: &str,
+    ) -> Result<Registered, (u16, Json)> {
+        let (status, started) = self.passkey_register_start(origin, Some(session)).await;
+        assert_eq!(status, 200, "{started}");
+        let handle = started["options"]["publicKey"]["user"]["id"].clone();
+        let options: CreationChallengeResponse =
+            serde_json::from_value(started["options"].clone()).unwrap();
+        let credential = authenticator
+            .do_registration(Url::parse(made_at).unwrap(), options)
+            .expect("the authenticator makes a passkey");
+        let (status, finished) = self
+            .call_at(
+                Some(origin),
+                SOURCE,
+                "fieldnotes",
+                Some(session),
+                "/internal/passkeys/register/finish",
+                json!({
+                    "challenge": started["challenge"],
+                    "credential": serde_json::to_value(&credential).unwrap(),
+                    "name": "Test key",
+                }),
+            )
+            .await;
+        if status != 200 {
+            return Err((status, finished));
+        }
+        Ok(Registered {
+            id: finished["passkey"]["id"].as_str().unwrap().to_string(),
+            handle,
+        })
+    }
+
+    /// Answer a sign-in challenge. The server issues it at `issued_at`, the authenticator signs
+    /// it as a page at `made_at`, and the answer reaches the backend as from `presented_at`.
+    async fn passkey_sign_in(
+        &self,
+        authenticator: &mut SoftPasskey,
+        passkey: &Registered,
+        issued_at: &str,
+        made_at: &str,
+        presented_at: &str,
+    ) -> (u16, Json) {
+        let (assertion, challenge) = self
+            .passkey_assertion(authenticator, passkey, issued_at, made_at)
+            .await;
+        self.passkey_present(presented_at, &challenge, assertion)
+            .await
+    }
+
+    async fn passkey_assertion(
+        &self,
+        authenticator: &mut SoftPasskey,
+        passkey: &Registered,
+        issued_at: &str,
+        made_at: &str,
+    ) -> (Json, String) {
+        let (status, issued) = self
+            .call_at(
+                Some(issued_at),
+                SOURCE,
+                "fieldnotes",
+                None,
+                "/internal/passkeys/challenge",
+                json!({}),
+            )
+            .await;
+        assert_eq!(status, 200, "{issued}");
+        // A browser lists no credential for a discoverable sign-in and lets the person pick; the
+        // software authenticator has to be told which one to use.
+        let mut options = issued["options"].clone();
+        options["publicKey"]["allowCredentials"] =
+            json!([{ "type": "public-key", "id": passkey.id }]);
+        let options: RequestChallengeResponse = serde_json::from_value(options).unwrap();
+        let assertion = authenticator
+            .do_authentication(Url::parse(made_at).unwrap(), options)
+            .expect("the authenticator signs");
+        let mut assertion = serde_json::to_value(&assertion).unwrap();
+        assertion["response"]["userHandle"] = passkey.handle.clone();
+        (assertion, issued["challenge"].as_str().unwrap().to_string())
+    }
+
+    async fn passkey_present(
+        &self,
+        presented_at: &str,
+        challenge: &str,
+        assertion: Json,
+    ) -> (u16, Json) {
+        self.call_at(
+            Some(presented_at),
+            SOURCE,
+            "fieldnotes",
+            None,
+            "/internal/session/sign-in/passkey",
+            json!({ "challenge": challenge, "assertion": assertion }),
+        )
+        .await
+    }
+
+    async fn passkeys_of(&self, session: &str) -> Vec<Json> {
+        let (status, listed) = self
+            .call_at(
+                Some(SITE),
+                SOURCE,
+                "fieldnotes",
+                Some(session),
+                "/internal/passkeys",
+                json!({}),
+            )
+            .await;
+        assert_eq!(status, 200, "{listed}");
+        listed["passkeys"].as_array().unwrap().clone()
+    }
+
+    async fn passkey_remove(&self, session: &str, id: &str) -> u16 {
+        self.call_at(
+            Some(SITE),
+            SOURCE,
+            "fieldnotes",
+            Some(session),
+            "/internal/passkeys/remove",
+            json!({ "id": id }),
+        )
+        .await
+        .0
+    }
+}
+
+/// Set the signature counter the server holds for a credential, as if the authenticator had
+/// been used that many times elsewhere.
+fn set_stored_counter(store: &MemoryStore, passkey: &Registered, counter: u64) {
+    let tenant = TenantId::new("fieldnotes").unwrap();
+    let record = store.passkey(&tenant, &passkey.id).unwrap().unwrap();
+    let mut credential: Json = serde_json::from_str(&record.credential).unwrap();
+    credential["cred"]["counter"] = json!(counter);
+    store
+        .update_passkey(
+            &tenant,
+            &passkey.id,
+            &credential.to_string(),
+            Timestamp(strata_protocol::log::now_ms()),
+        )
+        .unwrap();
+}
+
+/// Verifies: H-017
+/// Verifies: IDN-007
+/// Verifies: IDN-264
+///
+/// Case `passkey-valid`: an assertion for the tenant address, signed by a registered credential,
+/// is accepted and starts a session of the person who registered it, through the shared flow.
+#[tokio::test]
+async fn a_registered_passkey_signs_its_owner_in() {
+    let backend = start().await;
+    let mut authenticator = SoftPasskey::new(true);
+    let mirela = backend
+        .login("fieldnotes", "mirela", "strata-dev-mirela")
+        .await;
+    let passkey = backend
+        .passkey_register(&mut authenticator, SITE, SITE, &mirela)
+        .await
+        .expect("a signed-in person adds a passkey");
+    let listed = backend.passkeys_of(&mirela).await;
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0]["id"], passkey.id);
+    assert_eq!(listed[0]["name"], "Test key");
+    assert!(listed[0]["last_used_at"].is_null());
+
+    let (status, reply) = backend
+        .passkey_sign_in(&mut authenticator, &passkey, SITE, SITE, SITE)
+        .await;
+    assert_eq!(status, 200, "{reply}");
+    let token = reply["token"].as_str().unwrap();
+    assert_eq!(reply["session"]["authenticated"], true);
+    assert_eq!(reply["session"]["display_name"], "Mirela");
+    let (_, session) = backend
+        .call("fieldnotes", Some(token), "/internal/session", json!({}))
+        .await;
+    assert_eq!(session["session"]["authenticated"], true);
+    assert_ne!(token, mirela, "a session of its own");
+    // The use is noted, and the decision is audited under the method's name.
+    assert!(!backend.passkeys_of(&mirela).await[0]["last_used_at"].is_null());
+    let (_, platform) = backend
+        .call(
+            "fieldnotes",
+            None,
+            "/internal/platform/diagnostics",
+            json!({}),
+        )
+        .await;
+    assert!(platform["audit"].as_array().unwrap().iter().any(|entry| {
+        entry["event"] == "auth.decision"
+            && entry["method"] == "passkey"
+            && entry["outcome"] == "accepted"
+    }));
+}
+
+/// Verifies: IDN-007
+///
+/// A registration needs a signed-in person, the challenge of that session and of that address;
+/// and the credential belongs to the address of the tenant, so it is of no use at another.
+#[tokio::test]
+async fn a_passkey_is_added_only_by_a_signed_in_person_at_the_address_it_is_for() {
+    let backend = start().await;
+    let (status, _) = backend.passkey_register_start(SITE, None).await;
+    assert_eq!(status, 401, "no session, no challenge");
+    let (status, _) = backend
+        .call_at(
+            Some(SITE),
+            SOURCE,
+            "fieldnotes",
+            None,
+            "/internal/passkeys/register/finish",
+            json!({ "challenge": "0".repeat(64), "credential": {} }),
+        )
+        .await;
+    assert_eq!(status, 401, "nor can one be finished without a session");
+
+    let mirela = backend
+        .login("fieldnotes", "mirela", "strata-dev-mirela")
+        .await;
+    let tomasz = backend
+        .login("fieldnotes", "tomasz", "strata-dev-tomasz")
+        .await;
+    // A site reached by an address that is not a name cannot have passkeys.
+    for origin in ["http://127.0.0.1:4200", "not an origin"] {
+        let (status, _) = backend.passkey_register_start(origin, Some(&mirela)).await;
+        assert_eq!(status, 422, "{origin}");
+    }
+    let (status, _) = backend
+        .call_at(
+            None,
+            SOURCE,
+            "fieldnotes",
+            Some(&mirela),
+            "/internal/passkeys/register/start",
+            json!({}),
+        )
+        .await;
+    assert_eq!(status, 422, "a request that did not say where it came from");
+
+    // The authenticator makes the passkey for a page at another address than the challenge was
+    // issued for.
+    let mut authenticator = SoftPasskey::new(true);
+    let refused = backend
+        .passkey_register(&mut authenticator, SITE, SIBLING, &mirela)
+        .await;
+    assert_eq!(refused.err().map(|e| e.0), Some(422));
+    assert!(backend.passkeys_of(&mirela).await.is_empty());
+
+    // A challenge is the session's own: another person's session cannot finish it, and the
+    // attempt spends it.
+    let (_, started) = backend.passkey_register_start(SITE, Some(&mirela)).await;
+    let options: CreationChallengeResponse =
+        serde_json::from_value(started["options"].clone()).unwrap();
+    let credential = authenticator
+        .do_registration(Url::parse(SITE).unwrap(), options)
+        .unwrap();
+    let finish = json!({
+        "challenge": started["challenge"],
+        "credential": serde_json::to_value(&credential).unwrap(),
+    });
+    let (status, _) = backend
+        .call_at(
+            Some(SITE),
+            SOURCE,
+            "fieldnotes",
+            Some(&tomasz),
+            "/internal/passkeys/register/finish",
+            finish.clone(),
+        )
+        .await;
+    assert_eq!(status, 422);
+    assert!(backend.passkeys_of(&tomasz).await.is_empty());
+    let (status, _) = backend
+        .call_at(
+            Some(SITE),
+            SOURCE,
+            "fieldnotes",
+            Some(&mirela),
+            "/internal/passkeys/register/finish",
+            finish,
+        )
+        .await;
+    assert_eq!(status, 422, "the challenge was spent by the first attempt");
+    assert!(backend.passkeys_of(&mirela).await.is_empty());
+
+    // A passkey made for this address does not sign in at another address of the same tenant,
+    // even where the other address is answered correctly for itself.
+    let passkey = backend
+        .passkey_register(&mut authenticator, SITE, SITE, &mirela)
+        .await
+        .unwrap();
+    let (status, _) = backend
+        .passkey_sign_in(
+            &mut authenticator,
+            &passkey,
+            OTHER_HOST,
+            OTHER_HOST,
+            OTHER_HOST,
+        )
+        .await;
+    assert_eq!(status, 401);
+}
+
+/// Verifies: IDN-007
+/// Verifies: IDN-264
+///
+/// Case `passkey-other-origin`: an assertion made for another address is refused, whether the
+/// page that made it was at a sibling address, or the challenge was issued for one address and
+/// answered at another.
+#[tokio::test]
+async fn an_assertion_for_another_address_is_refused() {
+    let backend = start().await;
+    let mut authenticator = SoftPasskey::new(true);
+    let mirela = backend
+        .login("fieldnotes", "mirela", "strata-dev-mirela")
+        .await;
+    let passkey = backend
+        .passkey_register(&mut authenticator, SITE, SITE, &mirela)
+        .await
+        .unwrap();
+
+    // Signed by a page at a sibling address: the origin in what the browser signed is not the
+    // origin the challenge was issued for.
+    let (status, reply) = backend
+        .passkey_sign_in(&mut authenticator, &passkey, SITE, SIBLING, SITE)
+        .await;
+    assert_eq!(status, 401, "{reply}");
+    assert!(reply["token"].is_null());
+
+    // Issued for one address and presented from another.
+    let (status, reply) = backend
+        .passkey_sign_in(&mut authenticator, &passkey, SITE, SITE, OTHER_HOST)
+        .await;
+    assert_eq!(status, 401, "{reply}");
+    // Presented with no address at all.
+    let (assertion, challenge) = backend
+        .passkey_assertion(&mut authenticator, &passkey, SITE, SITE)
+        .await;
+    let (status, _) = backend
+        .call_at(
+            None,
+            SOURCE,
+            "fieldnotes",
+            None,
+            "/internal/session/sign-in/passkey",
+            json!({ "challenge": challenge, "assertion": assertion }),
+        )
+        .await;
+    assert_eq!(status, 401);
+
+    // And the right one still works afterwards: nothing above locked the person out.
+    let (status, reply) = backend
+        .passkey_sign_in(&mut authenticator, &passkey, SITE, SITE, SITE)
+        .await;
+    assert_eq!(status, 200, "{reply}");
+}
+
+/// Verifies: IDN-264
+///
+/// A challenge answers once, lapses, and is the tenant's own.
+#[tokio::test]
+async fn a_challenge_answers_once_and_lapses() {
+    let backend = start_with(|cfg| cfg.passkey_challenge_ttl_ms = 400).await;
+    let mut authenticator = SoftPasskey::new(true);
+    let mirela = backend
+        .login("fieldnotes", "mirela", "strata-dev-mirela")
+        .await;
+    let passkey = backend
+        .passkey_register(&mut authenticator, SITE, SITE, &mirela)
+        .await
+        .unwrap();
+
+    // A right answer, replayed, is a refusal: the challenge was taken by the first.
+    let (assertion, challenge) = backend
+        .passkey_assertion(&mut authenticator, &passkey, SITE, SITE)
+        .await;
+    let (status, _) = backend
+        .passkey_present(SITE, &challenge, assertion.clone())
+        .await;
+    assert_eq!(status, 200);
+    let (status, _) = backend.passkey_present(SITE, &challenge, assertion).await;
+    assert_eq!(status, 401, "a replayed assertion");
+
+    // An answer that comes too late.
+    let (assertion, challenge) = backend
+        .passkey_assertion(&mut authenticator, &passkey, SITE, SITE)
+        .await;
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    let (status, _) = backend.passkey_present(SITE, &challenge, assertion).await;
+    assert_eq!(status, 401, "a lapsed challenge");
+
+    // An answer to a challenge no one issued, or one issued to another site.
+    let (assertion, _) = backend
+        .passkey_assertion(&mut authenticator, &passkey, SITE, SITE)
+        .await;
+    for challenge in ["0".repeat(64), "not a challenge".to_string()] {
+        let (status, _) = backend
+            .passkey_present(SITE, &challenge, assertion.clone())
+            .await;
+        assert_eq!(status, 401);
+    }
+    let (_, issued) = backend
+        .call_at(
+            Some(SITE),
+            SOURCE,
+            "tidewater",
+            None,
+            "/internal/passkeys/challenge",
+            json!({}),
+        )
+        .await;
+    let (status, _) = backend
+        .passkey_present(SITE, issued["challenge"].as_str().unwrap(), assertion)
+        .await;
+    assert_eq!(status, 401, "a challenge is of one tenant");
+}
+
+/// Verifies: IDN-264
+///
+/// Case `passkey-counter-regress`: an assertion whose signature counter did not go forward
+/// shows a credential that may have been copied, and is refused and audited.
+#[tokio::test]
+async fn an_assertion_whose_counter_went_backwards_is_refused() {
+    let store = Arc::new(MemoryStore::new());
+    let backend = start_on(store.clone(), |_| {}).await;
+    let mut authenticator = SoftPasskey::new(true);
+    let mirela = backend
+        .login("fieldnotes", "mirela", "strata-dev-mirela")
+        .await;
+    let passkey = backend
+        .passkey_register(&mut authenticator, SITE, SITE, &mirela)
+        .await
+        .unwrap();
+    // Counters going forward are accepted.
+    for _ in 0..2 {
+        let (status, reply) = backend
+            .passkey_sign_in(&mut authenticator, &passkey, SITE, SITE, SITE)
+            .await;
+        assert_eq!(status, 200, "{reply}");
+    }
+    // The server has seen a counter ahead of what this authenticator now signs: a copy of the
+    // key has been used elsewhere.
+    set_stored_counter(&store, &passkey, 100);
+    let (status, reply) = backend
+        .passkey_sign_in(&mut authenticator, &passkey, SITE, SITE, SITE)
+        .await;
+    assert_eq!(status, 401, "{reply}");
+    assert!(reply["token"].is_null());
+    // The same counter again is not forward either: the next one the authenticator signs is 4.
+    set_stored_counter(&store, &passkey, 4);
+    let (status, _) = backend
+        .passkey_sign_in(&mut authenticator, &passkey, SITE, SITE, SITE)
+        .await;
+    assert_eq!(status, 401, "the counter did not advance");
+    let (_, platform) = backend
+        .call(
+            "fieldnotes",
+            None,
+            "/internal/platform/diagnostics",
+            json!({}),
+        )
+        .await;
+    assert!(platform["audit"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|entry| entry["event"] == "passkey.counter_regressed"));
+}
+
+/// Verifies: H-031
+/// Verifies: H-032
+/// Verifies: H-033
+///
+/// A person lists, and removes, their own passkeys and no one else's. A removed passkey signs no
+/// one in.
+#[tokio::test]
+async fn a_person_manages_only_their_own_passkeys() {
+    let backend = start().await;
+    let mut ines_key = SoftPasskey::new(true);
+    let mut tomasz_key = SoftPasskey::new(true);
+    let ines = backend.login("fieldnotes", "ines", "strata-dev-ines").await;
+    let tomasz = backend
+        .login("fieldnotes", "tomasz", "strata-dev-tomasz")
+        .await;
+    let ines_passkey = backend
+        .passkey_register(&mut ines_key, SITE, SITE, &ines)
+        .await
+        .unwrap();
+    let tomasz_passkey = backend
+        .passkey_register(&mut tomasz_key, SITE, SITE, &tomasz)
+        .await
+        .unwrap();
+    assert_eq!(backend.passkeys_of(&ines).await.len(), 1);
+    assert_eq!(backend.passkeys_of(&tomasz).await.len(), 1);
+    // Listing needs a session.
+    let (status, _) = backend
+        .call_at(
+            Some(SITE),
+            SOURCE,
+            "fieldnotes",
+            None,
+            "/internal/passkeys",
+            json!({}),
+        )
+        .await;
+    assert_eq!(status, 401);
+
+    // Tomasz cannot remove Ines's passkey, and is told no more than that there is none.
+    assert_eq!(backend.passkey_remove(&tomasz, &ines_passkey.id).await, 404);
+    assert_eq!(backend.passkeys_of(&ines).await.len(), 1);
+    assert_eq!(backend.passkey_remove(&ines, "no-such-passkey").await, 404);
+
+    // Removing one's own works, and then it signs no one in.
+    assert_eq!(backend.passkey_remove(&ines, &ines_passkey.id).await, 200);
+    assert!(backend.passkeys_of(&ines).await.is_empty());
+    let (status, _) = backend
+        .passkey_sign_in(&mut ines_key, &ines_passkey, SITE, SITE, SITE)
+        .await;
+    assert_eq!(status, 401);
+    // The other person's is untouched.
+    let (status, reply) = backend
+        .passkey_sign_in(&mut tomasz_key, &tomasz_passkey, SITE, SITE, SITE)
+        .await;
+    assert_eq!(status, 200, "{reply}");
+    assert_eq!(reply["session"]["display_name"], "Tomasz");
+}
+
+/// Verifies: IDN-250
+///
+/// A passkey sign-in goes through the same limits as every method, and asking for a challenge is
+/// counted too, so that the store cannot be filled from one source.
+#[tokio::test]
+async fn passkey_attempts_are_limited_like_every_other_method() {
+    let backend = start_with(|cfg| cfg.throttle.source_max = 3).await;
+    let mut statuses = Vec::new();
+    for _ in 0..5 {
+        let (status, _) = backend
+            .call_at(
+                Some(SITE),
+                SOURCE,
+                "fieldnotes",
+                None,
+                "/internal/passkeys/challenge",
+                json!({}),
+            )
+            .await;
+        statuses.push(status);
+    }
+    assert_eq!(statuses, [200, 200, 200, 429, 429]);
+    // Another source is not held back by it.
+    let (status, _) = backend
+        .call_at(
+            Some(SITE),
+            "203.0.113.8",
+            "fieldnotes",
+            None,
+            "/internal/passkeys/challenge",
+            json!({}),
+        )
+        .await;
+    assert_eq!(status, 200);
+
+    // Wrong answers count against the source and end in the same refusal as any method.
+    let backend = start_with(|cfg| cfg.throttle.source_max = 3).await;
+    let mut statuses = Vec::new();
+    for _ in 0..5 {
+        let (status, _) = backend
+            .call_at(
+                Some(SITE),
+                SOURCE,
+                "fieldnotes",
+                None,
+                "/internal/session/sign-in/passkey",
+                json!({ "challenge": "0".repeat(64), "assertion": {} }),
+            )
+            .await;
+        statuses.push(status);
+    }
+    assert_eq!(statuses, [401, 401, 401, 429, 429]);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Emailed sign-in links (IDN-003, IDN-004, IDN-005, IDN-006, IDN-269, FED-250)
+
+/// The login of a development account that is an email address.
+const LINK_ADDRESS: &str = "mirela@fieldnotes.example";
+
+/// A backend whose mail goes to a sink the test can read.
+async fn linking(
+    adjust: impl FnOnce(&mut Config),
+) -> (Backend, Arc<strata_backend::mail::DevSink>) {
+    let sink = Arc::new(strata_backend::mail::DevSink::memory());
+    let kept = sink.clone();
+    let backend = start_with(move |cfg| {
+        cfg.mail = kept;
+        adjust(cfg);
+    })
+    .await;
+    (backend, sink)
+}
+
+/// What a sign-in link carries: the challenge and the token, from the fragment of its address, and
+/// the whole address.
+struct Link {
+    challenge: String,
+    token: String,
+    address: String,
+}
+
+fn link_in(sink: &strata_backend::mail::DevSink, index: usize) -> Link {
+    use strata_backend::mail::Mailer;
+    let mail = sink.outbox().remove(index);
+    let address = mail
+        .text
+        .split_whitespace()
+        .find(|word| word.starts_with("https://"))
+        .expect("the message holds a link")
+        .to_string();
+    let (_, fragment) = address
+        .split_once('#')
+        .expect("the token is in the fragment");
+    let part = |name: &str| {
+        fragment
+            .split('&')
+            .find_map(|pair| pair.strip_prefix(&format!("{name}=")))
+            .expect("fragment field")
+            .to_string()
+    };
+    Link {
+        challenge: part("c"),
+        token: part("t"),
+        address,
+    }
+}
+
+/// A well-formed nonce that no browser was given.
+fn nonce() -> String {
+    canon::hash_bytes(format!("{:?}", std::time::Instant::now()).as_bytes())
+}
+
+impl Backend {
+    /// Ask for a link from a browser at `SITE`.
+    async fn ask_link(
+        &self,
+        source: &str,
+        email: &str,
+        binding: Option<&str>,
+        next: Option<&str>,
+    ) -> (u16, Json) {
+        let mut body = json!({ "email": email });
+        if let Some(binding) = binding {
+            body["binding"] = json!(binding);
+        }
+        if let Some(next) = next {
+            body["next"] = json!(next);
+        }
+        self.call_at(
+            Some(SITE),
+            source,
+            "fieldnotes",
+            None,
+            "/internal/sign-in/link/request",
+            body,
+        )
+        .await
+    }
+
+    /// Open a link from the browser that holds `binding`, at `origin`.
+    async fn open_link(&self, link: &Link, binding: &str, origin: &str) -> (u16, Json) {
+        self.call_at(
+            Some(origin),
+            SOURCE,
+            "fieldnotes",
+            None,
+            "/internal/session/sign-in/link",
+            json!({ "challenge": link.challenge, "token": link.token, "binding": binding }),
+        )
+        .await
+    }
+}
+
+/// Verifies: IDN-003
+///
+/// Case link-first-use: a fresh link, opened in the browser that asked for it, signs the person
+/// in through the shared flow: a session of their own, and a decision audited under `link`. The
+/// token is in the fragment of the address and in no query, and the binding nonce is not in the
+/// message at all.
+#[tokio::test]
+async fn link_first_use_in_the_requesting_browser_signs_in() {
+    use strata_backend::mail::Mailer;
+    let (backend, sink) = linking(|_| {}).await;
+    let (status, reply) = backend.ask_link(SOURCE, LINK_ADDRESS, None, None).await;
+    assert_eq!(status, 200, "{reply}");
+    let binding = reply["binding"].as_str().unwrap().to_string();
+    assert_eq!(binding.len(), 64);
+
+    let sent = sink.outbox();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].to, LINK_ADDRESS);
+    assert!(
+        !sent[0].text.contains(&binding),
+        "the binding is not in the message"
+    );
+    let link = link_in(&sink, 0);
+    assert!(
+        link.address.starts_with(&format!("{SITE}/login#c=")),
+        "{}",
+        link.address
+    );
+    assert!(!link
+        .address
+        .split('#')
+        .next()
+        .unwrap()
+        .contains(&link.token));
+
+    let (status, reply) = backend.open_link(&link, &binding, SITE).await;
+    assert_eq!(status, 200, "{reply}");
+    assert_eq!(reply["session"]["authenticated"], true);
+    assert_eq!(reply["session"]["display_name"], "Mirela Ashby");
+    let token = reply["token"].as_str().unwrap();
+    let (_, session) = backend
+        .call("fieldnotes", Some(token), "/internal/session", json!({}))
+        .await;
+    assert_eq!(session["session"]["authenticated"], true);
+
+    let (_, platform) = backend
+        .call(
+            "fieldnotes",
+            None,
+            "/internal/platform/diagnostics",
+            json!({}),
+        )
+        .await;
+    assert!(platform["audit"].as_array().unwrap().iter().any(|entry| {
+        entry["event"] == "auth.decision"
+            && entry["method"] == "link"
+            && entry["outcome"] == "accepted"
+    }));
+    let trail = platform["audit"].to_string();
+    for secret in [&link.token, &link.challenge, &binding] {
+        assert!(
+            !trail.contains(secret.as_str()),
+            "the audit trail holds {secret}"
+        );
+    }
+    assert!(
+        !trail.contains(LINK_ADDRESS),
+        "the audit trail holds the address"
+    );
+}
+
+/// Verifies: IDN-003
+///
+/// Case link-second-use: a link that was used signs no one in again.
+#[tokio::test]
+async fn link_second_use_is_refused() {
+    let (backend, sink) = linking(|_| {}).await;
+    let (_, reply) = backend.ask_link(SOURCE, LINK_ADDRESS, None, None).await;
+    let binding = reply["binding"].as_str().unwrap().to_string();
+    let link = link_in(&sink, 0);
+    assert_eq!(backend.open_link(&link, &binding, SITE).await.0, 200);
+    let (status, reply) = backend.open_link(&link, &binding, SITE).await;
+    assert_eq!(status, 401, "{reply}");
+    assert!(reply["message"].as_str().unwrap().contains("link"));
+}
+
+/// Verifies: IDN-004
+///
+/// Case link-expired: a link is accepted through its lifetime and not after it, however fresh its
+/// token and however right its browser. The lifetime the platform states is fifteen minutes.
+#[tokio::test]
+async fn link_expired_is_refused() {
+    use strata_backend::mail::Mailer;
+    let (backend, sink) = linking(|cfg| cfg.link_ttl_ms = 150).await;
+    let (_, reply) = backend.ask_link(SOURCE, LINK_ADDRESS, None, None).await;
+    let binding = reply["binding"].as_str().unwrap().to_string();
+    let link = link_in(&sink, 0);
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    let (status, _) = backend.open_link(&link, &binding, SITE).await;
+    assert_eq!(status, 401);
+
+    let (backend, sink) = linking(|_| {}).await;
+    let (_, reply) = backend.ask_link(SOURCE, LINK_ADDRESS, None, None).await;
+    let binding = reply["binding"].as_str().unwrap().to_string();
+    assert!(sink.outbox()[0].text.contains("15 minutes"));
+    assert_eq!(
+        backend
+            .open_link(&link_in(&sink, 0), &binding, SITE)
+            .await
+            .0,
+        200
+    );
+}
+
+/// Verifies: IDN-005
+///
+/// Case link-other-browser: a link opened in a browser that did not ask for it signs no one in,
+/// whether that browser has no nonce or another one; and a link that was refused has been taken,
+/// so the browser that did ask must ask again, and keeps its binding when it does.
+#[tokio::test]
+async fn link_other_browser_is_refused() {
+    let (backend, sink) = linking(|_| {}).await;
+    let (_, reply) = backend.ask_link(SOURCE, LINK_ADDRESS, None, None).await;
+    let binding = reply["binding"].as_str().unwrap().to_string();
+    let link = link_in(&sink, 0);
+
+    let (status, _) = backend.open_link(&link, &nonce(), SITE).await;
+    assert_eq!(status, 401, "another browser's nonce");
+    let (status, _) = backend.open_link(&link, &binding, SITE).await;
+    assert_eq!(status, 401, "taken by the refusal");
+
+    let (_, again) = backend
+        .ask_link(SOURCE, LINK_ADDRESS, Some(&binding), None)
+        .await;
+    assert_eq!(again["binding"], reply["binding"]);
+    assert_eq!(
+        backend
+            .open_link(&link_in(&sink, 1), &binding, SITE)
+            .await
+            .0,
+        200
+    );
+
+    // A browser that sends no nonce at all is not the one that asked.
+    let (_, reply) = backend
+        .ask_link(SOURCE, LINK_ADDRESS, Some(&binding), None)
+        .await;
+    assert_eq!(reply["binding"], json!(binding));
+    let link = link_in(&sink, 2);
+    let (status, _) = backend
+        .call_at(
+            Some(SITE),
+            SOURCE,
+            "fieldnotes",
+            None,
+            "/internal/session/sign-in/link",
+            json!({ "challenge": link.challenge, "token": link.token }),
+        )
+        .await;
+    assert_eq!(status, 401);
+}
+
+/// Verifies: IDN-005, IDN-003
+///
+/// A link names the address it was asked for at, and a token that is not its own is refused
+/// whatever else is right; either refusal takes the link.
+#[tokio::test]
+async fn a_link_is_accepted_only_at_its_own_address_with_its_own_token() {
+    let (backend, sink) = linking(|_| {}).await;
+    let (_, reply) = backend.ask_link(SOURCE, LINK_ADDRESS, None, None).await;
+    let binding = reply["binding"].as_str().unwrap().to_string();
+    let link = link_in(&sink, 0);
+    let (status, _) = backend
+        .open_link(&link, &binding, "https://elsewhere.example")
+        .await;
+    assert_eq!(status, 401);
+
+    backend
+        .ask_link(SOURCE, LINK_ADDRESS, Some(&binding), None)
+        .await;
+    let link = link_in(&sink, 1);
+    let wrong = Link {
+        token: nonce(),
+        challenge: link.challenge.clone(),
+        address: String::new(),
+    };
+    assert_eq!(backend.open_link(&wrong, &binding, SITE).await.0, 401);
+    assert_eq!(
+        backend.open_link(&link, &binding, SITE).await.0,
+        401,
+        "the wrong token took it"
+    );
+}
+
+/// Verifies: IDN-006
+///
+/// The answer to a request for a link is the same whether or not the address has an account, and
+/// so is what is said for something that is not an address; mail goes only to an account.
+#[tokio::test]
+async fn the_answer_to_a_link_request_does_not_say_whether_there_is_an_account() {
+    use strata_backend::mail::Mailer;
+    let (backend, sink) = linking(|_| {}).await;
+    let binding = nonce();
+    let mut answers = Vec::new();
+    for address in [
+        LINK_ADDRESS,
+        "nobody@fieldnotes.example",
+        "not an address",
+        "",
+    ] {
+        answers.push(
+            backend
+                .ask_link(SOURCE, address, Some(&binding), None)
+                .await,
+        );
+    }
+    for answer in &answers {
+        assert_eq!(answer, &answers[0], "one answer for every address");
+    }
+    assert_eq!(answers[0].0, 200);
+    let sent = sink.outbox();
+    assert_eq!(
+        sent.len(),
+        1,
+        "mail went to the account and to nothing else"
+    );
+    assert_eq!(sent[0].to, LINK_ADDRESS);
+}
+
+/// Verifies: IDN-269
+///
+/// Requests are counted per address and per source, whether or not the address has an account,
+/// and they are not given back.
+#[tokio::test]
+async fn link_requests_are_limited_per_address_and_per_source() {
+    use strata_backend::mail::Mailer;
+    let (backend, _) = linking(|cfg| cfg.throttle.account_max = 2).await;
+    for address in [LINK_ADDRESS, "nobody@fieldnotes.example"] {
+        let mut statuses = Vec::new();
+        for n in 0..4 {
+            let source = format!("203.0.113.{}", 20 + n);
+            statuses.push(backend.ask_link(&source, address, None, None).await.0);
+        }
+        assert_eq!(
+            statuses,
+            [200, 200, 429, 429],
+            "{address}: the same for both"
+        );
+    }
+
+    let (backend, sink) = linking(|cfg| cfg.throttle.source_max = 3).await;
+    let mut statuses = Vec::new();
+    for n in 0..5 {
+        statuses.push(
+            backend
+                .ask_link(SOURCE, &format!("person{n}@fieldnotes.example"), None, None)
+                .await
+                .0,
+        );
+    }
+    assert_eq!(statuses, [200, 200, 200, 429, 429]);
+    assert_eq!(
+        backend
+            .ask_link("203.0.113.99", LINK_ADDRESS, None, None)
+            .await
+            .0,
+        200
+    );
+    assert_eq!(sink.outbox().len(), 1);
+}
+
+/// Verifies: FED-250
+///
+/// A return address goes into the link only when it is a path on the site.
+#[tokio::test]
+async fn a_return_address_is_followed_only_when_it_is_a_path_on_the_site() {
+    let (backend, sink) = linking(|cfg| cfg.throttle.account_max = 100).await;
+    let binding = nonce();
+    let nexts = [
+        Some("/desk/settings"),
+        Some("//evil.example/x"),
+        Some("https://evil.example"),
+        Some("/\\evil.example"),
+        Some("javascript:alert(1)"),
+        None,
+    ];
+    for next in nexts {
+        let (status, _) = backend
+            .ask_link("203.0.113.40", LINK_ADDRESS, Some(&binding), next)
+            .await;
+        assert_eq!(status, 200);
+    }
+    let addresses: Vec<String> = (0..6).map(|i| link_in(&sink, i).address).collect();
+    assert!(
+        addresses[0].contains("?next=%2Fdesk%2Fsettings#c="),
+        "{}",
+        addresses[0]
+    );
+    for dropped in &addresses[1..] {
+        assert!(!dropped.contains("next="), "{dropped}");
+        assert!(!dropped.contains("evil"), "{dropped}");
+    }
+}
+
+/// Verifies: IDN-003
+///
+/// The development outbox is the owner's, in development only: a visitor, or a person who is not
+/// the site's owner, is refused, and the owner reads the messages the sink holds.
+#[tokio::test]
+async fn the_development_outbox_is_for_the_owner() {
+    let (backend, _) = linking(|_| {}).await;
+    backend.ask_link(SOURCE, LINK_ADDRESS, None, None).await;
+    let (status, _) = backend
+        .call("fieldnotes", None, "/internal/dev/mail-outbox", json!({}))
+        .await;
+    assert_eq!(status, 401);
+    let mirela = backend
+        .login("fieldnotes", "mirela", "strata-dev-mirela")
+        .await;
+    let (status, _) = backend
+        .call(
+            "fieldnotes",
+            Some(&mirela),
+            "/internal/dev/mail-outbox",
+            json!({}),
+        )
+        .await;
+    assert_eq!(status, 403);
+    let admin = backend
+        .login("fieldnotes", "admin", "strata-dev-admin")
+        .await;
+    let (status, outbox) = backend
+        .call(
+            "fieldnotes",
+            Some(&admin),
+            "/internal/dev/mail-outbox",
+            json!({}),
+        )
+        .await;
+    assert_eq!(status, 200, "{outbox}");
+    assert_eq!(outbox["messages"].as_array().unwrap().len(), 1);
+    assert_eq!(outbox["messages"][0]["to"], LINK_ADDRESS);
 }

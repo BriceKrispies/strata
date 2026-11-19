@@ -3,7 +3,7 @@
 //! Randomness and password hashing happen here, outside the kernel. The kernel only ever sees
 //! the resulting `Principal` and the session's public id.
 
-use crate::app::{ApiError, App, Shared, LOG};
+use crate::app::{ApiError, App, Shared};
 use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
 use argon2::Argon2;
 use axum::http::HeaderMap;
@@ -15,8 +15,8 @@ use strata_kernel::{
 };
 use strata_model::telemetry;
 use strata_protocol::api::{
-    valid_correlation, ErrorCode, LoginReply, LoginRequest, SessionView, HEADER_CORRELATION,
-    HEADER_SERVICE, HEADER_SESSION, HEADER_SITE,
+    valid_correlation, ErrorCode, LoginReply, SessionView, HEADER_CORRELATION, HEADER_ORIGIN,
+    HEADER_SERVICE, HEADER_SESSION, HEADER_SITE, HEADER_SOURCE,
 };
 use strata_protocol::ws::SessionState;
 use strata_storage_api::{Account, SessionRecord};
@@ -27,6 +27,11 @@ pub struct Caller {
     pub site: TenantId,
     pub token: Option<String>,
     pub correlation: String,
+    /// The address of the browser as the BFF saw it, or `unknown` when it did not say.
+    pub source: String,
+    /// The origin the browser made the request from, as the BFF checked it, or `None` when the
+    /// request did not come from one of the site's own pages.
+    pub origin: Option<String>,
 }
 
 /// Who a request acts as, after the session has been checked.
@@ -91,8 +96,23 @@ pub fn caller(headers: &HeaderMap) -> Result<Caller, ApiError> {
     Ok(Caller {
         site,
         token: header(headers, HEADER_SESSION).map(str::to_string),
+        source: header(headers, HEADER_SOURCE)
+            .filter(|source| valid_source(source))
+            .unwrap_or("unknown")
+            .to_string(),
+        origin: header(headers, HEADER_ORIGIN)
+            .filter(|origin| origin.len() <= 255)
+            .map(str::to_string),
         correlation,
     })
+}
+
+/// A source address as the BFF writes it: an IPv4 or IPv6 address, nothing else.
+fn valid_source(source: &str) -> bool {
+    source.len() <= 45
+        && source
+            .chars()
+            .all(|c| c.is_ascii_hexdigit() || matches!(c, '.' | ':'))
 }
 
 pub fn token_hash(token: &str) -> String {
@@ -227,74 +247,41 @@ pub(crate) fn is_password(password: &str, stored: &str) -> bool {
 }
 
 /// A hash to verify against when the login does not exist, so that a miss costs the same as a
-/// wrong password.
-fn decoy_hash() -> &'static str {
+/// wrong password (IDN-255).
+pub(crate) fn decoy_hash() -> &'static str {
     static DECOY: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     DECOY.get_or_init(|| hash_password("decoy-password").unwrap_or_default())
 }
 
-const MAX_FAILURES: u32 = 5;
-const LOCKOUT_MS: i64 = 30_000;
+/// Check a login for a method and start a session. Any session the caller already holds is
+/// ended, so the session identifier and its token change on every authentication (IDN-011).
+pub fn login(
+    app: &App,
+    caller: &Caller,
+    method: &str,
+    request: &serde_json::Value,
+) -> Result<crate::signin::SignInOutcome, ApiError> {
+    crate::signin::sign_in(app, caller, method, request)
+}
 
-/// Check a login and start a session. Any session the caller already holds is ended, so the
-/// session identifier changes on every authentication.
-pub fn login(app: &App, caller: &Caller, request: &LoginRequest) -> Result<LoginReply, ApiError> {
+/// The network context a request comes from, as a keyed hash: the key is the service token, so a
+/// copy of a session record holds no address and cannot be matched to one without it (D-704,
+/// PRV-364). `None` when the gateway did not say where the request came from.
+pub fn network_hash(app: &App, caller: &Caller) -> Option<String> {
+    (caller.source != "unknown").then(|| {
+        canon::hash_bytes(format!("network {} {}", app.cfg.service_token, caller.source).as_bytes())
+    })
+}
+
+/// Start the session of an account that a sign-in method has accepted.
+pub(crate) fn start_session(
+    app: &App,
+    caller: &Caller,
+    tenant: &TenantState,
+    account: Account,
+    method: &str,
+) -> Result<LoginReply, ApiError> {
     let now = app.now();
-    let refused = || {
-        ApiError::new(
-            ErrorCode::Unauthenticated,
-            "The name or password is not right.",
-        )
-    };
-    let login = request.login.trim().to_lowercase();
-    if login.is_empty() || login.len() > 64 || request.password.len() > 256 {
-        return Err(refused());
-    }
-    let key = format!("{}/{login}", caller.site);
-    if let Ok(throttle) = app.throttle.lock() {
-        if throttle
-            .get(&key)
-            .is_some_and(|(count, until)| *count >= MAX_FAILURES && now.0 < *until)
-        {
-            return Err(ApiError::new(
-                ErrorCode::Throttled,
-                "Too many attempts. Wait half a minute and try again.",
-            ));
-        }
-    }
-
-    let Some(tenant) = app.store.load(&caller.site, &[])?.tenant else {
-        return Err(ApiError::new(ErrorCode::NotFound, "no such site"));
-    };
-    let account: Option<Account> = app.store.account(&caller.site, &login)?;
-    let verified = match &account {
-        Some(account) => verify_password(&request.password, &account.password_hash),
-        None => {
-            verify_password(&request.password, decoy_hash());
-            false
-        }
-    };
-    let Some(account) = account.filter(|_| verified) else {
-        if let Ok(mut throttle) = app.throttle.lock() {
-            let entry = throttle.entry(key).or_insert((0, 0));
-            entry.0 = if now.0 >= entry.1 && entry.0 >= MAX_FAILURES {
-                1
-            } else {
-                entry.0 + 1
-            };
-            entry.1 = now.0 + LOCKOUT_MS;
-        }
-        LOG.warn(
-            "login.refused",
-            &caller.correlation,
-            json!({ "tenant": caller.site.as_str() }),
-        );
-        return Err(refused());
-    };
-    if let Ok(mut throttle) = app.throttle.lock() {
-        throttle.remove(&key);
-    }
-
     if let Some(previous) = &caller.token {
         end_session(app, previous, &caller.correlation)?;
     }
@@ -311,6 +298,8 @@ pub fn login(app: &App, caller: &Caller, request: &LoginRequest) -> Result<Login
         last_seen_at: now,
         expires_at: strata_kernel::Timestamp(now.0 + app.cfg.session_ttl_ms),
         revoked_at: None,
+        authenticated_at: now,
+        network: network_hash(app, caller),
     };
     app.store.put_session(&session)?;
     telemetry::session_started(
@@ -320,7 +309,7 @@ pub fn login(app: &App, caller: &Caller, request: &LoginRequest) -> Result<Login
             tenant: caller.site.as_str(),
             session: session.id.as_str(),
             principal: session.principal.as_str(),
-            method: "password",
+            method,
         },
     );
     let identity = Identity {
@@ -332,28 +321,155 @@ pub fn login(app: &App, caller: &Caller, request: &LoginRequest) -> Result<Login
     };
     Ok(LoginReply {
         token,
-        session: session_view(&tenant, &identity),
+        session: session_view(tenant, &identity),
     })
 }
 
-/// End the session behind a token, if there is one, and tell its connections.
+/// End one session: mark it revoked, log it, and tell the connections it has open, which close.
+/// When it had ended already, only the notice is sent again.
+pub fn revoke(app: &App, mut session: SessionRecord, correlation: &str) -> Result<(), ApiError> {
+    if session.revoked_at.is_none() {
+        session.revoked_at = Some(app.now());
+        app.store.put_session(&session)?;
+        log_end(&session, correlation);
+    }
+    let _ = app.hub.sessions.send((session.id, SessionState::Revoked));
+    Ok(())
+}
+
+/// The log line of a session that ended.
+fn log_end(session: &SessionRecord, correlation: &str) {
+    telemetry::session_ended(
+        &telemetry::BACKEND,
+        &telemetry::SessionEnded {
+            correlation,
+            tenant: session.tenant.as_str(),
+            session: session.id.as_str(),
+        },
+    );
+}
+
+/// End the session behind a token, if there is one, and tell its connections (IDN-263).
 pub fn end_session(app: &App, token: &str, correlation: &str) -> Result<(), ApiError> {
-    if let Some(mut session) = app.store.session_by_token(&token_hash(token))? {
-        if session.revoked_at.is_none() {
-            session.revoked_at = Some(app.now());
-            app.store.put_session(&session)?;
-            telemetry::session_ended(
-                &telemetry::BACKEND,
-                &telemetry::SessionEnded {
-                    correlation,
-                    tenant: session.tenant.as_str(),
-                    session: session.id.as_str(),
-                },
-            );
-        }
-        let _ = app.hub.sessions.send((session.id, SessionState::Revoked));
+    if let Some(session) = app.store.session_by_token(&token_hash(token))? {
+        revoke(app, session, correlation)?;
     }
     Ok(())
+}
+
+fn sign_in_needed() -> ApiError {
+    ApiError::new(ErrorCode::Unauthenticated, "Sign in to do this.")
+}
+
+/// Every live session of the person a session belongs to, in the same site.
+fn own_live_sessions(app: &App, current: &SessionRecord) -> Result<Vec<SessionRecord>, ApiError> {
+    let now = app.now().0;
+    Ok(app
+        .store
+        .live_sessions(app.now())?
+        .into_iter()
+        .filter(|s| {
+            s.tenant == current.tenant
+                && s.principal == current.principal
+                && session_state(app, s, now) == SessionState::Active
+        })
+        .collect())
+}
+
+/// The sessions of the caller that are still live, newest first, the caller's own marked
+/// (IDN-012). Nothing of a session's token is in the answer.
+pub fn list_sessions(
+    app: &App,
+    identity: &Identity,
+) -> Result<Vec<strata_model::types::SessionSummary>, ApiError> {
+    let Some(current) = &identity.session else {
+        return Err(sign_in_needed());
+    };
+    let mut own = own_live_sessions(app, current)?;
+    own.sort_by_key(|s| std::cmp::Reverse(s.created_at.0));
+    Ok(own
+        .into_iter()
+        .map(|s| strata_model::types::SessionSummary {
+            current: s.id == current.id,
+            id: strata_model::types::SessionId(s.id.as_str().to_string()),
+            created_at: strata_model::prelude::Timestamp(s.created_at.0),
+            last_seen_at: strata_model::prelude::Timestamp(s.last_seen_at.0),
+            expires_at: strata_model::prelude::Timestamp(s.expires_at.0),
+        })
+        .collect())
+}
+
+/// Revoke one of the caller's own sessions by its public id. A session that is not the caller's,
+/// or does not exist, is answered as not found: the answer does not say which.
+pub fn revoke_own_session(app: &App, identity: &Identity, id: &str) -> Result<(), ApiError> {
+    let Some(current) = &identity.session else {
+        return Err(sign_in_needed());
+    };
+    let not_found = || ApiError::new(ErrorCode::NotFound, "No such session.");
+    let id = SessionId::new(id).map_err(|_| not_found())?;
+    let target = app.store.session(&id)?.ok_or_else(not_found)?;
+    if target.tenant != current.tenant || target.principal != current.principal {
+        return Err(not_found());
+    }
+    revoke(app, target, &identity.correlation)
+}
+
+/// End every live session of a person in a tenant. Returns how many (IDN-020).
+pub fn revoke_all_of(
+    app: &App,
+    tenant: &TenantId,
+    principal: &PrincipalId,
+    correlation: &str,
+) -> Result<usize, ApiError> {
+    let now = app.now().0;
+    let live: Vec<SessionRecord> = app
+        .store
+        .live_sessions(app.now())?
+        .into_iter()
+        .filter(|s| {
+            s.tenant == *tenant
+                && s.principal == *principal
+                && session_state(app, s, now) == SessionState::Active
+        })
+        .collect();
+    let count = live.len();
+    for session in live {
+        revoke(app, session, correlation)?;
+    }
+    Ok(count)
+}
+
+/// Revoke every live session of the caller but the one making the request. Returns how many.
+pub fn revoke_other_sessions(app: &App, identity: &Identity) -> Result<usize, ApiError> {
+    let Some(current) = &identity.session else {
+        return Err(sign_in_needed());
+    };
+    let others: Vec<SessionRecord> = own_live_sessions(app, current)?
+        .into_iter()
+        .filter(|s| s.id != current.id)
+        .collect();
+    let count = others.len();
+    for session in others {
+        revoke(app, session, &identity.correlation)?;
+    }
+    Ok(count)
+}
+
+/// Tell the world about sessions that a commit ended in the store, such as those of a person
+/// whose roles changed: log each, and close its connections. `sessions` were live before the
+/// commit.
+pub fn announce_ended(app: &App, sessions: Vec<SessionRecord>, correlation: &str) {
+    for session in sessions {
+        match app.store.session(&session.id) {
+            Ok(Some(now)) if now.revoked_at.is_none() => {
+                let _ = revoke(app, now, correlation);
+            }
+            _ => {
+                log_end(&session, correlation);
+                let _ = app.hub.sessions.send((session.id, SessionState::Revoked));
+            }
+        }
+    }
 }
 
 pub async fn identify_async(app: &Shared, caller: Caller) -> Result<Identity, ApiError> {
@@ -374,7 +490,7 @@ pub fn put_dev_account(
 ) -> Result<(), ApiError> {
     app.store.put_account(&Account {
         tenant: tenant.clone(),
-        login: login.to_lowercase(),
+        login: crate::signin::normalise_login(login),
         principal,
         display_name: display_name.to_string(),
         password_hash: hash_password(password)?,

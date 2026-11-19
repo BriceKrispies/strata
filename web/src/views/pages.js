@@ -2,7 +2,7 @@
 // @ts-check
 
 import { h } from '../components/dom.js';
-import { date, index, marginNotes, prose } from '../components/parts.js';
+import { date, index, marginNotes, prose, qrCode } from '../components/parts.js';
 
 function topicList(topics, label) {
   if (!topics.length) return null;
@@ -210,7 +210,43 @@ export function about(page) {
   ];
 }
 
+/** The code prompt of a sign-in that is waiting for its second factor. */
+function secondFactor(s) {
+  const recovery = s.factor === 'recovery';
+  return [
+    h('h1', { class: 'page-title' }, 'One more step'),
+    h(
+      'form',
+      { class: 'form form--narrow', 'data-form': 'second', 'data-second-factor': true, novalidate: true },
+      s.enrol
+        ? h(
+            'div',
+            null,
+            h('p', { class: 'standfirst' }, 'This site asks for a second factor. Scan this code with an authenticator application.'),
+            qrCode(s.enrol.qr, 'QR code for your authenticator'),
+            h('p', null, 'Or type this secret: ', h('code', { 'data-totp-secret': true }, s.enrol.secret)),
+          )
+        : h('p', { class: 'standfirst' }, recovery ? 'Enter one of your recovery codes.' : 'Enter the code your authenticator shows.'),
+      s.error ? h('p', { class: 'form__error', role: 'alert', id: 'second-error' }, s.error) : null,
+      h(
+        'div',
+        { class: 'field' },
+        h('label', { for: 'second-code' }, recovery ? 'Recovery code' : 'Code'),
+        h('input', { id: 'second-code', name: 'code', type: 'text', value: s.code, autocomplete: 'one-time-code', autocapitalize: 'none', spellcheck: 'false', required: true }),
+      ),
+      h('button', { class: 'button', type: 'submit', disabled: s.busy }, s.busy ? 'Checking…' : 'Continue'),
+    ),
+    !s.enrol && s.methods.includes('recovery')
+      ? h('p', null, h('button', { class: 'button button--quiet', type: 'button', 'data-action': 'factors.use', 'data-arg': JSON.stringify({ factor: recovery ? 'totp' : 'recovery' }) }, recovery ? 'Use my authenticator' : 'Use a recovery code'))
+      : null,
+    !s.enrol && s.methods.includes('passkey') && s.passkeys
+      ? h('p', null, h('button', { class: 'button button--quiet', type: 'button', disabled: s.busy, 'data-action': 'factors.use_passkey' }, 'Use a passkey'))
+      : null,
+  ];
+}
+
 export function login(page) {
+  if (page.second) return secondFactor(page.second);
   if (page.signedIn) {
     return [
       h('h1', { class: 'page-title' }, 'You are signed in'),
@@ -218,9 +254,17 @@ export function login(page) {
       h('p', null, h('a', { class: 'button', href: '/desk' }, 'Go to the writing desk')),
     ];
   }
+  if (page.link?.landing === 'working' || page.oidc?.landing === 'working') {
+    return [
+      h('h1', { class: 'page-title' }, 'Signing you in'),
+      h('p', { class: 'standfirst', role: 'status' }, page.oidc?.landing === 'working' ? 'Checking the answer of your identity provider…' : 'Checking your link…'),
+    ];
+  }
   return [
     h('h1', { class: 'page-title' }, 'Sign in'),
     h('p', { class: 'standfirst' }, 'For the people who write and edit here. Readers do not need an account.'),
+    page.link?.landingError ? h('p', { class: 'form__error', role: 'alert', id: 'link-landing-error' }, page.link.landingError) : null,
+    page.oidc?.landingError ? h('p', { class: 'form__error', role: 'alert', id: 'oidc-landing-error' }, page.oidc.landingError) : null,
     h(
       'form',
       { class: 'form form--narrow', 'data-form': 'login', novalidate: true },
@@ -242,6 +286,43 @@ export function login(page) {
       ),
       h('button', { class: 'button', type: 'submit', disabled: page.busy }, page.busy ? 'Signing in…' : 'Sign in'),
     ),
+    page.passkeys?.supported
+      ? h(
+          'div',
+          { class: 'form form--narrow', 'data-passkey-signin': true },
+          page.passkeys.error ? h('p', { class: 'form__error', role: 'alert', id: 'passkey-error' }, page.passkeys.error) : null,
+          h('button', { class: 'button button--quiet', type: 'button', disabled: page.passkeys.busy, 'data-action': 'passkeys.sign_in' }, page.passkeys.busy ? 'Waiting for your passkey…' : 'Sign in with a passkey'),
+        )
+      : null,
+    page.oidc?.providers?.length
+      ? h(
+          'section',
+          { class: 'form form--narrow', 'aria-labelledby': 'oidc-title' },
+          h('h2', { class: 'section__title', id: 'oidc-title' }, 'Sign in with your organisation'),
+          page.oidc.error ? h('p', { class: 'form__error', role: 'alert', id: 'oidc-error' }, page.oidc.error) : null,
+          page.oidc.providers.map((p) =>
+            h('button', { key: p.id, class: 'button button--quiet', type: 'button', disabled: page.oidc.busy, 'data-action': 'oidc.start', 'data-arg': JSON.stringify({ provider: p.id }) }, `Sign in with ${p.label}`),
+          ),
+        )
+      : null,
+    page.link
+      ? h(
+          'form',
+          { class: 'form form--narrow', 'data-form': 'link', novalidate: true },
+          h('h2', { class: 'section__title', id: 'link-title' }, 'Email me a sign-in link'),
+          page.link.error ? h('p', { class: 'form__error', role: 'alert', id: 'link-error' }, page.link.error) : null,
+          page.link.sent
+            ? h('p', { class: 'form__note', role: 'status', id: 'link-sent' }, 'If that address belongs to an account, a sign-in link is on its way. Open it in this browser within fifteen minutes.')
+            : null,
+          h(
+            'div',
+            { class: 'field' },
+            h('label', { for: 'link-email' }, 'Email address'),
+            h('input', { id: 'link-email', name: 'email', type: 'email', value: page.link.email, autocomplete: 'email', autocapitalize: 'none', spellcheck: 'false', required: true }),
+          ),
+          h('button', { class: 'button button--quiet', type: 'submit', disabled: page.link.busy }, page.link.busy ? 'Sending…' : 'Email me a sign-in link'),
+        )
+      : null,
   ];
 }
 

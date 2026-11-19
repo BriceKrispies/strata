@@ -150,6 +150,10 @@ function page(state) {
         password: forms.login.values.password,
         busy: forms.login.busy,
         error: forms.login.error,
+        passkeys: { supported: state.passkeys.supported, busy: state.passkeys.signingIn, error: state.passkeys.signInError },
+        link: { ...state.links, landing: state.links.landingStatus },
+        oidc: { ...state.oidc, landing: state.oidc.landingStatus },
+        second: state.factors.prompt ? { ...state.factors.prompt, code: state.factors.fields.code, passkeys: state.passkeys.supported } : null,
       };
     case 'desk':
       return {
@@ -158,6 +162,9 @@ function page(state) {
         canWrite,
         canSettings: (session.may?.publication ?? []).includes('update'),
         canLab: session.may_manage_schema,
+        sessions: state.sessions,
+        passkeys: state.passkeys,
+        factors: state.factors,
         posts: d.posts
           .map((r) => ({ ...entry(r, state.optimistic), confirming: state.confirmDelete === r.id, labels: deskLabels(model, r) }))
           .filter((p) => p.status !== 'deleted'),

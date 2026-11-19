@@ -12,18 +12,81 @@
 //! | `STRATA_LEAN_DIR` | `lean` | The Lean project, for verification runs. |
 //! | `STRATA_SESSION_TTL_MS` | 12 hours | Absolute session lifetime. |
 //! | `STRATA_SESSION_IDLE_MS` | 2 hours | Idle session lifetime. |
+//! | `STRATA_PASSKEY_CHALLENGE_TTL_MS` | 5 minutes | How long a passkey challenge can be answered. |
+//! | `STRATA_LINK_TTL_MS` | 15 minutes | How long an emailed sign-in link is accepted. |
+//! | `STRATA_SMTP_URL` | unset | An SMTP server (`smtps://user:password@host:465`). Unset: no mail is sent. |
+//! | `STRATA_MAIL_FROM` | none | The sender address, required with `STRATA_SMTP_URL`. |
+//! | `STRATA_MAIL_DIR` | `var/mail` | Where the development sink writes `.eml` files (development only). |
+//! | `STRATA_OIDC_CONFIG` | unset | A JSON file of each tenant's OpenID Connect providers. Unset: no tenant has one. |
+//! | `STRATA_SECOND_FACTOR_REALMS` | unset | Tenants whose realm policy requires a second factor (IDN-018), comma-separated. |
+//! | `STRATA_STEP_UP_AGE_MS` | 15 minutes | How recent an authentication must be for a sensitive operation (IDN-019). |
+//! | `STRATA_RECOVERY_DELAY_MS` | 24 hours | How long account recovery waits before it can complete (IDN-265). |
+//! | `STRATA_FACTOR_KEY` | the service token | The secret TOTP secrets are sealed under. |
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
-use strata_backend::app::Config;
-use strata_kernel::Timestamp;
+use strata_backend::app::{Config, FactorPolicy, SealKey, LOG};
+use strata_backend::mail::{DevSink, Mailer, Smtp};
+use strata_backend::signin::oidc::Federation;
+use strata_kernel::{TenantId, Timestamp};
 use strata_protocol::log::now_ms;
 use strata_storage_api::memory::MemoryStore;
 use strata_storage_api::Store;
 use strata_storage_sqlite::{default_tenants_dir, SqliteStore};
 
 use strata_runtime::server::{self, env_number as number, env_var as var};
+
+/// The mail transport. An SMTP server is used only when `STRATA_SMTP_URL` names one; otherwise
+/// the development sink keeps the messages and nothing is sent. In development the sink also
+/// writes each message to `var/mail/*.eml`; outside it, nothing is written to disk.
+fn mailer(dev: bool) -> Result<Arc<dyn Mailer>, String> {
+    let url = var("STRATA_SMTP_URL", "");
+    if !url.is_empty() {
+        let from = var("STRATA_MAIL_FROM", "");
+        return Ok(Arc::new(Smtp::new(&url, &from)?));
+    }
+    if dev {
+        let dir = PathBuf::from(var("STRATA_MAIL_DIR", "var/mail"));
+        return Ok(Arc::new(DevSink::files(dir)));
+    }
+    LOG.warn(
+        "mail.unconfigured",
+        "",
+        serde_json::json!({ "note": "STRATA_SMTP_URL is not set; mail is kept in memory and not sent" }),
+    );
+    Ok(Arc::new(DevSink::memory()))
+}
+
+/// The tenants' identity providers, from the platform configuration file when one is named.
+fn federation() -> Result<Federation, String> {
+    let path = var("STRATA_OIDC_CONFIG", "");
+    if path.is_empty() {
+        return Ok(Federation::none());
+    }
+    Federation::from_file(&PathBuf::from(path))
+}
+
+/// What the realms ask of second factors. `STRATA_SECOND_FACTOR_REALMS` names the tenants whose
+/// policy requires one, comma-separated. TOTP secrets are sealed under a key derived from
+/// `STRATA_FACTOR_KEY` when it is set and from the service token otherwise.
+fn factors(service_token: &str) -> Result<FactorPolicy, String> {
+    let mut policy = FactorPolicy::default();
+    for name in var("STRATA_SECOND_FACTOR_REALMS", "")
+        .split(',')
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+    {
+        let tenant =
+            TenantId::new(name).map_err(|e| format!("STRATA_SECOND_FACTOR_REALMS: {name}: {e}"))?;
+        policy.realm_required.insert(tenant);
+    }
+    policy.step_up_age_ms = number("STRATA_STEP_UP_AGE_MS", policy.step_up_age_ms)?;
+    policy.recovery_delay_ms = number("STRATA_RECOVERY_DELAY_MS", policy.recovery_delay_ms)?;
+    let key = var("STRATA_FACTOR_KEY", "");
+    policy.seal_key = SealKey::derive(if key.is_empty() { service_token } else { &key });
+    Ok(policy)
+}
 
 fn start() -> Result<(Config, Arc<dyn Store>), String> {
     let addr: SocketAddr = var("STRATA_BACKEND_ADDR", "127.0.0.1:4101")
@@ -55,6 +118,7 @@ fn start() -> Result<(Config, Arc<dyn Store>), String> {
         }
         other => return Err(format!("STRATA_STORE: unknown adapter {other:?}")),
     };
+    let policy = factors(&service_token)?;
     let cfg = Config {
         addr,
         service_token,
@@ -63,6 +127,12 @@ fn start() -> Result<(Config, Arc<dyn Store>), String> {
         lean_dir: PathBuf::from(var("STRATA_LEAN_DIR", "lean")),
         session_ttl_ms: number("STRATA_SESSION_TTL_MS", 12 * 3_600_000)?,
         session_idle_ms: number("STRATA_SESSION_IDLE_MS", 2 * 3_600_000)?,
+        throttle: Default::default(),
+        passkey_challenge_ttl_ms: number("STRATA_PASSKEY_CHALLENGE_TTL_MS", 300_000)?,
+        link_ttl_ms: number("STRATA_LINK_TTL_MS", 15 * 60_000)?,
+        mail: mailer(var("STRATA_DEV", "") == "1")?,
+        federation: Arc::new(federation()?),
+        factors: policy,
     };
     Ok((cfg, store))
 }

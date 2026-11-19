@@ -1,12 +1,13 @@
 //! Browser-facing routes.
 
+use crate::signin;
 use crate::token::same;
 use crate::{relay, Bff, Shared, COOKIE, LOG};
 use axum::extract::ws::WebSocketUpgrade;
-use axum::extract::{Path, Query, Request, State};
+use axum::extract::{ConnectInfo, Path, Query, Request, State};
 use axum::http::header::{
-    CACHE_CONTROL, CONTENT_SECURITY_POLICY, CONTENT_TYPE, COOKIE as COOKIE_HEADER, HOST, ORIGIN,
-    SET_COOKIE,
+    CACHE_CONTROL, CONTENT_SECURITY_POLICY, CONTENT_TYPE, COOKIE as COOKIE_HEADER, HOST, LOCATION,
+    ORIGIN, SET_COOKIE,
 };
 use axum::http::{HeaderMap, HeaderValue, Method, StatusCode};
 use axum::middleware::{self, Next};
@@ -16,12 +17,14 @@ use axum::{Json, Router};
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value as Json_};
 use std::collections::BTreeMap;
+use std::net::SocketAddr;
 use std::sync::atomic::Ordering;
 use std::time::Instant;
 use strata_kernel::TenantId;
 use strata_protocol::api::{
-    valid_correlation, ErrorCode, ErrorReply, LoginReply, LoginRequest, Mutation, SessionReply,
-    SessionView, ViewRequest, HEADER_CORRELATION, HEADER_SERVICE, HEADER_SESSION, HEADER_SITE,
+    valid_correlation, ErrorCode, ErrorReply, LoginReply, Mutation, SessionReply, SessionView,
+    ViewRequest, HEADER_CORRELATION, HEADER_ORIGIN, HEADER_SERVICE, HEADER_SESSION, HEADER_SITE,
+    HEADER_SOURCE,
 };
 use strata_protocol::ws::SessionState;
 use strata_substrate::project::{project, ViewData};
@@ -57,10 +60,83 @@ pub struct Visit {
     pub site: TenantId,
     pub token: Option<String>,
     pub correlation: String,
+    /// The address the connection came from, which the backend limits failed sign-ins by.
+    pub source: Option<String>,
+    /// The origin the request was made from, when it is one of the site's own. A passkey is made
+    /// and used at that address.
+    pub origin: Option<String>,
 }
 
 fn text(headers: &HeaderMap, name: impl axum::http::header::AsHeaderName) -> Option<&str> {
     headers.get(name).and_then(|value| value.to_str().ok())
+}
+
+/// The cookie that holds the nonce binding an emailed link to the browser that asked for it.
+const LINK_COOKIE: &str = "__Host-strata-link";
+/// The cookie that holds the nonce binding a sign-in at an identity provider to the browser that
+/// started it.
+const OIDC_COOKIE: &str = "__Host-strata-oidc";
+/// The cookie that holds where to go after a sign-in at an identity provider. It is a path on this
+/// site and nothing secret, and it is `Lax` because the provider's redirect back is a navigation
+/// from another site, which a `Strict` cookie does not accompany.
+const RETURN_COOKIE: &str = "__Host-strata-return";
+
+/// The value of a cookie that holds a nonce, when the browser holds a well-formed one.
+fn binding_of(headers: &HeaderMap, name: &str) -> Option<String> {
+    cookie_value(headers, name)
+        .filter(|value| value.len() == 64 && value.chars().all(|c| c.is_ascii_hexdigit()))
+}
+
+/// The nonce in the link cookie, when the browser holds a well-formed one.
+fn link_binding(headers: &HeaderMap) -> Option<String> {
+    binding_of(headers, LINK_COOKIE)
+}
+
+/// A cookie as `__Host-` requires: `Secure`, `Path=/` and no `Domain`, and `HttpOnly`, so that a
+/// page script cannot read it.
+fn host_cookie(name: &str, value: &str, max_age: i64, same_site: &str) -> HeaderValue {
+    HeaderValue::from_str(&format!(
+        "{name}={value}; Path=/; Secure; HttpOnly; SameSite={same_site}; Max-Age={max_age}"
+    ))
+    .expect("cookie values are ASCII")
+}
+
+/// The link cookie: `Strict`, so that a link opened from another site does not carry it.
+fn link_cookie(binding: &str, max_age: i64) -> HeaderValue {
+    host_cookie(LINK_COOKIE, binding, max_age, "Strict")
+}
+
+/// The value of a cookie, as sent.
+fn cookie_value(headers: &HeaderMap, name: &str) -> Option<String> {
+    text(headers, COOKIE_HEADER)?
+        .split(';')
+        .filter_map(|pair| pair.trim().split_once('='))
+        .find(|(cookie_name, _)| *cookie_name == name)
+        .map(|(_, value)| value.to_string())
+}
+
+/// Percent-encode a value for a query string, a fragment or a cookie.
+fn percent_encode(value: &str) -> String {
+    value
+        .bytes()
+        .map(|b| {
+            if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~') {
+                (b as char).to_string()
+            } else {
+                format!("%{b:02X}")
+            }
+        })
+        .collect()
+}
+
+/// A return address that is a path on this site: one slash first, no other host, no backslash
+/// (which browsers read as a slash) and no control character (FED-250).
+fn safe_path(path: &str) -> bool {
+    path.len() <= 512
+        && path.starts_with('/')
+        && !path.starts_with("//")
+        && !path.contains('\\')
+        && !path.chars().any(char::is_control)
 }
 
 pub fn cookie(headers: &HeaderMap) -> Option<String> {
@@ -105,10 +181,15 @@ pub fn visit(bff: &Bff, headers: &HeaderMap) -> Result<Visit, Failure> {
                 &correlation,
             )
         })?;
+    let origin = origin_allowed(bff, &site, headers)
+        .then(|| text(headers, ORIGIN).map(str::to_string))
+        .flatten();
     Ok(Visit {
         site,
         token: cookie(headers),
         correlation,
+        source: text(headers, HEADER_SOURCE).map(str::to_string),
+        origin,
     })
 }
 
@@ -165,6 +246,12 @@ pub async fn backend<T: DeserializeOwned>(
         .json(body);
     if let Some(token) = &visit.token {
         request = request.header(HEADER_SESSION, token);
+    }
+    if let Some(source) = &visit.source {
+        request = request.header(HEADER_SOURCE, source);
+    }
+    if let Some(origin) = &visit.origin {
+        request = request.header(HEADER_ORIGIN, origin);
     }
     let response = request
         .send()
@@ -295,15 +382,66 @@ async fn session(State(bff): State<Shared>, headers: HeaderMap) -> Result<Respon
     Ok(response)
 }
 
-async fn login(
-    State(bff): State<Shared>,
-    headers: HeaderMap,
-    Json(request): Json<LoginRequest>,
+/// Sign in with the named method: the same origin and request-token checks for every method,
+/// the method's own credentials, and the session cookie from the backend's answer.
+async fn sign_in(
+    bff: &Bff,
+    headers: &HeaderMap,
+    method: &str,
+    body: Json_,
 ) -> Result<Response, Failure> {
-    let visit = visit(&bff, &headers)?;
-    guard_request(&bff, &visit, &headers).await?;
-    let reply: LoginReply =
-        backend(&bff, &visit, "/internal/session/login", &json!(request)).await?;
+    let visit = visit(bff, headers)?;
+    guard_request(bff, &visit, headers).await?;
+    let route = signin::route(method).ok_or_else(|| {
+        Failure::new(
+            ErrorCode::NotFound,
+            "No such sign-in method.",
+            &visit.correlation,
+        )
+    })?;
+    let binding = if method == "oidc" {
+        binding_of(headers, OIDC_COOKIE)
+    } else {
+        link_binding(headers)
+    };
+    let credentials = route
+        .credentials(&body, binding.as_deref())
+        .ok_or_else(|| {
+            Failure::new(
+                ErrorCode::Unauthenticated,
+                route.refusal(),
+                &visit.correlation,
+            )
+        })?;
+    let reply: Json_ = backend(
+        bff,
+        &visit,
+        &format!("/internal/session/sign-in/{method}"),
+        &credentials,
+    )
+    .await?;
+    finish_sign_in(&visit, reply)
+}
+
+/// What a sign-in answers. A first factor that is not enough yields no session and no cookie, only
+/// the waiting sign-in the browser answers with its second factor. A session's token goes in the
+/// cookie and nowhere else.
+fn finish_sign_in(visit: &Visit, reply: Json_) -> Result<Response, Failure> {
+    if let Some(waiting) = reply.get("second_factor") {
+        return Ok(Json(json!({ "second_factor": waiting, "state": "pending" })).into_response());
+    }
+    let reply: LoginReply = serde_json::from_value(reply).map_err(|e| {
+        LOG.error(
+            "backend.unreadable",
+            &visit.correlation,
+            json!({ "path": "sign-in", "error": e.to_string() }),
+        );
+        Failure::new(
+            ErrorCode::Unavailable,
+            "The service is not available right now.",
+            &visit.correlation,
+        )
+    })?;
     let lifetime = reply
         .session
         .expires_at
@@ -314,6 +452,448 @@ async fn login(
         .headers_mut()
         .insert(SET_COOKIE, session_cookie(&reply.token, lifetime));
     Ok(response)
+}
+
+/// Give the second factor of a waiting sign-in, from one of the site's own pages and with the
+/// request token every sign-in carries. Only the fields of a second factor go on to the backend. A
+/// right one answers like a sign-in: the session's cookie.
+async fn second_factor(
+    State(bff): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<Json_>,
+) -> Result<Response, Failure> {
+    let visit = visit(&bff, &headers)?;
+    guard_request(&bff, &visit, &headers).await?;
+    let sent = json!({
+        "challenge": body.get("challenge"),
+        "factor": body.get("factor"),
+        "code": body.get("code"),
+        "passkey_challenge": body.get("passkey_challenge"),
+        "assertion": body.get("assertion"),
+    });
+    let reply: Json_ = backend(&bff, &visit, "/internal/session/second-factor", &sent).await?;
+    finish_sign_in(&visit, reply)
+}
+
+/// The signed-in person's factors, for the desk.
+async fn factors(State(bff): State<Shared>, headers: HeaderMap) -> Result<Json<Json_>, Failure> {
+    let visit = visit(&bff, &headers)?;
+    backend(&bff, &visit, "/internal/factors", &json!({}))
+        .await
+        .map(Json)
+}
+
+async fn totp_start(State(bff): State<Shared>, headers: HeaderMap) -> Result<Json<Json_>, Failure> {
+    guarded(&bff, &headers, "/internal/factors/totp/start", json!({})).await
+}
+
+async fn totp_confirm(
+    State(bff): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<Json_>,
+) -> Result<Json<Json_>, Failure> {
+    guarded(
+        &bff,
+        &headers,
+        "/internal/factors/totp/confirm",
+        json!({ "code": body.get("code") }),
+    )
+    .await
+}
+
+async fn totp_remove(
+    State(bff): State<Shared>,
+    headers: HeaderMap,
+) -> Result<Json<Json_>, Failure> {
+    guarded(&bff, &headers, "/internal/factors/totp/remove", json!({})).await
+}
+
+async fn recovery_codes(
+    State(bff): State<Shared>,
+    headers: HeaderMap,
+) -> Result<Json<Json_>, Failure> {
+    guarded(
+        &bff,
+        &headers,
+        "/internal/factors/recovery-codes",
+        json!({}),
+    )
+    .await
+}
+
+/// Give a fresh factor to the session before a sensitive operation: a password, an authenticator's
+/// code or a passkey's assertion, and nothing else of the body.
+async fn step_up(
+    State(bff): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<Json_>,
+) -> Result<Json<Json_>, Failure> {
+    let mut sent = json!({});
+    for field in ["password", "code", "challenge", "assertion"] {
+        if let Some(value) = body.get(field) {
+            sent[field] = value.clone();
+        }
+    }
+    guarded(&bff, &headers, "/internal/session/step-up", sent).await
+}
+
+/// Ask for an account recovery. Anyone may, from one of the site's own pages; the answer is the
+/// same whether or not the address has an account.
+async fn recovery_request(
+    State(bff): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<Json_>,
+) -> Result<Json<Json_>, Failure> {
+    let visit = visit(&bff, &headers)?;
+    guard_request(&bff, &visit, &headers).await?;
+    backend(
+        &bff,
+        &visit,
+        "/internal/recovery/request",
+        &json!({ "email": body.get("email") }),
+    )
+    .await
+    .map(Json)
+}
+
+/// Complete a recovery with the link of its message, once its delay has passed.
+async fn recovery_complete(
+    State(bff): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<Json_>,
+) -> Result<Json<Json_>, Failure> {
+    let visit = visit(&bff, &headers)?;
+    guard_request(&bff, &visit, &headers).await?;
+    backend(
+        &bff,
+        &visit,
+        "/internal/recovery/complete",
+        &json!({
+            "challenge": body.get("challenge"),
+            "token": body.get("token"),
+            "password": body.get("password"),
+        }),
+    )
+    .await
+    .map(Json)
+}
+
+/// Cancel a recovery with the link of its notice.
+async fn recovery_cancel(
+    State(bff): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<Json_>,
+) -> Result<Json<Json_>, Failure> {
+    let visit = visit(&bff, &headers)?;
+    guard_request(&bff, &visit, &headers).await?;
+    backend(
+        &bff,
+        &visit,
+        "/internal/recovery/cancel",
+        &json!({ "challenge": body.get("challenge"), "cancel": body.get("cancel") }),
+    )
+    .await
+    .map(Json)
+}
+
+async fn login(
+    State(bff): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<Json_>,
+) -> Result<Response, Failure> {
+    sign_in(&bff, &headers, "password", body).await
+}
+
+async fn login_with(
+    State(bff): State<Shared>,
+    headers: HeaderMap,
+    Path(method): Path<String>,
+    Json(body): Json<Json_>,
+) -> Result<Response, Failure> {
+    sign_in(&bff, &headers, &method, body).await
+}
+
+/// Ask for an emailed sign-in link. Anyone may ask, from one of the site's own pages and with the
+/// request token that every sign-in carries. The answer is the same whether or not the address has
+/// an account, and it sets the cookie that binds the link to this browser.
+async fn link_request(
+    State(bff): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<Json_>,
+) -> Result<Response, Failure> {
+    let visit = visit(&bff, &headers)?;
+    guard_request(&bff, &visit, &headers).await?;
+    let Some(email) = body.get("email").and_then(Json_::as_str) else {
+        return Err(Failure::new(
+            ErrorCode::Invalid,
+            "Enter an email address.",
+            &visit.correlation,
+        ));
+    };
+    let mut sent = json!({ "email": email, "binding": link_binding(&headers) });
+    if let Some(next) = body.get("next").and_then(Json_::as_str) {
+        sent["next"] = json!(next);
+    }
+    let reply: Json_ = backend(&bff, &visit, "/internal/sign-in/link/request", &sent).await?;
+    let binding = reply["binding"].as_str().unwrap_or_default();
+    let max_age = reply["max_age"].as_i64().unwrap_or(900);
+    let mut response = Json(json!({ "sent": true })).into_response();
+    response
+        .headers_mut()
+        .insert(SET_COOKIE, link_cookie(binding, max_age));
+    Ok(response)
+}
+
+/// The identity providers the sign-in page offers at the address it is served at.
+async fn oidc_providers(
+    State(bff): State<Shared>,
+    headers: HeaderMap,
+) -> Result<Json<Json_>, Failure> {
+    let visit = visit(&bff, &headers)?;
+    backend(&bff, &visit, "/internal/sign-in/oidc/providers", &json!({}))
+        .await
+        .map(Json)
+}
+
+/// Begin a sign-in at an identity provider, from one of the site's own pages and with the request
+/// token every sign-in carries. The answer is the address to send the browser to; the nonce that
+/// binds the sign-in to this browser is a cookie the page cannot read, and the return address is
+/// another, which the callback reads.
+async fn oidc_start(
+    State(bff): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<Json_>,
+) -> Result<Response, Failure> {
+    let visit = visit(&bff, &headers)?;
+    guard_request(&bff, &visit, &headers).await?;
+    let Some(provider) = body.get("provider").and_then(Json_::as_str) else {
+        return Err(Failure::new(
+            ErrorCode::Invalid,
+            "Choose a provider.",
+            &visit.correlation,
+        ));
+    };
+    let mut sent = json!({
+        "provider": provider,
+        "binding": binding_of(&headers, OIDC_COOKIE),
+        "link": body.get("link").and_then(Json_::as_bool).unwrap_or(false),
+    });
+    if let Some(next) = body.get("next").and_then(Json_::as_str) {
+        sent["next"] = json!(next);
+    }
+    let reply: Json_ = backend(&bff, &visit, "/internal/sign-in/oidc/start", &sent).await?;
+    let unavailable = || {
+        Failure::new(
+            ErrorCode::Unavailable,
+            "The service is not available right now.",
+            &visit.correlation,
+        )
+    };
+    let redirect = reply["redirect"]
+        .as_str()
+        .filter(|address| address.starts_with("https://") || address.starts_with("http://"))
+        .ok_or_else(unavailable)?;
+    let binding = reply["binding"].as_str().ok_or_else(unavailable)?;
+    let max_age = reply["max_age"].as_i64().unwrap_or(300);
+    let mut response = Json(json!({ "redirect": redirect })).into_response();
+    let cookies = response.headers_mut();
+    cookies.append(
+        SET_COOKIE,
+        host_cookie(OIDC_COOKIE, binding, max_age, "Strict"),
+    );
+    // A return address of an earlier start is replaced, or removed when this one has none.
+    let kept = reply["return_to"].as_str().filter(|path| safe_path(path));
+    cookies.append(
+        SET_COOKIE,
+        match kept {
+            Some(path) => host_cookie(RETURN_COOKIE, &percent_encode(path), max_age, "Lax"),
+            None => host_cookie(RETURN_COOKIE, "", 0, "Lax"),
+        },
+    );
+    Ok(response)
+}
+
+/// Where the provider sends the browser back to. The code and the state are moved into the
+/// fragment of the sign-in page's address, which the browser does not send anywhere, and the page
+/// takes them out of the address bar and sends them in the body of `/api/sign-in/oidc`: the
+/// binding cookie is `Strict`, and goes with that request from the page and not with this
+/// navigation from another site.
+async fn oidc_callback(
+    State(bff): State<Shared>,
+    headers: HeaderMap,
+    Query(query): Query<BTreeMap<String, String>>,
+) -> Response {
+    if let Err(failure) = visit(&bff, &headers) {
+        return failure.into_response();
+    }
+    let next = cookie_value(&headers, RETURN_COOKIE)
+        .map(|value| percent_decode(&value))
+        .filter(|path| safe_path(path));
+    let printable = |value: &&String| {
+        !value.is_empty()
+            && value.len() <= 2048
+            && value.bytes().all(|b| (0x21..=0x7e).contains(&b))
+    };
+    let mut location = "/login".to_string();
+    if let Some(next) = &next {
+        location.push_str(&format!("?next={}", percent_encode(next)));
+    }
+    match (
+        query.get("state").filter(printable),
+        query.get("code").filter(printable),
+        query.get("error"),
+    ) {
+        (Some(state), Some(code), None) => location.push_str(&format!(
+            "#s={}&x={}",
+            percent_encode(state),
+            percent_encode(code)
+        )),
+        _ => location.push_str("#e=1"),
+    }
+    let mut response = StatusCode::SEE_OTHER.into_response();
+    let out = response.headers_mut();
+    if let Ok(value) = HeaderValue::from_str(&location) {
+        out.insert(LOCATION, value);
+    }
+    out.insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    out.append(SET_COOKIE, host_cookie(RETURN_COOKIE, "", 0, "Lax"));
+    response
+}
+
+/// A challenge for signing in with a passkey. Anyone may ask, from one of the site's own pages
+/// and with the request token that every sign-in carries.
+async fn passkey_challenge(
+    State(bff): State<Shared>,
+    headers: HeaderMap,
+) -> Result<Json<Json_>, Failure> {
+    let visit = visit(&bff, &headers)?;
+    guard_request(&bff, &visit, &headers).await?;
+    backend(&bff, &visit, "/internal/passkeys/challenge", &json!({}))
+        .await
+        .map(Json)
+}
+
+/// The signed-in person's own passkeys.
+async fn passkeys(State(bff): State<Shared>, headers: HeaderMap) -> Result<Json<Json_>, Failure> {
+    let visit = visit(&bff, &headers)?;
+    backend(&bff, &visit, "/internal/passkeys", &json!({}))
+        .await
+        .map(Json)
+}
+
+/// Begin adding a passkey.
+async fn passkey_register_start(
+    State(bff): State<Shared>,
+    headers: HeaderMap,
+) -> Result<Json<Json_>, Failure> {
+    guarded(
+        &bff,
+        &headers,
+        "/internal/passkeys/register/start",
+        json!({}),
+    )
+    .await
+}
+
+/// Finish adding a passkey: the challenge, the attestation and the name, and nothing else of the
+/// body.
+async fn passkey_register_finish(
+    State(bff): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<Json_>,
+) -> Result<Json<Json_>, Failure> {
+    guarded(
+        &bff,
+        &headers,
+        "/internal/passkeys/register/finish",
+        json!({
+            "challenge": body.get("challenge"),
+            "credential": body.get("credential"),
+            "name": body.get("name"),
+        }),
+    )
+    .await
+}
+
+/// Remove one of the signed-in person's passkeys.
+async fn passkey_remove(
+    State(bff): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<Json_>,
+) -> Result<Json<Json_>, Failure> {
+    let visit = visit(&bff, &headers)?;
+    guard_write(&bff, &visit, &headers).await?;
+    let Some(id) = body.get("id").and_then(Json_::as_str) else {
+        return Err(Failure::new(
+            ErrorCode::Invalid,
+            "Say which passkey.",
+            &visit.correlation,
+        ));
+    };
+    backend(
+        &bff,
+        &visit,
+        "/internal/passkeys/remove",
+        &json!({ "id": id }),
+    )
+    .await
+    .map(Json)
+}
+
+/// The signed-in person's own live sessions.
+async fn sessions(State(bff): State<Shared>, headers: HeaderMap) -> Result<Json<Json_>, Failure> {
+    let visit = visit(&bff, &headers)?;
+    backend(&bff, &visit, "/internal/sessions", &json!({}))
+        .await
+        .map(Json)
+}
+
+/// Revoke one of the signed-in person's own sessions. When it is the one making the request, the
+/// cookie goes with it.
+async fn session_revoke(
+    State(bff): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<Json_>,
+) -> Result<Response, Failure> {
+    let visit = visit(&bff, &headers)?;
+    // The checks come before the body is looked at: a request that skips them learns nothing
+    // about what a body should hold.
+    let current = guard_write(&bff, &visit, &headers).await?;
+    let Some(id) = body.get("id").and_then(Json_::as_str) else {
+        return Err(Failure::new(
+            ErrorCode::Invalid,
+            "Say which session.",
+            &visit.correlation,
+        ));
+    };
+    let reply: Json_ = backend(
+        &bff,
+        &visit,
+        "/internal/sessions/revoke",
+        &json!({ "id": id }),
+    )
+    .await?;
+    let mut response = Json(reply).into_response();
+    if current.session_id.as_deref() == Some(id) {
+        response
+            .headers_mut()
+            .insert(SET_COOKIE, session_cookie("", 0));
+    }
+    Ok(response)
+}
+
+/// Revoke every other session of the signed-in person.
+async fn sessions_revoke_others(
+    State(bff): State<Shared>,
+    headers: HeaderMap,
+) -> Result<Json<Json_>, Failure> {
+    guarded(
+        &bff,
+        &headers,
+        "/internal/sessions/revoke-others",
+        json!({}),
+    )
+    .await
 }
 
 async fn logout(State(bff): State<Shared>, headers: HeaderMap) -> Result<Response, Failure> {
@@ -566,7 +1146,9 @@ async fn dev(
     let visit = visit(&bff, &headers)?;
     let path = match (bff.cfg.dev, action.as_str()) {
         (true, "expire-session") => "/internal/dev/expire-session",
+        (true, "age-authentication") => "/internal/dev/age-authentication",
         (true, "reset") => "/internal/dev/reset",
+        (true, "mail-outbox") => "/internal/dev/mail-outbox",
         _ => {
             return Err(Failure::new(
                 ErrorCode::NotFound,
@@ -578,7 +1160,8 @@ async fn dev(
     // A signed-in session with its own request token, and the site's owner: the request token
     // handed to visitors without a session opens nothing here. The backend checks the owner too.
     let session = guard_write(&bff, &visit, &headers).await?;
-    if !session.roles.iter().any(|role| role == "owner") {
+    // Ageing the caller's own authentication touches nothing but that session, so it asks for no role.
+    if action != "age-authentication" && !session.roles.iter().any(|role| role == "owner") {
         return Err(Failure::new(
             ErrorCode::Forbidden,
             "Only the site's owner may use this.",
@@ -761,8 +1344,18 @@ async fn page(State(bff): State<Shared>, headers: HeaderMap, request: Request) -
 }
 
 /// Security headers on everything, and one log line per request.
-async fn envelope(State(bff): State<Shared>, request: Request, next: Next) -> Response {
+async fn envelope(State(bff): State<Shared>, mut request: Request, next: Next) -> Response {
     let started = Instant::now();
+    // The source of a request is the address of its connection and nothing the browser says: a
+    // header of that name that came in is thrown away.
+    let peer = request
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|ConnectInfo(peer)| peer.ip().to_string());
+    request.headers_mut().remove(HEADER_SOURCE);
+    if let Some(value) = peer.and_then(|peer| HeaderValue::from_str(&peer).ok()) {
+        request.headers_mut().insert(HEADER_SOURCE, value);
+    }
     let method = request.method().clone();
     let path = request.uri().path().to_string();
     let correlation = text(request.headers(), HEADER_CORRELATION)
@@ -815,6 +1408,28 @@ pub fn router(bff: Shared) -> Router {
     let api = Router::new()
         .route("/session", get(session))
         .route("/login", post(login))
+        .route("/sign-in/second-factor", post(second_factor))
+        .route("/sign-in/:method", post(login_with))
+        .route("/sign-in/link/request", post(link_request))
+        .route("/sign-in/providers", get(oidc_providers))
+        .route("/sign-in/oidc/start", post(oidc_start))
+        .route("/passkeys", get(passkeys))
+        .route("/passkeys/challenge", post(passkey_challenge))
+        .route("/passkeys/register/start", post(passkey_register_start))
+        .route("/passkeys/register/finish", post(passkey_register_finish))
+        .route("/passkeys/remove", post(passkey_remove))
+        .route("/session/step-up", post(step_up))
+        .route("/factors", get(factors))
+        .route("/factors/totp/start", post(totp_start))
+        .route("/factors/totp/confirm", post(totp_confirm))
+        .route("/factors/totp/remove", post(totp_remove))
+        .route("/factors/recovery-codes", post(recovery_codes))
+        .route("/recovery/request", post(recovery_request))
+        .route("/recovery/complete", post(recovery_complete))
+        .route("/recovery/cancel", post(recovery_cancel))
+        .route("/sessions", get(sessions))
+        .route("/sessions/revoke", post(session_revoke))
+        .route("/sessions/revoke-others", post(sessions_revoke_others))
         .route("/logout", post(logout))
         .route("/view", get(view))
         .route("/records", post(records))
@@ -830,6 +1445,7 @@ pub fn router(bff: Shared) -> Router {
     Router::new()
         .nest("/api", api)
         .route("/ws", get(socket))
+        .route("/federation/oidc/callback", get(oidc_callback))
         .nest_service("/assets", ServeDir::new(bff.cfg.dist.join("assets")))
         .nest_service("/media", ServeDir::new(bff.cfg.dist.join("media")))
         .fallback(get(page))

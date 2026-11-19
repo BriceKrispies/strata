@@ -13,6 +13,7 @@ export default defineConfig({
     // The BFF picks the tenant from the Host header, so the original host is passed on.
     proxy: {
       '/api': { target: bff, changeOrigin: false },
+      '/federation': { target: bff, changeOrigin: false },
       '/ws': { target: bff, changeOrigin: false, ws: true },
     },
     allowedHosts: ['localhost', 'tidewater.localhost'],

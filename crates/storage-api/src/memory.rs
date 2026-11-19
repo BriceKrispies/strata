@@ -4,14 +4,17 @@
 //! that the rest of the system does not depend on SQLite. It is not durable and says so.
 
 use crate::{
-    check_event_sequence, partial_state, Account, Capabilities, Commit, Health, JournalEntry,
-    OutboxEntry, Receipt, SessionRecord, SnapshotInfo, StorageMigration, Store, StoreError,
-    StoreResult, TenantSummary,
+    check_event_sequence, partial_state, throttle_refund, throttle_step, Account, Capabilities,
+    Commit, FederatedIdentity, Health, JournalEntry, OidcFlow, OutboxEntry, PasskeyChallenge,
+    PasskeyRecord, PendingSignIn, Receipt, RecoveryRequest, SessionRecord, SignInLink,
+    SnapshotInfo, StorageMigration, Store, StoreError, StoreResult, TenantSummary, ThrottleRow,
+    ThrottleRule, ThrottleSettle, ThrottleVerdict, TotpRecord,
 };
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex, MutexGuard};
 use strata_kernel::{
-    apply_delta, canon, DomainEvent, Need, SessionId, State, TenantId, TenantState, Timestamp,
+    apply_delta, canon, DomainEvent, Need, PrincipalId, SessionId, State, TenantId, TenantState,
+    Timestamp,
 };
 
 #[derive(Default)]
@@ -25,6 +28,16 @@ struct Inner {
     journal: Vec<JournalEntry>,
     sessions: BTreeMap<SessionId, SessionRecord>,
     accounts: BTreeMap<(TenantId, String), Account>,
+    throttle: BTreeMap<(TenantId, String), ThrottleRow>,
+    passkeys: BTreeMap<(TenantId, String), PasskeyRecord>,
+    challenges: BTreeMap<(TenantId, String), PasskeyChallenge>,
+    links: BTreeMap<(TenantId, String), SignInLink>,
+    flows: BTreeMap<(TenantId, String), OidcFlow>,
+    identities: BTreeMap<(TenantId, String, String), FederatedIdentity>,
+    totp: BTreeMap<(TenantId, PrincipalId), TotpRecord>,
+    recovery_codes: BTreeMap<(TenantId, PrincipalId), BTreeSet<String>>,
+    pending: BTreeMap<(TenantId, String), PendingSignIn>,
+    recoveries: BTreeMap<(TenantId, String), RecoveryRequest>,
     snapshots: BTreeMap<(TenantId, u64), (SnapshotInfo, Arc<TenantState>)>,
 }
 
@@ -253,6 +266,446 @@ impl Store for MemoryStore {
         Ok((count - inner.sessions.len()) as u64)
     }
 
+    fn throttle_reserve(
+        &self,
+        tenant: &TenantId,
+        rules: &[ThrottleRule],
+        now: Timestamp,
+    ) -> StoreResult<ThrottleVerdict> {
+        let mut inner = self.lock()?;
+        let mut next = Vec::with_capacity(rules.len());
+        let mut until: Option<i64> = None;
+        for rule in rules {
+            let row = inner
+                .throttle
+                .get(&(tenant.clone(), rule.key.clone()))
+                .copied();
+            match throttle_step(row, rule, now.0) {
+                Ok(row) => next.push((rule.key.clone(), row)),
+                Err(locked) => until = Some(until.map_or(locked, |u| u.max(locked))),
+            }
+        }
+        if let Some(until) = until {
+            return Ok(ThrottleVerdict::Refused {
+                until: Timestamp(until),
+            });
+        }
+        for (key, row) in next {
+            inner.throttle.insert((tenant.clone(), key), row);
+        }
+        Ok(ThrottleVerdict::Allowed)
+    }
+
+    fn throttle_settle(
+        &self,
+        tenant: &TenantId,
+        key: &str,
+        max: u32,
+        how: ThrottleSettle,
+    ) -> StoreResult<()> {
+        let mut inner = self.lock()?;
+        let slot = (tenant.clone(), key.to_string());
+        match how {
+            ThrottleSettle::Clear => {
+                inner.throttle.remove(&slot);
+            }
+            ThrottleSettle::Refund => {
+                if let Some(row) = inner.throttle.get_mut(&slot) {
+                    *row = throttle_refund(*row, max);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn purge_throttle(&self, now: Timestamp) -> StoreResult<u64> {
+        let mut inner = self.lock()?;
+        let count = inner.throttle.len();
+        inner.throttle.retain(|_, row| row.expires_at > now.0);
+        Ok((count - inner.throttle.len()) as u64)
+    }
+
+    fn account_of(
+        &self,
+        tenant: &TenantId,
+        principal: &PrincipalId,
+    ) -> StoreResult<Option<Account>> {
+        Ok(self
+            .lock()?
+            .accounts
+            .values()
+            .find(|account| account.tenant == *tenant && account.principal == *principal)
+            .cloned())
+    }
+
+    fn put_passkey(&self, passkey: &PasskeyRecord) -> StoreResult<bool> {
+        let mut inner = self.lock()?;
+        let slot = (passkey.tenant.clone(), passkey.id.clone());
+        if inner.passkeys.contains_key(&slot) {
+            return Ok(false);
+        }
+        inner.passkeys.insert(slot, passkey.clone());
+        Ok(true)
+    }
+
+    fn passkey(&self, tenant: &TenantId, id: &str) -> StoreResult<Option<PasskeyRecord>> {
+        Ok(self
+            .lock()?
+            .passkeys
+            .get(&(tenant.clone(), id.to_string()))
+            .cloned())
+    }
+
+    fn passkeys(
+        &self,
+        tenant: &TenantId,
+        principal: &PrincipalId,
+    ) -> StoreResult<Vec<PasskeyRecord>> {
+        let mut found: Vec<PasskeyRecord> = self
+            .lock()?
+            .passkeys
+            .values()
+            .filter(|p| p.tenant == *tenant && p.principal == *principal)
+            .cloned()
+            .collect();
+        found.sort_by(|a, b| (a.created_at, &a.id).cmp(&(b.created_at, &b.id)));
+        Ok(found)
+    }
+
+    fn update_passkey(
+        &self,
+        tenant: &TenantId,
+        id: &str,
+        credential: &str,
+        used_at: Timestamp,
+    ) -> StoreResult<bool> {
+        let mut inner = self.lock()?;
+        match inner.passkeys.get_mut(&(tenant.clone(), id.to_string())) {
+            Some(record) => {
+                record.credential = credential.to_string();
+                record.last_used_at = Some(used_at);
+                Ok(true)
+            }
+            None => Ok(false),
+        }
+    }
+
+    fn remove_passkey(
+        &self,
+        tenant: &TenantId,
+        principal: &PrincipalId,
+        id: &str,
+    ) -> StoreResult<bool> {
+        let mut inner = self.lock()?;
+        let slot = (tenant.clone(), id.to_string());
+        if inner
+            .passkeys
+            .get(&slot)
+            .is_some_and(|p| p.principal == *principal)
+        {
+            inner.passkeys.remove(&slot);
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
+    fn put_passkey_challenge(&self, challenge: &PasskeyChallenge) -> StoreResult<()> {
+        self.lock()?.challenges.insert(
+            (challenge.tenant.clone(), challenge.id_hash.clone()),
+            challenge.clone(),
+        );
+        Ok(())
+    }
+
+    fn take_passkey_challenge(
+        &self,
+        tenant: &TenantId,
+        id_hash: &str,
+        now: Timestamp,
+    ) -> StoreResult<Option<PasskeyChallenge>> {
+        let taken = self
+            .lock()?
+            .challenges
+            .remove(&(tenant.clone(), id_hash.to_string()));
+        Ok(taken.filter(|challenge| challenge.expires_at > now))
+    }
+
+    fn purge_passkey_challenges(&self, now: Timestamp) -> StoreResult<u64> {
+        let mut inner = self.lock()?;
+        let count = inner.challenges.len();
+        inner.challenges.retain(|_, c| c.expires_at > now);
+        Ok((count - inner.challenges.len()) as u64)
+    }
+
+    fn put_sign_in_link(&self, link: &SignInLink) -> StoreResult<()> {
+        self.lock()?
+            .links
+            .insert((link.tenant.clone(), link.id_hash.clone()), link.clone());
+        Ok(())
+    }
+
+    fn take_sign_in_link(
+        &self,
+        tenant: &TenantId,
+        id_hash: &str,
+    ) -> StoreResult<Option<SignInLink>> {
+        Ok(self
+            .lock()?
+            .links
+            .remove(&(tenant.clone(), id_hash.to_string())))
+    }
+
+    fn purge_sign_in_links(&self, now: Timestamp) -> StoreResult<u64> {
+        let mut inner = self.lock()?;
+        let count = inner.links.len();
+        inner.links.retain(|_, link| link.expires_at >= now);
+        Ok((count - inner.links.len()) as u64)
+    }
+
+    fn put_oidc_flow(&self, flow: &OidcFlow) -> StoreResult<()> {
+        self.lock()?
+            .flows
+            .insert((flow.tenant.clone(), flow.id_hash.clone()), flow.clone());
+        Ok(())
+    }
+
+    fn take_oidc_flow(&self, tenant: &TenantId, id_hash: &str) -> StoreResult<Option<OidcFlow>> {
+        Ok(self
+            .lock()?
+            .flows
+            .remove(&(tenant.clone(), id_hash.to_string())))
+    }
+
+    fn purge_oidc_flows(&self, now: Timestamp) -> StoreResult<u64> {
+        let mut inner = self.lock()?;
+        let count = inner.flows.len();
+        inner.flows.retain(|_, flow| flow.expires_at >= now);
+        Ok((count - inner.flows.len()) as u64)
+    }
+
+    fn put_identity(&self, identity: &FederatedIdentity) -> StoreResult<bool> {
+        let mut inner = self.lock()?;
+        if !inner.tenants.contains_key(&identity.tenant) {
+            return Err(StoreError::NotFound(format!("tenant {}", identity.tenant)));
+        }
+        let slot = (
+            identity.tenant.clone(),
+            identity.provider.clone(),
+            identity.subject.clone(),
+        );
+        if inner.identities.contains_key(&slot) {
+            return Ok(false);
+        }
+        inner.identities.insert(slot, identity.clone());
+        Ok(true)
+    }
+
+    fn identity(
+        &self,
+        tenant: &TenantId,
+        provider: &str,
+        subject: &str,
+    ) -> StoreResult<Option<FederatedIdentity>> {
+        Ok(self
+            .lock()?
+            .identities
+            .get(&(tenant.clone(), provider.to_string(), subject.to_string()))
+            .cloned())
+    }
+
+    fn put_totp(&self, totp: &TotpRecord) -> StoreResult<bool> {
+        let mut inner = self.lock()?;
+        let slot = (totp.tenant.clone(), totp.principal.clone());
+        if inner.totp.get(&slot).is_some_and(|held| held.confirmed) {
+            return Ok(false);
+        }
+        inner.totp.insert(slot, totp.clone());
+        Ok(true)
+    }
+
+    fn totp(&self, tenant: &TenantId, principal: &PrincipalId) -> StoreResult<Option<TotpRecord>> {
+        Ok(self
+            .lock()?
+            .totp
+            .get(&(tenant.clone(), principal.clone()))
+            .cloned())
+    }
+
+    fn confirm_totp(
+        &self,
+        tenant: &TenantId,
+        principal: &PrincipalId,
+        step: i64,
+    ) -> StoreResult<bool> {
+        let mut inner = self.lock()?;
+        match inner.totp.get_mut(&(tenant.clone(), principal.clone())) {
+            Some(record) if !record.confirmed => {
+                record.confirmed = true;
+                record.last_step = step;
+                Ok(true)
+            }
+            _ => Ok(false),
+        }
+    }
+
+    fn use_totp_step(
+        &self,
+        tenant: &TenantId,
+        principal: &PrincipalId,
+        step: i64,
+    ) -> StoreResult<bool> {
+        let mut inner = self.lock()?;
+        match inner.totp.get_mut(&(tenant.clone(), principal.clone())) {
+            Some(record) if record.confirmed && record.last_step < step => {
+                record.last_step = step;
+                Ok(true)
+            }
+            _ => Ok(false),
+        }
+    }
+
+    fn remove_totp(&self, tenant: &TenantId, principal: &PrincipalId) -> StoreResult<bool> {
+        Ok(self
+            .lock()?
+            .totp
+            .remove(&(tenant.clone(), principal.clone()))
+            .is_some())
+    }
+
+    fn replace_recovery_codes(
+        &self,
+        tenant: &TenantId,
+        principal: &PrincipalId,
+        hashes: &[String],
+        _at: Timestamp,
+    ) -> StoreResult<()> {
+        self.lock()?.recovery_codes.insert(
+            (tenant.clone(), principal.clone()),
+            hashes.iter().cloned().collect(),
+        );
+        Ok(())
+    }
+
+    fn spend_recovery_code(
+        &self,
+        tenant: &TenantId,
+        principal: &PrincipalId,
+        hash: &str,
+    ) -> StoreResult<bool> {
+        Ok(self
+            .lock()?
+            .recovery_codes
+            .get_mut(&(tenant.clone(), principal.clone()))
+            .is_some_and(|codes| codes.remove(hash)))
+    }
+
+    fn recovery_codes_left(&self, tenant: &TenantId, principal: &PrincipalId) -> StoreResult<u32> {
+        Ok(self
+            .lock()?
+            .recovery_codes
+            .get(&(tenant.clone(), principal.clone()))
+            .map_or(0, |codes| codes.len() as u32))
+    }
+
+    fn put_pending(&self, pending: &PendingSignIn) -> StoreResult<()> {
+        self.lock()?.pending.insert(
+            (pending.tenant.clone(), pending.id_hash.clone()),
+            pending.clone(),
+        );
+        Ok(())
+    }
+
+    fn attempt_pending(
+        &self,
+        tenant: &TenantId,
+        id_hash: &str,
+        now: Timestamp,
+        max: u32,
+    ) -> StoreResult<Option<PendingSignIn>> {
+        let mut inner = self.lock()?;
+        let slot = (tenant.clone(), id_hash.to_string());
+        let Some(held) = inner.pending.get_mut(&slot) else {
+            return Ok(None);
+        };
+        if held.expires_at <= now || held.attempts >= max {
+            inner.pending.remove(&slot);
+            return Ok(None);
+        }
+        held.attempts += 1;
+        Ok(Some(held.clone()))
+    }
+
+    fn take_pending(
+        &self,
+        tenant: &TenantId,
+        id_hash: &str,
+        now: Timestamp,
+    ) -> StoreResult<Option<PendingSignIn>> {
+        let taken = self
+            .lock()?
+            .pending
+            .remove(&(tenant.clone(), id_hash.to_string()));
+        Ok(taken.filter(|pending| pending.expires_at > now))
+    }
+
+    fn put_recovery(&self, request: &RecoveryRequest) -> StoreResult<()> {
+        let mut inner = self.lock()?;
+        inner
+            .recoveries
+            .retain(|(t, _), r| !(t == &request.tenant && r.principal == request.principal));
+        inner.recoveries.insert(
+            (request.tenant.clone(), request.id_hash.clone()),
+            request.clone(),
+        );
+        Ok(())
+    }
+
+    fn recovery(&self, tenant: &TenantId, id_hash: &str) -> StoreResult<Option<RecoveryRequest>> {
+        Ok(self
+            .lock()?
+            .recoveries
+            .get(&(tenant.clone(), id_hash.to_string()))
+            .cloned())
+    }
+
+    fn take_recovery(
+        &self,
+        tenant: &TenantId,
+        id_hash: &str,
+    ) -> StoreResult<Option<RecoveryRequest>> {
+        Ok(self
+            .lock()?
+            .recoveries
+            .remove(&(tenant.clone(), id_hash.to_string())))
+    }
+
+    fn cancel_recovery(
+        &self,
+        tenant: &TenantId,
+        id_hash: &str,
+        cancel_hash: &str,
+    ) -> StoreResult<bool> {
+        let mut inner = self.lock()?;
+        let slot = (tenant.clone(), id_hash.to_string());
+        if inner
+            .recoveries
+            .get(&slot)
+            .is_some_and(|r| r.cancel_hash == cancel_hash)
+        {
+            inner.recoveries.remove(&slot);
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
+    fn purge_factor_challenges(&self, now: Timestamp) -> StoreResult<u64> {
+        let mut inner = self.lock()?;
+        let count = inner.pending.len() + inner.recoveries.len();
+        inner.pending.retain(|_, p| p.expires_at > now);
+        inner.recoveries.retain(|_, r| r.expires_at > now);
+        Ok((count - inner.pending.len() - inner.recoveries.len()) as u64)
+    }
+
     fn put_account(&self, account: &Account) -> StoreResult<()> {
         let mut inner = self.lock()?;
         if !inner.tenants.contains_key(&account.tenant) {
@@ -363,6 +816,16 @@ impl Store for MemoryStore {
         inner.journal.retain(|entry| entry.tenant != *tenant);
         inner.sessions.retain(|_, s| s.tenant != *tenant);
         inner.accounts.retain(|(t, _), _| t != tenant);
+        inner.throttle.retain(|(t, _), _| t != tenant);
+        inner.passkeys.retain(|(t, _), _| t != tenant);
+        inner.challenges.retain(|(t, _), _| t != tenant);
+        inner.links.retain(|(t, _), _| t != tenant);
+        inner.flows.retain(|(t, _), _| t != tenant);
+        inner.identities.retain(|(t, _, _), _| t != tenant);
+        inner.totp.retain(|(t, _), _| t != tenant);
+        inner.recovery_codes.retain(|(t, _), _| t != tenant);
+        inner.pending.retain(|(t, _), _| t != tenant);
+        inner.recoveries.retain(|(t, _), _| t != tenant);
         inner.snapshots.retain(|(t, _), _| t != tenant);
         Ok(())
     }

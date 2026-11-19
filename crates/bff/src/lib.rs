@@ -19,6 +19,7 @@
 
 pub mod relay;
 pub mod routes;
+pub mod signin;
 pub mod token;
 
 use serde_json::json;
