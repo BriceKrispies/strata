@@ -8,15 +8,23 @@
 //!   snake_case, as `system.generation.wireCase` says); an `option<T>` field is present and may
 //!   be null; a field marked optional may be absent;
 //! - a union is written in its `encoding` (serde's external tagging, variant names in the
-//!   declared `variantCase`): a unit variant is the bare name, a newtype variant `{Name: value}`
-//!   and a struct variant `{Name: {fields}}`;
-//! - `list<T>`, `map<K, V>` and the built-in representations are checked by shape and range, id
-//!   and scalar types by their representation and their `constraints` (`pattern`, `maxLength`);
+//!   declared `variantCase`): a unit variant is the bare name, a newtype variant `{Name: value}`,
+//!   a tuple variant `{Name: [values]}` and a struct variant `{Name: {fields}}`;
+//! - `list<T>`, `set<T>` (an array of distinct items), `map<K, V>` (also a map of maps) and the
+//!   built-in representations are checked by shape and range, id and scalar types by their
+//!   representation and their `constraints` (`pattern`, `maxLength`);
 //! - an enum is one of its values.
 //!
 //! The checker rejects a sample the specification does not describe: an unknown variant, a
 //! missing or extra field, a value of the wrong shape. Each type also has to be reached by at
 //! least one sample, so a kernel type added to the list below without a sample fails.
+//!
+//! The shape check alone would pass a specification that is looser than the kernel. So every
+//! sample is also decoded into the type specc generates from the specification
+//! (`strata_model::types`, re-exported from `strata-model-core`) and encoded again, and the JSON
+//! must come back unchanged: the generated `Expr`, with its tuple variants, the generated
+//! `TenantState`, with its map of record maps and its role sets, and every other kernel type
+//! read and write exactly what the kernel's serde does.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -24,10 +32,12 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use regex::Regex;
+use serde::de::DeserializeOwned;
 use serde::Serialize;
 use serde_json::Value as Json;
 use strata_kernel::testkit::{ctx, field, notes_world, object, principal_id, role, tenant_id};
 use strata_kernel::*;
+use strata_model::types as generated;
 use strata_spec_compiler::jsonc;
 
 struct Types(BTreeMap<String, Json>);
@@ -134,6 +144,18 @@ fn check(types: &Types, used: &mut BTreeSet<String>, ty: &str, value: &Json) -> 
             check(types, used, inner, item).map_err(|e| format!("[{i}]: {e}"))
         });
     }
+    if let Some(inner) = ty.strip_prefix("set<").and_then(|t| t.strip_suffix('>')) {
+        let items = value
+            .as_array()
+            .ok_or_else(|| format!("{value} is not a set"))?;
+        for (i, item) in items.iter().enumerate() {
+            if items[..i].contains(item) {
+                return Err(format!("[{i}]: {item} repeats an earlier item of a set"));
+            }
+            check(types, used, inner, item).map_err(|e| format!("[{i}]: {e}"))?;
+        }
+        return Ok(());
+    }
     if let Some(inner) = ty.strip_prefix("map<").and_then(|t| t.strip_suffix('>')) {
         let (key, val) = split_pair(inner);
         let entries = value
@@ -236,7 +258,7 @@ fn check_union(
 ) -> Result<(), String> {
     let encoding = &decl["encoding"];
     assert!(
-        encoding.get("tag").map_or(true, |t| t == "external"),
+        encoding.get("tag").is_none_or(|t| t == "external"),
         "{ty}: this checker reads externally tagged unions only"
     );
     let wire = |variant: &Json| {
@@ -250,7 +272,7 @@ fn check_union(
     let variants = decl["variants"].as_array().unwrap();
     let unit = |v: &Json| {
         v.get("fields")
-            .map_or(true, |f| f.as_array().unwrap().is_empty())
+            .is_none_or(|f| f.as_array().unwrap().is_empty())
     };
     match value {
         Json::String(name) => {
@@ -277,6 +299,24 @@ fn check_union(
             if v["newtype"] == true {
                 check(types, used, fields[0]["type"].as_str().unwrap(), content)
                     .map_err(|e| format!("{ty}::{name}: {e}"))
+            } else if v["tuple"] == true {
+                let items = content
+                    .as_array()
+                    .filter(|items| items.len() == fields.len())
+                    .ok_or_else(|| {
+                        format!(
+                            "{ty}::{name}: {content} is not an array of {} values",
+                            fields.len()
+                        )
+                    })?;
+                fields
+                    .iter()
+                    .zip(items)
+                    .enumerate()
+                    .try_for_each(|(i, (f, item))| {
+                        check(types, used, f["type"].as_str().unwrap(), item)
+                            .map_err(|e| format!("{ty}::{name}.{i}: {e}"))
+                    })
             } else {
                 let object = content
                     .as_object()
@@ -286,6 +326,52 @@ fn check_union(
         }
         _ => Err(format!("{ty}: {value} is not a variant")),
     }
+}
+
+/// `value` decodes into `T` and encodes back to exactly `value`.
+fn exact<T: Serialize + DeserializeOwned>(value: &Json) -> Result<(), String> {
+    let decoded: T = serde_json::from_value(value.clone()).map_err(|e| format!("decode: {e}"))?;
+    let back = serde_json::to_value(&decoded).unwrap();
+    (back == *value)
+        .then_some(())
+        .ok_or_else(|| format!("encoded back as {back}"))
+}
+
+/// The exact check of a sample of the kernel type the specification names `ty`, through the type
+/// specc generates for it; `None` for a type with no generated counterpart listed here.
+fn exact_for(ty: &str, value: &Json) -> Option<Result<(), String>> {
+    use generated as g;
+    Some(match ty {
+        "value" => exact::<g::Value>(value),
+        "field-type" => exact::<g::FieldType>(value),
+        "expr" => exact::<g::Expr>(value),
+        "intent" => exact::<g::Intent>(value),
+        "schema-change" => exact::<g::SchemaChange>(value),
+        "delta-op" => exact::<g::DeltaOp>(value),
+        "state-delta" => exact::<g::StateDelta>(value),
+        "event-body" => exact::<g::EventBody>(value),
+        "domain-event" => exact::<g::DomainEvent>(value),
+        "effect" => exact::<g::Effect>(value),
+        "output" => exact::<g::Output>(value),
+        "transition-result" => exact::<g::TransitionResult>(value),
+        "check" => exact::<g::Check>(value),
+        "error-kind" => exact::<g::ErrorKind>(value),
+        "domain-error" => exact::<g::DomainError>(value),
+        "need" => exact::<g::Need>(value),
+        "coverage" => exact::<g::Coverage>(value),
+        "principal" => exact::<g::Principal>(value),
+        "action" => exact::<g::Action>(value),
+        "resource" => exact::<g::Resource>(value),
+        "existing-data" => exact::<g::ExistingData>(value),
+        "record" => exact::<g::Record>(value),
+        "tenant-state" => exact::<g::TenantState>(value),
+        "state" => exact::<g::State>(value),
+        "tenant-schema" => exact::<g::TenantSchema>(value),
+        "read-request" => exact::<g::ReadRequest>(value),
+        "read-result" => exact::<g::ReadResult>(value),
+        "context" => exact::<g::Context>(value),
+        _ => return None,
+    })
 }
 
 // ---- sample values of the kernel types ------------------------------------------------------
@@ -889,6 +975,77 @@ fn the_kernel_types_are_the_serde_form_of_the_specification_types() {
     ];
     let missed: Vec<_> = expected.iter().filter(|t| !used.contains(**t)).collect();
     assert!(missed.is_empty(), "no sample reaches {missed:?}");
+}
+
+#[test]
+fn every_kernel_sample_decodes_exactly_into_the_generated_types() {
+    let mut failures = Vec::new();
+    let mut checked = BTreeSet::new();
+    for (ty, value) in samples() {
+        match exact_for(ty, &value) {
+            Some(Ok(())) => {
+                checked.insert(ty);
+            }
+            Some(Err(e)) => failures.push(format!("{ty}: {e}\n    sample: {value}")),
+            None => failures.push(format!("{ty}: no generated type is listed for it")),
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "kernel values the generated types do not read and write exactly:\n{}",
+        failures.join("\n")
+    );
+    // The expression language and the stored records, which WG-4927 could state only by shape.
+    for ty in [
+        "expr",
+        "record",
+        "tenant-state",
+        "coverage",
+        "delta-op",
+        "event-body",
+    ] {
+        assert!(
+            checked.contains(ty),
+            "no sample of {ty} was checked exactly"
+        );
+    }
+    let tenant = samples()
+        .into_iter()
+        .find(|(ty, _)| *ty == "tenant-state")
+        .map(|(_, v)| v)
+        .unwrap();
+    let decoded: generated::TenantState = serde_json::from_value(tenant).unwrap();
+    assert!(
+        decoded.records.values().any(|by_id| !by_id.is_empty()),
+        "the tenant sample holds records, so the map of record maps was decoded"
+    );
+}
+
+#[test]
+fn the_generated_types_refuse_what_the_kernel_refuses() {
+    // A set that repeats an item: serde's BTreeSet would drop it; the generated decode refuses it.
+    let repeated =
+        serde_json::json!({"PutMember": {"principal": "alpha:owner", "roles": ["owner", "owner"]}});
+    assert!(serde_json::from_value::<generated::DeltaOp>(repeated).is_err());
+    let distinct = serde_json::json!({"PutMember": {"principal": "alpha:owner", "roles": ["editor", "owner"]}});
+    assert!(serde_json::from_value::<generated::DeltaOp>(distinct).is_ok());
+    // A tuple variant with the wrong number of positions or the wrong item types, which the
+    // WG-4927 stand-in (a newtype of a list of json) accepted.
+    for bad in [
+        serde_json::json!({"Cmp": ["Eq", {"Lit": "Null"}]}),
+        serde_json::json!({"Cmp": ["Equal", {"Lit": "Null"}, {"Lit": "Null"}]}),
+        serde_json::json!({"Var": ["Record"]}),
+        serde_json::json!({"If": [1, 2, 3]}),
+    ] {
+        assert!(
+            serde_json::from_value::<generated::Expr>(bad.clone()).is_err(),
+            "the generated Expr accepted {bad}"
+        );
+        assert!(
+            serde_json::from_value::<Expr>(bad.clone()).is_err(),
+            "the kernel Expr accepted {bad}"
+        );
+    }
 }
 
 #[test]

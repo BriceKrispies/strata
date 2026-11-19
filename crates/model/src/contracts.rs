@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::{prelude, types};
 
 /// The request of contract `decide-intent`: Decide an intent.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct DecideIntentRequest {
     /// Field `state`.
     pub state: types::State,
@@ -18,7 +18,7 @@ pub struct DecideIntentRequest {
 }
 
 /// The response of contract `decide-intent`: Decide an intent.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct DecideIntentResponse {
     /// Field `result`.
     pub result: types::TransitionResult,
@@ -127,7 +127,7 @@ impl fmt::Display for DecideIntentError {
 impl std::error::Error for DecideIntentError {}
 
 /// The request of contract `plan-intent-needs`: Plan the state an intent needs.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct PlanIntentNeedsRequest {
     /// Field `schema`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -156,7 +156,7 @@ impl fmt::Display for PlanIntentNeedsError {
 impl std::error::Error for PlanIntentNeedsError {}
 
 /// The request of contract `answer-read`: Answer a read against a snapshot.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct AnswerReadRequest {
     /// Field `state`.
     pub state: types::State,
@@ -212,7 +212,7 @@ impl fmt::Display for AnswerReadError {
 impl std::error::Error for AnswerReadError {}
 
 /// The request of contract `plan-read-needs`: Plan the state a read needs.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct PlanReadNeedsRequest {
     /// Field `schema`.
     pub schema: types::TenantSchema,
@@ -240,7 +240,7 @@ impl fmt::Display for PlanReadNeedsError {
 impl std::error::Error for PlanReadNeedsError {}
 
 /// The request of contract `check-record-visibility`: Decide whether a principal may read a record.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct CheckRecordVisibilityRequest {
     /// Field `tenant`.
     pub tenant: types::TenantState,
@@ -272,7 +272,7 @@ impl fmt::Display for CheckRecordVisibilityError {
 impl std::error::Error for CheckRecordVisibilityError {}
 
 /// The request of contract `apply-state-delta`: Apply an accepted state delta.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct ApplyStateDeltaRequest {
     /// Field `tenant`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -282,7 +282,7 @@ pub struct ApplyStateDeltaRequest {
 }
 
 /// The response of contract `apply-state-delta`: Apply an accepted state delta.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct ApplyStateDeltaResponse {
     /// Field `tenant`.
     pub tenant: types::TenantState,
@@ -307,7 +307,7 @@ impl fmt::Display for ApplyStateDeltaError {
 impl std::error::Error for ApplyStateDeltaError {}
 
 /// The request of contract `plan-schema-migration`: Plan a schema migration.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct PlanSchemaMigrationRequest {
     /// Field `tenant`.
     pub tenant: types::TenantState,
@@ -318,7 +318,7 @@ pub struct PlanSchemaMigrationRequest {
 }
 
 /// The response of contract `plan-schema-migration`: Plan a schema migration.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct PlanSchemaMigrationResponse {
     /// Field `plan`.
     pub plan: types::MigrationPlan,
@@ -470,7 +470,7 @@ pub struct LoadTenantRequest {
 }
 
 /// The response of contract `load-tenant`: Load a snapshot of one tenant.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct LoadTenantResponse {
     /// Field `state`.
     pub state: types::State,
@@ -506,7 +506,7 @@ pub struct LoadCompleteTenantRequest {
 }
 
 /// The response of contract `load-complete-tenant`: Load a complete snapshot of one tenant.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct LoadCompleteTenantResponse {
     /// Field `state`.
     pub state: types::State,
@@ -535,7 +535,7 @@ impl fmt::Display for LoadCompleteTenantError {
 impl std::error::Error for LoadCompleteTenantError {}
 
 /// The request of contract `commit-transition`: Commit an accepted transition.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct CommitTransitionRequest {
     /// Field `commit`.
     pub commit: types::Commit,
@@ -695,7 +695,7 @@ pub struct ListJournalAfterRequest {
 }
 
 /// The response of contract `list-journal-after`: List journal entries of a tenant after a revision.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct ListJournalAfterResponse {
     /// Field `entries`.
     pub entries: Vec<types::JournalEntry>,
@@ -1048,7 +1048,7 @@ pub struct LoadSnapshotRequest {
 }
 
 /// The response of contract `load-snapshot`: Load the state a snapshot holds.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct LoadSnapshotResponse {
     /// Field `tenant`.
     pub tenant: types::TenantState,
@@ -1142,7 +1142,7 @@ impl fmt::Display for ResetStoreError {
 impl std::error::Error for ResetStoreError {}
 
 /// The request of contract `execute-intent`: Decide an intent and commit it.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct ExecuteIntentRequest {
     /// Field `intent`.
     pub intent: types::Intent,
@@ -1151,7 +1151,7 @@ pub struct ExecuteIntentRequest {
 }
 
 /// The response of contract `execute-intent`: Decide an intent and commit it.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct ExecuteIntentResponse {
     /// Field `executed`.
     pub executed: types::ExecutedIntent,
@@ -6239,7 +6239,7 @@ impl fmt::Display for RunScenarioError {
 impl std::error::Error for RunScenarioError {}
 
 /// The request of contract `project-change`: Project a proposed change.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct ProjectChangeRequest {
     /// Field `scenario`.
     pub scenario: types::Scenario,
@@ -6248,7 +6248,7 @@ pub struct ProjectChangeRequest {
 }
 
 /// The response of contract `project-change`: Project a proposed change.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct ProjectChangeResponse {
     /// Field `projection`.
     pub projection: types::Projection,
@@ -6281,7 +6281,7 @@ impl fmt::Display for ProjectChangeError {
 impl std::error::Error for ProjectChangeError {}
 
 /// The request of contract `replay-journal`: Replay the journal of a tenant.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct ReplayJournalRequest {
     /// Field `tenant`.
     pub tenant: types::TenantId,
@@ -8266,7 +8266,7 @@ impl fmt::Display for RemoveTokenError {
 impl std::error::Error for RemoveTokenError {}
 
 /// The request of contract `evaluate-token`: Evaluate a token for a reader.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct EvaluateTokenRequest {
     /// Field `state`.
     pub state: types::State,
@@ -8724,7 +8724,7 @@ impl fmt::Display for SetListenerRuleError {
 impl std::error::Error for SetListenerRuleError {}
 
 /// The request of contract `preview-migration`: Preview a migration run.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct PreviewMigrationRequest {
     /// Field `tenant`.
     pub tenant: types::TenantId,
@@ -8733,7 +8733,7 @@ pub struct PreviewMigrationRequest {
 }
 
 /// The response of contract `preview-migration`: Preview a migration run.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct PreviewMigrationResponse {
     /// Field `plan`.
     pub plan: types::MigrationPlan,

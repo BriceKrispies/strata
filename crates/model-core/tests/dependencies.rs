@@ -3,22 +3,32 @@
 //!
 //! A source check in the style of `crates/runtime/tests/dependencies.rs`: it reads the manifest's
 //! dependency sections, and scans the sources for paths into crates that do I/O. The crate may
-//! depend on serde, serde_json, sha2 and regex only.
+//! depend on serde, serde_json, sha2 and regex, and on uuid (for uuid ids) with its `serde`
+//! feature only: default features off and no `v4` or other generator feature, so nothing in it
+//! can make a random or clock-based id.
 
 use std::path::{Path, PathBuf};
 
 /// The dependencies the pure crate may have.
-const ALLOWED: &[&str] = &["serde", "serde_json", "sha2", "regex"];
+const ALLOWED: &[&str] = &["serde", "serde_json", "sha2", "regex", "uuid"];
 
-/// Crates that must never appear, by package name: the runtime and what it brings in.
+/// Crates that must never appear, by package name: the runtime and what it brings in, and crates
+/// that do I/O, networking or randomness.
 const FORBIDDEN: &[&str] = &[
     "strata-runtime",
     "strata-model",
     "tokio",
     "axum",
+    "hyper",
+    "mio",
     "reqwest",
     "rusqlite",
+    "rand",
+    "getrandom",
 ];
+
+/// The only features the pure crate may turn on in uuid: decoding and encoding ids.
+const UUID_FEATURES: &[&str] = &["serde"];
 
 fn root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -59,6 +69,44 @@ fn declared(manifest: &str) -> Vec<String> {
         }
     }
     names
+}
+
+/// The uuid dependency's line in the manifest: `uuid = { ... }` (or `uuid = "..."`), if any.
+fn uuid_line(manifest: &str) -> Option<String> {
+    manifest
+        .lines()
+        .map(str::trim)
+        .find(|line| line.split(['=', ' ']).next() == Some("uuid"))
+        .map(str::to_string)
+}
+
+/// Why a uuid dependency line is not pure, or `None` when it is: default features must be off
+/// (they are `std`, which is harmless, but turning them off keeps the feature list exact) and
+/// every feature listed must be in [`UUID_FEATURES`], so `v4` (randomness) and the clock-based
+/// generators (`v1`, `v6`, `v7`) are refused.
+fn uuid_problem(line: &str) -> Option<String> {
+    if !line.contains("default-features = false") {
+        return Some(format!("uuid must turn default features off: {line}"));
+    }
+    let features = line
+        .split("features")
+        .filter_map(|rest| {
+            let list = rest.split('[').nth(1)?.split(']').next()?;
+            Some(list.to_string())
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    let extra: Vec<&str> = features
+        .split(',')
+        .map(|f| f.trim().trim_matches('"'))
+        .filter(|f| !f.is_empty() && !UUID_FEATURES.contains(f))
+        .collect();
+    if !extra.is_empty() {
+        return Some(format!(
+            "uuid may have only the features {UUID_FEATURES:?}, found {extra:?}: {line}"
+        ));
+    }
+    None
 }
 
 fn sources(dir: &Path, out: &mut Vec<PathBuf>) {
@@ -110,15 +158,18 @@ fn the_pure_crate_names_no_impure_crate_or_std_io_in_its_sources() {
         .iter()
         .map(|name| format!("{}::", name.replace('-', "_")))
         .collect();
+    // A uuid is named (`uuid::Uuid`), but never made: no generator of the uuid crate.
     patterns.extend(
         [
             "std::fs",
             "std::net",
             "std::env",
+            "std::io",
             "std::process",
             "std::time",
             "std::thread",
-            "uuid::",
+            "Uuid::new_v",
+            "Uuid::now_v",
         ]
         .map(str::to_string),
     );
@@ -160,4 +211,33 @@ fn the_check_would_catch_a_dependency() {
         !names.contains(&"x".to_string()),
         "package fields are not dependencies"
     );
+}
+
+#[test]
+fn uuid_is_declared_with_the_serde_feature_only() {
+    let manifest = std::fs::read_to_string(root().join("Cargo.toml")).unwrap();
+    if let Some(line) = uuid_line(&manifest) {
+        assert_eq!(uuid_problem(&line), None);
+    }
+}
+
+#[test]
+fn the_uuid_check_would_catch_a_generator_feature() {
+    let pure = "uuid = { version = \"1\", default-features = false, features = [\"serde\"] }";
+    assert_eq!(uuid_problem(pure), None);
+    for line in [
+        "uuid = { version = \"1\", default-features = false, features = [\"serde\", \"v4\"] }",
+        "uuid = { version = \"1\", default-features = false, features = [\"v7\"] }",
+        "uuid = { version = \"1\", features = [\"serde\"] }",
+        "uuid = \"1\"",
+    ] {
+        assert!(uuid_problem(line).is_some(), "{line} was accepted");
+    }
+    let manifest = format!(
+        "[dependencies]
+serde = \"1\"
+{pure}
+"
+    );
+    assert_eq!(uuid_line(&manifest).as_deref(), Some(pure));
 }

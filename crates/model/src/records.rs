@@ -1342,7 +1342,7 @@ impl RecGrant {
 /// Retention: Every version is kept in the schema history.
 ///
 /// Record `rec-schema`, owned by component `runtime`, schema version 1.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct RecSchema {
     /// Field `schema-version`.
     #[serde(rename = "schema-version")]

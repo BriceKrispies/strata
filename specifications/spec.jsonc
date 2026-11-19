@@ -36986,21 +36986,33 @@
         },
         {
           "name": "var",
-          "newtype": true,
+          "tuple": true,
           "fields": [
             {
-              "name": "value",
-              "type": "list<json>"
+              "name": "scope",
+              "type": "scope"
+            },
+            {
+              "name": "field",
+              "type": "string"
             }
           ]
         },
         {
           "name": "through",
-          "newtype": true,
+          "tuple": true,
           "fields": [
             {
-              "name": "value",
-              "type": "list<json>"
+              "name": "scope",
+              "type": "scope"
+            },
+            {
+              "name": "reference",
+              "type": "string"
+            },
+            {
+              "name": "field",
+              "type": "string"
             }
           ]
         },
@@ -37062,21 +37074,33 @@
         },
         {
           "name": "cmp",
-          "newtype": true,
+          "tuple": true,
           "fields": [
             {
-              "name": "value",
-              "type": "list<json>"
+              "name": "op",
+              "type": "cmp-op"
+            },
+            {
+              "name": "left",
+              "type": "expr"
+            },
+            {
+              "name": "right",
+              "type": "expr"
             }
           ]
         },
         {
           "name": "in",
-          "newtype": true,
+          "tuple": true,
           "fields": [
             {
-              "name": "value",
-              "type": "list<json>"
+              "name": "item",
+              "type": "expr"
+            },
+            {
+              "name": "list",
+              "type": "expr"
             }
           ]
         },
@@ -37112,21 +37136,29 @@
         },
         {
           "name": "contains",
-          "newtype": true,
+          "tuple": true,
           "fields": [
             {
-              "name": "value",
-              "type": "list<json>"
+              "name": "haystack",
+              "type": "expr"
+            },
+            {
+              "name": "needle",
+              "type": "expr"
             }
           ]
         },
         {
           "name": "starts-with",
-          "newtype": true,
+          "tuple": true,
           "fields": [
             {
-              "name": "value",
-              "type": "list<json>"
+              "name": "text",
+              "type": "expr"
+            },
+            {
+              "name": "prefix",
+              "type": "expr"
             }
           ]
         },
@@ -37142,11 +37174,19 @@
         },
         {
           "name": "if",
-          "newtype": true,
+          "tuple": true,
           "fields": [
             {
-              "name": "value",
-              "type": "list<json>"
+              "name": "condition",
+              "type": "expr"
+            },
+            {
+              "name": "then",
+              "type": "expr"
+            },
+            {
+              "name": "else",
+              "type": "expr"
             }
           ]
         }
@@ -37155,7 +37195,7 @@
         "tag": "external",
         "variantCase": "PascalCase"
       },
-      "description": "strata_kernel::Expr: the tenant expression language. The tuple variants Var(Scope,String), Through(Scope,String,String), Cmp(CmpOp,Expr,Expr), In(Expr,Expr), Contains(Expr,Expr), StartsWith(Expr,Expr) and If(Expr,Expr,Expr) are written as newtype variants of a json list, because the format has no tuple variant; the wire form is the same JSON array."
+      "description": "strata_kernel::Expr: the tenant expression language. Var(Scope, String), Through(Scope, String, String), Cmp(CmpOp, Box<Expr>, Box<Expr>), In, Contains, StartsWith (Box<Expr>, Box<Expr>) and If(Box<Expr>, Box<Expr>, Box<Expr>) are tuple variants, written as serde writes them: {\"Cmp\": [\"Eq\", a, b]}."
     },
     {
       "id": "field-def",
@@ -37326,14 +37366,14 @@
         },
         {
           "name": "actions",
-          "type": "list<action>"
+          "type": "set<action>"
         },
         {
           "name": "condition",
           "type": "option<expr>"
         }
       ],
-      "description": "strata_kernel::PolicyDef: actions is a BTreeSet<Action>: a list in ascending order without repeats."
+      "description": "strata_kernel::PolicyDef: actions is a BTreeSet<Action>."
     },
     {
       "id": "workflow-transition",
@@ -37382,14 +37422,14 @@
         },
         {
           "name": "initial",
-          "type": "list<string>"
+          "type": "set<string>"
         },
         {
           "name": "transitions",
           "type": "list<workflow-transition>"
         }
       ],
-      "description": "strata_kernel::WorkflowDef: initial is a BTreeSet<String>: a list in ascending order without repeats."
+      "description": "strata_kernel::WorkflowDef: initial is a BTreeSet<String>."
     },
     {
       "id": "order-key",
@@ -37426,7 +37466,7 @@
         },
         {
           "name": "params",
-          "type": "list<string>"
+          "type": "set<string>"
         },
         {
           "name": "order",
@@ -37437,7 +37477,7 @@
           "type": "option<u32>"
         }
       ],
-      "description": "strata_kernel::QueryDef: params is a BTreeSet<String>: a list in ascending order without repeats."
+      "description": "strata_kernel::QueryDef: params is a BTreeSet<String>."
     },
     {
       "id": "arg-source",
@@ -37677,14 +37717,14 @@
         },
         {
           "name": "members",
-          "type": "map<principal-id, list<role-id>>"
+          "type": "map<principal-id, set<role-id>>"
         },
         {
           "name": "records",
-          "type": "map<object-type-id, json>"
+          "type": "map<object-type-id, map<record-id, record>>"
         }
       ],
-      "description": "strata_kernel::TenantState: members maps to BTreeSet<RoleId>: lists in ascending order without repeats. records is BTreeMap<ObjectTypeId, BTreeMap<RecordId, Record>>; the inner map is typed json because the type text parser does not read a map inside a map (Exegra splitTop ignores angle brackets)."
+      "description": "strata_kernel::TenantState: members is BTreeMap<PrincipalId, BTreeSet<RoleId>>, records is BTreeMap<ObjectTypeId, BTreeMap<RecordId, Arc<Record>>>."
     },
     {
       "id": "need",
@@ -37752,7 +37792,7 @@
           "fields": [
             {
               "name": "value",
-              "type": "list<need>"
+              "type": "set<need>"
             }
           ]
         }
@@ -37761,7 +37801,7 @@
         "tag": "external",
         "variantCase": "PascalCase"
       },
-      "description": "strata_kernel::Coverage: partial holds a BTreeSet<Need>: a list in ascending order without repeats."
+      "description": "strata_kernel::Coverage: partial holds a BTreeSet<Need>."
     },
     {
       "id": "state",
@@ -38302,7 +38342,7 @@
             },
             {
               "name": "roles",
-              "type": "list<role-id>"
+              "type": "set<role-id>"
             }
           ]
         },
@@ -38408,7 +38448,7 @@
             },
             {
               "name": "roles",
-              "type": "list<role-id>"
+              "type": "set<role-id>"
             }
           ]
         },
