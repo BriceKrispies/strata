@@ -23,6 +23,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
+import { generatedTests, rustLineShare } from './generated-share.mjs';
 
 const root = resolve(import.meta.dirname, '..');
 const exegraHome = resolve(root, process.env.EXEGRA_HOME ?? '../exegra');
@@ -372,6 +373,21 @@ const faultBased = behaviourClaims.filter((claim) => claim.faultBasis === 'fault
 const restatements = behaviourClaims.filter((claim) => claim.faultBasis === 'restatement');
 const unmarked = behaviourClaims.filter((claim) => claim.faultBasis !== 'fault' && claim.faultBasis !== 'restatement');
 console.log(`behaviour claims: ${behaviourClaims.length}; ${faultBased.length} hold under a modelled fault, ${restatements.length} are restatements${unmarked.length ? `; ${unmarked.length} carry no fault basis (${unmarked.map((claim) => claim.id).join(', ')})` : ''}.`);
+// Generated share: informational, never fails the gate (scripts/generated-share.mjs).
+const realised = { construction: 0, checked: 0, operational: 0, missing: 0 };
+for (const claim of requirements) {
+  if (['construction', 'checked', 'operational'].includes(claim.realisation)) realised[claim.realisation] += 1;
+  else realised.missing += 1;
+}
+const constructionPct = requirements.length ? ((realised.construction / requirements.length) * 100).toFixed(1) : '0.0';
+console.log(`construction share: ${realised.construction} of ${requirements.length} requirements (${constructionPct}%); checked ${realised.checked}, operational ${realised.operational}, missing ${realised.missing}`);
+const rust = rustLineShare(root);
+const generatedPct = rust.total ? ((rust.generated / rust.total) * 100).toFixed(1) : '0.0';
+console.log(`generated code: ${rust.generated} of ${rust.total} non-blank Rust lines under crates/ (${generatedPct}%); hand-written ${rust.handWritten}`);
+const cargoRecord = existsSync(join(resultsDir, 'cargo-test.txt')) ? readFileSync(join(resultsDir, 'cargo-test.txt'), 'utf8') : '';
+const genTests = generatedTests(root, cargoRecord);
+if (genTests.total === 0 && genTests.unmapped === 0) console.log('generated tests: none yet');
+else console.log(`generated tests: ${genTests.passed} of ${genTests.total} passed${genTests.unmapped ? `; ${genTests.unmapped} tests of unmapped test binaries not counted` : ''}`);
 if (noTest) console.log('RECORDED TEST RESULTS, NOT A RUN OF THE TESTS ON THIS CODE. Accepted only because --allow-recorded was given.');
 for (const note of notes) console.log(`note: ${note}`);
 console.log(passed ? 'GATE PASSED' : `GATE FAILED: ${failures.join('; ') || 'recorded test results not accepted'}`);
