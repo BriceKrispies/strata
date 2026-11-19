@@ -3,7 +3,7 @@
 use crate::app::{ApiError, App, Shared, LOG};
 use crate::auth::{self, has_service_token, Caller, Identity};
 use crate::signin::{
-    link, oidc, passkey, recover, recovery_codes, second, stepup, totp, SignInOutcome,
+    link, oidc, passkey, recover, recovery_codes, saml, second, stepup, totp, SignInOutcome,
 };
 use crate::{lab, ops, seed, ws};
 use axum::extract::ws::WebSocketUpgrade;
@@ -166,6 +166,46 @@ async fn oidc_start(
         oidc::start(app, caller, identity, &body)
     })
     .await
+}
+
+/// The SAML providers the sign-in page offers at the address it is served at.
+async fn saml_providers(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+) -> Result<Json<Json_>, ApiError> {
+    let caller = auth::caller(&headers)?;
+    let correlation = caller.correlation.clone();
+    app.blocking(move |app| saml::providers(app, &caller))
+        .await?
+        .map(Json)
+        .map_err(|error| error.with_correlation(&correlation))
+}
+
+/// Begin a sign-in at a SAML provider. Anyone may; to link a provider to the caller's own account
+/// the caller is signed in.
+async fn saml_start(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<Json_>,
+) -> Result<Json<Json_>, ApiError> {
+    as_caller_at(&app, &headers, move |app, caller, identity| {
+        saml::start(app, caller, identity, &body)
+    })
+    .await
+}
+
+/// This service's SAML metadata for a provider. Anyone may ask.
+async fn saml_metadata(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<Json_>,
+) -> Result<Json<Json_>, ApiError> {
+    let caller = auth::caller(&headers)?;
+    let correlation = caller.correlation.clone();
+    app.blocking(move |app| saml::metadata(app, &caller, &body))
+        .await?
+        .map(Json)
+        .map_err(|error| error.with_correlation(&correlation))
 }
 
 async fn passkey_register_start(
@@ -654,6 +694,9 @@ pub fn router(app: Shared) -> Router {
         .route("/internal/sign-in/link/request", post(link_request))
         .route("/internal/sign-in/oidc/providers", post(oidc_providers))
         .route("/internal/sign-in/oidc/start", post(oidc_start))
+        .route("/internal/sign-in/saml/providers", post(saml_providers))
+        .route("/internal/sign-in/saml/start", post(saml_start))
+        .route("/internal/sign-in/saml/metadata", post(saml_metadata))
         .route("/internal/passkeys", post(passkeys))
         .route("/internal/passkeys/challenge", post(passkey_challenge))
         .route(

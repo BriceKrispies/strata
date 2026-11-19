@@ -17,6 +17,7 @@
 
 use super::config::ProviderConfig;
 use crate::auth::same_secret;
+pub use crate::signin::federated::Asserted;
 use jsonwebtoken::errors::ErrorKind;
 use jsonwebtoken::jwk::JwkSet;
 use jsonwebtoken::{decode, decode_header, DecodingKey, Validation};
@@ -64,15 +65,6 @@ impl Refusal {
             Refusal::Subject => "token_subject",
         }
     }
-}
-
-/// What a verified token says about the person.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Asserted {
-    pub subject: String,
-    pub email: Option<String>,
-    pub email_verified: bool,
-    pub name: Option<String>,
 }
 
 #[derive(Deserialize)]

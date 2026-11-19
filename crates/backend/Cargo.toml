@@ -31,6 +31,10 @@ base64.workspace = true
 lettre.workspace = true
 jsonwebtoken.workspace = true
 totp-rs.workspace = true
+bergshamra-dsig.workspace = true
+bergshamra-keys.workspace = true
+uppsala.workspace = true
+flate2.workspace = true
 sha2.workspace = true
 reqwest = { workspace = true, features = ["native-tls"] }
 openssl = { version = "0.10", features = ["vendored"] }

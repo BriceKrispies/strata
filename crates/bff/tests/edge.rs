@@ -290,13 +290,16 @@ async fn the_session_cookie_carries_the_host_prefix_and_secure() {
     assert_eq!(body["session"]["authenticated"], false);
 }
 
-/// The `POST` routes of the browser-facing router, read from its definition so that a route
-/// added later is covered without anyone remembering to list it. `:action` stands for the two
-/// development actions.
+/// The `POST` routes of the browser-facing API, read from its definition so that a route added
+/// later is covered without anyone remembering to list it. `:action` stands for the two
+/// development actions. The routes outside `/api` are a provider's own posts, which come from
+/// another site and carry no session of the person's: they are tested on their own.
 fn post_routes() -> Vec<String> {
     include_str!("../src/routes.rs")
         .lines()
-        .filter(|line| line.contains(".route(\"") && line.contains("post("))
+        .filter(|line| {
+            line.contains(".route(\"") && line.contains("post(") && !line.contains("\"/federation/")
+        })
         .map(|line| line.split('"').nth(1).expect("a route path").to_string())
         .flat_map(|path| {
             if path.contains(":action") {
@@ -1475,4 +1478,103 @@ async fn sign_in_goes_through_the_method_named_and_passes_on_only_its_own_fields
         assert_eq!(status, expected, "{path}");
         assert!(reply.cookie.is_none());
     }
+}
+
+/// Verifies: FED-005, FED-250
+///
+/// The assertion consumer address takes the provider's post, from another site and without any
+/// cookie of the person's but the return address, and signs no one in: it moves the response and
+/// the relay state into the fragment of the sign-in page, with the return address as a query
+/// that is a path on the site, and clears that cookie. A post that is not a response, or whose
+/// relay state is not one this service makes, sends the page to say so. A site that is not served
+/// is not answered, and the metadata of a provider nobody configured is not found.
+#[tokio::test]
+async fn the_assertion_consumer_address_moves_the_response_to_the_page_and_signs_no_one_in() {
+    let edge = start().await;
+    let relay = "ab".repeat(32);
+    let post = |host: &str, body: String, cookie: Option<&str>| {
+        let mut request = edge
+            .http
+            .post(format!("{}/federation/saml/acs", edge.origin(host)))
+            .header("origin", "https://idp.acme.example")
+            .header("content-type", "application/x-www-form-urlencoded")
+            .body(body);
+        if let Some(cookie) = cookie {
+            request = request.header("cookie", cookie);
+        }
+        request
+    };
+    let sent = edge
+        .send(post(
+            "127.0.0.1",
+            format!("SAMLResponse=PHNhbWw%2BKw%3D%3D&RelayState={relay}&extra=ignored"),
+            Some("__Host-strata-return=%2Fdesk"),
+        ))
+        .await;
+    assert_eq!(sent.0, 303);
+    assert_eq!(
+        sent.2.headers["location"].to_str().unwrap(),
+        format!("/login?next=%2Fdesk#m=saml&r=PHNhbWw%2BKw%3D%3D&t={relay}")
+    );
+    let cookies: Vec<_> = sent
+        .2
+        .headers
+        .get_all("set-cookie")
+        .iter()
+        .map(|value| value.to_str().unwrap().to_string())
+        .collect();
+    assert!(
+        cookies
+            .iter()
+            .all(|cookie| !cookie.starts_with(SESSION_COOKIE)),
+        "the provider's post signs no one in: {cookies:?}"
+    );
+    assert!(
+        cookies
+            .iter()
+            .any(|cookie| cookie.starts_with("__Host-strata-return=;")
+                && cookie.contains("Max-Age=0")),
+        "{cookies:?}"
+    );
+
+    for (why, body, cookie) in [
+        (
+            "a relay state that is not one this service makes",
+            "SAMLResponse=PHNhbWw%2BKw%3D%3D&RelayState=short".to_string(),
+            None,
+        ),
+        ("no response", format!("RelayState={relay}"), None),
+        (
+            "a response that is not base64",
+            format!("SAMLResponse=%3Cscript%3E&RelayState={relay}"),
+            None,
+        ),
+        (
+            "a return address that is not a path on the site",
+            format!("SAMLResponse=PHNhbWw%2BKw%3D%3D&RelayState={relay}"),
+            Some("__Host-strata-return=%2F%2Fevil.example"),
+        ),
+    ] {
+        let sent = edge.send(post("127.0.0.1", body, cookie)).await;
+        assert_eq!(sent.0, 303, "{why}");
+        let location = sent.2.headers["location"].to_str().unwrap().to_string();
+        if why.starts_with("a return address") {
+            assert!(location.starts_with("/login#m=saml&"), "{why}: {location}");
+        } else {
+            assert_eq!(location, "/login#e=1", "{why}");
+        }
+    }
+
+    let (status, _, _) = edge
+        .send(
+            edge.post("127.0.0.1", "/federation/saml/acs", json!({}))
+                .header("host", "not-a-site.example"),
+        )
+        .await;
+    assert_eq!(status, 404, "a host that is not served");
+
+    let (status, _, _) = edge
+        .get("127.0.0.1", "/federation/saml/metadata/nobody", None)
+        .await;
+    assert_eq!(status, 404, "no such provider");
 }

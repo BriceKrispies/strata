@@ -301,7 +301,7 @@ export function login(page) {
           h('h2', { class: 'section__title', id: 'oidc-title' }, 'Sign in with your organisation'),
           page.oidc.error ? h('p', { class: 'form__error', role: 'alert', id: 'oidc-error' }, page.oidc.error) : null,
           page.oidc.providers.map((p) =>
-            h('button', { key: p.id, class: 'button button--quiet', type: 'button', disabled: page.oidc.busy, 'data-action': 'oidc.start', 'data-arg': JSON.stringify({ provider: p.id }) }, `Sign in with ${p.label}`),
+            h('button', { key: `${p.protocol}-${p.id}`, class: 'button button--quiet', type: 'button', disabled: page.oidc.busy, 'data-action': 'oidc.start', 'data-arg': JSON.stringify({ provider: p.id, protocol: p.protocol }) }, `Sign in with ${p.label}`),
           ),
         )
       : null,

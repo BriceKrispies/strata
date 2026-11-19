@@ -6,7 +6,8 @@ use strata_kernel::testkit::*;
 use strata_kernel::*;
 use strata_storage_api::{
     conformance, execute, Account, FederatedIdentity, OidcFlow, PasskeyCeremony, PasskeyChallenge,
-    PasskeyRecord, SessionRecord, Store, ThrottleRule, ThrottleSettle, ThrottleVerdict,
+    PasskeyRecord, SamlRequest, SessionRecord, Store, ThrottleRule, ThrottleSettle,
+    ThrottleVerdict,
 };
 use strata_storage_sqlite::{default_tenants_dir, tenant_file_name, SqliteStore};
 
@@ -152,7 +153,7 @@ fn committed_data_survives_a_reopen() {
     let file = store.tenant_file(&alpha).unwrap().unwrap();
     assert_eq!(
         count(&file, "SELECT COUNT(*) FROM tenant_migrations"),
-        6,
+        7,
         "the tenant file's steps"
     );
     assert!(store.health().unwrap().ok);
@@ -370,7 +371,7 @@ fn two_tenants_data_live_in_different_files() {
         count(
             &path,
             "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' \
-             AND name IN ('records', 'events', 'journal', 'sessions', 'accounts', 'tenant',              'login_throttle', 'passkeys', 'passkey_challenges', 'sign_in_links', 'oidc_flows',              'federated_identities', 'totp_factors', 'recovery_codes', 'pending_sign_ins',              'recovery_requests')"
+             AND name IN ('records', 'events', 'journal', 'sessions', 'accounts', 'tenant',              'login_throttle', 'passkeys', 'passkey_challenges', 'sign_in_links', 'oidc_flows',              'federated_identities', 'totp_factors', 'recovery_codes', 'pending_sign_ins',              'recovery_requests', 'saml_requests', 'saml_assertions')"
         ),
         0,
         "the control database holds no tenant content"
@@ -924,4 +925,89 @@ fn second_factor_state_is_durable_and_answers_once() {
     assert_eq!(store.recovery_codes_left(&alpha, &ines).unwrap(), 1);
     store.reset_tenant(&alpha).unwrap();
     assert!(store.totp(&alpha, &ines).unwrap().is_none());
+}
+
+/// Verifies: STO-002
+///
+/// A started SAML sign-in is a row: it survives a reopen, is taken once, and is returned even when
+/// lapsed (the caller compares the time). An accepted assertion is remembered once per tenant and
+/// provider, by one statement, so that a second presentation finds it; the memory outlives a
+/// reopen, is purged only when the assertion could no longer be accepted, and goes with the
+/// tenant.
+#[test]
+fn saml_sign_ins_are_taken_once_and_accepted_assertions_are_remembered_once() {
+    let path = fresh_path("saml");
+    let alpha = tenant_id("alpha");
+    let ines = principal_id("user:ines");
+    let request = |hash: &str, expires: i64| SamlRequest {
+        tenant: alpha.clone(),
+        id_hash: hash.into(),
+        provider: "acme".into(),
+        request_id: "_request-1".into(),
+        binding_hash: "b".into(),
+        origin: "https://alpha.example".into(),
+        principal: Some(ines.clone()),
+        expires_at: Timestamp(expires),
+    };
+    {
+        let store = SqliteStore::open(&path, Timestamp(1)).unwrap();
+        execute(
+            &store,
+            &Intent::CreateTenant {
+                name: "alpha".into(),
+                owner: principal_id("alpha:owner"),
+            },
+            &ctx("alpha", Principal::System, 10),
+        )
+        .unwrap();
+        store.put_saml_request(&request("live", 1000)).unwrap();
+        store.put_saml_request(&request("lapsed", 50)).unwrap();
+        assert!(store
+            .put_saml_assertion(&alpha, "acme", "assertion-1", Timestamp(500))
+            .unwrap());
+    }
+    let store = SqliteStore::open(&path, Timestamp(1)).unwrap();
+    assert_eq!(
+        store.take_saml_request(&alpha, "live").unwrap(),
+        Some(request("live", 1000))
+    );
+    assert!(
+        store.take_saml_request(&alpha, "live").unwrap().is_none(),
+        "taken once"
+    );
+    assert_eq!(
+        store
+            .take_saml_request(&alpha, "lapsed")
+            .unwrap()
+            .map(|r| r.expires_at),
+        Some(Timestamp(50)),
+        "a lapsed request is returned, for the caller to refuse"
+    );
+    store.put_saml_request(&request("later", 60)).unwrap();
+    assert_eq!(store.purge_saml_requests(Timestamp(100)).unwrap(), 1);
+
+    assert!(
+        !store
+            .put_saml_assertion(&alpha, "acme", "assertion-1", Timestamp(900))
+            .unwrap(),
+        "an assertion that was accepted is remembered across a reopen"
+    );
+    assert!(
+        store
+            .put_saml_assertion(&alpha, "other", "assertion-1", Timestamp(500))
+            .unwrap(),
+        "one provider's identifier is not another's"
+    );
+    assert_eq!(store.purge_saml_assertions(Timestamp(499)).unwrap(), 0);
+    assert_eq!(store.purge_saml_assertions(Timestamp(501)).unwrap(), 2);
+    assert!(
+        store
+            .put_saml_assertion(&alpha, "acme", "assertion-1", Timestamp(900))
+            .unwrap(),
+        "a purged identifier is free again, which is safe once the assertion has expired"
+    );
+    store.reset_tenant(&alpha).unwrap();
+    assert!(store
+        .put_saml_assertion(&alpha, "acme", "assertion-1", Timestamp(900))
+        .is_err());
 }

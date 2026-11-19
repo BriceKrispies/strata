@@ -25,6 +25,8 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use strata_kernel::TenantId;
 
+use crate::signin::saml::{config as saml_config, SamlProvider};
+
 /// The most a provider's answer may hold, so that a provider cannot fill this process's memory.
 const MAX_BYTES: usize = 256 * 1024;
 /// The most keys of a provider that are kept.
@@ -294,6 +296,10 @@ struct Cached {
 /// Every tenant's providers, and what has been fetched from them.
 pub struct Federation {
     providers: BTreeMap<TenantId, Vec<ProviderConfig>>,
+    /// The tenants' SAML providers. They share this value with the OpenID Connect ones because
+    /// what is decided about a person's address, which domain a provider is bound to, is decided
+    /// across both (FED-009).
+    saml: BTreeMap<TenantId, Vec<SamlProvider>>,
     pub(super) fetch: Arc<dyn Fetch>,
     cache: Mutex<BTreeMap<(TenantId, String), Cached>>,
     refresh_floor_ms: i64,
@@ -306,6 +312,14 @@ impl Debug for Federation {
                 "providers",
                 &self
                     .providers
+                    .iter()
+                    .map(|(tenant, list)| (tenant.as_str().to_string(), list.len()))
+                    .collect::<BTreeMap<_, _>>(),
+            )
+            .field(
+                "saml",
+                &self
+                    .saml
                     .iter()
                     .map(|(tenant, list)| (tenant.as_str().to_string(), list.len()))
                     .collect::<BTreeMap<_, _>>(),
@@ -348,6 +362,7 @@ impl Federation {
     pub fn new(providers: BTreeMap<TenantId, Vec<ProviderConfig>>, fetch: Arc<dyn Fetch>) -> Self {
         Federation {
             providers,
+            saml: BTreeMap::new(),
             fetch,
             cache: Mutex::new(BTreeMap::new()),
             refresh_floor_ms: REFRESH_FLOOR_MS,
@@ -382,6 +397,17 @@ impl Federation {
         Ok(Federation::new(providers, Arc::new(Http::default())))
     }
 
+    /// The same providers and these SAML providers of each tenant.
+    pub fn with_saml(mut self, saml: BTreeMap<TenantId, Vec<SamlProvider>>) -> Self {
+        self.saml = saml;
+        self
+    }
+
+    /// The same providers and the SAML providers of the platform configuration file.
+    pub fn with_saml_file(self, path: &Path) -> Result<Self, String> {
+        Ok(self.with_saml(saml_config::from_file(path)?))
+    }
+
     /// The least time between two fetches of a provider's keys that unknown key names cause.
     pub fn with_refresh_floor(mut self, ms: i64) -> Self {
         self.refresh_floor_ms = ms;
@@ -396,6 +422,14 @@ impl Federation {
         self.providers(tenant).iter().find(|p| p.id == id)
     }
 
+    pub fn saml_providers(&self, tenant: &TenantId) -> &[SamlProvider] {
+        self.saml.get(tenant).map_or(&[], Vec::as_slice)
+    }
+
+    pub fn saml_provider(&self, tenant: &TenantId, id: &str) -> Option<&SamlProvider> {
+        self.saml_providers(tenant).iter().find(|p| p.id == id)
+    }
+
     /// Whether an enabled provider of the tenant decides for the domain of this address
     /// (FED-009). An address with no domain is not bound.
     ///
@@ -408,6 +442,10 @@ impl Federation {
         self.providers(tenant)
             .iter()
             .any(|p| p.enabled && p.domains.iter().any(|bound| *bound == domain))
+            || self
+                .saml_providers(tenant)
+                .iter()
+                .any(|p| p.enabled && p.domains.iter().any(|bound| *bound == domain))
     }
 
     fn slot(&self, tenant: &TenantId, provider: &ProviderConfig) -> (TenantId, String) {

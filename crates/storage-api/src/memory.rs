@@ -6,9 +6,9 @@
 use crate::{
     check_event_sequence, partial_state, throttle_refund, throttle_step, Account, Capabilities,
     Commit, FederatedIdentity, Health, JournalEntry, OidcFlow, OutboxEntry, PasskeyChallenge,
-    PasskeyRecord, PendingSignIn, Receipt, RecoveryRequest, SessionRecord, SignInLink,
-    SnapshotInfo, StorageMigration, Store, StoreError, StoreResult, TenantSummary, ThrottleRow,
-    ThrottleRule, ThrottleSettle, ThrottleVerdict, TotpRecord,
+    PasskeyRecord, PendingSignIn, Receipt, RecoveryRequest, SamlRequest, SessionRecord,
+    SignInLink, SnapshotInfo, StorageMigration, Store, StoreError, StoreResult, TenantSummary,
+    ThrottleRow, ThrottleRule, ThrottleSettle, ThrottleVerdict, TotpRecord,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -33,6 +33,8 @@ struct Inner {
     challenges: BTreeMap<(TenantId, String), PasskeyChallenge>,
     links: BTreeMap<(TenantId, String), SignInLink>,
     flows: BTreeMap<(TenantId, String), OidcFlow>,
+    saml_requests: BTreeMap<(TenantId, String), SamlRequest>,
+    saml_assertions: BTreeMap<(TenantId, String, String), Timestamp>,
     identities: BTreeMap<(TenantId, String, String), FederatedIdentity>,
     totp: BTreeMap<(TenantId, PrincipalId), TotpRecord>,
     recovery_codes: BTreeMap<(TenantId, PrincipalId), BTreeSet<String>>,
@@ -483,6 +485,62 @@ impl Store for MemoryStore {
         Ok((count - inner.flows.len()) as u64)
     }
 
+    fn put_saml_request(&self, request: &SamlRequest) -> StoreResult<()> {
+        self.lock()?.saml_requests.insert(
+            (request.tenant.clone(), request.id_hash.clone()),
+            request.clone(),
+        );
+        Ok(())
+    }
+
+    fn take_saml_request(
+        &self,
+        tenant: &TenantId,
+        id_hash: &str,
+    ) -> StoreResult<Option<SamlRequest>> {
+        Ok(self
+            .lock()?
+            .saml_requests
+            .remove(&(tenant.clone(), id_hash.to_string())))
+    }
+
+    fn purge_saml_requests(&self, now: Timestamp) -> StoreResult<u64> {
+        let mut inner = self.lock()?;
+        let count = inner.saml_requests.len();
+        inner
+            .saml_requests
+            .retain(|_, request| request.expires_at >= now);
+        Ok((count - inner.saml_requests.len()) as u64)
+    }
+
+    fn put_saml_assertion(
+        &self,
+        tenant: &TenantId,
+        provider: &str,
+        id_hash: &str,
+        expires_at: Timestamp,
+    ) -> StoreResult<bool> {
+        let mut inner = self.lock()?;
+        if !inner.tenants.contains_key(tenant) {
+            return Err(StoreError::NotFound(format!("tenant {tenant}")));
+        }
+        let slot = (tenant.clone(), provider.to_string(), id_hash.to_string());
+        if inner.saml_assertions.contains_key(&slot) {
+            return Ok(false);
+        }
+        inner.saml_assertions.insert(slot, expires_at);
+        Ok(true)
+    }
+
+    fn purge_saml_assertions(&self, now: Timestamp) -> StoreResult<u64> {
+        let mut inner = self.lock()?;
+        let count = inner.saml_assertions.len();
+        inner
+            .saml_assertions
+            .retain(|_, expires_at| *expires_at >= now);
+        Ok((count - inner.saml_assertions.len()) as u64)
+    }
+
     fn put_identity(&self, identity: &FederatedIdentity) -> StoreResult<bool> {
         let mut inner = self.lock()?;
         if !inner.tenants.contains_key(&identity.tenant) {
@@ -821,6 +879,8 @@ impl Store for MemoryStore {
         inner.challenges.retain(|(t, _), _| t != tenant);
         inner.links.retain(|(t, _), _| t != tenant);
         inner.flows.retain(|(t, _), _| t != tenant);
+        inner.saml_requests.retain(|(t, _), _| t != tenant);
+        inner.saml_assertions.retain(|(t, _, _), _| t != tenant);
         inner.identities.retain(|(t, _, _), _| t != tenant);
         inner.totp.retain(|(t, _), _| t != tenant);
         inner.recovery_codes.retain(|(t, _), _| t != tenant);

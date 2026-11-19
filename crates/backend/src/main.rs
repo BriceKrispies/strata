@@ -22,6 +22,7 @@
 //! | `STRATA_STEP_UP_AGE_MS` | 15 minutes | How recent an authentication must be for a sensitive operation (IDN-019). |
 //! | `STRATA_RECOVERY_DELAY_MS` | 24 hours | How long account recovery waits before it can complete (IDN-265). |
 //! | `STRATA_FACTOR_KEY` | the service token | The secret TOTP secrets are sealed under. |
+//! | `STRATA_SAML_CONFIG` | unset | A JSON file of each tenant's SAML providers. Unset: no tenant has one. |
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -61,10 +62,16 @@ fn mailer(dev: bool) -> Result<Arc<dyn Mailer>, String> {
 /// The tenants' identity providers, from the platform configuration file when one is named.
 fn federation() -> Result<Federation, String> {
     let path = var("STRATA_OIDC_CONFIG", "");
-    if path.is_empty() {
-        return Ok(Federation::none());
+    let federation = if path.is_empty() {
+        Federation::none()
+    } else {
+        Federation::from_file(&PathBuf::from(path))?
+    };
+    let saml = var("STRATA_SAML_CONFIG", "");
+    if saml.is_empty() {
+        return Ok(federation);
     }
-    Federation::from_file(&PathBuf::from(path))
+    federation.with_saml_file(&PathBuf::from(saml))
 }
 
 /// What the realms ask of second factors. `STRATA_SECOND_FACTOR_REALMS` names the tenants whose
