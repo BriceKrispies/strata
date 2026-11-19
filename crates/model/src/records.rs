@@ -1339,6 +1339,9 @@ pub struct RecContent {
     /// Field `copy-state`.
     #[serde(rename = "copy-state")]
     pub copy_state: String,
+    /// Field `stored`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stored: Option<bool>,
 }
 
 /// The key of a [`RecContent`]: `object`, `record-id`.
@@ -5363,6 +5366,9 @@ pub struct RecSessionCopy {
     /// Field `outage-state`.
     #[serde(rename = "outage-state")]
     pub outage_state: String,
+    /// Field `checked`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checked: Option<bool>,
 }
 
 /// The key of a [`RecSessionCopy`]: `session-id`.

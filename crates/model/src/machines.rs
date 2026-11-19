@@ -224,7 +224,12 @@ pub mod emailed_link_flow_impl {
                 (State::MlIdleI, Event::MlRequested(_)) => {
                     let mut next = vars.clone();
                     next.expires_at = prelude::Timestamp(
-                        now.0.checked_add(900000i64).ok_or(overflow("ml-issue-i"))?,
+                        now.0
+                            .checked_add(900000i64)
+                            .filter(|__v| {
+                                (-9007199254740991i64..=9007199254740991i64).contains(__v)
+                            })
+                            .ok_or(overflow("ml-issue-i"))?,
                     );
                     let emitted_2 = Emitted::MlMailed(MlMailedPayload {});
                     Ok(Outcome::to(State::MlPendingI, next).emit(
@@ -805,6 +810,8 @@ pub mod gateway_session_flow_impl {
         /// Variable `checkedAt`.
         #[serde(rename = "checkedAt")]
         pub checked_at: prelude::Timestamp,
+        /// Variable `checked`.
+        pub checked: bool,
     }
 
     /// The payload of event `sr-notice`: Revocation notice.
@@ -921,6 +928,7 @@ pub mod gateway_session_flow_impl {
                 Vars {
                     valid: true,
                     checked_at: prelude::Timestamp(0i64),
+                    checked: false,
                 },
             )
         }
@@ -940,6 +948,10 @@ pub mod gateway_session_flow_impl {
                         None => true,
                     },
                     checked_at: record.checked_at,
+                    checked: match &record.checked {
+                        Some(v) => *v,
+                        None => false,
+                    },
                 },
             ))
         }
@@ -964,6 +976,7 @@ pub mod gateway_session_flow_impl {
                 valid: Some(vars.valid),
                 session_state: state.id().to_string(),
                 outage_state: previous.outage_state.clone(),
+                checked: Some(vars.checked),
             })
         }
 
@@ -981,9 +994,14 @@ pub mod gateway_session_flow_impl {
                 }
                 (State::GsReadyI, Event::SrRequest(_)) => {
                     if vars.valid
+                        && vars.checked
+                        && vars.checked_at.0 <= now.0
                         && now
                             .0
                             .checked_sub(vars.checked_at.0)
+                            .filter(|__v| {
+                                (-9007199254740991i64..=9007199254740991i64).contains(__v)
+                            })
                             .ok_or(overflow("gs-accept-fresh-i"))?
                             < 5000i64
                     {
@@ -1001,11 +1019,17 @@ pub mod gateway_session_flow_impl {
                             ))
                         } else {
                             if vars.valid
-                                && now
-                                    .0
-                                    .checked_sub(vars.checked_at.0)
-                                    .ok_or(overflow("gs-recheck-i"))?
-                                    >= 5000i64
+                                && !(vars.checked
+                                    && vars.checked_at.0 <= now.0
+                                    && now
+                                        .0
+                                        .checked_sub(vars.checked_at.0)
+                                        .filter(|__v| {
+                                            (-9007199254740991i64..=9007199254740991i64)
+                                                .contains(__v)
+                                        })
+                                        .ok_or(overflow("gs-recheck-i"))?
+                                        < 5000i64)
                             {
                                 Ok(Outcome::to(State::GsCheckingI, vars.clone()).emit(
                                     "identity-service",
@@ -1021,12 +1045,13 @@ pub mod gateway_session_flow_impl {
                 (State::GsCheckingI, Event::SrLookupAnswer(payload)) => {
                     if payload.valid == true {
                         let mut next = vars.clone();
+                        next.checked = true;
                         next.checked_at = prelude::Timestamp(now.0);
-                        let emitted_2 = Emitted::SrAccepted(SrAcceptedPayload {});
+                        let emitted_3 = Emitted::SrAccepted(SrAcceptedPayload {});
                         Ok(Outcome::to(State::GsReadyI, next).emit(
                             "web-application",
                             Delivery::AtMostOnce,
-                            emitted_2,
+                            emitted_3,
                         ))
                     } else {
                         if payload.valid == false {
@@ -1061,7 +1086,7 @@ pub mod job_lease_flow_impl {
 
     use strata_runtime::{Delivery, Isolation, Machine, Outcome, RecordError, StepError, Time};
 
-    use crate::{records, types};
+    use crate::{prelude, records, types};
 
     /// The states of machine `job-lease-flow-impl`.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -1128,6 +1153,7 @@ pub mod job_lease_flow_impl {
     /// A worker reports a result with the token it holds.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
     pub struct WorkReportedPayload {
+        #[serde(deserialize_with = "prelude::safe_u64")]
         /// Field `token`.
         pub token: u64,
     }
@@ -1292,7 +1318,11 @@ pub mod job_lease_flow_impl {
             match (state, event) {
                 (State::JlWaitingI, Event::JobDue(_)) => {
                     let mut next = vars.clone();
-                    next.token = next.token.checked_add(1u64).ok_or(overflow("jl-grant-i"))?;
+                    next.token = next
+                        .token
+                        .checked_add(1u64)
+                        .filter(|__v| *__v <= 9007199254740991u64)
+                        .ok_or(overflow("jl-grant-i"))?;
                     let emitted_2 = Emitted::LeaseGranted(LeaseGrantedPayload {});
                     let timer_3 = Event::LeaseExpired(LeaseExpiredPayload {});
                     Ok(Outcome::to(State::JlLeasedI, next)
@@ -1304,6 +1334,7 @@ pub mod job_lease_flow_impl {
                     next.token = next
                         .token
                         .checked_add(1u64)
+                        .filter(|__v| *__v <= 9007199254740991u64)
                         .ok_or(overflow("jl-regrant-i"))?;
                     let emitted_2 = Emitted::LeaseGranted(LeaseGrantedPayload {});
                     let timer_3 = Event::LeaseExpired(LeaseExpiredPayload {});
@@ -1415,6 +1446,7 @@ pub mod origin_content_flow_impl {
     /// The origin answers with the current version.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
     pub struct EcOriginAnswerPayload {
+        #[serde(deserialize_with = "prelude::safe_u64")]
         /// Field `version`.
         pub version: u64,
     }
@@ -1528,6 +1560,7 @@ pub mod origin_content_flow_impl {
                 held: previous.held,
                 stored_at: previous.stored_at,
                 copy_state: previous.copy_state.clone(),
+                stored: previous.stored,
             })
         }
 
@@ -1543,6 +1576,7 @@ pub mod origin_content_flow_impl {
                     next.version = next
                         .version
                         .checked_add(1u64)
+                        .filter(|__v| *__v <= 9007199254740991u64)
                         .ok_or(overflow("oc-publish-i"))?;
                     next.changed_at = prelude::Timestamp(now.0);
                     let emitted_3 = Emitted::EcPurge(EcPurgePayload {});
@@ -1617,6 +1651,8 @@ pub mod edge_copy_flow_impl {
         /// Variable `storedAt`.
         #[serde(rename = "storedAt")]
         pub stored_at: prelude::Timestamp,
+        /// Variable `stored`.
+        pub stored: bool,
     }
 
     /// The payload of event `ec-purge`: Purge.
@@ -1636,6 +1672,7 @@ pub mod edge_copy_flow_impl {
     /// The origin answers with the current version.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
     pub struct EcOriginAnswerPayload {
+        #[serde(deserialize_with = "prelude::safe_u64")]
         /// Field `version`.
         pub version: u64,
     }
@@ -1720,6 +1757,7 @@ pub mod edge_copy_flow_impl {
                 Vars {
                     held: 1u64,
                     stored_at: prelude::Timestamp(0i64),
+                    stored: false,
                 },
             )
         }
@@ -1741,6 +1779,10 @@ pub mod edge_copy_flow_impl {
                     stored_at: match &record.stored_at {
                         Some(v) => *v,
                         None => prelude::Timestamp(0i64),
+                    },
+                    stored: match &record.stored {
+                        Some(v) => *v,
+                        None => false,
                     },
                 },
             ))
@@ -1772,6 +1814,7 @@ pub mod edge_copy_flow_impl {
                 held: Some(vars.held),
                 stored_at: Some(vars.stored_at),
                 copy_state: state.id().to_string(),
+                stored: Some(vars.stored),
             })
         }
 
@@ -1789,9 +1832,14 @@ pub mod edge_copy_flow_impl {
                 }
                 (State::EgReadyI, Event::EcRequest(_)) => {
                     if vars.held > 0u64
+                        && vars.stored
+                        && vars.stored_at.0 <= now.0
                         && now
                             .0
                             .checked_sub(vars.stored_at.0)
+                            .filter(|__v| {
+                                (-9007199254740991i64..=9007199254740991i64).contains(__v)
+                            })
                             .ok_or(overflow("eg-serve-i"))?
                             < 5000i64
                     {
@@ -1810,13 +1858,14 @@ pub mod edge_copy_flow_impl {
                 }
                 (State::EgFetchingI, Event::EcOriginAnswer(payload)) => {
                     let mut next = vars.clone();
+                    next.stored = true;
                     next.held = payload.version;
                     next.stored_at = prelude::Timestamp(now.0);
-                    let emitted_3 = Emitted::EcServed(EcServedPayload {});
+                    let emitted_4 = Emitted::EcServed(EcServedPayload {});
                     Ok(Outcome::to(State::EgReadyI, next).emit(
                         "web-application",
                         Delivery::AtMostOnce,
-                        emitted_3,
+                        emitted_4,
                     ))
                 }
                 _ => Ok(Outcome::to(*state, vars.clone())),
@@ -2496,7 +2545,7 @@ pub mod arc_outbox_consumer_flow_impl {
 
     use strata_runtime::{Delivery, Isolation, Machine, Outcome, RecordError, StepError, Time};
 
-    use crate::records;
+    use crate::{prelude, records};
 
     /// The states of machine `arc-outbox-consumer-flow-impl`.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -2538,6 +2587,7 @@ pub mod arc_outbox_consumer_flow_impl {
     /// The notice queue delivers an event notice to a subscriber.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
     pub struct ArcObDeliveredPayload {
+        #[serde(deserialize_with = "prelude::safe_u64")]
         /// Field `seq`.
         pub seq: u64,
     }
@@ -3303,6 +3353,9 @@ pub mod preview_link_flow_impl {
                     next.expires_at = prelude::Timestamp(
                         now.0
                             .checked_add(900000i64)
+                            .filter(|__v| {
+                                (-9007199254740991i64..=9007199254740991i64).contains(__v)
+                            })
                             .ok_or(overflow("pl-link-issued-i"))?,
                     );
                     Ok(Outcome::to(State::PlIssuedI, next))
@@ -4439,6 +4492,7 @@ pub mod guess_throttle_flow_impl {
                         next.failures = next
                             .failures
                             .checked_add(1u64)
+                            .filter(|__v| *__v <= 9007199254740991u64)
                             .ok_or(overflow("gti-wrong"))?;
                         let emitted_2 = Emitted::PwRefused(PwRefusedPayload {});
                         Ok(Outcome::to(State::GtiOpen, next).emit(
@@ -4452,6 +4506,7 @@ pub mod guess_throttle_flow_impl {
                             next.failures = next
                                 .failures
                                 .checked_add(1u64)
+                                .filter(|__v| *__v <= 9007199254740991u64)
                                 .ok_or(overflow("gti-wrong-last"))?;
                             let emitted_2 = Emitted::PwRefused(PwRefusedPayload {});
                             Ok(Outcome::to(State::GtiClosed, next).emit(
@@ -4496,7 +4551,7 @@ pub mod trigger_chain_flow_impl {
 
     use strata_runtime::{Delivery, Isolation, Machine, Outcome, RecordError, StepError, Time};
 
-    use crate::{records, types};
+    use crate::{prelude, records, types};
 
     /// The states of machine `trigger-chain-flow-impl`.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -4536,6 +4591,7 @@ pub mod trigger_chain_flow_impl {
     /// A committed change that may start a chain of triggers.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
     pub struct TcChangePayload {
+        #[serde(deserialize_with = "prelude::safe_u64")]
         /// Field `hop`.
         pub hop: u64,
         /// Field `correlation`.
@@ -4652,12 +4708,14 @@ pub mod trigger_chain_flow_impl {
                         next.accepted = next
                             .accepted
                             .checked_add(1u64)
+                            .filter(|__v| *__v <= 9007199254740991u64)
                             .ok_or(overflow("tci-accept"))?;
                         let emitted_2 = Emitted::TcJobCreated(TcJobCreatedPayload {});
                         let emitted_3 = Emitted::TcChange(TcChangePayload {
                             hop: payload
                                 .hop
                                 .checked_add(1u64)
+                                .filter(|__v| *__v <= 9007199254740991u64)
                                 .ok_or(overflow("tci-accept"))?,
                             correlation: types::CorrelationId(payload.correlation.0),
                         });
@@ -4731,6 +4789,8 @@ pub mod gateway_outage_flow_impl {
         /// Variable `checkedAt`.
         #[serde(rename = "checkedAt")]
         pub checked_at: prelude::Timestamp,
+        /// Variable `checked`.
+        pub checked: bool,
     }
 
     /// The payload of event `sr-request`: Request with the session.
@@ -4846,6 +4906,7 @@ pub mod gateway_outage_flow_impl {
                 State::GwiReady,
                 Vars {
                     checked_at: prelude::Timestamp(0i64),
+                    checked: false,
                 },
             )
         }
@@ -4861,6 +4922,10 @@ pub mod gateway_outage_flow_impl {
                 state,
                 Vars {
                     checked_at: record.checked_at,
+                    checked: match &record.checked {
+                        Some(v) => *v,
+                        None => false,
+                    },
                 },
             ))
         }
@@ -4885,6 +4950,7 @@ pub mod gateway_outage_flow_impl {
                 valid: previous.valid,
                 session_state: previous.session_state.clone(),
                 outage_state: state.id().to_string(),
+                checked: Some(vars.checked),
             })
         }
 
@@ -4896,11 +4962,16 @@ pub mod gateway_outage_flow_impl {
         ) -> Result<Outcome<Self>, StepError> {
             match (state, event) {
                 (State::GwiReady, Event::SrRequest(_)) => {
-                    if now
-                        .0
-                        .checked_sub(vars.checked_at.0)
-                        .ok_or(overflow("gwi-accept-fresh"))?
-                        < 5000i64
+                    if vars.checked
+                        && vars.checked_at.0 <= now.0
+                        && now
+                            .0
+                            .checked_sub(vars.checked_at.0)
+                            .filter(|__v| {
+                                (-9007199254740991i64..=9007199254740991i64).contains(__v)
+                            })
+                            .ok_or(overflow("gwi-accept-fresh"))?
+                            < 5000i64
                     {
                         Ok(Outcome::to(State::GwiReady, vars.clone()).emit(
                             "web-application",
@@ -4918,12 +4989,13 @@ pub mod gateway_outage_flow_impl {
                 (State::GwiChecking, Event::SrLookupAnswer(payload)) => {
                     if payload.valid == true {
                         let mut next = vars.clone();
+                        next.checked = true;
                         next.checked_at = prelude::Timestamp(now.0);
-                        let emitted_2 = Emitted::SrAccepted(SrAcceptedPayload {});
+                        let emitted_3 = Emitted::SrAccepted(SrAcceptedPayload {});
                         Ok(Outcome::to(State::GwiReady, next).emit(
                             "web-application",
                             Delivery::AtMostOnce,
-                            emitted_2,
+                            emitted_3,
                         ))
                     } else {
                         if payload.valid == false {
@@ -5166,9 +5238,13 @@ pub mod erasure_copy_flow_impl {
                 }
                 (State::EriHolding, Event::ErRead(_)) => {
                     if vars.erased
+                        && vars.erased_at.0 <= now.0
                         && now
                             .0
                             .checked_sub(vars.erased_at.0)
+                            .filter(|__v| {
+                                (-9007199254740991i64..=9007199254740991i64).contains(__v)
+                            })
                             .ok_or(overflow("eri-revalidate"))?
                             >= 2000i64
                     {
@@ -5627,6 +5703,7 @@ pub mod audit_chain_flow_impl {
                     next.head_seq = next
                         .head_seq
                         .checked_add(1u64)
+                        .filter(|__v| *__v <= 9007199254740991u64)
                         .ok_or(overflow("aci-append"))?;
                     let emitted_2 = Emitted::AuAppended(AuAppendedPayload {});
                     Ok(Outcome::to(State::AciOpen, next).emit(
@@ -5637,7 +5714,11 @@ pub mod audit_chain_flow_impl {
                 }
                 (State::AciOpen, Event::AuErase(_)) => {
                     let mut next = vars.clone();
-                    next.sealed = next.sealed.checked_add(1u64).ok_or(overflow("aci-seal"))?;
+                    next.sealed = next
+                        .sealed
+                        .checked_add(1u64)
+                        .filter(|__v| *__v <= 9007199254740991u64)
+                        .ok_or(overflow("aci-seal"))?;
                     let emitted_2 = Emitted::AuSealed(AuSealedPayload {});
                     Ok(Outcome::to(State::AciOpen, next).emit(
                         "subject-rights-service",
@@ -6495,6 +6576,7 @@ pub mod mail_dispatch_flow_impl {
                     next.attempts = next
                         .attempts
                         .checked_add(1u64)
+                        .filter(|__v| *__v <= 9007199254740991u64)
                         .ok_or(overflow("mdi-submit"))?;
                     next.key = payload.key.clone();
                     let emitted_3 = Emitted::EmSubmit(EmSubmitPayload {
@@ -6512,6 +6594,7 @@ pub mod mail_dispatch_flow_impl {
                     next.attempts = next
                         .attempts
                         .checked_add(1u64)
+                        .filter(|__v| *__v <= 9007199254740991u64)
                         .ok_or(overflow("mdi-resubmit"))?;
                     let emitted_2 = Emitted::EmSubmit(EmSubmitPayload {
                         key: next.key.clone(),
@@ -6725,6 +6808,7 @@ pub mod mail_adapter_flow_impl {
                         next.delivered_k1 = next
                             .delivered_k1
                             .checked_add(1u64)
+                            .filter(|__v| *__v <= 9007199254740991u64)
                             .ok_or(overflow("mai-deliver-k1"))?;
                         let emitted_2 = Emitted::EmAck(EmAckPayload {});
                         Ok(Outcome::to(State::MaiReady, next).emit_after(
@@ -6739,6 +6823,7 @@ pub mod mail_adapter_flow_impl {
                             next.delivered_k2 = next
                                 .delivered_k2
                                 .checked_add(1u64)
+                                .filter(|__v| *__v <= 9007199254740991u64)
                                 .ok_or(overflow("mai-deliver-k2"))?;
                             let emitted_2 = Emitted::EmAck(EmAckPayload {});
                             Ok(Outcome::to(State::MaiReady, next).emit_after(
@@ -7681,7 +7766,11 @@ pub mod migration_batch_flow_impl {
                 (State::MgiRunning, Event::MgBatchRun(_)) => {
                     if vars.cursor < 3u64 {
                         let mut next = vars.clone();
-                        next.cursor = next.cursor.checked_add(1u64).ok_or(overflow("mgi-batch"))?;
+                        next.cursor = next
+                            .cursor
+                            .checked_add(1u64)
+                            .filter(|__v| *__v <= 9007199254740991u64)
+                            .ok_or(overflow("mgi-batch"))?;
                         Ok(Outcome::to(State::MgiRunning, next))
                     } else {
                         if vars.cursor >= 3u64 {
@@ -8058,6 +8147,7 @@ pub mod tenant_move_flow_impl {
                     next.source_version = next
                         .source_version
                         .checked_add(1u64)
+                        .filter(|__v| *__v <= 9007199254740991u64)
                         .ok_or(overflow("tmi-write-source"))?;
                     let emitted_2 = Emitted::TmWriteAccepted(TmWriteAcceptedPayload {});
                     Ok(Outcome::to(State::TmiSource, next).emit(
@@ -8071,6 +8161,7 @@ pub mod tenant_move_flow_impl {
                     next.source_version = next
                         .source_version
                         .checked_add(1u64)
+                        .filter(|__v| *__v <= 9007199254740991u64)
                         .ok_or(overflow("tmi-write-copying"))?;
                     let emitted_2 = Emitted::TmWriteAccepted(TmWriteAcceptedPayload {});
                     Ok(Outcome::to(State::TmiCopying, next).emit(
@@ -8581,6 +8672,7 @@ pub mod source_throttle_flow_impl {
                             next.failures_a = next
                                 .failures_a
                                 .checked_add(1u64)
+                                .filter(|__v| *__v <= 9007199254740991u64)
                                 .ok_or(overflow("sti-fail-a"))?;
                             let emitted_2 = Emitted::SrcRefused(SrcRefusedPayload {});
                             Ok(Outcome::to(State::StiOpen, next).emit(
@@ -8594,6 +8686,7 @@ pub mod source_throttle_flow_impl {
                                 next.failures_b = next
                                     .failures_b
                                     .checked_add(1u64)
+                                    .filter(|__v| *__v <= 9007199254740991u64)
                                     .ok_or(overflow("sti-fail-b"))?;
                                 let emitted_2 = Emitted::SrcRefused(SrcRefusedPayload {});
                                 Ok(Outcome::to(State::StiOpen, next).emit(

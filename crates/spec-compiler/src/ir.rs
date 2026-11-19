@@ -395,6 +395,72 @@ pub struct Behavior {
     pub instances: Option<Instances>,
     /// `transaction.isolation`, as written.
     pub isolation: Option<String>,
+    /// The time units of the scenarios that run the behavior, distinct, in specification order
+    /// (Exegra's `machineTimeUnit`): a format-2 scenario's `timeUnit`, by default `us`; a format-1
+    /// scenario only when it names one. Bare-number delays are in this unit.
+    pub time_units: Vec<String>,
+}
+
+/// Nanoseconds per unit of a scenario clock or of a duration string.
+fn unit_ns(unit: &str) -> Option<u128> {
+    Some(match unit {
+        "ns" => 1,
+        "us" => 1_000,
+        "ms" => 1_000_000,
+        "s" => 1_000_000_000,
+        "min" => 60_000_000_000,
+        "h" => 3_600_000_000_000,
+        _ => return None,
+    })
+}
+
+impl Behavior {
+    /// The unit bare-number delays and `time` are in: the one unit of the scenarios that run the
+    /// behavior, `ms` when none constrains it, or the units found when they disagree.
+    pub fn time_unit(&self) -> Result<&str, &[String]> {
+        match self.time_units.as_slice() {
+            [] => Ok("ms"),
+            [one] => Ok(one),
+            many => Err(many),
+        }
+    }
+
+    /// A fixed delay (`after`) in whole milliseconds, the unit of generated timers: a bare number
+    /// in the behavior's time unit, or a duration string `"<decimal> <unit>"`. `None` when it is
+    /// neither, is not a whole number of milliseconds, or is 2^53 ms or more.
+    pub fn delay_ms(&self, after: &serde_json::Value) -> Option<u64> {
+        let ns: u128 = match after {
+            serde_json::Value::Number(n) => {
+                let unit = self.time_unit().ok()?;
+                u128::from(n.as_u64()?).checked_mul(unit_ns(unit)?)?
+            }
+            serde_json::Value::String(s) => {
+                let s = s.trim();
+                let split = s.find(|c: char| !(c.is_ascii_digit() || c == '.'))?;
+                let (num, unit) = (&s[..split], s[split..].trim());
+                let (int, frac) = num.split_once('.').unwrap_or((num, ""));
+                if int.is_empty()
+                    || !int.bytes().all(|b| b.is_ascii_digit())
+                    || !frac.bytes().all(|b| b.is_ascii_digit())
+                {
+                    return None;
+                }
+                let digits: u128 = format!("{int}{frac}").parse().ok()?;
+                let scale = 10u128.checked_pow(u32::try_from(frac.len()).ok()?)?;
+                let total = digits.checked_mul(unit_ns(unit)?)?;
+                if total % scale != 0 {
+                    return None;
+                }
+                total / scale
+            }
+            _ => return None,
+        };
+        if ns % 1_000_000 != 0 {
+            return None;
+        }
+        let ms = ns / 1_000_000;
+        (ms < 1 << 53).then(|| u64::try_from(ms).ok()).flatten()
+    }
 }
 
 /// A variable of a behavior.
@@ -519,4 +585,48 @@ pub struct Instances {
     pub stored_in: Option<String>,
     /// True when the instances are counted (`count`) rather than keyed.
     pub counted: bool,
+}
+
+#[cfg(test)]
+mod delay_tests {
+    use super::Behavior;
+    use serde_json::json;
+
+    fn behavior(units: &[&str]) -> Behavior {
+        Behavior {
+            id: "m".to_string(),
+            name: "M".to_string(),
+            description: None,
+            initial: None,
+            variables: Vec::new(),
+            states: Vec::new(),
+            transitions: Vec::new(),
+            storage: None,
+            instances: None,
+            isolation: None,
+            time_units: units.iter().map(|u| (*u).to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn a_bare_delay_is_in_the_scenario_unit() {
+        assert_eq!(behavior(&[]).delay_ms(&json!(5000)), Some(5000));
+        assert_eq!(behavior(&["ms"]).delay_ms(&json!(5000)), Some(5000));
+        assert_eq!(behavior(&["us"]).delay_ms(&json!(5000)), Some(5));
+        assert_eq!(behavior(&["s"]).delay_ms(&json!(2)), Some(2000));
+        // 5000 us is 5 ms; 2500 us is not a whole number of milliseconds.
+        assert_eq!(behavior(&["us"]).delay_ms(&json!(2500)), None);
+        // Scenarios that disagree leave a bare number without a unit.
+        assert_eq!(behavior(&["ms", "us"]).delay_ms(&json!(5)), None);
+    }
+
+    #[test]
+    fn a_duration_string_carries_its_unit() {
+        let b = behavior(&["us"]);
+        assert_eq!(b.delay_ms(&json!("1.5 s")), Some(1500));
+        assert_eq!(b.delay_ms(&json!("30 ms")), Some(30));
+        assert_eq!(b.delay_ms(&json!("2 min")), Some(120_000));
+        assert_eq!(b.delay_ms(&json!("2500 us")), None);
+        assert_eq!(b.delay_ms(&json!("soon")), None);
+    }
 }

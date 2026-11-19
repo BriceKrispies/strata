@@ -137,7 +137,8 @@ impl Loader {
                 .get("subject")
                 .and_then(Value::as_str)
                 .is_some_and(|s| client_components.contains(&s));
-            if let Some(b) = self.behavior(&entity, obj) {
+            if let Some(mut b) = self.behavior(&entity, obj) {
+                b.time_units = scenario_time_units(top, &entity);
                 if client {
                     self.client_machines.push(b);
                 } else {
@@ -687,6 +688,7 @@ impl Loader {
             storage,
             instances,
             isolation,
+            time_units: Vec::new(),
         })
     }
 
@@ -797,6 +799,61 @@ impl Loader {
             );
         Some(Effect::Other { kind })
     }
+}
+
+/// The distinct time units of the scenarios that run behavior `id`, in specification order, as
+/// Exegra's `machineTimeUnit` (`src/core/sim-input.js`) finds them: a scenario that needs format 2
+/// (`needsFormat2`) counts in its `timeUnit`, by default `us`; a format-1 scenario only when it
+/// names a `timeUnit`.
+fn scenario_time_units(top: &serde_json::Map<String, Value>, id: &str) -> Vec<String> {
+    let list = |v: Option<&Value>| v.and_then(Value::as_array).cloned().unwrap_or_default();
+    let behaviors = list(top.get("behaviors"));
+    let behavior = |bid: &str| {
+        behaviors
+            .iter()
+            .find(|b| b.get("id").and_then(Value::as_str) == Some(bid))
+    };
+    let format2 = |s: &Value| {
+        if !list(s.get("workloads")).is_empty()
+            || s.get("seed").is_some()
+            || s.get("horizon").is_some()
+        {
+            return true;
+        }
+        list(s.get("behaviors"))
+            .iter()
+            .filter_map(Value::as_str)
+            .any(|bid| {
+                behavior(bid).is_some_and(|b| {
+                    b.get("instances").is_some_and(|i| !i.is_null())
+                        || list(b.get("transitions")).iter().any(|t| {
+                            list(t.get("effects")).iter().any(|fx| {
+                                ["use", "acquire", "release", "timer", "cancel", "via"]
+                                    .iter()
+                                    .any(|k| fx.get(*k).is_some())
+                            })
+                        })
+                })
+            })
+    };
+    let mut units: Vec<String> = Vec::new();
+    for s in list(top.get("scenarios")) {
+        if !list(s.get("behaviors"))
+            .iter()
+            .any(|b| b.as_str() == Some(id))
+        {
+            continue;
+        }
+        let unit = match s.get("timeUnit").and_then(Value::as_str) {
+            Some(u) => u.to_string(),
+            None if format2(&s) => "us".to_string(),
+            None => continue,
+        };
+        if !units.contains(&unit) {
+            units.push(unit);
+        }
+    }
+    units
 }
 
 #[cfg(test)]

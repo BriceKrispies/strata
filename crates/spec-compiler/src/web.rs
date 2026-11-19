@@ -141,13 +141,13 @@ const RUNTIME: &str = r#"// @ts-check
 
 export class StepError extends Error {
   /**
-   * @param {'overflow' | 'unknown-state'} kind
+   * @param {'overflow' | 'unknown-state' | 'absent'} kind
    * @param {string} message
    */
   constructor(kind, message) {
     super(message);
     this.name = 'StepError';
-    /** @type {'overflow' | 'unknown-state'} */
+    /** @type {'overflow' | 'unknown-state' | 'absent'} */
     this.kind = kind;
   }
 }
@@ -411,9 +411,14 @@ impl JsScope for MachineScope {
                         js: format!("({read} ?? null)"),
                     });
                 }
+                // A field that is not an option must be present: an absent one refuses the step,
+                // as the Rust target refuses the event when decoding it.
                 Some(JsBinding {
                     ty: slot.ty.clone(),
-                    js: read,
+                    js: format!(
+                        "({read} ?? (() => {{ throw new StepError('absent', {}); }})())",
+                        sq(&format!("event field {name} is absent"))
+                    ),
                 })
             }
             _ => None,
@@ -1115,10 +1120,11 @@ impl<'a> Gen<'a> {
                         );
                         ok = false;
                     }
+                    // A bare number is in the machine's time unit (its scenarios'), converted to
+                    // milliseconds (Exegra docs/semantics.md, "Time").
                     let delay = match after {
                         None | Some(Value::Null) => Some(0),
-                        Some(Value::Number(n)) => n.as_u64().filter(|n| *n < 1 << 53),
-                        Some(_) => None,
+                        Some(v) => b.delay_ms(v),
                     };
                     let Some(delay) = delay else {
                         self.refuse(
@@ -1204,7 +1210,7 @@ impl<'a> Gen<'a> {
                         ));
                         continue;
                     }
-                    let Some(millis) = after.as_ref().and_then(Value::as_u64) else {
+                    let Some(millis) = after.as_ref().and_then(|v| b.delay_ms(v)) else {
                         self.refuse(
                             TIMER_AFTER,
                             format!("{what} of machine \"{}\" sets timer \"{name}\" with an \"after\" that is not a whole number of milliseconds.", b.id),

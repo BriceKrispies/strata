@@ -23,7 +23,11 @@
 //!
 //! Guards and values are translated by `strata-spec-expr`: a variable reads `vars.<field>` in a
 //! guard and the updated `next.<field>` in an effect, `event.<field>` reads the payload, and
-//! `time` reads the step's `now` (milliseconds since the Unix epoch). Timestamps, durations and
+//! `time` reads the step's `now` (milliseconds since the Unix epoch), which is what the simulator's
+//! `time` counts only for a machine whose scenarios count milliseconds (`specc.time-unit`
+//! otherwise); a bare-number delay is in the unit of the machine's scenarios
+//! (`Behavior::time_units`, Exegra's `machineTimeUnit`) and is converted to whole milliseconds, or
+//! refused when it is not a whole number of them. Timestamps, durations and
 //! declared identifiers and scalars are read as their representation, so `time + 15` is integer
 //! arithmetic in milliseconds, and written back through their constructors.
 
@@ -58,6 +62,9 @@ pub const EMIT_AFTER: &str = "specc.emit-after";
 pub const EMIT_UNADDRESSED: &str = "specc.emit-unaddressed";
 /// Code of a timer whose `after` is not a whole number of milliseconds.
 pub const TIMER_AFTER: &str = "specc.timer-after";
+/// Code of a machine that reads `time` while its scenarios count time in another unit than
+/// milliseconds (generated code's `time` is milliseconds since the Unix epoch).
+pub const TIME_UNIT: &str = "specc.time-unit";
 /// Code of any other effect the runtime cannot express.
 pub const EFFECT_UNSUPPORTED: &str = "specc.effect-unsupported";
 /// Code of counted instances (`instances.count`).
@@ -334,6 +341,44 @@ impl expr::Scope for MachineScope {
         self.used_overflow.set(true);
         let t = &self.transition;
         quote! { overflow(#t) }
+    }
+}
+
+/// The decoder that bounds a `u64` or `i64` payload field, and the attribute it needs beside it (a
+/// field of type `option<T>` that is not marked optional still defaults to `None` when absent).
+fn safe_decoder(t: &TypeRef, optional: bool) -> Option<(TokenStream, &'static str)> {
+    let (inner, opt_type) = match t {
+        TypeRef::Option(inner) => (inner.as_ref(), true),
+        other => (other, false),
+    };
+    let unsigned = match inner {
+        TypeRef::Builtin(Builtin::U64) => true,
+        TypeRef::Builtin(Builtin::I64) => false,
+        _ => return None,
+    };
+    let opt = optional || opt_type;
+    let decoder = match (unsigned, opt) {
+        (true, false) => "prelude::safe_u64",
+        (false, false) => "prelude::safe_i64",
+        (true, true) => "prelude::safe_opt_u64",
+        (false, true) => "prelude::safe_opt_i64",
+    };
+    let attr = if opt_type && !optional {
+        quote! { #[serde(default)] }
+    } else {
+        TokenStream::new()
+    };
+    Some((attr, decoder))
+}
+
+/// The machine's time unit, for a refusal: the unit, or the units its scenarios disagree on.
+fn unit_text(b: &Behavior) -> String {
+    match b.time_unit() {
+        Ok(u) => format!("scenario time unit {u}"),
+        Err(many) => format!(
+            "its scenarios disagree on the time unit: {}",
+            many.join(", ")
+        ),
     }
 }
 
@@ -668,6 +713,18 @@ impl<'a> Gen<'a> {
                     covered += 1;
                 }
             }
+        }
+        // `time` is the step's clock in milliseconds; the simulator's `time` counts the unit of
+        // the machine's scenarios, so the two agree only in milliseconds.
+        if self.used_time.get() && b.time_unit() != Ok("ms") {
+            self.refuse(
+                TIME_UNIT,
+                format!(
+                    "Machine \"{}\" reads time, but {}; generated code's time counts milliseconds, so its scenarios must use \"timeUnit\": \"ms\".",
+                    b.id,
+                    unit_text(b)
+                ),
+            );
         }
         if self.out.len() > errors_before {
             return None;
@@ -1424,15 +1481,16 @@ impl<'a> Gen<'a> {
                         );
                         ok = false;
                     }
+                    // A bare number is in the machine's time unit (its scenarios'), converted to
+                    // milliseconds (Exegra docs/semantics.md, "Time").
                     let delay = match after {
                         None | Some(Value::Null) => Some(0),
-                        Some(Value::Number(n)) => n.as_u64(),
-                        Some(_) => None,
+                        Some(v) => b.delay_ms(v),
                     };
                     let Some(delay) = delay else {
                         self.refuse(
                             EMIT_AFTER,
-                            format!("{what} of machine \"{}\" emits \"{event}\" after a delay that is not a whole number of milliseconds; generated code delays an emit by a fixed number of milliseconds only.", b.id),
+                            format!("{what} of machine \"{}\" emits \"{event}\" after a delay that is not a whole number of milliseconds in its time unit ({}); generated code delays an emit by a fixed number of milliseconds only.", b.id, unit_text(b)),
                         );
                         ok = false;
                         continue;
@@ -1494,11 +1552,11 @@ impl<'a> Gen<'a> {
                     event,
                     payload,
                 } => {
-                    let millis = after.as_ref().and_then(Value::as_u64);
+                    let millis = after.as_ref().and_then(|v| b.delay_ms(v));
                     let Some(millis) = millis else {
                         self.refuse(
                             TIMER_AFTER,
-                            format!("{what} of machine \"{}\" sets timer \"{name}\" with an \"after\" that is not a whole number of milliseconds.", b.id),
+                            format!("{what} of machine \"{}\" sets timer \"{name}\" with an \"after\" that is not a whole number of milliseconds in its time unit ({}).", b.id, unit_text(b)),
                         );
                         ok = false;
                         continue;
@@ -1679,14 +1737,23 @@ impl<'a> Gen<'a> {
                         TypeScope::Other,
                         &mut self.uses,
                     );
-                    Field {
+                    let tokens = Field {
                         wire_name: crate::wire::event_case(spec, event).name(&f.name),
                         rust_name: f.field.to_string(),
                         ty,
                         optional: f.optional,
                         doc: Doc::new(&format!("Field `{}`.", f.name)),
                     }
-                    .tokens()
+                    .tokens();
+                    // A u64 or i64 beyond +-(2^53 - 1) is refused when the payload is decoded,
+                    // as Exegra refuses it in a scenario (ready.number-bound).
+                    match safe_decoder(&TypeRef::parse(&f.type_name), f.optional) {
+                        Some((attr, decoder)) => {
+                            self.uses.prelude = true;
+                            quote! { #attr #[serde(deserialize_with = #decoder)] #tokens }
+                        }
+                        None => tokens,
+                    }
                 })
                 .collect();
             let mut doc = Doc::new(&format!(

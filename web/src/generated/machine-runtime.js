@@ -4,13 +4,13 @@
 
 export class StepError extends Error {
   /**
-   * @param {'overflow' | 'unknown-state'} kind
+   * @param {'overflow' | 'unknown-state' | 'absent'} kind
    * @param {string} message
    */
   constructor(kind, message) {
     super(message);
     this.name = 'StepError';
-    /** @type {'overflow' | 'unknown-state'} */
+    /** @type {'overflow' | 'unknown-state' | 'absent'} */
     this.kind = kind;
   }
 }
