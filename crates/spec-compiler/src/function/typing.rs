@@ -1,7 +1,15 @@
 //! Types of the body language, as Exegra types them (`typeFunction` in `src/core/function.js`),
-//! restricted to what specc compiles: booleans, strings, the integer types, ids and scalars over
-//! those, enums, structs, unions, lists, options, maps and results. `f64`, `timestamp`,
-//! `duration`, `bytes`, `uuid`, `json` and sets are refused (`specc.function-unsupported`).
+//! restricted to what specc compiles: booleans, strings, the integer types, `timestamp`, ids and
+//! scalars over those, enums, structs, unions (tuple variants included), lists, sets, options,
+//! maps and results. `f64`, `duration`, `bytes`, `uuid`, `json` and `shared<T>` are refused
+//! (`specc.function-unsupported`).
+//!
+//! - `timestamp` is a number type in Exegra, held as `prelude::Timestamp(i64)`: it is typed as an
+//!   alias over `i64` ([`Ty::timestamp`]), so it compares, computes and converts as an id over
+//!   `i64` does. Division of a timestamp is refused: Exegra divides it as a fraction.
+//! - `set<T>` is a list in Exegra (`typeStructure` gives `list` with `set: true`), so every list
+//!   operation takes one and a list stands where a set is expected and back. It is held as a
+//!   `BTreeSet<T>` ([`Ty::Set`]); what the operations give is a list (`Vec`), as in Exegra.
 //!
 //! Every node is annotated with its type, which the generator reads. A fold's step is typed a
 //! second time with the accumulator at the fold's joined type, so `acc = []` gets its item type.
@@ -22,12 +30,15 @@ pub(crate) enum Ty {
     Int(Builtin),
     /// A number literal, which takes the integer type of where it is used.
     Number,
-    /// An id or scalar type over a bool, string or integer representation.
+    /// An id or scalar type over a bool, string or integer representation; `timestamp` too, as
+    /// [`TIMESTAMP`] over `i64` ([`Ty::timestamp`]).
     Alias(String, Box<Ty>),
     Enum(String),
     Struct(String),
     Union(String),
     List(Box<Ty>),
+    /// `set<T>`: a list to Exegra, a `BTreeSet<T>` in Rust.
+    Set(Box<Ty>),
     Option(Box<Ty>),
     Map(Box<Ty>, Box<Ty>),
     Result(Box<Ty>, Box<Ty>),
@@ -37,9 +48,26 @@ pub(crate) enum Ty {
     Unknown,
 }
 
+/// The alias id of the built-in `timestamp` (no declared type can take a built-in's name).
+pub(crate) const TIMESTAMP: &str = "timestamp";
+
 impl Ty {
     pub(crate) fn list(of: Ty) -> Ty {
         Ty::List(Box::new(of))
+    }
+
+    pub(crate) fn set(of: Ty) -> Ty {
+        Ty::Set(Box::new(of))
+    }
+
+    /// The built-in `timestamp`: milliseconds since the epoch, `prelude::Timestamp(i64)`.
+    pub(crate) fn timestamp() -> Ty {
+        Ty::Alias(TIMESTAMP.to_string(), Box::new(Ty::Int(Builtin::I64)))
+    }
+
+    /// True for the built-in `timestamp`.
+    pub(crate) fn is_timestamp(&self) -> bool {
+        matches!(self, Ty::Alias(id, _) if id == TIMESTAMP)
     }
 
     pub(crate) fn option(of: Ty) -> Ty {
@@ -59,6 +87,7 @@ impl Ty {
             Ty::Number => "a number".into(),
             Ty::Alias(id, _) | Ty::Enum(id) | Ty::Struct(id) | Ty::Union(id) => id.clone(),
             Ty::List(of) => format!("list<{}>", of.text()),
+            Ty::Set(of) => format!("set<{}>", of.text()),
             Ty::Option(of) => format!("option<{}>", of.text()),
             Ty::Map(k, v) => format!("map<{}, {}>", k.text(), v.text()),
             Ty::Result(o, e) => format!("result<{}, {}>", o.text(), e.text()),
@@ -71,7 +100,7 @@ impl Ty {
     pub(crate) fn is_concrete(&self) -> bool {
         match self {
             Ty::Number | Ty::Unknown => false,
-            Ty::List(of) | Ty::Option(of) => of.is_concrete(),
+            Ty::List(of) | Ty::Set(of) | Ty::Option(of) => of.is_concrete(),
             Ty::Map(k, v) | Ty::Result(k, v) => k.is_concrete() && v.is_concrete(),
             Ty::Alias(_, r) => r.is_concrete(),
             _ => true,
@@ -133,7 +162,8 @@ pub(crate) fn assignable(from: &Ty, to: &Ty) -> bool {
         return fc == tc;
     }
     match (from, to) {
-        (Ty::List(a), Ty::List(b)) => assignable(a, b),
+        // A set is a list to Exegra.
+        (Ty::List(a) | Ty::Set(a), Ty::List(b) | Ty::Set(b)) => assignable(a, b),
         (Ty::Map(ak, av), Ty::Map(bk, bv)) => assignable(ak, bk) && assignable(av, bv),
         (Ty::Result(ao, ae), Ty::Result(bo, be)) => assignable(ao, bo) && assignable(ae, be),
         (Ty::Enum(a), Ty::Enum(b))
@@ -172,6 +202,17 @@ pub(crate) fn join(a: &Ty, b: &Ty) -> Option<Ty> {
     }
     match (a, b) {
         (Ty::List(x), Ty::List(y)) => return join(x, y).map(Ty::list),
+        (Ty::Set(x), Ty::Set(y)) => return join(x, y).map(Ty::set),
+        // A set and a list together: Exegra holds both as a list. A list of nothing yet (`[]`)
+        // takes the set's form; any other list keeps its own.
+        (Ty::Set(x), Ty::List(y)) | (Ty::List(y), Ty::Set(x)) => {
+            let item = join(x, y)?;
+            return Some(if is_open(y) {
+                Ty::set(item)
+            } else {
+                Ty::list(item)
+            });
+        }
         (Ty::Map(ak, av), Ty::Map(bk, bv)) => {
             return Some(Ty::map(join(ak, bk)?, join(av, bv)?));
         }
@@ -247,7 +288,8 @@ pub(crate) fn ty_of(spec: &Spec, t: &TypeRef) -> Result<Ty, Refusal> {
         TypeRef::List(of) => Ty::list(ty_of(spec, of)?),
         TypeRef::Option(of) => Ty::option(ty_of(spec, of)?),
         TypeRef::Map(k, v) => Ty::map(ty_of(spec, k)?, ty_of(spec, v)?),
-        TypeRef::Set(_) | TypeRef::Shared(_) => {
+        TypeRef::Set(of) => Ty::set(ty_of(spec, of)?),
+        TypeRef::Shared(_) => {
             return Err(unsupported(format!(
                 "the type {} is not compiled in functions yet",
                 t.text()
@@ -276,15 +318,7 @@ pub(crate) fn ty_of(spec: &Spec, t: &TypeRef) -> Result<Ty, Refusal> {
                 }
                 TypeKind::Enum { .. } => Ty::Enum(id.clone()),
                 TypeKind::Struct { .. } => Ty::Struct(id.clone()),
-                TypeKind::Union { variants, .. } => {
-                    if let Some(v) = variants.iter().find(|v| v.tuple) {
-                        return Err(unsupported(format!(
-                            "variant {} of {id} is a tuple variant, which functions do not build or take apart yet",
-                            v.name
-                        )));
-                    }
-                    Ty::Union(id.clone())
-                }
+                TypeKind::Union { .. } => Ty::Union(id.clone()),
             }
         }
     })
@@ -297,9 +331,10 @@ fn builtin(b: Builtin) -> Result<Ty, Refusal> {
         Builtin::U8 | Builtin::U16 | Builtin::U32 | Builtin::U64 | Builtin::I32 | Builtin::I64 => {
             Ty::Int(b)
         }
+        Builtin::Timestamp => Ty::timestamp(),
         other => {
             return Err(unsupported(format!(
-                "the built-in type {} is not compiled in functions yet (bool, string and the integer types are)",
+                "the built-in type {} is not compiled in functions yet (bool, string, timestamp and the integer types are)",
                 other.as_str()
             )))
         }
@@ -374,6 +409,9 @@ pub(crate) fn struct_fields(spec: &Spec, id: &str) -> Vec<FieldInfo> {
 pub(crate) struct VariantInfo {
     pub name: String,
     pub newtype: bool,
+    /// Written `Variant(T1, T2, ..)` in the generated type: its fields are positional. Functions
+    /// build it as `T.V{f: e, ..}` and take it apart as `V{f, ..}`, by the declared names.
+    pub tuple: bool,
     pub fields: Vec<FieldInfo>,
 }
 
@@ -390,6 +428,7 @@ pub(crate) fn variants(spec: &Spec, id: &str) -> Vec<VariantInfo> {
             .map(|v| VariantInfo {
                 name: v.name.clone(),
                 newtype: v.newtype,
+                tuple: v.tuple,
                 fields: v
                     .fields
                     .iter()
@@ -581,7 +620,7 @@ impl<'a> Checker<'a> {
     fn need_list(&self, t: &Ty, what: &str) -> Result<Ty, Refusal> {
         match t {
             Ty::Unknown | Ty::Never => Ok(Ty::Unknown),
-            Ty::List(of) => Ok((**of).clone()),
+            Ty::List(of) | Ty::Set(of) => Ok((**of).clone()),
             _ => Err(invalid(format!("{what} is {}, not a list", t.text()))),
         }
     }
@@ -807,11 +846,19 @@ impl<'a> Checker<'a> {
                     return Ok(Ty::Bool);
                 }
                 self.arith = true;
-                Ok(if a != Ty::Number && is_number(&a) {
+                let t = if a != Ty::Number && is_number(&a) {
                     a
                 } else {
                     b
-                })
+                };
+                if op == BinOp::Div && t.is_timestamp() {
+                    // Exegra checks integer arithmetic only for the integer types; it divides a
+                    // timestamp as a number, which can give a fraction an i64 cannot hold.
+                    return Err(unsupported(
+                        "\"/\" divides a timestamp, which Exegra computes as a number that can have a fraction, and the generated Timestamp(i64) cannot hold one",
+                    ));
+                }
+                Ok(t)
             }
             Kind::If(c, x, y) => {
                 let ct = self.walk(c, scope)?;
@@ -1135,8 +1182,13 @@ impl<'a> Checker<'a> {
                 let t = walk_args(self, op)?;
                 self.need_list(&t[0], "the first list of concat")?;
                 self.need_list(&t[1], "the second list of concat")?;
-                join(&t[0], &t[1]).ok_or_else(|| {
+                let j = join(&t[0], &t[1]).ok_or_else(|| {
                     invalid(format!("concat joins {} and {}", t[0].text(), t[1].text()))
+                })?;
+                // Concatenating sets gives a list (Exegra's join drops the set flag too).
+                Ok(match j {
+                    Ty::Set(of) => Ty::List(of),
+                    other => other,
                 })
             }
             "keys" => {
@@ -1152,7 +1204,7 @@ impl<'a> Checker<'a> {
             "get" => {
                 arity(2, op)?;
                 let t = walk_args(self, op)?;
-                if let Ty::List(of) = &t[0] {
+                if let Ty::List(of) | Ty::Set(of) = &t[0] {
                     if !is_number(&t[1]) {
                         return Err(invalid(format!(
                             "the index of get is {}, not a number",

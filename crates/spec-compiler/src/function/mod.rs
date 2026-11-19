@@ -25,11 +25,38 @@
 //! - `eval` and `check` of a language call its generated module ([`crate::language`]) through an
 //!   adapter that implements the module's environment traits over the environment struct.
 //!
+//! # Timestamps, sets and tuple variants
+//!
+//! - `timestamp` is `prelude::Timestamp(i64)`, a `Copy` value taken by value. Exegra types it as
+//!   a number, so it is compiled as an id over `i64` is: literals and `i64`s stand for it (built
+//!   as `Timestamp(n)`), it stands for them (`.0`), it compares and sorts by its `i64`, and
+//!   arithmetic on it is checked `i64` arithmetic wrapped back into `Timestamp`. An example writes
+//!   it as its integer. Dividing a timestamp is refused, since Exegra's division of it can give a
+//!   fraction.
+//! - `set<T>` is a `BTreeSet<T>`. Exegra has no set operations: a set is a list to it, and every
+//!   list operation takes one, iterating it in order (`iter()` of the `BTreeSet`); `get(s, i)`
+//!   is its `i`-th item. What the operations give is a list (`Vec`), concatenation too. A list
+//!   stands where a set is expected and back by collecting its items, converting each where the
+//!   item types differ as a single value would be (a `set<role-id>` passed as a `list<string>`);
+//!   a list literal there is built as a set, `[]` as an empty one. `s == []` is `is_empty()`.
+//!   An example writes a set as an array in the order the generated type derives, each item
+//!   once (anything else is refused), so that Exegra, which iterates the array as written,
+//!   iterates it as the `BTreeSet` does.
+//! - A tuple variant (`Variant(T1, T2, ..)`) is built and taken apart by its declared field
+//!   names, as Exegra writes it: `T.V{a: x, b: y}` is `T::V(x, y)` and the pattern `V{b}` is
+//!   `T::V(_, b)`. An example writes it as `{"V": {"a": .., "b": ..}}`.
+//!
+//! Literals and branches are built in the id or scalar expected of them: a list literal, `if`,
+//! `match` or `let` where a `list<role-id>` or `set<role-id>` is expected builds its string
+//! literals as `RoleId`s, and a string literal of a constrained id or scalar is built directly
+//! when it meets the type's constraints, which specc checks on the literal.
+//!
 //! # Ownership
 //!
-//! A parameter of a `Copy` type (bool, the integers, options of them) is taken by value; every
-//! other parameter by reference (`&T`, including `&String` and `&Vec<T>`, so the module allows
-//! `clippy::ptr_arg`). Lets own their values. Items bound by a list operation and bindings of a
+//! A parameter of a `Copy` type (bool, the integers, timestamp, options of them) is taken by
+//! value; every other parameter by reference (`&T`, including `&String` and `&Vec<T>`, so the
+//! module allows `clippy::ptr_arg`). Lets own their values. Items bound by a list operation and
+//! bindings of a
 //! match on a borrowed value are references. A value is cloned only where it must be owned (a
 //! constructor field, a list item, a returned value, a fold accumulator); comparisons, field
 //! reads, map lookups and iteration borrow.
@@ -47,10 +74,12 @@
 //!
 //! # Not compiled (refused)
 //!
-//! `f64`, `timestamp`, `duration`, `bytes`, `uuid`, `json` and sets; number literals with a
-//! fraction; reading or binding a boxed field (a field whose type holds its own type inline);
-//! an optional field of an option type; values of a constrained id or scalar built from their
-//! representation; mixing two integer types where a value is passed (rather than computed or
+//! `f64`, `duration`, `bytes`, `uuid`, `json` and `shared<T>`; number literals with a fraction;
+//! dividing a timestamp; `==` between a set and a list other than `[]`; an example set not
+//! written in order or with an item twice; reading or binding a boxed field (a field whose type
+//! holds its own type inline); an optional field of an option type; values of a constrained id
+//! or scalar built from their representation (but a string literal that meets the constraints);
+//! mixing two integer types where a value is passed (rather than computed or
 //! compared); names that become the same Rust name, or the name of a function.
 
 mod examples;
@@ -858,6 +887,189 @@ mod tests {
         );
         let d = refusals(&text);
         assert!(d.iter().any(|d| d.code == FUNCTION_INVALID), "{d:?}");
+    }
+
+    #[test]
+    fn a_timestamp_is_the_prelude_timestamp_and_computes_as_its_i64() {
+        let text = spec(
+            r#"{ "id": "later", "params": [{ "name": "at", "type": "timestamp" }, { "name": "by", "type": "i64" }],
+                 "returns": "timestamp", "body": "at + by",
+                 "examples": [{ "args": { "at": 1000, "by": 5 }, "result": 1005 }] },
+               { "id": "due", "params": [{ "name": "at", "type": "timestamp" }, { "name": "now", "type": "timestamp" }],
+                 "returns": "bool", "body": "at <= now",
+                 "examples": [{ "args": { "at": 1000, "now": 1000 }, "result": true }] },
+               { "id": "millis", "params": [{ "name": "at", "type": "timestamp" }], "returns": "i64", "body": "at",
+                 "examples": [{ "args": { "at": 7 }, "result": 7 }] }"#,
+            "",
+        );
+        let out = module(&text);
+        // Taken by value: Timestamp is Copy.
+        assert!(
+            out.contains("at : crate :: prelude :: Timestamp , by : i64"),
+            "{out}"
+        );
+        assert!(
+            out.contains("Result < crate :: prelude :: Timestamp , Fault >"),
+            "{out}"
+        );
+        assert!(out.contains("at . 0 . checked_add (by)"), "{out}");
+        assert!(out.contains("at . 0 <= now . 0"), "{out}");
+        assert!(out.contains("-> i64 { at . 0 }"), "{out}");
+        assert!(
+            out.contains("crate :: prelude :: Timestamp (1000)"),
+            "{out}"
+        );
+        assert!(!out.contains("types ::"), "{out}");
+    }
+
+    #[test]
+    fn dividing_a_timestamp_is_refused() {
+        let text = spec(
+            r#"{ "id": "half", "params": [{ "name": "at", "type": "timestamp" }], "returns": "timestamp", "body": "at / 2",
+                 "examples": [{ "args": { "at": 4 }, "result": 2 }] }"#,
+            "",
+        );
+        let d = refusals(&text);
+        assert!(
+            d.iter().any(
+                |d| d.code == FUNCTION_UNSUPPORTED && d.message.contains("divides a timestamp")
+            ),
+            "{d:?}"
+        );
+    }
+
+    const ROLE: &str = r#"{ "id": "role-id", "name": "Role", "kind": "id", "repr": "string" }"#;
+
+    #[test]
+    fn a_set_is_a_btreeset_that_list_operations_take() {
+        let text = spec(
+            r#"{ "id": "holds", "params": [{ "name": "roles", "type": "set<string>" }, { "name": "r", "type": "string" }],
+                 "returns": "bool", "body": "any(x in roles, x == r) && roles != []",
+                 "examples": [{ "args": { "roles": ["a", "b"], "r": "b" }, "result": true }] },
+               { "id": "distinct", "params": [{ "name": "items", "type": "list<string>" }], "returns": "set<string>",
+                 "body": "fold(r in sortBy(r in items, r), acc = [], if any(a in acc, a == r) then acc else concat(acc, [r]))",
+                 "examples": [{ "args": { "items": ["b", "a", "b"] }, "result": ["a", "b"] }] },
+               { "id": "nobody", "params": [], "returns": "set<string>", "body": "[]",
+                 "examples": [{ "args": {}, "result": [] }] },
+               { "id": "one", "params": [], "returns": "set<string>", "body": "['x']",
+                 "examples": [{ "args": {}, "result": ["x"] }] },
+               { "id": "names", "params": [{ "name": "roles", "type": "set<role-id>" }], "returns": "list<string>",
+                 "body": "roles", "examples": [{ "args": { "roles": ["a"] }, "result": ["a"] }] },
+               { "id": "plus", "params": [{ "name": "roles", "type": "set<string>" }], "returns": "list<string>",
+                 "body": "concat(roles, ['z'])", "examples": [{ "args": { "roles": ["a"] }, "result": ["a", "z"] }] }"#,
+            ROLE,
+        );
+        let out = module(&text);
+        assert!(
+            out.contains("roles : & std :: collections :: BTreeSet < String >"),
+            "{out}"
+        );
+        assert!(out.contains("roles . iter () . any"), "{out}");
+        assert!(out.contains("! roles . is_empty ()"), "{out}");
+        assert!(
+            out.contains(". into_iter () . collect :: < std :: collections :: BTreeSet < _ > > ()"),
+            "{out}"
+        );
+        assert!(
+            out.contains("std :: collections :: BTreeSet :: < String > :: new ()"),
+            "{out}"
+        );
+        assert!(
+            out.contains("std :: collections :: BTreeSet :: from ([\"x\" . to_string ()])"),
+            "{out}"
+        );
+        assert!(out.contains("map (| item_ | item_ . 0)"), "{out}");
+        assert!(out.contains("support :: concat"), "{out}");
+        // Examples write sets as BTreeSets.
+        assert!(
+            out.contains(
+                "std :: collections :: BTreeSet :: from ([\"a\" . to_string () , \"b\" . to_string ()])"
+            ),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn an_example_set_out_of_order_or_with_a_repeated_item_is_refused() {
+        for items in [r#"["b", "a"]"#, r#"["a", "a"]"#] {
+            let text = spec(
+                &format!(
+                    r#"{{ "id": "size", "params": [{{ "name": "s", "type": "set<string>" }}], "returns": "bool",
+                         "body": "s == []", "examples": [{{ "args": {{ "s": {items} }}, "result": false }}] }}"#
+                ),
+                "",
+            );
+            let d = refusals(&text);
+            assert!(
+                d.iter().any(|d| d.code == FUNCTION_UNSUPPORTED
+                    && d.message.contains("does not have item 2 after item 1")),
+                "{d:?}"
+            );
+        }
+    }
+
+    const CONSTRAINED_ROLE: &str = r#"{ "id": "role", "name": "Role", "kind": "id", "repr": "string",
+        "constraints": { "pattern": "^[a-z]+$", "maxLength": 8 } }"#;
+
+    #[test]
+    fn a_literal_where_a_set_of_constrained_ids_is_expected_is_built_as_one_when_it_meets_them() {
+        let body = |role: &str| {
+            spec(
+                &format!(
+                    r#"{{ "id": "anyone", "params": [{{ "name": "p", "type": "bool" }}], "returns": "set<role>",
+                         "body": "if p then ['{role}'] else []",
+                         "examples": [{{ "args": {{ "p": true }}, "result": ["{role}"] }}, {{ "args": {{ "p": false }}, "result": [] }}] }}"#
+                ),
+                CONSTRAINED_ROLE,
+            )
+        };
+        let out = module(&body("public"));
+        assert!(
+            out.contains("vec ! [types :: Role (\"public\" . to_string ())]"),
+            "{out}"
+        );
+        assert!(out.contains("Vec :: < types :: Role > :: new ()"), "{out}");
+        // A literal that breaks a constraint stays refused.
+        let d = refusals(&body("Public"));
+        assert!(
+            d.iter()
+                .any(|d| d.code == FUNCTION_UNSUPPORTED
+                    && d.message.contains("constrained type role")),
+            "{d:?}"
+        );
+    }
+
+    const GRANT: &str = r#"{ "id": "grant", "name": "Grant", "kind": "union", "variants": [
+        { "name": "capability", "newtype": true, "fields": [{ "name": "value", "type": "string" }] },
+        { "name": "object", "tuple": true, "fields": [{ "name": "object", "type": "string" }, { "name": "action", "type": "string" }] } ] }"#;
+
+    #[test]
+    fn a_tuple_variant_is_built_and_taken_apart_by_position() {
+        let text = spec(
+            r#"{ "id": "object-grant", "params": [{ "name": "o", "type": "string" }, { "name": "a", "type": "string" }],
+                 "returns": "grant", "body": "grant.object{action: a, object: o}",
+                 "examples": [{ "args": { "o": "post", "a": "read" }, "result": { "object": { "object": "post", "action": "read" } } }] },
+               { "id": "grant-action", "params": [{ "name": "g", "type": "grant" }], "returns": "string",
+                 "body": "match g { capability(name) => name, object{action} => action }",
+                 "examples": [{ "args": { "g": { "object": { "object": "post", "action": "read" } } }, "result": "read" },
+                              { "args": { "g": { "capability": "export" } }, "result": "export" }] }"#,
+            GRANT,
+        );
+        let out = module(&text);
+        assert!(
+            out.contains("types :: Grant :: Object (o . clone () , a . clone ())"),
+            "{out}"
+        );
+        assert!(
+            out.contains("types :: Grant :: Object (_ , action) =>"),
+            "{out}"
+        );
+        assert!(
+            out.contains(
+                "types :: Grant :: Object (\"post\" . to_string () , \"read\" . to_string ())"
+            ),
+            "{out}"
+        );
     }
 
     const TENANT: &str = r#"{ "id": "tenant", "name": "Tenant", "kind": "struct",

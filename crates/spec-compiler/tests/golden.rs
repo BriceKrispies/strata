@@ -182,6 +182,13 @@ fn functions_golden_output_matches_its_fixture_crate() {
         "pub fn check_version(",
         "pub fn next_version(",
         "fn check_version_example_1()",
+        // WG-4966: timestamps, sets and tuple variants.
+        "pub fn expires_at(",
+        "now: crate::prelude::Timestamp,",
+        "pub fn role_set(",
+        "roles: &std::collections::BTreeSet<String>,",
+        "types::Grant::Object(object, action) =>",
+        "fn grants_of_example_1()",
     ] {
         assert!(functions.contains(f), "no {f} in src/functions.rs");
     }

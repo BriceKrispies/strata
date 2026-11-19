@@ -21,7 +21,7 @@ use quote::{format_ident, quote};
 use super::syntax::{uses, Arm, BinOp, Expr, Kind, Op, Pattern, Res, UnOp};
 use super::typing::{
     cases, class, int_kind, is_number, match_on, struct_fields, unsupported, variants, Class,
-    MatchOn, Refusal, Sig, Ty,
+    MatchOn, Refusal, Sig, Ty, TIMESTAMP,
 };
 use crate::ir::Spec;
 use crate::naming;
@@ -126,6 +126,8 @@ struct Binding {
 pub(crate) fn is_copy(t: &Ty) -> bool {
     match t {
         Ty::Bool | Ty::Int(_) | Ty::Number => true,
+        // prelude::Timestamp is Copy.
+        Ty::Alias(..) if t.is_timestamp() => true,
         Ty::Option(of) => is_copy(of),
         _ => false,
     }
@@ -136,7 +138,11 @@ pub(crate) fn by_ref(t: &Ty) -> bool {
     !is_copy(t)
 }
 
+/// The path of a declared type, or of the prelude's `Timestamp` for the built-in `timestamp`.
 pub(crate) fn type_path(id: &str) -> TokenStream {
+    if id == TIMESTAMP {
+        return quote! { crate::prelude::Timestamp };
+    }
     let name = naming::ident(&naming::pascal(id).unwrap_or_default());
     quote! { types::#name }
 }
@@ -164,6 +170,10 @@ pub(crate) fn rust_ty(t: &Ty) -> Result<TokenStream, Refusal> {
         Ty::List(of) => {
             let of = rust_ty(of)?;
             quote! { Vec<#of> }
+        }
+        Ty::Set(of) => {
+            let of = rust_ty(of)?;
+            quote! { std::collections::BTreeSet<#of> }
         }
         Ty::Option(of) => {
             let of = rust_ty(of)?;
@@ -195,7 +205,9 @@ pub(crate) fn concretize(t: &Ty, hint: Option<&Ty>) -> Ty {
         },
         (Ty::Number, None) => Ty::Int(Builtin::I64),
         (Ty::Unknown | Ty::Never, Some(h)) => h.clone(),
-        (Ty::List(a), Some(Ty::List(b))) => Ty::list(concretize(a, Some(b))),
+        // A set and a list take each other's items; each keeps its own form.
+        (Ty::List(a), Some(Ty::List(b) | Ty::Set(b))) => Ty::list(concretize(a, Some(b))),
+        (Ty::Set(a), Some(Ty::List(b) | Ty::Set(b))) => Ty::set(concretize(a, Some(b))),
         (Ty::Option(a), Some(Ty::Option(b))) => Ty::option(concretize(a, Some(b))),
         (Ty::Map(k, v), Some(Ty::Map(hk, hv))) => {
             Ty::map(concretize(k, Some(hk)), concretize(v, Some(hv)))
@@ -206,9 +218,66 @@ pub(crate) fn concretize(t: &Ty, hint: Option<&Ty>) -> Ty {
         ),
         (_, Some(Ty::Option(inner))) if !matches!(t, Ty::Option(_)) => concretize(t, Some(inner)),
         (Ty::List(a), _) => Ty::list(concretize(a, None)),
+        (Ty::Set(a), _) => Ty::set(concretize(a, None)),
         (Ty::Option(a), _) => Ty::option(concretize(a, None)),
         (Ty::Map(k, v), _) => Ty::map(concretize(k, None), concretize(v, None)),
         _ => t.clone(),
+    }
+}
+
+/// The set a hint asks for, through options: a list literal written where it stands is built as
+/// that set.
+fn set_hint(hint: Option<&Ty>) -> Option<&Ty> {
+    match hint {
+        Some(Ty::Set(of)) => Some(of),
+        Some(Ty::Option(inner)) => set_hint(Some(inner)),
+        _ => None,
+    }
+}
+
+/// `t` with each bool, string or integer replaced by the id or scalar over it that `hint` has at
+/// that position, so that a literal is built as the id it stands for (`['public']` as a
+/// `set<role-id>`) instead of being converted after.
+fn refine(t: &Ty, hint: Option<&Ty>) -> Ty {
+    match (t, hint) {
+        (Ty::Bool | Ty::Str | Ty::Int(_), Some(h @ Ty::Alias(_, r))) if **r == *t => h.clone(),
+        (Ty::List(a), Some(Ty::List(b) | Ty::Set(b))) => Ty::list(refine(a, Some(b))),
+        (Ty::Set(a), Some(Ty::List(b) | Ty::Set(b))) => Ty::set(refine(a, Some(b))),
+        (Ty::Option(a), Some(Ty::Option(b))) => Ty::option(refine(a, Some(b))),
+        (Ty::Map(k, v), Some(Ty::Map(hk, hv))) => Ty::map(refine(k, Some(hk)), refine(v, Some(hv))),
+        (_, Some(Ty::Option(b))) if !matches!(t, Ty::Option(_)) => refine(t, Some(b)),
+        _ => t.clone(),
+    }
+}
+
+/// True for the expressions whose generated form follows what is expected of them: list
+/// literals, `if`, `match` and `let`, whose items or branches are built in the expected type.
+fn follows_hint(e: &Expr) -> bool {
+    matches!(
+        e.kind,
+        Kind::List(_) | Kind::If(..) | Kind::Match(..) | Kind::Let(..)
+    )
+}
+
+/// The type `e` is generated in where `hint` is expected, when the hint shapes it ([`Gen::value`]
+/// and [`Gen::borrow`]): its own, concretized, with literals and branches in the ids the hint
+/// has ([`refine`]).
+fn shaped(e: &Expr, hint: Option<&Ty>) -> Ty {
+    let t = concretize(&e.ty(), hint);
+    if follows_hint(e) {
+        refine(&t, hint)
+    } else {
+        t
+    }
+}
+
+/// The type `e` is held in where `hint` is expected: [`shaped`], and a set for a list literal
+/// written where a set is expected ([`Gen::raw`] builds it as one).
+fn held(e: &Expr, hint: Option<&Ty>) -> Ty {
+    let t = shaped(e, hint);
+    match (&e.kind, &t, set_hint(hint)) {
+        (Kind::List(_), Ty::List(of), Some(_)) => Ty::Set(of.clone()),
+        _ => t,
     }
 }
 
@@ -217,12 +286,61 @@ fn same(a: &Ty, b: &Ty) -> bool {
     match (a, b) {
         (Ty::Unknown | Ty::Never, _) | (_, Ty::Unknown | Ty::Never) => true,
         (Ty::Number, Ty::Int(_)) | (Ty::Int(_), Ty::Number) | (Ty::Number, Ty::Number) => true,
-        (Ty::List(x), Ty::List(y)) | (Ty::Option(x), Ty::Option(y)) => same(x, y),
+        (Ty::List(x), Ty::List(y)) | (Ty::Set(x), Ty::Set(y)) | (Ty::Option(x), Ty::Option(y)) => {
+            same(x, y)
+        }
         (Ty::Map(k, v), Ty::Map(k2, v2)) | (Ty::Result(k, v), Ty::Result(k2, v2)) => {
             same(k, k2) && same(v, v2)
         }
         _ => a == b,
     }
+}
+
+/// A string literal written where a constrained id or scalar over a string is expected (or an
+/// option of one), built directly when the literal meets the type's constraints: they are
+/// checked here, on the literal, so the value needs no check where it is built. `None` for
+/// anything else, which converts as usual (and a constrained type built from a value that is
+/// not such a literal stays refused).
+fn constrained_literal(spec: &Spec, e: &Expr, want: &Ty) -> Option<Code> {
+    let Kind::Str(s) = &e.kind else {
+        return None;
+    };
+    let (inner, some) = match want {
+        Ty::Option(of) => (of.as_ref(), true),
+        other => (other, false),
+    };
+    let Ty::Alias(id, repr) = inner else {
+        return None;
+    };
+    if **repr != Ty::Str || !is_constrained(spec, id) {
+        return None;
+    }
+    let c = &spec.type_decl(id)?.constraints;
+    let n = u64::try_from(s.chars().count()).unwrap_or(u64::MAX);
+    if c.min_length
+        .as_ref()
+        .and_then(serde_json::Number::as_u64)
+        .is_some_and(|min| n < min)
+        || c.max_length
+            .as_ref()
+            .and_then(serde_json::Number::as_u64)
+            .is_some_and(|max| n > max)
+    {
+        return None;
+    }
+    if let Some(p) = &c.pattern {
+        if !regex::Regex::new(p).ok()?.is_match(s) {
+            return None;
+        }
+    }
+    let p = type_path(id);
+    let lit = Literal::string(s);
+    let t = quote! { #p(#lit.to_string()) };
+    Some(if some {
+        Code::new(quote! { Some(#t) }, Prec::Postfix)
+    } else {
+        Code::new(t, Prec::Postfix)
+    })
 }
 
 fn is_constrained(spec: &Spec, id: &str) -> bool {
@@ -300,6 +418,8 @@ pub(crate) struct Gen<'a> {
     reserved: BTreeSet<String>,
     /// The `support` helpers used.
     pub helpers: BTreeSet<&'static str>,
+    /// The next [`Gen::raw`] is of a value whose type [`held`] gives, so the hint shapes it.
+    shape_next: bool,
 }
 
 type Gened<T> = Result<T, Refusal>;
@@ -318,6 +438,7 @@ impl<'a> Gen<'a> {
             scope: Vec::new(),
             reserved,
             helpers: BTreeSet::new(),
+            shape_next: false,
         }
     }
 
@@ -473,16 +594,24 @@ impl<'a> Gen<'a> {
 
     /// An owned value of type `want`.
     fn value(&mut self, e: &Expr, want: &Ty) -> Gened<Code> {
+        if let Some(c) = constrained_literal(self.spec, e, want) {
+            return Ok(c);
+        }
+        self.shape_next = true;
         let c = self.raw(e, Some(want))?;
-        let from = concretize(&e.ty(), Some(want));
+        let from = held(e, Some(want));
         let owned = self.own(c, &from);
         self.coerce(owned, &from, want)
     }
 
     /// A `&T` of type `want`.
     fn borrow(&mut self, e: &Expr, want: &Ty) -> Gened<Code> {
+        if let Some(c) = constrained_literal(self.spec, e, want) {
+            return Ok(Self::borrow_code(c));
+        }
+        self.shape_next = true;
         let c = self.raw(e, Some(want))?;
-        let from = concretize(&e.ty(), Some(want));
+        let from = held(e, Some(want));
         if same(&from, want) && c.form != Form::OptRef {
             return Ok(Self::borrow_code(c));
         }
@@ -552,6 +681,32 @@ impl<'a> Gen<'a> {
                 let t = c.recv();
                 Ok(Code::new(quote! { #t.0 }, Prec::Postfix).exits(exits))
             }
+            // Exegra holds a set as a list: where one stands for the other, the items are
+            // collected. A list that becomes a set is put in order and loses repeated items, as
+            // a BTreeSet holds it. Items of another type (an id where its representation is
+            // expected, say) are converted one by one, as a single value would be.
+            (Ty::List(a) | Ty::Set(a), Ty::List(b) | Ty::Set(b)) => {
+                let target = if matches!(to, Ty::Set(_)) {
+                    quote! { std::collections::BTreeSet<_> }
+                } else {
+                    quote! { Vec<_> }
+                };
+                let t = c.recv();
+                if same(a, b) {
+                    return Ok(Code::new(
+                        quote! { #t.into_iter().collect::<#target>() },
+                        Prec::Postfix,
+                    )
+                    .exits(exits));
+                }
+                let item = self.coerce(Code::new(quote! { item_ }, Prec::Postfix), a, b)?;
+                let it = &item.t;
+                Ok(Code::new(
+                    quote! { #t.into_iter().map(|item_| #it).collect::<#target>() },
+                    Prec::Postfix,
+                )
+                .exits(exits))
+            }
             (_, Ty::Alias(id, r)) if same(from, r) => {
                 if is_constrained(self.spec, id) {
                     return Err(unsupported(format!(
@@ -574,7 +729,14 @@ impl<'a> Gen<'a> {
 
     /// `e` in its own type (with `hint` deciding literals and empty collections).
     fn raw(&mut self, e: &Expr, hint: Option<&Ty>) -> Gened<Code> {
-        let eff = concretize(&e.ty(), hint);
+        // Only a value or borrow lets the hint shape the expression, since only they convert
+        // from the type [`held`] gives; every other caller reads the type it concretizes.
+        let shape = std::mem::take(&mut self.shape_next);
+        let eff = if shape {
+            shaped(e, hint)
+        } else {
+            concretize(&e.ty(), hint)
+        };
         match &e.kind {
             Kind::Num(text) => {
                 let v: i128 = text
@@ -661,9 +823,18 @@ impl<'a> Gen<'a> {
                 let Ty::List(of) = &eff else {
                     return Err(unsupported("a list literal where no list is expected"));
                 };
+                // Where a set is expected the literal is built as one ([`held`]).
+                let set = shape && set_hint(hint).is_some();
                 if items.is_empty() {
                     let t = rust_ty(of)?;
-                    return Ok(Code::new(quote! { Vec::<#t>::new() }, Prec::Postfix));
+                    return Ok(if set {
+                        Code::new(
+                            quote! { std::collections::BTreeSet::<#t>::new() },
+                            Prec::Postfix,
+                        )
+                    } else {
+                        Code::new(quote! { Vec::<#t>::new() }, Prec::Postfix)
+                    });
                 }
                 let mut exits = false;
                 let mut out = Vec::new();
@@ -672,7 +843,15 @@ impl<'a> Gen<'a> {
                     exits = exits || v.exits;
                     out.push(v.t);
                 }
-                Ok(Code::new(quote! { vec![#(#out),*] }, Prec::Postfix).exits(exits))
+                Ok(if set {
+                    Code::new(
+                        quote! { std::collections::BTreeSet::from([#(#out),*]) },
+                        Prec::Postfix,
+                    )
+                    .exits(exits)
+                } else {
+                    Code::new(quote! { vec![#(#out),*] }, Prec::Postfix).exits(exits)
+                })
             }
             Kind::EmptyMap => {
                 if let Ty::Map(k, v) = &eff {
@@ -1115,7 +1294,12 @@ impl<'a> Gen<'a> {
                 let r = c.recv();
                 Code::new(quote! { #r.0 }, Prec::Postfix).exits(c.exits)
             }
-            Ty::Option(_) | Ty::List(_) | Ty::Map(..) | Ty::Struct(_) | Ty::Union(_) => {
+            Ty::Option(_)
+            | Ty::List(_)
+            | Ty::Set(_)
+            | Ty::Map(..)
+            | Ty::Struct(_)
+            | Ty::Union(_) => {
                 return Err(unsupported(format!(
                     "format writes {}, which is not a number, string, bool or enum value",
                     ty.text()
@@ -1248,6 +1432,9 @@ impl<'a> Gen<'a> {
                 } else if info.newtype {
                     let b = &idents[0];
                     quote! { #path(#b) }
+                } else if info.tuple {
+                    // Positional: each field's binder in declaration order, `_` for the rest.
+                    quote! { #path(#(#idents),*) }
                 } else {
                     let mut parts = Vec::new();
                     let mut all = true;
@@ -1278,14 +1465,15 @@ impl<'a> Gen<'a> {
 
     // --- constructors ----------------------------------------------------------------------------
 
-    fn field_init(
+    /// The value of a field a constructor sets (`None` when it is left out), boxed where the
+    /// type holds it boxed, and whether it is the bare name of the field.
+    fn field_value(
         &mut self,
         f: &super::typing::FieldInfo,
         given: Option<&Expr>,
-    ) -> Gened<(TokenStream, bool)> {
-        let fid = snake_ident(&f.name);
+    ) -> Gened<(TokenStream, bool, bool)> {
         let Some(e) = given else {
-            return Ok((quote! { #fid: None }, false));
+            return Ok((quote! { None }, false, false));
         };
         let want = f.read(self.spec)?;
         let v = self.value(e, &want)?;
@@ -1300,29 +1488,54 @@ impl<'a> Gen<'a> {
         } else {
             t.clone()
         };
-        if !f.boxed && v.ident && v.t.to_string() == fid.to_string() {
-            return Ok((quote! { #fid }, v.exits));
+        let fid = snake_ident(&f.name);
+        let shorthand = !f.boxed && v.ident && v.t.to_string() == fid.to_string();
+        Ok((value, v.exits, shorthand))
+    }
+
+    fn field_init(
+        &mut self,
+        f: &super::typing::FieldInfo,
+        given: Option<&Expr>,
+    ) -> Gened<(TokenStream, bool)> {
+        let fid = snake_ident(&f.name);
+        let (value, exits, shorthand) = self.field_value(f, given)?;
+        if shorthand {
+            return Ok((quote! { #fid }, exits));
         }
-        Ok((quote! { #fid: #value }, v.exits))
+        Ok((quote! { #fid: #value }, exits))
     }
 
     fn construct(&mut self, path: &[String], fields: &[(String, Expr)]) -> Gened<Code> {
-        let (p, declared) = if path.len() == 1 {
-            (type_path(&path[0]), struct_fields(self.spec, &path[0]))
+        let (p, declared, tuple) = if path.len() == 1 {
+            (
+                type_path(&path[0]),
+                struct_fields(self.spec, &path[0]),
+                false,
+            )
         } else {
             let v = variants(self.spec, &path[0])
                 .into_iter()
                 .find(|v| v.name == path[1])
                 .ok_or_else(|| unsupported(format!("{} has no variant {}", path[0], path[1])))?;
-            (variant_path(&path[0], &path[1]), v.fields)
+            (variant_path(&path[0], &path[1]), v.fields, v.tuple)
         };
         let mut inits = Vec::new();
         let mut exits = false;
         for f in &declared {
             let given = fields.iter().find(|(n, _)| n == &f.name).map(|(_, e)| e);
-            let (init, x) = self.field_init(f, given)?;
+            let (init, x) = if tuple {
+                // A tuple variant takes its fields by position, in declaration order.
+                let (value, x, _) = self.field_value(f, given)?;
+                (value, x)
+            } else {
+                self.field_init(f, given)?
+            };
             exits = exits || x;
             inits.push(init);
+        }
+        if tuple {
+            return Ok(Code::new(quote! { #p(#(#inits),*) }, Prec::Postfix).exits(exits));
         }
         let mut c = Code::new(quote! { #p { #(#inits),* } }, Prec::Postfix).exits(exits);
         c.brace = true;
@@ -1474,19 +1687,22 @@ impl<'a> Gen<'a> {
             }
         }
         let st = concretize(&src.ty(), None);
-        let Ty::List(of) = st else {
-            return Err(unsupported(format!("a list operation over {}", st.text())));
+        // A set iterates in its order, which is the order Exegra holds it in: its items are
+        // sorted and distinct wherever it is read from (an example, a declared field).
+        let of = match &st {
+            Ty::List(of) | Ty::Set(of) => (**of).clone(),
+            _ => return Err(unsupported(format!("a list operation over {}", st.text()))),
         };
-        let c = self.raw(src, Some(&Ty::List(of.clone())))?;
+        let c = self.raw(src, Some(&st))?;
         let c = if c.form == Form::OptRef {
-            self.own(c, &Ty::list((*of).clone()))
+            self.own(c, &st)
         } else {
             c
         };
         let r = c.recv();
         Ok((
             Code::new(quote! { #r.iter() }, Prec::Postfix).exits(c.exits),
-            *of,
+            of,
         ))
     }
 
@@ -1701,6 +1917,37 @@ impl<'a> Gen<'a> {
                     quote! {
                         match usize::try_from(#it) {
                             Ok(index_) => #r.get(index_).#copy(),
+                            Err(_) => None,
+                        }
+                    },
+                    Prec::Block,
+                )
+                .exits(c.exits || i.exits))
+            }
+            // The item at an index of a set, in its order.
+            Ty::Set(of) => {
+                if let Some(v) = const_int(&op.args[1]) {
+                    if v < 0 {
+                        return Ok(Code::new(quote! { None }, Prec::Postfix));
+                    }
+                    let n = Literal::usize_unsuffixed(usize::try_from(v).unwrap_or(usize::MAX));
+                    return Ok(Code::new(quote! { #r.iter().nth(#n) }, Prec::Postfix)
+                        .form(Form::OptRef)
+                        .exits(c.exits));
+                }
+                let IntOpd::Code(i, _) = self.int_operand(&op.args[1])? else {
+                    return Err(unsupported("the index of get"));
+                };
+                let it = &i.t;
+                let copy = if is_copy(of) {
+                    quote! { copied }
+                } else {
+                    quote! { cloned }
+                };
+                Ok(Code::new(
+                    quote! {
+                        match usize::try_from(#it) {
+                            Ok(index_) => #r.iter().nth(index_).#copy(),
                             Err(_) => None,
                         }
                     },

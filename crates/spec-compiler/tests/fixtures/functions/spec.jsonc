@@ -53,7 +53,8 @@
     {"id":"decision","name":"Decision","kind":"struct","fields":[{"name":"allowed","type":"bool"},{"name":"checks","type":"list<rule-check>"}]},
     {"id":"auth-state","name":"Authorization state","kind":"struct","fields":[{"name":"granted","type":"option<rule-check>"},{"name":"checks","type":"list<rule-check>"}]},
     {"id":"domain-error","name":"Domain error","kind":"union","variants":[{"name":"VersionConflict","fields":[{"name":"message","type":"string"}]}]},
-    {"id":"unit","name":"Unit","kind":"union","variants":[{"name":"Unit"}]}
+    {"id":"unit","name":"Unit","kind":"union","variants":[{"name":"Unit"}]},
+    {"id":"grant","name":"Grant","kind":"union","description":"strata_kernel::Grant: Object(ObjectTypeId, ObjectAction) is a tuple variant.","variants":[{"name":"Capability","newtype":true,"fields":[{"name":"name","type":"string"}]},{"name":"Object","tuple":true,"fields":[{"name":"object","type":"string"},{"name":"action","type":"action"}]}]}
   ],
   "languages": [
     {
@@ -231,6 +232,61 @@
         {"args":{"version":1},"result":2},
         {"args":{"version":1,"expected":1},"result":2},
         {"args":{"version":2,"expected":1},"error":{"VersionConflict":{"message":"record is at version 2, expected 1"}}}
+      ]
+    },
+    {
+      "id": "expires-at",
+      "description": "A timestamp moved on by a number of milliseconds (WG-4966): checked i64 arithmetic on Timestamp.",
+      "params": [{"name":"now","type":"timestamp"},{"name":"ttl","type":"i64"}],
+      "returns": "timestamp",
+      "body": "now + ttl",
+      "examples": [
+        {"args":{"now":5000,"ttl":250},"result":5250}
+      ]
+    },
+    {
+      "id": "expired",
+      "description": "Whether a deadline has passed: timestamps compare by their milliseconds (WG-4966).",
+      "params": [{"name":"at","type":"timestamp"},{"name":"now","type":"timestamp"}],
+      "returns": "bool",
+      "body": "at <= now",
+      "examples": [
+        {"args":{"at":5000,"now":5000},"result":true},
+        {"args":{"at":5001,"now":5000},"result":false}
+      ]
+    },
+    {
+      "id": "role-set",
+      "description": "A set of roles with one more (WG-4966): a set is a list to Exegra, so set-of takes it and its list result stands for a set.",
+      "params": [{"name":"roles","type":"set<string>"},{"name":"extra","type":"string"}],
+      "returns": "set<string>",
+      "body": "if any(r in roles, r == extra) then roles else call set-of(concat(roles, [extra]))",
+      "examples": [
+        {"args":{"roles":["public","writer"],"extra":"editor"},"result":["editor","public","writer"]},
+        {"args":{"roles":["public"],"extra":"public"},"result":["public"]},
+        {"args":{"roles":[],"extra":"public"},"result":["public"]}
+      ]
+    },
+    {
+      "id": "grants-of",
+      "description": "rules.rs: the grants a permission on an object type expands to, one per action in the order of the set (WG-4966).",
+      "params": [{"name":"object","type":"string"},{"name":"actions","type":"set<action>"}],
+      "returns": "list<grant>",
+      "body": "map(a in actions, grant.Object{object, action: a})",
+      "examples": [
+        {"args":{"object":"note","actions":["Read","Update"]},"result":[{"Object":{"object":"note","action":"Read"}},{"Object":{"object":"note","action":"Update"}}]},
+        {"args":{"object":"note","actions":[]},"result":[]}
+      ]
+    },
+    {
+      "id": "grant-text",
+      "description": "A grant as text (WG-4966): a tuple variant taken apart by its field names.",
+      "params": [{"name":"g","type":"grant"}],
+      "returns": "string",
+      "body": "match g { Capability(name) => format('capability {}', name), Object{object, action} => format('{}:{}', object, action) }",
+      "examples": [
+        {"args":{"g":{"Object":{"object":"note","action":"Delete"}}},"result":"note:Delete"},
+        {"args":{"g":{"Capability":"export"}},"result":"capability export"}
       ]
     }
   ]
