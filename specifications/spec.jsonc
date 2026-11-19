@@ -78857,42 +78857,6 @@
       "description": "strata_kernel::rules::Subject: the records a policy condition may read; record is old, else new."
     },
     {
-      "id": "rule-env",
-      "name": "Rule environment",
-      "kind": "struct",
-      "fields": [
-        {
-          "name": "record",
-          "type": "option<map<string, value>>"
-        },
-        {
-          "name": "old",
-          "type": "option<map<string, value>>"
-        },
-        {
-          "name": "new",
-          "type": "option<map<string, value>>"
-        },
-        {
-          "name": "param",
-          "type": "map<string, value>"
-        },
-        {
-          "name": "now",
-          "type": "value"
-        },
-        {
-          "name": "principal",
-          "type": "value"
-        },
-        {
-          "name": "has_role",
-          "type": "list<string>"
-        }
-      ],
-      "description": "strata_kernel::expr::Env without its lookup, in the form eval(tenant-rule-language, ...) takes: one field per scope of the language. A record scope is the record as record-scope gives it; principal is Str of a user id or Null; has_role is the roles held."
-    },
-    {
       "id": "policy-outcome",
       "name": "Policy outcome",
       "kind": "union",
@@ -89187,10 +89151,6 @@
       "description": "A record as a record scope of expr-env: its fields and its system attributes, as expr.rs attribute reads them ($created_by only when the record has a creator).",
       "params": [
         {
-          "name": "record",
-          "type": "record"
-        },
-        {
           "name": "r",
           "type": "record"
         }
@@ -89198,78 +89158,6 @@
       "returns": "map<string, value>",
       "body": "match r.created-by { Some(p) => insert(base, '$created_by', value.str(p)), None => base }",
       "examples": [
-        {
-          "args": {
-            "record": {
-              "id": 3,
-              "object": "category",
-              "version": 1,
-              "created-by": "user:ed",
-              "created-at": 1767312000000,
-              "updated-at": 1767312000000,
-              "fields": {
-                "name": {
-                  "str": "Craft"
-                },
-                "slug": {
-                  "str": "craft"
-                }
-              }
-            }
-          },
-          "result": {
-            "$created_at": {
-              "time": 1767312000000
-            },
-            "$created_by": {
-              "str": "user:ed"
-            },
-            "$id": {
-              "ref": 3
-            },
-            "$updated_at": {
-              "time": 1767312000000
-            },
-            "$version": {
-              "int": 1
-            },
-            "name": {
-              "str": "Craft"
-            },
-            "slug": {
-              "str": "craft"
-            }
-          }
-        },
-        {
-          "description": "A record the system created has no creator: $created_by is Null.",
-          "args": {
-            "record": {
-              "id": 3,
-              "object": "category",
-              "version": 1,
-              "created-by": null,
-              "created-at": 1767312000000,
-              "updated-at": 1767312000000,
-              "fields": {}
-            }
-          },
-          "result": {
-            "$created_at": {
-              "time": 1767312000000
-            },
-            "$created_by": "null",
-            "$id": {
-              "ref": 3
-            },
-            "$updated_at": {
-              "time": 1767312000000
-            },
-            "$version": {
-              "int": 1
-            }
-          }
-        },
         {
           "args": {
             "r": {
@@ -89507,7 +89395,7 @@
         },
         {
           "name": "env",
-          "type": "rule-env"
+          "type": "expr-env"
         },
         {
           "name": "acc",
@@ -89516,10 +89404,6 @@
         {
           "name": "what",
           "type": "string"
-        },
-        {
-          "name": "env",
-          "type": "expr-env"
         }
       ],
       "returns": "policy-progress",
@@ -133257,12 +133141,12 @@
           "error": {
             "rejected": {
               "kind": "evaluation",
-              "message": "publish: set published_at: cannot compare a time with a string",
+              "message": "publish: set published_at: cannot compare a timestamp with a string",
               "evidence": [
                 {
                   "rule": "intent:evaluation",
                   "passed": false,
-                  "detail": "publish: set published_at: cannot compare a time with a string"
+                  "detail": "publish: set published_at: cannot compare a timestamp with a string"
                 }
               ],
               "missing": null
@@ -178705,7 +178589,7 @@
         }
       ],
       "returns": "error-code",
-      "body": "match kind { unauthorized => if anonymous then error-code.unauthenticated else error-code.forbidden, tenant-not-found => error-code.not-found, unknown-object => error-code.not-found, unknown-record => error-code.not-found, unknown-query => error-code.not-found, version-conflict => error-code.conflict, schema-conflict => error-code.conflict, tenant-mismatch => error-code.internal, insufficient-state => error-code.internal, _ => error-code.invalid }",
+      "body": "match kind { unauthorized => if anonymous then error-code.unauthenticated else error-code.forbidden, tenant-not-found => error-code.not_found, unknown-object => error-code.not_found, unknown-record => error-code.not_found, unknown-query => error-code.not_found, version-conflict => error-code.conflict, schema-conflict => error-code.conflict, tenant-mismatch => error-code.internal, insufficient-state => error-code.internal, _ => error-code.invalid }",
       "examples": [
         {
           "args": {
@@ -178726,7 +178610,7 @@
             "kind": "unknown-query",
             "anonymous": false
           },
-          "result": "not-found"
+          "result": "not_found"
         },
         {
           "args": {
@@ -178754,14 +178638,14 @@
             "kind": "tenant-not-found",
             "anonymous": false
           },
-          "result": "not-found"
+          "result": "not_found"
         },
         {
           "args": {
             "kind": "unknown-object",
             "anonymous": false
           },
-          "result": "not-found"
+          "result": "not_found"
         },
         {
           "args": {
@@ -178877,7 +178761,7 @@
         }
       ],
       "returns": "error-code",
-      "body": "match kind { conflict => error-code.conflict, not-found => error-code.not-found, invalid => error-code.invalid, unavailable => error-code.unavailable, corrupt => error-code.internal }",
+      "body": "match kind { conflict => error-code.conflict, not-found => error-code.not_found, invalid => error-code.invalid, unavailable => error-code.unavailable, corrupt => error-code.internal }",
       "examples": [
         {
           "args": {
@@ -178895,7 +178779,7 @@
           "args": {
             "kind": "not-found"
           },
-          "result": "not-found"
+          "result": "not_found"
         },
         {
           "args": {
@@ -178919,7 +178803,7 @@
         }
       ],
       "returns": "api-error",
-      "body": "let code = call store-error-code(error.kind) in api-error{code, message: match code { conflict => 'Someone else changed this at the same moment. Try again.', unavailable => 'The service is not available right now.', not-found => 'That could not be found.', invalid => 'The request could not be stored.', _ => 'Something went wrong on our side.' }, failed: [], correlation: context.correlation}",
+      "body": "let code = call store-error-code(error.kind) in api-error{code, message: match code { conflict => 'Someone else changed this at the same moment. Try again.', unavailable => 'The service is not available right now.', not_found => 'That could not be found.', invalid => 'The request could not be stored.', _ => 'Something went wrong on our side.' }, failed: [], correlation: context.correlation}",
       "examples": [
         {
           "args": {
@@ -179001,7 +178885,7 @@
             }
           },
           "result": {
-            "code": "not-found",
+            "code": "not_found",
             "message": "That could not be found.",
             "failed": [],
             "correlation": "c-1"
@@ -183122,7 +183006,7 @@
       ],
       "returns": "map<field-id, value>",
       "errors": "api-failure",
-      "body": "match get(tenant.schema.objects, object) { None => fail(api-failure.rejected(api-error{code: error-code.not-found, message: format('no object type {}', object), failed: [], correlation: context.correlation})), Some(def) => match call coerce-fields(def, fields, {}, times) { Ok(m) => m, Err(e) => match e { message(p) => fail(api-failure.rejected(api-error{code: error-code.invalid, message: p, failed: [check{rule: format('input:{}.{}', object, call problem-field(p, fields)), passed: false, detail: p}], correlation: context.correlation})) } } }",
+      "body": "match get(tenant.schema.objects, object) { None => fail(api-failure.rejected(api-error{code: error-code.not_found, message: format('no object type {}', object), failed: [], correlation: context.correlation})), Some(def) => match call coerce-fields(def, fields, {}, times) { Ok(m) => m, Err(e) => match e { message(p) => fail(api-failure.rejected(api-error{code: error-code.invalid, message: p, failed: [check{rule: format('input:{}.{}', object, call problem-field(p, fields)), passed: false, detail: p}], correlation: context.correlation})) } } }",
       "examples": [
         {
           "args": {
@@ -183446,7 +183330,7 @@
           },
           "error": {
             "rejected": {
-              "code": "not-found",
+              "code": "not_found",
               "message": "no object type page",
               "kind": null,
               "failed": [],
@@ -183482,7 +183366,7 @@
       "let": [
         {
           "name": "site",
-          "expr": "match state.tenant { Some(t) => t, None => fail(api-failure.rejected(api-error{code: error-code.not-found, message: format('no site {}', context.tenant), failed: [], correlation: context.correlation})) }"
+          "expr": "match state.tenant { Some(t) => t, None => fail(api-failure.rejected(api-error{code: error-code.not_found, message: format('no site {}', context.tenant), failed: [], correlation: context.correlation})) }"
         }
       ],
       "body": "match mutation { create{object, fields} => intent.create-record{object, fields: try call mutation-fields(site, object, fields, context, times)}, update{object, id, fields, expected-version} => intent.update-record{object, id, fields: try call mutation-fields(site, object, fields, context, times), expected-version}, delete{object, id, expected-version} => intent.delete-record{object, id, expected-version} }",
@@ -184159,7 +184043,7 @@
           },
           "error": {
             "rejected": {
-              "code": "not-found",
+              "code": "not_found",
               "message": "no site alpha",
               "kind": null,
               "failed": [],
@@ -189851,7 +189735,7 @@
           },
           "error": {
             "rejected": {
-              "code": "not-found",
+              "code": "not_found",
               "message": "no query nothing",
               "kind": "UnknownQuery",
               "failed": [],
@@ -191134,7 +191018,7 @@
           },
           "error": {
             "rejected": {
-              "code": "not-found",
+              "code": "not_found",
               "message": "no query nothing",
               "kind": "UnknownQuery",
               "failed": [],
@@ -191182,11 +191066,11 @@
       "let": [
         {
           "name": "site",
-          "expr": "match state.tenant { Some(t) => t, None => fail(api-failure.rejected(api-error{code: error-code.not-found, message: format('no site {}', context.tenant), failed: [], correlation: context.correlation})) }"
+          "expr": "match state.tenant { Some(t) => t, None => fail(api-failure.rejected(api-error{code: error-code.not_found, message: format('no site {}', context.tenant), failed: [], correlation: context.correlation})) }"
         },
         {
           "name": "found",
-          "expr": "match call match-route(site.schema, segments, routes) { Some(m) => m, None => fail(api-failure.rejected(api-error{code: error-code.not-found, message: format('nothing at {}', path), failed: [], correlation: context.correlation})) }"
+          "expr": "match call match-route(site.schema, segments, routes) { Some(m) => m, None => fail(api-failure.rejected(api-error{code: error-code.not_found, message: format('nothing at {}', path), failed: [], correlation: context.correlation})) }"
         },
         {
           "name": "depends",
@@ -192235,7 +192119,7 @@
           },
           "error": {
             "rejected": {
-              "code": "not-found",
+              "code": "not_found",
               "message": "nothing at /pages/x",
               "kind": null,
               "failed": [],
