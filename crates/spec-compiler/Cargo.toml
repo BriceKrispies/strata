@@ -26,8 +26,11 @@ regex.workspace = true
 strata-spec-expr.workspace = true
 
 [dev-dependencies]
+axum.workspace = true
 strata-runtime.workspace = true
 strata-spec-compiler-machines-fixture = { path = "../spec-compiler-machines-fixture" }
+strata-spec-compiler-wiring-fixture = { path = "../spec-compiler-wiring-fixture" }
+tokio.workspace = true
 
 [lints]
 workspace = true
