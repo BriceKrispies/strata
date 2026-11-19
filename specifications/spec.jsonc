@@ -1681,11 +1681,13 @@
         {
           "name": "rejected",
           "condition": "The kernel rejected the intent: a DomainError of kind tenant-mismatch, tenant-exists, tenant-not-found, unauthorized, unknown-object, unknown-field, unknown-record, unknown-role, type-mismatch, missing-required, constraint-violated, unique-violated, dangling-reference, still-referenced, workflow-violation, version-conflict, schema-conflict, invalid-schema, migration-rejected, insufficient-state, evaluation, invalid-intent, with the checks that led to it; insufficient-state names the need the snapshot lacked. Its HTTP status, where one is served, is error-code-of of its kind (backend ApiError::domain).",
-          "type": "domain-error"
+          "type": "domain-error",
+          "kind": "invalid"
         },
         {
           "name": "fault",
-          "condition": "An integer overflow in the decision (a revision, an event sequence, a version or a record id past its type); never in practice."
+          "condition": "An integer overflow in the decision (a revision, an event sequence, a version or a record id past its type); never in practice.",
+          "kind": "internal"
         }
       ],
       "exposure": "local",
@@ -1813,7 +1815,8 @@
         {
           "name": "rejected",
           "condition": "The kernel refused the read: a DomainError of kind tenant-mismatch, tenant-not-found, unknown-object, unknown-query, invalid-intent, insufficient-state or evaluation, with the checks that led to it; insufficient-state names the need the snapshot lacked. Its HTTP status, where one is served, is error-code-of of its kind (backend ApiError::domain).",
-          "type": "domain-error"
+          "type": "domain-error",
+          "kind": "invalid"
         }
       ],
       "exposure": "local",
@@ -1948,7 +1951,8 @@
         {
           "name": "rejected",
           "condition": "The delta does not apply: a DomainError of kind version-conflict (the state is not at the delta's base revision) or invalid-intent (a delta without a base creates no tenant), without evidence, with the checks that led to it. Its HTTP status, where one is served, is error-code-of of its kind (backend ApiError::domain).",
-          "type": "domain-error"
+          "type": "domain-error",
+          "kind": "invalid"
         }
       ],
       "exposure": "local",
@@ -2007,11 +2011,13 @@
         {
           "name": "rejected",
           "condition": "The changes do not produce a consistent schema: a DomainError of kind invalid-schema, with the checks that led to it. Its HTTP status, where one is served, is error-code-of of its kind (backend ApiError::domain).",
-          "type": "domain-error"
+          "type": "domain-error",
+          "kind": "invalid"
         },
         {
           "name": "fault",
-          "condition": "An integer overflow in the plan (a revision, an event sequence, a version or a record id past its type); never in practice."
+          "condition": "An integer overflow in the plan (a revision, an event sequence, a version or a record id past its type); never in practice.",
+          "kind": "internal"
         }
       ],
       "exposure": "local",
@@ -2988,36 +2994,43 @@
         {
           "name": "domain",
           "condition": "The kernel rejected the intent; the store is unchanged. Its HTTP status, where one is served, is error-code-of of its kind.",
-          "type": "domain-error"
+          "type": "domain-error",
+          "kind": "invalid"
         },
         {
           "name": "insufficient-state",
           "condition": "The decision asked for more needs than needRounds allows, or for one it was already given.",
-          "type": "need"
+          "type": "need",
+          "kind": "internal"
         },
         {
           "name": "conflict",
           "condition": "Every commit lost its race to another one, retries times over; nothing is changed.",
-          "type": "store-error"
+          "type": "store-error",
+          "kind": "conflict"
         },
         {
           "name": "invalid",
           "condition": "The commit is malformed, or its events do not continue the tenant event sequence without a gap; nothing is changed.",
-          "type": "store-error"
+          "type": "store-error",
+          "kind": "invalid"
         },
         {
           "name": "unavailable",
           "condition": "The store could not do the work right now (busy, I/O); safe to retry.",
-          "type": "store-error"
+          "type": "store-error",
+          "kind": "unavailable"
         },
         {
           "name": "corrupt",
           "condition": "Stored data could not be read back; not safe to ignore.",
-          "type": "store-error"
+          "type": "store-error",
+          "kind": "internal"
         },
         {
           "name": "fault",
-          "condition": "An integer overflow in the decision (a revision, an event sequence, a version or a record id past its type); never in practice."
+          "condition": "An integer overflow in the decision (a revision, an event sequence, a version or a record id past its type); never in practice.",
+          "kind": "internal"
         }
       ],
       "exposure": "local",
@@ -3085,17 +3098,20 @@
         {
           "name": "insufficient-state",
           "condition": "The decision asked for more needs than needRounds allows, or for one it was already given.",
-          "type": "need"
+          "type": "need",
+          "kind": "internal"
         },
         {
           "name": "unavailable",
           "condition": "The store could not do the work right now (busy, I/O); safe to retry.",
-          "type": "store-error"
+          "type": "store-error",
+          "kind": "unavailable"
         },
         {
           "name": "corrupt",
           "condition": "Stored data could not be read back; not safe to ignore.",
-          "type": "store-error"
+          "type": "store-error",
+          "kind": "internal"
         }
       ],
       "exposure": "local",
@@ -14503,7 +14519,8 @@
         {
           "name": "invalid",
           "condition": "The signature, issuer, audience, recipient, destination, time or request is wrong, or the message is not one that is read.",
-          "type": "api-error"
+          "type": "api-error",
+          "kind": "invalid"
         }
       ],
       "exposure": "local"
@@ -17058,12 +17075,14 @@
         {
           "name": "unavailable",
           "condition": "The store could not do the work right now (busy, I/O); safe to retry.",
-          "type": "store-error"
+          "type": "store-error",
+          "kind": "unavailable"
         },
         {
           "name": "corrupt",
           "condition": "Stored data could not be read back; not safe to ignore.",
-          "type": "store-error"
+          "type": "store-error",
+          "kind": "internal"
         }
       ]
     },
@@ -17102,22 +17121,26 @@
         {
           "name": "conflict",
           "condition": "The stored revision of the tenant differs from the base revision of the delta; nothing is changed.",
-          "type": "store-error"
+          "type": "store-error",
+          "kind": "conflict"
         },
         {
           "name": "invalid",
           "condition": "The commit is malformed, or its events do not continue the tenant event sequence without a gap; nothing is changed.",
-          "type": "store-error"
+          "type": "store-error",
+          "kind": "invalid"
         },
         {
           "name": "unavailable",
           "condition": "The store could not do the work right now (busy, I/O); safe to retry.",
-          "type": "store-error"
+          "type": "store-error",
+          "kind": "unavailable"
         },
         {
           "name": "corrupt",
           "condition": "Stored data could not be read back; not safe to ignore.",
-          "type": "store-error"
+          "type": "store-error",
+          "kind": "internal"
         }
       ]
     },
@@ -17175,36 +17198,43 @@
         {
           "name": "rejected",
           "condition": "The request was refused; the body is the error reply, whose code says why: not_found for no site or no object type, invalid for a field that does not coerce, and for a kernel rejection error-code-of of its kind (a refused change to a record the caller cannot read answers as unknown-record).",
-          "type": "api-error"
+          "type": "api-error",
+          "kind": "invalid"
         },
         {
           "name": "insufficient-state",
           "condition": "The decision asked for more needs than needRounds allows, or for one it was already given.",
-          "type": "need"
+          "type": "need",
+          "kind": "internal"
         },
         {
           "name": "conflict",
           "condition": "Every commit lost its race to another one, retries times over; nothing is changed.",
-          "type": "store-error"
+          "type": "store-error",
+          "kind": "conflict"
         },
         {
           "name": "invalid",
           "condition": "The commit is malformed, or its events do not continue the tenant event sequence without a gap; nothing is changed.",
-          "type": "store-error"
+          "type": "store-error",
+          "kind": "invalid"
         },
         {
           "name": "unavailable",
           "condition": "The store could not do the work right now (busy, I/O); safe to retry.",
-          "type": "store-error"
+          "type": "store-error",
+          "kind": "unavailable"
         },
         {
           "name": "corrupt",
           "condition": "Stored data could not be read back; not safe to ignore.",
-          "type": "store-error"
+          "type": "store-error",
+          "kind": "internal"
         },
         {
           "name": "fault",
-          "condition": "An integer overflow in the decision (a revision, an event sequence, a version or a record id past its type); never in practice."
+          "condition": "An integer overflow in the decision (a revision, an event sequence, a version or a record id past its type); never in practice.",
+          "kind": "internal"
         }
       ]
     },
@@ -17262,26 +17292,31 @@
         {
           "name": "rejected",
           "condition": "The request was refused; the body is the error reply, whose code says why: not_found for no site or no object type, invalid for a field that does not coerce, and for a kernel rejection error-code-of of its kind (a refused change to a record the caller cannot read answers as unknown-record).",
-          "type": "api-error"
+          "type": "api-error",
+          "kind": "invalid"
         },
         {
           "name": "insufficient-state",
           "condition": "The decision asked for more needs than needRounds allows, or for one it was already given.",
-          "type": "need"
+          "type": "need",
+          "kind": "internal"
         },
         {
           "name": "unavailable",
           "condition": "The store could not do the work right now (busy, I/O); safe to retry.",
-          "type": "store-error"
+          "type": "store-error",
+          "kind": "unavailable"
         },
         {
           "name": "corrupt",
           "condition": "Stored data could not be read back; not safe to ignore.",
-          "type": "store-error"
+          "type": "store-error",
+          "kind": "internal"
         },
         {
           "name": "fault",
-          "condition": "An integer overflow in the route match (a revision, an event sequence, a version or a record id past its type); never in practice."
+          "condition": "An integer overflow in the route match (a revision, an event sequence, a version or a record id past its type); never in practice.",
+          "kind": "internal"
         }
       ]
     },
@@ -17313,17 +17348,20 @@
         {
           "name": "throttled",
           "condition": "The caller exceeded a limit that applies to it.",
-          "type": "api-error"
+          "type": "api-error",
+          "kind": "throttled"
         },
         {
           "name": "invalid",
           "condition": "The site is not reached by a host name.",
-          "type": "api-error"
+          "type": "api-error",
+          "kind": "invalid"
         },
         {
           "name": "unauthenticated",
           "condition": "A registration was asked for without a valid session.",
-          "type": "api-error"
+          "type": "api-error",
+          "kind": "unauthenticated"
         }
       ]
     },
@@ -17350,7 +17388,8 @@
         {
           "name": "unauthenticated",
           "condition": "No valid session or credential accompanies the request.",
-          "type": "api-error"
+          "type": "api-error",
+          "kind": "unauthenticated"
         }
       ]
     },
@@ -17377,12 +17416,14 @@
         {
           "name": "unauthenticated",
           "condition": "No valid session or credential accompanies the request.",
-          "type": "api-error"
+          "type": "api-error",
+          "kind": "unauthenticated"
         },
         {
           "name": "not-found",
           "condition": "The caller has no such passkey in this tenant.",
-          "type": "api-error"
+          "type": "api-error",
+          "kind": "not_found"
         }
       ]
     },
@@ -17419,7 +17460,8 @@
         {
           "name": "unavailable",
           "condition": "The transport did not accept the message.",
-          "type": "api-error"
+          "type": "api-error",
+          "kind": "unavailable"
         }
       ]
     },
@@ -17484,7 +17526,8 @@
         {
           "name": "invalid",
           "condition": "The file does not parse, names a signature method that is not allowed, a provider twice, or an environment variable that is not set.",
-          "type": "api-error"
+          "type": "api-error",
+          "kind": "invalid"
         }
       ]
     },
@@ -17530,12 +17573,14 @@
         {
           "name": "unauthenticated",
           "condition": "The state matches no pending request of this browser, the code does not redeem, or the token fails a check.",
-          "type": "api-error"
+          "type": "api-error",
+          "kind": "unauthenticated"
         },
         {
           "name": "unavailable",
           "condition": "The provider's metadata cannot be fetched when a sign-in starts.",
-          "type": "api-error"
+          "type": "api-error",
+          "kind": "unavailable"
         }
       ]
     },
@@ -17615,7 +17660,8 @@
         {
           "name": "unauthenticated",
           "condition": "The realm does not admit the identity.",
-          "type": "api-error"
+          "type": "api-error",
+          "kind": "unauthenticated"
         }
       ]
     },
@@ -17651,7 +17697,8 @@
         {
           "name": "invalid",
           "condition": "The file does not parse, a certificate or an address in it is not usable, or a provider appears twice.",
-          "type": "api-error"
+          "type": "api-error",
+          "kind": "invalid"
         }
       ]
     },
@@ -17698,22 +17745,26 @@
         {
           "name": "invalid",
           "condition": "The provider does not exist or is not enabled.",
-          "type": "api-error"
+          "type": "api-error",
+          "kind": "invalid"
         },
         {
           "name": "forbidden",
           "condition": "The request did not come from one of the site's own pages.",
-          "type": "api-error"
+          "type": "api-error",
+          "kind": "forbidden"
         },
         {
           "name": "unauthenticated",
           "condition": "A request to link was made by no one who is signed in.",
-          "type": "api-error"
+          "type": "api-error",
+          "kind": "unauthenticated"
         },
         {
           "name": "unavailable",
           "condition": "The provider's sign-on address is not one the browser may be sent to.",
-          "type": "api-error"
+          "type": "api-error",
+          "kind": "unavailable"
         }
       ]
     },
@@ -17752,7 +17803,8 @@
         {
           "name": "not-found",
           "condition": "No site is served at the address.",
-          "type": "api-error"
+          "type": "api-error",
+          "kind": "not_found"
         }
       ]
     },
@@ -17796,7 +17848,8 @@
         {
           "name": "unauthenticated",
           "condition": "The response answers no pending request of this browser, or the assertion fails a check, or it was presented before.",
-          "type": "api-error"
+          "type": "api-error",
+          "kind": "unauthenticated"
         }
       ]
     },
