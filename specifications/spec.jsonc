@@ -2696,7 +2696,7 @@
     {"id":"thr-263","kind":"requirement","statement":"The published content of a tenant SHALL occupy none of the paths that the platform reserves for sign-in and federation.","rationale":"A tenant page at the sign-in path is a phishing page on the platform's own domain.","evaluate":{"method":"property"},"ref":"THR-263","area":"09-threat","section":"Abuse and takedown","lifecycle":"active","boundary":"b-9","boundaryDetail":"`reserved paths`","traces":["g-6","g-262"],"milestone":6,"inSection":"sec-threat-255","realisation":"checked"},
     {"id":"m-saml-assertion-single-use","kind":"invariant","models":"fed-006","statement":"A SAML assertion yields at most one session.","evaluate":{"method":"state-invariant","scenarios":["saml-replayed","saml-response-redelivered"],"expr":"saml-assertion-flow.sessions <= 1","negatives":[{"scenario":"saml-replayed","faults":["defect-saml-replay-accepted"]},{"scenario":"saml-response-redelivered","faults":["defect-saml-replay-accepted"]}]},"faultModel":"fault-model-launch","assumptions":["a-model-abstraction","a-provider-signatures"],"faultBasis":"fault"},
     {"id":"m-saml-assertion-flow-refined","kind":"temporal","models":"fed-006","statement":"The implementation of the SAML assertion handling refines the assertion model.","evaluate":{"method":"refines","behavior":"saml-assertion-flow-impl","scenarios":["saml-replayed-impl","saml-response-redelivered-impl"]},"faultModel":"fault-model-launch","assumptions":["a-model-abstraction"]},
-    {"id":"m-guessing-throttled","kind":"invariant","models":"idn-008","statement":"A guess that arrives after three failed guesses is refused, because the model counts the failures against one account. The threshold of 3 stands for the ten of D-700.","evaluate":{"method":"state-invariant","scenarios":["guesses-from-one-source","guesses-on-parallel-connections"],"expr":"guess-throttle-flow.throttled == 0","negatives":[{"scenario":"guesses-from-one-source","faults":["defect-throttle-ignored"]},{"scenario":"guesses-on-parallel-connections","faults":["defect-throttle-ignored"]}]},"faultModel":"fault-model-launch","assumptions":["a-model-abstraction"],"faultBasis":"fault"},
+    {"id":"m-guessing-throttled","kind":"invariant","models":"idn-008","statement":"A guess that arrives after ten failed guesses is refused, because the model counts the failures against one account (D-700).","evaluate":{"method":"state-invariant","scenarios":["guesses-from-one-source","guesses-on-parallel-connections"],"expr":"guess-throttle-flow.throttled == 0","negatives":[{"scenario":"guesses-from-one-source","faults":["defect-throttle-ignored"]},{"scenario":"guesses-on-parallel-connections","faults":["defect-throttle-ignored"]}]},"faultModel":"fault-model-launch","assumptions":["a-model-abstraction"],"faultBasis":"fault"},
     {"id":"m-guess-throttle-flow-refined","kind":"temporal","models":"idn-008","statement":"The implementation machine of Password guessing throttle refines its model: every step it takes is a step the model takes from the mapped state, or a step the model does not see.","evaluate":{"method":"refines","behavior":"guess-throttle-flow-impl"},"faultModel":"fault-model-launch","assumptions":["a-model-abstraction"],"faultBasis":"restatement"},
     {"id":"m-operator-console-private","kind":"structural","models":"thr-253","statement":"No public component and no gateway has a path to the operator console.","evaluate":{"method":"no-relationship","from":["gateway","delivery-network","delivery-network-control","agent-gateway","external-identity-provider","web-application","agent","external-endpoint","traffic-switch","agent-traffic-switch"],"to":"operator-console","transitive":true},"assumptions":["a-model-abstraction"]},
     {"id":"m-connector-runner-isolated","kind":"structural","models":"wfl-256","statement":"The connector runner has no path to a platform component other than the outbound gate and the key service; components outside the platform (category external) are reached only through the outbound gate.","evaluate":{"method":"no-relationship","from":"connector-runner","to":["kernel","substrate","store-contract","sqlite-adapter","postgres-adapter","tenant-database","control-plane","control-database","identity-service","runtime","gateway","automation-worker","copy-store","file-store","agent-gateway","telemetry-pipeline","audit-log","web-application","simulator","verification","agent","limit-store","backup-archive","fleet-reporting","product-module","notice-queue","search-index","notification-service","conversation-service","local-model-adapter","operator-console","upload-scanner","mail-dispatcher","release-controller","release-pipeline","image-registry","traffic-switch","subject-rights-service","agent-traffic-switch","migration-job","platform-audit-store"],"transitive":true},"assumptions":["a-model-abstraction"]},
@@ -16867,6 +16867,12 @@
       "id": "sl-issued",
       "name": "Session issued",
       "description": "The session is signed in: its issue time and its last use are set to now."
+    },
+    {
+      "id": "pw-lockout-ended",
+      "name": "Lockout ended",
+      "description": "The lockout of a closed throttle ends.",
+      "elapsed": true
     }
   ],
   "behaviors": [
@@ -18948,7 +18954,17 @@
       "realisation": "target"
     },
     {"id":"arc-outbox-delivery-flow","name":"Outbox delivery after a stop","subject":"runtime","initial":"arc-od-idle","description":"A commit leaves events unpublished. The runtime that committed publishes them, or else the outbox job does.","variables":[{"name":"pending","type":"boolean","initial":false}],"states":[{"id":"arc-od-idle","name":"Nothing pending"},{"id":"arc-od-pending","name":"Events pending"},{"id":"arc-od-done","name":"Published","terminal":true}],"transitions":[{"id":"arc-od-commit","from":"arc-od-idle","to":"arc-od-pending","on":"rt-committed","effects":[{"set":"pending","to":true}]},{"id":"arc-od-publish-now","from":"arc-od-pending","to":"arc-od-done","on":"arc-ob-publish-now","effects":[{"set":"pending","to":false},{"emit":"arc-ob-published"}]},{"id":"arc-od-sweep","from":"arc-od-pending","to":"arc-od-done","on":"arc-ob-sweep-due","effects":[{"set":"pending","to":false},{"emit":"arc-ob-published"}]}]},
-    {"id":"arc-outbox-delivery-flow-impl","name":"Outbox delivery after a stop (implementation)","subject":"runtime","level":"implementation","initial":"arc-od-idle-i","description":"A commit leaves its domain events (rec-event, keyed by seq) unpublished. The runtime that committed publishes them at once, or else the outbox job finds them on its next sweep, 10 seconds after the commit (10000 ms, default), and publishes them. Publication is at least once; the consumer discards what it has seen.","transaction":{"scope":"transition","isolation":"serializable"},"variables":[{"name":"pending","type":"boolean","initial":false,"repr":"bool"}],"states":[{"id":"arc-od-idle-i","name":"Nothing unpublished","ignores":["arc-ob-publish-now","arc-ob-sweep-due"]},{"id":"arc-od-pending-i","name":"Events unpublished","ignores":["rt-committed"]},{"id":"arc-od-done-i","name":"Published","terminal":true}],"transitions":[{"id":"arc-od-commit-i","from":"arc-od-idle-i","to":"arc-od-pending-i","on":"rt-committed","otherwise":true,"effects":[{"set":"pending","to":true},{"timer":"sweep","after":10000,"emit":"arc-ob-sweep-due"}]},{"id":"arc-od-publish-now-i","from":"arc-od-pending-i","to":"arc-od-done-i","on":"arc-ob-publish-now","otherwise":true,"effects":[{"set":"pending","to":false},{"emit":"arc-ob-published","to":"notice-queue"},{"cancel":"sweep"}]},{"id":"arc-od-sweep-i","from":"arc-od-pending-i","to":"arc-od-done-i","on":"arc-ob-sweep-due","otherwise":true,"effects":[{"set":"pending","to":false},{"emit":"arc-ob-published","to":"notice-queue"}]}],"refines":"arc-outbox-delivery-flow","refinement":{"states":{"arc-od-idle-i":"arc-od-idle","arc-od-pending-i":"arc-od-pending","arc-od-done-i":"arc-od-done"},"variables":{"pending":"pending"},"transitions":{"arc-od-commit-i":"arc-od-commit","arc-od-publish-now-i":"arc-od-publish-now","arc-od-sweep-i":"arc-od-sweep"}},"storage":{"record":"rec-event","key":"seq"}},
+    {"id":"arc-outbox-delivery-flow-impl","name":"Outbox delivery after a stop (implementation)","subject":"runtime","level":"implementation","initial":"arc-od-idle-i","description":"A commit leaves its domain events (rec-event, keyed by seq) in the outbox of their tenant, each with an outbox position of that tenant; positions of different tenants are not ordered against each other. The runtime that committed kicks the publisher at once (publish-now), or else the publisher finds the events on its next sweep, 500 ms after the commit (500 ms, the idle period of the publisher's pump; default). A sweep takes at most 256 outbox entries in one batch, hands them to subscribers and marks them published per tenant up to the last position it moved. Publication is at least once; the consumer discards what it has seen.","transaction":{"scope":"transition","isolation":"serializable"},"variables":[{"name":"pending","type":"boolean","initial":false,"repr":"bool"}],"states":[{"id":"arc-od-idle-i","name":"Nothing unpublished","ignores":["arc-ob-publish-now","arc-ob-sweep-due"]},{"id":"arc-od-pending-i","name":"Events unpublished","ignores":["rt-committed"]},{"id":"arc-od-done-i","name":"Published","terminal":true}],"transitions":[{"id":"arc-od-commit-i","from":"arc-od-idle-i","to":"arc-od-pending-i","on":"rt-committed","otherwise":true,"effects":[
+            {
+              "set": "pending",
+              "to": true
+            },
+            {
+              "timer": "sweep",
+              "after": 500,
+              "emit": "arc-ob-sweep-due"
+            }
+          ]},{"id":"arc-od-publish-now-i","from":"arc-od-pending-i","to":"arc-od-done-i","on":"arc-ob-publish-now","otherwise":true,"effects":[{"set":"pending","to":false},{"emit":"arc-ob-published","to":"notice-queue"},{"cancel":"sweep"}]},{"id":"arc-od-sweep-i","from":"arc-od-pending-i","to":"arc-od-done-i","on":"arc-ob-sweep-due","otherwise":true,"effects":[{"set":"pending","to":false},{"emit":"arc-ob-published","to":"notice-queue"}]}],"refines":"arc-outbox-delivery-flow","refinement":{"states":{"arc-od-idle-i":"arc-od-idle","arc-od-pending-i":"arc-od-pending","arc-od-done-i":"arc-od-done"},"variables":{"pending":"pending"},"transitions":{"arc-od-commit-i":"arc-od-commit","arc-od-publish-now-i":"arc-od-publish-now","arc-od-sweep-i":"arc-od-sweep"}},"storage":{"record":"rec-event","key":"seq"}},
     {"id":"arc-rolling-change-flow","name":"Rolling change of format","subject":"runtime","initial":"arc-rc-old","description":"Two versions run together while a deployment replaces the older one. Commits are written in the older format until the older version has stopped.","variables":[{"name":"oldRunning","type":"boolean","initial":true},{"name":"newFormat","type":"boolean","initial":false}],"states":[{"id":"arc-rc-old","name":"Older version only"},{"id":"arc-rc-mixed","name":"Both versions running"},{"id":"arc-rc-new","name":"Newer version only"}],"transitions":[{"id":"arc-rl-start","from":"arc-rc-old","to":"arc-rc-mixed","on":"arc-rl-deploy-started"},{"id":"arc-rl-commit-early","from":"arc-rc-mixed","to":"arc-rc-mixed","on":"arc-rl-commit","faultOnly":true,"description":"Defect: writes the newer format while the older version still runs.","effects":[{"set":"newFormat","to":true},{"emit":"arc-rl-committed"}]},{"id":"arc-rl-commit-old","from":"arc-rc-mixed","to":"arc-rc-mixed","on":"arc-rl-commit","effects":[{"emit":"arc-rl-committed"}]},{"id":"arc-rl-finish","from":"arc-rc-mixed","to":"arc-rc-new","on":"arc-rl-deploy-finished","effects":[{"set":"oldRunning","to":false}]},{"id":"arc-rl-commit-new","from":"arc-rc-new","to":"arc-rc-new","on":"arc-rl-commit","effects":[{"set":"newFormat","to":true},{"emit":"arc-rl-committed"}]}]},
     {
       "id": "arc-rolling-change-flow-impl",
@@ -19642,8 +19658,152 @@
       },
       "realisation": "target"
     },
-    {"id":"guess-throttle-flow","name":"Password guessing throttle","subject":"identity-service","initial":"gt-open","description":"Password attempts for one realm. Three failures close the throttle, and an attempt evaluated while it is closed is counted.","variables":[{"name":"failures","type":"number","initial":0},{"name":"throttled","type":"number","initial":0}],"states":[{"id":"gt-open","name":"Accepting attempts"}],"transitions":[{"id":"gt-ignore-throttle","from":"gt-open","to":"gt-open","on":"pw-attempt","faultOnly":true,"guard":"failures >= 3","description":"Defect: evaluates an attempt after the throttle has closed.","effects":[{"set":"throttled","to":"throttled + 1"},{"emit":"pw-refused"}]},{"id":"gt-refuse","from":"gt-open","to":"gt-open","on":"pw-attempt","guard":"failures >= 3","effects":[{"emit":"pw-refused"}]},{"id":"gt-wrong","from":"gt-open","to":"gt-open","on":"pw-attempt","guard":"failures < 3 && event.guess == 'wrong'","effects":[{"set":"failures","to":"failures + 1"},{"emit":"pw-refused"}]},{"id":"gt-right","from":"gt-open","to":"gt-open","on":"pw-attempt","guard":"failures < 3 && event.guess == 'right'","effects":[{"emit":"pw-accepted"}]}]},
-    {"id":"guess-throttle-flow-impl","name":"Password guessing throttle (implementation)","level":"implementation","subject":"identity-service","refines":"guess-throttle-flow","description":"The counter of failed password attempts for one account, held in the limit store. Three failures close it, and a closed counter refuses every attempt without evaluating it.","initial":"gti-open","instances":{"key":"limit-key","storedIn":"rec-limit-counter","max":16},"transaction":{"scope":"transition","isolation":"serializable"},"variables":[{"name":"failures","type":"number","repr":"u64","initial":0}],"states":[{"id":"gti-open","name":"Accepting attempts"},{"id":"gti-closed","name":"Closed"}],"transitions":[{"id":"gti-wrong","from":"gti-open","to":"gti-open","on":"pw-attempt","guard":"failures < 2 && event.guess == 'wrong'","effects":[{"set":"failures","to":"failures + 1"},{"emit":"pw-refused","to":"gateway"}]},{"id":"gti-wrong-last","from":"gti-open","to":"gti-closed","on":"pw-attempt","guard":"failures == 2 && event.guess == 'wrong'","effects":[{"set":"failures","to":"failures + 1"},{"emit":"pw-refused","to":"gateway"}]},{"id":"gti-right","from":"gti-open","to":"gti-open","on":"pw-attempt","guard":"event.guess == 'right'","effects":[{"emit":"pw-accepted","to":"gateway"}]},{"id":"gti-refuse","from":"gti-closed","to":"gti-closed","on":"pw-attempt","otherwise":true,"effects":[{"emit":"pw-refused","to":"gateway"}]}],"refinement":{"states":{"gti-open":"gt-open","gti-closed":"gt-open"},"variables":{"failures":"failures","throttled":"0"},"transitions":{"gti-wrong":"gt-wrong","gti-wrong-last":"gt-wrong","gti-right":"gt-right","gti-refuse":"gt-refuse"}},"storage":{"record":"rec-limit-counter","key":"limit-key","state":"throttle-state","creates":true}},
+    {"id":"guess-throttle-flow","name":"Password guessing throttle","subject":"runtime","initial":"gt-open","description":"Password attempts for one account. Ten failures close the throttle (D-700), and an attempt evaluated while it is closed is counted. The throttle opens again, with no failures, when its lockout ends.","variables":[{"name":"failures","type":"number","initial":0},{"name":"throttled","type":"number","initial":0}],"states":[{"id":"gt-open","name":"Accepting attempts"}],"transitions":[{"id":"gt-ignore-throttle","from":"gt-open","to":"gt-open","on":"pw-attempt","faultOnly":true,"guard":"failures >= 10","description":"Defect: evaluates an attempt after the throttle has closed.","effects":[{"set":"throttled","to":"throttled + 1"},{"emit":"pw-refused"}]},{"id":"gt-refuse","from":"gt-open","to":"gt-open","on":"pw-attempt","guard":"failures >= 10","effects":[{"emit":"pw-refused"}]},{"id":"gt-wrong","from":"gt-open","to":"gt-open","on":"pw-attempt","guard":"failures < 10 && event.guess == 'wrong'","effects":[{"set":"failures","to":"failures + 1"},{"emit":"pw-refused"}]},{"id":"gt-right","from":"gt-open","to":"gt-open","on":"pw-attempt","guard":"failures < 10 && event.guess == 'right'","effects":[
+            {
+              "set": "failures",
+              "to": 0
+            },
+            {
+              "emit": "pw-accepted"
+            }
+          ]},
+      {
+        "id": "gt-reopen",
+        "from": "gt-open",
+        "to": "gt-open",
+        "on": "pw-lockout-ended",
+        "guard": "failures >= 10",
+        "effects": [
+          {
+            "set": "failures",
+            "to": 0
+          }
+        ]
+      }]},
+    {
+      "id": "guess-throttle-flow-impl",
+      "name": "Password guessing throttle (implementation)",
+      "level": "implementation",
+      "subject": "runtime",
+      "refines": "guess-throttle-flow",
+      "description": "The counter of failed password attempts for one account, kept by the runtime in the store (rec-limit-counter). An attempt is counted before its password is checked. The tenth failure closes the counter (D-700: ten failures), and a closed counter refuses every attempt without evaluating it. The lockout lasts 30 seconds (30000 ms); the store keeps the time it ends, and the first attempt after it starts a new count, which the machine models as the end of the lockout. A right password clears the failures of the account.",
+      "initial": "gti-open",
+      "instances": {
+        "key": "limit-key",
+        "storedIn": "rec-limit-counter",
+        "max": 16
+      },
+      "transaction": {
+        "scope": "transition",
+        "isolation": "serializable"
+      },
+      "variables": [
+        {
+          "name": "failures",
+          "type": "number",
+          "repr": "u64",
+          "initial": 0
+        }
+      ],
+      "states": [
+        {
+          "id": "gti-open",
+          "name": "Accepting attempts",
+          "ignores": [
+            "pw-lockout-ended"
+          ]
+        },
+        {
+          "id": "gti-closed",
+          "name": "Closed"
+        }
+      ],
+      "transitions": [
+        {
+          "id": "gti-wrong",
+          "from": "gti-open",
+          "to": "gti-open",
+          "on": "pw-attempt",
+          "guard": "failures < 9 && event.guess == 'wrong'",
+          "effects": [
+            {
+              "set": "failures",
+              "to": "failures + 1"
+            },
+            {
+              "emit": "pw-refused",
+              "to": "gateway"
+            }
+          ]
+        },
+        {
+          "id": "gti-wrong-last",
+          "from": "gti-open",
+          "to": "gti-closed",
+          "on": "pw-attempt",
+          "guard": "failures == 9 && event.guess == 'wrong'",
+          "effects": [
+            {
+              "set": "failures",
+              "to": "failures + 1"
+            },
+            {
+              "timer": "lockout",
+              "after": 30000,
+              "emit": "pw-lockout-ended"
+            },
+            {
+              "emit": "pw-refused",
+              "to": "gateway"
+            }
+          ]},{"id":"gti-right","from":"gti-open","to":"gti-open","on":"pw-attempt","guard":"event.guess == 'right'","effects":[
+            {
+              "set": "failures",
+              "to": 0
+            },
+            {
+              "emit": "pw-accepted",
+              "to": "gateway"
+            }
+          ]},{"id":"gti-refuse","from":"gti-closed","to":"gti-closed","on":"pw-attempt","otherwise":true,"effects":[{"emit":"pw-refused","to":"gateway"}]},
+        {
+          "id": "gti-reopen",
+          "from": "gti-closed",
+          "to": "gti-open",
+          "on": "pw-lockout-ended",
+          "otherwise": true,
+          "effects": [
+            {
+              "set": "failures",
+              "to": 0
+            }
+          ]
+        }
+      ],
+      "refinement": {
+        "states": {
+          "gti-open": "gt-open",
+          "gti-closed": "gt-open"
+        },
+        "variables": {
+          "failures": "failures",
+          "throttled": "0"
+        },
+        "transitions": {
+          "gti-wrong": "gt-wrong",
+          "gti-wrong-last": "gt-wrong",
+          "gti-right": "gt-right",
+          "gti-refuse": "gt-refuse",
+          "gti-reopen": "gt-reopen"
+        }
+      },
+      "storage": {
+        "record": "rec-limit-counter",
+        "key": "limit-key",
+        "state": "throttle-state",
+        "creates": true
+      }
+    },
     {"id":"trigger-chain-flow","name":"Trigger chain","subject":"automation-worker","initial":"tc-live","description":"Each change that starts a chain carries its hop count. A trigger creates a job while the hop count is within the hop limit of eight that D-700 states, and refuses the rest of the chain.","variables":[{"name":"accepted","type":"number","initial":0}],"states":[{"id":"tc-live","name":"Live"}],"transitions":[{"id":"tc-accept-unbounded","from":"tc-live","to":"tc-live","on":"tc-change","faultOnly":true,"description":"Defect: creates a job for every hop, so a loop of triggers never ends.","effects":[{"set":"accepted","to":"accepted + 1"},{"emit":"tc-job-created"},{"emit":"tc-change","after":1,"payload":{"hop":"event.hop + 1"}}]},{"id":"tc-accept","from":"tc-live","to":"tc-live","on":"tc-change","guard":"event.hop <= 8","effects":[{"set":"accepted","to":"accepted + 1"},{"emit":"tc-job-created"},{"emit":"tc-change","after":1,"payload":{"hop":"event.hop + 1"}}]},{"id":"tc-refuse-deep","from":"tc-live","to":"tc-live","on":"tc-change","guard":"event.hop > 8","effects":[{"emit":"tc-cut"}]}]},
     {
       "id": "trigger-chain-flow-impl",
@@ -44525,7 +44685,7 @@
     {"id":"arc-outbox-duplicate-delivery","name":"A notice is delivered twice","description":"The notice queue delivers one event notice again before it is acknowledged.","behaviors":["arc-outbox-consumer-flow"],"steps":[{"at":0,"event":"arc-ob-delivered","payload":{"seq":1}},{"at":2,"event":"arc-ob-delivered","payload":{"seq":1},"note":"The redelivery."}]},
     {"id":"arc-outbox-duplicate-delivery-impl","name":"A notice is delivered twice (implementation)","description":"The notice queue delivers one event notice again before it is acknowledged. The same scenario run on the implementation machines.","behaviors":["arc-outbox-consumer-flow-impl"],"steps":[{"at":0,"event":"arc-ob-delivered","payload":{"seq":1}},{"at":2,"event":"arc-ob-delivered","payload":{"seq":1},"note":"The redelivery."}]},
     {"id":"arc-publisher-crashed-after-commit","name":"The publisher stops after a commit","description":"The runtime that committed stops before it publishes. The outbox job publishes later.","behaviors":["arc-outbox-delivery-flow"],"faults":["arc-publisher-stops"],"steps":[{"at":0,"event":"rt-committed"},{"at":1,"event":"arc-ob-publish-now"},{"at":5,"event":"arc-ob-sweep-due"}]},
-    {"id":"arc-publisher-crashed-after-commit-impl","name":"The publisher stops after a commit (implementation)","description":"The runtime that committed stops before it publishes. The outbox job publishes at its sweep, 10 seconds after the commit. Times are in milliseconds. The same scenario run on the implementation machines.","behaviors":["arc-outbox-delivery-flow-impl"],"faults":["arc-publisher-stops-impl"],"steps":[{"at":0,"event":"rt-committed"},{"at":1,"event":"arc-ob-publish-now"}],"timeUnit":"ms"},
+    {"id":"arc-publisher-crashed-after-commit-impl","name":"The publisher stops after a commit (implementation)","description":"The runtime that committed stops before it publishes. The publisher publishes at its sweep, 500 ms after the commit. Times are in milliseconds. The same scenario run on the implementation machines.","behaviors":["arc-outbox-delivery-flow-impl"],"faults":["arc-publisher-stops-impl"],"steps":[{"at":0,"event":"rt-committed"},{"at":1,"event":"arc-ob-publish-now"}],"timeUnit":"ms"},
     {"id":"arc-rolling-deploy-with-commit","name":"A commit during a rolling deployment","description":"The newer version starts and commits, the older version stops, and the newer version commits again.","behaviors":["arc-rolling-change-flow"],"steps":[{"at":0,"event":"arc-rl-deploy-started"},{"at":1,"event":"arc-rl-commit"},{"at":3,"event":"arc-rl-deploy-finished"},{"at":4,"event":"arc-rl-commit"}]},
     {"id":"arc-rolling-deploy-with-commit-impl","name":"A commit during a rolling deployment (implementation)","description":"The newer version starts and commits, the older version stops, and the newer version commits again. The same scenario run on the implementation machines.","behaviors":["arc-rolling-change-flow-impl"],"steps":[{"at":0,"event":"arc-rl-deploy-started"},{"at":1,"event":"arc-rl-commit"},{"at":3,"event":"arc-rl-deploy-finished"},{"at":4,"event":"arc-rl-commit"}]},
     {"id":"inbound-repeated-delivery","name":"An inbound delivery repeated","description":"The same event arrives twice, and the second arrival starts nothing.","behaviors":["inbound-run-flow"],"steps":[{"at":0,"event":"iw-received","payload":{"key":"d1"}},{"at":2,"event":"iw-received","payload":{"key":"d1"},"note":"The sender retries."}]},
@@ -44575,11 +44735,67 @@
           "payload": {
             "guess": "wrong",
             "limit-key": "account-1"
-          },
-          "note": "The fourth guess, after the throttle has closed."
+          }
         },
         {
           "at": 4,
+          "event": "pw-attempt",
+          "payload": {
+            "guess": "wrong",
+            "limit-key": "account-1"
+          }
+        },
+        {
+          "at": 5,
+          "event": "pw-attempt",
+          "payload": {
+            "guess": "wrong",
+            "limit-key": "account-1"
+          }
+        },
+        {
+          "at": 6,
+          "event": "pw-attempt",
+          "payload": {
+            "guess": "wrong",
+            "limit-key": "account-1"
+          }
+        },
+        {
+          "at": 7,
+          "event": "pw-attempt",
+          "payload": {
+            "guess": "wrong",
+            "limit-key": "account-1"
+          }
+        },
+        {
+          "at": 8,
+          "event": "pw-attempt",
+          "payload": {
+            "guess": "wrong",
+            "limit-key": "account-1"
+          }
+        },
+        {
+          "at": 9,
+          "event": "pw-attempt",
+          "payload": {
+            "guess": "wrong",
+            "limit-key": "account-1"
+          }
+        },
+        {
+          "at": 10,
+          "event": "pw-attempt",
+          "payload": {
+            "guess": "wrong",
+            "limit-key": "account-1"
+          },
+          "note": "The eleventh guess, after the throttle has closed."
+        },
+        {
+          "at": 11,
           "event": "pw-attempt",
           "payload": {
             "guess": "right",
@@ -44587,7 +44803,105 @@
           }
         }
       ]},
-    {"id":"guesses-from-one-source-impl","name":"Guesses from one source (implementation)","description":"Wrong guesses arrive until the throttle closes, and then a right guess arrives.","behaviors":["guess-throttle-flow-impl"],"steps":[{"at":0,"event":"pw-attempt","payload":{"guess":"wrong","limit-key":"account-1"}},{"at":1,"event":"pw-attempt","payload":{"guess":"wrong","limit-key":"account-1"}},{"at":2,"event":"pw-attempt","payload":{"guess":"wrong","limit-key":"account-1"}},{"at":3,"event":"pw-attempt","payload":{"guess":"wrong","limit-key":"account-1"},"note":"The fourth guess, after the throttle has closed."},{"at":4,"event":"pw-attempt","payload":{"guess":"right","limit-key":"account-1"}}],"routes":[{"event":"pw-attempt","behavior":"guess-throttle-flow-impl","by":"key","field":"limit-key"}]},
+    {"id":"guesses-from-one-source-impl","name":"Guesses from one source (implementation)","description":"Wrong guesses arrive until the throttle closes, and then a right guess arrives.","behaviors":["guess-throttle-flow-impl"],"steps":[
+        {
+          "at": 0,
+          "event": "pw-attempt",
+          "payload": {
+            "guess": "wrong",
+            "limit-key": "account-1"
+          }
+        },
+        {
+          "at": 1,
+          "event": "pw-attempt",
+          "payload": {
+            "guess": "wrong",
+            "limit-key": "account-1"
+          }
+        },
+        {
+          "at": 2,
+          "event": "pw-attempt",
+          "payload": {
+            "guess": "wrong",
+            "limit-key": "account-1"
+          }
+        },
+        {
+          "at": 3,
+          "event": "pw-attempt",
+          "payload": {
+            "guess": "wrong",
+            "limit-key": "account-1"
+          }
+        },
+        {
+          "at": 4,
+          "event": "pw-attempt",
+          "payload": {
+            "guess": "wrong",
+            "limit-key": "account-1"
+          }
+        },
+        {
+          "at": 5,
+          "event": "pw-attempt",
+          "payload": {
+            "guess": "wrong",
+            "limit-key": "account-1"
+          }
+        },
+        {
+          "at": 6,
+          "event": "pw-attempt",
+          "payload": {
+            "guess": "wrong",
+            "limit-key": "account-1"
+          }
+        },
+        {
+          "at": 7,
+          "event": "pw-attempt",
+          "payload": {
+            "guess": "wrong",
+            "limit-key": "account-1"
+          }
+        },
+        {
+          "at": 8,
+          "event": "pw-attempt",
+          "payload": {
+            "guess": "wrong",
+            "limit-key": "account-1"
+          }
+        },
+        {
+          "at": 9,
+          "event": "pw-attempt",
+          "payload": {
+            "guess": "wrong",
+            "limit-key": "account-1"
+          }
+        },
+        {
+          "at": 10,
+          "event": "pw-attempt",
+          "payload": {
+            "guess": "wrong",
+            "limit-key": "account-1"
+          },
+          "note": "The eleventh guess, after the throttle has closed."
+        },
+        {
+          "at": 11,
+          "event": "pw-attempt",
+          "payload": {
+            "guess": "right",
+            "limit-key": "account-1"
+          }
+        }
+      ],"routes":[{"event":"pw-attempt","behavior":"guess-throttle-flow-impl","by":"key","field":"limit-key"}]},
     {"id":"trigger-chain-runaway","name":"A chain of changes runs past the hop limit","description":"A change starts a chain: each accepted change emits the next one with its hop count raised by one. The chain is cut at the hop limit of eight; a second change at hop 12 arrives from outside and is refused.","behaviors":["trigger-chain-flow"],"steps":[
         {
           "at": 0,
@@ -45726,7 +46040,7 @@
     {"id":"cv-apply-before-delayed-confirmation-impl","name":"An apply request overtakes a delayed confirmation (implementation)","description":"The confirmation is sent at tick 1 and arrives at tick 4; the apply at tick 2 is refused. The same scenario run on the implementation machines.","behaviors":["cv-change-flow-impl"],"faults":["cv-confirmation-delayed"],"steps":[{"at":0,"event":"cv-proposed"},{"at":1,"event":"cv-confirmed"},{"at":2,"event":"cv-apply-requested"}]},
     {"id":"saml-response-redelivered","name":"A SAML response delivered twice","description":"The assertion is presented once and delivered again at tick 1.","behaviors":["saml-assertion-flow"],"faults":["saml-response-repeated"],"steps":[{"at":0,"event":"saml-response"}]},
     {"id":"saml-response-redelivered-impl","name":"A SAML response delivered twice (implementation)","description":"The assertion is presented once and delivered again at tick 1. The same scenario run on the implementation machines.","behaviors":["saml-assertion-flow-impl"],"faults":["saml-response-repeated"],"steps":[{"at":0,"event":"saml-response"}]},
-    {"id":"guesses-on-parallel-connections","name":"A parallel connection adds a failure","description":"Two scripted wrong guesses and one on a parallel connection reach the threshold before the right guess at tick 4.","behaviors":["guess-throttle-flow"],"faults":["parallel-connection-guess"],"steps":[
+    {"id":"guesses-on-parallel-connections","name":"A parallel connection adds a failure","description":"Nine scripted wrong guesses and one on a parallel connection reach the threshold of ten before the right guess at tick 18.","behaviors":["guess-throttle-flow"],"faults":["parallel-connection-guess"],"steps":[
         {
           "at": 0,
           "event": "pw-attempt",
@@ -45747,12 +46061,149 @@
           "at": 4,
           "event": "pw-attempt",
           "payload": {
+            "guess": "wrong",
+            "limit-key": "account-1"
+          }
+        },
+        {
+          "at": 6,
+          "event": "pw-attempt",
+          "payload": {
+            "guess": "wrong",
+            "limit-key": "account-1"
+          }
+        },
+        {
+          "at": 8,
+          "event": "pw-attempt",
+          "payload": {
+            "guess": "wrong",
+            "limit-key": "account-1"
+          }
+        },
+        {
+          "at": 10,
+          "event": "pw-attempt",
+          "payload": {
+            "guess": "wrong",
+            "limit-key": "account-1"
+          }
+        },
+        {
+          "at": 12,
+          "event": "pw-attempt",
+          "payload": {
+            "guess": "wrong",
+            "limit-key": "account-1"
+          }
+        },
+        {
+          "at": 14,
+          "event": "pw-attempt",
+          "payload": {
+            "guess": "wrong",
+            "limit-key": "account-1"
+          }
+        },
+        {
+          "at": 16,
+          "event": "pw-attempt",
+          "payload": {
+            "guess": "wrong",
+            "limit-key": "account-1"
+          }
+        },
+        {
+          "at": 18,
+          "event": "pw-attempt",
+          "payload": {
             "guess": "right",
             "limit-key": "account-1"
           }
         }
       ]},
-    {"id":"guesses-on-parallel-connections-impl","name":"A parallel connection adds a failure (implementation)","description":"Two scripted wrong guesses and one on a parallel connection reach the threshold before the right guess at tick 4.","behaviors":["guess-throttle-flow-impl"],"faults":["parallel-connection-guess"],"steps":[{"at":0,"event":"pw-attempt","payload":{"guess":"wrong","limit-key":"account-1"}},{"at":2,"event":"pw-attempt","payload":{"guess":"wrong","limit-key":"account-1"}},{"at":4,"event":"pw-attempt","payload":{"guess":"right","limit-key":"account-1"}}],"routes":[{"event":"pw-attempt","behavior":"guess-throttle-flow-impl","by":"key","field":"limit-key"}]},
+    {"id":"guesses-on-parallel-connections-impl","name":"A parallel connection adds a failure (implementation)","description":"Nine scripted wrong guesses and one on a parallel connection reach the threshold of ten before the right guess at tick 18.","behaviors":["guess-throttle-flow-impl"],"faults":["parallel-connection-guess"],"steps":[
+        {
+          "at": 0,
+          "event": "pw-attempt",
+          "payload": {
+            "guess": "wrong",
+            "limit-key": "account-1"
+          }
+        },
+        {
+          "at": 2,
+          "event": "pw-attempt",
+          "payload": {
+            "guess": "wrong",
+            "limit-key": "account-1"
+          }
+        },
+        {
+          "at": 4,
+          "event": "pw-attempt",
+          "payload": {
+            "guess": "wrong",
+            "limit-key": "account-1"
+          }
+        },
+        {
+          "at": 6,
+          "event": "pw-attempt",
+          "payload": {
+            "guess": "wrong",
+            "limit-key": "account-1"
+          }
+        },
+        {
+          "at": 8,
+          "event": "pw-attempt",
+          "payload": {
+            "guess": "wrong",
+            "limit-key": "account-1"
+          }
+        },
+        {
+          "at": 10,
+          "event": "pw-attempt",
+          "payload": {
+            "guess": "wrong",
+            "limit-key": "account-1"
+          }
+        },
+        {
+          "at": 12,
+          "event": "pw-attempt",
+          "payload": {
+            "guess": "wrong",
+            "limit-key": "account-1"
+          }
+        },
+        {
+          "at": 14,
+          "event": "pw-attempt",
+          "payload": {
+            "guess": "wrong",
+            "limit-key": "account-1"
+          }
+        },
+        {
+          "at": 16,
+          "event": "pw-attempt",
+          "payload": {
+            "guess": "wrong",
+            "limit-key": "account-1"
+          }
+        },
+        {
+          "at": 18,
+          "event": "pw-attempt",
+          "payload": {
+            "guess": "right",
+            "limit-key": "account-1"
+          }
+        }
+      ],"routes":[{"event":"pw-attempt","behavior":"guess-throttle-flow-impl","by":"key","field":"limit-key"}]},
     {"id":"token-reader-joins-concurrently","name":"A second reader asks between two requests of the first","description":"Ada asks twice; Ben asks at tick 1.","behaviors":["token-render-flow"],"faults":["concurrent-reader"],"steps":[{"at":0,"event":"tk-request","payload":{"reader":"ada"}},{"at":2,"event":"tk-request","payload":{"reader":"ada"}}]},
     {"id":"switch-before-delayed-verification","name":"A switch request overtakes a delayed verification result","description":"The verification result is sent at tick 1 and arrives at tick 5; the switch requested at tick 2 is refused.","behaviors":["colour-switch-flow"],"faults":["verification-result-delayed"],"steps":[
         {
