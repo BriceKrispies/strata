@@ -630,6 +630,13 @@ fn type_schema(
             json!({ "type": "array", "items": type_schema(spec, cases, inner, seen) })
         }
         TypeRef::Option(inner) => type_schema(spec, cases, inner, seen),
+        TypeRef::Shared(inner) => type_schema(spec, cases, inner, seen),
+        TypeRef::Set(inner) => {
+            json!({ "type": "array", "uniqueItems": true, "items": type_schema(spec, cases, inner, seen) })
+        }
+        TypeRef::Map(_, value) => {
+            json!({ "type": "object", "additionalProperties": type_schema(spec, cases, value, seen) })
+        }
         TypeRef::Declared(name) => {
             let Some(decl) = spec.type_decl(name) else {
                 return json!({});
@@ -661,6 +668,9 @@ fn type_schema(
                     seen.pop();
                     json!({ "type": "object", "properties": properties, "required": required })
                 }
+                // A union is written by its encoding (tagged or untagged); the catalogue states no
+                // narrower schema than "any JSON" for it rather than a wrong one.
+                TypeKind::Union { .. } => json!({}),
             }
         }
     }

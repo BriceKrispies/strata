@@ -2269,6 +2269,7 @@ impl<'a> Gen<'a> {
                 vars_param,
                 previous_param,
                 previous_required,
+                max_instances,
                 to_fields: to_fields.clone(),
                 machine_doc: format!(
                     " Machine `{}`, stored in record `{}` by `{}`.",
@@ -2425,6 +2426,7 @@ impl<'a> Gen<'a> {
                     vars_param,
                     previous_param,
                     previous_required,
+                    max_instances,
                     to_fields,
                     machine_doc,
                 } = st;
@@ -2634,6 +2636,8 @@ struct StorageTokens {
     vars_param: TokenStream,
     previous_param: TokenStream,
     previous_required: TokenStream,
+    /// `const MAX_INSTANCES` for a keyed machine that creates its records and states `instances.max`.
+    max_instances: TokenStream,
     to_fields: Vec<TokenStream>,
     machine_doc: String,
 }
