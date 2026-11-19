@@ -143,7 +143,8 @@
     // A grant, a forged result, an expiry and re-grant, a late result under the old token, an
     // accepted result, then a second grant (and an ignored third request) that expires once
     // before its result is accepted.
-    { "id": "lease-run", "name": "Lease run", "behaviors": ["lease"],
+    // Times are milliseconds, as generated machines read Exegra's time.
+    { "id": "lease-run", "name": "Lease run", "behaviors": ["lease"], "timeUnit": "ms",
       "steps": [
         { "at": 0, "event": "lease-requested", "payload": { "holder": "w1" } },
         { "at": 10, "event": "lease-result", "payload": { "token": 7, "value": "forged" } },
