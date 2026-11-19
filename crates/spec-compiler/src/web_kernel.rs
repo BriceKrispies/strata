@@ -616,6 +616,15 @@ impl<'a> Kernel<'a> {
         let mut out = Vec::new();
         for c in &ui.contracts {
             let Some(text) = &c.bff_route else { continue };
+            // `POST /path records` with no op and object is the generic records endpoint a
+            // served contract stands behind (mutate-record); the client reaches it only through
+            // the facades that name an op and an object, so it gets no request of its own.
+            if matches!(
+                text.split_whitespace().collect::<Vec<_>>().as_slice(),
+                ["POST", path, "records"] if path.starts_with('/')
+            ) {
+                continue;
+            }
             match parse_route(text) {
                 Some(r) => {
                     routes.insert(c.id.clone(), r);

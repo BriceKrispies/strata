@@ -3730,6 +3730,7 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
+ "strata-model-core",
  "strata-runtime",
  "uuid",
 ]

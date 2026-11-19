@@ -2763,10 +2763,13 @@ impl<'a> Gen<'a> {
         } else {
             quote! { acc_ }
         };
+        // The accumulator's type is written out: an integer literal start (`n = 0`) has no type
+        // of its own, and `checked_add` on it would not resolve.
+        let acc_ty = rust_ty(eff)?;
         Ok(Code::new(
             quote! {
                 {
-                    let mut #acc_var = #it_;
+                    let mut #acc_var: #acc_ty = #it_;
                     for #x in #itt {
                         #acc_var = #bt;
                     }
