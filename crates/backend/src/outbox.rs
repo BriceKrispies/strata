@@ -17,6 +17,11 @@
 //!
 //! An event reaches the hub only through the publisher, which reads the store's outbox, so only
 //! after its commit. Without a kick the sweep publishes it 500 ms after the commit.
+//!
+//! The sweep never ends: the machine has no terminal state, and every return to idle arms the
+//! timer again. The first commit hook call (the start-up one) starts it; from then on it publishes
+//! what another writer committed to the store (another replica, a command line tool) within
+//! 500 ms, with no commit hook of this process.
 
 use crate::app::{App, Shared, LOG};
 use crate::hub::publish_pending;
@@ -191,14 +196,9 @@ impl Outbox {
 
     async fn offer(&self, kick: bool) -> Result<(), HostError> {
         let system = &self.inner.system;
-        // One instance serves every commit: put it back to its start when it has finished.
-        let waiting = system
-            .instance(MACHINE, KEY)
-            .await?
-            .is_some_and(|(state, _)| {
-                matches!(state.as_str(), Some("arc-od-idle-i" | "arc-od-pending-i"))
-            });
-        if !waiting {
+        // One instance serves every commit and nothing is terminal: it returns to idle after each
+        // publication and its sweep keeps itself going, so it is set up only when none exists.
+        if system.instance(MACHINE, KEY).await?.is_none() {
             system.init(MACHINE, KEY, base_record()).await?;
         }
         system.submit(event("rt-committed")).await?;

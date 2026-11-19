@@ -19039,7 +19039,24 @@
     {"id":"m-outbox-effect-once","kind":"invariant","models":"arc-104","statement":"A subscriber that receives one notice twice makes one effect from it.","evaluate":{"method":"state-invariant","scenarios":["arc-outbox-duplicate-delivery","arc-outbox-delayed-first-delivery"],"expr":"arc-outbox-consumer-flow.effects <= 1","negatives":[{"scenario":"arc-outbox-duplicate-delivery","faults":["arc-defect-outbox-duplicate-applied"]},{"scenario":"arc-outbox-delayed-first-delivery","faults":["arc-defect-outbox-duplicate-applied"]}]},"faultModel":"fault-model-launch","assumptions":["a-model-abstraction"],"faultBasis":"fault"},
     {"id":"m-arc-outbox-consumer-flow-refined","kind":"temporal","models":"arc-104","statement":"The implementation of the outbox consumer, which remembers the last sequence number applied, refines the consumer model.","evaluate":{"method":"refines","behavior":"arc-outbox-consumer-flow-impl","scenarios":["arc-outbox-duplicate-delivery-impl","arc-outbox-delayed-first-delivery-impl"]},"faultModel":"fault-model-launch","assumptions":["a-model-abstraction"]},
     {"id":"m-outbox-published-after-crash","kind":"temporal","models":"arc-105","statement":"An event that a stopped runtime left unpublished is published by the outbox job.","evaluate":{"method":"eventually","scenarios":["arc-publisher-crashed-after-commit"],"occurs":{"event":"arc-ob-published"},"negatives":[{"scenario":"arc-publisher-crashed-after-commit","faults":["arc-recovery-disabled"]}]},"faultModel":"fault-model-launch","assumptions":["a-model-abstraction","a-database-commit"],"faultBasis":"fault"},
-    {"id":"m-arc-outbox-delivery-flow-refined","kind":"temporal","models":"arc-105","statement":"The implementation of the outbox delivery, over the stored domain events, refines the delivery model.","evaluate":{"method":"refines","behavior":"arc-outbox-delivery-flow-impl","scenarios":["arc-publisher-crashed-after-commit-impl"]},"faultModel":"fault-model-launch","assumptions":["a-model-abstraction"]},
+    {
+      "id": "m-arc-outbox-delivery-flow-refined",
+      "kind": "temporal",
+      "models": "arc-105",
+      "statement": "The implementation of the outbox delivery, over the stored domain events, refines the delivery model.",
+      "evaluate": {
+        "method": "refines",
+        "behavior": "arc-outbox-delivery-flow-impl",
+        "scenarios": [
+          "arc-publisher-crashed-after-commit-impl",
+          "arc-idle-sweep-publishes-foreign-commit-impl"
+        ]
+      },
+      "faultModel": "fault-model-launch",
+      "assumptions": [
+        "a-model-abstraction"
+      ]
+    },
     {"id":"m-old-format-while-old-runs","kind":"invariant","models":"arc-106","statement":"Once a commit is written in the newer format, no older version is still running.","evaluate":{"method":"state-invariant","scenarios":["arc-rolling-deploy-with-commit","rolling-deploy-finish-delayed"],"expr":"arc-rolling-change-flow.newFormat => !arc-rolling-change-flow.oldRunning","negatives":[{"scenario":"arc-rolling-deploy-with-commit","faults":["arc-defect-new-format-early"]},{"scenario":"rolling-deploy-finish-delayed","faults":["arc-defect-new-format-early"]}]},"faultModel":"fault-model-launch","assumptions":["a-model-abstraction"],"faultBasis":"fault"},
     {"id":"m-arc-rolling-change-flow-refined","kind":"temporal","models":"arc-106","statement":"The implementation of the rolling change refines the rolling change model.","evaluate":{"method":"refines","behavior":"arc-rolling-change-flow-impl","scenarios":["arc-rolling-deploy-with-commit-impl","rolling-deploy-finish-delayed-impl"]},"faultModel":"fault-model-launch","assumptions":["a-model-abstraction"]},
     {"id":"m-module-through-runtime","kind":"structural","models":"arc-112","statement":"Every path from a product module to a tenant database passes through the runtime.","evaluate":{"method":"only-via","from":"product-module","to":"tenant-database","via":"runtime"},"assumptions":["a-model-abstraction"]},
@@ -27876,6 +27893,35 @@
         "a-tick"
       ],
       "faultBasis": "fault"
+    },
+    {
+      "id": "m-outbox-published-without-local-commit",
+      "kind": "temporal",
+      "models": "arc-105",
+      "statement": "An event committed by another writer, with no commit hook of this runtime, is published by the idle sweep.",
+      "evaluate": {
+        "method": "eventually",
+        "scenarios": [
+          "arc-idle-sweep-publishes-foreign-commit"
+        ],
+        "occurs": {
+          "event": "arc-ob-published"
+        },
+        "negatives": [
+          {
+            "scenario": "arc-idle-sweep-publishes-foreign-commit",
+            "faults": [
+              "arc-idle-sweep-disabled"
+            ]
+          }
+        ]
+      },
+      "faultModel": "fault-model-launch",
+      "assumptions": [
+        "a-model-abstraction",
+        "a-database-commit"
+      ],
+      "faultBasis": "fault"
     }
   ],
 
@@ -36248,14 +36294,93 @@
       },
       "realisation": "target"
     },
-    {"id":"arc-outbox-delivery-flow","name":"Outbox delivery after a stop","subject":"runtime","initial":"arc-od-idle","description":"A commit leaves events unpublished. The runtime that committed publishes them, or else the outbox job does.","variables":[{"name":"pending","type":"boolean","initial":false}],"states":[{"id":"arc-od-idle","name":"Nothing pending"},{"id":"arc-od-pending","name":"Events pending"},{"id":"arc-od-done","name":"Published","terminal":true}],"transitions":[{"id":"arc-od-commit","from":"arc-od-idle","to":"arc-od-pending","on":"rt-committed","effects":[{"set":"pending","to":true}]},{"id":"arc-od-publish-now","from":"arc-od-pending","to":"arc-od-done","on":"arc-ob-publish-now","effects":[{"set":"pending","to":false},{"emit":"arc-ob-published"}]},{"id":"arc-od-sweep","from":"arc-od-pending","to":"arc-od-done","on":"arc-ob-sweep-due","effects":[{"set":"pending","to":false},{"emit":"arc-ob-published"}]}]},
+    {
+      "id": "arc-outbox-delivery-flow",
+      "name": "Outbox delivery after a stop",
+      "subject": "runtime",
+      "initial": "arc-od-idle",
+      "description": "A commit leaves events unpublished. The runtime that committed publishes them, or else the outbox job does. The outbox job sweeps for as long as the runtime runs, so events that another writer committed are published too. Nothing is terminal.",
+      "variables": [
+        {
+          "name": "pending",
+          "type": "boolean",
+          "initial": false
+        }
+      ],
+      "states": [
+        {
+          "id": "arc-od-idle",
+          "name": "Nothing pending"
+        },
+        {
+          "id": "arc-od-pending",
+          "name": "Events pending"
+        }
+      ],
+      "transitions": [
+        {
+          "id": "arc-od-commit",
+          "from": "arc-od-idle",
+          "to": "arc-od-pending",
+          "on": "rt-committed",
+          "effects": [
+            {
+              "set": "pending",
+              "to": true
+            }
+          ]
+        },
+        {
+          "id": "arc-od-publish-now",
+          "from": "arc-od-pending",
+          "to": "arc-od-idle",
+          "on": "arc-ob-publish-now",
+          "effects": [
+            {
+              "set": "pending",
+              "to": false
+            },
+            {
+              "emit": "arc-ob-published"
+            }
+          ]
+        },
+        {
+          "id": "arc-od-sweep",
+          "from": "arc-od-pending",
+          "to": "arc-od-idle",
+          "on": "arc-ob-sweep-due",
+          "effects": [
+            {
+              "set": "pending",
+              "to": false
+            },
+            {
+              "emit": "arc-ob-published"
+            }
+          ]
+        },
+        {
+          "id": "arc-od-sweep-idle",
+          "from": "arc-od-idle",
+          "to": "arc-od-idle",
+          "on": "arc-ob-sweep-due",
+          "description": "The sweep finds what another writer committed, which no commit hook of this runtime announced.",
+          "effects": [
+            {
+              "emit": "arc-ob-published"
+            }
+          ]
+        }
+      ]
+    },
     {
       "id": "arc-outbox-delivery-flow-impl",
       "name": "Outbox delivery after a stop (implementation)",
       "subject": "runtime",
       "level": "implementation",
       "initial": "arc-od-idle-i",
-      "description": "A commit leaves its domain events (rec-event, keyed by seq) in the outbox of their tenant, each with an outbox position of that tenant; positions of different tenants are not ordered against each other. The runtime that committed kicks the publisher at once (publish-now), or else the publisher finds the events on its next sweep, 500 ms after the commit (500 ms, the idle period of the publisher's pump; default). A sweep takes at most 256 outbox entries in one batch, hands them to subscribers and marks them published per tenant up to the last position it moved. Publication is at least once; the consumer discards what it has seen.",
+      "description": "A commit leaves its domain events (rec-event, keyed by seq) in the outbox of their tenant, each with an outbox position of that tenant; positions of different tenants are not ordered against each other. The runtime that committed kicks the publisher at once (publish-now), or else the publisher finds the events on its next sweep, 500 ms after the commit (500 ms, the idle period of the publisher's pump; default). The sweep never ends: the commit hook (called once at start-up too) arms it, and every return to idle arms it again, so events committed by another writer on the same store (another replica, a command line tool) are published within 500 ms with no commit hook of this runtime. A sweep takes at most 256 outbox entries in one batch, hands them to subscribers and marks them published per tenant up to the last position it moved. Publication is at least once; the consumer discards what it has seen.",
       "transaction": {
         "scope": "transition",
         "isolation": "serializable"
@@ -36273,8 +36398,7 @@
           "id": "arc-od-idle-i",
           "name": "Nothing unpublished",
           "ignores": [
-            "arc-ob-publish-now",
-            "arc-ob-sweep-due"
+            "arc-ob-publish-now"
           ]
         },
         {
@@ -36283,11 +36407,6 @@
           "ignores": [
             "rt-committed"
           ]
-        },
-        {
-          "id": "arc-od-done-i",
-          "name": "Published",
-          "terminal": true
         }
       ],
       "transitions": [
@@ -36312,7 +36431,7 @@
         {
           "id": "arc-od-publish-now-i",
           "from": "arc-od-pending-i",
-          "to": "arc-od-done-i",
+          "to": "arc-od-idle-i",
           "on": "arc-ob-publish-now",
           "otherwise": true,
           "effects": [
@@ -36325,14 +36444,16 @@
               "to": "notice-queue"
             },
             {
-              "cancel": "sweep"
+              "timer": "sweep",
+              "after": 500,
+              "emit": "arc-ob-sweep-due"
             }
           ]
         },
         {
           "id": "arc-od-sweep-i",
           "from": "arc-od-pending-i",
-          "to": "arc-od-done-i",
+          "to": "arc-od-idle-i",
           "on": "arc-ob-sweep-due",
           "otherwise": true,
           "effects": [
@@ -36343,6 +36464,30 @@
             {
               "emit": "arc-ob-published",
               "to": "notice-queue"
+            },
+            {
+              "timer": "sweep",
+              "after": 500,
+              "emit": "arc-ob-sweep-due"
+            }
+          ]
+        },
+        {
+          "id": "arc-od-sweep-idle-i",
+          "from": "arc-od-idle-i",
+          "to": "arc-od-idle-i",
+          "on": "arc-ob-sweep-due",
+          "otherwise": true,
+          "description": "Nothing is terminal: the sweep keeps running while the machine is idle, and publishes what another writer committed (another replica, a command line tool) without a commit hook of this runtime.",
+          "effects": [
+            {
+              "emit": "arc-ob-published",
+              "to": "notice-queue"
+            },
+            {
+              "timer": "sweep",
+              "after": 500,
+              "emit": "arc-ob-sweep-due"
             }
           ]
         }
@@ -36351,8 +36496,7 @@
       "refinement": {
         "states": {
           "arc-od-idle-i": "arc-od-idle",
-          "arc-od-pending-i": "arc-od-pending",
-          "arc-od-done-i": "arc-od-done"
+          "arc-od-pending-i": "arc-od-pending"
         },
         "variables": {
           "pending": "pending"
@@ -36360,7 +36504,8 @@
         "transitions": {
           "arc-od-commit-i": "arc-od-commit",
           "arc-od-publish-now-i": "arc-od-publish-now",
-          "arc-od-sweep-i": "arc-od-sweep"
+          "arc-od-sweep-i": "arc-od-sweep",
+          "arc-od-sweep-idle-i": "arc-od-sweep-idle"
         }
       },
       "storage": {
@@ -63043,6 +63188,13 @@
       "attempts": 2,
       "occurrence": 1,
       "description": "The first dispatch of the notice fails twice and it arrives 3 seconds late (the runtime's backoff of 1 and 2 seconds); the redelivery arrives first."
+    },
+    {
+      "id": "arc-idle-sweep-disabled",
+      "name": "The idle sweep does not publish",
+      "kind": "disable-transition",
+      "transition": "arc-od-sweep-idle",
+      "description": "Shows that the claim that an idle outbox job publishes another writer's commits can fail."
     }
   ],
   "scenarios": [
@@ -63176,7 +63328,7 @@
     {
       "id": "arc-publisher-crashed-after-commit-impl",
       "name": "The publisher stops after a commit (implementation)",
-      "description": "The runtime that committed stops before it publishes. The publisher publishes at its sweep, 500 ms after the commit. Times are in milliseconds. The same scenario run on the implementation machines.",
+      "description": "The runtime that committed stops before it publishes. The publisher publishes at its sweep, 500 ms after the commit, and goes on sweeping while idle. Times are in milliseconds; the run stops at 1200 because the sweep never ends. The same scenario run on the implementation machines.",
       "behaviors": [
         "arc-outbox-delivery-flow-impl"
       ],
@@ -63193,7 +63345,8 @@
           "event": "arc-ob-publish-now"
         }
       ],
-      "timeUnit": "ms"
+      "timeUnit": "ms",
+      "stopAt": "1200 ms"
     },
     {"id":"arc-rolling-deploy-with-commit","name":"A commit during a rolling deployment","description":"The newer version starts and commits, the older version stops, and the newer version commits again.","behaviors":["arc-rolling-change-flow"],"steps":[{"at":0,"event":"arc-rl-deploy-started"},{"at":1,"event":"arc-rl-commit"},{"at":3,"event":"arc-rl-deploy-finished"},{"at":4,"event":"arc-rl-commit"}]},
     {"id":"arc-rolling-deploy-with-commit-impl","name":"A commit during a rolling deployment (implementation)","description":"The newer version starts and commits, the older version stops, and the newer version commits again. The same scenario run on the implementation machines.","behaviors":["arc-rolling-change-flow-impl"],"steps":[{"at":0,"event":"arc-rl-deploy-started"},{"at":1,"event":"arc-rl-commit"},{"at":3,"event":"arc-rl-deploy-finished"},{"at":4,"event":"arc-rl-commit"}]},
@@ -76237,7 +76390,7 @@
     {
       "id": "cover-arc-outbox-delivery-flow-impl-1",
       "name": "Coverage of arc-outbox-delivery-flow-impl 1",
-      "description": "Generated by exegra cover-machines: exercises arc-od-publish-now-i.",
+      "description": "Generated by exegra cover-machines: exercises arc-od-publish-now-i. The run stops at 1200 because the sweep never ends.",
       "tags": [
         "generated-coverage"
       ],
@@ -76254,7 +76407,8 @@
           "at": 2,
           "event": "arc-ob-publish-now"
         }
-      ]
+      ],
+      "stopAt": "1200 ms"
     },
     {
       "id": "cover-preview-link-flow-impl-1",
@@ -76654,6 +76808,42 @@
           }
         }
       ]
+    },
+    {
+      "id": "arc-idle-sweep-publishes-foreign-commit",
+      "name": "An event committed by another writer is published by the idle sweep",
+      "description": "No runtime committed through this hook: the events were committed by another replica or a command line tool. The outbox job still publishes them.",
+      "behaviors": [
+        "arc-outbox-delivery-flow"
+      ],
+      "steps": [
+        {
+          "at": 0,
+          "event": "arc-ob-sweep-due",
+          "note": "The idle sweep; no rt-committed came before."
+        }
+      ]
+    },
+    {
+      "id": "arc-idle-sweep-publishes-foreign-commit-impl",
+      "name": "An event committed by another writer is published by the idle sweep (implementation)",
+      "description": "The backend calls the commit hook once at start-up and the kick publishes at once; from then on the machine is idle and no commit hook of this runtime runs. The idle sweep fires at 501 ms and again at 1001 ms, so an event another writer committed in between is published within 500 ms. Times are in milliseconds. The same scenario run on the implementation machines.",
+      "behaviors": [
+        "arc-outbox-delivery-flow-impl"
+      ],
+      "steps": [
+        {
+          "at": 0,
+          "event": "rt-committed",
+          "note": "The start-up call."
+        },
+        {
+          "at": 1,
+          "event": "arc-ob-publish-now"
+        }
+      ],
+      "timeUnit": "ms",
+      "stopAt": "1100 ms"
     }
   ],
 
