@@ -36,6 +36,7 @@ export const BINDINGS = [
   { id: 'live-about-session-ended', screen: 'screen-about', event: 'ui-session-ended', refresh: 'whole' },
   { id: 'live-sign-in-session-ended', screen: 'screen-sign-in', event: 'ui-session-ended', refresh: 'whole' },
   { id: 'live-not-found-session-ended', screen: 'screen-not-found', event: 'ui-session-ended', refresh: 'whole' },
+  { id: 'live-lab-published', screen: 'screen-lab', event: 'ui-notice-received', refresh: 'whole' },
 ];
 
 /**
@@ -170,6 +171,8 @@ export function refreshes(screen, event, payload, view) {
       switch (event) {
         case 'ui-session-ended':
           return true;
+        case 'ui-notice-received':
+          return ((payload?.kind === "schema") || (payload?.kind === "membership") || ((view?.depends_on) ?? []).includes(payload?.object));
         default:
           return false;
       }

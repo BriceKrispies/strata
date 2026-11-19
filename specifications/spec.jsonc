@@ -1682,10 +1682,221 @@
     {"id":"sign-in-at-site","name":"Sign in from the site","ref":"CT-254","realisation":"generated","implementedBy":"gateway","bffRoute":"POST /api/login","auth":"Anyone; no session is needed","idempotent":false,"timeoutMs":2000,"inputs":[{"name":"login","type":"string"},{"name":"password","type":"string"}],"outputs":[{"name":"session","type":"session-view"}],"preconditions":["The request carries the request token that the gateway issued to the browser (GWY-257)."],"postconditions":["It signs in through sign-in-with-password and answers the session as the browser may see it; the secret token travels only in the session cookie."],"errors":[{"name":"unauthenticated","condition":"The credentials do not match, the account does not exist or the factor is missing; the response does not say which (IDN-255, UXA-202).","type":"api-error"},{"name":"throttled","condition":"The caller exceeded a limit that applies to it.","type":"api-error"},{"name":"unavailable","condition":"A dependency of the operation did not answer.","type":"api-error"}]},
     {"id":"sign-out-of-site","name":"Sign out from the site","ref":"CT-255","realisation":"generated","implementedBy":"gateway","bffRoute":"POST /api/logout","auth":"A signed-in principal","idempotent":true,"timeoutMs":2000,"inputs":[],"outputs":[{"name":"session","type":"session-view"}],"preconditions":["The request carries the request token of the session (GWY-257)."],"postconditions":["The session named by the cookie is revoked through sign-out, and the answer is the session of an anonymous visitor."],"errors":[{"name":"unauthenticated","condition":"No valid session or credential accompanies the request.","type":"api-error"}]},
     {"id":"read-session-view","name":"Read the session of the visit","ref":"CT-256","realisation":"generated","implementedBy":"gateway","bffRoute":"GET /api/session","auth":"Anyone; no session is needed","idempotent":true,"timeoutMs":2000,"inputs":[],"outputs":[{"name":"session","type":"session-view"}],"postconditions":["The answer is the session the cookie names as the browser may see it, with the request token while it is signed in, or the session of an anonymous visitor."],"errors":[{"name":"unavailable","condition":"A dependency of the operation did not answer.","type":"api-error"}]},
-    {"id":"create-article","name":"Create an article","ref":"CT-257","realisation":"generated","implementedBy":"gateway","bffRoute":"POST /api/records records create post","auth":"A signed-in principal whose policies permit the operation","idempotent":false,"timeoutMs":10000,"inputs":[{"name":"title","type":"string"},{"name":"slug","type":"string"},{"name":"excerpt","type":"string","optional":true},{"name":"body","type":"string"},{"name":"category","type":"string","optional":true},{"name":"author","type":"string","optional":true},{"name":"tags","type":"string","optional":true},{"name":"cover","type":"string","optional":true},{"name":"cover-alt","type":"string","optional":true},{"name":"featured","type":"bool","optional":true},{"name":"status","type":"string","optional":true}],"outputs":[{"name":"article-id","type":"record-id"},{"name":"version","type":"u64"},{"name":"slug","type":"string"}],"preconditions":["The request carries the request token of the session (GWY-002)."],"postconditions":["The article is created as a draft whatever status is asked (CMS-154); a status of published is applied as a second step that the post workflow allows, so that a refusal of publishing leaves the draft saved.","The input category and author hold a record identifier as text, or are empty; tags are separated by commas; an empty optional input leaves the field unset.","The output slug repeats the address that was saved."],"errors":[{"name":"unauthenticated","condition":"No valid session or credential accompanies the request.","type":"api-error"},{"name":"forbidden","condition":"The caller holds no permission for the operation.","type":"api-error"},{"name":"invalid","condition":"A field fails a check of the tenant schema; the failed checks name the field.","type":"api-error"},{"name":"throttled","condition":"The caller exceeded a limit that applies to it.","type":"api-error"},{"name":"unavailable","condition":"A dependency of the operation did not answer.","type":"api-error"}]},
-    {"id":"update-article","name":"Update an article","ref":"CT-258","realisation":"generated","implementedBy":"gateway","bffRoute":"POST /api/records records update post","auth":"A signed-in principal whose policies permit the operation","idempotent":false,"timeoutMs":10000,"inputs":[{"name":"article","type":"record-id"},{"name":"expected-version","type":"u64"},{"name":"title","type":"string"},{"name":"slug","type":"string"},{"name":"excerpt","type":"string","optional":true},{"name":"body","type":"string"},{"name":"category","type":"string","optional":true},{"name":"author","type":"string","optional":true},{"name":"tags","type":"string","optional":true},{"name":"cover","type":"string","optional":true},{"name":"cover-alt","type":"string","optional":true},{"name":"featured","type":"bool","optional":true},{"name":"status","type":"string","optional":true}],"outputs":[{"name":"article-id","type":"record-id"},{"name":"version","type":"u64"},{"name":"slug","type":"string"}],"preconditions":["The request carries the request token of the session (GWY-002)."],"postconditions":["The change is applied only when expected-version is the stored version of the article; otherwise it is refused with conflict.","A status of published or draft moves the article through the post workflow in the same request.","The output slug repeats the address that was saved."],"errors":[{"name":"unauthenticated","condition":"No valid session or credential accompanies the request.","type":"api-error"},{"name":"forbidden","condition":"The caller holds no permission for the operation.","type":"api-error"},{"name":"invalid","condition":"A field fails a check of the tenant schema; the failed checks name the field.","type":"api-error"},{"name":"throttled","condition":"The caller exceeded a limit that applies to it.","type":"api-error"},{"name":"unavailable","condition":"A dependency of the operation did not answer.","type":"api-error"},{"name":"conflict","condition":"The record was changed since the version the caller saw; the current version is named.","type":"api-error"}]},
+    {"id":"create-article","name":"Create an article","ref":"CT-257","realisation":"generated","implementedBy":"gateway","bffRoute":"POST /api/records records create post","auth":"A signed-in principal whose policies permit the operation","idempotent":false,"timeoutMs":10000,"inputs":[
+        {
+          "name": "title",
+          "type": "string",
+          "encode": {
+            "trim": true
+          }
+        },
+        {
+          "name": "slug",
+          "type": "string",
+          "encode": {
+            "trim": true
+          }
+        },
+        {
+          "name": "excerpt",
+          "type": "string",
+          "optional": true,
+          "encode": {
+            "trim": true,
+            "empty": "omit"
+          }
+        },
+        {
+          "name": "body",
+          "type": "string"
+        },
+        {
+          "name": "category",
+          "type": "string",
+          "optional": true,
+          "encode": {
+            "as": "number",
+            "empty": "omit"
+          }
+        },
+        {
+          "name": "author",
+          "type": "string",
+          "optional": true,
+          "encode": {
+            "as": "number",
+            "empty": "omit"
+          }
+        },
+        {
+          "name": "tags",
+          "type": "string",
+          "optional": true,
+          "encode": {
+            "split": ",",
+            "empty": "omit"
+          }
+        },
+        {
+          "name": "cover",
+          "type": "string",
+          "optional": true,
+          "encode": {
+            "empty": "omit"
+          }
+        },
+        {
+          "name": "cover-alt",
+          "type": "string",
+          "optional": true,
+          "encode": {
+            "trim": true,
+            "empty": "omit"
+          }
+        },
+        {
+          "name": "featured",
+          "type": "bool",
+          "optional": true,
+          "encode": {
+            "empty": "omit"
+          }
+        },
+        {
+          "name": "status",
+          "type": "string",
+          "optional": true
+        }
+      ],"outputs":[{"name":"article-id","type":"record-id"},{"name":"version","type":"u64"},{"name":"slug","type":"string"}],"preconditions":["The request carries the request token of the session (GWY-002)."],"postconditions":["The article is created as a draft whatever status is asked (CMS-154); a status of published is applied as a second step that the post workflow allows, so that a refusal of publishing leaves the draft saved.","The input category and author hold a record identifier as text, or are empty; tags are separated by commas; an empty optional input leaves the field unset.","The output slug repeats the address that was saved."],"errors":[{"name":"unauthenticated","condition":"No valid session or credential accompanies the request.","type":"api-error"},{"name":"forbidden","condition":"The caller holds no permission for the operation.","type":"api-error"},{"name":"invalid","condition":"A field fails a check of the tenant schema; the failed checks name the field.","type":"api-error"},{"name":"throttled","condition":"The caller exceeded a limit that applies to it.","type":"api-error"},{"name":"unavailable","condition":"A dependency of the operation did not answer.","type":"api-error"}]},
+    {"id":"update-article","name":"Update an article","ref":"CT-258","realisation":"generated","implementedBy":"gateway","bffRoute":"POST /api/records records update post","auth":"A signed-in principal whose policies permit the operation","idempotent":false,"timeoutMs":10000,"inputs":[
+        {
+          "name": "article",
+          "type": "record-id"
+        },
+        {
+          "name": "expected-version",
+          "type": "u64"
+        },
+        {
+          "name": "title",
+          "type": "string",
+          "encode": {
+            "trim": true
+          }
+        },
+        {
+          "name": "slug",
+          "type": "string",
+          "encode": {
+            "trim": true
+          }
+        },
+        {
+          "name": "excerpt",
+          "type": "string",
+          "optional": true,
+          "encode": {
+            "trim": true,
+            "empty": "null"
+          }
+        },
+        {
+          "name": "body",
+          "type": "string"
+        },
+        {
+          "name": "category",
+          "type": "string",
+          "optional": true,
+          "encode": {
+            "as": "number",
+            "empty": "null"
+          }
+        },
+        {
+          "name": "author",
+          "type": "string",
+          "optional": true,
+          "encode": {
+            "as": "number",
+            "empty": "null"
+          }
+        },
+        {
+          "name": "tags",
+          "type": "string",
+          "optional": true,
+          "encode": {
+            "split": ",",
+            "empty": "null"
+          }
+        },
+        {
+          "name": "cover",
+          "type": "string",
+          "optional": true,
+          "encode": {
+            "empty": "null"
+          }
+        },
+        {
+          "name": "cover-alt",
+          "type": "string",
+          "optional": true,
+          "encode": {
+            "trim": true,
+            "empty": "null"
+          }
+        },
+        {
+          "name": "featured",
+          "type": "bool",
+          "optional": true,
+          "encode": {
+            "empty": "null"
+          }
+        },
+        {
+          "name": "status",
+          "type": "string",
+          "optional": true
+        }
+      ],"outputs":[{"name":"article-id","type":"record-id"},{"name":"version","type":"u64"},{"name":"slug","type":"string"}],"preconditions":["The request carries the request token of the session (GWY-002)."],"postconditions":["The change is applied only when expected-version is the stored version of the article; otherwise it is refused with conflict.","A status of published or draft moves the article through the post workflow in the same request.","The output slug repeats the address that was saved."],"errors":[{"name":"unauthenticated","condition":"No valid session or credential accompanies the request.","type":"api-error"},{"name":"forbidden","condition":"The caller holds no permission for the operation.","type":"api-error"},{"name":"invalid","condition":"A field fails a check of the tenant schema; the failed checks name the field.","type":"api-error"},{"name":"throttled","condition":"The caller exceeded a limit that applies to it.","type":"api-error"},{"name":"unavailable","condition":"A dependency of the operation did not answer.","type":"api-error"},{"name":"conflict","condition":"The record was changed since the version the caller saw; the current version is named.","type":"api-error"}]},
     {"id":"delete-article","name":"Delete an article","ref":"CT-259","realisation":"generated","implementedBy":"gateway","bffRoute":"POST /api/records records delete post","auth":"A signed-in principal whose policies permit the operation","idempotent":false,"timeoutMs":10000,"inputs":[{"name":"article","type":"record-id"},{"name":"expected-version","type":"u64"}],"outputs":[],"preconditions":["The request carries the request token of the session (GWY-002)."],"postconditions":["The article is removed only when expected-version is its stored version; otherwise the delete is refused with conflict."],"errors":[{"name":"unauthenticated","condition":"No valid session or credential accompanies the request.","type":"api-error"},{"name":"forbidden","condition":"The caller holds no permission for the operation.","type":"api-error"},{"name":"conflict","condition":"The record was changed since the version the caller saw; the current version is named.","type":"api-error"},{"name":"throttled","condition":"The caller exceeded a limit that applies to it.","type":"api-error"},{"name":"unavailable","condition":"A dependency of the operation did not answer.","type":"api-error"}]},
-    {"id":"save-site-settings","name":"Save the publication settings","ref":"CT-260","realisation":"generated","implementedBy":"gateway","bffRoute":"POST /api/records records update publication","auth":"A signed-in principal whose policies permit the operation","idempotent":false,"timeoutMs":10000,"inputs":[{"name":"publication","type":"record-id"},{"name":"expected-version","type":"u64"},{"name":"name","type":"string"},{"name":"tagline","type":"string","optional":true},{"name":"accent","type":"string"},{"name":"paper","type":"string"}],"outputs":[{"name":"version","type":"u64"}],"preconditions":["The request carries the request token of the session (GWY-002)."],"postconditions":["The change is applied only when expected-version is the stored version of the publication record; otherwise it is refused with conflict.","Every open page of the tenant refreshes from the committed change."],"errors":[{"name":"unauthenticated","condition":"No valid session or credential accompanies the request.","type":"api-error"},{"name":"forbidden","condition":"The caller holds no permission for the operation.","type":"api-error"},{"name":"invalid","condition":"A field fails a check of the tenant schema; the failed checks name the field.","type":"api-error"},{"name":"throttled","condition":"The caller exceeded a limit that applies to it.","type":"api-error"},{"name":"unavailable","condition":"A dependency of the operation did not answer.","type":"api-error"},{"name":"conflict","condition":"The record was changed since the version the caller saw; the current version is named.","type":"api-error"}]},
+    {"id":"save-site-settings","name":"Save the publication settings","ref":"CT-260","realisation":"generated","implementedBy":"gateway","bffRoute":"POST /api/records records update publication","auth":"A signed-in principal whose policies permit the operation","idempotent":false,"timeoutMs":10000,"inputs":[
+        {
+          "name": "publication",
+          "type": "record-id"
+        },
+        {
+          "name": "expected-version",
+          "type": "u64"
+        },
+        {
+          "name": "name",
+          "type": "string",
+          "encode": {
+            "trim": true
+          }
+        },
+        {
+          "name": "tagline",
+          "type": "string",
+          "optional": true,
+          "encode": {
+            "trim": true,
+            "empty": "null"
+          }
+        },
+        {
+          "name": "accent",
+          "type": "string"
+        },
+        {
+          "name": "paper",
+          "type": "string"
+        }
+      ],"outputs":[{"name":"version","type":"u64"}],"preconditions":["The request carries the request token of the session (GWY-002)."],"postconditions":["The change is applied only when expected-version is the stored version of the publication record; otherwise it is refused with conflict.","Every open page of the tenant refreshes from the committed change."],"errors":[{"name":"unauthenticated","condition":"No valid session or credential accompanies the request.","type":"api-error"},{"name":"forbidden","condition":"The caller holds no permission for the operation.","type":"api-error"},{"name":"invalid","condition":"A field fails a check of the tenant schema; the failed checks name the field.","type":"api-error"},{"name":"throttled","condition":"The caller exceeded a limit that applies to it.","type":"api-error"},{"name":"unavailable","condition":"A dependency of the operation did not answer.","type":"api-error"},{"name":"conflict","condition":"The record was changed since the version the caller saw; the current version is named.","type":"api-error"}]},
     {"id":"preview-markdown","name":"Preview constrained Markdown","ref":"CT-261","realisation":"generated","implementedBy":"gateway","bffRoute":"POST /api/preview","auth":"A signed-in principal whose policies permit the operation","idempotent":true,"timeoutMs":2000,"inputs":[{"name":"markdown","type":"string"}],"outputs":[{"name":"blocks","type":"json"}],"preconditions":["The request carries an allowed origin."],"postconditions":["The blocks are a pure function of the text through parse-markdown; nothing is stored."],"errors":[{"name":"unauthenticated","condition":"No valid session or credential accompanies the request.","type":"api-error"},{"name":"unavailable","condition":"A dependency of the operation did not answer.","type":"api-error"}]}
   ],
   "decisions": [
@@ -3204,24 +3415,976 @@
 
   "forms": [
     {"id":"form-sign-in","screen":"screen-sign-in","contract":"sign-in-at-site","fields":[{"name":"login","input":"login","label":"Name","control":"text"},{"name":"password","input":"password","label":"Password","control":"password"}],"submitLabel":"Sign in","onSuccess":{"navigate":{"path":"query.next","screen":"screen-desk"},"toast":"Signed in as ${response.session.display-name}."},"onError":{"show":"inline"}},
-    {"id":"form-search","screen":"screen-search","contract":"read-search-page","fields":[{"name":"q","input":"q","label":"Search the essays","control":"text"}],"submitLabel":"Search","onSuccess":{"navigate":{"screen":"screen-search","params":{"q":"response.q"}}},"onError":{"show":"inline"}},
-    {"id":"form-new-article-save","screen":"screen-desk-new","contract":"create-article","fields":[{"name":"title","input":"title","label":"Title","control":"text"},{"name":"slug","input":"slug","label":"Address","control":"text","derive":"form.title","transform":"slug","until":"edited"},{"name":"excerpt","input":"excerpt","label":"Excerpt","control":"textarea"},{"name":"body","input":"body","label":"Text","control":"textarea"},{"name":"category","input":"category","label":"Topic","control":"select","optionsFrom":{"path":"topics","value":"value","label":"label"}},{"name":"author","input":"author","label":"Author","control":"select","optionsFrom":{"path":"authors","value":"value","label":"label"}},{"name":"tags","input":"tags","label":"Tags","control":"text"},{"name":"cover","input":"cover","label":"Image","control":"select","options":[{"value":"","label":"No cover"},{"value":"/media/jig.svg","label":"Fixture and chair leg"},{"value":"/media/margin.svg","label":"Open book with margins"},{"value":"/media/kiln.svg","label":"Kiln mouth and pots"},{"value":"/media/slow.svg","label":"Growth rings"},{"value":"/media/drawing.svg","label":"Three sketched doors"},{"value":"/media/hours.svg","label":"Row of cylinders"}]},{"name":"cover-alt","input":"cover-alt","label":"Description of the image","control":"textarea"},{"name":"featured","input":"featured","label":"Feature at the top of the front page","control":"checkbox"}],"submitLabel":"Save draft","onSuccess":{"navigate":{"screen":"screen-desk-edit","params":{"slug":"response.slug"}},"toast":"Draft saved."},"onError":{"show":"inline"}},
-    {"id":"form-new-article-publish","screen":"screen-desk-new","contract":"create-article","fields":[{"name":"title","input":"title","label":"Title","control":"text"},{"name":"slug","input":"slug","label":"Address","control":"text","derive":"form.title","transform":"slug","until":"edited"},{"name":"excerpt","input":"excerpt","label":"Excerpt","control":"textarea"},{"name":"body","input":"body","label":"Text","control":"textarea"},{"name":"category","input":"category","label":"Topic","control":"select","optionsFrom":{"path":"topics","value":"value","label":"label"}},{"name":"author","input":"author","label":"Author","control":"select","optionsFrom":{"path":"authors","value":"value","label":"label"}},{"name":"tags","input":"tags","label":"Tags","control":"text"},{"name":"cover","input":"cover","label":"Image","control":"select","options":[{"value":"","label":"No cover"},{"value":"/media/jig.svg","label":"Fixture and chair leg"},{"value":"/media/margin.svg","label":"Open book with margins"},{"value":"/media/kiln.svg","label":"Kiln mouth and pots"},{"value":"/media/slow.svg","label":"Growth rings"},{"value":"/media/drawing.svg","label":"Three sketched doors"},{"value":"/media/hours.svg","label":"Row of cylinders"}]},{"name":"cover-alt","input":"cover-alt","label":"Description of the image","control":"textarea"},{"name":"featured","input":"featured","label":"Feature at the top of the front page","control":"checkbox"}],"arguments":{"status":"'published'"},"submitLabel":"Publish","onSuccess":{"navigate":{"screen":"screen-desk-edit","params":{"slug":"response.slug"}},"toast":"Published."},"onError":{"show":"inline"}},
-    {"id":"form-edit-article-save-draft","screen":"screen-desk-edit","contract":"update-article","fields":[{"name":"title","input":"title","label":"Title","control":"text"},{"name":"slug","input":"slug","label":"Address","control":"text"},{"name":"excerpt","input":"excerpt","label":"Excerpt","control":"textarea"},{"name":"body","input":"body","label":"Text","control":"textarea"},{"name":"category","input":"category","label":"Topic","control":"select","optionsFrom":{"path":"topics","value":"value","label":"label"}},{"name":"author","input":"author","label":"Author","control":"select","optionsFrom":{"path":"authors","value":"value","label":"label"}},{"name":"tags","input":"tags","label":"Tags","control":"text"},{"name":"cover","input":"cover","label":"Image","control":"select","options":[{"value":"","label":"No cover"},{"value":"/media/jig.svg","label":"Fixture and chair leg"},{"value":"/media/margin.svg","label":"Open book with margins"},{"value":"/media/kiln.svg","label":"Kiln mouth and pots"},{"value":"/media/slow.svg","label":"Growth rings"},{"value":"/media/drawing.svg","label":"Three sketched doors"},{"value":"/media/hours.svg","label":"Row of cylinders"}]},{"name":"cover-alt","input":"cover-alt","label":"Description of the image","control":"textarea"},{"name":"featured","input":"featured","label":"Feature at the top of the front page","control":"checkbox"}],"arguments":{"article":"view.article-id","expected-version":"view.article-version"},"submitLabel":"Save draft","onSuccess":{"navigate":{"screen":"screen-desk-edit","params":{"slug":"response.slug"}},"toast":"Draft saved."},"onError":{"show":"inline"}},
-    {"id":"form-edit-article-save-changes","screen":"screen-desk-edit","contract":"update-article","fields":[{"name":"title","input":"title","label":"Title","control":"text"},{"name":"slug","input":"slug","label":"Address","control":"text"},{"name":"excerpt","input":"excerpt","label":"Excerpt","control":"textarea"},{"name":"body","input":"body","label":"Text","control":"textarea"},{"name":"category","input":"category","label":"Topic","control":"select","optionsFrom":{"path":"topics","value":"value","label":"label"}},{"name":"author","input":"author","label":"Author","control":"select","optionsFrom":{"path":"authors","value":"value","label":"label"}},{"name":"tags","input":"tags","label":"Tags","control":"text"},{"name":"cover","input":"cover","label":"Image","control":"select","options":[{"value":"","label":"No cover"},{"value":"/media/jig.svg","label":"Fixture and chair leg"},{"value":"/media/margin.svg","label":"Open book with margins"},{"value":"/media/kiln.svg","label":"Kiln mouth and pots"},{"value":"/media/slow.svg","label":"Growth rings"},{"value":"/media/drawing.svg","label":"Three sketched doors"},{"value":"/media/hours.svg","label":"Row of cylinders"}]},{"name":"cover-alt","input":"cover-alt","label":"Description of the image","control":"textarea"},{"name":"featured","input":"featured","label":"Feature at the top of the front page","control":"checkbox"}],"arguments":{"article":"view.article-id","expected-version":"view.article-version"},"submitLabel":"Save changes","onSuccess":{"navigate":{"screen":"screen-desk-edit","params":{"slug":"response.slug"}},"toast":"Changes saved."},"onError":{"show":"inline"}},
-    {"id":"form-edit-article-publish","screen":"screen-desk-edit","contract":"update-article","fields":[{"name":"title","input":"title","label":"Title","control":"text"},{"name":"slug","input":"slug","label":"Address","control":"text"},{"name":"excerpt","input":"excerpt","label":"Excerpt","control":"textarea"},{"name":"body","input":"body","label":"Text","control":"textarea"},{"name":"category","input":"category","label":"Topic","control":"select","optionsFrom":{"path":"topics","value":"value","label":"label"}},{"name":"author","input":"author","label":"Author","control":"select","optionsFrom":{"path":"authors","value":"value","label":"label"}},{"name":"tags","input":"tags","label":"Tags","control":"text"},{"name":"cover","input":"cover","label":"Image","control":"select","options":[{"value":"","label":"No cover"},{"value":"/media/jig.svg","label":"Fixture and chair leg"},{"value":"/media/margin.svg","label":"Open book with margins"},{"value":"/media/kiln.svg","label":"Kiln mouth and pots"},{"value":"/media/slow.svg","label":"Growth rings"},{"value":"/media/drawing.svg","label":"Three sketched doors"},{"value":"/media/hours.svg","label":"Row of cylinders"}]},{"name":"cover-alt","input":"cover-alt","label":"Description of the image","control":"textarea"},{"name":"featured","input":"featured","label":"Feature at the top of the front page","control":"checkbox"}],"arguments":{"article":"view.article-id","expected-version":"view.article-version","status":"'published'"},"submitLabel":"Publish","onSuccess":{"navigate":{"screen":"screen-desk-edit","params":{"slug":"response.slug"}},"toast":"Published."},"onError":{"show":"inline"}},
-    {"id":"form-edit-article-unpublish","screen":"screen-desk-edit","contract":"update-article","fields":[{"name":"title","input":"title","label":"Title","control":"text"},{"name":"slug","input":"slug","label":"Address","control":"text"},{"name":"excerpt","input":"excerpt","label":"Excerpt","control":"textarea"},{"name":"body","input":"body","label":"Text","control":"textarea"},{"name":"category","input":"category","label":"Topic","control":"select","optionsFrom":{"path":"topics","value":"value","label":"label"}},{"name":"author","input":"author","label":"Author","control":"select","optionsFrom":{"path":"authors","value":"value","label":"label"}},{"name":"tags","input":"tags","label":"Tags","control":"text"},{"name":"cover","input":"cover","label":"Image","control":"select","options":[{"value":"","label":"No cover"},{"value":"/media/jig.svg","label":"Fixture and chair leg"},{"value":"/media/margin.svg","label":"Open book with margins"},{"value":"/media/kiln.svg","label":"Kiln mouth and pots"},{"value":"/media/slow.svg","label":"Growth rings"},{"value":"/media/drawing.svg","label":"Three sketched doors"},{"value":"/media/hours.svg","label":"Row of cylinders"}]},{"name":"cover-alt","input":"cover-alt","label":"Description of the image","control":"textarea"},{"name":"featured","input":"featured","label":"Feature at the top of the front page","control":"checkbox"}],"arguments":{"article":"view.article-id","expected-version":"view.article-version","status":"'draft'"},"submitLabel":"Unpublish","onSuccess":{"navigate":{"screen":"screen-desk-edit","params":{"slug":"response.slug"}},"toast":"Moved back to drafts."},"onError":{"show":"inline"}},
-    {"id":"form-settings","screen":"screen-desk-settings","contract":"save-site-settings","fields":[{"name":"name","input":"name","label":"Name","control":"text"},{"name":"tagline","input":"tagline","label":"Tagline","control":"text"},{"name":"accent","input":"accent","label":"Accent colour","control":"radio","optionsFrom":{"path":"accents"}},{"name":"paper","input":"paper","label":"Paper","control":"radio","optionsFrom":{"path":"papers"}}],"arguments":{"publication":"view.publication-id","expected-version":"view.publication-version"},"submitLabel":"Save settings","onSuccess":{"toast":"Settings saved."},"onError":{"show":"inline"}}
+    {"id":"form-search","screen":"screen-search","contract":"read-search-page","fields":[
+        {
+          "name": "q",
+          "input": "q",
+          "label": "Search the essays",
+          "control": "text",
+          "normalize": "trim"
+        }
+      ],"submitLabel":"Search","onSuccess":{"navigate":{"screen":"screen-search","params":{"q":"response.q"}}},"onError":{"show":"inline"}},
+    {"id":"form-new-article-save","screen":"screen-desk-new","contract":"create-article","fields":[
+        {
+          "name": "title",
+          "input": "title",
+          "label": "Title",
+          "control": "text"
+        },
+        {
+          "name": "slug",
+          "input": "slug",
+          "label": "Address",
+          "control": "text",
+          "derive": "form.title",
+          "transform": "slug",
+          "until": "edited"
+        },
+        {
+          "name": "excerpt",
+          "input": "excerpt",
+          "label": "Excerpt",
+          "control": "textarea"
+        },
+        {
+          "name": "body",
+          "input": "body",
+          "label": "Text",
+          "control": "textarea"
+        },
+        {
+          "name": "category",
+          "input": "category",
+          "label": "Topic",
+          "control": "select",
+          "optionsFrom": {
+            "path": "topics",
+            "value": "value",
+            "label": "label"
+          }
+        },
+        {
+          "name": "author",
+          "input": "author",
+          "label": "Author",
+          "control": "select",
+          "optionsFrom": {
+            "path": "authors",
+            "value": "value",
+            "label": "label"
+          },
+          "initial": {
+            "path": "data.authors",
+            "where": {
+              "field": "fields.principal",
+              "equals": "principal.id"
+            },
+            "value": "id"
+          }
+        },
+        {
+          "name": "tags",
+          "input": "tags",
+          "label": "Tags",
+          "control": "text"
+        },
+        {
+          "name": "cover",
+          "input": "cover",
+          "label": "Image",
+          "control": "select",
+          "options": [
+            {
+              "value": "",
+              "label": "No cover"
+            },
+            {
+              "value": "/media/jig.svg",
+              "label": "Fixture and chair leg"
+            },
+            {
+              "value": "/media/margin.svg",
+              "label": "Open book with margins"
+            },
+            {
+              "value": "/media/kiln.svg",
+              "label": "Kiln mouth and pots"
+            },
+            {
+              "value": "/media/slow.svg",
+              "label": "Growth rings"
+            },
+            {
+              "value": "/media/drawing.svg",
+              "label": "Three sketched doors"
+            },
+            {
+              "value": "/media/hours.svg",
+              "label": "Row of cylinders"
+            }
+          ]
+        },
+        {
+          "name": "cover-alt",
+          "input": "cover-alt",
+          "label": "Description of the image",
+          "control": "textarea"
+        },
+        {
+          "name": "featured",
+          "input": "featured",
+          "label": "Feature at the top of the front page",
+          "control": "checkbox"
+        }
+      ],"submitLabel":"Save draft","onSuccess":{
+        "navigate": {
+          "screen": "screen-desk-edit",
+          "params": {
+            "slug": "response.slug"
+          }
+        },
+        "toast": "Draft saved.",
+        "view": {
+          "article-id": "response.article-id",
+          "article-version": "response.version"
+        }
+      },"onError":{
+        "show": "inline",
+        "announce": "Some fields need attention."
+      }},
+    {"id":"form-new-article-publish","screen":"screen-desk-new","contract":"create-article","fields":[
+        {
+          "name": "title",
+          "input": "title",
+          "label": "Title",
+          "control": "text"
+        },
+        {
+          "name": "slug",
+          "input": "slug",
+          "label": "Address",
+          "control": "text",
+          "derive": "form.title",
+          "transform": "slug",
+          "until": "edited"
+        },
+        {
+          "name": "excerpt",
+          "input": "excerpt",
+          "label": "Excerpt",
+          "control": "textarea"
+        },
+        {
+          "name": "body",
+          "input": "body",
+          "label": "Text",
+          "control": "textarea"
+        },
+        {
+          "name": "category",
+          "input": "category",
+          "label": "Topic",
+          "control": "select",
+          "optionsFrom": {
+            "path": "topics",
+            "value": "value",
+            "label": "label"
+          }
+        },
+        {
+          "name": "author",
+          "input": "author",
+          "label": "Author",
+          "control": "select",
+          "optionsFrom": {
+            "path": "authors",
+            "value": "value",
+            "label": "label"
+          },
+          "initial": {
+            "path": "data.authors",
+            "where": {
+              "field": "fields.principal",
+              "equals": "principal.id"
+            },
+            "value": "id"
+          }
+        },
+        {
+          "name": "tags",
+          "input": "tags",
+          "label": "Tags",
+          "control": "text"
+        },
+        {
+          "name": "cover",
+          "input": "cover",
+          "label": "Image",
+          "control": "select",
+          "options": [
+            {
+              "value": "",
+              "label": "No cover"
+            },
+            {
+              "value": "/media/jig.svg",
+              "label": "Fixture and chair leg"
+            },
+            {
+              "value": "/media/margin.svg",
+              "label": "Open book with margins"
+            },
+            {
+              "value": "/media/kiln.svg",
+              "label": "Kiln mouth and pots"
+            },
+            {
+              "value": "/media/slow.svg",
+              "label": "Growth rings"
+            },
+            {
+              "value": "/media/drawing.svg",
+              "label": "Three sketched doors"
+            },
+            {
+              "value": "/media/hours.svg",
+              "label": "Row of cylinders"
+            }
+          ]
+        },
+        {
+          "name": "cover-alt",
+          "input": "cover-alt",
+          "label": "Description of the image",
+          "control": "textarea"
+        },
+        {
+          "name": "featured",
+          "input": "featured",
+          "label": "Feature at the top of the front page",
+          "control": "checkbox"
+        }
+      ],"submitLabel":"Publish","onSuccess":{
+        "navigate": {
+          "screen": "screen-desk-edit",
+          "params": {
+            "slug": "response.slug"
+          }
+        },
+        "toast": "Published.",
+        "view": {
+          "article-id": "response.article-id",
+          "article-version": "response.version"
+        }
+      },"onError":{
+        "show": "inline",
+        "announce": "Some fields need attention."
+      },
+      "then": {
+        "contract": "update-article",
+        "arguments": {
+          "article": "response.article-id",
+          "expected-version": "response.version",
+          "status": "'published'"
+        }
+      }
+    },
+    {"id":"form-edit-article-save-draft","screen":"screen-desk-edit","contract":"update-article","fields":[
+        {
+          "name": "title",
+          "input": "title",
+          "label": "Title",
+          "control": "text",
+          "initial": {
+            "path": "data.post.fields.title"
+          }
+        },
+        {
+          "name": "slug",
+          "input": "slug",
+          "label": "Address",
+          "control": "text",
+          "initial": {
+            "path": "data.post.fields.slug"
+          }
+        },
+        {
+          "name": "excerpt",
+          "input": "excerpt",
+          "label": "Excerpt",
+          "control": "textarea",
+          "initial": {
+            "path": "data.post.fields.excerpt"
+          }
+        },
+        {
+          "name": "body",
+          "input": "body",
+          "label": "Text",
+          "control": "textarea",
+          "initial": {
+            "path": "data.post.fields.body"
+          }
+        },
+        {
+          "name": "category",
+          "input": "category",
+          "label": "Topic",
+          "control": "select",
+          "optionsFrom": {
+            "path": "topics",
+            "value": "value",
+            "label": "label"
+          },
+          "initial": {
+            "path": "data.post.fields.category"
+          }
+        },
+        {
+          "name": "author",
+          "input": "author",
+          "label": "Author",
+          "control": "select",
+          "optionsFrom": {
+            "path": "authors",
+            "value": "value",
+            "label": "label"
+          },
+          "initial": {
+            "path": "data.post.fields.author"
+          }
+        },
+        {
+          "name": "tags",
+          "input": "tags",
+          "label": "Tags",
+          "control": "text",
+          "initial": {
+            "path": "data.post.fields.tags",
+            "join": ", "
+          }
+        },
+        {
+          "name": "cover",
+          "input": "cover",
+          "label": "Image",
+          "control": "select",
+          "options": [
+            {
+              "value": "",
+              "label": "No cover"
+            },
+            {
+              "value": "/media/jig.svg",
+              "label": "Fixture and chair leg"
+            },
+            {
+              "value": "/media/margin.svg",
+              "label": "Open book with margins"
+            },
+            {
+              "value": "/media/kiln.svg",
+              "label": "Kiln mouth and pots"
+            },
+            {
+              "value": "/media/slow.svg",
+              "label": "Growth rings"
+            },
+            {
+              "value": "/media/drawing.svg",
+              "label": "Three sketched doors"
+            },
+            {
+              "value": "/media/hours.svg",
+              "label": "Row of cylinders"
+            }
+          ],
+          "initial": {
+            "path": "data.post.fields.cover"
+          }
+        },
+        {
+          "name": "cover-alt",
+          "input": "cover-alt",
+          "label": "Description of the image",
+          "control": "textarea",
+          "initial": {
+            "path": "data.post.fields.cover-alt"
+          }
+        },
+        {
+          "name": "featured",
+          "input": "featured",
+          "label": "Feature at the top of the front page",
+          "control": "checkbox",
+          "initial": {
+            "path": "data.post.fields.featured"
+          }
+        }
+      ],"arguments":{"article":"view.article-id","expected-version":"view.article-version"},"submitLabel":"Save draft","onSuccess":{
+        "navigate": {
+          "screen": "screen-desk-edit",
+          "params": {
+            "slug": "response.slug"
+          }
+        },
+        "toast": "Draft saved.",
+        "view": {
+          "article-id": "response.article-id",
+          "article-version": "response.version"
+        }
+      },"onError":{
+        "show": "inline",
+        "announce": "Some fields need attention."
+      }},
+    {"id":"form-edit-article-save-changes","screen":"screen-desk-edit","contract":"update-article","fields":[
+        {
+          "name": "title",
+          "input": "title",
+          "label": "Title",
+          "control": "text",
+          "initial": {
+            "path": "data.post.fields.title"
+          }
+        },
+        {
+          "name": "slug",
+          "input": "slug",
+          "label": "Address",
+          "control": "text",
+          "initial": {
+            "path": "data.post.fields.slug"
+          }
+        },
+        {
+          "name": "excerpt",
+          "input": "excerpt",
+          "label": "Excerpt",
+          "control": "textarea",
+          "initial": {
+            "path": "data.post.fields.excerpt"
+          }
+        },
+        {
+          "name": "body",
+          "input": "body",
+          "label": "Text",
+          "control": "textarea",
+          "initial": {
+            "path": "data.post.fields.body"
+          }
+        },
+        {
+          "name": "category",
+          "input": "category",
+          "label": "Topic",
+          "control": "select",
+          "optionsFrom": {
+            "path": "topics",
+            "value": "value",
+            "label": "label"
+          },
+          "initial": {
+            "path": "data.post.fields.category"
+          }
+        },
+        {
+          "name": "author",
+          "input": "author",
+          "label": "Author",
+          "control": "select",
+          "optionsFrom": {
+            "path": "authors",
+            "value": "value",
+            "label": "label"
+          },
+          "initial": {
+            "path": "data.post.fields.author"
+          }
+        },
+        {
+          "name": "tags",
+          "input": "tags",
+          "label": "Tags",
+          "control": "text",
+          "initial": {
+            "path": "data.post.fields.tags",
+            "join": ", "
+          }
+        },
+        {
+          "name": "cover",
+          "input": "cover",
+          "label": "Image",
+          "control": "select",
+          "options": [
+            {
+              "value": "",
+              "label": "No cover"
+            },
+            {
+              "value": "/media/jig.svg",
+              "label": "Fixture and chair leg"
+            },
+            {
+              "value": "/media/margin.svg",
+              "label": "Open book with margins"
+            },
+            {
+              "value": "/media/kiln.svg",
+              "label": "Kiln mouth and pots"
+            },
+            {
+              "value": "/media/slow.svg",
+              "label": "Growth rings"
+            },
+            {
+              "value": "/media/drawing.svg",
+              "label": "Three sketched doors"
+            },
+            {
+              "value": "/media/hours.svg",
+              "label": "Row of cylinders"
+            }
+          ],
+          "initial": {
+            "path": "data.post.fields.cover"
+          }
+        },
+        {
+          "name": "cover-alt",
+          "input": "cover-alt",
+          "label": "Description of the image",
+          "control": "textarea",
+          "initial": {
+            "path": "data.post.fields.cover-alt"
+          }
+        },
+        {
+          "name": "featured",
+          "input": "featured",
+          "label": "Feature at the top of the front page",
+          "control": "checkbox",
+          "initial": {
+            "path": "data.post.fields.featured"
+          }
+        }
+      ],"arguments":{"article":"view.article-id","expected-version":"view.article-version"},"submitLabel":"Save changes","onSuccess":{
+        "navigate": {
+          "screen": "screen-desk-edit",
+          "params": {
+            "slug": "response.slug"
+          }
+        },
+        "toast": "Changes saved.",
+        "view": {
+          "article-id": "response.article-id",
+          "article-version": "response.version"
+        }
+      },"onError":{
+        "show": "inline",
+        "announce": "Some fields need attention."
+      }},
+    {"id":"form-edit-article-publish","screen":"screen-desk-edit","contract":"update-article","fields":[
+        {
+          "name": "title",
+          "input": "title",
+          "label": "Title",
+          "control": "text",
+          "initial": {
+            "path": "data.post.fields.title"
+          }
+        },
+        {
+          "name": "slug",
+          "input": "slug",
+          "label": "Address",
+          "control": "text",
+          "initial": {
+            "path": "data.post.fields.slug"
+          }
+        },
+        {
+          "name": "excerpt",
+          "input": "excerpt",
+          "label": "Excerpt",
+          "control": "textarea",
+          "initial": {
+            "path": "data.post.fields.excerpt"
+          }
+        },
+        {
+          "name": "body",
+          "input": "body",
+          "label": "Text",
+          "control": "textarea",
+          "initial": {
+            "path": "data.post.fields.body"
+          }
+        },
+        {
+          "name": "category",
+          "input": "category",
+          "label": "Topic",
+          "control": "select",
+          "optionsFrom": {
+            "path": "topics",
+            "value": "value",
+            "label": "label"
+          },
+          "initial": {
+            "path": "data.post.fields.category"
+          }
+        },
+        {
+          "name": "author",
+          "input": "author",
+          "label": "Author",
+          "control": "select",
+          "optionsFrom": {
+            "path": "authors",
+            "value": "value",
+            "label": "label"
+          },
+          "initial": {
+            "path": "data.post.fields.author"
+          }
+        },
+        {
+          "name": "tags",
+          "input": "tags",
+          "label": "Tags",
+          "control": "text",
+          "initial": {
+            "path": "data.post.fields.tags",
+            "join": ", "
+          }
+        },
+        {
+          "name": "cover",
+          "input": "cover",
+          "label": "Image",
+          "control": "select",
+          "options": [
+            {
+              "value": "",
+              "label": "No cover"
+            },
+            {
+              "value": "/media/jig.svg",
+              "label": "Fixture and chair leg"
+            },
+            {
+              "value": "/media/margin.svg",
+              "label": "Open book with margins"
+            },
+            {
+              "value": "/media/kiln.svg",
+              "label": "Kiln mouth and pots"
+            },
+            {
+              "value": "/media/slow.svg",
+              "label": "Growth rings"
+            },
+            {
+              "value": "/media/drawing.svg",
+              "label": "Three sketched doors"
+            },
+            {
+              "value": "/media/hours.svg",
+              "label": "Row of cylinders"
+            }
+          ],
+          "initial": {
+            "path": "data.post.fields.cover"
+          }
+        },
+        {
+          "name": "cover-alt",
+          "input": "cover-alt",
+          "label": "Description of the image",
+          "control": "textarea",
+          "initial": {
+            "path": "data.post.fields.cover-alt"
+          }
+        },
+        {
+          "name": "featured",
+          "input": "featured",
+          "label": "Feature at the top of the front page",
+          "control": "checkbox",
+          "initial": {
+            "path": "data.post.fields.featured"
+          }
+        }
+      ],"arguments":{"article":"view.article-id","expected-version":"view.article-version","status":"'published'"},"submitLabel":"Publish","onSuccess":{
+        "navigate": {
+          "screen": "screen-desk-edit",
+          "params": {
+            "slug": "response.slug"
+          }
+        },
+        "toast": "Published.",
+        "view": {
+          "article-id": "response.article-id",
+          "article-version": "response.version"
+        }
+      },"onError":{
+        "show": "inline",
+        "announce": "Some fields need attention."
+      }},
+    {"id":"form-edit-article-unpublish","screen":"screen-desk-edit","contract":"update-article","fields":[
+        {
+          "name": "title",
+          "input": "title",
+          "label": "Title",
+          "control": "text",
+          "initial": {
+            "path": "data.post.fields.title"
+          }
+        },
+        {
+          "name": "slug",
+          "input": "slug",
+          "label": "Address",
+          "control": "text",
+          "initial": {
+            "path": "data.post.fields.slug"
+          }
+        },
+        {
+          "name": "excerpt",
+          "input": "excerpt",
+          "label": "Excerpt",
+          "control": "textarea",
+          "initial": {
+            "path": "data.post.fields.excerpt"
+          }
+        },
+        {
+          "name": "body",
+          "input": "body",
+          "label": "Text",
+          "control": "textarea",
+          "initial": {
+            "path": "data.post.fields.body"
+          }
+        },
+        {
+          "name": "category",
+          "input": "category",
+          "label": "Topic",
+          "control": "select",
+          "optionsFrom": {
+            "path": "topics",
+            "value": "value",
+            "label": "label"
+          },
+          "initial": {
+            "path": "data.post.fields.category"
+          }
+        },
+        {
+          "name": "author",
+          "input": "author",
+          "label": "Author",
+          "control": "select",
+          "optionsFrom": {
+            "path": "authors",
+            "value": "value",
+            "label": "label"
+          },
+          "initial": {
+            "path": "data.post.fields.author"
+          }
+        },
+        {
+          "name": "tags",
+          "input": "tags",
+          "label": "Tags",
+          "control": "text",
+          "initial": {
+            "path": "data.post.fields.tags",
+            "join": ", "
+          }
+        },
+        {
+          "name": "cover",
+          "input": "cover",
+          "label": "Image",
+          "control": "select",
+          "options": [
+            {
+              "value": "",
+              "label": "No cover"
+            },
+            {
+              "value": "/media/jig.svg",
+              "label": "Fixture and chair leg"
+            },
+            {
+              "value": "/media/margin.svg",
+              "label": "Open book with margins"
+            },
+            {
+              "value": "/media/kiln.svg",
+              "label": "Kiln mouth and pots"
+            },
+            {
+              "value": "/media/slow.svg",
+              "label": "Growth rings"
+            },
+            {
+              "value": "/media/drawing.svg",
+              "label": "Three sketched doors"
+            },
+            {
+              "value": "/media/hours.svg",
+              "label": "Row of cylinders"
+            }
+          ],
+          "initial": {
+            "path": "data.post.fields.cover"
+          }
+        },
+        {
+          "name": "cover-alt",
+          "input": "cover-alt",
+          "label": "Description of the image",
+          "control": "textarea",
+          "initial": {
+            "path": "data.post.fields.cover-alt"
+          }
+        },
+        {
+          "name": "featured",
+          "input": "featured",
+          "label": "Feature at the top of the front page",
+          "control": "checkbox",
+          "initial": {
+            "path": "data.post.fields.featured"
+          }
+        }
+      ],"arguments":{"article":"view.article-id","expected-version":"view.article-version","status":"'draft'"},"submitLabel":"Unpublish","onSuccess":{
+        "navigate": {
+          "screen": "screen-desk-edit",
+          "params": {
+            "slug": "response.slug"
+          }
+        },
+        "toast": "Moved back to drafts.",
+        "view": {
+          "article-id": "response.article-id",
+          "article-version": "response.version"
+        }
+      },"onError":{
+        "show": "inline",
+        "announce": "Some fields need attention."
+      }},
+    {"id":"form-settings","screen":"screen-desk-settings","contract":"save-site-settings","fields":[
+        {
+          "name": "name",
+          "input": "name",
+          "label": "Name",
+          "control": "text",
+          "initial": {
+            "path": "data.site.fields.name"
+          }
+        },
+        {
+          "name": "tagline",
+          "input": "tagline",
+          "label": "Tagline",
+          "control": "text",
+          "initial": {
+            "path": "data.site.fields.tagline"
+          }
+        },
+        {
+          "name": "accent",
+          "input": "accent",
+          "label": "Accent colour",
+          "control": "radio",
+          "optionsFrom": {
+            "path": "accents"
+          },
+          "initial": {
+            "path": "data.site.fields.accent"
+          }
+        },
+        {
+          "name": "paper",
+          "input": "paper",
+          "label": "Paper",
+          "control": "radio",
+          "optionsFrom": {
+            "path": "papers"
+          },
+          "initial": {
+            "path": "data.site.fields.paper"
+          }
+        }
+      ],"arguments":{"publication":"view.publication-id","expected-version":"view.publication-version"},"submitLabel":"Save settings","onSuccess":{
+        "toast": "Settings saved.",
+        "view": {
+          "publication-version": "response.version"
+        }
+      },"onError":{
+        "show": "inline",
+        "announce": "Some fields need attention."
+      }}
   ],
 
   "actions": [
-    {"id":"act-sign-out-desk","screen":"screen-desk","label":"Sign out","contract":"sign-out-of-site","onSuccess":{"navigate":{"screen":"screen-front-page"},"toast":"Signed out."},"onError":{"show":"toast"}},
-    {"id":"act-sign-out-front-page","screen":"screen-front-page","label":"Sign out","contract":"sign-out-of-site","onSuccess":{"toast":"Signed out."},"onError":{"show":"toast"}},
+    {
+      "id": "act-sign-out-desk",
+      "screen": "screen-desk",
+      "label": "Sign out",
+      "contract": "sign-out-of-site",
+      "onSuccess": {
+        "navigate": {
+          "screen": "screen-front-page"
+        },
+        "toast": "Signed out."
+      },
+      "onError": {
+        "show": "toast"
+      },
+      "alsoOn": {
+        "auth": "session"
+      }
+    },
+    {
+      "id": "act-sign-out-front-page",
+      "screen": "screen-front-page",
+      "label": "Sign out",
+      "contract": "sign-out-of-site",
+      "onSuccess": {
+        "toast": "Signed out."
+      },
+      "onError": {
+        "show": "toast"
+      },
+      "alsoOn": {
+        "auth": "none"
+      }
+    },
     {"id":"act-preview-new","screen":"screen-desk-new","label":"Preview","contract":"preview-markdown","form":"form-new-article-save","arguments":{"markdown":"form.body"},"result":{"into":"preview","output":"blocks"},"onSuccess":{},"onError":{"show":"inline"}},
     {"id":"act-preview-edit","screen":"screen-desk-edit","label":"Preview","contract":"preview-markdown","form":"form-edit-article-save-draft","arguments":{"markdown":"form.body"},"result":{"into":"preview","output":"blocks"},"onSuccess":{},"onError":{"show":"inline"}},
-    {"id":"act-desk-publish","screen":"screen-desk","label":"Publish ${item.title}","contract":"update-article","forEach":"articles","arguments":{"article":"item.article-id","expected-version":"item.version","title":"item.title","slug":"item.slug","body":"item.body","status":"'published'"},"onSuccess":{"toast":"Published."},"onError":{"show":"toast"}},
-    {"id":"act-desk-unpublish","screen":"screen-desk","label":"Unpublish ${item.title}","contract":"update-article","forEach":"articles","arguments":{"article":"item.article-id","expected-version":"item.version","title":"item.title","slug":"item.slug","body":"item.body","status":"'draft'"},"onSuccess":{"toast":"Moved back to drafts."},"onError":{"show":"toast"}},
-    {"id":"act-desk-delete","screen":"screen-desk","label":"Delete ${item.title}","contract":"delete-article","forEach":"articles","arguments":{"article":"item.article-id","expected-version":"item.version"},"confirm":"Confirm deleting ${item.title}","onSuccess":{"toast":"Deleted."},"onError":{"show":"toast"}}
+    {"id":"act-desk-publish","screen":"screen-desk","label":"Publish ${item.title}","contract":"update-article","forEach":"articles","arguments":{"article":"item.article-id","expected-version":"item.version","title":"item.title","slug":"item.slug","body":"item.body","status":"'published'"},"onSuccess":{"toast":"Published."},"onError":{
+        "show": "toast",
+        "prefix": "Not done. "
+      }},
+    {"id":"act-desk-unpublish","screen":"screen-desk","label":"Unpublish ${item.title}","contract":"update-article","forEach":"articles","arguments":{"article":"item.article-id","expected-version":"item.version","title":"item.title","slug":"item.slug","body":"item.body","status":"'draft'"},"onSuccess":{"toast":"Moved back to drafts."},"onError":{
+        "show": "toast",
+        "prefix": "Not done. "
+      }},
+    {"id":"act-desk-delete","screen":"screen-desk","label":"Delete ${item.title}","contract":"delete-article","forEach":"articles","arguments":{"article":"item.article-id","expected-version":"item.version"},"confirm":"Confirm deleting ${item.title}","onSuccess":{"toast":"Deleted."},"onError":{
+        "show": "toast",
+        "prefix": "Not done. "
+      },
+      "confirmAnnounce": "Press Confirm delete to remove the article for good."
+    }
   ],
 
   "liveBindings": [
@@ -3252,7 +4415,23 @@
     {"id":"live-search-session-ended","screen":"screen-search","event":"ui-session-ended","refresh":"whole"},
     {"id":"live-about-session-ended","screen":"screen-about","event":"ui-session-ended","refresh":"whole"},
     {"id":"live-sign-in-session-ended","screen":"screen-sign-in","event":"ui-session-ended","refresh":"whole"},
-    {"id":"live-not-found-session-ended","screen":"screen-not-found","event":"ui-session-ended","refresh":"whole"}
+    {"id":"live-not-found-session-ended","screen":"screen-not-found","event":"ui-session-ended","refresh":"whole"},
+    {
+      "id": "live-lab-published",
+      "screen": "screen-lab",
+      "event": "ui-notice-received",
+      "refresh": "whole",
+      "when": {
+        "any": [
+          "event.kind == 'schema'",
+          "event.kind == 'membership'",
+          {
+            "value": "event.object",
+            "in": "depends-on"
+          }
+        ]
+      }
+    }
   ],
 
   "uiScenarios": [
@@ -3519,7 +4698,18 @@
     {"id":"ev-inbox-item-ended","name":"Inbox item ended","description":"The recipient removed an inbox item, or the record it names was erased (NTF-151).","payload":[{"name":"item-id","type":"identifier"}]},
     {"id":"ev-webhook-removed","name":"Webhook subscription removed","description":"The owner removed a webhook subscription (SEC-003, WFL-010).","payload":[{"name":"subscription-id","type":"identifier"}]},
     {"id":"ev-connector-secret-removed","name":"Connector secret removed","description":"The owner removed a connector secret (SEC-003).","payload":[{"name":"secret-id","type":"identifier"}]},
-    {"id":"ev-delivery-key-removed","name":"Delivery key removed","description":"The owner removed a delivery key (CMS-166, CMS-167).","payload":[{"name":"key-id","type":"identifier"}]}
+    {"id":"ev-delivery-key-removed","name":"Delivery key removed","description":"The owner removed a delivery key (CMS-166, CMS-167).","payload":[{"name":"key-id","type":"identifier"}]},
+    {
+      "id": "ui-live-resync",
+      "name": "Resync frame",
+      "description": "The server says the client fell too far behind to replay what it missed and names the head of its event log; the client reads its view again and carries on from that head.",
+      "payload": [
+        {
+          "name": "head",
+          "type": "u64"
+        }
+      ]
+    }
   ],
   "behaviors": [
     {"id":"emailed-link-flow","name":"Emailed link","subject":"identity-service","initial":"ml-idle","description":"One sign-in link: issued, presented, accepted once in the requesting browser within its lifetime of 15 ticks.","variables":[{"name":"issuedAt","type":"number","initial":0},{"name":"sessions","type":"number","initial":0}],"states":[{"id":"ml-idle","name":"No link"},{"id":"ml-pending","name":"Link issued"},{"id":"ml-used","name":"Link used"}],"transitions":[{"id":"ml-issue","from":"ml-idle","to":"ml-pending","on":"ml-requested","effects":[{"set":"issuedAt","to":"time"},{"emit":"ml-mailed"}]},{"id":"ml-accept-unchecked","from":"ml-pending","to":"ml-used","on":"ml-presented","faultOnly":true,"guard":"event.token == 'good'","description":"Defect: accepts the right token without checking lifetime or browser.","effects":[{"set":"sessions","to":"sessions + 1"},{"emit":"ml-session-issued"}]},{"id":"ml-accept-untimed","from":"ml-pending","to":"ml-used","on":"ml-presented","faultOnly":true,"guard":"event.token == 'good' && event.browser == 'requester'","description":"Defect: accepts the right token without checking lifetime or browser.","effects":[{"set":"sessions","to":"sessions + 1"},{"emit":"ml-session-issued"}]},{"id":"ml-accept-unbrowsed","from":"ml-pending","to":"ml-used","on":"ml-presented","faultOnly":true,"guard":"event.token == 'good' && time - issuedAt <= 15","description":"Defect: accepts the right token without checking lifetime or browser.","effects":[{"set":"sessions","to":"sessions + 1"},{"emit":"ml-session-issued"}]},{"id":"ml-accept","from":"ml-pending","to":"ml-used","on":"ml-presented","guard":"event.token == 'good' && event.browser == 'requester' && time - issuedAt <= 15","effects":[{"set":"sessions","to":"sessions + 1"},{"emit":"ml-session-issued"}]},{"id":"ml-refuse-pending","from":"ml-pending","to":"ml-pending","on":"ml-presented","effects":[{"emit":"ml-refused"}]},{"id":"ml-accept-again","from":"ml-used","to":"ml-used","on":"ml-presented","faultOnly":true,"description":"Defect: accepts a link that was already used.","effects":[{"set":"sessions","to":"sessions + 1"},{"emit":"ml-session-issued"}]},{"id":"ml-refuse-used","from":"ml-used","to":"ml-used","on":"ml-presented","effects":[{"emit":"ml-refused"}]}]},
@@ -3592,8 +4782,122 @@
     {"id":"source-throttle-flow-impl","name":"Per-source sign-in throttle (implementation)","level":"implementation","subject":"identity-service","refines":"source-throttle-flow","description":"The per-source failure counters of the sign-in throttle, for the two sources a and b. Once the failures of a source reach the threshold of 3, every attempt from it is refused without being evaluated, whatever its account. The counters are rows of the limit counter record; the model puts both sources in one machine, so this one is a single unit and has no keyed instances.","initial":"sti-open","transaction":{"scope":"transition","isolation":"serializable"},"variables":[{"name":"failuresA","type":"number","repr":"u64","initial":0},{"name":"failuresB","type":"number","repr":"u64","initial":0}],"states":[{"id":"sti-open","name":"Open"}],"transitions":[{"id":"sti-refuse-throttled","from":"sti-open","to":"sti-open","on":"src-attempt","guard":"(event.source == 'a' && failuresA >= 3) || (event.source == 'b' && failuresB >= 3)","effects":[{"emit":"src-refused","to":"gateway"}]},{"id":"sti-fail-a","from":"sti-open","to":"sti-open","on":"src-attempt","guard":"event.source == 'a' && event.guess == 'wrong'","effects":[{"set":"failuresA","to":"failuresA + 1"},{"emit":"src-refused","to":"gateway"}]},{"id":"sti-fail-b","from":"sti-open","to":"sti-open","on":"src-attempt","guard":"event.source == 'b' && event.guess == 'wrong'","effects":[{"set":"failuresB","to":"failuresB + 1"},{"emit":"src-refused","to":"gateway"}]},{"id":"sti-accept","from":"sti-open","to":"sti-open","on":"src-attempt","guard":"event.guess == 'right'","effects":[{"emit":"src-accepted","to":"gateway"}]}],"refinement":{"states":{"sti-open":"st-open"},"variables":{"failuresA":"failuresA","failuresB":"failuresB","evaluatedWhileThrottled":"0"},"transitions":{"sti-refuse-throttled":"st-refuse-throttled","sti-fail-a":"st-fail-a","sti-fail-b":"st-fail-b","sti-accept":"st-accept"}},"storage":{"record":"rec-limit-counter","key":"limit-key","fields":{"failuresA":"failures-a","failuresB":"failures-b"}}},
     {"id":"client-session-flow","name":"Client session","subject":"web-application","initial":"cs-unknown","description":"The session the web application believes it holds. It is unknown until the first read; signing in and out move it; a session frame that says the session ended clears the request token at once and asks for the session again.","variables":[{"name":"holdsToken","type":"number","initial":0},{"name":"warnings","type":"number","initial":0}],"states":[{"id":"cs-unknown","name":"Not read yet"},{"id":"cs-out","name":"Signed out"},{"id":"cs-in","name":"Signed in"},{"id":"cs-ended","name":"Ended, read pending"}],"transitions":[{"id":"cs-read-in","from":"cs-unknown","to":"cs-in","on":"ui-session-read","guard":"event.authenticated == 1","effects":[{"set":"holdsToken","to":"1"}]},{"id":"cs-read-out","from":"cs-unknown","to":"cs-out","on":"ui-session-read","effects":[{"set":"holdsToken","to":"0"}]},{"id":"cs-sign-in","from":"cs-out","to":"cs-in","on":"ui-signed-in","effects":[{"set":"holdsToken","to":"1"}]},{"id":"cs-sign-out","from":"cs-in","to":"cs-out","on":"ui-signed-out","effects":[{"set":"holdsToken","to":"0"}]},{"id":"cs-end","from":"cs-in","to":"cs-ended","on":"ui-session-ended","effects":[{"set":"holdsToken","to":"0"},{"set":"warnings","to":"warnings + 1"},{"emit":"ui-session-requested"}]},{"id":"cs-confirm-end","from":"cs-ended","to":"cs-out","on":"ui-session-read","guard":"event.authenticated == 0"},{"id":"cs-resign","from":"cs-ended","to":"cs-in","on":"ui-signed-in","effects":[{"set":"holdsToken","to":"1"}]}]},
     {"id":"client-session-flow-impl","name":"Client session (implementation)","subject":"web-application","level":"implementation","initial":"cs-unknown-i","description":"The session in the kernel state of the web application (state.session, with its csrf_token). A session frame that says the session ended sets authenticated to false and drops the token in the same transition, then reads the session and the page again. The state is kept in memory for the life of the tab.","transaction":{"scope":"transition","isolation":"serializable"},"variables":[{"name":"holdsToken","type":"number","initial":0,"repr":"u8"},{"name":"warnings","type":"number","initial":0,"repr":"u32"}],"states":[{"id":"cs-unknown-i","name":"Not read yet","ignores":["ui-signed-in","ui-signed-out","ui-session-ended"]},{"id":"cs-out-i","name":"Signed out","ignores":["ui-session-read","ui-signed-out","ui-session-ended"]},{"id":"cs-in-i","name":"Signed in","ignores":["ui-session-read","ui-signed-in"]},{"id":"cs-ended-i","name":"Ended, read pending","ignores":["ui-signed-out","ui-session-ended"]}],"transitions":[{"id":"cs-read-in-i","from":"cs-unknown-i","to":"cs-in-i","on":"ui-session-read","guard":"event.authenticated == 1","effects":[{"set":"holdsToken","to":"1"}]},{"id":"cs-read-out-i","from":"cs-unknown-i","to":"cs-out-i","on":"ui-session-read","otherwise":true,"effects":[{"set":"holdsToken","to":"0"}]},{"id":"cs-sign-in-i","from":"cs-out-i","to":"cs-in-i","on":"ui-signed-in","otherwise":true,"effects":[{"set":"holdsToken","to":"1"}]},{"id":"cs-sign-out-i","from":"cs-in-i","to":"cs-out-i","on":"ui-signed-out","otherwise":true,"effects":[{"set":"holdsToken","to":"0"}]},{"id":"cs-end-i","from":"cs-in-i","to":"cs-ended-i","on":"ui-session-ended","otherwise":true,"effects":[{"set":"holdsToken","to":"0"},{"set":"warnings","to":"warnings + 1"},{"emit":"ui-session-requested","to":"read-session-view"}]},{"id":"cs-confirm-end-i","from":"cs-ended-i","to":"cs-out-i","on":"ui-session-read","guard":"event.authenticated == 0"},{"id":"cs-resign-i","from":"cs-ended-i","to":"cs-in-i","on":"ui-signed-in","otherwise":true,"effects":[{"set":"holdsToken","to":"1"}]}],"refines":"client-session-flow","refinement":{"states":{"cs-unknown-i":"cs-unknown","cs-out-i":"cs-out","cs-in-i":"cs-in","cs-ended-i":"cs-ended"},"variables":{"holdsToken":"holdsToken","warnings":"warnings"},"transitions":{"cs-read-in-i":"cs-read-in","cs-read-out-i":"cs-read-out","cs-sign-in-i":"cs-sign-in","cs-sign-out-i":"cs-sign-out","cs-end-i":"cs-end","cs-confirm-end-i":"cs-confirm-end","cs-resign-i":"cs-resign"}},"storage":{"record":"rec-client-visit","key":"visit-id","fields":{"holdsToken":"holds-token","warnings":"expiry-warnings"},"state":"session-state"}},
-    {"id":"client-live-flow","name":"Live connection","subject":"web-application","initial":"lv-idle","description":"The WebSocket of the web application. It opens, subscribes after the last sequence it saw (nothing on the first connection), acknowledges each event frame by its number and starts over when a number is missing, pings on the heartbeat and closes after two pings without an answer; a closed socket waits and reconnects, and the next welcome resumes from the last sequence.","variables":[{"name":"attempts","type":"number","initial":0},{"name":"lastSeq","type":"number","initial":0},{"name":"lastN","type":"number","initial":0},{"name":"missedPongs","type":"number","initial":0}],"states":[{"id":"lv-idle","name":"Not started"},{"id":"lv-connecting","name":"Connecting"},{"id":"lv-open","name":"Open"},{"id":"lv-waiting","name":"Waiting to reconnect"}],"transitions":[{"id":"lv-start","from":"lv-idle","to":"lv-connecting","on":"ui-live-start"},{"id":"lv-first-welcome","from":"lv-connecting","to":"lv-open","on":"ui-live-welcome","guard":"lastSeq == 0","effects":[{"set":"attempts","to":"0"},{"set":"lastN","to":"0"},{"set":"missedPongs","to":"0"},{"emit":"ui-live-subscribe","payload":{"after":"lastSeq"}},{"set":"lastSeq","to":"event.head"}]},{"id":"lv-resume-welcome","from":"lv-connecting","to":"lv-open","on":"ui-live-welcome","effects":[{"set":"attempts","to":"0"},{"set":"lastN","to":"0"},{"set":"missedPongs","to":"0"},{"emit":"ui-live-subscribe","payload":{"after":"lastSeq"}}]},{"id":"lv-frame-advance","from":"lv-open","to":"lv-open","on":"ui-live-frame","guard":"event.n == lastN + 1 && event.seq > lastSeq","effects":[{"set":"lastN","to":"event.n"},{"set":"lastSeq","to":"event.seq"},{"emit":"ui-live-ack","payload":{"n":"event.n"}}]},{"id":"lv-frame-same","from":"lv-open","to":"lv-open","on":"ui-live-frame","guard":"event.n == lastN + 1","effects":[{"set":"lastN","to":"event.n"},{"emit":"ui-live-ack","payload":{"n":"event.n"}}]},{"id":"lv-frame-gap","from":"lv-open","to":"lv-open","on":"ui-live-frame","effects":[{"set":"lastSeq","to":"0"},{"emit":"ui-live-close-requested"}]},{"id":"lv-pong-advance","from":"lv-open","to":"lv-open","on":"ui-live-pong","guard":"event.head > lastSeq","effects":[{"set":"missedPongs","to":"0"},{"set":"lastSeq","to":"event.head"}]},{"id":"lv-pong-same","from":"lv-open","to":"lv-open","on":"ui-live-pong","effects":[{"set":"missedPongs","to":"0"}]},{"id":"lv-give-up","from":"lv-open","to":"lv-open","on":"ui-live-heartbeat-due","guard":"missedPongs >= 2","effects":[{"emit":"ui-live-close-requested"}]},{"id":"lv-ping","from":"lv-open","to":"lv-open","on":"ui-live-heartbeat-due","effects":[{"set":"missedPongs","to":"missedPongs + 1"},{"emit":"ui-live-ping"}]},{"id":"lv-closed-connecting","from":"lv-connecting","to":"lv-waiting","on":"ui-live-closed","effects":[{"set":"attempts","to":"attempts + 1"}]},{"id":"lv-closed-open","from":"lv-open","to":"lv-waiting","on":"ui-live-closed","effects":[{"set":"attempts","to":"attempts + 1"}]},{"id":"lv-reconnect","from":"lv-waiting","to":"lv-connecting","on":"ui-live-reconnect-due"},{"id":"lv-reset-connecting","from":"lv-connecting","to":"lv-connecting","on":"ui-live-reset","effects":[{"set":"lastSeq","to":"0"},{"emit":"ui-live-close-requested"}]},{"id":"lv-reset-open","from":"lv-open","to":"lv-open","on":"ui-live-reset","effects":[{"set":"lastSeq","to":"0"},{"emit":"ui-live-close-requested"}]},{"id":"lv-reset-waiting","from":"lv-waiting","to":"lv-waiting","on":"ui-live-reset","effects":[{"set":"lastSeq","to":"0"}]}]},
-    {"id":"client-live-flow-impl","name":"Live connection (implementation)","subject":"web-application","level":"implementation","initial":"lv-idle-i","description":"The ws state of the kernel (status, attempts, lastSeq, lastN, missedPongs). A heartbeat timer whose interval the welcome frame announces (heartbeatMs; 10 seconds until the first welcome) pings and gives up after two pings without a pong. A closed socket waits 0.5, 1, 2, 4 seconds and then 8 seconds, the cap of the back-off (a reconnect after the fifth failure waits 8 seconds; the random jitter between half and all of the wait is not modelled, the wait is its upper bound). The state is kept in memory for the life of the tab.","transaction":{"scope":"transition","isolation":"serializable"},"variables":[{"name":"attempts","type":"number","initial":0,"repr":"u32"},{"name":"lastSeq","type":"number","initial":0,"repr":"u64"},{"name":"lastN","type":"number","initial":0,"repr":"u64"},{"name":"missedPongs","type":"number","initial":0,"repr":"u8"},{"name":"heartbeatMs","type":"number","initial":10000,"repr":"u32"}],"states":[{"id":"lv-idle-i","name":"Not started","ignores":["ui-live-welcome","ui-live-frame","ui-live-pong","ui-live-heartbeat-due","ui-live-closed","ui-live-reconnect-due","ui-live-reset"]},{"id":"lv-connecting-i","name":"Connecting","ignores":["ui-live-start","ui-live-frame","ui-live-pong","ui-live-heartbeat-due","ui-live-reconnect-due"]},{"id":"lv-open-i","name":"Open","ignores":["ui-live-start","ui-live-welcome","ui-live-reconnect-due"]},{"id":"lv-waiting-i","name":"Waiting to reconnect","ignores":["ui-live-start","ui-live-welcome","ui-live-frame","ui-live-pong","ui-live-heartbeat-due","ui-live-closed"]}],"transitions":[{"id":"lv-start-i","from":"lv-idle-i","to":"lv-connecting-i","on":"ui-live-start","otherwise":true},{"id":"lv-first-welcome-i","from":"lv-connecting-i","to":"lv-open-i","on":"ui-live-welcome","guard":"lastSeq == 0","effects":[{"set":"attempts","to":"0"},{"set":"lastN","to":"0"},{"set":"missedPongs","to":"0"},{"emit":"ui-live-subscribe","payload":{"after":"lastSeq"},"to":"subscribe-events"},{"set":"lastSeq","to":"event.head"},{"set":"heartbeatMs","to":"event.heartbeat-ms"},{"timer":"heartbeat","after":{"expr":"event.heartbeat-ms","simulate":10000},"emit":"ui-live-heartbeat-due"}]},{"id":"lv-resume-welcome-i","from":"lv-connecting-i","to":"lv-open-i","on":"ui-live-welcome","otherwise":true,"effects":[{"set":"attempts","to":"0"},{"set":"lastN","to":"0"},{"set":"missedPongs","to":"0"},{"emit":"ui-live-subscribe","payload":{"after":"lastSeq"},"to":"subscribe-events"},{"set":"heartbeatMs","to":"event.heartbeat-ms"},{"timer":"heartbeat","after":{"expr":"event.heartbeat-ms","simulate":10000},"emit":"ui-live-heartbeat-due"}]},{"id":"lv-frame-advance-i","from":"lv-open-i","to":"lv-open-i","on":"ui-live-frame","guard":"event.n == lastN + 1 && event.seq > lastSeq","effects":[{"set":"lastN","to":"event.n"},{"set":"lastSeq","to":"event.seq"},{"emit":"ui-live-ack","payload":{"n":"event.n"},"to":"subscribe-events"}]},{"id":"lv-frame-same-i","from":"lv-open-i","to":"lv-open-i","on":"ui-live-frame","guard":"event.n == lastN + 1","effects":[{"set":"lastN","to":"event.n"},{"emit":"ui-live-ack","payload":{"n":"event.n"},"to":"subscribe-events"}]},{"id":"lv-frame-gap-i","from":"lv-open-i","to":"lv-open-i","on":"ui-live-frame","otherwise":true,"effects":[{"set":"lastSeq","to":"0"},{"emit":"ui-live-close-requested","to":"subscribe-events"}]},{"id":"lv-pong-advance-i","from":"lv-open-i","to":"lv-open-i","on":"ui-live-pong","guard":"event.head > lastSeq","effects":[{"set":"missedPongs","to":"0"},{"set":"lastSeq","to":"event.head"}]},{"id":"lv-pong-same-i","from":"lv-open-i","to":"lv-open-i","on":"ui-live-pong","otherwise":true,"effects":[{"set":"missedPongs","to":"0"}]},{"id":"lv-give-up-i","from":"lv-open-i","to":"lv-open-i","on":"ui-live-heartbeat-due","guard":"missedPongs >= 2","effects":[{"emit":"ui-live-close-requested","to":"subscribe-events"}]},{"id":"lv-ping-i","from":"lv-open-i","to":"lv-open-i","on":"ui-live-heartbeat-due","otherwise":true,"effects":[{"set":"missedPongs","to":"missedPongs + 1"},{"emit":"ui-live-ping","to":"subscribe-events"},{"timer":"heartbeat","after":{"expr":"heartbeatMs","simulate":10000},"emit":"ui-live-heartbeat-due"}]},{"id":"lv-closed-connecting-1-i","from":"lv-connecting-i","to":"lv-waiting-i","on":"ui-live-closed","guard":"attempts == 0","effects":[{"set":"attempts","to":"attempts + 1"},{"cancel":"heartbeat"},{"timer":"reconnect","after":500,"emit":"ui-live-reconnect-due"}]},{"id":"lv-closed-connecting-2-i","from":"lv-connecting-i","to":"lv-waiting-i","on":"ui-live-closed","guard":"attempts == 1","effects":[{"set":"attempts","to":"attempts + 1"},{"cancel":"heartbeat"},{"timer":"reconnect","after":1000,"emit":"ui-live-reconnect-due"}]},{"id":"lv-closed-connecting-3-i","from":"lv-connecting-i","to":"lv-waiting-i","on":"ui-live-closed","guard":"attempts == 2","effects":[{"set":"attempts","to":"attempts + 1"},{"cancel":"heartbeat"},{"timer":"reconnect","after":2000,"emit":"ui-live-reconnect-due"}]},{"id":"lv-closed-connecting-4-i","from":"lv-connecting-i","to":"lv-waiting-i","on":"ui-live-closed","guard":"attempts == 3","effects":[{"set":"attempts","to":"attempts + 1"},{"cancel":"heartbeat"},{"timer":"reconnect","after":4000,"emit":"ui-live-reconnect-due"}]},{"id":"lv-closed-connecting-5-i","from":"lv-connecting-i","to":"lv-waiting-i","on":"ui-live-closed","otherwise":true,"effects":[{"set":"attempts","to":"attempts + 1"},{"cancel":"heartbeat"},{"timer":"reconnect","after":8000,"emit":"ui-live-reconnect-due"}]},{"id":"lv-closed-open-1-i","from":"lv-open-i","to":"lv-waiting-i","on":"ui-live-closed","guard":"attempts == 0","effects":[{"set":"attempts","to":"attempts + 1"},{"cancel":"heartbeat"},{"timer":"reconnect","after":500,"emit":"ui-live-reconnect-due"}]},{"id":"lv-closed-open-2-i","from":"lv-open-i","to":"lv-waiting-i","on":"ui-live-closed","guard":"attempts == 1","effects":[{"set":"attempts","to":"attempts + 1"},{"cancel":"heartbeat"},{"timer":"reconnect","after":1000,"emit":"ui-live-reconnect-due"}]},{"id":"lv-closed-open-3-i","from":"lv-open-i","to":"lv-waiting-i","on":"ui-live-closed","guard":"attempts == 2","effects":[{"set":"attempts","to":"attempts + 1"},{"cancel":"heartbeat"},{"timer":"reconnect","after":2000,"emit":"ui-live-reconnect-due"}]},{"id":"lv-closed-open-4-i","from":"lv-open-i","to":"lv-waiting-i","on":"ui-live-closed","guard":"attempts == 3","effects":[{"set":"attempts","to":"attempts + 1"},{"cancel":"heartbeat"},{"timer":"reconnect","after":4000,"emit":"ui-live-reconnect-due"}]},{"id":"lv-closed-open-5-i","from":"lv-open-i","to":"lv-waiting-i","on":"ui-live-closed","otherwise":true,"effects":[{"set":"attempts","to":"attempts + 1"},{"cancel":"heartbeat"},{"timer":"reconnect","after":8000,"emit":"ui-live-reconnect-due"}]},{"id":"lv-reconnect-i","from":"lv-waiting-i","to":"lv-connecting-i","on":"ui-live-reconnect-due","otherwise":true},{"id":"lv-reset-connecting-i","from":"lv-connecting-i","to":"lv-connecting-i","on":"ui-live-reset","otherwise":true,"effects":[{"set":"lastSeq","to":"0"},{"emit":"ui-live-close-requested","to":"subscribe-events"}]},{"id":"lv-reset-open-i","from":"lv-open-i","to":"lv-open-i","on":"ui-live-reset","otherwise":true,"effects":[{"set":"lastSeq","to":"0"},{"emit":"ui-live-close-requested","to":"subscribe-events"}]},{"id":"lv-reset-waiting-i","from":"lv-waiting-i","to":"lv-waiting-i","on":"ui-live-reset","otherwise":true,"effects":[{"set":"lastSeq","to":"0"}]}],"refines":"client-live-flow","refinement":{"states":{"lv-idle-i":"lv-idle","lv-connecting-i":"lv-connecting","lv-open-i":"lv-open","lv-waiting-i":"lv-waiting"},"variables":{"attempts":"attempts","lastSeq":"lastSeq","lastN":"lastN","missedPongs":"missedPongs"},"transitions":{"lv-start-i":"lv-start","lv-first-welcome-i":"lv-first-welcome","lv-resume-welcome-i":"lv-resume-welcome","lv-frame-advance-i":"lv-frame-advance","lv-frame-same-i":"lv-frame-same","lv-frame-gap-i":"lv-frame-gap","lv-pong-advance-i":"lv-pong-advance","lv-pong-same-i":"lv-pong-same","lv-give-up-i":"lv-give-up","lv-ping-i":"lv-ping","lv-reconnect-i":"lv-reconnect","lv-reset-connecting-i":"lv-reset-connecting","lv-reset-open-i":"lv-reset-open","lv-reset-waiting-i":"lv-reset-waiting","lv-closed-connecting-1-i":"lv-closed-connecting","lv-closed-open-1-i":"lv-closed-open","lv-closed-connecting-2-i":"lv-closed-connecting","lv-closed-open-2-i":"lv-closed-open","lv-closed-connecting-3-i":"lv-closed-connecting","lv-closed-open-3-i":"lv-closed-open","lv-closed-connecting-4-i":"lv-closed-connecting","lv-closed-open-4-i":"lv-closed-open","lv-closed-connecting-5-i":"lv-closed-connecting","lv-closed-open-5-i":"lv-closed-open"}},"storage":{"record":"rec-client-visit","key":"visit-id","fields":{"attempts":"connect-attempts","lastSeq":"last-seq","lastN":"last-n","missedPongs":"missed-pongs","heartbeatMs":"heartbeat-ms"},"state":"live-state"}},
+    {"id":"client-live-flow","name":"Live connection","subject":"web-application","initial":"lv-idle","description":"The WebSocket of the web application. It opens, subscribes after the last sequence it saw (nothing on the first connection), acknowledges each event frame by its number and starts over when a number is missing, pings on the heartbeat and closes after two pings without an answer; a closed socket waits and reconnects, and the next welcome resumes from the last sequence.","variables":[{"name":"attempts","type":"number","initial":0},{"name":"lastSeq","type":"number","initial":0},{"name":"lastN","type":"number","initial":0},{"name":"missedPongs","type":"number","initial":0}],"states":[{"id":"lv-idle","name":"Not started"},{"id":"lv-connecting","name":"Connecting"},{"id":"lv-open","name":"Open"},{"id":"lv-waiting","name":"Waiting to reconnect"}],"transitions":[{"id":"lv-start","from":"lv-idle","to":"lv-connecting","on":"ui-live-start"},{"id":"lv-first-welcome","from":"lv-connecting","to":"lv-open","on":"ui-live-welcome","guard":"lastSeq == 0","effects":[{"set":"attempts","to":"0"},{"set":"lastN","to":"0"},{"set":"missedPongs","to":"0"},{"emit":"ui-live-subscribe","payload":{"after":"lastSeq"}},{"set":"lastSeq","to":"event.head"}]},{"id":"lv-resume-welcome","from":"lv-connecting","to":"lv-open","on":"ui-live-welcome","effects":[{"set":"attempts","to":"0"},{"set":"lastN","to":"0"},{"set":"missedPongs","to":"0"},{"emit":"ui-live-subscribe","payload":{"after":"lastSeq"}}]},{"id":"lv-frame-advance","from":"lv-open","to":"lv-open","on":"ui-live-frame","guard":"event.n == lastN + 1 && event.seq > lastSeq","effects":[{"set":"lastN","to":"event.n"},{"set":"lastSeq","to":"event.seq"},{"emit":"ui-live-ack","payload":{"n":"event.n"}}]},{"id":"lv-frame-same","from":"lv-open","to":"lv-open","on":"ui-live-frame","guard":"event.n == lastN + 1","effects":[{"set":"lastN","to":"event.n"},{"emit":"ui-live-ack","payload":{"n":"event.n"}}]},{"id":"lv-frame-gap","from":"lv-open","to":"lv-open","on":"ui-live-frame","effects":[{"set":"lastSeq","to":"0"},{"emit":"ui-live-close-requested"}]},{"id":"lv-pong-advance","from":"lv-open","to":"lv-open","on":"ui-live-pong","guard":"event.head > lastSeq","effects":[{"set":"missedPongs","to":"0"},{"set":"lastSeq","to":"event.head"}]},{"id":"lv-pong-same","from":"lv-open","to":"lv-open","on":"ui-live-pong","effects":[{"set":"missedPongs","to":"0"}]},{"id":"lv-give-up","from":"lv-open","to":"lv-open","on":"ui-live-heartbeat-due","guard":"missedPongs >= 2","effects":[{"emit":"ui-live-close-requested"}]},{"id":"lv-ping","from":"lv-open","to":"lv-open","on":"ui-live-heartbeat-due","effects":[{"set":"missedPongs","to":"missedPongs + 1"},{"emit":"ui-live-ping"}]},{"id":"lv-closed-connecting","from":"lv-connecting","to":"lv-waiting","on":"ui-live-closed","effects":[{"set":"attempts","to":"attempts + 1"}]},{"id":"lv-closed-open","from":"lv-open","to":"lv-waiting","on":"ui-live-closed","effects":[{"set":"attempts","to":"attempts + 1"}]},{"id":"lv-reconnect","from":"lv-waiting","to":"lv-connecting","on":"ui-live-reconnect-due"},{"id":"lv-reset-connecting","from":"lv-connecting","to":"lv-connecting","on":"ui-live-reset","effects":[{"set":"lastSeq","to":"0"},{"emit":"ui-live-close-requested"}]},{"id":"lv-reset-open","from":"lv-open","to":"lv-open","on":"ui-live-reset","effects":[{"set":"lastSeq","to":"0"},{"emit":"ui-live-close-requested"}]},{"id":"lv-reset-waiting","from":"lv-waiting","to":"lv-waiting","on":"ui-live-reset","effects":[{"set":"lastSeq","to":"0"}]},
+      {
+        "id": "lv-resync",
+        "from": "lv-open",
+        "to": "lv-open",
+        "on": "ui-live-resync",
+        "effects": [
+          {
+            "set": "lastSeq",
+            "to": "event.head"
+          }
+        ]
+      }]},
+    {"id":"client-live-flow-impl","name":"Live connection (implementation)","subject":"web-application","level":"implementation","initial":"lv-idle-i","description":"The ws state of the kernel (status, attempts, lastSeq, lastN, missedPongs). A heartbeat timer whose interval the welcome frame announces (heartbeatMs; 10 seconds until the first welcome) pings and gives up after two pings without a pong. A closed socket waits 0.5, 1, 2, 4 seconds and then 8 seconds, the cap of the back-off (a reconnect after the fifth failure waits 8 seconds; the random jitter between half and all of the wait is not modelled, the wait is its upper bound). The state is kept in memory for the life of the tab.","transaction":{"scope":"transition","isolation":"serializable"},"variables":[{"name":"attempts","type":"number","initial":0,"repr":"u32"},{"name":"lastSeq","type":"number","initial":0,"repr":"u64"},{"name":"lastN","type":"number","initial":0,"repr":"u64"},{"name":"missedPongs","type":"number","initial":0,"repr":"u8"},{"name":"heartbeatMs","type":"number","initial":10000,"repr":"u32"}],"states":[
+        {
+          "id": "lv-idle-i",
+          "name": "Not started",
+          "ignores": [
+            "ui-live-welcome",
+            "ui-live-frame",
+            "ui-live-pong",
+            "ui-live-heartbeat-due",
+            "ui-live-closed",
+            "ui-live-reconnect-due",
+            "ui-live-reset",
+            "ui-live-resync"
+          ]
+        },
+        {
+          "id": "lv-connecting-i",
+          "name": "Connecting",
+          "ignores": [
+            "ui-live-start",
+            "ui-live-frame",
+            "ui-live-pong",
+            "ui-live-heartbeat-due",
+            "ui-live-reconnect-due",
+            "ui-live-resync"
+          ]
+        },
+        {
+          "id": "lv-open-i",
+          "name": "Open",
+          "ignores": [
+            "ui-live-start",
+            "ui-live-welcome",
+            "ui-live-reconnect-due"
+          ]
+        },
+        {
+          "id": "lv-waiting-i",
+          "name": "Waiting to reconnect",
+          "ignores": [
+            "ui-live-start",
+            "ui-live-welcome",
+            "ui-live-frame",
+            "ui-live-pong",
+            "ui-live-heartbeat-due",
+            "ui-live-closed",
+            "ui-live-resync"
+          ]
+        }
+      ],"transitions":[{"id":"lv-start-i","from":"lv-idle-i","to":"lv-connecting-i","on":"ui-live-start","otherwise":true},{"id":"lv-first-welcome-i","from":"lv-connecting-i","to":"lv-open-i","on":"ui-live-welcome","guard":"lastSeq == 0","effects":[{"set":"attempts","to":"0"},{"set":"lastN","to":"0"},{"set":"missedPongs","to":"0"},{"emit":"ui-live-subscribe","payload":{"after":"lastSeq"},"to":"subscribe-events"},{"set":"lastSeq","to":"event.head"},{"set":"heartbeatMs","to":"event.heartbeat-ms"},{"timer":"heartbeat","after":{"expr":"event.heartbeat-ms","simulate":10000},"emit":"ui-live-heartbeat-due"}]},{"id":"lv-resume-welcome-i","from":"lv-connecting-i","to":"lv-open-i","on":"ui-live-welcome","otherwise":true,"effects":[{"set":"attempts","to":"0"},{"set":"lastN","to":"0"},{"set":"missedPongs","to":"0"},{"emit":"ui-live-subscribe","payload":{"after":"lastSeq"},"to":"subscribe-events"},{"set":"heartbeatMs","to":"event.heartbeat-ms"},{"timer":"heartbeat","after":{"expr":"event.heartbeat-ms","simulate":10000},"emit":"ui-live-heartbeat-due"}]},{"id":"lv-frame-advance-i","from":"lv-open-i","to":"lv-open-i","on":"ui-live-frame","guard":"event.n == lastN + 1 && event.seq > lastSeq","effects":[{"set":"lastN","to":"event.n"},{"set":"lastSeq","to":"event.seq"},{"emit":"ui-live-ack","payload":{"n":"event.n"},"to":"subscribe-events"}]},{"id":"lv-frame-same-i","from":"lv-open-i","to":"lv-open-i","on":"ui-live-frame","guard":"event.n == lastN + 1","effects":[{"set":"lastN","to":"event.n"},{"emit":"ui-live-ack","payload":{"n":"event.n"},"to":"subscribe-events"}]},{"id":"lv-frame-gap-i","from":"lv-open-i","to":"lv-open-i","on":"ui-live-frame","otherwise":true,"effects":[{"set":"lastSeq","to":"0"},{"emit":"ui-live-close-requested","to":"subscribe-events"}]},{"id":"lv-pong-advance-i","from":"lv-open-i","to":"lv-open-i","on":"ui-live-pong","guard":"event.head > lastSeq","effects":[{"set":"missedPongs","to":"0"},{"set":"lastSeq","to":"event.head"}]},{"id":"lv-pong-same-i","from":"lv-open-i","to":"lv-open-i","on":"ui-live-pong","otherwise":true,"effects":[{"set":"missedPongs","to":"0"}]},{"id":"lv-give-up-i","from":"lv-open-i","to":"lv-open-i","on":"ui-live-heartbeat-due","guard":"missedPongs >= 2","effects":[{"emit":"ui-live-close-requested","to":"subscribe-events"}]},{"id":"lv-ping-i","from":"lv-open-i","to":"lv-open-i","on":"ui-live-heartbeat-due","otherwise":true,"effects":[{"set":"missedPongs","to":"missedPongs + 1"},{"emit":"ui-live-ping","to":"subscribe-events"},{"timer":"heartbeat","after":{"expr":"heartbeatMs","simulate":10000},"emit":"ui-live-heartbeat-due"}]},{"id":"lv-closed-connecting-1-i","from":"lv-connecting-i","to":"lv-waiting-i","on":"ui-live-closed","guard":"attempts == 0","effects":[{"set":"attempts","to":"attempts + 1"},{"cancel":"heartbeat"},{"timer":"reconnect","after":500,"emit":"ui-live-reconnect-due"}]},{"id":"lv-closed-connecting-2-i","from":"lv-connecting-i","to":"lv-waiting-i","on":"ui-live-closed","guard":"attempts == 1","effects":[{"set":"attempts","to":"attempts + 1"},{"cancel":"heartbeat"},{"timer":"reconnect","after":1000,"emit":"ui-live-reconnect-due"}]},{"id":"lv-closed-connecting-3-i","from":"lv-connecting-i","to":"lv-waiting-i","on":"ui-live-closed","guard":"attempts == 2","effects":[{"set":"attempts","to":"attempts + 1"},{"cancel":"heartbeat"},{"timer":"reconnect","after":2000,"emit":"ui-live-reconnect-due"}]},{"id":"lv-closed-connecting-4-i","from":"lv-connecting-i","to":"lv-waiting-i","on":"ui-live-closed","guard":"attempts == 3","effects":[{"set":"attempts","to":"attempts + 1"},{"cancel":"heartbeat"},{"timer":"reconnect","after":4000,"emit":"ui-live-reconnect-due"}]},{"id":"lv-closed-connecting-5-i","from":"lv-connecting-i","to":"lv-waiting-i","on":"ui-live-closed","otherwise":true,"effects":[{"set":"attempts","to":"attempts + 1"},{"cancel":"heartbeat"},{"timer":"reconnect","after":8000,"emit":"ui-live-reconnect-due"}]},{"id":"lv-closed-open-1-i","from":"lv-open-i","to":"lv-waiting-i","on":"ui-live-closed","guard":"attempts == 0","effects":[{"set":"attempts","to":"attempts + 1"},{"cancel":"heartbeat"},{"timer":"reconnect","after":500,"emit":"ui-live-reconnect-due"}]},{"id":"lv-closed-open-2-i","from":"lv-open-i","to":"lv-waiting-i","on":"ui-live-closed","guard":"attempts == 1","effects":[{"set":"attempts","to":"attempts + 1"},{"cancel":"heartbeat"},{"timer":"reconnect","after":1000,"emit":"ui-live-reconnect-due"}]},{"id":"lv-closed-open-3-i","from":"lv-open-i","to":"lv-waiting-i","on":"ui-live-closed","guard":"attempts == 2","effects":[{"set":"attempts","to":"attempts + 1"},{"cancel":"heartbeat"},{"timer":"reconnect","after":2000,"emit":"ui-live-reconnect-due"}]},{"id":"lv-closed-open-4-i","from":"lv-open-i","to":"lv-waiting-i","on":"ui-live-closed","guard":"attempts == 3","effects":[{"set":"attempts","to":"attempts + 1"},{"cancel":"heartbeat"},{"timer":"reconnect","after":4000,"emit":"ui-live-reconnect-due"}]},{"id":"lv-closed-open-5-i","from":"lv-open-i","to":"lv-waiting-i","on":"ui-live-closed","otherwise":true,"effects":[{"set":"attempts","to":"attempts + 1"},{"cancel":"heartbeat"},{"timer":"reconnect","after":8000,"emit":"ui-live-reconnect-due"}]},{"id":"lv-reconnect-i","from":"lv-waiting-i","to":"lv-connecting-i","on":"ui-live-reconnect-due","otherwise":true},{"id":"lv-reset-connecting-i","from":"lv-connecting-i","to":"lv-connecting-i","on":"ui-live-reset","otherwise":true,"effects":[{"set":"lastSeq","to":"0"},{"emit":"ui-live-close-requested","to":"subscribe-events"}]},{"id":"lv-reset-open-i","from":"lv-open-i","to":"lv-open-i","on":"ui-live-reset","otherwise":true,"effects":[{"set":"lastSeq","to":"0"},{"emit":"ui-live-close-requested","to":"subscribe-events"}]},{"id":"lv-reset-waiting-i","from":"lv-waiting-i","to":"lv-waiting-i","on":"ui-live-reset","otherwise":true,"effects":[{"set":"lastSeq","to":"0"}]},
+      {
+        "id": "lv-resync-i",
+        "from": "lv-open-i",
+        "to": "lv-open-i",
+        "on": "ui-live-resync",
+        "otherwise": true,
+        "effects": [
+          {
+            "set": "lastSeq",
+            "to": "event.head"
+          }
+        ]
+      }],"refines":"client-live-flow","refinement":{
+      "states": {
+        "lv-idle-i": "lv-idle",
+        "lv-connecting-i": "lv-connecting",
+        "lv-open-i": "lv-open",
+        "lv-waiting-i": "lv-waiting"
+      },
+      "variables": {
+        "attempts": "attempts",
+        "lastSeq": "lastSeq",
+        "lastN": "lastN",
+        "missedPongs": "missedPongs"
+      },
+      "transitions": {
+        "lv-start-i": "lv-start",
+        "lv-first-welcome-i": "lv-first-welcome",
+        "lv-resume-welcome-i": "lv-resume-welcome",
+        "lv-frame-advance-i": "lv-frame-advance",
+        "lv-frame-same-i": "lv-frame-same",
+        "lv-frame-gap-i": "lv-frame-gap",
+        "lv-pong-advance-i": "lv-pong-advance",
+        "lv-pong-same-i": "lv-pong-same",
+        "lv-give-up-i": "lv-give-up",
+        "lv-ping-i": "lv-ping",
+        "lv-reconnect-i": "lv-reconnect",
+        "lv-reset-connecting-i": "lv-reset-connecting",
+        "lv-reset-open-i": "lv-reset-open",
+        "lv-reset-waiting-i": "lv-reset-waiting",
+        "lv-closed-connecting-1-i": "lv-closed-connecting",
+        "lv-closed-open-1-i": "lv-closed-open",
+        "lv-closed-connecting-2-i": "lv-closed-connecting",
+        "lv-closed-open-2-i": "lv-closed-open",
+        "lv-closed-connecting-3-i": "lv-closed-connecting",
+        "lv-closed-open-3-i": "lv-closed-open",
+        "lv-closed-connecting-4-i": "lv-closed-connecting",
+        "lv-closed-open-4-i": "lv-closed-open",
+        "lv-closed-connecting-5-i": "lv-closed-connecting",
+        "lv-closed-open-5-i": "lv-closed-open",
+        "lv-resync-i": "lv-resync"
+      }
+    },"storage":{"record":"rec-client-visit","key":"visit-id","fields":{"attempts":"connect-attempts","lastSeq":"last-seq","lastN":"last-n","missedPongs":"missed-pongs","heartbeatMs":"heartbeat-ms"},"state":"live-state"}},
     {"id":"client-submit-flow","name":"Form submission","subject":"web-application","initial":"fs-idle","description":"One form being submitted. A form with a required field empty is refused where it stands, with no request; a complete form sends one request and shows busy; a second submit while busy changes nothing; the reply ends busy, with the form clear when it is accepted and with its error shown when it is refused.","variables":[{"name":"requests","type":"number","initial":0},{"name":"answers","type":"number","initial":0}],"states":[{"id":"fs-idle","name":"Idle"},{"id":"fs-busy","name":"Waiting for the reply"},{"id":"fs-failed","name":"Error shown"}],"transitions":[{"id":"fs-submit-idle","from":"fs-idle","to":"fs-busy","on":"ui-form-submitted","guard":"event.complete == 1","effects":[{"set":"requests","to":"requests + 1"},{"emit":"ui-request-sent"}]},{"id":"fs-incomplete-idle","from":"fs-idle","to":"fs-failed","on":"ui-form-submitted"},{"id":"fs-submit-busy","from":"fs-busy","to":"fs-busy","on":"ui-form-submitted"},{"id":"fs-accepted","from":"fs-busy","to":"fs-idle","on":"ui-form-accepted","effects":[{"set":"answers","to":"answers + 1"}]},{"id":"fs-refused","from":"fs-busy","to":"fs-failed","on":"ui-form-refused","effects":[{"set":"answers","to":"answers + 1"}]},{"id":"fs-submit-failed","from":"fs-failed","to":"fs-busy","on":"ui-form-submitted","guard":"event.complete == 1","effects":[{"set":"requests","to":"requests + 1"},{"emit":"ui-request-sent"}]},{"id":"fs-incomplete-failed","from":"fs-failed","to":"fs-failed","on":"ui-form-submitted"}]},
     {"id":"client-submit-flow-impl","name":"Form submission (implementation)","subject":"web-application","level":"implementation","initial":"fs-idle-i","description":"The busy and error fields of one form of the kernel state (forms.login, forms.editor, forms.settings). The login form checks its two fields itself; the editor and the settings form leave every check to the gateway and ignore a submit while busy. The state is kept in memory for the life of the tab.","transaction":{"scope":"transition","isolation":"serializable"},"variables":[{"name":"requests","type":"number","initial":0,"repr":"u32"},{"name":"answers","type":"number","initial":0,"repr":"u32"}],"states":[{"id":"fs-idle-i","name":"Idle","ignores":["ui-form-accepted","ui-form-refused"]},{"id":"fs-busy-i","name":"Waiting for the reply"},{"id":"fs-failed-i","name":"Error shown","ignores":["ui-form-accepted","ui-form-refused"]}],"transitions":[{"id":"fs-submit-idle-i","from":"fs-idle-i","to":"fs-busy-i","on":"ui-form-submitted","guard":"event.complete == 1","effects":[{"set":"requests","to":"requests + 1"},{"emit":"ui-request-sent","to":"gateway"}]},{"id":"fs-incomplete-idle-i","from":"fs-idle-i","to":"fs-failed-i","on":"ui-form-submitted","otherwise":true},{"id":"fs-submit-busy-i","from":"fs-busy-i","to":"fs-busy-i","on":"ui-form-submitted","otherwise":true},{"id":"fs-accepted-i","from":"fs-busy-i","to":"fs-idle-i","on":"ui-form-accepted","otherwise":true,"effects":[{"set":"answers","to":"answers + 1"}]},{"id":"fs-refused-i","from":"fs-busy-i","to":"fs-failed-i","on":"ui-form-refused","otherwise":true,"effects":[{"set":"answers","to":"answers + 1"}]},{"id":"fs-submit-failed-i","from":"fs-failed-i","to":"fs-busy-i","on":"ui-form-submitted","guard":"event.complete == 1","effects":[{"set":"requests","to":"requests + 1"},{"emit":"ui-request-sent","to":"gateway"}]},{"id":"fs-incomplete-failed-i","from":"fs-failed-i","to":"fs-failed-i","on":"ui-form-submitted","otherwise":true}],"refines":"client-submit-flow","refinement":{"states":{"fs-idle-i":"fs-idle","fs-busy-i":"fs-busy","fs-failed-i":"fs-failed"},"variables":{"requests":"requests","answers":"answers"},"transitions":{"fs-submit-idle-i":"fs-submit-idle","fs-incomplete-idle-i":"fs-incomplete-idle","fs-submit-busy-i":"fs-submit-busy","fs-accepted-i":"fs-accepted","fs-refused-i":"fs-refused","fs-submit-failed-i":"fs-submit-failed","fs-incomplete-failed-i":"fs-incomplete-failed"}},"storage":{"record":"rec-client-visit","key":"visit-id","state":"submit-state"}}
   ],
@@ -5928,5 +7232,129 @@
     {"id":"copy-move-replica","name":"Move replica","of":["rec-content","rec-event","rec-principal"],"heldBy":"postgres-adapter","scope":"internal","freshness":{"bound":"zero","mechanism":"verified by state hash before the placement switch, after which it is the tenant database","source":"d-576"},"erasure":{"point":"removal of the source database at the end of its retention (MIG-572)"},"description":"The copy of a tenant database that a move makes until the placement switch."},
     {"id":"copy-edge-media","name":"Edge media","of":["rec-file"],"heldBy":"delivery-network","scope":"shared","freshness":{"bound":"zero","mechanism":"the address is derived from the content","source":"d-16"},"description":"copy-classes: edge-media.","erasure":{"point":"the purge sent when the file is deleted"}},
     {"id":"copy-search-entries","name":"Search entries","of":["rec-content"],"fields":["record-id","status","fields"],"heldBy":"search-index","scope":"internal","freshness":{"bound":"the commit of the record","mechanism":"an entry follows the commit that changed its record, including the commit of its deletion","source":"srh-152"},"erasure":{"point":"the commit of the deletion of the record","source":"srh-152"},"description":"Search entries are read through the authority filter (SRH-150) and are never served as stored."}
+  ],
+  "errorMessages": [
+    {
+      "id": "em-check-required",
+      "on": "check",
+      "kinds": [
+        "required"
+      ],
+      "text": "This is required.",
+      "field": "name"
+    },
+    {
+      "id": "em-check-unique",
+      "on": "check",
+      "kinds": [
+        "unique"
+      ],
+      "text": "Another entry already uses this value.",
+      "field": "name"
+    },
+    {
+      "id": "em-check-form",
+      "on": "check",
+      "kinds": [
+        "type",
+        "input"
+      ],
+      "text": "This value is not in the expected form.",
+      "field": "name"
+    },
+    {
+      "id": "em-check-reference",
+      "on": "check",
+      "kinds": [
+        "reference"
+      ],
+      "text": "The chosen entry no longer exists.",
+      "field": "name"
+    },
+    {
+      "id": "em-check-constraint",
+      "on": "check",
+      "kinds": [
+        "constraint"
+      ],
+      "text": "${check.statement}.",
+      "field": "prefix",
+      "description": "A constraint is named for the field it guards: title_length is about title. Its detail ends with the rule in brackets, which is left out."
+    },
+    {
+      "id": "em-check-workflow",
+      "on": "check",
+      "kinds": [
+        "workflow",
+        "workflow_state"
+      ],
+      "text": "That change of status is not allowed from here."
+    },
+    {
+      "id": "em-check-policy",
+      "on": "check",
+      "kinds": [
+        "policy"
+      ],
+      "text": "You are not allowed to do this."
+    },
+    {
+      "id": "em-check-other",
+      "on": "check",
+      "text": "${check.detail}",
+      "description": "A failed check of any other kind is shown as the kernel words it."
+    },
+    {
+      "id": "em-error-conflict",
+      "on": "error",
+      "kinds": [
+        "conflict"
+      ],
+      "text": "This was changed somewhere else since you opened it. Reload to see the latest version."
+    },
+    {
+      "id": "em-error-session-ended",
+      "on": "error",
+      "kinds": [
+        "unauthenticated"
+      ],
+      "text": "Your session has ended. Sign in again to save."
+    },
+    {
+      "id": "em-error-other",
+      "on": "error",
+      "text": "${error.message}",
+      "fallback": "That did not work. Try again."
+    },
+    {
+      "id": "em-sign-in-refused",
+      "on": "error",
+      "kinds": [
+        "throttled",
+        "unauthenticated"
+      ],
+      "appliesTo": [
+        "form-sign-in"
+      ],
+      "text": "${error.message}",
+      "description": "Wrong credentials and a throttled caller are worded by the gateway, which does not say which credential was wrong (UXA-202)."
+    },
+    {
+      "id": "em-sign-in-failed",
+      "on": "error",
+      "appliesTo": [
+        "form-sign-in"
+      ],
+      "text": "Signing in did not work. Try again."
+    },
+    {
+      "id": "em-sign-out-failed",
+      "on": "error",
+      "appliesTo": [
+        "act-sign-out-desk",
+        "act-sign-out-front-page"
+      ],
+      "text": "Signing out did not work. Try again."
+    }
   ]
 }

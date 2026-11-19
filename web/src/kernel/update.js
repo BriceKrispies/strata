@@ -8,15 +8,14 @@
 
 import * as actions from '../generated/actions.js';
 import * as contracts from '../generated/contracts.js';
+import * as refusals from '../generated/errors.js';
 import * as forms from '../generated/forms.js';
 import * as live from '../generated/live.js';
 import { matchRoute, route as routeOf } from '../generated/routes.js';
-import { gatewayInputs } from './gateway.js';
 import { labEnter, labInit, labUpdate } from './lab.js';
 import {
   busy,
   liveInit,
-  liveResync,
   liveStep,
   liveTimer,
   sessionInit,
@@ -47,7 +46,7 @@ export function initialState() {
     view: { status: 'loading', model: null, error: null, request: 0 },
     ws: liveInit(),
     forms: {
-      login: { values: forms.initialValues(SIGN_IN, null), busy: false, error: '', flow: submitInit() },
+      login: { values: forms.initialValues(SIGN_IN, {}), busy: false, error: '', flow: submitInit() },
       editor: null,
       settings: null,
     },
@@ -187,11 +186,6 @@ function readSession(state, msg) {
   return call(state, 'session', 'read-session-view', {}, msg);
 }
 
-function authorFor(session, authors) {
-  const own = (authors ?? []).find((a) => a.fields.principal && a.fields.principal === session?.principal);
-  return String((own ?? authors?.[0])?.id ?? '');
-}
-
 /** The form whose fields the editor shows: the new article's, or an existing one's. */
 function editorForm(editor) {
   return editor.id == null ? 'form-new-article-save' : 'form-edit-article-save-draft';
@@ -202,14 +196,12 @@ function editorFor(state, model) {
   const current = state.forms.editor;
   if (model.view === 'desk_new') {
     if (current?.key === 'new') return current;
-    // The author starts as the principal's own (the specification's select starts at the first).
-    const values = { ...forms.initialValues('form-new-article-save', model), author: authorFor(state.session, model.data.authors) };
     return {
       key: 'new',
       id: null,
       version: null,
       status: 'draft',
-      values,
+      values: forms.initialValues('form-new-article-save', scopeOf(state)),
       edited: [], dirty: false, busy: false, flow: submitInit(), errors: {}, formError: '',
       tab: 'write', preview: null, remoteChanged: false, rev: state.nextId,
     };
@@ -220,20 +212,12 @@ function editorFor(state, model) {
     // Someone else saved while we were typing: keep our text, remember theirs exists.
     return current.version === post.version ? current : { ...current, remoteChanged: true };
   }
-  // The specification has no initial values from the view model, so an article's fields are
-  // read here.
-  const f = post.fields;
   return {
-    key: f.slug,
+    key: post.fields.slug,
     id: post.id,
     version: post.version,
-    status: f.status,
-    values: {
-      title: f.title ?? '', slug: f.slug ?? '', excerpt: f.excerpt ?? '', body: f.body ?? '',
-      category: f.category == null ? '' : String(f.category),
-      author: f.author == null ? '' : String(f.author),
-      tags: (f.tags ?? []).join(', '), cover: f.cover ?? '', cover_alt: f.cover_alt ?? '', featured: f.featured === true,
-    },
+    status: post.fields.status,
+    values: forms.initialValues('form-edit-article-save-draft', scopeOf(state)),
     edited: [], dirty: false, busy: false, flow: submitInit(), errors: {}, formError: '',
     tab: current?.id === post.id ? current.tab : 'write',
     preview: current?.id === post.id ? current.preview : null,
@@ -246,10 +230,9 @@ function settingsFor(state, model) {
   const current = state.forms.settings;
   if (!site) return null;
   if (current?.dirty && current.id === site.id) return current;
-  const f = site.fields;
   return {
-    id: site.id, version: site.version,
-    values: { name: f.name ?? '', tagline: f.tagline ?? '', accent: f.accent ?? 'moss', paper: f.paper ?? 'linen' },
+    id: site.id,
+    values: forms.initialValues(SETTINGS, scopeOf(state)),
     dirty: false, busy: false, flow: submitInit(), errors: {}, formError: '', rev: state.nextId,
   };
 }
@@ -276,69 +259,15 @@ function acceptView(state, model) {
   const formsState = { ...next.forms };
   formsState.editor = model.view === 'desk_new' || model.view === 'desk_edit' ? editorFor(next, model) : null;
   formsState.settings = model.view === 'desk_settings' ? settingsFor(next, model) : null;
-  next = { ...next, forms: formsState };
-  return next;
-}
-
-/** Which form field a failed kernel check is about, and what to tell the writer. */
-export function explainCheck(check, object, fieldNames) {
-  const [kind, rest = ''] = check.rule.split(/:(.*)/s);
-  const name = rest.startsWith(`${object}.`) ? rest.slice(object.length + 1) : rest;
-  const direct = fieldNames.includes(name) ? name : null;
-  switch (kind) {
-    case 'required':
-      return { field: direct, text: 'This is required.' };
-    case 'unique':
-      return { field: direct, text: 'Another entry already uses this value.' };
-    case 'type':
-    case 'input':
-      return { field: direct, text: 'This value is not in the expected form.' };
-    case 'reference':
-      return { field: direct, text: 'The chosen entry no longer exists.' };
-    case 'constraint': {
-      // A constraint is named for the field it guards: `title_length` is about `title`.
-      const field = [...fieldNames].sort((a, b) => b.length - a.length).find((f) => name === f || name.startsWith(`${f}_`));
-      return { field: field ?? null, text: check.detail.replace(/\s*\[.*\]\s*$/s, '') + '.' };
-    }
-    case 'workflow':
-    case 'workflow_state':
-      return { field: null, text: 'That change of status is not allowed from here.' };
-    case 'policy':
-      return { field: null, text: 'You are not allowed to do this.' };
-    default:
-      return { field: null, text: check.detail };
-  }
-}
-
-function formErrors(error, object, fieldNames) {
-  /** @type {Record<string, string>} */
-  const errors = {};
-  const general = [];
-  for (const check of error?.failed ?? []) {
-    const { field, text } = explainCheck(check, object, fieldNames);
-    if (field && !errors[field]) errors[field] = text;
-    else if (!field) general.push(text);
-  }
-  let formError = general[0] ?? '';
-  if (!Object.keys(errors).length && !formError) {
-    formError =
-      error?.code === 'conflict'
-        ? 'This was changed somewhere else since you opened it. Reload to see the latest version.'
-        : error?.code === 'unauthenticated'
-          ? 'Your session has ended. Sign in again to save.'
-          : error?.message || 'That did not work. Try again.';
-  }
-  return { errors, formError };
+  // A form kept with unsaved changes holds the view-model values its saves set.
+  const kept = formsState.editor?.dirty ? editorForm(formsState.editor) : formsState.settings?.dirty ? SETTINGS : null;
+  if (kept) next = { ...next, view: { ...next.view, model: { ...model, ...forms.held(kept, state.view.model) } } };
+  return { ...next, forms: formsState };
 }
 
 /** The names of a form's fields, in the order it shows them. */
 function fieldNames(form) {
   return forms.FORMS[form].fields.map((f) => f.name);
-}
-
-/** The record object a records contract changes. */
-function objectOf(contract) {
-  return contracts.BFF[contract]?.object ?? '';
 }
 
 /**
@@ -352,21 +281,6 @@ function editorSubmission(editor, status) {
   return editor.status === 'published' ? 'form-edit-article-save-changes' : 'form-edit-article-save-draft';
 }
 
-/**
- * The scope of a form's expressions: the screen's, with the editor's or the settings' record
- * as the view model knows it (a save moves the version on before the view is read again).
- */
-function formScope(state, form) {
-  const model = state.view.model ?? {};
-  if (form === SETTINGS) {
-    const s = state.forms.settings;
-    return scopeOf(state, { view: { ...model, publication_id: s.id, publication_version: s.version } });
-  }
-  const editor = state.forms.editor;
-  if (editor && form !== SIGN_IN) return scopeOf(state, { view: { ...model, article_id: editor.id, article_version: editor.version } });
-  return scopeOf(state);
-}
-
 /** Save the editor's article, optionally moving it to a new status in the same request. */
 /** @returns {Result} */
 function saveEditor(state, msg, status) {
@@ -376,8 +290,7 @@ function saveEditor(state, msg, status) {
   if (!stepped?.sends) return { state, effects: [] };
   const form = editorSubmission(editor, status);
   const contract = forms.FORMS[form].contract;
-  const { inputs, publishAfterCreate } = gatewayInputs(contract, forms.inputs(form, editor.values, formScope(state, form)));
-  const [next, effect] = call(state, 'editor.save', contract, inputs, msg, { form, status, publishAfterCreate });
+  const [next, effect] = call(state, 'editor.save', contract, forms.inputs(form, editor.values, scopeOf(state)), msg, { form, status });
   return {
     state: { ...next, forms: { ...next.forms, editor: { ...editor, flow: stepped.flow, busy: true, errors: {}, formError: '' } } },
     effects: [effect],
@@ -387,7 +300,9 @@ function saveEditor(state, msg, status) {
 /** Where a form or an action leads after a success, and the message it shows. */
 /** @returns {Result} */
 function succeed(state, outcome, msg) {
-  const done = outcome.toast ? toast(state, 'ok', outcome.toast) : state;
+  const toasted = outcome.toast ? toast(state, 'ok', outcome.toast) : state;
+  // What the success says the view model now holds, until it is read again.
+  const done = outcome.view && toasted.view.model ? { ...toasted, view: { ...toasted.view, model: { ...toasted.view.model, ...outcome.view } } } : toasted;
   if (!outcome.navigate) return fetchView(done, msg, true);
   const target = parseHref(outcome.navigate);
   if (hrefOf(state.route) === hrefOf(target)) return fetchView(done, msg, true);
@@ -406,6 +321,12 @@ function resetLive(state, msg) {
   return liveStep(state, 'ui-live-reset', {}, msg) ?? { state, effects: [] };
 }
 
+/** A view refresh after a step of the live connection. @returns {Result} */
+function refreshAfter(stepped, msg) {
+  const refreshed = fetchView(stepped.state, msg, true);
+  return { state: refreshed.state, effects: [...stepped.effects, ...refreshed.effects] };
+}
+
 /** Handle one frame from the server. */
 /** @returns {Result} */
 function onSocket(state, frame, msg) {
@@ -417,30 +338,17 @@ function onSocket(state, frame, msg) {
       if (!stepped) return { state, effects: [] };
       // A frame went missing on this connection: the machine starts over rather than carry on stale.
       if (stepped.effects.some((e) => e.type === 'ws_close')) return stepped;
-      const next = stepped.state;
-      const effects = stepped.effects;
       const notice = frame.notice;
-      const model = state.view.model;
-      const screen = screenOf(state)?.screen ?? '';
-      const relevant =
-        screen === LAB_SCREEN
-          ? notice.kind === 'schema' || notice.kind === 'membership' || (model?.depends_on ?? []).includes(notice.object)
-          : live.refreshes(screen, 'ui-notice-received', { kind: notice.kind, object: notice.object }, model);
       if (notice.kind === 'membership') {
-        const [withRequest, effect] = readSession(next, msg);
-        const refreshed = fetchView(withRequest, msg, true);
-        return { state: refreshed.state, effects: [...effects, effect, ...refreshed.effects] };
+        const [withRequest, effect] = readSession(stepped.state, msg);
+        return refreshAfter({ state: withRequest, effects: [...stepped.effects, effect] }, msg);
       }
-      if (relevant && state.view.status === 'ready') {
-        const refreshed = fetchView(next, msg, true);
-        return { state: refreshed.state, effects: [...effects, ...refreshed.effects] };
-      }
-      return { state: next, effects };
+      const relevant = live.refreshes(screenOf(state)?.screen ?? '', 'ui-notice-received', { kind: notice.kind, object: notice.object }, state.view.model);
+      return relevant && state.view.status === 'ready' ? refreshAfter(stepped, msg) : stepped;
     }
-    case 'resync': {
-      const next = { ...state, ws: liveResync(state.ws, frame.head) };
-      return fetchView(next, msg, true);
-    }
+    case 'resync':
+      // Too far behind to replay: carry on from the server's head, with the view read again.
+      return refreshAfter(liveStep(state, 'ui-live-resync', { head: frame.head }, msg) ?? { state, effects: [] }, msg);
     case 'pong':
       // Everything visible up to `head` has already arrived on this ordered connection.
       return liveStep(state, 'ui-live-pong', { head: frame.head }, msg) ?? { state, effects: [] };
@@ -460,10 +368,8 @@ function onSocket(state, frame, msg) {
         effects.push(effect);
       }
       next = { ...next, session: { ...state.session, authenticated: false, csrf_token: undefined, roles: ['public'], may: {}, may_manage_schema: false } };
-      const screen = screenOf(state)?.screen ?? '';
-      if (!live.refreshes(screen, 'ui-session-ended', {}, state.view.model)) return { state: next, effects };
-      const refreshed = fetchView(next, msg, true);
-      return { state: refreshed.state, effects: [...effects, ...refreshed.effects] };
+      const refresh = live.refreshes(screenOf(state)?.screen ?? '', 'ui-session-ended', {}, state.view.model);
+      return refresh ? refreshAfter({ state: next, effects }, msg) : { state: next, effects };
     }
     case 'run':
       return labUpdate(state, { ...msg, type: 'lab_run', frame }, { request, toast }) ?? { state, effects: [] };
@@ -515,7 +421,7 @@ function onHttp(state, msg) {
       const login = state.forms.login;
       if (!msg.ok) {
         const flow = submitStep(login.flow, 'ui-form-refused', {}, msg.at)?.flow ?? login.flow;
-        const text = error.code === 'throttled' || error.code === 'unauthenticated' ? error.message : 'Signing in did not work. Try again.';
+        const text = refusals.refusal(SIGN_IN, error).formError;
         return {
           state: { ...state, announce: text, forms: { ...state.forms, login: { ...login, flow, busy: busy(flow), error: text, values: { ...login.values, password: '' } } }, focus: { target: 'login-password', token: msg.id } },
           effects: [],
@@ -523,7 +429,7 @@ function onHttp(state, msg) {
       }
       const flow = submitStep(login.flow, 'ui-form-accepted', {}, msg.at)?.flow ?? login.flow;
       const outcome = forms.succeeded(SIGN_IN, scopeOf(state, { form: pending.values, response: outputs }));
-      let signedIn = { ...state, session: outputs.session, forms: { ...state.forms, login: { values: forms.initialValues(SIGN_IN, null), busy: busy(flow), error: '', flow } } };
+      let signedIn = { ...state, session: outputs.session, forms: { ...state.forms, login: { values: forms.initialValues(SIGN_IN, {}), busy: busy(flow), error: '', flow } } };
       signedIn = sessionStep(signedIn, 'ui-signed-in', {}, msg.at)?.state ?? signedIn;
       if (outcome.toast) signedIn = toast(signedIn, 'ok', outcome.toast);
       // The socket was opened as an anonymous visitor; open it again as this person.
@@ -532,7 +438,7 @@ function onHttp(state, msg) {
       return { state: moved.state, effects: [...reset.effects, ...moved.effects] };
     }
     case 'logout': {
-      if (!msg.ok) return { state: toast(state, 'warn', 'Signing out did not work. Try again.'), effects: [] };
+      if (!msg.ok) return { state: toast(state, 'warn', refusals.refusal(pending.action, error).text), effects: [] };
       const outcome = actions.succeeded(pending.action, scopeOf(state, { response: outputs }));
       let out = sessionStep({ ...state, session: outputs.session }, 'ui-signed-out', {}, msg.at)?.state ?? { ...state, session: outputs.session };
       if (outcome.toast) out = toast(out, 'ok', outcome.toast);
@@ -544,17 +450,15 @@ function onHttp(state, msg) {
     case 'editor.save': {
       const editor = state.forms.editor;
       if (!editor) return { state, effects: [] };
-      const contract = pending.contract;
-      const names = fieldNames(pending.form);
       if (!msg.ok) {
         const flow = submitStep(editor.flow, 'ui-form-refused', {}, msg.at)?.flow ?? editor.flow;
-        const { errors, formError } = formErrors(error, objectOf(contract), names);
+        const { errors, formError, announce } = refusals.refusal(pending.form, error);
         // Focus goes to the first failing field in the order the form shows them.
-        const first = names.find((name) => errors[name]);
+        const first = fieldNames(pending.form).find((name) => errors[name]);
         return {
           state: {
             ...state,
-            announce: formError || 'Some fields need attention.',
+            announce,
             forms: { ...state.forms, editor: { ...editor, flow, busy: busy(flow), errors, formError } },
             focus: first ? { target: `editor-${first}`, token: msg.id } : state.focus,
           },
@@ -562,21 +466,19 @@ function onHttp(state, msg) {
         };
       }
       let flow = submitStep(editor.flow, 'ui-form-accepted', {}, msg.at)?.flow ?? editor.flow;
-      const saved = { ...editor, id: outputs.article_id, version: outputs.version, key: outputs.slug, dirty: false, remoteChanged: false };
-      if (pending.publishAfterCreate) {
-        // Publishing a new article is the second step the post workflow allows.
+      const response = pending.first ? forms.bothResponses(pending.first, outputs) : outputs;
+      const saved = { ...editor, id: response.article_id, version: response.version, key: response.slug, dirty: false, remoteChanged: false };
+      const scope = scopeOf(state, { form: editor.values, response });
+      const second = pending.first ? null : forms.followUp(pending.form, scope);
+      if (second) {
         const again = submitStep(flow, 'ui-form-submitted', { complete: 1 }, msg.at);
         flow = again?.flow ?? flow;
-        const inputs = { article: outputs.article_id, expected_version: outputs.version, status: 'published' };
-        const [next, effect] = call(
-          { ...state, forms: { ...state.forms, editor: { ...saved, flow, busy: busy(flow) } } }, 'editor.save', 'update-article', inputs, msg,
-          // The reply repeats the address that was saved.
-          { form: 'form-new-article-publish', status: 'published', inputs: { ...inputs, slug: outputs.slug } },
-        );
+        const withSaved = { ...state, forms: { ...state.forms, editor: { ...saved, flow, busy: busy(flow) } } };
+        const [next, effect] = call(withSaved, 'editor.save', second.contract, second.inputs, msg, { form: pending.form, status: pending.status, first: response });
         return { state: next, effects: [effect] };
       }
       const status = pending.status ?? editor.status;
-      const outcome = forms.succeeded(pending.form, scopeOf(state, { form: editor.values, response: outputs }));
+      const outcome = forms.succeeded(pending.form, scope);
       const done = { ...state, forms: { ...state.forms, editor: { ...saved, flow, busy: busy(flow), status } } };
       return succeed(done, outcome, msg);
     }
@@ -590,21 +492,18 @@ function onHttp(state, msg) {
     case 'post.action': {
       const { [pending.id]: _gone, ...optimistic } = state.optimistic;
       if (msg.ok) return succeed(state, actions.succeeded(pending.action, scopeOf(state, { item: pending.item, response: outputs })), msg);
-      const names = fieldNames('form-edit-article-save-draft');
-      const { formError } = formErrors(error, objectOf(pending.contract), names);
-      const explained = error.failed?.length ? explainCheck(error.failed[0], objectOf(pending.contract), names).text : formError;
-      return { state: toast({ ...state, optimistic }, 'warn', `Not done. ${explained}`), effects: [] };
+      return { state: toast({ ...state, optimistic }, 'warn', refusals.refusal(pending.action, error).text), effects: [] };
     }
     case 'settings.save': {
       const settings = state.forms.settings;
       if (!settings) return { state, effects: [] };
       if (!msg.ok) {
         const flow = submitStep(settings.flow, 'ui-form-refused', {}, msg.at)?.flow ?? settings.flow;
-        const { errors, formError } = formErrors(error, objectOf(pending.contract), fieldNames(SETTINGS));
-        return { state: { ...state, announce: formError || 'Some fields need attention.', forms: { ...state.forms, settings: { ...settings, flow, busy: busy(flow), errors, formError } } }, effects: [] };
+        const { errors, formError, announce } = refusals.refusal(SETTINGS, error);
+        return { state: { ...state, announce, forms: { ...state.forms, settings: { ...settings, flow, busy: busy(flow), errors, formError } } }, effects: [] };
       }
       const flow = submitStep(settings.flow, 'ui-form-accepted', {}, msg.at)?.flow ?? settings.flow;
-      const done = { ...state, forms: { ...state.forms, settings: { ...settings, flow, busy: busy(flow), dirty: false, version: outputs.version } } };
+      const done = { ...state, forms: { ...state.forms, settings: { ...settings, flow, busy: busy(flow), dirty: false } } };
       return succeed(done, forms.succeeded(SETTINGS, scopeOf(done, { form: settings.values, response: outputs })), msg);
     }
     case 'dev':
@@ -670,10 +569,8 @@ function rowAction(state, msg, action, arg, marker) {
   const scope = scopeOf(state, { item });
   const inputs = actions.args(action, scope);
   if (!actions.visible(action, scope, inputs)) return { state, effects: [] };
-  const contract = actions.ACTIONS[action].contract;
-  const converted = gatewayInputs(contract, inputs).inputs;
   const [next, effect] = call(
-    { ...state, optimistic: { ...state.optimistic, [arg.id]: marker } }, 'post.action', contract, converted, msg, { id: arg.id, action, item },
+    { ...state, optimistic: { ...state.optimistic, [arg.id]: marker } }, 'post.action', actions.ACTIONS[action].contract, inputs, msg, { id: arg.id, action, item },
   );
   return { state: next, effects: [effect] };
 }
@@ -693,11 +590,10 @@ function onAction(state, msg) {
     case 'dismiss':
       return { state: { ...state, toasts: state.toasts.filter((t) => t.id !== arg) }, effects: [] };
     case 'logout': {
-      // Signing out of a signed-in screen leaves it for the front page; elsewhere the page stays.
-      const screen = screenOf(state);
-      const action = screen && routeOf(screen.screen)?.auth !== 'none' ? 'act-sign-out-desk' : 'act-sign-out-front-page';
-      const inputs = actions.args(action, scopeOf(state));
-      const [next, effect] = call(state, 'logout', actions.ACTIONS[action].contract, inputs, msg, { action });
+      // The page's sign-out: the action that signs out on this screen.
+      const action = actions.actionsOn(screenOf(state)?.screen ?? '').find((a) => actions.ACTIONS[a].contract === 'sign-out-of-site');
+      if (!action) return { state, effects: [] };
+      const [next, effect] = call(state, 'logout', actions.ACTIONS[action].contract, actions.args(action, scopeOf(state)), msg, { action });
       return { state: next, effects: [effect] };
     }
     case 'editor.tab':
@@ -718,7 +614,7 @@ function onAction(state, msg) {
       return rowAction(state, msg, ROW_ACTIONS[msg.name], arg, 'draft');
     case 'post.ask_delete':
       // Deleting takes two presses on the same row; any other action disarms it.
-      return { state: { ...state, confirmDelete: arg.id, announce: 'Press Confirm delete to remove the article for good.' }, effects: [] };
+      return { state: { ...state, confirmDelete: arg.id, announce: actions.ACTIONS[ROW_ACTIONS['post.delete']].confirmAnnounce ?? '' }, effects: [] };
     case 'reload':
       return fetchView(state, msg, false);
     case 'post.delete': {
@@ -740,7 +636,7 @@ function onSubmit(state, msg) {
   switch (msg.form) {
     case 'login': {
       const login = state.forms.login;
-      const values = { login: String(msg.values.login ?? ''), password: String(msg.values.password ?? '') };
+      const values = forms.submitted(SIGN_IN, msg.values);
       const errors = forms.validate(SIGN_IN, values);
       const stepped = submitStep(login.flow, 'ui-form-submitted', { complete: Object.keys(errors).length ? 0 : 1 }, msg.at);
       if (!stepped) return { state, effects: [] };
@@ -756,8 +652,8 @@ function onSubmit(state, msg) {
     }
     case 'search': {
       // The search form calls the view model of the search page, which opening the page does.
-      const q = String(msg.values.q ?? '').trim();
-      const outcome = forms.succeeded('form-search', scopeOf(state, { form: { q }, response: { q } }));
+      const form = forms.submitted('form-search', msg.values);
+      const outcome = forms.succeeded('form-search', scopeOf(state, { form, response: form }));
       return navigate(state, outcome.navigate ?? '/search', false, msg);
     }
     case 'editor':
@@ -767,9 +663,7 @@ function onSubmit(state, msg) {
       if (!settings) return { state, effects: [] };
       const stepped = submitStep(settings.flow, 'ui-form-submitted', { complete: 1 }, msg.at);
       if (!stepped?.sends) return { state, effects: [] };
-      const contract = forms.FORMS[SETTINGS].contract;
-      const { inputs } = gatewayInputs(contract, forms.inputs(SETTINGS, settings.values, formScope(state, SETTINGS)));
-      const [next, effect] = call(state, 'settings.save', contract, inputs, msg);
+      const [next, effect] = call(state, 'settings.save', forms.FORMS[SETTINGS].contract, forms.inputs(SETTINGS, settings.values, scopeOf(state)), msg);
       return { state: { ...next, forms: { ...next.forms, settings: { ...settings, flow: stepped.flow, busy: true, errors: {}, formError: '' } } }, effects: [effect] };
     }
     default:

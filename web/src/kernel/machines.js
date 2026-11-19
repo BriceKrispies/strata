@@ -62,16 +62,6 @@ export function liveInit() {
 }
 
 /**
- * The connection with its last sequence set from outside the machine: a resync names the head
- * to read from (the machine has no event for it).
- * @param {any} ws
- * @param {number} head
- */
-export function liveResync(ws, head) {
-  return project({ ...ws, machine: { ...ws.machine, vars: { ...ws.machine.vars, lastSeq: head } } });
-}
-
-/**
  * Step the live connection on an event. Returns the new state and the effects the machine's
  * emits and timers ask for (a reconnect waits a random half to all of the machine's delay), and
  * a `ws_connect` when it moves from waiting to connecting; null when the machine ignores it.

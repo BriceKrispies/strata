@@ -28,6 +28,9 @@
 //!   `args(action, scope)`, `visible(action, scope, inputs)` (the policy decision on its
 //!   contract), `succeeded(action, scope)` and `placeResult(action, local, outputs)`.
 //! - `live.js`: the live bindings (`BINDINGS`) and `refreshes(screen, event, payload, view)`.
+//! - `errors.js`: the wording of refusals (`MESSAGES`, the `errorMessages`), `explain(owner,
+//!   check)` -> `{field, text}` for one failed check and `refusal(owner, error)` -> `{errors,
+//!   formError, announce, text}` for a refused call of a form or an action.
 //!
 //! **How the BFF serves a contract.** The browser does not call the gateway's contract routes;
 //! it calls the BFF, whose routes a contract names with the vocabulary property `bffRoute`:
@@ -87,6 +90,8 @@ struct Ui {
     #[serde(default)]
     live_bindings: Vec<LiveBinding>,
     #[serde(default)]
+    error_messages: Vec<ErrorMessage>,
+    #[serde(default)]
     contracts: Vec<ContractRoute>,
 }
 
@@ -95,6 +100,37 @@ struct Ui {
 struct ContractRoute {
     id: String,
     bff_route: Option<String>,
+    #[serde(default)]
+    inputs: Vec<RawInput>,
+}
+
+/// A contract input as written, for its `encode`.
+#[derive(Deserialize)]
+struct RawInput {
+    name: String,
+    encode: Option<Encode>,
+}
+
+/// How a page's request turns the value it holds into what the endpoint takes.
+#[derive(Deserialize, Clone)]
+struct Encode {
+    trim: Option<bool>,
+    split: Option<String>,
+    #[serde(rename = "as")]
+    as_: Option<String>,
+    empty: Option<String>,
+}
+
+/// The wording of a refusal: of a failed check of some kinds, or of some error codes.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ErrorMessage {
+    on: String,
+    kinds: Option<Vec<String>>,
+    text: String,
+    fallback: Option<String>,
+    field: Option<String>,
+    applies_to: Option<Vec<String>>,
 }
 
 #[derive(Deserialize)]
@@ -127,6 +163,7 @@ struct Form {
     fields: Vec<Field>,
     #[serde(default)]
     arguments: BTreeMap<String, String>,
+    then: Option<Then>,
     submit_label: Option<String>,
     on_success: Option<Outcome>,
     on_error: Option<OnError>,
@@ -144,6 +181,32 @@ struct Field {
     derive: Option<String>,
     until: Option<String>,
     transform: Option<String>,
+    initial: Option<Initial>,
+    normalize: Option<String>,
+}
+
+/// Where a field's value comes from when the form opens.
+#[derive(Deserialize)]
+struct Initial {
+    path: String,
+    #[serde(rename = "where")]
+    where_: Option<Where>,
+    value: Option<String>,
+    join: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct Where {
+    field: String,
+    equals: String,
+}
+
+/// A second call a form makes when the first succeeds.
+#[derive(Deserialize)]
+struct Then {
+    contract: String,
+    #[serde(default)]
+    arguments: BTreeMap<String, String>,
 }
 
 #[derive(Deserialize)]
@@ -163,6 +226,9 @@ struct OptionsFrom {
 struct Outcome {
     navigate: Option<Navigate>,
     toast: Option<String>,
+    /// View-model outputs the success sets, held until the view model is read again.
+    #[serde(default)]
+    view: BTreeMap<String, String>,
 }
 
 #[derive(Deserialize)]
@@ -176,6 +242,8 @@ struct Navigate {
 #[derive(Deserialize)]
 struct OnError {
     show: Option<String>,
+    prefix: Option<String>,
+    announce: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -190,10 +258,17 @@ struct Action {
     #[serde(default)]
     arguments: BTreeMap<String, String>,
     confirm: Option<String>,
+    confirm_announce: Option<String>,
+    also_on: Option<AlsoOn>,
     optimistic: Option<bool>,
     result: Option<ResultInto>,
     on_success: Option<Outcome>,
     on_error: Option<OnError>,
+}
+
+#[derive(Deserialize)]
+struct AlsoOn {
+    auth: String,
 }
 
 #[derive(Deserialize)]
@@ -249,6 +324,7 @@ pub fn generate(
         ("forms.js", k.forms()),
         ("actions.js", k.actions()),
         ("live.js", k.live()),
+        ("errors.js", k.errors()),
     ];
     if !k.out.is_empty() {
         return Err(dedup(k.out));
@@ -998,6 +1074,35 @@ function pick(body, names) {
   return out;
 }
 
+/**
+ * A value as text: empty when absent.
+ * @param {unknown} value
+ * @returns {string}
+ */
+function text(value) {
+  return value == null ? '' : String(value);
+}
+
+/**
+ * A value as an endpoint takes it (an input's `encode`): trimmed, split into its trimmed
+ * non-empty parts, made a number, and an empty value (an empty text, an empty list, false or
+ * nothing) sent as null or left out. A value not given stays left out.
+ * @param {unknown} value
+ * @param {{ trim?: boolean, split?: string, number?: boolean, empty?: string }} how
+ * @returns {any}
+ */
+function encoded(value, how) {
+  if (value === undefined) return undefined;
+  /** @type {any} */
+  let v = value;
+  if (how.trim) v = text(v).trim();
+  if (how.split !== undefined) v = text(v).split(how.split).map((part) => part.trim()).filter(Boolean);
+  if (how.number && v != null && v !== '') v = Number(v);
+  const empty = v == null || v === '' || v === false || (Array.isArray(v) && v.length === 0);
+  if (how.empty !== undefined && empty) return how.empty === 'null' ? null : undefined;
+  return v;
+}
+
 ",
         );
         let mut requests = Vec::new();
@@ -1055,7 +1160,7 @@ function pick(body, names) {
                     let body = if route.method == "POST" {
                         let items: Vec<String> = inputs
                             .iter()
-                            .map(|s| format!("{}: inputs{}", key(&s.wire), member(&s.wire)))
+                            .map(|s| format!("{}: {}", key(&s.wire), self.encoded(&c.id, s)))
                             .collect();
                         format!(", body: defined({{ {} }})", items.join(", "))
                             .replace("defined({  })", "{}")
@@ -1113,7 +1218,7 @@ function pick(body, names) {
                             Some(s.name.as_str()) != id.map(|i| i.name.as_str())
                                 && s.name != "expected-version"
                         })
-                        .map(|s| format!("{}: inputs{}", key(&s.wire), member(&s.wire)))
+                        .map(|s| format!("{}: {}", key(&s.wire), self.encoded(&c.id, s)))
                         .collect();
                     let mut body =
                         vec![format!("op: {}", sq(op)), format!("object: {}", sq(object))];
@@ -1149,8 +1254,13 @@ function pick(body, names) {
                                 "body?.id".to_string()
                             } else if o.name == "version" {
                                 "body?.version".to_string()
-                            } else if inputs.iter().any(|i| i.name == o.name) {
-                                format!("inputs{}", optional_member(&o.wire))
+                            } else if let Some(i) = inputs.iter().find(|i| i.name == o.name) {
+                                // The input as it was sent.
+                                self.encoded_from(
+                                    &c.id,
+                                    i,
+                                    format!("inputs{}", optional_member(&o.wire)),
+                                )
                             } else {
                                 format!("body{}", optional_member(&o.wire))
                             };
@@ -1228,7 +1338,52 @@ export const BFF = {{
             decoders.join("\n"),
             table.join("\n")
         ));
+        // The encoding helpers only when an input is encoded.
+        let helpers_end = "  return v;\n}\n\n";
+        if !out.contains("encoded(inputs") {
+            if let (Some(start), Some(end)) = (
+                out.find("/**\n * A value as text: empty when absent."),
+                out.find(helpers_end),
+            ) {
+                out.replace_range(start..end + helpers_end.len(), "");
+            }
+        }
         out
+    }
+
+    /// The value a request sends for an input: `inputs.<input>`, encoded as the input's `encode`
+    /// says (`encoded(value, how)` of contracts.js).
+    fn encoded(&self, contract: &str, slot: &Slot) -> String {
+        self.encoded_from(contract, slot, format!("inputs{}", member(&slot.wire)))
+    }
+
+    /// `read`, encoded as the input `slot` of `contract` says.
+    fn encoded_from(&self, contract: &str, slot: &Slot, read: String) -> String {
+        let enc = self
+            .ui
+            .contracts
+            .iter()
+            .find(|c| c.id == contract)
+            .and_then(|c| c.inputs.iter().find(|i| i.name == slot.name))
+            .and_then(|i| i.encode.clone());
+        let Some(enc) = enc else { return read };
+        let mut how = Vec::new();
+        if enc.trim == Some(true) {
+            how.push("trim: true".to_string());
+        }
+        if let Some(s) = &enc.split {
+            how.push(format!("split: {}", sq(s)));
+        }
+        if enc.as_.as_deref() == Some("number") {
+            how.push("number: true".to_string());
+        }
+        if let Some(e) = &enc.empty {
+            how.push(format!("empty: {}", sq(e)));
+        }
+        if how.is_empty() {
+            return read;
+        }
+        format!("encoded({read}, {{ {} }})", how.join(", "))
     }
 
     fn object_jsdoc(&self, slots: &[Slot]) -> String {
@@ -1303,14 +1458,24 @@ export const BFF = {{
                 })
                 .collect();
             let success = form.on_success.as_ref();
+            let holds: Vec<String> = match success {
+                Some(o) => self
+                    .overlay_slots(&form.id, o, screen)
+                    .into_iter()
+                    .map(|(_, s)| sq(&s.wire))
+                    .collect(),
+                None => Vec::new(),
+            };
             table.push(format!(
-                "  {}: {{ screen: {}, contract: {}, submitLabel: {}, show: {}, navigates: {}, fields: [\n    {},\n  ] }},",
+                "  {}: {{ screen: {}, contract: {}, submitLabel: {}, show: {}, navigates: {}, then: {}, holds: [{}], fields: [\n    {},\n  ] }},",
                 sq(&form.id),
                 sq(&form.screen),
                 sq(&form.contract),
                 sq(form.submit_label.as_deref().unwrap_or("")),
                 sq(form.on_error.as_ref().and_then(|e| e.show.as_deref()).unwrap_or("inline")),
                 success.and_then(|s| s.navigate.as_ref()).is_some(),
+                form.then.as_ref().map_or("null".to_string(), |t| sq(&t.contract)),
+                holds.join(", "),
                 fields.join(",\n    ")
             ));
 
@@ -1332,11 +1497,22 @@ export const BFF = {{
                     }
                     _ => "''".to_string(),
                 };
+                let value = match &f.initial {
+                    Some(ini) => self
+                        .initial_value(form, f, ini, screen, &roots, &value)
+                        .unwrap_or(value),
+                    None => value,
+                };
                 initial.push(format!("{}: {value}", key(&wire)));
             }
+            let initial = initial.join(", ");
+            let view_line = if initial.contains("view") {
+                "    const view = scope?.view;\n"
+            } else {
+                ""
+            };
             lines.push(format!(
-                "  /** @param {{any}} view */\n  initial(view) {{\n    return this.derive({{ {} }}, [], {{ view }});\n  }},",
-                initial.join(", ")
+                "  /** @param {{any}} scope */\n  initial(scope) {{\n{view_line}    return this.derive({{ {initial} }}, [], scope ?? {{}});\n  }},"
             ));
 
             // options
@@ -1545,10 +1721,82 @@ export const BFF = {{
                 items.join(", ")
             ));
 
-            // succeeded
+            // submitted: the values of a submission as the form holds them.
+            let raw: Vec<String> = form
+                .fields
+                .iter()
+                .map(|f| {
+                    let wire = self.case.name(&f.name);
+                    let read = format!("raw{}", member(&wire));
+                    let value = match f.control.as_str() {
+                        "checkbox" => format!("{read} === true"),
+                        "number" => read,
+                        _ if f.normalize.as_deref() == Some("trim") => {
+                            format!("String({read} ?? '').trim()")
+                        }
+                        _ => format!("String({read} ?? '')"),
+                    };
+                    format!("{}: {value}", key(&wire))
+                })
+                .collect();
+            lines.push(format!(
+                "  /** @param {{Record<string, any>}} raw */\n  submitted(raw) {{\n    return {{ {} }};\n  }},",
+                raw.join(", ")
+            ));
+
+            // then: the second call when the first succeeds.
             roots.push(self.form_root(form, "scope.form"));
-            roots.push(self.response_root(&form.contract));
-            let outcome = self.outcome(&form.id, &format!("form \"{}\"", form.id), success, &roots);
+            let mut then_roots = roots.clone();
+            then_roots.push(self.response_root(&form.contract));
+            let mut then_js = "null".to_string();
+            if let Some(th) = &form.then {
+                match self.contract(&th.contract) {
+                    None => self.refuse(
+                        &form.id,
+                        format!(
+                            "Form \"{}\" makes a second call to contract \"{}\", which is not declared.",
+                            form.id, th.contract
+                        ),
+                    ),
+                    Some(second) => {
+                        let sinputs = self.slots(second, false);
+                        let mut items = Vec::new();
+                        for (input, src) in &th.arguments {
+                            let Some(slot) = sinputs.iter().find(|i| i.name == *input) else {
+                                self.refuse(&form.id, format!("The second call of form \"{}\" gives argument \"{input}\", which contract \"{}\" does not declare.", form.id, second.id));
+                                continue;
+                            };
+                            let what = format!(
+                                "Argument \"{input}\" of the second call of form \"{}\"",
+                                form.id
+                            );
+                            let types = candidates(self.spec, &slot.ty);
+                            if let Some(js) = self.compile(&form.id, &what, src, &then_roots, &types) {
+                                items.push(format!("{}: {js}", key(&slot.wire)));
+                            }
+                        }
+                        then_js = format!(
+                            "{{ contract: {}, inputs: {} }}",
+                            sq(&second.id),
+                            if items.is_empty() { "{}".to_string() } else { format!("{{ {} }}", items.join(", ")) }
+                        );
+                    }
+                }
+            }
+            lines.push(format!(
+                "  /**\n   * @param {{any}} {s}\n   * @returns {{{{ contract: string, inputs: Record<string, any> }} | null}}\n   */\n  then({s}) {{\n    return {then_js};\n  }},",
+                s = if then_js.contains("scope") { "scope" } else { "_scope" }
+            ));
+
+            // succeeded
+            roots.push(self.form_response_root(form));
+            let outcome = self.outcome(
+                &form.id,
+                &format!("form \"{}\"", form.id),
+                success,
+                &roots,
+                screen,
+            );
             lines.push(outcome);
 
             code.push(format!(
@@ -1571,7 +1819,9 @@ import {{ hrefFor }} from './routes.js';
 /**
  * A field: the input it fills, its accessible name, its control, and whether it is derived.
  * @typedef {{{{ name: string, input: string, label: string, control: string, derived?: 'always' | 'until-edited' }}}} FormField
- * @typedef {{{{ screen: string, contract: string, submitLabel: string, show: string, navigates: boolean, fields: FormField[] }}}} FormInfo
+ * A form's `then` is the contract of its second call, `holds` the view-model outputs its success
+ * sets and holds while the form has unsaved changes.
+ * @typedef {{{{ screen: string, contract: string, submitLabel: string, show: string, navigates: boolean, then: string | null, holds: string[], fields: FormField[] }}}} FormInfo
  */
 
 /** @type {{Record<string, FormInfo>}} */
@@ -1642,14 +1892,26 @@ function of(form) {{
 }}
 
 /**
- * The values of a new form on a screen with this view model: empty texts, unchecked boxes, the
- * first choice of a select or radio, and the derived fields derived.
+ * The values of a form as it opens on a screen with this scope (`scope.view` its view model):
+ * the values its fields take from the view model, else empty texts, unchecked boxes and the
+ * first choice of a select or radio; and the derived fields derived.
  * @param {{string}} form
- * @param {{any}} view
+ * @param {{any}} scope
  * @returns {{Record<string, any>}}
  */
-export function initialValues(form, view) {{
-  return of(form).initial(view);
+export function initialValues(form, scope) {{
+  return of(form).initial(scope);
+}}
+
+/**
+ * The values of a submission as the form holds them: texts (trimmed where the field says so)
+ * and checkboxes.
+ * @param {{string}} form
+ * @param {{Record<string, any>}} raw
+ * @returns {{Record<string, any>}}
+ */
+export function submitted(form, raw) {{
+  return of(form).submitted(raw);
 }}
 
 /**
@@ -1704,20 +1966,156 @@ export function inputs(form, values, scope) {{
 }}
 
 /**
- * What an accepted submission does: the address to open (or null) and the message to show (or
- * null). `scope.form` holds the submitted values and `scope.response` the outputs.
+ * The second call of a form, made when the first succeeds: its contract and inputs, or null.
+ * `scope.form` holds the submitted values and `scope.response` the first call's outputs.
  * @param {{string}} form
  * @param {{any}} scope
- * @returns {{{{ navigate: string | null, toast: string | null }}}}
+ * @returns {{{{ contract: string, inputs: Record<string, any> }} | null}}
+ */
+export function followUp(form, scope) {{
+  return of(form).then(scope);
+}}
+
+/**
+ * The outputs of a form's calls: the first's, with the second's where it has one.
+ * @param {{any}} first
+ * @param {{any}} second
+ * @returns {{any}}
+ */
+export function bothResponses(first, second) {{
+  return {{ ...first, ...Object.fromEntries(Object.entries(second ?? {{}}).filter(([, v]) => v !== undefined)) }};
+}}
+
+/**
+ * What an accepted submission does: the address to open (or null), the message to show (or
+ * null) and the view-model outputs it sets (or null), which hold until the view model is read
+ * again. `scope.form` holds the submitted values and `scope.response` the outputs.
+ * @param {{string}} form
+ * @param {{any}} scope
+ * @returns {{{{ navigate: string | null, toast: string | null, view: Record<string, any> | null }}}}
  */
 export function succeeded(form, scope) {{
   return of(form).succeeded(scope);
+}}
+
+/**
+ * The view-model outputs a form holds while it has unsaved changes (those its success sets),
+ * as this view model has them.
+ * @param {{string}} form
+ * @param {{any}} view
+ * @returns {{Record<string, any>}}
+ */
+export function held(form, view) {{
+  return Object.fromEntries((FORMS[form]?.holds ?? []).map((name) => [name, view?.[name]]));
 }}
 "#,
             table = table.join("\n"),
             code = code.join("\n"),
             cases = cases.join("\n"),
         )
+    }
+
+    /// Whether a value of type `t` is a number (through `option<T>`).
+    fn numeric(&self, t: &TypeRef) -> bool {
+        let inner = match t {
+            TypeRef::Option(i) => i.as_ref(),
+            other => other,
+        };
+        matches!(
+            expr_ty(self.spec, inner),
+            Ty::U8 | Ty::U16 | Ty::U32 | Ty::U64 | Ty::I32 | Ty::I64 | Ty::F64
+        )
+    }
+
+    /// The initial value of a field taken from the view model (`initial`): the value at a path,
+    /// a number shown as text, a list of texts joined, or a value of the first item of a list
+    /// whose field equals an expression; `fallback` (the control's own initial value) when
+    /// there is none. JavaScript over `view` and `scope`.
+    fn initial_value(
+        &mut self,
+        form: &Form,
+        f: &Field,
+        ini: &Initial,
+        screen: &Screen,
+        roots: &[Root],
+        fallback: &str,
+    ) -> Option<String> {
+        let Some((js, t)) = self.view_path(screen, &ini.path, "view") else {
+            self.refuse(&form.id, format!("Field \"{}\" of form \"{}\" takes its initial value from \"{}\", which is not a path into the view model of screen \"{}\".", f.name, form.id, ini.path, screen.id));
+            return None;
+        };
+        let text_control = !matches!(f.control.as_str(), "checkbox" | "number");
+        let Some(w) = &ini.where_ else {
+            if let Some(sep) = &ini.join {
+                return Some(format!(
+                    "{js} == null ? {fallback} : ({js}).join({})",
+                    sq(sep)
+                ));
+            }
+            if text_control && self.numeric(&t) {
+                return Some(format!("{js} == null ? {fallback} : String({js})"));
+            }
+            return Some(format!("({js}) ?? {fallback}"));
+        };
+        let what = format!(
+            "The item the initial value of field \"{}\" of form \"{}\" is taken from",
+            f.name, form.id
+        );
+        let equals = self.compile(&form.id, &what, &w.equals, roots, &[])?;
+        let found = {
+            let scope = UiScope {
+                spec: self.spec,
+                cases: &self.cases,
+                roots: vec![],
+            };
+            let slots = Self::list_item(&t)
+                .and_then(|i| scope.struct_slots(i))
+                .unwrap_or_default();
+            let items = UiScope {
+                spec: self.spec,
+                cases: &self.cases,
+                roots: vec![Root {
+                    name: "item",
+                    js: "o".into(),
+                    slots,
+                    direct: None,
+                }],
+            };
+            let walk = |path: &str| {
+                let mut parts = vec!["item"];
+                parts.extend(path.split('.'));
+                items.walk(&parts)
+            };
+            match (walk(&w.field), ini.value.as_deref().and_then(walk)) {
+                (Some((field, _, _)), Some((value, value_t, _))) => Some((field, value, value_t)),
+                _ => None,
+            }
+        };
+        let Some((field, value, value_t)) = found else {
+            self.refuse(&form.id, format!("Field \"{}\" of form \"{}\" takes its initial value from an item of \"{}\" by fields \"{}\" and \"{}\", which its items do not have.", f.name, form.id, ini.path, w.field, ini.value.as_deref().unwrap_or("")));
+            return None;
+        };
+        let shown = if text_control && self.numeric(&value_t) {
+            format!("String({value})")
+        } else {
+            value
+        };
+        Some(format!(
+            "((/** @type {{any}} */ o) => (o == null ? {fallback} : {shown}))((({js}) ?? []).find((/** @type {{any}} */ o) => {field} != null && {field} === ({equals})))"
+        ))
+    }
+
+    /// The `response` root of a form's outcome: the outputs of its contract and, when it makes a
+    /// second call, of that call too (the second's where both have one).
+    fn form_response_root(&self, form: &Form) -> Root {
+        let mut root = self.response_root(&form.contract);
+        if let Some(second) = form.then.as_ref().and_then(|t| self.contract(&t.contract)) {
+            let more = self.slots(second, true);
+            root.slots
+                .retain(|s| !more.iter().any(|m| m.name == s.name));
+            root.slots.extend(more);
+        }
+        root
     }
 
     /// The `succeeded(scope)` method of a form or an action.
@@ -1727,10 +2125,26 @@ export function succeeded(form, scope) {{
         what: &str,
         outcome: Option<&Outcome>,
         roots: &[Root],
+        screen: &Screen,
     ) -> String {
         let mut navigate = "null".to_string();
         let mut toast = "null".to_string();
+        let mut view = "null".to_string();
         if let Some(o) = outcome {
+            let mut items = Vec::new();
+            for (output, slot) in self.overlay_slots(entity, o, screen) {
+                let Some(src) = o.view.get(&output) else {
+                    continue;
+                };
+                let w = format!("The view-model value \"{output}\" the success of {what} sets");
+                let types = candidates(self.spec, &slot.ty);
+                if let Some(js) = self.compile(entity, &w, src, roots, &types) {
+                    items.push(format!("{}: {js}", key(&slot.wire)));
+                }
+            }
+            if !items.is_empty() {
+                view = format!("{{ {} }}", items.join(", "));
+            }
             if let Some(n) = &o.navigate {
                 let mut params = Vec::new();
                 let target = n.screen.as_deref().and_then(|s| self.screen(s));
@@ -1762,11 +2176,44 @@ export function succeeded(form, scope) {{
                 }
             }
         }
-        let uses = navigate.contains("scope") || toast.contains("scope");
+        let uses = navigate.contains("scope") || toast.contains("scope") || view.contains("scope");
         format!(
-            "  /** @param {{any}} {s} */\n  succeeded({s}) {{\n    return {{ navigate: {navigate}, toast: {toast} }};\n  }},",
+            "  /** @param {{any}} {s} */\n  succeeded({s}) {{\n    return {{ navigate: {navigate}, toast: {toast}, view: {view} }};\n  }},",
             s = if uses { "scope" } else { "_scope" }
         )
+    }
+
+    /// The view-model outputs a success sets (`onSuccess.view`), in declaration order of the
+    /// view model of the screen the success opens (its navigation's, else `screen`).
+    fn overlay_slots(&mut self, entity: &str, o: &Outcome, screen: &Screen) -> Vec<(String, Slot)> {
+        if o.view.is_empty() {
+            return Vec::new();
+        }
+        let target = o
+            .navigate
+            .as_ref()
+            .and_then(|n| n.screen.as_deref())
+            .and_then(|s| self.screen(s))
+            .unwrap_or(screen);
+        let Some(vm) = target
+            .view_model
+            .as_deref()
+            .and_then(|id| self.contract(id))
+        else {
+            self.refuse(entity, format!("The success of \"{entity}\" sets values of the view model of screen \"{}\", which names no view-model contract.", target.id));
+            return Vec::new();
+        };
+        let slots = self.slots(vm, true);
+        for name in o.view.keys() {
+            if !slots.iter().any(|s| s.name == *name) {
+                self.refuse(entity, format!("The success of \"{entity}\" sets \"{name}\", which is not an output of view-model contract \"{}\".", vm.id));
+            }
+        }
+        slots
+            .into_iter()
+            .filter(|s| o.view.contains_key(&s.name))
+            .map(|s| (s.name.clone(), s))
+            .collect()
     }
 
     // -----------------------------------------------------------------------------------------
@@ -1911,7 +2358,7 @@ export function succeeded(form, scope) {{
             // succeeded
             roots.push(self.response_root(&a.contract));
             let what = format!("action \"{}\"", a.id);
-            lines.push(self.outcome(&a.id, &what, a.on_success.as_ref(), &roots));
+            lines.push(self.outcome(&a.id, &what, a.on_success.as_ref(), &roots, screen));
 
             // result
             let place = match &a.result {
@@ -1943,14 +2390,25 @@ export function succeeded(form, scope) {{
             let result = a.result.as_ref().map_or("null".to_string(), |r| {
                 format!("{{ into: {}, output: {} }}", sq(&r.into), sq(&r.output))
             });
+            // The screens it is offered on: its own, and every other of the authentication alsoOn names.
+            let mut screens = vec![sq(&a.screen)];
+            if let Some(also) = &a.also_on {
+                for s in &self.ui.screens {
+                    if s.id != a.screen && s.auth.as_deref().unwrap_or("none") == also.auth {
+                        screens.push(sq(&s.id));
+                    }
+                }
+            }
             table.push(format!(
-                "  {}: {{ screen: {}, contract: {}, forEach: {}, form: {}, confirm: {}, optimistic: {}, result: {result}, show: {}, navigates: {} }},",
+                "  {}: {{ screen: {}, screens: [{}], contract: {}, forEach: {}, form: {}, confirm: {}, confirmAnnounce: {}, optimistic: {}, result: {result}, show: {}, navigates: {} }},",
                 sq(&a.id),
                 sq(&a.screen),
+                screens.join(", "),
                 sq(&a.contract),
                 a.for_each.as_deref().map_or("null".into(), sq),
                 a.form.as_deref().map_or("null".into(), sq),
                 a.confirm.is_some(),
+                a.confirm_announce.as_deref().map_or("null".into(), sq),
                 a.optimistic.unwrap_or(false),
                 sq(a.on_error.as_ref().and_then(|e| e.show.as_deref()).unwrap_or("toast")),
                 a.on_success.as_ref().and_then(|s| s.navigate.as_ref()).is_some(),
@@ -1972,7 +2430,10 @@ export function succeeded(form, scope) {{
 import {{ hrefFor }} from './routes.js';
 
 /**
- * @typedef {{{{ screen: string, contract: string, forEach: string | null, form: string | null, confirm: boolean, optimistic: boolean, result: {{ into: string, output: string }} | null, show: string, navigates: boolean }}}} ActionInfo
+ * `screens` are the screens it is offered on: its own, and with `alsoOn` every other screen of
+ * that authentication. `confirmAnnounce` is what is announced when a first press asks for the
+ * second.
+ * @typedef {{{{ screen: string, screens: string[], contract: string, forEach: string | null, form: string | null, confirm: boolean, confirmAnnounce: string | null, optimistic: boolean, result: {{ into: string, output: string }} | null, show: string, navigates: boolean }}}} ActionInfo
  */
 
 /** @type {{Record<string, ActionInfo>}} */
@@ -2027,12 +2488,12 @@ function of(action) {{
 }}
 
 /**
- * The actions of a screen, in declaration order.
+ * The actions offered on a screen, in declaration order.
  * @param {{string}} screen
  * @returns {{string[]}}
  */
 export function actionsOn(screen) {{
-  return Object.keys(ACTIONS).filter((id) => ACTIONS[id].screen === screen);
+  return Object.keys(ACTIONS).filter((id) => ACTIONS[id].screens.includes(screen));
 }}
 
 /**
@@ -2089,10 +2550,11 @@ export function visible(action, scope, inputs) {{
 }}
 
 /**
- * What a success does: the address to open (or null) and the message to show (or null).
+ * What a success does: the address to open (or null), the message to show (or null) and the
+ * view-model outputs it sets until the view model is read again (or null).
  * @param {{string}} action
  * @param {{any}} scope
- * @returns {{{{ navigate: string | null, toast: string | null }}}}
+ * @returns {{{{ navigate: string | null, toast: string | null, view: Record<string, any> | null }}}}
  */
 export function succeeded(action, scope) {{
   return of(action).succeeded(scope);
@@ -2323,6 +2785,202 @@ export function refreshes(screen, event, {p}, {v}) {{
             } else {
                 "_view"
             },
+        )
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // errors.js
+
+    /// The records object a contract changes, or nothing.
+    fn records_object(&self, contract: &str) -> String {
+        match self.routes.get(contract).map(|r| &r.shape) {
+            Some(Shape::Records { object, .. }) => object.clone(),
+            _ => String::new(),
+        }
+    }
+
+    fn errors(&mut self) -> String {
+        let list = |items: &[String]| {
+            format!(
+                "[{}]",
+                items.iter().map(|i| sq(i)).collect::<Vec<_>>().join(", ")
+            )
+        };
+        let opt = |v: &Option<String>| v.as_deref().map_or("null".to_string(), sq);
+        let mut messages = Vec::new();
+        for m in &self.ui.error_messages {
+            // An error code is named in the wire case, as the error payload carries it; a check
+            // kind as the kernel names its rules.
+            let kinds = m.kinds.as_ref().map(|ks| {
+                let named: Vec<String> = ks
+                    .iter()
+                    .map(|k| {
+                        if m.on == "error" {
+                            self.case.name(k)
+                        } else {
+                            k.clone()
+                        }
+                    })
+                    .collect();
+                list(&named)
+            });
+            messages.push(format!(
+                "  {{ on: {}, kinds: {}, text: {}, fallback: {}, field: {}, appliesTo: {} }},",
+                sq(&m.on),
+                kinds.unwrap_or_else(|| "null".into()),
+                sq(&m.text),
+                opt(&m.fallback),
+                opt(&m.field),
+                m.applies_to
+                    .as_ref()
+                    .map_or("null".to_string(), |a| list(a)),
+            ));
+        }
+        let mut owners = Vec::new();
+        let on_error = |e: &Option<OnError>| {
+            (
+                e.as_ref()
+                    .and_then(|e| e.prefix.clone())
+                    .unwrap_or_default(),
+                e.as_ref()
+                    .and_then(|e| e.announce.clone())
+                    .unwrap_or_default(),
+            )
+        };
+        for f in &self.ui.forms {
+            let (prefix, announce) = on_error(&f.on_error);
+            let fields: Vec<String> = f.fields.iter().map(|x| self.case.name(&x.name)).collect();
+            owners.push(format!(
+                "  {}: {{ object: {}, fields: {}, prefix: {}, announce: {} }},",
+                sq(&f.id),
+                sq(&self.records_object(&f.contract)),
+                list(&fields),
+                sq(&prefix),
+                sq(&announce)
+            ));
+        }
+        for a in &self.ui.actions {
+            let (prefix, announce) = on_error(&a.on_error);
+            owners.push(format!(
+                "  {}: {{ object: {}, fields: [], prefix: {}, announce: {} }},",
+                sq(&a.id),
+                sq(&self.records_object(&a.contract)),
+                sq(&prefix),
+                sq(&announce)
+            ));
+        }
+        format!(
+            r#"// @ts-check
+// The wording of refusals: the error messages, for a failed check of a kind or for an error code,
+// for every form and action or for those they apply to. A message for the form or action and
+// the kind comes first, then one for the form or action, then one for the kind, then the
+// default.
+
+/**
+ * @typedef {{{{ on: 'check' | 'error', kinds: string[] | null, text: string, fallback: string | null, field: 'name' | 'prefix' | null, appliesTo: string[] | null }}}} Message
+ * @typedef {{{{ rule: string, detail: string }}}} Check
+ */
+
+/** @type {{Message[]}} */
+export const MESSAGES = [
+{messages}
+];
+
+/**
+ * Each form and action: the records object its contract changes (a check names its fields
+ * `object.field`), the names of its fields, and the prefix and announcement of its refusals.
+ * @type {{Record<string, {{ object: string, fields: string[], prefix: string, announce: string }}>}}
+ */
+const OWNERS = {{
+{owners}
+}};
+
+/**
+ * The message for a failed check of a kind or an error code, on a form or an action.
+ * @param {{string}} owner
+ * @param {{'check' | 'error'}} on
+ * @param {{string}} kind
+ * @returns {{Message | null}}
+ */
+function message(owner, on, kind) {{
+  const of = MESSAGES.filter((m) => m.on === on);
+  /** @param {{Message}} m */
+  const mine = (m) => m.appliesTo?.includes(owner) ?? false;
+  /** @param {{Message}} m */
+  const kinds = (m) => m.kinds?.includes(kind) ?? false;
+  return (
+    of.find((m) => mine(m) && kinds(m)) ??
+    of.find((m) => mine(m) && m.kinds === null) ??
+    of.find((m) => m.appliesTo === null && kinds(m)) ??
+    of.find((m) => m.appliesTo === null && m.kinds === null) ??
+    null
+  );
+}}
+
+/**
+ * A message's text with its placeholders filled in, or its fallback when that leaves nothing.
+ * @param {{Message}} m
+ * @param {{Record<string, string>}} values
+ * @returns {{string}}
+ */
+function fill(m, values) {{
+  /** @param {{string}} text */
+  const filled = (text) => text.replace(/\$\{{([^}}]*)\}}/g, (_, name) => values[name] ?? '');
+  const text = filled(m.text);
+  return text === '' && m.fallback !== null ? filled(m.fallback) : text;
+}}
+
+/**
+ * Which field of a form a failed check is about, and what to tell the person.
+ * @param {{string}} owner A form or an action.
+ * @param {{Check}} check
+ * @returns {{{{ field: string | null, text: string }}}}
+ */
+export function explain(owner, check) {{
+  const [kind, rest = ''] = check.rule.split(/:(.*)/s);
+  const o = OWNERS[owner] ?? {{ object: '', fields: [], prefix: '', announce: '' }};
+  const name = rest.startsWith(`${{o.object}}.`) ? rest.slice(o.object.length + 1) : rest;
+  const m = message(owner, 'check', kind);
+  if (!m) return {{ field: null, text: check.detail }};
+  const text = fill(m, {{ 'check.detail': check.detail, 'check.statement': check.detail.replace(/\s*\[.*\]\s*$/s, '') }});
+  if (m.field === 'name') return {{ field: o.fields.includes(name) ? name : null, text }};
+  if (m.field === 'prefix') {{
+    const field = [...o.fields].sort((a, b) => b.length - a.length).find((f) => name === f || name.startsWith(`${{f}}_`));
+    return {{ field: field ?? null, text }};
+  }}
+  return {{ field: null, text }};
+}}
+
+/**
+ * A refused call of a form or an action: the message of each field a failed check is about,
+ * the message of the form as a whole (a failed check about no field, else the wording of the
+ * error), what is announced, and the text of a toast (the prefix, then the first failed
+ * check's message or the form's).
+ * @param {{string}} owner
+ * @param {{any}} error
+ * @returns {{{{ errors: Record<string, string>, formError: string, announce: string, text: string }}}}
+ */
+export function refusal(owner, error) {{
+  /** @type {{Record<string, string>}} */
+  const errors = {{}};
+  const general = [];
+  for (const check of error?.failed ?? []) {{
+    const {{ field, text }} = explain(owner, check);
+    if (field && !errors[field]) errors[field] = text;
+    else if (!field) general.push(text);
+  }}
+  let formError = general[0] ?? '';
+  if (!Object.keys(errors).length && !formError) {{
+    const m = message(owner, 'error', String(error?.code ?? ''));
+    formError = m ? fill(m, {{ 'error.message': String(error?.message ?? '') }}) : String(error?.message ?? '');
+  }}
+  const o = OWNERS[owner];
+  const first = error?.failed?.length ? explain(owner, error.failed[0]).text : formError;
+  return {{ errors, formError, announce: formError || o?.announce || '', text: `${{o?.prefix ?? ''}}${{first}}` }};
+}}
+"#,
+            messages = messages.join("\n"),
+            owners = owners.join("\n"),
         )
     }
 

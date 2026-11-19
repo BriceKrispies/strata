@@ -25,7 +25,8 @@ import { check, overflow, StepError } from './machine-runtime.js';
  *   | { event: 'ui-live-heartbeat-due', payload?: {} }
  *   | { event: 'ui-live-closed', payload?: {} }
  *   | { event: 'ui-live-reconnect-due', payload?: {} }
- *   | { event: 'ui-live-reset', payload?: {} }} ClientLiveFlowImplEvent
+ *   | { event: 'ui-live-reset', payload?: {} }
+ *   | { event: 'ui-live-resync', payload: { head: number } }} ClientLiveFlowImplEvent
  */
 
 /**
@@ -358,6 +359,16 @@ export function step(state, vars, event, now) {
           const timers = [];
           next.lastSeq = 0;
           emits.push({ to: 'subscribe-events', delivery: 'at-most-once', event: 'ui-live-close-requested', payload: {} });
+          return { state: 'lv-open-i', vars: next, emits, timers };
+        }
+        case 'ui-live-resync': {
+          // lv-resync-i
+          const next = { ...vars };
+          /** @type {ClientLiveFlowImplEmit[]} */
+          const emits = [];
+          /** @type {ClientLiveFlowImplTimer[]} */
+          const timers = [];
+          next.lastSeq = event.payload.head;
           return { state: 'lv-open-i', vars: next, emits, timers };
         }
         default:
