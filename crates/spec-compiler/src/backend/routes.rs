@@ -2,7 +2,7 @@
 //! component implements, the route of each contract on its own, and per implementing component the
 //! routes of all its contracts and a typed client.
 //!
-//! For every contract with an `implementedBy` component:
+//! For every contract with an `implementedBy` component (a facade has none, and is never served):
 //!
 //! - a unit type named after the contract implements `strata_runtime::Contract`, with
 //!   `SPEC = ContractSpec { id, path, access, timeout, idempotent }`: `id` is the contract's `ref`
@@ -179,7 +179,7 @@ pub fn implementing_components(spec: &Spec) -> Vec<&Component> {
 pub fn contracts_of<'a>(spec: &'a Spec, component: &str) -> Vec<&'a Contract> {
     spec.contracts
         .iter()
-        .filter(|c| !c.target && c.implemented_by.as_deref() == Some(component))
+        .filter(|c| c.served_by() == Some(component))
         .collect()
 }
 
@@ -187,12 +187,7 @@ pub fn contracts_of<'a>(spec: &'a Spec, component: &str) -> Vec<&'a Contract> {
 fn served(spec: &Spec) -> Vec<&Contract> {
     spec.contracts
         .iter()
-        .filter(|c| {
-            !c.target
-                && c.implemented_by
-                    .as_deref()
-                    .is_some_and(|id| spec.component(id).is_some())
-        })
+        .filter(|c| c.served_by().is_some_and(|id| spec.component(id).is_some()))
         .collect()
 }
 

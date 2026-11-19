@@ -352,10 +352,50 @@ fn cycles(calls: &BTreeMap<String, Vec<String>>, order: &[String]) -> Vec<String
     out
 }
 
-fn compile(spec: &Spec) -> Result<TokenStream, Vec<Diagnostic>> {
-    if !wanted(spec) {
-        return Ok(TokenStream::new());
-    }
+/// The functions named, signed, parsed, checked for cycles and typed, with what each can fault.
+struct Analysis {
+    reserved: BTreeMap<String, String>,
+    sigs: BTreeMap<String, Sig>,
+    typed: BTreeMap<String, Typed>,
+    bridges: Vec<BridgeUse>,
+}
+
+/// How a generated function is called, for code that calls it (the derived contracts).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Shape {
+    /// The parameters in order: the name, and true when it is passed by reference (`&T`).
+    pub params: Vec<(String, bool)>,
+    /// The id of its error union: it returns `Result<R, E>` (or `Result<R, Failure<E>>`).
+    pub errors: Option<String>,
+    /// It can fault: it returns `Result<R, Fault>` (or `Result<R, Failure<E>>` with errors).
+    pub faultable: bool,
+}
+
+/// The call shape of every function, by id; `None` when the functions do not compile (their
+/// own diagnostics say why).
+pub fn shapes(spec: &Spec) -> Option<BTreeMap<String, Shape>> {
+    let analysis = analyse(spec).ok()?;
+    Some(
+        analysis
+            .sigs
+            .into_iter()
+            .map(|(id, sig)| {
+                let shape = Shape {
+                    params: sig
+                        .params
+                        .iter()
+                        .map(|(name, t)| (name.clone(), rust::by_ref(t)))
+                        .collect(),
+                    errors: sig.errors.clone(),
+                    faultable: sig.faultable,
+                };
+                (id, shape)
+            })
+            .collect(),
+    )
+}
+
+fn analyse(spec: &Spec) -> Result<Analysis, Vec<Diagnostic>> {
     let mut diags = Vec::new();
     if spec
         .languages
@@ -473,6 +513,25 @@ fn compile(spec: &Spec) -> Result<TokenStream, Vec<Diagnostic>> {
             break;
         }
     }
+    Ok(Analysis {
+        reserved,
+        sigs,
+        typed,
+        bridges,
+    })
+}
+
+fn compile(spec: &Spec) -> Result<TokenStream, Vec<Diagnostic>> {
+    if !wanted(spec) {
+        return Ok(TokenStream::new());
+    }
+    let Analysis {
+        reserved,
+        sigs,
+        typed,
+        bridges,
+    } = analyse(spec)?;
+    let mut diags = Vec::new();
     // Code.
     let reserved: BTreeSet<String> = reserved.into_keys().collect();
     let mut items = Vec::new();

@@ -11,11 +11,11 @@ use serde_json::{Map, Number, Value};
 
 use crate::diagnostic::{Diagnostic, SPEC_ENTITY};
 use crate::ir::{
-    Auth, Behavior, Component, Constraints, Contract, ContractError, ContractField, Effect,
-    Encoding, ErrorBody, ErrorWire, Event, Exposure, Index, Injection, Instances, LoggedField,
-    Logging, OnDelete, PayloadField, Realisation, Record, RecordField, Route, Scheme, Spec, State,
-    Storage, StructField, System, Telemetry, TelemetryService, TenantScope, Transition,
-    TypeConstraints, TypeDecl, TypeKind, UnionTag, Variable, Variant, VariantCase,
+    Auth, Behavior, Component, Constraints, Contract, ContractError, ContractField, Derivation,
+    Effect, Encoding, ErrorBody, ErrorWire, Event, Exposure, Index, Injection, Instances,
+    LoggedField, Logging, OnDelete, PayloadField, Realisation, Record, RecordField, Route, Scheme,
+    Spec, State, Storage, StructField, System, Telemetry, TelemetryService, TenantScope,
+    Transition, TypeConstraints, TypeDecl, TypeKind, UnionTag, Variable, Variant, VariantCase,
 };
 use crate::jsonc;
 
@@ -874,7 +874,7 @@ impl Loader {
                 if parsed.is_none() {
                     self.shape(
                         id,
-                        format!("\"realisation\" is \"{text}\"; it must be generated or hand"),
+                        format!("\"realisation\" is \"{text}\"; it must be generated, hand, derived or facade"),
                     );
                 }
                 parsed
@@ -942,6 +942,26 @@ impl Loader {
                 (None, None, None)
             }
         };
+        let derivation = match obj.get("derivation") {
+            None | Some(Value::Null) => None,
+            Some(Value::Object(d)) => Some(Derivation {
+                kind: self.opt_str(d, "kind", id),
+                function: self.opt_str(d, "function", id),
+                needs: self.opt_str(d, "needs", id),
+                load: self.opt_str(d, "load", id),
+                decide: self.opt_str(d, "decide", id),
+                commit: self.opt_str(d, "commit", id),
+                conflict: self.opt_str(d, "conflict", id),
+                insufficient: self.opt_str(d, "insufficient", id),
+                need_rounds: self.opt_number(d, "needRounds", id),
+                retries: self.opt_number(d, "retries", id),
+                fault: self.opt_str(d, "fault", id),
+            }),
+            Some(_) => {
+                self.shape(id, "\"derivation\" must be an object");
+                None
+            }
+        };
         Some(Contract {
             id: id.to_string(),
             name: name?,
@@ -966,6 +986,7 @@ impl Loader {
             binding_path,
             binding_case,
             target,
+            derivation,
         })
     }
 

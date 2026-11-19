@@ -659,3 +659,110 @@ fn a_machine_logs_the_emitted_events_the_specification_logs() {
     assert!(machines.contains("holder: payload.holder.as_str(),"));
     assert_eq!(machines.matches("fn log_emitted(").count(), 1);
 }
+
+const DERIVED_SPEC: &str = "crates/spec-compiler/tests/fixtures/derived/spec.jsonc";
+const DERIVED_CRATE: &str = "strata-spec-compiler-derived-fixture";
+
+/// The model crate of the derived fixture (WG-4935): `crates/spec-compiler-derived-fixture`,
+/// whose module `derived` implements the derived contracts from the functions and from the
+/// load and commit contracts' trait. The facade `edit-counter` has types but no trait method and
+/// no route. `tests/derived.rs` runs the generated loops; it uses the generated crate and so
+/// cannot compile before the crate is blessed.
+#[test]
+fn derived_golden_output_matches_its_fixture_crate() {
+    let dir = manifest_dir().join("../spec-compiler-derived-fixture");
+    let text =
+        fs::read_to_string(manifest_dir().join("tests/fixtures/derived/spec.jsonc")).unwrap();
+    let files = generated(DERIVED_SPEC, &text, DERIVED_CRATE);
+    let derived = file_text(&files, "src/derived.rs");
+    for item in [
+        "pub fn pick_larger(",
+        "pub async fn read_counter<",
+        "pub async fn copy_counter<",
+        "pub async fn copy_counter_once<",
+        "S0: contracts::Store + Sync",
+        "crate::functions::decide_copy(",
+        "break (loaded, decided)",
+        "if rounds < 4 && !needs.contains(&need)",
+        "if conflicts < 3 => conflicts += 1",
+    ] {
+        assert!(
+            derived.contains(item),
+            "no {item} in src/derived.rs:\n{derived}"
+        );
+    }
+    // A bound of zero is no loop at all.
+    let once = &derived[derived.find("pub async fn copy_counter_once<").unwrap()..];
+    assert!(!once.contains("loop"), "{once}");
+    assert!(file_text(&files, "src/lib.rs").contains("pub mod derived;"));
+    let contracts = file_text(&files, "src/contracts.rs");
+    assert!(contracts.contains("pub struct EditCounterRequest"));
+    assert!(contracts.contains("realisation: Realisation::Facade,"));
+    assert!(contracts.contains("realisation: Realisation::Derived,"));
+    for method in ["fn load_counters(", "fn commit_bump(", "fn mutate_counter("] {
+        assert!(contracts.contains(method), "no {method} in the Store trait");
+    }
+    assert!(
+        !contracts.contains("fn edit_counter("),
+        "the facade is in a trait"
+    );
+    let routes = file_text(&files, "src/routes.rs");
+    assert!(
+        !routes.contains("EditCounter"),
+        "the facade is served:\n{routes}"
+    );
+    assert!(routes.contains("LoadCounters"));
+    if std::env::var("SPECC_BLESS").as_deref() == Ok("1") {
+        output::write(&dir, &files).unwrap();
+        return;
+    }
+    let differences = output::compare(&dir, &files).unwrap();
+    assert!(
+        differences.is_empty(),
+        "crates/spec-compiler-derived-fixture is not what specc generates from the derived fixture: {differences:?}. Run the test with SPECC_BLESS=1 to rewrite it, and review the change."
+    );
+}
+
+/// A derivation specc cannot emit is refused with its code, and nothing is generated.
+#[test]
+fn a_derivation_specc_cannot_emit_is_refused() {
+    let text =
+        fs::read_to_string(manifest_dir().join("tests/fixtures/derived/spec.jsonc")).unwrap();
+    let options = Options {
+        crate_name: DERIVED_CRATE.to_string(),
+        runtime: RuntimeDependency::Workspace,
+    };
+    let refused = |t: &str| match generate(DERIVED_SPEC, t, &options) {
+        Ok(_) => Vec::new(),
+        Err(d) => d.iter().map(ToString::to_string).collect::<Vec<_>>(),
+    };
+    assert_eq!(refused(&text), Vec::<String>::new());
+    // A load contract nothing serves has no trait to call it through.
+    let unserved = text.replacen(
+        "\"realisation\": \"generated\", \"implementedBy\": \"store\",\n      \"inputs\": [{ \"name\": \"needs\"",
+        "\"realisation\": \"generated\",\n      \"inputs\": [{ \"name\": \"needs\"",
+        1,
+    );
+    assert_ne!(unserved, text);
+    assert!(
+        refused(&unserved)
+            .iter()
+            .any(|d| d.contains("specc.derived-unsupported") && d.contains("read-counter")),
+        "{:?}",
+        refused(&unserved)
+    );
+    // A conflict error the commit contract does not have.
+    let clash = text.replacen(
+        "\"conflict\": \"conflict\", \"insufficient\": \"Missing\", \"needRounds\": 4",
+        "\"conflict\": \"clash\", \"insufficient\": \"Missing\", \"needRounds\": 4",
+        1,
+    );
+    assert_ne!(clash, text);
+    assert!(
+        refused(&clash)
+            .iter()
+            .any(|d| d.contains("specc.derived-invalid") && d.contains("copy-counter")),
+        "{:?}",
+        refused(&clash)
+    );
+}

@@ -594,6 +594,21 @@ pub struct Contract {
     /// `implementedBy` component: the contract describes the enterprise target, so it is served
     /// by no route and has no handler in the shipped code.
     pub target: bool,
+    /// `derivation`, as written: how a derived contract's implementation is built.
+    pub derivation: Option<Derivation>,
+}
+
+impl Contract {
+    /// The component that serves the contract: `implementedBy`, except for a facade, which
+    /// nothing serves (it gets no trait method and no route), and a target contract, which the
+    /// shipped code does not serve.
+    pub fn served_by(&self) -> Option<&str> {
+        if self.target || self.realisation == Some(Realisation::Facade) {
+            None
+        } else {
+            self.implemented_by.as_deref()
+        }
+    }
 }
 
 /// Where a contract can be reached from (`contract.exposure`).
@@ -721,6 +736,33 @@ pub struct Auth {
     pub description: Option<String>,
 }
 
+/// `contract.derivation` of a derived contract, as written (Exegra WG-4935).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Derivation {
+    /// `pure`, `read` or `command`, as written.
+    pub kind: Option<String>,
+    /// pure: the function that is the implementation.
+    pub function: Option<String>,
+    /// read, command: the function that gives the needs.
+    pub needs: Option<String>,
+    /// read, command: the contract that loads the needs.
+    pub load: Option<String>,
+    /// read, command: the function that decides.
+    pub decide: Option<String>,
+    /// command: the contract that commits what decide gives.
+    pub commit: Option<String>,
+    /// command: the commit contract's error that means it lost a race.
+    pub conflict: Option<String>,
+    /// command: the variant of decide's errors that asks for one more need.
+    pub insufficient: Option<String>,
+    /// command: how many extra needs one decision may ask for, as written.
+    pub need_rounds: Option<Number>,
+    /// command: how often a commit that lost a race is decided again, as written.
+    pub retries: Option<Number>,
+    /// The contract error an integer overflow or a division by zero in a function becomes.
+    pub fault: Option<String>,
+}
+
 /// An input or output of a contract.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContractField {
@@ -756,6 +798,10 @@ pub enum Realisation {
     Generated,
     /// A hole: written by hand against the postconditions.
     Hand,
+    /// Generated from its derivation.
+    Derived,
+    /// No server implementation: a client lowers it onto a generic contract.
+    Facade,
 }
 
 impl Realisation {
@@ -764,6 +810,8 @@ impl Realisation {
         match text {
             "generated" => Some(Self::Generated),
             "hand" => Some(Self::Hand),
+            "derived" => Some(Self::Derived),
+            "facade" => Some(Self::Facade),
             _ => None,
         }
     }

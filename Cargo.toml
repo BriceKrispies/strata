@@ -19,6 +19,7 @@ members = [
     "crates/spec-compiler-core-fixture",
     "crates/spec-compiler-language-fixture",
     "crates/spec-compiler-functions-fixture",
+    "crates/spec-compiler-derived-fixture",
     "crates/spec-expr",
     "crates/spec-expr-cases",
     "crates/model",
