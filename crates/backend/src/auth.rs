@@ -9,6 +9,7 @@ use argon2::Argon2;
 use axum::http::HeaderMap;
 use serde_json::json;
 use std::collections::BTreeMap;
+use std::sync::atomic::Ordering;
 use strata_kernel::rules::{may_attempt, roles_of};
 use strata_kernel::{
     canon, Action, Context, Principal, PrincipalId, Resource, SessionId, TenantId, TenantState,
@@ -19,7 +20,7 @@ use strata_protocol::api::{
     HEADER_SERVICE, HEADER_SESSION, HEADER_SITE, HEADER_SOURCE,
 };
 use strata_protocol::ws::SessionState;
-use strata_storage_api::{Account, SessionRecord};
+use strata_storage_api::{Account, SessionRecord, StoreError};
 
 /// What the BFF asserted about a request.
 #[derive(Clone, Debug)]
@@ -131,6 +132,24 @@ pub fn session_state(app: &App, session: &SessionRecord, now: i64) -> SessionSta
     }
 }
 
+/// The refusal of a request that needs a session while sessions cannot be looked up. It names the
+/// identity outage, so that the person is told why and not that something went wrong (IDN-300).
+///
+/// Implements: IDN-300
+pub fn identity_outage() -> ApiError {
+    let mut error = ApiError::new(
+        ErrorCode::Unavailable,
+        "Signing in and signed-in requests are not available right now: the identity service cannot be reached. Published pages are still served.",
+    );
+    error.0.kind = Some("identity_outage".into());
+    error
+}
+
+/// Whether an error is the identity outage.
+pub fn is_identity_outage(error: &ApiError) -> bool {
+    error.0.kind.as_deref() == Some("identity_outage")
+}
+
 /// Resolve a caller to an identity. Blocking: reads the store.
 ///
 /// A token that does not hold (unknown, ended, or issued for another tenant than the site being
@@ -146,7 +165,16 @@ pub fn identify(app: &App, caller: &Caller) -> Result<Identity, ApiError> {
     let Some(token) = &caller.token else {
         return Ok(anonymous(SessionState::Anonymous));
     };
-    let Some(mut session) = app.store.session_by_token(&token_hash(token))? else {
+    // A session that cannot be looked up cannot be checked, so it is not guessed at (IDN-300).
+    if app.identity_outage.load(Ordering::Relaxed) {
+        return Err(identity_outage());
+    }
+    let found = match app.store.session_by_token(&token_hash(token)) {
+        Ok(found) => found,
+        Err(StoreError::Unavailable(_)) => return Err(identity_outage()),
+        Err(other) => return Err(other.into()),
+    };
+    let Some(mut session) = found else {
         return Ok(anonymous(SessionState::Expired));
     };
     let now = app.now().0;
@@ -269,7 +297,7 @@ pub fn login(
 /// PRV-364). `None` when the gateway did not say where the request came from.
 pub fn network_hash(app: &App, caller: &Caller) -> Option<String> {
     (caller.source != "unknown").then(|| {
-        canon::hash_bytes(format!("network {} {}", app.cfg.service_token, caller.source).as_bytes())
+        canon::hash_bytes(format!("network\0{}\0{}", app.cfg.service_token, caller.source).as_bytes())
     })
 }
 

@@ -2,6 +2,7 @@
 
 use crate::app::{ApiError, App, Shared, LOG};
 use crate::auth::{self, has_service_token, Caller, Identity};
+use crate::service::{self, clients, keys, scim, tokens};
 use crate::signin::{
     link, oidc, passkey, recover, recovery_codes, saml, second, stepup, totp, SignInOutcome,
 };
@@ -411,10 +412,32 @@ async fn view(
     headers: HeaderMap,
     Json(request): Json<ViewRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    as_caller(&app, &headers, move |app, identity| {
-        ops::view(app, identity, &request)
+    // Published content needs no session (IDN-301): when sessions cannot be looked up, a reader
+    // is served as a reader with none, and what that reader may not see is refused with the
+    // outage named (IDN-300).
+    let caller = auth::caller(&headers)?;
+    let correlation = caller.correlation.clone();
+    app.blocking(move |app| {
+        let (identity, outage) = match auth::identify(app, &caller) {
+            Err(error) if auth::is_identity_outage(&error) => {
+                let anonymous = Caller {
+                    token: None,
+                    ..caller.clone()
+                };
+                (auth::identify(app, &anonymous)?, true)
+            }
+            other => (other?, false),
+        };
+        match ops::view(app, &identity, &request) {
+            Err(error) if outage && matches!(error.0.code, ErrorCode::Unauthenticated) => {
+                Err(auth::identity_outage())
+            }
+            other => other,
+        }
     })
-    .await
+    .await?
+    .map(Json)
+    .map_err(|error| error.with_correlation(&correlation))
 }
 
 async fn mutate(
@@ -646,6 +669,249 @@ async fn dev_outbox(
     Ok(Json(json!({ "kick": kick })))
 }
 
+/// Run blocking work for a request that is not a person's: nothing is looked up about who sent
+/// it, and the work checks the credentials the request itself carries.
+async fn as_public<T, F>(app: &Shared, headers: &HeaderMap, work: F) -> Result<Json<T>, ApiError>
+where
+    T: Serialize + Send + 'static,
+    F: FnOnce(&App, &Caller) -> Result<T, ApiError> + Send + 'static,
+{
+    let caller = auth::caller(headers)?;
+    let correlation = caller.correlation.clone();
+    app.blocking(move |app| work(app, &caller))
+        .await?
+        .map(Json)
+        .map_err(|error| error.with_correlation(&correlation))
+}
+
+/// The token endpoint: client credentials, or the exchange of a delegation.
+async fn token(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<Json_>,
+) -> Result<Json<Json_>, ApiError> {
+    as_public(&app, &headers, move |app, caller| {
+        tokens::issue(app, caller, &body)
+    })
+    .await
+}
+
+async fn token_verify(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<Json_>,
+) -> Result<Json<Json_>, ApiError> {
+    as_public(&app, &headers, move |app, caller| {
+        tokens::verify_for_resource(app, caller, &body)
+    })
+    .await
+}
+
+async fn token_introspect(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<Json_>,
+) -> Result<Json<Json_>, ApiError> {
+    as_caller_at(&app, &headers, move |app, caller, identity| {
+        tokens::introspect(app, caller, identity, &body)
+    })
+    .await
+}
+
+/// The public keys the tenant's tokens verify with.
+async fn keys_published(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+) -> Result<Json<Json_>, ApiError> {
+    as_public(&app, &headers, |app, caller| {
+        keys::published(app, &caller.site)
+    })
+    .await
+}
+
+async fn keys_rotate(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+) -> Result<Json<Json_>, ApiError> {
+    as_caller(&app, &headers, |app, identity| {
+        service::require_owner(app, identity)?;
+        keys::rotate(app, &identity.tenant, &identity.correlation)
+    })
+    .await
+}
+
+async fn keys_compromise(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<Json_>,
+) -> Result<Json<Json_>, ApiError> {
+    as_caller(&app, &headers, move |app, identity| {
+        service::require_owner(app, identity)?;
+        let kid = service::text(&body, "kid", 64)?;
+        keys::compromise(app, &identity.tenant, kid, &identity.correlation)
+    })
+    .await
+}
+
+async fn clients_list(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+) -> Result<Json<Json_>, ApiError> {
+    as_caller(&app, &headers, |app, identity| clients::all(app, identity)).await
+}
+
+async fn clients_create(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<Json_>,
+) -> Result<Json<Json_>, ApiError> {
+    as_caller(&app, &headers, move |app, identity| {
+        clients::create(app, identity, &body)
+    })
+    .await
+}
+
+async fn clients_rotate_secret(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<Json_>,
+) -> Result<Json<Json_>, ApiError> {
+    as_caller(&app, &headers, move |app, identity| {
+        clients::rotate_secret(app, identity, &body)
+    })
+    .await
+}
+
+async fn clients_revoke(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<Json_>,
+) -> Result<Json<Json_>, ApiError> {
+    as_caller(&app, &headers, move |app, identity| {
+        clients::revoke(app, identity, &body)
+    })
+    .await
+}
+
+async fn grants_create(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<Json_>,
+) -> Result<Json<Json_>, ApiError> {
+    as_caller(&app, &headers, move |app, identity| {
+        tokens::create_grant(app, identity, &body)
+    })
+    .await
+}
+
+async fn grants_revoke(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<Json_>,
+) -> Result<Json<Json_>, ApiError> {
+    as_caller(&app, &headers, move |app, identity| {
+        tokens::revoke_grant(app, identity, &body)
+    })
+    .await
+}
+
+async fn provisioning_token_create(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+) -> Result<Json<Json_>, ApiError> {
+    as_caller(&app, &headers, |app, identity| {
+        scim::create_token(app, identity)
+    })
+    .await
+}
+
+async fn provisioning_token_revoke(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<Json_>,
+) -> Result<Json<Json_>, ApiError> {
+    as_caller(&app, &headers, move |app, identity| {
+        scim::revoke_token(app, identity, &body)
+    })
+    .await
+}
+
+async fn provisioning_groups(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+) -> Result<Json<Json_>, ApiError> {
+    as_caller(&app, &headers, |app, identity| {
+        scim::group_roles(app, identity)
+    })
+    .await
+}
+
+async fn provisioning_group_set(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<Json_>,
+) -> Result<Json<Json_>, ApiError> {
+    as_caller(&app, &headers, move |app, identity| {
+        scim::set_group_role(app, identity, &body)
+    })
+    .await
+}
+
+async fn provisioning_group_remove(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<Json_>,
+) -> Result<Json<Json_>, ApiError> {
+    as_caller(&app, &headers, move |app, identity| {
+        scim::remove_group_role(app, identity, &body)
+    })
+    .await
+}
+
+/// A SCIM request from the gateway, as an envelope: the token it carried is the credential.
+async fn scim_request(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<Json_>,
+) -> Result<Json<Json_>, ApiError> {
+    as_public(&app, &headers, move |app, caller| {
+        scim::handle(app, caller, &body)
+    })
+    .await
+}
+
+/// Development only: move this process's clock forward, to see a lifetime or a revocation bound
+/// pass without waiting for it.
+async fn dev_clock(
+    State(app): State<Shared>,
+    Json(body): Json<Json_>,
+) -> Result<Json<Json_>, ApiError> {
+    if !app.cfg.dev {
+        return Err(ApiError::new(ErrorCode::NotFound, "not available"));
+    }
+    let advance = body.get("advance_ms").and_then(Json_::as_i64).unwrap_or(0);
+    let total = app
+        .clock_skew_ms
+        .fetch_add(advance, std::sync::atomic::Ordering::Relaxed)
+        + advance;
+    Ok(Json(json!({ "skew_ms": total })))
+}
+
+/// Development only: make the identity service answer as if it could not be reached, or again as
+/// it should (IDN-300, IDN-301).
+async fn dev_identity_outage(
+    State(app): State<Shared>,
+    Json(body): Json<Json_>,
+) -> Result<Json<Json_>, ApiError> {
+    if !app.cfg.dev {
+        return Err(ApiError::new(ErrorCode::NotFound, "not available"));
+    }
+    let on = body.get("on").and_then(Json_::as_bool).unwrap_or(false);
+    app.identity_outage
+        .store(on, std::sync::atomic::Ordering::Relaxed);
+    Ok(Json(json!({ "identity_outage": on })))
+}
+
 async fn socket(
     State(app): State<Shared>,
     headers: HeaderMap,
@@ -742,6 +1008,41 @@ pub fn router(app: Shared) -> Router {
             post(dev_age_authentication),
         )
         .route("/internal/dev/mail-outbox", post(dev_mail_outbox))
+        .route("/internal/dev/clock", post(dev_clock))
+        .route("/internal/dev/identity-outage", post(dev_identity_outage))
+        .route("/internal/token", post(token))
+        .route("/internal/token/verify", post(token_verify))
+        .route("/internal/token/introspect", post(token_introspect))
+        .route("/internal/keys", post(keys_published))
+        .route("/internal/keys/rotate", post(keys_rotate))
+        .route("/internal/keys/compromise", post(keys_compromise))
+        .route("/internal/clients", post(clients_list))
+        .route("/internal/clients/create", post(clients_create))
+        .route(
+            "/internal/clients/rotate-secret",
+            post(clients_rotate_secret),
+        )
+        .route("/internal/clients/revoke", post(clients_revoke))
+        .route("/internal/grants/create", post(grants_create))
+        .route("/internal/grants/revoke", post(grants_revoke))
+        .route(
+            "/internal/provisioning/tokens/create",
+            post(provisioning_token_create),
+        )
+        .route(
+            "/internal/provisioning/tokens/revoke",
+            post(provisioning_token_revoke),
+        )
+        .route("/internal/provisioning/groups", post(provisioning_groups))
+        .route(
+            "/internal/provisioning/groups/set",
+            post(provisioning_group_set),
+        )
+        .route(
+            "/internal/provisioning/groups/remove",
+            post(provisioning_group_remove),
+        )
+        .route("/internal/scim", post(scim_request))
         .route("/internal/ws", get(socket))
         .layer(middleware::from_fn_with_state(app.clone(), gate))
         .with_state(app)

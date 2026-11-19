@@ -304,6 +304,18 @@ const TENANT_MIGRATIONS: &[Migration] = &[
     CREATE INDEX saml_assertions_expiry ON saml_assertions(expires_at);
     ",
     },
+    Migration {
+        version: 8,
+        name: "identity service documents",
+        sql: "
+    CREATE TABLE identity_docs (
+        kind  TEXT NOT NULL,
+        key   TEXT NOT NULL,
+        value TEXT NOT NULL,
+        PRIMARY KEY (kind, key)
+    );
+    ",
+    },
 ];
 
 /// Index values longer than this are not indexed; lookups for them scan the object type.
@@ -2505,6 +2517,68 @@ impl Store for SqliteStore {
             .execute("DELETE FROM accounts WHERE login = ?1", params![login])
             .map_err(db)?;
         Ok(removed > 0)
+    }
+
+    fn doc_put(
+        &self,
+        tenant: &TenantId,
+        kind: &str,
+        key: &str,
+        value: &str,
+        create_only: bool,
+    ) -> StoreResult<bool> {
+        let sql = if create_only {
+            "INSERT OR IGNORE INTO identity_docs (kind, key, value) VALUES (?1, ?2, ?3)"
+        } else {
+            "INSERT INTO identity_docs (kind, key, value) VALUES (?1, ?2, ?3)
+             ON CONFLICT (kind, key) DO UPDATE SET value = excluded.value"
+        };
+        // A tenant that does not exist has no file, and is refused as not found.
+        let changed = self.on_existing(tenant, |conn| {
+            conn.execute(sql, params![kind, key, value]).map_err(db)
+        })?;
+        Ok(changed == 1)
+    }
+
+    fn doc_get(&self, tenant: &TenantId, kind: &str, key: &str) -> StoreResult<Option<String>> {
+        let value = self.on_tenant(tenant, |conn| {
+            conn.query_row(
+                "SELECT value FROM identity_docs WHERE kind = ?1 AND key = ?2",
+                params![kind, key],
+                |r| r.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(db)
+        })?;
+        Ok(value.flatten())
+    }
+
+    fn doc_list(&self, tenant: &TenantId, kind: &str) -> StoreResult<Vec<(String, String)>> {
+        let rows = self.on_tenant(tenant, |conn| {
+            let mut statement = conn
+                .prepare("SELECT key, value FROM identity_docs WHERE kind = ?1 ORDER BY key")
+                .map_err(db)?;
+            let rows = statement
+                .query_map(params![kind], |r| {
+                    Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+                })
+                .map_err(db)?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(db)?;
+            Ok(rows)
+        })?;
+        Ok(rows.unwrap_or_default())
+    }
+
+    fn doc_remove(&self, tenant: &TenantId, kind: &str, key: &str) -> StoreResult<bool> {
+        let removed = self.on_tenant(tenant, |conn| {
+            conn.execute(
+                "DELETE FROM identity_docs WHERE kind = ?1 AND key = ?2",
+                params![kind, key],
+            )
+            .map_err(db)
+        })?;
+        Ok(removed == Some(1))
     }
 
     fn create_snapshot(

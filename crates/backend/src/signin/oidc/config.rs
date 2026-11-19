@@ -328,14 +328,61 @@ impl Debug for Federation {
     }
 }
 
-/// Whether an address may be fetched from: HTTPS, with no credentials in it, and in development
-/// plain HTTP too, so that a provider on this machine can be used.
+/// Whether an address is on the platform's own side of the network: loopback, private, link-local
+/// (where cloud metadata services live) or unspecified.
+fn internal_ip(ip: std::net::IpAddr) -> bool {
+    use std::net::IpAddr;
+    match ip {
+        IpAddr::V4(a) => {
+            let o = a.octets();
+            a.is_private()
+                || a.is_loopback()
+                || a.is_link_local()
+                || a.is_unspecified()
+                || a.is_broadcast()
+                // 100.64.0.0/10, shared address space
+                || (o[0] == 100 && (o[1] & 0xc0) == 64)
+        }
+        IpAddr::V6(a) => {
+            a.is_loopback()
+                || a.is_unspecified()
+                || (a.segments()[0] & 0xfe00) == 0xfc00
+                || (a.segments()[0] & 0xffc0) == 0xfe80
+                || a.to_ipv4_mapped()
+                    .is_some_and(|v4| internal_ip(IpAddr::V4(v4)))
+        }
+    }
+}
+
+/// Whether a host is one a tenant may make this process connect to: not an address on the
+/// platform's own network, and not a name that is only ever one (FED-261, D-702).
+fn outward_host(host: &str) -> bool {
+    let bare = host.trim_start_matches('[').trim_end_matches(']');
+    if let Ok(ip) = bare.parse::<std::net::IpAddr>() {
+        return !internal_ip(ip);
+    }
+    let name = host.to_ascii_lowercase();
+    name.contains('.')
+        && name != "localhost"
+        && !name.ends_with(".localhost")
+        && !name.ends_with(".local")
+        && !name.ends_with(".internal")
+}
+
+/// Whether an address may be fetched from: HTTPS, with no credentials in it, and a host outside
+/// the platform's own network. In development plain HTTP and any host are allowed too, so that a
+/// provider on this machine can be used (FED-261).
+///
+/// Implements: FED-261
 fn endpoint_ok(address: &str, dev: bool) -> bool {
     let Ok(url) = reqwest::Url::parse(address) else {
         return false;
     };
     let scheme = url.scheme() == "https" || (dev && url.scheme() == "http");
-    scheme && url.host_str().is_some() && url.username().is_empty() && url.password().is_none()
+    scheme
+        && url.host_str().is_some_and(|host| dev || outward_host(host))
+        && url.username().is_empty()
+        && url.password().is_none()
 }
 
 /// The keys of a set that can be read; one that cannot is left out and does not spoil the rest.
@@ -620,6 +667,24 @@ mod tests {
         assert!(endpoint_ok("http://127.0.0.1:9/keys", true));
         assert!(!endpoint_ok("https://user:pw@id.acme.example/keys", true));
         assert!(!endpoint_ok("file:///etc/passwd", true));
+        // FED-261: the platform's own network is not a provider's address.
+        for internal in [
+            "https://127.0.0.1/keys",
+            "https://10.0.0.5/keys",
+            "https://192.168.1.1/keys",
+            "https://169.254.169.254/latest/meta-data",
+            "https://[::1]/keys",
+            "https://[fd00::1]/keys",
+            "https://[::ffff:10.0.0.1]/keys",
+            "https://localhost/keys",
+            "https://metadata.internal/keys",
+            "https://printer.local/keys",
+            "https://intranet/keys",
+        ] {
+            assert!(!endpoint_ok(internal, false), "{internal}");
+            assert!(endpoint_ok(internal, true), "{internal} in development");
+        }
+        assert!(endpoint_ok("https://203.0.113.9/keys", false));
         assert_eq!(algorithm("none"), None);
         assert_eq!(algorithm("HS256"), None);
         assert_eq!(algorithm("EdDSA"), Some(Algorithm::EdDSA));

@@ -13,6 +13,7 @@ pub mod mail;
 pub mod ops;
 pub mod outbox;
 pub mod seed;
+pub mod service;
 pub mod signin;
 pub mod ws;
 

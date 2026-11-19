@@ -672,8 +672,11 @@ pub trait Store: Send + Sync {
     /// Take a started SAML sign-in, removing it in the same step, so that a response answers it
     /// once whatever the timing. The row is returned whether or not it has lapsed: the caller
     /// compares the time.
-    fn take_saml_request(&self, tenant: &TenantId, id_hash: &str)
-        -> StoreResult<Option<SamlRequest>>;
+    fn take_saml_request(
+        &self,
+        tenant: &TenantId,
+        id_hash: &str,
+    ) -> StoreResult<Option<SamlRequest>>;
     /// Remove started SAML sign-ins that have lapsed before `now`. Returns how many were removed.
     fn purge_saml_requests(&self, now: Timestamp) -> StoreResult<u64>;
 
@@ -786,6 +789,26 @@ pub trait Store: Send + Sync {
     ) -> StoreResult<bool>;
     /// Remove waiting sign-ins and recoveries that have lapsed at `now`. Returns how many.
     fn purge_factor_challenges(&self, now: Timestamp) -> StoreResult<u64>;
+
+    /// Keep a small document of the identity service under a kind and a key of one tenant: a
+    /// client, a signing key, a grant, a provisioning token. `value` is JSON text the store does
+    /// not read. With `create_only` the document is kept only when the key is free, in one step,
+    /// and `false` says it was not; otherwise an existing document is replaced and the answer is
+    /// `true`.
+    fn doc_put(
+        &self,
+        tenant: &TenantId,
+        kind: &str,
+        key: &str,
+        value: &str,
+        create_only: bool,
+    ) -> StoreResult<bool>;
+    /// One document of a tenant.
+    fn doc_get(&self, tenant: &TenantId, kind: &str, key: &str) -> StoreResult<Option<String>>;
+    /// Every document of one kind of a tenant, by key.
+    fn doc_list(&self, tenant: &TenantId, kind: &str) -> StoreResult<Vec<(String, String)>>;
+    /// Remove one document. Returns whether it was there.
+    fn doc_remove(&self, tenant: &TenantId, kind: &str, key: &str) -> StoreResult<bool>;
 
     /// Keep a copy of the tenant's complete state as it is now.
     fn create_snapshot(

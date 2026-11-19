@@ -6,9 +6,9 @@
 use crate::{
     check_event_sequence, partial_state, throttle_refund, throttle_step, Account, Capabilities,
     Commit, FederatedIdentity, Health, JournalEntry, OidcFlow, OutboxEntry, PasskeyChallenge,
-    PasskeyRecord, PendingSignIn, Receipt, RecoveryRequest, SamlRequest, SessionRecord,
-    SignInLink, SnapshotInfo, StorageMigration, Store, StoreError, StoreResult, TenantSummary,
-    ThrottleRow, ThrottleRule, ThrottleSettle, ThrottleVerdict, TotpRecord,
+    PasskeyRecord, PendingSignIn, Receipt, RecoveryRequest, SamlRequest, SessionRecord, SignInLink,
+    SnapshotInfo, StorageMigration, Store, StoreError, StoreResult, TenantSummary, ThrottleRow,
+    ThrottleRule, ThrottleSettle, ThrottleVerdict, TotpRecord,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -40,6 +40,7 @@ struct Inner {
     recovery_codes: BTreeMap<(TenantId, PrincipalId), BTreeSet<String>>,
     pending: BTreeMap<(TenantId, String), PendingSignIn>,
     recoveries: BTreeMap<(TenantId, String), RecoveryRequest>,
+    docs: BTreeMap<(TenantId, String, String), String>,
     snapshots: BTreeMap<(TenantId, u64), (SnapshotInfo, Arc<TenantState>)>,
 }
 
@@ -792,6 +793,52 @@ impl Store for MemoryStore {
             .is_some())
     }
 
+    fn doc_put(
+        &self,
+        tenant: &TenantId,
+        kind: &str,
+        key: &str,
+        value: &str,
+        create_only: bool,
+    ) -> StoreResult<bool> {
+        let mut inner = self.lock()?;
+        if !inner.tenants.contains_key(tenant) {
+            return Err(StoreError::NotFound(format!("tenant {tenant}")));
+        }
+        let slot = (tenant.clone(), kind.to_string(), key.to_string());
+        if create_only && inner.docs.contains_key(&slot) {
+            return Ok(false);
+        }
+        inner.docs.insert(slot, value.to_string());
+        Ok(true)
+    }
+
+    fn doc_get(&self, tenant: &TenantId, kind: &str, key: &str) -> StoreResult<Option<String>> {
+        Ok(self
+            .lock()?
+            .docs
+            .get(&(tenant.clone(), kind.to_string(), key.to_string()))
+            .cloned())
+    }
+
+    fn doc_list(&self, tenant: &TenantId, kind: &str) -> StoreResult<Vec<(String, String)>> {
+        Ok(self
+            .lock()?
+            .docs
+            .iter()
+            .filter(|((t, k, _), _)| t == tenant && k == kind)
+            .map(|((_, _, key), value)| (key.clone(), value.clone()))
+            .collect())
+    }
+
+    fn doc_remove(&self, tenant: &TenantId, kind: &str, key: &str) -> StoreResult<bool> {
+        Ok(self
+            .lock()?
+            .docs
+            .remove(&(tenant.clone(), kind.to_string(), key.to_string()))
+            .is_some())
+    }
+
     fn create_snapshot(
         &self,
         tenant: &TenantId,
@@ -886,6 +933,7 @@ impl Store for MemoryStore {
         inner.recovery_codes.retain(|(t, _), _| t != tenant);
         inner.pending.retain(|(t, _), _| t != tenant);
         inner.recoveries.retain(|(t, _), _| t != tenant);
+        inner.docs.retain(|(t, _, _), _| t != tenant);
         inner.snapshots.retain(|(t, _), _| t != tenant);
         Ok(())
     }

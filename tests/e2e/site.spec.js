@@ -1519,3 +1519,120 @@ test('the metadata names this service and its assertion consumer address', async
   expect(xml).toContain('WantAssertionsSigned="true"');
   expect((await request.get('/federation/saml/metadata/nobody')).status()).toBe(404);
 });
+
+// Service accounts, tokens and provisioning. There is no desk page for these yet, so they are
+// tested at the BFF's own endpoints, as a service account, an agent and an identity provider
+// reach them: the token endpoint and the key set, introspection, and the SCIM endpoint.
+async function ownerHeaders(page) {
+  await signIn(page, 'admin');
+  const csrf = (await (await page.request.get('/api/session')).json()).session.csrf_token;
+  return { origin: BASE, 'x-csrf-token': csrf };
+}
+
+test('a service account is made on the desk side, gets a token, and rotating its secret ends the old one', async ({ page, request }) => {
+  const headers = await ownerHeaders(page);
+  const made = await (await page.request.post('/api/identity/clients/create', {
+    data: { name: 'Feed reader', scopes: ['read:post'] },
+    headers,
+  })).json();
+  expect(made.secret).toMatch(/^scs_/);
+  const listed = await (await page.request.get('/api/identity/clients')).text();
+  expect(listed).toContain(made.id);
+  expect(listed).not.toContain(made.secret);
+
+  const token = async (secret) =>
+    request.post('/token', { form: { grant_type: 'client_credentials', client_id: made.id, client_secret: secret } });
+  const issued = await token(made.secret);
+  expect(issued.status()).toBe(200);
+  const body = await issued.json();
+  expect(body.token_type).toBe('Bearer');
+  expect(body.expires_in).toBeLessThanOrEqual(300);
+  expect(issued.headers()['cache-control']).toBe('no-store');
+
+  // The access token is verifiable with the published keys: its key is in the set.
+  const kid = JSON.parse(Buffer.from(body.access_token.split('.')[0], 'base64url').toString()).kid;
+  const keys = await (await request.get('/.well-known/jwks.json')).json();
+  expect(keys.keys.map((key) => key.kid)).toContain(kid);
+  expect(keys.keys[0]).toMatchObject({ kty: 'EC', crv: 'P-256', alg: 'ES256' });
+
+  // The service account asks about its own token.
+  const seen = await (await request.post('/introspect', {
+    form: { token: body.access_token, client_id: made.id, client_secret: made.secret },
+  })).json();
+  expect(seen).toMatchObject({ active: true, scope: 'read:post', sub: made.id });
+
+  const rotated = await (await page.request.post('/api/identity/clients/rotate-secret', { data: { id: made.id }, headers })).json();
+  expect(rotated.secret).not.toBe(made.secret);
+  expect((await token(made.secret)).status()).toBe(401);
+  expect((await token(rotated.secret)).status()).toBe(200);
+
+  // Revoked, the account and the token it was given are refused at once.
+  await page.request.post('/api/identity/clients/revoke', { data: { id: made.id }, headers });
+  expect((await token(rotated.secret)).status()).toBe(401);
+  const after = await (await request.post('/introspect', {
+    form: { token: body.access_token, client_id: made.id, client_secret: rotated.secret },
+  }));
+  expect(after.status()).toBe(401);
+});
+
+test('a visitor cannot make a service account, rotate a key or read the clients', async ({ page }) => {
+  await open(page, '/login');
+  const csrf = (await (await page.request.get('/api/session')).json()).session.csrf_token;
+  const headers = { origin: BASE, 'x-csrf-token': csrf };
+  for (const action of ['clients/create', 'keys/rotate', 'provisioning/tokens/create']) {
+    const refused = await page.request.post(`/api/identity/${action}`, { data: {}, headers, failOnStatusCode: false });
+    expect([401, 403]).toContain(refused.status());
+  }
+  expect((await page.request.get('/api/identity/clients', { failOnStatusCode: false })).status()).toBe(401);
+});
+
+test('an identity provider provisions a person with its token and a deactivation takes effect', async ({ page, request }) => {
+  const headers = await ownerHeaders(page);
+  const { token } = await (await page.request.post('/api/identity/provisioning/tokens/create', { data: {}, headers })).json();
+  expect(token).toMatch(/^scimt_/);
+  const scim = { Authorization: `Bearer ${token}`, 'content-type': 'application/scim+json' };
+
+  const unauthorised = await request.get('/scim/v2/Users', { failOnStatusCode: false });
+  expect(unauthorised.status()).toBe(401);
+
+  const created = await request.post('/scim/v2/Users', {
+    headers: scim,
+    data: { userName: 'pw-test@acme.example', externalId: 'pw-ext-1', displayName: 'Playwright Person', active: true },
+  });
+  expect(created.status()).toBe(201);
+  expect(created.headers()['content-type']).toContain('application/scim+json');
+  const user = await created.json();
+  expect(user.userName).toBe('pw-test@acme.example');
+
+  const duplicate = await request.post('/scim/v2/Users', {
+    headers: scim,
+    data: { userName: 'PW-TEST@acme.example' },
+    failOnStatusCode: false,
+  });
+  expect(duplicate.status()).toBe(409);
+
+  const found = await (await request.get('/scim/v2/Users', {
+    headers: scim,
+    params: { filter: 'userName eq "pw-test@acme.example"' },
+  })).json();
+  expect(found.totalResults).toBe(1);
+
+  // A group the realm did not map changes no role.
+  const unmapped = await request.patch('/scim/v2/Groups/unmapped', {
+    headers: scim,
+    data: { Operations: [{ op: 'add', path: 'members', value: [{ value: user.id }] }] },
+    failOnStatusCode: false,
+  });
+  expect(unmapped.status()).toBe(400);
+
+  const off = await request.patch(`/scim/v2/Users/${user.id}`, {
+    headers: scim,
+    data: { Operations: [{ op: 'replace', path: 'active', value: false }] },
+  });
+  expect((await off.json()).active).toBe(false);
+  expect((await request.delete(`/scim/v2/Users/${user.id}`, { headers: scim })).status()).toBe(204);
+
+  // The token is no session and opens nothing else.
+  const asCookie = await request.get('/api/identity/clients', { headers: { Cookie: `__Host-strata_sid=${token}` }, failOnStatusCode: false });
+  expect(asCookie.status()).toBe(401);
+});

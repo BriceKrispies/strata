@@ -1206,3 +1206,46 @@ async fn a_first_sign_in_grants_only_the_default_role_the_realm_names() {
     assert_eq!(reply["session"]["may_manage_schema"], false);
     assert_ne!(principal(&reply), "user:admin");
 }
+
+/// Verifies: IDN-250
+///
+/// The start of a sign-in is counted by source and realm and never by provider: more than ten
+/// starts, from different sources, all go through, so that the provider's button is not locked
+/// for everyone by a few clicks of anyone's. One source that starts past its own limit is refused.
+#[tokio::test]
+async fn starts_from_different_sources_are_not_limited_by_the_provider() {
+    let mock = Mock::start().await;
+    let backend = start_with(federation(vec![provider(&mock, |_| {})], Some(0)), |cfg| {
+        cfg.throttle = ThrottleLimits {
+            source_max: 15,
+            ..Default::default()
+        }
+    })
+    .await;
+    let start_from = |source: String| {
+        let request = backend
+            .http
+            .post(format!("{}/internal/sign-in/oidc/start", backend.base))
+            .header(HEADER_SERVICE, TOKEN)
+            .header(HEADER_SITE, "fieldnotes")
+            .header(HEADER_SOURCE, source)
+            .header(HEADER_ORIGIN, SITE)
+            .header(HEADER_CORRELATION, "t-start-sources")
+            .json(&json!({ "provider": "acme" }));
+        async move { request.send().await.unwrap().status().as_u16() }
+    };
+    for index in 1..=14 {
+        assert_eq!(
+            start_from(format!("203.0.113.{index}")).await,
+            200,
+            "start {index} from a source of its own"
+        );
+    }
+    // One source is still limited, by its own count.
+    let mut statuses = Vec::new();
+    for _ in 0..20 {
+        statuses.push(start_from("198.51.100.9".to_string()).await);
+    }
+    assert_eq!(statuses.first(), Some(&200));
+    assert_eq!(statuses.last(), Some(&429), "{statuses:?}");
+}

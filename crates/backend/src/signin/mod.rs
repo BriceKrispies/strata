@@ -192,6 +192,11 @@ pub fn sign_in(
         ));
     };
     let name = method.name();
+    // No method can be checked while the identity service cannot be reached: a sign-in fails
+    // closed (IDN-300).
+    if app.identity_outage.load(std::sync::atomic::Ordering::Relaxed) {
+        return Err(auth::identity_outage());
+    }
     let Some(tenant) = app.store.load(&caller.site, &[])?.tenant else {
         return Err(ApiError::new(ErrorCode::NotFound, "no such site"));
     };
@@ -233,6 +238,16 @@ pub fn sign_in(
         );
         return Err(refused(name));
     };
+    // A person their provider deactivated signs in by no method (FED-015).
+    if crate::service::is_disabled(app, &caller.site, &account.principal)? {
+        app.decision(
+            name,
+            "refused",
+            &["well-formed", "throttle", "credential", "active"],
+            &caller.correlation,
+        );
+        return Err(refused(name));
+    }
 
     // The credential was right. The account forgets its failures; the source and the realm
     // only get this attempt's slot back, so that a right login does not wipe what a spray

@@ -53,6 +53,13 @@ fn sqlite_store_conforms_on_disk() {
     );
 }
 
+/// The identity service's documents are kept per tenant and kind, on a database file.
+#[test]
+fn sqlite_store_keeps_documents() {
+    let store = SqliteStore::open(&fresh_path("documents"), Timestamp(1)).unwrap();
+    conformance::documents_are_scoped_to_their_tenant_and_kind(&store);
+}
+
 /// Verifies: STO-003
 ///
 /// Everything the adapter acknowledges is there after the file is closed and opened again: the
@@ -153,7 +160,7 @@ fn committed_data_survives_a_reopen() {
     let file = store.tenant_file(&alpha).unwrap().unwrap();
     assert_eq!(
         count(&file, "SELECT COUNT(*) FROM tenant_migrations"),
-        7,
+        8,
         "the tenant file's steps"
     );
     assert!(store.health().unwrap().ok);
@@ -371,7 +378,10 @@ fn two_tenants_data_live_in_different_files() {
         count(
             &path,
             "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' \
-             AND name IN ('records', 'events', 'journal', 'sessions', 'accounts', 'tenant',              'login_throttle', 'passkeys', 'passkey_challenges', 'sign_in_links', 'oidc_flows',              'federated_identities', 'totp_factors', 'recovery_codes', 'pending_sign_ins',              'recovery_requests', 'saml_requests', 'saml_assertions')"
+             AND name IN ('records', 'events', 'journal', 'sessions', 'accounts', 'tenant', \
+             'login_throttle', 'passkeys', 'passkey_challenges', 'sign_in_links', 'oidc_flows', \
+             'federated_identities', 'totp_factors', 'recovery_codes', 'pending_sign_ins', \
+             'recovery_requests', 'saml_requests', 'saml_assertions', 'identity_docs')"
         ),
         0,
         "the control database holds no tenant content"
