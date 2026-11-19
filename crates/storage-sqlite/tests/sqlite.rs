@@ -5,8 +5,8 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use strata_kernel::testkit::*;
 use strata_kernel::*;
 use strata_storage_api::{
-    conformance, execute, Account, SessionRecord, Store, ThrottleRule, ThrottleSettle,
-    ThrottleVerdict,
+    conformance, execute, Account, PasskeyCeremony, PasskeyChallenge, PasskeyRecord, SessionRecord,
+    Store, ThrottleRule, ThrottleSettle, ThrottleVerdict,
 };
 use strata_storage_sqlite::SqliteStore;
 
@@ -319,4 +319,106 @@ fn login_throttle_counters_are_durable_atomic_and_purged() {
     );
     assert_eq!(store.purge_throttle(Timestamp(1_000_000)).unwrap(), 2);
     assert_eq!(store.purge_throttle(Timestamp(1_000_000)).unwrap(), 0);
+}
+
+/// Verifies: IDN-264
+///
+/// Passkeys and their challenges are rows: a reopened file holds them, a credential id is
+/// unique within a tenant, a challenge is taken once and not after it lapses, and a tenant reset
+/// takes them all.
+#[test]
+fn passkeys_and_challenges_are_durable_and_a_challenge_is_taken_once() {
+    let path = fresh_path("passkeys");
+    let alpha = tenant_id("alpha");
+    let ines = principal_id("user:ines");
+    let passkey = |id: &str, principal: &PrincipalId, at: i64| PasskeyRecord {
+        tenant: alpha.clone(),
+        principal: principal.clone(),
+        id: id.into(),
+        rp_id: "alpha.example".into(),
+        label: "Key".into(),
+        credential: "{}".into(),
+        created_at: Timestamp(at),
+        last_used_at: None,
+    };
+    let challenge = |hash: &str, expires: i64| PasskeyChallenge {
+        tenant: alpha.clone(),
+        id_hash: hash.into(),
+        ceremony: PasskeyCeremony::SignIn,
+        session: None,
+        principal: None,
+        origin: "https://alpha.example".into(),
+        state: "{}".into(),
+        expires_at: Timestamp(expires),
+    };
+    {
+        let store = SqliteStore::open(&path, Timestamp(1)).unwrap();
+        execute(
+            &store,
+            &Intent::CreateTenant {
+                name: "alpha".into(),
+                owner: principal_id("alpha:owner"),
+            },
+            &ctx("alpha", Principal::System, 10),
+        )
+        .unwrap();
+        assert!(store.put_passkey(&passkey("k2", &ines, 20)).unwrap());
+        assert!(store.put_passkey(&passkey("k1", &ines, 10)).unwrap());
+        assert!(
+            !store
+                .put_passkey(&passkey("k1", &principal_id("user:omar"), 30))
+                .unwrap(),
+            "a credential id is held once in a tenant, whoever brings it"
+        );
+        store
+            .put_passkey_challenge(&challenge("live", 1000))
+            .unwrap();
+        store
+            .put_passkey_challenge(&challenge("lapsed", 50))
+            .unwrap();
+    }
+    let store = SqliteStore::open(&path, Timestamp(1)).unwrap();
+    let held = store.passkeys(&alpha, &ines).unwrap();
+    assert_eq!(
+        held.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(),
+        ["k1", "k2"],
+        "oldest first, and only this person's"
+    );
+    assert_eq!(held[0].rp_id, "alpha.example");
+    assert!(store
+        .update_passkey(&alpha, "k1", "{\"cred\":1}", Timestamp(99))
+        .unwrap());
+    let used = store.passkey(&alpha, "k1").unwrap().unwrap();
+    assert_eq!(used.credential, "{\"cred\":1}");
+    assert_eq!(used.last_used_at, Some(Timestamp(99)));
+
+    assert!(store
+        .take_passkey_challenge(&alpha, "live", Timestamp(100))
+        .unwrap()
+        .is_some());
+    assert!(
+        store
+            .take_passkey_challenge(&alpha, "live", Timestamp(100))
+            .unwrap()
+            .is_none(),
+        "taken once"
+    );
+    assert!(
+        store
+            .take_passkey_challenge(&alpha, "lapsed", Timestamp(100))
+            .unwrap()
+            .is_none(),
+        "not after it lapsed"
+    );
+    store
+        .put_passkey_challenge(&challenge("later", 60))
+        .unwrap();
+    assert_eq!(store.purge_passkey_challenges(Timestamp(100)).unwrap(), 1);
+
+    assert!(!store
+        .remove_passkey(&alpha, &principal_id("user:omar"), "k1")
+        .unwrap());
+    assert!(store.remove_passkey(&alpha, &ines, "k1").unwrap());
+    store.reset_tenant(&alpha).unwrap();
+    assert!(store.passkey(&alpha, "k2").unwrap().is_none());
 }

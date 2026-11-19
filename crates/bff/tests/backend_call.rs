@@ -36,6 +36,7 @@ fn visit(session: Option<&str>) -> Visit {
         token: session.map(str::to_string),
         correlation: "c-visit-7".into(),
         source: None,
+        origin: None,
     }
 }
 
@@ -52,6 +53,7 @@ async fn stand_in() -> String {
             "site": get("x-strata-site"),
             "correlation": get("x-correlation-id"),
             "session": get("x-strata-session"),
+            "origin": get("x-strata-origin"),
         }))
     }
     async fn refuse() -> (StatusCode, Json<Json_>) {
@@ -91,6 +93,20 @@ async fn the_internal_call_carries_its_credentials_and_reports_failures_as_unava
         .ok()
         .unwrap();
     assert_eq!(anonymous["session"], Json_::Null, "no session, no header");
+    assert_eq!(
+        anonymous["origin"],
+        Json_::Null,
+        "no checked origin, no header"
+    );
+    let from_page = Visit {
+        origin: Some("http://localhost:4200".into()),
+        ..visit(None)
+    };
+    let at: Json_ = backend(&bff, &from_page, "/echo", &json!({}))
+        .await
+        .ok()
+        .unwrap();
+    assert_eq!(at["origin"], "http://localhost:4200");
 
     // The service's own error reply is passed on.
     let refused = backend::<Json_>(&bff, &visit(None), "/refuse", &json!({}))

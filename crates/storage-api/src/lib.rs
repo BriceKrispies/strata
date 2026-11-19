@@ -301,6 +301,52 @@ pub fn throttle_refund(mut row: ThrottleRow, max: u32) -> ThrottleRow {
     row
 }
 
+/// A passkey a person registered: the relying party's record of one WebAuthn credential. The
+/// credential itself (public key, signature counter, flags) is the WebAuthn library's own
+/// serialisation, kept as it is.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PasskeyRecord {
+    pub tenant: TenantId,
+    pub principal: PrincipalId,
+    /// The credential id, base64url without padding. Unique within the tenant.
+    pub id: String,
+    /// The relying party the credential was made for: the host of the tenant's address. It is
+    /// used at that address only.
+    pub rp_id: String,
+    /// What the person calls it.
+    pub label: String,
+    /// The library's serialised credential.
+    pub credential: String,
+    pub created_at: Timestamp,
+    pub last_used_at: Option<Timestamp>,
+}
+
+/// What kind of ceremony a challenge was issued for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PasskeyCeremony {
+    Register,
+    SignIn,
+}
+
+/// A challenge the server issued and has not yet seen answered. It is held server-side, bound to
+/// the address it was requested at (and for a registration to the session that asked), is
+/// answered once, and lapses.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PasskeyChallenge {
+    pub tenant: TenantId,
+    /// A hash of the identifier the browser holds, so that the store holds no usable one.
+    pub id_hash: String,
+    pub ceremony: PasskeyCeremony,
+    /// The session that asked for a registration.
+    pub session: Option<SessionId>,
+    pub principal: Option<PrincipalId>,
+    /// The origin the ceremony was requested at, such as `https://tidewater.example`.
+    pub origin: String,
+    /// The library's serialised ceremony state.
+    pub state: String,
+    pub expires_at: Timestamp,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SnapshotInfo {
     pub tenant: TenantId,
@@ -404,6 +450,53 @@ pub trait Store: Send + Sync {
     fn account(&self, tenant: &TenantId, login: &str) -> StoreResult<Option<Account>>;
     /// Remove a login. Returns whether it was there.
     fn remove_account(&self, tenant: &TenantId, login: &str) -> StoreResult<bool>;
+    /// The login of a principal, for a sign-in method that identifies the person by something
+    /// other than a login.
+    fn account_of(
+        &self,
+        tenant: &TenantId,
+        principal: &PrincipalId,
+    ) -> StoreResult<Option<Account>>;
+
+    /// Keep a registered passkey. Returns `false`, and keeps nothing, when the tenant already
+    /// holds a credential with that id.
+    fn put_passkey(&self, passkey: &PasskeyRecord) -> StoreResult<bool>;
+    /// One credential of a tenant, by its id.
+    fn passkey(&self, tenant: &TenantId, id: &str) -> StoreResult<Option<PasskeyRecord>>;
+    /// The passkeys of one principal, oldest first.
+    fn passkeys(
+        &self,
+        tenant: &TenantId,
+        principal: &PrincipalId,
+    ) -> StoreResult<Vec<PasskeyRecord>>;
+    /// Replace the stored credential after a sign-in moved its counter, and note when it was
+    /// used. Returns whether the credential was there.
+    fn update_passkey(
+        &self,
+        tenant: &TenantId,
+        id: &str,
+        credential: &str,
+        used_at: Timestamp,
+    ) -> StoreResult<bool>;
+    /// Remove one of a principal's passkeys. Returns whether it was there.
+    fn remove_passkey(
+        &self,
+        tenant: &TenantId,
+        principal: &PrincipalId,
+        id: &str,
+    ) -> StoreResult<bool>;
+    /// Keep an issued challenge.
+    fn put_passkey_challenge(&self, challenge: &PasskeyChallenge) -> StoreResult<()>;
+    /// Take a challenge, removing it in the same step, so that it answers once whatever the
+    /// timing. A challenge that has lapsed at `now` is removed and not returned.
+    fn take_passkey_challenge(
+        &self,
+        tenant: &TenantId,
+        id_hash: &str,
+        now: Timestamp,
+    ) -> StoreResult<Option<PasskeyChallenge>>;
+    /// Remove challenges that have lapsed at `now`. Returns how many were removed.
+    fn purge_passkey_challenges(&self, now: Timestamp) -> StoreResult<u64>;
 
     /// Keep a copy of the tenant's complete state as it is now.
     fn create_snapshot(

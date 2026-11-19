@@ -12,7 +12,7 @@ use strata_kernel::{
     ViewId, ViewSection,
 };
 use strata_protocol::api::{
-    HEADER_CORRELATION, HEADER_SERVICE, HEADER_SESSION, HEADER_SITE, HEADER_SOURCE,
+    HEADER_CORRELATION, HEADER_ORIGIN, HEADER_SERVICE, HEADER_SESSION, HEADER_SITE, HEADER_SOURCE,
 };
 use strata_storage_api::memory::MemoryStore;
 use strata_storage_api::{execute, Store};
@@ -48,6 +48,7 @@ async fn start_on(store: Arc<MemoryStore>, adjust: impl FnOnce(&mut Config)) -> 
         session_ttl_ms: 3_600_000,
         session_idle_ms: 3_600_000,
         throttle: Default::default(),
+        passkey_challenge_ttl_ms: 300_000,
     };
     adjust(&mut cfg);
     tokio::spawn(strata_backend::run(
@@ -108,6 +109,35 @@ impl Backend {
             .header(HEADER_SITE, site)
             .header(HEADER_SOURCE, source)
             .json(&body);
+        if let Some(token) = session {
+            request = request.header(HEADER_SESSION, token);
+        }
+        let response = request.send().await.unwrap();
+        let status = response.status().as_u16();
+        (status, response.json().await.unwrap_or(Json::Null))
+    }
+
+    /// A call that says which origin the browser made it from, as the BFF does once it has checked
+    /// the origin is one of the site's own, and which address it came from.
+    async fn call_at(
+        &self,
+        origin: Option<&str>,
+        source: &str,
+        site: &str,
+        session: Option<&str>,
+        path: &str,
+        body: Json,
+    ) -> (u16, Json) {
+        let mut request = self
+            .http
+            .post(format!("{}{path}", self.base))
+            .header(HEADER_SERVICE, TOKEN)
+            .header(HEADER_SITE, site)
+            .header(HEADER_SOURCE, source)
+            .json(&body);
+        if let Some(origin) = origin {
+            request = request.header(HEADER_ORIGIN, origin);
+        }
         if let Some(token) = session {
             request = request.header(HEADER_SESSION, token);
         }
@@ -2231,4 +2261,634 @@ async fn a_change_of_roles_ends_the_sessions_of_the_person_it_changes() {
             break;
         }
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Passkeys (WebAuthn). The authenticator is the `webauthn-authenticator-rs` software passkey,
+// which makes real attestations and assertions with a real key; the server side is the
+// `webauthn-rs` library behind the sign-in method. The software authenticator only signs for
+// `https` origins and is handed the credential to use, so the tests give it the credential id
+// and add the user handle to the assertion as a discoverable credential would.
+// ---------------------------------------------------------------------------------------------
+
+use webauthn_authenticator_rs::softpasskey::SoftPasskey;
+use webauthn_authenticator_rs::WebauthnAuthenticator as _;
+use webauthn_rs::prelude::{CreationChallengeResponse, RequestChallengeResponse, Url};
+
+/// The address the tenant is reached at, in these tests.
+const SITE: &str = "https://fieldnotes.example";
+const SIBLING: &str = "https://evil.fieldnotes.example";
+const OTHER_HOST: &str = "https://elsewhere.example";
+const SOURCE: &str = "203.0.113.7";
+
+/// A passkey the software authenticator holds, as the server knows it.
+struct Registered {
+    /// The credential id, as the server writes it.
+    id: String,
+    /// The user handle the server gave the authenticator, as the server writes it.
+    handle: Json,
+}
+
+impl Backend {
+    /// Ask for a registration challenge as `session` at `origin`.
+    async fn passkey_register_start(&self, origin: &str, session: Option<&str>) -> (u16, Json) {
+        self.call_at(
+            Some(origin),
+            SOURCE,
+            "fieldnotes",
+            session,
+            "/internal/passkeys/register/start",
+            json!({}),
+        )
+        .await
+    }
+
+    /// Add a passkey for the person `session` belongs to: the authenticator makes it at
+    /// `made_at`, the server issues and takes it at `origin`.
+    async fn passkey_register(
+        &self,
+        authenticator: &mut SoftPasskey,
+        origin: &str,
+        made_at: &str,
+        session: &str,
+    ) -> Result<Registered, (u16, Json)> {
+        let (status, started) = self.passkey_register_start(origin, Some(session)).await;
+        assert_eq!(status, 200, "{started}");
+        let handle = started["options"]["publicKey"]["user"]["id"].clone();
+        let options: CreationChallengeResponse =
+            serde_json::from_value(started["options"].clone()).unwrap();
+        let credential = authenticator
+            .do_registration(Url::parse(made_at).unwrap(), options)
+            .expect("the authenticator makes a passkey");
+        let (status, finished) = self
+            .call_at(
+                Some(origin),
+                SOURCE,
+                "fieldnotes",
+                Some(session),
+                "/internal/passkeys/register/finish",
+                json!({
+                    "challenge": started["challenge"],
+                    "credential": serde_json::to_value(&credential).unwrap(),
+                    "name": "Test key",
+                }),
+            )
+            .await;
+        if status != 200 {
+            return Err((status, finished));
+        }
+        Ok(Registered {
+            id: finished["passkey"]["id"].as_str().unwrap().to_string(),
+            handle,
+        })
+    }
+
+    /// Answer a sign-in challenge. The server issues it at `issued_at`, the authenticator signs
+    /// it as a page at `made_at`, and the answer reaches the backend as from `presented_at`.
+    async fn passkey_sign_in(
+        &self,
+        authenticator: &mut SoftPasskey,
+        passkey: &Registered,
+        issued_at: &str,
+        made_at: &str,
+        presented_at: &str,
+    ) -> (u16, Json) {
+        let (assertion, challenge) = self
+            .passkey_assertion(authenticator, passkey, issued_at, made_at)
+            .await;
+        self.passkey_present(presented_at, &challenge, assertion)
+            .await
+    }
+
+    async fn passkey_assertion(
+        &self,
+        authenticator: &mut SoftPasskey,
+        passkey: &Registered,
+        issued_at: &str,
+        made_at: &str,
+    ) -> (Json, String) {
+        let (status, issued) = self
+            .call_at(
+                Some(issued_at),
+                SOURCE,
+                "fieldnotes",
+                None,
+                "/internal/passkeys/challenge",
+                json!({}),
+            )
+            .await;
+        assert_eq!(status, 200, "{issued}");
+        // A browser lists no credential for a discoverable sign-in and lets the person pick; the
+        // software authenticator has to be told which one to use.
+        let mut options = issued["options"].clone();
+        options["publicKey"]["allowCredentials"] =
+            json!([{ "type": "public-key", "id": passkey.id }]);
+        let options: RequestChallengeResponse = serde_json::from_value(options).unwrap();
+        let assertion = authenticator
+            .do_authentication(Url::parse(made_at).unwrap(), options)
+            .expect("the authenticator signs");
+        let mut assertion = serde_json::to_value(&assertion).unwrap();
+        assertion["response"]["userHandle"] = passkey.handle.clone();
+        (assertion, issued["challenge"].as_str().unwrap().to_string())
+    }
+
+    async fn passkey_present(
+        &self,
+        presented_at: &str,
+        challenge: &str,
+        assertion: Json,
+    ) -> (u16, Json) {
+        self.call_at(
+            Some(presented_at),
+            SOURCE,
+            "fieldnotes",
+            None,
+            "/internal/session/sign-in/passkey",
+            json!({ "challenge": challenge, "assertion": assertion }),
+        )
+        .await
+    }
+
+    async fn passkeys_of(&self, session: &str) -> Vec<Json> {
+        let (status, listed) = self
+            .call_at(
+                Some(SITE),
+                SOURCE,
+                "fieldnotes",
+                Some(session),
+                "/internal/passkeys",
+                json!({}),
+            )
+            .await;
+        assert_eq!(status, 200, "{listed}");
+        listed["passkeys"].as_array().unwrap().clone()
+    }
+
+    async fn passkey_remove(&self, session: &str, id: &str) -> u16 {
+        self.call_at(
+            Some(SITE),
+            SOURCE,
+            "fieldnotes",
+            Some(session),
+            "/internal/passkeys/remove",
+            json!({ "id": id }),
+        )
+        .await
+        .0
+    }
+}
+
+/// Set the signature counter the server holds for a credential, as if the authenticator had
+/// been used that many times elsewhere.
+fn set_stored_counter(store: &MemoryStore, passkey: &Registered, counter: u64) {
+    let tenant = TenantId::new("fieldnotes").unwrap();
+    let record = store.passkey(&tenant, &passkey.id).unwrap().unwrap();
+    let mut credential: Json = serde_json::from_str(&record.credential).unwrap();
+    credential["cred"]["counter"] = json!(counter);
+    store
+        .update_passkey(
+            &tenant,
+            &passkey.id,
+            &credential.to_string(),
+            Timestamp(strata_protocol::log::now_ms()),
+        )
+        .unwrap();
+}
+
+/// Verifies: H-017
+/// Verifies: IDN-007
+/// Verifies: IDN-264
+///
+/// Case `passkey-valid`: an assertion for the tenant address, signed by a registered credential,
+/// is accepted and starts a session of the person who registered it, through the shared flow.
+#[tokio::test]
+async fn a_registered_passkey_signs_its_owner_in() {
+    let backend = start().await;
+    let mut authenticator = SoftPasskey::new(true);
+    let mirela = backend
+        .login("fieldnotes", "mirela", "strata-dev-mirela")
+        .await;
+    let passkey = backend
+        .passkey_register(&mut authenticator, SITE, SITE, &mirela)
+        .await
+        .expect("a signed-in person adds a passkey");
+    let listed = backend.passkeys_of(&mirela).await;
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0]["id"], passkey.id);
+    assert_eq!(listed[0]["name"], "Test key");
+    assert!(listed[0]["last_used_at"].is_null());
+
+    let (status, reply) = backend
+        .passkey_sign_in(&mut authenticator, &passkey, SITE, SITE, SITE)
+        .await;
+    assert_eq!(status, 200, "{reply}");
+    let token = reply["token"].as_str().unwrap();
+    assert_eq!(reply["session"]["authenticated"], true);
+    assert_eq!(reply["session"]["display_name"], "Mirela");
+    let (_, session) = backend
+        .call("fieldnotes", Some(token), "/internal/session", json!({}))
+        .await;
+    assert_eq!(session["session"]["authenticated"], true);
+    assert_ne!(token, mirela, "a session of its own");
+    // The use is noted, and the decision is audited under the method's name.
+    assert!(!backend.passkeys_of(&mirela).await[0]["last_used_at"].is_null());
+    let (_, platform) = backend
+        .call(
+            "fieldnotes",
+            None,
+            "/internal/platform/diagnostics",
+            json!({}),
+        )
+        .await;
+    assert!(platform["audit"].as_array().unwrap().iter().any(|entry| {
+        entry["event"] == "auth.decision"
+            && entry["method"] == "passkey"
+            && entry["outcome"] == "accepted"
+    }));
+}
+
+/// Verifies: IDN-007
+///
+/// A registration needs a signed-in person, the challenge of that session and of that address;
+/// and the credential belongs to the address of the tenant, so it is of no use at another.
+#[tokio::test]
+async fn a_passkey_is_added_only_by_a_signed_in_person_at_the_address_it_is_for() {
+    let backend = start().await;
+    let (status, _) = backend.passkey_register_start(SITE, None).await;
+    assert_eq!(status, 401, "no session, no challenge");
+    let (status, _) = backend
+        .call_at(
+            Some(SITE),
+            SOURCE,
+            "fieldnotes",
+            None,
+            "/internal/passkeys/register/finish",
+            json!({ "challenge": "0".repeat(64), "credential": {} }),
+        )
+        .await;
+    assert_eq!(status, 401, "nor can one be finished without a session");
+
+    let mirela = backend
+        .login("fieldnotes", "mirela", "strata-dev-mirela")
+        .await;
+    let tomasz = backend
+        .login("fieldnotes", "tomasz", "strata-dev-tomasz")
+        .await;
+    // A site reached by an address that is not a name cannot have passkeys.
+    for origin in ["http://127.0.0.1:4200", "not an origin"] {
+        let (status, _) = backend.passkey_register_start(origin, Some(&mirela)).await;
+        assert_eq!(status, 422, "{origin}");
+    }
+    let (status, _) = backend
+        .call_at(
+            None,
+            SOURCE,
+            "fieldnotes",
+            Some(&mirela),
+            "/internal/passkeys/register/start",
+            json!({}),
+        )
+        .await;
+    assert_eq!(status, 422, "a request that did not say where it came from");
+
+    // The authenticator makes the passkey for a page at another address than the challenge was
+    // issued for.
+    let mut authenticator = SoftPasskey::new(true);
+    let refused = backend
+        .passkey_register(&mut authenticator, SITE, SIBLING, &mirela)
+        .await;
+    assert_eq!(refused.err().map(|e| e.0), Some(422));
+    assert!(backend.passkeys_of(&mirela).await.is_empty());
+
+    // A challenge is the session's own: another person's session cannot finish it, and the
+    // attempt spends it.
+    let (_, started) = backend.passkey_register_start(SITE, Some(&mirela)).await;
+    let options: CreationChallengeResponse =
+        serde_json::from_value(started["options"].clone()).unwrap();
+    let credential = authenticator
+        .do_registration(Url::parse(SITE).unwrap(), options)
+        .unwrap();
+    let finish = json!({
+        "challenge": started["challenge"],
+        "credential": serde_json::to_value(&credential).unwrap(),
+    });
+    let (status, _) = backend
+        .call_at(
+            Some(SITE),
+            SOURCE,
+            "fieldnotes",
+            Some(&tomasz),
+            "/internal/passkeys/register/finish",
+            finish.clone(),
+        )
+        .await;
+    assert_eq!(status, 422);
+    assert!(backend.passkeys_of(&tomasz).await.is_empty());
+    let (status, _) = backend
+        .call_at(
+            Some(SITE),
+            SOURCE,
+            "fieldnotes",
+            Some(&mirela),
+            "/internal/passkeys/register/finish",
+            finish,
+        )
+        .await;
+    assert_eq!(status, 422, "the challenge was spent by the first attempt");
+    assert!(backend.passkeys_of(&mirela).await.is_empty());
+
+    // A passkey made for this address does not sign in at another address of the same tenant,
+    // even where the other address is answered correctly for itself.
+    let passkey = backend
+        .passkey_register(&mut authenticator, SITE, SITE, &mirela)
+        .await
+        .unwrap();
+    let (status, _) = backend
+        .passkey_sign_in(
+            &mut authenticator,
+            &passkey,
+            OTHER_HOST,
+            OTHER_HOST,
+            OTHER_HOST,
+        )
+        .await;
+    assert_eq!(status, 401);
+}
+
+/// Verifies: IDN-007
+/// Verifies: IDN-264
+///
+/// Case `passkey-other-origin`: an assertion made for another address is refused, whether the
+/// page that made it was at a sibling address, or the challenge was issued for one address and
+/// answered at another.
+#[tokio::test]
+async fn an_assertion_for_another_address_is_refused() {
+    let backend = start().await;
+    let mut authenticator = SoftPasskey::new(true);
+    let mirela = backend
+        .login("fieldnotes", "mirela", "strata-dev-mirela")
+        .await;
+    let passkey = backend
+        .passkey_register(&mut authenticator, SITE, SITE, &mirela)
+        .await
+        .unwrap();
+
+    // Signed by a page at a sibling address: the origin in what the browser signed is not the
+    // origin the challenge was issued for.
+    let (status, reply) = backend
+        .passkey_sign_in(&mut authenticator, &passkey, SITE, SIBLING, SITE)
+        .await;
+    assert_eq!(status, 401, "{reply}");
+    assert!(reply["token"].is_null());
+
+    // Issued for one address and presented from another.
+    let (status, reply) = backend
+        .passkey_sign_in(&mut authenticator, &passkey, SITE, SITE, OTHER_HOST)
+        .await;
+    assert_eq!(status, 401, "{reply}");
+    // Presented with no address at all.
+    let (assertion, challenge) = backend
+        .passkey_assertion(&mut authenticator, &passkey, SITE, SITE)
+        .await;
+    let (status, _) = backend
+        .call_at(
+            None,
+            SOURCE,
+            "fieldnotes",
+            None,
+            "/internal/session/sign-in/passkey",
+            json!({ "challenge": challenge, "assertion": assertion }),
+        )
+        .await;
+    assert_eq!(status, 401);
+
+    // And the right one still works afterwards: nothing above locked the person out.
+    let (status, reply) = backend
+        .passkey_sign_in(&mut authenticator, &passkey, SITE, SITE, SITE)
+        .await;
+    assert_eq!(status, 200, "{reply}");
+}
+
+/// Verifies: IDN-264
+///
+/// A challenge answers once, lapses, and is the tenant's own.
+#[tokio::test]
+async fn a_challenge_answers_once_and_lapses() {
+    let backend = start_with(|cfg| cfg.passkey_challenge_ttl_ms = 400).await;
+    let mut authenticator = SoftPasskey::new(true);
+    let mirela = backend
+        .login("fieldnotes", "mirela", "strata-dev-mirela")
+        .await;
+    let passkey = backend
+        .passkey_register(&mut authenticator, SITE, SITE, &mirela)
+        .await
+        .unwrap();
+
+    // A right answer, replayed, is a refusal: the challenge was taken by the first.
+    let (assertion, challenge) = backend
+        .passkey_assertion(&mut authenticator, &passkey, SITE, SITE)
+        .await;
+    let (status, _) = backend
+        .passkey_present(SITE, &challenge, assertion.clone())
+        .await;
+    assert_eq!(status, 200);
+    let (status, _) = backend.passkey_present(SITE, &challenge, assertion).await;
+    assert_eq!(status, 401, "a replayed assertion");
+
+    // An answer that comes too late.
+    let (assertion, challenge) = backend
+        .passkey_assertion(&mut authenticator, &passkey, SITE, SITE)
+        .await;
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    let (status, _) = backend.passkey_present(SITE, &challenge, assertion).await;
+    assert_eq!(status, 401, "a lapsed challenge");
+
+    // An answer to a challenge no one issued, or one issued to another site.
+    let (assertion, _) = backend
+        .passkey_assertion(&mut authenticator, &passkey, SITE, SITE)
+        .await;
+    for challenge in ["0".repeat(64), "not a challenge".to_string()] {
+        let (status, _) = backend
+            .passkey_present(SITE, &challenge, assertion.clone())
+            .await;
+        assert_eq!(status, 401);
+    }
+    let (_, issued) = backend
+        .call_at(
+            Some(SITE),
+            SOURCE,
+            "tidewater",
+            None,
+            "/internal/passkeys/challenge",
+            json!({}),
+        )
+        .await;
+    let (status, _) = backend
+        .passkey_present(SITE, issued["challenge"].as_str().unwrap(), assertion)
+        .await;
+    assert_eq!(status, 401, "a challenge is of one tenant");
+}
+
+/// Verifies: IDN-264
+///
+/// Case `passkey-counter-regress`: an assertion whose signature counter did not go forward
+/// shows a credential that may have been copied, and is refused and audited.
+#[tokio::test]
+async fn an_assertion_whose_counter_went_backwards_is_refused() {
+    let store = Arc::new(MemoryStore::new());
+    let backend = start_on(store.clone(), |_| {}).await;
+    let mut authenticator = SoftPasskey::new(true);
+    let mirela = backend
+        .login("fieldnotes", "mirela", "strata-dev-mirela")
+        .await;
+    let passkey = backend
+        .passkey_register(&mut authenticator, SITE, SITE, &mirela)
+        .await
+        .unwrap();
+    // Counters going forward are accepted.
+    for _ in 0..2 {
+        let (status, reply) = backend
+            .passkey_sign_in(&mut authenticator, &passkey, SITE, SITE, SITE)
+            .await;
+        assert_eq!(status, 200, "{reply}");
+    }
+    // The server has seen a counter ahead of what this authenticator now signs: a copy of the
+    // key has been used elsewhere.
+    set_stored_counter(&store, &passkey, 100);
+    let (status, reply) = backend
+        .passkey_sign_in(&mut authenticator, &passkey, SITE, SITE, SITE)
+        .await;
+    assert_eq!(status, 401, "{reply}");
+    assert!(reply["token"].is_null());
+    // The same counter again is not forward either: the next one the authenticator signs is 4.
+    set_stored_counter(&store, &passkey, 4);
+    let (status, _) = backend
+        .passkey_sign_in(&mut authenticator, &passkey, SITE, SITE, SITE)
+        .await;
+    assert_eq!(status, 401, "the counter did not advance");
+    let (_, platform) = backend
+        .call(
+            "fieldnotes",
+            None,
+            "/internal/platform/diagnostics",
+            json!({}),
+        )
+        .await;
+    assert!(platform["audit"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|entry| entry["event"] == "passkey.counter_regressed"));
+}
+
+/// Verifies: H-031
+/// Verifies: H-032
+/// Verifies: H-033
+///
+/// A person lists, and removes, their own passkeys and no one else's. A removed passkey signs no
+/// one in.
+#[tokio::test]
+async fn a_person_manages_only_their_own_passkeys() {
+    let backend = start().await;
+    let mut ines_key = SoftPasskey::new(true);
+    let mut tomasz_key = SoftPasskey::new(true);
+    let ines = backend.login("fieldnotes", "ines", "strata-dev-ines").await;
+    let tomasz = backend
+        .login("fieldnotes", "tomasz", "strata-dev-tomasz")
+        .await;
+    let ines_passkey = backend
+        .passkey_register(&mut ines_key, SITE, SITE, &ines)
+        .await
+        .unwrap();
+    let tomasz_passkey = backend
+        .passkey_register(&mut tomasz_key, SITE, SITE, &tomasz)
+        .await
+        .unwrap();
+    assert_eq!(backend.passkeys_of(&ines).await.len(), 1);
+    assert_eq!(backend.passkeys_of(&tomasz).await.len(), 1);
+    // Listing needs a session.
+    let (status, _) = backend
+        .call_at(
+            Some(SITE),
+            SOURCE,
+            "fieldnotes",
+            None,
+            "/internal/passkeys",
+            json!({}),
+        )
+        .await;
+    assert_eq!(status, 401);
+
+    // Tomasz cannot remove Ines's passkey, and is told no more than that there is none.
+    assert_eq!(backend.passkey_remove(&tomasz, &ines_passkey.id).await, 404);
+    assert_eq!(backend.passkeys_of(&ines).await.len(), 1);
+    assert_eq!(backend.passkey_remove(&ines, "no-such-passkey").await, 404);
+
+    // Removing one's own works, and then it signs no one in.
+    assert_eq!(backend.passkey_remove(&ines, &ines_passkey.id).await, 200);
+    assert!(backend.passkeys_of(&ines).await.is_empty());
+    let (status, _) = backend
+        .passkey_sign_in(&mut ines_key, &ines_passkey, SITE, SITE, SITE)
+        .await;
+    assert_eq!(status, 401);
+    // The other person's is untouched.
+    let (status, reply) = backend
+        .passkey_sign_in(&mut tomasz_key, &tomasz_passkey, SITE, SITE, SITE)
+        .await;
+    assert_eq!(status, 200, "{reply}");
+    assert_eq!(reply["session"]["display_name"], "Tomasz");
+}
+
+/// Verifies: IDN-250
+///
+/// A passkey sign-in goes through the same limits as every method, and asking for a challenge is
+/// counted too, so that the store cannot be filled from one source.
+#[tokio::test]
+async fn passkey_attempts_are_limited_like_every_other_method() {
+    let backend = start_with(|cfg| cfg.throttle.source_max = 3).await;
+    let mut statuses = Vec::new();
+    for _ in 0..5 {
+        let (status, _) = backend
+            .call_at(
+                Some(SITE),
+                SOURCE,
+                "fieldnotes",
+                None,
+                "/internal/passkeys/challenge",
+                json!({}),
+            )
+            .await;
+        statuses.push(status);
+    }
+    assert_eq!(statuses, [200, 200, 200, 429, 429]);
+    // Another source is not held back by it.
+    let (status, _) = backend
+        .call_at(
+            Some(SITE),
+            "203.0.113.8",
+            "fieldnotes",
+            None,
+            "/internal/passkeys/challenge",
+            json!({}),
+        )
+        .await;
+    assert_eq!(status, 200);
+
+    // Wrong answers count against the source and end in the same refusal as any method.
+    let backend = start_with(|cfg| cfg.throttle.source_max = 3).await;
+    let mut statuses = Vec::new();
+    for _ in 0..5 {
+        let (status, _) = backend
+            .call_at(
+                Some(SITE),
+                SOURCE,
+                "fieldnotes",
+                None,
+                "/internal/session/sign-in/passkey",
+                json!({ "challenge": "0".repeat(64), "assertion": {} }),
+            )
+            .await;
+        statuses.push(status);
+    }
+    assert_eq!(statuses, [401, 401, 401, 429, 429]);
 }

@@ -55,7 +55,7 @@
  * @typedef {{ at: number, rand: number }} Stamp
  *
  * @typedef {(
- *   | { type: 'init', path: string, search: string, bootstrap: any, systemDark: boolean, storedTheme: string | null }
+ *   | { type: 'init', path: string, search: string, bootstrap: any, systemDark: boolean, storedTheme: string | null, passkeys?: boolean }
  *   | { type: 'navigate', href: string, replace?: boolean }
  *   | { type: 'popstate', path: string, search: string }
  *   | { type: 'input', seq?: number, form: string, name: string, value: string | boolean }
@@ -67,6 +67,7 @@
  *   | { type: 'ws_message', message: any }
  *   | { type: 'ws_closed' }
  *   | { type: 'timer', name: string, token: number }
+ *   | { type: 'passkey_result', id: number, ok: boolean, credential?: any, cancelled?: boolean }
  * ) & Stamp} Message
  */
 
@@ -82,6 +83,7 @@
  *   | { type: 'push_url', href: string, replace: boolean }
  *   | { type: 'store', key: string, value: string }
  *   | { type: 'scroll_top' }
+ *   | { type: 'passkey', op: 'create' | 'get', id: number, options: any }
  *   | { type: 'log', level: string, event: string, correlation: string, detail: string }
  * )} Effect
  */

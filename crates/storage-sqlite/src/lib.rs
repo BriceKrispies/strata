@@ -26,9 +26,9 @@ use strata_kernel::{
 use strata_runtime::sqlite::{Database, DbError, Migration};
 use strata_storage_api::{
     check_event_sequence, field_matches, throttle_refund, throttle_step, Account, Capabilities,
-    Commit, Health, JournalEntry, OutboxEntry, Receipt, SessionRecord, SnapshotInfo,
-    StorageMigration, Store, StoreError, StoreResult, TenantSummary, ThrottleRow, ThrottleRule,
-    ThrottleSettle, ThrottleVerdict,
+    Commit, Health, JournalEntry, OutboxEntry, PasskeyCeremony, PasskeyChallenge, PasskeyRecord,
+    Receipt, SessionRecord, SnapshotInfo, StorageMigration, Store, StoreError, StoreResult,
+    TenantSummary, ThrottleRow, ThrottleRule, ThrottleSettle, ThrottleVerdict,
 };
 
 /// The ledger table of the tenant store's migrations.
@@ -136,6 +136,37 @@ const MIGRATIONS: &[Migration] = &[
         PRIMARY KEY (tenant, key)
     );
     CREATE INDEX login_throttle_expiry ON login_throttle(expires_at);
+    ",
+    },
+    Migration {
+        version: 3,
+        name: "passkeys",
+        sql: "
+    CREATE TABLE passkeys (
+        tenant       TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+        id           TEXT NOT NULL,
+        principal    TEXT NOT NULL,
+        rp_id        TEXT NOT NULL,
+        label        TEXT NOT NULL,
+        credential   TEXT NOT NULL,
+        created_at   INTEGER NOT NULL,
+        last_used_at INTEGER,
+        PRIMARY KEY (tenant, id)
+    );
+    CREATE INDEX passkeys_principal ON passkeys(tenant, principal, created_at);
+    CREATE TABLE passkey_challenges (
+        tenant     TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+        id_hash    TEXT NOT NULL,
+        ceremony   TEXT NOT NULL,
+        session    TEXT,
+        principal  TEXT,
+        origin     TEXT NOT NULL,
+        state      TEXT NOT NULL,
+        expires_at INTEGER NOT NULL,
+        PRIMARY KEY (tenant, id_hash)
+    );
+    CREATE INDEX passkey_challenges_expiry ON passkey_challenges(expires_at);
+    CREATE INDEX accounts_principal ON accounts(tenant, principal);
     ",
     },
 ];
@@ -308,6 +339,46 @@ fn throttle_row(
     )
     .optional()
     .map_err(db)
+}
+
+type PasskeyRow = (
+    String,
+    String,
+    String,
+    String,
+    String,
+    String,
+    i64,
+    Option<i64>,
+);
+
+fn passkey_from(row: &rusqlite::Row<'_>) -> rusqlite::Result<PasskeyRow> {
+    Ok((
+        row.get(0)?,
+        row.get(1)?,
+        row.get(2)?,
+        row.get(3)?,
+        row.get(4)?,
+        row.get(5)?,
+        row.get(6)?,
+        row.get(7)?,
+    ))
+}
+
+fn passkey_record(
+    (tenant, id, principal, rp_id, label, credential, created_at, last_used_at): PasskeyRow,
+) -> StoreResult<PasskeyRecord> {
+    let bad = |e: strata_kernel::IdError| StoreError::Corrupt(e.to_string());
+    Ok(PasskeyRecord {
+        tenant: TenantId::new(tenant).map_err(bad)?,
+        principal: PrincipalId::new(principal).map_err(bad)?,
+        id,
+        rp_id,
+        label,
+        credential,
+        created_at: Timestamp(created_at),
+        last_used_at: last_used_at.map(Timestamp),
+    })
 }
 
 fn session_from(
@@ -936,6 +1007,200 @@ impl Store for SqliteStore {
             .lock()?
             .execute(
                 "DELETE FROM login_throttle WHERE expires_at <= ?1",
+                params![now.0],
+            )
+            .map_err(db)?;
+        Ok(removed as u64)
+    }
+
+    fn account_of(
+        &self,
+        tenant: &TenantId,
+        principal: &PrincipalId,
+    ) -> StoreResult<Option<Account>> {
+        let conn = self.lock()?;
+        let row = conn
+            .query_row(
+                "SELECT login, display_name, password_hash FROM accounts WHERE tenant = ?1 AND principal = ?2 ORDER BY login LIMIT 1",
+                params![tenant.as_str(), principal.as_str()],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?)),
+            )
+            .optional()
+            .map_err(db)?;
+        Ok(row.map(|(login, display_name, password_hash)| Account {
+            tenant: tenant.clone(),
+            login,
+            principal: principal.clone(),
+            display_name,
+            password_hash,
+        }))
+    }
+
+    fn put_passkey(&self, passkey: &PasskeyRecord) -> StoreResult<bool> {
+        let added = self
+            .lock()?
+            .execute(
+                "INSERT OR IGNORE INTO passkeys (tenant, id, principal, rp_id, label, credential, created_at, last_used_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![
+                    passkey.tenant.as_str(),
+                    passkey.id,
+                    passkey.principal.as_str(),
+                    passkey.rp_id,
+                    passkey.label,
+                    passkey.credential,
+                    passkey.created_at.0,
+                    passkey.last_used_at.map(|at| at.0),
+                ],
+            )
+            .map_err(db)?;
+        Ok(added == 1)
+    }
+
+    fn passkey(&self, tenant: &TenantId, id: &str) -> StoreResult<Option<PasskeyRecord>> {
+        let conn = self.lock()?;
+        conn.query_row(
+            "SELECT tenant, id, principal, rp_id, label, credential, created_at, last_used_at FROM passkeys WHERE tenant = ?1 AND id = ?2",
+            params![tenant.as_str(), id],
+            passkey_from,
+        )
+        .optional()
+        .map_err(db)?
+        .map(passkey_record)
+        .transpose()
+    }
+
+    fn passkeys(
+        &self,
+        tenant: &TenantId,
+        principal: &PrincipalId,
+    ) -> StoreResult<Vec<PasskeyRecord>> {
+        let conn = self.lock()?;
+        let mut statement = conn
+            .prepare(
+                "SELECT tenant, id, principal, rp_id, label, credential, created_at, last_used_at FROM passkeys
+                 WHERE tenant = ?1 AND principal = ?2 ORDER BY created_at, id",
+            )
+            .map_err(db)?;
+        let rows = statement
+            .query_map(params![tenant.as_str(), principal.as_str()], passkey_from)
+            .map_err(db)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(db)?;
+        rows.into_iter().map(passkey_record).collect()
+    }
+
+    fn update_passkey(
+        &self,
+        tenant: &TenantId,
+        id: &str,
+        credential: &str,
+        used_at: Timestamp,
+    ) -> StoreResult<bool> {
+        let changed = self
+            .lock()?
+            .execute(
+                "UPDATE passkeys SET credential = ?3, last_used_at = ?4 WHERE tenant = ?1 AND id = ?2",
+                params![tenant.as_str(), id, credential, used_at.0],
+            )
+            .map_err(db)?;
+        Ok(changed == 1)
+    }
+
+    fn remove_passkey(
+        &self,
+        tenant: &TenantId,
+        principal: &PrincipalId,
+        id: &str,
+    ) -> StoreResult<bool> {
+        let removed = self
+            .lock()?
+            .execute(
+                "DELETE FROM passkeys WHERE tenant = ?1 AND principal = ?2 AND id = ?3",
+                params![tenant.as_str(), principal.as_str(), id],
+            )
+            .map_err(db)?;
+        Ok(removed == 1)
+    }
+
+    fn put_passkey_challenge(&self, challenge: &PasskeyChallenge) -> StoreResult<()> {
+        self.lock()?
+            .execute(
+                "INSERT OR REPLACE INTO passkey_challenges (tenant, id_hash, ceremony, session, principal, origin, state, expires_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![
+                    challenge.tenant.as_str(),
+                    challenge.id_hash,
+                    match challenge.ceremony {
+                        PasskeyCeremony::Register => "register",
+                        PasskeyCeremony::SignIn => "sign-in",
+                    },
+                    challenge.session.as_ref().map(|s| s.as_str().to_string()),
+                    challenge.principal.as_ref().map(|p| p.as_str().to_string()),
+                    challenge.origin,
+                    challenge.state,
+                    challenge.expires_at.0,
+                ],
+            )
+            .map_err(db)?;
+        Ok(())
+    }
+
+    fn take_passkey_challenge(
+        &self,
+        tenant: &TenantId,
+        id_hash: &str,
+        now: Timestamp,
+    ) -> StoreResult<Option<PasskeyChallenge>> {
+        // One statement reads and removes the row, so two answers to one challenge cannot both
+        // take it.
+        let row = self
+            .lock()?
+            .query_row(
+                "DELETE FROM passkey_challenges WHERE tenant = ?1 AND id_hash = ?2
+                 RETURNING ceremony, session, principal, origin, state, expires_at",
+                params![tenant.as_str(), id_hash],
+                |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, Option<String>>(1)?,
+                        r.get::<_, Option<String>>(2)?,
+                        r.get::<_, String>(3)?,
+                        r.get::<_, String>(4)?,
+                        r.get::<_, i64>(5)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(db)?;
+        let Some((ceremony, session, principal, origin, state, expires_at)) = row else {
+            return Ok(None);
+        };
+        if expires_at <= now.0 {
+            return Ok(None);
+        }
+        let bad = |e: strata_kernel::IdError| StoreError::Corrupt(e.to_string());
+        Ok(Some(PasskeyChallenge {
+            tenant: tenant.clone(),
+            id_hash: id_hash.to_string(),
+            ceremony: if ceremony == "register" {
+                PasskeyCeremony::Register
+            } else {
+                PasskeyCeremony::SignIn
+            },
+            session: session.map(SessionId::new).transpose().map_err(bad)?,
+            principal: principal.map(PrincipalId::new).transpose().map_err(bad)?,
+            origin,
+            state,
+            expires_at: Timestamp(expires_at),
+        }))
+    }
+
+    fn purge_passkey_challenges(&self, now: Timestamp) -> StoreResult<u64> {
+        let removed = self
+            .lock()?
+            .execute(
+                "DELETE FROM passkey_challenges WHERE expires_at <= ?1",
                 params![now.0],
             )
             .map_err(db)?;

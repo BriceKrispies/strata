@@ -34,6 +34,8 @@ pub struct Config {
     pub session_idle_ms: i64,
     /// How many failed attempts are let through, and for how long a limit holds.
     pub throttle: ThrottleLimits,
+    /// How long an issued passkey challenge can be answered.
+    pub passkey_challenge_ttl_ms: i64,
 }
 
 /// The limits on failed sign-in attempts. The defaults are the platform defaults of D-700; a

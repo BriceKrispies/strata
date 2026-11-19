@@ -47,6 +47,44 @@ function sessionsSection(sessions) {
   );
 }
 
+/** The signed-in person's own passkeys: add one on this device, remove any. */
+function passkeysSection(passkeys) {
+  if (!passkeys?.supported || (!passkeys.loaded && !passkeys.error)) return null;
+  return h(
+    'section',
+    { class: 'sessions', 'data-passkeys': true, 'aria-labelledby': 'passkeys-title' },
+    h('h2', { id: 'passkeys-title', class: 'section-title' }, 'Passkeys'),
+    passkeys.error ? h('p', { class: 'form__error', role: 'alert' }, passkeys.error) : null,
+    passkeys.list.length
+      ? h(
+          'table',
+          { class: 'table' },
+          h('caption', { class: 'visually-hidden' }, 'Your passkeys'),
+          h('thead', null, h('tr', null, h('th', { scope: 'col' }, 'Passkey'), h('th', { scope: 'col' }, 'Added'), h('th', { scope: 'col' }, 'Last used'), h('th', { scope: 'col' }, 'Actions'))),
+          h(
+            'tbody',
+            null,
+            passkeys.list.map((p) =>
+              h(
+                'tr',
+                { key: p.id, 'data-passkey': p.id },
+                h('th', { scope: 'row' }, p.name),
+                h('td', null, date(p.created_at, 'stamp')),
+                h('td', null, p.last_used_at ? date(p.last_used_at, 'stamp') : 'Never'),
+                h(
+                  'td',
+                  { class: 'table__actions' },
+                  h('button', { class: 'button button--small button--quiet', type: 'button', disabled: passkeys.busy, 'data-action': 'passkeys.remove', 'data-arg': arg({ id: p.id }), 'aria-label': `Remove ${p.name}` }, 'Remove'),
+                ),
+              ),
+            ),
+          ),
+        )
+      : h('p', { class: 'empty' }, 'You have no passkeys. Add one to sign in without a password.'),
+    h('p', { class: 'toolbar' }, h('button', { class: 'button button--quiet', type: 'button', disabled: passkeys.busy, 'data-action': 'passkeys.add' }, 'Add a passkey')),
+  );
+}
+
 function arg(value) {
   return JSON.stringify(value);
 }
@@ -101,6 +139,7 @@ export function desk(page) {
         )
       : h('p', { class: 'empty' }, 'You have not written anything yet. Start with a draft; nobody sees it until you publish.'),
     sessionsSection(page.sessions),
+    passkeysSection(page.passkeys),
   ];
 }
 

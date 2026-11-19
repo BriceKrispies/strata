@@ -1,7 +1,8 @@
 //! The internal HTTP API: routes, the service-token gate and request logging.
 
 use crate::app::{ApiError, App, Shared, LOG};
-use crate::auth::{self, has_service_token, Identity};
+use crate::auth::{self, has_service_token, Caller, Identity};
+use crate::signin::passkey;
 use crate::{lab, ops, seed, ws};
 use axum::extract::ws::WebSocketUpgrade;
 use axum::extract::{Path, Request, State};
@@ -31,6 +32,23 @@ where
     app.blocking(move |app| {
         let identity = auth::identify(app, &caller)?;
         work(app, &identity)
+    })
+    .await?
+    .map(Json)
+    .map_err(|error| error.with_correlation(&correlation))
+}
+
+/// Run blocking work as the identified caller, with what the caller asserted as well.
+async fn as_caller_at<T, F>(app: &Shared, headers: &HeaderMap, work: F) -> Result<Json<T>, ApiError>
+where
+    T: Serialize + Send + 'static,
+    F: FnOnce(&App, &Caller, &Identity) -> Result<T, ApiError> + Send + 'static,
+{
+    let caller = auth::caller(headers)?;
+    let correlation = caller.correlation.clone();
+    app.blocking(move |app| {
+        let identity = auth::identify(app, &caller)?;
+        work(app, &caller, &identity)
     })
     .await?
     .map(Json)
@@ -92,6 +110,59 @@ async fn login_with(
     Json(request): Json<Json_>,
 ) -> Result<impl IntoResponse, ApiError> {
     sign_in(app, headers, method, request).await
+}
+
+/// A challenge for signing in with a passkey at the address the caller is at.
+async fn passkey_challenge(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+) -> Result<Json<Json_>, ApiError> {
+    let caller = auth::caller(&headers)?;
+    let correlation = caller.correlation.clone();
+    app.blocking(move |app| passkey::sign_in_challenge(app, &caller))
+        .await?
+        .map(Json)
+        .map_err(|error| error.with_correlation(&correlation))
+}
+
+async fn passkey_register_start(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+) -> Result<Json<Json_>, ApiError> {
+    as_caller_at(&app, &headers, |app, caller, identity| {
+        passkey::register_start(app, caller, identity)
+    })
+    .await
+}
+
+async fn passkey_register_finish(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Json(request): Json<Json_>,
+) -> Result<Json<Json_>, ApiError> {
+    as_caller_at(&app, &headers, move |app, caller, identity| {
+        passkey::register_finish(app, caller, identity, &request)
+    })
+    .await
+}
+
+/// The caller's own passkeys.
+async fn passkeys(State(app): State<Shared>, headers: HeaderMap) -> Result<Json<Json_>, ApiError> {
+    as_caller_at(&app, &headers, |app, caller, identity| {
+        passkey::list(app, caller, identity)
+    })
+    .await
+}
+
+async fn passkey_remove(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Json(request): Json<IdRequest>,
+) -> Result<Json<Json_>, ApiError> {
+    as_caller_at(&app, &headers, move |app, caller, identity| {
+        passkey::remove(app, caller, identity, &request.id)
+    })
+    .await
 }
 
 /// The caller's own live sessions.
@@ -359,6 +430,17 @@ pub fn router(app: Shared) -> Router {
         .route("/internal/session", post(session))
         .route("/internal/session/login", post(login))
         .route("/internal/session/sign-in/:method", post(login_with))
+        .route("/internal/passkeys", post(passkeys))
+        .route("/internal/passkeys/challenge", post(passkey_challenge))
+        .route(
+            "/internal/passkeys/register/start",
+            post(passkey_register_start),
+        )
+        .route(
+            "/internal/passkeys/register/finish",
+            post(passkey_register_finish),
+        )
+        .route("/internal/passkeys/remove", post(passkey_remove))
         .route("/internal/sessions", post(sessions))
         .route("/internal/sessions/revoke", post(session_revoke))
         .route(

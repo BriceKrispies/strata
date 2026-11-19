@@ -5,14 +5,15 @@
 
 use crate::{
     check_event_sequence, partial_state, throttle_refund, throttle_step, Account, Capabilities,
-    Commit, Health, JournalEntry, OutboxEntry, Receipt, SessionRecord, SnapshotInfo,
-    StorageMigration, Store, StoreError, StoreResult, TenantSummary, ThrottleRow, ThrottleRule,
-    ThrottleSettle, ThrottleVerdict,
+    Commit, Health, JournalEntry, OutboxEntry, PasskeyChallenge, PasskeyRecord, Receipt,
+    SessionRecord, SnapshotInfo, StorageMigration, Store, StoreError, StoreResult, TenantSummary,
+    ThrottleRow, ThrottleRule, ThrottleSettle, ThrottleVerdict,
 };
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, MutexGuard};
 use strata_kernel::{
-    apply_delta, canon, DomainEvent, Need, SessionId, State, TenantId, TenantState, Timestamp,
+    apply_delta, canon, DomainEvent, Need, PrincipalId, SessionId, State, TenantId, TenantState,
+    Timestamp,
 };
 
 #[derive(Default)]
@@ -24,6 +25,8 @@ struct Inner {
     sessions: BTreeMap<SessionId, SessionRecord>,
     accounts: BTreeMap<(TenantId, String), Account>,
     throttle: BTreeMap<(TenantId, String), ThrottleRow>,
+    passkeys: BTreeMap<(TenantId, String), PasskeyRecord>,
+    challenges: BTreeMap<(TenantId, String), PasskeyChallenge>,
     snapshots: BTreeMap<(TenantId, u64), (SnapshotInfo, Arc<TenantState>)>,
 }
 
@@ -310,6 +313,118 @@ impl Store for MemoryStore {
         Ok((count - inner.throttle.len()) as u64)
     }
 
+    fn account_of(
+        &self,
+        tenant: &TenantId,
+        principal: &PrincipalId,
+    ) -> StoreResult<Option<Account>> {
+        Ok(self
+            .lock()?
+            .accounts
+            .values()
+            .find(|account| account.tenant == *tenant && account.principal == *principal)
+            .cloned())
+    }
+
+    fn put_passkey(&self, passkey: &PasskeyRecord) -> StoreResult<bool> {
+        let mut inner = self.lock()?;
+        let slot = (passkey.tenant.clone(), passkey.id.clone());
+        if inner.passkeys.contains_key(&slot) {
+            return Ok(false);
+        }
+        inner.passkeys.insert(slot, passkey.clone());
+        Ok(true)
+    }
+
+    fn passkey(&self, tenant: &TenantId, id: &str) -> StoreResult<Option<PasskeyRecord>> {
+        Ok(self
+            .lock()?
+            .passkeys
+            .get(&(tenant.clone(), id.to_string()))
+            .cloned())
+    }
+
+    fn passkeys(
+        &self,
+        tenant: &TenantId,
+        principal: &PrincipalId,
+    ) -> StoreResult<Vec<PasskeyRecord>> {
+        let mut found: Vec<PasskeyRecord> = self
+            .lock()?
+            .passkeys
+            .values()
+            .filter(|p| p.tenant == *tenant && p.principal == *principal)
+            .cloned()
+            .collect();
+        found.sort_by(|a, b| (a.created_at, &a.id).cmp(&(b.created_at, &b.id)));
+        Ok(found)
+    }
+
+    fn update_passkey(
+        &self,
+        tenant: &TenantId,
+        id: &str,
+        credential: &str,
+        used_at: Timestamp,
+    ) -> StoreResult<bool> {
+        let mut inner = self.lock()?;
+        match inner.passkeys.get_mut(&(tenant.clone(), id.to_string())) {
+            Some(record) => {
+                record.credential = credential.to_string();
+                record.last_used_at = Some(used_at);
+                Ok(true)
+            }
+            None => Ok(false),
+        }
+    }
+
+    fn remove_passkey(
+        &self,
+        tenant: &TenantId,
+        principal: &PrincipalId,
+        id: &str,
+    ) -> StoreResult<bool> {
+        let mut inner = self.lock()?;
+        let slot = (tenant.clone(), id.to_string());
+        if inner
+            .passkeys
+            .get(&slot)
+            .is_some_and(|p| p.principal == *principal)
+        {
+            inner.passkeys.remove(&slot);
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
+    fn put_passkey_challenge(&self, challenge: &PasskeyChallenge) -> StoreResult<()> {
+        self.lock()?.challenges.insert(
+            (challenge.tenant.clone(), challenge.id_hash.clone()),
+            challenge.clone(),
+        );
+        Ok(())
+    }
+
+    fn take_passkey_challenge(
+        &self,
+        tenant: &TenantId,
+        id_hash: &str,
+        now: Timestamp,
+    ) -> StoreResult<Option<PasskeyChallenge>> {
+        let taken = self
+            .lock()?
+            .challenges
+            .remove(&(tenant.clone(), id_hash.to_string()));
+        Ok(taken.filter(|challenge| challenge.expires_at > now))
+    }
+
+    fn purge_passkey_challenges(&self, now: Timestamp) -> StoreResult<u64> {
+        let mut inner = self.lock()?;
+        let count = inner.challenges.len();
+        inner.challenges.retain(|_, c| c.expires_at > now);
+        Ok((count - inner.challenges.len()) as u64)
+    }
+
     fn put_account(&self, account: &Account) -> StoreResult<()> {
         let mut inner = self.lock()?;
         if !inner.tenants.contains_key(&account.tenant) {
@@ -420,6 +535,8 @@ impl Store for MemoryStore {
         inner.sessions.retain(|_, s| s.tenant != *tenant);
         inner.accounts.retain(|(t, _), _| t != tenant);
         inner.throttle.retain(|(t, _), _| t != tenant);
+        inner.passkeys.retain(|(t, _), _| t != tenant);
+        inner.challenges.retain(|(t, _), _| t != tenant);
         inner.snapshots.retain(|(t, _), _| t != tenant);
         Ok(())
     }

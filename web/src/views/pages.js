@@ -242,6 +242,14 @@ export function login(page) {
       ),
       h('button', { class: 'button', type: 'submit', disabled: page.busy }, page.busy ? 'Signing in…' : 'Sign in'),
     ),
+    page.passkeys?.supported
+      ? h(
+          'div',
+          { class: 'form form--narrow', 'data-passkey-signin': true },
+          page.passkeys.error ? h('p', { class: 'form__error', role: 'alert', id: 'passkey-error' }, page.passkeys.error) : null,
+          h('button', { class: 'button button--quiet', type: 'button', disabled: page.passkeys.busy, 'data-action': 'passkeys.sign_in' }, page.passkeys.busy ? 'Waiting for your passkey…' : 'Sign in with a passkey'),
+        )
+      : null,
   ];
 }
 

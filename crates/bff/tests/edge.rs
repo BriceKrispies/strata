@@ -35,6 +35,7 @@ async fn start_with(throttle: strata_backend::app::ThrottleLimits) -> Edge {
         lean_dir: root.join("lean"),
         session_ttl_ms: 3_600_000,
         session_idle_ms: 3_600_000,
+        passkey_challenge_ttl_ms: 300_000,
         throttle,
     };
     tokio::spawn(strata_backend::run(

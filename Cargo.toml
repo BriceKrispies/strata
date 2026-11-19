@@ -62,6 +62,8 @@ syn = { version = "2.0.119", features = ["full"] }
 prettyplease = "0.2.37"
 regex = "1.13.1"
 uuid = { version = "1.24.0", features = ["serde"] }
+base64 = "0.22.1"
+webauthn-rs = { version = "=0.6.2", features = ["danger-allow-state-serialisation", "conditional-ui"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

@@ -1674,7 +1674,13 @@
     {"id":"verify-access-token","name":"Verify an access token","ref":"H-014","realisation":"hand","milestone":4,"implementedBy":"identity-service","auth":"Local call inside the platform process; no network credential","idempotent":true,"inputs":[{"name":"token","type":"secret"},{"name":"audience","type":"string"},{"name":"now","type":"timestamp"}],"outputs":[{"name":"claims","type":"value-map"}],"postconditions":["A token whose audience names another client is refused (TOK-250).","A token issued for one tenant is refused by every other (TOK-006).","A token signed by a retired key is refused (TOK-251)."],"errors":[{"name":"invalid","condition":"The signature, audience, tenant or expiry is wrong.","type":"api-error"}]},
     {"id":"verify-identity-token","name":"Verify an OpenID Connect identity token","ref":"H-015","realisation":"hand","milestone":4,"implementedBy":"identity-service","auth":"Local call inside the platform process; no network credential","idempotent":true,"inputs":[{"name":"token","type":"secret"},{"name":"provider","type":"provider-id"},{"name":"nonce","type":"secret"},{"name":"now","type":"timestamp"}],"outputs":[{"name":"subject","type":"external-subject"},{"name":"email","type":"email-address","optional":true},{"name":"email-verified","type":"bool"}],"postconditions":["Only the signature method that the provider configuration names is accepted (FED-255).","A signing key of one provider verifies the tokens of that provider only (FED-256)."],"errors":[{"name":"invalid","condition":"The issuer, audience, signature or nonce fails verification.","type":"api-error"}]},
     {"id":"verify-saml-assertion","name":"Verify a SAML assertion","ref":"H-016","realisation":"hand","milestone":4,"implementedBy":"identity-service","auth":"Local call inside the platform process; no network credential","idempotent":true,"inputs":[{"name":"response","type":"bytes"},{"name":"provider","type":"provider-id"}],"outputs":[{"name":"subject","type":"external-subject"},{"name":"attributes","type":"value-map"}],"postconditions":["The subject and attributes come only from the assertion whose signature covers them (FED-252).","The message is read with external entity and document type processing off (FED-251).","The subject is the complete text of the name identifier, comments excluded (FED-253)."],"errors":[{"name":"invalid","condition":"The signature, issuer, audience or recipient is wrong.","type":"api-error"}]},
-    {"id":"verify-passkey-assertion","name":"Verify a passkey assertion","ref":"H-017","realisation":"hand","milestone":3,"implementedBy":"identity-service","auth":"Local call inside the platform process; no network credential","idempotent":true,"inputs":[{"name":"assertion","type":"bytes"},{"name":"challenge","type":"challenge-id"},{"name":"host","type":"host"}],"outputs":[{"name":"credential","type":"credential-id"}],"postconditions":["The assertion carries a challenge issued for this sign-in and bound to the address of the request (IDN-264).","The relying party is the address of the tenant (IDN-007)."],"errors":[{"name":"invalid","condition":"The signature, challenge or relying party is wrong.","type":"api-error"}]},
+    {"id":"verify-passkey-assertion","name":"Verify a passkey assertion","ref":"H-017","realisation":"hand","milestone":3,"implementedBy":"identity-service","auth":"Local call inside the platform process; no network credential","idempotent":true,"inputs":[{"name":"assertion","type":"bytes"},{"name":"challenge","type":"challenge-id"},{"name":"host","type":"host"}],"outputs":[{"name":"credential","type":"credential-id"}],"postconditions":[
+        "The assertion carries a challenge issued for this sign-in and bound to the address of the request (IDN-264).",
+        "The relying party is the address of the tenant (IDN-007).",
+        "A challenge answers once and lapses (IDN-264).",
+        "An assertion whose signature counter does not go forward is refused and audited, and the credential is not used again until the person has removed it (case passkey-counter-regress).",
+        "A credential is used at the address it was registered for, by the person it names."
+      ],"errors":[{"name":"invalid","condition":"The signature, challenge or relying party is wrong.","type":"api-error"}]},
     {"id":"verify-one-time-code","name":"Verify a time-based one-time code","ref":"H-018","realisation":"hand","milestone":3,"implementedBy":"identity-service","auth":"Local call inside the platform process; no network credential","idempotent":true,"inputs":[{"name":"code","type":"secret"},{"name":"credential","type":"credential-id"},{"name":"now","type":"timestamp"}],"outputs":[{"name":"matches","type":"bool"}],"postconditions":["The result is true exactly when the code is the one the secret of the credential gives for the time window of now."],"errors":[]},
     {"id":"seal-field","name":"Encrypt under a data key","ref":"H-019","realisation":"hand","milestone":3,"implementedBy":"key-service","auth":"Local call inside the platform process; no network credential","idempotent":false,"inputs":[{"name":"plaintext","type":"bytes"},{"name":"key","type":"key-id"}],"outputs":[{"name":"sealed","type":"bytes"}],"postconditions":["The result opens only with the same key and fails to open if changed.","A personal field stored sealed under the key of its principal is unreadable once that key is destroyed (PRV-358)."],"errors":[{"name":"key-destroyed","condition":"The key was destroyed.","type":"store-error"}]},
     {"id":"open-field","name":"Decrypt under a data key","ref":"H-020","realisation":"hand","milestone":3,"implementedBy":"key-service","auth":"Local call inside the platform process; no network credential","idempotent":true,"inputs":[{"name":"sealed","type":"bytes"},{"name":"key","type":"key-id"}],"outputs":[{"name":"plaintext","type":"bytes"}],"postconditions":["Opening what seal-field produced under the same key returns the original bytes."],"errors":[{"name":"key-destroyed","condition":"The key was destroyed.","type":"store-error"},{"name":"tampered","condition":"The sealed bytes fail authentication.","type":"store-error"}]},
@@ -1921,7 +1927,108 @@
           "type": "string"
         }
       ],"outputs":[{"name":"version","type":"u64"}],"preconditions":["The request carries the request token of the session (GWY-002)."],"postconditions":["The change is applied only when expected-version is the stored version of the publication record; otherwise it is refused with conflict.","Every open page of the tenant refreshes from the committed change."],"errors":[{"name":"unauthenticated","condition":"No valid session or credential accompanies the request.","type":"api-error"},{"name":"forbidden","condition":"The caller holds no permission for the operation.","type":"api-error"},{"name":"invalid","condition":"A field fails a check of the tenant schema; the failed checks name the field.","type":"api-error"},{"name":"throttled","condition":"The caller exceeded a limit that applies to it.","type":"api-error"},{"name":"unavailable","condition":"A dependency of the operation did not answer.","type":"api-error"},{"name":"conflict","condition":"The record was changed since the version the caller saw; the current version is named.","type":"api-error"}]},
-    {"id":"preview-markdown","name":"Preview constrained Markdown","ref":"CT-261","realisation":"generated","implementedBy":"gateway","bffRoute":"POST /api/preview","auth":"A signed-in principal whose policies permit the operation","idempotent":true,"timeoutMs":2000,"inputs":[{"name":"markdown","type":"string"}],"outputs":[{"name":"blocks","type":"json"}],"preconditions":["The request carries an allowed origin."],"postconditions":["The blocks are a pure function of the text through parse-markdown; nothing is stored."],"errors":[{"name":"unauthenticated","condition":"No valid session or credential accompanies the request.","type":"api-error"},{"name":"unavailable","condition":"A dependency of the operation did not answer.","type":"api-error"}]}
+    {"id":"preview-markdown","name":"Preview constrained Markdown","ref":"CT-261","realisation":"generated","implementedBy":"gateway","bffRoute":"POST /api/preview","auth":"A signed-in principal whose policies permit the operation","idempotent":true,"timeoutMs":2000,"inputs":[{"name":"markdown","type":"string"}],"outputs":[{"name":"blocks","type":"json"}],"preconditions":["The request carries an allowed origin."],"postconditions":["The blocks are a pure function of the text through parse-markdown; nothing is stored."],"errors":[{"name":"unauthenticated","condition":"No valid session or credential accompanies the request.","type":"api-error"},{"name":"unavailable","condition":"A dependency of the operation did not answer.","type":"api-error"}]},
+    {
+      "id": "issue-passkey-challenge",
+      "name": "Issue a passkey challenge",
+      "ref": "H-031",
+      "realisation": "hand",
+      "milestone": 3,
+      "implementedBy": "identity-service",
+      "auth": "Anyone for a sign-in, a signed-in principal for a registration",
+      "idempotent": false,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "challenge",
+          "type": "challenge-id"
+        },
+        {
+          "name": "options",
+          "type": "bytes"
+        }
+      ],
+      "postconditions": [
+        "The challenge is kept by the identity service with the address it was requested at and, for a registration, the session that asked; it answers once and lapses (IDN-264).",
+        "A request that does not come from a host name, an address that WebAuthn can bind a passkey to, is refused."
+      ],
+      "errors": [
+        {
+          "name": "throttled",
+          "condition": "The caller exceeded a limit that applies to it.",
+          "type": "api-error"
+        },
+        {
+          "name": "invalid",
+          "condition": "The site is not reached by a host name.",
+          "type": "api-error"
+        },
+        {
+          "name": "unauthenticated",
+          "condition": "A registration was asked for without a valid session.",
+          "type": "api-error"
+        }
+      ]
+    },
+    {
+      "id": "list-passkeys",
+      "name": "List the passkeys of the caller",
+      "ref": "H-032",
+      "realisation": "hand",
+      "milestone": 3,
+      "implementedBy": "identity-service",
+      "auth": "A signed-in principal",
+      "idempotent": true,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "credentials",
+          "type": "list<credential-id>"
+        }
+      ],
+      "postconditions": [
+        "Only the passkeys of the caller in this tenant are listed, with their names and times; no key material is."
+      ],
+      "errors": [
+        {
+          "name": "unauthenticated",
+          "condition": "No valid session or credential accompanies the request.",
+          "type": "api-error"
+        }
+      ]
+    },
+    {
+      "id": "remove-passkey",
+      "name": "Remove a passkey",
+      "ref": "H-033",
+      "realisation": "hand",
+      "milestone": 3,
+      "implementedBy": "identity-service",
+      "auth": "A signed-in principal",
+      "idempotent": true,
+      "inputs": [
+        {
+          "name": "credential",
+          "type": "credential-id"
+        }
+      ],
+      "outputs": [],
+      "postconditions": [
+        "The credential signs no one in from then on."
+      ],
+      "errors": [
+        {
+          "name": "unauthenticated",
+          "condition": "No valid session or credential accompanies the request.",
+          "type": "api-error"
+        },
+        {
+          "name": "not-found",
+          "condition": "The caller has no such passkey in this tenant.",
+          "type": "api-error"
+        }
+      ]
+    }
   ],
   "decisions": [
     {"id":"d-1","title":"One PostgreSQL database per tenant","statement":"**One PostgreSQL database per tenant.** Each tenant has one PostgreSQL database, grouped in clusters. The SQLite adapter stays for single-process local use, tests and simulation. A tenant is the unit of backup, restore, move, export, key and deletion.","group":"Tenancy","decided":"2026-11-18","ref":"D-1"},

@@ -57,6 +57,7 @@ pub async fn run(
                     // Counters of failed sign-ins that have run out, and sessions that ended
                     // a day ago.
                     let _ = app.store.purge_throttle(app.now());
+                    let _ = app.store.purge_passkey_challenges(app.now());
                     app.store
                         .purge_sessions(strata_kernel::Timestamp(app.now().0 - 86_400_000))
                 })

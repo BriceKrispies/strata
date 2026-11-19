@@ -929,3 +929,114 @@ test('ten wrong passwords lock a login for a while, whether or not it exists', a
   // Another login is not affected, and signing in still works.
   await signIn(page, 'ines');
 });
+
+// Passkeys. A virtual authenticator (the Chrome DevTools Protocol's WebAuthn domain) stands in
+// for the person's device. WebAuthn needs the site to be reached by a name, so these use
+// `localhost`; at the address `127.0.0.1` the site offers no passkeys, which the first test checks.
+const NAMED = 'http://localhost:4200';
+
+async function virtualAuthenticator(page) {
+  const client = await page.context().newCDPSession(page);
+  await client.send('WebAuthn.enable');
+  const { authenticatorId } = await client.send('WebAuthn.addVirtualAuthenticator', {
+    options: { protocol: 'ctap2', transport: 'internal', hasResidentKey: true, hasUserVerification: true, isUserVerified: true, automaticPresenceSimulation: true },
+  });
+  return { client, authenticatorId, credentials: async () => (await client.send('WebAuthn.getCredentials', { authenticatorId })).credentials };
+}
+
+async function signInNamed(page, name) {
+  await open(page, `${NAMED}/login`);
+  await page.getByLabel('Name').fill(name);
+  await page.getByLabel('Password').fill(`strata-dev-${name}`);
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+  await expect(page.getByRole('heading', { level: 1, name: 'Writing desk' })).toBeVisible();
+}
+
+test('a site reached by an address that is not a name offers no passkeys', async ({ page }) => {
+  await open(page, '/login');
+  await expect(page.getByRole('button', { name: 'Sign in with a passkey' })).toHaveCount(0);
+  await signIn(page, 'ines');
+  await expect(page.getByRole('region', { name: 'Passkeys' })).toHaveCount(0);
+});
+
+test('a person adds a passkey at the desk, signs out, signs in with it and removes it', async ({ page }) => {
+  const authenticator = await virtualAuthenticator(page);
+  await signInNamed(page, 'ines');
+  const section = page.getByRole('region', { name: 'Passkeys' });
+  await expect(section.getByText('You have no passkeys.')).toBeVisible();
+
+  await section.getByRole('button', { name: 'Add a passkey' }).click();
+  await expect(page.locator('.toast', { hasText: 'Passkey added.' })).toBeVisible();
+  await expect(section.locator('tr[data-passkey]')).toHaveCount(1);
+  await expect(section.locator('tr[data-passkey]')).toContainText('Never');
+  expect(await authenticator.credentials()).toHaveLength(1);
+  // The server's relying party is the address the person is at.
+  expect((await authenticator.credentials())[0].rpId).toBe('localhost');
+
+  await page.getByRole('button', { name: 'Sign out', exact: true }).click();
+  await open(page, `${NAMED}/login`);
+  await page.getByRole('button', { name: 'Sign in with a passkey' }).click();
+  await expect(page.getByRole('heading', { level: 1, name: 'Writing desk' })).toBeVisible();
+  await expect(page.getByText('Signed in as Ines')).toBeVisible();
+  // The use is noted, and the signature counter moved on.
+  await expect(section.locator('tr[data-passkey]')).not.toContainText('Never');
+  expect((await authenticator.credentials())[0].signCount).toBeGreaterThan(0);
+
+  await section.getByRole('button', { name: /^Remove/ }).click();
+  await expect(page.locator('.toast', { hasText: 'That passkey has been removed.' })).toBeVisible();
+  await expect(section.getByText('You have no passkeys.')).toBeVisible();
+
+  // A removed passkey signs no one in: the authenticator still holds it, the server does not.
+  await page.getByRole('button', { name: 'Sign out', exact: true }).click();
+  await open(page, `${NAMED}/login`);
+  await page.getByRole('button', { name: 'Sign in with a passkey' }).click();
+  await expect(page.getByRole('alert')).toContainText('not accepted');
+});
+
+test('an assertion made for one address is refused at another', async ({ page }) => {
+  const authenticator = await virtualAuthenticator(page);
+  await signInNamed(page, 'ines');
+  const section = page.getByRole('region', { name: 'Passkeys' });
+  await section.getByRole('button', { name: 'Add a passkey' }).click();
+  await expect(section.locator('tr[data-passkey]')).toHaveCount(1);
+  await page.getByRole('button', { name: 'Sign out', exact: true }).click();
+  expect(await authenticator.credentials()).toHaveLength(1);
+
+  // The browser answers a challenge issued at localhost, as a page at localhost.
+  const answer = await page.evaluate(async () => {
+    const bytes = (text) => Uint8Array.from(atob(text.replace(/-/g, '+').replace(/_/g, '/')), (c) => c.charCodeAt(0));
+    const text = (buffer) => btoa(String.fromCharCode(...new Uint8Array(buffer))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    const csrf = (await (await fetch('/api/session')).json()).session.csrf_token;
+    const issued = await (await fetch('/api/passkeys/challenge', { method: 'POST', headers: { 'content-type': 'application/json', 'x-csrf-token': csrf }, body: '{}' })).json();
+    const options = issued.options.publicKey;
+    const credential = await navigator.credentials.get({ publicKey: { challenge: bytes(options.challenge), rpId: options.rpId, userVerification: 'required' } });
+    const response = credential.response;
+    return {
+      challenge: issued.challenge,
+      assertion: {
+        id: credential.id,
+        rawId: text(credential.rawId),
+        type: credential.type,
+        response: { authenticatorData: text(response.authenticatorData), clientDataJSON: text(response.clientDataJSON), signature: text(response.signature), userHandle: text(response.userHandle) },
+        extensions: credential.getClientExtensionResults(),
+      },
+    };
+  });
+
+  // Presented from another address of the same site, it is refused and starts no session.
+  const other = 'http://127.0.0.1:4200';
+  const csrf = (await (await page.request.get(`${other}/api/session`)).json()).session.csrf_token;
+  const refused = await page.request.post(`${other}/api/sign-in/passkey`, { data: answer, headers: { origin: other, 'x-csrf-token': csrf }, failOnStatusCode: false });
+  expect(refused.status()).toBe(401);
+  expect(refused.headers()['set-cookie']).toBeUndefined();
+
+  // The challenge was spent by that attempt, so the right address cannot use it either.
+  const csrfHere = (await (await page.request.get(`${NAMED}/api/session`)).json()).session.csrf_token;
+  const replay = await page.request.post(`${NAMED}/api/sign-in/passkey`, { data: answer, headers: { origin: NAMED, 'x-csrf-token': csrfHere }, failOnStatusCode: false });
+  expect(replay.status()).toBe(401);
+
+  // Clean up: the passkey goes, so that no later test finds it.
+  await signInNamed(page, 'ines');
+  await page.getByRole('region', { name: 'Passkeys' }).getByRole('button', { name: /^Remove/ }).click();
+  await expect(page.locator('.toast', { hasText: 'That passkey has been removed.' })).toBeVisible();
+});

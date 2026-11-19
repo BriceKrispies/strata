@@ -17,6 +17,11 @@ pub trait SignInRoute: Send + Sync {
     /// What of the browser's body goes to the backend, or `None` when it is not a request of
     /// this method. Anything else in the body is dropped here.
     fn credentials(&self, body: &Json) -> Option<Json>;
+
+    /// What a request that is not one of this method's is told.
+    fn refusal(&self) -> &'static str {
+        "The name or password is not right."
+    }
 }
 
 /// A login and a password.
@@ -35,8 +40,29 @@ impl SignInRoute for Password {
     }
 }
 
+/// A passkey: the challenge that was issued and the browser's answer to it.
+struct Passkey;
+
+impl SignInRoute for Passkey {
+    fn method(&self) -> &'static str {
+        "passkey"
+    }
+
+    fn credentials(&self, body: &Json) -> Option<Json> {
+        body.get("assertion")?.as_object()?;
+        Some(json!({
+            "challenge": body.get("challenge")?.as_str()?,
+            "assertion": body.get("assertion")?,
+        }))
+    }
+
+    fn refusal(&self) -> &'static str {
+        "The passkey was not accepted."
+    }
+}
+
 /// Every method the site offers.
-static ROUTES: &[&dyn SignInRoute] = &[&Password];
+static ROUTES: &[&dyn SignInRoute] = &[&Password, &Passkey];
 
 pub fn route(method: &str) -> Option<&'static dyn SignInRoute> {
     ROUTES
@@ -63,5 +89,23 @@ mod tests {
             .credentials(&json!({ "login": 4, "password": "x" }))
             .is_none());
         assert!(super::route("telepathy").is_none());
+    }
+
+    #[test]
+    fn a_passkey_passes_on_the_challenge_and_the_assertion_only() {
+        let route = route("passkey").expect("passkey is offered");
+        let sent = route
+            .credentials(
+                &json!({ "challenge": "c", "assertion": { "id": "x" }, "tenant": "other" }),
+            )
+            .expect("a complete request");
+        assert_eq!(
+            sent,
+            json!({ "challenge": "c", "assertion": { "id": "x" } })
+        );
+        assert!(route.credentials(&json!({ "challenge": "c" })).is_none());
+        assert!(route
+            .credentials(&json!({ "challenge": 4, "assertion": {} }))
+            .is_none());
     }
 }

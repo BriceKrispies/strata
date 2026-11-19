@@ -15,8 +15,8 @@ use strata_kernel::{
 };
 use strata_model::telemetry;
 use strata_protocol::api::{
-    valid_correlation, ErrorCode, LoginReply, SessionView, HEADER_CORRELATION, HEADER_SERVICE,
-    HEADER_SESSION, HEADER_SITE, HEADER_SOURCE,
+    valid_correlation, ErrorCode, LoginReply, SessionView, HEADER_CORRELATION, HEADER_ORIGIN,
+    HEADER_SERVICE, HEADER_SESSION, HEADER_SITE, HEADER_SOURCE,
 };
 use strata_protocol::ws::SessionState;
 use strata_storage_api::{Account, SessionRecord};
@@ -29,6 +29,9 @@ pub struct Caller {
     pub correlation: String,
     /// The address of the browser as the BFF saw it, or `unknown` when it did not say.
     pub source: String,
+    /// The origin the browser made the request from, as the BFF checked it, or `None` when the
+    /// request did not come from one of the site's own pages.
+    pub origin: Option<String>,
 }
 
 /// Who a request acts as, after the session has been checked.
@@ -97,6 +100,9 @@ pub fn caller(headers: &HeaderMap) -> Result<Caller, ApiError> {
             .filter(|source| valid_source(source))
             .unwrap_or("unknown")
             .to_string(),
+        origin: header(headers, HEADER_ORIGIN)
+            .filter(|origin| origin.len() <= 255)
+            .map(str::to_string),
         correlation,
     })
 }

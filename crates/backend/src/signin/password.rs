@@ -2,9 +2,8 @@
 
 use super::{normalise_login, SignInMethod};
 use crate::app::{ApiError, App};
-use crate::auth::{decoy_hash, is_password};
+use crate::auth::{decoy_hash, is_password, Caller};
 use serde_json::Value as Json;
-use strata_kernel::TenantId;
 use strata_storage_api::Account;
 
 pub struct Password;
@@ -33,7 +32,7 @@ impl SignInMethod for Password {
     fn verify(
         &self,
         app: &App,
-        tenant: &TenantId,
+        caller: &Caller,
         subject: &str,
         request: &Json,
     ) -> Result<Option<Account>, ApiError> {
@@ -41,7 +40,7 @@ impl SignInMethod for Password {
             .get("password")
             .and_then(Json::as_str)
             .unwrap_or_default();
-        let account = app.store.account(tenant, subject)?;
+        let account = app.store.account(&caller.site, subject)?;
         Ok(match account {
             Some(account) => is_password(password, &account.password_hash).then_some(account),
             None => {

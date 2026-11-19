@@ -133,6 +133,7 @@ function page(state) {
         password: forms.login.values.password,
         busy: forms.login.busy,
         error: forms.login.error,
+        passkeys: { supported: state.passkeys.supported, busy: state.passkeys.signingIn, error: state.passkeys.signInError },
       };
     case 'desk':
       return {
@@ -142,6 +143,7 @@ function page(state) {
         canSettings: (session.may?.publication ?? []).includes('update'),
         canLab: session.may_manage_schema,
         sessions: state.sessions,
+        passkeys: state.passkeys,
         posts: d.posts
           .map((r) => ({ ...entry(r, state.optimistic), confirming: state.confirmDelete === r.id }))
           .filter((p) => p.status !== 'deleted'),

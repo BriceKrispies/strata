@@ -8,12 +8,13 @@
 //!
 //! Implements: IDN-001
 
+pub mod passkey;
 pub mod password;
 
 use crate::app::{ApiError, App, LOG};
 use crate::auth::{self, Caller};
 use serde_json::{json, Value as Json};
-use strata_kernel::{canon, TenantId};
+use strata_kernel::canon;
 use strata_protocol::api::{ErrorCode, LoginReply};
 use strata_storage_api::{Account, ThrottleRule, ThrottleSettle, ThrottleVerdict};
 use unicode_normalization::UnicodeNormalization;
@@ -33,14 +34,14 @@ pub trait SignInMethod: Send + Sync {
     fn verify(
         &self,
         app: &App,
-        tenant: &TenantId,
+        caller: &Caller,
         subject: &str,
         request: &Json,
     ) -> Result<Option<Account>, ApiError>;
 }
 
 /// Every method the backend offers.
-static METHODS: &[&dyn SignInMethod] = &[&password::Password];
+static METHODS: &[&dyn SignInMethod] = &[&password::Password, &passkey::PasskeyMethod];
 
 pub fn method(name: &str) -> Option<&'static dyn SignInMethod> {
     METHODS.iter().copied().find(|method| method.name() == name)
@@ -58,15 +59,20 @@ pub fn normalise_login(raw: &str) -> String {
     folded.nfkc().collect::<String>().trim().to_string()
 }
 
-fn refused() -> ApiError {
+/// The one refusal of a method, which says nothing about which part of the attempt was wrong.
+fn refused(method: &str) -> ApiError {
     ApiError::new(
         ErrorCode::Unauthenticated,
-        "The name or password is not right.",
+        if method == "passkey" {
+            "The passkey was not accepted."
+        } else {
+            "The name or password is not right."
+        },
     )
 }
 
 /// One answer for every limit that can stop an attempt, so that it does not say which one did.
-fn throttled() -> ApiError {
+pub(crate) fn throttled() -> ApiError {
     ApiError::new(
         ErrorCode::Throttled,
         "Too many attempts. Wait a while and try again.",
@@ -130,7 +136,7 @@ pub fn sign_in(
     };
     let Some(subject) = method.subject(request) else {
         app.decision(name, "refused", &["well-formed"], &caller.correlation);
-        return Err(refused());
+        return Err(refused(name));
     };
 
     let rules = rules(app, name, &subject, &caller.source);
@@ -152,7 +158,7 @@ pub fn sign_in(
         return Err(throttled());
     }
 
-    let Some(account) = method.verify(app, &caller.site, &subject, request)? else {
+    let Some(account) = method.verify(app, caller, &subject, request)? else {
         app.decision(
             name,
             "refused",
@@ -164,7 +170,7 @@ pub fn sign_in(
             &caller.correlation,
             json!({ "tenant": caller.site.as_str() }),
         );
-        return Err(refused());
+        return Err(refused(name));
     };
 
     // The credential was right. The account forgets its failures; the source and the realm
@@ -219,6 +225,7 @@ mod tests {
         let unique: std::collections::BTreeSet<_> = names.iter().collect();
         assert_eq!(names.len(), unique.len());
         assert!(method("password").is_some());
+        assert!(method("passkey").is_some());
         assert!(method("telepathy").is_none());
     }
 }

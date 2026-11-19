@@ -11,6 +11,7 @@
 //! | `STRATA_LEAN_DIR` | `lean` | The Lean project, for verification runs. |
 //! | `STRATA_SESSION_TTL_MS` | 12 hours | Absolute session lifetime. |
 //! | `STRATA_SESSION_IDLE_MS` | 2 hours | Idle session lifetime. |
+//! | `STRATA_PASSKEY_CHALLENGE_TTL_MS` | 5 minutes | How long a passkey challenge can be answered. |
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -56,6 +57,7 @@ fn start() -> Result<(Config, Arc<dyn Store>), String> {
         session_ttl_ms: number("STRATA_SESSION_TTL_MS", 12 * 3_600_000)?,
         session_idle_ms: number("STRATA_SESSION_IDLE_MS", 2 * 3_600_000)?,
         throttle: Default::default(),
+        passkey_challenge_ttl_ms: number("STRATA_PASSKEY_CHALLENGE_TTL_MS", 300_000)?,
     };
     Ok((cfg, store))
 }

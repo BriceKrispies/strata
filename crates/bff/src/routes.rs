@@ -23,7 +23,8 @@ use std::time::Instant;
 use strata_kernel::TenantId;
 use strata_protocol::api::{
     valid_correlation, ErrorCode, ErrorReply, LoginReply, Mutation, SessionReply, SessionView,
-    ViewRequest, HEADER_CORRELATION, HEADER_SERVICE, HEADER_SESSION, HEADER_SITE, HEADER_SOURCE,
+    ViewRequest, HEADER_CORRELATION, HEADER_ORIGIN, HEADER_SERVICE, HEADER_SESSION, HEADER_SITE,
+    HEADER_SOURCE,
 };
 use strata_protocol::ws::SessionState;
 use strata_substrate::project::{project, ViewData};
@@ -61,6 +62,9 @@ pub struct Visit {
     pub correlation: String,
     /// The address the connection came from, which the backend limits failed sign-ins by.
     pub source: Option<String>,
+    /// The origin the request was made from, when it is one of the site's own. A passkey is made
+    /// and used at that address.
+    pub origin: Option<String>,
 }
 
 fn text(headers: &HeaderMap, name: impl axum::http::header::AsHeaderName) -> Option<&str> {
@@ -109,11 +113,15 @@ pub fn visit(bff: &Bff, headers: &HeaderMap) -> Result<Visit, Failure> {
                 &correlation,
             )
         })?;
+    let origin = origin_allowed(bff, &site, headers)
+        .then(|| text(headers, ORIGIN).map(str::to_string))
+        .flatten();
     Ok(Visit {
         site,
         token: cookie(headers),
         correlation,
         source: text(headers, HEADER_SOURCE).map(str::to_string),
+        origin,
     })
 }
 
@@ -173,6 +181,9 @@ pub async fn backend<T: DeserializeOwned>(
     }
     if let Some(source) = &visit.source {
         request = request.header(HEADER_SOURCE, source);
+    }
+    if let Some(origin) = &visit.origin {
+        request = request.header(HEADER_ORIGIN, origin);
     }
     let response = request
         .send()
@@ -313,22 +324,20 @@ async fn sign_in(
 ) -> Result<Response, Failure> {
     let visit = visit(bff, headers)?;
     guard_request(bff, &visit, headers).await?;
-    let credentials = signin::route(method)
-        .ok_or_else(|| {
-            Failure::new(
-                ErrorCode::NotFound,
-                "No such sign-in method.",
-                &visit.correlation,
-            )
-        })?
-        .credentials(&body)
-        .ok_or_else(|| {
-            Failure::new(
-                ErrorCode::Unauthenticated,
-                "The name or password is not right.",
-                &visit.correlation,
-            )
-        })?;
+    let route = signin::route(method).ok_or_else(|| {
+        Failure::new(
+            ErrorCode::NotFound,
+            "No such sign-in method.",
+            &visit.correlation,
+        )
+    })?;
+    let credentials = route.credentials(&body).ok_or_else(|| {
+        Failure::new(
+            ErrorCode::Unauthenticated,
+            route.refusal(),
+            &visit.correlation,
+        )
+    })?;
     let reply: LoginReply = backend(
         bff,
         &visit,
@@ -363,6 +372,86 @@ async fn login_with(
     Json(body): Json<Json_>,
 ) -> Result<Response, Failure> {
     sign_in(&bff, &headers, &method, body).await
+}
+
+/// A challenge for signing in with a passkey. Anyone may ask, from one of the site's own pages
+/// and with the request token that every sign-in carries.
+async fn passkey_challenge(
+    State(bff): State<Shared>,
+    headers: HeaderMap,
+) -> Result<Json<Json_>, Failure> {
+    let visit = visit(&bff, &headers)?;
+    guard_request(&bff, &visit, &headers).await?;
+    backend(&bff, &visit, "/internal/passkeys/challenge", &json!({}))
+        .await
+        .map(Json)
+}
+
+/// The signed-in person's own passkeys.
+async fn passkeys(State(bff): State<Shared>, headers: HeaderMap) -> Result<Json<Json_>, Failure> {
+    let visit = visit(&bff, &headers)?;
+    backend(&bff, &visit, "/internal/passkeys", &json!({}))
+        .await
+        .map(Json)
+}
+
+/// Begin adding a passkey.
+async fn passkey_register_start(
+    State(bff): State<Shared>,
+    headers: HeaderMap,
+) -> Result<Json<Json_>, Failure> {
+    guarded(
+        &bff,
+        &headers,
+        "/internal/passkeys/register/start",
+        json!({}),
+    )
+    .await
+}
+
+/// Finish adding a passkey: the challenge, the attestation and the name, and nothing else of the
+/// body.
+async fn passkey_register_finish(
+    State(bff): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<Json_>,
+) -> Result<Json<Json_>, Failure> {
+    guarded(
+        &bff,
+        &headers,
+        "/internal/passkeys/register/finish",
+        json!({
+            "challenge": body.get("challenge"),
+            "credential": body.get("credential"),
+            "name": body.get("name"),
+        }),
+    )
+    .await
+}
+
+/// Remove one of the signed-in person's passkeys.
+async fn passkey_remove(
+    State(bff): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<Json_>,
+) -> Result<Json<Json_>, Failure> {
+    let visit = visit(&bff, &headers)?;
+    guard_write(&bff, &visit, &headers).await?;
+    let Some(id) = body.get("id").and_then(Json_::as_str) else {
+        return Err(Failure::new(
+            ErrorCode::Invalid,
+            "Say which passkey.",
+            &visit.correlation,
+        ));
+    };
+    backend(
+        &bff,
+        &visit,
+        "/internal/passkeys/remove",
+        &json!({ "id": id }),
+    )
+    .await
+    .map(Json)
 }
 
 /// The signed-in person's own live sessions.
@@ -931,6 +1020,11 @@ pub fn router(bff: Shared) -> Router {
         .route("/session", get(session))
         .route("/login", post(login))
         .route("/sign-in/:method", post(login_with))
+        .route("/passkeys", get(passkeys))
+        .route("/passkeys/challenge", post(passkey_challenge))
+        .route("/passkeys/register/start", post(passkey_register_start))
+        .route("/passkeys/register/finish", post(passkey_register_finish))
+        .route("/passkeys/remove", post(passkey_remove))
         .route("/sessions", get(sessions))
         .route("/sessions/revoke", post(session_revoke))
         .route("/sessions/revoke-others", post(sessions_revoke_others))

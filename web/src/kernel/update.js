@@ -13,6 +13,7 @@ import * as forms from '../generated/forms.js';
 import * as live from '../generated/live.js';
 import { matchRoute, route as routeOf } from '../generated/routes.js';
 import { labEnter, labInit, labUpdate } from './lab.js';
+import { passkeysEnter, passkeysInit, passkeysUpdate } from './passkeys.js';
 import { sessionsEnter, sessionsInit, sessionsUpdate } from './sessions.js';
 import {
   busy,
@@ -55,6 +56,7 @@ export function initialState() {
     confirmDelete: null,
     lab: labInit(),
     sessions: sessionsInit(),
+    passkeys: passkeysInit(),
     /** @type {{ id: number, kind: string, text: string }[]} */
     toasts: [],
     announce: '',
@@ -380,6 +382,25 @@ function onSocket(state, frame, msg) {
   }
 }
 
+/** What the desk asks for when it is shown: the person's sessions and passkeys. @returns {Result} */
+function deskEnter(state, msg) {
+  const sessions = sessionsEnter(state, msg, { request });
+  const passkeys = passkeysEnter(sessions.state, msg, { request });
+  return { state: passkeys.state, effects: [...sessions.effects, ...passkeys.effects] };
+}
+
+/** A passkey was accepted: the same as a password being accepted, from the session on. @returns {Result} */
+function passkeySignedIn(state, msg) {
+  const outputs = contracts.decode('sign-in-at-site', msg.body, {});
+  const outcome = forms.succeeded(SIGN_IN, scopeOf(state, { form: {}, response: outputs }));
+  let signedIn = { ...state, session: outputs.session };
+  signedIn = sessionStep(signedIn, 'ui-signed-in', {}, msg.at)?.state ?? signedIn;
+  if (outcome.toast) signedIn = toast(signedIn, 'ok', outcome.toast);
+  const reset = resetLive(signedIn, msg);
+  const moved = navigate(reset.state, outcome.navigate ?? '/', false, msg);
+  return { state: moved.state, effects: [...reset.effects, ...moved.effects] };
+}
+
 /** @returns {Result} */
 function onHttp(state, msg) {
   const pending = state.pending[msg.id];
@@ -394,6 +415,9 @@ function onHttp(state, msg) {
   }
   if (pending.kind.startsWith('sessions.')) {
     return sessionsUpdate(state, { ...msg, pending, error }, { request, toast }) ?? { state, effects: [] };
+  }
+  if (pending.kind.startsWith('passkeys.')) {
+    return passkeysUpdate(state, { ...msg, pending, error }, { request, toast, signedIn: passkeySignedIn }) ?? { state, effects: [] };
   }
 
   switch (pending.kind) {
@@ -414,7 +438,7 @@ function onHttp(state, msg) {
       if (state.view.request !== msg.id) return { state, effects: [] };
       if (msg.ok) {
         const accepted = acceptView(state, decodeView(state, msg.body));
-        if (msg.body.view === 'desk') return sessionsEnter(accepted, msg, { request });
+        if (msg.body.view === 'desk') return deskEnter(accepted, msg);
         return msg.body.view === 'lab' ? labEnter(accepted, msg, { request }) : { state: accepted, effects: [] };
       }
       const status = msg.status === 404 ? 'missing' : 'error';
@@ -634,6 +658,7 @@ function onAction(state, msg) {
     default:
       if (msg.name.startsWith('lab.')) return labUpdate(state, msg, { request, toast }) ?? { state, effects: [] };
       if (msg.name.startsWith('sessions.')) return sessionsUpdate(state, msg, { request, toast }) ?? { state, effects: [] };
+      if (msg.name.startsWith('passkeys.')) return passkeysUpdate(state, msg, { request, toast, signedIn: passkeySignedIn }) ?? { state, effects: [] };
       return { state, effects: [] };
   }
 }
@@ -709,7 +734,7 @@ function step(state, msg) {
     case 'init': {
       const route = parseHref(msg.path + msg.search);
       const mode = THEME_MODES.includes(msg.storedTheme ?? '') ? msg.storedTheme : 'auto';
-      let next = { ...state, route, theme: { ...state.theme, mode, systemDark: msg.systemDark } };
+      let next = { ...state, route, theme: { ...state.theme, mode, systemDark: msg.systemDark }, passkeys: { ...state.passkeys, supported: msg.passkeys === true } };
       /** @type {Effect[]} */
       const effects = [];
       const boot = msg.bootstrap;
@@ -728,7 +753,7 @@ function step(state, msg) {
           effects.push(...entered.effects);
         }
         if (boot.view.view === 'desk') {
-          const entered = sessionsEnter(next, msg, { request });
+          const entered = deskEnter(next, msg);
           next = entered.state;
           effects.push(...entered.effects);
         }
@@ -761,6 +786,8 @@ function step(state, msg) {
       return { state: { ...state, theme: { ...state.theme, systemDark: msg.dark } }, effects: [] };
     case 'http_result':
       return onHttp(state, msg);
+    case 'passkey_result':
+      return passkeysUpdate(state, msg, { request, toast, signedIn: passkeySignedIn }) ?? { state, effects: [] };
     case 'ws_open':
       return { state, effects: [] };
     case 'ws_message':
