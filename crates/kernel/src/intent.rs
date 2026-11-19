@@ -1,11 +1,13 @@
 //! What a caller asks for, the context it asks in, and what the kernel answers with.
 
 use crate::ids::{
-    ConstraintId, FieldId, ObjectTypeId, PolicyId, PrincipalId, QueryId, RecordId, RoleId,
-    SchemaVersion, SessionId, StateRevision, TenantId, Timestamp, ViewId, WorkflowId,
+    ConstraintId, FieldId, InvitationId, ObjectTypeId, PolicyId, PrincipalId, QueryId, RecordId,
+    RoleId, SchemaVersion, SessionId, StateRevision, TeamId, TenantId, Timestamp, ViewId,
+    WorkflowId,
 };
 use crate::schema::{
-    ConstraintDef, FieldDef, PolicyDef, QueryDef, RoleDef, TenantSchema, ViewDef, WorkflowDef,
+    ConstraintDef, FieldDef, Permission, PolicyDef, QueryDef, RoleDef, TenantSchema, ViewDef,
+    WorkflowDef,
 };
 use crate::state::{Need, Principal, Record};
 use crate::value::Value;
@@ -59,6 +61,11 @@ pub enum SchemaChange {
         constraint: ConstraintId,
     },
     DefineRole(RoleDef),
+    /// Replace the permissions a role grants. The role must exist.
+    DefineRolePermissions {
+        role: RoleId,
+        permissions: Vec<Permission>,
+    },
     DefinePolicy(PolicyDef),
     RemovePolicy(PolicyId),
     DefineWorkflow(WorkflowDef),
@@ -98,6 +105,42 @@ pub enum Intent {
         principal: PrincipalId,
         role: RoleId,
     },
+    /// Define a team with no members and no roles. Defining it again changes only its label.
+    DefineTeam {
+        team: TeamId,
+        label: String,
+    },
+    /// Give a team a role. Everyone in the team holds it.
+    AssignTeamRole {
+        team: TeamId,
+        role: RoleId,
+    },
+    RevokeTeamRole {
+        team: TeamId,
+        role: RoleId,
+    },
+    /// Put a principal in a team, which confers the team's roles on it.
+    AddTeamMember {
+        team: TeamId,
+        principal: PrincipalId,
+    },
+    RemoveTeamMember {
+        team: TeamId,
+        principal: PrincipalId,
+    },
+    /// Offer roles to whoever redeems the invitation with `address`.
+    CreateInvitation {
+        invitation: InvitationId,
+        address: String,
+        roles: BTreeSet<RoleId>,
+    },
+    /// Redeem an invitation as the acting person. `verified_address` is the address the shell
+    /// has verified for the acting person; the roles are granted only if it is the address the
+    /// invitation names, and only once.
+    RedeemInvitation {
+        invitation: InvitationId,
+        verified_address: String,
+    },
     CreateRecord {
         object: ObjectTypeId,
         fields: BTreeMap<FieldId, Value>,
@@ -123,6 +166,13 @@ impl Intent {
             Intent::ChangeSchema { .. } => "change_schema",
             Intent::AssignRole { .. } => "assign_role",
             Intent::RevokeRole { .. } => "revoke_role",
+            Intent::DefineTeam { .. } => "define_team",
+            Intent::AssignTeamRole { .. } => "assign_team_role",
+            Intent::RevokeTeamRole { .. } => "revoke_team_role",
+            Intent::AddTeamMember { .. } => "add_team_member",
+            Intent::RemoveTeamMember { .. } => "remove_team_member",
+            Intent::CreateInvitation { .. } => "create_invitation",
+            Intent::RedeemInvitation { .. } => "redeem_invitation",
             Intent::CreateRecord { .. } => "create_record",
             Intent::UpdateRecord { .. } => "update_record",
             Intent::DeleteRecord { .. } => "delete_record",

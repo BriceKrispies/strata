@@ -2,15 +2,20 @@
 
 use crate::expr::{self, Env};
 use crate::ids::{
-    owner_role, public_role, FieldId, ObjectTypeId, RecordId, SchemaVersion, StateRevision,
-    Timestamp,
+    owner_role, public_role, FieldId, InvitationId, ObjectTypeId, PrincipalId, RecordId, RoleId,
+    SchemaVersion, StateRevision, TeamId, Timestamp,
 };
 use crate::intent::{
     Check, Context, DeltaOp, DomainError, DomainEvent, Effect, ErrorKind, EventBody, ExistingData,
     Intent, Output, SchemaChange, StateDelta, Transition,
 };
-use crate::rules::{authorize, roles_of, validate_record, Lookup, Subject};
-use crate::schema::{Action, FieldDef, ObjectTypeDef, Resource, TenantSchema};
+use crate::rules::{
+    assigned_roles, authorize, may_confer, roles_of, validate_record, Lookup, Subject,
+};
+use crate::schema::{
+    normalise_address, Action, FieldDef, InvitationDef, ObjectTypeDef, Resource, TeamDef,
+    TenantSchema,
+};
 use crate::state::{Need, Principal, Record, State, TenantState};
 use crate::value::{refs_in, FieldType, OnDelete, Value};
 use std::collections::{BTreeMap, BTreeSet};
@@ -78,6 +83,24 @@ pub fn transition(
         Intent::RevokeRole { principal, role } => {
             change_member(&mut draft, principal, role, false)?
         }
+        Intent::DefineTeam { team, label } => define_team(&mut draft, team, label)?,
+        Intent::AssignTeamRole { team, role } => team_role(&mut draft, team, role, true)?,
+        Intent::RevokeTeamRole { team, role } => team_role(&mut draft, team, role, false)?,
+        Intent::AddTeamMember { team, principal } => {
+            team_member(&mut draft, team, principal, true)?
+        }
+        Intent::RemoveTeamMember { team, principal } => {
+            team_member(&mut draft, team, principal, false)?
+        }
+        Intent::CreateInvitation {
+            invitation,
+            address,
+            roles,
+        } => create_invitation(&mut draft, invitation, address, roles)?,
+        Intent::RedeemInvitation {
+            invitation,
+            verified_address,
+        } => redeem_invitation(&mut draft, invitation, verified_address)?,
         Intent::CreateRecord { object, fields } => {
             create_record(&mut draft, lookup, object, fields)?
         }
@@ -139,7 +162,16 @@ pub fn needs(schema: Option<&TenantSchema>, intent: &Intent) -> Vec<Need> {
             }
         };
     match intent {
-        Intent::CreateTenant { .. } | Intent::AssignRole { .. } | Intent::RevokeRole { .. } => {}
+        Intent::CreateTenant { .. }
+        | Intent::AssignRole { .. }
+        | Intent::RevokeRole { .. }
+        | Intent::DefineTeam { .. }
+        | Intent::AssignTeamRole { .. }
+        | Intent::RevokeTeamRole { .. }
+        | Intent::AddTeamMember { .. }
+        | Intent::RemoveTeamMember { .. }
+        | Intent::CreateInvitation { .. }
+        | Intent::RedeemInvitation { .. } => {}
         Intent::CreateRecord { object, fields } => field_needs(&mut out, object, fields),
         Intent::UpdateRecord {
             object, id, fields, ..
@@ -735,6 +767,9 @@ fn change_member(
     if *role == public_role() {
         return Err(draft.reject(ErrorKind::InvalidIntent, "everyone already holds public"));
     }
+    if grant {
+        require_conferrable(draft, [role])?;
+    }
     let mut roles = draft
         .tenant
         .members
@@ -758,7 +793,8 @@ fn change_member(
             ));
         }
     }
-    if roles.is_empty() {
+    let through_teams = assigned_roles(&BTreeMap::new(), &draft.tenant.schema, principal);
+    if roles.is_empty() && through_teams.is_empty() {
         draft.effects.push(Effect::RevokeSessions {
             principal: principal.clone(),
         });
@@ -769,7 +805,284 @@ fn change_member(
     });
     draft.events.push(EventBody::MemberChanged {
         principal: principal.clone(),
+        roles: roles.union(&through_teams).cloned().collect(),
+    });
+    Ok(Output::Member)
+}
+
+/// ADM-152: every role in `roles` must be one the acting principal may confer, which is to say
+/// the principal holds at least one permission the role grants. The first role it may not
+/// confer refuses the intent.
+fn require_conferrable<'r>(
+    draft: &mut Draft<'_>,
+    roles: impl IntoIterator<Item = &'r RoleId>,
+) -> Result<(), DomainError> {
+    for role in roles {
+        let check = may_confer(draft.tenant, &draft.ctx.principal, role);
+        let passed = check.passed;
+        let detail = check.detail.clone();
+        draft.evidence.push(check);
+        if !passed {
+            return Err(draft.reject(
+                ErrorKind::Unauthorized,
+                format!("may not confer role {role}: {detail}"),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// The id under which a team appears in events: a team is assigned roles like a principal.
+fn team_principal(team: &TeamId) -> PrincipalId {
+    PrincipalId::new(format!("team:{team}")).expect("a team id is a valid principal token")
+}
+
+fn team_of<'a>(draft: &Draft<'a>, team: &TeamId) -> Result<&'a TeamDef, DomainError> {
+    let tenant: &'a TenantState = draft.tenant;
+    tenant
+        .schema
+        .teams
+        .get(team)
+        .ok_or_else(|| draft.reject(ErrorKind::InvalidIntent, format!("no team {team}")))
+}
+
+/// Record a changed team: the new schema, an event for the team and one for each member whose
+/// roles it changes.
+fn put_team(draft: &mut Draft<'_>, mut schema: TenantSchema, team: TeamDef) {
+    draft.events.push(EventBody::MemberChanged {
+        principal: team_principal(&team.id),
+        roles: team.roles.clone(),
+    });
+    schema.teams.insert(team.id.clone(), team.clone());
+    for member in &team.members {
+        let roles = assigned_roles(&draft.tenant.members, &schema, member);
+        draft.events.push(EventBody::MemberChanged {
+            principal: member.clone(),
+            roles,
+        });
+    }
+    draft.ops.push(DeltaOp::PutSchema(Arc::new(schema)));
+}
+
+fn define_team(draft: &mut Draft<'_>, team: &TeamId, label: &str) -> Result<Output, DomainError> {
+    draft.require(Action::Manage, &Resource::Members, Subject::default())?;
+    if label.trim().is_empty() {
+        return Err(draft.reject(ErrorKind::InvalidIntent, "a team needs a label"));
+    }
+    let schema = TenantSchema::clone(&draft.tenant.schema);
+    let def = TeamDef {
+        label: label.to_string(),
+        ..schema.teams.get(team).cloned().unwrap_or(TeamDef {
+            id: team.clone(),
+            label: String::new(),
+            members: BTreeSet::new(),
+            roles: BTreeSet::new(),
+        })
+    };
+    put_team(draft, schema, def);
+    Ok(Output::Member)
+}
+
+fn team_role(
+    draft: &mut Draft<'_>,
+    team: &TeamId,
+    role: &RoleId,
+    grant: bool,
+) -> Result<Output, DomainError> {
+    draft.require(Action::Manage, &Resource::Members, Subject::default())?;
+    let mut def = team_of(draft, team)?.clone();
+    if !draft.tenant.schema.roles.contains_key(role) {
+        return Err(draft.reject(ErrorKind::UnknownRole, format!("no role {role}")));
+    }
+    if *role == public_role() {
+        return Err(draft.reject(ErrorKind::InvalidIntent, "everyone already holds public"));
+    }
+    if grant {
+        require_conferrable(draft, [role])?;
+        def.roles.insert(role.clone());
+    } else {
+        def.roles.remove(role);
+    }
+    let schema = TenantSchema::clone(&draft.tenant.schema);
+    let mut after = schema.clone();
+    after.teams.insert(def.id.clone(), def.clone());
+    let lost: Vec<PrincipalId> = if grant {
+        Vec::new()
+    } else {
+        def.members
+            .iter()
+            .filter(|member| {
+                draft
+                    .tenant
+                    .members
+                    .get(*member)
+                    .is_none_or(BTreeSet::is_empty)
+                    && assigned_roles(&BTreeMap::new(), &after, member).is_empty()
+            })
+            .cloned()
+            .collect()
+    };
+    for principal in lost {
+        draft.effects.push(Effect::RevokeSessions { principal });
+    }
+    put_team(draft, schema, def);
+    Ok(Output::Member)
+}
+
+fn team_member(
+    draft: &mut Draft<'_>,
+    team: &TeamId,
+    principal: &PrincipalId,
+    add: bool,
+) -> Result<Output, DomainError> {
+    draft.require(Action::Manage, &Resource::Members, Subject::default())?;
+    let mut def = team_of(draft, team)?.clone();
+    if add {
+        require_conferrable(draft, def.roles.iter())?;
+        def.members.insert(principal.clone());
+    } else {
+        def.members.remove(principal);
+    }
+    let schema = TenantSchema::clone(&draft.tenant.schema);
+    // The member is no longer in `def.members` after a removal, so it gets its own event here.
+    let mut after = schema.clone();
+    after.teams.insert(def.id.clone(), def.clone());
+    let roles = assigned_roles(&draft.tenant.members, &after, principal);
+    if !add {
+        draft.events.push(EventBody::MemberChanged {
+            principal: principal.clone(),
+            roles: roles.clone(),
+        });
+        if roles.is_empty() {
+            draft.effects.push(Effect::RevokeSessions {
+                principal: principal.clone(),
+            });
+        }
+    }
+    put_team(draft, schema, def);
+    Ok(Output::Member)
+}
+
+fn create_invitation(
+    draft: &mut Draft<'_>,
+    invitation: &InvitationId,
+    address: &str,
+    roles: &BTreeSet<RoleId>,
+) -> Result<Output, DomainError> {
+    draft.require(Action::Manage, &Resource::Members, Subject::default())?;
+    let ctx = draft.ctx;
+    let Principal::User(creator) = &ctx.principal else {
+        return Err(draft.reject(ErrorKind::InvalidIntent, "a person issues an invitation"));
+    };
+    let address = normalise_address(address);
+    if !address.contains('@') {
+        return Err(draft.reject(ErrorKind::InvalidIntent, "an invitation names an address"));
+    }
+    if roles.is_empty() {
+        return Err(draft.reject(ErrorKind::InvalidIntent, "an invitation grants a role"));
+    }
+    if draft.tenant.schema.invitations.contains_key(invitation) {
+        return Err(draft.reject(
+            ErrorKind::InvalidIntent,
+            format!("invitation {invitation} already exists"),
+        ));
+    }
+    for role in roles {
+        if !draft.tenant.schema.roles.contains_key(role) {
+            return Err(draft.reject(ErrorKind::UnknownRole, format!("no role {role}")));
+        }
+        if *role == public_role() {
+            return Err(draft.reject(ErrorKind::InvalidIntent, "everyone already holds public"));
+        }
+    }
+    require_conferrable(draft, roles.iter())?;
+    let mut schema = TenantSchema::clone(&draft.tenant.schema);
+    schema.invitations.insert(
+        invitation.clone(),
+        InvitationDef {
+            id: invitation.clone(),
+            address,
+            roles: roles.clone(),
+            created_by: creator.clone(),
+            redeemed_by: None,
+        },
+    );
+    draft.ops.push(DeltaOp::PutSchema(Arc::new(schema)));
+    Ok(Output::Member)
+}
+
+/// ADM-153: the roles of an invitation go to the one person who redeems it with the address it
+/// names, once. The refusal for a wrong address does not say which address the invitation names.
+fn redeem_invitation(
+    draft: &mut Draft<'_>,
+    invitation: &InvitationId,
+    verified_address: &str,
+) -> Result<Output, DomainError> {
+    let ctx = draft.ctx;
+    let Principal::User(redeemer) = &ctx.principal else {
+        draft.evidence.push(Check::fail(
+            "invitation:redeemer_is_person",
+            "only a signed-in person redeems an invitation",
+        ));
+        return Err(draft.reject(
+            ErrorKind::Unauthorized,
+            "only a signed-in person redeems an invitation",
+        ));
+    };
+    let tenant = draft.tenant;
+    let Some(offer) = tenant.schema.invitations.get(invitation) else {
+        return Err(draft.reject(
+            ErrorKind::InvalidIntent,
+            format!("no invitation {invitation}"),
+        ));
+    };
+    if normalise_address(verified_address) != offer.address {
+        draft.evidence.push(Check::fail(
+            "invitation:address_matches",
+            "the redeemer's verified address is not the address the invitation names",
+        ));
+        return Err(draft.reject(
+            ErrorKind::Unauthorized,
+            "the invitation names another address",
+        ));
+    }
+    draft.evidence.push(Check::pass(
+        "invitation:address_matches",
+        "the verified address is the one the invitation names",
+    ));
+    if let Some(by) = &offer.redeemed_by {
+        draft.evidence.push(Check::fail(
+            "invitation:redeemed_once",
+            format!("already redeemed by {by}"),
+        ));
+        return Err(draft.reject(
+            ErrorKind::InvalidIntent,
+            "the invitation was already redeemed",
+        ));
+    }
+    draft.evidence.push(Check::pass(
+        "invitation:redeemed_once",
+        "not redeemed before",
+    ));
+    let mut roles = tenant.members.get(redeemer).cloned().unwrap_or_default();
+    roles.extend(offer.roles.iter().cloned());
+    let mut schema = TenantSchema::clone(&tenant.schema);
+    if let Some(stored) = schema.invitations.get_mut(invitation) {
+        stored.redeemed_by = Some(redeemer.clone());
+    }
+    let effective: BTreeSet<RoleId> = {
+        let mut members = tenant.members.clone();
+        members.insert(redeemer.clone(), roles.clone());
+        assigned_roles(&members, &schema, redeemer)
+    };
+    draft.ops.push(DeltaOp::PutSchema(Arc::new(schema)));
+    draft.ops.push(DeltaOp::PutMember {
+        principal: redeemer.clone(),
         roles,
+    });
+    draft.events.push(EventBody::MemberChanged {
+        principal: redeemer.clone(),
+        roles: effective,
     });
     Ok(Output::Member)
 }
@@ -862,6 +1175,19 @@ fn apply_change(schema: &mut TenantSchema, change: &SchemaChange) -> Result<Stri
             }
             schema.roles.insert(role.id.clone(), role.clone());
             format!("define role {}", role.id)
+        }
+        SchemaChange::DefineRolePermissions { role, permissions } => {
+            if !schema.roles.contains_key(role) {
+                return Err(format!("no role {role}"));
+            }
+            if permissions.is_empty() {
+                schema.role_permissions.remove(role);
+            } else {
+                schema
+                    .role_permissions
+                    .insert(role.clone(), permissions.clone());
+            }
+            format!("define permissions of role {role}")
         }
         SchemaChange::DefinePolicy(policy) => {
             schema.policies.insert(policy.id.clone(), policy.clone());

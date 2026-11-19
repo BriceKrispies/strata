@@ -86,6 +86,14 @@ string_id!(
     FieldId, "field", is_name
 );
 string_id!(RoleId, "role", is_name);
+string_id!(
+    /// A team of a tenant: a named set of principals that holds roles together.
+    TeamId, "team", is_name
+);
+string_id!(
+    /// An invitation of a tenant, chosen by whoever issues it.
+    InvitationId, "invitation", is_token
+);
 string_id!(PolicyId, "policy", is_name);
 string_id!(ConstraintId, "constraint", is_name);
 string_id!(WorkflowId, "workflow", is_name);

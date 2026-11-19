@@ -3,8 +3,8 @@
 
 use crate::expr::{self, Expr, TypeEnv};
 use crate::ids::{
-    owner_role, public_role, ConstraintId, FieldId, ObjectTypeId, PolicyId, QueryId, RoleId,
-    SchemaVersion, ViewId, WorkflowId,
+    owner_role, public_role, ConstraintId, FieldId, InvitationId, ObjectTypeId, PolicyId,
+    PrincipalId, QueryId, RoleId, SchemaVersion, TeamId, ViewId, WorkflowId,
 };
 use crate::value::{FieldType, Value};
 use serde::{Deserialize, Serialize};
@@ -44,6 +44,94 @@ pub struct ObjectTypeDef {
 pub struct RoleDef {
     pub id: RoleId,
     pub label: String,
+}
+
+/// The four actions on an object type that a role's permission can name.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Verb {
+    Read,
+    Create,
+    Update,
+    Delete,
+}
+
+impl Verb {
+    pub fn action(self) -> Action {
+        match self {
+            Verb::Read => Action::Read,
+            Verb::Create => Action::Create,
+            Verb::Update => Action::Update,
+            Verb::Delete => Action::Delete,
+        }
+    }
+
+    /// The verb of an action on an object type; `None` for `Manage`.
+    pub fn of(action: Action) -> Option<Verb> {
+        match action {
+            Action::Read => Some(Verb::Read),
+            Action::Create => Some(Verb::Create),
+            Action::Update => Some(Verb::Update),
+            Action::Delete => Some(Verb::Delete),
+            Action::Manage => None,
+        }
+    }
+}
+
+/// One entry of a role's permission set, as a tenant writes it: either the name of a platform
+/// capability, which the kernel treats as an opaque string, or actions on an object type.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum Permission {
+    Capability(String),
+    Object {
+        object: ObjectTypeId,
+        actions: BTreeSet<Verb>,
+    },
+}
+
+/// One indivisible permission. A [`Permission`] is the set of grants it expands to.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub enum Grant {
+    Capability(String),
+    Object(ObjectTypeId, Verb),
+}
+
+impl Permission {
+    pub fn grants(&self) -> Vec<Grant> {
+        match self {
+            Permission::Capability(name) => vec![Grant::Capability(name.clone())],
+            Permission::Object { object, actions } => actions
+                .iter()
+                .map(|verb| Grant::Object(object.clone(), *verb))
+                .collect(),
+        }
+    }
+}
+
+/// A named set of principals that holds roles together.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TeamDef {
+    pub id: TeamId,
+    pub label: String,
+    pub members: BTreeSet<PrincipalId>,
+    pub roles: BTreeSet<RoleId>,
+}
+
+/// An offer of roles to the one person who redeems it with the address it names.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InvitationDef {
+    pub id: InvitationId,
+    /// Normalised: trimmed and lower-cased.
+    pub address: String,
+    pub roles: BTreeSet<RoleId>,
+    pub created_by: PrincipalId,
+    pub redeemed_by: Option<PrincipalId>,
+}
+
+/// The form in which an address is compared.
+pub fn normalise_address(address: &str) -> String {
+    address.trim().to_ascii_lowercase()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -169,6 +257,16 @@ pub struct TenantSchema {
     pub version: SchemaVersion,
     pub objects: BTreeMap<ObjectTypeId, ObjectTypeDef>,
     pub roles: BTreeMap<RoleId, RoleDef>,
+    /// The permissions each role grants. A role without an entry grants none.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub role_permissions: BTreeMap<RoleId, Vec<Permission>>,
+    /// Teams, with their members and the roles they hold. A team's membership changes through
+    /// its own intents, not through `ChangeSchema`, and does not raise the schema version.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub teams: BTreeMap<TeamId, TeamDef>,
+    /// Invitations issued, redeemed or not. Same remark as for teams.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub invitations: BTreeMap<InvitationId, InvitationDef>,
     pub policies: BTreeMap<PolicyId, PolicyDef>,
     pub workflows: BTreeMap<WorkflowId, WorkflowDef>,
     pub queries: BTreeMap<QueryId, QueryDef>,
@@ -194,11 +292,24 @@ impl TenantSchema {
             version: SchemaVersion(1),
             objects: BTreeMap::new(),
             roles,
+            role_permissions: BTreeMap::new(),
+            teams: BTreeMap::new(),
+            invitations: BTreeMap::new(),
             policies: BTreeMap::new(),
             workflows: BTreeMap::new(),
             queries: BTreeMap::new(),
             views: BTreeMap::new(),
         }
+    }
+
+    /// Every grant of a role.
+    pub fn grants_of(&self, role: &RoleId) -> BTreeSet<Grant> {
+        self.role_permissions
+            .get(role)
+            .into_iter()
+            .flatten()
+            .flat_map(Permission::grants)
+            .collect()
     }
 
     pub fn workflows_of<'a>(
@@ -272,6 +383,55 @@ impl TenantSchema {
                         object.id, constraint.id
                     )),
                     Err(e) => problems.push(format!("{}.{}: {e}", object.id, constraint.id)),
+                }
+            }
+        }
+
+        for (role, permissions) in &self.role_permissions {
+            let at = format!("role {role}");
+            if !roles.contains(role) {
+                problems.push(format!("{at}: permissions of an unknown role"));
+            }
+            if *role == owner_role() {
+                problems.push(format!("{at}: the owner role holds every permission"));
+            }
+            for permission in permissions {
+                match permission {
+                    Permission::Capability(name) if name.trim().is_empty() => {
+                        problems.push(format!("{at}: a capability needs a name"))
+                    }
+                    Permission::Capability(_) => {}
+                    Permission::Object { object, actions } => {
+                        if !self.objects.contains_key(object) {
+                            problems
+                                .push(format!("{at}: permission on unknown object type {object}"));
+                        }
+                        if actions.is_empty() {
+                            problems.push(format!("{at}: permission on {object} names no action"));
+                        }
+                    }
+                }
+            }
+        }
+        for team in self.teams.values() {
+            let at = format!("team {}", team.id);
+            for role in &team.roles {
+                if !roles.contains(role) {
+                    problems.push(format!("{at}: unknown role {role}"));
+                }
+                if *role == public_role() {
+                    problems.push(format!("{at}: everyone already holds public"));
+                }
+            }
+        }
+        for invitation in self.invitations.values() {
+            let at = format!("invitation {}", invitation.id);
+            if invitation.address.is_empty() {
+                problems.push(format!("{at}: names no address"));
+            }
+            for role in &invitation.roles {
+                if !roles.contains(role) {
+                    problems.push(format!("{at}: unknown role {role}"));
                 }
             }
         }
