@@ -147,8 +147,9 @@ fn file(path: &str, spec_path: &str, body: String) -> GeneratedFile {
     GeneratedFile {
         path: path.to_string(),
         contents: format!(
-            "{} from {spec_path}. Do not edit; change the specification and regenerate.\n{body}",
-            HEADER_MARKERS[1]
+            "{} from {}. Do not edit; change the specification and regenerate.\n{body}",
+            HEADER_MARKERS[1],
+            crate::codetext::line_text(spec_path)
         ),
     }
 }

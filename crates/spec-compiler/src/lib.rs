@@ -20,6 +20,7 @@
 
 pub mod backend;
 pub mod budget;
+pub mod codetext;
 pub mod constructs;
 pub mod deploy;
 pub mod diagnostic;
