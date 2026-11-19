@@ -1421,12 +1421,12 @@
   ],
   "contracts": [
     {"id":"decide-intent","name":"Decide an intent","ref":"CT-001","realisation":"generated","implementedBy":"kernel","auth":"Local call inside the platform process; no network credential","idempotent":true,"inputs":[{"name":"state","type":"state"},{"name":"intent","type":"intent"},{"name":"context","type":"context"}],"outputs":[{"name":"result","type":"transition-result"}],"preconditions":["The state is a snapshot of the tenant that the context names, complete or covering the needs of the intent."],"postconditions":["Equal state, intent and context give equal results (KRN-001).","An accepted result holds a state delta addressed only to the tenant of the context and advancing its revision by one (KRN-002, KRN-006).","A rejected result changes nothing and lists the checks that failed (KRN-007).","A snapshot that lacks needed state is answered with insufficient-state naming the need, never with a different decision (KRN-005)."],"errors":[{"name":"tenant-mismatch","condition":"The snapshot is of a tenant other than the one the context names.","type":"domain-error"},{"name":"tenant-exists","condition":"A create-tenant intent names a tenant that already exists.","type":"domain-error"},{"name":"tenant-not-found","condition":"The intent needs a tenant that has no state.","type":"domain-error"},{"name":"unauthorized","condition":"No policy of the principal authorises the intent.","type":"domain-error"},{"name":"unknown-object","condition":"The intent names an object type the schema does not declare.","type":"domain-error"},{"name":"unknown-field","condition":"The intent names a field the object type does not declare.","type":"domain-error"},{"name":"unknown-record","condition":"The intent names a record that does not exist.","type":"domain-error"},{"name":"unknown-role","condition":"The intent names a role the tenant does not define.","type":"domain-error"},{"name":"type-mismatch","condition":"A field value is not of the declared field type.","type":"domain-error"},{"name":"missing-required","condition":"A required field has no value.","type":"domain-error"},{"name":"constraint-violated","condition":"A declared constraint of the object type fails.","type":"domain-error"},{"name":"unique-violated","condition":"A unique field repeats a value.","type":"domain-error"},{"name":"dangling-reference","condition":"A reference field names no record of its target type.","type":"domain-error"},{"name":"still-referenced","condition":"The record to delete is referred to by another record.","type":"domain-error"},{"name":"workflow-violation","condition":"A workflow field changes in a way no declared transition permits.","type":"domain-error"},{"name":"version-conflict","condition":"The expected version differs from the stored version.","type":"domain-error"},{"name":"schema-conflict","condition":"The expected schema version differs from the current one.","type":"domain-error"},{"name":"invalid-schema","condition":"The schema changes do not produce a consistent schema.","type":"domain-error"},{"name":"migration-rejected","condition":"Strict mode and an existing record would not conform.","type":"domain-error"},{"name":"insufficient-state","condition":"The snapshot lacks state the decision needs; the error names the missing need.","type":"domain-error"},{"name":"evaluation","condition":"A tenant expression fails or exhausts its step budget.","type":"domain-error"},{"name":"invalid-intent","condition":"The intent is malformed.","type":"domain-error"}]},
-    {"id":"plan-intent-needs","name":"Plan the state an intent needs","ref":"CT-002","realisation":"generated","implementedBy":"kernel","auth":"Local call inside the platform process; no network credential","idempotent":true,"inputs":[{"name":"schema","type":"schema","optional":true},{"name":"intent","type":"intent"}],"outputs":[{"name":"needs","type":"list<need>"}],"postconditions":["The needs name the records the decision is expected to read; deciding on a snapshot that holds them gives the result of the complete snapshot (KRN-005, ARC-108)."],"errors":[]},
+    {"id":"plan-intent-needs","name":"Plan the state an intent needs","ref":"CT-002","realisation":"generated","implementedBy":"kernel","auth":"Local call inside the platform process; no network credential","idempotent":true,"inputs":[{"name":"schema","type":"tenant-schema","optional":true},{"name":"intent","type":"intent"}],"outputs":[{"name":"needs","type":"list<need>"}],"postconditions":["The needs name the records the decision is expected to read; deciding on a snapshot that holds them gives the result of the complete snapshot (KRN-005, ARC-108)."],"errors":[]},
     {"id":"answer-read","name":"Answer a read against a snapshot","ref":"CT-003","realisation":"generated","implementedBy":"kernel","auth":"Local call inside the platform process; no network credential","idempotent":true,"inputs":[{"name":"state","type":"state"},{"name":"request","type":"read-request"},{"name":"context","type":"context"}],"outputs":[{"name":"result","type":"read-result"}],"postconditions":["Only records that the policies of the requesting principal permit are returned (KRN-004).","The result names the revision and schema version it answers at."],"errors":[{"name":"tenant-mismatch","condition":"The snapshot is of a tenant other than the one the context names.","type":"domain-error"},{"name":"tenant-not-found","condition":"The intent needs a tenant that has no state.","type":"domain-error"},{"name":"unknown-object","condition":"The intent names an object type the schema does not declare.","type":"domain-error"},{"name":"insufficient-state","condition":"The snapshot lacks state the decision needs; the error names the missing need.","type":"domain-error"},{"name":"evaluation","condition":"A tenant expression fails or exhausts its step budget.","type":"domain-error"},{"name":"invalid-intent","condition":"The intent is malformed.","type":"domain-error"}]},
-    {"id":"plan-read-needs","name":"Plan the state a read needs","ref":"CT-004","realisation":"generated","implementedBy":"kernel","auth":"Local call inside the platform process; no network credential","idempotent":true,"inputs":[{"name":"schema","type":"schema"},{"name":"request","type":"read-request"}],"outputs":[{"name":"needs","type":"list<need>"}],"postconditions":["The needs name the records the read is expected to look at."],"errors":[]},
-    {"id":"check-record-visibility","name":"Decide whether a principal may read a record","ref":"CT-005","realisation":"generated","implementedBy":"kernel","auth":"Local call inside the platform process; no network credential","idempotent":true,"inputs":[{"name":"tenant","type":"tenant-snapshot"},{"name":"principal","type":"acting-principal"},{"name":"record","type":"stored-record"},{"name":"now","type":"timestamp"}],"outputs":[{"name":"visible","type":"bool"}],"postconditions":["The answer is the one answer that a read makes for each row; the runtime uses it to decide who receives an event about the record."],"errors":[]},
-    {"id":"apply-state-delta","name":"Apply an accepted state delta","ref":"CT-006","realisation":"generated","implementedBy":"kernel","auth":"Local call inside the platform process; no network credential","idempotent":false,"inputs":[{"name":"tenant","type":"tenant-snapshot","optional":true},{"name":"delta","type":"state-delta"}],"outputs":[{"name":"tenant","type":"tenant-snapshot"}],"preconditions":["The state is at the base revision of the delta, or absent when the base is none."],"postconditions":["The revision of the result is the new revision of the delta, one step beyond its base (KRN-006)."],"errors":[{"name":"version-conflict","condition":"The expected version differs from the stored version.","type":"domain-error"}]},
-    {"id":"plan-schema-migration","name":"Plan a schema migration","ref":"CT-007","realisation":"generated","implementedBy":"kernel","auth":"Local call inside the platform process; no network credential","idempotent":true,"inputs":[{"name":"tenant","type":"tenant-snapshot"},{"name":"changes","type":"list<schema-change>"},{"name":"now","type":"timestamp"}],"outputs":[{"name":"plan","type":"migration-plan"}],"postconditions":["The plan holds the new schema, a summary of each change, the records rewritten and the existing records that do not conform (KRN-009, KRN-010).","Nothing is changed; the plan is the preview of the change (MIG-550)."],"errors":[{"name":"invalid-schema","condition":"The schema changes do not produce a consistent schema.","type":"domain-error"}]},
+    {"id":"plan-read-needs","name":"Plan the state a read needs","ref":"CT-004","realisation":"generated","implementedBy":"kernel","auth":"Local call inside the platform process; no network credential","idempotent":true,"inputs":[{"name":"schema","type":"tenant-schema"},{"name":"request","type":"read-request"}],"outputs":[{"name":"needs","type":"list<need>"}],"postconditions":["The needs name the records the read is expected to look at."],"errors":[]},
+    {"id":"check-record-visibility","name":"Decide whether a principal may read a record","ref":"CT-005","realisation":"generated","implementedBy":"kernel","auth":"Local call inside the platform process; no network credential","idempotent":true,"inputs":[{"name":"tenant","type":"tenant-state"},{"name":"principal","type":"principal"},{"name":"record","type":"record"},{"name":"now","type":"timestamp"}],"outputs":[{"name":"visible","type":"bool"}],"postconditions":["The answer is the one answer that a read makes for each row; the runtime uses it to decide who receives an event about the record."],"errors":[]},
+    {"id":"apply-state-delta","name":"Apply an accepted state delta","ref":"CT-006","realisation":"generated","implementedBy":"kernel","auth":"Local call inside the platform process; no network credential","idempotent":false,"inputs":[{"name":"tenant","type":"tenant-state","optional":true},{"name":"delta","type":"state-delta"}],"outputs":[{"name":"tenant","type":"tenant-state"}],"preconditions":["The state is at the base revision of the delta, or absent when the base is none."],"postconditions":["The revision of the result is the new revision of the delta, one step beyond its base (KRN-006)."],"errors":[{"name":"version-conflict","condition":"The expected version differs from the stored version.","type":"domain-error"}]},
+    {"id":"plan-schema-migration","name":"Plan a schema migration","ref":"CT-007","realisation":"generated","implementedBy":"kernel","auth":"Local call inside the platform process; no network credential","idempotent":true,"inputs":[{"name":"tenant","type":"tenant-state"},{"name":"changes","type":"list<schema-change>"},{"name":"now","type":"timestamp"}],"outputs":[{"name":"plan","type":"migration-plan"}],"postconditions":["The plan holds the new schema, a summary of each change, the records rewritten and the existing records that do not conform (KRN-009, KRN-010).","Nothing is changed; the plan is the preview of the change (MIG-550)."],"errors":[{"name":"invalid-schema","condition":"The schema changes do not produce a consistent schema.","type":"domain-error"}]},
     {"id":"store-capabilities","name":"Report the capabilities of an adapter","ref":"CT-008","realisation":"generated","implementedBy":"store-contract","auth":"Local call inside the platform process; no network credential","idempotent":true,"inputs":[],"outputs":[{"name":"capabilities","type":"adapter-capabilities"}],"postconditions":["The adapter states whether acknowledged commits survive a restart, how it orders concurrent commits and what a reader sees during a commit."],"errors":[]},
     {"id":"store-health","name":"Report store health","ref":"CT-009","realisation":"generated","implementedBy":"store-contract","auth":"Local call inside the platform process; no network credential","idempotent":true,"inputs":[],"outputs":[{"name":"health","type":"adapter-health"}],"errors":[{"name":"unavailable","condition":"The store could not do the work right now (busy, I/O); safe to retry.","type":"store-error"}]},
     {"id":"list-storage-migrations","name":"List the storage layout history","ref":"CT-010","realisation":"generated","implementedBy":"store-contract","auth":"Local call inside the platform process; no network credential","idempotent":true,"inputs":[],"outputs":[{"name":"migrations","type":"list<storage-migration>"}],"errors":[{"name":"unavailable","condition":"The store could not do the work right now (busy, I/O); safe to retry.","type":"store-error"},{"name":"corrupt","condition":"Stored data could not be read back; not safe to ignore.","type":"store-error"}]},
@@ -1447,19 +1447,19 @@
     {"id":"find-account","name":"Find a local account by login","ref":"CT-025","realisation":"generated","implementedBy":"store-contract","auth":"Local call inside the platform process; no network credential","idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"login","type":"string"}],"outputs":[{"name":"account","type":"account","optional":true}],"errors":[{"name":"unavailable","condition":"The store could not do the work right now (busy, I/O); safe to retry.","type":"store-error"},{"name":"corrupt","condition":"Stored data could not be read back; not safe to ignore.","type":"store-error"}]},
     {"id":"create-snapshot","name":"Keep a copy of the complete state of a tenant","ref":"CT-026","realisation":"generated","implementedBy":"store-contract","auth":"Local call inside the platform process; no network credential","idempotent":false,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"label","type":"string"},{"name":"at","type":"timestamp"}],"outputs":[{"name":"snapshot","type":"snapshot-info"}],"postconditions":["The snapshot names the canonical hash of the state it holds."],"errors":[{"name":"not-found","condition":"The tenant does not exist.","type":"store-error"},{"name":"unavailable","condition":"The store could not do the work right now (busy, I/O); safe to retry.","type":"store-error"}]},
     {"id":"list-snapshots","name":"List the snapshots of a tenant","ref":"CT-027","realisation":"generated","implementedBy":"store-contract","auth":"Local call inside the platform process; no network credential","idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"}],"outputs":[{"name":"snapshots","type":"list<snapshot-info>"}],"errors":[{"name":"unavailable","condition":"The store could not do the work right now (busy, I/O); safe to retry.","type":"store-error"},{"name":"corrupt","condition":"Stored data could not be read back; not safe to ignore.","type":"store-error"}]},
-    {"id":"load-snapshot","name":"Load the state a snapshot holds","ref":"CT-028","realisation":"generated","implementedBy":"store-contract","auth":"Local call inside the platform process; no network credential","idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"id","type":"u64"}],"outputs":[{"name":"tenant","type":"tenant-snapshot"}],"errors":[{"name":"not-found","condition":"The snapshot does not exist.","type":"store-error"},{"name":"unavailable","condition":"The store could not do the work right now (busy, I/O); safe to retry.","type":"store-error"},{"name":"corrupt","condition":"Stored data could not be read back; not safe to ignore.","type":"store-error"}]},
+    {"id":"load-snapshot","name":"Load the state a snapshot holds","ref":"CT-028","realisation":"generated","implementedBy":"store-contract","auth":"Local call inside the platform process; no network credential","idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"id","type":"u64"}],"outputs":[{"name":"tenant","type":"tenant-state"}],"errors":[{"name":"not-found","condition":"The snapshot does not exist.","type":"store-error"},{"name":"unavailable","condition":"The store could not do the work right now (busy, I/O); safe to retry.","type":"store-error"},{"name":"corrupt","condition":"Stored data could not be read back; not safe to ignore.","type":"store-error"}]},
     {"id":"restore-snapshot","name":"Put a tenant back as a snapshot holds it","ref":"CT-029","realisation":"generated","implementedBy":"store-contract","auth":"A platform operator","idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"id","type":"u64"}],"outputs":[],"postconditions":["The tenant is exactly as the snapshot holds it; events and journal entries newer than the snapshot are discarded."],"errors":[{"name":"not-found","condition":"The snapshot does not exist.","type":"store-error"},{"name":"unavailable","condition":"The store could not do the work right now (busy, I/O); safe to retry.","type":"store-error"}]},
     {"id":"reset-store","name":"Remove everything from a store","ref":"CT-030","realisation":"generated","implementedBy":"store-contract","auth":"Development fixtures only; refused outside development","idempotent":true,"inputs":[],"outputs":[],"errors":[{"name":"unavailable","condition":"The store could not do the work right now (busy, I/O); safe to retry.","type":"store-error"}]},
     {"id":"execute-intent","name":"Decide an intent and commit it","ref":"CT-031","realisation":"generated","implementedBy":"store-contract","auth":"Local call inside the platform process; no network credential","idempotent":false,"timeoutMs":300,"inputs":[{"name":"intent","type":"intent"},{"name":"context","type":"context"}],"outputs":[{"name":"executed","type":"executed-intent"}],"postconditions":["The needs the kernel names are loaded, the intent is decided and the commit is applied atomically.","When another commit got there first, the decision is made again on the new state, up to a bounded number of retries.","A state-changing intent is confirmed as committed within 300 ms at the 99th percentile (OPS-334)."],"errors":[{"name":"domain","condition":"The kernel rejected the intent; the store is unchanged.","type":"domain-error"},{"name":"store","condition":"The store failed.","type":"store-error"}]},
     {"id":"execute-read","name":"Answer a read from the store","ref":"CT-032","realisation":"generated","implementedBy":"store-contract","auth":"Local call inside the platform process; no network credential","idempotent":true,"inputs":[{"name":"request","type":"read-request"},{"name":"context","type":"context"}],"outputs":[{"name":"result","type":"read-result"}],"postconditions":["Only the records the read needs are loaded."],"errors":[{"name":"domain","condition":"The kernel rejected the read.","type":"domain-error"},{"name":"store","condition":"The store failed.","type":"store-error"}]},
-    {"id":"provision-tenant","name":"Provision a tenant","ref":"CT-033","realisation":"generated","implementedBy":"control-plane","auth":"Platform operator, or a person starting a sandbox (see start-sandbox)","idempotent":false,"timeoutMs":30000,"inputs":[{"name":"name","type":"string"},{"name":"template","type":"template-id"},{"name":"plan","type":"plan-id"},{"name":"region","type":"region-id","optional":true},{"name":"owner","type":"principal-id"}],"outputs":[{"name":"tenant","type":"tenant-id"},{"name":"state","type":"tenant-state"},{"name":"bootstrap-credential","type":"secret"}],"postconditions":["A database that holds the data of this tenant alone exists (TEN-001), in the region asked for (TEN-005).","The tenant is reported as active only after its layout and template are installed; a failed run leaves no active tenant (TEN-002, TEN-003).","One bootstrap credential for the first owner is issued; it is refused after its first use and after its expiry (TEN-500).","An audit entry is written and a dry run is offered (AGT-415)."],"errors":[{"name":"unauthenticated","condition":"No valid session or credential accompanies the request.","type":"api-error"},{"name":"forbidden","condition":"The caller holds no permission for the operation.","type":"api-error"},{"name":"invalid","condition":"The template, plan or region is unknown.","type":"api-error"},{"name":"unavailable","condition":"A dependency of the operation did not answer.","type":"api-error"}]},
+    {"id":"provision-tenant","name":"Provision a tenant","ref":"CT-033","realisation":"generated","implementedBy":"control-plane","auth":"Platform operator, or a person starting a sandbox (see start-sandbox)","idempotent":false,"timeoutMs":30000,"inputs":[{"name":"name","type":"string"},{"name":"template","type":"template-id"},{"name":"plan","type":"plan-id"},{"name":"region","type":"region-id","optional":true},{"name":"owner","type":"principal-id"}],"outputs":[{"name":"tenant","type":"tenant-id"},{"name":"state","type":"tenant-lifecycle"},{"name":"bootstrap-credential","type":"secret"}],"postconditions":["A database that holds the data of this tenant alone exists (TEN-001), in the region asked for (TEN-005).","The tenant is reported as active only after its layout and template are installed; a failed run leaves no active tenant (TEN-002, TEN-003).","One bootstrap credential for the first owner is issued; it is refused after its first use and after its expiry (TEN-500).","An audit entry is written and a dry run is offered (AGT-415)."],"errors":[{"name":"unauthenticated","condition":"No valid session or credential accompanies the request.","type":"api-error"},{"name":"forbidden","condition":"The caller holds no permission for the operation.","type":"api-error"},{"name":"invalid","condition":"The template, plan or region is unknown.","type":"api-error"},{"name":"unavailable","condition":"A dependency of the operation did not answer.","type":"api-error"}]},
     {"id":"get-tenant","name":"Read a tenant directory entry","ref":"CT-034","realisation":"generated","implementedBy":"control-plane","auth":"Service credential of a platform component","idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"}],"outputs":[{"name":"tenant","type":"tenant-directory-entry"}],"postconditions":["The entry is served for at most 15 minutes after the control plane was last reached (ARC-500).","The control database holds no field of a tenant record (TEN-006)."],"errors":[{"name":"not-found","condition":"The tenant does not exist for this tenant.","type":"api-error"},{"name":"unauthenticated","condition":"No valid session or credential accompanies the request.","type":"api-error"}]},
     {"id":"resolve-host","name":"Resolve a host name to a tenant and placement","ref":"CT-035","realisation":"generated","implementedBy":"control-plane","auth":"Service credential of a platform component","idempotent":true,"inputs":[{"name":"host","type":"host"}],"outputs":[{"name":"tenant","type":"tenant-id"},{"name":"placement","type":"placement-id"}],"postconditions":["The same name resolves to the same tenant before and after a move (TEN-013)."],"errors":[{"name":"not-found","condition":"The host name is bound to no tenant; no tenant database is contacted (EDG-011).","type":"api-error"}]},
-    {"id":"suspend-tenant","name":"Suspend a tenant","ref":"CT-036","realisation":"generated","implementedBy":"control-plane","auth":"A platform operator","idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"reason","type":"string"}],"outputs":[{"name":"state","type":"tenant-state"}],"postconditions":["A suspended tenant refuses state-changing requests (TEN-009).","All of its data is kept (BIL-154)."],"errors":[{"name":"unauthenticated","condition":"No valid session or credential accompanies the request.","type":"api-error"},{"name":"forbidden","condition":"The caller holds no permission for the operation.","type":"api-error"},{"name":"not-found","condition":"The tenant does not exist for this tenant.","type":"api-error"}]},
-    {"id":"resume-tenant","name":"Resume a suspended tenant","ref":"CT-037","realisation":"generated","implementedBy":"control-plane","auth":"A platform operator","idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"}],"outputs":[{"name":"state","type":"tenant-state"}],"errors":[{"name":"unauthenticated","condition":"No valid session or credential accompanies the request.","type":"api-error"},{"name":"forbidden","condition":"The caller holds no permission for the operation.","type":"api-error"},{"name":"not-found","condition":"The tenant does not exist for this tenant.","type":"api-error"},{"name":"conflict","condition":"The tenant is not suspended.","type":"api-error"}]},
+    {"id":"suspend-tenant","name":"Suspend a tenant","ref":"CT-036","realisation":"generated","implementedBy":"control-plane","auth":"A platform operator","idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"reason","type":"string"}],"outputs":[{"name":"state","type":"tenant-lifecycle"}],"postconditions":["A suspended tenant refuses state-changing requests (TEN-009).","All of its data is kept (BIL-154)."],"errors":[{"name":"unauthenticated","condition":"No valid session or credential accompanies the request.","type":"api-error"},{"name":"forbidden","condition":"The caller holds no permission for the operation.","type":"api-error"},{"name":"not-found","condition":"The tenant does not exist for this tenant.","type":"api-error"}]},
+    {"id":"resume-tenant","name":"Resume a suspended tenant","ref":"CT-037","realisation":"generated","implementedBy":"control-plane","auth":"A platform operator","idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"}],"outputs":[{"name":"state","type":"tenant-lifecycle"}],"errors":[{"name":"unauthenticated","condition":"No valid session or credential accompanies the request.","type":"api-error"},{"name":"forbidden","condition":"The caller holds no permission for the operation.","type":"api-error"},{"name":"not-found","condition":"The tenant does not exist for this tenant.","type":"api-error"},{"name":"conflict","condition":"The tenant is not suspended.","type":"api-error"}]},
     {"id":"export-tenant","name":"Export a tenant","ref":"CT-038","realisation":"generated","implementedBy":"control-plane","auth":"An owner of the tenant","idempotent":false,"inputs":[{"name":"tenant","type":"tenant-id"}],"outputs":[{"name":"archive","type":"archive-ref"}],"postconditions":["The export restores into an empty installation as a state with the same canonical hash (TEN-010)."],"errors":[{"name":"unauthenticated","condition":"No valid session or credential accompanies the request.","type":"api-error"},{"name":"forbidden","condition":"The caller holds no permission for the operation.","type":"api-error"},{"name":"not-found","condition":"The tenant does not exist for this tenant.","type":"api-error"}]},
     {"id":"delete-tenant","name":"Delete a tenant","ref":"CT-039","realisation":"generated","implementedBy":"control-plane","auth":"An owner of the tenant","idempotent":false,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"confirm-tenant","type":"tenant-id"}],"outputs":[{"name":"certificate","type":"deletion-certificate"}],"preconditions":["The grace period that the plan states has ended, unless the platform operator deletes it."],"postconditions":["The database, stored files and encryption key of the tenant are removed (TEN-011).","The certificate states when the key was destroyed and when each backup image and export was removed (PRV-354)."],"errors":[{"name":"unauthenticated","condition":"No valid session or credential accompanies the request.","type":"api-error"},{"name":"forbidden","condition":"The caller holds no permission for the operation.","type":"api-error"},{"name":"not-found","condition":"The tenant does not exist for this tenant.","type":"api-error"},{"name":"invalid","condition":"The request does not repeat the identifier of the tenant it destroys (OPS-325).","type":"api-error"}]},
-    {"id":"cancel-tenant-deletion","name":"Cancel a pending tenant deletion","ref":"CT-040","realisation":"generated","implementedBy":"control-plane","auth":"An owner of the tenant","idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"}],"outputs":[{"name":"state","type":"tenant-state"}],"postconditions":["A deletion requested by the owner stays cancellable until the grace period ends (ADM-160)."],"errors":[{"name":"unauthenticated","condition":"No valid session or credential accompanies the request.","type":"api-error"},{"name":"forbidden","condition":"The caller holds no permission for the operation.","type":"api-error"},{"name":"not-found","condition":"The tenant does not exist for this tenant.","type":"api-error"},{"name":"conflict","condition":"The grace period has ended.","type":"api-error"}]},
+    {"id":"cancel-tenant-deletion","name":"Cancel a pending tenant deletion","ref":"CT-040","realisation":"generated","implementedBy":"control-plane","auth":"An owner of the tenant","idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"}],"outputs":[{"name":"state","type":"tenant-lifecycle"}],"postconditions":["A deletion requested by the owner stays cancellable until the grace period ends (ADM-160)."],"errors":[{"name":"unauthenticated","condition":"No valid session or credential accompanies the request.","type":"api-error"},{"name":"forbidden","condition":"The caller holds no permission for the operation.","type":"api-error"},{"name":"not-found","condition":"The tenant does not exist for this tenant.","type":"api-error"},{"name":"conflict","condition":"The grace period has ended.","type":"api-error"}]},
     {"id":"restore-tenant","name":"Restore a tenant to a point in time","ref":"CT-041","realisation":"generated","implementedBy":"control-plane","auth":"An owner of the tenant","idempotent":false,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"at","type":"timestamp"}],"outputs":[{"name":"revision","type":"u64"},{"name":"first-lost-change","type":"u64","optional":true},{"name":"last-lost-change","type":"u64","optional":true}],"postconditions":["The restored state has the hash that the journal records at that point (TEN-015).","The first and last committed change that was not restored are reported (MIG-573).","A backup of one tenant is unreadable with the key of any other tenant (TEN-252)."],"errors":[{"name":"unauthenticated","condition":"No valid session or credential accompanies the request.","type":"api-error"},{"name":"forbidden","condition":"The caller holds no permission for the operation.","type":"api-error"},{"name":"not-found","condition":"The tenant does not exist for this tenant.","type":"api-error"},{"name":"invalid","condition":"The point lies outside the restorable window.","type":"api-error"}]},
     {"id":"start-sandbox","name":"Start a sandbox tenant","ref":"CT-042","realisation":"generated","implementedBy":"control-plane","auth":"A signed-in principal","idempotent":false,"timeoutMs":30000,"inputs":[{"name":"template","type":"template-id"}],"outputs":[{"name":"tenant","type":"tenant-id"}],"postconditions":["The person becomes the owner with no step by a platform operator (ADM-154).","The sandbox is deleted at the end of the period its plan states unless kept (ADM-155)."],"errors":[{"name":"unauthenticated","condition":"No valid session or credential accompanies the request.","type":"api-error"},{"name":"invalid","condition":"The template is not published.","type":"api-error"},{"name":"throttled","condition":"The caller exceeded a limit that applies to it.","type":"api-error"}]},
     {"id":"keep-sandbox","name":"Keep a sandbox tenant","ref":"CT-043","realisation":"generated","implementedBy":"control-plane","auth":"An owner of the tenant","idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"}],"outputs":[{"name":"kind","type":"tenant-kind"}],"postconditions":["The kind changes to production without copying records (ADM-156)."],"errors":[{"name":"unauthenticated","condition":"No valid session or credential accompanies the request.","type":"api-error"},{"name":"forbidden","condition":"The caller holds no permission for the operation.","type":"api-error"},{"name":"not-found","condition":"The tenant does not exist for this tenant.","type":"api-error"}]},
@@ -1584,7 +1584,7 @@
     {"id":"inject-fault","name":"Inject a failure of the operations fault model","ref":"CT-162","realisation":"generated","implementedBy":"release-pipeline","auth":"Local stack only","idempotent":true,"inputs":[{"name":"failure","type":"string"}],"outputs":[],"postconditions":["Every failure mode of the fault model has a hook in the local stack (OPS-349)."],"errors":[{"name":"unknown-failure","condition":"The failure mode has no hook."}]},
     {"id":"run-scenario","name":"Run a scenario","ref":"CT-163","realisation":"generated","implementedBy":"simulator","auth":"Local call inside the platform process; no network credential","idempotent":true,"inputs":[{"name":"scenario","type":"scenario"}],"outputs":[{"name":"trace","type":"trace"}],"postconditions":["Two runs of one scenario produce traces with equal hashes (SIM-001, SCH-016)."],"errors":[{"name":"cancelled","condition":"The run was cancelled by the caller."}]},
     {"id":"project-change","name":"Project a proposed change","ref":"CT-164","realisation":"generated","implementedBy":"simulator","auth":"A principal whose policies permit the operation","idempotent":true,"inputs":[{"name":"scenario","type":"scenario"},{"name":"proposal","type":"projection-proposal"}],"outputs":[{"name":"projection","type":"projection"}],"postconditions":["A change that alters no behaviour reports no divergence (SIM-002).","The first scheduled operation whose outcome differs is reported (SIM-003).","A projection is requestable through the catalogue against the history of a tenant at a revision (AGT-422)."],"errors":[{"name":"cancelled","condition":"The run was cancelled by the caller."},{"name":"unauthenticated","condition":"No valid session or credential accompanies the request.","type":"api-error"},{"name":"forbidden","condition":"The caller holds no permission for the operation.","type":"api-error"}]},
-    {"id":"replay-journal","name":"Replay the journal of a tenant","ref":"CT-165","realisation":"generated","implementedBy":"simulator","auth":"A principal whose policies permit the operation","idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"entries","type":"list<journal-entry>"},{"name":"live","type":"tenant-snapshot","optional":true}],"outputs":[{"name":"replay","type":"journal-replay"}],"postconditions":["The replay reproduces the recorded state delta of each entry (SIM-004).","A tenant is served by a newer kernel version only after its journal replays under it to the recorded state hash (MIG-566)."],"errors":[]},
+    {"id":"replay-journal","name":"Replay the journal of a tenant","ref":"CT-165","realisation":"generated","implementedBy":"simulator","auth":"A principal whose policies permit the operation","idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"entries","type":"list<journal-entry>"},{"name":"live","type":"tenant-state","optional":true}],"outputs":[{"name":"replay","type":"journal-replay"}],"postconditions":["The replay reproduces the recorded state delta of each entry (SIM-004).","A tenant is served by a newer kernel version only after its journal replays under it to the recorded state hash (MIG-566)."],"errors":[]},
     {"id":"fork-tenant","name":"Fork a tenant for a projection","ref":"CT-166","realisation":"generated","implementedBy":"runtime","auth":"An owner of the tenant","idempotent":false,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"at-revision","type":"u64","optional":true}],"outputs":[{"name":"fork","type":"tenant-id"}],"postconditions":["The fork is a copy on which a change is previewed before it is applied (MIG-550)."],"errors":[{"name":"unauthenticated","condition":"No valid session or credential accompanies the request.","type":"api-error"},{"name":"forbidden","condition":"The caller holds no permission for the operation.","type":"api-error"},{"name":"not-found","condition":"The tenant does not exist for this tenant.","type":"api-error"}]},
     {"id":"count-request","name":"Count a request against a limit","ref":"CT-167","realisation":"generated","implementedBy":"limit-store","auth":"Local call inside the platform process; no network credential","idempotent":false,"inputs":[{"name":"key","type":"string"},{"name":"window","type":"duration"},{"name":"limit","type":"u64"}],"outputs":[{"name":"allowed","type":"bool"},{"name":"remaining","type":"u64"},{"name":"retry-after","type":"duration","optional":true}],"postconditions":["Request rates are counted in one store that every gateway instance reads and writes (ARC-109)."],"errors":[{"name":"unavailable","condition":"The store could not do the work right now; safe to retry.","type":"store-error"}]},
     {"id":"count-agent-operation","name":"Count an agent operation against its budget","ref":"CT-168","realisation":"generated","implementedBy":"limit-store","auth":"Local call inside the platform process; no network credential","idempotent":false,"inputs":[{"name":"agent","type":"principal-id"},{"name":"kind","type":"string"},{"name":"amount","type":"u64"}],"outputs":[{"name":"allowed","type":"bool"}],"postconditions":["An agent that exceeds its budget is refused until the window ends (AGT-017)."],"errors":[{"name":"unavailable","condition":"The store could not do the work right now; safe to retry.","type":"store-error"}]},
@@ -1637,7 +1637,7 @@
     {"id":"place-legal-hold","name":"Place a legal hold","ref":"CT-215","realisation":"generated","implementedBy":"subject-rights-service","auth":"An owner of the tenant","idempotent":false,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"records","type":"list<record-id>"},{"name":"reason","type":"string"}],"outputs":[{"name":"hold","type":"hold-id"}],"postconditions":["Erasure and expiry of each named record are suspended until the hold ends (PRV-355)."],"errors":[{"name":"unauthenticated","condition":"No valid session or credential accompanies the request.","type":"api-error"},{"name":"forbidden","condition":"The caller holds no permission for the operation.","type":"api-error"}]},
     {"id":"define-token","name":"Define a content token","ref":"CT-216","realisation":"generated","implementedBy":"kernel","auth":"An owner of the tenant","idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"name","type":"string"},{"name":"expression","type":"expression"},{"name":"fallback","type":"string"}],"outputs":[{"name":"version","type":"u64"}],"postconditions":["The token is stored as tenant metadata under the schema version (CTK-001).","A change is offered with a projection listing the content whose rendered text differs (CTK-006)."],"errors":[{"name":"unauthenticated","condition":"No valid session or credential accompanies the request.","type":"api-error"},{"name":"forbidden","condition":"The caller holds no permission for the operation.","type":"api-error"},{"name":"invalid","condition":"The expression fails to parse (the error carries its position), or refers to itself through other tokens (CTK-002, CTK-003).","type":"api-error"}]},
     {"id":"remove-token","name":"Remove a content token","ref":"CT-217","realisation":"generated","implementedBy":"kernel","auth":"An owner of the tenant","idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"name","type":"string"}],"outputs":[],"errors":[{"name":"unauthenticated","condition":"No valid session or credential accompanies the request.","type":"api-error"},{"name":"forbidden","condition":"The caller holds no permission for the operation.","type":"api-error"},{"name":"invalid","condition":"Stored content refers to the token; the referrers are named (CTK-004).","type":"api-error"}]},
-    {"id":"evaluate-token","name":"Evaluate a token for a reader","ref":"CT-218","realisation":"generated","implementedBy":"kernel","auth":"Local call inside the platform process; no network credential","idempotent":true,"inputs":[{"name":"state","type":"state"},{"name":"name","type":"string"},{"name":"record","type":"stored-record"},{"name":"context","type":"context"}],"outputs":[{"name":"value","type":"string"},{"name":"reads","type":"list<record-id>"}],"postconditions":["Two evaluations give equal values (CTK-008).","The token reads only fields the reader may read (CTK-010).","An empty or budget-exhausting evaluation renders the fallback text (CTK-011, CTK-012).","The result names the records the expression read (CTK-018)."],"errors":[]},
+    {"id":"evaluate-token","name":"Evaluate a token for a reader","ref":"CT-218","realisation":"generated","implementedBy":"kernel","auth":"Local call inside the platform process; no network credential","idempotent":true,"inputs":[{"name":"state","type":"state"},{"name":"name","type":"string"},{"name":"record","type":"record"},{"name":"context","type":"context"}],"outputs":[{"name":"value","type":"string"},{"name":"reads","type":"list<record-id>"}],"postconditions":["Two evaluations give equal values (CTK-008).","The token reads only fields the reader may read (CTK-010).","An empty or budget-exhausting evaluation renders the fallback text (CTK-011, CTK-012).","The result names the records the expression read (CTK-018)."],"errors":[]},
     {"id":"define-mail-template","name":"Define a mail template","ref":"CT-219","realisation":"generated","implementedBy":"mail-dispatcher","auth":"A principal whose policies permit the operation","idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"template","type":"template-id"},{"name":"subject","type":"string"},{"name":"body","type":"structured-blocks"}],"outputs":[{"name":"version","type":"u64"}],"postconditions":["The template is stored as tenant metadata (EML-012)."],"errors":[{"name":"unauthenticated","condition":"No valid session or credential accompanies the request.","type":"api-error"},{"name":"forbidden","condition":"The caller holds no permission for the operation.","type":"api-error"},{"name":"invalid","condition":"A token in the template is undefined.","type":"api-error"}]},
     {"id":"render-message","name":"Render a message for a recipient","ref":"CT-220","realisation":"generated","implementedBy":"mail-dispatcher","auth":"Local call inside the platform process; no network credential","idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"template","type":"template-id"},{"name":"recipient","type":"email-address"}],"outputs":[{"name":"html","type":"string"},{"name":"text","type":"string"}],"postconditions":["A message renders into an HTML part and a plain text part (EML-016).","Tokens are evaluated once per recipient with that recipient as reader (CTK-019)."],"errors":[]},
     {"id":"prove-sender-domain","name":"Prove a sender domain","ref":"CT-221","realisation":"generated","implementedBy":"mail-dispatcher","auth":"An owner of the tenant","idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"domain","type":"domain"}],"outputs":[{"name":"state","type":"domain-state"}],"postconditions":["Mail carries a sender address on a tenant domain only after its proof (EML-013).","Without proof, mail is sent from a platform address (EML-014)."],"errors":[{"name":"unauthenticated","condition":"No valid session or credential accompanies the request.","type":"api-error"},{"name":"forbidden","condition":"The caller holds no permission for the operation.","type":"api-error"}]},
@@ -57763,11 +57763,61 @@
 
   // ---- Data model: records and the copies made of them -------------------------------------------
   "types": [
-    {"id":"tenant-id","name":"tenant-id","kind":"id","repr":"string","description":"Lower-case name, [a-z][a-z0-9_]*, at most 64 bytes (kernel TenantId)."},
-    {"id":"principal-id","name":"principal-id","kind":"id","repr":"string","description":"Assigned by the shell, opaque to the kernel (kernel PrincipalId)."},
-    {"id":"session-id","name":"session-id","kind":"id","repr":"string","description":"The public identifier of a session, never the secret token (kernel SessionId)."},
-    {"id":"object-type-id","name":"object-type-id","kind":"id","repr":"string","description":"An object type within a tenant (kernel ObjectTypeId)."},
-    {"id":"workflow-id","name":"workflow-id","kind":"id","repr":"string","description":"A workflow of a tenant (kernel WorkflowId)."},
+    {
+      "id": "tenant-id",
+      "name": "tenant-id",
+      "kind": "id",
+      "repr": "string",
+      "description": "Lower-case name, [a-z][a-z0-9_]*, at most 64 bytes (kernel TenantId).",
+      "constraints": {
+        "pattern": "^[a-z][a-z0-9_]*$",
+        "maxLength": 64
+      }
+    },
+    {
+      "id": "principal-id",
+      "name": "principal-id",
+      "kind": "id",
+      "repr": "string",
+      "description": "Assigned by the shell, opaque to the kernel (kernel PrincipalId).",
+      "constraints": {
+        "pattern": "^[A-Za-z0-9_:.-]+$",
+        "maxLength": 96
+      }
+    },
+    {
+      "id": "session-id",
+      "name": "session-id",
+      "kind": "id",
+      "repr": "string",
+      "description": "The public identifier of a session, never the secret token (kernel SessionId).",
+      "constraints": {
+        "pattern": "^[A-Za-z0-9_:.-]+$",
+        "maxLength": 96
+      }
+    },
+    {
+      "id": "object-type-id",
+      "name": "object-type-id",
+      "kind": "id",
+      "repr": "string",
+      "description": "An object type within a tenant (kernel ObjectTypeId).",
+      "constraints": {
+        "pattern": "^[a-z][a-z0-9_]*$",
+        "maxLength": 64
+      }
+    },
+    {
+      "id": "workflow-id",
+      "name": "workflow-id",
+      "kind": "id",
+      "repr": "string",
+      "description": "A workflow of a tenant (kernel WorkflowId).",
+      "constraints": {
+        "pattern": "^[a-z][a-z0-9_]*$",
+        "maxLength": 64
+      }
+    },
     {"id":"record-id","name":"record-id","kind":"id","repr":"u64","description":"Allocated from the tenant counter (kernel RecordId)."},
     {"id":"placement-id","name":"placement-id","kind":"id","repr":"uuid"},
     {"id":"credential-id","name":"credential-id","kind":"id","repr":"uuid"},
@@ -57832,14 +57882,12 @@
       "sensitive": "secret"
     },
     {"id":"expression","name":"expression","kind":"scalar","repr":"string"},
-    {"id":"schema","name":"schema","kind":"scalar","repr":"string","description":"A tenant schema as the JSON text that storage holds."},
     {"id":"value-map","name":"value-map","kind":"scalar","repr":"string","description":"A map of field values as JSON text."},
-    {"id":"event-body","name":"event-body","kind":"scalar","repr":"string","description":"The body of a domain event as JSON text."},
     {"id":"change-set","name":"change-set","kind":"scalar","repr":"string","description":"A set of changes as JSON text."},
     {"id":"structured-blocks","name":"structured-blocks","kind":"scalar","repr":"string","description":"Structured content blocks as JSON text."},
     {"id":"recurrence","name":"recurrence","kind":"scalar","repr":"string","description":"A recurrence rule."},
     {"id":"workflow-state","name":"workflow-state","kind":"scalar","repr":"string","description":"The state a tenant workflow gives a record; tenant-defined."},
-    {"id":"tenant-state","name":"tenant-state","kind":"enum","values":["provisioning","active","suspended"]},
+    {"id":"tenant-lifecycle","name":"tenant-state","kind":"enum","values":["provisioning","active","suspended"]},
     {"id":"principal-state","name":"principal-state","kind":"enum","values":["active","suspended","erased"]},
     {"id":"certificate-state","name":"certificate-state","kind":"enum","values":["pending","valid","expired"]},
     {"id":"domain-state","name":"domain-state","kind":"enum","values":["pending","proved"]},
@@ -57886,8 +57934,6 @@
     {"id":"environment-kind","name":"environment-kind","kind":"enum","values":["stage","production"]},
     {"id":"access-report","name":"Access Report","kind":"struct","fields":[{"name":"tenant","type":"tenant-id"},{"name":"grants","type":"list<grant-id>"},{"name":"generated-at","type":"timestamp"}],"description":"The grants made to the data of a tenant."},
     {"id":"account","name":"Account","kind":"struct","fields":[{"name":"tenant","type":"tenant-id"},{"name":"login","type":"string"},{"name":"principal","type":"principal-id"},{"name":"display-name","type":"string"},{"name":"password-hash","type":"hash"}],"description":"strata_storage_api::Account: a locally managed login."},
-    {"id":"acting-principal","name":"Acting Principal","kind":"struct","fields":[{"name":"kind","type":"acting-principal-kind"},{"name":"principal","type":"principal-id","optional":true}],"description":"strata_kernel::Principal."},
-    {"id":"acting-principal-kind","name":"Acting Principal Kind","kind":"enum","values":["system","anonymous","user"],"description":"Who is acting: the platform, an unauthenticated visitor or a signed-in principal."},
     {"id":"action-preview","name":"Action Preview","kind":"struct","fields":[{"name":"pending","type":"pending-id"},{"name":"creates","type":"list<record-id>"},{"name":"changes","type":"list<record-id>"},{"name":"removes","type":"list<record-id>"},{"name":"views","type":"list<string>"},{"name":"preview-hash","type":"hash"},{"name":"valid-until","type":"timestamp"}],"description":"The preview of a pending action."},
     {"id":"adapter-capabilities","name":"Adapter Capabilities","kind":"struct","fields":[{"name":"adapter","type":"string"},{"name":"durable","type":"bool"},{"name":"isolation","type":"string"},{"name":"read-consistency","type":"string"},{"name":"notes","type":"list<string>"}],"description":"strata_storage_api::Capabilities: what an adapter actually provides."},
     {"id":"adapter-health","name":"Adapter Health","kind":"struct","fields":[{"name":"ok","type":"bool"},{"name":"detail","type":"string"},{"name":"tenants","type":"u64"},{"name":"outbox-pending","type":"u64"}],"description":"strata_storage_api::Health."},
@@ -57897,14 +57943,9 @@
     {"id":"archive-ref","name":"Archive Ref","kind":"id","repr":"string","description":"A reference to an archive document produced by an export."},
     {"id":"audit-entry","name":"Audit Entry","kind":"struct","fields":[{"name":"seq","type":"u64"},{"name":"actor","type":"principal-id"},{"name":"on-behalf-of","type":"principal-id","optional":true},{"name":"action","type":"string"},{"name":"outcome","type":"string"},{"name":"correlation","type":"correlation-id"},{"name":"previous-hash","type":"hash"}],"description":"One entry of the hash-chained audit log."},
     {"id":"changelog-entry","name":"Changelog Entry","kind":"struct","fields":[{"name":"version","type":"string"},{"name":"description","type":"string"},{"name":"at","type":"timestamp"}],"description":"One entry of the changelog."},
-    {"id":"check","name":"Check","kind":"struct","fields":[{"name":"rule","type":"string"},{"name":"passed","type":"bool"},{"name":"detail","type":"string"}],"description":"strata_kernel::Check: one evaluated rule."},
     {"id":"commit","name":"Commit","kind":"struct","fields":[{"name":"delta","type":"state-delta"},{"name":"events","type":"list<domain-event>"},{"name":"journal","type":"journal-entry"},{"name":"revoke-sessions","type":"list<principal-id>"}],"description":"strata_storage_api::Commit: everything one accepted transition writes, applied atomically."},
-    {"id":"context","name":"Context","kind":"struct","fields":[{"name":"tenant","type":"tenant-id"},{"name":"principal","type":"acting-principal"},{"name":"session","type":"session-id","optional":true},{"name":"now","type":"timestamp"},{"name":"correlation","type":"correlation-id"}],"description":"strata_kernel::Context: the explicit environment of a transition; nothing else reaches the kernel."},
     {"id":"copy-key","name":"Copy Key","kind":"scalar","repr":"string","description":"The key of a stored copy; it begins with the tenant identifier."},
-    {"id":"coverage","name":"Coverage","kind":"struct","fields":[{"name":"kind","type":"coverage-kind"},{"name":"needs","type":"list<need>"}],"description":"strata_kernel::Coverage."},
-    {"id":"coverage-kind","name":"Coverage Kind","kind":"enum","values":["complete","partial"],"description":"Whether a snapshot holds every record of the tenant or only those answering stated needs."},
     {"id":"deletion-certificate","name":"Deletion Certificate","kind":"struct","fields":[{"name":"tenant","type":"tenant-id"},{"name":"key-destroyed-at","type":"timestamp"},{"name":"images-removed","type":"list<timestamp>"}],"description":"The certificate of a tenant deletion."},
-    {"id":"delta-op","name":"Delta Op","kind":"struct","fields":[{"name":"kind","type":"string"},{"name":"record","type":"stored-record","optional":true},{"name":"object","type":"object-type-id","optional":true},{"name":"id","type":"record-id","optional":true},{"name":"principal","type":"principal-id","optional":true},{"name":"roles","type":"list<string>","optional":true}],"description":"strata_kernel::DeltaOp: one change to a tenant state."},
     {"id":"desk-article","name":"Desk Article","kind":"struct","fields":[{"name":"article-id","type":"record-id"},{"name":"version","type":"u64"},{"name":"title","type":"string"},{"name":"slug","type":"string"},{"name":"body","type":"string"},{"name":"status","type":"string"}],"description":"One article as the writing desk lists it: the identifier and version a change names, the fields a save repeats, and whether it is a draft or published."},
     {"id":"publication-fields","name":"Publication Fields","kind":"struct","fields":[{"name":"key","type":"string"},{"name":"name","type":"string"},{"name":"tagline","type":"string","optional":true},{"name":"about","type":"string","optional":true},{"name":"colophon","type":"string","optional":true},{"name":"accent","type":"string"},{"name":"paper","type":"string"}],"description":"The fields of the publication record as the BFF projects them (object publication of the tenant template), under the names the JSON uses."},
     {"id":"author-fields","name":"Author Fields","kind":"struct","fields":[{"name":"name","type":"string"},{"name":"slug","type":"string"},{"name":"title","type":"string","optional":true},{"name":"bio","type":"string","optional":true},{"name":"principal","type":"string","optional":true}],"description":"The fields of an author record as the BFF projects them (object author)."},
@@ -57932,21 +57973,14 @@
     {"id":"new-article-page-data","name":"New Article Page Data","kind":"struct","fields":[{"name":"site","type":"publication-row","optional":true},{"name":"categories","type":"list<category-row>"},{"name":"authors","type":"list<author-row>"}],"description":"The sections of the view for a new article."},
     {"id":"edit-article-page-data","name":"Edit Article Page Data","kind":"struct","fields":[{"name":"site","type":"publication-row","optional":true},{"name":"post","type":"post-row","optional":true},{"name":"categories","type":"list<category-row>"},{"name":"authors","type":"list<author-row>"}],"description":"The sections of the view for editing an article."},
     {"id":"domain-binding","name":"Domain Binding","kind":"struct","fields":[{"name":"host","type":"host"},{"name":"tenant","type":"tenant-id"},{"name":"certificate-state","type":"certificate-state"}],"description":"A domain name bound to a tenant."},
-    {"id":"domain-error","name":"Domain Error","kind":"struct","fields":[{"name":"kind","type":"error-kind"},{"name":"message","type":"string"},{"name":"evidence","type":"list<check>"},{"name":"missing","type":"need","optional":true}],"description":"strata_kernel::DomainError: a rejection with the checks that led to it."},
-    {"id":"domain-event","name":"Domain Event","kind":"struct","fields":[{"name":"tenant","type":"tenant-id"},{"name":"seq","type":"u64"},{"name":"revision","type":"state-revision"},{"name":"at","type":"timestamp"},{"name":"principal","type":"acting-principal"},{"name":"correlation","type":"string"},{"name":"body","type":"event-body"}],"description":"strata_kernel::DomainEvent: a fact about an accepted transition; its sequence is gapless per tenant."},
-    {"id":"effect","name":"Effect","kind":"struct","fields":[{"name":"kind","type":"string"},{"name":"seq","type":"u64","optional":true},{"name":"principal","type":"principal-id","optional":true}],"description":"strata_kernel::Effect: something the adapters do after commit."},
     {"id":"erasure-receipt","name":"Erasure Receipt","kind":"struct","fields":[{"name":"principal","type":"principal-id"},{"name":"records","type":"list<record-id>"},{"name":"at","type":"timestamp"}],"description":"The receipt of an erasure."},
     {"id":"error-code","name":"Error Code","kind":"enum","values":["unauthenticated","forbidden","not-found","conflict","invalid","throttled","unavailable","internal"],"description":"strata_protocol::api::ErrorCode; each has one HTTP status."},
-    {"id":"error-kind","name":"Error Kind","kind":"enum","values":["tenant-mismatch","tenant-exists","tenant-not-found","unauthorized","unknown-object","unknown-field","unknown-record","unknown-role","unknown-query","type-mismatch","missing-required","constraint-violated","unique-violated","dangling-reference","still-referenced","workflow-violation","version-conflict","schema-conflict","invalid-schema","migration-rejected","insufficient-state","evaluation","invalid-intent"],"description":"strata_kernel::ErrorKind."},
     {"id":"event-stream","name":"Event Stream","kind":"struct","fields":[{"name":"tenant","type":"tenant-id"},{"name":"position","type":"u64"}],"description":"A stream of notices, resumable from a position; a notice never carries record contents."},
     {"id":"executed-intent","name":"Executed Intent","kind":"struct","fields":[{"name":"transition","type":"transition-result"},{"name":"receipt","type":"receipt"},{"name":"conflicts","type":"u32"}],"description":"strata_storage_api::Executed."},
-    {"id":"existing-data","name":"Existing Data","kind":"enum","values":["reject","grandfather"],"description":"How a schema change treats records that do not conform."},
     {"id":"field-difference","name":"Field Difference","kind":"struct","fields":[{"name":"field","type":"string"},{"name":"draft","type":"string"},{"name":"published","type":"string"}],"description":"One field that differs between a draft and its published version."},
     {"id":"html-page","name":"Html Page","kind":"scalar","repr":"string","description":"A complete HTML document."},
     {"id":"identity-assertion","name":"Identity Assertion","kind":"struct","fields":[{"name":"tenant","type":"tenant-id"},{"name":"principal","type":"principal-id"},{"name":"session","type":"session-id"},{"name":"roles","type":"list<string>"},{"name":"authenticated-at","type":"timestamp"},{"name":"expires-at","type":"timestamp"},{"name":"signature","type":"bytes"}],"description":"An assertion signed by the identity service about one session."},
     {"id":"inbox-notice","name":"Inbox Notice","kind":"struct","fields":[{"name":"id","type":"string"},{"name":"kind","type":"string"},{"name":"body","type":"value-map"},{"name":"at","type":"timestamp"},{"name":"read","type":"bool"}],"description":"One notice of an inbox."},
-    {"id":"intent","name":"Intent","kind":"struct","fields":[{"name":"kind","type":"intent-kind"},{"name":"payload","type":"value-map"}],"description":"strata_kernel::Intent: one request to change a tenant, tagged by its kind."},
-    {"id":"intent-kind","name":"Intent Kind","kind":"enum","values":["create-tenant","change-schema","assign-role","revoke-role","create-record","update-record","delete-record"],"description":"The kinds of intent the kernel decides."},
     {"id":"job-outcome","name":"Job Outcome","kind":"enum","values":["succeeded","failed"],"description":"The outcome a worker reports for one attempt."},
     {"id":"job-summary","name":"Job Summary","kind":"struct","fields":[{"name":"job","type":"job-id"},{"name":"state","type":"job-state"},{"name":"due-at","type":"timestamp"},{"name":"attempts","type":"u32"},{"name":"errors","type":"list<string>"}],"description":"A job as the catalogue lists it."},
     {"id":"journal-entry","name":"Journal Entry","kind":"struct","fields":[{"name":"tenant","type":"tenant-id"},{"name":"base-revision","type":"state-revision","optional":true},{"name":"revision","type":"state-revision"},{"name":"kernel-version","type":"string"},{"name":"intent","type":"intent"},{"name":"context","type":"context"},{"name":"delta-hash","type":"hash"},{"name":"events-hash","type":"hash"}],"description":"strata_storage_api::JournalEntry: one accepted transition as decided, enough to run it again."},
@@ -57955,29 +57989,23 @@
     {"id":"layout-phase","name":"Layout Phase","kind":"enum","values":["expanding","contracting"],"description":"The phases of a storage layout change."},
     {"id":"mail-log-entry","name":"Mail Log Entry","kind":"struct","fields":[{"name":"message","type":"message-id"},{"name":"recipient","type":"email-address"},{"name":"state","type":"message-state"},{"name":"at","type":"timestamp"}],"description":"One entry of the mail log."},
     {"id":"mapping-report","name":"Mapping Report","kind":"struct","fields":[{"name":"mappings","type":"list<string>"},{"name":"unmapped","type":"list<string>"}],"description":"What an import mapped and could not map."},
-    {"id":"migration-plan","name":"Migration Plan","kind":"struct","fields":[{"name":"schema","type":"schema"},{"name":"summary","type":"list<string>"},{"name":"rewritten","type":"list<stored-record>"},{"name":"violations","type":"list<violation>"}],"description":"strata_kernel::Migration: what schema changes would do."},
+    {"id":"migration-plan","name":"Migration Plan","kind":"struct","fields":[{"name":"schema","type":"tenant-schema"},{"name":"summary","type":"list<string>"},{"name":"rewritten","type":"list<record>"},{"name":"violations","type":"list<violation>"}],"description":"strata_kernel::Migration: what schema changes would do."},
     {"id":"model-usage","name":"Model Usage","kind":"struct","fields":[{"name":"input-tokens","type":"u64"},{"name":"output-tokens","type":"u64"}],"description":"What a model request used."},
-    {"id":"need","name":"Need","kind":"struct","fields":[{"name":"kind","type":"need-kind"},{"name":"object","type":"object-type-id"},{"name":"id","type":"record-id","optional":true},{"name":"field","type":"string","optional":true},{"name":"value","type":"string","optional":true}],"description":"strata_kernel::Need: a piece of state a decision or read needs."},
-    {"id":"need-kind","name":"Need Kind","kind":"enum","values":["record","by-field","all-of"],"description":"How a need names the records it wants."},
     {"id":"notice","name":"Notice","kind":"struct","fields":[{"name":"tenant","type":"tenant-id"},{"name":"id","type":"string"},{"name":"kind","type":"string"},{"name":"seq","type":"u64","optional":true}],"description":"A tenant-scoped notice: a reference to an event, a wake notice or a revocation."},
     {"id":"operation-entry","name":"Operation Entry","kind":"struct","fields":[{"name":"name","type":"string"},{"name":"version","type":"string"},{"name":"deprecation","type":"string"},{"name":"requirements","type":"list<string>"},{"name":"permitted","type":"bool"},{"name":"description","type":"string"}],"description":"One entry of the operation catalogue."},
     {"id":"operation-result","name":"Operation Result","kind":"struct","fields":[{"name":"state","type":"string"},{"name":"output","type":"value-map"},{"name":"changes","type":"list<string>"},{"name":"inverse","type":"string","optional":true},{"name":"checks","type":"list<check>"},{"name":"handle","type":"string","optional":true}],"description":"The result of invoking an operation."},
     {"id":"outbox-entry","name":"Outbox Entry","kind":"struct","fields":[{"name":"position","type":"u64"},{"name":"event","type":"domain-event"}],"description":"strata_storage_api::OutboxEntry: an event waiting to be handed to subscribers."},
     {"id":"platform-description","name":"Platform Description","kind":"struct","fields":[{"name":"components","type":"list<string>"},{"name":"health","type":"value-map"},{"name":"configuration","type":"value-map"}],"description":"The topology, configuration and health of the platform."},
     {"id":"projection","name":"Projection","kind":"struct","fields":[{"name":"proposal","type":"projection-proposal"},{"name":"baseline-hash","type":"hash"},{"name":"branch-hash","type":"hash"},{"name":"diverged","type":"bool"},{"name":"counterexample","type":"string","optional":true},{"name":"findings","type":"list<string>"},{"name":"unmodelled","type":"list<string>"}],"description":"strata_simulation::project::Projection."},
-    {"id":"projection-proposal","name":"Projection Proposal","kind":"struct","fields":[{"name":"tenant","type":"tenant-id"},{"name":"principal","type":"acting-principal"},{"name":"changes","type":"list<schema-change>"},{"name":"existing-data","type":"existing-data"},{"name":"before-step","type":"u64"}],"description":"strata_simulation::project::Proposal."},
+    {"id":"projection-proposal","name":"Projection Proposal","kind":"struct","fields":[{"name":"tenant","type":"tenant-id"},{"name":"principal","type":"principal"},{"name":"changes","type":"list<schema-change>"},{"name":"existing-data","type":"existing-data"},{"name":"before-step","type":"u64"}],"description":"strata_simulation::project::Proposal."},
     {"id":"projection-summary","name":"Projection Summary","kind":"struct","fields":[{"name":"diverged","type":"bool"},{"name":"summary","type":"list<string>"},{"name":"first-difference","type":"string","optional":true}],"description":"A projection as an operation reports it."},
     {"id":"public-key","name":"Public Key","kind":"struct","fields":[{"name":"id","type":"key-id"},{"name":"algorithm","type":"string"},{"name":"key","type":"bytes"}],"description":"A published signing key."},
-    {"id":"read-kind","name":"Read Kind","kind":"enum","values":["named","records"],"description":"Whether a read names a query or lists records by identifier."},
-    {"id":"read-request","name":"Read Request","kind":"struct","fields":[{"name":"kind","type":"read-kind"},{"name":"query","type":"string","optional":true},{"name":"params","type":"json","optional":true},{"name":"object","type":"object-type-id","optional":true},{"name":"ids","type":"list<record-id>","optional":true}],"description":"strata_kernel::ReadRequest."},
-    {"id":"read-result","name":"Read Result","kind":"struct","fields":[{"name":"rows","type":"list<stored-record>"},{"name":"revision","type":"state-revision"},{"name":"schema-version","type":"schema-version"}],"description":"strata_kernel::ReadResult."},
     {"id":"realm-policy","name":"Realm Policy","kind":"struct","fields":[{"name":"second-factor-required","type":"bool"},{"name":"password-sign-in","type":"bool"},{"name":"bound-domains","type":"list<domain>"},{"name":"create-on-first-sign-in","type":"bool"},{"name":"default-role","type":"string","optional":true}],"description":"The sign-in policy of a realm."},
     {"id":"receipt","name":"Receipt","kind":"struct","fields":[{"name":"revision","type":"state-revision"},{"name":"last-position","type":"u64","optional":true}],"description":"strata_storage_api::Receipt."},
     {"id":"record-version","name":"Record Version","kind":"struct","fields":[{"name":"version","type":"u64"},{"name":"at","type":"timestamp"},{"name":"author","type":"principal-id"}],"description":"One published version of a record."},
     {"id":"requirement-status","name":"Requirement Status","kind":"struct","fields":[{"name":"ref","type":"string"},{"name":"status","type":"string"},{"name":"evidence","type":"string","optional":true}],"description":"The verification status of one requirement."},
     {"id":"run-trace","name":"Run Trace","kind":"struct","fields":[{"name":"run","type":"request-id"},{"name":"agent","type":"principal-id"},{"name":"on-behalf-of","type":"principal-id","optional":true},{"name":"inputs","type":"list<string>"},{"name":"operations","type":"list<string>"}],"description":"The trace of one agent run."},
     {"id":"scenario","name":"Scenario","kind":"struct","fields":[{"name":"name","type":"string"},{"name":"seed","type":"u64"},{"name":"initial","type":"value-map"},{"name":"schedule","type":"list<value-map>"},{"name":"faults","type":"value-map"}],"description":"strata_simulation::engine::Scenario."},
-    {"id":"schema-change","name":"Schema Change","kind":"struct","fields":[{"name":"kind","type":"string"},{"name":"payload","type":"value-map"}],"description":"strata_kernel::SchemaChange: one edit of a tenant schema (define or remove an object, field, relationship, constraint, role, policy, workflow, query or view)."},
     {"id":"schema-version","name":"Schema Version","kind":"id","repr":"u64","description":"The version of a tenant schema."},
     {"id":"scim-user","name":"Scim User","kind":"struct","fields":[{"name":"external-id","type":"string"},{"name":"email","type":"email-address"},{"name":"display-name","type":"display-name"},{"name":"active","type":"bool"}],"description":"A person as the provisioning endpoint exchanges it."},
     {"id":"search-hit","name":"Search Hit","kind":"struct","fields":[{"name":"record","type":"record-id"},{"name":"object","type":"object-type-id"},{"name":"title","type":"string"},{"name":"status","type":"string","optional":true}],"description":"One hit of a search."},
@@ -57987,22 +58015,16 @@
     {"id":"session-view","name":"Session View","kind":"struct","fields":[{"name":"authenticated","type":"bool"},{"name":"tenant","type":"tenant-id"},{"name":"tenant-name","type":"string"},{"name":"session-id","type":"session-id","optional":true},{"name":"principal","type":"principal-id","optional":true},{"name":"display-name","type":"display-name","optional":true},{"name":"roles","type":"list<string>"},{"name":"csrf-token","type":"secret","optional":true},{"name":"expires-at","type":"timestamp","optional":true},{"name":"may-manage-schema","type":"bool"}],"description":"strata_protocol::api::SessionView: a session as the browser may see it."},
     {"id":"snapshot-info","name":"Snapshot Info","kind":"struct","fields":[{"name":"tenant","type":"tenant-id"},{"name":"id","type":"u64"},{"name":"label","type":"string"},{"name":"revision","type":"state-revision"},{"name":"hash","type":"hash"},{"name":"created-at","type":"timestamp"}],"description":"strata_storage_api::SnapshotInfo."},
     {"id":"spend-entry","name":"Spend Entry","kind":"struct","fields":[{"name":"agent","type":"principal-id","optional":true},{"name":"tenant","type":"tenant-id","optional":true},{"name":"amount","type":"f64"}],"description":"The spend of one agent or tenant."},
-    {"id":"state","name":"State","kind":"struct","fields":[{"name":"tenant-id","type":"tenant-id"},{"name":"tenant","type":"tenant-snapshot","optional":true},{"name":"coverage","type":"coverage"}],"description":"strata_kernel::State: the snapshot a transition or read runs against."},
-    {"id":"state-delta","name":"State Delta","kind":"struct","fields":[{"name":"tenant","type":"tenant-id"},{"name":"base-revision","type":"state-revision","optional":true},{"name":"new-revision","type":"state-revision"},{"name":"next-record","type":"u64"},{"name":"event-seq","type":"u64"},{"name":"ops","type":"list<delta-op>"}],"description":"strata_kernel::StateDelta: the logical change of one accepted transition."},
     {"id":"state-revision","name":"State Revision","kind":"id","repr":"u64","description":"The revision of a tenant state; each accepted transition advances it by one."},
     {"id":"storage-migration","name":"Storage Migration","kind":"struct","fields":[{"name":"version","type":"u32"},{"name":"name","type":"string"},{"name":"applied-at","type":"timestamp"}],"description":"strata_storage_api::StorageMigration: a step in the layout history of an adapter."},
     {"id":"store-error","name":"Store Error","kind":"struct","fields":[{"name":"kind","type":"store-error-kind"},{"name":"message","type":"string"},{"name":"expected","type":"state-revision","optional":true},{"name":"found","type":"state-revision","optional":true}],"description":"strata_storage_api::StoreError."},
     {"id":"store-error-kind","name":"Store Error Kind","kind":"enum","values":["conflict","not-found","invalid","unavailable","corrupt"],"description":"strata_storage_api::StoreError variants."},
     {"id":"store-handle","name":"Store Handle","kind":"scalar","repr":"string","description":"An opened store of one adapter, held by the process that opened it; it implements the store contract."},
-    {"id":"stored-record","name":"Stored Record","kind":"struct","fields":[{"name":"id","type":"record-id"},{"name":"object","type":"object-type-id"},{"name":"version","type":"u64"},{"name":"created-by","type":"principal-id","optional":true},{"name":"created-at","type":"timestamp"},{"name":"updated-at","type":"timestamp"},{"name":"fields","type":"value-map"}],"description":"strata_kernel::Record: one record of an object type."},
     {"id":"tenant-bundle","name":"Tenant Bundle","kind":"struct","fields":[{"name":"name","type":"string"},{"name":"version","type":"string"},{"name":"content","type":"value-map"}],"description":"substrate::bundle::Bundle: a tenant or a template as one document."},
-    {"id":"tenant-directory-entry","name":"Tenant Directory Entry","kind":"struct","fields":[{"name":"tenant","type":"tenant-id"},{"name":"state","type":"tenant-state"},{"name":"kind","type":"tenant-kind"},{"name":"plan","type":"plan-id"},{"name":"placement","type":"placement-id"},{"name":"region","type":"region-id"},{"name":"fetched-at","type":"timestamp"}],"description":"A directory entry as the gateway holds it."},
+    {"id":"tenant-directory-entry","name":"Tenant Directory Entry","kind":"struct","fields":[{"name":"tenant","type":"tenant-id"},{"name":"state","type":"tenant-lifecycle"},{"name":"kind","type":"tenant-kind"},{"name":"plan","type":"plan-id"},{"name":"placement","type":"placement-id"},{"name":"region","type":"region-id"},{"name":"fetched-at","type":"timestamp"}],"description":"A directory entry as the gateway holds it."},
     {"id":"tenant-kind","name":"Tenant Kind","kind":"enum","values":["production","staging","sandbox"],"description":"Whether a tenant is production, staging or sandbox."},
-    {"id":"tenant-snapshot","name":"Tenant Snapshot","kind":"struct","fields":[{"name":"id","type":"tenant-id"},{"name":"name","type":"string"},{"name":"revision","type":"state-revision"},{"name":"schema","type":"schema"},{"name":"event-seq","type":"u64"},{"name":"next-record","type":"u64"},{"name":"records","type":"list<stored-record>"}],"description":"strata_kernel::TenantState: the state of one tenant."},
     {"id":"tenant-summary","name":"Tenant Summary","kind":"struct","fields":[{"name":"id","type":"tenant-id"},{"name":"name","type":"string"},{"name":"revision","type":"state-revision"},{"name":"schema-version","type":"u64"},{"name":"event-seq","type":"u64"},{"name":"records","type":"u64"}],"description":"strata_storage_api::TenantSummary."},
     {"id":"trace","name":"Trace","kind":"struct","fields":[{"name":"kernel-version","type":"string"},{"name":"scenario","type":"string"},{"name":"seed","type":"u64"},{"name":"final-hash","type":"hash"},{"name":"steps","type":"u64"},{"name":"hash","type":"hash"}],"description":"strata_simulation::engine::Trace."},
-    {"id":"transition-output","name":"Transition Output","kind":"struct","fields":[{"name":"kind","type":"string"},{"name":"object","type":"object-type-id","optional":true},{"name":"id","type":"record-id","optional":true},{"name":"version","type":"u64","optional":true},{"name":"schema-version","type":"schema-version","optional":true}],"description":"strata_kernel::Output: what an accepted transition tells its caller."},
-    {"id":"transition-result","name":"Transition Result","kind":"struct","fields":[{"name":"delta","type":"state-delta"},{"name":"events","type":"list<domain-event>"},{"name":"effects","type":"list<effect>"},{"name":"evidence","type":"list<check>"},{"name":"output","type":"transition-output"}],"description":"strata_kernel::Transition: the result of an accepted transition."},
     {"id":"usage-count","name":"Usage Count","kind":"struct","fields":[{"name":"quantity","type":"string"},{"name":"count","type":"u64"}],"description":"A metered quantity counted for a period."},
     {"id":"view-data","name":"View Data","kind":"struct","fields":[{"name":"view","type":"string"},{"name":"title","type":"string"},{"name":"params","type":"json"},{"name":"sections","type":"value-map"},{"name":"depends-on","type":"list<object-type-id>"},{"name":"revision","type":"state-revision"},{"name":"schema-version","type":"schema-version"}],"description":"strata_substrate::project::ViewData: the raw result of a view."},
     {"id":"violation","name":"Violation","kind":"struct","fields":[{"name":"object","type":"object-type-id"},{"name":"id","type":"record-id"},{"name":"check","type":"check"},{"name":"kind","type":"error-kind"}],"description":"strata_kernel::Violation: an existing record that does not conform to a proposed schema."},
@@ -58015,10 +58037,1997 @@
       "repr": "string",
       "sensitive": "token",
       "description": "The secret a session cookie carries; only its hash is stored, and it is never logged."
+    },
+    {
+      "id": "field-id",
+      "name": "field-id",
+      "kind": "id",
+      "repr": "string",
+      "constraints": {
+        "pattern": "^[a-z][a-z0-9_]*$",
+        "maxLength": 64
+      },
+      "description": "kernel FieldId: a field of an object type, [a-z][a-z0-9_]*, at most 64 bytes."
+    },
+    {
+      "id": "role-id",
+      "name": "role-id",
+      "kind": "id",
+      "repr": "string",
+      "constraints": {
+        "pattern": "^[a-z][a-z0-9_]*$",
+        "maxLength": 64
+      },
+      "description": "kernel RoleId: a role of a tenant, [a-z][a-z0-9_]*, at most 64 bytes."
+    },
+    {
+      "id": "policy-id",
+      "name": "policy-id",
+      "kind": "id",
+      "repr": "string",
+      "constraints": {
+        "pattern": "^[a-z][a-z0-9_]*$",
+        "maxLength": 64
+      },
+      "description": "kernel PolicyId: a policy of a tenant, [a-z][a-z0-9_]*, at most 64 bytes."
+    },
+    {
+      "id": "constraint-id",
+      "name": "constraint-id",
+      "kind": "id",
+      "repr": "string",
+      "constraints": {
+        "pattern": "^[a-z][a-z0-9_]*$",
+        "maxLength": 64
+      },
+      "description": "kernel ConstraintId: a constraint of an object type, [a-z][a-z0-9_]*, at most 64 bytes."
+    },
+    {
+      "id": "query-id",
+      "name": "query-id",
+      "kind": "id",
+      "repr": "string",
+      "constraints": {
+        "pattern": "^[a-z][a-z0-9_]*$",
+        "maxLength": 64
+      },
+      "description": "kernel QueryId: a named query of a tenant, [a-z][a-z0-9_]*, at most 64 bytes."
+    },
+    {
+      "id": "view-id",
+      "name": "view-id",
+      "kind": "id",
+      "repr": "string",
+      "constraints": {
+        "pattern": "^[a-z][a-z0-9_]*$",
+        "maxLength": 64
+      },
+      "description": "kernel ViewId: a view of a tenant, [a-z][a-z0-9_]*, at most 64 bytes."
+    },
+    {
+      "id": "on-delete",
+      "name": "On Delete",
+      "kind": "union",
+      "variants": [
+        {
+          "name": "restrict"
+        },
+        {
+          "name": "set-null"
+        }
+      ],
+      "encoding": {
+        "tag": "external",
+        "variantCase": "PascalCase"
+      },
+      "description": "strata_kernel::OnDelete."
+    },
+    {
+      "id": "value",
+      "name": "Value",
+      "kind": "union",
+      "variants": [
+        {
+          "name": "null"
+        },
+        {
+          "name": "bool",
+          "newtype": true,
+          "fields": [
+            {
+              "name": "value",
+              "type": "bool"
+            }
+          ]
+        },
+        {
+          "name": "int",
+          "newtype": true,
+          "fields": [
+            {
+              "name": "value",
+              "type": "i64"
+            }
+          ]
+        },
+        {
+          "name": "str",
+          "newtype": true,
+          "fields": [
+            {
+              "name": "value",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "name": "time",
+          "newtype": true,
+          "fields": [
+            {
+              "name": "value",
+              "type": "i64"
+            }
+          ]
+        },
+        {
+          "name": "ref",
+          "newtype": true,
+          "fields": [
+            {
+              "name": "value",
+              "type": "record-id"
+            }
+          ]
+        },
+        {
+          "name": "list",
+          "newtype": true,
+          "fields": [
+            {
+              "name": "value",
+              "type": "list<value>"
+            }
+          ]
+        }
+      ],
+      "encoding": {
+        "tag": "external",
+        "variantCase": "PascalCase"
+      },
+      "description": "strata_kernel::Value: the typed value algebra."
+    },
+    {
+      "id": "field-type",
+      "name": "Field Type",
+      "kind": "union",
+      "variants": [
+        {
+          "name": "str"
+        },
+        {
+          "name": "int"
+        },
+        {
+          "name": "bool"
+        },
+        {
+          "name": "time"
+        },
+        {
+          "name": "ref",
+          "fields": [
+            {
+              "name": "target",
+              "type": "object-type-id"
+            },
+            {
+              "name": "on-delete",
+              "type": "on-delete"
+            }
+          ]
+        },
+        {
+          "name": "list",
+          "newtype": true,
+          "fields": [
+            {
+              "name": "value",
+              "type": "field-type"
+            }
+          ]
+        }
+      ],
+      "encoding": {
+        "tag": "external",
+        "variantCase": "PascalCase"
+      },
+      "description": "strata_kernel::FieldType."
+    },
+    {
+      "id": "scope",
+      "name": "Scope",
+      "kind": "union",
+      "variants": [
+        {
+          "name": "record"
+        },
+        {
+          "name": "old"
+        },
+        {
+          "name": "new"
+        }
+      ],
+      "encoding": {
+        "tag": "external",
+        "variantCase": "PascalCase"
+      },
+      "description": "strata_kernel::Scope."
+    },
+    {
+      "id": "cmp-op",
+      "name": "Cmp Op",
+      "kind": "union",
+      "variants": [
+        {
+          "name": "eq"
+        },
+        {
+          "name": "ne"
+        },
+        {
+          "name": "lt"
+        },
+        {
+          "name": "le"
+        },
+        {
+          "name": "gt"
+        },
+        {
+          "name": "ge"
+        }
+      ],
+      "encoding": {
+        "tag": "external",
+        "variantCase": "PascalCase"
+      },
+      "description": "strata_kernel::CmpOp."
+    },
+    {
+      "id": "expr",
+      "name": "Expr",
+      "kind": "union",
+      "variants": [
+        {
+          "name": "lit",
+          "newtype": true,
+          "fields": [
+            {
+              "name": "value",
+              "type": "value"
+            }
+          ]
+        },
+        {
+          "name": "var",
+          "tuple": true,
+          "fields": [
+            {
+              "name": "scope",
+              "type": "scope"
+            },
+            {
+              "name": "field",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "name": "through",
+          "tuple": true,
+          "fields": [
+            {
+              "name": "scope",
+              "type": "scope"
+            },
+            {
+              "name": "reference",
+              "type": "string"
+            },
+            {
+              "name": "field",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "name": "param",
+          "newtype": true,
+          "fields": [
+            {
+              "name": "value",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "name": "now"
+        },
+        {
+          "name": "principal"
+        },
+        {
+          "name": "has-role",
+          "newtype": true,
+          "fields": [
+            {
+              "name": "value",
+              "type": "role-id"
+            }
+          ]
+        },
+        {
+          "name": "not",
+          "newtype": true,
+          "fields": [
+            {
+              "name": "value",
+              "type": "expr"
+            }
+          ]
+        },
+        {
+          "name": "and",
+          "newtype": true,
+          "fields": [
+            {
+              "name": "value",
+              "type": "list<expr>"
+            }
+          ]
+        },
+        {
+          "name": "or",
+          "newtype": true,
+          "fields": [
+            {
+              "name": "value",
+              "type": "list<expr>"
+            }
+          ]
+        },
+        {
+          "name": "cmp",
+          "tuple": true,
+          "fields": [
+            {
+              "name": "op",
+              "type": "cmp-op"
+            },
+            {
+              "name": "left",
+              "type": "expr"
+            },
+            {
+              "name": "right",
+              "type": "expr"
+            }
+          ]
+        },
+        {
+          "name": "in",
+          "tuple": true,
+          "fields": [
+            {
+              "name": "item",
+              "type": "expr"
+            },
+            {
+              "name": "list",
+              "type": "expr"
+            }
+          ]
+        },
+        {
+          "name": "is-null",
+          "newtype": true,
+          "fields": [
+            {
+              "name": "value",
+              "type": "expr"
+            }
+          ]
+        },
+        {
+          "name": "len",
+          "newtype": true,
+          "fields": [
+            {
+              "name": "value",
+              "type": "expr"
+            }
+          ]
+        },
+        {
+          "name": "lower",
+          "newtype": true,
+          "fields": [
+            {
+              "name": "value",
+              "type": "expr"
+            }
+          ]
+        },
+        {
+          "name": "contains",
+          "tuple": true,
+          "fields": [
+            {
+              "name": "haystack",
+              "type": "expr"
+            },
+            {
+              "name": "needle",
+              "type": "expr"
+            }
+          ]
+        },
+        {
+          "name": "starts-with",
+          "tuple": true,
+          "fields": [
+            {
+              "name": "text",
+              "type": "expr"
+            },
+            {
+              "name": "prefix",
+              "type": "expr"
+            }
+          ]
+        },
+        {
+          "name": "is-slug",
+          "newtype": true,
+          "fields": [
+            {
+              "name": "value",
+              "type": "expr"
+            }
+          ]
+        },
+        {
+          "name": "if",
+          "tuple": true,
+          "fields": [
+            {
+              "name": "condition",
+              "type": "expr"
+            },
+            {
+              "name": "then",
+              "type": "expr"
+            },
+            {
+              "name": "else",
+              "type": "expr"
+            }
+          ]
+        }
+      ],
+      "encoding": {
+        "tag": "external",
+        "variantCase": "PascalCase"
+      },
+      "description": "strata_kernel::Expr: the tenant expression language. Var(Scope, String), Through(Scope, String, String), Cmp(CmpOp, Box<Expr>, Box<Expr>), In, Contains, StartsWith (Box<Expr>, Box<Expr>) and If(Box<Expr>, Box<Expr>, Box<Expr>) are tuple variants, written as serde writes them: {\"Cmp\": [\"Eq\", a, b]}."
+    },
+    {
+      "id": "field-def",
+      "name": "Field Def",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "id",
+          "type": "field-id"
+        },
+        {
+          "name": "label",
+          "type": "string"
+        },
+        {
+          "name": "ty",
+          "type": "field-type"
+        },
+        {
+          "name": "required",
+          "type": "bool"
+        },
+        {
+          "name": "unique",
+          "type": "bool"
+        },
+        {
+          "name": "default",
+          "type": "option<expr>"
+        }
+      ],
+      "description": "strata_kernel::FieldDef."
+    },
+    {
+      "id": "constraint-def",
+      "name": "Constraint Def",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "id",
+          "type": "constraint-id"
+        },
+        {
+          "name": "expr",
+          "type": "expr"
+        },
+        {
+          "name": "message",
+          "type": "string"
+        }
+      ],
+      "description": "strata_kernel::ConstraintDef."
+    },
+    {
+      "id": "object-type-def",
+      "name": "Object Type Def",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "id",
+          "type": "object-type-id"
+        },
+        {
+          "name": "label",
+          "type": "string"
+        },
+        {
+          "name": "fields",
+          "type": "map<field-id, field-def>"
+        },
+        {
+          "name": "constraints",
+          "type": "map<constraint-id, constraint-def>"
+        }
+      ],
+      "description": "strata_kernel::ObjectTypeDef."
+    },
+    {
+      "id": "role-def",
+      "name": "Role Def",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "id",
+          "type": "role-id"
+        },
+        {
+          "name": "label",
+          "type": "string"
+        }
+      ],
+      "description": "strata_kernel::RoleDef."
+    },
+    {
+      "id": "action",
+      "name": "Action",
+      "kind": "union",
+      "variants": [
+        {
+          "name": "read"
+        },
+        {
+          "name": "create"
+        },
+        {
+          "name": "update"
+        },
+        {
+          "name": "delete"
+        },
+        {
+          "name": "manage"
+        }
+      ],
+      "encoding": {
+        "tag": "external",
+        "variantCase": "PascalCase"
+      },
+      "description": "strata_kernel::Action."
+    },
+    {
+      "id": "resource",
+      "name": "Resource",
+      "kind": "union",
+      "variants": [
+        {
+          "name": "object",
+          "newtype": true,
+          "fields": [
+            {
+              "name": "value",
+              "type": "object-type-id"
+            }
+          ]
+        },
+        {
+          "name": "any-object"
+        },
+        {
+          "name": "schema"
+        },
+        {
+          "name": "members"
+        }
+      ],
+      "encoding": {
+        "tag": "external",
+        "variantCase": "PascalCase"
+      },
+      "description": "strata_kernel::Resource."
+    },
+    {
+      "id": "policy-def",
+      "name": "Policy Def",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "id",
+          "type": "policy-id"
+        },
+        {
+          "name": "role",
+          "type": "role-id"
+        },
+        {
+          "name": "resource",
+          "type": "resource"
+        },
+        {
+          "name": "actions",
+          "type": "set<action>"
+        },
+        {
+          "name": "condition",
+          "type": "option<expr>"
+        }
+      ],
+      "description": "strata_kernel::PolicyDef: actions is a BTreeSet<Action>."
+    },
+    {
+      "id": "workflow-transition",
+      "name": "Workflow Transition",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "name",
+          "type": "string"
+        },
+        {
+          "name": "from",
+          "type": "string"
+        },
+        {
+          "name": "to",
+          "type": "string"
+        },
+        {
+          "name": "guard",
+          "type": "option<expr>"
+        },
+        {
+          "name": "set",
+          "type": "map<field-id, expr>"
+        }
+      ],
+      "description": "strata_kernel::WorkflowTransition."
+    },
+    {
+      "id": "workflow-def",
+      "name": "Workflow Def",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "id",
+          "type": "workflow-id"
+        },
+        {
+          "name": "object",
+          "type": "object-type-id"
+        },
+        {
+          "name": "field",
+          "type": "field-id"
+        },
+        {
+          "name": "initial",
+          "type": "set<string>"
+        },
+        {
+          "name": "transitions",
+          "type": "list<workflow-transition>"
+        }
+      ],
+      "description": "strata_kernel::WorkflowDef: initial is a BTreeSet<String>."
+    },
+    {
+      "id": "order-key",
+      "name": "Order Key",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "field",
+          "type": "string"
+        },
+        {
+          "name": "descending",
+          "type": "bool"
+        }
+      ],
+      "description": "strata_kernel::OrderKey."
+    },
+    {
+      "id": "query-def",
+      "name": "Query Def",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "id",
+          "type": "query-id"
+        },
+        {
+          "name": "object",
+          "type": "object-type-id"
+        },
+        {
+          "name": "filter",
+          "type": "option<expr>"
+        },
+        {
+          "name": "params",
+          "type": "set<string>"
+        },
+        {
+          "name": "order",
+          "type": "list<order-key>"
+        },
+        {
+          "name": "limit",
+          "type": "option<u32>"
+        }
+      ],
+      "description": "strata_kernel::QueryDef: params is a BTreeSet<String>."
+    },
+    {
+      "id": "arg-source",
+      "name": "Arg Source",
+      "kind": "union",
+      "variants": [
+        {
+          "name": "route",
+          "newtype": true,
+          "fields": [
+            {
+              "name": "value",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "name": "request",
+          "newtype": true,
+          "fields": [
+            {
+              "name": "value",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "name": "const",
+          "newtype": true,
+          "fields": [
+            {
+              "name": "value",
+              "type": "value"
+            }
+          ]
+        },
+        {
+          "name": "section",
+          "fields": [
+            {
+              "name": "section",
+              "type": "string"
+            },
+            {
+              "name": "attribute",
+              "type": "string"
+            }
+          ]
+        }
+      ],
+      "encoding": {
+        "tag": "external",
+        "variantCase": "PascalCase"
+      },
+      "description": "strata_kernel::ArgSource."
+    },
+    {
+      "id": "view-section",
+      "name": "View Section",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "query",
+          "type": "query-id"
+        },
+        {
+          "name": "args",
+          "type": "map<string, arg-source>"
+        },
+        {
+          "name": "include",
+          "type": "list<field-id>"
+        },
+        {
+          "name": "markdown",
+          "type": "list<field-id>"
+        },
+        {
+          "name": "single",
+          "type": "bool"
+        }
+      ],
+      "description": "strata_kernel::ViewSection."
+    },
+    {
+      "id": "view-def",
+      "name": "View Def",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "id",
+          "type": "view-id"
+        },
+        {
+          "name": "route",
+          "type": "string"
+        },
+        {
+          "name": "title",
+          "type": "string"
+        },
+        {
+          "name": "sections",
+          "type": "map<string, view-section>"
+        }
+      ],
+      "description": "strata_kernel::ViewDef."
+    },
+    {
+      "id": "tenant-schema",
+      "name": "Tenant Schema",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "version",
+          "type": "schema-version"
+        },
+        {
+          "name": "objects",
+          "type": "map<object-type-id, object-type-def>"
+        },
+        {
+          "name": "roles",
+          "type": "map<role-id, role-def>"
+        },
+        {
+          "name": "policies",
+          "type": "map<policy-id, policy-def>"
+        },
+        {
+          "name": "workflows",
+          "type": "map<workflow-id, workflow-def>"
+        },
+        {
+          "name": "queries",
+          "type": "map<query-id, query-def>"
+        },
+        {
+          "name": "views",
+          "type": "map<view-id, view-def>"
+        }
+      ],
+      "description": "strata_kernel::TenantSchema."
+    },
+    {
+      "id": "principal",
+      "name": "Principal",
+      "kind": "union",
+      "variants": [
+        {
+          "name": "system"
+        },
+        {
+          "name": "anonymous"
+        },
+        {
+          "name": "user",
+          "newtype": true,
+          "fields": [
+            {
+              "name": "value",
+              "type": "principal-id"
+            }
+          ]
+        }
+      ],
+      "encoding": {
+        "tag": "external",
+        "variantCase": "PascalCase"
+      },
+      "description": "strata_kernel::Principal."
+    },
+    {
+      "id": "record",
+      "name": "Record",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "id",
+          "type": "record-id"
+        },
+        {
+          "name": "object",
+          "type": "object-type-id"
+        },
+        {
+          "name": "version",
+          "type": "u64"
+        },
+        {
+          "name": "created-by",
+          "type": "option<principal-id>"
+        },
+        {
+          "name": "created-at",
+          "type": "timestamp"
+        },
+        {
+          "name": "updated-at",
+          "type": "timestamp"
+        },
+        {
+          "name": "fields",
+          "type": "map<field-id, value>"
+        }
+      ],
+      "description": "strata_kernel::Record: one record of an object type."
+    },
+    {
+      "id": "tenant-state",
+      "name": "Tenant State",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "id",
+          "type": "tenant-id"
+        },
+        {
+          "name": "name",
+          "type": "string"
+        },
+        {
+          "name": "revision",
+          "type": "state-revision"
+        },
+        {
+          "name": "next-record",
+          "type": "u64"
+        },
+        {
+          "name": "event-seq",
+          "type": "u64"
+        },
+        {
+          "name": "schema",
+          "type": "shared<tenant-schema>"
+        },
+        {
+          "name": "members",
+          "type": "map<principal-id, set<role-id>>"
+        },
+        {
+          "name": "records",
+          "type": "map<object-type-id, map<record-id, shared<record>>>"
+        }
+      ],
+      "description": "strata_kernel::TenantState: members is BTreeMap<PrincipalId, BTreeSet<RoleId>>; the schema and every record are shared<T> (Arc<T>), so a new state shares what it did not change with the one before it."
+    },
+    {
+      "id": "need",
+      "name": "Need",
+      "kind": "union",
+      "variants": [
+        {
+          "name": "record",
+          "fields": [
+            {
+              "name": "object",
+              "type": "object-type-id"
+            },
+            {
+              "name": "id",
+              "type": "record-id"
+            }
+          ]
+        },
+        {
+          "name": "by-field",
+          "fields": [
+            {
+              "name": "object",
+              "type": "object-type-id"
+            },
+            {
+              "name": "field",
+              "type": "field-id"
+            },
+            {
+              "name": "value",
+              "type": "value"
+            }
+          ]
+        },
+        {
+          "name": "all-of",
+          "newtype": true,
+          "fields": [
+            {
+              "name": "value",
+              "type": "object-type-id"
+            }
+          ]
+        }
+      ],
+      "encoding": {
+        "tag": "external",
+        "variantCase": "PascalCase"
+      },
+      "description": "strata_kernel::Need: a piece of state a decision or read needs."
+    },
+    {
+      "id": "coverage",
+      "name": "Coverage",
+      "kind": "union",
+      "variants": [
+        {
+          "name": "complete"
+        },
+        {
+          "name": "partial",
+          "newtype": true,
+          "fields": [
+            {
+              "name": "value",
+              "type": "set<need>"
+            }
+          ]
+        }
+      ],
+      "encoding": {
+        "tag": "external",
+        "variantCase": "PascalCase"
+      },
+      "description": "strata_kernel::Coverage: partial holds a BTreeSet<Need>."
+    },
+    {
+      "id": "state",
+      "name": "State",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "tenant-id",
+          "type": "tenant-id"
+        },
+        {
+          "name": "tenant",
+          "type": "option<shared<tenant-state>>"
+        },
+        {
+          "name": "coverage",
+          "type": "coverage"
+        }
+      ],
+      "description": "strata_kernel::State: the snapshot a transition or read runs against."
+    },
+    {
+      "id": "context",
+      "name": "Context",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "tenant",
+          "type": "tenant-id"
+        },
+        {
+          "name": "principal",
+          "type": "principal"
+        },
+        {
+          "name": "session",
+          "type": "option<session-id>"
+        },
+        {
+          "name": "now",
+          "type": "timestamp"
+        },
+        {
+          "name": "correlation",
+          "type": "string"
+        }
+      ],
+      "description": "strata_kernel::Context: the explicit environment of a transition."
+    },
+    {
+      "id": "existing-data",
+      "name": "Existing Data",
+      "kind": "union",
+      "variants": [
+        {
+          "name": "reject"
+        },
+        {
+          "name": "grandfather"
+        }
+      ],
+      "encoding": {
+        "tag": "external",
+        "variantCase": "PascalCase"
+      },
+      "description": "strata_kernel::ExistingData: how a schema change treats records that do not conform."
+    },
+    {
+      "id": "schema-change",
+      "name": "Schema Change",
+      "kind": "union",
+      "variants": [
+        {
+          "name": "define-object",
+          "fields": [
+            {
+              "name": "id",
+              "type": "object-type-id"
+            },
+            {
+              "name": "label",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "name": "define-field",
+          "fields": [
+            {
+              "name": "object",
+              "type": "object-type-id"
+            },
+            {
+              "name": "field",
+              "type": "field-def"
+            }
+          ]
+        },
+        {
+          "name": "define-relationship",
+          "fields": [
+            {
+              "name": "object",
+              "type": "object-type-id"
+            },
+            {
+              "name": "field",
+              "type": "field-id"
+            },
+            {
+              "name": "label",
+              "type": "string"
+            },
+            {
+              "name": "target",
+              "type": "object-type-id"
+            },
+            {
+              "name": "on-delete",
+              "type": "on-delete"
+            },
+            {
+              "name": "required",
+              "type": "bool"
+            }
+          ]
+        },
+        {
+          "name": "remove-field",
+          "fields": [
+            {
+              "name": "object",
+              "type": "object-type-id"
+            },
+            {
+              "name": "field",
+              "type": "field-id"
+            }
+          ]
+        },
+        {
+          "name": "define-constraint",
+          "fields": [
+            {
+              "name": "object",
+              "type": "object-type-id"
+            },
+            {
+              "name": "constraint",
+              "type": "constraint-def"
+            }
+          ]
+        },
+        {
+          "name": "remove-constraint",
+          "fields": [
+            {
+              "name": "object",
+              "type": "object-type-id"
+            },
+            {
+              "name": "constraint",
+              "type": "constraint-id"
+            }
+          ]
+        },
+        {
+          "name": "define-role",
+          "newtype": true,
+          "fields": [
+            {
+              "name": "value",
+              "type": "role-def"
+            }
+          ]
+        },
+        {
+          "name": "define-policy",
+          "newtype": true,
+          "fields": [
+            {
+              "name": "value",
+              "type": "policy-def"
+            }
+          ]
+        },
+        {
+          "name": "remove-policy",
+          "newtype": true,
+          "fields": [
+            {
+              "name": "value",
+              "type": "policy-id"
+            }
+          ]
+        },
+        {
+          "name": "define-workflow",
+          "newtype": true,
+          "fields": [
+            {
+              "name": "value",
+              "type": "workflow-def"
+            }
+          ]
+        },
+        {
+          "name": "remove-workflow",
+          "newtype": true,
+          "fields": [
+            {
+              "name": "value",
+              "type": "workflow-id"
+            }
+          ]
+        },
+        {
+          "name": "define-query",
+          "newtype": true,
+          "fields": [
+            {
+              "name": "value",
+              "type": "query-def"
+            }
+          ]
+        },
+        {
+          "name": "remove-query",
+          "newtype": true,
+          "fields": [
+            {
+              "name": "value",
+              "type": "query-id"
+            }
+          ]
+        },
+        {
+          "name": "define-view",
+          "newtype": true,
+          "fields": [
+            {
+              "name": "value",
+              "type": "view-def"
+            }
+          ]
+        },
+        {
+          "name": "remove-view",
+          "newtype": true,
+          "fields": [
+            {
+              "name": "value",
+              "type": "view-id"
+            }
+          ]
+        }
+      ],
+      "encoding": {
+        "tag": "external",
+        "variantCase": "PascalCase"
+      },
+      "description": "strata_kernel::SchemaChange: one edit of a tenant schema."
+    },
+    {
+      "id": "intent",
+      "name": "Intent",
+      "kind": "union",
+      "variants": [
+        {
+          "name": "create-tenant",
+          "fields": [
+            {
+              "name": "name",
+              "type": "string"
+            },
+            {
+              "name": "owner",
+              "type": "principal-id"
+            }
+          ]
+        },
+        {
+          "name": "change-schema",
+          "fields": [
+            {
+              "name": "changes",
+              "type": "list<schema-change>"
+            },
+            {
+              "name": "expected-version",
+              "type": "option<schema-version>"
+            },
+            {
+              "name": "existing",
+              "type": "existing-data"
+            }
+          ]
+        },
+        {
+          "name": "assign-role",
+          "fields": [
+            {
+              "name": "principal",
+              "type": "principal-id"
+            },
+            {
+              "name": "role",
+              "type": "role-id"
+            }
+          ]
+        },
+        {
+          "name": "revoke-role",
+          "fields": [
+            {
+              "name": "principal",
+              "type": "principal-id"
+            },
+            {
+              "name": "role",
+              "type": "role-id"
+            }
+          ]
+        },
+        {
+          "name": "create-record",
+          "fields": [
+            {
+              "name": "object",
+              "type": "object-type-id"
+            },
+            {
+              "name": "fields",
+              "type": "map<field-id, value>"
+            }
+          ]
+        },
+        {
+          "name": "update-record",
+          "fields": [
+            {
+              "name": "object",
+              "type": "object-type-id"
+            },
+            {
+              "name": "id",
+              "type": "record-id"
+            },
+            {
+              "name": "fields",
+              "type": "map<field-id, value>"
+            },
+            {
+              "name": "expected-version",
+              "type": "option<u64>"
+            }
+          ]
+        },
+        {
+          "name": "delete-record",
+          "fields": [
+            {
+              "name": "object",
+              "type": "object-type-id"
+            },
+            {
+              "name": "id",
+              "type": "record-id"
+            },
+            {
+              "name": "expected-version",
+              "type": "option<u64>"
+            }
+          ]
+        }
+      ],
+      "encoding": {
+        "tag": "external",
+        "variantCase": "PascalCase"
+      },
+      "description": "strata_kernel::Intent: one request to change a tenant."
+    },
+    {
+      "id": "check",
+      "name": "Check",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "rule",
+          "type": "string"
+        },
+        {
+          "name": "passed",
+          "type": "bool"
+        },
+        {
+          "name": "detail",
+          "type": "string"
+        }
+      ],
+      "description": "strata_kernel::Check: one evaluated rule."
+    },
+    {
+      "id": "error-kind",
+      "name": "Error Kind",
+      "kind": "union",
+      "variants": [
+        {
+          "name": "tenant-mismatch"
+        },
+        {
+          "name": "tenant-exists"
+        },
+        {
+          "name": "tenant-not-found"
+        },
+        {
+          "name": "unauthorized"
+        },
+        {
+          "name": "unknown-object"
+        },
+        {
+          "name": "unknown-field"
+        },
+        {
+          "name": "unknown-record"
+        },
+        {
+          "name": "unknown-role"
+        },
+        {
+          "name": "unknown-query"
+        },
+        {
+          "name": "type-mismatch"
+        },
+        {
+          "name": "missing-required"
+        },
+        {
+          "name": "constraint-violated"
+        },
+        {
+          "name": "unique-violated"
+        },
+        {
+          "name": "dangling-reference"
+        },
+        {
+          "name": "still-referenced"
+        },
+        {
+          "name": "workflow-violation"
+        },
+        {
+          "name": "version-conflict"
+        },
+        {
+          "name": "schema-conflict"
+        },
+        {
+          "name": "invalid-schema"
+        },
+        {
+          "name": "migration-rejected"
+        },
+        {
+          "name": "insufficient-state"
+        },
+        {
+          "name": "evaluation"
+        },
+        {
+          "name": "invalid-intent"
+        }
+      ],
+      "encoding": {
+        "tag": "external",
+        "variantCase": "PascalCase"
+      },
+      "description": "strata_kernel::ErrorKind."
+    },
+    {
+      "id": "domain-error",
+      "name": "Domain Error",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "kind",
+          "type": "error-kind"
+        },
+        {
+          "name": "message",
+          "type": "string"
+        },
+        {
+          "name": "evidence",
+          "type": "list<check>"
+        },
+        {
+          "name": "missing",
+          "type": "option<need>"
+        }
+      ],
+      "description": "strata_kernel::DomainError: a rejection with the checks that led to it."
+    },
+    {
+      "id": "delta-op",
+      "name": "Delta Op",
+      "kind": "union",
+      "variants": [
+        {
+          "name": "create-tenant",
+          "fields": [
+            {
+              "name": "name",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "name": "put-schema",
+          "newtype": true,
+          "fields": [
+            {
+              "name": "value",
+              "type": "shared<tenant-schema>"
+            }
+          ]
+        },
+        {
+          "name": "put-member",
+          "fields": [
+            {
+              "name": "principal",
+              "type": "principal-id"
+            },
+            {
+              "name": "roles",
+              "type": "set<role-id>"
+            }
+          ]
+        },
+        {
+          "name": "put-record",
+          "newtype": true,
+          "fields": [
+            {
+              "name": "value",
+              "type": "shared<record>"
+            }
+          ]
+        },
+        {
+          "name": "delete-record",
+          "fields": [
+            {
+              "name": "object",
+              "type": "object-type-id"
+            },
+            {
+              "name": "id",
+              "type": "record-id"
+            }
+          ]
+        }
+      ],
+      "encoding": {
+        "tag": "external",
+        "variantCase": "PascalCase"
+      },
+      "description": "strata_kernel::DeltaOp: one change to a tenant state; roles is a BTreeSet<RoleId>."
+    },
+    {
+      "id": "state-delta",
+      "name": "State Delta",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "tenant",
+          "type": "tenant-id"
+        },
+        {
+          "name": "base-revision",
+          "type": "option<state-revision>"
+        },
+        {
+          "name": "new-revision",
+          "type": "state-revision"
+        },
+        {
+          "name": "next-record",
+          "type": "u64"
+        },
+        {
+          "name": "event-seq",
+          "type": "u64"
+        },
+        {
+          "name": "ops",
+          "type": "list<delta-op>"
+        }
+      ],
+      "description": "strata_kernel::StateDelta: the logical change of one accepted transition."
+    },
+    {
+      "id": "event-body",
+      "name": "Event Body",
+      "kind": "union",
+      "variants": [
+        {
+          "name": "tenant-created",
+          "fields": [
+            {
+              "name": "name",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "name": "schema-changed",
+          "fields": [
+            {
+              "name": "version",
+              "type": "schema-version"
+            },
+            {
+              "name": "summary",
+              "type": "list<string>"
+            },
+            {
+              "name": "grandfathered",
+              "type": "u64"
+            }
+          ]
+        },
+        {
+          "name": "member-changed",
+          "fields": [
+            {
+              "name": "principal",
+              "type": "principal-id"
+            },
+            {
+              "name": "roles",
+              "type": "set<role-id>"
+            }
+          ]
+        },
+        {
+          "name": "record-created",
+          "fields": [
+            {
+              "name": "record",
+              "type": "shared<record>"
+            }
+          ]
+        },
+        {
+          "name": "record-updated",
+          "fields": [
+            {
+              "name": "before",
+              "type": "shared<record>"
+            },
+            {
+              "name": "after",
+              "type": "shared<record>"
+            }
+          ]
+        },
+        {
+          "name": "record-deleted",
+          "fields": [
+            {
+              "name": "before",
+              "type": "shared<record>"
+            }
+          ]
+        }
+      ],
+      "encoding": {
+        "tag": "external",
+        "variantCase": "PascalCase"
+      },
+      "description": "strata_kernel::EventBody: the body of a domain event; roles is a BTreeSet<RoleId>."
+    },
+    {
+      "id": "domain-event",
+      "name": "Domain Event",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "tenant",
+          "type": "tenant-id"
+        },
+        {
+          "name": "seq",
+          "type": "u64"
+        },
+        {
+          "name": "revision",
+          "type": "state-revision"
+        },
+        {
+          "name": "at",
+          "type": "timestamp"
+        },
+        {
+          "name": "principal",
+          "type": "principal"
+        },
+        {
+          "name": "correlation",
+          "type": "string"
+        },
+        {
+          "name": "body",
+          "type": "event-body"
+        }
+      ],
+      "description": "strata_kernel::DomainEvent: a fact about an accepted transition; its sequence is gapless per tenant."
+    },
+    {
+      "id": "effect",
+      "name": "Effect",
+      "kind": "union",
+      "variants": [
+        {
+          "name": "publish",
+          "fields": [
+            {
+              "name": "seq",
+              "type": "u64"
+            }
+          ]
+        },
+        {
+          "name": "revoke-sessions",
+          "fields": [
+            {
+              "name": "principal",
+              "type": "principal-id"
+            }
+          ]
+        }
+      ],
+      "encoding": {
+        "tag": "external",
+        "variantCase": "PascalCase"
+      },
+      "description": "strata_kernel::Effect: something the adapters do after commit."
+    },
+    {
+      "id": "output",
+      "name": "Output",
+      "kind": "union",
+      "variants": [
+        {
+          "name": "tenant"
+        },
+        {
+          "name": "schema",
+          "fields": [
+            {
+              "name": "version",
+              "type": "schema-version"
+            }
+          ]
+        },
+        {
+          "name": "member"
+        },
+        {
+          "name": "record",
+          "fields": [
+            {
+              "name": "object",
+              "type": "object-type-id"
+            },
+            {
+              "name": "id",
+              "type": "record-id"
+            },
+            {
+              "name": "version",
+              "type": "u64"
+            }
+          ]
+        },
+        {
+          "name": "deleted",
+          "fields": [
+            {
+              "name": "object",
+              "type": "object-type-id"
+            },
+            {
+              "name": "id",
+              "type": "record-id"
+            }
+          ]
+        }
+      ],
+      "encoding": {
+        "tag": "external",
+        "variantCase": "PascalCase"
+      },
+      "description": "strata_kernel::Output: what an accepted transition tells its caller."
+    },
+    {
+      "id": "transition-result",
+      "name": "Transition Result",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "delta",
+          "type": "state-delta"
+        },
+        {
+          "name": "events",
+          "type": "list<domain-event>"
+        },
+        {
+          "name": "effects",
+          "type": "list<effect>"
+        },
+        {
+          "name": "evidence",
+          "type": "list<check>"
+        },
+        {
+          "name": "output",
+          "type": "output"
+        }
+      ],
+      "description": "strata_kernel::Transition: the result of an accepted transition."
+    },
+    {
+      "id": "read-request",
+      "name": "Read Request",
+      "kind": "union",
+      "variants": [
+        {
+          "name": "named",
+          "fields": [
+            {
+              "name": "query",
+              "type": "query-id"
+            },
+            {
+              "name": "params",
+              "type": "map<string, value>"
+            }
+          ]
+        },
+        {
+          "name": "records",
+          "fields": [
+            {
+              "name": "object",
+              "type": "object-type-id"
+            },
+            {
+              "name": "ids",
+              "type": "list<record-id>"
+            }
+          ]
+        }
+      ],
+      "encoding": {
+        "tag": "external",
+        "variantCase": "PascalCase"
+      },
+      "description": "strata_kernel::ReadRequest."
+    },
+    {
+      "id": "read-result",
+      "name": "Read Result",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "rows",
+          "type": "list<shared<record>>"
+        },
+        {
+          "name": "revision",
+          "type": "state-revision"
+        },
+        {
+          "name": "schema-version",
+          "type": "schema-version"
+        }
+      ],
+      "description": "strata_kernel::ReadResult."
     }
   ],
   "records": [
-    {"id":"rec-tenant","name":"Tenant","owner":"control-plane","key":["tenant-id"],"fields":[{"name":"tenant-id","type":"tenant-id","constraints":{"pattern":"^[a-z][a-z0-9_]*$","maxLength":64}},{"name":"state","type":"tenant-state"},{"name":"plan","type":"plan-id"},{"name":"placement-id","type":"placement-id","refersTo":"rec-placement","onDelete":"restrict"},{"name":"database-created","type":"bool","optional":true},{"name":"layout-applied","type":"bool","optional":true},{"name":"template-installed","type":"bool","optional":true},{"name":"activated","type":"bool","optional":true},{"name":"flow-state","type":"string"}],"retention":"Until the tenant is deleted (TEN-011), with the certificate of PRV-354.","schemaVersion":1},
+    {"id":"rec-tenant","name":"Tenant","owner":"control-plane","key":["tenant-id"],"fields":[{"name":"tenant-id","type":"tenant-id","constraints":{"pattern":"^[a-z][a-z0-9_]*$","maxLength":64}},{"name":"state","type":"tenant-lifecycle"},{"name":"plan","type":"plan-id"},{"name":"placement-id","type":"placement-id","refersTo":"rec-placement","onDelete":"restrict"},{"name":"database-created","type":"bool","optional":true},{"name":"layout-applied","type":"bool","optional":true},{"name":"template-installed","type":"bool","optional":true},{"name":"activated","type":"bool","optional":true},{"name":"flow-state","type":"string"}],"retention":"Until the tenant is deleted (TEN-011), with the certificate of PRV-354.","schemaVersion":1},
     {"id":"rec-placement","name":"Placement","owner":"control-plane","key":["placement-id"],"fields":[{"name":"placement-id","type":"placement-id"},{"name":"cluster","type":"cluster-id"},{"name":"region","type":"region-id"},{"name":"database","type":"database-id"}],"retention":"Until the tenant is deleted or moved.","schemaVersion":1},
     {"id":"rec-domain-binding","name":"Domain binding","owner":"control-plane","key":["host"],"fields":[{"name":"host","type":"host"},{"name":"tenant-id","type":"tenant-id","refersTo":"rec-tenant","constraints":{"pattern":"^[a-z][a-z0-9_]*$","maxLength":64},"onDelete":"cascade"},{"name":"certificate-state","type":"certificate-state"}],"retention":"Until the binding is removed (EDG-008).","schemaVersion":1},
     {"id":"rec-wake-entry","name":"Wake entry","owner":"control-plane","key":["tenant-id"],"fields":[{"name":"tenant-id","type":"tenant-id","refersTo":"rec-tenant","constraints":{"pattern":"^[a-z][a-z0-9_]*$","maxLength":64},"onDelete":"cascade"},{"name":"due-at","type":"timestamp"}],"retention":"Replaced on every change of the tenant's next due time.","schemaVersion":1},
@@ -58029,7 +60038,7 @@
     {"id":"rec-session","name":"Sign-in session","owner":"identity-service","key":["session-id"],"fields":[{"name":"session-id","type":"session-id","constraints":{"pattern":"^[A-Za-z0-9_:.-]+$","maxLength":96}},{"name":"principal-id","type":"principal-id","refersTo":"principal","role":"subject","constraints":{"pattern":"^[A-Za-z0-9_:.-]+$","maxLength":96},"onDelete":"restrict"},{"name":"secret-hash","type":"hash","personal":"credential"},{"name":"authenticated-at","type":"timestamp"},{"name":"expires-at","type":"timestamp"},{"name":"revoked-at","type":"timestamp","optional":true},{"name":"revoked","type":"bool","optional":true},{"name":"state","type":"string"}],"retention":"A day after it ends, so that a revocation can be explained. It holds no network address in clear form and no user agent (PRV-364).","erasure":{"point":"the session ends","bound":1,"unit":"day"},"schemaVersion":1,"unique":[["secret-hash"]],"indexes":[{"name":"sessions_principal","fields":["principal-id"]}]},
     {"id":"rec-challenge","name":"Sign-in challenge","owner":"identity-service","key":["challenge-id"],"fields":[{"name":"challenge-id","type":"challenge-id"},{"name":"kind","type":"challenge-kind"},{"name":"token-hash","type":"hash","personal":"credential"},{"name":"principal-id","type":"principal-id","refersTo":"principal","role":"subject","constraints":{"pattern":"^[A-Za-z0-9_:.-]+$","maxLength":96},"onDelete":"restrict"},{"name":"browser-binding","type":"hash"},{"name":"expires-at","type":"timestamp"},{"name":"consumed","type":"bool"},{"name":"state","type":"string"},{"name":"sessions","type":"u32","optional":true},{"name":"expected-state","type":"string","optional":true},{"name":"federated-sessions","type":"u32","optional":true}],"retention":"Removed at its expiry or at its consumption, whichever comes first. The principal is named only when the address has an account (PRV-365).","erasure":{"point":"its expiry or its consumption, whichever comes first"},"schemaVersion":1},
     {"id":"rec-grant","name":"Grant","owner":"identity-service","key":["grant-id"],"fields":[{"name":"grant-id","type":"grant-id"},{"name":"principal-id","type":"principal-id","refersTo":"principal","role":"subject","constraints":{"pattern":"^[A-Za-z0-9_:.-]+$","maxLength":96},"onDelete":"restrict"},{"name":"delegator","type":"principal-id","refersTo":"principal","role":"party","constraints":{"pattern":"^[A-Za-z0-9_:.-]+$","maxLength":96},"optional":true,"onDelete":"restrict"},{"name":"scopes","type":"list<string>"},{"name":"revoked-at","type":"timestamp","optional":true},{"name":"expires-at","type":"timestamp"}],"retention":"Until revoked or its expiry passes, then removed with its last token.","schemaVersion":1},
-    {"id":"rec-schema","name":"Tenant schema","owner":"runtime","key":["schema-version"],"fields":[{"name":"schema-version","type":"u64"},{"name":"definition","type":"schema"}],"retention":"Every version is kept in the schema history.","schemaVersion":1},
+    {"id":"rec-schema","name":"Tenant schema","owner":"runtime","key":["schema-version"],"fields":[{"name":"schema-version","type":"u64"},{"name":"definition","type":"tenant-schema"}],"retention":"Every version is kept in the schema history.","schemaVersion":1},
     {"id":"rec-content","name":"Content record","owner":"runtime","key":["object","record-id"],"fields":[
         {
           "name": "object",
@@ -60626,6 +62635,636 @@
         "act-sign-out-front-page"
       ],
       "text": "Signing out did not work. Try again."
+    }
+  ],
+  "languages": [
+    {
+      "id": "tenant-rule-language",
+      "name": "Tenant rule language",
+      "ast": "expr",
+      "values": "value",
+      "shapes": [
+        "bool",
+        "int",
+        "str",
+        "time",
+        "ref",
+        "list",
+        "any"
+      ],
+      "anyShape": "any",
+      "scopes": [
+        {
+          "name": "record",
+          "kind": "record-scope",
+          "value": "record",
+          "attributes": [
+            {
+              "name": "$id",
+              "shape": "ref"
+            },
+            {
+              "name": "$version",
+              "shape": "int"
+            },
+            {
+              "name": "$created_by",
+              "shape": "str"
+            },
+            {
+              "name": "$created_at",
+              "shape": "time"
+            },
+            {
+              "name": "$updated_at",
+              "shape": "time"
+            }
+          ]
+        },
+        {
+          "name": "old",
+          "kind": "record-scope",
+          "value": "old",
+          "attributes": [
+            {
+              "name": "$id",
+              "shape": "ref"
+            },
+            {
+              "name": "$version",
+              "shape": "int"
+            },
+            {
+              "name": "$created_by",
+              "shape": "str"
+            },
+            {
+              "name": "$created_at",
+              "shape": "time"
+            },
+            {
+              "name": "$updated_at",
+              "shape": "time"
+            }
+          ]
+        },
+        {
+          "name": "new",
+          "kind": "record-scope",
+          "value": "new",
+          "attributes": [
+            {
+              "name": "$id",
+              "shape": "ref"
+            },
+            {
+              "name": "$version",
+              "shape": "int"
+            },
+            {
+              "name": "$created_by",
+              "shape": "str"
+            },
+            {
+              "name": "$created_at",
+              "shape": "time"
+            },
+            {
+              "name": "$updated_at",
+              "shape": "time"
+            }
+          ]
+        },
+        {
+          "name": "param",
+          "kind": "param"
+        },
+        {
+          "name": "now",
+          "kind": "constant"
+        },
+        {
+          "name": "principal",
+          "kind": "constant"
+        },
+        {
+          "name": "has_role",
+          "kind": "role-test"
+        }
+      ],
+      "operators": [
+        {
+          "name": "lit-null",
+          "variant": "lit",
+          "case": {
+            "field": "value",
+            "value": "null"
+          },
+          "syntax": {
+            "form": "literal",
+            "token": "null"
+          },
+          "operands": [],
+          "result": "any",
+          "nulls": "total",
+          "primitive": "literal"
+        },
+        {
+          "name": "lit-bool",
+          "variant": "lit",
+          "case": {
+            "field": "value",
+            "value": "bool"
+          },
+          "syntax": {
+            "form": "literal",
+            "token": "bool"
+          },
+          "operands": [],
+          "result": "bool",
+          "nulls": "total",
+          "primitive": "literal"
+        },
+        {
+          "name": "lit-int",
+          "variant": "lit",
+          "case": {
+            "field": "value",
+            "value": "int"
+          },
+          "syntax": {
+            "form": "literal",
+            "token": "int"
+          },
+          "operands": [],
+          "result": "int",
+          "nulls": "total",
+          "primitive": "literal"
+        },
+        {
+          "name": "lit-str",
+          "variant": "lit",
+          "case": {
+            "field": "value",
+            "value": "str"
+          },
+          "syntax": {
+            "form": "literal",
+            "token": "string"
+          },
+          "operands": [],
+          "result": "str",
+          "nulls": "total",
+          "primitive": "literal"
+        },
+        {
+          "name": "lit-time",
+          "variant": "lit",
+          "case": {
+            "field": "value",
+            "value": "time"
+          },
+          "syntax": {
+            "form": "literal",
+            "token": "time"
+          },
+          "operands": [],
+          "result": "time",
+          "nulls": "total",
+          "primitive": "literal"
+        },
+        {
+          "name": "lit-ref",
+          "variant": "lit",
+          "case": {
+            "field": "value",
+            "value": "ref"
+          },
+          "syntax": {
+            "form": "literal",
+            "token": "ref"
+          },
+          "operands": [],
+          "result": "ref",
+          "nulls": "total",
+          "primitive": "literal"
+        },
+        {
+          "name": "lit-list",
+          "variant": "lit",
+          "case": {
+            "field": "value",
+            "value": "list"
+          },
+          "syntax": {
+            "form": "literal",
+            "token": "list"
+          },
+          "operands": [],
+          "result": "list",
+          "nulls": "total",
+          "primitive": "list-literal"
+        },
+        {
+          "name": "var",
+          "variant": "var",
+          "syntax": {
+            "form": "scope"
+          },
+          "operands": [],
+          "nulls": "total",
+          "primitive": "var"
+        },
+        {
+          "name": "through",
+          "variant": "through",
+          "syntax": {
+            "form": "scope"
+          },
+          "operands": [],
+          "nulls": "total",
+          "primitive": "through"
+        },
+        {
+          "name": "param",
+          "variant": "param",
+          "syntax": {
+            "form": "scope",
+            "token": "param"
+          },
+          "operands": [],
+          "result": "any",
+          "nulls": "total",
+          "primitive": "param"
+        },
+        {
+          "name": "now",
+          "variant": "now",
+          "syntax": {
+            "form": "scope",
+            "token": "now"
+          },
+          "operands": [],
+          "result": "time",
+          "nulls": "total",
+          "primitive": "now"
+        },
+        {
+          "name": "principal",
+          "variant": "principal",
+          "syntax": {
+            "form": "scope",
+            "token": "principal"
+          },
+          "operands": [],
+          "result": "str",
+          "nulls": "total",
+          "primitive": "principal"
+        },
+        {
+          "name": "has-role",
+          "variant": "has-role",
+          "syntax": {
+            "form": "scope",
+            "token": "has_role"
+          },
+          "operands": [],
+          "result": "bool",
+          "nulls": "total",
+          "primitive": "has-role"
+        },
+        {
+          "name": "or",
+          "variant": "or",
+          "syntax": {
+            "form": "keyword-infix",
+            "token": "or",
+            "precedence": 1,
+            "assoc": "n-ary"
+          },
+          "operands": [
+            "bool"
+          ],
+          "result": "bool",
+          "nulls": "kleene-or",
+          "primitive": "or3"
+        },
+        {
+          "name": "and",
+          "variant": "and",
+          "syntax": {
+            "form": "keyword-infix",
+            "token": "and",
+            "precedence": 2,
+            "assoc": "n-ary"
+          },
+          "operands": [
+            "bool"
+          ],
+          "result": "bool",
+          "nulls": "kleene-and",
+          "primitive": "and3"
+        },
+        {
+          "name": "not",
+          "variant": "not",
+          "syntax": {
+            "form": "prefix-word",
+            "token": "not",
+            "precedence": 3
+          },
+          "operands": [
+            "bool"
+          ],
+          "result": "bool",
+          "nulls": "kleene-not",
+          "primitive": "not3"
+        },
+        {
+          "name": "eq",
+          "variant": "cmp",
+          "case": {
+            "field": "op",
+            "value": "eq"
+          },
+          "syntax": {
+            "form": "infix",
+            "token": "==",
+            "precedence": 4,
+            "assoc": "none"
+          },
+          "operands": [
+            "any",
+            "any"
+          ],
+          "result": "bool",
+          "nulls": "propagate",
+          "primitive": "eq"
+        },
+        {
+          "name": "ne",
+          "variant": "cmp",
+          "case": {
+            "field": "op",
+            "value": "ne"
+          },
+          "syntax": {
+            "form": "infix",
+            "token": "!=",
+            "precedence": 4,
+            "assoc": "none"
+          },
+          "operands": [
+            "any",
+            "any"
+          ],
+          "result": "bool",
+          "nulls": "propagate",
+          "primitive": "ne"
+        },
+        {
+          "name": "lt",
+          "variant": "cmp",
+          "case": {
+            "field": "op",
+            "value": "lt"
+          },
+          "syntax": {
+            "form": "infix",
+            "token": "<",
+            "precedence": 4,
+            "assoc": "none"
+          },
+          "operands": [
+            [
+              "int",
+              "time",
+              "str"
+            ],
+            [
+              "int",
+              "time",
+              "str"
+            ]
+          ],
+          "result": "bool",
+          "nulls": "propagate",
+          "primitive": "lt"
+        },
+        {
+          "name": "le",
+          "variant": "cmp",
+          "case": {
+            "field": "op",
+            "value": "le"
+          },
+          "syntax": {
+            "form": "infix",
+            "token": "<=",
+            "precedence": 4,
+            "assoc": "none"
+          },
+          "operands": [
+            [
+              "int",
+              "time",
+              "str"
+            ],
+            [
+              "int",
+              "time",
+              "str"
+            ]
+          ],
+          "result": "bool",
+          "nulls": "propagate",
+          "primitive": "le"
+        },
+        {
+          "name": "gt",
+          "variant": "cmp",
+          "case": {
+            "field": "op",
+            "value": "gt"
+          },
+          "syntax": {
+            "form": "infix",
+            "token": ">",
+            "precedence": 4,
+            "assoc": "none"
+          },
+          "operands": [
+            [
+              "int",
+              "time",
+              "str"
+            ],
+            [
+              "int",
+              "time",
+              "str"
+            ]
+          ],
+          "result": "bool",
+          "nulls": "propagate",
+          "primitive": "gt"
+        },
+        {
+          "name": "ge",
+          "variant": "cmp",
+          "case": {
+            "field": "op",
+            "value": "ge"
+          },
+          "syntax": {
+            "form": "infix",
+            "token": ">=",
+            "precedence": 4,
+            "assoc": "none"
+          },
+          "operands": [
+            [
+              "int",
+              "time",
+              "str"
+            ],
+            [
+              "int",
+              "time",
+              "str"
+            ]
+          ],
+          "result": "bool",
+          "nulls": "propagate",
+          "primitive": "ge"
+        },
+        {
+          "name": "in",
+          "variant": "in",
+          "syntax": {
+            "form": "keyword-infix",
+            "token": "in",
+            "precedence": 4,
+            "assoc": "none"
+          },
+          "operands": [
+            "any",
+            "list"
+          ],
+          "result": "bool",
+          "nulls": "propagate",
+          "primitive": "in-list"
+        },
+        {
+          "name": "is-null",
+          "variant": "is-null",
+          "syntax": {
+            "form": "call",
+            "token": "is_null"
+          },
+          "operands": [
+            "any"
+          ],
+          "result": "bool",
+          "nulls": "total",
+          "primitive": "is-null"
+        },
+        {
+          "name": "len",
+          "variant": "len",
+          "syntax": {
+            "form": "call",
+            "token": "len"
+          },
+          "operands": [
+            [
+              "str",
+              "list"
+            ]
+          ],
+          "result": "int",
+          "nulls": "propagate",
+          "primitive": "len"
+        },
+        {
+          "name": "lower",
+          "variant": "lower",
+          "syntax": {
+            "form": "call",
+            "token": "lower"
+          },
+          "operands": [
+            "str"
+          ],
+          "result": "str",
+          "nulls": "propagate",
+          "primitive": "lower"
+        },
+        {
+          "name": "contains",
+          "variant": "contains",
+          "syntax": {
+            "form": "call",
+            "token": "contains"
+          },
+          "operands": [
+            [
+              "str",
+              "list"
+            ],
+            "any"
+          ],
+          "result": "bool",
+          "nulls": "propagate",
+          "primitive": "contains"
+        },
+        {
+          "name": "starts-with",
+          "variant": "starts-with",
+          "syntax": {
+            "form": "call",
+            "token": "starts_with"
+          },
+          "operands": [
+            "str",
+            "str"
+          ],
+          "result": "bool",
+          "nulls": "propagate",
+          "primitive": "starts-with"
+        },
+        {
+          "name": "is-slug",
+          "variant": "is-slug",
+          "syntax": {
+            "form": "call",
+            "token": "is_slug"
+          },
+          "operands": [
+            "str"
+          ],
+          "result": "bool",
+          "nulls": "propagate",
+          "primitive": "is-slug"
+        },
+        {
+          "name": "if",
+          "variant": "if",
+          "syntax": {
+            "form": "call",
+            "token": "if"
+          },
+          "operands": [
+            "bool",
+            "any",
+            "any"
+          ],
+          "result": "operand:2",
+          "nulls": "null-is-false",
+          "primitive": "if"
+        }
+      ],
+      "description": "The expression language tenants write constraints, policy conditions, workflow guards, defaults and query filters in. Parsed and printed as crates/substrate/src/syntax.rs; evaluated and checked as crates/kernel/src/expr.rs."
     }
   ]
 }

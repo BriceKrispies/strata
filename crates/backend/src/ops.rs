@@ -7,6 +7,7 @@ use serde_json::{json, Value as Json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use strata_kernel::ext::*;
 use strata_kernel::{
     read, visible, Check, Context, DomainError, ErrorKind, Intent, Need, ObjectTypeId, Output,
     Principal, ReadRequest, Record, RecordId, TenantId, TenantState,

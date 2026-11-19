@@ -10,6 +10,7 @@ use crate::outbox::Outbox;
 use serde_json::{json, Value as Json};
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, OnceLock};
+use strata_kernel::ext::*;
 use strata_kernel::{
     DomainEvent, EventBody, PrincipalId, Record, SessionId, TenantId, TenantState, Value,
 };

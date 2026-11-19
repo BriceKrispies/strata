@@ -12,10 +12,10 @@ use serde_json::{Map, Number, Value};
 use crate::diagnostic::{Diagnostic, SPEC_ENTITY};
 use crate::ir::{
     Auth, Behavior, Component, Constraints, Contract, ContractError, ContractField, Effect,
-    ErrorBody, ErrorWire, Event, Exposure, Index, Injection, Instances, LoggedField, Logging,
-    OnDelete, PayloadField, Realisation, Record, RecordField, Route, Scheme, Spec, State, Storage,
-    StructField, System, Telemetry, TelemetryService, TenantScope,
-    Transition, TypeDecl, TypeKind, Variable,
+    Encoding, ErrorBody, ErrorWire, Event, Exposure, Index, Injection, Instances, LoggedField,
+    Logging, OnDelete, PayloadField, Realisation, Record, RecordField, Route, Scheme, Spec, State,
+    Storage, StructField, System, Telemetry, TelemetryService, TenantScope, Transition,
+    TypeConstraints, TypeDecl, TypeKind, UnionTag, Variable, Variant, VariantCase,
 };
 use crate::jsonc;
 
@@ -249,6 +249,8 @@ impl Loader {
             shipped.into_iter().partition(|b| b.memory);
         let constructs = self.constructs(top);
         let telemetry = self.telemetry(top);
+        let languages = self.languages(top);
+        let functions = self.functions(top);
         Some(Spec {
             path: path.replace('\\', "/"),
             system: system?,
@@ -262,6 +264,8 @@ impl Loader {
             target_machines,
             constructs,
             telemetry,
+            languages,
+            functions,
         })
     }
 
@@ -598,28 +602,55 @@ impl Loader {
             Some("enum") => Some(TypeKind::Enum {
                 values: self.opt_str_list(obj, "values", id).unwrap_or_default(),
             }),
-            Some("struct") => {
-                let mut fields = Vec::new();
-                for f in self.obj_list(obj, "fields", id) {
-                    let name = self.req_str(f, "name", id);
-                    let type_name = self.req_str(f, "type", id);
-                    let optional = self.opt_bool(f, "optional", id).unwrap_or(false);
-                    if let (Some(name), Some(type_name)) = (name, type_name) {
-                        fields.push(StructField {
+            Some("struct") => Some(TypeKind::Struct {
+                fields: self.struct_fields(obj, id),
+            }),
+            Some("union") => {
+                let mut variants = Vec::new();
+                for v in self.obj_list(obj, "variants", id) {
+                    let name = self.req_str(v, "name", id);
+                    let fields = self.struct_fields(v, id);
+                    let newtype = self.opt_bool(v, "newtype", id).unwrap_or(false);
+                    let tuple = self.opt_bool(v, "tuple", id).unwrap_or(false);
+                    if let Some(name) = name {
+                        variants.push(Variant {
                             name,
-                            type_name,
-                            optional,
+                            fields,
+                            newtype,
+                            tuple,
                         });
                     }
                 }
-                Some(TypeKind::Struct { fields })
+                let encoding = match obj.get("encoding") {
+                    None | Some(Value::Null) => Encoding::default(),
+                    Some(Value::Object(e)) => self.encoding(e, id),
+                    Some(_) => {
+                        self.shape(id, "\"encoding\" must be an object");
+                        Encoding::default()
+                    }
+                };
+                Some(TypeKind::Union { variants, encoding })
             }
             Some(other) => {
                 self.shape(
                     id,
-                    format!("\"kind\" is \"{other}\"; it must be id, scalar, enum or struct"),
+                    format!(
+                        "\"kind\" is \"{other}\"; it must be id, scalar, enum, struct or union"
+                    ),
                 );
                 None
+            }
+        };
+        let constraints = match obj.get("constraints") {
+            None | Some(Value::Null) => TypeConstraints::default(),
+            Some(Value::Object(c)) => TypeConstraints {
+                pattern: self.opt_str(c, "pattern", id),
+                min_length: self.opt_number(c, "minLength", id),
+                max_length: self.opt_number(c, "maxLength", id),
+            },
+            Some(_) => {
+                self.shape(id, "\"constraints\" must be an object");
+                TypeConstraints::default()
             }
         };
         Some(TypeDecl {
@@ -627,7 +658,61 @@ impl Loader {
             name: name?,
             description,
             kind: kind?,
+            constraints,
         })
+    }
+
+    /// `fields` `[{name, type, optional?}]` of a struct type or a union variant.
+    fn struct_fields(&mut self, obj: &Obj, id: &str) -> Vec<StructField> {
+        let mut fields = Vec::new();
+        for f in self.obj_list(obj, "fields", id) {
+            let name = self.req_str(f, "name", id);
+            let type_name = self.req_str(f, "type", id);
+            let optional = self.opt_bool(f, "optional", id).unwrap_or(false);
+            if let (Some(name), Some(type_name)) = (name, type_name) {
+                fields.push(StructField {
+                    name,
+                    type_name,
+                    optional,
+                });
+            }
+        }
+        fields
+    }
+
+    /// `encoding` `{tag?, tagField?, contentField?, variantCase?}` of a union.
+    fn encoding(&mut self, e: &Obj, id: &str) -> Encoding {
+        let tag = match self.opt_str(e, "tag", id) {
+            None => UnionTag::External,
+            Some(text) => UnionTag::parse(&text).unwrap_or_else(|| {
+                self.shape(
+                    id,
+                    format!("\"tag\" is \"{text}\"; it must be external, internal or adjacent"),
+                );
+                UnionTag::External
+            }),
+        };
+        let variant_case = match self.opt_str(e, "variantCase", id) {
+            None => None,
+            Some(text) => {
+                let parsed = VariantCase::parse(&text);
+                if parsed.is_none() {
+                    self.shape(
+                        id,
+                        format!(
+                            "\"variantCase\" is \"{text}\"; it must be PascalCase, snake_case or kebab-case"
+                        ),
+                    );
+                }
+                parsed
+            }
+        };
+        Encoding {
+            tag,
+            tag_field: self.opt_str(e, "tagField", id),
+            content_field: self.opt_str(e, "contentField", id),
+            variant_case,
+        }
     }
 
     fn record(&mut self, id: &str, obj: &Obj) -> Option<Record> {
@@ -899,6 +984,7 @@ impl Loader {
                 default_target
             }
         }
+    }
 
     /// A structured auth: its scheme and the members the format gives it. An unknown scheme is a
     /// shape error and no auth; Exegra checks which members apply to which scheme.
@@ -914,6 +1000,7 @@ impl Loader {
                     );
                 }
                 parsed
+            }
         };
         let roles = self.opt_str_list(a, "roles", id).unwrap_or_default();
         let policies = self.opt_str_list(a, "policies", id).unwrap_or_default();

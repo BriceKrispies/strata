@@ -40,6 +40,10 @@ pub struct Spec {
     pub constructs: crate::constructs::Constructs,
     /// `system.telemetry` and the sensitive types: what the telemetry backend needs.
     pub telemetry: Telemetry,
+    /// The `languages` section: expression languages the specified system's users write.
+    pub languages: Vec<crate::language::Language>,
+    /// The `functions` section: pure functions compiled into the pure crate.
+    pub functions: Vec<crate::function::Function>,
 }
 
 /// `system.telemetry` and the types a log line may never hold.
@@ -214,9 +218,158 @@ pub struct TypeDecl {
     pub description: Option<String>,
     /// What kind of type it is.
     pub kind: TypeKind,
+    /// `constraints` of an `id` or `scalar`; empty when none are stated.
+    pub constraints: TypeConstraints,
 }
 
-/// The four kinds of declared type.
+/// `constraints` `{pattern?, minLength?, maxLength?}` of an id or scalar type, as written.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TypeConstraints {
+    /// A regular expression the value must match (a `string` representation).
+    pub pattern: Option<String>,
+    /// The least length: characters of a `string`, bytes of `bytes`.
+    pub min_length: Option<Number>,
+    /// The greatest length: characters of a `string`, bytes of `bytes`.
+    pub max_length: Option<Number>,
+}
+
+impl TypeConstraints {
+    /// True when no constraint is stated.
+    pub fn is_empty(&self) -> bool {
+        self.pattern.is_none() && self.min_length.is_none() && self.max_length.is_none()
+    }
+}
+
+/// A variant of a union type.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Variant {
+    /// The variant name, as declared.
+    pub name: String,
+    /// The fields, in declaration order; none for a unit variant.
+    pub fields: Vec<StructField>,
+    /// `newtype: true`: the one field is written without its name.
+    pub newtype: bool,
+    /// `tuple: true`: two or more positional fields, written as a JSON array of their values in
+    /// order (serde's tuple variant); the field names are not written.
+    pub tuple: bool,
+}
+
+/// How a union is tagged on the wire, in serde's forms.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum UnionTag {
+    /// `{"Variant": content}`, a unit variant as the bare string (serde's default).
+    #[default]
+    External,
+    /// `{<tagField>: "Variant", ...fields}`.
+    Internal,
+    /// `{<tagField>: "Variant", <contentField>: content}`.
+    Adjacent,
+}
+
+impl UnionTag {
+    /// Reads the specification's value.
+    pub fn parse(text: &str) -> Option<Self> {
+        match text {
+            "external" => Some(Self::External),
+            "internal" => Some(Self::Internal),
+            "adjacent" => Some(Self::Adjacent),
+            _ => None,
+        }
+    }
+
+    /// The value as the specification writes it.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::External => "external",
+            Self::Internal => "internal",
+            Self::Adjacent => "adjacent",
+        }
+    }
+}
+
+/// How the variant names of a union are written on the wire.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VariantCase {
+    /// `PascalCase`
+    Pascal,
+    /// `snake_case`
+    Snake,
+    /// `kebab-case`
+    Kebab,
+}
+
+impl VariantCase {
+    /// Reads the specification's value.
+    pub fn parse(text: &str) -> Option<Self> {
+        match text {
+            "PascalCase" => Some(Self::Pascal),
+            "snake_case" => Some(Self::Snake),
+            "kebab-case" => Some(Self::Kebab),
+            _ => None,
+        }
+    }
+}
+
+/// `encoding` of a union.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Encoding {
+    /// The tag form; external when unstated.
+    pub tag: UnionTag,
+    /// The member holding the variant name (internal and adjacent).
+    pub tag_field: Option<String>,
+    /// The member holding the content (adjacent).
+    pub content_field: Option<String>,
+    /// The case of the variant names on the wire; as declared when unstated.
+    pub variant_case: Option<VariantCase>,
+}
+
+/// The name a variant has on the wire: its words (split at `-`, `_`, white space and
+/// lower-to-upper changes) written in the case; without a case the name as written. The same
+/// function as Exegra's `variantWireName` (`src/core/type-shapes.js`).
+pub fn variant_wire_name(name: &str, case: Option<VariantCase>) -> String {
+    let Some(case) = case else {
+        return name.to_string();
+    };
+    // Split as the JavaScript does: a space between a lower-case letter or digit and an
+    // upper-case letter, and between an upper-case run and an upper-case letter that starts a
+    // lower-case word; then at runs of white space, `_` and `-`.
+    let chars: Vec<char> = name.chars().collect();
+    let mut spaced = String::new();
+    for (i, &c) in chars.iter().enumerate() {
+        if i > 0 && c.is_ascii_uppercase() {
+            let prev = chars[i - 1];
+            let next = chars.get(i + 1).copied();
+            let lower_to_upper = prev.is_ascii_lowercase() || prev.is_ascii_digit();
+            let acronym_end =
+                prev.is_ascii_uppercase() && next.is_some_and(|n| n.is_ascii_lowercase());
+            if lower_to_upper || acronym_end {
+                spaced.push(' ');
+            }
+        }
+        spaced.push(c);
+    }
+    let words: Vec<String> = spaced
+        .split(|c: char| c.is_whitespace() || c == '_' || c == '-')
+        .filter(|w| !w.is_empty())
+        .map(str::to_lowercase)
+        .collect();
+    match case {
+        VariantCase::Snake => words.join("_"),
+        VariantCase::Kebab => words.join("-"),
+        VariantCase::Pascal => words
+            .iter()
+            .map(|w| {
+                let mut cs = w.chars();
+                match cs.next() {
+                    Some(first) => first.to_uppercase().collect::<String>() + cs.as_str(),
+                    None => String::new(),
+                }
+            })
+            .collect(),
+    }
+}
+
+/// The kinds of declared type.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TypeKind {
     /// An identifier over a built-in representation.
@@ -239,6 +392,13 @@ pub enum TypeKind {
         /// The fields, in declaration order.
         fields: Vec<StructField>,
     },
+    /// A tagged union of variants.
+    Union {
+        /// The variants, in declaration order.
+        variants: Vec<Variant>,
+        /// How a value is written on the wire.
+        encoding: Encoding,
+    },
 }
 
 impl TypeKind {
@@ -249,6 +409,7 @@ impl TypeKind {
             Self::Scalar { .. } => "scalar",
             Self::Enum { .. } => "enum",
             Self::Struct { .. } => "struct",
+            Self::Union { .. } => "union",
         }
     }
 }

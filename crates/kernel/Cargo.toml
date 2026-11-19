@@ -15,6 +15,9 @@ testkit = []
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
+# The kernel's data types, generated from the specification. Pure: serde, serde_json, regex and
+# uuid with its serde feature only (KRN-012).
+strata-model-core.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true

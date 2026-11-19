@@ -6,6 +6,7 @@
 
 use serde::Serialize;
 use std::collections::BTreeMap;
+use strata_kernel::ext::*;
 use strata_kernel::{FieldId, Value};
 
 pub const ACCENTS: [&str; 5] = ["moss", "clay", "ink", "ochre", "plum"];

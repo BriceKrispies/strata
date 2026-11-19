@@ -16,9 +16,13 @@ members = [
     "crates/spec-compiler-fixture",
     "crates/spec-compiler-machines-fixture",
     "crates/spec-compiler-wiring-fixture",
+    "crates/spec-compiler-core-fixture",
+    "crates/spec-compiler-language-fixture",
+    "crates/spec-compiler-functions-fixture",
     "crates/spec-expr",
     "crates/spec-expr-cases",
     "crates/model",
+    "crates/model-core",
     "crates/system-differential",
 ]
 
@@ -41,6 +45,7 @@ strata-simulation = { path = "crates/simulation" }
 strata-verification = { path = "crates/verification" }
 strata-spec-expr = { path = "crates/spec-expr" }
 strata-model = { path = "crates/model" }
+strata-model-core = { path = "crates/model-core" }
 
 serde = { version = "1.0.228", features = ["derive", "rc"] }
 serde_json = "1.0.146"

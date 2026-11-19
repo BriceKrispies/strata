@@ -6,10 +6,10 @@
 //! tenant has gone through exactly the same transition function as everything after it.
 
 use crate::plain::{coerce_fields, parse_time};
-use crate::syntax::parse;
 use serde::Deserialize;
 use serde_json::Value as Json;
 use std::collections::{BTreeMap, BTreeSet};
+use strata_kernel::expr::parse;
 use strata_kernel::*;
 
 #[derive(Clone, Debug, Deserialize)]

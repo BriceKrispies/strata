@@ -350,7 +350,12 @@ pub(crate) fn raw_ty(t: &TypeRef) -> Ty {
         TypeRef::Builtin(b) => builtin_ty(*b),
         TypeRef::Declared(id) => Ty::Named(id.clone()),
         TypeRef::Option(inner) => Ty::Option(Box::new(raw_ty(inner))),
-        TypeRef::List(inner) => Ty::List(Box::new(raw_ty(inner))),
+        // A set is a list of distinct items to expressions, as in Exegra (class list).
+        TypeRef::List(inner) | TypeRef::Set(inner) => Ty::List(Box::new(raw_ty(inner))),
+        // A map is opaque to expressions, like json: compared only with == and !=.
+        TypeRef::Map(..) => Ty::Named(t.text()),
+        // A shared value is its inner value everywhere but in Rust.
+        TypeRef::Shared(inner) => raw_ty(inner),
     }
 }
 
@@ -373,7 +378,8 @@ pub(crate) fn expr_ty(spec: &Spec, t: &TypeRef) -> Ty {
                 None => Ty::Named(id.clone()),
             }
         }
-        TypeRef::Option(_) | TypeRef::List(_) => raw_ty(t),
+        TypeRef::Shared(inner) => expr_ty(spec, inner),
+        TypeRef::Option(_) | TypeRef::List(_) | TypeRef::Set(_) | TypeRef::Map(..) => raw_ty(t),
     }
 }
 
@@ -400,10 +406,16 @@ pub(crate) fn js_check(spec: &Spec, cases: &Cases, t: &TypeRef, depth: usize) ->
                 None => "check.any".to_string(),
             },
         },
-        TypeRef::List(inner) => format!("check.list({})", js_check(spec, cases, inner, depth + 1)),
+        // A set's distinct items are checked by the Rust decode, as a map's values are.
+        TypeRef::List(inner) | TypeRef::Set(inner) => {
+            format!("check.list({})", js_check(spec, cases, inner, depth + 1))
+        }
         TypeRef::Option(inner) => {
             format!("check.option({})", js_check(spec, cases, inner, depth + 1))
         }
+        // A map's value is checked by the Rust decode; the browser passes it on as it is.
+        TypeRef::Map(..) => "check.any".to_string(),
+        TypeRef::Shared(inner) => js_check(spec, cases, inner, depth),
         TypeRef::Declared(id) => match spec.type_decl(id).map(|d| &d.kind) {
             Some(TypeKind::Id { repr } | TypeKind::Scalar { repr }) => {
                 match repr.as_deref().and_then(Builtin::parse) {
@@ -429,7 +441,8 @@ pub(crate) fn js_check(spec: &Spec, cases: &Cases, t: &TypeRef, depth: usize) ->
                 );
                 format!("check.struct({members}{omittable})")
             }
-            None => "check.any".to_string(),
+            // A union's value is checked by the Rust decode; the browser passes it on as it is.
+            Some(TypeKind::Union { .. }) | None => "check.any".to_string(),
         },
     }
 }
@@ -483,11 +496,18 @@ pub(crate) fn js_type(
             _ => "number",
         }
         .to_string(),
-        TypeRef::List(inner) => format!("{}[]", js_type(spec, cases, inner, true, depth + 1)),
+        TypeRef::List(inner) | TypeRef::Set(inner) => {
+            format!("{}[]", js_type(spec, cases, inner, true, depth + 1))
+        }
         TypeRef::Option(inner) => wrap(format!(
             "{} | null",
             js_type(spec, cases, inner, false, depth + 1)
         )),
+        TypeRef::Map(_, value) => format!(
+            "Record<string, {}>",
+            js_type(spec, cases, value, false, depth + 1)
+        ),
+        TypeRef::Shared(inner) => js_type(spec, cases, inner, nested, depth + 1),
         TypeRef::Declared(id) => match spec.type_decl(id).map(|d| &d.kind) {
             Some(TypeKind::Id { repr } | TypeKind::Scalar { repr }) => {
                 match repr.as_deref().and_then(Builtin::parse) {
@@ -522,7 +542,7 @@ pub(crate) fn js_type(
                     .collect();
                 object_type(&items)
             }
-            None => "unknown".to_string(),
+            Some(TypeKind::Union { .. }) | None => "unknown".to_string(),
         },
     }
 }
@@ -1078,7 +1098,7 @@ impl<'a> Gen<'a> {
         match (t, value) {
             (TypeRef::Option(_), Value::Null) => Ok("null".to_string()),
             (TypeRef::Option(inner), v) => self.literal(v, inner),
-            (TypeRef::List(inner), Value::Array(items)) => {
+            (TypeRef::List(inner) | TypeRef::Set(inner), Value::Array(items)) => {
                 let items = items
                     .iter()
                     .map(|i| self.literal(i, inner))

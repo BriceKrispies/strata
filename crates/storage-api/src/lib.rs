@@ -38,6 +38,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::fmt;
 use std::sync::Arc;
+use strata_kernel::ext::*;
 use strata_kernel::{
     canon, Context, Coverage, DomainError, DomainEvent, Effect, ErrorKind, Intent, Need,
     PrincipalId, ReadRequest, ReadResult, Record, SessionId, State, StateDelta, StateRevision,
@@ -387,7 +388,7 @@ pub enum ExecuteError {
 impl fmt::Display for ExecuteError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ExecuteError::Domain(e) => write!(f, "{e}"),
+            ExecuteError::Domain(e) => f.write_str(&e.describe()),
             ExecuteError::Store(e) => write!(f, "{e}"),
         }
     }

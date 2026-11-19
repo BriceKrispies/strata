@@ -38,6 +38,7 @@ use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
+use strata_kernel::ext::*;
 use strata_kernel::{
     canon, Coverage, DeltaOp, DomainEvent, Need, ObjectTypeId, PrincipalId, Record, RoleId,
     SessionId, State, StateRevision, TenantId, TenantSchema, TenantState, Timestamp, Value,

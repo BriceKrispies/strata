@@ -1,110 +1,26 @@
 //! Tenant structure as data: object types, fields, relationships, constraints, roles, policies,
 //! workflows, named queries and view definitions, under one schema version.
+//!
+//! The types are generated ([`crate::types`]); this module holds what the kernel does with them:
+//! the genesis schema and the consistency check.
 
 use crate::expr::{self, Expr, TypeEnv};
-use crate::ids::{
-    owner_role, public_role, ConstraintId, FieldId, ObjectTypeId, PolicyId, QueryId, RoleId,
-    SchemaVersion, ViewId, WorkflowId,
+use crate::types::{owner_role, public_role, FieldTypeExt, ObjectTypeId, RoleId, SchemaVersion};
+pub use crate::types::{
+    Action, ArgSource, ConstraintDef, FieldDef, FieldType, ObjectTypeDef, OrderKey, PolicyDef,
+    QueryDef, Resource, RoleDef, TenantSchema, ViewDef, ViewSection, WorkflowDef,
+    WorkflowTransition,
 };
-use crate::value::{FieldType, Value};
-use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct FieldDef {
-    pub id: FieldId,
-    pub label: String,
-    pub ty: FieldType,
-    /// A required field may not be `null`.
-    pub required: bool,
-    /// No two records of the object type may share a non-null value.
-    pub unique: bool,
-    /// Evaluated on create when the intent leaves the field out.
-    pub default: Option<Expr>,
-    /// Who may read the field's value. Evaluated per record on every read, with `record`, the
-    /// principal and its roles in scope; where it is not `true` the value is left out of what
-    /// the reader receives (views, included records, lookups by id). Policy conditions, queries
-    /// and constraints run server-side on the whole record and are not affected. `None` means
-    /// every reader of the record reads the field.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub read: Option<Expr>,
+/// What the kernel asks of a [`WorkflowDef`].
+pub trait WorkflowDefExt {
+    /// Every state the workflow names: its initial states and both ends of its transitions.
+    fn states(&self) -> BTreeSet<&str>;
 }
 
-/// A rule every record of the object type must satisfy. Violated only when it evaluates to
-/// `false`.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ConstraintDef {
-    pub id: ConstraintId,
-    pub expr: Expr,
-    pub message: String,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ObjectTypeDef {
-    pub id: ObjectTypeId,
-    pub label: String,
-    pub fields: BTreeMap<FieldId, FieldDef>,
-    pub constraints: BTreeMap<ConstraintId, ConstraintDef>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct RoleDef {
-    pub id: RoleId,
-    pub label: String,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub enum Action {
-    Read,
-    Create,
-    Update,
-    Delete,
-    /// Change the schema or the membership.
-    Manage,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub enum Resource {
-    Object(ObjectTypeId),
-    AnyObject,
-    Schema,
-    Members,
-}
-
-/// An allow rule. Nothing is permitted without one, except to the `owner` role.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PolicyDef {
-    pub id: PolicyId,
-    pub role: RoleId,
-    pub resource: Resource,
-    pub actions: BTreeSet<Action>,
-    /// When present, the rule applies only where this evaluates to `true`.
-    pub condition: Option<Expr>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct WorkflowTransition {
-    pub name: String,
-    pub from: String,
-    pub to: String,
-    pub guard: Option<Expr>,
-    /// Field assignments applied when this transition fires.
-    pub set: BTreeMap<FieldId, Expr>,
-}
-
-/// A state machine over one string field of an object type.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct WorkflowDef {
-    pub id: WorkflowId,
-    pub object: ObjectTypeId,
-    pub field: FieldId,
-    /// The states a new record may start in.
-    pub initial: BTreeSet<String>,
-    pub transitions: Vec<WorkflowTransition>,
-}
-
-impl WorkflowDef {
-    pub fn states(&self) -> BTreeSet<&str> {
+impl WorkflowDefExt for WorkflowDef {
+    fn states(&self) -> BTreeSet<&str> {
         self.initial
             .iter()
             .map(String::as_str)
@@ -117,74 +33,24 @@ impl WorkflowDef {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct OrderKey {
-    /// A field id or a system attribute such as `$created_at`.
-    pub field: String,
-    pub descending: bool,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct QueryDef {
-    pub id: QueryId,
-    pub object: ObjectTypeId,
-    pub filter: Option<Expr>,
-    pub params: BTreeSet<String>,
-    pub order: Vec<OrderKey>,
-    pub limit: Option<u32>,
-}
-
-/// Where a view section's query argument comes from.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ArgSource {
-    /// A named segment of the view's route, such as `slug` in `/posts/:slug`.
-    Route(String),
-    /// A named request parameter, such as a search term.
-    Request(String),
-    Const(Value),
-    /// An attribute of the single row of another section of the same view.
-    Section {
-        section: String,
-        attribute: String,
-    },
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ViewSection {
-    pub query: QueryId,
-    pub args: BTreeMap<String, ArgSource>,
-    /// Reference fields whose targets are delivered alongside the rows.
-    pub include: Vec<FieldId>,
-    /// String fields holding constrained Markdown, delivered as structured blocks.
-    pub markdown: Vec<FieldId>,
-    /// The section yields at most one row.
-    pub single: bool,
-}
-
-/// A named bundle of queries that together make one page of data.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ViewDef {
-    pub id: ViewId,
-    /// An address pattern such as `/posts/:slug`. Opaque to the kernel apart from uniqueness.
-    pub route: String,
-    pub title: String,
-    pub sections: BTreeMap<String, ViewSection>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TenantSchema {
-    pub version: SchemaVersion,
-    pub objects: BTreeMap<ObjectTypeId, ObjectTypeDef>,
-    pub roles: BTreeMap<RoleId, RoleDef>,
-    pub policies: BTreeMap<PolicyId, PolicyDef>,
-    pub workflows: BTreeMap<WorkflowId, WorkflowDef>,
-    pub queries: BTreeMap<QueryId, QueryDef>,
-    pub views: BTreeMap<ViewId, ViewDef>,
-}
-
-impl TenantSchema {
+/// What the kernel asks of a [`TenantSchema`].
+pub trait TenantSchemaExt {
     /// The schema of a freshly created tenant: the two built-in roles and nothing else.
-    pub fn genesis() -> Self {
+    fn genesis() -> Self;
+    /// The workflows over one object type.
+    fn workflows_of<'a>(
+        &'a self,
+        object: &'a ObjectTypeId,
+    ) -> impl Iterator<Item = &'a WorkflowDef>;
+    /// Fields anywhere in the schema that refer to `target`: `(object, field, is_list)`.
+    fn referrers(&self, target: &ObjectTypeId) -> Vec<(&ObjectTypeDef, &FieldDef, bool)>;
+    /// Check that the schema is internally consistent. Returns every problem found, in a
+    /// deterministic order.
+    fn problems(&self) -> Vec<String>;
+}
+
+impl TenantSchemaExt for TenantSchema {
+    fn genesis() -> Self {
         let roles = [(public_role(), "Everyone"), (owner_role(), "Owner")]
             .into_iter()
             .map(|(id, label)| {
@@ -208,15 +74,14 @@ impl TenantSchema {
         }
     }
 
-    pub fn workflows_of<'a>(
+    fn workflows_of<'a>(
         &'a self,
         object: &'a ObjectTypeId,
     ) -> impl Iterator<Item = &'a WorkflowDef> {
         self.workflows.values().filter(move |w| &w.object == object)
     }
 
-    /// Fields anywhere in the schema that refer to `target`: `(object, field, is_list)`.
-    pub fn referrers(&self, target: &ObjectTypeId) -> Vec<(&ObjectTypeDef, &FieldDef, bool)> {
+    fn referrers(&self, target: &ObjectTypeId) -> Vec<(&ObjectTypeDef, &FieldDef, bool)> {
         let mut found = Vec::new();
         for object in self.objects.values() {
             for field in object.fields.values() {
@@ -230,9 +95,7 @@ impl TenantSchema {
         found
     }
 
-    /// Check that the schema is internally consistent. Returns every problem found, in a
-    /// deterministic order.
-    pub fn problems(&self) -> Vec<String> {
+    fn problems(&self) -> Vec<String> {
         let mut problems = Vec::new();
         let roles: BTreeSet<RoleId> = self.roles.keys().cloned().collect();
         let no_params = BTreeSet::new();

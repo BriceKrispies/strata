@@ -314,6 +314,7 @@ fn data_struct(
                         .as_deref()
                         .unwrap_or(&format!("Field `{}`.", f.name)),
                 ),
+                deserialize_with: None,
             }
             .tokens()
         })

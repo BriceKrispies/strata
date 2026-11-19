@@ -10,6 +10,7 @@ use crate::{
 };
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, MutexGuard};
+use strata_kernel::ext::*;
 use strata_kernel::{
     apply_delta, canon, DomainEvent, Need, SessionId, State, TenantId, TenantState, Timestamp,
 };

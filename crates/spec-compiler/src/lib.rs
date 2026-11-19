@@ -26,9 +26,12 @@ pub mod deploy;
 pub mod diagnostic;
 pub mod e2e;
 pub mod emit;
+pub mod function;
 pub mod ir;
 pub mod jsonc;
+pub mod language;
 pub mod load;
+pub mod model_core;
 pub mod naming;
 pub mod output;
 pub mod readiness;
@@ -92,4 +95,70 @@ pub fn generate(
         return Err(diagnostics);
     }
     emit::crate_files(&spec, options)
+}
+
+/// The files of a generation split into two crates: the model crate (`options`), and the pure
+/// crate `core` names ([`model_core`]), which the model crate depends on. Returns the model crate's
+/// files, then the pure crate's, or refuses with every diagnostic.
+pub fn generate_with_core(
+    spec_path: &str,
+    text: &str,
+    options: &Options,
+    core: &model_core::CoreDependency,
+) -> Result<(Vec<GeneratedFile>, Vec<GeneratedFile>), Vec<Diagnostic>> {
+    let spec = load::load(spec_path, text)?;
+    let mut diagnostics = Vec::new();
+    for name in [&options.crate_name, &core.crate_name] {
+        if !emit::is_crate_name(name) {
+            diagnostics.push(Diagnostic::new(
+                CRATE_NAME_INVALID,
+                diagnostic::SPEC_ENTITY,
+                format!(
+                    "\"{name}\" cannot be a package name: it must be an ASCII letter followed by letters, digits, - and _."
+                ),
+            ));
+        }
+    }
+    if options.crate_name == core.crate_name {
+        diagnostics.push(Diagnostic::new(
+            CRATE_NAME_INVALID,
+            diagnostic::SPEC_ENTITY,
+            format!(
+                "the model crate and the pure crate are both named \"{}\"; give them different names.",
+                core.crate_name
+            ),
+        ));
+    }
+    diagnostics.extend(readiness::check(&spec));
+    if !diagnostics.is_empty() {
+        return Err(diagnostics);
+    }
+    let model = emit::crate_files_with(&spec, options, Some(core))?;
+    let pure = model_core::crate_files(&spec, &core.crate_name)?;
+    Ok((model, pure))
+}
+
+/// The files of the pure crate alone ([`model_core`]), named `crate_name`: what [`generate_with_core`]
+/// returns second. The golden fixture of unions and maps is generated this way.
+pub fn generate_core(
+    spec_path: &str,
+    text: &str,
+    crate_name: &str,
+) -> Result<Vec<GeneratedFile>, Vec<Diagnostic>> {
+    let spec = load::load(spec_path, text)?;
+    let mut diagnostics = Vec::new();
+    if !emit::is_crate_name(crate_name) {
+        diagnostics.push(Diagnostic::new(
+            CRATE_NAME_INVALID,
+            diagnostic::SPEC_ENTITY,
+            format!(
+                "\"{crate_name}\" cannot be a package name: it must be an ASCII letter followed by letters, digits, - and _."
+            ),
+        ));
+    }
+    diagnostics.extend(readiness::check(&spec));
+    if !diagnostics.is_empty() {
+        return Err(diagnostics);
+    }
+    model_core::crate_files(&spec, crate_name)
 }

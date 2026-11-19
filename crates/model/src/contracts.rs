@@ -131,7 +131,7 @@ impl std::error::Error for DecideIntentError {}
 pub struct PlanIntentNeedsRequest {
     /// Field `schema`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub schema: Option<types::Schema>,
+    pub schema: Option<types::TenantSchema>,
     /// Field `intent`.
     pub intent: types::Intent,
 }
@@ -156,7 +156,7 @@ impl fmt::Display for PlanIntentNeedsError {
 impl std::error::Error for PlanIntentNeedsError {}
 
 /// The request of contract `answer-read`: Answer a read against a snapshot.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct AnswerReadRequest {
     /// Field `state`.
     pub state: types::State,
@@ -212,10 +212,10 @@ impl fmt::Display for AnswerReadError {
 impl std::error::Error for AnswerReadError {}
 
 /// The request of contract `plan-read-needs`: Plan the state a read needs.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct PlanReadNeedsRequest {
     /// Field `schema`.
-    pub schema: types::Schema,
+    pub schema: types::TenantSchema,
     /// Field `request`.
     pub request: types::ReadRequest,
 }
@@ -243,11 +243,11 @@ impl std::error::Error for PlanReadNeedsError {}
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct CheckRecordVisibilityRequest {
     /// Field `tenant`.
-    pub tenant: types::TenantSnapshot,
+    pub tenant: types::TenantState,
     /// Field `principal`.
-    pub principal: types::ActingPrincipal,
+    pub principal: types::Principal,
     /// Field `record`.
-    pub record: types::StoredRecord,
+    pub record: types::Record,
     /// Field `now`.
     pub now: prelude::Timestamp,
 }
@@ -276,7 +276,7 @@ impl std::error::Error for CheckRecordVisibilityError {}
 pub struct ApplyStateDeltaRequest {
     /// Field `tenant`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tenant: Option<types::TenantSnapshot>,
+    pub tenant: Option<types::TenantState>,
     /// Field `delta`.
     pub delta: types::StateDelta,
 }
@@ -285,7 +285,7 @@ pub struct ApplyStateDeltaRequest {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct ApplyStateDeltaResponse {
     /// Field `tenant`.
-    pub tenant: types::TenantSnapshot,
+    pub tenant: types::TenantState,
 }
 
 /// The errors of contract `apply-state-delta`: Apply an accepted state delta.
@@ -310,7 +310,7 @@ impl std::error::Error for ApplyStateDeltaError {}
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct PlanSchemaMigrationRequest {
     /// Field `tenant`.
-    pub tenant: types::TenantSnapshot,
+    pub tenant: types::TenantState,
     /// Field `changes`.
     pub changes: Vec<types::SchemaChange>,
     /// Field `now`.
@@ -1051,7 +1051,7 @@ pub struct LoadSnapshotRequest {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct LoadSnapshotResponse {
     /// Field `tenant`.
-    pub tenant: types::TenantSnapshot,
+    pub tenant: types::TenantState,
 }
 
 /// The errors of contract `load-snapshot`: Load the state a snapshot holds.
@@ -1180,7 +1180,7 @@ impl fmt::Display for ExecuteIntentError {
 impl std::error::Error for ExecuteIntentError {}
 
 /// The request of contract `execute-read`: Answer a read from the store.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct ExecuteReadRequest {
     /// Field `request`.
     pub request: types::ReadRequest,
@@ -1239,7 +1239,7 @@ pub struct ProvisionTenantResponse {
     /// Field `tenant`.
     pub tenant: types::TenantId,
     /// Field `state`.
-    pub state: types::TenantState,
+    pub state: types::TenantLifecycle,
     /// Field `bootstrap-credential`.
     pub bootstrap_credential: types::Secret,
 }
@@ -1357,7 +1357,7 @@ pub struct SuspendTenantRequest {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct SuspendTenantResponse {
     /// Field `state`.
-    pub state: types::TenantState,
+    pub state: types::TenantLifecycle,
 }
 
 /// The errors of contract `suspend-tenant`: Suspend a tenant.
@@ -1397,7 +1397,7 @@ pub struct ResumeTenantRequest {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct ResumeTenantResponse {
     /// Field `state`.
-    pub state: types::TenantState,
+    pub state: types::TenantLifecycle,
 }
 
 /// The errors of contract `resume-tenant`: Resume a suspended tenant.
@@ -1527,7 +1527,7 @@ pub struct CancelTenantDeletionRequest {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct CancelTenantDeletionResponse {
     /// Field `state`.
-    pub state: types::TenantState,
+    pub state: types::TenantLifecycle,
 }
 
 /// The errors of contract `cancel-tenant-deletion`: Cancel a pending tenant deletion.
@@ -6289,7 +6289,7 @@ pub struct ReplayJournalRequest {
     pub entries: Vec<types::JournalEntry>,
     /// Field `live`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub live: Option<types::TenantSnapshot>,
+    pub live: Option<types::TenantState>,
 }
 
 /// The response of contract `replay-journal`: Replay the journal of a tenant.
@@ -8273,7 +8273,7 @@ pub struct EvaluateTokenRequest {
     /// Field `name`.
     pub name: String,
     /// Field `record`.
-    pub record: types::StoredRecord,
+    pub record: types::Record,
     /// Field `context`.
     pub context: types::Context,
 }

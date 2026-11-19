@@ -87,9 +87,13 @@ fn repr_of(spec: &Spec, t: &TypeRef) -> Option<Repr> {
                 builtin_repr(Builtin::parse(repr.as_deref()?)?)
             }
             TypeKind::Enum { .. } => Some(Repr::Str),
-            TypeKind::Struct { .. } => None,
+            TypeKind::Struct { .. } | TypeKind::Union { .. } => None,
         },
-        TypeRef::List(_) | TypeRef::Option(_) => None,
+        TypeRef::List(_)
+        | TypeRef::Set(_)
+        | TypeRef::Option(_)
+        | TypeRef::Map(..)
+        | TypeRef::Shared(_) => None,
     }
 }
 
@@ -114,7 +118,13 @@ fn sensitivity(spec: &Spec, t: &TypeRef, depth: usize) -> Option<String> {
     }
     match t {
         TypeRef::Builtin(_) => None,
-        TypeRef::List(inner) | TypeRef::Option(inner) => sensitivity(spec, inner, depth + 1),
+        TypeRef::List(inner)
+        | TypeRef::Set(inner)
+        | TypeRef::Option(inner)
+        | TypeRef::Shared(inner) => sensitivity(spec, inner, depth + 1),
+        TypeRef::Map(key, value) => {
+            sensitivity(spec, key, depth + 1).or_else(|| sensitivity(spec, value, depth + 1))
+        }
         TypeRef::Declared(id) => {
             if let Some((_, kind)) = spec.telemetry.sensitive_types.iter().find(|(t, _)| t == id) {
                 return Some(kind.clone());
@@ -122,6 +132,10 @@ fn sensitivity(spec: &Spec, t: &TypeRef, depth: usize) -> Option<String> {
             match &spec.type_decl(id)?.kind {
                 TypeKind::Struct { fields } => fields
                     .iter()
+                    .find_map(|f| sensitivity(spec, &TypeRef::parse(&f.type_name), depth + 1)),
+                TypeKind::Union { variants, .. } => variants
+                    .iter()
+                    .flat_map(|v| &v.fields)
                     .find_map(|f| sensitivity(spec, &TypeRef::parse(&f.type_name), depth + 1)),
                 _ => None,
             }

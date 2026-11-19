@@ -1303,7 +1303,18 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
+ "strata-model-core",
  "strata-runtime",
+ "uuid",
+]
+
+[[package]]
+name = "strata-model-core"
+version = "0.1.0"
+dependencies = [
+ "regex",
+ "serde",
+ "serde_json",
  "uuid",
 ]
 
@@ -1354,6 +1365,7 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
+ "strata-kernel",
  "strata-model",
  "strata-runtime",
  "strata-spec-compiler-machines-fixture",
@@ -1361,6 +1373,16 @@ dependencies = [
  "strata-spec-expr",
  "syn 2.0.119",
  "tokio",
+]
+
+[[package]]
+name = "strata-spec-compiler-core-fixture"
+version = "0.1.0"
+dependencies = [
+ "regex",
+ "serde",
+ "serde_json",
+ "uuid",
 ]
 
 [[package]]

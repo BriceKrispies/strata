@@ -569,7 +569,11 @@ fn raw_ty(t: &TypeRef) -> Ty {
         TypeRef::Builtin(b) => builtin_ty(*b),
         TypeRef::Declared(id) => Ty::Named(id.clone()),
         TypeRef::Option(inner) => Ty::Option(Box::new(raw_ty(inner))),
-        TypeRef::List(inner) => Ty::List(Box::new(raw_ty(inner))),
+        TypeRef::List(inner) | TypeRef::Set(inner) => Ty::List(Box::new(raw_ty(inner))),
+        // A map is opaque to expressions, like json: compared only with == and !=.
+        TypeRef::Map(..) => Ty::Named(t.text()),
+        // So is a shared value, whose Rust type is not its inner type.
+        TypeRef::Shared(..) => Ty::Named(t.text()),
     }
 }
 
@@ -615,7 +619,11 @@ fn view(spec: &Spec, t: &TypeRef, uses: &mut Uses) -> View {
                 None => View::plain(Ty::Named(id.clone())),
             }
         }
-        TypeRef::Option(_) | TypeRef::List(_) => View::plain(raw_ty(t)),
+        TypeRef::Option(_)
+        | TypeRef::List(_)
+        | TypeRef::Set(_)
+        | TypeRef::Map(..)
+        | TypeRef::Shared(_) => View::plain(raw_ty(t)),
     }
 }
 
@@ -1238,7 +1246,7 @@ impl<'a> Gen<'a> {
                 if f.optional {
                     ty = quote! { Option<#ty> };
                 }
-                (ty, resolve::is_copy(&r) && !f.optional)
+                (ty, resolve::is_copy(spec, &r) && !f.optional)
             })
             .collect();
         let key_ty = if let [(ty, _)] = key_types.as_slice() {
@@ -1383,7 +1391,7 @@ impl<'a> Gen<'a> {
         let mut uses_state = false;
         for f in &record.fields {
             let field = naming::ident(&naming::snake(&f.name).unwrap_or_default());
-            let field_copy = resolve::is_copy(&TypeRef::parse(&f.type_name));
+            let field_copy = resolve::is_copy(spec, &TypeRef::parse(&f.type_name));
             let value = if let Some(at) = key.iter().position(|k| *k == f.name) {
                 let copy = key_types[at].1;
                 if key.len() == 1 {
@@ -1452,7 +1460,7 @@ impl<'a> Gen<'a> {
     /// The value of record field `f` holding the variable of `slot`, in `to_record`.
     fn write_field(&mut self, slot: &Slot, f: &RecordField) -> TokenStream {
         let vf = &slot.field;
-        let value = if resolve::is_copy(&TypeRef::parse(&slot.type_name)) {
+        let value = if resolve::is_copy(self.spec, &TypeRef::parse(&slot.type_name)) {
             quote! { vars.#vf }
         } else {
             quote! { vars.#vf.clone() }
@@ -1476,7 +1484,7 @@ impl<'a> Gen<'a> {
     /// unset optional field gives the variable its initial value.
     fn read_field(&mut self, slot: &Slot, f: &RecordField) -> TokenStream {
         let rf = naming::ident(&naming::snake(&f.name).unwrap_or_default());
-        let copy = resolve::is_copy(&TypeRef::parse(&slot.type_name));
+        let copy = resolve::is_copy(self.spec, &TypeRef::parse(&slot.type_name));
         let (optional, declared) = match fit(self.spec, &slot.type_name, f) {
             Some(Fit::Option) | None => {
                 return if copy {
@@ -1622,6 +1630,13 @@ impl<'a> Gen<'a> {
             (TypeRef::Option(inner), v) => {
                 let inner = self.literal(v, inner)?;
                 Ok(quote! { Some(#inner) })
+            }
+            (TypeRef::Set(inner), Value::Array(items)) => {
+                let items = items
+                    .iter()
+                    .map(|i| self.literal(i, inner))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(quote! { [#(#items),*].into_iter().collect::<std::collections::BTreeSet<_>>() })
             }
             (TypeRef::List(inner), Value::Array(items)) => {
                 if items.is_empty() {
@@ -2074,6 +2089,7 @@ impl<'a> Gen<'a> {
                     ty,
                     optional: false,
                     doc: Doc::new(&format!("Variable `{}`.", v.name)),
+                    deserialize_with: None,
                 }
                 .tokens()
             })
@@ -2142,6 +2158,7 @@ impl<'a> Gen<'a> {
                         ty,
                         optional: f.optional,
                         doc: Doc::new(&format!("Field `{}`.", f.name)),
+                        deserialize_with: None,
                     }
                     .tokens();
                     // A u64 or i64 beyond +-(2^53 - 1) is refused when the payload is decoded,

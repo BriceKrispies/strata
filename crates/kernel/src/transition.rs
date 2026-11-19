@@ -1,18 +1,17 @@
 //! `transition`: the one function that decides what an intent does to a tenant's state.
 
 use crate::expr::{self, Env};
-use crate::ids::{
-    owner_role, public_role, FieldId, ObjectTypeId, RecordId, SchemaVersion, StateRevision,
-    Timestamp,
-};
 use crate::intent::{
-    Check, Context, DeltaOp, DomainError, DomainEvent, Effect, ErrorKind, EventBody, ExistingData,
-    Intent, Output, SchemaChange, StateDelta, Transition,
+    Check, CheckExt, Context, DeltaOp, DomainError, DomainErrorExt, DomainEvent, Effect, ErrorKind,
+    EventBody, ExistingData, Intent, Output, SchemaChange, StateDelta, Transition,
 };
 use crate::rules::{authorize, roles_of, validate_record, Lookup, Subject};
-use crate::schema::{Action, FieldDef, ObjectTypeDef, Resource, TenantSchema};
-use crate::state::{Need, Principal, Record, State, TenantState};
-use crate::value::{refs_in, FieldType, OnDelete, Value};
+use crate::schema::{Action, FieldDef, ObjectTypeDef, Resource, TenantSchema, TenantSchemaExt};
+use crate::state::{Need, Principal, Record, RecordExt, State, TenantState};
+use crate::types::{
+    owner_role, public_role, refs_in, FieldId, FieldType, FieldTypeExt, ObjectTypeId, OnDelete,
+    PrincipalId, RecordId, RoleId, SchemaVersion, StateRevision, Timestamp, Value, ValueExt,
+};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
@@ -312,7 +311,7 @@ impl<'a> Draft<'a> {
 fn create_tenant(
     ctx: &Context,
     name: &str,
-    owner: &crate::ids::PrincipalId,
+    owner: &PrincipalId,
 ) -> Result<Transition, DomainError> {
     if ctx.principal != Principal::System {
         return Err(
@@ -729,8 +728,8 @@ fn delete_record(
 
 fn change_member(
     draft: &mut Draft<'_>,
-    principal: &crate::ids::PrincipalId,
-    role: &crate::ids::RoleId,
+    principal: &PrincipalId,
+    role: &RoleId,
     grant: bool,
 ) -> Result<Output, DomainError> {
     draft.require(Action::Manage, &Resource::Members, Subject::default())?;

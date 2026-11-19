@@ -1,7 +1,9 @@
 //! Type names and what they resolve to.
 //!
 //! A type name resolves when it is a built-in representation type, the id of a declared `type`,
-//! or `list<T>` / `option<T>` of a name that resolves (the shared generation-readiness format).
+//! `list<T>` / `option<T>` of a name that resolves, or `map<K, V>` of a key and a value that
+//! resolve (the shared generation-readiness format). `shared<T>` is `T` held behind a shared,
+//! immutable reference (`std::sync::Arc<T>` in Rust): the same value on the wire, cheap to copy.
 
 use std::collections::BTreeSet;
 
@@ -135,8 +137,15 @@ pub enum TypeRef {
     Declared(String),
     /// `list<T>`
     List(Box<TypeRef>),
+    /// `set<T>`: a JSON array of distinct items, in order; a `BTreeSet` in Rust.
+    Set(Box<TypeRef>),
     /// `option<T>`
     Option(Box<TypeRef>),
+    /// `map<K, V>`: a JSON object, a `BTreeMap` in Rust.
+    Map(Box<TypeRef>, Box<TypeRef>),
+    /// `shared<T>`: a `T` behind a shared, immutable reference, `std::sync::Arc<T>` in Rust. On
+    /// the wire, and everywhere but in Rust, it is exactly a `T`.
+    Shared(Box<TypeRef>),
 }
 
 impl TypeRef {
@@ -152,13 +161,101 @@ impl TypeRef {
         if let Some(inner) = wrapped("list<") {
             return TypeRef::List(inner);
         }
+        if let Some(inner) = wrapped("set<") {
+            return TypeRef::Set(inner);
+        }
         if let Some(inner) = wrapped("option<") {
             return TypeRef::Option(inner);
+        }
+        if let Some(inner) = wrapped("shared<") {
+            return TypeRef::Shared(inner);
+        }
+        if let Some(args) = text.strip_prefix("map<").and_then(|t| t.strip_suffix('>')) {
+            if let Some((key, value)) = split_top_comma(args) {
+                return TypeRef::Map(
+                    Box::new(TypeRef::parse(key)),
+                    Box::new(TypeRef::parse(value)),
+                );
+            }
         }
         match Builtin::parse(text) {
             Some(b) => TypeRef::Builtin(b),
             None => TypeRef::Declared(text.to_string()),
         }
+    }
+}
+
+/// `K, V` split at its one comma outside angle brackets; `None` unless there are exactly two
+/// non-empty parts.
+fn split_top_comma(text: &str) -> Option<(&str, &str)> {
+    let mut depth = 0i32;
+    let mut at = None;
+    for (i, c) in text.char_indices() {
+        match c {
+            '<' => depth += 1,
+            '>' => depth -= 1,
+            ',' if depth == 0 => {
+                if at.is_some() {
+                    return None;
+                }
+                at = Some(i);
+            }
+            _ => {}
+        }
+    }
+    let i = at?;
+    let (key, value) = (text[..i].trim(), text[i + 1..].trim());
+    (!key.is_empty() && !value.is_empty()).then_some((key, value))
+}
+
+impl TypeRef {
+    /// The type name as the specification writes it.
+    pub fn text(&self) -> String {
+        match self {
+            TypeRef::Builtin(b) => b.as_str().to_string(),
+            TypeRef::Declared(id) => id.clone(),
+            TypeRef::List(inner) => format!("list<{}>", inner.text()),
+            TypeRef::Set(inner) => format!("set<{}>", inner.text()),
+            TypeRef::Option(inner) => format!("option<{}>", inner.text()),
+            TypeRef::Map(k, v) => format!("map<{}, {}>", k.text(), v.text()),
+            TypeRef::Shared(inner) => format!("shared<{}>", inner.text()),
+        }
+    }
+
+    /// The type without any `shared<>` around it: what it is on the wire.
+    pub fn unshared(&self) -> &TypeRef {
+        match self {
+            TypeRef::Shared(inner) => inner.unshared(),
+            other => other,
+        }
+    }
+}
+
+/// True when the type can be the key of a `map<K, V>`: `string`, an integer built-in, or an id or
+/// scalar over one (Exegra's `type.map-key`). A key that does not resolve is not one.
+pub fn is_map_key(spec: &Spec, t: &TypeRef) -> bool {
+    let keyable = |b: Builtin| {
+        matches!(
+            b,
+            Builtin::String
+                | Builtin::U8
+                | Builtin::U16
+                | Builtin::U32
+                | Builtin::U64
+                | Builtin::I32
+                | Builtin::I64
+        )
+    };
+    match t {
+        TypeRef::Builtin(b) => keyable(*b),
+        TypeRef::Declared(id) => spec.type_decl(id).is_some_and(|d| match &d.kind {
+            TypeKind::Id { repr } | TypeKind::Scalar { repr } => repr
+                .as_deref()
+                .and_then(Builtin::parse)
+                .is_some_and(keyable),
+            _ => false,
+        }),
+        _ => false,
     }
 }
 
@@ -172,7 +269,11 @@ pub fn ref_resolves(spec: &Spec, t: &TypeRef) -> bool {
     match t {
         TypeRef::Builtin(_) => true,
         TypeRef::Declared(id) => spec.type_decl(id).is_some(),
-        TypeRef::List(inner) | TypeRef::Option(inner) => ref_resolves(spec, inner),
+        TypeRef::List(inner)
+        | TypeRef::Set(inner)
+        | TypeRef::Option(inner)
+        | TypeRef::Shared(inner) => ref_resolves(spec, inner),
+        TypeRef::Map(k, v) => ref_resolves(spec, k) && ref_resolves(spec, v),
     }
 }
 
@@ -193,7 +294,11 @@ pub fn is_total(spec: &Spec, t: &TypeRef) -> bool {
 fn total(spec: &Spec, t: &TypeRef, visiting: &mut BTreeSet<String>) -> bool {
     match t {
         TypeRef::Builtin(b) => b.is_total(),
-        TypeRef::List(inner) | TypeRef::Option(inner) => total(spec, inner, visiting),
+        TypeRef::List(inner)
+        | TypeRef::Set(inner)
+        | TypeRef::Option(inner)
+        | TypeRef::Shared(inner) => total(spec, inner, visiting),
+        TypeRef::Map(k, v) => total(spec, k, visiting) && total(spec, v, visiting),
         TypeRef::Declared(id) => {
             let Some(decl) = spec.type_decl(id) else {
                 return false;
@@ -211,6 +316,10 @@ fn total(spec: &Spec, t: &TypeRef, visiting: &mut BTreeSet<String>) -> bool {
                 TypeKind::Struct { fields } => fields
                     .iter()
                     .all(|f| total(spec, &TypeRef::parse(&f.type_name), visiting)),
+                TypeKind::Union { variants, .. } => variants
+                    .iter()
+                    .flat_map(|v| &v.fields)
+                    .all(|f| total(spec, &TypeRef::parse(&f.type_name), visiting)),
             };
             visiting.remove(id);
             result
@@ -218,12 +327,35 @@ fn total(spec: &Spec, t: &TypeRef, visiting: &mut BTreeSet<String>) -> bool {
     }
 }
 
-/// True when the generated Rust type is `Copy`. Declared types never derive `Copy`.
-pub fn is_copy(t: &TypeRef) -> bool {
+/// True when the generated Rust type is `Copy`: a built-in other than `string`, `bytes` and
+/// `json`, an option of one, or a declared type that derives `Copy` ([`declared_is_copy`]).
+pub fn is_copy(spec: &Spec, t: &TypeRef) -> bool {
     match t {
         TypeRef::Builtin(b) => b.is_copy(),
-        TypeRef::Option(inner) => is_copy(inner),
-        TypeRef::Declared(_) | TypeRef::List(_) => false,
+        TypeRef::Option(inner) => is_copy(spec, inner),
+        TypeRef::Declared(id) => declared_is_copy(spec, id),
+        TypeRef::List(_) | TypeRef::Set(_) | TypeRef::Map(..) | TypeRef::Shared(_) => false,
+    }
+}
+
+/// True when the declared type derives `Copy`: an id or scalar over a `Copy` built-in without
+/// constraints, an enumeration, or a union whose variants all have no fields. Structs never do,
+/// so adding a field never takes `Copy` away from a type others rely on.
+pub fn declared_is_copy(spec: &Spec, id: &str) -> bool {
+    let Some(decl) = spec.type_decl(id) else {
+        return false;
+    };
+    match &decl.kind {
+        TypeKind::Id { repr } | TypeKind::Scalar { repr } => {
+            decl.constraints.is_empty()
+                && repr
+                    .as_deref()
+                    .and_then(Builtin::parse)
+                    .is_some_and(Builtin::is_copy)
+        }
+        TypeKind::Enum { .. } => true,
+        TypeKind::Union { variants, .. } => variants.iter().all(|v| v.fields.is_empty()),
+        TypeKind::Struct { .. } => false,
     }
 }
 
@@ -252,6 +384,8 @@ mod tests {
             target_machines: vec![],
             constructs: Default::default(),
             telemetry: Default::default(),
+            languages: Vec::new(),
+            functions: Vec::new(),
         }
     }
 
@@ -261,6 +395,7 @@ mod tests {
             name: id.into(),
             description: None,
             kind,
+            constraints: Default::default(),
         }
     }
 
@@ -289,6 +424,24 @@ mod tests {
             )))))
         );
         assert_eq!(TypeRef::parse("list<>"), TypeRef::Declared("list<>".into()));
+        assert_eq!(
+            TypeRef::parse("map<string, list<map<u32, bool>>>"),
+            TypeRef::Map(
+                Box::new(TypeRef::Builtin(Builtin::String)),
+                Box::new(TypeRef::List(Box::new(TypeRef::Map(
+                    Box::new(TypeRef::Builtin(Builtin::U32)),
+                    Box::new(TypeRef::Builtin(Builtin::Bool))
+                ))))
+            )
+        );
+        assert_eq!(
+            TypeRef::parse("map<string,list<u8>>").text(),
+            "map<string, list<u8>>"
+        );
+        assert_eq!(
+            TypeRef::parse("map<string>"),
+            TypeRef::Declared("map<string>".into())
+        );
     }
 
     #[test]
@@ -337,11 +490,48 @@ mod tests {
     }
 
     #[test]
-    fn copy_types_are_scalars_and_their_options() {
-        assert!(is_copy(&TypeRef::parse("option<u64>")));
-        assert!(is_copy(&TypeRef::parse("uuid")));
-        assert!(!is_copy(&TypeRef::parse("string")));
-        assert!(!is_copy(&TypeRef::parse("list<u8>")));
-        assert!(!is_copy(&TypeRef::parse("tenant-id")));
+    fn copy_types_are_scalars_their_options_and_fieldless_declarations() {
+        let spec = spec_with(vec![
+            decl(
+                "record-id",
+                TypeKind::Id {
+                    repr: Some("u64".into()),
+                },
+            ),
+            decl(
+                "tenant-id",
+                TypeKind::Id {
+                    repr: Some("string".into()),
+                },
+            ),
+            decl(
+                "pair",
+                TypeKind::Struct {
+                    fields: vec![field("n", "u32")],
+                },
+            ),
+        ]);
+        assert!(is_copy(&spec, &TypeRef::parse("option<u64>")));
+        assert!(is_copy(&spec, &TypeRef::parse("uuid")));
+        assert!(is_copy(&spec, &TypeRef::parse("record-id")));
+        assert!(is_copy(&spec, &TypeRef::parse("option<record-id>")));
+        assert!(!is_copy(&spec, &TypeRef::parse("string")));
+        assert!(!is_copy(&spec, &TypeRef::parse("list<u8>")));
+        assert!(!is_copy(&spec, &TypeRef::parse("tenant-id")));
+        assert!(!is_copy(&spec, &TypeRef::parse("pair")));
+        assert!(!is_copy(&spec, &TypeRef::parse("shared<record-id>")));
+    }
+
+    #[test]
+    fn shared_wraps_a_type_that_is_the_same_on_the_wire() {
+        let t = TypeRef::parse("map<u64, shared<option<u8>>>");
+        assert_eq!(t.text(), "map<u64, shared<option<u8>>>");
+        let TypeRef::Map(_, v) = &t else {
+            panic!("a map: {t:?}")
+        };
+        assert_eq!(
+            v.unshared(),
+            &TypeRef::Option(Box::new(TypeRef::Builtin(Builtin::U8)))
+        );
     }
 }

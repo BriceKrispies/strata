@@ -2,12 +2,13 @@
 //! policies do not grant.
 
 use crate::expr::{self, Env};
-use crate::ids::{RoleId, Timestamp};
-use crate::intent::{Check, Context, DomainError, ErrorKind, ReadRequest, ReadResult};
+use crate::intent::{
+    Check, CheckExt, Context, DomainError, DomainErrorExt, ErrorKind, ReadRequest, ReadResult,
+};
 use crate::rules::{authorize, roles_of, Lookup, Subject};
 use crate::schema::{Action, Resource, TenantSchema};
 use crate::state::{Need, Principal, Record, State, TenantState};
-use crate::value::Value;
+use crate::types::{RoleId, Timestamp, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 

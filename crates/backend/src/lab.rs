@@ -12,6 +12,7 @@ use serde_json::{json, Value as Json};
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use strata_kernel::ext::*;
 use strata_kernel::{ExistingData, Principal, PrincipalId, TenantId, TenantState, World};
 use strata_protocol::api::ErrorCode;
 use strata_simulation::engine::{replay as replay_trace, Faults, Scenario, Scheduled};

@@ -47,6 +47,7 @@
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
+use strata_kernel::ext::*;
 use strata_kernel::{
     canon, Context, DeltaOp, DomainEvent, EventBody, FieldId, Intent, Need, ObjectTypeId,
     Principal, PrincipalId, Record, RecordId, StateDelta, StateRevision, TenantId, TenantSchema,

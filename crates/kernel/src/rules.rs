@@ -2,11 +2,17 @@
 //! transition and read is built from.
 
 use crate::expr::{self, Env};
-use crate::ids::{owner_role, public_role, FieldId, ObjectTypeId, RecordId, RoleId, Timestamp};
-use crate::intent::{Check, DomainError, ErrorKind};
-use crate::schema::{Action, ObjectTypeDef, Resource, TenantSchema};
-use crate::state::{Coverage, Need, Principal, Record, TenantState};
-use crate::value::{refs_in, Value};
+use crate::intent::{Check, CheckExt, DomainError, DomainErrorExt, ErrorKind};
+use crate::schema::{
+    Action, ObjectTypeDef, Resource, TenantSchema, TenantSchemaExt, WorkflowDefExt,
+};
+use crate::state::{
+    Coverage, CoverageExt, Need, Principal, Record, RecordExt, TenantState, TenantStateExt,
+};
+use crate::types::{
+    owner_role, public_role, refs_in, FieldId, FieldTypeExt, ObjectTypeId, RecordId, RoleId,
+    Timestamp, Value, ValueExt,
+};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
@@ -171,7 +177,8 @@ pub fn authorize(
                 Ok(other) => checks.push(Check::fail(
                     rule,
                     format!(
-                        "{condition} is {}",
+                        "{} is {}",
+                        condition,
                         if other.is_null() { "null" } else { "false" }
                     ),
                 )),

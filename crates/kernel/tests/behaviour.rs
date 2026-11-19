@@ -842,7 +842,7 @@ fn a_grandfathered_migration_is_accepted_for_every_kind_of_change_that_a_record_
     for (name, change, rule, broken) in breaking_changes() {
         let intent = change_in(ExistingData::Grandfather, change);
         let (changed, outcome) = step(&world, "alpha", "owner", 5_003, intent)
-            .unwrap_or_else(|e| panic!("{name} was refused: {e}"));
+            .unwrap_or_else(|e| panic!("{name} was refused: {}", e.describe()));
         let expected: BTreeSet<String> = broken
             .iter()
             .map(|id| format!("existing:note/{id}:{rule}"))

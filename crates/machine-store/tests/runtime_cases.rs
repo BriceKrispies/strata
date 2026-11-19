@@ -13,6 +13,7 @@ mod system;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
+use strata_kernel::ext::*;
 use strata_kernel::{EventBody, FieldId, ObjectTypeId, TenantId, Value};
 use strata_machine_store::{StorageApiMachineStore, OUTBOX, TIMERS};
 use strata_runtime::store::{NewMessage, NewTimer, OutboxStore, RecordStore, TimerStore};
@@ -496,10 +497,12 @@ fn equal_ids_are_two_instances(api: Arc<dyn Store>) {
     save(&globex, "{\"version\":1}");
     assert_eq!(load(&acme).unwrap().data, "{\"version\":7}");
     assert_eq!(load(&globex).unwrap().data, "{\"version\":1}");
+}
 
 #[test]
 fn api_memory_tenants_with_equal_record_ids_share_no_instance_state() {
     equal_ids_are_two_instances(Arc::new(MemoryStore::new()));
+}
 
 #[test]
 fn api_sqlite_tenants_with_equal_record_ids_share_no_instance_state() {

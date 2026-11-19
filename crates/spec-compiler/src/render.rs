@@ -71,10 +71,46 @@ pub fn rust_type(spec: &Spec, t: &TypeRef, scope: Scope, uses: &mut Uses) -> Tok
             let inner = rust_type(spec, inner, scope, uses);
             quote! { Vec<#inner> }
         }
+        TypeRef::Set(inner) => {
+            let inner = rust_type(spec, inner, scope, uses);
+            quote! { std::collections::BTreeSet<#inner> }
+        }
         TypeRef::Option(inner) => {
             let inner = rust_type(spec, inner, scope, uses);
             quote! { Option<#inner> }
         }
+        TypeRef::Map(key, value) => {
+            let key = rust_type(spec, key, scope, uses);
+            let value = rust_type(spec, value, scope, uses);
+            quote! { std::collections::BTreeMap<#key, #value> }
+        }
+        TypeRef::Shared(inner) => {
+            let inner = rust_type(spec, inner, scope, uses);
+            quote! { std::sync::Arc<#inner> }
+        }
+    }
+}
+
+/// As [`rust_type`], with every declared type in `boxed` that the value holds inline (directly or
+/// through `option<T>`, not through a list or map, which already hold their items on the heap)
+/// written `Box<T>`: what a recursive type needs to have a finite size.
+pub fn rust_type_boxed(
+    spec: &Spec,
+    t: &TypeRef,
+    scope: Scope,
+    uses: &mut Uses,
+    boxed: &dyn Fn(&str) -> bool,
+) -> TokenStream {
+    match t {
+        TypeRef::Declared(id) if boxed(id) => {
+            let inner = rust_type(spec, t, scope, uses);
+            quote! { Box<#inner> }
+        }
+        TypeRef::Option(inner) => {
+            let inner = rust_type_boxed(spec, inner, scope, uses, boxed);
+            quote! { Option<#inner> }
+        }
+        _ => rust_type(spec, t, scope, uses),
     }
 }
 
@@ -107,7 +143,16 @@ pub fn builtin_type(b: Builtin, uses: &mut Uses) -> TokenStream {
 /// The derives of every generated data type: `Eq`, `Ord` and `Hash` only when nothing in the
 /// type is an `f64`.
 pub fn derives(total: bool) -> TokenStream {
-    if total {
+    derives_copy(total, false)
+}
+
+/// As [`derives`], with `Copy` as well when `copy` ([`crate::resolve::declared_is_copy`]).
+pub fn derives_copy(total: bool, copy: bool) -> TokenStream {
+    if copy && total {
+        quote! { #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)] }
+    } else if copy {
+        quote! { #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)] }
+    } else if total {
         quote! { #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)] }
     } else {
         quote! { #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)] }
@@ -182,6 +227,7 @@ fn clean(text: &str) -> String {
 }
 
 /// A struct field to emit.
+#[derive(Default)]
 pub struct Field {
     /// The name on the wire, kept through `serde(rename)`: the specification's name, converted
     /// to the wire case where the field crosses a contract ([`crate::wire`]).
@@ -194,11 +240,23 @@ pub struct Field {
     pub optional: bool,
     /// Its documentation.
     pub doc: Doc,
+    /// The function that decodes it, when serde's own decoding is not enough (a `set<T>` that
+    /// must refuse a repeated item): `#[serde(deserialize_with = "...")]`.
+    pub deserialize_with: Option<String>,
 }
 
 impl Field {
     /// The field as it appears in a braced struct.
     pub fn tokens(&self) -> TokenStream {
+        self.with_visibility(quote! { pub })
+    }
+
+    /// The field as it appears in a struct-like enum variant, which takes no visibility.
+    pub fn variant_tokens(&self) -> TokenStream {
+        self.with_visibility(TokenStream::new())
+    }
+
+    fn with_visibility(&self, vis: TokenStream) -> TokenStream {
         let doc = self.doc.tokens();
         let name = naming::ident(&self.rust_name);
         let ty = &self.ty;
@@ -219,10 +277,15 @@ impl Field {
         } else {
             quote! { #ty }
         };
+        let decode = match &self.deserialize_with {
+            Some(path) => quote! { #[serde(deserialize_with = #path)] },
+            None => TokenStream::new(),
+        };
         quote! {
             #doc
             #serde
-            pub #name: #ty,
+            #decode
+            #vis #name: #ty,
         }
     }
 }
