@@ -22,6 +22,9 @@ fn bundle() -> Bundle {
             { "principal": "user:ann", "roles": ["author"] },
             { "principal": "user:bob", "roles": ["author"] }
         ],
+        "teams": [
+            { "id": "newsdesk", "label": "News desk", "roles": ["editor"], "members": ["user:cy"] }
+        ],
         "records": [
             { "object": "publication", "as": "user:admin", "at": "2026-01-02", "fields": { "key": "main", "name": "Gazette" } },
             { "object": "author", "key": "ann", "as": "user:ed", "at": "2026-01-02", "fields": { "name": "Ann", "slug": "ann", "principal": "user:ann" } },
@@ -449,4 +452,71 @@ fn an_author_cannot_touch_another_authors_post() {
     );
     assert!(world.step(&edit, &ctx(user("ann"))).is_ok());
     assert!(world.step(&edit, &ctx(user("ed"))).is_ok());
+}
+
+/// Verifies: ADM-150
+///
+/// The template's roles state their permissions, as data, and what they state is what the
+/// template's own policies already let the role do without a condition: no permission without a
+/// policy and no unconditional policy without a permission, so that behaviour is unchanged.
+#[test]
+fn the_templates_roles_state_the_permissions_their_policies_grant() {
+    let world = world();
+    let tenant = &world.tenants[&TenantId::new("gazette").unwrap()];
+    let schema = &tenant.schema;
+    let bundle = bundle();
+    assert!(bundle.roles.iter().all(|r| !r.permissions.is_empty()));
+    for role in &bundle.roles {
+        let stated = schema.grants_of(&role.id);
+        let by_policy: BTreeSet<Grant> = schema
+            .policies
+            .values()
+            .filter(|p| p.role == role.id && p.condition.is_none())
+            .flat_map(|p| match &p.resource {
+                Resource::Object(object) => p
+                    .actions
+                    .iter()
+                    .filter_map(|a| Verb::of(*a))
+                    .map(|verb| Grant::Object(object.clone(), verb))
+                    .collect::<Vec<_>>(),
+                _ => Vec::new(),
+            })
+            .collect();
+        assert_eq!(stated, by_policy, "permissions of {}", role.id);
+    }
+    let post = ObjectTypeId::new("post").unwrap();
+    assert_eq!(
+        strata_kernel::rules::effective_permissions(tenant, &user("ann")),
+        BTreeSet::from([Grant::Object(post, Verb::Create)])
+    );
+}
+
+/// Verifies: ADM-151
+///
+/// A person in a team that holds the editor role does what an editor does, and a person in no
+/// team and with no role does not.
+#[test]
+fn a_member_of_a_team_holding_editor_edits_like_an_editor() {
+    let world = world();
+    let category = |slug: &str| Intent::CreateRecord {
+        object: ObjectTypeId::new("category").unwrap(),
+        fields: BTreeMap::from([
+            (FieldId::new("name").unwrap(), Value::Str(slug.into())),
+            (FieldId::new("slug").unwrap(), Value::Str(slug.into())),
+        ]),
+    };
+    world
+        .step(&category("by-team"), &ctx(user("cy")))
+        .unwrap_or_else(|e| panic!("a team member could not create a category: {e}"));
+    let refused = world
+        .step(&category("by-nobody"), &ctx(user("dee")))
+        .expect_err("a person with no role creates no category");
+    assert_eq!(refused.kind, ErrorKind::Unauthorized);
+    let tenant = &world.tenants[&TenantId::new("gazette").unwrap()];
+    assert!(strata_kernel::rules::roles_of(tenant, &user("cy"))
+        .contains(&RoleId::new("editor").unwrap()));
+    assert!(tenant
+        .members
+        .get(&PrincipalId::new("user:cy").unwrap())
+        .is_none());
 }

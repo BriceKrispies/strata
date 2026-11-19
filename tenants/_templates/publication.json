@@ -1,7 +1,22 @@
 {
   "roles": [
-    { "id": "author", "label": "Author" },
-    { "id": "editor", "label": "Editor" }
+    {
+      "id": "author",
+      "label": "Author",
+      "permissions": [
+        { "object": "post", "actions": ["create"] }
+      ]
+    },
+    {
+      "id": "editor",
+      "label": "Editor",
+      "permissions": [
+        { "object": "post", "actions": ["read", "create", "update", "delete"] },
+        { "object": "category", "actions": ["create", "update", "delete"] },
+        { "object": "author", "actions": ["create", "update"] },
+        { "object": "publication", "actions": ["update"] }
+      ]
+    }
   ],
   "objects": [
     {
