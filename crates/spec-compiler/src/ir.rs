@@ -395,6 +395,23 @@ pub struct Behavior {
     pub instances: Option<Instances>,
     /// `transaction.isolation`, as written.
     pub isolation: Option<String>,
+    /// The scenario routes to this machine (`routes` of every scenario), each distinct one once,
+    /// in the order the scenarios give them. Exegra decides a routed event's receiving instance
+    /// by them; the generated routing table does the same.
+    pub routes: Vec<Route>,
+}
+
+/// A scenario route `{event, behavior, by, field?}` to a machine.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Route {
+    /// The routed event.
+    pub event: String,
+    /// How the instance is chosen: `key`, `round-robin`, ...
+    pub by: String,
+    /// For `by: key`, the payload field whose value is the key.
+    pub field: Option<String>,
+    /// The scenario that declares it (the first, when several do).
+    pub scenario: String,
 }
 
 /// A variable of a behavior.
