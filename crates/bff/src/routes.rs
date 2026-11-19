@@ -6,8 +6,8 @@ use crate::{relay, Bff, Shared, COOKIE, LOG};
 use axum::extract::ws::WebSocketUpgrade;
 use axum::extract::{ConnectInfo, Path, Query, Request, State};
 use axum::http::header::{
-    CACHE_CONTROL, CONTENT_SECURITY_POLICY, CONTENT_TYPE, COOKIE as COOKIE_HEADER, HOST, ORIGIN,
-    SET_COOKIE,
+    CACHE_CONTROL, CONTENT_SECURITY_POLICY, CONTENT_TYPE, COOKIE as COOKIE_HEADER, HOST, LOCATION,
+    ORIGIN, SET_COOKIE,
 };
 use axum::http::{HeaderMap, HeaderValue, Method, StatusCode};
 use axum::middleware::{self, Next};
@@ -73,24 +73,70 @@ fn text(headers: &HeaderMap, name: impl axum::http::header::AsHeaderName) -> Opt
 
 /// The cookie that holds the nonce binding an emailed link to the browser that asked for it.
 const LINK_COOKIE: &str = "__Host-strata-link";
+/// The cookie that holds the nonce binding a sign-in at an identity provider to the browser that
+/// started it.
+const OIDC_COOKIE: &str = "__Host-strata-oidc";
+/// The cookie that holds where to go after a sign-in at an identity provider. It is a path on this
+/// site and nothing secret, and it is `Lax` because the provider's redirect back is a navigation
+/// from another site, which a `Strict` cookie does not accompany.
+const RETURN_COOKIE: &str = "__Host-strata-return";
 
-/// The nonce in the link cookie, when the browser holds a well-formed one.
-fn link_binding(headers: &HeaderMap) -> Option<String> {
-    text(headers, COOKIE_HEADER)?
-        .split(';')
-        .filter_map(|pair| pair.trim().split_once('='))
-        .find(|(name, _)| *name == LINK_COOKIE)
-        .map(|(_, value)| value.to_string())
+/// The value of a cookie that holds a nonce, when the browser holds a well-formed one.
+fn binding_of(headers: &HeaderMap, name: &str) -> Option<String> {
+    cookie_value(headers, name)
         .filter(|value| value.len() == 64 && value.chars().all(|c| c.is_ascii_hexdigit()))
 }
 
-/// The link cookie: `__Host-` (`Secure`, `Path=/`, no `Domain`), `HttpOnly` and `SameSite=Strict`,
-/// so that a page script cannot read it and a link opened from another site does not carry it.
-fn link_cookie(binding: &str, max_age: i64) -> HeaderValue {
+/// The nonce in the link cookie, when the browser holds a well-formed one.
+fn link_binding(headers: &HeaderMap) -> Option<String> {
+    binding_of(headers, LINK_COOKIE)
+}
+
+/// A cookie as `__Host-` requires: `Secure`, `Path=/` and no `Domain`, and `HttpOnly`, so that a
+/// page script cannot read it.
+fn host_cookie(name: &str, value: &str, max_age: i64, same_site: &str) -> HeaderValue {
     HeaderValue::from_str(&format!(
-        "{LINK_COOKIE}={binding}; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age={max_age}"
+        "{name}={value}; Path=/; Secure; HttpOnly; SameSite={same_site}; Max-Age={max_age}"
     ))
     .expect("cookie values are ASCII")
+}
+
+/// The link cookie: `Strict`, so that a link opened from another site does not carry it.
+fn link_cookie(binding: &str, max_age: i64) -> HeaderValue {
+    host_cookie(LINK_COOKIE, binding, max_age, "Strict")
+}
+
+/// The value of a cookie, as sent.
+fn cookie_value(headers: &HeaderMap, name: &str) -> Option<String> {
+    text(headers, COOKIE_HEADER)?
+        .split(';')
+        .filter_map(|pair| pair.trim().split_once('='))
+        .find(|(cookie_name, _)| *cookie_name == name)
+        .map(|(_, value)| value.to_string())
+}
+
+/// Percent-encode a value for a query string, a fragment or a cookie.
+fn percent_encode(value: &str) -> String {
+    value
+        .bytes()
+        .map(|b| {
+            if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~') {
+                (b as char).to_string()
+            } else {
+                format!("%{b:02X}")
+            }
+        })
+        .collect()
+}
+
+/// A return address that is a path on this site: one slash first, no other host, no backslash
+/// (which browsers read as a slash) and no control character (FED-250).
+fn safe_path(path: &str) -> bool {
+    path.len() <= 512
+        && path.starts_with('/')
+        && !path.starts_with("//")
+        && !path.contains('\\')
+        && !path.chars().any(char::is_control)
 }
 
 pub fn cookie(headers: &HeaderMap) -> Option<String> {
@@ -353,8 +399,13 @@ async fn sign_in(
             &visit.correlation,
         )
     })?;
+    let binding = if method == "oidc" {
+        binding_of(headers, OIDC_COOKIE)
+    } else {
+        link_binding(headers)
+    };
     let credentials = route
-        .credentials(&body, link_binding(headers).as_deref())
+        .credentials(&body, binding.as_deref())
         .ok_or_else(|| {
             Failure::new(
                 ErrorCode::Unauthenticated,
@@ -427,6 +478,122 @@ async fn link_request(
         .headers_mut()
         .insert(SET_COOKIE, link_cookie(binding, max_age));
     Ok(response)
+}
+
+/// The identity providers the sign-in page offers at the address it is served at.
+async fn oidc_providers(
+    State(bff): State<Shared>,
+    headers: HeaderMap,
+) -> Result<Json<Json_>, Failure> {
+    let visit = visit(&bff, &headers)?;
+    backend(&bff, &visit, "/internal/sign-in/oidc/providers", &json!({}))
+        .await
+        .map(Json)
+}
+
+/// Begin a sign-in at an identity provider, from one of the site's own pages and with the request
+/// token every sign-in carries. The answer is the address to send the browser to; the nonce that
+/// binds the sign-in to this browser is a cookie the page cannot read, and the return address is
+/// another, which the callback reads.
+async fn oidc_start(
+    State(bff): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<Json_>,
+) -> Result<Response, Failure> {
+    let visit = visit(&bff, &headers)?;
+    guard_request(&bff, &visit, &headers).await?;
+    let Some(provider) = body.get("provider").and_then(Json_::as_str) else {
+        return Err(Failure::new(
+            ErrorCode::Invalid,
+            "Choose a provider.",
+            &visit.correlation,
+        ));
+    };
+    let mut sent = json!({
+        "provider": provider,
+        "binding": binding_of(&headers, OIDC_COOKIE),
+        "link": body.get("link").and_then(Json_::as_bool).unwrap_or(false),
+    });
+    if let Some(next) = body.get("next").and_then(Json_::as_str) {
+        sent["next"] = json!(next);
+    }
+    let reply: Json_ = backend(&bff, &visit, "/internal/sign-in/oidc/start", &sent).await?;
+    let unavailable = || {
+        Failure::new(
+            ErrorCode::Unavailable,
+            "The service is not available right now.",
+            &visit.correlation,
+        )
+    };
+    let redirect = reply["redirect"]
+        .as_str()
+        .filter(|address| address.starts_with("https://") || address.starts_with("http://"))
+        .ok_or_else(unavailable)?;
+    let binding = reply["binding"].as_str().ok_or_else(unavailable)?;
+    let max_age = reply["max_age"].as_i64().unwrap_or(300);
+    let mut response = Json(json!({ "redirect": redirect })).into_response();
+    let cookies = response.headers_mut();
+    cookies.append(
+        SET_COOKIE,
+        host_cookie(OIDC_COOKIE, binding, max_age, "Strict"),
+    );
+    // A return address of an earlier start is replaced, or removed when this one has none.
+    let kept = reply["return_to"].as_str().filter(|path| safe_path(path));
+    cookies.append(
+        SET_COOKIE,
+        match kept {
+            Some(path) => host_cookie(RETURN_COOKIE, &percent_encode(path), max_age, "Lax"),
+            None => host_cookie(RETURN_COOKIE, "", 0, "Lax"),
+        },
+    );
+    Ok(response)
+}
+
+/// Where the provider sends the browser back to. The code and the state are moved into the
+/// fragment of the sign-in page's address, which the browser does not send anywhere, and the page
+/// takes them out of the address bar and sends them in the body of `/api/sign-in/oidc`: the
+/// binding cookie is `Strict`, and goes with that request from the page and not with this
+/// navigation from another site.
+async fn oidc_callback(
+    State(bff): State<Shared>,
+    headers: HeaderMap,
+    Query(query): Query<BTreeMap<String, String>>,
+) -> Response {
+    if let Err(failure) = visit(&bff, &headers) {
+        return failure.into_response();
+    }
+    let next = cookie_value(&headers, RETURN_COOKIE)
+        .map(|value| percent_decode(&value))
+        .filter(|path| safe_path(path));
+    let printable = |value: &&String| {
+        !value.is_empty()
+            && value.len() <= 2048
+            && value.bytes().all(|b| (0x21..=0x7e).contains(&b))
+    };
+    let mut location = "/login".to_string();
+    if let Some(next) = &next {
+        location.push_str(&format!("?next={}", percent_encode(next)));
+    }
+    match (
+        query.get("state").filter(printable),
+        query.get("code").filter(printable),
+        query.get("error"),
+    ) {
+        (Some(state), Some(code), None) => location.push_str(&format!(
+            "#s={}&x={}",
+            percent_encode(state),
+            percent_encode(code)
+        )),
+        _ => location.push_str("#e=1"),
+    }
+    let mut response = StatusCode::SEE_OTHER.into_response();
+    let out = response.headers_mut();
+    if let Ok(value) = HeaderValue::from_str(&location) {
+        out.insert(LOCATION, value);
+    }
+    out.insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    out.append(SET_COOKIE, host_cookie(RETURN_COOKIE, "", 0, "Lax"));
+    response
 }
 
 /// A challenge for signing in with a passkey. Anyone may ask, from one of the site's own pages
@@ -1077,6 +1244,8 @@ pub fn router(bff: Shared) -> Router {
         .route("/login", post(login))
         .route("/sign-in/:method", post(login_with))
         .route("/sign-in/link/request", post(link_request))
+        .route("/sign-in/providers", get(oidc_providers))
+        .route("/sign-in/oidc/start", post(oidc_start))
         .route("/passkeys", get(passkeys))
         .route("/passkeys/challenge", post(passkey_challenge))
         .route("/passkeys/register/start", post(passkey_register_start))
@@ -1100,6 +1269,7 @@ pub fn router(bff: Shared) -> Router {
     Router::new()
         .nest("/api", api)
         .route("/ws", get(socket))
+        .route("/federation/oidc/callback", get(oidc_callback))
         .nest_service("/assets", ServeDir::new(bff.cfg.dist.join("assets")))
         .nest_service("/media", ServeDir::new(bff.cfg.dist.join("media")))
         .fallback(get(page))

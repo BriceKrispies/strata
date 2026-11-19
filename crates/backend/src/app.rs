@@ -3,6 +3,7 @@
 use crate::hub::Hub;
 use crate::lab::Lab;
 use crate::mail::Mailer;
+use crate::signin::oidc::Federation;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
@@ -41,6 +42,8 @@ pub struct Config {
     pub link_ttl_ms: i64,
     /// Where mail goes. A development sink unless an SMTP server was configured.
     pub mail: Arc<dyn Mailer>,
+    /// The identity providers of each tenant, and what has been fetched from them.
+    pub federation: Arc<Federation>,
 }
 
 /// The limits on failed sign-in attempts. The defaults are the platform defaults of D-700; a

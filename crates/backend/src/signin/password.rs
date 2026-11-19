@@ -28,7 +28,7 @@ impl SignInMethod for Password {
         (!login.is_empty() && login.len() <= LOGIN_BYTES).then_some(login)
     }
 
-    /// Implements: IDN-255
+    /// Implements: FED-009, H-038, IDN-255
     fn verify(
         &self,
         app: &App,
@@ -40,6 +40,12 @@ impl SignInMethod for Password {
             .get("password")
             .and_then(Json::as_str)
             .unwrap_or_default();
+        // A login in a domain that a provider decides for does not open with a password. The
+        // work is the same as for a wrong one (FED-009, IDN-255).
+        if app.cfg.federation.domain_bound(&caller.site, subject) {
+            is_password(password, decoy_hash());
+            return Ok(None);
+        }
         let account = app.store.account(&caller.site, subject)?;
         Ok(match account {
             Some(account) => is_password(password, &account.password_hash).then_some(account),

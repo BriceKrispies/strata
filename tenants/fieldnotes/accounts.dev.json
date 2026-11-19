@@ -3,5 +3,6 @@
   { "login": "ines", "password": "strata-dev-ines", "principal": "user:ines", "display_name": "Inès Okafor" },
   { "login": "tomasz", "password": "strata-dev-tomasz", "principal": "user:tomasz", "display_name": "Tomasz Wren" },
   { "login": "mirela", "password": "strata-dev-mirela", "principal": "user:mirela", "display_name": "Mirela Ashby" },
-  { "login": "mirela@fieldnotes.example", "password": "strata-dev-mirela", "principal": "user:mirela", "display_name": "Mirela Ashby" }
+  { "login": "mirela@fieldnotes.example", "password": "strata-dev-mirela", "principal": "user:mirela", "display_name": "Mirela Ashby" },
+  { "login": "ines@bound.example", "password": "strata-dev-ines", "principal": "user:ines", "display_name": "Inès Okafor" }
 ]

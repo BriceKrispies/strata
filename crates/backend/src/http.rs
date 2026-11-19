@@ -2,7 +2,7 @@
 
 use crate::app::{ApiError, App, Shared, LOG};
 use crate::auth::{self, has_service_token, Caller, Identity};
-use crate::signin::{link, passkey};
+use crate::signin::{link, oidc, passkey};
 use crate::{lab, ops, seed, ws};
 use axum::extract::ws::WebSocketUpgrade;
 use axum::extract::{Path, Request, State};
@@ -138,6 +138,32 @@ async fn link_request(
         .await?
         .map(Json)
         .map_err(|error| error.with_correlation(&correlation))
+}
+
+/// The providers the sign-in page offers at the address it is served at.
+async fn oidc_providers(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+) -> Result<Json<Json_>, ApiError> {
+    let caller = auth::caller(&headers)?;
+    let correlation = caller.correlation.clone();
+    app.blocking(move |app| oidc::providers(app, &caller))
+        .await?
+        .map(Json)
+        .map_err(|error| error.with_correlation(&correlation))
+}
+
+/// Begin a sign-in at an identity provider. Anyone may; to link a provider to the caller's own
+/// account the caller is signed in.
+async fn oidc_start(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<Json_>,
+) -> Result<Json<Json_>, ApiError> {
+    as_caller_at(&app, &headers, move |app, caller, identity| {
+        oidc::start(app, caller, identity, &body)
+    })
+    .await
 }
 
 async fn passkey_register_start(
@@ -466,6 +492,8 @@ pub fn router(app: Shared) -> Router {
         .route("/internal/session/login", post(login))
         .route("/internal/session/sign-in/:method", post(login_with))
         .route("/internal/sign-in/link/request", post(link_request))
+        .route("/internal/sign-in/oidc/providers", post(oidc_providers))
+        .route("/internal/sign-in/oidc/start", post(oidc_start))
         .route("/internal/passkeys", post(passkeys))
         .route("/internal/passkeys/challenge", post(passkey_challenge))
         .route(

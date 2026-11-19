@@ -17,7 +17,7 @@
 //!   that is refused for any reason has been taken: the person asks for another.
 //! - **Return address.** A `next` that is not a path on the site is dropped, not followed.
 //!
-//! Implements: IDN-003, IDN-004, IDN-005, IDN-006, IDN-269, PRV-365
+//! Implements: FED-009, H-038, IDN-003, IDN-004, IDN-005, IDN-006, IDN-269, PRV-365
 
 use super::{normalise_login, rules, throttled, SignInMethod};
 use crate::app::{ApiError, App, LOG};
@@ -37,7 +37,7 @@ const NEXT_BYTES: usize = 512;
 /// A challenge identifier, a token and a binding nonce: 32 random bytes in hex each.
 const HEX_LEN: usize = 64;
 
-fn well_formed(value: &str) -> bool {
+pub(super) fn well_formed(value: &str) -> bool {
     value.len() == HEX_LEN && value.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
@@ -56,7 +56,7 @@ pub fn same_site_path(next: &str) -> Option<&str> {
 }
 
 /// An origin in the one spelling that is compared and put in links: `http(s)://host[:port]`.
-fn site_origin(origin: &str) -> Option<String> {
+pub(super) fn site_origin(origin: &str) -> Option<String> {
     let origin = origin.trim_end_matches('/').to_ascii_lowercase();
     let rest = origin
         .strip_prefix("https://")
@@ -69,7 +69,7 @@ fn site_origin(origin: &str) -> Option<String> {
 }
 
 /// Percent-encode a value for a query string.
-fn encode(value: &str) -> String {
+pub(super) fn encode(value: &str) -> String {
     value
         .bytes()
         .map(|b| {
@@ -128,9 +128,13 @@ pub fn request(app: &App, caller: &Caller, body: &Json) -> Result<Json, ApiError
         return Err(throttled());
     }
 
+    // An address in a domain that a provider decides for is answered like one with no account:
+    // the provider is the way in for it (FED-009).
     let account = match &address {
-        Some(address) => app.store.account(&caller.site, address)?,
-        None => None,
+        Some(address) if !app.cfg.federation.domain_bound(&caller.site, address) => {
+            app.store.account(&caller.site, address)?
+        }
+        _ => None,
     };
     if let (Some(account), Some(address)) = (account, address) {
         let challenge = random_hex(HEX_LEN / 2)?;
@@ -209,7 +213,8 @@ impl SignInMethod for LinkMethod {
         let in_time = app.now() <= link.expires_at;
         let token = same_secret(&token_hash(text("token")), &link.token_hash);
         let browser = same_secret(&token_hash(text("binding")), &link.binding_hash);
-        let site = caller.origin.as_deref().and_then(site_origin).as_deref() == Some(link.origin.as_str());
+        let site =
+            caller.origin.as_deref().and_then(site_origin).as_deref() == Some(link.origin.as_str());
         if !(in_time && token && browser && site) {
             return Ok(None);
         }

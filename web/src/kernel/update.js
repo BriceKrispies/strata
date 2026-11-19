@@ -14,6 +14,7 @@ import * as live from '../generated/live.js';
 import { matchRoute, route as routeOf } from '../generated/routes.js';
 import { labEnter, labInit, labUpdate } from './lab.js';
 import { linksInit, linksInput, linksLand, linksOpened, linksUpdate } from './links.js';
+import { oidcEnter, oidcInit, oidcLand, oidcOpened, oidcUpdate } from './oidc.js';
 import { passkeysEnter, passkeysInit, passkeysUpdate } from './passkeys.js';
 import { sessionsEnter, sessionsInit, sessionsUpdate } from './sessions.js';
 import {
@@ -59,6 +60,7 @@ export function initialState() {
     sessions: sessionsInit(),
     passkeys: passkeysInit(),
     links: linksInit(),
+    oidc: oidcInit(),
     /** @type {{ id: number, kind: string, text: string }[]} */
     toasts: [],
     announce: '',
@@ -406,6 +408,9 @@ function passkeySignedIn(state, msg) {
 /** An emailed link was accepted: the same as a passkey being accepted, from the session on. @returns {Result} */
 const linkSignedIn = passkeySignedIn;
 
+/** An identity provider's answer was accepted: the same, from the session on. @returns {Result} */
+const oidcSignedIn = passkeySignedIn;
+
 /** @returns {Result} */
 function onHttp(state, msg) {
   const pending = state.pending[msg.id];
@@ -427,6 +432,9 @@ function onHttp(state, msg) {
   if (pending.kind.startsWith('links.')) {
     return linksUpdate(state, { ...msg, pending, error }, { request, signedIn: linkSignedIn }) ?? { state, effects: [] };
   }
+  if (pending.kind.startsWith('oidc.')) {
+    return oidcUpdate(state, { ...msg, pending, error }, { request, signedIn: oidcSignedIn }) ?? { state, effects: [] };
+  }
 
   switch (pending.kind) {
     case 'session': {
@@ -437,12 +445,13 @@ function onHttp(state, msg) {
       /** @type {Effect[]} */
       const open = state.session ? [] : [{ type: 'ws_connect', csrf: outputs.session.csrf_token }];
       // A link the page was opened with waits for the request token that this reply brings.
-      const landed = linksLand(known, msg, { request });
+      const linked = linksLand(known, msg, { request });
+      const landed = oidcLand(linked.state, msg, { request });
       if (state.view.model?.view === 'lab') {
         const entered = labEnter(landed.state, msg, { request });
-        return { state: entered.state, effects: [...open, ...landed.effects, ...entered.effects] };
+        return { state: entered.state, effects: [...open, ...linked.effects, ...landed.effects, ...entered.effects] };
       }
-      return { state: landed.state, effects: [...open, ...landed.effects] };
+      return { state: landed.state, effects: [...open, ...linked.effects, ...landed.effects] };
     }
     case 'view': {
       if (state.view.request !== msg.id) return { state, effects: [] };
@@ -559,9 +568,10 @@ function navigate(state, href, replace, msg) {
   const same = hrefOf(route) === hrefOf(state.route);
   const moved = { ...state, route, menuOpen: false, focus: { target: 'main', token: state.nextId } };
   const fetched = fetchView(moved, msg, false);
+  const providers = oidcEnter(fetched.state, msg, { request });
   /** @type {Effect[]} */
   const effects = same && !replace ? [] : [{ type: 'push_url', href: hrefOf(route), replace }];
-  return { state: fetched.state, effects: [...effects, { type: 'scroll_top' }, ...fetched.effects] };
+  return { state: providers.state, effects: [...effects, { type: 'scroll_top' }, ...fetched.effects, ...providers.effects] };
 }
 
 function onInput(state, msg) {
@@ -670,6 +680,7 @@ function onAction(state, msg) {
       if (msg.name.startsWith('lab.')) return labUpdate(state, msg, { request, toast }) ?? { state, effects: [] };
       if (msg.name.startsWith('sessions.')) return sessionsUpdate(state, msg, { request, toast }) ?? { state, effects: [] };
       if (msg.name.startsWith('passkeys.')) return passkeysUpdate(state, msg, { request, toast, signedIn: passkeySignedIn }) ?? { state, effects: [] };
+      if (msg.name.startsWith('oidc.')) return oidcUpdate(state, msg, { request, signedIn: oidcSignedIn }) ?? { state, effects: [] };
       return { state, effects: [] };
   }
 }
@@ -781,6 +792,13 @@ function step(state, msg) {
       const landed = linksLand(opened.state, msg, { request });
       next = landed.state;
       effects.push(...opened.effects, ...landed.effects);
+      // The same for the answer of an identity provider, and the sign-in page asks which
+      // providers the site offers.
+      const returned = oidcOpened(next, msg.hash ?? '', hrefOf(route));
+      const answered = oidcLand(returned.state, msg, { request });
+      const offered = oidcEnter(answered.state, msg, { request });
+      next = offered.state;
+      effects.push(...returned.effects, ...answered.effects, ...offered.effects);
       // The socket needs the request token, which a bootstrapped page already has. A cold start
       // gets it with the session reply and connects then.
       next = liveStep(next, 'ui-live-start', {}, msg)?.state ?? next;

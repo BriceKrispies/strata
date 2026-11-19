@@ -5,8 +5,8 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use strata_kernel::testkit::*;
 use strata_kernel::*;
 use strata_storage_api::{
-    conformance, execute, Account, PasskeyCeremony, PasskeyChallenge, PasskeyRecord, SessionRecord,
-    Store, ThrottleRule, ThrottleSettle, ThrottleVerdict,
+    conformance, execute, Account, FederatedIdentity, OidcFlow, PasskeyCeremony, PasskeyChallenge,
+    PasskeyRecord, SessionRecord, Store, ThrottleRule, ThrottleSettle, ThrottleVerdict,
 };
 use strata_storage_sqlite::SqliteStore;
 
@@ -140,7 +140,7 @@ fn committed_data_survives_a_reopen() {
     assert_eq!(store.snapshots(&alpha).unwrap(), vec![snapshot]);
     assert_eq!(store.journal_after(&alpha, 0, 10).unwrap().len(), 3);
     let migrations = store.migrations().unwrap();
-    assert_eq!(migrations.len(), 2);
+    assert_eq!(migrations.len(), 5);
     assert_eq!(
         migrations[0].applied_at,
         Timestamp(1),
@@ -421,4 +421,93 @@ fn passkeys_and_challenges_are_durable_and_a_challenge_is_taken_once() {
     assert!(store.remove_passkey(&alpha, &ines, "k1").unwrap());
     store.reset_tenant(&alpha).unwrap();
     assert!(store.passkey(&alpha, "k2").unwrap().is_none());
+}
+
+/// Verifies: STO-002
+///
+/// A started identity-provider sign-in is a row: it survives a reopen, is taken once, and is
+/// returned even when lapsed (the caller compares the time). A provider's subject is tied to one
+/// principal, once, and only within its own tenant and provider; a tenant reset takes them all.
+#[test]
+fn identity_provider_sign_ins_are_taken_once_and_identities_are_tied_once() {
+    let path = fresh_path("oidc");
+    let alpha = tenant_id("alpha");
+    let ines = principal_id("user:ines");
+    let flow = |hash: &str, expires: i64| OidcFlow {
+        tenant: alpha.clone(),
+        id_hash: hash.into(),
+        provider: "acme".into(),
+        nonce: "n".into(),
+        verifier: "v".into(),
+        binding_hash: "b".into(),
+        origin: "https://alpha.example".into(),
+        principal: Some(ines.clone()),
+        expires_at: Timestamp(expires),
+    };
+    let identity = |provider: &str, subject: &str, principal: &PrincipalId| FederatedIdentity {
+        tenant: alpha.clone(),
+        provider: provider.into(),
+        subject: subject.into(),
+        principal: principal.clone(),
+        created_at: Timestamp(5),
+    };
+    {
+        let store = SqliteStore::open(&path, Timestamp(1)).unwrap();
+        execute(
+            &store,
+            &Intent::CreateTenant {
+                name: "alpha".into(),
+                owner: principal_id("alpha:owner"),
+            },
+            &ctx("alpha", Principal::System, 10),
+        )
+        .unwrap();
+        store.put_oidc_flow(&flow("live", 1000)).unwrap();
+        store.put_oidc_flow(&flow("lapsed", 50)).unwrap();
+        assert!(store
+            .put_identity(&identity("acme", "sub-1", &ines))
+            .unwrap());
+    }
+    let store = SqliteStore::open(&path, Timestamp(1)).unwrap();
+    assert_eq!(
+        store.take_oidc_flow(&alpha, "live").unwrap(),
+        Some(flow("live", 1000))
+    );
+    assert!(
+        store.take_oidc_flow(&alpha, "live").unwrap().is_none(),
+        "taken once"
+    );
+    assert_eq!(
+        store
+            .take_oidc_flow(&alpha, "lapsed")
+            .unwrap()
+            .map(|f| f.expires_at),
+        Some(Timestamp(50)),
+        "a lapsed request is returned, for the caller to refuse"
+    );
+    store.put_oidc_flow(&flow("later", 60)).unwrap();
+    assert_eq!(store.purge_oidc_flows(Timestamp(100)).unwrap(), 1);
+
+    let known = store.identity(&alpha, "acme", "sub-1").unwrap().unwrap();
+    assert_eq!(known.principal, ines);
+    assert!(
+        !store
+            .put_identity(&identity("acme", "sub-1", &principal_id("user:omar")))
+            .unwrap(),
+        "a subject is tied to one principal"
+    );
+    assert_eq!(
+        store
+            .identity(&alpha, "acme", "sub-1")
+            .unwrap()
+            .unwrap()
+            .principal,
+        ines
+    );
+    assert!(
+        store.identity(&alpha, "other", "sub-1").unwrap().is_none(),
+        "one provider's subject is not another's"
+    );
+    store.reset_tenant(&alpha).unwrap();
+    assert!(store.identity(&alpha, "acme", "sub-1").unwrap().is_none());
 }

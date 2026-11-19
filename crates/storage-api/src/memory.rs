@@ -5,9 +5,10 @@
 
 use crate::{
     check_event_sequence, partial_state, throttle_refund, throttle_step, Account, Capabilities,
-    Commit, Health, JournalEntry, OutboxEntry, PasskeyChallenge, PasskeyRecord, Receipt,
-    SessionRecord, SignInLink, SnapshotInfo, StorageMigration, Store, StoreError, StoreResult,
-    TenantSummary, ThrottleRow, ThrottleRule, ThrottleSettle, ThrottleVerdict,
+    Commit, FederatedIdentity, Health, JournalEntry, OidcFlow, OutboxEntry, PasskeyChallenge,
+    PasskeyRecord, Receipt, SessionRecord, SignInLink, SnapshotInfo, StorageMigration, Store,
+    StoreError, StoreResult, TenantSummary, ThrottleRow, ThrottleRule, ThrottleSettle,
+    ThrottleVerdict,
 };
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -28,6 +29,8 @@ struct Inner {
     passkeys: BTreeMap<(TenantId, String), PasskeyRecord>,
     challenges: BTreeMap<(TenantId, String), PasskeyChallenge>,
     links: BTreeMap<(TenantId, String), SignInLink>,
+    flows: BTreeMap<(TenantId, String), OidcFlow>,
+    identities: BTreeMap<(TenantId, String, String), FederatedIdentity>,
     snapshots: BTreeMap<(TenantId, u64), (SnapshotInfo, Arc<TenantState>)>,
 }
 
@@ -451,6 +454,57 @@ impl Store for MemoryStore {
         Ok((count - inner.links.len()) as u64)
     }
 
+    fn put_oidc_flow(&self, flow: &OidcFlow) -> StoreResult<()> {
+        self.lock()?
+            .flows
+            .insert((flow.tenant.clone(), flow.id_hash.clone()), flow.clone());
+        Ok(())
+    }
+
+    fn take_oidc_flow(&self, tenant: &TenantId, id_hash: &str) -> StoreResult<Option<OidcFlow>> {
+        Ok(self
+            .lock()?
+            .flows
+            .remove(&(tenant.clone(), id_hash.to_string())))
+    }
+
+    fn purge_oidc_flows(&self, now: Timestamp) -> StoreResult<u64> {
+        let mut inner = self.lock()?;
+        let count = inner.flows.len();
+        inner.flows.retain(|_, flow| flow.expires_at >= now);
+        Ok((count - inner.flows.len()) as u64)
+    }
+
+    fn put_identity(&self, identity: &FederatedIdentity) -> StoreResult<bool> {
+        let mut inner = self.lock()?;
+        if !inner.tenants.contains_key(&identity.tenant) {
+            return Err(StoreError::NotFound(format!("tenant {}", identity.tenant)));
+        }
+        let slot = (
+            identity.tenant.clone(),
+            identity.provider.clone(),
+            identity.subject.clone(),
+        );
+        if inner.identities.contains_key(&slot) {
+            return Ok(false);
+        }
+        inner.identities.insert(slot, identity.clone());
+        Ok(true)
+    }
+
+    fn identity(
+        &self,
+        tenant: &TenantId,
+        provider: &str,
+        subject: &str,
+    ) -> StoreResult<Option<FederatedIdentity>> {
+        Ok(self
+            .lock()?
+            .identities
+            .get(&(tenant.clone(), provider.to_string(), subject.to_string()))
+            .cloned())
+    }
+
     fn put_account(&self, account: &Account) -> StoreResult<()> {
         let mut inner = self.lock()?;
         if !inner.tenants.contains_key(&account.tenant) {
@@ -564,6 +618,8 @@ impl Store for MemoryStore {
         inner.passkeys.retain(|(t, _), _| t != tenant);
         inner.challenges.retain(|(t, _), _| t != tenant);
         inner.links.retain(|(t, _), _| t != tenant);
+        inner.flows.retain(|(t, _), _| t != tenant);
+        inner.identities.retain(|(t, _, _), _| t != tenant);
         inner.snapshots.retain(|(t, _), _| t != tenant);
         Ok(())
     }

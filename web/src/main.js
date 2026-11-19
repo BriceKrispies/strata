@@ -82,6 +82,10 @@ worker.onmessage = (event) => {
     case 'scroll_top':
       window.scrollTo(0, 0);
       break;
+    case 'navigate_away':
+      // Only to a web address: the identity provider's, which the gateway checked.
+      if (/^https?:\/\//.test(effect.href)) window.location.assign(effect.href);
+      break;
     case 'passkey':
       void runPasskey(effect).then(send);
       break;

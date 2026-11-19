@@ -21,7 +21,7 @@ async function signIn(page, name) {
   await open(page, '/login');
   await page.getByLabel('Name').fill(name);
   await page.getByLabel('Password').fill(`strata-dev-${name}`);
-  await page.getByRole('button', { name: 'Sign in' }).click();
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click();
   await expect(page.getByRole('heading', { level: 1, name: 'Writing desk' })).toBeVisible();
 }
 
@@ -170,7 +170,7 @@ test('signing in with a wrong password explains itself; signing in and out works
   await open(page, '/login');
   await page.getByLabel('Name').fill('ines');
   await page.getByLabel('Password').fill('not-the-password');
-  await page.getByRole('button', { name: 'Sign in' }).click();
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click();
   await expect(page.getByRole('alert')).toHaveText('The name or password is not right.');
   await expect(page.getByLabel('Password')).toBeFocused();
   await expect(page.getByLabel('Password')).toHaveValue('');
@@ -587,7 +587,7 @@ test('a second tenant on the same substrate shares nothing with the first', asyn
   await ready(page);
   await page.getByLabel('Name').fill('ines');
   await page.getByLabel('Password').fill('strata-dev-ines');
-  await page.getByRole('button', { name: 'Sign in' }).click();
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click();
   await expect(page.getByRole('alert')).toHaveText('The name or password is not right.');
 
   // A Fieldnotes owner's session, replayed against the Tidewater host, is nobody there.
@@ -920,7 +920,7 @@ test('ten wrong passwords lock a login for a while, whether or not it exists', a
   // The eleventh, another spelling of the same login, through the page.
   await page.getByLabel('Name').fill('LOCKOUT-PROBE');
   await page.getByLabel('Password').fill('not-the-password');
-  await page.getByRole('button', { name: 'Sign in' }).click();
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click();
   await expect(page.getByRole('alert')).toContainText('Too many attempts');
   const locked = await attempt();
   expect(locked.status()).toBe(429);
@@ -1100,4 +1100,91 @@ test('an emailed link signs in once, in the browser that asked for it and in no 
   await expect(page.getByRole('heading', { level: 1, name: 'Sign in' })).toBeVisible();
 
   await ownerContext.close();
+});
+
+// Sign-in at an identity provider. A mock OpenID Connect provider (tests/e2e/mock-oidc.mjs) stands
+// in for it: it approves at once, as whoever the test says, and the site is configured to trust it
+// for Fieldnotes and to let its first sign-ins in as authors. It is also bound to the address
+// domain `bound.example`, so a password for an address there is refused.
+const PROVIDER = 'http://127.0.0.1:4290';
+
+/** Tell the mock provider who signs in next and what, if anything, is wrong with the token. */
+async function provider(request, fields = {}) {
+  const reply = await request.post(`${PROVIDER}/__control`, { data: { reset: true, ...fields } });
+  expect(reply.ok()).toBe(true);
+}
+
+async function chooseProvider(page) {
+  await open(page, '/login');
+  await page.getByRole('button', { name: 'Sign in with Mock Provider' }).click();
+}
+
+test('a password for an address in a domain the provider decides for is refused', async ({ page }) => {
+  await open(page, '/login');
+  await page.getByLabel('Name').fill('ines@bound.example');
+  await page.getByLabel('Password').fill('strata-dev-ines');
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+  await expect(page.getByRole('alert')).toHaveText('The name or password is not right.');
+  await expect(page.getByRole('heading', { level: 1, name: 'Sign in' })).toBeVisible();
+
+  // The same password for the same person's own login is accepted: only the bound domain is closed.
+  await page.getByLabel('Name').fill('ines');
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+  await expect(page.getByRole('heading', { level: 1, name: 'Writing desk' })).toBeVisible();
+});
+
+test('the sign-in page offers the provider, and signing in through it makes the person once', async ({ page, request }) => {
+  const subject = `e2e-${Date.now()}`;
+  await provider(request, { sub: subject, email: 'nora@bound.example', email_verified: true, name: 'Nora Newcomer' });
+  const callbacks = [];
+  page.on('request', (r) => r.url().includes('/federation/oidc/callback') && callbacks.push(r.url()));
+
+  await chooseProvider(page);
+  await expect(page.getByRole('heading', { level: 1, name: 'Writing desk' })).toBeVisible();
+  await expect(page.getByText('Signed in as Nora Newcomer')).toBeVisible();
+  expect(page.url()).not.toContain('#');
+  expect(page.url()).not.toContain('code=');
+  expect(callbacks).toHaveLength(1);
+
+  // The second time the provider names the same person by another name, and the site keeps its own.
+  await page.getByRole('button', { name: 'Sign out', exact: true }).click();
+  await provider(request, { sub: subject, email: 'nora@bound.example', email_verified: true, name: 'Someone Else' });
+  await chooseProvider(page);
+  await expect(page.getByText('Signed in as Nora Newcomer')).toBeVisible();
+  await page.getByRole('button', { name: 'Sign out', exact: true }).click();
+
+  // A callback that was answered once is not answered again.
+  await page.goto(callbacks[0]);
+  await expect(page.getByRole('alert')).toContainText('not accepted');
+  await expect(page.getByRole('heading', { level: 1, name: 'Sign in' })).toBeVisible();
+});
+
+test('an identity token that is wrong in any way signs no one in', async ({ page, request }) => {
+  const wrong = [
+    { name: 'audience', fields: { aud: 'another-client' } },
+    { name: 'nonce', fields: { nonce: 'a-nonce-that-was-never-asked-for' } },
+    { name: 'expiry', fields: { exp_offset: -3600 } },
+    { name: 'key', fields: { kid: 'a-key-that-is-not-published' } },
+  ];
+  for (const { name, fields } of wrong) {
+    await provider(request, { sub: `e2e-wrong-${name}`, email: 'x@bound.example', email_verified: true, name: 'Nobody', ...fields });
+    await chooseProvider(page);
+    await expect(page.getByRole('alert'), name).toContainText('not accepted');
+    await expect(page.getByRole('heading', { level: 1, name: 'Sign in' }), name).toBeVisible();
+    expect(page.url(), name).not.toContain('#');
+  }
+
+  // A provider that refuses the person sends no code at all.
+  await provider(request, { deny: true });
+  await chooseProvider(page);
+  await expect(page.getByRole('alert')).toContainText('did not sign you in');
+});
+
+test('a callback that no sign-in of this browser started is refused', async ({ page }) => {
+  await open(page, '/login');
+  const forged = `${'0123456789abcdef'.repeat(4)}`;
+  await page.goto(`/federation/oidc/callback?state=${forged}&code=a-code-nobody-issued`);
+  await expect(page.getByRole('alert')).toContainText('not accepted');
+  await expect(page.getByRole('heading', { level: 1, name: 'Sign in' })).toBeVisible();
+  expect(page.url()).not.toContain('code=');
 });

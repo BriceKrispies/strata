@@ -9,6 +9,7 @@
 //! Implements: IDN-001
 
 pub mod link;
+pub mod oidc;
 pub mod passkey;
 pub mod password;
 
@@ -46,6 +47,7 @@ static METHODS: &[&dyn SignInMethod] = &[
     &password::Password,
     &passkey::PasskeyMethod,
     &link::LinkMethod,
+    &oidc::OidcMethod,
 ];
 
 pub fn method(name: &str) -> Option<&'static dyn SignInMethod> {
@@ -71,6 +73,7 @@ fn refused(method: &str) -> ApiError {
         match method {
             "passkey" => "The passkey was not accepted.",
             "link" => "The link was not accepted. Ask for a new one.",
+            "oidc" => "The sign-in with the identity provider was not accepted.",
             _ => "The name or password is not right.",
         },
     )
@@ -198,6 +201,9 @@ pub fn sign_in(
         &["well-formed", "throttle", "credential"],
         &caller.correlation,
     );
+    // A method may have changed the tenant while it checked the credential (a first sign-in
+    // gives its principal a role), and the session's reply says what the person may do.
+    let tenant = app.store.load(&caller.site, &[])?.tenant.unwrap_or(tenant);
     auth::start_session(app, caller, &tenant, account, name)
 }
 
@@ -232,6 +238,7 @@ mod tests {
         assert!(method("password").is_some());
         assert!(method("passkey").is_some());
         assert!(method("link").is_some());
+        assert!(method("oidc").is_some());
         assert!(method("telepathy").is_none());
     }
 }

@@ -2094,6 +2094,172 @@
         "A sign-in link carries a return address only when this check passes, and the page that the link opens checks it again before it navigates."
       ],
       "errors": []
+    },
+    {
+      "id": "configure-identity-providers",
+      "name": "Configure the identity providers of a tenant",
+      "ref": "H-036",
+      "realisation": "hand",
+      "milestone": 4,
+      "implementedBy": "identity-service",
+      "auth": "Platform operator, through the platform configuration file and the process environment",
+      "idempotent": true,
+      "inputs": [
+        {
+          "name": "tenant",
+          "type": "string"
+        },
+        {
+          "name": "provider",
+          "type": "provider-id"
+        }
+      ],
+      "outputs": [],
+      "postconditions": [
+        "A tenant's identity providers are platform configuration and not tenant data: one file that the operator names (STRATA_OIDC_CONFIG) maps each tenant to its providers. A tenant's own people cannot change who is let in by a provider, and the operator, who holds the client secret, can.",
+        "A provider names an identifier of 1 to 32 lower-case letters, digits and hyphens, a label for the sign-in page, its issuer and client identifier, the signature methods its tokens may use (RS256, ES256 and EdDSA, and never none or a shared-secret method, FED-255), the email domains it decides for, whether a first sign-in creates a principal (FED-011) and the one default role that principal receives (FED-258).",
+        "The client secret is never in the file: the file names an environment variable that holds it. The secret is read when the process starts, kept in a value that does not print, sent only to the provider's token endpoint and written to no log, audit entry or reply. A name that is not set stops the process from starting.",
+        "A provider that is not enabled is offered on no sign-in page, cannot be started, accepts no callback and binds none of its domains (FED-011).",
+        "The sign-in page offers the enabled providers of the realm of the address it is served at, and no other realm's (FED-010).",
+        "Provider metadata and keys are held per provider of a tenant and never shared between providers (FED-256)."
+      ],
+      "errors": [
+        {
+          "name": "invalid",
+          "condition": "The file does not parse, names a signature method that is not allowed, a provider twice, or an environment variable that is not set.",
+          "type": "api-error"
+        }
+      ]
+    },
+    {
+      "id": "redeem-oidc-code",
+      "name": "Redeem an authorization code and check the identity token",
+      "ref": "H-037",
+      "realisation": "hand",
+      "milestone": 4,
+      "implementedBy": "identity-service",
+      "auth": "Local call inside the platform process; the client secret goes to the provider's token endpoint only",
+      "idempotent": false,
+      "inputs": [
+        {
+          "name": "state",
+          "type": "secret"
+        },
+        {
+          "name": "code",
+          "type": "secret"
+        },
+        {
+          "name": "binding",
+          "type": "secret"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "subject",
+          "type": "external-subject"
+        }
+      ],
+      "postconditions": [
+        "A pending request holds the nonce, the proof-key verifier and the hash of the nonce kept in the starting browser's cookie, found by the hash of its state value. It is taken out of the store in the step that reads it, so a callback answers once, and it is accepted only through its lifetime, from the browser that started it and at the address it started at (FED-001).",
+        "The authorization request carries a state value, a nonce and the S256 challenge of a verifier, and the redirect address is the callback path of the host of the tenant (FED-002). The code is redeemed with that verifier.",
+        "Metadata that names another issuer than the one configured is not used, and neither is an address that is not HTTPS (HTTP is allowed in development only). A fetch follows no redirect, times out and reads a bounded answer.",
+        "The identity token is checked as verify-identity-token states, with the keys of that provider: algorithm allowlist, issuer, audience, authorised party, expiry and issue time with a skew of 60 seconds, subject and nonce (FED-003, FED-255).",
+        "A token that names a key that is not held makes the provider's keys be fetched once more and is checked again; a key that is still not there is a refusal, and a second fetch is not made within 30 seconds of the last, so that made-up key names cannot make this process fetch without end (FED-004).",
+        "A provider that does not answer refuses its own callbacks and its own starts, and leaves every other way in the realm has usable (FED-013).",
+        "Every refusal says the same to the person, whatever failed; the reason is in the log and holds no token, code, state or address."
+      ],
+      "errors": [
+        {
+          "name": "unauthenticated",
+          "condition": "The state matches no pending request of this browser, the code does not redeem, or the token fails a check.",
+          "type": "api-error"
+        },
+        {
+          "name": "unavailable",
+          "condition": "The provider's metadata cannot be fetched when a sign-in starts.",
+          "type": "api-error"
+        }
+      ]
+    },
+    {
+      "id": "refuse-bound-domain-sign-in",
+      "name": "Refuse password and emailed-link sign-in in a provider-bound domain",
+      "ref": "H-038",
+      "realisation": "hand",
+      "milestone": 4,
+      "implementedBy": "identity-service",
+      "auth": "Local call inside the platform process; no network credential",
+      "idempotent": true,
+      "inputs": [
+        {
+          "name": "address",
+          "type": "email-address"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "bound",
+          "type": "bool"
+        }
+      ],
+      "postconditions": [
+        "An address is in a bound domain when its part after the last @, in lower case, is one of the domains of an enabled provider of the realm (FED-009). A provider that is not enabled binds nothing, so that disabling it is how a realm lifts the binding.",
+        "A password for such an address is refused as a wrong password is, after the same work, so that neither the answer nor its time says that the domain is bound (IDN-255).",
+        "A request for an emailed link for such an address is answered as one for an address with no account is, and no message is sent (IDN-006).",
+        "A login with no @ is in no bound domain."
+      ],
+      "errors": []
+    },
+    {
+      "id": "resolve-federated-identity",
+      "name": "Decide whose account a verified identity is",
+      "ref": "H-039",
+      "realisation": "hand",
+      "milestone": 4,
+      "implementedBy": "identity-service",
+      "auth": "Local call inside the platform process; no network credential",
+      "idempotent": false,
+      "inputs": [
+        {
+          "name": "provider",
+          "type": "provider-id"
+        },
+        {
+          "name": "subject",
+          "type": "external-subject"
+        },
+        {
+          "name": "email",
+          "type": "email-address",
+          "optional": true
+        },
+        {
+          "name": "email-verified",
+          "type": "bool"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "principal",
+          "type": "string"
+        }
+      ],
+      "postconditions": [
+        "An identity is a provider of the realm and the provider's subject identifier. It is tied to one principal, once; a subject of one provider is never another provider's (FED-256).",
+        "A known identity signs its principal in. A first sign-in never takes the account of another person: an identity is linked to an existing principal only after that principal has signed in and asked to link, and the callback of that request answers only to the session that asked (FED-012).",
+        "Where the realm decided to trust a provider that far, and only then, an address that the provider marks as verified links to the account whose login is that address. An address that is not marked verified links to nothing. By default no address links to anything (FED-257).",
+        "A first sign-in creates a principal only when the realm enabled creation (FED-011). A realm that restricted the provider to domains lets in only a verified address in one of them.",
+        "The principal created has a login that no password opens, holds the one default role that the realm names and no other, and its name is made from the realm, the provider and the subject, so that two first sign-ins that arrive together make one (FED-258).",
+        "A principal created and an identity linked are audit entries; the entry names the principal and the provider, and no address."
+      ],
+      "errors": [
+        {
+          "name": "unauthenticated",
+          "condition": "The realm does not admit the identity.",
+          "type": "api-error"
+        }
+      ]
     }
   ],
   "decisions": [

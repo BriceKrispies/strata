@@ -26,9 +26,10 @@ use strata_kernel::{
 use strata_runtime::sqlite::{Database, DbError, Migration};
 use strata_storage_api::{
     check_event_sequence, field_matches, throttle_refund, throttle_step, Account, Capabilities,
-    Commit, Health, JournalEntry, OutboxEntry, PasskeyCeremony, PasskeyChallenge, PasskeyRecord,
-    Receipt, SessionRecord, SignInLink, SnapshotInfo, StorageMigration, Store, StoreError,
-    StoreResult, TenantSummary, ThrottleRow, ThrottleRule, ThrottleSettle, ThrottleVerdict,
+    Commit, FederatedIdentity, Health, JournalEntry, OidcFlow, OutboxEntry, PasskeyCeremony,
+    PasskeyChallenge, PasskeyRecord, Receipt, SessionRecord, SignInLink, SnapshotInfo,
+    StorageMigration, Store, StoreError, StoreResult, TenantSummary, ThrottleRow, ThrottleRule,
+    ThrottleSettle, ThrottleVerdict,
 };
 
 /// The ledger table of the tenant store's migrations.
@@ -184,6 +185,34 @@ const MIGRATIONS: &[Migration] = &[
         PRIMARY KEY (tenant, id_hash)
     );
     CREATE INDEX sign_in_links_expiry ON sign_in_links(expires_at);
+    ",
+    },
+    Migration {
+        version: 5,
+        name: "identity-provider sign-ins and federated identities",
+        sql: "
+    CREATE TABLE oidc_flows (
+        tenant       TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+        id_hash      TEXT NOT NULL,
+        provider     TEXT NOT NULL,
+        nonce        TEXT NOT NULL,
+        verifier     TEXT NOT NULL,
+        binding_hash TEXT NOT NULL,
+        origin       TEXT NOT NULL,
+        principal    TEXT,
+        expires_at   INTEGER NOT NULL,
+        PRIMARY KEY (tenant, id_hash)
+    );
+    CREATE INDEX oidc_flows_expiry ON oidc_flows(expires_at);
+    CREATE TABLE federated_identities (
+        tenant     TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+        provider   TEXT NOT NULL,
+        subject    TEXT NOT NULL,
+        principal  TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (tenant, provider, subject)
+    );
+    CREATE INDEX federated_identities_principal ON federated_identities(tenant, principal);
     ",
     },
 ];
@@ -1291,6 +1320,127 @@ impl Store for SqliteStore {
             )
             .map_err(db)?;
         Ok(removed as u64)
+    }
+
+    fn put_oidc_flow(&self, flow: &OidcFlow) -> StoreResult<()> {
+        self.lock()?
+            .execute(
+                "INSERT OR REPLACE INTO oidc_flows (tenant, id_hash, provider, nonce, verifier, binding_hash, origin, principal, expires_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                params![
+                    flow.tenant.as_str(),
+                    flow.id_hash,
+                    flow.provider,
+                    flow.nonce,
+                    flow.verifier,
+                    flow.binding_hash,
+                    flow.origin,
+                    flow.principal.as_ref().map(|p| p.as_str()),
+                    flow.expires_at.0,
+                ],
+            )
+            .map_err(db)?;
+        Ok(())
+    }
+
+    fn take_oidc_flow(&self, tenant: &TenantId, id_hash: &str) -> StoreResult<Option<OidcFlow>> {
+        // One statement reads and removes the row, so two callbacks cannot both take it.
+        let row = self
+            .lock()?
+            .query_row(
+                "DELETE FROM oidc_flows WHERE tenant = ?1 AND id_hash = ?2
+                 RETURNING provider, nonce, verifier, binding_hash, origin, principal, expires_at",
+                params![tenant.as_str(), id_hash],
+                |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, String>(2)?,
+                        r.get::<_, String>(3)?,
+                        r.get::<_, String>(4)?,
+                        r.get::<_, Option<String>>(5)?,
+                        r.get::<_, i64>(6)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(db)?;
+        let Some((provider, nonce, verifier, binding_hash, origin, principal, expires_at)) = row
+        else {
+            return Ok(None);
+        };
+        Ok(Some(OidcFlow {
+            tenant: tenant.clone(),
+            id_hash: id_hash.to_string(),
+            provider,
+            nonce,
+            verifier,
+            binding_hash,
+            origin,
+            principal: principal
+                .map(PrincipalId::new)
+                .transpose()
+                .map_err(|e| StoreError::Corrupt(e.to_string()))?,
+            expires_at: Timestamp(expires_at),
+        }))
+    }
+
+    fn purge_oidc_flows(&self, now: Timestamp) -> StoreResult<u64> {
+        let removed = self
+            .lock()?
+            .execute(
+                "DELETE FROM oidc_flows WHERE expires_at < ?1",
+                params![now.0],
+            )
+            .map_err(db)?;
+        Ok(removed as u64)
+    }
+
+    fn put_identity(&self, identity: &FederatedIdentity) -> StoreResult<bool> {
+        let added = self
+            .lock()?
+            .execute(
+                "INSERT OR IGNORE INTO federated_identities (tenant, provider, subject, principal, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    identity.tenant.as_str(),
+                    identity.provider,
+                    identity.subject,
+                    identity.principal.as_str(),
+                    identity.created_at.0,
+                ],
+            )
+            .map_err(db)?;
+        Ok(added == 1)
+    }
+
+    fn identity(
+        &self,
+        tenant: &TenantId,
+        provider: &str,
+        subject: &str,
+    ) -> StoreResult<Option<FederatedIdentity>> {
+        let row = self
+            .lock()?
+            .query_row(
+                "SELECT principal, created_at FROM federated_identities
+                 WHERE tenant = ?1 AND provider = ?2 AND subject = ?3",
+                params![tenant.as_str(), provider, subject],
+                |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)),
+            )
+            .optional()
+            .map_err(db)?;
+        let Some((principal, created_at)) = row else {
+            return Ok(None);
+        };
+        Ok(Some(FederatedIdentity {
+            tenant: tenant.clone(),
+            provider: provider.to_string(),
+            subject: subject.to_string(),
+            principal: PrincipalId::new(principal)
+                .map_err(|e| StoreError::Corrupt(e.to_string()))?,
+            created_at: Timestamp(created_at),
+        }))
     }
 
     fn put_account(&self, account: &Account) -> StoreResult<()> {

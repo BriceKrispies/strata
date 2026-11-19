@@ -60,6 +60,7 @@ pub async fn run(
                     let _ = app.store.purge_throttle(app.now());
                     let _ = app.store.purge_passkey_challenges(app.now());
                     let _ = app.store.purge_sign_in_links(app.now());
+                    let _ = app.store.purge_oidc_flows(app.now());
                     app.store
                         .purge_sessions(strata_kernel::Timestamp(app.now().0 - 86_400_000))
                 })

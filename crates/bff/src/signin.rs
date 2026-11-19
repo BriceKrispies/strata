@@ -84,8 +84,30 @@ impl SignInRoute for Link {
     }
 }
 
+/// An identity provider: the `state` and `code` the provider sent the browser back with, and the
+/// nonce of the browser that started the sign-in, which is in a cookie and not in the body.
+struct Oidc;
+
+impl SignInRoute for Oidc {
+    fn method(&self) -> &'static str {
+        "oidc"
+    }
+
+    fn credentials(&self, body: &Json, binding: Option<&str>) -> Option<Json> {
+        Some(json!({
+            "state": body.get("state")?.as_str()?,
+            "code": body.get("code")?.as_str()?,
+            "binding": binding?,
+        }))
+    }
+
+    fn refusal(&self) -> &'static str {
+        "The sign-in with the identity provider was not accepted."
+    }
+}
+
 /// Every method the site offers.
-static ROUTES: &[&dyn SignInRoute] = &[&Password, &Passkey, &Link];
+static ROUTES: &[&dyn SignInRoute] = &[&Password, &Passkey, &Link, &Oidc];
 
 pub fn route(method: &str) -> Option<&'static dyn SignInRoute> {
     ROUTES
@@ -135,6 +157,25 @@ mod tests {
             .is_none());
         assert!(route
             .credentials(&json!({ "challenge": 4, "assertion": {} }), None)
+            .is_none());
+    }
+
+    #[test]
+    fn an_identity_provider_sign_in_takes_its_browser_binding_from_the_cookie_and_never_from_the_body(
+    ) {
+        let route = route("oidc").expect("identity providers are offered");
+        let body =
+            json!({ "state": "s", "code": "c", "binding": "from-the-body", "tenant": "other" });
+        assert_eq!(
+            route.credentials(&body, Some("from-the-cookie")),
+            Some(json!({ "state": "s", "code": "c", "binding": "from-the-cookie" }))
+        );
+        assert!(
+            route.credentials(&body, None).is_none(),
+            "a browser with no cookie is not the one that started it"
+        );
+        assert!(route
+            .credentials(&json!({ "state": "s" }), Some("x"))
             .is_none());
     }
 

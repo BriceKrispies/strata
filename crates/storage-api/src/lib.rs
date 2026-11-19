@@ -366,6 +366,44 @@ pub struct SignInLink {
     pub expires_at: Timestamp,
 }
 
+/// A sign-in at an external identity provider that has been started and not yet answered. The
+/// row is held server-side, found by the hash of the `state` value the browser returns with, is
+/// answered once, and lapses. It holds what the callback must check: the nonce the identity token
+/// must carry, the proof-key verifier the code is redeemed with, the hash of the nonce kept in
+/// the starting browser's cookie, and the address the sign-in started at.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OidcFlow {
+    pub tenant: TenantId,
+    /// A hash of the `state` value.
+    pub id_hash: String,
+    /// The identifier of the provider in the tenant's configuration.
+    pub provider: String,
+    /// The nonce the identity token must carry.
+    pub nonce: String,
+    /// The proof-key verifier the authorisation code is redeemed with.
+    pub verifier: String,
+    /// A hash of the nonce kept in the cookie of the browser that started the sign-in.
+    pub binding_hash: String,
+    /// The origin the sign-in started at, and the one its callback must come back to.
+    pub origin: String,
+    /// The principal that was signed in when it started, when the sign-in is to link the
+    /// identity to that principal's account (FED-012).
+    pub principal: Option<PrincipalId>,
+    pub expires_at: Timestamp,
+}
+
+/// A person at an external identity provider, tied to the principal they sign in as. Keyed by
+/// the tenant, the provider of its configuration and the provider's subject identifier, so that
+/// one provider's subject is never another provider's (FED-256).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FederatedIdentity {
+    pub tenant: TenantId,
+    pub provider: String,
+    pub subject: String,
+    pub principal: PrincipalId,
+    pub created_at: Timestamp,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SnapshotInfo {
     pub tenant: TenantId,
@@ -528,6 +566,26 @@ pub trait Store: Send + Sync {
     ) -> StoreResult<Option<SignInLink>>;
     /// Remove links that have lapsed before `now`. Returns how many were removed.
     fn purge_sign_in_links(&self, now: Timestamp) -> StoreResult<u64>;
+
+    /// Keep a started identity-provider sign-in.
+    fn put_oidc_flow(&self, flow: &OidcFlow) -> StoreResult<()>;
+    /// Take a started sign-in, removing it in the same step, so that a callback answers it once
+    /// whatever the timing. The row is returned whether or not it has lapsed: the caller compares
+    /// the time.
+    fn take_oidc_flow(&self, tenant: &TenantId, id_hash: &str) -> StoreResult<Option<OidcFlow>>;
+    /// Remove started sign-ins that have lapsed before `now`. Returns how many were removed.
+    fn purge_oidc_flows(&self, now: Timestamp) -> StoreResult<u64>;
+
+    /// Tie a provider's subject to a principal. Returns `false`, and keeps nothing, when the
+    /// tenant already ties that provider's subject to a principal.
+    fn put_identity(&self, identity: &FederatedIdentity) -> StoreResult<bool>;
+    /// The principal a provider's subject is tied to.
+    fn identity(
+        &self,
+        tenant: &TenantId,
+        provider: &str,
+        subject: &str,
+    ) -> StoreResult<Option<FederatedIdentity>>;
 
     /// Keep a copy of the tenant's complete state as it is now.
     fn create_snapshot(

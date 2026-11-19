@@ -51,6 +51,7 @@ async fn start_on(store: Arc<MemoryStore>, adjust: impl FnOnce(&mut Config)) -> 
         passkey_challenge_ttl_ms: 300_000,
         link_ttl_ms: 900_000,
         mail: std::sync::Arc::new(strata_backend::mail::DevSink::memory()),
+        federation: std::sync::Arc::new(strata_backend::signin::oidc::Federation::none()),
     };
     adjust(&mut cfg);
     tokio::spawn(strata_backend::run(

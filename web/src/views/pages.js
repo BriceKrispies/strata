@@ -218,16 +218,17 @@ export function login(page) {
       h('p', null, h('a', { class: 'button', href: '/desk' }, 'Go to the writing desk')),
     ];
   }
-  if (page.link?.landing === 'working') {
+  if (page.link?.landing === 'working' || page.oidc?.landing === 'working') {
     return [
       h('h1', { class: 'page-title' }, 'Signing you in'),
-      h('p', { class: 'standfirst', role: 'status' }, 'Checking your link…'),
+      h('p', { class: 'standfirst', role: 'status' }, page.oidc?.landing === 'working' ? 'Checking the answer of your identity provider…' : 'Checking your link…'),
     ];
   }
   return [
     h('h1', { class: 'page-title' }, 'Sign in'),
     h('p', { class: 'standfirst' }, 'For the people who write and edit here. Readers do not need an account.'),
     page.link?.landingError ? h('p', { class: 'form__error', role: 'alert', id: 'link-landing-error' }, page.link.landingError) : null,
+    page.oidc?.landingError ? h('p', { class: 'form__error', role: 'alert', id: 'oidc-landing-error' }, page.oidc.landingError) : null,
     h(
       'form',
       { class: 'form form--narrow', 'data-form': 'login', novalidate: true },
@@ -255,6 +256,17 @@ export function login(page) {
           { class: 'form form--narrow', 'data-passkey-signin': true },
           page.passkeys.error ? h('p', { class: 'form__error', role: 'alert', id: 'passkey-error' }, page.passkeys.error) : null,
           h('button', { class: 'button button--quiet', type: 'button', disabled: page.passkeys.busy, 'data-action': 'passkeys.sign_in' }, page.passkeys.busy ? 'Waiting for your passkey…' : 'Sign in with a passkey'),
+        )
+      : null,
+    page.oidc?.providers?.length
+      ? h(
+          'section',
+          { class: 'form form--narrow', 'aria-labelledby': 'oidc-title' },
+          h('h2', { class: 'section__title', id: 'oidc-title' }, 'Sign in with your organisation'),
+          page.oidc.error ? h('p', { class: 'form__error', role: 'alert', id: 'oidc-error' }, page.oidc.error) : null,
+          page.oidc.providers.map((p) =>
+            h('button', { key: p.id, class: 'button button--quiet', type: 'button', disabled: page.oidc.busy, 'data-action': 'oidc.start', 'data-arg': JSON.stringify({ provider: p.id }) }, `Sign in with ${p.label}`),
+          ),
         )
       : null,
     page.link

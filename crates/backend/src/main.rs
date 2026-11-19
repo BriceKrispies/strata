@@ -16,12 +16,14 @@
 //! | `STRATA_SMTP_URL` | unset | An SMTP server (`smtps://user:password@host:465`). Unset: no mail is sent. |
 //! | `STRATA_MAIL_FROM` | none | The sender address, required with `STRATA_SMTP_URL`. |
 //! | `STRATA_MAIL_DIR` | `var/mail` | Where the development sink writes `.eml` files (development only). |
+//! | `STRATA_OIDC_CONFIG` | unset | A JSON file of each tenant's OpenID Connect providers. Unset: no tenant has one. |
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use strata_backend::app::{Config, LOG};
 use strata_backend::mail::{DevSink, Mailer, Smtp};
+use strata_backend::signin::oidc::Federation;
 use strata_kernel::Timestamp;
 use strata_protocol::log::now_ms;
 use strata_storage_api::memory::MemoryStore;
@@ -49,6 +51,15 @@ fn mailer(dev: bool) -> Result<Arc<dyn Mailer>, String> {
         serde_json::json!({ "note": "STRATA_SMTP_URL is not set; mail is kept in memory and not sent" }),
     );
     Ok(Arc::new(DevSink::memory()))
+}
+
+/// The tenants' identity providers, from the platform configuration file when one is named.
+fn federation() -> Result<Federation, String> {
+    let path = var("STRATA_OIDC_CONFIG", "");
+    if path.is_empty() {
+        return Ok(Federation::none());
+    }
+    Federation::from_file(&PathBuf::from(path))
 }
 
 fn start() -> Result<(Config, Arc<dyn Store>), String> {
@@ -86,6 +97,7 @@ fn start() -> Result<(Config, Arc<dyn Store>), String> {
         passkey_challenge_ttl_ms: number("STRATA_PASSKEY_CHALLENGE_TTL_MS", 300_000)?,
         link_ttl_ms: number("STRATA_LINK_TTL_MS", 15 * 60_000)?,
         mail: mailer(var("STRATA_DEV", "") == "1")?,
+        federation: Arc::new(federation()?),
     };
     Ok((cfg, store))
 }

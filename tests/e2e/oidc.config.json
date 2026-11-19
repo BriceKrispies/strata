@@ -1,0 +1,17 @@
+{
+  "tenants": {
+    "fieldnotes": [
+      {
+        "id": "mock",
+        "label": "Mock Provider",
+        "issuer": "http://127.0.0.1:4290",
+        "client_id": "strata-e2e",
+        "client_secret_env": "STRATA_E2E_OIDC_SECRET",
+        "algorithms": ["RS256"],
+        "domains": ["bound.example"],
+        "create_on_first_sign_in": true,
+        "default_role": "author"
+      }
+    ]
+  }
+}
