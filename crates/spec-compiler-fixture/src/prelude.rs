@@ -5,12 +5,36 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 /// A point in time: milliseconds since the Unix epoch, UTC.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize
+)]
+
 #[serde(transparent)]
 pub struct Timestamp(pub i64);
 
 /// A length of time in milliseconds.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize
+)]
+
 #[serde(transparent)]
 pub struct DurationMs(pub u64);
 
@@ -95,10 +119,7 @@ pub struct ConstraintViolation {
 impl fmt::Display for ConstraintViolation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
-            f,
-            "field {} of record {} breaks its {} constraint",
-            self.field,
-            self.record,
+            f, "field {} of record {} breaks its {} constraint", self.field, self.record,
             self.constraint.as_str()
         )
     }

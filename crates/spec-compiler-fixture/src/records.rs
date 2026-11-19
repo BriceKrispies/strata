@@ -14,8 +14,9 @@ static REC_TENANT_SLUG_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 /// The pattern of field `memo` of record `rec-ledger-entry`.
-static REC_LEDGER_ENTRY_MEMO_PATTERN: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new("^\\S.*$").expect("specc checked that the pattern compiles"));
+static REC_LEDGER_ENTRY_MEMO_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new("^\\S.*$").expect("specc checked that the pattern compiles")
+});
 
 /// Tenant
 ///
@@ -170,11 +171,7 @@ pub struct RecAccount {
     /// Personal data: name.
     ///
     /// Constraints: at most 64 characters.
-    #[serde(
-        rename = "display-name",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(rename = "display-name", default, skip_serializing_if = "Option::is_none")]
     pub display_name: Option<String>,
     /// Field `balance`.
     ///
@@ -197,11 +194,7 @@ pub struct RecAccount {
     /// Field `expires-in`.
     ///
     /// Constraints: max 86400000.
-    #[serde(
-        rename = "expires-in",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(rename = "expires-in", default, skip_serializing_if = "Option::is_none")]
     pub expires_in: Option<types::Ttl>,
     /// Field `home-port`.
     #[serde(rename = "home-port")]
@@ -235,11 +228,13 @@ impl RecAccount {
     pub const INDEXES: &[prelude::Index] = &[];
 
     /// The fields that hold the key of another record, and what deleting it does.
-    pub const REFERENCES: &[prelude::Reference] = &[prelude::Reference {
-        field: "principal",
-        record: "principal",
-        on_delete: prelude::OnDelete::Cascade,
-    }];
+    pub const REFERENCES: &[prelude::Reference] = &[
+        prelude::Reference {
+            field: "principal",
+            record: "principal",
+            on_delete: prelude::OnDelete::Cascade,
+        },
+    ];
 
     /// The record's key.
     pub fn key(&self) -> RecAccountKey {
@@ -299,7 +294,7 @@ impl RecAccount {
             }
         }
         if let Some(value) = &self.expires_in {
-            if value.0 .0 > 86400000 {
+            if value.0.0 > 86400000 {
                 return Err(prelude::ConstraintViolation {
                     record: Self::ID,
                     field: "expires-in",
@@ -384,11 +379,13 @@ impl RecLedgerEntry {
     pub const INDEXES: &[prelude::Index] = &[];
 
     /// The fields that hold the key of another record, and what deleting it does.
-    pub const REFERENCES: &[prelude::Reference] = &[prelude::Reference {
-        field: "account-id",
-        record: "rec-account",
-        on_delete: prelude::OnDelete::Cascade,
-    }];
+    pub const REFERENCES: &[prelude::Reference] = &[
+        prelude::Reference {
+            field: "account-id",
+            record: "rec-account",
+            on_delete: prelude::OnDelete::Cascade,
+        },
+    ];
 
     /// The record's key.
     pub fn key(&self) -> RecLedgerEntryKey {
@@ -401,7 +398,7 @@ impl RecLedgerEntry {
     /// Checks the field constraints, returning the first one the record breaks.
     pub fn validate(&self) -> Result<(), prelude::ConstraintViolation> {
         if let Some(value) = &self.settle_by {
-            if value.0 .0 < 1 {
+            if value.0.0 < 1 {
                 return Err(prelude::ConstraintViolation {
                     record: Self::ID,
                     field: "settle-by",
