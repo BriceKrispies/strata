@@ -101,6 +101,21 @@ impl Loader {
                 }
             }
         }
+        // Components that are declared not-implemented: what a behavior's or contract's
+        // realisation defaults from.
+        let not_implemented: Vec<&str> = top
+            .get("components")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter(|c| {
+                c.get("implementation")
+                    .and_then(|i| i.get("status"))
+                    .and_then(Value::as_str)
+                    == Some("not-implemented")
+            })
+            .filter_map(|c| c.get("id").and_then(Value::as_str))
+            .collect();
         let types = self
             .section(top, "types")
             .into_iter()
@@ -114,7 +129,7 @@ impl Loader {
         let contracts = self
             .section(top, "contracts")
             .into_iter()
-            .filter_map(|(entity, obj)| self.contract(&entity, obj))
+            .filter_map(|(entity, obj)| self.contract(&entity, obj, &not_implemented))
             .collect();
         let events = self
             .section(top, "events")
@@ -130,6 +145,7 @@ impl Loader {
             .filter_map(|c| c.get("id").and_then(Value::as_str))
             .collect();
         let mut machines = Vec::new();
+        let mut declared = 0usize;
         for (entity, obj) in self.section(top, "behaviors") {
             if obj.get("level").and_then(Value::as_str) != Some("implementation") {
                 continue;
@@ -140,6 +156,16 @@ impl Loader {
                 .is_some_and(|s| client_components.contains(&s));
             if let Some(mut b) = self.behavior(&entity, obj) {
                 b.time_units = scenario_time_units(top, &entity);
+                b.target = self.realisation_target(
+                    obj,
+                    "realisation",
+                    &entity,
+                    obj.get("subject")
+                        .and_then(Value::as_str)
+                        .is_some_and(|s| not_implemented.contains(&s)),
+                );
+                b.declared = declared;
+                declared += 1;
                 if client {
                     self.client_machines.push(b);
                 } else {
@@ -210,6 +236,16 @@ impl Loader {
                 }
             }
         }
+        let (mut target_machines, mut shipped) = (Vec::new(), Vec::new());
+        for b in machines {
+            if b.target {
+                target_machines.push(b);
+            } else {
+                shipped.push(b);
+            }
+        }
+        let (memory_machines, machines): (Vec<_>, Vec<_>) =
+            shipped.into_iter().partition(|b| b.memory);
         let constructs = self.constructs(top);
         let telemetry = self.telemetry(top);
         Some(Spec {
@@ -221,6 +257,8 @@ impl Loader {
             contracts,
             events,
             machines,
+            memory_machines,
+            target_machines,
             constructs,
             telemetry,
         })
@@ -621,7 +659,7 @@ impl Loader {
         out
     }
 
-    fn contract(&mut self, id: &str, obj: &Obj) -> Option<Contract> {
+    fn contract(&mut self, id: &str, obj: &Obj, not_implemented: &[&str]) -> Option<Contract> {
         let name = self.req_str(obj, "name", id);
         let description = self.opt_str(obj, "description", id);
         let inputs = self.contract_fields(id, obj, "inputs");
@@ -660,6 +698,14 @@ impl Loader {
             }
         };
         let implemented_by = self.opt_str(obj, "implementedBy", id);
+        let target = self.realisation_target(
+            obj,
+            "deployment",
+            id,
+            implemented_by
+                .as_deref()
+                .is_some_and(|c| not_implemented.contains(&c)),
+        );
         let auth = self.opt_str(obj, "auth", id);
         let idempotent = self.opt_bool(obj, "idempotent", id);
         let timeout_ms = self.opt_number(obj, "timeoutMs", id);
@@ -693,7 +739,25 @@ impl Loader {
             binding_method,
             binding_path,
             binding_case,
+            target,
         })
+    }
+
+    /// True when the declared `shipped` or `target` value under `key` is `target`; when the
+    /// entity does not declare one, `default_target` (its component is not implemented).
+    fn realisation_target(&mut self, obj: &Obj, key: &str, id: &str, default_target: bool) -> bool {
+        match self.opt_str(obj, key, id).as_deref() {
+            None => default_target,
+            Some("shipped") => false,
+            Some("target") => true,
+            Some(other) => {
+                self.shape(
+                    id,
+                    format!("\"{key}\" is \"{other}\"; it must be shipped or target"),
+                );
+                default_target
+            }
+        }
     }
 
     fn event(&mut self, id: &str, obj: &Obj) -> Option<Event> {
@@ -772,7 +836,26 @@ impl Loader {
                 transitions.push(t);
             }
         }
+        let memory = match obj.get("storage") {
+            Some(Value::Object(st)) => {
+                match self.opt_str(st, "durability", id).as_deref() {
+                    None | Some("record") => false,
+                    Some("memory") => true,
+                    Some(other) => {
+                        self.shape(
+                        id,
+                        format!("\"storage.durability\" is \"{other}\"; it must be record or memory"),
+                    );
+                        false
+                    }
+                }
+            }
+            _ => false,
+        };
         let storage = match obj.get("storage") {
+            // A memory machine has no record, key, fields, state or transaction: whatever the
+            // object holds besides `durability` is Exegra's to refuse.
+            _ if memory => None,
             None | Some(Value::Null) => None,
             Some(Value::Object(st)) => {
                 let string_map = |this: &mut Self, key: &str| match st.get(key) {
@@ -804,6 +887,7 @@ impl Loader {
             }
         };
         let instances = match obj.get("instances") {
+            _ if memory => None,
             None | Some(Value::Null) => None,
             Some(Value::Object(i)) => Some(Instances {
                 key: self.opt_str(i, "key", id),
@@ -816,6 +900,7 @@ impl Loader {
             }
         };
         let isolation = match obj.get("transaction") {
+            _ if memory => None,
             None | Some(Value::Null) => None,
             Some(Value::Object(t)) => self.opt_str(t, "isolation", id),
             Some(_) => {
@@ -837,6 +922,9 @@ impl Loader {
             time_units: Vec::new(),
             routes: Vec::new(),
             injected: Vec::new(),
+            target: false,
+            memory,
+            declared: 0,
         })
     }
 

@@ -116,6 +116,8 @@ fn arrivals<'a>(spec: &'a Spec, b: &'a Behavior) -> Vec<(&'a Event, Vec<Arrival<
                     .contract
                     .as_deref()
                     .and_then(|id| spec.contracts.iter().find(|c| c.id == id))
+                    // A target contract is served by nothing, so it delivers nothing.
+                    .filter(|c| !c.target)
                 {
                     ways.push(Arrival::Contract(c));
                 }

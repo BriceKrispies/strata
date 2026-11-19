@@ -11,6 +11,10 @@ use proc_macro2::TokenStream;
 use crate::diagnostic::Diagnostic;
 use crate::ir::Spec;
 
+/// The module the target machines are written to; the generated crate compiles it only with
+/// its `target-models` feature.
+pub const TARGET_MODULE: &str = "target_machines";
+
 pub mod audits;
 pub mod contracts;
 pub mod deps;
@@ -55,6 +59,7 @@ pub const BACKENDS: &[&dyn Backend] = &[
     &records::RecordsBackend,
     &contracts::ContractsBackend,
     &machines::MachinesBackend,
+    &machines::TargetMachinesBackend,
     &support::SupportBackend,
     &policies::PoliciesBackend,
     &validations::ValidationsBackend,

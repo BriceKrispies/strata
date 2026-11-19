@@ -291,9 +291,15 @@ impl<'a> WireValues<'a> {
 
     /// The variables of machine `machine`: variable names stay, their values are converted.
     pub fn vars(&self, machine: &str, vars: &Value) -> Value {
-        let (Some(b), Value::Object(map)) =
-            (self.spec.machines.iter().find(|b| b.id == machine), vars)
-        else {
+        let (Some(b), Value::Object(map)) = (
+            self.spec
+                .machines
+                .iter()
+                .chain(&self.spec.memory_machines)
+                .chain(&self.spec.target_machines)
+                .find(|b| b.id == machine),
+            vars,
+        ) else {
             return vars.clone();
         };
         let mut out = serde_json::Map::new();

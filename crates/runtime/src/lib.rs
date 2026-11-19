@@ -47,8 +47,8 @@ pub use host::{
     RetryPolicy, TickReport,
 };
 pub use machine::{
-    Delivery, EffectRef, Emit, Isolation, Machine, Outcome, Receiver, RecordError, StepError,
-    TimerCommand,
+    Delivery, EffectRef, Emit, Isolation, Machine, MemoryOutcome, Outcome, Receiver, RecordError,
+    StepError, TimerCommand,
 };
 pub use memory::MemoryStore;
 pub use routes::{
