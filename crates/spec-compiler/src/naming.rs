@@ -23,7 +23,8 @@ const UNRAWABLE: &[&str] = &["self", "Self", "super", "crate"];
 
 /// Type names the generated modules use unqualified (the standard prelude, the derives and the
 /// imports of the generated files). A declared type, record or contract that maps to one of
-/// them would shadow it, so it is refused.
+/// them would shadow it, so it is refused. `Hash` is not here: the generated code names it only
+/// in `#[derive(Hash)]`, which resolves in the macro namespace, so a type called `Hash` is safe.
 pub const RESERVED_TYPE_NAMES: &[&str] = &[
     "Box",
     "Clone",
@@ -33,7 +34,6 @@ pub const RESERVED_TYPE_NAMES: &[&str] = &[
     "Deserialize",
     "Eq",
     "Err",
-    "Hash",
     "LazyLock",
     "None",
     "Ok",

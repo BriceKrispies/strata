@@ -82,9 +82,45 @@ pub fn crate_files(spec: &Spec, crate_name: &str) -> Result<Vec<GeneratedFile>, 
 
 fn rust_file(spec: &Spec, tokens: TokenStream) -> Result<String, syn::Error> {
     let file: syn::File = syn::parse2(tokens)?;
-    let body = prettyplease::unparse(&file);
+    let body = separate_items(&prettyplease::unparse(&file));
     Ok(format!("{}\n{body}", rust_header(&spec.path)))
 }
+
+/// Puts one blank line before every item that prettyplease left directly after the previous one,
+/// at any nesting depth, so the generated files read like hand-written ones. An item starts at its
+/// first doc comment or attribute; lines inside an item's leading docs and attributes stay together.
+fn separate_items(text: &str) -> String {
+    let mut out = String::with_capacity(text.len() + text.len() / 16);
+    let mut previous = "";
+    for line in text.lines() {
+        let trimmed = line.trim_start();
+        let starts_item = trimmed.starts_with("///")
+            || trimmed.starts_with("#[")
+            || ITEM_KEYWORDS.iter().any(|k| trimmed.starts_with(k));
+        let prev = previous.trim_start();
+        let prev_continues = prev.is_empty()
+            || prev.starts_with("///")
+            || prev.starts_with("//!")
+            || prev.starts_with("#[")
+            || prev.starts_with("#![")
+            || prev.ends_with('{')
+            || prev.ends_with('(')
+            || prev.ends_with(',');
+        let same_indent = line.len() - trimmed.len() == previous.len() - prev.len();
+        if starts_item && !prev_continues && same_indent {
+            out.push('\n');
+        }
+        out.push_str(line);
+        out.push('\n');
+        previous = line;
+    }
+    out
+}
+
+const ITEM_KEYWORDS: &[&str] = &[
+    "pub ", "impl ", "impl<", "fn ", "struct ", "enum ", "trait ", "const ", "static ", "type ",
+    "mod ", "use ",
+];
 
 fn lib_rs<'a>(spec: &Spec, modules: impl Iterator<Item = &'a str>) -> TokenStream {
     let summary = format!(

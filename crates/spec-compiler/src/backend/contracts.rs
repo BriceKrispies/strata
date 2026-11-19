@@ -379,10 +379,11 @@ fn contract_items(spec: &Spec, c: &Contract, uses: &mut Uses) -> TokenStream {
             }
         }
     }
-    let display_body = if arms.is_empty() {
-        quote! { match *self {} }
+    // An error enum with no variants has no value to format, so its formatter goes unused.
+    let (formatter, display_body) = if arms.is_empty() {
+        (quote! { _ }, quote! { match *self {} })
     } else {
-        quote! { match self { #(#arms)* } }
+        (quote! { f }, quote! { match self { #(#arms)* } })
     };
 
     quote! {
@@ -396,7 +397,7 @@ fn contract_items(spec: &Spec, c: &Contract, uses: &mut Uses) -> TokenStream {
         }
 
         impl fmt::Display for #error_name {
-            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            fn fmt(&self, #formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
                 #display_body
             }
         }
