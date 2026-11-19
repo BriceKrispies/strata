@@ -3528,14 +3528,166 @@
     {"id":"oidc-callback-flow-impl","name":"OpenID Connect callback (implementation)","subject":"identity-service","level":"implementation","initial":"oidc-idle-i","description":"One sign-in through a provider. The state value of the pending request is kept with its challenge (rec-challenge, keyed by challenge-id) and compared with the one the callback carries; a callback with another value is refused and the request stays open.","transaction":{"scope":"transition","isolation":"serializable"},"variables":[{"name":"expectedState","type":"string","initial":"s1","repr":"string"},{"name":"federatedSessions","type":"number","initial":0,"repr":"u32"}],"states":[{"id":"oidc-idle-i","name":"No request","ignores":["oidc-callback"]},{"id":"oidc-awaiting-i","name":"Awaiting the callback","ignores":["oidc-started"]},{"id":"oidc-done-i","name":"Signed in","terminal":true}],"transitions":[{"id":"oidc-begin-i","from":"oidc-idle-i","to":"oidc-awaiting-i","on":"oidc-started","otherwise":true,"effects":[{"emit":"oidc-redirected","to":"web-application"}]},{"id":"oidc-accept-i","from":"oidc-awaiting-i","to":"oidc-done-i","on":"oidc-callback","guard":"event.state == expectedState","effects":[{"set":"federatedSessions","to":"federatedSessions + 1"},{"emit":"oidc-session-issued","to":"web-application"}]},{"id":"oidc-refuse-i","from":"oidc-awaiting-i","to":"oidc-awaiting-i","on":"oidc-callback","otherwise":true,"effects":[{"emit":"oidc-refused","to":"web-application"}]}],"refines":"oidc-callback-flow","refinement":{"states":{"oidc-idle-i":"oidc-idle","oidc-awaiting-i":"oidc-awaiting","oidc-done-i":"oidc-done"},"variables":{"federatedSessions":"federatedSessions"},"transitions":{"oidc-begin-i":"oidc-begin","oidc-accept-i":"oidc-accept","oidc-refuse-i":"oidc-refuse"}},"storage":{"record":"rec-challenge","key":"challenge-id","fields":{"expectedState":"expected-state","federatedSessions":"federated-sessions"}}},
     {"id":"session-authority-flow","name":"Session authority","subject":"identity-service","initial":"sa-live","description":"The identity service's record of one session.","variables":[{"name":"revoked","type":"boolean","initial":false},{"name":"revokedAt","type":"number","initial":0}],"states":[{"id":"sa-live","name":"Live"},{"id":"sa-revoked","name":"Revoked"}],"transitions":[{"id":"sa-revoke","from":"sa-live","to":"sa-revoked","on":"sr-revoked","effects":[{"set":"revoked","to":true},{"set":"revokedAt","to":"time"},{"emit":"sr-notice"}]},{"id":"sa-answer-live","from":"sa-live","to":"sa-live","on":"sr-lookup","effects":[{"emit":"sr-lookup-answer","payload":{"valid":true}}]},{"id":"sa-answer-revoked","from":"sa-revoked","to":"sa-revoked","on":"sr-lookup","effects":[{"emit":"sr-lookup-answer","payload":{"valid":false}}]}]},
     {"id":"session-authority-flow-impl","name":"Session authority (implementation)","subject":"identity-service","level":"implementation","initial":"sa-live-i","description":"The identity service record of one session (rec-session, keyed by session-id): revoked-at is set at the revocation and a lookup answers from it. The revocation notice to the gateways may be lost; a lookup is never answered from a copy. The refinement reads one model tick as one second (timeScale 1000, as for the gateway copy whose model compares with it), and the mapping gives the model the revocation in seconds.","transaction":{"scope":"transition","isolation":"serializable"},"variables":[{"name":"revoked","type":"boolean","initial":false,"repr":"bool"},{"name":"revokedAt","type":"number","initial":0,"repr":"timestamp"}],"states":[{"id":"sa-live-i","name":"Session live"},{"id":"sa-revoked-i","name":"Session revoked","ignores":["sr-revoked"]}],"transitions":[{"id":"sa-revoke-i","from":"sa-live-i","to":"sa-revoked-i","on":"sr-revoked","otherwise":true,"effects":[{"set":"revoked","to":true},{"set":"revokedAt","to":"time"},{"emit":"sr-notice","to":"gateway"}]},{"id":"sa-answer-live-i","from":"sa-live-i","to":"sa-live-i","on":"sr-lookup","otherwise":true,"effects":[{"emit":"sr-lookup-answer","to":"gateway","payload":{"valid":true}}]},{"id":"sa-answer-revoked-i","from":"sa-revoked-i","to":"sa-revoked-i","on":"sr-lookup","otherwise":true,"effects":[{"emit":"sr-lookup-answer","to":"gateway","payload":{"valid":false}}]}],"refines":"session-authority-flow","refinement":{"states":{"sa-live-i":"sa-live","sa-revoked-i":"sa-revoked"},"variables":{"revoked":"revoked","revokedAt":"revokedAt / 1000"},"transitions":{"sa-revoke-i":"sa-revoke","sa-answer-live-i":"sa-answer-live","sa-answer-revoked-i":"sa-answer-revoked"},"timeScale":1000},"storage":{"record":"rec-session","key":"session-id","fields":{"revokedAt":"revoked-at"}}},
-    {"id":"gateway-session-flow","name":"Gateway session copy","subject":"gateway","initial":"gs-ready","description":"The gateway's copy of the session. It trusts the copy for 5 ticks, then asks again.","variables":[{"name":"valid","type":"boolean","initial":true},{"name":"checkedAt","type":"number","initial":0},{"name":"staleAccept","type":"boolean","initial":false}],"states":[{"id":"gs-ready","name":"Ready"},{"id":"gs-checking","name":"Asking the identity service"}],"transitions":[{"id":"gs-hear-revocation","from":"gs-ready","to":"gs-ready","on":"sr-notice","effects":[{"set":"valid","to":false}]},{"id":"gs-accept-without-recheck","from":"gs-ready","to":"gs-ready","on":"sr-request","faultOnly":true,"guard":"valid","description":"Defect: trusts the copy however old it is.","effects":[{"set":"staleAccept","to":"staleAccept || (session-authority-flow.revoked && time - session-authority-flow.revokedAt >= 5)"},{"emit":"sr-accepted"}]},{"id":"gs-accept-fresh","from":"gs-ready","to":"gs-ready","on":"sr-request","guard":"valid && time - checkedAt < 5","effects":[{"set":"staleAccept","to":"staleAccept || (session-authority-flow.revoked && time - session-authority-flow.revokedAt >= 5)"},{"emit":"sr-accepted"}]},{"id":"gs-refuse-known","from":"gs-ready","to":"gs-ready","on":"sr-request","guard":"!valid","effects":[{"emit":"sr-refused"}]},{"id":"gs-recheck","from":"gs-ready","to":"gs-checking","on":"sr-request","guard":"valid && time - checkedAt >= 5","effects":[{"emit":"sr-lookup"}]},{"id":"gs-recheck-live","from":"gs-checking","to":"gs-ready","on":"sr-lookup-answer","guard":"event.valid == true","effects":[{"set":"checkedAt","to":"time"},{"set":"staleAccept","to":"staleAccept || (session-authority-flow.revoked && time - session-authority-flow.revokedAt >= 5)"},{"emit":"sr-accepted"}]},{"id":"gs-recheck-revoked","from":"gs-checking","to":"gs-ready","on":"sr-lookup-answer","guard":"event.valid == false","effects":[{"set":"valid","to":false},{"emit":"sr-refused"}]}]},
-    {"id":"gateway-session-flow-impl","name":"Gateway session copy (implementation)","subject":"gateway","level":"implementation","initial":"gs-ready-i","description":"The gateway copy of one session, held in the gateway process. It trusts the copy for 5 seconds (5000 ms, IDN-014) after the last check, then asks the identity service again; a revocation notice marks the copy invalid at once. The observation of the revocation bound belongs to the model: the identity service state it compares with is not visible to the gateway, so the mapping gives the model staleAccept as false. The refinement reads one model tick as one second (timeScale 1000), so the model bound of 5 ticks is the 5 seconds here.","transaction":{"scope":"transition","isolation":"serializable"},"variables":[{"name":"valid","type":"boolean","initial":true,"repr":"bool"},{"name":"checkedAt","type":"number","initial":0,"repr":"timestamp"}],"states":[{"id":"gs-ready-i","name":"Copy held","ignores":["sr-lookup-answer"]},{"id":"gs-checking-i","name":"Asking the identity service","ignores":["sr-notice","sr-request"]}],"transitions":[{"id":"gs-hear-revocation-i","from":"gs-ready-i","to":"gs-ready-i","on":"sr-notice","otherwise":true,"effects":[{"set":"valid","to":false}]},{"id":"gs-accept-fresh-i","from":"gs-ready-i","to":"gs-ready-i","on":"sr-request","guard":"valid && time - checkedAt < 5000","effects":[{"emit":"sr-accepted","to":"web-application"}]},{"id":"gs-refuse-known-i","from":"gs-ready-i","to":"gs-ready-i","on":"sr-request","guard":"!valid","effects":[{"emit":"sr-refused","to":"web-application"}]},{"id":"gs-recheck-i","from":"gs-ready-i","to":"gs-checking-i","on":"sr-request","guard":"valid && time - checkedAt >= 5000","effects":[{"emit":"sr-lookup","to":"identity-service"}]},{"id":"gs-recheck-live-i","from":"gs-checking-i","to":"gs-ready-i","on":"sr-lookup-answer","guard":"event.valid == true","effects":[{"set":"checkedAt","to":"time"},{"emit":"sr-accepted","to":"web-application"}]},{"id":"gs-recheck-revoked-i","from":"gs-checking-i","to":"gs-ready-i","on":"sr-lookup-answer","guard":"event.valid == false","effects":[{"set":"valid","to":false},{"emit":"sr-refused","to":"web-application"}]}],"refines":"gateway-session-flow","refinement":{"states":{"gs-ready-i":"gs-ready","gs-checking-i":"gs-checking"},"variables":{"valid":"valid","checkedAt":"checkedAt / 1000","staleAccept":"false"},"transitions":{"gs-hear-revocation-i":"gs-hear-revocation","gs-accept-fresh-i":"gs-accept-fresh","gs-refuse-known-i":"gs-refuse-known","gs-recheck-i":"gs-recheck","gs-recheck-live-i":"gs-recheck-live","gs-recheck-revoked-i":"gs-recheck-revoked"},"timeScale":1000},"storage":{"record":"rec-session-copy","key":"session-id","fields":{"checkedAt":"checked-at"},"state":"session-state"}},
+    {"id":"gateway-session-flow","name":"Gateway session copy","subject":"gateway","initial":"gs-ready","description":"The gateway's copy of the session. It trusts the copy for 5 ticks, then asks again.","variables":[
+        {
+          "name": "valid",
+          "type": "boolean",
+          "initial": true
+        },
+        {
+          "name": "checkedAt",
+          "type": "number",
+          "initial": 0
+        },
+        {
+          "name": "staleAccept",
+          "type": "boolean",
+          "initial": false
+        },
+        {
+          "name": "checked",
+          "type": "boolean",
+          "initial": false
+        }
+      ],"states":[{"id":"gs-ready","name":"Ready"},{"id":"gs-checking","name":"Asking the identity service"}],"transitions":[{"id":"gs-hear-revocation","from":"gs-ready","to":"gs-ready","on":"sr-notice","effects":[{"set":"valid","to":false}]},{"id":"gs-accept-without-recheck","from":"gs-ready","to":"gs-ready","on":"sr-request","faultOnly":true,"guard":"valid","description":"Defect: trusts the copy however old it is.","effects":[{"set":"staleAccept","to":"staleAccept || (session-authority-flow.revoked && time - session-authority-flow.revokedAt >= 5)"},{"emit":"sr-accepted"}]},{"id":"gs-accept-fresh","from":"gs-ready","to":"gs-ready","on":"sr-request","guard":"valid && checked && checkedAt <= time && time - checkedAt < 5","effects":[{"set":"staleAccept","to":"staleAccept || (session-authority-flow.revoked && time - session-authority-flow.revokedAt >= 5)"},{"emit":"sr-accepted"}]},{"id":"gs-refuse-known","from":"gs-ready","to":"gs-ready","on":"sr-request","guard":"!valid","effects":[{"emit":"sr-refused"}]},{"id":"gs-recheck","from":"gs-ready","to":"gs-checking","on":"sr-request","guard":"valid && !(checked && checkedAt <= time && time - checkedAt < 5)","effects":[{"emit":"sr-lookup"}]},{"id":"gs-recheck-live","from":"gs-checking","to":"gs-ready","on":"sr-lookup-answer","guard":"event.valid == true","effects":[
+            {
+              "set": "checked",
+              "to": true
+            },
+            {
+              "set": "checkedAt",
+              "to": "time"
+            },
+            {
+              "set": "staleAccept",
+              "to": "staleAccept || (session-authority-flow.revoked && time - session-authority-flow.revokedAt >= 5)"
+            },
+            {
+              "emit": "sr-accepted"
+            }
+          ]},{"id":"gs-recheck-revoked","from":"gs-checking","to":"gs-ready","on":"sr-lookup-answer","guard":"event.valid == false","effects":[{"set":"valid","to":false},{"emit":"sr-refused"}]}]},
+    {"id":"gateway-session-flow-impl","name":"Gateway session copy (implementation)","subject":"gateway","level":"implementation","initial":"gs-ready-i","description":"The gateway copy of one session, held in the gateway process. It trusts the copy for 5 seconds (5000 ms, IDN-014) after the last check, then asks the identity service again; a revocation notice marks the copy invalid at once. The observation of the revocation bound belongs to the model: the identity service state it compares with is not visible to the gateway, so the mapping gives the model staleAccept as false. The refinement reads one model tick as one second (timeScale 1000), so the model bound of 5 ticks is the 5 seconds here.","transaction":{"scope":"transition","isolation":"serializable"},"variables":[
+        {
+          "name": "valid",
+          "type": "boolean",
+          "initial": true,
+          "repr": "bool"
+        },
+        {
+          "name": "checkedAt",
+          "type": "number",
+          "initial": 0,
+          "repr": "timestamp"
+        },
+        {
+          "name": "checked",
+          "type": "boolean",
+          "initial": false,
+          "repr": "bool"
+        }
+      ],"states":[{"id":"gs-ready-i","name":"Copy held","ignores":["sr-lookup-answer"]},{"id":"gs-checking-i","name":"Asking the identity service","ignores":["sr-notice","sr-request"]}],"transitions":[{"id":"gs-hear-revocation-i","from":"gs-ready-i","to":"gs-ready-i","on":"sr-notice","otherwise":true,"effects":[{"set":"valid","to":false}]},{"id":"gs-accept-fresh-i","from":"gs-ready-i","to":"gs-ready-i","on":"sr-request","guard":"valid && checked && checkedAt <= time && time - checkedAt < 5000","effects":[{"emit":"sr-accepted","to":"web-application"}]},{"id":"gs-refuse-known-i","from":"gs-ready-i","to":"gs-ready-i","on":"sr-request","guard":"!valid","effects":[{"emit":"sr-refused","to":"web-application"}]},{"id":"gs-recheck-i","from":"gs-ready-i","to":"gs-checking-i","on":"sr-request","guard":"valid && !(checked && checkedAt <= time && time - checkedAt < 5000)","effects":[{"emit":"sr-lookup","to":"identity-service"}]},{"id":"gs-recheck-live-i","from":"gs-checking-i","to":"gs-ready-i","on":"sr-lookup-answer","guard":"event.valid == true","effects":[
+            {
+              "set": "checked",
+              "to": true
+            },
+            {
+              "set": "checkedAt",
+              "to": "time"
+            },
+            {
+              "emit": "sr-accepted",
+              "to": "web-application"
+            }
+          ]},{"id":"gs-recheck-revoked-i","from":"gs-checking-i","to":"gs-ready-i","on":"sr-lookup-answer","guard":"event.valid == false","effects":[{"set":"valid","to":false},{"emit":"sr-refused","to":"web-application"}]}],"refines":"gateway-session-flow","refinement":{"states":{"gs-ready-i":"gs-ready","gs-checking-i":"gs-checking"},"variables":{
+          "valid": "valid",
+          "checkedAt": "checkedAt / 1000",
+          "staleAccept": "false",
+          "checked": "checked"
+        },"transitions":{"gs-hear-revocation-i":"gs-hear-revocation","gs-accept-fresh-i":"gs-accept-fresh","gs-refuse-known-i":"gs-refuse-known","gs-recheck-i":"gs-recheck","gs-recheck-live-i":"gs-recheck-live","gs-recheck-revoked-i":"gs-recheck-revoked"},"timeScale":1000},"storage":{"record":"rec-session-copy","key":"session-id","fields":{"checkedAt":"checked-at"},"state":"session-state"}},
     {"id":"job-lease-flow","name":"Job lease","subject":"automation-worker","initial":"jl-waiting","description":"One job. Every grant raises the token, and a result is recorded only with the current token.","variables":[{"name":"token","type":"number","initial":0},{"name":"completions","type":"number","initial":0},{"name":"acceptedToken","type":"number","initial":0}],"states":[{"id":"jl-waiting","name":"Waiting"},{"id":"jl-leased","name":"Leased"},{"id":"jl-done","name":"Completed"}],"transitions":[{"id":"jl-grant","from":"jl-waiting","to":"jl-leased","on":"job-due","effects":[{"set":"token","to":"token + 1"},{"emit":"lease-granted"}]},{"id":"jl-regrant","from":"jl-leased","to":"jl-leased","on":"lease-expired","effects":[{"set":"token","to":"token + 1"},{"emit":"lease-granted"}]},{"id":"jl-complete-any-token","from":"jl-leased","to":"jl-done","on":"work-reported","faultOnly":true,"description":"Defect: records a result without checking its token.","effects":[{"set":"completions","to":"completions + 1"},{"set":"acceptedToken","to":"event.token"},{"emit":"job-completed"}]},{"id":"jl-complete","from":"jl-leased","to":"jl-done","on":"work-reported","guard":"event.token == token","effects":[{"set":"completions","to":"completions + 1"},{"set":"acceptedToken","to":"event.token"},{"emit":"job-completed"}]},{"id":"jl-refuse-stale","from":"jl-leased","to":"jl-leased","on":"work-reported","effects":[{"emit":"result-refused"}]},{"id":"jl-refuse-after-done","from":"jl-done","to":"jl-done","on":"work-reported","effects":[{"emit":"result-refused"}]}]},
     {"id":"job-lease-flow-impl","name":"Job lease (implementation)","subject":"automation-worker","level":"implementation","initial":"jl-waiting-i","description":"One job as the automation worker keeps it (rec-job, keyed by job-id): lease-token is raised at every grant and a reported result is recorded only when it carries the current token. A lease runs for 60 seconds (60000 ms, default) and a timer then raises lease-expired. A result with another token, or one that arrives after the job is done, is refused.","transaction":{"scope":"transition","isolation":"serializable"},"variables":[{"name":"token","type":"number","initial":0,"repr":"u64"},{"name":"completions","type":"number","initial":0,"repr":"u32"},{"name":"acceptedToken","type":"number","initial":0,"repr":"u64"}],"states":[{"id":"jl-waiting-i","name":"Waiting for a worker","ignores":["lease-expired","work-reported"]},{"id":"jl-leased-i","name":"Leased","ignores":["job-due"]},{"id":"jl-done-i","name":"Done","ignores":["job-due","lease-expired"]}],"transitions":[{"id":"jl-grant-i","from":"jl-waiting-i","to":"jl-leased-i","on":"job-due","otherwise":true,"effects":[{"set":"token","to":"token + 1"},{"emit":"lease-granted","to":"automation-worker"},{"timer":"lease","after":60000,"emit":"lease-expired"}]},{"id":"jl-regrant-i","from":"jl-leased-i","to":"jl-leased-i","on":"lease-expired","otherwise":true,"effects":[{"set":"token","to":"token + 1"},{"emit":"lease-granted","to":"automation-worker"},{"timer":"lease","after":60000,"emit":"lease-expired"}]},{"id":"jl-complete-i","from":"jl-leased-i","to":"jl-done-i","on":"work-reported","guard":"event.token == token","effects":[{"set":"completions","to":"completions + 1"},{"set":"acceptedToken","to":"event.token"},{"emit":"job-completed","to":"automation-worker"},{"cancel":"lease"}]},{"id":"jl-refuse-stale-i","from":"jl-leased-i","to":"jl-leased-i","on":"work-reported","otherwise":true,"effects":[{"emit":"result-refused","to":"automation-worker"}]},{"id":"jl-refuse-after-done-i","from":"jl-done-i","to":"jl-done-i","on":"work-reported","otherwise":true,"effects":[{"emit":"result-refused","to":"automation-worker"}]}],"refines":"job-lease-flow","refinement":{"states":{"jl-waiting-i":"jl-waiting","jl-leased-i":"jl-leased","jl-done-i":"jl-done"},"variables":{"token":"token","completions":"completions","acceptedToken":"acceptedToken"},"transitions":{"jl-grant-i":"jl-grant","jl-regrant-i":"jl-regrant","jl-complete-i":"jl-complete","jl-refuse-stale-i":"jl-refuse-stale","jl-refuse-after-done-i":"jl-refuse-after-done"}},"storage":{"record":"rec-job","key":"job-id","fields":{"token":"lease-token","acceptedToken":"accepted-token"},"stateValues":{"jl-waiting-i":"waiting","jl-leased-i":"leased","jl-done-i":"completed"}}},
     {"id":"origin-content-flow","name":"Origin content","subject":"runtime","initial":"oc-live","description":"The published version of one page at the origin.","variables":[{"name":"version","type":"number","initial":1},{"name":"changedAt","type":"number","initial":0}],"states":[{"id":"oc-live","name":"Live"}],"transitions":[{"id":"oc-publish","from":"oc-live","to":"oc-live","on":"ec-published","effects":[{"set":"version","to":"version + 1"},{"set":"changedAt","to":"time"},{"emit":"ec-purge"}]},{"id":"oc-answer","from":"oc-live","to":"oc-live","on":"ec-origin-fetch","effects":[{"emit":"ec-origin-answer","payload":{"version":"version"}}]}]},
     {"id":"origin-content-flow-impl","name":"Origin content (implementation)","subject":"runtime","level":"implementation","initial":"oc-live-i","description":"The published version of one page at the origin, read from its content record (rec-content, keyed by object and record-id). A publication raises the version, notes the time in milliseconds and asks the content delivery network, through its control interface, to purge; a fetch is answered with the current version. The refinement reads one model tick as one second (timeScale 1000, as for the edge copy whose model compares with it), and the mapping gives the model the time of the change in seconds.","transaction":{"scope":"transition","isolation":"serializable"},"variables":[{"name":"version","type":"number","initial":1,"repr":"u64"},{"name":"changedAt","type":"number","initial":0,"repr":"timestamp"}],"states":[{"id":"oc-live-i","name":"Live"}],"transitions":[{"id":"oc-publish-i","from":"oc-live-i","to":"oc-live-i","on":"ec-published","otherwise":true,"effects":[{"set":"version","to":"version + 1"},{"set":"changedAt","to":"time"},{"emit":"ec-purge","to":"delivery-network-control"}]},{"id":"oc-answer-i","from":"oc-live-i","to":"oc-live-i","on":"ec-origin-fetch","otherwise":true,"effects":[{"emit":"ec-origin-answer","to":"delivery-network","payload":{"version":"version"}}]}],"refines":"origin-content-flow","refinement":{"states":{"oc-live-i":"oc-live"},"variables":{"version":"version","changedAt":"changedAt / 1000"},"transitions":{"oc-publish-i":"oc-publish","oc-answer-i":"oc-answer"},"timeScale":1000},"storage":{"record":"rec-content","key":"record-id","fields":{"changedAt":"changed-at"}}},
-    {"id":"edge-copy-flow","name":"Edge copy","subject":"delivery-network","initial":"eg-ready","description":"The edge copy of the page. It is dropped by a purge and revalidated after a lifetime of 5 ticks.","variables":[{"name":"held","type":"number","initial":1},{"name":"storedAt","type":"number","initial":0},{"name":"staleServed","type":"boolean","initial":false}],"states":[{"id":"eg-ready","name":"Ready"},{"id":"eg-fetching","name":"Fetching from the origin"}],"transitions":[{"id":"eg-purge","from":"eg-ready","to":"eg-ready","on":"ec-purge","effects":[{"set":"held","to":0}]},{"id":"eg-serve-past-lifetime","from":"eg-ready","to":"eg-ready","on":"ec-request","faultOnly":true,"guard":"held > 0","description":"Defect: serves the copy however old it is.","effects":[{"set":"staleServed","to":"staleServed || (held != origin-content-flow.version && time - origin-content-flow.changedAt >= 5)"},{"emit":"ec-served"}]},{"id":"eg-serve","from":"eg-ready","to":"eg-ready","on":"ec-request","guard":"held > 0 && time - storedAt < 5","effects":[{"set":"staleServed","to":"staleServed || (held != origin-content-flow.version && time - origin-content-flow.changedAt >= 5)"},{"emit":"ec-served"}]},{"id":"eg-fetch","from":"eg-ready","to":"eg-fetching","on":"ec-request","effects":[{"emit":"ec-origin-fetch"}]},{"id":"eg-store","from":"eg-fetching","to":"eg-ready","on":"ec-origin-answer","effects":[{"set":"held","to":"event.version"},{"set":"storedAt","to":"time"},{"emit":"ec-served"}]}]},
-    {"id":"edge-copy-flow-impl","name":"Edge copy (implementation)","subject":"delivery-network","level":"implementation","initial":"eg-ready-i","description":"The copy of one page in the edge cache of the content delivery network, kept in its cache memory and not in a record of the platform. held is the version of the copy and 0 when it has been purged; a copy is served for 5 seconds (5000 ms, EDG-007) after it was stored and revalidated at the origin after that. The observation of the staleness bound belongs to the model: the origin state it compares with is not visible to the edge, so the mapping gives the model staleServed as false. The refinement reads one model tick as one second (timeScale 1000), so the model lifetime of 5 ticks is the 5 seconds here.","transaction":{"scope":"transition","isolation":"serializable"},"variables":[{"name":"held","type":"number","initial":1,"repr":"u64"},{"name":"storedAt","type":"number","initial":0,"repr":"timestamp"}],"states":[{"id":"eg-ready-i","name":"Ready","ignores":["ec-origin-answer"]},{"id":"eg-fetching-i","name":"Fetching from the origin","ignores":["ec-purge","ec-request"]}],"transitions":[{"id":"eg-purge-i","from":"eg-ready-i","to":"eg-ready-i","on":"ec-purge","otherwise":true,"effects":[{"set":"held","to":0}]},{"id":"eg-serve-i","from":"eg-ready-i","to":"eg-ready-i","on":"ec-request","guard":"held > 0 && time - storedAt < 5000","effects":[{"emit":"ec-served","to":"web-application"}]},{"id":"eg-fetch-i","from":"eg-ready-i","to":"eg-fetching-i","on":"ec-request","otherwise":true,"effects":[{"emit":"ec-origin-fetch","to":"traffic-switch"}]},{"id":"eg-store-i","from":"eg-fetching-i","to":"eg-ready-i","on":"ec-origin-answer","otherwise":true,"effects":[{"set":"held","to":"event.version"},{"set":"storedAt","to":"time"},{"emit":"ec-served","to":"web-application"}]}],"refines":"edge-copy-flow","refinement":{"states":{"eg-ready-i":"eg-ready","eg-fetching-i":"eg-fetching"},"variables":{"held":"held","storedAt":"storedAt / 1000","staleServed":"false"},"transitions":{"eg-purge-i":"eg-purge","eg-serve-i":"eg-serve","eg-fetch-i":"eg-fetch","eg-store-i":"eg-store"},"timeScale":1000},"storage":{"record":"rec-content","key":"record-id","fields":{"storedAt":"stored-at"},"state":"copy-state"}},
+    {"id":"edge-copy-flow","name":"Edge copy","subject":"delivery-network","initial":"eg-ready","description":"The edge copy of the page. It is dropped by a purge and revalidated after a lifetime of 5 ticks.","variables":[
+        {
+          "name": "held",
+          "type": "number",
+          "initial": 1
+        },
+        {
+          "name": "storedAt",
+          "type": "number",
+          "initial": 0
+        },
+        {
+          "name": "staleServed",
+          "type": "boolean",
+          "initial": false
+        },
+        {
+          "name": "stored",
+          "type": "boolean",
+          "initial": false
+        }
+      ],"states":[{"id":"eg-ready","name":"Ready"},{"id":"eg-fetching","name":"Fetching from the origin"}],"transitions":[{"id":"eg-purge","from":"eg-ready","to":"eg-ready","on":"ec-purge","effects":[{"set":"held","to":0}]},{"id":"eg-serve-past-lifetime","from":"eg-ready","to":"eg-ready","on":"ec-request","faultOnly":true,"guard":"held > 0","description":"Defect: serves the copy however old it is.","effects":[{"set":"staleServed","to":"staleServed || (held != origin-content-flow.version && time - origin-content-flow.changedAt >= 5)"},{"emit":"ec-served"}]},{"id":"eg-serve","from":"eg-ready","to":"eg-ready","on":"ec-request","guard":"held > 0 && stored && storedAt <= time && time - storedAt < 5","effects":[{"set":"staleServed","to":"staleServed || (held != origin-content-flow.version && time - origin-content-flow.changedAt >= 5)"},{"emit":"ec-served"}]},{"id":"eg-fetch","from":"eg-ready","to":"eg-fetching","on":"ec-request","effects":[{"emit":"ec-origin-fetch"}]},{"id":"eg-store","from":"eg-fetching","to":"eg-ready","on":"ec-origin-answer","effects":[
+            {
+              "set": "stored",
+              "to": true
+            },
+            {
+              "set": "held",
+              "to": "event.version"
+            },
+            {
+              "set": "storedAt",
+              "to": "time"
+            },
+            {
+              "emit": "ec-served"
+            }
+          ]}]},
+    {"id":"edge-copy-flow-impl","name":"Edge copy (implementation)","subject":"delivery-network","level":"implementation","initial":"eg-ready-i","description":"The copy of one page in the edge cache of the content delivery network, kept in its cache memory and not in a record of the platform. held is the version of the copy and 0 when it has been purged; a copy is served for 5 seconds (5000 ms, EDG-007) after it was stored and revalidated at the origin after that. The observation of the staleness bound belongs to the model: the origin state it compares with is not visible to the edge, so the mapping gives the model staleServed as false. The refinement reads one model tick as one second (timeScale 1000), so the model lifetime of 5 ticks is the 5 seconds here.","transaction":{"scope":"transition","isolation":"serializable"},"variables":[
+        {
+          "name": "held",
+          "type": "number",
+          "initial": 1,
+          "repr": "u64"
+        },
+        {
+          "name": "storedAt",
+          "type": "number",
+          "initial": 0,
+          "repr": "timestamp"
+        },
+        {
+          "name": "stored",
+          "type": "boolean",
+          "initial": false,
+          "repr": "bool"
+        }
+      ],"states":[{"id":"eg-ready-i","name":"Ready","ignores":["ec-origin-answer"]},{"id":"eg-fetching-i","name":"Fetching from the origin","ignores":["ec-purge","ec-request"]}],"transitions":[{"id":"eg-purge-i","from":"eg-ready-i","to":"eg-ready-i","on":"ec-purge","otherwise":true,"effects":[{"set":"held","to":0}]},{"id":"eg-serve-i","from":"eg-ready-i","to":"eg-ready-i","on":"ec-request","guard":"held > 0 && stored && storedAt <= time && time - storedAt < 5000","effects":[{"emit":"ec-served","to":"web-application"}]},{"id":"eg-fetch-i","from":"eg-ready-i","to":"eg-fetching-i","on":"ec-request","otherwise":true,"effects":[{"emit":"ec-origin-fetch","to":"traffic-switch"}]},{"id":"eg-store-i","from":"eg-fetching-i","to":"eg-ready-i","on":"ec-origin-answer","otherwise":true,"effects":[
+            {
+              "set": "stored",
+              "to": true
+            },
+            {
+              "set": "held",
+              "to": "event.version"
+            },
+            {
+              "set": "storedAt",
+              "to": "time"
+            },
+            {
+              "emit": "ec-served",
+              "to": "web-application"
+            }
+          ]}],"refines":"edge-copy-flow","refinement":{"states":{"eg-ready-i":"eg-ready","eg-fetching-i":"eg-fetching"},"variables":{
+          "held": "held",
+          "storedAt": "storedAt / 1000",
+          "staleServed": "false",
+          "stored": "stored"
+        },"transitions":{"eg-purge-i":"eg-purge","eg-serve-i":"eg-serve","eg-fetch-i":"eg-fetch","eg-store-i":"eg-store"},"timeScale":1000},"storage":{"record":"rec-content","key":"record-id","fields":{"storedAt":"stored-at"},"state":"copy-state"}},
     {"id":"provisioning-flow","name":"Tenant provisioning","subject":"control-plane","initial":"pv-idle","description":"Create the database, apply the layout, install the template, then report the tenant as active.","variables":[{"name":"database","type":"boolean","initial":false},{"name":"layout","type":"boolean","initial":false},{"name":"template","type":"boolean","initial":false},{"name":"active","type":"boolean","initial":false}],"states":[{"id":"pv-idle","name":"Idle"},{"id":"pv-creating","name":"Creating the database"},{"id":"pv-laying","name":"Applying the layout"},{"id":"pv-installing","name":"Installing the template"},{"id":"pv-active","name":"Active","terminal":true},{"id":"pv-failed","name":"Rolled back","terminal":true}],"transitions":[{"id":"pv-start","from":"pv-idle","to":"pv-creating","on":"pv-requested","effects":[{"emit":"pv-database-created"}]},{"id":"pv-activate-early","from":"pv-creating","to":"pv-active","on":"pv-database-created","faultOnly":true,"description":"Defect: reports the tenant active as soon as its database exists.","effects":[{"set":"database","to":true},{"set":"active","to":true},{"emit":"pv-activated"}]},{"id":"pv-created","from":"pv-creating","to":"pv-laying","on":"pv-database-created","effects":[{"set":"database","to":true},{"emit":"pv-layout-applied","after":2}]},{"id":"pv-laid","from":"pv-laying","to":"pv-installing","on":"pv-layout-applied","effects":[{"set":"layout","to":true},{"emit":"pv-template-installed","after":2}]},{"id":"pv-installed","from":"pv-installing","to":"pv-active","on":"pv-template-installed","effects":[{"set":"template","to":true},{"set":"active","to":true},{"emit":"pv-activated"}]},{"id":"pv-fail-laying","from":"pv-laying","to":"pv-failed","on":"pv-step-failed","effects":[{"set":"database","to":false},{"emit":"pv-rolled-back"}]},{"id":"pv-fail-installing","from":"pv-installing","to":"pv-failed","on":"pv-step-failed","effects":[{"set":"database","to":false},{"set":"layout","to":false},{"emit":"pv-rolled-back"}]}]},
     {"id":"provisioning-flow-impl","name":"Tenant provisioning (implementation)","subject":"control-plane","level":"implementation","initial":"pv-idle-i","description":"Creation of one tenant by the control plane (rec-tenant, keyed by tenant-id; the state of this machine is held in its flow-state field): create the database, apply the layout 5 seconds later (5000 ms, default), install the template 5 seconds after that (5000 ms, default), then report the tenant as active. A failed step undoes what was done and ends in failure; the tenant is never reported active before the layout and the template are in place. One model tick is 2.5 seconds here (timeScale 2500), so the model delay of two ticks is the 5 seconds.","transaction":{"scope":"transition","isolation":"serializable"},"variables":[{"name":"database","type":"boolean","initial":false,"repr":"bool"},{"name":"layout","type":"boolean","initial":false,"repr":"bool"},{"name":"template","type":"boolean","initial":false,"repr":"bool"},{"name":"active","type":"boolean","initial":false,"repr":"bool"}],"states":[{"id":"pv-idle-i","name":"Requested nothing","ignores":["pv-database-created","pv-layout-applied","pv-template-installed","pv-step-failed"]},{"id":"pv-creating-i","name":"Creating the database","ignores":["pv-requested","pv-layout-applied","pv-template-installed","pv-step-failed"]},{"id":"pv-laying-i","name":"Applying the layout","ignores":["pv-requested","pv-database-created","pv-template-installed"]},{"id":"pv-installing-i","name":"Installing the template","ignores":["pv-requested","pv-database-created","pv-layout-applied"]},{"id":"pv-active-i","name":"Active","terminal":true},{"id":"pv-failed-i","name":"Failed","terminal":true}],"transitions":[{"id":"pv-start-i","from":"pv-idle-i","to":"pv-creating-i","on":"pv-requested","otherwise":true,"effects":[{"emit":"pv-database-created","to":"control-plane"}]},{"id":"pv-created-i","from":"pv-creating-i","to":"pv-laying-i","on":"pv-database-created","otherwise":true,"effects":[{"set":"database","to":true},{"emit":"pv-layout-applied","to":"control-plane","after":5000}]},{"id":"pv-laid-i","from":"pv-laying-i","to":"pv-installing-i","on":"pv-layout-applied","otherwise":true,"effects":[{"set":"layout","to":true},{"emit":"pv-template-installed","to":"control-plane","after":5000}]},{"id":"pv-installed-i","from":"pv-installing-i","to":"pv-active-i","on":"pv-template-installed","otherwise":true,"effects":[{"set":"template","to":true},{"set":"active","to":true},{"emit":"pv-activated","to":"control-plane"}]},{"id":"pv-fail-laying-i","from":"pv-laying-i","to":"pv-failed-i","on":"pv-step-failed","otherwise":true,"effects":[{"set":"database","to":false},{"emit":"pv-rolled-back","to":"control-plane"}]},{"id":"pv-fail-installing-i","from":"pv-installing-i","to":"pv-failed-i","on":"pv-step-failed","otherwise":true,"effects":[{"set":"database","to":false},{"set":"layout","to":false},{"emit":"pv-rolled-back","to":"control-plane"}]}],"refines":"provisioning-flow","refinement":{"states":{"pv-idle-i":"pv-idle","pv-creating-i":"pv-creating","pv-laying-i":"pv-laying","pv-installing-i":"pv-installing","pv-active-i":"pv-active","pv-failed-i":"pv-failed"},"variables":{"database":"database","layout":"layout","template":"template","active":"active"},"transitions":{"pv-start-i":"pv-start","pv-created-i":"pv-created","pv-laid-i":"pv-laid","pv-installed-i":"pv-installed","pv-fail-laying-i":"pv-fail-laying","pv-fail-installing-i":"pv-fail-installing"},"timeScale":2500},"storage":{"record":"rec-tenant","key":"tenant-id","fields":{"database":"database-created","layout":"layout-applied","template":"template-installed","active":"activated"},"state":"flow-state"}},
     {"id":"proposal-flow","name":"Change proposal","subject":"agent-gateway","initial":"cp-idle","description":"A change is projected, then applied directly when policy classes it as safe, or after approval when it is risky.","variables":[{"name":"risky","type":"boolean","initial":false},{"name":"projected","type":"boolean","initial":false},{"name":"cleared","type":"boolean","initial":false},{"name":"applied","type":"boolean","initial":false}],"states":[{"id":"cp-idle","name":"No proposal"},{"id":"cp-projecting","name":"Projecting"},{"id":"cp-awaiting","name":"Awaiting approval"},{"id":"cp-ready","name":"Cleared"},{"id":"cp-closed","name":"Rejected"},{"id":"cp-done","name":"Applied","terminal":true}],"transitions":[{"id":"cp-open","from":"cp-idle","to":"cp-projecting","on":"cp-proposed","effects":[{"set":"risky","to":"event.risky"},{"emit":"cp-projected"}]},{"id":"cp-clear-safe","from":"cp-projecting","to":"cp-ready","on":"cp-projected","guard":"!risky","effects":[{"set":"projected","to":true},{"set":"cleared","to":true}]},{"id":"cp-hold-risky","from":"cp-projecting","to":"cp-awaiting","on":"cp-projected","guard":"risky","effects":[{"set":"projected","to":true}]},{"id":"cp-approve","from":"cp-awaiting","to":"cp-ready","on":"cp-approved","effects":[{"set":"cleared","to":true}]},{"id":"cp-reject","from":"cp-awaiting","to":"cp-closed","on":"cp-rejected"},{"id":"cp-apply-unapproved","from":"cp-awaiting","to":"cp-done","on":"cp-apply-requested","faultOnly":true,"description":"Defect: applies a risky change that nobody approved.","effects":[{"set":"applied","to":true},{"emit":"cp-applied"}]},{"id":"cp-refuse-awaiting","from":"cp-awaiting","to":"cp-awaiting","on":"cp-apply-requested","effects":[{"emit":"cp-refused"}]},{"id":"cp-apply-rejected","from":"cp-closed","to":"cp-done","on":"cp-apply-requested","faultOnly":true,"description":"Defect: applies a change that was rejected.","effects":[{"set":"applied","to":true},{"emit":"cp-applied"}]},{"id":"cp-refuse-closed","from":"cp-closed","to":"cp-closed","on":"cp-apply-requested","effects":[{"emit":"cp-refused"}]},{"id":"cp-apply","from":"cp-ready","to":"cp-done","on":"cp-apply-requested","effects":[{"set":"applied","to":true},{"emit":"cp-applied"}]}]},
@@ -3560,10 +3712,62 @@
     {"id":"guess-throttle-flow-impl","name":"Password guessing throttle (implementation)","level":"implementation","subject":"identity-service","refines":"guess-throttle-flow","description":"The counter of failed password attempts for one account, held in the limit store. Three failures close it, and a closed counter refuses every attempt without evaluating it.","initial":"gti-open","instances":{"key":"limit-key","storedIn":"rec-limit-counter","max":16},"transaction":{"scope":"transition","isolation":"serializable"},"variables":[{"name":"failures","type":"number","repr":"u64","initial":0}],"states":[{"id":"gti-open","name":"Accepting attempts"},{"id":"gti-closed","name":"Closed"}],"transitions":[{"id":"gti-wrong","from":"gti-open","to":"gti-open","on":"pw-attempt","guard":"failures < 2 && event.guess == 'wrong'","effects":[{"set":"failures","to":"failures + 1"},{"emit":"pw-refused","to":"gateway"}]},{"id":"gti-wrong-last","from":"gti-open","to":"gti-closed","on":"pw-attempt","guard":"failures == 2 && event.guess == 'wrong'","effects":[{"set":"failures","to":"failures + 1"},{"emit":"pw-refused","to":"gateway"}]},{"id":"gti-right","from":"gti-open","to":"gti-open","on":"pw-attempt","guard":"event.guess == 'right'","effects":[{"emit":"pw-accepted","to":"gateway"}]},{"id":"gti-refuse","from":"gti-closed","to":"gti-closed","on":"pw-attempt","otherwise":true,"effects":[{"emit":"pw-refused","to":"gateway"}]}],"refinement":{"states":{"gti-open":"gt-open","gti-closed":"gt-open"},"variables":{"failures":"failures","throttled":"0"},"transitions":{"gti-wrong":"gt-wrong","gti-wrong-last":"gt-wrong","gti-right":"gt-right","gti-refuse":"gt-refuse"}},"storage":{"record":"rec-limit-counter","key":"limit-key","state":"throttle-state","creates":true}},
     {"id":"trigger-chain-flow","name":"Trigger chain","subject":"automation-worker","initial":"tc-live","description":"Each change that starts a chain carries its hop count. A trigger creates a job while the hop count is within the hop limit of eight that D-700 states, and refuses the rest of the chain.","variables":[{"name":"accepted","type":"number","initial":0}],"states":[{"id":"tc-live","name":"Live"}],"transitions":[{"id":"tc-accept-unbounded","from":"tc-live","to":"tc-live","on":"tc-change","faultOnly":true,"description":"Defect: creates a job for every hop, so a loop of triggers never ends.","effects":[{"set":"accepted","to":"accepted + 1"},{"emit":"tc-job-created"},{"emit":"tc-change","after":1,"payload":{"hop":"event.hop + 1"}}]},{"id":"tc-accept","from":"tc-live","to":"tc-live","on":"tc-change","guard":"event.hop <= 8","effects":[{"set":"accepted","to":"accepted + 1"},{"emit":"tc-job-created"},{"emit":"tc-change","after":1,"payload":{"hop":"event.hop + 1"}}]},{"id":"tc-refuse-deep","from":"tc-live","to":"tc-live","on":"tc-change","guard":"event.hop > 8","effects":[{"emit":"tc-cut"}]}]},
     {"id":"trigger-chain-flow-impl","name":"Trigger chain (implementation)","level":"implementation","subject":"automation-worker","refines":"trigger-chain-flow","description":"One chain of triggers, identified by the correlation of the change that started it. The chain keeps the number of jobs it created. Every change carries its hop count, and the next change of the chain carries the count raised by one. The next change of the chain follows 100 ms after the one before (default). One model tick is 100 ms here (timeScale 100), so the model delay of one tick is the 100 ms.","initial":"tci-live","instances":{"key":"correlation","storedIn":"rec-trigger-chain","max":16},"transaction":{"scope":"transition","isolation":"serializable"},"variables":[{"name":"accepted","type":"number","repr":"u64","initial":0}],"states":[{"id":"tci-live","name":"Live"}],"transitions":[{"id":"tci-accept","from":"tci-live","to":"tci-live","on":"tc-change","guard":"event.hop <= 8","effects":[{"set":"accepted","to":"accepted + 1"},{"emit":"tc-job-created","to":"automation-worker"},{"emit":"tc-change","after":100,"to":"automation-worker","payload":{"hop":"event.hop + 1","correlation":"event.correlation"}}]},{"id":"tci-cut","from":"tci-live","to":"tci-live","on":"tc-change","otherwise":true,"effects":[{"emit":"tc-cut","to":"automation-worker"}]}],"refinement":{"states":{"tci-live":"tc-live"},"variables":{"accepted":"accepted"},"transitions":{"tci-accept":"tc-accept","tci-cut":"tc-refuse-deep"},"timeScale":100},"storage":{"record":"rec-trigger-chain","key":"correlation","creates":true}},
-    {"id":"gateway-outage-flow","name":"Gateway during identity outage","subject":"gateway","initial":"go-ready","description":"The gateway's copy of a session is refreshed from the identity service once it is 5 ticks old. While a lookup is unanswered, a request that needs a session is refused with the outage named, and is not accepted.","variables":[{"name":"checkedAt","type":"number","initial":0}],"states":[{"id":"go-ready","name":"Ready"},{"id":"go-checking","name":"Waiting for the identity service"}],"transitions":[{"id":"go-accept-fresh","from":"go-ready","to":"go-ready","on":"sr-request","guard":"time - checkedAt < 5","effects":[{"emit":"sr-accepted"}]},{"id":"go-recheck","from":"go-ready","to":"go-checking","on":"sr-request","guard":"time - checkedAt >= 5","effects":[{"emit":"sr-lookup"}]},{"id":"go-answer","from":"go-checking","to":"go-ready","on":"sr-lookup-answer","guard":"event.valid == true","effects":[{"set":"checkedAt","to":"time"},{"emit":"sr-accepted"}]},{"id":"go-answer-revoked","from":"go-checking","to":"go-ready","on":"sr-lookup-answer","guard":"event.valid == false","effects":[{"emit":"sr-refused"}]},{"id":"go-accept-unanswered","from":"go-checking","to":"go-checking","on":"sr-request","faultOnly":true,"description":"Defect: accepts a request while the identity service has not answered.","effects":[{"emit":"sr-accepted"}]},{"id":"go-refuse-outage","from":"go-checking","to":"go-checking","on":"sr-request","effects":[{"emit":"sr-unavailable"}]}]},
-    {"id":"gateway-outage-flow-impl","name":"Gateway during identity outage (implementation)","level":"implementation","subject":"gateway","refines":"gateway-outage-flow","description":"The copy of one session at the gateway. It is checked at the identity service once it is 5 seconds (5000 ms, IDN-014) old. While a lookup is unanswered, a request that needs the session is refused with the outage named. The refinement reads one model tick as one second (timeScale 1000), so the model bound of 5 ticks is the 5 seconds here.","initial":"gwi-ready","instances":{"key":"session-id","storedIn":"rec-session-copy","max":16},"transaction":{"scope":"transition","isolation":"serializable"},"variables":[{"name":"checkedAt","type":"number","repr":"timestamp","initial":0}],"states":[{"id":"gwi-ready","name":"Ready","ignores":["sr-lookup-answer"]},{"id":"gwi-checking","name":"Waiting for the identity service"}],"transitions":[{"id":"gwi-accept-fresh","from":"gwi-ready","to":"gwi-ready","on":"sr-request","guard":"time - checkedAt < 5000","effects":[{"emit":"sr-accepted","to":"web-application"}]},{"id":"gwi-recheck","from":"gwi-ready","to":"gwi-checking","on":"sr-request","otherwise":true,"effects":[{"emit":"sr-lookup","to":"identity-service"}]},{"id":"gwi-answer","from":"gwi-checking","to":"gwi-ready","on":"sr-lookup-answer","guard":"event.valid == true","effects":[{"set":"checkedAt","to":"time"},{"emit":"sr-accepted","to":"web-application"}]},{"id":"gwi-answer-revoked","from":"gwi-checking","to":"gwi-ready","on":"sr-lookup-answer","guard":"event.valid == false","effects":[{"emit":"sr-refused","to":"web-application"}]},{"id":"gwi-refuse-outage","from":"gwi-checking","to":"gwi-checking","on":"sr-request","otherwise":true,"effects":[{"emit":"sr-unavailable","to":"web-application"}]}],"refinement":{"states":{"gwi-ready":"go-ready","gwi-checking":"go-checking"},"variables":{"checkedAt":"checkedAt / 1000"},"transitions":{"gwi-accept-fresh":"go-accept-fresh","gwi-recheck":"go-recheck","gwi-answer":"go-answer","gwi-answer-revoked":"go-answer-revoked","gwi-refuse-outage":"go-refuse-outage"},"timeScale":1000},"storage":{"record":"rec-session-copy","key":"session-id","fields":{"checkedAt":"checked-at"},"state":"outage-state"}},
+    {"id":"gateway-outage-flow","name":"Gateway during identity outage","subject":"gateway","initial":"go-ready","description":"The gateway's copy of a session is refreshed from the identity service once it is 5 ticks old. While a lookup is unanswered, a request that needs a session is refused with the outage named, and is not accepted.","variables":[
+        {
+          "name": "checkedAt",
+          "type": "number",
+          "initial": 0
+        },
+        {
+          "name": "checked",
+          "type": "boolean",
+          "initial": false
+        }
+      ],"states":[{"id":"go-ready","name":"Ready"},{"id":"go-checking","name":"Waiting for the identity service"}],"transitions":[{"id":"go-accept-fresh","from":"go-ready","to":"go-ready","on":"sr-request","guard":"checked && checkedAt <= time && time - checkedAt < 5","effects":[{"emit":"sr-accepted"}]},{"id":"go-recheck","from":"go-ready","to":"go-checking","on":"sr-request","guard":"!(checked && checkedAt <= time && time - checkedAt < 5)","effects":[{"emit":"sr-lookup"}]},{"id":"go-answer","from":"go-checking","to":"go-ready","on":"sr-lookup-answer","guard":"event.valid == true","effects":[
+            {
+              "set": "checked",
+              "to": true
+            },
+            {
+              "set": "checkedAt",
+              "to": "time"
+            },
+            {
+              "emit": "sr-accepted"
+            }
+          ]},{"id":"go-answer-revoked","from":"go-checking","to":"go-ready","on":"sr-lookup-answer","guard":"event.valid == false","effects":[{"emit":"sr-refused"}]},{"id":"go-accept-unanswered","from":"go-checking","to":"go-checking","on":"sr-request","faultOnly":true,"description":"Defect: accepts a request while the identity service has not answered.","effects":[{"emit":"sr-accepted"}]},{"id":"go-refuse-outage","from":"go-checking","to":"go-checking","on":"sr-request","effects":[{"emit":"sr-unavailable"}]}]},
+    {"id":"gateway-outage-flow-impl","name":"Gateway during identity outage (implementation)","level":"implementation","subject":"gateway","refines":"gateway-outage-flow","description":"The copy of one session at the gateway. It is checked at the identity service once it is 5 seconds (5000 ms, IDN-014) old. While a lookup is unanswered, a request that needs the session is refused with the outage named. The refinement reads one model tick as one second (timeScale 1000), so the model bound of 5 ticks is the 5 seconds here.","initial":"gwi-ready","instances":{"key":"session-id","storedIn":"rec-session-copy","max":16},"transaction":{"scope":"transition","isolation":"serializable"},"variables":[
+        {
+          "name": "checkedAt",
+          "type": "number",
+          "repr": "timestamp",
+          "initial": 0
+        },
+        {
+          "name": "checked",
+          "type": "boolean",
+          "initial": false,
+          "repr": "bool"
+        }
+      ],"states":[{"id":"gwi-ready","name":"Ready","ignores":["sr-lookup-answer"]},{"id":"gwi-checking","name":"Waiting for the identity service"}],"transitions":[{"id":"gwi-accept-fresh","from":"gwi-ready","to":"gwi-ready","on":"sr-request","guard":"checked && checkedAt <= time && time - checkedAt < 5000","effects":[{"emit":"sr-accepted","to":"web-application"}]},{"id":"gwi-recheck","from":"gwi-ready","to":"gwi-checking","on":"sr-request","otherwise":true,"effects":[{"emit":"sr-lookup","to":"identity-service"}]},{"id":"gwi-answer","from":"gwi-checking","to":"gwi-ready","on":"sr-lookup-answer","guard":"event.valid == true","effects":[
+            {
+              "set": "checked",
+              "to": true
+            },
+            {
+              "set": "checkedAt",
+              "to": "time"
+            },
+            {
+              "emit": "sr-accepted",
+              "to": "web-application"
+            }
+          ]},{"id":"gwi-answer-revoked","from":"gwi-checking","to":"gwi-ready","on":"sr-lookup-answer","guard":"event.valid == false","effects":[{"emit":"sr-refused","to":"web-application"}]},{"id":"gwi-refuse-outage","from":"gwi-checking","to":"gwi-checking","on":"sr-request","otherwise":true,"effects":[{"emit":"sr-unavailable","to":"web-application"}]}],"refinement":{"states":{"gwi-ready":"go-ready","gwi-checking":"go-checking"},"variables":{
+          "checkedAt": "checkedAt / 1000",
+          "checked": "checked"
+        },"transitions":{"gwi-accept-fresh":"go-accept-fresh","gwi-recheck":"go-recheck","gwi-answer":"go-answer","gwi-answer-revoked":"go-answer-revoked","gwi-refuse-outage":"go-refuse-outage"},"timeScale":1000},"storage":{"record":"rec-session-copy","key":"session-id","fields":{"checkedAt":"checked-at"},"state":"outage-state"}},
     {"id":"erasure-copy-flow","name":"Erased copy","subject":"copy-store","initial":"er-holding","description":"One copy of the personal data of an erased principal. A purge drops it. Once the lifetime of 5 ticks has passed after the erasure committed, a read revalidates the copy and drops it before it answers. Every answer states whether it carried the held personal data after that bound: the flag leak.","variables":[{"name":"erased","type":"boolean","initial":false},{"name":"erasedAt","type":"number","initial":0},{"name":"held","type":"boolean","initial":true},{"name":"leak","type":"boolean","initial":false}],"states":[{"id":"er-holding","name":"Copy holds the data"},{"id":"er-dropped","name":"Copy dropped"}],"transitions":[{"id":"er-commit","from":"er-holding","to":"er-holding","on":"er-erase-committed","effects":[{"set":"erased","to":true},{"set":"erasedAt","to":"time"}]},{"id":"er-purge","from":"er-holding","to":"er-dropped","on":"er-purge-sent","effects":[{"set":"held","to":false}]},{"id":"er-serve-stale","from":"er-holding","to":"er-holding","on":"er-read","faultOnly":true,"guard":"erased && time - erasedAt >= 5","effects":[{"set":"leak","to":"leak || (held && erased && time - erasedAt >= 5)"},{"emit":"er-served"}]},{"id":"er-serve-fresh","from":"er-holding","to":"er-holding","on":"er-read","guard":"!(erased && time - erasedAt >= 5)","effects":[{"set":"leak","to":"leak || (held && erased && time - erasedAt >= 5)"},{"emit":"er-served"}]},{"id":"er-revalidate","from":"er-holding","to":"er-dropped","on":"er-read","guard":"erased && time - erasedAt >= 5","effects":[{"set":"held","to":false},{"set":"leak","to":"leak || (held && erased && time - erasedAt >= 5)"},{"emit":"er-served"}]},{"id":"er-serve-dropped","from":"er-dropped","to":"er-dropped","on":"er-read","effects":[{"set":"leak","to":"leak || (held && erased && time - erasedAt >= 5)"},{"emit":"er-served"}]}]},
-    {"id":"erasure-copy-flow-impl","name":"Erased copy (implementation)","level":"implementation","subject":"copy-store","refines":"erasure-copy-flow","description":"One copy entry in the copy store. After the erasure commits, a read made once the erasure bound of 2 seconds (2000 ms, CPY-009, audience view class) has passed revalidates the copy and drops it before it answers; a purge drops it at once. The refinement reads one model tick as 400 ms (timeScale 400), so the model erasure bound of 5 ticks is the 2 seconds here.","initial":"eri-holding","instances":{"key":"copy-ref","storedIn":"rec-copy-entry","max":16},"transaction":{"scope":"transition","isolation":"serializable"},"variables":[{"name":"erased","type":"boolean","repr":"bool","initial":false},{"name":"erasedAt","type":"number","repr":"timestamp","initial":0},{"name":"held","type":"boolean","repr":"bool","initial":true}],"states":[{"id":"eri-holding","name":"Copy holds the data"},{"id":"eri-dropped","name":"Copy dropped","ignores":["er-erase-committed","er-purge-sent"]}],"transitions":[{"id":"eri-commit","from":"eri-holding","to":"eri-holding","on":"er-erase-committed","otherwise":true,"effects":[{"set":"erased","to":true},{"set":"erasedAt","to":"time"}]},{"id":"eri-purge","from":"eri-holding","to":"eri-dropped","on":"er-purge-sent","otherwise":true,"effects":[{"set":"held","to":false}]},{"id":"eri-revalidate","from":"eri-holding","to":"eri-dropped","on":"er-read","guard":"erased && time - erasedAt >= 2000","effects":[{"set":"held","to":false},{"emit":"er-served","to":"gateway"}]},{"id":"eri-serve","from":"eri-holding","to":"eri-holding","on":"er-read","otherwise":true,"effects":[{"emit":"er-served","to":"gateway"}]},{"id":"eri-serve-dropped","from":"eri-dropped","to":"eri-dropped","on":"er-read","otherwise":true,"effects":[{"emit":"er-served","to":"gateway"}]}],"refinement":{"states":{"eri-holding":"er-holding","eri-dropped":"er-dropped"},"variables":{"erased":"erased","erasedAt":"erasedAt / 400","held":"held","leak":"false"},"transitions":{"eri-commit":"er-commit","eri-purge":"er-purge","eri-revalidate":"er-revalidate","eri-serve":"er-serve-fresh","eri-serve-dropped":"er-serve-dropped"},"timeScale":400},"storage":{"record":"rec-copy-entry","key":"copy-ref","fields":{"erasedAt":"erased-at"}}},
+    {"id":"erasure-copy-flow-impl","name":"Erased copy (implementation)","level":"implementation","subject":"copy-store","refines":"erasure-copy-flow","description":"One copy entry in the copy store. After the erasure commits, a read made once the erasure bound of 2 seconds (2000 ms, CPY-009, audience view class) has passed revalidates the copy and drops it before it answers; a purge drops it at once. The refinement reads one model tick as 400 ms (timeScale 400), so the model erasure bound of 5 ticks is the 2 seconds here.","initial":"eri-holding","instances":{"key":"copy-ref","storedIn":"rec-copy-entry","max":16},"transaction":{"scope":"transition","isolation":"serializable"},"variables":[{"name":"erased","type":"boolean","repr":"bool","initial":false},{"name":"erasedAt","type":"number","repr":"timestamp","initial":0},{"name":"held","type":"boolean","repr":"bool","initial":true}],"states":[{"id":"eri-holding","name":"Copy holds the data"},{"id":"eri-dropped","name":"Copy dropped","ignores":["er-erase-committed","er-purge-sent"]}],"transitions":[{"id":"eri-commit","from":"eri-holding","to":"eri-holding","on":"er-erase-committed","otherwise":true,"effects":[{"set":"erased","to":true},{"set":"erasedAt","to":"time"}]},{"id":"eri-purge","from":"eri-holding","to":"eri-dropped","on":"er-purge-sent","otherwise":true,"effects":[{"set":"held","to":false}]},{"id":"eri-revalidate","from":"eri-holding","to":"eri-dropped","on":"er-read","guard":"erased && erasedAt <= time && time - erasedAt >= 2000","effects":[{"set":"held","to":false},{"emit":"er-served","to":"gateway"}]},{"id":"eri-serve","from":"eri-holding","to":"eri-holding","on":"er-read","otherwise":true,"effects":[{"emit":"er-served","to":"gateway"}]},{"id":"eri-serve-dropped","from":"eri-dropped","to":"eri-dropped","on":"er-read","otherwise":true,"effects":[{"emit":"er-served","to":"gateway"}]}],"refinement":{"states":{"eri-holding":"er-holding","eri-dropped":"er-dropped"},"variables":{"erased":"erased","erasedAt":"erasedAt / 400","held":"held","leak":"false"},"transitions":{"eri-commit":"er-commit","eri-purge":"er-purge","eri-revalidate":"er-revalidate","eri-serve":"er-serve-fresh","eri-serve-dropped":"er-serve-dropped"},"timeScale":400},"storage":{"record":"rec-copy-entry","key":"copy-ref","fields":{"erasedAt":"erased-at"}}},
     {"id":"subject-key-flow","name":"Subject key","subject":"key-service","initial":"sk-live","description":"The sealed personal fields of one subject. Destroying the subject key makes them unreadable, so a read after destruction returns only the sealed form.","variables":[{"name":"shredRequested","type":"boolean","initial":false},{"name":"plainAfterShred","type":"boolean","initial":false}],"states":[{"id":"sk-live","name":"Key held"},{"id":"sk-shredded","name":"Key destroyed","terminal":true}],"transitions":[{"id":"sk-destroy-ignored","from":"sk-live","to":"sk-live","on":"sk-shred","faultOnly":true,"description":"Defect: reports the key destroyed and keeps it.","effects":[{"set":"shredRequested","to":true},{"emit":"sk-destroyed"}]},{"id":"sk-destroy","from":"sk-live","to":"sk-shredded","on":"sk-shred","effects":[{"set":"shredRequested","to":true},{"emit":"sk-destroyed"}]},{"id":"sk-read-plain","from":"sk-live","to":"sk-live","on":"sk-read","effects":[{"set":"plainAfterShred","to":"plainAfterShred || shredRequested"},{"emit":"sk-plain"}]},{"id":"sk-read-sealed","from":"sk-shredded","to":"sk-shredded","on":"sk-read","effects":[{"emit":"sk-sealed"}]}]},
     {"id":"subject-key-flow-impl","name":"Subject key (implementation)","level":"implementation","subject":"key-service","refines":"subject-key-flow","description":"The key of one subject, held wrapped in the key service. Destroying it overwrites the wrapped key and records the time, and a read after that returns only the sealed form.","initial":"ski-live","instances":{"key":"key-id","storedIn":"rec-subject-key","max":16},"transaction":{"scope":"transition","isolation":"serializable"},"variables":[{"name":"keyState","type":"string","repr":"string","initial":"live"},{"name":"destroyedAt","type":"number","repr":"timestamp","initial":0}],"states":[{"id":"ski-live","name":"Key held"},{"id":"ski-shredded","name":"Key destroyed","terminal":true}],"transitions":[{"id":"ski-destroy","from":"ski-live","to":"ski-shredded","on":"sk-shred","otherwise":true,"effects":[{"set":"keyState","to":"'destroyed'"},{"set":"destroyedAt","to":"time"},{"emit":"sk-destroyed","to":"subject-rights-service"}]},{"id":"ski-read-plain","from":"ski-live","to":"ski-live","on":"sk-read","otherwise":true,"effects":[{"emit":"sk-plain","to":"runtime"}]},{"id":"ski-read-sealed","from":"ski-shredded","to":"ski-shredded","on":"sk-read","otherwise":true,"effects":[{"emit":"sk-sealed","to":"runtime"}]}],"refinement":{"states":{"ski-live":"sk-live","ski-shredded":"sk-shredded"},"variables":{"shredRequested":"keyState == 'destroyed'","plainAfterShred":"false"},"transitions":{"ski-destroy":"sk-destroy","ski-read-plain":"sk-read-plain","ski-read-sealed":"sk-read-sealed"}},"storage":{"record":"rec-subject-key","key":"key-id","fields":{"keyState":"key-state","destroyedAt":"destroyed-at"},"stateValues":{"ski-live":"live","ski-shredded":"destroyed"}}},
     {"id":"audit-chain-flow","name":"Audit chain under erasure","subject":"audit-log","initial":"ac-open","description":"An append-only chain. Erasing a principal seals its entries, and the hash of each entry is computed over the sealed form, so the chain stays valid.","variables":[{"name":"chainOk","type":"boolean","initial":true},{"name":"sealed","type":"number","initial":0}],"states":[{"id":"ac-open","name":"Open"}],"transitions":[{"id":"ac-append","from":"ac-open","to":"ac-open","on":"au-append","effects":[{"emit":"au-appended"}]},{"id":"ac-rewrite","from":"ac-open","to":"ac-open","on":"au-erase","faultOnly":true,"description":"Defect: rewrites the entry in place, so the link of the next entry no longer matches.","effects":[{"set":"chainOk","to":false},{"emit":"au-sealed"}]},{"id":"ac-seal","from":"ac-open","to":"ac-open","on":"au-erase","effects":[{"set":"sealed","to":"sealed + 1"},{"emit":"au-sealed"}]}]},
@@ -3773,7 +3977,45 @@
     {"id":"erasure-purge-lost","name":"An erasure whose purge is lost","description":"The copy keeps its value. A read inside the bound is served from it. A read after the bound revalidates and is answered without personal data.","behaviors":["erasure-copy-flow"],"faults":["erasure-purge-dropped"],"steps":[{"at":0,"event":"er-erase-committed"},{"at":1,"event":"er-purge-sent"},{"at":2,"event":"er-read","note":"Within the bound."},{"at":8,"event":"er-read","note":"After the bound."}]},
     {"id":"erasure-purge-lost-impl","name":"An erasure whose purge is lost (implementation)","description":"The purge sent half a second after the erasure is lost, and the copy keeps its value. A read at 1 second, inside the bound of 2 seconds, is served from it. A read at 4 seconds revalidates and is answered without personal data. Times are in milliseconds.","behaviors":["erasure-copy-flow-impl"],"faults":["erasure-purge-dropped"],"steps":[{"at":0,"event":"er-erase-committed","payload":{"copy-ref":"copy-1"}},{"at":500,"event":"er-purge-sent","payload":{"copy-ref":"copy-1"}},{"at":1000,"event":"er-read","note":"Within the bound.","payload":{"copy-ref":"copy-1"}},{"at":4000,"event":"er-read","note":"After the bound of 2 seconds.","payload":{"copy-ref":"copy-1"}}],"routes":[{"event":"er-erase-committed","behavior":"erasure-copy-flow-impl","by":"key","field":"copy-ref"},{"event":"er-purge-sent","behavior":"erasure-copy-flow-impl","by":"key","field":"copy-ref"},{"event":"er-read","behavior":"erasure-copy-flow-impl","by":"key","field":"copy-ref"}],"timeUnit":"ms"},
     {"id":"subject-shredded","name":"A subject key is destroyed","description":"After destruction a read gets only the sealed form.","behaviors":["subject-key-flow"],"steps":[{"at":0,"event":"sk-shred"},{"at":2,"event":"sk-read"}]},
-    {"id":"subject-shredded-impl","name":"A subject key is destroyed (implementation)","description":"After destruction a read gets only the sealed form.","behaviors":["subject-key-flow-impl"],"steps":[{"at":0,"event":"sk-shred","payload":{"key-id":"key-1"}},{"at":2,"event":"sk-read","payload":{"key-id":"key-1"}}],"routes":[{"event":"sk-shred","behavior":"subject-key-flow-impl","by":"key","field":"key-id"},{"event":"sk-read","behavior":"subject-key-flow-impl","by":"key","field":"key-id"}]},
+    {
+      "id": "subject-shredded-impl",
+      "name": "A subject key is destroyed (implementation)",
+      "description": "After destruction a read gets only the sealed form.",
+      "behaviors": [
+        "subject-key-flow-impl"
+      ],
+      "steps": [
+        {
+          "at": 0,
+          "event": "sk-shred",
+          "payload": {
+            "key-id": "key-1"
+          }
+        },
+        {
+          "at": 2,
+          "event": "sk-read",
+          "payload": {
+            "key-id": "key-1"
+          }
+        }
+      ],
+      "routes": [
+        {
+          "event": "sk-shred",
+          "behavior": "subject-key-flow-impl",
+          "by": "key",
+          "field": "key-id"
+        },
+        {
+          "event": "sk-read",
+          "behavior": "subject-key-flow-impl",
+          "by": "key",
+          "field": "key-id"
+        }
+      ],
+      "timeUnit": "ms"
+    },
     {"id":"audit-erasure","name":"An erasure seals audit entries","description":"Entries are appended, the entries of the principal are sealed, and the chain continues.","behaviors":["audit-chain-flow"],"steps":[{"at":0,"event":"au-append"},{"at":1,"event":"au-erase"},{"at":2,"event":"au-append"}]},
     {"id":"audit-erasure-impl","name":"An erasure seals audit entries (implementation)","description":"Entries are appended, the entries of the principal are sealed, and the chain continues.","behaviors":["audit-chain-flow-impl"],"steps":[{"at":0,"event":"au-append","payload":{"tenant-id":"acme"}},{"at":1,"event":"au-erase","payload":{"tenant-id":"acme"}},{"at":2,"event":"au-append","payload":{"tenant-id":"acme"}}],"routes":[{"event":"au-append","behavior":"audit-chain-flow-impl","by":"key","field":"tenant-id"},{"event":"au-erase","behavior":"audit-chain-flow-impl","by":"key","field":"tenant-id"}]},
     {"id":"anomaly-then-operation","name":"An anomaly, then an operation","description":"The anomaly halts the agent, and the operation that follows is refused.","behaviors":["agent-halt-flow"],"steps":[{"at":0,"event":"ah-anomaly"},{"at":2,"event":"ah-operation","note":"The agent asks again after the halt."}]},
@@ -3821,7 +4063,48 @@
     {"id":"intent-commit-confirmation-delayed","name":"A commit confirmation delayed before publication","description":"The intent is committed, and the confirmation of the commit is delayed by 4 ticks.","behaviors":["commit-flow"],"faults":["commit-confirmation-delayed"],"steps":[{"at":0,"event":"rt-intent"}]},
     {"id":"intent-commit-confirmation-delayed-impl","name":"A commit confirmation delayed before publication (implementation)","description":"The intent is committed, and the confirmation of the commit is delayed by 4 ticks.","behaviors":["commit-flow-impl"],"faults":["commit-confirmation-delayed"],"steps":[{"at":0,"event":"rt-intent","payload":{"correlation":"c-1"}}],"routes":[{"event":"rt-intent","behavior":"commit-flow-impl","by":"key","field":"correlation"}],"timeUnit":"ms"},
     {"id":"read-in-transit-past-shred","name":"A read delayed past the key destruction","description":"A read is sent at tick 0 and delayed by 5 ticks; the key is destroyed at tick 1.","behaviors":["subject-key-flow"],"faults":["read-delayed-past-shred"],"steps":[{"at":0,"event":"sk-read"},{"at":1,"event":"sk-shred"}]},
-    {"id":"read-in-transit-past-shred-impl","name":"A read delayed past the key destruction (implementation)","description":"A read is sent at tick 0 and delayed by 5 ticks; the key is destroyed at tick 1.","behaviors":["subject-key-flow-impl"],"faults":["read-delayed-past-shred"],"steps":[{"at":0,"event":"sk-read","payload":{"key-id":"key-1"}},{"at":1,"event":"sk-shred","payload":{"key-id":"key-1"}}],"routes":[{"event":"sk-shred","behavior":"subject-key-flow-impl","by":"key","field":"key-id"},{"event":"sk-read","behavior":"subject-key-flow-impl","by":"key","field":"key-id"}]},
+    {
+      "id": "read-in-transit-past-shred-impl",
+      "name": "A read delayed past the key destruction (implementation)",
+      "description": "A read is sent at tick 0 and delayed by 5 ticks; the key is destroyed at tick 1.",
+      "behaviors": [
+        "subject-key-flow-impl"
+      ],
+      "faults": [
+        "read-delayed-past-shred"
+      ],
+      "steps": [
+        {
+          "at": 0,
+          "event": "sk-read",
+          "payload": {
+            "key-id": "key-1"
+          }
+        },
+        {
+          "at": 1,
+          "event": "sk-shred",
+          "payload": {
+            "key-id": "key-1"
+          }
+        }
+      ],
+      "routes": [
+        {
+          "event": "sk-shred",
+          "behavior": "subject-key-flow-impl",
+          "by": "key",
+          "field": "key-id"
+        },
+        {
+          "event": "sk-read",
+          "behavior": "subject-key-flow-impl",
+          "by": "key",
+          "field": "key-id"
+        }
+      ],
+      "timeUnit": "ms"
+    },
     {"id":"cv-confirmation-in-transit","name":"An apply that arrives before a delayed confirmation","description":"The change is proposed; the confirmation is sent at tick 1 but delayed by 3 ticks; an apply at tick 2 is refused and one at tick 5 is accepted.","behaviors":["cv-change-flow"],"faults":["cv-confirmation-delayed"],"steps":[{"at":0,"event":"cv-proposed"},{"at":1,"event":"cv-confirmed"},{"at":2,"event":"cv-apply-requested"},{"at":5,"event":"cv-apply-requested"}]},
     {"id":"cv-confirmation-in-transit-impl","name":"An apply that arrives before a delayed confirmation (implementation)","description":"The change is proposed; the confirmation is sent at tick 1 but delayed by 3 ticks; an apply at tick 2 is refused and one at tick 5 is accepted. The same scenario run on the implementation machines.","behaviors":["cv-change-flow-impl"],"faults":["cv-confirmation-delayed"],"steps":[{"at":0,"event":"cv-proposed"},{"at":1,"event":"cv-confirmed"},{"at":2,"event":"cv-apply-requested"},{"at":5,"event":"cv-apply-requested"}]},
     {"id":"cv-run-in-transit-past-withdrawal","name":"A run delayed past the withdrawal of its permission","description":"The run is requested at tick 1 and delayed by 3 ticks; the permission is withdrawn at tick 2.","behaviors":["cv-authority-flow"],"faults":["cv-run-delayed-past-withdrawal"],"steps":[{"at":1,"event":"cv-operation-run"},{"at":2,"event":"cv-permission-withdrawn"}]},
@@ -4167,7 +4450,72 @@
     {"id":"rec-challenge","name":"Sign-in challenge","owner":"identity-service","key":["challenge-id"],"fields":[{"name":"challenge-id","type":"challenge-id"},{"name":"kind","type":"challenge-kind"},{"name":"token-hash","type":"hash","personal":"credential"},{"name":"principal-id","type":"principal-id","refersTo":"principal","role":"subject","constraints":{"pattern":"^[A-Za-z0-9_:.-]+$","maxLength":96},"onDelete":"restrict"},{"name":"browser-binding","type":"hash"},{"name":"expires-at","type":"timestamp"},{"name":"consumed","type":"bool"},{"name":"state","type":"string"},{"name":"sessions","type":"u32","optional":true},{"name":"expected-state","type":"string","optional":true},{"name":"federated-sessions","type":"u32","optional":true}],"retention":"Removed at its expiry or at its consumption, whichever comes first. The principal is named only when the address has an account (PRV-365).","erasure":{"point":"its expiry or its consumption, whichever comes first"},"schemaVersion":1},
     {"id":"rec-grant","name":"Grant","owner":"identity-service","key":["grant-id"],"fields":[{"name":"grant-id","type":"grant-id"},{"name":"principal-id","type":"principal-id","refersTo":"principal","role":"subject","constraints":{"pattern":"^[A-Za-z0-9_:.-]+$","maxLength":96},"onDelete":"restrict"},{"name":"delegator","type":"principal-id","refersTo":"principal","role":"party","constraints":{"pattern":"^[A-Za-z0-9_:.-]+$","maxLength":96},"optional":true,"onDelete":"restrict"},{"name":"scopes","type":"list<string>"},{"name":"revoked-at","type":"timestamp","optional":true},{"name":"expires-at","type":"timestamp"}],"retention":"Until revoked or its expiry passes, then removed with its last token.","schemaVersion":1},
     {"id":"rec-schema","name":"Tenant schema","owner":"runtime","key":["schema-version"],"fields":[{"name":"schema-version","type":"u64"},{"name":"definition","type":"schema"}],"retention":"Every version is kept in the schema history.","schemaVersion":1},
-    {"id":"rec-content","name":"Content record","owner":"runtime","key":["object","record-id"],"fields":[{"name":"object","type":"object-type-id","constraints":{"pattern":"^[a-z][a-z0-9_]*$","maxLength":64}},{"name":"record-id","type":"record-id"},{"name":"version","type":"u64"},{"name":"status","type":"workflow-state"},{"name":"fields","type":"value-map","personal":"other"},{"name":"public-fields","type":"value-map"},{"name":"created-by","type":"principal-id","refersTo":"principal","role":"party","constraints":{"pattern":"^[A-Za-z0-9_:.-]+$","maxLength":96},"onDelete":"restrict"},{"name":"changed-at","type":"timestamp","optional":true},{"name":"held","type":"u64","optional":true},{"name":"stored-at","type":"timestamp","optional":true},{"name":"copy-state","type":"string"}],"retention":"Until deleted by the tenant or removed by its retention rule (PRV-356), with every version (CMS-006).","erasure":{"point":"its deletion by the tenant, or the end of its retention rule (PRV-356)"},"schemaVersion":1},
+    {"id":"rec-content","name":"Content record","owner":"runtime","key":["object","record-id"],"fields":[
+        {
+          "name": "object",
+          "type": "object-type-id",
+          "constraints": {
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "maxLength": 64
+          }
+        },
+        {
+          "name": "record-id",
+          "type": "record-id"
+        },
+        {
+          "name": "version",
+          "type": "u64"
+        },
+        {
+          "name": "status",
+          "type": "workflow-state"
+        },
+        {
+          "name": "fields",
+          "type": "value-map",
+          "personal": "other"
+        },
+        {
+          "name": "public-fields",
+          "type": "value-map"
+        },
+        {
+          "name": "created-by",
+          "type": "principal-id",
+          "refersTo": "principal",
+          "role": "party",
+          "constraints": {
+            "pattern": "^[A-Za-z0-9_:.-]+$",
+            "maxLength": 96
+          },
+          "onDelete": "restrict"
+        },
+        {
+          "name": "changed-at",
+          "type": "timestamp",
+          "optional": true
+        },
+        {
+          "name": "held",
+          "type": "u64",
+          "optional": true
+        },
+        {
+          "name": "stored-at",
+          "type": "timestamp",
+          "optional": true
+        },
+        {
+          "name": "copy-state",
+          "type": "string"
+        },
+        {
+          "name": "stored",
+          "type": "bool",
+          "optional": true
+        }
+      ],"retention":"Until deleted by the tenant or removed by its retention rule (PRV-356), with every version (CMS-006).","erasure":{"point":"its deletion by the tenant, or the end of its retention rule (PRV-356)"},"schemaVersion":1},
     {"id":"rec-event","name":"Domain event","owner":"runtime","key":["seq"],"fields":[{"name":"seq","type":"u64"},{"name":"revision","type":"u64"},{"name":"body","type":"event-body","personal":"other"},{"name":"actor","type":"principal-id","refersTo":"principal","role":"party","constraints":{"pattern":"^[A-Za-z0-9_:.-]+$","maxLength":96},"onDelete":"restrict"},{"name":"correlation","type":"correlation-id"},{"name":"pending","type":"bool","optional":true},{"name":"state","type":"string"}],"retention":"Within the restore window the tenant chooses (D-522), then truncated after a snapshot that carries the state hash at its start.","erasure":{"point":"truncation after the snapshot that closes the restore window the tenant chose (D-522)"},"schemaVersion":1},
     {"id":"rec-job","name":"Job","owner":"automation-worker","key":["job-id"],"fields":[{"name":"job-id","type":"job-id"},{"name":"due-at","type":"timestamp"},{"name":"state","type":"job-state"},{"name":"attempt","type":"u64"},{"name":"lease-token","type":"u64"},{"name":"idempotency-key","type":"string"},{"name":"completions","type":"u32","optional":true},{"name":"accepted-token","type":"u64","optional":true}],"retention":"Thirty days after its outcome.","schemaVersion":1},
     {"id":"rec-schedule","name":"Schedule","owner":"automation-worker","key":["schedule-id"],"fields":[{"name":"schedule-id","type":"schedule-id"},{"name":"rule","type":"recurrence"},{"name":"paused","type":"bool"},{"name":"next-due","type":"timestamp"}],"retention":"Until removed by the tenant.","schemaVersion":1},
@@ -4216,7 +4564,36 @@
     {"id":"rec-limit-counter","name":"limit counter","owner":"limit-store","key":["limit-key"],"fields":[{"name":"limit-key","type":"string","constraints":{"maxLength":128}},{"name":"failures","type":"u64"},{"name":"closed-at","type":"timestamp","optional":true},{"name":"throttle-state","type":"string"},{"name":"failures-a","type":"u64","optional":true},{"name":"failures-b","type":"u64","optional":true}],"retention":"Kept while the window of the limit is open and dropped when it expires.","schemaVersion":1},
     {"id":"rec-copy-entry","name":"copy entry","owner":"copy-store","key":["copy-ref"],"fields":[{"name":"copy-ref","type":"reference"},{"name":"erased","type":"bool"},{"name":"erased-at","type":"timestamp","optional":true},{"name":"held","type":"bool"},{"name":"state","type":"string"}],"retention":"Held until the copy is dropped by a purge or by its lifetime.","schemaVersion":1},
     {"id":"rec-trigger-chain","name":"trigger chain","owner":"automation-worker","key":["correlation"],"fields":[{"name":"correlation","type":"correlation-id"},{"name":"accepted","type":"u64"}],"retention":"Kept as long as the jobs the chain created.","schemaVersion":1},
-    {"id":"rec-session-copy","name":"session copy","owner":"gateway","key":["session-id"],"fields":[{"name":"session-id","type":"session-id","refersTo":"rec-session","onDelete":"cascade"},{"name":"checked-at","type":"timestamp"},{"name":"valid","type":"bool","optional":true},{"name":"session-state","type":"string"},{"name":"outage-state","type":"string"}],"retention":"Held while the session is in use at the gateway and dropped with it.","schemaVersion":1},
+    {"id":"rec-session-copy","name":"session copy","owner":"gateway","key":["session-id"],"fields":[
+        {
+          "name": "session-id",
+          "type": "session-id",
+          "refersTo": "rec-session",
+          "onDelete": "cascade"
+        },
+        {
+          "name": "checked-at",
+          "type": "timestamp"
+        },
+        {
+          "name": "valid",
+          "type": "bool",
+          "optional": true
+        },
+        {
+          "name": "session-state",
+          "type": "string"
+        },
+        {
+          "name": "outage-state",
+          "type": "string"
+        },
+        {
+          "name": "checked",
+          "type": "bool",
+          "optional": true
+        }
+      ],"retention":"Held while the session is in use at the gateway and dropped with it.","schemaVersion":1},
     {"id":"rec-preview-link","name":"Preview link","owner":"gateway","key":["link-id"],"fields":[{"name":"link-id","type":"link-id"},{"name":"expiresAt","type":"timestamp"},{"name":"shown","type":"u32"},{"name":"state","type":"string"}],"retention":"As long as the preview link it tracks exists.","schemaVersion":1},
     {"id":"rec-audit-chain","name":"audit chain","owner":"audit-log","key":["tenant-id"],"fields":[{"name":"tenant-id","type":"tenant-id","refersTo":"rec-tenant","constraints":{"pattern":"^[a-z][a-z0-9_]*$","maxLength":64},"onDelete":"cascade"},{"name":"head-seq","type":"u64"},{"name":"sealed","type":"u64"}],"retention":"Kept as long as the audit entries of the tenant.","schemaVersion":1},
     {"id":"rec-outbox-entry","name":"outbox entry","owner":"runtime","key":["correlation"],"fields":[{"name":"correlation","type":"correlation-id"},{"name":"committed","type":"bool"},{"name":"published","type":"bool"},{"name":"state","type":"string"}],"retention":"Dropped once the event is published.","schemaVersion":1},
