@@ -14,7 +14,7 @@ pub mod oidc_callback_flow_impl {}
 
 /// How events reach machine `session-authority-flow-impl` (Session authority (implementation)).
 ///
-/// The specification does not say how these events arrive, so nothing is generated for them: `sr-revoked`, `sr-lookup`.
+/// The specification does not say how these events arrive, so nothing is generated for them: `sr-revoked`, `sr-lookup`, `sr-authenticated`, `sr-password-changed`, `sr-recovered`, `sr-signed-out`, `sr-deactivated`, `sr-owner-revoked`, `sr-list`.
 pub mod session_authority_flow_impl {}
 
 /// How events reach machine `gateway-session-flow-impl` (Gateway session copy (implementation)).
@@ -107,7 +107,7 @@ pub mod trigger_chain_flow_impl {}
 
 /// How events reach machine `gateway-outage-flow-impl` (Gateway during identity outage (implementation)).
 ///
-/// The specification does not say how these events arrive, so nothing is generated for them: `sr-request`, `sr-lookup-answer`.
+/// The specification does not say how these events arrive, so nothing is generated for them: `sr-request`, `sr-lookup-answer`, `sr-public-request`.
 pub mod gateway_outage_flow_impl {}
 
 /// How events reach machine `erasure-copy-flow-impl` (Erased copy (implementation)).
@@ -433,3 +433,183 @@ pub mod template_proposal_flow_impl {}
 ///
 /// The specification does not say how these events arrive, so nothing is generated for them: `im-record-imported`, `im-page-imported`.
 pub mod import_flow_impl {}
+
+/// How events reach machine `samlv-flow-impl` (SAML response checks (implementation)).
+///
+/// The specification does not say how these events arrive, so nothing is generated for them: `samlv-presented`.
+pub mod samlv_flow_impl {}
+
+/// How events reach machine `oidcv-flow-impl` (OpenID Connect token checks (implementation)).
+///
+/// The specification does not say how these events arrive, so nothing is generated for them: `oidcv-presented`.
+pub mod oidcv_flow_impl {}
+
+/// How events reach machine `oidcs-flow-impl` (OpenID Connect sign-in start (implementation)).
+///
+/// The specification does not say how these events arrive, so nothing is generated for them: `oidcs-presented`.
+pub mod oidcs_flow_impl {}
+
+/// How events reach machine `fedp-flow-impl` (Sign-in method for a bound domain (implementation)).
+///
+/// The specification does not say how these events arrive, so nothing is generated for them: `fedp-presented`.
+pub mod fedp_flow_impl {}
+
+/// How events reach machine `fedc-flow-impl` (Principal creation at first federated sign-in (implementation)).
+///
+/// The specification does not say how these events arrive, so nothing is generated for them: `fedc-presented`.
+pub mod fedc_flow_impl {}
+
+/// How events reach machine `fedl-flow-impl` (Linking a federated identity (implementation)).
+///
+/// The specification does not say how these events arrive, so nothing is generated for them: `fedl-presented`.
+pub mod fedl_flow_impl {}
+
+/// How events reach machine `prov-flow-impl` (Provisioning requests (implementation)).
+///
+/// The specification does not say how these events arrive, so nothing is generated for them: `prov-presented`.
+pub mod prov_flow_impl {}
+
+/// How events reach machine `idpa-flow-impl` (Calls to an identity provider (implementation)).
+///
+/// The specification does not say how these events arrive, so nothing is generated for them: `idpa-presented`.
+pub mod idpa_flow_impl {}
+
+/// How events reach machine `tokiss-flow-impl` (Access token issue (implementation)).
+///
+/// The specification does not say how these events arrive, so nothing is generated for them: `tokiss-presented`.
+pub mod tokiss_flow_impl {}
+
+/// How events reach machine `tokact-flow-impl` (Agent token use (implementation)).
+///
+/// The specification does not say how these events arrive, so nothing is generated for them: `tokact-presented`.
+pub mod tokact_flow_impl {}
+
+/// How events reach machine `tokint-flow-impl` (Token introspection (implementation)).
+///
+/// The specification does not say how these events arrive, so nothing is generated for them: `tokint-presented`.
+pub mod tokint_flow_impl {}
+
+/// How events reach machine `stepup-flow-impl` (Sensitive operations (implementation)).
+///
+/// The specification does not say how these events arrive, so nothing is generated for them: `stepup-presented`.
+pub mod stepup_flow_impl {}
+
+/// How events reach machine `facg-flow-impl` (Sign-in methods under a second-factor realm (implementation)).
+///
+/// The specification does not say how these events arrive, so nothing is generated for them: `facg-presented`.
+pub mod facg_flow_impl {}
+
+/// How events reach machine `realm-flow-impl` (Realm policy that turns password sign-in off (implementation)).
+///
+/// The specification does not say how these events arrive, so nothing is generated for them: `realm-presented`.
+pub mod realm_flow_impl {}
+
+/// How events reach machine `auditk-flow-impl` (Audit entry retention (implementation)).
+///
+/// The specification does not say how these events arrive, so nothing is generated for them: `auditk-presented`.
+pub mod auditk_flow_impl {}
+
+/// How events reach machine `ppreg-flow-impl` (Passkey registration (implementation)).
+///
+/// The specification does not say how these events arrive, so nothing is generated for them: `ppreg-presented`.
+pub mod ppreg_flow_impl {}
+
+/// How events reach machine `ppauth-flow-impl` (Passkey assertion (implementation)).
+///
+/// The specification does not say how these events arrive, so nothing is generated for them: `ppauth-presented`.
+pub mod ppauth_flow_impl {}
+
+/// How events reach machine `asrt-flow-impl` (Caller identity assertion (implementation)).
+///
+/// The specification does not say how these events arrive, so nothing is generated for them: `asrt-presented`.
+pub mod asrt_flow_impl {}
+
+/// How events reach machine `session-lifetime-flow-impl` (Session lifetime (implementation)).
+///
+/// The specification does not say how these events arrive, so nothing is generated for them: `sl-used`, `sl-issued`.
+pub mod session_lifetime_flow_impl {}
+
+/// How events reach machine `second-factor-flow-impl` (Second factor (implementation)).
+///
+/// The specification does not say how these events arrive, so nothing is generated for them: `sf-primary`, `sf-second`.
+pub mod second_factor_flow_impl {}
+
+/// How events reach machine `recovery-flow-impl` (Account recovery (implementation)).
+///
+/// The specification does not say how these events arrive, so nothing is generated for them: `rc-requested`, `rc-completion-asked`, `rc-signed-in`.
+pub mod recovery_flow_impl {}
+
+/// How events reach machine `code-spend-flow-impl` (One-time code (implementation)).
+///
+/// The specification does not say how these events arrive, so nothing is generated for them: `cs-presented`.
+pub mod code_spend_flow_impl {}
+
+/// How events reach machine `mfp-limit-flow-impl` (Second-factor prompt limit (implementation)).
+///
+/// The specification does not say how these events arrive, so nothing is generated for them: `mfp-requested`, `mfp-tightened`.
+pub mod mfp_limit_flow_impl {}
+
+/// How events reach machine `lea-limit-flow-impl` (Emailed-link limit per address (implementation)).
+///
+/// The specification does not say how these events arrive, so nothing is generated for them: `lea-requested`, `lea-tightened`.
+pub mod lea_limit_flow_impl {}
+
+/// How events reach machine `leb-limit-flow-impl` (Emailed-link limit per browser (implementation)).
+///
+/// The specification does not say how these events arrive, so nothing is generated for them: `leb-requested`, `leb-tightened`.
+pub mod leb_limit_flow_impl {}
+
+/// How events reach machine `sus-limit-flow-impl` (Sign-up limit per source (implementation)).
+///
+/// The specification does not say how these events arrive, so nothing is generated for them: `sus-requested`, `sus-tightened`.
+pub mod sus_limit_flow_impl {}
+
+/// How events reach machine `tcl-limit-flow-impl` (Token request limit per client (implementation)).
+///
+/// The specification does not say how these events arrive, so nothing is generated for them: `tcl-requested`, `tcl-tightened`.
+pub mod tcl_limit_flow_impl {}
+
+/// How events reach machine `realm-rate-flow-impl` (Realm failure rate (implementation)).
+///
+/// The specification does not say how these events arrive, so nothing is generated for them: `rl-failed`, `rl-attempt`, `rl-tightened`.
+pub mod realm_rate_flow_impl {}
+
+/// How events reach machine `idp-outage-flow-impl` (Identity provider outage (implementation)).
+///
+/// The specification does not say how these events arrive, so nothing is generated for them: `io-outage`, `io-sign-in`.
+pub mod idp_outage_flow_impl {}
+
+/// How events reach machine `provider-keys-flow-impl` (Provider signing keys (implementation)).
+///
+/// The specification does not say how these events arrive, so nothing is generated for them: `jw-token`.
+pub mod provider_keys_flow_impl {}
+
+/// How events reach machine `idp-offer-flow-impl` (Providers offered on the sign-in page (implementation)).
+///
+/// The specification does not say how these events arrive, so nothing is generated for them: `po-page`.
+pub mod idp_offer_flow_impl {}
+
+/// How events reach machine `first-sign-in-role-flow-impl` (Role at a first federated sign-in (implementation)).
+///
+/// The specification does not say how these events arrive, so nothing is generated for them: `fr-created`.
+pub mod first_sign_in_role_flow_impl {}
+
+/// How events reach machine `token-verifier-flow-impl` (Token verifier copy of a grant (implementation)).
+///
+/// The specification does not say how these events arrive, so nothing is generated for them: `tg-notice`, `tg-presented`.
+pub mod token_verifier_flow_impl {}
+
+/// How events reach machine `signing-key-flow-impl` (Signing keys (implementation)).
+///
+/// The specification does not say how these events arrive, so nothing is generated for them: `sk-rotated`, `sk-compromised`, `sk-token`.
+pub mod signing_key_flow_impl {}
+
+/// How events reach machine `signup-notice-flow-impl` (Sign-up and recovery responses (implementation)).
+///
+/// The specification does not say how these events arrive, so nothing is generated for them: `su-requested`.
+pub mod signup_notice_flow_impl {}
+
+/// How events reach machine `new-device-flow-impl` (Sign-in from a new source or device (implementation)).
+///
+/// The specification does not say how these events arrive, so nothing is generated for them: `nd-signed-in`.
+pub mod new_device_flow_impl {}
