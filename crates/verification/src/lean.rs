@@ -465,6 +465,13 @@ fn lake(lean_dir: &Path, args: &[&str]) -> Result<(bool, String), String> {
 
 /// Run the Lean model on a scenario file inside `lean_dir` and return what it prints.
 pub fn model_output(lean_dir: &Path, relative_fixture: &str) -> Result<String, String> {
+    // Build first, on its own: on a cold build `lake exe` prints Lake's progress lines
+    // ("✔ [2/8] Built Strata.Model") into the same output as the program, and those lines would
+    // be compared with the kernel's output as if the model had written them.
+    let (built, log) = lake(lean_dir, &["build", "strata_model"])?;
+    if !built {
+        return Err(format!("the Lean model failed to build:\n{log}"));
+    }
     let (ok, text) = lake(lean_dir, &["exe", "strata_model", relative_fixture])?;
     if ok {
         Ok(text)
