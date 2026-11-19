@@ -1466,3 +1466,244 @@ async fn authorship_is_shown_to_the_author_only() {
         Json::Null
     );
 }
+
+// ---------------------------------------------------------------------------------------------
+// The outbox publisher, which is the generated machine `arc-outbox-delivery-flow-impl` on the
+// runtime's System: a commit offers it `rt-committed` and then the kick (`arc-ob-publish-now`);
+// its own timer is the 500 ms sweep; what it emits makes the backend publish the outbox.
+// ---------------------------------------------------------------------------------------------
+
+/// A socket subscribed to every event the session may read, past its welcome.
+async fn listening(backend: &Backend, site: &str, session: &str) -> (Socket, u64) {
+    let mut socket = backend.socket(site, Some(session)).await;
+    let welcome = next(&mut socket).await;
+    let head = welcome["head"].as_u64().unwrap();
+    say(
+        &mut socket,
+        json!({ "type": "subscribe", "req": "r1", "sub": "all" }),
+    )
+    .await;
+    assert_eq!(next(&mut socket).await["type"], "ok");
+    (socket, head)
+}
+
+/// Create a category as the session's owner; the status of the reply.
+async fn add_category(backend: &Backend, site: &str, session: &str, slug: &str) -> u16 {
+    backend
+        .call(
+            site,
+            Some(session),
+            "/internal/mutate",
+            json!({ "op": "create", "object": "category", "fields": { "name": slug, "slug": slug } }),
+        )
+        .await
+        .0
+}
+
+/// The sequence number of the next event frame, or `None` when none comes within `wait`.
+async fn event_within(socket: &mut Socket, wait: Duration) -> Option<u64> {
+    let deadline = tokio::time::Instant::now() + wait;
+    loop {
+        let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+        let frame = tokio::time::timeout(left, socket.next()).await.ok()?;
+        if let Message::Text(text) = frame?.ok()? {
+            let message: Json = serde_json::from_str(&text).unwrap();
+            if message["type"] == "event" {
+                return message["seq"].as_u64();
+            }
+        }
+    }
+}
+
+async fn dev_kick(backend: &Backend, kick: bool) {
+    let (status, body) = backend
+        .call(
+            "fieldnotes",
+            None,
+            "/internal/dev/outbox",
+            json!({ "kick": kick }),
+        )
+        .await;
+    assert_eq!(status, 200, "{body}");
+}
+
+#[tokio::test]
+async fn an_event_is_published_only_after_its_commit() {
+    let store = Arc::new(MemoryStore::new());
+    let backend = start_on(store.clone(), |_| {}).await;
+    let tenant = TenantId::new("fieldnotes").unwrap();
+    let admin = backend
+        .login("fieldnotes", "admin", "strata-dev-admin")
+        .await;
+    let (mut socket, head) = listening(&backend, "fieldnotes", &admin).await;
+    assert_eq!(
+        event_within(&mut socket, Duration::from_millis(700)).await,
+        None,
+        "nothing is published while nothing is committed"
+    );
+
+    // A refused write commits nothing, so nothing is published for it.
+    let (status, _) = backend
+        .call(
+            "fieldnotes",
+            Some(&admin),
+            "/internal/mutate",
+            json!({ "op": "create", "object": "no-such-object", "fields": {} }),
+        )
+        .await;
+    assert_ne!(status, 200);
+    assert_eq!(
+        event_within(&mut socket, Duration::from_millis(700)).await,
+        None,
+        "a rejected write publishes nothing"
+    );
+
+    // An accepted one is published, and what is published is already in the store's log.
+    assert_eq!(
+        add_category(&backend, "fieldnotes", &admin, "after-commit").await,
+        200
+    );
+    let seq = event_within(&mut socket, Duration::from_secs(3))
+        .await
+        .expect("the committed event is published");
+    assert_eq!(seq, head + 1);
+    let stored = store.events_after(&tenant, head, 100).unwrap();
+    assert!(
+        stored.iter().any(|event| event.seq == seq),
+        "the event was committed before it was published"
+    );
+}
+
+#[tokio::test]
+async fn every_commit_kicks_the_publisher_at_once() {
+    let backend = start().await;
+    let admin = backend
+        .login("fieldnotes", "admin", "strata-dev-admin")
+        .await;
+    let (mut socket, head) = listening(&backend, "fieldnotes", &admin).await;
+    for i in 1..=4u64 {
+        let status = add_category(&backend, "fieldnotes", &admin, &format!("kick-{i}")).await;
+        assert_eq!(status, 200);
+        // The sweep is 500 ms after the commit, so an event inside 350 ms came from the kick.
+        let seq = event_within(&mut socket, Duration::from_millis(350)).await;
+        assert_eq!(
+            seq,
+            Some(head + i),
+            "commit {i} was published without waiting"
+        );
+    }
+}
+
+#[tokio::test]
+async fn the_sweep_publishes_what_a_missed_kick_left() {
+    let backend = start().await;
+    let admin = backend
+        .login("fieldnotes", "admin", "strata-dev-admin")
+        .await;
+    let (mut socket, head) = listening(&backend, "fieldnotes", &admin).await;
+    dev_kick(&backend, false).await;
+    let committed = tokio::time::Instant::now();
+    assert_eq!(
+        add_category(&backend, "fieldnotes", &admin, "no-kick").await,
+        200
+    );
+    assert_eq!(
+        event_within(&mut socket, Duration::from_millis(250)).await,
+        None,
+        "with no kick, the event waits for the sweep"
+    );
+    let seq = event_within(&mut socket, Duration::from_secs(3))
+        .await
+        .expect("the sweep publishes it");
+    assert_eq!(seq, head + 1);
+    assert!(
+        committed.elapsed() >= Duration::from_millis(400),
+        "the sweep is 500 ms after the commit, not earlier: {:?}",
+        committed.elapsed()
+    );
+
+    // Kicks are back: the next commit is published at once.
+    dev_kick(&backend, true).await;
+    assert_eq!(
+        add_category(&backend, "fieldnotes", &admin, "kick-again").await,
+        200
+    );
+    assert_eq!(
+        event_within(&mut socket, Duration::from_millis(350)).await,
+        Some(head + 2)
+    );
+}
+
+#[tokio::test]
+async fn no_event_is_published_twice() {
+    let backend = start().await;
+    let admin = backend
+        .login("fieldnotes", "admin", "strata-dev-admin")
+        .await;
+    let (mut socket, head) = listening(&backend, "fieldnotes", &admin).await;
+    // Commits at the same moment, each kicking, with the sweep timers of the earlier ones still
+    // set: the publisher is offered the same events many times over.
+    let statuses = futures_util::future::join_all(
+        (0..8).map(|i| add_category(&backend, "fieldnotes", &admin, &format!("twice-{i}"))),
+    )
+    .await;
+    assert!(statuses.iter().all(|status| *status == 200), "{statuses:?}");
+    let mut heard = Vec::new();
+    while heard.len() < 8 {
+        heard.push(
+            event_within(&mut socket, Duration::from_secs(3))
+                .await
+                .expect("every commit is published"),
+        );
+    }
+    // Long enough for the sweeps of all of them to have come due.
+    while let Some(seq) = event_within(&mut socket, Duration::from_millis(900)).await {
+        heard.push(seq);
+    }
+    let mut sorted = heard.clone();
+    sorted.sort_unstable();
+    sorted.dedup();
+    assert_eq!(heard.len(), 8, "published more than once: {heard:?}");
+    assert_eq!(sorted, (head + 1..=head + 8).collect::<Vec<_>>());
+}
+
+#[tokio::test]
+async fn each_tenants_events_are_published_in_its_commit_order() {
+    let backend = start().await;
+    let fieldnotes = backend
+        .login("fieldnotes", "admin", "strata-dev-admin")
+        .await;
+    let tidewater = backend
+        .login("tidewater", "admin", "strata-dev-tidewater")
+        .await;
+    let (mut fn_socket, fn_head) = listening(&backend, "fieldnotes", &fieldnotes).await;
+    let (mut tw_socket, tw_head) = listening(&backend, "tidewater", &tidewater).await;
+    // The tenants commit at the same time, one commit after another within each tenant.
+    tokio::join!(
+        async {
+            for i in 0..6 {
+                let status =
+                    add_category(&backend, "fieldnotes", &fieldnotes, &format!("order-{i}")).await;
+                assert_eq!(status, 200);
+            }
+        },
+        async {
+            for i in 0..6 {
+                let status =
+                    add_category(&backend, "tidewater", &tidewater, &format!("order-{i}")).await;
+                assert_eq!(status, 200);
+            }
+        }
+    );
+    for (socket, head) in [(&mut fn_socket, fn_head), (&mut tw_socket, tw_head)] {
+        let mut heard = Vec::new();
+        while let Some(seq) = event_within(socket, Duration::from_millis(900)).await {
+            heard.push(seq);
+        }
+        assert_eq!(
+            heard,
+            (head + 1..=head + 6).collect::<Vec<_>>(),
+            "each tenant hears only its own events, once, in commit order"
+        );
+    }
+}

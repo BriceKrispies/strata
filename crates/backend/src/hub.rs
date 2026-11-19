@@ -1,21 +1,21 @@
-//! In-process fan-out of committed events, and the outbox publisher that feeds it.
+//! In-process fan-out of committed events, and the publication that feeds it.
 //!
-//! Nothing reaches the hub except through [`publisher`], which reads the store's outbox. An
-//! event is therefore only ever published after its transaction has committed, and an event
-//! committed just before a crash is still in the outbox when the process starts again.
-//! Delivery is at-least-once; subscribers skip sequence numbers they have already seen.
+//! Nothing reaches the hub except through [`publish_pending`], which reads the store's outbox
+//! when the generated outbox machine (see [`crate::outbox`]) says to. An event is therefore only
+//! ever published after its transaction has committed, and an event committed just before a
+//! crash is still in the outbox when the process starts again. Delivery is at-least-once;
+//! subscribers skip sequence numbers they have already seen.
 
-use crate::app::{Shared, LOG};
+use crate::outbox::Outbox;
 use serde_json::{json, Value as Json};
 use std::collections::BTreeMap;
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::sync::{Arc, Mutex, OnceLock};
 use strata_kernel::{
     DomainEvent, EventBody, PrincipalId, Record, SessionId, TenantId, TenantState, Value,
 };
 use strata_model::telemetry;
 use strata_protocol::ws::SessionState;
-use tokio::sync::{broadcast, Notify};
+use tokio::sync::broadcast;
 
 /// A committed event together with the tenant's schema and members at publication time, which
 /// is what deciding visibility needs.
@@ -50,8 +50,8 @@ pub struct Hub {
     pub events: broadcast::Sender<Arc<Published>>,
     pub runs: broadcast::Sender<RunMessage>,
     pub sessions: broadcast::Sender<(SessionId, SessionState)>,
-    /// Wakes the publisher after a commit.
-    pub kick: Notify,
+    /// The outbox publisher, set once the backend has started.
+    pub outbox: OnceLock<Outbox>,
     pub connections: Mutex<BTreeMap<String, Connection>>,
 }
 
@@ -61,8 +61,17 @@ impl Hub {
             events: broadcast::channel(1024).0,
             runs: broadcast::channel(256).0,
             sessions: broadcast::channel(64).0,
-            kick: Notify::new(),
+            outbox: OnceLock::new(),
             connections: Mutex::new(BTreeMap::new()),
+        }
+    }
+}
+
+impl Hub {
+    /// A commit was made: tell the outbox publisher.
+    pub fn committed(&self) {
+        if let Some(outbox) = self.outbox.get() {
+            outbox.committed();
         }
     }
 }
@@ -253,26 +262,4 @@ pub fn publish_pending(app: &crate::app::App) -> Result<usize, strata_storage_ap
         app.store.mark_published(tenant, *position)?;
     }
     Ok(pending.len())
-}
-
-/// Publish committed events for as long as the process lives.
-pub async fn publisher(app: Shared) {
-    // A commit wakes the pump at once; the idle period covers commits made by another process.
-    let wake = app.clone();
-    strata_runtime::jobs::pump(&wake.hub.kick, Duration::from_millis(500), || async {
-        let drained = app.blocking(|app| {
-            let mut total = 0;
-            loop {
-                match publish_pending(app) {
-                    Ok(0) => return Ok(total),
-                    Ok(n) => total += n,
-                    Err(e) => return Err(e),
-                }
-            }
-        });
-        if let Ok(Err(error)) = drained.await {
-            LOG.error("outbox.failed", "", json!({ "error": error.to_string() }));
-        }
-    })
-    .await
 }
