@@ -40979,5 +40979,635 @@
       ],
       "text": "Signing out did not work. Try again."
     }
+  ],
+  "languages": [
+    {
+      "id": "tenant-rule-language",
+      "name": "Tenant rule language",
+      "ast": "expr",
+      "values": "value",
+      "shapes": [
+        "bool",
+        "int",
+        "str",
+        "time",
+        "ref",
+        "list",
+        "any"
+      ],
+      "anyShape": "any",
+      "scopes": [
+        {
+          "name": "record",
+          "kind": "record-scope",
+          "value": "record",
+          "attributes": [
+            {
+              "name": "$id",
+              "shape": "ref"
+            },
+            {
+              "name": "$version",
+              "shape": "int"
+            },
+            {
+              "name": "$created_by",
+              "shape": "str"
+            },
+            {
+              "name": "$created_at",
+              "shape": "time"
+            },
+            {
+              "name": "$updated_at",
+              "shape": "time"
+            }
+          ]
+        },
+        {
+          "name": "old",
+          "kind": "record-scope",
+          "value": "old",
+          "attributes": [
+            {
+              "name": "$id",
+              "shape": "ref"
+            },
+            {
+              "name": "$version",
+              "shape": "int"
+            },
+            {
+              "name": "$created_by",
+              "shape": "str"
+            },
+            {
+              "name": "$created_at",
+              "shape": "time"
+            },
+            {
+              "name": "$updated_at",
+              "shape": "time"
+            }
+          ]
+        },
+        {
+          "name": "new",
+          "kind": "record-scope",
+          "value": "new",
+          "attributes": [
+            {
+              "name": "$id",
+              "shape": "ref"
+            },
+            {
+              "name": "$version",
+              "shape": "int"
+            },
+            {
+              "name": "$created_by",
+              "shape": "str"
+            },
+            {
+              "name": "$created_at",
+              "shape": "time"
+            },
+            {
+              "name": "$updated_at",
+              "shape": "time"
+            }
+          ]
+        },
+        {
+          "name": "param",
+          "kind": "param"
+        },
+        {
+          "name": "now",
+          "kind": "constant"
+        },
+        {
+          "name": "principal",
+          "kind": "constant"
+        },
+        {
+          "name": "has_role",
+          "kind": "role-test"
+        }
+      ],
+      "operators": [
+        {
+          "name": "lit-null",
+          "variant": "lit",
+          "case": {
+            "field": "value",
+            "value": "null"
+          },
+          "syntax": {
+            "form": "literal",
+            "token": "null"
+          },
+          "operands": [],
+          "result": "any",
+          "nulls": "total",
+          "primitive": "literal"
+        },
+        {
+          "name": "lit-bool",
+          "variant": "lit",
+          "case": {
+            "field": "value",
+            "value": "bool"
+          },
+          "syntax": {
+            "form": "literal",
+            "token": "bool"
+          },
+          "operands": [],
+          "result": "bool",
+          "nulls": "total",
+          "primitive": "literal"
+        },
+        {
+          "name": "lit-int",
+          "variant": "lit",
+          "case": {
+            "field": "value",
+            "value": "int"
+          },
+          "syntax": {
+            "form": "literal",
+            "token": "int"
+          },
+          "operands": [],
+          "result": "int",
+          "nulls": "total",
+          "primitive": "literal"
+        },
+        {
+          "name": "lit-str",
+          "variant": "lit",
+          "case": {
+            "field": "value",
+            "value": "str"
+          },
+          "syntax": {
+            "form": "literal",
+            "token": "string"
+          },
+          "operands": [],
+          "result": "str",
+          "nulls": "total",
+          "primitive": "literal"
+        },
+        {
+          "name": "lit-time",
+          "variant": "lit",
+          "case": {
+            "field": "value",
+            "value": "time"
+          },
+          "syntax": {
+            "form": "literal",
+            "token": "time"
+          },
+          "operands": [],
+          "result": "time",
+          "nulls": "total",
+          "primitive": "literal"
+        },
+        {
+          "name": "lit-ref",
+          "variant": "lit",
+          "case": {
+            "field": "value",
+            "value": "ref"
+          },
+          "syntax": {
+            "form": "literal",
+            "token": "ref"
+          },
+          "operands": [],
+          "result": "ref",
+          "nulls": "total",
+          "primitive": "literal"
+        },
+        {
+          "name": "lit-list",
+          "variant": "lit",
+          "case": {
+            "field": "value",
+            "value": "list"
+          },
+          "syntax": {
+            "form": "literal",
+            "token": "list"
+          },
+          "operands": [],
+          "result": "list",
+          "nulls": "total",
+          "primitive": "list-literal"
+        },
+        {
+          "name": "var",
+          "variant": "var",
+          "syntax": {
+            "form": "scope"
+          },
+          "operands": [],
+          "nulls": "total",
+          "primitive": "var"
+        },
+        {
+          "name": "through",
+          "variant": "through",
+          "syntax": {
+            "form": "scope"
+          },
+          "operands": [],
+          "nulls": "total",
+          "primitive": "through"
+        },
+        {
+          "name": "param",
+          "variant": "param",
+          "syntax": {
+            "form": "scope",
+            "token": "param"
+          },
+          "operands": [],
+          "result": "any",
+          "nulls": "total",
+          "primitive": "param"
+        },
+        {
+          "name": "now",
+          "variant": "now",
+          "syntax": {
+            "form": "scope",
+            "token": "now"
+          },
+          "operands": [],
+          "result": "time",
+          "nulls": "total",
+          "primitive": "now"
+        },
+        {
+          "name": "principal",
+          "variant": "principal",
+          "syntax": {
+            "form": "scope",
+            "token": "principal"
+          },
+          "operands": [],
+          "result": "str",
+          "nulls": "total",
+          "primitive": "principal"
+        },
+        {
+          "name": "has-role",
+          "variant": "has-role",
+          "syntax": {
+            "form": "scope",
+            "token": "has_role"
+          },
+          "operands": [],
+          "result": "bool",
+          "nulls": "total",
+          "primitive": "has-role"
+        },
+        {
+          "name": "or",
+          "variant": "or",
+          "syntax": {
+            "form": "keyword-infix",
+            "token": "or",
+            "precedence": 1,
+            "assoc": "n-ary"
+          },
+          "operands": [
+            "bool"
+          ],
+          "result": "bool",
+          "nulls": "kleene-or",
+          "primitive": "or3"
+        },
+        {
+          "name": "and",
+          "variant": "and",
+          "syntax": {
+            "form": "keyword-infix",
+            "token": "and",
+            "precedence": 2,
+            "assoc": "n-ary"
+          },
+          "operands": [
+            "bool"
+          ],
+          "result": "bool",
+          "nulls": "kleene-and",
+          "primitive": "and3"
+        },
+        {
+          "name": "not",
+          "variant": "not",
+          "syntax": {
+            "form": "prefix-word",
+            "token": "not",
+            "precedence": 3
+          },
+          "operands": [
+            "bool"
+          ],
+          "result": "bool",
+          "nulls": "kleene-not",
+          "primitive": "not3"
+        },
+        {
+          "name": "eq",
+          "variant": "cmp",
+          "case": {
+            "field": "op",
+            "value": "eq"
+          },
+          "syntax": {
+            "form": "infix",
+            "token": "==",
+            "precedence": 4,
+            "assoc": "none"
+          },
+          "operands": [
+            "any",
+            "any"
+          ],
+          "result": "bool",
+          "nulls": "propagate",
+          "primitive": "eq"
+        },
+        {
+          "name": "ne",
+          "variant": "cmp",
+          "case": {
+            "field": "op",
+            "value": "ne"
+          },
+          "syntax": {
+            "form": "infix",
+            "token": "!=",
+            "precedence": 4,
+            "assoc": "none"
+          },
+          "operands": [
+            "any",
+            "any"
+          ],
+          "result": "bool",
+          "nulls": "propagate",
+          "primitive": "ne"
+        },
+        {
+          "name": "lt",
+          "variant": "cmp",
+          "case": {
+            "field": "op",
+            "value": "lt"
+          },
+          "syntax": {
+            "form": "infix",
+            "token": "<",
+            "precedence": 4,
+            "assoc": "none"
+          },
+          "operands": [
+            [
+              "int",
+              "time",
+              "str"
+            ],
+            [
+              "int",
+              "time",
+              "str"
+            ]
+          ],
+          "result": "bool",
+          "nulls": "propagate",
+          "primitive": "lt"
+        },
+        {
+          "name": "le",
+          "variant": "cmp",
+          "case": {
+            "field": "op",
+            "value": "le"
+          },
+          "syntax": {
+            "form": "infix",
+            "token": "<=",
+            "precedence": 4,
+            "assoc": "none"
+          },
+          "operands": [
+            [
+              "int",
+              "time",
+              "str"
+            ],
+            [
+              "int",
+              "time",
+              "str"
+            ]
+          ],
+          "result": "bool",
+          "nulls": "propagate",
+          "primitive": "le"
+        },
+        {
+          "name": "gt",
+          "variant": "cmp",
+          "case": {
+            "field": "op",
+            "value": "gt"
+          },
+          "syntax": {
+            "form": "infix",
+            "token": ">",
+            "precedence": 4,
+            "assoc": "none"
+          },
+          "operands": [
+            [
+              "int",
+              "time",
+              "str"
+            ],
+            [
+              "int",
+              "time",
+              "str"
+            ]
+          ],
+          "result": "bool",
+          "nulls": "propagate",
+          "primitive": "gt"
+        },
+        {
+          "name": "ge",
+          "variant": "cmp",
+          "case": {
+            "field": "op",
+            "value": "ge"
+          },
+          "syntax": {
+            "form": "infix",
+            "token": ">=",
+            "precedence": 4,
+            "assoc": "none"
+          },
+          "operands": [
+            [
+              "int",
+              "time",
+              "str"
+            ],
+            [
+              "int",
+              "time",
+              "str"
+            ]
+          ],
+          "result": "bool",
+          "nulls": "propagate",
+          "primitive": "ge"
+        },
+        {
+          "name": "in",
+          "variant": "in",
+          "syntax": {
+            "form": "keyword-infix",
+            "token": "in",
+            "precedence": 4,
+            "assoc": "none"
+          },
+          "operands": [
+            "any",
+            "list"
+          ],
+          "result": "bool",
+          "nulls": "propagate",
+          "primitive": "in-list"
+        },
+        {
+          "name": "is-null",
+          "variant": "is-null",
+          "syntax": {
+            "form": "call",
+            "token": "is_null"
+          },
+          "operands": [
+            "any"
+          ],
+          "result": "bool",
+          "nulls": "total",
+          "primitive": "is-null"
+        },
+        {
+          "name": "len",
+          "variant": "len",
+          "syntax": {
+            "form": "call",
+            "token": "len"
+          },
+          "operands": [
+            [
+              "str",
+              "list"
+            ]
+          ],
+          "result": "int",
+          "nulls": "propagate",
+          "primitive": "len"
+        },
+        {
+          "name": "lower",
+          "variant": "lower",
+          "syntax": {
+            "form": "call",
+            "token": "lower"
+          },
+          "operands": [
+            "str"
+          ],
+          "result": "str",
+          "nulls": "propagate",
+          "primitive": "lower"
+        },
+        {
+          "name": "contains",
+          "variant": "contains",
+          "syntax": {
+            "form": "call",
+            "token": "contains"
+          },
+          "operands": [
+            [
+              "str",
+              "list"
+            ],
+            "any"
+          ],
+          "result": "bool",
+          "nulls": "propagate",
+          "primitive": "contains"
+        },
+        {
+          "name": "starts-with",
+          "variant": "starts-with",
+          "syntax": {
+            "form": "call",
+            "token": "starts_with"
+          },
+          "operands": [
+            "str",
+            "str"
+          ],
+          "result": "bool",
+          "nulls": "propagate",
+          "primitive": "starts-with"
+        },
+        {
+          "name": "is-slug",
+          "variant": "is-slug",
+          "syntax": {
+            "form": "call",
+            "token": "is_slug"
+          },
+          "operands": [
+            "str"
+          ],
+          "result": "bool",
+          "nulls": "propagate",
+          "primitive": "is-slug"
+        },
+        {
+          "name": "if",
+          "variant": "if",
+          "syntax": {
+            "form": "call",
+            "token": "if"
+          },
+          "operands": [
+            "bool",
+            "any",
+            "any"
+          ],
+          "result": "operand:2",
+          "nulls": "null-is-false",
+          "primitive": "if"
+        }
+      ],
+      "description": "The expression language tenants write constraints, policy conditions, workflow guards, defaults and query filters in. Parsed and printed as crates/substrate/src/syntax.rs; evaluated and checked as crates/kernel/src/expr.rs."
+    }
   ]
 }
