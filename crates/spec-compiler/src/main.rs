@@ -251,7 +251,22 @@ impl Args {
     }
 }
 
+/// specc walks specifications recursively (types, expressions, functions); a large specification
+/// nests deeper than the main thread's default stack allows in a debug build, so the work runs on a
+/// thread with a stack of its own.
+const STACK_BYTES: usize = 256 * 1024 * 1024;
+
 fn main() -> ExitCode {
+    std::thread::Builder::new()
+        .name("specc".into())
+        .stack_size(STACK_BYTES)
+        .spawn(run)
+        .expect("specc: cannot start its worker thread")
+        .join()
+        .unwrap_or(ExitCode::FAILURE)
+}
+
+fn run() -> ExitCode {
     let raw: Vec<String> = std::env::args().skip(1).collect();
     let args = match parse_args(&raw) {
         Ok(args) => args,
