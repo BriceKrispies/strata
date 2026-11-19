@@ -117,9 +117,9 @@ export function step(state, vars, event, now) {
             next.lastN = 0;
             next.missedPongs = 0;
             emits.push({ to: 'subscribe-events', delivery: 'at-least-once', event: 'ui-live-subscribe', payload: { after: next.lastSeq } });
-            next.lastSeq = event.payload.head;
-            next.heartbeatMs = event.payload['heartbeat-ms'];
-            timers.push({ set: 'heartbeat', afterMs: event.payload['heartbeat-ms'], event: 'ui-live-heartbeat-due', payload: {} });
+            next.lastSeq = (event.payload.head ?? (() => { throw new StepError('absent', 'event field head is absent'); })());
+            next.heartbeatMs = (event.payload['heartbeat-ms'] ?? (() => { throw new StepError('absent', 'event field heartbeat-ms is absent'); })());
+            timers.push({ set: 'heartbeat', afterMs: (event.payload['heartbeat-ms'] ?? (() => { throw new StepError('absent', 'event field heartbeat-ms is absent'); })()), event: 'ui-live-heartbeat-due', payload: {} });
             return { state: 'lv-open-i', vars: next, emits, timers };
           }
           // lv-resume-welcome-i
@@ -132,8 +132,8 @@ export function step(state, vars, event, now) {
           next.lastN = 0;
           next.missedPongs = 0;
           emits.push({ to: 'subscribe-events', delivery: 'at-least-once', event: 'ui-live-subscribe', payload: { after: next.lastSeq } });
-          next.heartbeatMs = event.payload['heartbeat-ms'];
-          timers.push({ set: 'heartbeat', afterMs: event.payload['heartbeat-ms'], event: 'ui-live-heartbeat-due', payload: {} });
+          next.heartbeatMs = (event.payload['heartbeat-ms'] ?? (() => { throw new StepError('absent', 'event field heartbeat-ms is absent'); })());
+          timers.push({ set: 'heartbeat', afterMs: (event.payload['heartbeat-ms'] ?? (() => { throw new StepError('absent', 'event field heartbeat-ms is absent'); })()), event: 'ui-live-heartbeat-due', payload: {} });
           return { state: 'lv-open-i', vars: next, emits, timers };
         }
         case 'ui-live-closed': {
@@ -214,27 +214,27 @@ export function step(state, vars, event, now) {
     case 'lv-open-i':
       switch (event.event) {
         case 'ui-live-frame': {
-          if (event.payload.n === (($v) => $v >= 0 && $v <= 9007199254740991 ? $v : overflow('lv-frame-advance-i'))(vars.lastN + 1) && event.payload.seq > vars.lastSeq) {
+          if ((event.payload.n ?? (() => { throw new StepError('absent', 'event field n is absent'); })()) === (($v) => $v >= 0 && $v <= 9007199254740991 ? $v : overflow('lv-frame-advance-i'))(vars.lastN + 1) && (event.payload.seq ?? (() => { throw new StepError('absent', 'event field seq is absent'); })()) > vars.lastSeq) {
             // lv-frame-advance-i
             const next = { ...vars };
             /** @type {ClientLiveFlowImplEmit[]} */
             const emits = [];
             /** @type {ClientLiveFlowImplTimer[]} */
             const timers = [];
-            next.lastN = event.payload.n;
-            next.lastSeq = event.payload.seq;
-            emits.push({ to: 'subscribe-events', delivery: 'at-most-once', event: 'ui-live-ack', payload: { n: event.payload.n } });
+            next.lastN = (event.payload.n ?? (() => { throw new StepError('absent', 'event field n is absent'); })());
+            next.lastSeq = (event.payload.seq ?? (() => { throw new StepError('absent', 'event field seq is absent'); })());
+            emits.push({ to: 'subscribe-events', delivery: 'at-most-once', event: 'ui-live-ack', payload: { n: (event.payload.n ?? (() => { throw new StepError('absent', 'event field n is absent'); })()) } });
             return { state: 'lv-open-i', vars: next, emits, timers };
           }
-          if (event.payload.n === (($v) => $v >= 0 && $v <= 9007199254740991 ? $v : overflow('lv-frame-same-i'))(vars.lastN + 1)) {
+          if ((event.payload.n ?? (() => { throw new StepError('absent', 'event field n is absent'); })()) === (($v) => $v >= 0 && $v <= 9007199254740991 ? $v : overflow('lv-frame-same-i'))(vars.lastN + 1)) {
             // lv-frame-same-i
             const next = { ...vars };
             /** @type {ClientLiveFlowImplEmit[]} */
             const emits = [];
             /** @type {ClientLiveFlowImplTimer[]} */
             const timers = [];
-            next.lastN = event.payload.n;
-            emits.push({ to: 'subscribe-events', delivery: 'at-most-once', event: 'ui-live-ack', payload: { n: event.payload.n } });
+            next.lastN = (event.payload.n ?? (() => { throw new StepError('absent', 'event field n is absent'); })());
+            emits.push({ to: 'subscribe-events', delivery: 'at-most-once', event: 'ui-live-ack', payload: { n: (event.payload.n ?? (() => { throw new StepError('absent', 'event field n is absent'); })()) } });
             return { state: 'lv-open-i', vars: next, emits, timers };
           }
           // lv-frame-gap-i
@@ -248,7 +248,7 @@ export function step(state, vars, event, now) {
           return { state: 'lv-open-i', vars: next, emits, timers };
         }
         case 'ui-live-pong': {
-          if (event.payload.head > vars.lastSeq) {
+          if ((event.payload.head ?? (() => { throw new StepError('absent', 'event field head is absent'); })()) > vars.lastSeq) {
             // lv-pong-advance-i
             const next = { ...vars };
             /** @type {ClientLiveFlowImplEmit[]} */
@@ -256,7 +256,7 @@ export function step(state, vars, event, now) {
             /** @type {ClientLiveFlowImplTimer[]} */
             const timers = [];
             next.missedPongs = 0;
-            next.lastSeq = event.payload.head;
+            next.lastSeq = (event.payload.head ?? (() => { throw new StepError('absent', 'event field head is absent'); })());
             return { state: 'lv-open-i', vars: next, emits, timers };
           }
           // lv-pong-same-i

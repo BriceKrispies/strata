@@ -89,7 +89,7 @@ export function step(state, vars, event, now) {
           const emits = [];
           /** @type {LoginFormTimer[]} */
           const timers = [];
-          next.name = event.payload.name;
+          next.name = (event.payload.name ?? (() => { throw new StepError('absent', 'event field name is absent'); })());
           return { state: 'editing', vars: next, emits, timers };
         }
         case 'login-submitted': {
@@ -103,7 +103,7 @@ export function step(state, vars, event, now) {
             emits.push({ to: 'api', delivery: 'at-most-once', event: 'login-abandoned', payload: { attempts: next.attempts } });
             return { state: 'locked', vars: next, emits, timers };
           }
-          if (event.payload.chars > 0) {
+          if ((event.payload.chars ?? (() => { throw new StepError('absent', 'event field chars is absent'); })()) > 0) {
             // submit
             const next = { ...vars };
             /** @type {LoginFormEmit[]} */
@@ -161,7 +161,7 @@ export function step(state, vars, event, now) {
           return { state: 'editing', vars: next, emits, timers };
         }
         case 'login-timeout': {
-          if (event.payload.attempt === vars.attempts) {
+          if ((event.payload.attempt ?? (() => { throw new StepError('absent', 'event field attempt is absent'); })()) === vars.attempts) {
             // time-out
             const next = { ...vars };
             /** @type {LoginFormEmit[]} */

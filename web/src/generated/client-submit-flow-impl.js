@@ -75,7 +75,7 @@ export function step(state, vars, event, now) {
     case 'fs-idle-i':
       switch (event.event) {
         case 'ui-form-submitted': {
-          if (event.payload.complete === 1) {
+          if ((event.payload.complete ?? (() => { throw new StepError('absent', 'event field complete is absent'); })()) === 1) {
             // fs-submit-idle-i
             const next = { ...vars };
             /** @type {ClientSubmitFlowImplEmit[]} */
@@ -136,7 +136,7 @@ export function step(state, vars, event, now) {
     case 'fs-failed-i':
       switch (event.event) {
         case 'ui-form-submitted': {
-          if (event.payload.complete === 1) {
+          if ((event.payload.complete ?? (() => { throw new StepError('absent', 'event field complete is absent'); })()) === 1) {
             // fs-submit-failed-i
             const next = { ...vars };
             /** @type {ClientSubmitFlowImplEmit[]} */

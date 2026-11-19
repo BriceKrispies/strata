@@ -77,7 +77,7 @@ export function step(state, vars, event, now) {
     case 'cs-unknown-i':
       switch (event.event) {
         case 'ui-session-read': {
-          if (event.payload.authenticated === 1) {
+          if ((event.payload.authenticated ?? (() => { throw new StepError('absent', 'event field authenticated is absent'); })()) === 1) {
             // cs-read-in-i
             const next = { ...vars };
             /** @type {ClientSessionFlowImplEmit[]} */
@@ -147,7 +147,7 @@ export function step(state, vars, event, now) {
     case 'cs-ended-i':
       switch (event.event) {
         case 'ui-session-read': {
-          if (event.payload.authenticated === 0) {
+          if ((event.payload.authenticated ?? (() => { throw new StepError('absent', 'event field authenticated is absent'); })()) === 0) {
             // cs-confirm-end-i
             const next = { ...vars };
             /** @type {ClientSessionFlowImplEmit[]} */

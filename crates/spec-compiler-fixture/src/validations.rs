@@ -133,7 +133,15 @@ fn expr_val_seats_even(
     request: &crate::contracts::CreateTenantRequest,
     value: u32,
 ) -> Result<bool, crate::support::Overflow> {
-    Ok(value.checked_rem(2u32).ok_or(crate::support::Overflow)? == 0u32 || request.slug == "trial")
+    Ok({
+        let __l = value;
+        let __r = 2u32;
+        if __r == 0 {
+            return ::core::result::Result::Err(crate::support::Overflow);
+        }
+        __l.wrapping_rem(__r)
+    } == 0u32
+        || request.slug == "trial")
 }
 
 fn check_val_seats_even(
