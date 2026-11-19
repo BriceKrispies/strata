@@ -29,3 +29,5 @@ pub mod retries;
 pub mod audits;
 
 pub mod handlers;
+
+pub mod telemetry;

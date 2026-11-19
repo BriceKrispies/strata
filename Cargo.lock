@@ -1238,6 +1238,7 @@ dependencies = [
  "serde",
  "serde_json",
  "strata-kernel",
+ "strata-model",
  "strata-protocol",
  "strata-runtime",
  "strata-simulation",

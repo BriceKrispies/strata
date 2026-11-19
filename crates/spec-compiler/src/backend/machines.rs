@@ -1890,6 +1890,51 @@ impl<'a> Gen<'a> {
         } else {
             quote! { use crate::{#(#crate_mods),*}; }
         };
+        // Logging: the events it emits that the specification logs (telemetry.rs).
+        let log_arms: Vec<(TokenStream, TokenStream)> = self
+            .emitted
+            .iter()
+            .filter_map(|e| {
+                let fields: Vec<(String, Ident)> = e
+                    .fields
+                    .iter()
+                    .map(|f| (f.name.clone(), f.field.clone()))
+                    .collect();
+                super::telemetry::emitted_arm(self.spec, e.event, &e.variant, &fields)
+            })
+            .collect();
+        let partial = log_arms.len() < self.emitted.len();
+        let log_body = match log_arms.as_slice() {
+            [] => TokenStream::new(),
+            [(pattern, call)] if partial => quote! {
+                if let #pattern = emitted {
+                    #call;
+                }
+            },
+            arms => {
+                let rest = if partial {
+                    quote! { _ => {} }
+                } else {
+                    TokenStream::new()
+                };
+                let (patterns, calls): (Vec<_>, Vec<_>) = arms.iter().cloned().unzip();
+                quote! {
+                    match emitted {
+                        #( #patterns => #calls, )*
+                        #rest
+                    }
+                }
+            }
+        };
+        let log_emitted = if log_arms.is_empty() {
+            TokenStream::new()
+        } else {
+            quote! {
+                fn log_emitted(emitted: &Emitted, telemetry: &dyn strata_runtime::Telemetry) {
+                    #log_body
+                }
+            }
+        };
         let machine_doc = format!(
             " Machine `{}`, stored in record `{}` by `{}`.",
             b.id, record_id, storage.key_field
@@ -1989,6 +2034,8 @@ impl<'a> Gen<'a> {
                         #fallback
                     }
                 }
+
+                #log_emitted
             }
         }
     }

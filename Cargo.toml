@@ -39,6 +39,7 @@ strata-protocol = { path = "crates/protocol" }
 strata-simulation = { path = "crates/simulation" }
 strata-verification = { path = "crates/verification" }
 strata-spec-expr = { path = "crates/spec-expr" }
+strata-model = { path = "crates/model" }
 
 serde = { version = "1.0.228", features = ["derive", "rc"] }
 serde_json = "1.0.146"

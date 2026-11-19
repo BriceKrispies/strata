@@ -5,7 +5,31 @@
 {
   "exegra": "0.1",
 
-  "system": {"id":"strata","name":"Strata","version":"0.2-draft","description":"Strata is a multi-tenant automation and content platform in which every tenant has a database of its own. Tenant structure is versioned data interpreted by one pure kernel. The platform is built so that agents can observe, explain and change it through the same typed, authorised operations people use, with every change simulated before it is applied and recorded after.","generation":{"target":"rust","wireCase":"snake_case"}},
+  "system": {
+    "id": "strata",
+    "name": "Strata",
+    "version": "0.2-draft",
+    "description": "Strata is a multi-tenant automation and content platform in which every tenant has a database of its own. Tenant structure is versioned data interpreted by one pure kernel. The platform is built so that agents can observe, explain and change it through the same typed, authorised operations people use, with every change simulated before it is applied and recorded after.",
+    "generation": {
+      "target": "rust",
+      "wireCase": "snake_case"
+    },
+    "telemetry": {
+      "format": "json-lines",
+      "services": [
+        {
+          "id": "backend",
+          "component": "runtime",
+          "log": "var/logs/backend.jsonl"
+        },
+        {
+          "id": "bff",
+          "component": "gateway",
+          "log": "var/logs/bff.jsonl"
+        }
+      ]
+    }
+  },
 
   "vocabulary": {
     "entityKinds": {
@@ -4441,9 +4465,587 @@
     {"id":"ui-browse-and-search","name":"Topics, authors, about and search all work","verifies":["srh-150"],"description":"Journey of tests/e2e/site.spec.js, test 4: \"topics, authors, about and search all work\".","steps":[{"goto":{"screen":"screen-topics"}},{"click":{"role":"link","name":"Design"}},{"expectRole":{"role":"heading","level":1,"name":"Design"}},{"expectCount":{"role":"article","count":2}},{"click":{"role":"link","name":"Authors","within":{"role":"navigation","name":"Sections"}}},{"click":{"role":"link","name":"Tomasz Wren"}},{"expectRole":{"role":"heading","level":1,"name":"Tomasz Wren"}},{"expectCount":{"role":"article","count":2}},{"click":{"role":"link","name":"About","within":{"role":"navigation","name":"Sections"}}},{"expectRole":{"role":"heading","level":1,"name":"About Fieldnotes"}},{"expectRole":{"role":"heading","name":"Colophon"}},{"fill":{"form":"form-search","field":"q","value":"kiln"}},{"press":"Enter"},{"expectScreen":{"screen":"screen-search","params":{"q":"kiln"}}},{"expectText":{"text":"1 essay mentions “kiln”."}},{"expectRole":{"role":"heading","name":"What the Kiln Decides","within":{"role":"article"}}},{"goto":{"screen":"screen-search","params":{"q":"zzzz"}}},{"expectText":{"text":"Nothing mentions “zzzz”."}}]},
     {"id":"ui-unknown-address","name":"An unknown address says so, with the right status","description":"Journey of tests/e2e/site.spec.js, test 5: \"an unknown address says so, with the right status\".","steps":[{"gotoPath":{"path":"/posts/no-such-essay"}},{"expectStatus":200},{"expectRole":{"role":"heading","level":1,"name":"There is nothing at this address"}},{"gotoPath":{"path":"/no/such/route"}},{"expectStatus":404}]},
     {"id":"ui-requests-from-worker-to-bff","name":"Every application request comes from the worker and goes to the BFF only","verifies":["run-003"],"description":"Journey of tests/e2e/site.spec.js, test 6: \"every application request comes from the worker and goes to the BFF only\". Hand-written test keeps: that exactly one worker exists (worker count); the check that the main thread itself calls fetch, WebSocket and XMLHttpRequest never, which the worker-origin assertions below cover for the application's own requests.","steps":[{"recordRequests":"app"},{"goto":{"screen":"screen-front-page"}},{"click":{"role":"link","name":"Drawing the Thing You Mean"}},{"expectRole":{"role":"heading","level":1,"name":"Drawing the Thing You Mean"}},{"click":{"role":"link","name":"Topics","within":{"role":"navigation","name":"Sections"}}},{"expectRole":{"role":"heading","level":1,"name":"Topics"}},{"expectAttribute":{"role":"status","name":"Live connection","attribute":"data-connection","value":"open"}},{"expectRequests":{"log":"app","to":"/api/view","atLeast":2,"fromWorker":true}},{"expectRequests":{"log":"app","to":"^ws://","atLeast":1,"fromWorker":true}},{"expectRequests":{"log":"app","to":"^(http|ws)://127\\.0\\.0\\.1:4200/","only":true}},{"apiCall":{"method":"POST","host":"127.0.0.1:4201","path":"/internal/view","anonymous":true,"body":{"path":"/"},"expectStatus":401}}]},
-    {"id":"ui-sign-in-and-out","name":"Signing in with a wrong password explains itself; signing in and out works","verifies":["uxa-202","gwy-003","idn-261","idn-262"],"description":"Journey of tests/e2e/site.spec.js, test 7: \"signing in with a wrong password explains itself; signing in and out works\". Hand-written test keeps: that the Password field is focused and emptied after a refusal (a password input has no WAI-ARIA role to address it by); that document.cookie is empty (the cookie's httpOnly attribute is asserted instead).","steps":[{"goto":{"screen":"screen-sign-in"}},{"fill":{"form":"form-sign-in","field":"login","value":"ines"}},{"fill":{"form":"form-sign-in","field":"password","value":"not-the-password"}},{"submit":{"form":"form-sign-in"}},{"expectText":{"text":"The name or password is not right.","within":{"role":"alert"}}},{"fill":{"form":"form-sign-in","field":"password","value":"strata-dev-ines"}},{"press":"Enter"},{"expectRole":{"role":"heading","level":1,"name":"Writing desk"}},{"expectText":{"text":"Signed in as Inès Okafor.","within":{"role":"region","name":"Messages"}}},{"expectCookie":{"name":"__Host-strata_sid","attributes":{"httpOnly":true,"secure":true,"sameSite":"Strict","path":"/","hostPrefix":true}}},{"expectText":{"text":"Draft","within":{"role":"row","namePattern":"Notes Toward a Workbench"}}},{"clickAction":{"action":"act-sign-out-desk"}},{"expectText":{"text":"Signed out.","within":{"role":"region","name":"Messages"}}},{"expectRole":{"role":"link","name":"Sign in","within":{"role":"banner"}}},{"expectRole":{"role":"heading","level":2,"name":"The Jig Is the Work"}},{"expectCookie":{"name":"__Host-strata_sid","absent":true}},{"goto":{"screen":"screen-desk"}},{"expectRole":{"role":"heading","level":1,"name":"Sign in to continue"}}]},
+    {"id":"ui-sign-in-and-out","name":"Signing in with a wrong password explains itself; signing in and out works","verifies":["uxa-202","gwy-003","idn-261","idn-262"],"description":"Journey of tests/e2e/site.spec.js, test 7: \"signing in with a wrong password explains itself; signing in and out works\". Hand-written test keeps: that the Password field is focused and emptied after a refusal (a password input has no WAI-ARIA role to address it by); that document.cookie is empty (the cookie's httpOnly attribute is asserted instead).","steps":[
+        {
+          "goto": {
+            "screen": "screen-sign-in"
+          }
+        },
+        {
+          "fill": {
+            "form": "form-sign-in",
+            "field": "login",
+            "value": "ines"
+          }
+        },
+        {
+          "fill": {
+            "form": "form-sign-in",
+            "field": "password",
+            "value": "not-the-password"
+          }
+        },
+        {
+          "submit": {
+            "form": "form-sign-in"
+          }
+        },
+        {
+          "expectText": {
+            "text": "The name or password is not right.",
+            "within": {
+              "role": "alert"
+            }
+          }
+        },
+        {
+          "fill": {
+            "form": "form-sign-in",
+            "field": "password",
+            "value": "strata-dev-ines"
+          }
+        },
+        {
+          "press": "Enter"
+        },
+        {
+          "expectRole": {
+            "role": "heading",
+            "level": 1,
+            "name": "Writing desk"
+          }
+        },
+        {
+          "expectText": {
+            "text": "Signed in as Inès Okafor.",
+            "within": {
+              "role": "region",
+              "name": "Messages"
+            }
+          }
+        },
+        {
+          "expectLog": {
+            "service": "backend",
+            "event": "session-started",
+            "fields": {
+              "tenant": "fieldnotes",
+              "principal": "user:ines",
+              "method": "password"
+            }
+          }
+        },
+        {
+          "expectCookie": {
+            "name": "__Host-strata_sid",
+            "attributes": {
+              "httpOnly": true,
+              "secure": true,
+              "sameSite": "Strict",
+              "path": "/",
+              "hostPrefix": true
+            }
+          }
+        },
+        {
+          "expectText": {
+            "text": "Draft",
+            "within": {
+              "role": "row",
+              "namePattern": "Notes Toward a Workbench"
+            }
+          }
+        },
+        {
+          "clickAction": {
+            "action": "act-sign-out-desk"
+          }
+        },
+        {
+          "expectText": {
+            "text": "Signed out.",
+            "within": {
+              "role": "region",
+              "name": "Messages"
+            }
+          }
+        },
+        {
+          "expectLog": {
+            "service": "backend",
+            "event": "session-ended",
+            "fields": {
+              "tenant": "fieldnotes"
+            }
+          }
+        },
+        {
+          "expectRole": {
+            "role": "link",
+            "name": "Sign in",
+            "within": {
+              "role": "banner"
+            }
+          }
+        },
+        {
+          "expectRole": {
+            "role": "heading",
+            "level": 2,
+            "name": "The Jig Is the Work"
+          }
+        },
+        {
+          "expectCookie": {
+            "name": "__Host-strata_sid",
+            "absent": true
+          }
+        },
+        {
+          "goto": {
+            "screen": "screen-desk"
+          }
+        },
+        {
+          "expectRole": {
+            "role": "heading",
+            "level": 1,
+            "name": "Sign in to continue"
+          }
+        }
+      ]},
     {"id":"ui-forged-requests-refused","name":"Requests that skip the page are refused","verifies":["gwy-002"],"browsers":["visitor"],"description":"Journey of tests/e2e/site.spec.js, test 8: \"requests that skip the page are refused: no session, no CSRF token, foreign origin\".","steps":[{"apiCall":{"method":"POST","path":"/api/records","anonymous":true,"headers":{"origin":"http://127.0.0.1:4200"},"body":{"op":"create","object":"category","fields":{"name":"Forged","slug":"forged"}},"expectStatus":401}},{"goto":{"screen":"screen-sign-in"}},{"fill":{"form":"form-sign-in","field":"login","value":"ines"}},{"fill":{"form":"form-sign-in","field":"password","value":"strata-dev-ines"}},{"submit":{"form":"form-sign-in"}},{"expectRole":{"role":"heading","level":1,"name":"Writing desk"}},{"apiCall":{"method":"POST","path":"/api/records","headers":{"origin":"http://127.0.0.1:4200"},"body":{"op":"create","object":"category","fields":{"name":"Forged","slug":"forged"}},"expectStatus":403}},{"apiCall":{"method":"POST","path":"/api/records","headers":{"origin":"http://evil.example","x-csrf-token":"x"},"body":{"op":"create","object":"category","fields":{"name":"Forged","slug":"forged"}},"expectStatus":403}},{"goto":{"screen":"screen-topics"}},{"expectNoText":{"text":"Forged"}}]},
-    {"id":"ui-author-writes-publishes-live","name":"An author writes a draft, sees validation from the kernel, publishes, and readers see it live","verifies":["cms-154","cms-003","cms-011","uxa-201","uxa-212","run-001"],"browsers":["reader","author","visitor"],"description":"Journey of tests/e2e/site.spec.js, test 9: \"an author writes a draft, sees validation from the kernel, publishes, and readers see it live\". Hand-written test keeps: the screenshots, which assert nothing.","steps":[{"goto":{"screen":"screen-front-page"}},{"mark":"loaded"},{"expectAttribute":{"role":"status","name":"Live connection","attribute":"data-connection","value":"open"}},{"switchBrowser":"author"},{"goto":{"screen":"screen-sign-in"}},{"fill":{"form":"form-sign-in","field":"login","value":"tomasz"}},{"fill":{"form":"form-sign-in","field":"password","value":"strata-dev-tomasz"}},{"submit":{"form":"form-sign-in"}},{"expectRole":{"role":"heading","level":1,"name":"Writing desk"}},{"click":{"role":"link","name":"Write a new article"}},{"expectRole":{"role":"heading","level":1,"name":"New article"}},{"fill":{"form":"form-new-article-save","field":"title","value":"On Sharpening"}},{"fill":{"form":"form-new-article-save","field":"body","value":"A first paragraph written by a test.\n\n## A heading\n\nAnd a second one."}},{"submit":{"form":"form-new-article-save"}},{"expectText":{"text":"Draft saved.","within":{"role":"region","name":"Messages"}}},{"expectRole":{"role":"heading","level":1,"name":"Edit article"}},{"expectScreen":{"screen":"screen-desk-edit","params":{"slug":"on-sharpening"}}},{"expectAttribute":{"role":"textbox","name":"Address","attribute":"value","value":"on-sharpening"}},{"switchBrowser":"reader"},{"expectNoText":{"text":"On Sharpening"}},{"switchBrowser":"visitor"},{"goto":{"screen":"screen-article","params":{"slug":"on-sharpening"}}},{"expectRole":{"role":"heading","level":1,"name":"There is nothing at this address"}},{"switchBrowser":"author"},{"fill":{"form":"form-edit-article-save-draft","field":"slug","value":"Not A Slug"}},{"fill":{"form":"form-edit-article-save-draft","field":"excerpt","value":"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}},{"submit":{"form":"form-edit-article-save-draft"}},{"expectText":{"text":"2 fields need attention before this can be saved.","within":{"role":"alert"}}},{"expectAttribute":{"role":"textbox","name":"Address","attribute":"aria-invalid","value":"true"}},{"expectRole":{"role":"textbox","name":"Address","state":"focused"}},{"expectText":{"text":"A slug uses lower-case letters, digits and single hyphens, at most 80 characters."}},{"expectText":{"text":"An excerpt has at most 280 characters."}},{"fill":{"form":"form-edit-article-save-draft","field":"slug","value":"on-sharpening"}},{"fill":{"form":"form-edit-article-save-draft","field":"excerpt","value":"A dull edge is a decision somebody put off."}},{"click":{"role":"button","name":"Preview"}},{"expectRole":{"role":"heading","level":2,"name":"A heading","within":{"role":"region","name":"Preview"}}},{"click":{"role":"button","name":"Write"}},{"focus":{"role":"textbox","name":"Text"}},{"press":"Control+End"},{"click":{"role":"button","name":"Bold"}},{"expectAttribute":{"role":"textbox","name":"Text","attribute":"value","pattern":"\\*\\*bold text\\*\\*$"}},{"submit":{"form":"form-edit-article-publish"}},{"expectText":{"text":"Published.","within":{"role":"region","name":"Messages"}}},{"expectText":{"text":"Published","within":{"role":"group","name":"Article state"}}},{"switchBrowser":"reader"},{"expectRole":{"role":"heading","name":"On Sharpening"}},{"expectText":{"text":"A dull edge is a decision somebody put off."}},{"expectNoReload":"loaded"},{"click":{"role":"link","name":"On Sharpening"}},{"expectText":{"text":"bold text","within":{"role":"strong"}}},{"switchBrowser":"author"},{"click":{"role":"link","name":"Back to the desk"}},{"clickAction":{"action":"act-desk-unpublish","item":{"title":"On Sharpening"}}},{"expectText":{"text":"Moved back to drafts.","within":{"role":"region","name":"Messages"}}},{"switchBrowser":"reader"},{"expectRole":{"role":"heading","level":1,"name":"There is nothing at this address"}},{"expectNoReload":"loaded"},{"switchBrowser":"author"},{"clickAction":{"action":"act-desk-delete","item":{"title":"On Sharpening"},"confirm":true}},{"expectText":{"text":"Deleted.","within":{"role":"region","name":"Messages"}}},{"expectCount":{"role":"row","namePattern":"On Sharpening","count":0}}]},
+    {"id":"ui-author-writes-publishes-live","name":"An author writes a draft, sees validation from the kernel, publishes, and readers see it live","verifies":["cms-154","cms-003","cms-011","uxa-201","uxa-212","run-001"],"browsers":["reader","author","visitor"],"description":"Journey of tests/e2e/site.spec.js, test 9: \"an author writes a draft, sees validation from the kernel, publishes, and readers see it live\". Hand-written test keeps: the screenshots, which assert nothing.","steps":[
+        {
+          "goto": {
+            "screen": "screen-front-page"
+          }
+        },
+        {
+          "mark": "loaded"
+        },
+        {
+          "expectAttribute": {
+            "role": "status",
+            "name": "Live connection",
+            "attribute": "data-connection",
+            "value": "open"
+          }
+        },
+        {
+          "switchBrowser": "author"
+        },
+        {
+          "goto": {
+            "screen": "screen-sign-in"
+          }
+        },
+        {
+          "fill": {
+            "form": "form-sign-in",
+            "field": "login",
+            "value": "tomasz"
+          }
+        },
+        {
+          "fill": {
+            "form": "form-sign-in",
+            "field": "password",
+            "value": "strata-dev-tomasz"
+          }
+        },
+        {
+          "submit": {
+            "form": "form-sign-in"
+          }
+        },
+        {
+          "expectRole": {
+            "role": "heading",
+            "level": 1,
+            "name": "Writing desk"
+          }
+        },
+        {
+          "expectLog": {
+            "service": "backend",
+            "event": "session-started",
+            "fields": {
+              "tenant": "fieldnotes",
+              "principal": "user:tomasz",
+              "method": "password"
+            }
+          }
+        },
+        {
+          "click": {
+            "role": "link",
+            "name": "Write a new article"
+          }
+        },
+        {
+          "expectRole": {
+            "role": "heading",
+            "level": 1,
+            "name": "New article"
+          }
+        },
+        {
+          "fill": {
+            "form": "form-new-article-save",
+            "field": "title",
+            "value": "On Sharpening"
+          }
+        },
+        {
+          "fill": {
+            "form": "form-new-article-save",
+            "field": "body",
+            "value": "A first paragraph written by a test.\n\n## A heading\n\nAnd a second one."
+          }
+        },
+        {
+          "submit": {
+            "form": "form-new-article-save"
+          }
+        },
+        {
+          "expectText": {
+            "text": "Draft saved.",
+            "within": {
+              "role": "region",
+              "name": "Messages"
+            }
+          }
+        },
+        {
+          "expectLog": {
+            "service": "backend",
+            "event": "record-created",
+            "fields": {
+              "tenant": "fieldnotes",
+              "object": "post"
+            }
+          }
+        },
+        {
+          "expectRole": {
+            "role": "heading",
+            "level": 1,
+            "name": "Edit article"
+          }
+        },
+        {
+          "expectScreen": {
+            "screen": "screen-desk-edit",
+            "params": {
+              "slug": "on-sharpening"
+            }
+          }
+        },
+        {
+          "expectAttribute": {
+            "role": "textbox",
+            "name": "Address",
+            "attribute": "value",
+            "value": "on-sharpening"
+          }
+        },
+        {
+          "switchBrowser": "reader"
+        },
+        {
+          "expectNoText": {
+            "text": "On Sharpening"
+          }
+        },
+        {
+          "switchBrowser": "visitor"
+        },
+        {
+          "goto": {
+            "screen": "screen-article",
+            "params": {
+              "slug": "on-sharpening"
+            }
+          }
+        },
+        {
+          "expectRole": {
+            "role": "heading",
+            "level": 1,
+            "name": "There is nothing at this address"
+          }
+        },
+        {
+          "switchBrowser": "author"
+        },
+        {
+          "fill": {
+            "form": "form-edit-article-save-draft",
+            "field": "slug",
+            "value": "Not A Slug"
+          }
+        },
+        {
+          "fill": {
+            "form": "form-edit-article-save-draft",
+            "field": "excerpt",
+            "value": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+          }
+        },
+        {
+          "submit": {
+            "form": "form-edit-article-save-draft"
+          }
+        },
+        {
+          "expectText": {
+            "text": "2 fields need attention before this can be saved.",
+            "within": {
+              "role": "alert"
+            }
+          }
+        },
+        {
+          "expectAttribute": {
+            "role": "textbox",
+            "name": "Address",
+            "attribute": "aria-invalid",
+            "value": "true"
+          }
+        },
+        {
+          "expectRole": {
+            "role": "textbox",
+            "name": "Address",
+            "state": "focused"
+          }
+        },
+        {
+          "expectText": {
+            "text": "A slug uses lower-case letters, digits and single hyphens, at most 80 characters."
+          }
+        },
+        {
+          "expectText": {
+            "text": "An excerpt has at most 280 characters."
+          }
+        },
+        {
+          "fill": {
+            "form": "form-edit-article-save-draft",
+            "field": "slug",
+            "value": "on-sharpening"
+          }
+        },
+        {
+          "fill": {
+            "form": "form-edit-article-save-draft",
+            "field": "excerpt",
+            "value": "A dull edge is a decision somebody put off."
+          }
+        },
+        {
+          "click": {
+            "role": "button",
+            "name": "Preview"
+          }
+        },
+        {
+          "expectRole": {
+            "role": "heading",
+            "level": 2,
+            "name": "A heading",
+            "within": {
+              "role": "region",
+              "name": "Preview"
+            }
+          }
+        },
+        {
+          "click": {
+            "role": "button",
+            "name": "Write"
+          }
+        },
+        {
+          "focus": {
+            "role": "textbox",
+            "name": "Text"
+          }
+        },
+        {
+          "press": "Control+End"
+        },
+        {
+          "click": {
+            "role": "button",
+            "name": "Bold"
+          }
+        },
+        {
+          "expectAttribute": {
+            "role": "textbox",
+            "name": "Text",
+            "attribute": "value",
+            "pattern": "\\*\\*bold text\\*\\*$"
+          }
+        },
+        {
+          "submit": {
+            "form": "form-edit-article-publish"
+          }
+        },
+        {
+          "expectText": {
+            "text": "Published.",
+            "within": {
+              "role": "region",
+              "name": "Messages"
+            }
+          }
+        },
+        {
+          "expectText": {
+            "text": "Published",
+            "within": {
+              "role": "group",
+              "name": "Article state"
+            }
+          }
+        },
+        {
+          "expectLog": {
+            "service": "backend",
+            "event": "record-updated",
+            "fields": {
+              "tenant": "fieldnotes",
+              "object": "post",
+              "transition": "publish"
+            }
+          }
+        },
+        {
+          "switchBrowser": "reader"
+        },
+        {
+          "expectRole": {
+            "role": "heading",
+            "name": "On Sharpening"
+          }
+        },
+        {
+          "expectText": {
+            "text": "A dull edge is a decision somebody put off."
+          }
+        },
+        {
+          "expectNoReload": "loaded"
+        },
+        {
+          "click": {
+            "role": "link",
+            "name": "On Sharpening"
+          }
+        },
+        {
+          "expectText": {
+            "text": "bold text",
+            "within": {
+              "role": "strong"
+            }
+          }
+        },
+        {
+          "switchBrowser": "author"
+        },
+        {
+          "click": {
+            "role": "link",
+            "name": "Back to the desk"
+          }
+        },
+        {
+          "clickAction": {
+            "action": "act-desk-unpublish",
+            "item": {
+              "title": "On Sharpening"
+            }
+          }
+        },
+        {
+          "expectText": {
+            "text": "Moved back to drafts.",
+            "within": {
+              "role": "region",
+              "name": "Messages"
+            }
+          }
+        },
+        {
+          "expectLog": {
+            "service": "backend",
+            "event": "record-updated",
+            "fields": {
+              "tenant": "fieldnotes",
+              "object": "post",
+              "transition": "unpublish"
+            }
+          }
+        },
+        {
+          "switchBrowser": "reader"
+        },
+        {
+          "expectRole": {
+            "role": "heading",
+            "level": 1,
+            "name": "There is nothing at this address"
+          }
+        },
+        {
+          "expectNoReload": "loaded"
+        },
+        {
+          "switchBrowser": "author"
+        },
+        {
+          "clickAction": {
+            "action": "act-desk-delete",
+            "item": {
+              "title": "On Sharpening"
+            },
+            "confirm": true
+          }
+        },
+        {
+          "expectText": {
+            "text": "Deleted.",
+            "within": {
+              "role": "region",
+              "name": "Messages"
+            }
+          }
+        },
+        {
+          "expectLog": {
+            "service": "backend",
+            "event": "record-deleted",
+            "fields": {
+              "tenant": "fieldnotes",
+              "object": "post"
+            }
+          }
+        },
+        {
+          "expectCount": {
+            "role": "row",
+            "namePattern": "On Sharpening",
+            "count": 0
+          }
+        }
+      ]},
     {"id":"ui-author-cannot-edit-others","name":"An author cannot edit another author’s article; an editor can","verifies":["krn-003","krn-004"],"description":"Journey of tests/e2e/site.spec.js, test 10: \"an author cannot edit another author’s article; an editor can\".","steps":[{"goto":{"screen":"screen-sign-in"}},{"fill":{"form":"form-sign-in","field":"login","value":"mirela"}},{"fill":{"form":"form-sign-in","field":"password","value":"strata-dev-mirela"}},{"submit":{"form":"form-sign-in"}},{"expectRole":{"role":"heading","level":1,"name":"Writing desk"}},{"expectCount":{"role":"row","namePattern":"The Jig Is the Work","count":0}},{"expectRole":{"role":"row","namePattern":"What the Kiln Decides"}},{"goto":{"screen":"screen-desk-edit","params":{"slug":"notes-toward-a-workbench"}}},{"expectRole":{"role":"heading","level":1,"name":"There is nothing at this address"}},{"apiCall":{"method":"GET","path":"/api/session","expectStatus":200,"capture":{"csrf":"session.csrf_token"}}},{"apiCall":{"method":"POST","path":"/api/records","headers":{"origin":"http://127.0.0.1:4200","x-csrf-token":"${csrf}"},"body":{"op":"update","object":"post","id":15,"fields":{"title":"Taken over"}},"expectStatus":403,"expectJson":{"failed.0.rule":"policy:authors_own_posts"}}}]},
     {"id":"ui-session-ends","name":"A session that ends is noticed at once and the page falls back to signed out","verifies":["idn-013"],"description":"Journey of tests/e2e/site.spec.js, test 11: \"a session that ends is noticed at once and the page falls back to signed out\".","steps":[{"goto":{"screen":"screen-sign-in"}},{"fill":{"form":"form-sign-in","field":"login","value":"tomasz"}},{"fill":{"form":"form-sign-in","field":"password","value":"strata-dev-tomasz"}},{"submit":{"form":"form-sign-in"}},{"expectRole":{"role":"heading","level":1,"name":"Writing desk"}},{"expectAttribute":{"role":"status","name":"Live connection","attribute":"data-connection","value":"open"}},{"mark":"loaded"},{"apiCall":{"method":"GET","path":"/api/session","expectStatus":200,"capture":{"csrf":"session.csrf_token"}}},{"apiCall":{"method":"POST","path":"/api/dev/expire-session","headers":{"origin":"http://127.0.0.1:4200","x-csrf-token":"${csrf}"},"expectJson":{"expired":true}}},{"expectText":{"text":"Your session has expired. Sign in again to keep writing.","within":{"role":"region","name":"Messages"}}},{"expectRole":{"role":"heading","level":1,"name":"Sign in to continue"}},{"expectNoReload":"loaded"},{"apiCall":{"method":"POST","path":"/api/records","headers":{"origin":"http://127.0.0.1:4200","x-csrf-token":"stale"},"body":{"op":"delete","object":"post","id":9},"expectStatus":401}}]},
     {"id":"ui-reconnect-catches-up","name":"After losing the connection the page reconnects and catches up on what it missed","verifies":["run-001"],"browsers":["reader","author"],"description":"Journey of tests/e2e/site.spec.js, test 12: \"after losing the connection the page reconnects and catches up on what it missed\". Hand-written test keeps: the drop of the socket through the page's test hook (window.__strataDropSocket) and the check that the connection then reads \"waiting\"; offline alone does not close an open socket, so the scenario goes offline and publishes, then back online, and asserts only what the reader shows afterwards.","steps":[{"goto":{"screen":"screen-front-page"}},{"mark":"loaded"},{"expectAttribute":{"role":"status","name":"Live connection","attribute":"data-connection","value":"open"}},{"goOffline":{}},{"switchBrowser":"author"},{"goto":{"screen":"screen-sign-in"}},{"fill":{"form":"form-sign-in","field":"login","value":"mirela"}},{"fill":{"form":"form-sign-in","field":"password","value":"strata-dev-mirela"}},{"submit":{"form":"form-sign-in"}},{"expectRole":{"role":"heading","level":1,"name":"Writing desk"}},{"click":{"role":"link","name":"Write a new article"}},{"expectRole":{"role":"heading","level":1,"name":"New article"}},{"fill":{"form":"form-new-article-save","field":"title","value":"While You Were Away"}},{"fill":{"form":"form-new-article-save","field":"body","value":"A first paragraph written by a test.\n\n## A heading\n\nAnd a second one."}},{"submit":{"form":"form-new-article-save"}},{"expectText":{"text":"Draft saved.","within":{"role":"region","name":"Messages"}}},{"expectRole":{"role":"heading","level":1,"name":"Edit article"}},{"submit":{"form":"form-edit-article-publish"}},{"expectText":{"text":"Published.","within":{"role":"region","name":"Messages"}}},{"switchBrowser":"reader"},{"expectNoText":{"text":"While You Were Away"}},{"goOnline":{}},{"expectAttribute":{"role":"status","name":"Live connection","attribute":"data-connection","value":"open","timeoutMs":20000}},{"expectRole":{"role":"heading","name":"While You Were Away"}},{"expectNoReload":"loaded"},{"switchBrowser":"author"},{"submit":{"form":"form-edit-article-unpublish"}},{"switchBrowser":"reader"},{"expectCount":{"role":"heading","name":"While You Were Away","count":0}}]},
@@ -4709,6 +5311,420 @@
           "type": "u64"
         }
       ]
+    },
+    {
+      "id": "tenant-created",
+      "name": "Tenant created",
+      "description": "strata_kernel::EventBody::TenantCreated: the first event of a tenant, published by the backend from the outbox after commit.",
+      "domain": true,
+      "payload": [
+        {
+          "name": "tenant",
+          "type": "tenant-id"
+        },
+        {
+          "name": "seq",
+          "type": "u64"
+        },
+        {
+          "name": "revision",
+          "type": "state-revision"
+        },
+        {
+          "name": "name",
+          "type": "string"
+        }
+      ],
+      "logging": {
+        "logged": true,
+        "service": "backend",
+        "level": "info",
+        "name": "tenant.created",
+        "tenant": "tenant",
+        "fields": [
+          {
+            "field": "seq"
+          },
+          {
+            "field": "revision"
+          },
+          {
+            "field": "name"
+          }
+        ]
+      }
+    },
+    {
+      "id": "schema-changed",
+      "name": "Schema changed",
+      "description": "strata_kernel::EventBody::SchemaChanged: a schema change was applied; changes counts the lines of its summary, grandfathered the records kept under the earlier rules.",
+      "domain": true,
+      "payload": [
+        {
+          "name": "tenant",
+          "type": "tenant-id"
+        },
+        {
+          "name": "seq",
+          "type": "u64"
+        },
+        {
+          "name": "revision",
+          "type": "state-revision"
+        },
+        {
+          "name": "version",
+          "type": "schema-version"
+        },
+        {
+          "name": "changes",
+          "type": "u64"
+        },
+        {
+          "name": "grandfathered",
+          "type": "u64"
+        }
+      ],
+      "logging": {
+        "logged": true,
+        "service": "backend",
+        "level": "info",
+        "name": "schema.changed",
+        "tenant": "tenant",
+        "fields": [
+          {
+            "field": "seq"
+          },
+          {
+            "field": "revision"
+          },
+          {
+            "field": "version"
+          },
+          {
+            "field": "changes"
+          },
+          {
+            "field": "grandfathered"
+          }
+        ]
+      }
+    },
+    {
+      "id": "member-changed",
+      "name": "Member changed",
+      "description": "strata_kernel::EventBody::MemberChanged: the roles of a principal in the tenant changed. The roles are a list and are not logged.",
+      "domain": true,
+      "payload": [
+        {
+          "name": "tenant",
+          "type": "tenant-id"
+        },
+        {
+          "name": "seq",
+          "type": "u64"
+        },
+        {
+          "name": "revision",
+          "type": "state-revision"
+        },
+        {
+          "name": "principal",
+          "type": "principal-id"
+        },
+        {
+          "name": "roles",
+          "type": "list<string>"
+        }
+      ],
+      "logging": {
+        "logged": true,
+        "service": "backend",
+        "level": "info",
+        "name": "member.changed",
+        "tenant": "tenant",
+        "fields": [
+          {
+            "field": "seq"
+          },
+          {
+            "field": "revision"
+          },
+          {
+            "field": "principal"
+          }
+        ]
+      }
+    },
+    {
+      "id": "record-created",
+      "name": "Record created",
+      "description": "strata_kernel::EventBody::RecordCreated: a record of a tenant-defined object type was created. Its contents are tenant data and are never logged.",
+      "domain": true,
+      "payload": [
+        {
+          "name": "tenant",
+          "type": "tenant-id"
+        },
+        {
+          "name": "seq",
+          "type": "u64"
+        },
+        {
+          "name": "revision",
+          "type": "state-revision"
+        },
+        {
+          "name": "object",
+          "type": "object-type-id"
+        },
+        {
+          "name": "record",
+          "type": "record-id"
+        },
+        {
+          "name": "version",
+          "type": "u64"
+        },
+        {
+          "name": "fields",
+          "type": "event-body",
+          "sensitive": "personal"
+        }
+      ],
+      "logging": {
+        "logged": true,
+        "service": "backend",
+        "level": "info",
+        "name": "record.created",
+        "tenant": "tenant",
+        "fields": [
+          {
+            "field": "seq"
+          },
+          {
+            "field": "revision"
+          },
+          {
+            "field": "object"
+          },
+          {
+            "field": "record",
+            "as": "id"
+          },
+          {
+            "field": "version"
+          }
+        ]
+      }
+    },
+    {
+      "id": "record-updated",
+      "name": "Record updated",
+      "description": "strata_kernel::EventBody::RecordUpdated: a record changed. transition names the workflow transition the change took (publish, unpublish), when it moved a workflow field. The contents before and after are never logged.",
+      "domain": true,
+      "payload": [
+        {
+          "name": "tenant",
+          "type": "tenant-id"
+        },
+        {
+          "name": "seq",
+          "type": "u64"
+        },
+        {
+          "name": "revision",
+          "type": "state-revision"
+        },
+        {
+          "name": "object",
+          "type": "object-type-id"
+        },
+        {
+          "name": "record",
+          "type": "record-id"
+        },
+        {
+          "name": "version",
+          "type": "u64"
+        },
+        {
+          "name": "transition",
+          "type": "option<string>",
+          "optional": true
+        },
+        {
+          "name": "before",
+          "type": "event-body",
+          "sensitive": "personal"
+        },
+        {
+          "name": "after",
+          "type": "event-body",
+          "sensitive": "personal"
+        }
+      ],
+      "logging": {
+        "logged": true,
+        "service": "backend",
+        "level": "info",
+        "name": "record.updated",
+        "tenant": "tenant",
+        "fields": [
+          {
+            "field": "seq"
+          },
+          {
+            "field": "revision"
+          },
+          {
+            "field": "object"
+          },
+          {
+            "field": "record",
+            "as": "id"
+          },
+          {
+            "field": "version"
+          },
+          {
+            "field": "transition"
+          }
+        ]
+      }
+    },
+    {
+      "id": "record-deleted",
+      "name": "Record deleted",
+      "description": "strata_kernel::EventBody::RecordDeleted: a record was deleted. Its last contents are never logged.",
+      "domain": true,
+      "payload": [
+        {
+          "name": "tenant",
+          "type": "tenant-id"
+        },
+        {
+          "name": "seq",
+          "type": "u64"
+        },
+        {
+          "name": "revision",
+          "type": "state-revision"
+        },
+        {
+          "name": "object",
+          "type": "object-type-id"
+        },
+        {
+          "name": "record",
+          "type": "record-id"
+        },
+        {
+          "name": "before",
+          "type": "event-body",
+          "sensitive": "personal"
+        }
+      ],
+      "logging": {
+        "logged": true,
+        "service": "backend",
+        "level": "info",
+        "name": "record.deleted",
+        "tenant": "tenant",
+        "fields": [
+          {
+            "field": "seq"
+          },
+          {
+            "field": "revision"
+          },
+          {
+            "field": "object"
+          },
+          {
+            "field": "record",
+            "as": "id"
+          }
+        ]
+      }
+    },
+    {
+      "id": "session-started",
+      "name": "Signed in",
+      "description": "The backend issued a session after a sign-in. The token and the request token are secrets and are never logged; the session id is public.",
+      "domain": true,
+      "payload": [
+        {
+          "name": "tenant",
+          "type": "tenant-id"
+        },
+        {
+          "name": "session",
+          "type": "session-id"
+        },
+        {
+          "name": "principal",
+          "type": "principal-id"
+        },
+        {
+          "name": "method",
+          "type": "credential-kind"
+        },
+        {
+          "name": "token",
+          "type": "session-token"
+        },
+        {
+          "name": "csrf-token",
+          "type": "secret"
+        }
+      ],
+      "logging": {
+        "logged": true,
+        "service": "backend",
+        "level": "info",
+        "name": "session.started",
+        "tenant": "tenant",
+        "fields": [
+          {
+            "field": "session"
+          },
+          {
+            "field": "principal"
+          },
+          {
+            "field": "method"
+          }
+        ]
+      }
+    },
+    {
+      "id": "session-ended",
+      "name": "Signed out",
+      "description": "A session was revoked by signing out or by a new sign-in from the same browser.",
+      "domain": true,
+      "payload": [
+        {
+          "name": "tenant",
+          "type": "tenant-id"
+        },
+        {
+          "name": "session",
+          "type": "session-id"
+        }
+      ],
+      "logging": {
+        "logged": true,
+        "service": "backend",
+        "level": "info",
+        "name": "session.ended",
+        "tenant": "tenant",
+        "fields": [
+          {
+            "field": "session"
+          }
+        ]
+      }
     }
   ],
   "behaviors": [
@@ -7749,8 +8765,22 @@
     {"id":"address-text","name":"address-text","kind":"scalar","repr":"string"},
     {"id":"text","name":"text","kind":"scalar","repr":"string","description":"Free text."},
     {"id":"reference","name":"reference","kind":"scalar","repr":"string","description":"A reference to a record or a copy, in text form."},
-    {"id":"wrapped-secret","name":"wrapped-secret","kind":"scalar","repr":"bytes","description":"A secret wrapped by the key service."},
-    {"id":"secret","name":"secret","kind":"scalar","repr":"bytes","description":"A sealed secret."},
+    {
+      "id": "wrapped-secret",
+      "name": "wrapped-secret",
+      "kind": "scalar",
+      "repr": "bytes",
+      "description": "A secret wrapped by the key service.",
+      "sensitive": "secret"
+    },
+    {
+      "id": "secret",
+      "name": "secret",
+      "kind": "scalar",
+      "repr": "bytes",
+      "description": "A sealed secret.",
+      "sensitive": "secret"
+    },
     {"id":"expression","name":"expression","kind":"scalar","repr":"string"},
     {"id":"schema","name":"schema","kind":"scalar","repr":"string","description":"A tenant schema as the JSON text that storage holds."},
     {"id":"value-map","name":"value-map","kind":"scalar","repr":"string","description":"A map of field values as JSON text."},
@@ -7907,7 +8937,15 @@
     {"id":"view-data","name":"View Data","kind":"struct","fields":[{"name":"view","type":"string"},{"name":"title","type":"string"},{"name":"params","type":"json"},{"name":"sections","type":"value-map"},{"name":"depends-on","type":"list<object-type-id>"},{"name":"revision","type":"state-revision"},{"name":"schema-version","type":"schema-version"}],"description":"strata_substrate::project::ViewData: the raw result of a view."},
     {"id":"violation","name":"Violation","kind":"struct","fields":[{"name":"object","type":"object-type-id"},{"name":"id","type":"record-id"},{"name":"check","type":"check"},{"name":"kind","type":"error-kind"}],"description":"strata_kernel::Violation: an existing record that does not conform to a proposed schema."},
     {"id":"wake-entry","name":"Wake Entry","kind":"struct","fields":[{"name":"tenant","type":"tenant-id"},{"name":"due-at","type":"timestamp"}],"description":"A wake index entry: a tenant and its next due time, with no content of a job."},
-    {"id":"webhook-delivery","name":"Webhook Delivery","kind":"struct","fields":[{"name":"id","type":"string"},{"name":"endpoint","type":"string"},{"name":"status","type":"u16"},{"name":"attempts","type":"u32"},{"name":"at","type":"timestamp"}],"description":"One outbound webhook delivery."}
+    {"id":"webhook-delivery","name":"Webhook Delivery","kind":"struct","fields":[{"name":"id","type":"string"},{"name":"endpoint","type":"string"},{"name":"status","type":"u16"},{"name":"attempts","type":"u32"},{"name":"at","type":"timestamp"}],"description":"One outbound webhook delivery."},
+    {
+      "id": "session-token",
+      "name": "session-token",
+      "kind": "scalar",
+      "repr": "string",
+      "sensitive": "token",
+      "description": "The secret a session cookie carries; only its hash is stored, and it is never logged."
+    }
   ],
   "records": [
     {"id":"rec-tenant","name":"Tenant","owner":"control-plane","key":["tenant-id"],"fields":[{"name":"tenant-id","type":"tenant-id","constraints":{"pattern":"^[a-z][a-z0-9_]*$","maxLength":64}},{"name":"state","type":"tenant-state"},{"name":"plan","type":"plan-id"},{"name":"placement-id","type":"placement-id","refersTo":"rec-placement","onDelete":"restrict"},{"name":"database-created","type":"bool","optional":true},{"name":"layout-applied","type":"bool","optional":true},{"name":"template-installed","type":"bool","optional":true},{"name":"activated","type":"bool","optional":true},{"name":"flow-state","type":"string"}],"retention":"Until the tenant is deleted (TEN-011), with the certificate of PRV-354.","schemaVersion":1},
