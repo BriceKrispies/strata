@@ -50,6 +50,10 @@ export default defineConfig({
         STRATA_OIDC_CONFIG: `${root}/tests/e2e/oidc.config.json`,
         STRATA_E2E_OIDC_SECRET: 'e2e-secret',
         STRATA_SAML_CONFIG: `${root}/tests/e2e/saml.config.json`,
+        // Every test signs in from this one address; the per-source limit is for strangers, and
+        // the per-login lockout, which a test checks, is a limit of its own.
+        STRATA_LOGINS_PER_SOURCE: '10000',
+        STRATA_SOCKETS_PER_SOURCE: '10000',
       },
     },
     {

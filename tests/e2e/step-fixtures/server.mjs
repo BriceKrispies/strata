@@ -121,7 +121,7 @@ worker.onmessage = () => { document.querySelector('main').dataset.page = 'worker
 const OTHER = page('other', 'Other', '<h1>Other page</h1>');
 const LOST = page('lost', 'Nothing here', '<h1>There is nothing at this address</h1>');
 const LIVE = later('live', 'Live', '<h1>Live</h1><a href="/other">Elsewhere</a><p id="state">connecting</p>', `const refresh = !new URLSearchParams(location.search).has('norefresh');
-const view = () => fetch('/api/view?path=' + encodeURIComponent(location.pathname));
+const view = () => fetch('/api/view?path=' + encodeURIComponent(location.pathname)).then((r) => r.text());
 const socket = new WebSocket('ws://' + location.host + '/ws');
 socket.onmessage = (message) => {
   if (JSON.parse(message.data).type === 'event' && refresh) view();

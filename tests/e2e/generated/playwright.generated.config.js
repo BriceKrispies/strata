@@ -7,6 +7,10 @@ import base from '../playwright.config.js';
 
 const report = new URL('../../../var/test-results/e2e-junit.xml', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1');
 const external = process.env.STRATA_E2E_BASE_URL;
+// The servers of the stack the journeys run against: all of the hand-written suite's but the
+// stacks a project of its own addresses (such as the development loop), which serve other tests.
+const others = (base.projects ?? []).map((p) => p.use?.baseURL).filter(Boolean);
+const servers = (base.webServer ?? []).filter((s) => !others.some((url) => s.url.startsWith(url)));
 
 export default defineConfig({
   ...base,
@@ -16,5 +20,5 @@ export default defineConfig({
   reporter: [['list'], ['junit', { outputFile: report }]],
   use: { ...base.use, ...(external ? { baseURL: external } : {}) },
   projects: [{ name: 'generated' }],
-  webServer: external ? [] : base.webServer.slice(0, 1),
+  webServer: external ? [] : servers,
 });

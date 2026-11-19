@@ -929,8 +929,11 @@ test('a person sees where they are signed in and signs out another session from 
   await expect(section.getByRole('row')).toHaveCount(3);
   await expect(section.locator('tr[data-current="true"]')).toHaveCount(1);
   await expect(section.locator('tr[data-current="false"]')).toContainText('Another device');
-  // Nothing of the session's secret is on the page.
-  expect(await page.content()).not.toContain('csrf');
+  // Nothing of the session's secret is on the page: the session cookie (HttpOnly) is the secret.
+  // The request token is on it by design, since the page sends it with every write.
+  const cookie = (await page.context().cookies()).find((c) => c.name === '__Host-strata_sid');
+  expect(cookie?.value, 'the session cookie').toBeTruthy();
+  expect(await page.content()).not.toContain(cookie.value);
 
   await section.getByRole('button', { name: 'Sign out that session' }).click();
   await expect(page.locator('.toast', { hasText: 'That session has been signed out.' })).toBeVisible();
@@ -950,6 +953,7 @@ test('a person signs out all their other sessions at once', async ({ page, brows
   for (let i = 0; i < 2; i++) {
     const elsewhere = await (await browser.newContext({ baseURL: BASE })).newPage();
     await signIn(elsewhere, 'mirela');
+    await expect(elsewhere.locator('.colophon__live')).toHaveAttribute('data-connection', 'open');
     others.push(elsewhere);
   }
   await open(page, '/desk');
@@ -1039,7 +1043,7 @@ test('a person adds a passkey at the desk, signs out, signs in with it and remov
   await open(page, `${NAMED}/login`);
   await page.getByRole('button', { name: 'Sign in with a passkey' }).click();
   await expect(page.getByRole('heading', { level: 1, name: 'Writing desk' })).toBeVisible();
-  await expect(page.getByText('Signed in as Ines')).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Messages' }).getByText('Signed in as Inès Okafor.')).toBeVisible();
   // The use is noted, and the signature counter moved on.
   await expect(section.locator('tr[data-passkey]')).not.toContainText('Never');
   expect((await authenticator.credentials())[0].signCount).toBeGreaterThan(0);
@@ -1150,16 +1154,18 @@ test('an emailed link signs in once, in the browser that asked for it and in no 
   await askForLink(page, LINK_ADDRESS);
   await expect.poll(async () => (await linksSent(owner, LINK_ADDRESS)).length).toBe(2);
   const second = (await linksSent(owner, LINK_ADDRESS))[1];
-  await page.goto(second);
-  await expect(page.getByRole('heading', { level: 1, name: 'Writing desk' })).toBeVisible();
-  await expect(page.getByText('Signed in as Mirela Ashby')).toBeVisible();
-  expect(page.url()).not.toContain('#');
+  // A link in an email opens in a new tab of the same browser.
+  const tab = await page.context().newPage();
+  await tab.goto(second);
+  await expect(tab.getByRole('heading', { level: 1, name: 'Writing desk' })).toBeVisible();
+  await expect(tab.getByRole('region', { name: 'Messages' }).getByText('Signed in as Mirela Ashby')).toBeVisible();
+  expect(tab.url()).not.toContain('#');
 
   // The same link, a second time, in the same browser: refused.
-  await page.getByRole('button', { name: 'Sign out', exact: true }).click();
-  await page.goto(second);
-  await expect(page.getByRole('alert')).toContainText('not accepted');
-  await expect(page.getByRole('heading', { level: 1, name: 'Sign in' })).toBeVisible();
+  await tab.getByRole('button', { name: 'Sign out', exact: true }).click();
+  await tab.goto(second);
+  await expect(tab.getByRole('alert')).toContainText('not accepted');
+  await expect(tab.getByRole('heading', { level: 1, name: 'Sign in' })).toBeVisible();
 
   await ownerContext.close();
 });
@@ -1190,7 +1196,9 @@ test('a password for an address in a domain the provider decides for is refused'
   await expect(page.getByRole('heading', { level: 1, name: 'Sign in' })).toBeVisible();
 
   // The same password for the same person's own login is accepted: only the bound domain is closed.
+  // A refused sign-in clears the password, so it is typed again.
   await page.getByLabel('Name').fill('ines');
+  await page.getByLabel('Password').fill('strata-dev-ines');
   await page.getByRole('button', { name: 'Sign in', exact: true }).click();
   await expect(page.getByRole('heading', { level: 1, name: 'Writing desk' })).toBeVisible();
 });
@@ -1203,7 +1211,7 @@ test('the sign-in page offers the provider, and signing in through it makes the 
 
   await chooseProvider(page);
   await expect(page.getByRole('heading', { level: 1, name: 'Writing desk' })).toBeVisible();
-  await expect(page.getByText('Signed in as Nora Newcomer')).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Messages' }).getByText('Signed in as Nora Newcomer')).toBeVisible();
   expect(page.url()).not.toContain('#');
   expect(page.url()).not.toContain('code=');
   expect(callbacks).toHaveLength(1);
@@ -1212,7 +1220,7 @@ test('the sign-in page offers the provider, and signing in through it makes the 
   await page.getByRole('button', { name: 'Sign out', exact: true }).click();
   await provider(request, { sub: subject, email: 'nora@bound.example', email_verified: true, name: 'Someone Else' });
   await chooseProvider(page);
-  await expect(page.getByText('Signed in as Nora Newcomer')).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Messages' }).getByText('Signed in as Nora Newcomer')).toBeVisible();
   await page.getByRole('button', { name: 'Sign out', exact: true }).click();
 
   // A callback that was answered once is not answered again.
@@ -1428,7 +1436,7 @@ test('the sign-in page offers the SAML provider, and signing in through it makes
 
   await chooseSamlProvider(page);
   await expect(page.getByRole('heading', { level: 1, name: 'Writing desk' })).toBeVisible();
-  await expect(page.getByText('Signed in as Sam Saml')).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Messages' }).getByText('Signed in as Sam Saml')).toBeVisible();
   // The response is not left in the address bar, nor anywhere the page keeps.
   expect(page.url()).not.toContain('#');
   expect(page.url()).not.toContain('SAMLResponse');
@@ -1444,7 +1452,7 @@ test('the sign-in page offers the SAML provider, and signing in through it makes
   await page.getByRole('button', { name: 'Sign out', exact: true }).click();
   await samlProvider(request, { sub: subject, email: 'sam@saml.example', name: 'Someone Else' });
   await chooseSamlProvider(page);
-  await expect(page.getByText('Signed in as Sam Saml')).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Messages' }).getByText('Signed in as Sam Saml')).toBeVisible();
   await page.getByRole('button', { name: 'Sign out', exact: true }).click();
 });
 
@@ -1473,7 +1481,7 @@ test('an assertion that was accepted once is not accepted again', async ({ page,
   const subject = `e2e-saml-replay-${Date.now()}`;
   await samlProvider(request, { sub: subject, email: 'r@saml.example', name: 'Ria Replay', assertion_id: identifier });
   await chooseSamlProvider(page);
-  await expect(page.getByText('Signed in as Ria Replay')).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Messages' }).getByText('Signed in as Ria Replay')).toBeVisible();
   await page.getByRole('button', { name: 'Sign out', exact: true }).click();
 
   // The provider answers a new request with the same assertion identifier.
@@ -1671,7 +1679,16 @@ async function person(browser, name) {
   const headers = { origin: BASE, 'x-csrf-token': session.csrf_token };
   return {
     page,
-    roles: async () => (await (await page.request.get('/api/session')).json()).session.roles,
+    // A change of someone's roles ends their sessions, so their roles are read from a session
+    // started now, never from the one this person began with.
+    roles: async () => {
+      const fresh = await (await browser.newContext()).newPage();
+      await signIn(fresh, name);
+      const roles = (await (await fresh.request.get('/api/session')).json()).session.roles;
+      await fresh.context().close();
+      return roles;
+    },
+    signedIn: async () => (await (await page.request.get('/api/session')).json()).session.authenticated,
     members: (operation, data) => page.request.post(`/api/members/${operation}`, { data, headers }),
   };
 }
@@ -1715,7 +1732,10 @@ test('a team member is added and removed by someone who holds the team’s roles
   expect(refused.status()).toBe(403);
   expect((await refused.json()).failed[0].rule).toBe('permission:confer:editor');
   expect(await tomasz.roles()).not.toContain('editor');
+  expect(await tomasz.signedIn()).toBe(true);
   expect((await owner.members('add-team-member', join)).status()).toBe(200);
+  // Joining the team changed his roles, which ended the session he had.
+  expect(await tomasz.signedIn()).toBe(false);
   expect(await tomasz.roles()).toContain('editor');
   expect((await owner.members('remove-team-member', join)).status()).toBe(200);
   expect(await tomasz.roles()).not.toContain('editor');
@@ -1748,7 +1768,10 @@ test('an invitation grants its roles to the one person whose verified address it
   // The person with the named address gets the roles, once.
   expect((await dana.members('redeem', { invitation })).status()).toBe(200);
   expect(await dana.roles()).toContain('author');
-  const again = await dana.members('redeem', { invitation });
+  // The roles she was given ended the session she redeemed with; signed in again, she cannot
+  // redeem a second time.
+  expect(await dana.signedIn()).toBe(false);
+  const again = await (await person(browser, 'dana')).members('redeem', { invitation });
   expect(again.status()).toBe(422);
   expect((await again.json()).failed[0].rule).toBe('invitation:redeemed_once');
 

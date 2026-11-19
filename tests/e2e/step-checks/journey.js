@@ -481,7 +481,7 @@ export class Journey {
       await expect(api.fetch(target, { ...options, timeout: 5_000 }), `${what} at ${target} is unreachable`).rejects.toThrow();
       return;
     }
-    const response = await api.fetch(target, options);
+    const response = await api.fetch(...(await this.loopback(target, options, anonymous ? null : (as === undefined ? this.current : this.sessions.get(as)).context)));
     this.lastResponse = response;
     const text = await response.text();
     if (expectStatus !== undefined) expect(response.status(), `${what}: the status (reply ${text.slice(0, 300)})`).toBe(expectStatus);
@@ -523,11 +523,31 @@ export class Journey {
     expect(got, `the attributes of cookie ${name}`).toEqual(attributes);
   }
 
+  /**
+   * A name under `.localhost` is the loopback address (RFC 6761), which browsers know and Node's
+   * resolver may not: such a request goes to 127.0.0.1 with the name as its Host, and carries the
+   * cookies the browser holds for the name, which the context would otherwise match by address.
+   */
+  async loopback(target, options, context) {
+    const url = new URL(target, this.baseURL);
+    if (!url.hostname.endsWith('.localhost')) return [target, options];
+    const headers = { ...options.headers, host: url.host };
+    if (context && !Object.keys(headers).some((k) => k.toLowerCase() === 'cookie')) {
+      const cookies = await context.cookies(url.href);
+      if (cookies.length) headers.cookie = cookies.map((c) => `${c.name}=${c.value}`).join('; ');
+    }
+    url.hostname = '127.0.0.1';
+    return [url.href, { ...options, headers }];
+  }
+
   async setCookie({ name, value, host, attributes = {} }) {
     await this.context.addCookies([{
       name,
       value: this.sub(value),
-      url: `${this.scheme()}//${hostOf(host)}${attributes.path ?? '/'}`,
+      // By domain and path, as a browser stores it: a cookie has no port, and a secure one set
+      // through an http address is refused.
+      domain: hostParts(hostOf(host)).name,
+      path: attributes.path ?? '/',
       secure: attributes.secure ?? false,
       httpOnly: attributes.httpOnly ?? false,
       ...(attributes.sameSite ? { sameSite: attributes.sameSite } : {}),

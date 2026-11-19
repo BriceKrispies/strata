@@ -68,13 +68,17 @@ function checks(list) {
 function form(page) {
   const f = page.form;
   const running = page.run?.status === 'running' || page.run?.status === 'starting';
-  const radio = (name, val, label, hint) =>
-    h(
+  // The choice is named by its label alone; the hint describes it, so a screen reader reads the
+  // name first and the hint after it.
+  const radio = (name, val, label, hint) => {
+    const hintId = `lab-${name}-${val}-hint`;
+    return h(
       'label',
       { class: 'choice' },
-      h('input', { type: 'radio', name, value: val, checked: f[name] === val }),
-      h('span', null, h('strong', null, label), h('span', { class: 'choice__hint' }, hint)),
+      h('input', { type: 'radio', name, value: val, checked: f[name] === val, 'aria-describedby': hintId }),
+      h('span', null, h('strong', null, label), h('span', { class: 'choice__hint', id: hintId, 'aria-hidden': 'true' }, hint)),
     );
+  };
   return h(
     'form',
     { class: 'form lab-form', 'data-form': 'lab', novalidate: true },

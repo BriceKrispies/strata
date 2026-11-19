@@ -11,7 +11,7 @@
 //   aud, nonce, exp_offset, kid, deny        what is wrong with the token, for the refusals
 //   rotate                                   publish a new signing key and sign with it
 //   reset                                    forget all of the above
-import { createHash, createPublicKey, createSign, generateKeyPairSync, randomBytes } from 'node:crypto';
+import { createHash, createSign, generateKeyPairSync, randomBytes } from 'node:crypto';
 import { createServer } from 'node:http';
 
 const PORT = Number(process.argv[2] ?? 4290);
@@ -24,7 +24,7 @@ const b64url = (buffer) => Buffer.from(buffer).toString('base64url');
 /** A signing key and the entry that publishes it. */
 function makeKey(kid) {
   const { privateKey, publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
-  const jwk = { ...createPublicKey(publicKey).export({ format: 'jwk' }), kid, alg: 'RS256', use: 'sig' };
+  const jwk = { ...publicKey.export({ format: 'jwk' }), kid, alg: 'RS256', use: 'sig' };
   return { kid, privateKey, jwk };
 }
 
