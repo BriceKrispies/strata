@@ -28,98 +28,98 @@ pub struct DecideIntentResponse {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum DecideIntentError {
     /// The snapshot is of a tenant other than the one the context names.
-    #[serde(rename = "tenant-mismatch")]
+    #[serde(rename = "tenant_mismatch")]
     TenantMismatch(types::DomainError),
     /// A create-tenant intent names a tenant that already exists.
-    #[serde(rename = "tenant-exists")]
+    #[serde(rename = "tenant_exists")]
     TenantExists(types::DomainError),
     /// The intent needs a tenant that has no state.
-    #[serde(rename = "tenant-not-found")]
+    #[serde(rename = "tenant_not_found")]
     TenantNotFound(types::DomainError),
     /// No policy of the principal authorises the intent.
     #[serde(rename = "unauthorized")]
     Unauthorized(types::DomainError),
     /// The intent names an object type the schema does not declare.
-    #[serde(rename = "unknown-object")]
+    #[serde(rename = "unknown_object")]
     UnknownObject(types::DomainError),
     /// The intent names a field the object type does not declare.
-    #[serde(rename = "unknown-field")]
+    #[serde(rename = "unknown_field")]
     UnknownField(types::DomainError),
     /// The intent names a record that does not exist.
-    #[serde(rename = "unknown-record")]
+    #[serde(rename = "unknown_record")]
     UnknownRecord(types::DomainError),
     /// The intent names a role the tenant does not define.
-    #[serde(rename = "unknown-role")]
+    #[serde(rename = "unknown_role")]
     UnknownRole(types::DomainError),
     /// A field value is not of the declared field type.
-    #[serde(rename = "type-mismatch")]
+    #[serde(rename = "type_mismatch")]
     TypeMismatch(types::DomainError),
     /// A required field has no value.
-    #[serde(rename = "missing-required")]
+    #[serde(rename = "missing_required")]
     MissingRequired(types::DomainError),
     /// A declared constraint of the object type fails.
-    #[serde(rename = "constraint-violated")]
+    #[serde(rename = "constraint_violated")]
     ConstraintViolated(types::DomainError),
     /// A unique field repeats a value.
-    #[serde(rename = "unique-violated")]
+    #[serde(rename = "unique_violated")]
     UniqueViolated(types::DomainError),
     /// A reference field names no record of its target type.
-    #[serde(rename = "dangling-reference")]
+    #[serde(rename = "dangling_reference")]
     DanglingReference(types::DomainError),
     /// The record to delete is referred to by another record.
-    #[serde(rename = "still-referenced")]
+    #[serde(rename = "still_referenced")]
     StillReferenced(types::DomainError),
     /// A workflow field changes in a way no declared transition permits.
-    #[serde(rename = "workflow-violation")]
+    #[serde(rename = "workflow_violation")]
     WorkflowViolation(types::DomainError),
     /// The expected version differs from the stored version.
-    #[serde(rename = "version-conflict")]
+    #[serde(rename = "version_conflict")]
     VersionConflict(types::DomainError),
     /// The expected schema version differs from the current one.
-    #[serde(rename = "schema-conflict")]
+    #[serde(rename = "schema_conflict")]
     SchemaConflict(types::DomainError),
     /// The schema changes do not produce a consistent schema.
-    #[serde(rename = "invalid-schema")]
+    #[serde(rename = "invalid_schema")]
     InvalidSchema(types::DomainError),
     /// Strict mode and an existing record would not conform.
-    #[serde(rename = "migration-rejected")]
+    #[serde(rename = "migration_rejected")]
     MigrationRejected(types::DomainError),
     /// The snapshot lacks state the decision needs; the error names the missing need.
-    #[serde(rename = "insufficient-state")]
+    #[serde(rename = "insufficient_state")]
     InsufficientState(types::DomainError),
     /// A tenant expression fails or exhausts its step budget.
     #[serde(rename = "evaluation")]
     Evaluation(types::DomainError),
     /// The intent is malformed.
-    #[serde(rename = "invalid-intent")]
+    #[serde(rename = "invalid_intent")]
     InvalidIntent(types::DomainError),
 }
 
 impl fmt::Display for DecideIntentError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::TenantMismatch(_) => f.write_str("tenant-mismatch"),
-            Self::TenantExists(_) => f.write_str("tenant-exists"),
-            Self::TenantNotFound(_) => f.write_str("tenant-not-found"),
+            Self::TenantMismatch(_) => f.write_str("tenant_mismatch"),
+            Self::TenantExists(_) => f.write_str("tenant_exists"),
+            Self::TenantNotFound(_) => f.write_str("tenant_not_found"),
             Self::Unauthorized(_) => f.write_str("unauthorized"),
-            Self::UnknownObject(_) => f.write_str("unknown-object"),
-            Self::UnknownField(_) => f.write_str("unknown-field"),
-            Self::UnknownRecord(_) => f.write_str("unknown-record"),
-            Self::UnknownRole(_) => f.write_str("unknown-role"),
-            Self::TypeMismatch(_) => f.write_str("type-mismatch"),
-            Self::MissingRequired(_) => f.write_str("missing-required"),
-            Self::ConstraintViolated(_) => f.write_str("constraint-violated"),
-            Self::UniqueViolated(_) => f.write_str("unique-violated"),
-            Self::DanglingReference(_) => f.write_str("dangling-reference"),
-            Self::StillReferenced(_) => f.write_str("still-referenced"),
-            Self::WorkflowViolation(_) => f.write_str("workflow-violation"),
-            Self::VersionConflict(_) => f.write_str("version-conflict"),
-            Self::SchemaConflict(_) => f.write_str("schema-conflict"),
-            Self::InvalidSchema(_) => f.write_str("invalid-schema"),
-            Self::MigrationRejected(_) => f.write_str("migration-rejected"),
-            Self::InsufficientState(_) => f.write_str("insufficient-state"),
+            Self::UnknownObject(_) => f.write_str("unknown_object"),
+            Self::UnknownField(_) => f.write_str("unknown_field"),
+            Self::UnknownRecord(_) => f.write_str("unknown_record"),
+            Self::UnknownRole(_) => f.write_str("unknown_role"),
+            Self::TypeMismatch(_) => f.write_str("type_mismatch"),
+            Self::MissingRequired(_) => f.write_str("missing_required"),
+            Self::ConstraintViolated(_) => f.write_str("constraint_violated"),
+            Self::UniqueViolated(_) => f.write_str("unique_violated"),
+            Self::DanglingReference(_) => f.write_str("dangling_reference"),
+            Self::StillReferenced(_) => f.write_str("still_referenced"),
+            Self::WorkflowViolation(_) => f.write_str("workflow_violation"),
+            Self::VersionConflict(_) => f.write_str("version_conflict"),
+            Self::SchemaConflict(_) => f.write_str("schema_conflict"),
+            Self::InvalidSchema(_) => f.write_str("invalid_schema"),
+            Self::MigrationRejected(_) => f.write_str("migration_rejected"),
+            Self::InsufficientState(_) => f.write_str("insufficient_state"),
             Self::Evaluation(_) => f.write_str("evaluation"),
-            Self::InvalidIntent(_) => f.write_str("invalid-intent"),
+            Self::InvalidIntent(_) => f.write_str("invalid_intent"),
         }
     }
 }
@@ -177,34 +177,34 @@ pub struct AnswerReadResponse {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum AnswerReadError {
     /// The snapshot is of a tenant other than the one the context names.
-    #[serde(rename = "tenant-mismatch")]
+    #[serde(rename = "tenant_mismatch")]
     TenantMismatch(types::DomainError),
     /// The intent needs a tenant that has no state.
-    #[serde(rename = "tenant-not-found")]
+    #[serde(rename = "tenant_not_found")]
     TenantNotFound(types::DomainError),
     /// The intent names an object type the schema does not declare.
-    #[serde(rename = "unknown-object")]
+    #[serde(rename = "unknown_object")]
     UnknownObject(types::DomainError),
     /// The snapshot lacks state the decision needs; the error names the missing need.
-    #[serde(rename = "insufficient-state")]
+    #[serde(rename = "insufficient_state")]
     InsufficientState(types::DomainError),
     /// A tenant expression fails or exhausts its step budget.
     #[serde(rename = "evaluation")]
     Evaluation(types::DomainError),
     /// The intent is malformed.
-    #[serde(rename = "invalid-intent")]
+    #[serde(rename = "invalid_intent")]
     InvalidIntent(types::DomainError),
 }
 
 impl fmt::Display for AnswerReadError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::TenantMismatch(_) => f.write_str("tenant-mismatch"),
-            Self::TenantNotFound(_) => f.write_str("tenant-not-found"),
-            Self::UnknownObject(_) => f.write_str("unknown-object"),
-            Self::InsufficientState(_) => f.write_str("insufficient-state"),
+            Self::TenantMismatch(_) => f.write_str("tenant_mismatch"),
+            Self::TenantNotFound(_) => f.write_str("tenant_not_found"),
+            Self::UnknownObject(_) => f.write_str("unknown_object"),
+            Self::InsufficientState(_) => f.write_str("insufficient_state"),
             Self::Evaluation(_) => f.write_str("evaluation"),
-            Self::InvalidIntent(_) => f.write_str("invalid-intent"),
+            Self::InvalidIntent(_) => f.write_str("invalid_intent"),
         }
     }
 }
@@ -292,14 +292,14 @@ pub struct ApplyStateDeltaResponse {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum ApplyStateDeltaError {
     /// The expected version differs from the stored version.
-    #[serde(rename = "version-conflict")]
+    #[serde(rename = "version_conflict")]
     VersionConflict(types::DomainError),
 }
 
 impl fmt::Display for ApplyStateDeltaError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::VersionConflict(_) => f.write_str("version-conflict"),
+            Self::VersionConflict(_) => f.write_str("version_conflict"),
         }
     }
 }
@@ -328,14 +328,14 @@ pub struct PlanSchemaMigrationResponse {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum PlanSchemaMigrationError {
     /// The schema changes do not produce a consistent schema.
-    #[serde(rename = "invalid-schema")]
+    #[serde(rename = "invalid_schema")]
     InvalidSchema(types::DomainError),
 }
 
 impl fmt::Display for PlanSchemaMigrationError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::InvalidSchema(_) => f.write_str("invalid-schema"),
+            Self::InvalidSchema(_) => f.write_str("invalid_schema"),
         }
     }
 }
@@ -756,7 +756,6 @@ impl std::error::Error for PutSessionError {}
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct FindSessionByTokenRequest {
     /// Field `token-hash`.
-    #[serde(rename = "token-hash")]
     pub token_hash: types::Hash,
 }
 
@@ -794,7 +793,6 @@ impl std::error::Error for FindSessionByTokenError {}
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct FindSessionByIdRequest {
     /// Field `session-id`.
-    #[serde(rename = "session-id")]
     pub session_id: types::SessionId,
 }
 
@@ -986,7 +984,7 @@ pub struct CreateSnapshotResponse {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum CreateSnapshotError {
     /// The tenant does not exist.
-    #[serde(rename = "not-found")]
+    #[serde(rename = "not_found")]
     NotFound(types::StoreError),
     /// The store could not do the work right now (busy, I/O); safe to retry.
     #[serde(rename = "unavailable")]
@@ -996,7 +994,7 @@ pub enum CreateSnapshotError {
 impl fmt::Display for CreateSnapshotError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::NotFound(_) => f.write_str("not-found"),
+            Self::NotFound(_) => f.write_str("not_found"),
             Self::Unavailable(_) => f.write_str("unavailable"),
         }
     }
@@ -1060,7 +1058,7 @@ pub struct LoadSnapshotResponse {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum LoadSnapshotError {
     /// The snapshot does not exist.
-    #[serde(rename = "not-found")]
+    #[serde(rename = "not_found")]
     NotFound(types::StoreError),
     /// The store could not do the work right now (busy, I/O); safe to retry.
     #[serde(rename = "unavailable")]
@@ -1073,7 +1071,7 @@ pub enum LoadSnapshotError {
 impl fmt::Display for LoadSnapshotError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::NotFound(_) => f.write_str("not-found"),
+            Self::NotFound(_) => f.write_str("not_found"),
             Self::Unavailable(_) => f.write_str("unavailable"),
             Self::Corrupt(_) => f.write_str("corrupt"),
         }
@@ -1099,7 +1097,7 @@ pub struct RestoreSnapshotResponse {}
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum RestoreSnapshotError {
     /// The snapshot does not exist.
-    #[serde(rename = "not-found")]
+    #[serde(rename = "not_found")]
     NotFound(types::StoreError),
     /// The store could not do the work right now (busy, I/O); safe to retry.
     #[serde(rename = "unavailable")]
@@ -1109,7 +1107,7 @@ pub enum RestoreSnapshotError {
 impl fmt::Display for RestoreSnapshotError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::NotFound(_) => f.write_str("not-found"),
+            Self::NotFound(_) => f.write_str("not_found"),
             Self::Unavailable(_) => f.write_str("unavailable"),
         }
     }
@@ -1243,7 +1241,6 @@ pub struct ProvisionTenantResponse {
     /// Field `state`.
     pub state: types::TenantState,
     /// Field `bootstrap-credential`.
-    #[serde(rename = "bootstrap-credential")]
     pub bootstrap_credential: types::Secret,
 }
 
@@ -1295,7 +1292,7 @@ pub struct GetTenantResponse {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum GetTenantError {
     /// The tenant does not exist for this tenant.
-    #[serde(rename = "not-found")]
+    #[serde(rename = "not_found")]
     NotFound(types::ApiError),
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -1305,7 +1302,7 @@ pub enum GetTenantError {
 impl fmt::Display for GetTenantError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::NotFound(_) => f.write_str("not-found"),
+            Self::NotFound(_) => f.write_str("not_found"),
             Self::Unauthenticated(_) => f.write_str("unauthenticated"),
         }
     }
@@ -1333,14 +1330,14 @@ pub struct ResolveHostResponse {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum ResolveHostError {
     /// The host name is bound to no tenant; no tenant database is contacted (EDG-011).
-    #[serde(rename = "not-found")]
+    #[serde(rename = "not_found")]
     NotFound(types::ApiError),
 }
 
 impl fmt::Display for ResolveHostError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::NotFound(_) => f.write_str("not-found"),
+            Self::NotFound(_) => f.write_str("not_found"),
         }
     }
 }
@@ -1373,7 +1370,7 @@ pub enum SuspendTenantError {
     #[serde(rename = "forbidden")]
     Forbidden(types::ApiError),
     /// The tenant does not exist for this tenant.
-    #[serde(rename = "not-found")]
+    #[serde(rename = "not_found")]
     NotFound(types::ApiError),
 }
 
@@ -1382,7 +1379,7 @@ impl fmt::Display for SuspendTenantError {
         match self {
             Self::Unauthenticated(_) => f.write_str("unauthenticated"),
             Self::Forbidden(_) => f.write_str("forbidden"),
-            Self::NotFound(_) => f.write_str("not-found"),
+            Self::NotFound(_) => f.write_str("not_found"),
         }
     }
 }
@@ -1413,7 +1410,7 @@ pub enum ResumeTenantError {
     #[serde(rename = "forbidden")]
     Forbidden(types::ApiError),
     /// The tenant does not exist for this tenant.
-    #[serde(rename = "not-found")]
+    #[serde(rename = "not_found")]
     NotFound(types::ApiError),
     /// The tenant is not suspended.
     #[serde(rename = "conflict")]
@@ -1425,7 +1422,7 @@ impl fmt::Display for ResumeTenantError {
         match self {
             Self::Unauthenticated(_) => f.write_str("unauthenticated"),
             Self::Forbidden(_) => f.write_str("forbidden"),
-            Self::NotFound(_) => f.write_str("not-found"),
+            Self::NotFound(_) => f.write_str("not_found"),
             Self::Conflict(_) => f.write_str("conflict"),
         }
     }
@@ -1457,7 +1454,7 @@ pub enum ExportTenantError {
     #[serde(rename = "forbidden")]
     Forbidden(types::ApiError),
     /// The tenant does not exist for this tenant.
-    #[serde(rename = "not-found")]
+    #[serde(rename = "not_found")]
     NotFound(types::ApiError),
 }
 
@@ -1466,7 +1463,7 @@ impl fmt::Display for ExportTenantError {
         match self {
             Self::Unauthenticated(_) => f.write_str("unauthenticated"),
             Self::Forbidden(_) => f.write_str("forbidden"),
-            Self::NotFound(_) => f.write_str("not-found"),
+            Self::NotFound(_) => f.write_str("not_found"),
         }
     }
 }
@@ -1479,7 +1476,6 @@ pub struct DeleteTenantRequest {
     /// Field `tenant`.
     pub tenant: types::TenantId,
     /// Field `confirm-tenant`.
-    #[serde(rename = "confirm-tenant")]
     pub confirm_tenant: types::TenantId,
 }
 
@@ -1500,7 +1496,7 @@ pub enum DeleteTenantError {
     #[serde(rename = "forbidden")]
     Forbidden(types::ApiError),
     /// The tenant does not exist for this tenant.
-    #[serde(rename = "not-found")]
+    #[serde(rename = "not_found")]
     NotFound(types::ApiError),
     /// The request does not repeat the identifier of the tenant it destroys (OPS-325).
     #[serde(rename = "invalid")]
@@ -1512,7 +1508,7 @@ impl fmt::Display for DeleteTenantError {
         match self {
             Self::Unauthenticated(_) => f.write_str("unauthenticated"),
             Self::Forbidden(_) => f.write_str("forbidden"),
-            Self::NotFound(_) => f.write_str("not-found"),
+            Self::NotFound(_) => f.write_str("not_found"),
             Self::Invalid(_) => f.write_str("invalid"),
         }
     }
@@ -1544,7 +1540,7 @@ pub enum CancelTenantDeletionError {
     #[serde(rename = "forbidden")]
     Forbidden(types::ApiError),
     /// The tenant does not exist for this tenant.
-    #[serde(rename = "not-found")]
+    #[serde(rename = "not_found")]
     NotFound(types::ApiError),
     /// The grace period has ended.
     #[serde(rename = "conflict")]
@@ -1556,7 +1552,7 @@ impl fmt::Display for CancelTenantDeletionError {
         match self {
             Self::Unauthenticated(_) => f.write_str("unauthenticated"),
             Self::Forbidden(_) => f.write_str("forbidden"),
-            Self::NotFound(_) => f.write_str("not-found"),
+            Self::NotFound(_) => f.write_str("not_found"),
             Self::Conflict(_) => f.write_str("conflict"),
         }
     }
@@ -1579,18 +1575,10 @@ pub struct RestoreTenantResponse {
     /// Field `revision`.
     pub revision: u64,
     /// Field `first-lost-change`.
-    #[serde(
-        rename = "first-lost-change",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub first_lost_change: Option<u64>,
     /// Field `last-lost-change`.
-    #[serde(
-        rename = "last-lost-change",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_lost_change: Option<u64>,
 }
 
@@ -1604,7 +1592,7 @@ pub enum RestoreTenantError {
     #[serde(rename = "forbidden")]
     Forbidden(types::ApiError),
     /// The tenant does not exist for this tenant.
-    #[serde(rename = "not-found")]
+    #[serde(rename = "not_found")]
     NotFound(types::ApiError),
     /// The point lies outside the restorable window.
     #[serde(rename = "invalid")]
@@ -1616,7 +1604,7 @@ impl fmt::Display for RestoreTenantError {
         match self {
             Self::Unauthenticated(_) => f.write_str("unauthenticated"),
             Self::Forbidden(_) => f.write_str("forbidden"),
-            Self::NotFound(_) => f.write_str("not-found"),
+            Self::NotFound(_) => f.write_str("not_found"),
             Self::Invalid(_) => f.write_str("invalid"),
         }
     }
@@ -1688,7 +1676,7 @@ pub enum KeepSandboxError {
     #[serde(rename = "forbidden")]
     Forbidden(types::ApiError),
     /// The tenant does not exist for this tenant.
-    #[serde(rename = "not-found")]
+    #[serde(rename = "not_found")]
     NotFound(types::ApiError),
 }
 
@@ -1697,7 +1685,7 @@ impl fmt::Display for KeepSandboxError {
         match self {
             Self::Unauthenticated(_) => f.write_str("unauthenticated"),
             Self::Forbidden(_) => f.write_str("forbidden"),
-            Self::NotFound(_) => f.write_str("not-found"),
+            Self::NotFound(_) => f.write_str("not_found"),
         }
     }
 }
@@ -1773,7 +1761,7 @@ pub enum RemoveDomainBindingError {
     #[serde(rename = "forbidden")]
     Forbidden(types::ApiError),
     /// The binding does not exist for this tenant.
-    #[serde(rename = "not-found")]
+    #[serde(rename = "not_found")]
     NotFound(types::ApiError),
 }
 
@@ -1782,7 +1770,7 @@ impl fmt::Display for RemoveDomainBindingError {
         match self {
             Self::Unauthenticated(_) => f.write_str("unauthenticated"),
             Self::Forbidden(_) => f.write_str("forbidden"),
-            Self::NotFound(_) => f.write_str("not-found"),
+            Self::NotFound(_) => f.write_str("not_found"),
         }
     }
 }
@@ -1871,7 +1859,7 @@ pub struct RecordNextDueRequest {
     /// Field `tenant`.
     pub tenant: types::TenantId,
     /// Field `due-at`.
-    #[serde(rename = "due-at", default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub due_at: Option<prelude::Timestamp>,
 }
 
@@ -1886,7 +1874,7 @@ pub enum RecordNextDueError {
     #[serde(rename = "unauthenticated")]
     Unauthenticated(types::ApiError),
     /// The tenant does not exist for this tenant.
-    #[serde(rename = "not-found")]
+    #[serde(rename = "not_found")]
     NotFound(types::ApiError),
 }
 
@@ -1894,7 +1882,7 @@ impl fmt::Display for RecordNextDueError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Unauthenticated(_) => f.write_str("unauthenticated"),
-            Self::NotFound(_) => f.write_str("not-found"),
+            Self::NotFound(_) => f.write_str("not_found"),
         }
     }
 }
@@ -1907,7 +1895,6 @@ pub struct ApplyLayoutChangeRequest {
     /// Field `tenant`.
     pub tenant: types::TenantId,
     /// Field `layout-version`.
-    #[serde(rename = "layout-version")]
     pub layout_version: u32,
     /// Field `phase`.
     pub phase: types::LayoutPhase,
@@ -2214,7 +2201,6 @@ pub struct SignUpRequest {
     /// Field `password`.
     pub password: types::Secret,
     /// Field `display-name`.
-    #[serde(rename = "display-name")]
     pub display_name: types::DisplayName,
 }
 
@@ -2248,7 +2234,6 @@ impl std::error::Error for SignUpError {}
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct SignOutRequest {
     /// Field `session-id`.
-    #[serde(rename = "session-id")]
     pub session_id: types::SessionId,
 }
 
@@ -2345,7 +2330,6 @@ impl std::error::Error for ListSessionsError {}
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct RevokeSessionRequest {
     /// Field `session-id`.
-    #[serde(rename = "session-id")]
     pub session_id: types::SessionId,
 }
 
@@ -2360,7 +2344,7 @@ pub enum RevokeSessionError {
     #[serde(rename = "unauthenticated")]
     Unauthenticated(types::ApiError),
     /// The session does not exist for this tenant.
-    #[serde(rename = "not-found")]
+    #[serde(rename = "not_found")]
     NotFound(types::ApiError),
 }
 
@@ -2368,7 +2352,7 @@ impl fmt::Display for RevokeSessionError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Unauthenticated(_) => f.write_str("unauthenticated"),
-            Self::NotFound(_) => f.write_str("not-found"),
+            Self::NotFound(_) => f.write_str("not_found"),
         }
     }
 }
@@ -2481,7 +2465,7 @@ pub struct ConfigureRealmRequest {
     /// Field `policy`.
     pub policy: types::RealmPolicy,
     /// Field `dry-run`.
-    #[serde(rename = "dry-run", default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dry_run: Option<bool>,
 }
 
@@ -2558,7 +2542,7 @@ pub struct StartOidcSignInRequest {
     /// Field `provider`.
     pub provider: types::ProviderId,
     /// Field `return-to`.
-    #[serde(rename = "return-to", default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub return_to: Option<String>,
 }
 
@@ -2602,7 +2586,6 @@ pub struct CompleteOidcSignInResponse {
     /// Field `token`.
     pub token: types::Secret,
     /// Field `return-to`.
-    #[serde(rename = "return-to")]
     pub return_to: String,
 }
 
@@ -2650,14 +2633,14 @@ pub struct ServeSamlMetadataResponse {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum ServeSamlMetadataError {
     /// The provider does not exist for this tenant.
-    #[serde(rename = "not-found")]
+    #[serde(rename = "not_found")]
     NotFound(types::ApiError),
 }
 
 impl fmt::Display for ServeSamlMetadataError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::NotFound(_) => f.write_str("not-found"),
+            Self::NotFound(_) => f.write_str("not_found"),
         }
     }
 }
@@ -2670,11 +2653,7 @@ pub struct ConsumeSamlAssertionRequest {
     /// Field `response`.
     pub response: Vec<u8>,
     /// Field `relay-state`.
-    #[serde(
-        rename = "relay-state",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub relay_state: Option<types::Secret>,
 }
 
@@ -2684,7 +2663,6 @@ pub struct ConsumeSamlAssertionResponse {
     /// Field `token`.
     pub token: types::Secret,
     /// Field `return-to`.
-    #[serde(rename = "return-to")]
     pub return_to: String,
 }
 
@@ -2764,7 +2742,7 @@ pub enum DeprovisionUserError {
     #[serde(rename = "unauthenticated")]
     Unauthenticated(types::ApiError),
     /// The person does not exist for this tenant.
-    #[serde(rename = "not-found")]
+    #[serde(rename = "not_found")]
     NotFound(types::ApiError),
 }
 
@@ -2772,7 +2750,7 @@ impl fmt::Display for DeprovisionUserError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Unauthenticated(_) => f.write_str("unauthenticated"),
-            Self::NotFound(_) => f.write_str("not-found"),
+            Self::NotFound(_) => f.write_str("not_found"),
         }
     }
 }
@@ -2832,10 +2810,8 @@ pub struct IssueAccessTokenRequest {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct IssueAccessTokenResponse {
     /// Field `access-token`.
-    #[serde(rename = "access-token")]
     pub access_token: types::Secret,
     /// Field `expires-at`.
-    #[serde(rename = "expires-at")]
     pub expires_at: prelude::Timestamp,
     /// Field `scope`.
     pub scope: Vec<String>,
@@ -2867,14 +2843,12 @@ impl std::error::Error for IssueAccessTokenError {}
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct ExchangeTokenRequest {
     /// Field `subject-token`.
-    #[serde(rename = "subject-token")]
     pub subject_token: types::Secret,
     /// Field `agent`.
     pub agent: types::PrincipalId,
     /// Field `purpose`.
     pub purpose: String,
     /// Field `expires-at`.
-    #[serde(rename = "expires-at")]
     pub expires_at: prelude::Timestamp,
 }
 
@@ -2882,10 +2856,8 @@ pub struct ExchangeTokenRequest {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct ExchangeTokenResponse {
     /// Field `access-token`.
-    #[serde(rename = "access-token")]
     pub access_token: types::Secret,
     /// Field `expires-at`.
-    #[serde(rename = "expires-at")]
     pub expires_at: prelude::Timestamp,
 }
 
@@ -2934,11 +2906,7 @@ pub struct IntrospectTokenResponse {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subject: Option<types::PrincipalId>,
     /// Field `expires-at`.
-    #[serde(
-        rename = "expires-at",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expires_at: Option<prelude::Timestamp>,
 }
 
@@ -3004,7 +2972,7 @@ pub enum RevokeGrantError {
     #[serde(rename = "forbidden")]
     Forbidden(types::ApiError),
     /// The grant does not exist for this tenant.
-    #[serde(rename = "not-found")]
+    #[serde(rename = "not_found")]
     NotFound(types::ApiError),
 }
 
@@ -3013,7 +2981,7 @@ impl fmt::Display for RevokeGrantError {
         match self {
             Self::Unauthenticated(_) => f.write_str("unauthenticated"),
             Self::Forbidden(_) => f.write_str("forbidden"),
-            Self::NotFound(_) => f.write_str("not-found"),
+            Self::NotFound(_) => f.write_str("not_found"),
         }
     }
 }
@@ -3028,7 +2996,6 @@ pub struct CreateGrantRequest {
     /// Field `scopes`.
     pub scopes: Vec<String>,
     /// Field `expires-at`.
-    #[serde(rename = "expires-at")]
     pub expires_at: prelude::Timestamp,
 }
 
@@ -3109,10 +3076,8 @@ pub struct ScheduleJobRequest {
     /// Field `kind`.
     pub kind: String,
     /// Field `due-at`.
-    #[serde(rename = "due-at")]
     pub due_at: prelude::Timestamp,
     /// Field `idempotency-key`.
-    #[serde(rename = "idempotency-key")]
     pub idempotency_key: String,
     /// Field `payload`.
     pub payload: types::ValueMap,
@@ -3167,18 +3132,10 @@ pub struct LeaseJobResponse {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub job: Option<types::JobId>,
     /// Field `lease-token`.
-    #[serde(
-        rename = "lease-token",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lease_token: Option<u64>,
     /// Field `expires-at`.
-    #[serde(
-        rename = "expires-at",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expires_at: Option<prelude::Timestamp>,
 }
 
@@ -3210,7 +3167,6 @@ pub struct ReportJobResultRequest {
     /// Field `job`.
     pub job: types::JobId,
     /// Field `lease-token`.
-    #[serde(rename = "lease-token")]
     pub lease_token: u64,
     /// Field `outcome`.
     pub outcome: types::JobOutcome,
@@ -3271,7 +3227,7 @@ pub enum CancelJobError {
     #[serde(rename = "forbidden")]
     Forbidden(types::ApiError),
     /// The job does not exist for this tenant.
-    #[serde(rename = "not-found")]
+    #[serde(rename = "not_found")]
     NotFound(types::ApiError),
 }
 
@@ -3280,7 +3236,7 @@ impl fmt::Display for CancelJobError {
         match self {
             Self::Unauthenticated(_) => f.write_str("unauthenticated"),
             Self::Forbidden(_) => f.write_str("forbidden"),
-            Self::NotFound(_) => f.write_str("not-found"),
+            Self::NotFound(_) => f.write_str("not_found"),
         }
     }
 }
@@ -3311,7 +3267,7 @@ pub enum RetryJobError {
     #[serde(rename = "forbidden")]
     Forbidden(types::ApiError),
     /// The job does not exist for this tenant.
-    #[serde(rename = "not-found")]
+    #[serde(rename = "not_found")]
     NotFound(types::ApiError),
     /// The job has not failed.
     #[serde(rename = "conflict")]
@@ -3323,7 +3279,7 @@ impl fmt::Display for RetryJobError {
         match self {
             Self::Unauthenticated(_) => f.write_str("unauthenticated"),
             Self::Forbidden(_) => f.write_str("forbidden"),
-            Self::NotFound(_) => f.write_str("not-found"),
+            Self::NotFound(_) => f.write_str("not_found"),
             Self::Conflict(_) => f.write_str("conflict"),
         }
     }
@@ -3391,7 +3347,6 @@ pub struct DefineScheduleRequest {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct DefineScheduleResponse {
     /// Field `next-due`.
-    #[serde(rename = "next-due")]
     pub next_due: prelude::Timestamp,
 }
 
@@ -3505,11 +3460,7 @@ pub struct StartWorkflowRunRequest {
     /// Field `input`.
     pub input: types::ValueMap,
     /// Field `idempotency-key`.
-    #[serde(
-        rename = "idempotency-key",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub idempotency_key: Option<String>,
 }
 
@@ -3527,7 +3478,7 @@ pub enum StartWorkflowRunError {
     #[serde(rename = "unauthenticated")]
     Unauthenticated(types::ApiError),
     /// The workflow does not exist for this tenant.
-    #[serde(rename = "not-found")]
+    #[serde(rename = "not_found")]
     NotFound(types::ApiError),
 }
 
@@ -3535,7 +3486,7 @@ impl fmt::Display for StartWorkflowRunError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Unauthenticated(_) => f.write_str("unauthenticated"),
-            Self::NotFound(_) => f.write_str("not-found"),
+            Self::NotFound(_) => f.write_str("not_found"),
         }
     }
 }
@@ -3567,7 +3518,7 @@ pub enum AdvanceWorkflowRunError {
     #[serde(rename = "unauthenticated")]
     Unauthenticated(types::ApiError),
     /// The run does not exist for this tenant.
-    #[serde(rename = "not-found")]
+    #[serde(rename = "not_found")]
     NotFound(types::ApiError),
 }
 
@@ -3575,7 +3526,7 @@ impl fmt::Display for AdvanceWorkflowRunError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Unauthenticated(_) => f.write_str("unauthenticated"),
-            Self::NotFound(_) => f.write_str("not-found"),
+            Self::NotFound(_) => f.write_str("not_found"),
         }
     }
 }
@@ -3608,7 +3559,7 @@ pub enum ApproveWorkflowStepError {
     #[serde(rename = "forbidden")]
     Forbidden(types::ApiError),
     /// The run does not exist for this tenant.
-    #[serde(rename = "not-found")]
+    #[serde(rename = "not_found")]
     NotFound(types::ApiError),
 }
 
@@ -3617,7 +3568,7 @@ impl fmt::Display for ApproveWorkflowStepError {
         match self {
             Self::Unauthenticated(_) => f.write_str("unauthenticated"),
             Self::Forbidden(_) => f.write_str("forbidden"),
-            Self::NotFound(_) => f.write_str("not-found"),
+            Self::NotFound(_) => f.write_str("not_found"),
         }
     }
 }
@@ -3659,7 +3610,7 @@ pub struct DeliverViewResponse {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum DeliverViewError {
     /// The host or the page does not exist for this tenant.
-    #[serde(rename = "not-found")]
+    #[serde(rename = "not_found")]
     NotFound(types::ApiError),
     /// The caller exceeded a limit that applies to it.
     #[serde(rename = "throttled")]
@@ -3672,7 +3623,7 @@ pub enum DeliverViewError {
 impl fmt::Display for DeliverViewError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::NotFound(_) => f.write_str("not-found"),
+            Self::NotFound(_) => f.write_str("not_found"),
             Self::Throttled(_) => f.write_str("throttled"),
             Self::Unavailable(_) => f.write_str("unavailable"),
         }
@@ -3713,7 +3664,7 @@ pub struct RunNamedQueryResponse {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum RunNamedQueryError {
     /// The query does not exist for this tenant.
-    #[serde(rename = "not-found")]
+    #[serde(rename = "not_found")]
     NotFound(types::ApiError),
     /// The filter names a field the query does not declare filterable (CMS-165), or the query would read more records than its plan allows (CMS-255).
     #[serde(rename = "invalid")]
@@ -3726,7 +3677,7 @@ pub enum RunNamedQueryError {
 impl fmt::Display for RunNamedQueryError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::NotFound(_) => f.write_str("not-found"),
+            Self::NotFound(_) => f.write_str("not_found"),
             Self::Invalid(_) => f.write_str("invalid"),
             Self::Throttled(_) => f.write_str("throttled"),
         }
@@ -3759,7 +3710,7 @@ pub enum ListRecordVersionsError {
     #[serde(rename = "forbidden")]
     Forbidden(types::ApiError),
     /// The record does not exist for this tenant.
-    #[serde(rename = "not-found")]
+    #[serde(rename = "not_found")]
     NotFound(types::ApiError),
 }
 
@@ -3768,7 +3719,7 @@ impl fmt::Display for ListRecordVersionsError {
         match self {
             Self::Unauthenticated(_) => f.write_str("unauthenticated"),
             Self::Forbidden(_) => f.write_str("forbidden"),
-            Self::NotFound(_) => f.write_str("not-found"),
+            Self::NotFound(_) => f.write_str("not_found"),
         }
     }
 }
@@ -3801,7 +3752,7 @@ pub enum RestoreRecordVersionError {
     #[serde(rename = "forbidden")]
     Forbidden(types::ApiError),
     /// The version does not exist for this tenant.
-    #[serde(rename = "not-found")]
+    #[serde(rename = "not_found")]
     NotFound(types::ApiError),
 }
 
@@ -3810,7 +3761,7 @@ impl fmt::Display for RestoreRecordVersionError {
         match self {
             Self::Unauthenticated(_) => f.write_str("unauthenticated"),
             Self::Forbidden(_) => f.write_str("forbidden"),
-            Self::NotFound(_) => f.write_str("not-found"),
+            Self::NotFound(_) => f.write_str("not_found"),
         }
     }
 }
@@ -3825,11 +3776,7 @@ pub struct ShowPreviewRequest {
     /// Field `path`.
     pub path: String,
     /// Field `preview-token`.
-    #[serde(
-        rename = "preview-token",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preview_token: Option<types::Secret>,
 }
 
@@ -3847,7 +3794,7 @@ pub enum ShowPreviewError {
     #[serde(rename = "unauthenticated")]
     Unauthenticated(types::ApiError),
     /// The draft does not exist for this tenant.
-    #[serde(rename = "not-found")]
+    #[serde(rename = "not_found")]
     NotFound(types::ApiError),
 }
 
@@ -3855,7 +3802,7 @@ impl fmt::Display for ShowPreviewError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Unauthenticated(_) => f.write_str("unauthenticated"),
-            Self::NotFound(_) => f.write_str("not-found"),
+            Self::NotFound(_) => f.write_str("not_found"),
         }
     }
 }
@@ -3923,14 +3870,14 @@ pub struct ServeSitemapResponse {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum ServeSitemapError {
     /// The site does not exist for this tenant.
-    #[serde(rename = "not-found")]
+    #[serde(rename = "not_found")]
     NotFound(types::ApiError),
 }
 
 impl fmt::Display for ServeSitemapError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::NotFound(_) => f.write_str("not-found"),
+            Self::NotFound(_) => f.write_str("not_found"),
         }
     }
 }
@@ -3957,14 +3904,14 @@ pub struct ServeFeedResponse {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum ServeFeedError {
     /// The collection does not exist for this tenant.
-    #[serde(rename = "not-found")]
+    #[serde(rename = "not_found")]
     NotFound(types::ApiError),
 }
 
 impl fmt::Display for ServeFeedError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::NotFound(_) => f.write_str("not-found"),
+            Self::NotFound(_) => f.write_str("not_found"),
         }
     }
 }
@@ -4109,7 +4056,6 @@ pub struct RegisterEdgeDomainRequest {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct RegisterEdgeDomainResponse {
     /// Field `certificate-state`.
-    #[serde(rename = "certificate-state")]
     pub certificate_state: types::CertificateState,
 }
 
@@ -4141,7 +4087,6 @@ pub struct SignMediaAddressRequest {
     /// Field `principal`.
     pub principal: types::PrincipalId,
     /// Field `expires-at`.
-    #[serde(rename = "expires-at")]
     pub expires_at: prelude::Timestamp,
 }
 
@@ -4178,10 +4123,8 @@ impl std::error::Error for SignMediaAddressError {}
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct SetStorabilityDirectivesRequest {
     /// Field `principal-dependent`.
-    #[serde(rename = "principal-dependent")]
     pub principal_dependent: bool,
     /// Field `record-keys`.
-    #[serde(rename = "record-keys")]
     pub record_keys: Vec<String>,
 }
 
@@ -4189,10 +4132,8 @@ pub struct SetStorabilityDirectivesRequest {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct SetStorabilityDirectivesResponse {
     /// Field `cache-control`.
-    #[serde(rename = "cache-control")]
     pub cache_control: String,
     /// Field `surrogate-key`.
-    #[serde(rename = "surrogate-key")]
     pub surrogate_key: String,
     /// Field `vary`.
     pub vary: String,
@@ -4278,7 +4219,7 @@ pub enum DescribeOperationError {
     #[serde(rename = "unauthenticated")]
     Unauthenticated(types::ApiError),
     /// The operation does not exist for this tenant.
-    #[serde(rename = "not-found")]
+    #[serde(rename = "not_found")]
     NotFound(types::ApiError),
 }
 
@@ -4286,7 +4227,7 @@ impl fmt::Display for DescribeOperationError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Unauthenticated(_) => f.write_str("unauthenticated"),
-            Self::NotFound(_) => f.write_str("not-found"),
+            Self::NotFound(_) => f.write_str("not_found"),
         }
     }
 }
@@ -4301,21 +4242,13 @@ pub struct InvokeOperationRequest {
     /// Field `input`.
     pub input: types::ValueMap,
     /// Field `idempotency-key`.
-    #[serde(
-        rename = "idempotency-key",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub idempotency_key: Option<String>,
     /// Field `dry-run`.
-    #[serde(rename = "dry-run", default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dry_run: Option<bool>,
     /// Field `expected-revision`.
-    #[serde(
-        rename = "expected-revision",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expected_revision: Option<u64>,
 }
 
@@ -4388,7 +4321,7 @@ pub enum GetOperationHandleError {
     #[serde(rename = "unauthenticated")]
     Unauthenticated(types::ApiError),
     /// The handle does not exist for this tenant.
-    #[serde(rename = "not-found")]
+    #[serde(rename = "not_found")]
     NotFound(types::ApiError),
 }
 
@@ -4396,7 +4329,7 @@ impl fmt::Display for GetOperationHandleError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Unauthenticated(_) => f.write_str("unauthenticated"),
-            Self::NotFound(_) => f.write_str("not-found"),
+            Self::NotFound(_) => f.write_str("not_found"),
         }
     }
 }
@@ -4888,11 +4821,7 @@ pub struct AppendAuditEntryRequest {
     /// Field `actor`.
     pub actor: types::PrincipalId,
     /// Field `on-behalf-of`.
-    #[serde(
-        rename = "on-behalf-of",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub on_behalf_of: Option<types::PrincipalId>,
     /// Field `action`.
     pub action: String,
@@ -5024,11 +4953,7 @@ pub struct VerifyAuditChainResponse {
     /// Field `intact`.
     pub intact: bool,
     /// Field `first-break`.
-    #[serde(
-        rename = "first-break",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub first_break: Option<u64>,
 }
 
@@ -5216,7 +5141,7 @@ pub enum GetRunTraceError {
     #[serde(rename = "forbidden")]
     Forbidden(types::ApiError),
     /// The run does not exist for this tenant.
-    #[serde(rename = "not-found")]
+    #[serde(rename = "not_found")]
     NotFound(types::ApiError),
 }
 
@@ -5225,7 +5150,7 @@ impl fmt::Display for GetRunTraceError {
         match self {
             Self::Unauthenticated(_) => f.write_str("unauthenticated"),
             Self::Forbidden(_) => f.write_str("forbidden"),
-            Self::NotFound(_) => f.write_str("not-found"),
+            Self::NotFound(_) => f.write_str("not_found"),
         }
     }
 }
@@ -5321,14 +5246,14 @@ pub struct ShowSignInPageResponse {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum ShowSignInPageError {
     /// The host is bound to no tenant.
-    #[serde(rename = "not-found")]
+    #[serde(rename = "not_found")]
     NotFound(types::ApiError),
 }
 
 impl fmt::Display for ShowSignInPageError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::NotFound(_) => f.write_str("not-found"),
+            Self::NotFound(_) => f.write_str("not_found"),
         }
     }
 }
@@ -5380,12 +5305,10 @@ pub struct SaveDraftRequest {
     /// Field `record`.
     pub record: types::RecordId,
     /// Field `based-on-version`.
-    #[serde(rename = "based-on-version")]
     pub based_on_version: u64,
     /// Field `fields`.
     pub fields: types::ValueMap,
     /// Field `schema-version`.
-    #[serde(rename = "schema-version")]
     pub schema_version: u64,
 }
 
@@ -5446,7 +5369,7 @@ pub enum ShowReviewDiffError {
     #[serde(rename = "forbidden")]
     Forbidden(types::ApiError),
     /// The record does not exist for this tenant.
-    #[serde(rename = "not-found")]
+    #[serde(rename = "not_found")]
     NotFound(types::ApiError),
 }
 
@@ -5455,7 +5378,7 @@ impl fmt::Display for ShowReviewDiffError {
         match self {
             Self::Unauthenticated(_) => f.write_str("unauthenticated"),
             Self::Forbidden(_) => f.write_str("forbidden"),
-            Self::NotFound(_) => f.write_str("not-found"),
+            Self::NotFound(_) => f.write_str("not_found"),
         }
     }
 }
@@ -5468,7 +5391,6 @@ pub struct PreviewTokensRequest {
     /// Field `record`.
     pub record: types::RecordId,
     /// Field `as-reader`.
-    #[serde(rename = "as-reader")]
     pub as_reader: types::PrincipalId,
 }
 
@@ -5509,7 +5431,6 @@ pub struct PutFileRequest {
     /// Field `content`.
     pub content: Vec<u8>,
     /// Field `media-type`.
-    #[serde(rename = "media-type")]
     pub media_type: String,
 }
 
@@ -5557,7 +5478,6 @@ pub struct GetFileResponse {
     /// Field `content`.
     pub content: Vec<u8>,
     /// Field `media-type`.
-    #[serde(rename = "media-type")]
     pub media_type: String,
 }
 
@@ -5565,7 +5485,7 @@ pub struct GetFileResponse {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum GetFileError {
     /// No file of this tenant has the hash.
-    #[serde(rename = "not-found")]
+    #[serde(rename = "not_found")]
     NotFound(types::StoreError),
     /// The store could not do the work right now; safe to retry.
     #[serde(rename = "unavailable")]
@@ -5575,7 +5495,7 @@ pub enum GetFileError {
 impl fmt::Display for GetFileError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::NotFound(_) => f.write_str("not-found"),
+            Self::NotFound(_) => f.write_str("not_found"),
             Self::Unavailable(_) => f.write_str("unavailable"),
         }
     }
@@ -5622,7 +5542,6 @@ pub struct SignFileAddressRequest {
     /// Field `hash`.
     pub hash: types::Hash,
     /// Field `expires-at`.
-    #[serde(rename = "expires-at")]
     pub expires_at: prelude::Timestamp,
     /// Field `principal`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -5640,14 +5559,14 @@ pub struct SignFileAddressResponse {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum SignFileAddressError {
     /// No file of this tenant has the hash.
-    #[serde(rename = "not-found")]
+    #[serde(rename = "not_found")]
     NotFound(types::StoreError),
 }
 
 impl fmt::Display for SignFileAddressError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::NotFound(_) => f.write_str("not-found"),
+            Self::NotFound(_) => f.write_str("not_found"),
         }
     }
 }
@@ -5664,7 +5583,6 @@ pub struct PutCopyRequest {
     /// Field `tags`.
     pub tags: Vec<String>,
     /// Field `fresh-for`.
-    #[serde(rename = "fresh-for")]
     pub fresh_for: prelude::DurationMs,
 }
 
@@ -6008,7 +5926,6 @@ pub struct DestroyKeyRequest {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct DestroyKeyResponse {
     /// Field `destroyed-at`.
-    #[serde(rename = "destroyed-at")]
     pub destroyed_at: prelude::Timestamp,
 }
 
@@ -6036,7 +5953,6 @@ pub struct SubmitMessageRequest {
     /// Field `message`.
     pub message: types::MessageId,
     /// Field `idempotency-key`.
-    #[serde(rename = "idempotency-key")]
     pub idempotency_key: String,
     /// Field `to`.
     pub to: types::EmailAddress,
@@ -6061,10 +5977,10 @@ pub struct SubmitMessageResponse {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum SubmitMessageError {
     /// The provider refused for a temporary reason; the message stays queued (EML-007).
-    #[serde(rename = "temporary-refusal")]
+    #[serde(rename = "temporary_refusal")]
     TemporaryRefusal,
     /// The provider refused for a permanent reason; the message is recorded as failed with the reason (EML-008).
-    #[serde(rename = "permanent-refusal")]
+    #[serde(rename = "permanent_refusal")]
     PermanentRefusal,
     /// The address is on the suppression list of the tenant; the message is recorded as suppressed and left unsent (EML-018).
     #[serde(rename = "suppressed")]
@@ -6074,8 +5990,8 @@ pub enum SubmitMessageError {
 impl fmt::Display for SubmitMessageError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::TemporaryRefusal => f.write_str("temporary-refusal"),
-            Self::PermanentRefusal => f.write_str("permanent-refusal"),
+            Self::TemporaryRefusal => f.write_str("temporary_refusal"),
+            Self::PermanentRefusal => f.write_str("permanent_refusal"),
             Self::Suppressed => f.write_str("suppressed"),
         }
     }
@@ -6129,14 +6045,14 @@ pub struct StartLocalStackResponse {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum StartLocalStackError {
     /// A component or a dependency does not start.
-    #[serde(rename = "start-failed")]
+    #[serde(rename = "start_failed")]
     StartFailed,
 }
 
 impl fmt::Display for StartLocalStackError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::StartFailed => f.write_str("start-failed"),
+            Self::StartFailed => f.write_str("start_failed"),
         }
     }
 }
@@ -6167,18 +6083,18 @@ pub struct BuildComponentImageResponse {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum BuildComponentImageError {
     /// A dependency of the build carries a published vulnerability above the threshold (THR-257).
-    #[serde(rename = "vulnerable-dependency")]
+    #[serde(rename = "vulnerable_dependency")]
     VulnerableDependency,
     /// The specification gate has not passed the commit (REL-583).
-    #[serde(rename = "gate-failed")]
+    #[serde(rename = "gate_failed")]
     GateFailed,
 }
 
 impl fmt::Display for BuildComponentImageError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::VulnerableDependency => f.write_str("vulnerable-dependency"),
-            Self::GateFailed => f.write_str("gate-failed"),
+            Self::VulnerableDependency => f.write_str("vulnerable_dependency"),
+            Self::GateFailed => f.write_str("gate_failed"),
         }
     }
 }
@@ -6193,7 +6109,7 @@ pub struct ApplyDeploymentDescriptorRequest {
     /// Field `descriptor`.
     pub descriptor: Vec<u8>,
     /// Field `dry-run`.
-    #[serde(rename = "dry-run", default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dry_run: Option<bool>,
 }
 
@@ -6276,14 +6192,14 @@ pub struct InjectFaultResponse {}
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum InjectFaultError {
     /// The failure mode has no hook.
-    #[serde(rename = "unknown-failure")]
+    #[serde(rename = "unknown_failure")]
     UnknownFailure,
 }
 
 impl fmt::Display for InjectFaultError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::UnknownFailure => f.write_str("unknown-failure"),
+            Self::UnknownFailure => f.write_str("unknown_failure"),
         }
     }
 }
@@ -6401,11 +6317,7 @@ pub struct ForkTenantRequest {
     /// Field `tenant`.
     pub tenant: types::TenantId,
     /// Field `at-revision`.
-    #[serde(
-        rename = "at-revision",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub at_revision: Option<u64>,
 }
 
@@ -6426,7 +6338,7 @@ pub enum ForkTenantError {
     #[serde(rename = "forbidden")]
     Forbidden(types::ApiError),
     /// The tenant does not exist for this tenant.
-    #[serde(rename = "not-found")]
+    #[serde(rename = "not_found")]
     NotFound(types::ApiError),
 }
 
@@ -6435,7 +6347,7 @@ impl fmt::Display for ForkTenantError {
         match self {
             Self::Unauthenticated(_) => f.write_str("unauthenticated"),
             Self::Forbidden(_) => f.write_str("forbidden"),
-            Self::NotFound(_) => f.write_str("not-found"),
+            Self::NotFound(_) => f.write_str("not_found"),
         }
     }
 }
@@ -6461,11 +6373,7 @@ pub struct CountRequestResponse {
     /// Field `remaining`.
     pub remaining: u64,
     /// Field `retry-after`.
-    #[serde(
-        rename = "retry-after",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retry_after: Option<prelude::DurationMs>,
 }
 
@@ -6577,7 +6485,7 @@ pub struct ReadBackupResponse {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum ReadBackupError {
     /// No such image for this tenant.
-    #[serde(rename = "not-found")]
+    #[serde(rename = "not_found")]
     NotFound(types::StoreError),
     /// The store could not do the work right now; safe to retry.
     #[serde(rename = "unavailable")]
@@ -6587,7 +6495,7 @@ pub enum ReadBackupError {
 impl fmt::Display for ReadBackupError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::NotFound(_) => f.write_str("not-found"),
+            Self::NotFound(_) => f.write_str("not_found"),
             Self::Unavailable(_) => f.write_str("unavailable"),
         }
     }
@@ -6639,7 +6547,6 @@ pub struct ReceiveInboundWebhookRequest {
     /// Field `signature`.
     pub signature: Vec<u8>,
     /// Field `event-id`.
-    #[serde(rename = "event-id")]
     pub event_id: String,
 }
 
@@ -6798,14 +6705,14 @@ pub struct IssueSubmissionTokenResponse {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum IssueSubmissionTokenError {
     /// The form does not exist for this tenant.
-    #[serde(rename = "not-found")]
+    #[serde(rename = "not_found")]
     NotFound(types::ApiError),
 }
 
 impl fmt::Display for IssueSubmissionTokenError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::NotFound(_) => f.write_str("not-found"),
+            Self::NotFound(_) => f.write_str("not_found"),
         }
     }
 }
@@ -7269,7 +7176,7 @@ pub enum StreamReplyError {
     #[serde(rename = "unauthenticated")]
     Unauthenticated(types::ApiError),
     /// The conversation does not exist for this tenant.
-    #[serde(rename = "not-found")]
+    #[serde(rename = "not_found")]
     NotFound(types::ApiError),
 }
 
@@ -7277,7 +7184,7 @@ impl fmt::Display for StreamReplyError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Unauthenticated(_) => f.write_str("unauthenticated"),
-            Self::NotFound(_) => f.write_str("not-found"),
+            Self::NotFound(_) => f.write_str("not_found"),
         }
     }
 }
@@ -7302,7 +7209,7 @@ pub enum CancelTurnError {
     #[serde(rename = "unauthenticated")]
     Unauthenticated(types::ApiError),
     /// The turn does not exist for this tenant.
-    #[serde(rename = "not-found")]
+    #[serde(rename = "not_found")]
     NotFound(types::ApiError),
 }
 
@@ -7310,7 +7217,7 @@ impl fmt::Display for CancelTurnError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Unauthenticated(_) => f.write_str("unauthenticated"),
-            Self::NotFound(_) => f.write_str("not-found"),
+            Self::NotFound(_) => f.write_str("not_found"),
         }
     }
 }
@@ -7338,7 +7245,7 @@ pub enum GetPendingActionError {
     #[serde(rename = "unauthenticated")]
     Unauthenticated(types::ApiError),
     /// The pending action does not exist for this tenant.
-    #[serde(rename = "not-found")]
+    #[serde(rename = "not_found")]
     NotFound(types::ApiError),
 }
 
@@ -7346,7 +7253,7 @@ impl fmt::Display for GetPendingActionError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Unauthenticated(_) => f.write_str("unauthenticated"),
-            Self::NotFound(_) => f.write_str("not-found"),
+            Self::NotFound(_) => f.write_str("not_found"),
         }
     }
 }
@@ -7359,7 +7266,6 @@ pub struct ConfirmPendingActionRequest {
     /// Field `pending`.
     pub pending: types::PendingId,
     /// Field `preview-hash`.
-    #[serde(rename = "preview-hash")]
     pub preview_hash: types::Hash,
 }
 
@@ -7410,7 +7316,7 @@ pub enum CancelPendingActionError {
     #[serde(rename = "unauthenticated")]
     Unauthenticated(types::ApiError),
     /// The pending action does not exist for this tenant.
-    #[serde(rename = "not-found")]
+    #[serde(rename = "not_found")]
     NotFound(types::ApiError),
 }
 
@@ -7418,7 +7324,7 @@ impl fmt::Display for CancelPendingActionError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Unauthenticated(_) => f.write_str("unauthenticated"),
-            Self::NotFound(_) => f.write_str("not-found"),
+            Self::NotFound(_) => f.write_str("not_found"),
         }
     }
 }
@@ -7446,7 +7352,7 @@ pub enum UndoTurnError {
     #[serde(rename = "unauthenticated")]
     Unauthenticated(types::ApiError),
     /// The turn does not exist for this tenant.
-    #[serde(rename = "not-found")]
+    #[serde(rename = "not_found")]
     NotFound(types::ApiError),
 }
 
@@ -7454,7 +7360,7 @@ impl fmt::Display for UndoTurnError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Unauthenticated(_) => f.write_str("unauthenticated"),
-            Self::NotFound(_) => f.write_str("not-found"),
+            Self::NotFound(_) => f.write_str("not_found"),
         }
     }
 }
@@ -7485,7 +7391,7 @@ pub enum GetConversationError {
     #[serde(rename = "forbidden")]
     Forbidden(types::ApiError),
     /// The conversation does not exist for this tenant.
-    #[serde(rename = "not-found")]
+    #[serde(rename = "not_found")]
     NotFound(types::ApiError),
 }
 
@@ -7494,7 +7400,7 @@ impl fmt::Display for GetConversationError {
         match self {
             Self::Unauthenticated(_) => f.write_str("unauthenticated"),
             Self::Forbidden(_) => f.write_str("forbidden"),
-            Self::NotFound(_) => f.write_str("not-found"),
+            Self::NotFound(_) => f.write_str("not_found"),
         }
     }
 }
@@ -7558,7 +7464,7 @@ pub struct GenerateReplyResponse {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum GenerateReplyError {
     /// The provider did not answer.
-    #[serde(rename = "provider-unavailable")]
+    #[serde(rename = "provider_unavailable")]
     ProviderUnavailable,
     /// The provider refused the request.
     #[serde(rename = "refused")]
@@ -7568,7 +7474,7 @@ pub enum GenerateReplyError {
 impl fmt::Display for GenerateReplyError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::ProviderUnavailable => f.write_str("provider-unavailable"),
+            Self::ProviderUnavailable => f.write_str("provider_unavailable"),
             Self::Refused => f.write_str("refused"),
         }
     }
@@ -7594,14 +7500,14 @@ pub struct ReportModelUsageResponse {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum ReportModelUsageError {
     /// No such request.
-    #[serde(rename = "unknown-request")]
+    #[serde(rename = "unknown_request")]
     UnknownRequest,
 }
 
 impl fmt::Display for ReportModelUsageError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::UnknownRequest => f.write_str("unknown-request"),
+            Self::UnknownRequest => f.write_str("unknown_request"),
         }
     }
 }
@@ -7614,7 +7520,6 @@ pub struct SaveRecordEditRequest {
     /// Field `record`.
     pub record: types::RecordId,
     /// Field `based-on-version`.
-    #[serde(rename = "based-on-version")]
     pub based_on_version: u64,
     /// Field `fields`.
     pub fields: types::ValueMap,
@@ -7731,7 +7636,6 @@ pub struct UploadFileRequest {
     /// Field `content`.
     pub content: Vec<u8>,
     /// Field `declared-type`.
-    #[serde(rename = "declared-type")]
     pub declared_type: String,
     /// Field `name`.
     pub name: String,
@@ -7787,7 +7691,6 @@ pub struct ScanUploadResponse {
     /// Field `clean`.
     pub clean: bool,
     /// Field `media-type`.
-    #[serde(rename = "media-type")]
     pub media_type: String,
     /// Field `renditions`.
     pub renditions: Vec<types::Hash>,
@@ -7815,7 +7718,6 @@ impl std::error::Error for ScanUploadError {}
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct DeliverFileRequest {
     /// Field `file-host`.
-    #[serde(rename = "file-host")]
     pub file_host: types::Host,
     /// Field `address`.
     pub address: types::Url,
@@ -7827,7 +7729,6 @@ pub struct DeliverFileResponse {
     /// Field `content`.
     pub content: Vec<u8>,
     /// Field `media-type`.
-    #[serde(rename = "media-type")]
     pub media_type: String,
 }
 
@@ -7835,7 +7736,7 @@ pub struct DeliverFileResponse {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum DeliverFileError {
     /// The file does not exist for this tenant.
-    #[serde(rename = "not-found")]
+    #[serde(rename = "not_found")]
     NotFound(types::ApiError),
     /// The caller holds no permission for the operation.
     #[serde(rename = "forbidden")]
@@ -7845,7 +7746,7 @@ pub enum DeliverFileError {
 impl fmt::Display for DeliverFileError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::NotFound(_) => f.write_str("not-found"),
+            Self::NotFound(_) => f.write_str("not_found"),
             Self::Forbidden(_) => f.write_str("forbidden"),
         }
     }
@@ -7868,14 +7769,9 @@ pub struct CallExternalAddressRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub body: Option<Vec<u8>>,
     /// Field `idempotency-key`.
-    #[serde(
-        rename = "idempotency-key",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub idempotency_key: Option<String>,
     /// Field `max-bytes`.
-    #[serde(rename = "max-bytes")]
     pub max_bytes: u64,
 }
 
@@ -7894,13 +7790,13 @@ pub struct CallExternalAddressResponse {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum CallExternalAddressError {
     /// The address resolves to a private, link-local or loopback network, or is outside the outbound rule (WFL-008, WFL-252).
-    #[serde(rename = "address-refused")]
+    #[serde(rename = "address_refused")]
     AddressRefused,
     /// A redirect names an address the rule does not allow (WFL-251).
-    #[serde(rename = "redirect-refused")]
+    #[serde(rename = "redirect_refused")]
     RedirectRefused,
     /// The response exceeds the size the connector policy names (WFL-253).
-    #[serde(rename = "too-large")]
+    #[serde(rename = "too_large")]
     TooLarge,
     /// The address did not answer.
     #[serde(rename = "unreachable")]
@@ -7910,9 +7806,9 @@ pub enum CallExternalAddressError {
 impl fmt::Display for CallExternalAddressError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::AddressRefused => f.write_str("address-refused"),
-            Self::RedirectRefused => f.write_str("redirect-refused"),
-            Self::TooLarge => f.write_str("too-large"),
+            Self::AddressRefused => f.write_str("address_refused"),
+            Self::RedirectRefused => f.write_str("redirect_refused"),
+            Self::TooLarge => f.write_str("too_large"),
             Self::Unreachable => f.write_str("unreachable"),
         }
     }
@@ -7938,14 +7834,14 @@ pub struct FetchProviderMetadataResponse {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum FetchProviderMetadataError {
     /// The address is not the one the provider configuration names (FED-261).
-    #[serde(rename = "address-refused")]
+    #[serde(rename = "address_refused")]
     AddressRefused,
 }
 
 impl fmt::Display for FetchProviderMetadataError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::AddressRefused => f.write_str("address-refused"),
+            Self::AddressRefused => f.write_str("address_refused"),
         }
     }
 }
@@ -7962,7 +7858,6 @@ pub struct IssueAccessGrantRequest {
     /// Field `scope`.
     pub scope: Vec<String>,
     /// Field `expires-at`.
-    #[serde(rename = "expires-at")]
     pub expires_at: prelude::Timestamp,
 }
 
@@ -8022,7 +7917,7 @@ pub enum WithdrawAccessGrantError {
     #[serde(rename = "forbidden")]
     Forbidden(types::ApiError),
     /// The grant does not exist for this tenant.
-    #[serde(rename = "not-found")]
+    #[serde(rename = "not_found")]
     NotFound(types::ApiError),
 }
 
@@ -8031,7 +7926,7 @@ impl fmt::Display for WithdrawAccessGrantError {
         match self {
             Self::Unauthenticated(_) => f.write_str("unauthenticated"),
             Self::Forbidden(_) => f.write_str("forbidden"),
-            Self::NotFound(_) => f.write_str("not-found"),
+            Self::NotFound(_) => f.write_str("not_found"),
         }
     }
 }
@@ -8064,7 +7959,7 @@ pub enum ExportSubjectDataError {
     #[serde(rename = "forbidden")]
     Forbidden(types::ApiError),
     /// The principal does not exist for this tenant.
-    #[serde(rename = "not-found")]
+    #[serde(rename = "not_found")]
     NotFound(types::ApiError),
 }
 
@@ -8073,7 +7968,7 @@ impl fmt::Display for ExportSubjectDataError {
         match self {
             Self::Unauthenticated(_) => f.write_str("unauthenticated"),
             Self::Forbidden(_) => f.write_str("forbidden"),
-            Self::NotFound(_) => f.write_str("not-found"),
+            Self::NotFound(_) => f.write_str("not_found"),
         }
     }
 }
@@ -8112,7 +8007,7 @@ pub enum RectifySubjectFieldError {
     #[serde(rename = "forbidden")]
     Forbidden(types::ApiError),
     /// The record does not exist for this tenant.
-    #[serde(rename = "not-found")]
+    #[serde(rename = "not_found")]
     NotFound(types::ApiError),
 }
 
@@ -8121,7 +8016,7 @@ impl fmt::Display for RectifySubjectFieldError {
         match self {
             Self::Unauthenticated(_) => f.write_str("unauthenticated"),
             Self::Forbidden(_) => f.write_str("forbidden"),
-            Self::NotFound(_) => f.write_str("not-found"),
+            Self::NotFound(_) => f.write_str("not_found"),
         }
     }
 }
@@ -8151,7 +8046,7 @@ pub enum RestrictSubjectError {
     #[serde(rename = "forbidden")]
     Forbidden(types::ApiError),
     /// The principal does not exist for this tenant.
-    #[serde(rename = "not-found")]
+    #[serde(rename = "not_found")]
     NotFound(types::ApiError),
 }
 
@@ -8160,7 +8055,7 @@ impl fmt::Display for RestrictSubjectError {
         match self {
             Self::Unauthenticated(_) => f.write_str("unauthenticated"),
             Self::Forbidden(_) => f.write_str("forbidden"),
-            Self::NotFound(_) => f.write_str("not-found"),
+            Self::NotFound(_) => f.write_str("not_found"),
         }
     }
 }
@@ -8799,7 +8694,6 @@ pub struct SetListenerRuleRequest {
     /// Field `live`.
     pub live: types::ColourId,
     /// Field `canary-share`.
-    #[serde(rename = "canary-share")]
     pub canary_share: u8,
 }
 
@@ -9070,7 +8964,6 @@ pub struct InstallBundleRequest {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct InstallBundleResponse {
     /// Field `schema-version`.
-    #[serde(rename = "schema-version")]
     pub schema_version: u64,
 }
 
@@ -9078,18 +8971,18 @@ pub struct InstallBundleResponse {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum InstallBundleError {
     /// The bundle is malformed, holds executable code or a theme value outside the token schema (CMS-005, INT-155).
-    #[serde(rename = "invalid-bundle")]
+    #[serde(rename = "invalid_bundle")]
     InvalidBundle,
     /// A kernel intent of the installation was refused.
-    #[serde(rename = "install-refused")]
+    #[serde(rename = "install_refused")]
     InstallRefused(types::DomainError),
 }
 
 impl fmt::Display for InstallBundleError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::InvalidBundle => f.write_str("invalid-bundle"),
-            Self::InstallRefused(_) => f.write_str("install-refused"),
+            Self::InvalidBundle => f.write_str("invalid_bundle"),
+            Self::InstallRefused(_) => f.write_str("install_refused"),
         }
     }
 }
@@ -9114,14 +9007,14 @@ pub struct ParseBundleResponse {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum ParseBundleError {
     /// The document is not a valid bundle.
-    #[serde(rename = "invalid-bundle")]
+    #[serde(rename = "invalid_bundle")]
     InvalidBundle,
 }
 
 impl fmt::Display for ParseBundleError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::InvalidBundle => f.write_str("invalid-bundle"),
+            Self::InvalidBundle => f.write_str("invalid_bundle"),
         }
     }
 }
@@ -9328,7 +9221,6 @@ pub struct SetSessionCookieRequest {
     /// Field `token`.
     pub token: types::Secret,
     /// Field `max-age`.
-    #[serde(rename = "max-age")]
     pub max_age: i64,
 }
 
@@ -9381,7 +9273,7 @@ pub enum CallInternalServiceError {
     #[serde(rename = "unavailable")]
     Unavailable(types::ApiError),
     /// The service answered with an error reply, which is passed on.
-    #[serde(rename = "service-error")]
+    #[serde(rename = "service_error")]
     ServiceError(types::ApiError),
 }
 
@@ -9389,7 +9281,7 @@ impl fmt::Display for CallInternalServiceError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Unavailable(_) => f.write_str("unavailable"),
-            Self::ServiceError(_) => f.write_str("service-error"),
+            Self::ServiceError(_) => f.write_str("service_error"),
         }
     }
 }
@@ -9504,14 +9396,14 @@ pub struct TerminateTlsResponse {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum TerminateTlsError {
     /// No allowed protocol version or certificate matches.
-    #[serde(rename = "handshake-failed")]
+    #[serde(rename = "handshake_failed")]
     HandshakeFailed(types::ApiError),
 }
 
 impl fmt::Display for TerminateTlsError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::HandshakeFailed(_) => f.write_str("handshake-failed"),
+            Self::HandshakeFailed(_) => f.write_str("handshake_failed"),
         }
     }
 }
@@ -9630,7 +9522,6 @@ pub struct VerifyIdentityTokenResponse {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub email: Option<types::EmailAddress>,
     /// Field `email-verified`.
-    #[serde(rename = "email-verified")]
     pub email_verified: bool,
 }
 
@@ -9774,14 +9665,14 @@ pub struct SealFieldResponse {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum SealFieldError {
     /// The key was destroyed.
-    #[serde(rename = "key-destroyed")]
+    #[serde(rename = "key_destroyed")]
     KeyDestroyed(types::StoreError),
 }
 
 impl fmt::Display for SealFieldError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::KeyDestroyed(_) => f.write_str("key-destroyed"),
+            Self::KeyDestroyed(_) => f.write_str("key_destroyed"),
         }
     }
 }
@@ -9808,7 +9699,7 @@ pub struct OpenFieldResponse {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum OpenFieldError {
     /// The key was destroyed.
-    #[serde(rename = "key-destroyed")]
+    #[serde(rename = "key_destroyed")]
     KeyDestroyed(types::StoreError),
     /// The sealed bytes fail authentication.
     #[serde(rename = "tampered")]
@@ -9818,7 +9709,7 @@ pub enum OpenFieldError {
 impl fmt::Display for OpenFieldError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::KeyDestroyed(_) => f.write_str("key-destroyed"),
+            Self::KeyDestroyed(_) => f.write_str("key_destroyed"),
             Self::Tampered(_) => f.write_str("tampered"),
         }
     }
@@ -9892,7 +9783,6 @@ pub struct SendThroughMailProviderRequest {
     /// Field `message`.
     pub message: Vec<u8>,
     /// Field `idempotency-key`.
-    #[serde(rename = "idempotency-key")]
     pub idempotency_key: String,
 }
 
@@ -9907,18 +9797,18 @@ pub struct SendThroughMailProviderResponse {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum SendThroughMailProviderError {
     /// The provider refused for a temporary reason.
-    #[serde(rename = "temporary-refusal")]
+    #[serde(rename = "temporary_refusal")]
     TemporaryRefusal,
     /// The provider refused for a permanent reason.
-    #[serde(rename = "permanent-refusal")]
+    #[serde(rename = "permanent_refusal")]
     PermanentRefusal,
 }
 
 impl fmt::Display for SendThroughMailProviderError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::TemporaryRefusal => f.write_str("temporary-refusal"),
-            Self::PermanentRefusal => f.write_str("permanent-refusal"),
+            Self::TemporaryRefusal => f.write_str("temporary_refusal"),
+            Self::PermanentRefusal => f.write_str("permanent_refusal"),
         }
     }
 }
@@ -10027,7 +9917,6 @@ pub struct PerformOutboundHttpRequest {
     /// Field `request`.
     pub request: Vec<u8>,
     /// Field `max-bytes`.
-    #[serde(rename = "max-bytes")]
     pub max_bytes: u64,
 }
 
@@ -10042,7 +9931,7 @@ pub struct PerformOutboundHttpResponse {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum PerformOutboundHttpError {
     /// The response exceeds the size the connector policy names.
-    #[serde(rename = "too-large")]
+    #[serde(rename = "too_large")]
     TooLarge,
     /// The address did not answer.
     #[serde(rename = "unreachable")]
@@ -10052,7 +9941,7 @@ pub enum PerformOutboundHttpError {
 impl fmt::Display for PerformOutboundHttpError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::TooLarge => f.write_str("too-large"),
+            Self::TooLarge => f.write_str("too_large"),
             Self::Unreachable => f.write_str("unreachable"),
         }
     }
@@ -10073,7 +9962,6 @@ pub struct ScanContentResponse {
     /// Field `clean`.
     pub clean: bool,
     /// Field `media-type`.
-    #[serde(rename = "media-type")]
     pub media_type: String,
 }
 
@@ -10109,14 +9997,14 @@ pub struct ProduceRenditionResponse {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum ProduceRenditionError {
     /// The decompressed size exceeds the limit of the plan (CMS-263).
-    #[serde(rename = "too-large")]
+    #[serde(rename = "too_large")]
     TooLarge,
 }
 
 impl fmt::Display for ProduceRenditionError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::TooLarge => f.write_str("too-large"),
+            Self::TooLarge => f.write_str("too_large"),
         }
     }
 }
@@ -10134,7 +10022,6 @@ pub struct IssueDomainCertificateRequest {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct IssueDomainCertificateResponse {
     /// Field `certificate-state`.
-    #[serde(rename = "certificate-state")]
     pub certificate_state: types::CertificateState,
 }
 
@@ -10173,11 +10060,11 @@ pub struct ReadFrontPageResponse {
     pub params: serde_json::Value,
     /// Field `data`.
     pub data: types::FrontPageData,
-    /// Field `depends_on`.
+    /// Field `depends-on`.
     pub depends_on: Vec<String>,
     /// Field `revision`.
     pub revision: types::StateRevision,
-    /// Field `schema_version`.
+    /// Field `schema-version`.
     pub schema_version: types::SchemaVersion,
     /// Field `theme`.
     pub theme: types::ViewTheme,
@@ -10221,11 +10108,11 @@ pub struct ReadArticlePageResponse {
     pub params: serde_json::Value,
     /// Field `data`.
     pub data: types::ArticlePageData,
-    /// Field `depends_on`.
+    /// Field `depends-on`.
     pub depends_on: Vec<String>,
     /// Field `revision`.
     pub revision: types::StateRevision,
-    /// Field `schema_version`.
+    /// Field `schema-version`.
     pub schema_version: types::SchemaVersion,
     /// Field `theme`.
     pub theme: types::ViewTheme,
@@ -10235,7 +10122,7 @@ pub struct ReadArticlePageResponse {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum ReadArticlePageError {
     /// The page or the record it names does not exist for this tenant.
-    #[serde(rename = "not-found")]
+    #[serde(rename = "not_found")]
     NotFound(types::ApiError),
     /// A dependency of the operation did not answer.
     #[serde(rename = "unavailable")]
@@ -10245,7 +10132,7 @@ pub enum ReadArticlePageError {
 impl fmt::Display for ReadArticlePageError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::NotFound(_) => f.write_str("not-found"),
+            Self::NotFound(_) => f.write_str("not_found"),
             Self::Unavailable(_) => f.write_str("unavailable"),
         }
     }
@@ -10270,11 +10157,11 @@ pub struct ReadTopicsPageResponse {
     pub params: serde_json::Value,
     /// Field `data`.
     pub data: types::TopicsPageData,
-    /// Field `depends_on`.
+    /// Field `depends-on`.
     pub depends_on: Vec<String>,
     /// Field `revision`.
     pub revision: types::StateRevision,
-    /// Field `schema_version`.
+    /// Field `schema-version`.
     pub schema_version: types::SchemaVersion,
     /// Field `theme`.
     pub theme: types::ViewTheme,
@@ -10318,11 +10205,11 @@ pub struct ReadTopicPageResponse {
     pub params: serde_json::Value,
     /// Field `data`.
     pub data: types::TopicPageData,
-    /// Field `depends_on`.
+    /// Field `depends-on`.
     pub depends_on: Vec<String>,
     /// Field `revision`.
     pub revision: types::StateRevision,
-    /// Field `schema_version`.
+    /// Field `schema-version`.
     pub schema_version: types::SchemaVersion,
     /// Field `theme`.
     pub theme: types::ViewTheme,
@@ -10332,7 +10219,7 @@ pub struct ReadTopicPageResponse {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum ReadTopicPageError {
     /// The page or the record it names does not exist for this tenant.
-    #[serde(rename = "not-found")]
+    #[serde(rename = "not_found")]
     NotFound(types::ApiError),
     /// A dependency of the operation did not answer.
     #[serde(rename = "unavailable")]
@@ -10342,7 +10229,7 @@ pub enum ReadTopicPageError {
 impl fmt::Display for ReadTopicPageError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::NotFound(_) => f.write_str("not-found"),
+            Self::NotFound(_) => f.write_str("not_found"),
             Self::Unavailable(_) => f.write_str("unavailable"),
         }
     }
@@ -10367,11 +10254,11 @@ pub struct ReadAuthorsPageResponse {
     pub params: serde_json::Value,
     /// Field `data`.
     pub data: types::AuthorsPageData,
-    /// Field `depends_on`.
+    /// Field `depends-on`.
     pub depends_on: Vec<String>,
     /// Field `revision`.
     pub revision: types::StateRevision,
-    /// Field `schema_version`.
+    /// Field `schema-version`.
     pub schema_version: types::SchemaVersion,
     /// Field `theme`.
     pub theme: types::ViewTheme,
@@ -10415,11 +10302,11 @@ pub struct ReadAuthorPageResponse {
     pub params: serde_json::Value,
     /// Field `data`.
     pub data: types::AuthorPageData,
-    /// Field `depends_on`.
+    /// Field `depends-on`.
     pub depends_on: Vec<String>,
     /// Field `revision`.
     pub revision: types::StateRevision,
-    /// Field `schema_version`.
+    /// Field `schema-version`.
     pub schema_version: types::SchemaVersion,
     /// Field `theme`.
     pub theme: types::ViewTheme,
@@ -10429,7 +10316,7 @@ pub struct ReadAuthorPageResponse {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum ReadAuthorPageError {
     /// The page or the record it names does not exist for this tenant.
-    #[serde(rename = "not-found")]
+    #[serde(rename = "not_found")]
     NotFound(types::ApiError),
     /// A dependency of the operation did not answer.
     #[serde(rename = "unavailable")]
@@ -10439,7 +10326,7 @@ pub enum ReadAuthorPageError {
 impl fmt::Display for ReadAuthorPageError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::NotFound(_) => f.write_str("not-found"),
+            Self::NotFound(_) => f.write_str("not_found"),
             Self::Unavailable(_) => f.write_str("unavailable"),
         }
     }
@@ -10468,11 +10355,11 @@ pub struct ReadSearchPageResponse {
     pub params: serde_json::Value,
     /// Field `data`.
     pub data: types::SearchPageData,
-    /// Field `depends_on`.
+    /// Field `depends-on`.
     pub depends_on: Vec<String>,
     /// Field `revision`.
     pub revision: types::StateRevision,
-    /// Field `schema_version`.
+    /// Field `schema-version`.
     pub schema_version: types::SchemaVersion,
     /// Field `theme`.
     pub theme: types::ViewTheme,
@@ -10515,11 +10402,11 @@ pub struct ReadAboutPageResponse {
     pub params: serde_json::Value,
     /// Field `data`.
     pub data: types::AboutPageData,
-    /// Field `depends_on`.
+    /// Field `depends-on`.
     pub depends_on: Vec<String>,
     /// Field `revision`.
     pub revision: types::StateRevision,
-    /// Field `schema_version`.
+    /// Field `schema-version`.
     pub schema_version: types::SchemaVersion,
     /// Field `theme`.
     pub theme: types::ViewTheme,
@@ -10561,14 +10448,14 @@ pub struct ReadMissingPageResponse {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum ReadMissingPageError {
     /// The page or the record it names does not exist for this tenant.
-    #[serde(rename = "not-found")]
+    #[serde(rename = "not_found")]
     NotFound(types::ApiError),
 }
 
 impl fmt::Display for ReadMissingPageError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::NotFound(_) => f.write_str("not-found"),
+            Self::NotFound(_) => f.write_str("not_found"),
         }
     }
 }
@@ -10596,11 +10483,11 @@ pub struct ReadSignInViewResponse {
     pub params: serde_json::Value,
     /// Field `data`.
     pub data: types::SitePageData,
-    /// Field `depends_on`.
+    /// Field `depends-on`.
     pub depends_on: Vec<String>,
     /// Field `revision`.
     pub revision: types::StateRevision,
-    /// Field `schema_version`.
+    /// Field `schema-version`.
     pub schema_version: types::SchemaVersion,
     /// Field `theme`.
     pub theme: types::ViewTheme,
@@ -10641,11 +10528,11 @@ pub struct ReadDeskViewResponse {
     pub params: serde_json::Value,
     /// Field `data`.
     pub data: types::DeskPageData,
-    /// Field `depends_on`.
+    /// Field `depends-on`.
     pub depends_on: Vec<String>,
     /// Field `revision`.
     pub revision: types::StateRevision,
-    /// Field `schema_version`.
+    /// Field `schema-version`.
     pub schema_version: types::SchemaVersion,
     /// Field `theme`.
     pub theme: types::ViewTheme,
@@ -10696,11 +10583,11 @@ pub struct ReadNewArticleViewResponse {
     pub params: serde_json::Value,
     /// Field `data`.
     pub data: types::NewArticlePageData,
-    /// Field `depends_on`.
+    /// Field `depends-on`.
     pub depends_on: Vec<String>,
     /// Field `revision`.
     pub revision: types::StateRevision,
-    /// Field `schema_version`.
+    /// Field `schema-version`.
     pub schema_version: types::SchemaVersion,
     /// Field `theme`.
     pub theme: types::ViewTheme,
@@ -10756,19 +10643,17 @@ pub struct ReadEditArticleViewResponse {
     pub params: serde_json::Value,
     /// Field `data`.
     pub data: types::EditArticlePageData,
-    /// Field `depends_on`.
+    /// Field `depends-on`.
     pub depends_on: Vec<String>,
     /// Field `revision`.
     pub revision: types::StateRevision,
-    /// Field `schema_version`.
+    /// Field `schema-version`.
     pub schema_version: types::SchemaVersion,
     /// Field `theme`.
     pub theme: types::ViewTheme,
     /// Field `article-id`.
-    #[serde(rename = "article-id")]
     pub article_id: types::RecordId,
     /// Field `article-version`.
-    #[serde(rename = "article-version")]
     pub article_version: u64,
     /// Field `topics`.
     pub topics: Vec<types::OptionChoice>,
@@ -10780,7 +10665,7 @@ pub struct ReadEditArticleViewResponse {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum ReadEditArticleViewError {
     /// The page or the record it names does not exist for this tenant.
-    #[serde(rename = "not-found")]
+    #[serde(rename = "not_found")]
     NotFound(types::ApiError),
     /// No valid session or credential accompanies the request.
     #[serde(rename = "unauthenticated")]
@@ -10796,7 +10681,7 @@ pub enum ReadEditArticleViewError {
 impl fmt::Display for ReadEditArticleViewError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::NotFound(_) => f.write_str("not-found"),
+            Self::NotFound(_) => f.write_str("not_found"),
             Self::Unauthenticated(_) => f.write_str("unauthenticated"),
             Self::Forbidden(_) => f.write_str("forbidden"),
             Self::Unavailable(_) => f.write_str("unavailable"),
@@ -10823,19 +10708,17 @@ pub struct ReadSettingsViewResponse {
     pub params: serde_json::Value,
     /// Field `data`.
     pub data: types::SitePageData,
-    /// Field `depends_on`.
+    /// Field `depends-on`.
     pub depends_on: Vec<String>,
     /// Field `revision`.
     pub revision: types::StateRevision,
-    /// Field `schema_version`.
+    /// Field `schema-version`.
     pub schema_version: types::SchemaVersion,
     /// Field `theme`.
     pub theme: types::ViewTheme,
     /// Field `publication-id`.
-    #[serde(rename = "publication-id")]
     pub publication_id: types::RecordId,
     /// Field `publication-version`.
-    #[serde(rename = "publication-version")]
     pub publication_version: u64,
     /// Field `accents`.
     pub accents: Vec<String>,
@@ -10886,11 +10769,11 @@ pub struct ReadLabViewResponse {
     pub params: serde_json::Value,
     /// Field `data`.
     pub data: types::SitePageData,
-    /// Field `depends_on`.
+    /// Field `depends-on`.
     pub depends_on: Vec<String>,
     /// Field `revision`.
     pub revision: types::StateRevision,
-    /// Field `schema_version`.
+    /// Field `schema-version`.
     pub schema_version: types::SchemaVersion,
     /// Field `theme`.
     pub theme: types::ViewTheme,
@@ -11047,7 +10930,7 @@ pub struct CreateArticleRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cover: Option<String>,
     /// Field `cover-alt`.
-    #[serde(rename = "cover-alt", default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cover_alt: Option<String>,
     /// Field `featured`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -11061,7 +10944,6 @@ pub struct CreateArticleRequest {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct CreateArticleResponse {
     /// Field `article-id`.
-    #[serde(rename = "article-id")]
     pub article_id: types::RecordId,
     /// Field `version`.
     pub version: u64,
@@ -11109,7 +10991,6 @@ pub struct UpdateArticleRequest {
     /// Field `article`.
     pub article: types::RecordId,
     /// Field `expected-version`.
-    #[serde(rename = "expected-version")]
     pub expected_version: u64,
     /// Field `title`.
     pub title: String,
@@ -11133,7 +11014,7 @@ pub struct UpdateArticleRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cover: Option<String>,
     /// Field `cover-alt`.
-    #[serde(rename = "cover-alt", default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cover_alt: Option<String>,
     /// Field `featured`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -11147,7 +11028,6 @@ pub struct UpdateArticleRequest {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct UpdateArticleResponse {
     /// Field `article-id`.
-    #[serde(rename = "article-id")]
     pub article_id: types::RecordId,
     /// Field `version`.
     pub version: u64,
@@ -11199,7 +11079,6 @@ pub struct DeleteArticleRequest {
     /// Field `article`.
     pub article: types::RecordId,
     /// Field `expected-version`.
-    #[serde(rename = "expected-version")]
     pub expected_version: u64,
 }
 
@@ -11247,7 +11126,6 @@ pub struct SaveSiteSettingsRequest {
     /// Field `publication`.
     pub publication: types::RecordId,
     /// Field `expected-version`.
-    #[serde(rename = "expected-version")]
     pub expected_version: u64,
     /// Field `name`.
     pub name: String,

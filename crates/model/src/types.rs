@@ -1189,7 +1189,6 @@ pub struct AccessReport {
     /// Field `grants`.
     pub grants: Vec<GrantId>,
     /// Field `generated-at`.
-    #[serde(rename = "generated-at")]
     pub generated_at: prelude::Timestamp,
 }
 
@@ -1207,10 +1206,8 @@ pub struct Account {
     /// Field `principal`.
     pub principal: PrincipalId,
     /// Field `display-name`.
-    #[serde(rename = "display-name")]
     pub display_name: String,
     /// Field `password-hash`.
-    #[serde(rename = "password-hash")]
     pub password_hash: Hash,
 }
 
@@ -1275,10 +1272,8 @@ pub struct ActionPreview {
     /// Field `views`.
     pub views: Vec<String>,
     /// Field `preview-hash`.
-    #[serde(rename = "preview-hash")]
     pub preview_hash: Hash,
     /// Field `valid-until`.
-    #[serde(rename = "valid-until")]
     pub valid_until: prelude::Timestamp,
 }
 
@@ -1296,7 +1291,6 @@ pub struct AdapterCapabilities {
     /// Field `isolation`.
     pub isolation: String,
     /// Field `read-consistency`.
-    #[serde(rename = "read-consistency")]
     pub read_consistency: String,
     /// Field `notes`.
     pub notes: Vec<String>,
@@ -1316,7 +1310,6 @@ pub struct AdapterHealth {
     /// Field `tenants`.
     pub tenants: u64,
     /// Field `outbox-pending`.
-    #[serde(rename = "outbox-pending")]
     pub outbox_pending: u64,
 }
 
@@ -1371,7 +1364,6 @@ pub struct ArchiveManifest {
     /// Field `hashes`.
     pub hashes: Vec<Hash>,
     /// Field `not-carried`.
-    #[serde(rename = "not-carried")]
     pub not_carried: Vec<String>,
 }
 
@@ -1396,11 +1388,7 @@ pub struct AuditEntry {
     /// Field `actor`.
     pub actor: PrincipalId,
     /// Field `on-behalf-of`.
-    #[serde(
-        rename = "on-behalf-of",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub on_behalf_of: Option<PrincipalId>,
     /// Field `action`.
     pub action: String,
@@ -1409,7 +1397,6 @@ pub struct AuditEntry {
     /// Field `correlation`.
     pub correlation: CorrelationId,
     /// Field `previous-hash`.
-    #[serde(rename = "previous-hash")]
     pub previous_hash: Hash,
 }
 
@@ -1457,7 +1444,6 @@ pub struct Commit {
     /// Field `journal`.
     pub journal: JournalEntry,
     /// Field `revoke-sessions`.
-    #[serde(rename = "revoke-sessions")]
     pub revoke_sessions: Vec<PrincipalId>,
 }
 
@@ -1538,10 +1524,8 @@ pub struct DeletionCertificate {
     /// Field `tenant`.
     pub tenant: TenantId,
     /// Field `key-destroyed-at`.
-    #[serde(rename = "key-destroyed-at")]
     pub key_destroyed_at: prelude::Timestamp,
     /// Field `images-removed`.
-    #[serde(rename = "images-removed")]
     pub images_removed: Vec<prelude::Timestamp>,
 }
 
@@ -1579,7 +1563,6 @@ pub struct DeltaOp {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct DeskArticle {
     /// Field `article-id`.
-    #[serde(rename = "article-id")]
     pub article_id: RecordId,
     /// Field `version`.
     pub version: u64,
@@ -1659,7 +1642,7 @@ pub struct CategoryFields {
 
 /// Post Fields
 ///
-/// The fields of an article record as the BFF projects them (object post). The JSON names are snake_case (published_at, cover_alt); the contract inputs that save them use cover-alt.
+/// The fields of an article record as the BFF projects them (object post). The specification names them in kebab-case like every other field; on the wire they are snake_case (published_at, cover_alt), as system.generation.wireCase says.
 ///
 /// Specification type `post-fields`: a struct.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -1686,13 +1669,13 @@ pub struct PostFields {
     /// Field `featured`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub featured: Option<bool>,
-    /// Field `published_at`.
+    /// Field `published-at`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub published_at: Option<prelude::Timestamp>,
     /// Field `cover`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cover: Option<String>,
-    /// Field `cover_alt`.
+    /// Field `cover-alt`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cover_alt: Option<String>,
 }
@@ -1710,11 +1693,11 @@ pub struct AuthorRecord {
     pub object: String,
     /// Field `version`.
     pub version: u64,
-    /// Field `created_at`.
+    /// Field `created-at`.
     pub created_at: prelude::Timestamp,
-    /// Field `updated_at`.
+    /// Field `updated-at`.
     pub updated_at: prelude::Timestamp,
-    /// Field `created_by`.
+    /// Field `created-by`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created_by: Option<PrincipalId>,
     /// Field `fields`.
@@ -1734,11 +1717,11 @@ pub struct CategoryRecord {
     pub object: String,
     /// Field `version`.
     pub version: u64,
-    /// Field `created_at`.
+    /// Field `created-at`.
     pub created_at: prelude::Timestamp,
-    /// Field `updated_at`.
+    /// Field `updated-at`.
     pub updated_at: prelude::Timestamp,
-    /// Field `created_by`.
+    /// Field `created-by`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created_by: Option<PrincipalId>,
     /// Field `fields`.
@@ -1773,11 +1756,11 @@ pub struct PublicationRow {
     pub object: String,
     /// Field `version`.
     pub version: u64,
-    /// Field `created_at`.
+    /// Field `created-at`.
     pub created_at: prelude::Timestamp,
-    /// Field `updated_at`.
+    /// Field `updated-at`.
     pub updated_at: prelude::Timestamp,
-    /// Field `created_by`.
+    /// Field `created-by`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created_by: Option<PrincipalId>,
     /// Field `fields`.
@@ -1787,7 +1770,7 @@ pub struct PublicationRow {
     /// Field `blocks`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub blocks: Option<serde_json::Value>,
-    /// Field `reading_minutes`.
+    /// Field `reading-minutes`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reading_minutes: Option<u32>,
 }
@@ -1805,11 +1788,11 @@ pub struct AuthorRow {
     pub object: String,
     /// Field `version`.
     pub version: u64,
-    /// Field `created_at`.
+    /// Field `created-at`.
     pub created_at: prelude::Timestamp,
-    /// Field `updated_at`.
+    /// Field `updated-at`.
     pub updated_at: prelude::Timestamp,
-    /// Field `created_by`.
+    /// Field `created-by`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created_by: Option<PrincipalId>,
     /// Field `fields`.
@@ -1819,7 +1802,7 @@ pub struct AuthorRow {
     /// Field `blocks`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub blocks: Option<serde_json::Value>,
-    /// Field `reading_minutes`.
+    /// Field `reading-minutes`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reading_minutes: Option<u32>,
 }
@@ -1837,11 +1820,11 @@ pub struct CategoryRow {
     pub object: String,
     /// Field `version`.
     pub version: u64,
-    /// Field `created_at`.
+    /// Field `created-at`.
     pub created_at: prelude::Timestamp,
-    /// Field `updated_at`.
+    /// Field `updated-at`.
     pub updated_at: prelude::Timestamp,
-    /// Field `created_by`.
+    /// Field `created-by`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created_by: Option<PrincipalId>,
     /// Field `fields`.
@@ -1851,7 +1834,7 @@ pub struct CategoryRow {
     /// Field `blocks`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub blocks: Option<serde_json::Value>,
-    /// Field `reading_minutes`.
+    /// Field `reading-minutes`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reading_minutes: Option<u32>,
 }
@@ -1869,11 +1852,11 @@ pub struct PostRow {
     pub object: String,
     /// Field `version`.
     pub version: u64,
-    /// Field `created_at`.
+    /// Field `created-at`.
     pub created_at: prelude::Timestamp,
-    /// Field `updated_at`.
+    /// Field `updated-at`.
     pub updated_at: prelude::Timestamp,
-    /// Field `created_by`.
+    /// Field `created-by`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created_by: Option<PrincipalId>,
     /// Field `fields`.
@@ -1883,7 +1866,7 @@ pub struct PostRow {
     /// Field `blocks`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub blocks: Option<serde_json::Value>,
-    /// Field `reading_minutes`.
+    /// Field `reading-minutes`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reading_minutes: Option<u32>,
 }
@@ -2117,7 +2100,6 @@ pub struct DomainBinding {
     /// Field `tenant`.
     pub tenant: TenantId,
     /// Field `certificate-state`.
-    #[serde(rename = "certificate-state")]
     pub certificate_state: CertificateState,
 }
 
@@ -2445,10 +2427,8 @@ pub struct IdentityAssertion {
     /// Field `roles`.
     pub roles: Vec<String>,
     /// Field `authenticated-at`.
-    #[serde(rename = "authenticated-at")]
     pub authenticated_at: prelude::Timestamp,
     /// Field `expires-at`.
-    #[serde(rename = "expires-at")]
     pub expires_at: prelude::Timestamp,
     /// Field `signature`.
     pub signature: Vec<u8>,
@@ -2568,7 +2548,6 @@ pub struct JobSummary {
     /// Field `state`.
     pub state: JobState,
     /// Field `due-at`.
-    #[serde(rename = "due-at")]
     pub due_at: prelude::Timestamp,
     /// Field `attempts`.
     pub attempts: u32,
@@ -2586,26 +2565,19 @@ pub struct JournalEntry {
     /// Field `tenant`.
     pub tenant: TenantId,
     /// Field `base-revision`.
-    #[serde(
-        rename = "base-revision",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_revision: Option<StateRevision>,
     /// Field `revision`.
     pub revision: StateRevision,
     /// Field `kernel-version`.
-    #[serde(rename = "kernel-version")]
     pub kernel_version: String,
     /// Field `intent`.
     pub intent: Intent,
     /// Field `context`.
     pub context: Context,
     /// Field `delta-hash`.
-    #[serde(rename = "delta-hash")]
     pub delta_hash: Hash,
     /// Field `events-hash`.
-    #[serde(rename = "events-hash")]
     pub events_hash: Hash,
 }
 
@@ -2623,23 +2595,15 @@ pub struct JournalReplay {
     /// Field `agreed`.
     pub agreed: u64,
     /// Field `first-mismatch`.
-    #[serde(
-        rename = "first-mismatch",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub first_mismatch: Option<String>,
     /// Field `replayed-hash`.
-    #[serde(rename = "replayed-hash")]
     pub replayed_hash: Hash,
     /// Field `live-hash`.
-    #[serde(rename = "live-hash")]
     pub live_hash: Hash,
     /// Field `matches-live`.
-    #[serde(rename = "matches-live")]
     pub matches_live: bool,
     /// Field `other-kernel-versions`.
-    #[serde(rename = "other-kernel-versions")]
     pub other_kernel_versions: Vec<String>,
 }
 
@@ -2739,10 +2703,8 @@ pub struct MigrationPlan {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct ModelUsage {
     /// Field `input-tokens`.
-    #[serde(rename = "input-tokens")]
     pub input_tokens: u64,
     /// Field `output-tokens`.
-    #[serde(rename = "output-tokens")]
     pub output_tokens: u64,
 }
 
@@ -2897,10 +2859,8 @@ pub struct Projection {
     /// Field `proposal`.
     pub proposal: ProjectionProposal,
     /// Field `baseline-hash`.
-    #[serde(rename = "baseline-hash")]
     pub baseline_hash: Hash,
     /// Field `branch-hash`.
-    #[serde(rename = "branch-hash")]
     pub branch_hash: Hash,
     /// Field `diverged`.
     pub diverged: bool,
@@ -2927,10 +2887,8 @@ pub struct ProjectionProposal {
     /// Field `changes`.
     pub changes: Vec<SchemaChange>,
     /// Field `existing-data`.
-    #[serde(rename = "existing-data")]
     pub existing_data: ExistingData,
     /// Field `before-step`.
-    #[serde(rename = "before-step")]
     pub before_step: u64,
 }
 
@@ -2946,11 +2904,7 @@ pub struct ProjectionSummary {
     /// Field `summary`.
     pub summary: Vec<String>,
     /// Field `first-difference`.
-    #[serde(
-        rename = "first-difference",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub first_difference: Option<String>,
 }
 
@@ -3029,7 +2983,6 @@ pub struct ReadResult {
     /// Field `revision`.
     pub revision: StateRevision,
     /// Field `schema-version`.
-    #[serde(rename = "schema-version")]
     pub schema_version: SchemaVersion,
 }
 
@@ -3041,23 +2994,15 @@ pub struct ReadResult {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct RealmPolicy {
     /// Field `second-factor-required`.
-    #[serde(rename = "second-factor-required")]
     pub second_factor_required: bool,
     /// Field `password-sign-in`.
-    #[serde(rename = "password-sign-in")]
     pub password_sign_in: bool,
     /// Field `bound-domains`.
-    #[serde(rename = "bound-domains")]
     pub bound_domains: Vec<Domain>,
     /// Field `create-on-first-sign-in`.
-    #[serde(rename = "create-on-first-sign-in")]
     pub create_on_first_sign_in: bool,
     /// Field `default-role`.
-    #[serde(
-        rename = "default-role",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_role: Option<String>,
 }
 
@@ -3071,11 +3016,7 @@ pub struct Receipt {
     /// Field `revision`.
     pub revision: StateRevision,
     /// Field `last-position`.
-    #[serde(
-        rename = "last-position",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_position: Option<u64>,
 }
 
@@ -3122,11 +3063,7 @@ pub struct RunTrace {
     /// Field `agent`.
     pub agent: PrincipalId,
     /// Field `on-behalf-of`.
-    #[serde(
-        rename = "on-behalf-of",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub on_behalf_of: Option<PrincipalId>,
     /// Field `inputs`.
     pub inputs: Vec<String>,
@@ -3183,12 +3120,10 @@ pub struct SchemaVersion(pub u64);
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct ScimUser {
     /// Field `external-id`.
-    #[serde(rename = "external-id")]
     pub external_id: String,
     /// Field `email`.
     pub email: EmailAddress,
     /// Field `display-name`.
-    #[serde(rename = "display-name")]
     pub display_name: DisplayName,
     /// Field `active`.
     pub active: bool,
@@ -3234,33 +3169,23 @@ pub struct SessionRecord {
     /// Field `id`.
     pub id: SessionId,
     /// Field `token-hash`.
-    #[serde(rename = "token-hash")]
     pub token_hash: Hash,
     /// Field `csrf-token`.
-    #[serde(rename = "csrf-token")]
     pub csrf_token: Secret,
     /// Field `tenant`.
     pub tenant: TenantId,
     /// Field `principal`.
     pub principal: PrincipalId,
     /// Field `display-name`.
-    #[serde(rename = "display-name")]
     pub display_name: String,
     /// Field `created-at`.
-    #[serde(rename = "created-at")]
     pub created_at: prelude::Timestamp,
     /// Field `last-seen-at`.
-    #[serde(rename = "last-seen-at")]
     pub last_seen_at: prelude::Timestamp,
     /// Field `expires-at`.
-    #[serde(rename = "expires-at")]
     pub expires_at: prelude::Timestamp,
     /// Field `revoked-at`.
-    #[serde(
-        rename = "revoked-at",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub revoked_at: Option<prelude::Timestamp>,
 }
 
@@ -3274,13 +3199,10 @@ pub struct SessionSummary {
     /// Field `id`.
     pub id: SessionId,
     /// Field `created-at`.
-    #[serde(rename = "created-at")]
     pub created_at: prelude::Timestamp,
     /// Field `last-seen-at`.
-    #[serde(rename = "last-seen-at")]
     pub last_seen_at: prelude::Timestamp,
     /// Field `expires-at`.
-    #[serde(rename = "expires-at")]
     pub expires_at: prelude::Timestamp,
     /// Field `current`.
     pub current: bool,
@@ -3298,43 +3220,25 @@ pub struct SessionView {
     /// Field `tenant`.
     pub tenant: TenantId,
     /// Field `tenant-name`.
-    #[serde(rename = "tenant-name")]
     pub tenant_name: String,
     /// Field `session-id`.
-    #[serde(
-        rename = "session-id",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<SessionId>,
     /// Field `principal`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub principal: Option<PrincipalId>,
     /// Field `display-name`.
-    #[serde(
-        rename = "display-name",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub display_name: Option<DisplayName>,
     /// Field `roles`.
     pub roles: Vec<String>,
     /// Field `csrf-token`.
-    #[serde(
-        rename = "csrf-token",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub csrf_token: Option<Secret>,
     /// Field `expires-at`.
-    #[serde(
-        rename = "expires-at",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expires_at: Option<prelude::Timestamp>,
     /// Field `may-manage-schema`.
-    #[serde(rename = "may-manage-schema")]
     pub may_manage_schema: bool,
 }
 
@@ -3356,7 +3260,6 @@ pub struct SnapshotInfo {
     /// Field `hash`.
     pub hash: Hash,
     /// Field `created-at`.
-    #[serde(rename = "created-at")]
     pub created_at: prelude::Timestamp,
 }
 
@@ -3385,7 +3288,6 @@ pub struct SpendEntry {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct State {
     /// Field `tenant-id`.
-    #[serde(rename = "tenant-id")]
     pub tenant_id: TenantId,
     /// Field `tenant`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -3404,20 +3306,13 @@ pub struct StateDelta {
     /// Field `tenant`.
     pub tenant: TenantId,
     /// Field `base-revision`.
-    #[serde(
-        rename = "base-revision",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_revision: Option<StateRevision>,
     /// Field `new-revision`.
-    #[serde(rename = "new-revision")]
     pub new_revision: StateRevision,
     /// Field `next-record`.
-    #[serde(rename = "next-record")]
     pub next_record: u64,
     /// Field `event-seq`.
-    #[serde(rename = "event-seq")]
     pub event_seq: u64,
     /// Field `ops`.
     pub ops: Vec<DeltaOp>,
@@ -3444,7 +3339,6 @@ pub struct StorageMigration {
     /// Field `name`.
     pub name: String,
     /// Field `applied-at`.
-    #[serde(rename = "applied-at")]
     pub applied_at: prelude::Timestamp,
 }
 
@@ -3527,17 +3421,11 @@ pub struct StoredRecord {
     /// Field `version`.
     pub version: u64,
     /// Field `created-by`.
-    #[serde(
-        rename = "created-by",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created_by: Option<PrincipalId>,
     /// Field `created-at`.
-    #[serde(rename = "created-at")]
     pub created_at: prelude::Timestamp,
     /// Field `updated-at`.
-    #[serde(rename = "updated-at")]
     pub updated_at: prelude::Timestamp,
     /// Field `fields`.
     pub fields: ValueMap,
@@ -3578,7 +3466,6 @@ pub struct TenantDirectoryEntry {
     /// Field `region`.
     pub region: RegionId,
     /// Field `fetched-at`.
-    #[serde(rename = "fetched-at")]
     pub fetched_at: prelude::Timestamp,
 }
 
@@ -3627,10 +3514,8 @@ pub struct TenantSnapshot {
     /// Field `schema`.
     pub schema: Schema,
     /// Field `event-seq`.
-    #[serde(rename = "event-seq")]
     pub event_seq: u64,
     /// Field `next-record`.
-    #[serde(rename = "next-record")]
     pub next_record: u64,
     /// Field `records`.
     pub records: Vec<StoredRecord>,
@@ -3650,10 +3535,8 @@ pub struct TenantSummary {
     /// Field `revision`.
     pub revision: StateRevision,
     /// Field `schema-version`.
-    #[serde(rename = "schema-version")]
     pub schema_version: u64,
     /// Field `event-seq`.
-    #[serde(rename = "event-seq")]
     pub event_seq: u64,
     /// Field `records`.
     pub records: u64,
@@ -3667,14 +3550,12 @@ pub struct TenantSummary {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct Trace {
     /// Field `kernel-version`.
-    #[serde(rename = "kernel-version")]
     pub kernel_version: String,
     /// Field `scenario`.
     pub scenario: String,
     /// Field `seed`.
     pub seed: u64,
     /// Field `final-hash`.
-    #[serde(rename = "final-hash")]
     pub final_hash: Hash,
     /// Field `steps`.
     pub steps: u64,
@@ -3701,11 +3582,7 @@ pub struct TransitionOutput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<u64>,
     /// Field `schema-version`.
-    #[serde(
-        rename = "schema-version",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub schema_version: Option<SchemaVersion>,
 }
 
@@ -3757,12 +3634,10 @@ pub struct ViewData {
     /// Field `sections`.
     pub sections: ValueMap,
     /// Field `depends-on`.
-    #[serde(rename = "depends-on")]
     pub depends_on: Vec<ObjectTypeId>,
     /// Field `revision`.
     pub revision: StateRevision,
     /// Field `schema-version`.
-    #[serde(rename = "schema-version")]
     pub schema_version: SchemaVersion,
 }
 
@@ -3793,7 +3668,6 @@ pub struct WakeEntry {
     /// Field `tenant`.
     pub tenant: TenantId,
     /// Field `due-at`.
-    #[serde(rename = "due-at")]
     pub due_at: prelude::Timestamp,
 }
 
