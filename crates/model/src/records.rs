@@ -341,7 +341,7 @@ pub struct RecTenant {
     #[serde(rename = "tenant-id")]
     pub tenant_id: types::TenantId,
     /// Field `state`.
-    pub state: types::TenantState,
+    pub state: types::TenantLifecycle,
     /// Field `plan`.
     pub plan: types::PlanId,
     /// Field `placement-id`.
@@ -1342,13 +1342,13 @@ impl RecGrant {
 /// Retention: Every version is kept in the schema history.
 ///
 /// Record `rec-schema`, owned by component `runtime`, schema version 1.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RecSchema {
     /// Field `schema-version`.
     #[serde(rename = "schema-version")]
     pub schema_version: u64,
     /// Field `definition`.
-    pub definition: types::Schema,
+    pub definition: types::TenantSchema,
 }
 
 /// The key of a [`RecSchema`]: `schema-version`.
