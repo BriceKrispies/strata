@@ -75,6 +75,34 @@ pub fn rust_type(spec: &Spec, t: &TypeRef, scope: Scope, uses: &mut Uses) -> Tok
             let inner = rust_type(spec, inner, scope, uses);
             quote! { Option<#inner> }
         }
+        TypeRef::Map(key, value) => {
+            let key = rust_type(spec, key, scope, uses);
+            let value = rust_type(spec, value, scope, uses);
+            quote! { std::collections::BTreeMap<#key, #value> }
+        }
+    }
+}
+
+/// As [`rust_type`], with every declared type in `boxed` that the value holds inline (directly or
+/// through `option<T>`, not through a list or map, which already hold their items on the heap)
+/// written `Box<T>`: what a recursive type needs to have a finite size.
+pub fn rust_type_boxed(
+    spec: &Spec,
+    t: &TypeRef,
+    scope: Scope,
+    uses: &mut Uses,
+    boxed: &dyn Fn(&str) -> bool,
+) -> TokenStream {
+    match t {
+        TypeRef::Declared(id) if boxed(id) => {
+            let inner = rust_type(spec, t, scope, uses);
+            quote! { Box<#inner> }
+        }
+        TypeRef::Option(inner) => {
+            let inner = rust_type_boxed(spec, inner, scope, uses, boxed);
+            quote! { Option<#inner> }
+        }
+        _ => rust_type(spec, t, scope, uses),
     }
 }
 
@@ -199,6 +227,15 @@ pub struct Field {
 impl Field {
     /// The field as it appears in a braced struct.
     pub fn tokens(&self) -> TokenStream {
+        self.with_visibility(quote! { pub })
+    }
+
+    /// The field as it appears in a struct-like enum variant, which takes no visibility.
+    pub fn variant_tokens(&self) -> TokenStream {
+        self.with_visibility(TokenStream::new())
+    }
+
+    fn with_visibility(&self, vis: TokenStream) -> TokenStream {
         let doc = self.doc.tokens();
         let name = naming::ident(&self.rust_name);
         let ty = &self.ty;
@@ -222,7 +259,7 @@ impl Field {
         quote! {
             #doc
             #serde
-            pub #name: #ty,
+            #vis #name: #ty,
         }
     }
 }

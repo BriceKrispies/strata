@@ -205,10 +205,10 @@ pub fn leaf(spec: &Spec, t: &TypeRef) -> Option<Leaf> {
                     base: Builtin::String,
                     layers: vec![Layer::Enum],
                 }),
-                TypeKind::Struct { .. } => None,
+                TypeKind::Struct { .. } | TypeKind::Union { .. } => None,
             }
         }
-        TypeRef::List(_) | TypeRef::Option(_) => None,
+        TypeRef::List(_) | TypeRef::Option(_) | TypeRef::Map(..) => None,
     }
 }
 
@@ -225,12 +225,7 @@ pub fn peel_options(t: &TypeRef) -> (&TypeRef, usize) {
 
 /// The type as the specification writes it.
 pub fn type_text(t: &TypeRef) -> String {
-    match t {
-        TypeRef::Builtin(b) => b.as_str().to_string(),
-        TypeRef::Declared(id) => id.clone(),
-        TypeRef::List(inner) => format!("list<{}>", type_text(inner)),
-        TypeRef::Option(inner) => format!("option<{}>", type_text(inner)),
-    }
+    t.text()
 }
 
 /// The value `t` has when cleared: nothing for an option, empty for text, bytes and lists, zero
@@ -239,6 +234,7 @@ pub fn zero_value(spec: &Spec, t: &TypeRef, uses: &mut Uses) -> Option<TokenStre
     match t {
         TypeRef::Option(_) => Some(quote! { None }),
         TypeRef::List(_) => Some(quote! { Vec::new() }),
+        TypeRef::Map(..) => Some(quote! { std::collections::BTreeMap::new() }),
         _ => {
             let l = leaf(spec, t)?;
             let base = match l.base {
@@ -655,6 +651,7 @@ mod tests {
                     kind: TypeKind::Id {
                         repr: Some("string".into()),
                     },
+                    constraints: Default::default(),
                 },
                 TypeDecl {
                     id: "since".into(),
@@ -663,6 +660,7 @@ mod tests {
                     kind: TypeKind::Scalar {
                         repr: Some("timestamp".into()),
                     },
+                    constraints: Default::default(),
                 },
                 TypeDecl {
                     id: "state".into(),
@@ -671,6 +669,7 @@ mod tests {
                     kind: TypeKind::Enum {
                         values: vec!["a".into()],
                     },
+                    constraints: Default::default(),
                 },
             ],
             records: vec![],

@@ -401,6 +401,8 @@ fn raw_ty(t: &TypeRef) -> Ty {
         TypeRef::Declared(id) => Ty::Named(id.clone()),
         TypeRef::Option(inner) => Ty::Option(Box::new(raw_ty(inner))),
         TypeRef::List(inner) => Ty::List(Box::new(raw_ty(inner))),
+        // A map is opaque to expressions, like json: compared only with == and !=.
+        TypeRef::Map(..) => Ty::Named(t.text()),
     }
 }
 
@@ -446,7 +448,7 @@ fn view(spec: &Spec, t: &TypeRef, uses: &mut Uses) -> View {
                 None => View::plain(Ty::Named(id.clone())),
             }
         }
-        TypeRef::Option(_) | TypeRef::List(_) => View::plain(raw_ty(t)),
+        TypeRef::Option(_) | TypeRef::List(_) | TypeRef::Map(..) => View::plain(raw_ty(t)),
     }
 }
 
