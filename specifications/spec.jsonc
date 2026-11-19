@@ -13286,7 +13286,7 @@
     {"id":"oidc-session-issued","name":"Session issued from a provider","description":"The callback was accepted and the token verified.","delivery":"at-most-once"},
     {"id":"oidc-refused","name":"Callback refused","description":"The callback was not accepted.","delivery":"at-most-once"},
     {"id":"sr-revoked","name":"Session revoked","description":"A session is revoked."},
-    {"id":"sr-notice","name":"Revocation notice","description":"The identity service tells gateways about a revocation.","delivery":"at-most-once"},
+    {"id":"sr-notice","name":"Revocation notice","description":"The runtime tells the WebSocket connections of a session that it ended (a session notice), and the connections close. Gateways that keep a copy learn of it at their next check.","delivery":"at-most-once"},
     {"id":"sr-request","name":"Request with the session","description":"A request arrives at the gateway carrying the session.","payload":[{"name":"session-id","type":"session-id"}]},
     {"id":"sr-lookup","name":"Session lookup","description":"The gateway asks the identity service about the session.","delivery":"at-least-once"},
     {"id":"sr-lookup-answer","name":"Session lookup answer","description":"The identity service answers.","payload":[{"name":"valid","type":"bool"}],"delivery":"at-most-once"},
@@ -16873,6 +16873,21 @@
       "name": "Lockout ended",
       "description": "The lockout of a closed throttle ends.",
       "elapsed": true
+    },
+    {
+      "id": "sr-expired",
+      "name": "Session expired",
+      "description": "The runtime finds a session past its idle limit (2 hours since it was last used) or its absolute limit (12 hours since sign-in).",
+      "payload": [
+        {
+          "name": "idleMs",
+          "type": "u64"
+        },
+        {
+          "name": "ageMs",
+          "type": "u64"
+        }
+      ]
     }
   ],
   "behaviors": [
@@ -17133,7 +17148,7 @@
       },
       "realisation": "target"
     },
-    {"id":"session-authority-flow","name":"Session authority","subject":"identity-service","initial":"sa-live","description":"The identity service's record of one session.","variables":[{"name":"revoked","type":"boolean","initial":false},{"name":"revokedAt","type":"number","initial":0}],"states":[{"id":"sa-live","name":"Live"},{"id":"sa-revoked","name":"Revoked"}],"transitions":[
+    {"id":"session-authority-flow","name":"Session authority","subject":"runtime","initial":"sa-live","description":"The runtime's record of one session: it ends by an explicit revocation, by a sign-in, a password change, a recovery, a sign-out, a deactivation, or by expiry (2 hours without use, or 12 hours after sign-in).","variables":[{"name":"revoked","type":"boolean","initial":false},{"name":"revokedAt","type":"number","initial":0}],"states":[{"id":"sa-live","name":"Live"},{"id":"sa-revoked","name":"Revoked"}],"transitions":[
         {
           "id": "sa-revoke",
           "from": "sa-live",
@@ -17371,9 +17386,29 @@
               "emit": "sr-listed"
             }
           ]
+        },
+        {
+          "id": "sa-end-on-expiry",
+          "from": "sa-live",
+          "to": "sa-revoked",
+          "on": "sr-expired",
+          "guard": "event.idleMs >= 7200000 || event.ageMs >= 43200000",
+          "effects": [
+            {
+              "set": "revoked",
+              "to": true
+            },
+            {
+              "set": "revokedAt",
+              "to": "time"
+            },
+            {
+              "emit": "sr-notice"
+            }
+          ]
         }
       ]},
-    {"id":"session-authority-flow-impl","name":"Session authority (implementation)","subject":"identity-service","level":"implementation","initial":"sa-live-i","description":"The identity service record of one session (rec-session, keyed by session-id): revoked-at is set at the revocation and a lookup answers from it. The revocation notice to the gateways may be lost; a lookup is never answered from a copy. The refinement reads one model tick as one second (timeScale 1000, as for the gateway copy whose model compares with it), and the mapping gives the model the revocation in seconds.","transaction":{"scope":"transition","isolation":"serializable"},"variables":[{"name":"revoked","type":"boolean","initial":false,"repr":"bool"},{"name":"revokedAt","type":"number","initial":0,"repr":"timestamp"}],"states":[
+    {"id":"session-authority-flow-impl","name":"Session authority (implementation)","subject":"runtime","level":"implementation","initial":"sa-live-i","description":"The runtime record of one session (rec-session, keyed by session-id; the backend holds it in the store). revoked-at is set at the revocation and a lookup answers from it. A session also ends by expiry: the runtime finds it idle for 2 hours (7200000 ms; the idle time slides, written at most once a minute) or 12 hours (43200000 ms) after sign-in, and ends it the same way. Every end tells the WebSocket connections of the session with a session notice, and the connections close. The notice may be lost; a lookup is never answered from a copy. The refinement reads one model tick as one second (timeScale 1000, as for the gateway copy whose model compares with it), and the mapping gives the model the revocation in seconds.","transaction":{"scope":"transition","isolation":"serializable"},"variables":[{"name":"revoked","type":"boolean","initial":false,"repr":"bool"},{"name":"revokedAt","type":"number","initial":0,"repr":"timestamp"}],"states":[
         {
           "id": "sa-live-i",
           "name": "Session live"
@@ -17389,7 +17424,8 @@
             "sr-signed-out",
             "sr-deactivated",
             "sr-owner-revoked",
-            "sr-list"
+            "sr-list",
+            "sr-expired"
           ]
         }
       ],"transitions":[
@@ -17410,7 +17446,7 @@
             },
             {
               "emit": "sr-notice",
-              "to": "gateway"
+              "to": "web-application"
             }
           ]
         },
@@ -17471,7 +17507,7 @@
             },
             {
               "emit": "sr-notice",
-              "to": "gateway"
+              "to": "web-application"
             }
           ]
         },
@@ -17492,7 +17528,7 @@
             },
             {
               "emit": "sr-notice",
-              "to": "gateway"
+              "to": "web-application"
             }
           ]
         },
@@ -17512,7 +17548,7 @@
             },
             {
               "emit": "sr-notice",
-              "to": "gateway"
+              "to": "web-application"
             }
           ],
           "otherwise": true
@@ -17533,7 +17569,7 @@
             },
             {
               "emit": "sr-notice",
-              "to": "gateway"
+              "to": "web-application"
             }
           ],
           "otherwise": true
@@ -17554,7 +17590,7 @@
             },
             {
               "emit": "sr-notice",
-              "to": "gateway"
+              "to": "web-application"
             }
           ],
           "otherwise": true
@@ -17576,7 +17612,7 @@
             },
             {
               "emit": "sr-notice",
-              "to": "gateway"
+              "to": "web-application"
             }
           ]
         },
@@ -17592,6 +17628,27 @@
             }
           ],
           "otherwise": true
+        },
+        {
+          "id": "sa-end-on-expiry-i",
+          "from": "sa-live-i",
+          "to": "sa-revoked-i",
+          "on": "sr-expired",
+          "guard": "event.idleMs >= 7200000 || event.ageMs >= 43200000",
+          "effects": [
+            {
+              "set": "revoked",
+              "to": true
+            },
+            {
+              "set": "revokedAt",
+              "to": "time"
+            },
+            {
+              "emit": "sr-notice",
+              "to": "web-application"
+            }
+          ]
         }
       ],"refines":"session-authority-flow","refinement":{
         "states": {
@@ -17612,7 +17669,8 @@
           "sa-end-on-signout-i": "sa-end-on-signout",
           "sa-end-on-deactivation-i": "sa-end-on-deactivation",
           "sa-end-on-owner-i": "sa-end-on-owner",
-          "sa-list-i": "sa-list"
+          "sa-list-i": "sa-list",
+          "sa-end-on-expiry-i": "sa-end-on-expiry"
         },
         "timeScale": 1000
       },"storage":{"record":"rec-session","key":"session-id","fields":{"revokedAt":"revoked-at"}}},
