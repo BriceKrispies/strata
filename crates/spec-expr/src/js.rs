@@ -5,7 +5,9 @@
 //! timestamp/duration arithmetic, same refusal of literals that do not fit.
 //!
 //! Semantics follow `src/core/expr.js` of Exegra: `==`/`!=` are `===`/`!==`, `&&`, `||` and `=>`
-//! short-circuit, `+` on strings concatenates, `null` is an option's `None`. Operand types are
+//! short-circuit, `+` on strings concatenates, `null` is an option's `None`. A `json` value is
+//! compared structurally (as `serde_json::Value` is in the Rust target), with an inline deep
+//! equality, and is otherwise refused as in the Rust target. Operand types are
 //! established statically, so the dynamic type checks Exegra performs at evaluation cannot fail
 //! in well-typed output and are not emitted.
 //!
@@ -130,6 +132,10 @@ enum Pair {
     Typed(Ty, Out, Out),
     Untyped(Inf),
 }
+
+/// Structural equality of two JSON values, as `serde_json::Value`'s `==`: objects by their keys
+/// and members in any order, arrays element by element, everything else by `===`.
+const JSON_EQ: &str = "(($a, $b) => { const $eq = (x, y) => x === y || (typeof x === 'object' && typeof y === 'object' && x !== null && y !== null && Array.isArray(x) === Array.isArray(y) && Object.keys(x).length === Object.keys(y).length && Object.keys(x).every((k) => Object.prototype.hasOwnProperty.call(y, k) && $eq(x[k], y[k]))); return $eq($a, $b); })";
 
 fn is_float(t: &Ty) -> bool {
     matches!(t, Ty::F64)
@@ -299,6 +305,7 @@ impl Cx<'_> {
             Lit::Str(s) => Ok(Out::known(Ty::String, js_string(s))),
             Lit::Null => match hint {
                 Some(t @ Ty::Option(_)) => Ok(Out::known(t.clone(), "null".to_string())),
+                Some(Ty::Json) => Ok(Out::known(Ty::Json, "null".to_string())),
                 Some(t) => Err(self.err(
                     e,
                     TypeErrorKind::NullNeedsOption,
@@ -520,6 +527,14 @@ impl Cx<'_> {
                 e,
                 TypeErrorKind::BadOperand,
                 format!("operator \"{}\" needs numbers, got {ty}", op.symbol()),
+            ));
+        }
+        if ty == Ty::Json {
+            let not = if op == BinOp::Ne { "!" } else { "" };
+            return Ok(Out::known_at(
+                Ty::Bool,
+                format!("{not}{JSON_EQ}({}, {})", l.js, r.js),
+                if op == BinOp::Ne { UNARY } else { ATOM },
             ));
         }
         let sym = match op {

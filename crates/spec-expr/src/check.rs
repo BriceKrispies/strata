@@ -9,7 +9,10 @@
 //! * integer `/` is refused: Exegra computes the exact quotient (`7 / 2` is `3.5`), Rust truncates;
 //! * `Timestamp` and `Duration` compare but have no arithmetic (their Rust representation is not
 //!   fixed by the language);
-//! * `null` is an option value and is only compared with, or used as, an `option<T>`.
+//! * `null` is an option value and is only compared with, or used as, an `option<T>`; a `json`
+//!   value may also be compared with `null` (the JSON null);
+//! * `json` (any JSON value, `serde_json::Value`) is compared only with `==` and `!=`, against
+//!   another `json` value or `null`; it is not orderable and has no arithmetic or concatenation.
 //!
 //! Emitted expressions carry the binding strength of their top operator, and a parenthesis is
 //! written only where Rust's precedence needs one, so the output reads like hand-written code.
@@ -38,6 +41,8 @@ pub enum Ty {
     Timestamp,
     Duration,
     Uuid,
+    /// Any JSON value (`serde_json::Value`). It has no fields, so no path reaches into it.
+    Json,
     /// A declared `type` entity (id, scalar, enum or struct), by id.
     Named(String),
     List(Box<Ty>),
@@ -78,6 +83,7 @@ impl fmt::Display for Ty {
             Ty::Timestamp => f.write_str("timestamp"),
             Ty::Duration => f.write_str("duration"),
             Ty::Uuid => f.write_str("uuid"),
+            Ty::Json => f.write_str("json"),
             Ty::Named(n) => f.write_str(n),
             Ty::List(t) => write!(f, "list<{t}>"),
             Ty::Option(t) => write!(f, "option<{t}>"),
@@ -345,6 +351,7 @@ impl Cx<'_> {
                 Some(t @ Ty::Option(_)) => {
                     Ok(Out::known(t.clone(), quote!(::core::option::Option::None)))
                 }
+                Some(Ty::Json) => Ok(Out::known(Ty::Json, quote!(::serde_json::Value::Null))),
                 Some(t) => Err(self.err(
                     e,
                     TypeErrorKind::NullNeedsOption,
