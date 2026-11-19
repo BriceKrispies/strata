@@ -7,7 +7,17 @@
 //! specc check-deploy --spec <file> --out <dir>
 //! specc e2e          --spec <file> --out <dir>
 //! specc check-e2e    --spec <file> --out <dir>
+//! specc scenarios       --spec <file> --out <dir> [--crate-name <name>] [--exegra-project <id>] [--exegra-specs <dir>]
+//! specc check-scenarios --spec <file> --out <dir> [--crate-name <name>] [--exegra-project <id>] [--exegra-specs <dir>]
 //! ```
+//!
+//! `scenarios` writes `scenarios.rs` into `<dir>` (a generated crate's `tests` directory): one
+//! test per scenario that runs only implementation machines, with the expectations Exegra
+//! computes for it (see `strata_spec_compiler::scenarios`). It runs `node
+//! $EXEGRA_HOME/cli/exegra.js trace`, and is refused (`specc.scenarios-no-exegra`) when
+//! `EXEGRA_HOME` is not set. The crate name defaults to the name of `<dir>`'s parent; the Exegra
+//! project to the name of the specification's directory and the specs directory to that
+//! directory's parent.
 //!
 //! `deploy` and `check-deploy` do for the deployment files (a compose stack, Kubernetes
 //! manifests and Prometheus alert rules; see `strata_spec_compiler::deploy`) what `generate`
@@ -27,7 +37,7 @@ use std::process::ExitCode;
 
 use strata_spec_compiler::emit::relative_path;
 use strata_spec_compiler::{
-    deploy, e2e, generate, output, GeneratedFile, Options, RuntimeDependency,
+    deploy, e2e, generate, output, scenarios, GeneratedFile, Options, RuntimeDependency,
 };
 
 const USAGE: &str = "usage:
@@ -36,7 +46,9 @@ const USAGE: &str = "usage:
   specc deploy       --spec <file> --out <dir>
   specc check-deploy --spec <file> --out <dir>
   specc e2e          --spec <file> --out <dir>
-  specc check-e2e    --spec <file> --out <dir>";
+  specc check-e2e    --spec <file> --out <dir>
+  specc scenarios       --spec <file> --out <dir> [--crate-name <name>] [--exegra-project <id>] [--exegra-specs <dir>]
+  specc check-scenarios --spec <file> --out <dir> [--crate-name <name>] [--exegra-project <id>] [--exegra-specs <dir>]";
 
 /// The runtime crate of the checkout specc was built from.
 const DEFAULT_RUNTIME: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../runtime");
@@ -49,6 +61,8 @@ enum Command {
     CheckDeploy,
     E2e,
     CheckE2e,
+    Scenarios,
+    CheckScenarios,
 }
 
 struct Args {
@@ -57,6 +71,8 @@ struct Args {
     out: PathBuf,
     crate_name: String,
     runtime: PathBuf,
+    exegra_project: Option<String>,
+    exegra_specs: Option<PathBuf>,
 }
 
 fn parse_args(raw: &[String]) -> Result<Args, String> {
@@ -67,6 +83,8 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
         Some((c, rest)) if c == "check-deploy" => (Command::CheckDeploy, rest),
         Some((c, rest)) if c == "e2e" => (Command::E2e, rest),
         Some((c, rest)) if c == "check-e2e" => (Command::CheckE2e, rest),
+        Some((c, rest)) if c == "scenarios" => (Command::Scenarios, rest),
+        Some((c, rest)) if c == "check-scenarios" => (Command::CheckScenarios, rest),
         Some((c, _)) => return Err(format!("unknown command \"{c}\"")),
         None => return Err("no command given".to_string()),
     };
@@ -74,6 +92,8 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
     let mut out = None;
     let mut crate_name = None;
     let mut runtime = None;
+    let mut exegra_project = None;
+    let mut exegra_specs = None;
     let mut iter = rest.iter();
     while let Some(flag) = iter.next() {
         let slot = match flag.as_str() {
@@ -81,6 +101,8 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
             "--out" => &mut out,
             "--crate-name" => &mut crate_name,
             "--runtime" => &mut runtime,
+            "--exegra-project" => &mut exegra_project,
+            "--exegra-specs" => &mut exegra_specs,
             other => return Err(format!("unknown argument \"{other}\"")),
         };
         let Some(value) = iter.next() else {
@@ -99,9 +121,18 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
     if deploys && crate_name.is_some() {
         return Err("--crate-name does not apply to deploy or e2e".to_string());
     }
+    let scenario = matches!(command, Command::Scenarios | Command::CheckScenarios);
+    if !scenario && (exegra_project.is_some() || exegra_specs.is_some()) {
+        return Err("--exegra-project and --exegra-specs apply only to scenarios".to_string());
+    }
     let crate_name = match crate_name {
         _ if deploys => String::new(),
         Some(name) => name,
+        None if scenario => absolute(&out)?
+            .parent()
+            .and_then(|p| p.file_name())
+            .map(|n| n.to_string_lossy().into_owned())
+            .ok_or("--out has no parent to name the crate; give --crate-name")?,
         None => out
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
@@ -113,6 +144,8 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
         out,
         crate_name,
         runtime: PathBuf::from(runtime.unwrap_or_else(|| DEFAULT_RUNTIME.to_string())),
+        exegra_project,
+        exegra_specs: exegra_specs.map(PathBuf::from),
     })
 }
 
@@ -137,6 +170,9 @@ fn main() -> ExitCode {
     }
     if matches!(args.command, Command::E2e | Command::CheckE2e) {
         return run_e2e(&args, &text);
+    }
+    if matches!(args.command, Command::Scenarios | Command::CheckScenarios) {
+        return run_scenarios(&args, &text);
     }
     let runtime = match runtime_path(&args.out, &args.runtime) {
         Ok(path) => path,
@@ -167,9 +203,12 @@ fn main() -> ExitCode {
         Command::Generate => run_generate(&args.out, &files),
         Command::Check => run_check(&args.out, &files),
         // Handled before generation.
-        Command::Deploy | Command::CheckDeploy | Command::E2e | Command::CheckE2e => {
-            ExitCode::from(2)
-        }
+        Command::Deploy
+        | Command::CheckDeploy
+        | Command::E2e
+        | Command::CheckE2e
+        | Command::Scenarios
+        | Command::CheckScenarios => ExitCode::from(2),
     }
 }
 
@@ -214,6 +253,52 @@ fn run_e2e(args: &Args, text: &str) -> ExitCode {
     };
     match args.command {
         Command::CheckE2e => run_check(&args.out, &output.files),
+        _ => run_generate(&args.out, &output.files),
+    }
+}
+
+fn run_scenarios(args: &Args, text: &str) -> ExitCode {
+    let spec = absolute(Path::new(&args.spec)).unwrap_or_else(|_| PathBuf::from(&args.spec));
+    let project = args.exegra_project.clone().or_else(|| {
+        spec.parent()
+            .and_then(|p| p.file_name())
+            .map(|n| n.to_string_lossy().into_owned())
+    });
+    let specs = args
+        .exegra_specs
+        .clone()
+        .or_else(|| spec.parent().and_then(Path::parent).map(Path::to_path_buf));
+    let home = std::env::var_os("EXEGRA_HOME")
+        .map(PathBuf::from)
+        .filter(|h| h.join("cli").join("exegra.js").is_file());
+    let source = match (home, project, specs) {
+        (Some(home), Some(project), Some(specs)) => {
+            Some(scenarios::exegra_cli(home, project, specs))
+        }
+        _ => None,
+    };
+    let result = scenarios::generate(
+        &args.spec,
+        text,
+        &args.crate_name,
+        source.as_ref().map(|s| s as scenarios::TraceSource),
+    );
+    let output = match result {
+        Ok(output) => output,
+        Err(diagnostics) => {
+            for d in &diagnostics {
+                eprintln!("{d}");
+            }
+            eprintln!(
+                "specc: refused {} with {} diagnostic(s); nothing was written",
+                args.spec,
+                diagnostics.len()
+            );
+            return ExitCode::from(1);
+        }
+    };
+    match args.command {
+        Command::CheckScenarios => run_check(&args.out, &output.files),
         _ => run_generate(&args.out, &output.files),
     }
 }

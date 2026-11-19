@@ -21,6 +21,9 @@ pub const UUID_VERSION: &str = "1.24.0";
 pub const REGEX_VERSION: &str = "1.13.1";
 /// The sha2 version a generated crate with a hash-chained audit depends on (the workspace's).
 pub const SHA2_VERSION: &str = "0.10.9";
+/// The serde_json version a generated crate with machines has as a dev-dependency, for its
+/// scenario tests (the workspace's).
+pub const SERDE_JSON_VERSION: &str = "1.0.146";
 
 /// Code of a module that does not parse as Rust: a defect in specc, never in the specification.
 pub const INTERNAL: &str = "specc.internal";
@@ -104,7 +107,7 @@ pub fn crate_files(spec: &Spec, options: &Options) -> Result<Vec<GeneratedFile>,
 }
 
 /// Why a module could not be written.
-enum FileError {
+pub(crate) enum FileError {
     /// The tokens are not a Rust file.
     Syntax(syn::Error),
     /// `rustfmt` could not be started.
@@ -120,7 +123,7 @@ fn rust_file(spec: &Spec, tokens: TokenStream) -> Result<String, FileError> {
 }
 
 /// `text` formatted by `rustfmt --edition 2021` (the generated crate's edition) from PATH.
-fn rustfmt(text: &str) -> Result<String, FileError> {
+pub(crate) fn rustfmt(text: &str) -> Result<String, FileError> {
     let mut child = Command::new("rustfmt")
         .args(["--edition", "2021", "--emit", "stdout"])
         .stdin(Stdio::piped())
@@ -220,6 +223,11 @@ fn cargo_toml(spec: &Spec, options: &Options) -> String {
             }
         }
     };
+    let dev = if spec.machines.is_empty() {
+        String::new()
+    } else {
+        format!("\n[dev-dependencies]\nserde_json = \"{SERDE_JSON_VERSION}\"\n")
+    };
     let crate_name = &options.crate_name;
     let chained = spec
         .constructs
@@ -244,7 +252,8 @@ fn cargo_toml(spec: &Spec, options: &Options) -> String {
          serde = {{ version = \"{SERDE_VERSION}\", features = [\"derive\"] }}\n\
          {runtime}\
          {sha2}\
-         uuid = {{ version = \"{UUID_VERSION}\", features = [\"serde\"] }}\n",
+         uuid = {{ version = \"{UUID_VERSION}\", features = [\"serde\"] }}\n\
+         {dev}",
         header = toml_header(&spec.path),
     )
 }
