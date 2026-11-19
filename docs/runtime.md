@@ -366,7 +366,7 @@ database to `SqliteMachineStore`, so machine state can live in the tenant store'
   `{"kind": "contract", "error": <error>}`, and a runtime failure with
   `{"kind": "runtime", "code": <code>, "message": <text>}` at the code's status:
   `unauthenticated` 401, `forbidden` 403, `invalid_request` 400, `timeout` 504, `unavailable`
-  503, `internal` 500. A specification that states an error body has the generated crate supply
+  503, `internal` 500, `idempotency_conflict` 409. A specification that states an error body has the generated crate supply
   a body of its own (below); the client reads failures back with the same `FailureBody`.
 
 ```rust
@@ -381,14 +381,22 @@ requirement it does not recognise. A contract that states no `auth` carries the 
 requirement, which `ServiceToken` admits only with the token (`none` admits anyone).
 
 Per call, the server: asks the `Authorizer` about `SPEC.auth` and answers its refusal at once;
-for an idempotent contract with an `idempotency-key` header, replays an answer already given to
-the same caller subject under the same key, without running the handler (the last 1024 answers
-are kept in memory, per `Routes`); decodes the body (`invalid_request` if it does not decode);
-runs the handler, dropping it and answering `timeout` if it has not finished within
-`SPEC.timeout`; records the answer for replay when the contract is idempotent and a key was given.
-Runtime failures are not recorded for replay.
+for an idempotent contract with an `idempotency-key` header, replays an answer already given
+under the same scope (contract, tenant, caller subject, key) to the same request (its SHA-256
+digest) without running the handler. The tenant is the authorizer's `tenant` attribute, else the
+`x-tenant-id` header. The same key with another body is refused with `idempotency_conflict`
+(409; generated code answers it as the error kind `conflict`, unless `errorBody.runtime` maps
+`idempotency-conflict` elsewhere). A key is reserved while its first call runs: a duplicate waits
+for it, up to the contract's timeout, and gets its answer. The server decodes the body
+(`invalid_request` if it does not decode) and runs the handler on a task of its own; if it has not
+finished within `SPEC.timeout` the call answers `timeout`, but nothing is cancelled: the handler
+finishes and its answer is recorded, so the client's retry is answered from it and never runs a
+half-applied handler again. Answers are recorded when the contract is idempotent and a key was
+given; runtime failures (including `timeout`) are not. The recorded answers are bounded by bytes
+(`Routes::with_replay_bytes`, 8 MiB by default), oldest first out.
 
-The client sends `idempotency-key` (fresh per call, the same across its retries) for idempotent
+The client sends `idempotency-key` (fresh per call, 128 random bits; if the operating system's
+random source fails the call fails with `CallError::Key` and sends nothing, the same across its retries) for idempotent
 contracts and the correlation id in `x-correlation-id` when given. It retries an idempotent
 contract on a transport failure or a runtime `timeout` or `unavailable`; a contract that is not
 idempotent is sent once. How often and how long it waits is a `CallRetry`:

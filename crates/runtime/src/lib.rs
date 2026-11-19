@@ -33,7 +33,9 @@ pub mod sqlite;
 pub mod store;
 pub mod telemetry;
 
-pub use client::{CallBackoff, CallError, CallRetry, Client, Credentials, NoCredentials};
+pub use client::{
+    random_key, CallBackoff, CallError, CallRetry, Client, Credentials, KeySource, NoCredentials,
+};
 pub use clock::{Clock, SystemClock, TestClock, Time};
 pub use host::{
     Committed, DispatchError, DispatchReport, Dispatcher, Envelope, Handled, Host, HostError,
@@ -45,7 +47,7 @@ pub use machine::{
 pub use memory::MemoryStore;
 pub use routes::{
     Authorizer, Caller, Contract, ContractError, ContractSpec, Failure, FailureBody, FailureCode,
-    Refusal, Routes, RuntimeBody, ServiceToken,
+    Refusal, Routes, RuntimeBody, ServiceToken, TENANT,
 };
 pub use sqlite::{Database, SqliteMachineStore};
 pub use store::{

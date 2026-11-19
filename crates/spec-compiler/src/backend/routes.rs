@@ -109,7 +109,17 @@ pub const RUNTIME_FAILURES: &[(&str, &str)] = &[
     ("timeout", "Timeout"),
     ("unavailable", "Unavailable"),
     ("internal", "Internal"),
+    (IDEMPOTENCY_CONFLICT, "IdempotencyConflict"),
 ];
+
+/// The runtime failure of an idempotency key reused with a different request. Unlike the others
+/// the specification need not map it in `errorBody.runtime`: it is always answered as the error
+/// kind `conflict` unless the mapping says otherwise, so the specification only has to declare that
+/// kind (`system.generation.errorKinds`, 409 in Strata).
+pub const IDEMPOTENCY_CONFLICT: &str = "idempotency-conflict";
+
+/// The error kind the failures without a mapping in `errorBody.runtime` are answered as.
+const IDEMPOTENCY_CONFLICT_KIND: &str = "conflict";
 
 /// The timeout of a contract that states no `timeoutMs`, in milliseconds.
 pub const DEFAULT_TIMEOUT_MS: u64 = 30_000;
@@ -323,6 +333,13 @@ fn check_body(spec: &Spec, body: &ErrorBody) -> Vec<String> {
     }
     for (failure, _) in RUNTIME_FAILURES {
         match body.runtime.iter().find(|(k, _)| k == failure) {
+            None if *failure == IDEMPOTENCY_CONFLICT => {
+                if wire.kind_status(IDEMPOTENCY_CONFLICT_KIND).is_none() {
+                    problems.push(format!(
+                        "it does not declare the error kind \"{IDEMPOTENCY_CONFLICT_KIND}\" an idempotency key reused with another request is answered as"
+                    ));
+                }
+            }
             None => problems.push(format!(
                 "its runtime mapping does not name the runtime failure \"{failure}\""
             )),
@@ -794,7 +811,13 @@ fn body_items(spec: &Spec, names: &BodyNames) -> TokenStream {
             .iter()
             .find(|(k, _)| k == failure)
             .map(|(_, kind)| kind.clone())
-            .unwrap_or_default()
+            .unwrap_or_else(|| {
+                if failure == IDEMPOTENCY_CONFLICT {
+                    IDEMPOTENCY_CONFLICT_KIND.to_string()
+                } else {
+                    String::new()
+                }
+            })
     };
     let runtime_arms: Vec<TokenStream> = RUNTIME_FAILURES
         .iter()

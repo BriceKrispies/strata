@@ -17,6 +17,29 @@
 //!   [`FailureCode`] and `{"kind": "runtime", "code": ..., "message": ...}`. A specification that
 //!   states an error body has generated code supply a body of its own instead.
 //!
+//! Idempotent contracts are replayed. A call to an idempotent contract that carries an
+//! `idempotency-key` header is answered once per *scope*: the contract, the tenant, the caller and
+//! the key. The tenant is the `tenant` attribute of the [`Caller`] the authorizer established, and
+//! only when it set none, the [`TENANT`] header. The caller is [`Caller::subject`] (empty for a call
+//! that needed no identity, which then shares one scope per tenant). The request body is part of
+//! the call too: its SHA-256 digest is kept with the answer, and the same key with another body is
+//! refused with [`FailureCode::IdempotencyConflict`] (409; generated code answers it as the error
+//! kind `conflict` unless `errorBody.runtime` maps `idempotency-conflict` elsewhere), never
+//! replayed.
+//!
+//! A key is reserved while its first call runs. A duplicate that arrives meanwhile waits for the
+//! first call to finish and gets its answer, for at most the contract's timeout, after which it
+//! answers `timeout` and the client's retry waits again. A timeout cancels nothing: the handler
+//! runs on its own task to the end, whether or not the caller is still there, and its answer is
+//! recorded under the key, so a retry after a `timeout` never runs a half-applied handler a
+//! second time but receives the answer when it is ready. A `timeout` answer itself is never
+//! recorded, nor is any other runtime failure; the reservation is released so the next call with
+//! the key runs the handler. (A handler that panics is such a failure: `internal`.)
+//!
+//! The recorded answers are bounded by bytes, not by number: [`Routes::with_replay_bytes`] (8 MiB
+//! by default). The oldest answers are forgotten first; an answer larger than the bound is not
+//! recorded, and a repeated call then runs the handler again.
+//!
 //! Who may call is decided by an [`Authorizer`], written by hand per deployment, which reads the
 //! contract's `auth` requirement and the request headers. It is the one seam through which a route
 //! asks who the caller is. An authorizer refuses a requirement it does not recognise; a contract
@@ -31,14 +54,19 @@ use axum::routing::post;
 use axum::Router;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt;
 use std::future::Future;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
+use tokio::sync::watch;
 
 /// The header carrying a request's idempotency key.
 pub const IDEMPOTENCY_KEY: &str = "idempotency-key";
+
+/// The header a request's tenant is read from when the [`Authorizer`] established none.
+pub const TENANT: &str = "x-tenant-id";
 
 /// The header carrying a request's correlation id.
 pub const CORRELATION: &str = "x-correlation-id";
@@ -131,6 +159,8 @@ pub enum FailureCode {
     Unavailable,
     /// The runtime failed (500).
     Internal,
+    /// An idempotency key was reused with a different request (409).
+    IdempotencyConflict,
 }
 
 impl FailureCode {
@@ -143,6 +173,7 @@ impl FailureCode {
             FailureCode::Timeout => 504,
             FailureCode::Unavailable => 503,
             FailureCode::Internal => 500,
+            FailureCode::IdempotencyConflict => 409,
         }
     }
 }
@@ -270,32 +301,182 @@ impl Authorizer for ServiceToken {
     }
 }
 
-type ReplayKey = (&'static str, String, String);
+/// The scope of an idempotency key: contract, tenant, caller subject and the key itself.
+type ReplayKey = (&'static str, String, String, String);
 
-/// Answers to idempotent calls, by contract, subject and idempotency key. Bounded: the oldest
-/// answer is forgotten first.
+/// A SHA-256 digest of a request body.
+type Digest32 = [u8; 32];
+
+/// The default bound of the replay cache, in bytes.
+const DEFAULT_REPLAY_BYTES: usize = 8 * 1024 * 1024;
+
+/// What a recorded answer is charged besides its key and body: the entry's own bookkeeping.
+const ENTRY_OVERHEAD: usize = 96;
+
+fn digest_of(body: &[u8]) -> Digest32 {
+    let mut out = [0u8; 32];
+    out.copy_from_slice(Sha256::digest(body).as_slice());
+    out
+}
+
+enum Slot {
+    /// The first call is running. Removing the slot drops `done`, which wakes every waiter.
+    Pending {
+        digest: Digest32,
+        done: watch::Sender<()>,
+    },
+    /// The recorded answer.
+    Done {
+        digest: Digest32,
+        status: u16,
+        body: Bytes,
+    },
+}
+
+#[derive(Default)]
+struct ReplayState {
+    entries: BTreeMap<ReplayKey, Slot>,
+    /// The recorded answers, oldest first. Reserved keys are not in it and cost nothing.
+    order: VecDeque<ReplayKey>,
+    /// What the recorded answers cost together.
+    bytes: usize,
+}
+
+/// What [`Replay::claim`] found.
+enum Claim {
+    /// Nothing was known of the key: it is now reserved for the caller.
+    Reserved(Reservation),
+    /// The same request was answered before.
+    Replay(u16, Bytes),
+    /// The key was used with another request.
+    Conflict,
+    /// The same request is running; the receiver reports when it is over.
+    Wait(watch::Receiver<()>),
+}
+
+/// Answers to idempotent calls by scope, and the keys of the calls still running. Bounded by the
+/// bytes of the answers: the oldest answer is forgotten first.
 struct Replay {
-    capacity: usize,
-    entries: Mutex<(BTreeMap<ReplayKey, (u16, Bytes)>, VecDeque<ReplayKey>)>,
+    max_bytes: usize,
+    state: Mutex<ReplayState>,
+}
+
+fn cost(key: &ReplayKey, body: &Bytes) -> usize {
+    ENTRY_OVERHEAD + key.0.len() + key.1.len() + key.2.len() + key.3.len() + body.len()
 }
 
 impl Replay {
-    fn get(&self, key: &ReplayKey) -> Option<(u16, Bytes)> {
-        self.entries.lock().ok()?.0.get(key).cloned()
+    fn new(max_bytes: usize) -> Self {
+        Replay {
+            max_bytes,
+            state: Mutex::new(ReplayState::default()),
+        }
     }
 
-    fn put(&self, key: ReplayKey, status: u16, body: Bytes) {
-        let Ok(mut entries) = self.entries.lock() else {
+    fn lock(&self) -> MutexGuard<'_, ReplayState> {
+        // The state is consistent between statements; a panic elsewhere must not stop replays.
+        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Look the key up and, when it is unknown, reserve it for the caller.
+    fn claim(this: &Arc<Replay>, key: &ReplayKey, digest: Digest32) -> Claim {
+        let mut state = this.lock();
+        match state.entries.get(key) {
+            Some(Slot::Done {
+                digest: known,
+                status,
+                body,
+            }) => {
+                if *known == digest {
+                    Claim::Replay(*status, body.clone())
+                } else {
+                    Claim::Conflict
+                }
+            }
+            Some(Slot::Pending {
+                digest: known,
+                done,
+            }) => {
+                if *known == digest {
+                    Claim::Wait(done.subscribe())
+                } else {
+                    Claim::Conflict
+                }
+            }
+            None => {
+                let (done, _) = watch::channel(());
+                state
+                    .entries
+                    .insert(key.clone(), Slot::Pending { digest, done });
+                Claim::Reserved(Reservation {
+                    replay: this.clone(),
+                    key: key.clone(),
+                    settled: false,
+                })
+            }
+        }
+    }
+
+    /// End a reservation: record `answer` under the key, or only free the key when there is none
+    /// (or it does not fit the bound). Waiters wake either way.
+    fn settle(&self, key: &ReplayKey, answer: Option<(u16, &Bytes)>) {
+        let mut state = self.lock();
+        let Some(Slot::Pending { digest, done }) = state.entries.remove(key) else {
             return;
         };
-        let (map, order) = &mut *entries;
-        if map.insert(key.clone(), (status, body)).is_none() {
-            order.push_back(key);
-        }
-        while order.len() > self.capacity {
-            if let Some(oldest) = order.pop_front() {
-                map.remove(&oldest);
+        if let Some((status, body)) = answer {
+            let charge = cost(key, body);
+            if charge <= self.max_bytes {
+                state.entries.insert(
+                    key.clone(),
+                    Slot::Done {
+                        digest,
+                        status,
+                        body: body.clone(),
+                    },
+                );
+                state.order.push_back(key.clone());
+                state.bytes += charge;
+                while state.bytes > self.max_bytes {
+                    let Some(oldest) = state.order.pop_front() else {
+                        break;
+                    };
+                    if let Some(Slot::Done { body, .. }) = state.entries.remove(&oldest) {
+                        state.bytes = state.bytes.saturating_sub(cost(&oldest, &body));
+                    }
+                }
             }
+        }
+        drop(state);
+        // Dropping the sender wakes every receiver.
+        drop(done);
+    }
+}
+
+/// A key reserved for the call that is running. Dropped unsettled (the task ended abnormally), it
+/// frees the key.
+struct Reservation {
+    replay: Arc<Replay>,
+    key: ReplayKey,
+    settled: bool,
+}
+
+impl Reservation {
+    fn record(mut self, status: u16, body: &Bytes) {
+        self.settled = true;
+        self.replay.settle(&self.key, Some((status, body)));
+    }
+
+    fn release(mut self) {
+        self.settled = true;
+        self.replay.settle(&self.key, None);
+    }
+}
+
+impl Drop for Reservation {
+    fn drop(&mut self) {
+        if !self.settled {
+            self.replay.settle(&self.key, None);
         }
     }
 }
@@ -355,12 +536,17 @@ impl<A: Authorizer> Routes<A> {
         Routes {
             router: Router::new(),
             authorizer: Arc::new(authorizer),
-            replay: Arc::new(Replay {
-                capacity: 1024,
-                entries: Mutex::new((BTreeMap::new(), VecDeque::new())),
-            }),
+            replay: Arc::new(Replay::new(DEFAULT_REPLAY_BYTES)),
             telemetry: Arc::new(NoTelemetry),
         }
+    }
+
+    /// Keep at most `max_bytes` of recorded answers for replay (8 MiB by default), counting each
+    /// answer's body, its key and a fixed overhead. Call it before serving any contract: it
+    /// starts a new, empty cache.
+    pub fn with_replay_bytes(mut self, max_bytes: usize) -> Self {
+        self.replay = Arc::new(Replay::new(max_bytes));
+        self
     }
 
     /// Report each call to `telemetry`.
@@ -373,10 +559,13 @@ impl<A: Authorizer> Routes<A> {
     ///
     /// Per call: the authorizer checks `C::SPEC.auth` (a refusal answers at once); for an
     /// idempotent contract with an `idempotency-key` header, an answer already given to the same
-    /// subject under the same key is replayed without running the handler; the body is decoded
-    /// (`invalid_request` if it does not decode); the handler runs, and is dropped with a
-    /// `timeout` answer if it does not finish within `C::SPEC.timeout`; its answer is recorded
-    /// for replay when the contract is idempotent and a key was given.
+    /// tenant and subject under the same key and request is replayed without running the handler,
+    /// the same key with another request is refused (`idempotency_conflict`), and a call of the
+    /// same scope still running is waited for; the body is decoded (`invalid_request` if it does
+    /// not decode); the handler runs on a task of its own and the call answers `timeout` if it has
+    /// not finished within `C::SPEC.timeout`, without cancelling the handler; its answer is
+    /// recorded for replay when the contract is idempotent and a key was given. See the module
+    /// docs.
     pub fn serve<C, F, Fut>(self, handler: F) -> Self
     where
         C: Contract,
@@ -436,7 +625,7 @@ impl<A: Authorizer> Routes<A> {
 
 async fn answer<C, A, F, Fut>(
     authorizer: &A,
-    replay: &Replay,
+    replay: &Arc<Replay>,
     handler: F,
     headers: HeaderMap,
     body: Bytes,
@@ -445,7 +634,7 @@ where
     C: Contract,
     A: Authorizer,
     F: Fn(Caller, C::Request) -> Fut,
-    Fut: Future<Output = Result<C::Response, Failure<C::Error>>>,
+    Fut: Future<Output = Result<C::Response, Failure<C::Error>>> + Send + 'static,
 {
     let caller = match authorizer.authorize(C::SPEC.auth, &headers).await {
         Ok(caller) => caller,
@@ -455,16 +644,56 @@ where
         }
     };
     let correlation = caller.correlation.clone();
-    let replay_key = match header(&headers, IDEMPOTENCY_KEY) {
-        Some(key) if C::SPEC.idempotent => Some((
-            C::SPEC.id,
-            caller.subject.clone().unwrap_or_default(),
-            key.to_string(),
-        )),
+    let replay_key: Option<ReplayKey> = match header(&headers, IDEMPOTENCY_KEY) {
+        Some(key) if C::SPEC.idempotent => {
+            let tenant = caller
+                .attributes
+                .get("tenant")
+                .map(String::as_str)
+                .or_else(|| header(&headers, TENANT))
+                .unwrap_or("");
+            Some((
+                C::SPEC.id,
+                tenant.to_string(),
+                caller.subject.clone().unwrap_or_default(),
+                key.to_string(),
+            ))
+        }
         _ => None,
     };
-    if let Some(answer) = replay_key.as_ref().and_then(|key| replay.get(key)) {
-        return answer;
+    let mut reservation = None;
+    if let Some(key) = &replay_key {
+        let digest = digest_of(&body);
+        let deadline = tokio::time::Instant::now() + C::SPEC.timeout;
+        loop {
+            match Replay::claim(replay, key, digest) {
+                Claim::Replay(status, body) => return (status, body),
+                Claim::Conflict => {
+                    return runtime_failure::<C>(
+                        FailureCode::IdempotencyConflict,
+                        "the idempotency key was used with another request",
+                        &correlation,
+                    )
+                }
+                Claim::Reserved(held) => {
+                    reservation = Some(held);
+                    break;
+                }
+                Claim::Wait(mut finished) => {
+                    // The first call ends by dropping its slot, which makes `changed` fail.
+                    if tokio::time::timeout_at(deadline, finished.changed())
+                        .await
+                        .is_err()
+                    {
+                        return runtime_failure::<C>(
+                            FailureCode::Timeout,
+                            format!("{} did not finish in time", C::SPEC.id),
+                            &correlation,
+                        );
+                    }
+                }
+            }
+        }
     }
     let request: C::Request = match serde_json::from_slice(&body) {
         Ok(request) => request,
@@ -476,33 +705,55 @@ where
             )
         }
     };
-    let encoded = match tokio::time::timeout(C::SPEC.timeout, handler(caller, request)).await {
-        Err(_) => {
-            return runtime_failure::<C>(
-                FailureCode::Timeout,
-                format!("{} did not finish in time", C::SPEC.id),
-                &correlation,
-            )
+    // The handler runs on a task of its own, which settles the reservation when it is done. The
+    // timeout below only stops this call from waiting: it cancels nothing.
+    let pending = handler(caller, request);
+    let task_correlation = correlation.clone();
+    let mut task = tokio::spawn(async move {
+        let (answer, record) = match pending.await {
+            Ok(response) => match serde_json::to_vec(&response) {
+                Ok(body) => ((200, Bytes::from(body)), true),
+                Err(error) => (
+                    runtime_failure::<C>(
+                        FailureCode::Internal,
+                        error.to_string(),
+                        &task_correlation,
+                    ),
+                    false,
+                ),
+            },
+            Err(Failure::Runtime { code, message }) => (
+                runtime_failure::<C>(code, message, &task_correlation),
+                false,
+            ),
+            Err(Failure::Contract { error }) => (
+                encoded::<C>(Failure::Contract { error: &error }, &task_correlation),
+                true,
+            ),
+        };
+        if let Some(held) = reservation {
+            if record {
+                held.record(answer.0, &answer.1);
+            } else {
+                held.release();
+            }
         }
-        Ok(Ok(response)) => serde_json::to_vec(&response).map(|body| (200, Bytes::from(body))),
-        Ok(Err(Failure::Runtime { code, message })) => {
-            return runtime_failure::<C>(code, message, &correlation)
-        }
-        Ok(Err(Failure::Contract { error })) => Ok(encoded::<C>(
-            Failure::Contract { error: &error },
+        answer
+    });
+    match tokio::time::timeout(C::SPEC.timeout, &mut task).await {
+        Err(_) => runtime_failure::<C>(
+            FailureCode::Timeout,
+            format!("{} did not finish in time", C::SPEC.id),
             &correlation,
-        )),
-    };
-    let (status, body) = match encoded {
-        Ok(answer) => answer,
-        Err(error) => {
-            return runtime_failure::<C>(FailureCode::Internal, error.to_string(), &correlation)
-        }
-    };
-    if let Some(key) = replay_key {
-        replay.put(key, status, body.clone());
+        ),
+        Ok(Ok(answer)) => answer,
+        // The handler panicked; the reservation freed the key as the task unwound.
+        Ok(Err(_)) => runtime_failure::<C>(
+            FailureCode::Internal,
+            format!("{} failed", C::SPEC.id),
+            &correlation,
+        ),
     }
-    (status, body)
 }
 
 #[cfg(test)]
