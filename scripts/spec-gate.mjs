@@ -8,7 +8,8 @@
 // crashes, prints nothing parseable, or cannot be found is a failed check.
 //
 // Steps, in order:
-//   0. specc check: crates/model is exactly what the compiler writes from the specification.
+//   0. specc check, check-web, check-deploy: crates/model, web/src/generated and deploy/ are exactly what
+//      the compiler writes from the specification.
 //   1. cargo test --workspace, lake build, node --test (web), npm run check (tsc), recorded under
 //      var/test-results (at most two jobs). Not run with --no-test.
 //   2. Exegra (EXEGRA_HOME, default ../exegra; EXEGRA_PROJECT, default strata): validate the
@@ -196,6 +197,13 @@ if (!startedMatch || started.size === 0) check('concordance.toml names started m
   });
   check('specc check-web (web/src/generated is generated from the specification)', web.ok,
     web.ok ? 'up to date' : `${exitText(web)}: ${lastLine(web.out)}; run npm run generate and commit`);
+
+  const deploy = run('cargo', ['run', '--quiet', '-p', 'strata-spec-compiler', '--bin', 'specc', '--',
+    'check-deploy', '--spec', 'specifications/spec.jsonc', '--out', 'deploy'], {
+    env: { CARGO_BUILD_JOBS: '2', CARGO_TARGET_DIR: 'target/gate' },
+  });
+  check('specc check-deploy (deploy/ compose and Kubernetes files are generated from the specification)', deploy.ok,
+    deploy.ok ? 'up to date' : `${exitText(deploy)}: ${lastLine(deploy.out)}; run npm run generate and commit`);
 }
 
 // ---------------------------------------------------------------------------------------------

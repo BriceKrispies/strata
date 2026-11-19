@@ -9,6 +9,10 @@
     "check": "tsc -p web/jsconfig.json",
     "test:web": "node --test web/test/kernel.test.js",
     "e2e": "playwright test -c tests/e2e/playwright.config.js",
+    "containers:build": "node scripts/containers.mjs build",
+    "containers:up": "node scripts/containers.mjs up",
+    "containers:down": "node scripts/containers.mjs down",
+    "e2e:containers": "node scripts/containers.mjs e2e",
     "spec": "node scripts/spec-gate.mjs"
   },
   "devDependencies": {

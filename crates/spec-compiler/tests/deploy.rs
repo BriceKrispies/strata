@@ -171,19 +171,72 @@ fn compose_joins_only_the_networks_a_connection_needs() {
         "a logical component is not a unit"
     );
     assert!(!compose.contains("  browser:"), "a client is not a unit");
-    // telemetry only observes, so it is isolated.
-    let telemetry = compose.split("  telemetry:").nth(1).unwrap();
-    assert!(telemetry
-        .split("  worker:")
-        .next()
-        .unwrap()
-        .contains("network_mode: none"));
-    assert!(compose.contains("zone-data: {}"));
+    // Only implemented units are in the stack: the rest have no image.
+    for absent in ["tenant-db", "telemetry", "worker"] {
+        assert!(
+            !compose.contains(&format!("  {absent}:")),
+            "{absent} is not implemented"
+        );
+    }
+    assert!(compose.contains("not implemented and have no image: tenant-db, telemetry, worker"));
     assert!(compose.contains("zone-tenant: {}"));
+    assert!(
+        !compose.contains("zone-data"),
+        "no runnable unit connects into the data zone"
+    );
     assert!(
         !compose.contains("zone-edge"),
         "nothing connects to the gateway"
     );
+}
+
+#[test]
+fn a_profile_adds_build_environment_health_and_dependencies_to_the_units_it_configures() {
+    let profile = r#"{
+        "containerfile": "deploy/Containerfile",
+        "context": "..",
+        "units": {
+            "runtime": {
+                "port": 4101,
+                "health": "/health",
+                "env": { "TOKEN": "${TOKEN}" },
+                "volumes": ["data:/var/lib/app"]
+            },
+            "gateway": {
+                "port": 4100,
+                "shareNetworkWith": "runtime",
+                "publish": ["127.0.0.1:4100:4100"]
+            }
+        }
+    }"#;
+    let files = deploy::generate_with_profile(FIXTURE_SPEC, &fixture_text(), Some(profile))
+        .unwrap()
+        .files;
+    let compose = contents(&files, "compose.yaml");
+    assert!(compose.contains("target: \"runtime\""));
+    assert!(compose.contains("TOKEN: \"${TOKEN}\""));
+    assert!(compose.contains("\"/dev/null\", \"http://127.0.0.1:4101/health\""));
+    assert!(compose.contains("network_mode: \"service:runtime\""));
+    assert!(compose.contains("condition: service_healthy"));
+    assert!(compose.contains("  data: {}"), "a named volume is declared");
+    // The gateway's published port lives on the unit that owns the namespace.
+    let runtime = compose
+        .split("  runtime:")
+        .nth(1)
+        .unwrap()
+        .split("  gateway:")
+        .next()
+        .unwrap();
+    assert!(runtime.contains("127.0.0.1:4100:4100"));
+    // A profile that names a unit the specification does not deploy is refused.
+    let unknown = r#"{ "units": { "ghost": {} } }"#;
+    let codes: Vec<String> =
+        deploy::generate_with_profile(FIXTURE_SPEC, &fixture_text(), Some(unknown))
+            .unwrap_err()
+            .into_iter()
+            .map(|d| d.code)
+            .collect();
+    assert_eq!(codes, ["deploy.profile-unit-unknown"]);
 }
 
 #[test]

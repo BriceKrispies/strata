@@ -7,6 +7,8 @@
 //      clean checkout (or one where crates/model/src was deleted) could not regenerate itself.
 //   2. The backend model: crates/model, from specifications/spec.jsonc.
 //   3. The web modules: web/src/generated, from the same specification.
+//   4. The deployment files: deploy/compose.yaml, deploy/kubernetes, deploy/monitoring, from the
+//      specification and specifications/deploy.jsonc.
 //
 // The first failing step stops the run. Cargo runs with two jobs.
 import { spawnSync } from 'node:child_process';
@@ -51,6 +53,10 @@ specc('generate the backend model (crates/model)', [
 ]);
 specc('generate the web modules (web/src/generated)', [
   'web', '--spec', 'specifications/spec.jsonc', '--out', 'web/src/generated',
+]);
+
+specc('generate the deployment files (deploy)', [
+  'deploy', '--spec', 'specifications/spec.jsonc', '--out', 'deploy',
 ]);
 
 console.log('\nregenerate: done');

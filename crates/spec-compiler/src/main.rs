@@ -49,8 +49,8 @@ use strata_spec_compiler::{
 const USAGE: &str = "usage:
   specc generate     --spec <file> --out <dir> [--crate-name <name>] [--runtime <dir>]
   specc check        --spec <file> --out <dir> [--crate-name <name>] [--runtime <dir>]
-  specc deploy       --spec <file> --out <dir>
-  specc check-deploy --spec <file> --out <dir>
+  specc deploy       --spec <file> --out <dir> [--profile <file>]
+  specc check-deploy --spec <file> --out <dir> [--profile <file>]
   specc e2e          --spec <file> --out <dir>
   specc check-e2e    --spec <file> --out <dir>
   specc scenarios       --spec <file> --out <dir> [--crate-name <name>] [--exegra-project <id>] [--exegra-specs <dir>]
@@ -83,6 +83,7 @@ struct Args {
     runtime: PathBuf,
     exegra_project: Option<String>,
     exegra_specs: Option<PathBuf>,
+    profile: Option<PathBuf>,
 }
 
 fn parse_args(raw: &[String]) -> Result<Args, String> {
@@ -106,6 +107,7 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
     let mut runtime = None;
     let mut exegra_project = None;
     let mut exegra_specs = None;
+    let mut profile = None;
     let mut iter = rest.iter();
     while let Some(flag) = iter.next() {
         let slot = match flag.as_str() {
@@ -115,6 +117,7 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
             "--runtime" => &mut runtime,
             "--exegra-project" => &mut exegra_project,
             "--exegra-specs" => &mut exegra_specs,
+            "--profile" => &mut profile,
             other => return Err(format!("unknown argument \"{other}\"")),
         };
         let Some(value) = iter.next() else {
@@ -137,6 +140,9 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
     );
     if deploys && crate_name.is_some() {
         return Err("--crate-name does not apply to deploy or e2e".to_string());
+    }
+    if profile.is_some() && !matches!(command, Command::Deploy | Command::CheckDeploy) {
+        return Err("--profile applies only to deploy and check-deploy".to_string());
     }
     let scenario = matches!(command, Command::Scenarios | Command::CheckScenarios);
     if !scenario && (exegra_project.is_some() || exegra_specs.is_some()) {
@@ -163,6 +169,7 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
         runtime: PathBuf::from(runtime.unwrap_or_else(|| DEFAULT_RUNTIME.to_string())),
         exegra_project,
         exegra_specs: exegra_specs.map(PathBuf::from),
+        profile: profile.map(PathBuf::from),
     })
 }
 
@@ -235,7 +242,22 @@ fn main() -> ExitCode {
 }
 
 fn run_deploy(args: &Args, text: &str) -> ExitCode {
-    let output = match deploy::generate(&args.spec, text) {
+    // The profile is the file named by --profile, else `deploy.jsonc` next to the specification.
+    let profile_path = args.profile.clone().or_else(|| {
+        let next_to_spec = Path::new(&args.spec).with_file_name("deploy.jsonc");
+        next_to_spec.is_file().then_some(next_to_spec)
+    });
+    let profile = match &profile_path {
+        Some(path) => match std::fs::read_to_string(path) {
+            Ok(text) => Some(text),
+            Err(e) => {
+                eprintln!("specc: cannot read {}: {e}", path.display());
+                return ExitCode::from(1);
+            }
+        },
+        None => None,
+    };
+    let output = match deploy::generate_with_profile(&args.spec, text, profile.as_deref()) {
         Ok(output) => output,
         Err(diagnostics) => {
             for d in &diagnostics {
