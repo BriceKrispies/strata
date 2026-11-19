@@ -297,7 +297,9 @@ pub fn login(
 /// PRV-364). `None` when the gateway did not say where the request came from.
 pub fn network_hash(app: &App, caller: &Caller) -> Option<String> {
     (caller.source != "unknown").then(|| {
-        canon::hash_bytes(format!("network\0{}\0{}", app.cfg.service_token, caller.source).as_bytes())
+        canon::hash_bytes(
+            format!("network\0{}\0{}", app.cfg.service_token, caller.source).as_bytes(),
+        )
     })
 }
 
