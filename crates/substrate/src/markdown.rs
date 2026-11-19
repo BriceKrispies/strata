@@ -205,6 +205,8 @@ fn figure(line: &str) -> Option<Block> {
 }
 
 /// Parse constrained Markdown into blocks.
+///
+/// Implements: H-009
 pub fn parse(source: &str) -> Vec<Block> {
     let normalised = source.replace("\r\n", "\n");
     let lines: Vec<&str> = normalised.lines().collect();

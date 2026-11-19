@@ -75,6 +75,7 @@ pub fn has_service_token(app: &App, headers: &HeaderMap) -> bool {
     header(headers, HEADER_SERVICE).is_some_and(|given| same_secret(given, &app.cfg.service_token))
 }
 
+/// Implements: H-003
 pub fn random_hex(bytes: usize) -> Result<String, ApiError> {
     let mut buffer = vec![0u8; bytes];
     getrandom::getrandom(&mut buffer)
@@ -194,6 +195,7 @@ pub fn session_view(tenant: &TenantState, identity: &Identity) -> SessionView {
     }
 }
 
+/// Implements: H-001
 pub fn hash_password(password: &str) -> Result<String, ApiError> {
     let mut salt = [0u8; 16];
     getrandom::getrandom(&mut salt)
@@ -207,6 +209,7 @@ pub fn hash_password(password: &str) -> Result<String, ApiError> {
         .map_err(|e| ApiError::new(ErrorCode::Internal, e.to_string()))
 }
 
+/// Implements: H-002
 fn verify_password(password: &str, stored: &str) -> bool {
     PasswordHash::new(stored)
         .map(|hash| {
