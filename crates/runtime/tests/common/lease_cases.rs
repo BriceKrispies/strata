@@ -13,10 +13,31 @@ use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use strata_runtime::telemetry::Field;
 use strata_runtime::{
-    Clock, Delivery, DispatchError, Dispatcher, Envelope, Host, HostError, Isolation, Machine,
-    MachineStore, Outcome, RecordError, StepError, TestClock, Time,
+    Clock, Delivery, DispatchError, Dispatcher, Envelope, Host, HostError, Isolation, Level,
+    Machine, MachineStore, NewTimer, Outcome, RecordError, StepError, Telemetry, TestClock, Time,
 };
+
+/// The longest lease id a record may have: the machine's stand-in for a generated record
+/// constraint.
+const MAX_ID: usize = 8;
+
+/// Telemetry that keeps the names of the events reported at level error.
+#[derive(Default)]
+struct Errors {
+    names: Mutex<Vec<String>>,
+}
+
+impl Telemetry for Errors {
+    fn event(&self, level: Level, name: &str, _: &[Field<'_>]) {
+        if level == Level::Error {
+            self.names.lock().unwrap().push(name.to_string());
+        }
+    }
+    fn metric(&self, _: &str, _: f64, _: &[Field<'_>]) {}
+    fn span(&self, _: &str, _: Duration, _: bool, _: &[Field<'_>]) {}
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 enum Phase {
@@ -138,6 +159,17 @@ impl Machine for Lease {
         })
     }
 
+    fn is_elapsed(event: &LeaseEvent) -> bool {
+        matches!(event, LeaseEvent::Expired { .. })
+    }
+
+    fn validate_record(record: &LeaseRecord) -> Result<(), String> {
+        if record.id.chars().count() > MAX_ID {
+            return Err(format!("id is longer than {MAX_ID} characters"));
+        }
+        Ok(())
+    }
+
     fn step(
         state: &Phase,
         vars: &LeaseVars,
@@ -233,6 +265,8 @@ impl Machine for Borrowed {
             vars: o.vars,
             emits: o.emits,
             timers: o.timers,
+            sequence: o.sequence,
+            ignored: o.ignored,
         })
     }
 }
@@ -427,7 +461,7 @@ pub async fn fires_timers<S: MachineStore>(open: impl Fn() -> Arc<S>) {
     assert_eq!(fired.dispatched.delivered, 1);
     let (state, vars, _) = host.load(&key("a")).await.unwrap().unwrap();
     assert_eq!((state, vars.token), (Phase::Granted, 2));
-    // The re-grant ran at the clock's time when the timer fired.
+    // The re-grant ran at the timer's deadline (here also the clock's time).
     assert_eq!(vars.granted_at, clock.now());
     assert_eq!(
         receivers.seen().last().unwrap().event,
@@ -551,10 +585,133 @@ pub async fn refuses_a_missing_record_when_not_creating<S: MachineStore>(
     // Once the creating machine has made the record, the same event steps it.
     let lease = host(store.clone(), &receivers, &clock);
     lease
-        .handle(key("a"), LeaseEvent::Expired { token: 0 })
+        .handle(
+            key("a"),
+            LeaseEvent::Result {
+                token: 0,
+                value: String::new(),
+            },
+        )
         .await
         .unwrap();
     let handled = borrowed.handle(key("a"), grant()).await.unwrap();
     assert_eq!((handled.state, handled.vars.token), (Phase::Granted, 1));
     assert_eq!(handled.version, 2);
+}
+
+/// A timer that no longer reads (an event whose shape changed) is set aside as a dead letter and
+/// reported at level error; the other timers still fire and the outbox is still drained.
+pub async fn quarantines_an_unreadable_timer<S: MachineStore>(open: impl Fn() -> Arc<S>) {
+    let (clock, receivers) = start();
+    let store = open();
+    let errors = Arc::new(Errors::default());
+    let host = host(store.clone(), &receivers, &clock).with_telemetry(errors.clone());
+    let grant = |holder: &str| LeaseEvent::Grant {
+        holder: holder.into(),
+    };
+    host.handle(key("a"), grant("w1")).await.unwrap();
+    host.handle(key("b"), grant("w2")).await.unwrap();
+    // `c` is committed but not dispatched: its message waits in the outbox.
+    host.commit(key("c"), grant("w3")).await.unwrap();
+    let fire_at = clock.now().after(TERM);
+    let unreadable = r#"{"Gone":{"shape":1}}"#;
+    store
+        .transact(Isolation::Serializable, |tx| {
+            tx.set_timer(&NewTimer {
+                machine: "lease".to_string(),
+                key: "\"a\"".to_string(),
+                name: "expiry".to_string(),
+                fire_at,
+                event: unreadable.to_string(),
+            })
+        })
+        .unwrap();
+
+    clock.advance(TERM);
+    let tick = host.tick().await.unwrap();
+    assert_eq!((tick.fired, tick.quarantined), (2, 1), "{tick:?}");
+    // b and c re-granted, and c's first message left the outbox in the same tick.
+    assert_eq!(tick.dispatched.delivered, 3, "{tick:?}");
+    assert_eq!(store.pending().unwrap(), 0);
+    let dead = store.dead_letters().unwrap();
+    assert_eq!(dead.len(), 1, "{dead:?}");
+    assert_eq!(dead[0].entry.event, unreadable);
+    assert_eq!(dead[0].entry.timer.as_deref(), Some("expiry"));
+    assert_eq!(
+        dead[0].entry.target,
+        Some(("lease".to_string(), "\"a\"".to_string()))
+    );
+    assert!(!dead[0].error.is_empty());
+    assert!(errors
+        .names
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|n| n == "timer.quarantined"));
+    // `a` was not touched, and the quarantined timer does not come back.
+    assert_eq!(host.load(&key("a")).await.unwrap().unwrap().1.token, 1);
+    assert_eq!(host.load(&key("b")).await.unwrap().unwrap().1.token, 2);
+    clock.advance(TERM);
+    let again = host.tick().await.unwrap();
+    assert_eq!(again.quarantined, 0, "{again:?}");
+}
+
+/// An event that stands for elapsed time is refused from outside, whichever way it is offered;
+/// the timer that sets it still delivers it.
+pub async fn refuses_an_elapsed_event_from_outside<S: MachineStore>(open: impl Fn() -> Arc<S>) {
+    let (clock, receivers) = start();
+    let host = host(open(), &receivers, &clock);
+    host.handle(
+        key("a"),
+        LeaseEvent::Grant {
+            holder: "w1".into(),
+        },
+    )
+    .await
+    .unwrap();
+    let before = receivers.seen().len();
+    let expired = || LeaseEvent::Expired { token: 1 };
+    match host.handle(key("a"), expired()).await {
+        Err(HostError::Elapsed { machine, event }) => {
+            assert_eq!((machine, event.as_str()), ("lease", "Expired"));
+        }
+        other => panic!(
+            "expected the elapsed event to be refused, got {:?}",
+            other.err()
+        ),
+    }
+    assert!(matches!(
+        host.commit(key("a"), expired()).await,
+        Err(HostError::Elapsed { .. })
+    ));
+    // Nothing moved: same record, nothing emitted, the timer still set.
+    let (state, vars, version) = host.load(&key("a")).await.unwrap().unwrap();
+    assert_eq!((state, vars.token, version), (Phase::Granted, 1, 1));
+    assert_eq!(receivers.seen().len(), before);
+
+    clock.advance(TERM);
+    assert_eq!(host.fire_due_timers().await.unwrap().fired, 1);
+    assert_eq!(host.load(&key("a")).await.unwrap().unwrap().1.token, 2);
+}
+
+/// A record that breaks a constraint is refused: nothing is saved, scheduled or emitted.
+pub async fn refuses_a_record_that_breaks_a_constraint<S: MachineStore>(open: impl Fn() -> Arc<S>) {
+    let (clock, receivers) = start();
+    let store = open();
+    let host = host(store.clone(), &receivers, &clock);
+    let grant = || LeaseEvent::Grant {
+        holder: "w1".into(),
+    };
+    match host.handle(key("much-too-long"), grant()).await {
+        Err(HostError::Constraint(why)) => assert!(why.contains("longer than"), "{why}"),
+        other => panic!("expected the record to be refused, got {:?}", other.err()),
+    }
+    assert!(host.load(&key("much-too-long")).await.unwrap().is_none());
+    assert_eq!(store.pending().unwrap(), 0);
+    clock.advance(TERM * 2);
+    assert_eq!(host.tick().await.unwrap().fired, 0);
+    assert!(receivers.seen().is_empty());
+    // A key within the limit is stored.
+    host.handle(key("short"), grant()).await.unwrap();
+    assert!(host.load(&key("short")).await.unwrap().is_some());
 }

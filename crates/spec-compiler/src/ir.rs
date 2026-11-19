@@ -450,6 +450,35 @@ pub struct Behavior {
     /// (Exegra's `machineTimeUnit`): a format-2 scenario's `timeUnit`, by default `us`; a format-1
     /// scenario only when it names one. Bare-number delays are in this unit.
     pub time_units: Vec<String>,
+    /// The scenario routes to this machine (`routes` of every scenario), each distinct one once,
+    /// in the order the scenarios give them. Exegra decides a routed event's receiving instance
+    /// by them; the generated routing table does the same.
+    pub routes: Vec<Route>,
+    /// The events the steps of scenarios that run this machine inject from outside, each
+    /// distinct one once, with the first scenario that does.
+    pub injected: Vec<Injection>,
+}
+
+/// An event a scenario step injects into a machine from outside.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Injection {
+    /// The injected event.
+    pub event: String,
+    /// The scenario whose step injects it.
+    pub scenario: String,
+}
+
+/// A scenario route `{event, behavior, by, field?}` to a machine.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Route {
+    /// The routed event.
+    pub event: String,
+    /// How the instance is chosen: `key`, `round-robin`, ...
+    pub by: String,
+    /// For `by: key`, the payload field whose value is the key.
+    pub field: Option<String>,
+    /// The scenario that declares it (the first, when several do).
+    pub scenario: String,
 }
 
 /// Nanoseconds per unit of a scenario clock or of a duration string.

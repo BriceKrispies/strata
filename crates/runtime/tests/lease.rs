@@ -87,3 +87,33 @@ async fn memory_never_retries_at_most_once() {
 async fn sqlite_never_retries_at_most_once() {
     never_retries_at_most_once(sqlite("at-most-once")).await;
 }
+
+#[tokio::test]
+async fn memory_quarantines_an_unreadable_timer() {
+    quarantines_an_unreadable_timer(memory()).await;
+}
+
+#[tokio::test]
+async fn sqlite_quarantines_an_unreadable_timer() {
+    quarantines_an_unreadable_timer(sqlite("quarantine")).await;
+}
+
+#[tokio::test]
+async fn memory_refuses_an_elapsed_event_from_outside() {
+    refuses_an_elapsed_event_from_outside(memory()).await;
+}
+
+#[tokio::test]
+async fn sqlite_refuses_an_elapsed_event_from_outside() {
+    refuses_an_elapsed_event_from_outside(sqlite("elapsed")).await;
+}
+
+#[tokio::test]
+async fn memory_refuses_a_record_that_breaks_a_constraint() {
+    refuses_a_record_that_breaks_a_constraint(memory()).await;
+}
+
+#[tokio::test]
+async fn sqlite_refuses_a_record_that_breaks_a_constraint() {
+    refuses_a_record_that_breaks_a_constraint(sqlite("constraint")).await;
+}

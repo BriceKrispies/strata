@@ -17,9 +17,17 @@
 //!   outcome (`Outcome::emit_after`), dispatched to the receiver once that delay has passed; a `timer` sets a named timer firing its event at the same instance after
 //!   `after` milliseconds, replacing one of the same name; a `cancel` removes it;
 //! - an event with no enabled transition, whether the state lists it in `ignores`, no guard
-//!   holds, or the state is terminal, is ignored: the same state and variables, nothing emitted
-//!   (Exegra's `ignored` outcome). An evaluation that fails (checked arithmetic overflowing, a
-//!   division by zero) is `StepError::Rejected` and nothing is committed.
+//!   holds, or the state is terminal, is ignored (`Outcome::ignore`): the same state and
+//!   variables, nothing emitted, nothing written (Exegra's `ignored` outcome). An evaluation that
+//!   fails (checked arithmetic overflowing, a division by zero) is `StepError::Rejected` and
+//!   nothing is committed.
+//!
+//! After the machines comes the `dispatch` module, the routing table of the system host
+//! (`strata_runtime::System`): for every event that is not elapsed time, each machine with a
+//! transition on it, reached at the instance a scenario route `by: key` names (the routes of all
+//! scenarios together; two that disagree are refused) or, with no route, at every instance. That
+//! is how Exegra addresses an entry (`addressed` and `decideRoutes` in `Format2.lean`); an emit's
+//! `to` names a receiver outside the machines and does not route it.
 //!
 //! Guards and values are translated by `strata-spec-expr`: a variable reads `vars.<field>` in a
 //! guard and the updated `next.<field>` in an effect, `event.<field>` reads the payload, and
@@ -93,6 +101,10 @@ pub const VARIABLE_UNKNOWN: &str = "specc.variable-unknown";
 pub const LITERAL: &str = "specc.machine-literal";
 /// Code of an emit or timer payload that does not match its event's payload fields.
 pub const PAYLOAD_FIELD: &str = "specc.payload-field";
+/// Code of an event that stands for elapsed time (`elapsed: true`) and is reachable from outside:
+/// a scenario step injects it into an implementation machine, or a scenario routes it to one.
+/// Only a timer the machine set may deliver it, and the generated hosts refuse it as an input.
+pub const ELAPSED_EXTERNAL: &str = "event.elapsed-external";
 /// Code of a machine that receives no event.
 pub const NO_EVENTS: &str = "specc.machine-no-events";
 
@@ -111,6 +123,12 @@ impl Backend for MachinesBackend {
     fn check(&self, spec: &Spec) -> Vec<Diagnostic> {
         let mut out = Vec::new();
         let mut module = Namespace::new("module machines");
+        module.claim(
+            &mut out,
+            crate::diagnostic::SPEC_ENTITY,
+            "the routing table `dispatch`",
+            "dispatch",
+        );
         for b in &spec.machines {
             let what = format!("machine \"{}\"", b.id);
             if let Some(name) = render::checked_name(&mut out, &b.id, &what, naming::snake(&b.id)) {
@@ -120,6 +138,8 @@ impl Backend for MachinesBackend {
             gen.machine();
             out.extend(gen.out);
         }
+        routing_rows(spec, &mut out);
+        elapsed_external(spec, &mut out);
         out
     }
 
@@ -140,10 +160,170 @@ impl Backend for MachinesBackend {
                 }
             })
             .collect();
+        let dispatch = dispatch_module(spec);
         quote! {
-            #![doc = " The implementation-level machines of the specification: for each, its states, variables and events, and its `strata_runtime::Machine`."]
+            #![doc = " The implementation-level machines of the specification: for each, its states, variables and events, and its `strata_runtime::Machine`; and the routing table that delivers events between them (`dispatch`)."]
             #![allow(clippy::bool_comparison, clippy::nonminimal_bool, clippy::cmp_owned)]
             #(#modules)*
+            #dispatch
+        }
+    }
+}
+
+/// Code of a scenario route the generated routing table cannot follow (any `by` but `key`).
+pub const ROUTE_UNSUPPORTED: &str = "specc.route-unsupported";
+/// Code of two scenario routes of one event to one machine that key it by different fields, or
+/// a key route without a field or by a field the event does not carry.
+pub const ROUTE_KEY: &str = "specc.route-key";
+
+/// The machines that react to each event, with how each finds its instance: the routing table,
+/// in event declaration order, machines in declaration order within an event. An event stands
+/// for elapsed time only as a timer, which reaches its own instance and no route, so elapsed
+/// events have no row.
+fn routing_rows<'a>(
+    spec: &'a Spec,
+    out: &mut Vec<Diagnostic>,
+) -> Vec<(&'a Event, Vec<(&'a Behavior, Option<String>)>)> {
+    let mut rows = Vec::new();
+    for event in spec.events.iter().filter(|e| !e.elapsed) {
+        let mut receivers = Vec::new();
+        for b in &spec.machines {
+            if !b
+                .transitions
+                .iter()
+                .any(|t| t.on == event.id && !t.fault_only)
+            {
+                continue;
+            }
+            let routes: Vec<_> = b.routes.iter().filter(|r| r.event == event.id).collect();
+            let mut field: Option<String> = None;
+            for r in &routes {
+                if r.by != "key" {
+                    out.push(Diagnostic::new(
+                        ROUTE_UNSUPPORTED,
+                        &r.scenario,
+                        format!(
+                            "Scenario \"{}\" routes \"{}\" to machine \"{}\" by \"{}\"; generated routing follows routes by key only.",
+                            r.scenario, r.event, b.id, r.by
+                        ),
+                    ));
+                    continue;
+                }
+                let Some(f) = &r.field else {
+                    out.push(Diagnostic::new(
+                        ROUTE_KEY,
+                        &r.scenario,
+                        format!(
+                            "Scenario \"{}\" routes \"{}\" to machine \"{}\" by key without a \"field\".",
+                            r.scenario, r.event, b.id
+                        ),
+                    ));
+                    continue;
+                };
+                if !event.payload.iter().any(|p| p.name == *f) {
+                    out.push(Diagnostic::new(
+                        ROUTE_KEY,
+                        &r.scenario,
+                        format!(
+                            "Scenario \"{}\" routes \"{}\" to machine \"{}\" by field \"{f}\", which is not a payload field of the event.",
+                            r.scenario, r.event, b.id
+                        ),
+                    ));
+                    continue;
+                }
+                match &field {
+                    Some(other) if other != f => out.push(Diagnostic::new(
+                        ROUTE_KEY,
+                        &r.scenario,
+                        format!(
+                            "Scenario \"{}\" routes \"{}\" to machine \"{}\" by field \"{f}\", another scenario by \"{other}\"; one event reaches one machine by one key.",
+                            r.scenario, r.event, b.id
+                        ),
+                    )),
+                    _ => field = Some(f.clone()),
+                }
+            }
+            let wire = field.map(|f| crate::wire::event_case(spec, event).name(&f));
+            receivers.push((b, wire));
+        }
+        if !receivers.is_empty() {
+            rows.push((event, receivers));
+        }
+    }
+    rows
+}
+
+/// Refuse an elapsed event that a scenario injects into, or routes to, an implementation machine:
+/// the generated hosts accept an elapsed event only from the timer that set it.
+fn elapsed_external(spec: &Spec, out: &mut Vec<Diagnostic>) {
+    for b in &spec.machines {
+        let injected = b
+            .injected
+            .iter()
+            .map(|i| (&i.event, &i.scenario, "injects"));
+        let routed = b.routes.iter().map(|r| (&r.event, &r.scenario, "routes"));
+        for (event, scenario, how) in injected.chain(routed) {
+            if spec.event(event).is_some_and(|e| e.elapsed) {
+                out.push(Diagnostic::new(
+                    ELAPSED_EXTERNAL,
+                    &b.id,
+                    format!(
+                        "Scenario \"{scenario}\" {how} \"{event}\", which stands for elapsed time (\"elapsed\": true), into machine \"{}\"; only a timer the machine sets may deliver it, so it cannot be an input from outside.",
+                        b.id
+                    ),
+                ));
+            }
+        }
+    }
+}
+
+/// The `dispatch` module: the members and routing table of the system host.
+fn dispatch_module(spec: &Spec) -> TokenStream {
+    let rows = routing_rows(spec, &mut Vec::new());
+    let members: Vec<TokenStream> = spec
+        .machines
+        .iter()
+        .map(|b| {
+            let module = naming::ident(&naming::snake(&b.id).unwrap_or_default());
+            let ty = naming::ident(&naming::pascal(&b.id).unwrap_or_default());
+            quote! { strata_runtime::Member::of::<super::#module::#ty>() }
+        })
+        .collect();
+    let table: Vec<TokenStream> = rows
+        .iter()
+        .map(|(event, receivers)| {
+            let id = &event.id;
+            let routings: Vec<TokenStream> = receivers
+                .iter()
+                .map(|(b, field)| {
+                    let name = &b.id;
+                    match field {
+                        Some(f) => quote! { strata_runtime::Routing::by_key(#name, #f) },
+                        None => quote! { strata_runtime::Routing::every(#name) },
+                    }
+                })
+                .collect();
+            quote! { (#id, &[#(#routings),*]) }
+        })
+        .collect();
+    quote! {
+        /// How events travel between the machines, as Exegra delivers them: for every event,
+        /// each machine with a transition on it and how the event finds its instance there
+        /// (Exegra's route `by: key`, from the scenarios' `routes`, or every instance). An
+        /// emit's `to` names its receiver outside the machines and does not route it.
+        pub mod dispatch {
+            /// For each event id, the machines that receive it.
+            pub const ROUTES: strata_runtime::RouteTable = &[#(#table),*];
+
+            /// Every machine, in declaration order.
+            pub fn members() -> Vec<strata_runtime::Member> {
+                vec![#(#members),*]
+            }
+
+            /// The router of the system host: every machine and the routing table.
+            pub fn router() -> strata_runtime::Router {
+                strata_runtime::Router::new(members(), ROUTES)
+            }
         }
     }
 }
@@ -1387,7 +1567,7 @@ impl<'a> Gen<'a> {
                 break;
             }
         }
-        let ignore = quote! { Ok(Outcome::to(*state, vars.clone())) };
+        let ignore = quote! { Ok(Outcome::ignore(*state, vars.clone())) };
         let mut chain = if unconditional {
             branches.pop().map(|(_, body)| body).unwrap_or(ignore)
         } else {
@@ -1838,7 +2018,7 @@ impl<'a> Gen<'a> {
         // Step.
         let total_pairs = b.states.len() * self.received.len();
         let fallback = if covered < total_pairs {
-            quote! { _ => Ok(Outcome::to(*state, vars.clone())), }
+            quote! { _ => Ok(Outcome::ignore(*state, vars.clone())), }
         } else {
             TokenStream::new()
         };
@@ -1940,6 +2120,20 @@ impl<'a> Gen<'a> {
             b.id, record_id, storage.key_field
         );
 
+        // Events that stand for elapsed time are fired only by a timer: the hosts refuse them
+        // from outside, by this.
+        let elapsed_variants: Vec<&Ident> = self
+            .received
+            .iter()
+            .filter(|e| e.event.elapsed)
+            .map(|e| &e.variant)
+            .collect();
+        let is_elapsed = if elapsed_variants.is_empty() {
+            quote! { let _ = event; false }
+        } else {
+            quote! { matches!(event, #(Event::#elapsed_variants(_))|*) }
+        };
+
         quote! {
             #duration
 
@@ -2026,6 +2220,14 @@ impl<'a> Gen<'a> {
                 ) -> Result<records::#record_ty, RecordError> {
                     #previous_required
                     Ok(records::#record_ty { #(#to_fields),* })
+                }
+
+                fn is_elapsed(event: &Event) -> bool {
+                    #is_elapsed
+                }
+
+                fn validate_record(record: &records::#record_ty) -> Result<(), String> {
+                    record.validate().map_err(|violation| violation.to_string())
                 }
 
                 fn step(state: &State, vars: &Vars, event: &Event, #now: Time) -> Result<Outcome<Self>, StepError> {

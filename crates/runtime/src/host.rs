@@ -1,5 +1,11 @@
 //! The machine host: runs a [`Machine`]'s steps against a store, with an outbox and timers.
 //!
+//! [`Host`] runs one machine on its own, and hands what it emits to a hand-written
+//! [`Dispatcher`]. It does not deliver one machine's emits to another, so it is not how Exegra
+//! runs a system of machines: that is the [`System`](crate::System) host, with one queue for every
+//! machine and the generated routes. What `Host` does follow from Exegra: an ignored event writes
+//! nothing, and a timer is delivered with `now` equal to its deadline.
+//!
 //! For one incoming event the host
 //!
 //! 1. opens one transaction at the machine's declared isolation (or stronger),
@@ -16,22 +22,26 @@
 //!
 //! A delayed emit ([`Outcome::emit_after`](crate::Outcome::emit_after)) is not dispatched at
 //! commit: its outbox entry carries a not-before time (the step's time plus the delay), and
-//! [`Host::drain_outbox`] hands it to the receiver once the clock reaches it, with the same
-//! guarantees: `at-least-once` retried until delivered, `at-most-once` removed and dispatched once.
+//! [`Host::drain_outbox`] hands it to the receiver once the clock reaches it, in due order, with
+//! the same guarantees: `at-least-once` retried until delivered, `at-most-once` dispatched once
+//! and removed after the dispatch, whatever it returned.
 //!
 //! If the step fails, the transaction is rolled back and nothing is saved, scheduled or emitted.
 //! If the process stops between commit and dispatch, the `at-least-once` emits are still in the
 //! outbox and [`Host::drain_outbox`] delivers them later; the `at-most-once` emits are lost.
 //!
 //! Timers fire through [`Host::fire_due_timers`]: each due timer is removed and its event is
-//! stepped in one transaction, so a timer fires at most once per setting and its effects commit
-//! together with its removal. [`Host::tick`] does both jobs and [`Host::run`] calls it in a loop.
+//! stepped in one transaction, at its deadline, so a timer fires at most once per setting and its
+//! effects commit together with its removal. [`Host::tick`] does both jobs and [`Host::run`] calls
+//! it in a loop.
 
 use crate::clock::{Clock, Time};
 use crate::machine::{
     Delivery, Isolation, Machine, Receiver, RecordError, StepError, TimerCommand,
 };
-use crate::store::{MachineStore, NewMessage, NewTimer, OutboxEntry, StorageError, TimerEntry, Tx};
+use crate::store::{
+    MachineStore, NewMessage, NewTimer, OutboxEntry, QueueEntry, StorageError, TimerEntry, Tx,
+};
 use crate::telemetry::{Level, NoTelemetry, Span, Telemetry};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -148,6 +158,17 @@ pub enum HostError {
     },
     /// The blocking worker running the store call failed.
     Worker(String),
+    /// The event stands for elapsed time, which only a timer the machine set may deliver; it was
+    /// offered from outside and refused. Nothing was committed.
+    Elapsed {
+        /// The machine.
+        machine: &'static str,
+        /// The event's id.
+        event: String,
+    },
+    /// The record the step produced breaks a constraint of its generated validation (a length
+    /// or a pattern). The transition is refused and nothing was committed.
+    Constraint(String),
 }
 
 impl fmt::Display for HostError {
@@ -170,6 +191,11 @@ impl fmt::Display for HostError {
                 )
             }
             HostError::Worker(why) => write!(f, "worker failed: {why}"),
+            HostError::Elapsed { machine, event } => write!(
+                f,
+                "{event} stands for elapsed time and only a timer of {machine} may deliver it"
+            ),
+            HostError::Constraint(why) => write!(f, "record constraint: {why}"),
         }
     }
 }
@@ -194,11 +220,38 @@ impl From<RecordError> for HostError {
     }
 }
 
-fn encode<T: Serialize>(value: &T) -> Result<String, HostError> {
+pub(crate) fn encode<T: Serialize>(value: &T) -> Result<String, HostError> {
     serde_json::to_string(value).map_err(|e| HostError::Codec(e.to_string()))
 }
 
-fn decode<T: DeserializeOwned>(text: &str) -> Result<T, HostError> {
+/// The id of an event as its wire form names it, for messages.
+pub(crate) fn event_name<T: Serialize>(event: &T) -> String {
+    let value = serde_json::to_value(event).ok();
+    let tagged = value
+        .as_ref()
+        .and_then(|v| v.get("event"))
+        .and_then(|e| e.as_str());
+    let external = value
+        .as_ref()
+        .and_then(|v| v.as_object())
+        .filter(|o| o.len() == 1)
+        .and_then(|o| o.keys().next());
+    tagged
+        .or(external.map(String::as_str))
+        .unwrap_or("an event")
+        .to_string()
+}
+
+/// How many times a step is tried when a concurrent writer wins the commit.
+pub(crate) const CONFLICT_RETRIES: usize = 3;
+
+/// Whether `error` is a lost optimistic-concurrency race: the transaction was rolled back and
+/// nothing was changed, so it is neither a failure of the step nor a reason to dead-letter.
+pub(crate) fn is_conflict(error: &HostError) -> bool {
+    matches!(error, HostError::Storage(StorageError::Conflict(_)))
+}
+
+pub(crate) fn decode<T: DeserializeOwned>(text: &str) -> Result<T, HostError> {
     serde_json::from_str(text).map_err(|e| HostError::Codec(e.to_string()))
 }
 
@@ -213,7 +266,8 @@ pub struct Committed<M: Machine> {
     pub state: M::State,
     /// Its variables after the step.
     pub vars: M::Vars,
-    /// The record version written.
+    /// The record version after the step: the one written, or for an ignored event the one
+    /// loaded (0 when there is no record).
     pub version: u64,
     /// The immediate emits, in order, waiting for dispatch.
     pub emits: Vec<Envelope<M::Emitted>>,
@@ -262,6 +316,8 @@ pub struct TickReport {
     pub fired: usize,
     /// Timers that were due but discarded because their step failed.
     pub discarded: usize,
+    /// Timers that were due but could not be read, set aside as dead letters.
+    pub quarantined: usize,
     /// Dispatches, from fired timers and from the outbox drain together.
     pub dispatched: DispatchReport,
 }
@@ -321,7 +377,19 @@ fn transition<M: Machine>(
         }
     };
     let outcome = M::step(&state, &vars, event, now)?;
+    if outcome.ignored {
+        // An ignored event changes nothing: no record is written, created or versioned.
+        return Ok(Some(Committed {
+            key: key.clone(),
+            state: outcome.state,
+            vars: outcome.vars,
+            version: stored.map_or(0, |s| s.version),
+            emits: Vec::new(),
+            delayed: Vec::new(),
+        }));
+    }
     let record = M::to_record(key, &outcome.state, &outcome.vars, previous.as_ref())?;
+    M::validate_record(&record).map_err(HostError::Constraint)?;
     let version = tx.save(
         M::RECORD,
         &key_text,
@@ -464,18 +532,35 @@ impl<M: Machine, S: MachineStore, D: Dispatcher<M::Emitted>> Host<M, S, D> {
     }
 
     /// Step the instance of `key` with `event` and commit, without dispatching the emits.
+    ///
+    /// An event that stands for elapsed time is refused ([`HostError::Elapsed`]): only a timer
+    /// the machine set delivers it.
     pub async fn commit(&self, key: M::Key, event: M::Event) -> Result<Committed<M>, HostError> {
+        if M::is_elapsed(&event) {
+            return Err(HostError::Elapsed {
+                machine: M::NAME,
+                event: event_name(&event),
+            });
+        }
         let span = Span::start(&self.telemetry, "machine.transition");
         let (now, hold) = (self.clock.now(), self.retry.first);
-        let result = self
-            .on_store(move |store| {
-                store.transact(M::ISOLATION, |tx| {
-                    transition::<M>(tx, &key, &event, now, hold, None)
+        let mut result = Err(HostError::Worker("not run".to_string()));
+        // A lost commit race rolled everything back: try again on what the winner wrote.
+        for _ in 0..CONFLICT_RETRIES {
+            let (key, event) = (key.clone(), event.clone());
+            result = self
+                .on_store(move |store| {
+                    store.transact(M::ISOLATION, |tx| {
+                        transition::<M>(tx, &key, &event, now, hold, None)
+                    })
                 })
-            })
-            .await
-            .and_then(|inner| inner)
-            .map(|committed| committed.expect("a transition without a timer always commits"));
+                .await
+                .and_then(|inner| inner)
+                .map(|committed| committed.expect("a transition without a timer always commits"));
+            if !result.as_ref().is_err_and(is_conflict) {
+                break;
+            }
+        }
         span.finish(result.is_ok(), &[("machine", M::NAME.into())]);
         if let Ok(committed) = &result {
             self.log_committed(committed);
@@ -523,7 +608,9 @@ impl<M: Machine, S: MachineStore, D: Dispatcher<M::Emitted>> Host<M, S, D> {
         match (envelope.id, result) {
             (Some(id), Ok(())) => {
                 let marked = match self.on_store(move |store| store.mark_delivered(id)).await {
-                    Ok(Ok(())) => None,
+                    Ok(Ok(true)) => None,
+                    // Another host delivered it too: at-least-once allows that.
+                    Ok(Ok(false)) => Some("already delivered by another host".to_string()),
                     Ok(Err(error)) => Some(error.to_string()),
                     Err(error) => Some(error.to_string()),
                 };
@@ -612,17 +699,14 @@ impl<M: Machine, S: MachineStore, D: Dispatcher<M::Emitted>> Host<M, S, D> {
                     continue;
                 }
             };
-            if entry.delivery == Delivery::AtMostOnce {
-                // A delayed at-most-once emit: removed first, then dispatched once, so a stop
-                // between the two loses it rather than sending it twice. If it cannot be removed
-                // it stays for a later drain and is not dispatched now.
-                let id = entry.id;
-                match self.on_store(move |store| store.mark_delivered(id)).await {
-                    Ok(Ok(())) => {}
-                    _ => continue,
-                }
-            }
             let at_least_once = entry.delivery == Delivery::AtLeastOnce;
+            let id = entry.id;
+            if !at_least_once && !self.claim(id).await {
+                // A delayed at-most-once emit is dispatched by whoever removes its entry, and
+                // only by them: another host took it, or the claim failed and it stays for the
+                // next drain. A stop after the claim loses it, which is what at-most-once means.
+                continue;
+            }
             let envelope = Envelope {
                 id: at_least_once.then_some(entry.id),
                 source: entry.source,
@@ -636,6 +720,30 @@ impl<M: Machine, S: MachineStore, D: Dispatcher<M::Emitted>> Host<M, S, D> {
         Ok(report)
     }
 
+    /// Remove an outbox entry to claim it. True when this call removed it; false when another
+    /// host did, or the store failed (said to telemetry).
+    async fn claim(&self, id: u64) -> bool {
+        match self.on_store(move |store| store.mark_delivered(id)).await {
+            Ok(Ok(claimed)) => claimed,
+            Ok(Err(error)) => {
+                self.claim_failed(id, error.to_string());
+                false
+            }
+            Err(error) => {
+                self.claim_failed(id, error.to_string());
+                false
+            }
+        }
+    }
+
+    fn claim_failed(&self, id: u64, why: String) {
+        self.telemetry.event(
+            Level::Warn,
+            "outbox.unclaimed",
+            &[("id", id.into()), ("error", why.as_str().into())],
+        );
+    }
+
     /// Fire every timer of this machine that is due, earliest first, and dispatch what the
     /// fired steps emit. A timer whose step fails is removed without effect and counted as
     /// discarded.
@@ -647,13 +755,27 @@ impl<M: Machine, S: MachineStore, D: Dispatcher<M::Emitted>> Host<M, S, D> {
         let mut report = TickReport::default();
         let hold = self.retry.first;
         for timer in due {
-            let key: M::Key = decode(&timer.key)?;
-            let event: M::Event = decode(&timer.event)?;
             let id = timer.id;
+            let decoded = decode::<M::Key>(&timer.key)
+                .and_then(|key| decode::<M::Event>(&timer.event).map(|event| (key, event)));
+            let (key, event) = match decoded {
+                Ok(pair) => pair,
+                Err(error) => {
+                    // After a regeneration that changed an event's shape a stored timer may
+                    // not read. Setting it aside keeps every other timer and the outbox going.
+                    if self.quarantine(&timer, &error.to_string(), now).await? {
+                        report.quarantined += 1;
+                    }
+                    continue;
+                }
+            };
+            // Delivered at exactly its deadline, as Exegra delivers a timer, however late this
+            // tick is: the step's `time` and the timers it sets again count from the deadline.
+            let at = timer.fire_at;
             let fired = self
                 .on_store(move |store| {
                     store.transact(M::ISOLATION, |tx| {
-                        transition::<M>(tx, &key, &event, now, hold, Some(id))
+                        transition::<M>(tx, &key, &event, at, hold, Some(id))
                     })
                 })
                 .await?;
@@ -668,7 +790,8 @@ impl<M: Machine, S: MachineStore, D: Dispatcher<M::Emitted>> Host<M, S, D> {
                     error @ (HostError::Step(_)
                     | HostError::Record(_)
                     | HostError::RecordMissing { .. }
-                    | HostError::Codec(_)),
+                    | HostError::Codec(_)
+                    | HostError::Constraint(_)),
                 ) => {
                     // The step can never succeed for this timer; firing it again would fail the
                     // same way, so it is removed on its own.
@@ -690,17 +813,75 @@ impl<M: Machine, S: MachineStore, D: Dispatcher<M::Emitted>> Host<M, S, D> {
                     .await??;
                     report.discarded += 1;
                 }
+                // Another host won the commit: the timer is theirs, or stays for the next tick.
+                Err(error) if is_conflict(&error) => {}
                 Err(error) => return Err(error),
             }
         }
         Ok(report)
     }
 
-    /// Fire due timers, then drain the outbox.
+    /// Take a timer that cannot be read out of the timers and keep it as a dead letter with
+    /// the reason, reporting `timer.quarantined` at level error. False when it was gone.
+    async fn quarantine(
+        &self,
+        timer: &TimerEntry,
+        error: &str,
+        now: Time,
+    ) -> Result<bool, HostError> {
+        self.telemetry.event(
+            Level::Error,
+            "timer.quarantined",
+            &[
+                ("machine", M::NAME.into()),
+                ("timer", timer.name.as_str().into()),
+                ("error", error.into()),
+            ],
+        );
+        let (id, entry, why) = (
+            timer.id,
+            QueueEntry {
+                seq: timer.id,
+                due: timer.fire_at,
+                event: timer.event.clone(),
+                target: Some((timer.machine.clone(), timer.key.clone())),
+                timer: Some(timer.name.clone()),
+                source: timer.machine.clone(),
+                source_key: timer.key.clone(),
+            },
+            error.to_string(),
+        );
+        let moved = self
+            .on_store(move |store| {
+                store.transact(M::ISOLATION, |tx| -> Result<bool, HostError> {
+                    if !tx.take_timer(id)? {
+                        return Ok(false);
+                    }
+                    tx.dead_letter(&entry, &why, now)?;
+                    Ok(true)
+                })
+            })
+            .await?;
+        match moved {
+            // Lost a race: it is still there for the next tick.
+            Err(error) if is_conflict(&error) => Ok(false),
+            other => other,
+        }
+    }
+
+    /// Fire due timers, then drain the outbox. One failing does not stop the other: the first
+    /// error is returned after both ran.
     pub async fn tick(&self) -> Result<TickReport, HostError> {
-        let mut report = self.fire_due_timers().await?;
-        report.dispatched.add(self.drain_outbox().await?);
-        Ok(report)
+        let fired = self.fire_due_timers().await;
+        let drained = self.drain_outbox().await;
+        let mut report = fired.as_ref().ok().copied().unwrap_or_default();
+        if let Ok(drained) = &drained {
+            report.dispatched.add(*drained);
+        }
+        match (fired, drained) {
+            (Err(error), _) | (_, Err(error)) => Err(error),
+            _ => Ok(report),
+        }
     }
 
     /// Call [`Host::tick`] every `period` until `shutdown` resolves. Failures are reported to

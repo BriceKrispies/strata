@@ -1448,6 +1448,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "strata-system-differential"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "strata-model",
+ "strata-runtime",
+ "strata-spec-compiler",
+ "tokio",
+]
+
+[[package]]
 name = "strata-verification"
 version = "0.1.0"
 dependencies = [

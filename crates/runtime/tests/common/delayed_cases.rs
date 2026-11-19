@@ -191,3 +191,26 @@ pub async fn retries_only_at_least_once<S: MachineStore>(open: impl Fn() -> Arc<
     assert_eq!(seen[0].receiver.as_str(), "mailer");
     assert_eq!(host.store().pending().unwrap(), 0);
 }
+
+/// Two hosts on one store: a delayed at-most-once emit is dispatched once, by the host that
+/// removes its entry; an at-least-once one may be offered by both but ends up delivered.
+pub async fn two_hosts_dispatch_once<S: MachineStore>(open: impl Fn() -> Arc<S>) {
+    let clock = TestClock::at(Time(1_000_000));
+    let receivers = Arc::new(Receivers::default());
+    let one = host(open(), &receivers, &clock);
+    let two = host(open(), &receivers, &clock);
+    one.handle("a".into(), remind("call")).await.unwrap();
+    clock.advance(DELAY);
+
+    let (first, second) = tokio::join!(one.drain_outbox(), two.drain_outbox());
+    first.unwrap();
+    second.unwrap();
+    let seen = receivers.seen();
+    let pings = seen
+        .iter()
+        .filter(|e| e.receiver.as_str() == "pager")
+        .count();
+    assert_eq!(pings, 1, "{seen:?}");
+    assert!(seen.iter().any(|e| e.receiver.as_str() == "mailer"));
+    assert_eq!(one.store().pending().unwrap(), 0);
+}

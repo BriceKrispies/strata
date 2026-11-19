@@ -12,9 +12,9 @@ use serde_json::{Map, Number, Value};
 use crate::diagnostic::{Diagnostic, SPEC_ENTITY};
 use crate::ir::{
     Behavior, Component, Constraints, Contract, ContractError, ContractField, Effect, Event, Index,
-    Instances, LoggedField, Logging, OnDelete, PayloadField, Realisation, Record, RecordField,
-    Spec, State, Storage, StructField, System, Telemetry, TelemetryService, Transition, TypeDecl,
-    TypeKind, Variable,
+    Injection, Instances, LoggedField, Logging, OnDelete, PayloadField, Realisation, Record,
+    RecordField, Route, Spec, State, Storage, StructField, System, Telemetry, TelemetryService,
+    Transition, TypeDecl, TypeKind, Variable,
 };
 use crate::jsonc;
 
@@ -144,6 +144,69 @@ impl Loader {
                     self.client_machines.push(b);
                 } else {
                     machines.push(b);
+                }
+            }
+        }
+        // Scenario routes to implementation machines, each distinct one once.
+        for scenario in top
+            .get("scenarios")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let sid = scenario.get("id").and_then(Value::as_str).unwrap_or("");
+            // The events its steps inject, into the machines it runs.
+            let run: Vec<&str> = scenario
+                .get("behaviors")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .collect();
+            for step in scenario
+                .get("steps")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+            {
+                let Some(event) = step.get("event").and_then(Value::as_str) else {
+                    continue;
+                };
+                for b in machines.iter_mut().filter(|b| run.contains(&b.id.as_str())) {
+                    if !b.injected.iter().any(|i| i.event == event) {
+                        b.injected.push(Injection {
+                            event: event.to_string(),
+                            scenario: sid.to_string(),
+                        });
+                    }
+                }
+            }
+            for route in scenario
+                .get("routes")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+            {
+                let text = |k: &str| route.get(k).and_then(Value::as_str).map(str::to_string);
+                let (Some(event), Some(behavior), Some(by)) =
+                    (text("event"), text("behavior"), text("by"))
+                else {
+                    continue;
+                };
+                let field = text("field");
+                if let Some(b) = machines.iter_mut().find(|b| b.id == behavior) {
+                    if !b
+                        .routes
+                        .iter()
+                        .any(|r| r.event == event && r.by == by && r.field == field)
+                    {
+                        b.routes.push(Route {
+                            event,
+                            by,
+                            field,
+                            scenario: sid.to_string(),
+                        });
+                    }
                 }
             }
         }
@@ -772,6 +835,8 @@ impl Loader {
             instances,
             isolation,
             time_units: Vec::new(),
+            routes: Vec::new(),
+            injected: Vec::new(),
         })
     }
 

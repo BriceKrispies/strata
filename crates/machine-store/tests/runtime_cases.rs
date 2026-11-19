@@ -7,6 +7,8 @@
 mod delayed;
 #[path = "../../runtime/tests/common/lease_cases.rs"]
 mod lease;
+#[path = "../../runtime/tests/common/system_cases.rs"]
+mod system;
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -125,6 +127,36 @@ async fn api_memory_retries_only_at_least_once() {
 #[tokio::test]
 async fn api_sqlite_retries_only_at_least_once() {
     delayed::retries_only_at_least_once(api_sqlite("retries")).await;
+}
+
+#[tokio::test]
+async fn api_memory_delivers_at_deadlines() {
+    system::delivers_at_deadlines(api_memory()).await;
+}
+
+#[tokio::test]
+async fn api_sqlite_delivers_at_deadlines() {
+    system::delivers_at_deadlines(api_sqlite("deadlines")).await;
+}
+
+#[tokio::test]
+async fn api_memory_ignores_without_writing() {
+    system::ignores_without_writing(api_memory()).await;
+}
+
+#[tokio::test]
+async fn api_sqlite_ignores_without_writing() {
+    system::ignores_without_writing(api_sqlite("ignores")).await;
+}
+
+#[tokio::test]
+async fn api_memory_a_failed_step_commits_nothing() {
+    system::a_failed_step_commits_nothing(api_memory()).await;
+}
+
+#[tokio::test]
+async fn api_sqlite_a_failed_step_commits_nothing() {
+    system::a_failed_step_commits_nothing(api_sqlite("failed")).await;
 }
 
 fn message(source: &str) -> NewMessage {
@@ -267,8 +299,14 @@ fn timers_and_outbox_follow_the_runtime_contract() {
         (due[0].attempts, due[0].last_error.as_deref()),
         (1, Some("down"))
     );
-    store.mark_delivered(id).unwrap();
-    store.mark_delivered(id).unwrap();
+    assert!(
+        store.mark_delivered(id).unwrap(),
+        "the first claim removes it"
+    );
+    assert!(
+        !store.mark_delivered(id).unwrap(),
+        "the second finds it gone"
+    );
     assert_eq!(store.pending().unwrap(), 0);
 }
 
@@ -300,4 +338,84 @@ fn a_concurrent_writer_is_a_conflict() {
         matches!(result, Err(StorageError::Conflict(_))),
         "{result:?}"
     );
+}
+
+#[tokio::test]
+async fn api_memory_quarantines_an_unreadable_entry() {
+    system::quarantines_an_unreadable_entry(api_memory()).await;
+}
+
+#[tokio::test]
+async fn api_sqlite_quarantines_an_unreadable_entry() {
+    system::quarantines_an_unreadable_entry(api_sqlite("quarantine")).await;
+}
+
+#[tokio::test]
+async fn api_memory_two_hosts_dispatch_once() {
+    system::two_hosts_dispatch_once(api_memory()).await;
+}
+
+#[tokio::test]
+async fn api_sqlite_two_hosts_dispatch_once() {
+    system::two_hosts_dispatch_once(api_sqlite("two-hosts")).await;
+}
+
+#[tokio::test]
+async fn api_memory_refuses_an_elapsed_event_from_outside() {
+    system::refuses_an_elapsed_event_from_outside(api_memory()).await;
+}
+
+#[tokio::test]
+async fn api_sqlite_refuses_an_elapsed_event_from_outside() {
+    system::refuses_an_elapsed_event_from_outside(api_sqlite("elapsed")).await;
+}
+
+#[tokio::test]
+async fn api_memory_refuses_a_record_that_breaks_a_constraint() {
+    system::refuses_a_record_that_breaks_a_constraint(api_memory()).await;
+}
+
+#[tokio::test]
+async fn api_sqlite_refuses_a_record_that_breaks_a_constraint() {
+    system::refuses_a_record_that_breaks_a_constraint(api_sqlite("constraint")).await;
+}
+
+#[tokio::test]
+async fn api_memory_lease_quarantines_an_unreadable_timer() {
+    lease::quarantines_an_unreadable_timer(api_memory()).await;
+}
+
+#[tokio::test]
+async fn api_sqlite_lease_quarantines_an_unreadable_timer() {
+    lease::quarantines_an_unreadable_timer(api_sqlite("quarantine")).await;
+}
+
+#[tokio::test]
+async fn api_memory_lease_refuses_an_elapsed_event_from_outside() {
+    lease::refuses_an_elapsed_event_from_outside(api_memory()).await;
+}
+
+#[tokio::test]
+async fn api_sqlite_lease_refuses_an_elapsed_event_from_outside() {
+    lease::refuses_an_elapsed_event_from_outside(api_sqlite("elapsed")).await;
+}
+
+#[tokio::test]
+async fn api_memory_lease_refuses_a_record_that_breaks_a_constraint() {
+    lease::refuses_a_record_that_breaks_a_constraint(api_memory()).await;
+}
+
+#[tokio::test]
+async fn api_sqlite_lease_refuses_a_record_that_breaks_a_constraint() {
+    lease::refuses_a_record_that_breaks_a_constraint(api_sqlite("constraint")).await;
+}
+
+#[tokio::test]
+async fn api_memory_delayed_two_hosts_dispatch_once() {
+    delayed::two_hosts_dispatch_once(api_memory()).await;
+}
+
+#[tokio::test]
+async fn api_sqlite_delayed_two_hosts_dispatch_once() {
+    delayed::two_hosts_dispatch_once(api_sqlite("two-hosts-delayed")).await;
 }

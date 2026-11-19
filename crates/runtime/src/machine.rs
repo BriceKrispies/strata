@@ -110,6 +110,20 @@ pub enum TimerCommand<E> {
     },
 }
 
+/// One effect of an [`Outcome`], in the order the transition's effects ran: an index into
+/// [`Outcome::emits`] or into [`Outcome::timers`].
+///
+/// Exegra numbers the queue entries a step creates in effect order, emits and timers together,
+/// and entries due at the same time are delivered in that order. The two lists keep each kind's
+/// order; this keeps the order between them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EffectRef {
+    /// `emits[i]`.
+    Emit(usize),
+    /// `timers[i]`.
+    Timer(usize),
+}
+
 /// The result of one step: where the instance goes and what it asks the runtime to do.
 pub struct Outcome<M: Machine + ?Sized> {
     /// The next state.
@@ -120,21 +134,38 @@ pub struct Outcome<M: Machine + ?Sized> {
     pub emits: Vec<Emit<M::Emitted>>,
     /// Timer changes, applied in order.
     pub timers: Vec<TimerCommand<M::Event>>,
+    /// The emits and timer changes together, in effect order.
+    pub sequence: Vec<EffectRef>,
+    /// True when no transition fired: the event is ignored (Exegra's `ignored` outcome). The
+    /// state and variables are the ones the step was given, nothing is emitted or scheduled, and
+    /// the host writes nothing, not even the record.
+    pub ignored: bool,
 }
 
 impl<M: Machine + ?Sized> Outcome<M> {
-    /// Go to `state` with `vars`, emitting nothing and leaving timers alone.
+    /// Go to `state` with `vars`, emitting nothing and leaving timers alone: a transition fired.
     pub fn to(state: M::State, vars: M::Vars) -> Self {
         Outcome {
             state,
             vars,
             emits: Vec::new(),
             timers: Vec::new(),
+            sequence: Vec::new(),
+            ignored: false,
+        }
+    }
+
+    /// No transition fired: the event is ignored, and the instance stays at `state` with `vars`.
+    pub fn ignore(state: M::State, vars: M::Vars) -> Self {
+        Outcome {
+            ignored: true,
+            ..Outcome::to(state, vars)
         }
     }
 
     /// Also emit `event` to `receiver` with `delivery`.
     pub fn emit(mut self, receiver: &str, delivery: Delivery, event: M::Emitted) -> Self {
+        self.sequence.push(EffectRef::Emit(self.emits.len()));
         self.emits.push(Emit {
             receiver: Receiver::new(receiver),
             delivery,
@@ -153,6 +184,7 @@ impl<M: Machine + ?Sized> Outcome<M> {
         event: M::Emitted,
         after: Duration,
     ) -> Self {
+        self.sequence.push(EffectRef::Emit(self.emits.len()));
         self.emits.push(Emit {
             receiver: Receiver::new(receiver),
             delivery,
@@ -164,6 +196,7 @@ impl<M: Machine + ?Sized> Outcome<M> {
 
     /// Also set the timer `name` to fire `event` after `after`.
     pub fn set_timer(mut self, name: &str, after: Duration, event: M::Event) -> Self {
+        self.sequence.push(EffectRef::Timer(self.timers.len()));
         self.timers.push(TimerCommand::Set {
             name: name.to_string(),
             after,
@@ -174,10 +207,23 @@ impl<M: Machine + ?Sized> Outcome<M> {
 
     /// Also cancel the timer `name`.
     pub fn cancel_timer(mut self, name: &str) -> Self {
+        self.sequence.push(EffectRef::Timer(self.timers.len()));
         self.timers.push(TimerCommand::Cancel {
             name: name.to_string(),
         });
         self
+    }
+
+    /// The emits and timer changes in effect order. An outcome built by hand with an empty
+    /// [`Outcome::sequence`] gives its emits, then its timer changes.
+    pub fn effects(&self) -> Vec<EffectRef> {
+        if self.sequence.len() == self.emits.len() + self.timers.len() {
+            return self.sequence.clone();
+        }
+        (0..self.emits.len())
+            .map(EffectRef::Emit)
+            .chain((0..self.timers.len()).map(EffectRef::Timer))
+            .collect()
     }
 }
 
@@ -188,6 +234,7 @@ impl<M: Machine + ?Sized> Debug for Outcome<M> {
             .field("vars", &self.vars)
             .field("emits", &self.emits)
             .field("timers", &self.timers)
+            .field("ignored", &self.ignored)
             .finish()
     }
 }
@@ -288,12 +335,27 @@ pub trait Machine: Send + Sync + 'static {
         previous: Option<&Self::Record>,
     ) -> Result<Self::Record, RecordError>;
 
+    /// Whether `event` stands for elapsed time (`elapsed: true` in the specification). Such an
+    /// event is fired only by a timer the machine set: the hosts refuse it from outside
+    /// ([`Host::handle`](crate::Host::handle), [`System::submit`](crate::System::submit)).
+    fn is_elapsed(_event: &Self::Event) -> bool {
+        false
+    }
+
+    /// Check the constraints of a record the machine is about to save (its fields' lengths and
+    /// patterns). The hosts call it on every save and refuse the transition with the error,
+    /// committing nothing.
+    fn validate_record(_record: &Self::Record) -> Result<(), String> {
+        Ok(())
+    }
+
     /// Take one transition at time `now`: the first enabled transition from `state` on `event`,
-    /// in declaration order, or an ignore (the same state and variables, nothing emitted).
+    /// in declaration order, or an ignore ([`Outcome::ignore`]: the same state and variables,
+    /// nothing emitted, nothing written).
     ///
-    /// `now` is the host clock's time when the transaction runs (for a fired timer, the time it
-    /// is fired, which may be later than its deadline). Timer durations in the outcome are
-    /// measured from it.
+    /// `now` is the time the event is delivered at, as Exegra's `time`: for an incoming event the
+    /// time it is due, and for a fired timer or a delayed emit exactly its deadline, however late
+    /// the host gets to it. Timer and emit delays in the outcome are measured from it.
     fn step(
         state: &Self::State,
         vars: &Self::Vars,

@@ -8,7 +8,12 @@
 //! worker thread, never on the async executor.
 //!
 //! Every write the host makes for one transition goes through one [`Tx`] inside one
-//! [`RecordStore::transact`] call, and is committed whole or not at all.
+//! [`RecordStore::transact`] call, and is committed whole or not at all. The system host
+//! ([`System`](crate::System)) likewise makes every write of one queue entry's step, across all
+//! the instances it reaches, in one transaction.
+//!
+//! The isolation a transaction is asked for is a floor: every store here runs every transaction
+//! serializable (one writer at a time), which satisfies each declared level.
 
 use crate::clock::Time;
 use crate::machine::{Delivery, Isolation};
@@ -136,6 +141,56 @@ pub struct TimerEntry {
     pub event: String,
 }
 
+/// An entry to put on the system queue: an input, an emit or a timer, due at a time.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NewEntry {
+    /// When it is delivered. Entries are delivered in `(due, seq)` order.
+    pub due: Time,
+    /// The event's JSON text: `{"event": <id>, "payload": {...}}`.
+    pub event: String,
+    /// The one instance it goes to, as `(machine, key JSON text)`: set for a timer, which only
+    /// its own instance receives. `None`: the routes decide the receivers.
+    pub target: Option<(String, String)>,
+    /// For a timer, its name within the target instance; setting a timer of the same name
+    /// replaces this entry.
+    pub timer: Option<String>,
+    /// Who put it there: a machine's name, or `input` for an event from outside.
+    pub source: String,
+    /// The emitting instance's key (JSON text); empty for an input.
+    pub source_key: String,
+}
+
+/// An entry of the system queue.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct QueueEntry {
+    /// Assigned by the store when the entry is written: unique, never reused, and increasing,
+    /// so entries due at the same time keep the order they were created in.
+    pub seq: u64,
+    /// When it is delivered.
+    pub due: Time,
+    /// The event's JSON text.
+    pub event: String,
+    /// The one instance it goes to, for a timer.
+    pub target: Option<(String, String)>,
+    /// The timer's name, for a timer.
+    pub timer: Option<String>,
+    /// Who put it there.
+    pub source: String,
+    /// The emitting instance's key (JSON text).
+    pub source_key: String,
+}
+
+/// A queue entry whose delivery failed, kept with the reason.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DeadLetter {
+    /// The entry as it was on the queue.
+    pub entry: QueueEntry,
+    /// Why its step failed.
+    pub error: String,
+    /// When it was set aside.
+    pub at: Time,
+}
+
 /// The writes and reads of one transaction.
 pub trait Tx {
     /// The record of `key` in `collection`, if there is one.
@@ -164,6 +219,33 @@ pub trait Tx {
     /// Remove the timer with this id, if it is still set. Returns whether it was: `false` means
     /// it was cancelled or replaced since it was listed, and must not fire.
     fn take_timer(&mut self, id: u64) -> Result<bool, StorageError>;
+
+    /// The keys (JSON text) of every record in `collection`, in the order the records were
+    /// created.
+    fn keys(&mut self, collection: &str) -> Result<Vec<String>, StorageError>;
+
+    /// Put an entry on the system queue. Returns its sequence number.
+    fn push(&mut self, entry: &NewEntry) -> Result<u64, StorageError>;
+
+    /// Remove the queue entry `seq`. Returns whether it was there.
+    fn take_entry(&mut self, seq: u64) -> Result<bool, StorageError>;
+
+    /// Remove the queued timer `name` of an instance (`target` `(machine, key)`). Returns
+    /// whether one was queued.
+    fn drop_timer_entry(
+        &mut self,
+        machine: &str,
+        key: &str,
+        name: &str,
+    ) -> Result<bool, StorageError>;
+
+    /// Keep `entry`, which has been taken off the queue, as a dead letter with `error`.
+    fn dead_letter(
+        &mut self,
+        entry: &QueueEntry,
+        error: &str,
+        at: Time,
+    ) -> Result<(), StorageError>;
 }
 
 /// Records, read and written in transactions.
@@ -184,8 +266,8 @@ pub trait RecordStore: Send + Sync + 'static {
 
 /// The outbox, outside any transition's transaction.
 pub trait OutboxStore: Send + Sync + 'static {
-    /// Entries of `source` whose `next_attempt_at` and `not_before` are at or before `now`,
-    /// oldest first.
+    /// Entries of `source` whose `next_attempt_at` and `not_before` are at or before `now`, in
+    /// due order: by `not_before`, then by id.
     fn due_messages(
         &self,
         source: &str,
@@ -193,8 +275,10 @@ pub trait OutboxStore: Send + Sync + 'static {
         limit: usize,
     ) -> Result<Vec<OutboxEntry>, StorageError>;
 
-    /// The entry was delivered: remove it. Removing an entry that is gone does nothing.
-    fn mark_delivered(&self, id: u64) -> Result<(), StorageError>;
+    /// Claim the entry by removing it, and say whether this caller removed it: `false` means it
+    /// was already gone (delivered or claimed by another host), and the caller must not dispatch
+    /// it on the strength of this claim.
+    fn mark_delivered(&self, id: u64) -> Result<bool, StorageError>;
 
     /// A dispatch failed: record the attempt and when to try again.
     fn defer(
@@ -220,7 +304,19 @@ pub trait TimerStore: Send + Sync + 'static {
     ) -> Result<Vec<TimerEntry>, StorageError>;
 }
 
-/// Everything the host needs from a store.
-pub trait MachineStore: RecordStore + OutboxStore + TimerStore {}
+/// The system queue, outside any step's transaction.
+pub trait QueueStore: Send + Sync + 'static {
+    /// The entry first in `(due, seq)` order, whether or not it is due yet.
+    fn head(&self) -> Result<Option<QueueEntry>, StorageError>;
 
-impl<S: RecordStore + OutboxStore + TimerStore> MachineStore for S {}
+    /// Up to `limit` entries in `(due, seq)` order.
+    fn queued(&self, limit: usize) -> Result<Vec<QueueEntry>, StorageError>;
+
+    /// The dead letters, oldest first.
+    fn dead_letters(&self) -> Result<Vec<DeadLetter>, StorageError>;
+}
+
+/// Everything the hosts need from a store.
+pub trait MachineStore: RecordStore + OutboxStore + TimerStore + QueueStore {}
+
+impl<S: RecordStore + OutboxStore + TimerStore + QueueStore> MachineStore for S {}

@@ -19,6 +19,7 @@ members = [
     "crates/spec-expr",
     "crates/spec-expr-cases",
     "crates/model",
+    "crates/system-differential",
 ]
 
 [workspace.package]
