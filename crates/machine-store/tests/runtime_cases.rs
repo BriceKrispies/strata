@@ -461,6 +461,7 @@ async fn api_memory_refuses_an_instance_beyond_max() {
 #[tokio::test]
 async fn api_sqlite_refuses_an_instance_beyond_max() {
     system::refuses_an_instance_beyond_max(api_sqlite("max")).await;
+}
 
 /// Two tenants on one storage-api store, with machines whose record ids are equal: each tenant's
 /// machine store keeps its rows in that tenant, so they hold two instances (WG-4907). The store is
