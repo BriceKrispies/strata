@@ -136,18 +136,34 @@ pub fn generate(spec_path: &str, text: &str) -> Result<Vec<GeneratedFile>, Vec<D
 }
 
 /// The contents of `machine-runtime.js` after its header.
+///
+/// Integers: the two sides of a machine do not hold the same integers. A JavaScript number holds
+/// integers exactly only up to 2^53 - 1, while the Rust machines hold the whole range of their
+/// type (a `u64` up to 2^64 - 1). The chosen semantics is the intersection: a generated JavaScript
+/// machine accepts, holds and computes integers within the type's range and within
+/// +-(2^53 - 1), and refuses anything else (a payload integer outside is `invalid-event`,
+/// arithmetic outside is `overflow`). The Rust machines are not narrowed to match, so the two
+/// agree on every value of magnitude at most 2^53 - 1 and differ only above it, where the
+/// JavaScript machine refuses and the Rust machine accepts.
 const RUNTIME: &str = r#"// @ts-check
-// What the generated machines share: the error a step throws.
+// What the generated machines share: the error a step throws and the checks of an event's payload.
+//
+// The payload checks make a JavaScript machine refuse what the Rust machine's serde decode
+// refuses: a number where a string is declared, a fractional or negative number for an unsigned
+// integer, an integer outside the type's range, a field that is missing, an enum value that is
+// not declared. Integers are further limited to +-(2^53 - 1), the integers a JavaScript number
+// holds exactly; the Rust machines accept the type's whole range, so the two differ only above
+// that bound, where this side refuses.
 
 export class StepError extends Error {
   /**
-   * @param {'overflow' | 'unknown-state'} kind
+   * @param {'overflow' | 'unknown-state' | 'invalid-event'} kind
    * @param {string} message
    */
   constructor(kind, message) {
     super(message);
     this.name = 'StepError';
-    /** @type {'overflow' | 'unknown-state'} */
+    /** @type {'overflow' | 'unknown-state' | 'invalid-event'} */
     this.kind = kind;
   }
 }
@@ -160,6 +176,115 @@ export class StepError extends Error {
 export function overflow(transition) {
   throw new StepError('overflow', `transition ${transition} overflowed or divided by zero`);
 }
+
+/**
+ * The refusal of an event the machine does not receive or whose payload is not of its types.
+ * @param {string} at Where: the event id and the path of the member.
+ * @param {string} why
+ * @returns {never}
+ */
+export function invalid(at, why) {
+  throw new StepError('invalid-event', `${at} ${why}`);
+}
+
+/** @typedef {(value: unknown, at: string) => void} Check */
+
+const SAFE = Number.MAX_SAFE_INTEGER;
+const UUID = /^(?:[0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|\{[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\}|urn:uuid:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
+
+/**
+ * The checks a payload member is held to, one per type. Each throws a `StepError` of kind
+ * `invalid-event` when the value is not of the type.
+ */
+export const check = {
+  /** @type {Check} */
+  bool: (v, at) => {
+    if (typeof v !== 'boolean') invalid(at, 'is not a boolean');
+  },
+  /** @type {Check} */
+  string: (v, at) => {
+    if (typeof v !== 'string') invalid(at, 'is not a string');
+  },
+  /** @type {Check} */
+  uuid: (v, at) => {
+    if (typeof v !== 'string' || !UUID.test(v)) invalid(at, 'is not a uuid');
+  },
+  /** @type {Check} */
+  f64: (v, at) => {
+    if (typeof v !== 'number' || !Number.isFinite(v)) invalid(at, 'is not a number');
+  },
+  /** @type {Check} */
+  any: () => {},
+  /** @type {Check} */
+  bytes: (v, at) => {
+    if (v instanceof Uint8Array) return;
+    check.list(check.integer(0, 255))(v, at);
+  },
+  /**
+   * An integer of a type whose range is `low` to `high`, within +-(2^53 - 1).
+   * @param {number} low
+   * @param {number} high
+   * @returns {Check}
+   */
+  integer: (low, high) => (v, at) => {
+    if (typeof v !== 'number' || !Number.isInteger(v)) invalid(at, 'is not an integer');
+    const n = /** @type {number} */ (v);
+    if (n < Math.max(low, -SAFE) || n > Math.min(high, SAFE)) invalid(at, `is outside the range ${Math.max(low, -SAFE)}..${Math.min(high, SAFE)}`);
+  },
+  /**
+   * A value that may be null or left out.
+   * @param {Check} inner
+   * @returns {Check}
+   */
+  option: (inner) => (v, at) => {
+    if (v !== null && v !== undefined) inner(v, at);
+  },
+  /**
+   * @param {Check} inner
+   * @returns {Check}
+   */
+  list: (inner) => (v, at) => {
+    if (!Array.isArray(v)) invalid(at, 'is not a list');
+    /** @type {unknown[]} */ (v).forEach((item, i) => inner(item, `${at}[${i}]`));
+  },
+  /**
+   * One of the declared values of an enum.
+   * @param {string[]} values
+   * @returns {Check}
+   */
+  oneOf: (values) => (v, at) => {
+    if (typeof v !== 'string' || !values.includes(v)) invalid(at, `is not one of ${values.join(', ')}`);
+  },
+  /**
+   * An object with the given members. Members named in `omittable` may be left out; any other
+   * member must be present. Members that are not declared are ignored.
+   * @param {Record<string, Check>} fields
+   * @param {string[]} [omittable]
+   * @returns {Check}
+   */
+  struct: (fields, omittable = []) => (v, at) => {
+    if (typeof v !== 'object' || v === null || Array.isArray(v)) invalid(at, 'is not an object');
+    const object = /** @type {Record<string, unknown>} */ (v);
+    for (const [name, member] of Object.entries(fields)) {
+      if (object[name] === undefined) {
+        if (!omittable.includes(name)) invalid(`${at}.${name}`, 'is missing');
+        continue;
+      }
+      member(object[name], `${at}.${name}`);
+    }
+  },
+  /**
+   * The payload of an event. An event with no members may leave its payload out.
+   * @param {Record<string, Check>} fields
+   * @param {string[]} [omittable]
+   * @returns {Check}
+   */
+  payload: (fields, omittable = []) => {
+    const body = check.struct(fields, omittable);
+    const bare = Object.keys(fields).length === 0;
+    return (v, at) => body(v === undefined && bare ? {} : v, at);
+  },
+};
 "#;
 
 // ---------------------------------------------------------------------------------------------
@@ -260,6 +385,90 @@ pub(crate) fn expr_ty(spec: &Spec, t: &TypeRef) -> Ty {
         }
         TypeRef::Option(_) | TypeRef::List(_) => raw_ty(t),
     }
+}
+
+/// The payload check of machine-runtime.js (`check.*`) for a value of type `t`: what the Rust
+/// machine's serde decode accepts, narrowed to the integers a JavaScript number holds exactly
+/// (+-(2^53 - 1), see `machine-runtime.js`).
+pub(crate) fn js_check(spec: &Spec, cases: &Cases, t: &TypeRef, depth: usize) -> String {
+    if depth > 16 {
+        return "check.any".to_string();
+    }
+    match t {
+        TypeRef::Builtin(b) => match b {
+            Builtin::Bool => "check.bool".to_string(),
+            Builtin::String => "check.string".to_string(),
+            Builtin::Uuid => "check.uuid".to_string(),
+            Builtin::Bytes => "check.bytes".to_string(),
+            Builtin::Json => "check.any".to_string(),
+            Builtin::F64 => "check.f64".to_string(),
+            other => match other.integer_range() {
+                Some((low, high)) => {
+                    let safe = (1i128 << 53) - 1;
+                    format!("check.integer({}, {})", low.max(-safe), high.min(safe))
+                }
+                None => "check.any".to_string(),
+            },
+        },
+        TypeRef::List(inner) => format!("check.list({})", js_check(spec, cases, inner, depth + 1)),
+        TypeRef::Option(inner) => {
+            format!("check.option({})", js_check(spec, cases, inner, depth + 1))
+        }
+        TypeRef::Declared(id) => match spec.type_decl(id).map(|d| &d.kind) {
+            Some(TypeKind::Id { repr } | TypeKind::Scalar { repr }) => {
+                match repr.as_deref().and_then(Builtin::parse) {
+                    Some(b) => js_check(spec, cases, &TypeRef::Builtin(b), depth + 1),
+                    None => "check.any".to_string(),
+                }
+            }
+            Some(TypeKind::Enum { values }) => {
+                let values: Vec<String> = values.iter().map(|v| sq(v)).collect();
+                format!("check.oneOf([{}])", values.join(", "))
+            }
+            Some(TypeKind::Struct { fields }) => {
+                let case = cases.get(id).copied().unwrap_or_default();
+                let (members, omittable) = struct_members(
+                    fields.iter().map(|f| {
+                        (
+                            case.name(&f.name),
+                            f.type_name.as_str(),
+                            f.optional || f.type_name.trim_start().starts_with("option<"),
+                        )
+                    }),
+                    |t| js_check(spec, cases, &TypeRef::parse(t), depth + 1),
+                );
+                format!("check.struct({members}{omittable})")
+            }
+            None => "check.any".to_string(),
+        },
+    }
+}
+
+/// The `{ name: check, ... }` object and the `, ['omittable', ...]` argument (empty when every
+/// member is required) of a struct check, from `(wire name, type, omittable)`.
+fn struct_members<'a>(
+    members: impl Iterator<Item = (String, &'a str, bool)>,
+    check_of: impl Fn(&str) -> String,
+) -> (String, String) {
+    let mut items = Vec::new();
+    let mut omittable = Vec::new();
+    for (name, type_name, may_omit) in members {
+        items.push(format!("{}: {}", key(&name), check_of(type_name)));
+        if may_omit {
+            omittable.push(sq(&name));
+        }
+    }
+    let object = if items.is_empty() {
+        "{}".to_string()
+    } else {
+        format!("{{ {} }}", items.join(", "))
+    };
+    let omit = if omittable.is_empty() {
+        String::new()
+    } else {
+        format!(", [{}]", omittable.join(", "))
+    };
+    (object, omit)
 }
 
 /// The JSDoc type of a value of type `t`; `nested` parenthesises unions.
@@ -1295,9 +1504,9 @@ impl<'a> Gen<'a> {
         ));
         out.push('\n');
         if self.used_overflow.get() {
-            out.push_str("import { overflow, StepError } from './machine-runtime.js';\n\n");
+            out.push_str("import { check, overflow, StepError } from './machine-runtime.js';\n\n");
         } else {
-            out.push_str("import { StepError } from './machine-runtime.js';\n\n");
+            out.push_str("import { check, StepError } from './machine-runtime.js';\n\n");
         }
 
         // Types.
@@ -1403,6 +1612,25 @@ impl<'a> Gen<'a> {
             ],
         ));
 
+        // The checks of the payloads of the events the machine receives.
+        out.push_str(
+            "/**\n * What each event the machine receives must hold, as the Rust machine's decode requires it.\n * @type {Map<string, import('./machine-runtime.js').Check>}\n */\n",
+        );
+        out.push_str("const PAYLOADS = new Map([\n");
+        for e in &self.received {
+            let (members, omittable) = struct_members(
+                e.fields
+                    .iter()
+                    .map(|f| (f.wire.clone(), f.type_name.as_str(), f.omittable())),
+                |t| js_check(spec, &self.cases, &TypeRef::parse(t), 0),
+            );
+            out.push_str(&format!(
+                "  [{}, check.payload({members}{omittable})],\n",
+                sq(&e.event.id)
+            ));
+        }
+        out.push_str("]);\n\n");
+
         // initial.
         out.push_str(&format!(
             "/**\n * The state and variables of a new instance.\n * @param {{string}} [_key] The instance key; unused, the state lives in the kernel.\n * @returns {{{{ state: {state_t}, vars: {vars_t} }}}}\n */\n"
@@ -1416,9 +1644,15 @@ impl<'a> Gen<'a> {
 
         // step.
         out.push_str(&format!(
-            "/**\n * Steps the machine on an event at `now`, milliseconds since the Unix epoch.\n * @param {{{state_t}}} state\n * @param {{{vars_t}}} vars\n * @param {{{event_t}}} event\n * @param {{number}} now\n * @returns {{{outcome_t}}}\n * @throws {{StepError}} when arithmetic overflows or divides by zero.\n */\n"
+            "/**\n * Steps the machine on an event at `now`, milliseconds since the Unix epoch.\n * @param {{{state_t}}} state\n * @param {{{vars_t}}} vars\n * @param {{{event_t}}} event\n * @param {{number}} now\n * @returns {{{outcome_t}}}\n * @throws {{StepError}} when arithmetic overflows or divides by zero, or the event is not one the machine receives or its payload is not of the declared types (integers beyond +-(2^53 - 1) included).\n */\n"
         ));
         out.push_str("export function step(state, vars, event, now) {\n");
+        out.push_str("  const payloadCheck = PAYLOADS.get(event.event);\n");
+        out.push_str(&format!(
+            "  if (payloadCheck === undefined) throw new StepError('invalid-event', `machine {} receives no event ${{event.event}}`);\n",
+            b.id
+        ));
+        out.push_str("  payloadCheck(event.payload, event.event);\n");
         out.push_str("  switch (state) {\n");
         for c in state_cases {
             out.push_str(c);

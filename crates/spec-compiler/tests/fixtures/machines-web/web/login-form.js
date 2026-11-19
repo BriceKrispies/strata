@@ -4,7 +4,7 @@
 // The web client's login form: sends the credentials, times the answer out after 5 s, and locks after three attempts.
 // Specification behavior `login-form`, an implementation-level machine run in the browser.
 
-import { overflow, StepError } from './machine-runtime.js';
+import { check, overflow, StepError } from './machine-runtime.js';
 
 /**
  * The states of machine `login-form`.
@@ -45,6 +45,19 @@ import { overflow, StepError } from './machine-runtime.js';
  */
 
 /**
+ * What each event the machine receives must hold, as the Rust machine's decode requires it.
+ * @type {Map<string, import('./machine-runtime.js').Check>}
+ */
+const PAYLOADS = new Map([
+  ['login-typed', check.payload({ name: check.string })],
+  ['login-submitted', check.payload({ chars: check.integer(0, 4294967295) })],
+  ['login-accepted', check.payload({})],
+  ['login-rejected', check.payload({ reason: check.string, note: check.option(check.string) }, ['note'])],
+  ['login-cancelled', check.payload({})],
+  ['login-timeout', check.payload({ attempt: check.integer(0, 4294967295) })],
+]);
+
+/**
  * The state and variables of a new instance.
  * @param {string} [_key] The instance key; unused, the state lives in the kernel.
  * @returns {{ state: LoginFormState, vars: LoginFormVars }}
@@ -60,9 +73,12 @@ export function initial(_key) {
  * @param {LoginFormEvent} event
  * @param {number} now
  * @returns {LoginFormOutcome}
- * @throws {StepError} when arithmetic overflows or divides by zero.
+ * @throws {StepError} when arithmetic overflows or divides by zero, or the event is not one the machine receives or its payload is not of the declared types (integers beyond +-(2^53 - 1) included).
  */
 export function step(state, vars, event, now) {
+  const payloadCheck = PAYLOADS.get(event.event);
+  if (payloadCheck === undefined) throw new StepError('invalid-event', `machine login-form receives no event ${event.event}`);
+  payloadCheck(event.payload, event.event);
   switch (state) {
     case 'editing':
       switch (event.event) {

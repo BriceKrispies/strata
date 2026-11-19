@@ -212,7 +212,8 @@ if (!noTest) {
   console.log('running tests (--no-test would reuse the recorded results instead)');
   // A private build directory, so a running development stack does not hold the binaries.
   const cargo = run('cargo', ['test', '--workspace', '--no-fail-fast'], {
-    env: { CARGO_BUILD_JOBS: '2', RUST_TEST_THREADS: '2', CARGO_TARGET_DIR: 'target/gate' },
+    // EXEGRA_HOME: the specc differential tests run Exegra and fail without it (no silent skip).
+    env: { CARGO_BUILD_JOBS: '2', RUST_TEST_THREADS: '2', CARGO_TARGET_DIR: 'target/gate', EXEGRA_HOME: exegraHome },
   });
   writeFileSync(join(resultsDir, 'cargo-test.txt'), cargo.out);
   const libtest = [...cargo.out.matchAll(/^test result: (?:ok|FAILED)\. (\d+) passed; (\d+) failed;/gm)];

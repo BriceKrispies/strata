@@ -4,7 +4,7 @@
 // The ws state of the kernel (status, attempts, lastSeq, lastN, missedPongs). A heartbeat timer whose interval the welcome frame announces (heartbeatMs; 10 seconds until the first welcome) pings and gives up after two pings without a pong. A closed socket waits 0.5, 1, 2, 4 seconds and then 8 seconds, the cap of the back-off (a reconnect after the fifth failure waits 8 seconds; the random jitter between half and all of the wait is not modelled, the wait is its upper bound). The state is kept in memory for the life of the tab.
 // Specification behavior `client-live-flow-impl`, an implementation-level machine run in the browser.
 
-import { overflow, StepError } from './machine-runtime.js';
+import { check, overflow, StepError } from './machine-runtime.js';
 
 /**
  * The states of machine `client-live-flow-impl`.
@@ -50,6 +50,21 @@ import { overflow, StepError } from './machine-runtime.js';
  */
 
 /**
+ * What each event the machine receives must hold, as the Rust machine's decode requires it.
+ * @type {Map<string, import('./machine-runtime.js').Check>}
+ */
+const PAYLOADS = new Map([
+  ['ui-live-start', check.payload({})],
+  ['ui-live-welcome', check.payload({ head: check.integer(0, 9007199254740991), 'heartbeat-ms': check.integer(0, 4294967295) })],
+  ['ui-live-frame', check.payload({ n: check.integer(0, 9007199254740991), seq: check.integer(0, 9007199254740991) })],
+  ['ui-live-pong', check.payload({ head: check.integer(0, 9007199254740991) })],
+  ['ui-live-heartbeat-due', check.payload({})],
+  ['ui-live-closed', check.payload({})],
+  ['ui-live-reconnect-due', check.payload({})],
+  ['ui-live-reset', check.payload({})],
+]);
+
+/**
  * The state and variables of a new instance.
  * @param {string} [_key] The instance key; unused, the state lives in the kernel.
  * @returns {{ state: ClientLiveFlowImplState, vars: ClientLiveFlowImplVars }}
@@ -65,9 +80,12 @@ export function initial(_key) {
  * @param {ClientLiveFlowImplEvent} event
  * @param {number} now
  * @returns {ClientLiveFlowImplOutcome}
- * @throws {StepError} when arithmetic overflows or divides by zero.
+ * @throws {StepError} when arithmetic overflows or divides by zero, or the event is not one the machine receives or its payload is not of the declared types (integers beyond +-(2^53 - 1) included).
  */
 export function step(state, vars, event, now) {
+  const payloadCheck = PAYLOADS.get(event.event);
+  if (payloadCheck === undefined) throw new StepError('invalid-event', `machine client-live-flow-impl receives no event ${event.event}`);
+  payloadCheck(event.payload, event.event);
   switch (state) {
     case 'lv-idle-i':
       switch (event.event) {
