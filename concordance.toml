@@ -4,6 +4,9 @@
 spec_roots = ["specifications"]
 src_roots = ["crates", "lean"]
 test_results = ["var/test-results/cargo-test.txt", "var/test-results/lake-build.txt"]
+# Test fixtures of the specification compiler: the specifications and expected output it is
+# tested with, including generated tests that name the fixtures' own requirements.
+exclude = ["crates/spec-compiler/tests/fixtures/**"]
 
 [authority]
 normative = ["specifications/index.md", "specifications/glossary.md", "specifications/0[1-9]-*/**"]

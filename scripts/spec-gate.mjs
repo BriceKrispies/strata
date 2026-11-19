@@ -271,7 +271,24 @@ if (!noTest) {
 const lint = run('concordance', ['lint', '--config', 'concordance.toml']);
 check('concordance lint (strict)', lint.ok, lint.ok ? lastLine(lint.out) : `${exitText(lint)}: ${lastLine(lint.out)}`);
 
-const scan = run('concordance', ['scan', '--config', 'concordance.toml', '--json', '--fail-on', 'unverified', '--exegra-results', 'var/concordance-results.json', '--no-generated-at']);
+// A construction requirement is verified by the Exegra claims that model it, so Concordance reads
+// their verdicts. The model claims do not depend on Concordance's results, so they are evaluated
+// first, here, and written where the scan reads them.
+{
+  const cli = resolve(exegraHome, 'cli/exegra.js');
+  const verdicts = existsSync(cli) ? run(process.execPath, [cli, 'claims', '--project', exegraProject], { cwd: exegraHome }) : null;
+  let claims = null;
+  try {
+    claims = verdicts ? JSON.parse(verdicts.stdout).result : null;
+  } catch {
+    claims = null;
+  }
+  const written = Array.isArray(claims);
+  if (written) writeFileSync(resolve(root, 'var/exegra-verdicts.json'), JSON.stringify({ results: claims }));
+  check('exegra claim verdicts for construction requirements', written, written ? `${claims.length} claims` : `no verdicts: ${verdicts ? exitText(verdicts) : 'no Exegra checkout'}`);
+}
+
+const scan = run('concordance', ['scan', '--config', 'concordance.toml', '--json', '--fail-on', 'unverified', '--exegra-results', 'var/concordance-results.json', '--exegra-verdicts', 'var/exegra-verdicts.json', '--no-generated-at']);
 let report = null;
 try {
   report = JSON.parse(scan.stdout);
