@@ -2,16 +2,73 @@
 //! workflows, named queries and view definitions, under one schema version.
 //!
 //! The types are generated ([`crate::types`]); this module holds what the kernel does with them:
-//! the genesis schema and the consistency check.
+//! the genesis schema, the consistency check, and the reading of a role's permissions and of the
+//! teams and invitations a schema holds.
 
 use crate::expr::{self, Expr, TypeEnv};
-use crate::types::{owner_role, public_role, FieldTypeExt, ObjectTypeId, RoleId, SchemaVersion};
+use crate::types::{
+    owner_role, public_role, FieldTypeExt, InvitationId, ObjectTypeId, RoleId, SchemaVersion,
+    TeamId,
+};
 pub use crate::types::{
-    Action, ArgSource, ConstraintDef, FieldDef, FieldType, ObjectTypeDef, OrderKey, PolicyDef,
-    QueryDef, Resource, RoleDef, TenantSchema, ViewDef, ViewSection, WorkflowDef,
-    WorkflowTransition,
+    Action, ArgSource, ConstraintDef, FieldDef, FieldType, Grant, InvitationDef, ObjectAction,
+    ObjectTypeDef, OrderKey, Permission, PolicyDef, QueryDef, Resource, RoleDef, TeamDef,
+    TenantSchema, ViewDef, ViewSection, WorkflowDef, WorkflowTransition,
 };
 use std::collections::{BTreeMap, BTreeSet};
+
+/// What the kernel asks of an [`ObjectAction`], one of the four actions on an object type that a
+/// role's permission can name.
+pub trait ObjectActionExt: Sized {
+    /// The policy action it is.
+    fn action(self) -> Action;
+    /// The object action of a policy action; `None` for `Manage`.
+    fn of(action: Action) -> Option<Self>;
+}
+
+impl ObjectActionExt for ObjectAction {
+    fn action(self) -> Action {
+        match self {
+            ObjectAction::Read => Action::Read,
+            ObjectAction::Create => Action::Create,
+            ObjectAction::Update => Action::Update,
+            ObjectAction::Delete => Action::Delete,
+        }
+    }
+
+    fn of(action: Action) -> Option<Self> {
+        match action {
+            Action::Read => Some(ObjectAction::Read),
+            Action::Create => Some(ObjectAction::Create),
+            Action::Update => Some(ObjectAction::Update),
+            Action::Delete => Some(ObjectAction::Delete),
+            Action::Manage => None,
+        }
+    }
+}
+
+/// What the kernel asks of a [`Permission`]: the indivisible grants it stands for.
+pub trait PermissionExt {
+    /// One [`Grant`] for a capability, or one per action on the object type.
+    fn grants(&self) -> Vec<Grant>;
+}
+
+impl PermissionExt for Permission {
+    fn grants(&self) -> Vec<Grant> {
+        match self {
+            Permission::Capability(name) => vec![Grant::Capability(name.clone())],
+            Permission::Object { object, actions } => actions
+                .iter()
+                .map(|verb| Grant::Object(object.clone(), *verb))
+                .collect(),
+        }
+    }
+}
+
+/// The form in which an address is compared.
+pub fn normalise_address(address: &str) -> String {
+    address.trim().to_ascii_lowercase()
+}
 
 /// What the kernel asks of a [`WorkflowDef`].
 pub trait WorkflowDefExt {
@@ -47,6 +104,26 @@ pub trait TenantSchemaExt {
     /// Check that the schema is internally consistent. Returns every problem found, in a
     /// deterministic order.
     fn problems(&self) -> Vec<String>;
+    /// Every grant of a role. A role without permissions grants none.
+    fn grants_of(&self, role: &RoleId) -> BTreeSet<Grant>;
+    /// Replace the permissions a role grants; none removes the role's entry. A schema whose
+    /// roles grant nothing holds no table of permissions at all, as the genesis schema does.
+    fn set_role_permissions(&mut self, role: &RoleId, permissions: Vec<Permission>);
+    /// One team, by its id.
+    fn team(&self, id: &TeamId) -> Option<&TeamDef>;
+    /// Every team, in id order.
+    fn all_teams(&self) -> impl Iterator<Item = &TeamDef>;
+    /// Define or replace a team. A team's membership changes through its own intents, not
+    /// through `ChangeSchema`, and does not raise the schema version.
+    fn put_team(&mut self, team: TeamDef);
+    /// One invitation, by its id.
+    fn invitation(&self, id: &InvitationId) -> Option<&InvitationDef>;
+    /// The invitation, to change it.
+    fn invitation_mut(&mut self, id: &InvitationId) -> Option<&mut InvitationDef>;
+    /// Every invitation, redeemed or not, in id order.
+    fn all_invitations(&self) -> impl Iterator<Item = &InvitationDef>;
+    /// Record an invitation.
+    fn put_invitation(&mut self, invitation: InvitationDef);
 }
 
 impl TenantSchemaExt for TenantSchema {
@@ -67,11 +144,70 @@ impl TenantSchemaExt for TenantSchema {
             version: SchemaVersion(1),
             objects: BTreeMap::new(),
             roles,
+            role_permissions: None,
+            teams: None,
+            invitations: None,
             policies: BTreeMap::new(),
             workflows: BTreeMap::new(),
             queries: BTreeMap::new(),
             views: BTreeMap::new(),
         }
+    }
+
+    fn grants_of(&self, role: &RoleId) -> BTreeSet<Grant> {
+        self.role_permissions
+            .as_ref()
+            .and_then(|table| table.get(role))
+            .into_iter()
+            .flatten()
+            .flat_map(PermissionExt::grants)
+            .collect()
+    }
+
+    fn set_role_permissions(&mut self, role: &RoleId, permissions: Vec<Permission>) {
+        let mut table = self.role_permissions.take().unwrap_or_default();
+        if permissions.is_empty() {
+            table.remove(role);
+        } else {
+            table.insert(role.clone(), permissions);
+        }
+        self.role_permissions = (!table.is_empty()).then_some(table);
+    }
+
+    fn team(&self, id: &TeamId) -> Option<&TeamDef> {
+        self.teams.as_ref().and_then(|teams| teams.get(id))
+    }
+
+    fn all_teams(&self) -> impl Iterator<Item = &TeamDef> {
+        self.teams.iter().flat_map(BTreeMap::values)
+    }
+
+    fn put_team(&mut self, team: TeamDef) {
+        self.teams
+            .get_or_insert_with(BTreeMap::new)
+            .insert(team.id.clone(), team);
+    }
+
+    fn invitation(&self, id: &InvitationId) -> Option<&InvitationDef> {
+        self.invitations
+            .as_ref()
+            .and_then(|invitations| invitations.get(id))
+    }
+
+    fn invitation_mut(&mut self, id: &InvitationId) -> Option<&mut InvitationDef> {
+        self.invitations
+            .as_mut()
+            .and_then(|invitations| invitations.get_mut(id))
+    }
+
+    fn all_invitations(&self) -> impl Iterator<Item = &InvitationDef> {
+        self.invitations.iter().flat_map(BTreeMap::values)
+    }
+
+    fn put_invitation(&mut self, invitation: InvitationDef) {
+        self.invitations
+            .get_or_insert_with(BTreeMap::new)
+            .insert(invitation.id.clone(), invitation);
     }
 
     fn workflows_of<'a>(
@@ -153,6 +289,55 @@ impl TenantSchemaExt for TenantSchema {
                         object.id, constraint.id
                     )),
                     Err(e) => problems.push(format!("{}.{}: {e}", object.id, constraint.id)),
+                }
+            }
+        }
+
+        for (role, permissions) in self.role_permissions.iter().flatten() {
+            let at = format!("role {role}");
+            if !roles.contains(role) {
+                problems.push(format!("{at}: permissions of an unknown role"));
+            }
+            if *role == owner_role() {
+                problems.push(format!("{at}: the owner role holds every permission"));
+            }
+            for permission in permissions {
+                match permission {
+                    Permission::Capability(name) if name.trim().is_empty() => {
+                        problems.push(format!("{at}: a capability needs a name"))
+                    }
+                    Permission::Capability(_) => {}
+                    Permission::Object { object, actions } => {
+                        if !self.objects.contains_key(object) {
+                            problems
+                                .push(format!("{at}: permission on unknown object type {object}"));
+                        }
+                        if actions.is_empty() {
+                            problems.push(format!("{at}: permission on {object} names no action"));
+                        }
+                    }
+                }
+            }
+        }
+        for team in self.all_teams() {
+            let at = format!("team {}", team.id);
+            for role in &team.roles {
+                if !roles.contains(role) {
+                    problems.push(format!("{at}: unknown role {role}"));
+                }
+                if *role == public_role() {
+                    problems.push(format!("{at}: everyone already holds public"));
+                }
+            }
+        }
+        for invitation in self.all_invitations() {
+            let at = format!("invitation {}", invitation.id);
+            if invitation.address.is_empty() {
+                problems.push(format!("{at}: names no address"));
+            }
+            for role in &invitation.roles {
+                if !roles.contains(role) {
+                    problems.push(format!("{at}: unknown role {role}"));
                 }
             }
         }

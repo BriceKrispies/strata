@@ -15,6 +15,7 @@ use crate::ir::Spec;
 /// its `target-models` feature.
 pub const TARGET_MODULE: &str = "target_machines";
 
+pub mod access_model;
 pub mod audits;
 pub mod contracts;
 pub mod deps;

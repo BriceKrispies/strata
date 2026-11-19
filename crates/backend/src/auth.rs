@@ -53,6 +53,8 @@ pub struct Identity {
     /// Why there is no session, when a token was presented but did not hold.
     pub state: SessionState,
     pub correlation: String,
+    /// The address the signed-in account has verified, from the store: never from a request.
+    pub verified_address: Option<String>,
 }
 
 impl Identity {
@@ -67,6 +69,7 @@ impl Identity {
             session: self.session.as_ref().map(|s| s.id.clone()),
             now: app.now(),
             correlation: self.correlation.clone(),
+            verified_address: self.verified_address.clone(),
         }
     }
 }
@@ -170,6 +173,7 @@ pub fn identify(app: &App, caller: &Caller) -> Result<Identity, ApiError> {
         session: None,
         state,
         correlation: caller.correlation.clone(),
+        verified_address: None,
     };
     let Some(token) = &caller.token else {
         return Ok(anonymous(SessionState::Anonymous));
@@ -210,12 +214,16 @@ pub fn identify(app: &App, caller: &Caller) -> Result<Identity, ApiError> {
         session.last_seen_at = app.now();
         app.store.put_session(&session)?;
     }
+    let verified_address = app
+        .store
+        .verified_address(&session.tenant, &session.principal)?;
     Ok(Identity {
         tenant: session.tenant.clone(),
         principal: Principal::User(session.principal.clone()),
         session: Some(session),
         state: SessionState::Active,
         correlation: caller.correlation.clone(),
+        verified_address,
     })
 }
 
@@ -357,6 +365,7 @@ pub(crate) fn start_session(
         session: Some(session),
         state: SessionState::Active,
         correlation: caller.correlation.clone(),
+        verified_address: account.verified_email,
     };
     Ok(LoginReply {
         token,
@@ -526,6 +535,7 @@ pub fn put_dev_account(
     password: &str,
     principal: PrincipalId,
     display_name: &str,
+    verified_email: Option<&str>,
 ) -> Result<(), ApiError> {
     app.store.put_account(&Account {
         tenant: tenant.clone(),
@@ -533,6 +543,7 @@ pub fn put_dev_account(
         principal,
         display_name: display_name.to_string(),
         password_hash: hash_password(password)?,
+        verified_email: verified_email.map(str::to_string),
     })?;
     Ok(())
 }

@@ -840,6 +840,19 @@ impl Store for MemoryStore {
             .is_some())
     }
 
+    fn verified_address(
+        &self,
+        tenant: &TenantId,
+        principal: &PrincipalId,
+    ) -> StoreResult<Option<String>> {
+        Ok(self
+            .lock()?
+            .accounts
+            .values()
+            .find(|account| account.tenant == *tenant && account.principal == *principal)
+            .and_then(|account| account.verified_email.clone()))
+    }
+
     fn create_snapshot(
         &self,
         tenant: &TenantId,

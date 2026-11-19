@@ -223,6 +223,7 @@ fn context(tenant: &TenantId, now: Time) -> Context {
         session: None,
         now: Timestamp(now.0),
         correlation: "runtime".into(),
+        verified_address: None,
     }
 }
 

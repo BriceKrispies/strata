@@ -9,10 +9,13 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use strata_kernel::ext::*;
 use strata_kernel::{
-    read, visible, Check, Context, DomainError, ErrorKind, Intent, Need, ObjectTypeId, Output,
-    Principal, ReadRequest, Record, RecordId, TenantId, TenantState,
+    read, visible, Check, Context, DomainError, ErrorKind, Intent, InvitationId, Need,
+    ObjectTypeId, Output, Principal, PrincipalId, ReadRequest, Record, RecordId, RoleId, TeamId,
+    TenantId, TenantState,
 };
-use strata_protocol::api::{ErrorCode, Mutation, MutationReply, ViewRequest};
+use strata_protocol::api::{
+    ErrorCode, MembersReply, MembersRequest, Mutation, MutationReply, ViewRequest,
+};
 use strata_storage_api::{execute, ExecuteError, Executed};
 use strata_substrate::plain::coerce_fields;
 use strata_substrate::project::{
@@ -237,6 +240,62 @@ fn without_others_authorship(principal: &Principal, record: &Arc<Record>) -> Arc
     let mut shown = Record::clone(record);
     shown.created_by = None;
     Arc::new(shown)
+}
+
+/// Parse a name the browser sent into a kernel identifier, or refuse the request as invalid.
+fn named<T, E: std::fmt::Display>(what: &str, parsed: Result<T, E>) -> Result<T, ApiError> {
+    parsed.map_err(|problem| ApiError::new(ErrorCode::Invalid, format!("{what}: {problem}")))
+}
+
+/// Change who holds which role: assign or revoke a role, add or remove a team member, invite and
+/// redeem (ADM-150 to ADM-153). Each is one kernel intent, decided by the kernel as the signed-in
+/// person. The address an invitation is redeemed with is never read from the request: it is the
+/// verified address of the signed-in account, which `Identity::context` puts in the context.
+pub fn members(
+    app: &App,
+    identity: &Identity,
+    request: &MembersRequest,
+) -> Result<MembersReply, ApiError> {
+    let intent = match request {
+        MembersRequest::AssignRole { principal, role } => Intent::AssignRole {
+            principal: named("principal", PrincipalId::new(principal.as_str()))?,
+            role: named("role", RoleId::new(role.as_str()))?,
+        },
+        MembersRequest::RevokeRole { principal, role } => Intent::RevokeRole {
+            principal: named("principal", PrincipalId::new(principal.as_str()))?,
+            role: named("role", RoleId::new(role.as_str()))?,
+        },
+        MembersRequest::AddTeamMember { team, principal } => Intent::AddTeamMember {
+            team: named("team", TeamId::new(team.as_str()))?,
+            principal: named("principal", PrincipalId::new(principal.as_str()))?,
+        },
+        MembersRequest::RemoveTeamMember { team, principal } => Intent::RemoveTeamMember {
+            team: named("team", TeamId::new(team.as_str()))?,
+            principal: named("principal", PrincipalId::new(principal.as_str()))?,
+        },
+        MembersRequest::Invite {
+            invitation,
+            address,
+            roles,
+        } => Intent::CreateInvitation {
+            invitation: named("invitation", InvitationId::new(invitation.as_str()))?,
+            address: address.clone(),
+            roles: roles
+                .iter()
+                .map(|role| named("role", RoleId::new(role.as_str())))
+                .collect::<Result<BTreeSet<_>, _>>()?,
+        },
+        MembersRequest::Redeem { invitation } => Intent::RedeemInvitation {
+            invitation: named("invitation", InvitationId::new(invitation.as_str()))?,
+        },
+    };
+    let ctx = identity.context(app);
+    let done = run_intent(app, &ctx, &intent, identity.anonymous())?;
+    Ok(MembersReply {
+        revision: done.receipt.revision.0,
+        event_seq: done.transition.delta.event_seq,
+        checks_passed: done.transition.evidence.len(),
+    })
 }
 
 /// Evaluate the view whose route matches a path. Every section is read from one snapshot, and

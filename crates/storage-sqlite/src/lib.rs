@@ -317,6 +317,11 @@ const TENANT_MIGRATIONS: &[Migration] = &[
     );
     ",
     },
+    Migration {
+        version: 9,
+        name: "verified e-mail address of an account",
+        sql: "ALTER TABLE accounts ADD COLUMN verified_email TEXT;",
+    },
 ];
 
 /// Index values longer than this are not indexed; lookups for them scan the object type.
@@ -1654,28 +1659,48 @@ impl Store for SqliteStore {
     ) -> StoreResult<Option<Account>> {
         let row = self.on_tenant(tenant, |conn| {
             conn.query_row(
-                "SELECT login, display_name, password_hash FROM accounts WHERE principal = ?1 ORDER BY login LIMIT 1",
+                "SELECT login, display_name, password_hash, verified_email FROM accounts WHERE principal = ?1 ORDER BY login LIMIT 1",
                 params![principal.as_str()],
                 |row| {
                     Ok((
                         row.get::<_, String>(0)?,
                         row.get::<_, String>(1)?,
                         row.get::<_, String>(2)?,
+                        row.get::<_, Option<String>>(3)?,
                     ))
                 },
             )
             .optional()
             .map_err(db)
         })?;
-        Ok(row
-            .flatten()
-            .map(|(login, display_name, password_hash)| Account {
+        Ok(row.flatten().map(
+            |(login, display_name, password_hash, verified_email)| Account {
                 tenant: tenant.clone(),
                 login,
                 principal: principal.clone(),
                 display_name,
                 password_hash,
-            }))
+                verified_email,
+            },
+        ))
+    }
+
+    fn verified_address(
+        &self,
+        tenant: &TenantId,
+        principal: &PrincipalId,
+    ) -> StoreResult<Option<String>> {
+        // The same account as `account_of`: the principal's first login.
+        let address = self.on_tenant(tenant, |conn| {
+            conn.query_row(
+                "SELECT verified_email FROM accounts WHERE principal = ?1 ORDER BY login LIMIT 1",
+                params![principal.as_str()],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()
+            .map_err(db)
+        })?;
+        Ok(address.flatten().flatten())
     }
 
     fn put_passkey(&self, passkey: &PasskeyRecord) -> StoreResult<bool> {
@@ -2463,14 +2488,16 @@ impl Store for SqliteStore {
         file.lock()
             .map_err(dbe)?
             .execute(
-                "INSERT INTO accounts (login, principal, display_name, password_hash) VALUES (?1, ?2, ?3, ?4)
+                "INSERT INTO accounts (login, principal, display_name, password_hash, verified_email) VALUES (?1, ?2, ?3, ?4, ?5)
                  ON CONFLICT (login) DO UPDATE SET principal = excluded.principal,
-                    display_name = excluded.display_name, password_hash = excluded.password_hash",
+                    display_name = excluded.display_name, password_hash = excluded.password_hash,
+                    verified_email = excluded.verified_email",
                 params![
                     account.login,
                     account.principal.as_str(),
                     account.display_name,
-                    account.password_hash
+                    account.password_hash,
+                    account.verified_email
                 ],
             )
             .map_err(db)?;
@@ -2484,25 +2511,27 @@ impl Store for SqliteStore {
         let conn = file.lock().map_err(dbe)?;
         let row = conn
             .query_row(
-                "SELECT principal, display_name, password_hash FROM accounts WHERE login = ?1",
+                "SELECT principal, display_name, password_hash, verified_email FROM accounts WHERE login = ?1",
                 params![login],
                 |row| {
                     Ok((
                         row.get::<_, String>(0)?,
                         row.get::<_, String>(1)?,
                         row.get::<_, String>(2)?,
+                        row.get::<_, Option<String>>(3)?,
                     ))
                 },
             )
             .optional()
             .map_err(db)?;
-        row.map(|(principal, display_name, password_hash)| {
+        row.map(|(principal, display_name, password_hash, verified_email)| {
             Ok(Account {
                 tenant: tenant.clone(),
                 login: login.to_string(),
                 principal: PrincipalId::new(principal).map_err(corrupt_id)?,
                 display_name,
                 password_hash,
+                verified_email,
             })
         })
         .transpose()

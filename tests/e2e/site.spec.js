@@ -1636,3 +1636,122 @@ test('an identity provider provisions a person with its token and a deactivation
   const asCookie = await request.get('/api/identity/clients', { headers: { Cookie: `__Host-strata_sid=${token}` }, failOnStatusCode: false });
   expect(asCookie.status()).toBe(401);
 });
+
+// Team membership (ADM-151). The fixture seeds `dana` with no role of her own and in the
+// `newsdesk` team, which holds the editor role, so everything she may do she may do through it.
+test('a person in a team that holds the editor role has the editor’s access and the author without a team does not', async ({ page, browser }) => {
+  await signIn(page, 'dana');
+  // Editors see every article on the desk, not only their own.
+  await expect(page.getByRole('row', { name: /What the Kiln Decides/ })).toBeVisible();
+  await expect(page.getByRole('row', { name: /The Jig Is the Work/ })).toBeVisible();
+  // Editors tune the publication's settings; she reaches them through the team alone.
+  await page.getByRole('link', { name: 'Publication settings' }).click();
+  await expect(page.getByRole('heading', { level: 1, name: 'Publication settings' })).toBeVisible();
+  // The kernel decides, not the page: a category is the editor's to create ...
+  const change = { op: 'create', object: 'category', fields: { name: 'Team made', slug: 'team-made' } };
+  const csrf = (await (await page.request.get('/api/session')).json()).session.csrf_token;
+  const allowed = await page.request.post('/api/records', { data: change, headers: { origin: BASE, 'x-csrf-token': csrf } });
+  expect(allowed.status()).toBe(200);
+  // ... and an author who is in no team is refused the same write.
+  const author = await (await browser.newContext()).newPage();
+  await signIn(author, 'mirela');
+  const authorCsrf = (await (await author.request.get('/api/session')).json()).session.csrf_token;
+  const refused = await author.request.post('/api/records', {
+    data: { ...change, fields: { name: 'Author made', slug: 'author-made' } },
+    headers: { origin: BASE, 'x-csrf-token': authorCsrf },
+  });
+  expect(refused.status()).toBe(403);
+});
+
+/** A signed-in person in a context of their own, with the request token their writes carry. */
+async function person(browser, name) {
+  const page = await (await browser.newContext()).newPage();
+  await signIn(page, name);
+  const session = (await (await page.request.get('/api/session')).json()).session;
+  const headers = { origin: BASE, 'x-csrf-token': session.csrf_token };
+  return {
+    page,
+    roles: async () => (await (await page.request.get('/api/session')).json()).session.roles,
+    members: (operation, data) => page.request.post(`/api/members/${operation}`, { data, headers }),
+  };
+}
+
+// Over-granting (ADM-152). `moderator` manages members and holds the author role, so every
+// permission and capability of an author and none of an editor's; an author manages nobody; the
+// owner holds everything. The kernel decides each assignment, and a refusal names the rule.
+test('assigning a role whose permissions the assigner lacks is refused with the named reason, and an owner may', async ({ browser }) => {
+  const moderator = await person(browser, 'moderator');
+  const assign = (who, role) => who.members('assign-role', { principal: 'user:mirela', role });
+  const refused = await assign(moderator, 'editor');
+  expect(refused.status()).toBe(403);
+  expect((await refused.json()).failed[0].rule).toBe('permission:confer:editor');
+  expect(await (await person(browser, 'mirela')).roles()).not.toContain('editor');
+  // A role whose permissions the moderator holds in full is another matter.
+  expect((await assign(moderator, 'author')).status()).toBe(200);
+
+  // An author, who manages no one, is refused making someone an editor, and for another reason.
+  const author = await person(browser, 'tomasz');
+  const byAuthor = await assign(author, 'editor');
+  expect(byAuthor.status()).toBe(403);
+  expect((await byAuthor.json()).failed.map((check) => check.rule)).toContain('policy:none');
+
+  // An owner is allowed, and takes the role away again.
+  const owner = await person(browser, 'admin');
+  expect((await assign(owner, 'editor')).status()).toBe(200);
+  const mirela = await person(browser, 'mirela');
+  expect(await mirela.roles()).toContain('editor');
+  expect((await owner.members('revoke-role', { principal: 'user:mirela', role: 'editor' })).status()).toBe(200);
+  expect(await mirela.roles()).not.toContain('editor');
+});
+
+// Team membership through the route (ADM-151, ADM-152): joining a team confers its roles, so it
+// is refused to a manager who does not hold them, and allowed to an owner.
+test('a team member is added and removed by someone who holds the team’s roles, and not by someone who does not', async ({ browser }) => {
+  const moderator = await person(browser, 'moderator');
+  const owner = await person(browser, 'admin');
+  const tomasz = await person(browser, 'tomasz');
+  const join = { team: 'newsdesk', principal: 'user:tomasz' };
+  const refused = await moderator.members('add-team-member', join);
+  expect(refused.status()).toBe(403);
+  expect((await refused.json()).failed[0].rule).toBe('permission:confer:editor');
+  expect(await tomasz.roles()).not.toContain('editor');
+  expect((await owner.members('add-team-member', join)).status()).toBe(200);
+  expect(await tomasz.roles()).toContain('editor');
+  expect((await owner.members('remove-team-member', join)).status()).toBe(200);
+  expect(await tomasz.roles()).not.toContain('editor');
+});
+
+// Invitations (ADM-153): the roles go to the one person whose verified address, the signed-in
+// account's and never one the request gives, is the address the invitation names.
+test('an invitation grants its roles to the one person whose verified address it names, once', async ({ browser }) => {
+  const invitation = `inv-${Date.now()}`;
+  const owner = await person(browser, 'admin');
+  const moderator = await person(browser, 'moderator');
+  const dana = await person(browser, 'dana');
+  const mirela = await person(browser, 'mirela');
+  const invite = { invitation, address: 'Dana@Fieldnotes.example', roles: ['author'] };
+
+  // Inviting is conferring: the moderator may not offer a role it could not assign.
+  const overreach = await moderator.members('invite', { ...invite, invitation: `${invitation}-editor`, roles: ['editor'] });
+  expect(overreach.status()).toBe(403);
+  expect((await overreach.json()).failed[0].rule).toBe('permission:confer:editor');
+  expect((await owner.members('invite', invite)).status()).toBe(200);
+
+  // Another signed-in person redeems nothing, and the request has no field to claim an address with.
+  const wrong = await mirela.members('redeem', { invitation });
+  expect(wrong.status()).toBe(403);
+  expect((await wrong.json()).failed[0].rule).toBe('invitation:address_matches');
+  const claimed = await mirela.members('redeem', { invitation, address: 'dana@fieldnotes.example', verified_address: 'dana@fieldnotes.example' });
+  expect(claimed.status()).toBe(422);
+  expect(await dana.roles()).not.toContain('author');
+
+  // The person with the named address gets the roles, once.
+  expect((await dana.members('redeem', { invitation })).status()).toBe(200);
+  expect(await dana.roles()).toContain('author');
+  const again = await dana.members('redeem', { invitation });
+  expect(again.status()).toBe(422);
+  expect((await again.json()).failed[0].rule).toBe('invitation:redeemed_once');
+
+  expect((await owner.members('revoke-role', { principal: 'user:dana', role: 'author' })).status()).toBe(200);
+  expect(await dana.roles()).not.toContain('author');
+});

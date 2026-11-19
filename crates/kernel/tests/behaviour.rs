@@ -1204,3 +1204,722 @@ fn a_unique_clash_with_a_hidden_record_does_not_name_it() {
         refused.message
     );
 }
+
+// Roles as sets of permissions, teams and invitations (ADM-150 to ADM-153).
+
+fn object_permission(name: &str, verbs: &[ObjectAction]) -> Permission {
+    Permission::Object {
+        object: object(name),
+        actions: verbs.iter().copied().collect(),
+    }
+}
+
+fn capability(name: &str) -> Permission {
+    Permission::Capability(name.to_string())
+}
+
+/// The notes tenant with four more roles. `writer` creates notes, `reviewer` reads them,
+/// `publisher` holds one capability, and `moderator` manages members and holds a capability and
+/// the right to read notes. The principal `alpha:stranger` is a moderator.
+fn access_world() -> World {
+    let role_def = |id: &str, label: &str| {
+        SchemaChange::DefineRole(RoleDef {
+            id: role(id),
+            label: label.into(),
+        })
+    };
+    let permissions =
+        |id: &str, permissions: Vec<Permission>| SchemaChange::DefineRolePermissions {
+            role: role(id),
+            permissions,
+        };
+    let world = must(
+        &notes_world(),
+        "alpha",
+        "owner",
+        6_000,
+        Intent::ChangeSchema {
+            changes: vec![
+                role_def("moderator", "Moderator"),
+                role_def("publisher", "Publisher"),
+                role_def("reviewer", "Reviewer"),
+                permissions(
+                    "writer",
+                    vec![object_permission("note", &[ObjectAction::Create])],
+                ),
+                permissions(
+                    "reviewer",
+                    vec![object_permission("note", &[ObjectAction::Read])],
+                ),
+                permissions("publisher", vec![capability("content.publish")]),
+                permissions(
+                    "moderator",
+                    vec![
+                        capability("people.manage"),
+                        object_permission("note", &[ObjectAction::Read]),
+                    ],
+                ),
+                SchemaChange::DefinePolicy(PolicyDef {
+                    id: PolicyId::new("moderators_manage_members").unwrap(),
+                    role: role("moderator"),
+                    resource: Resource::Members,
+                    actions: BTreeSet::from([Action::Manage]),
+                    condition: None,
+                }),
+            ],
+            expected_version: None,
+            existing: ExistingData::Reject,
+        },
+    );
+    must(
+        &world,
+        "alpha",
+        "owner",
+        6_001,
+        Intent::AssignRole {
+            principal: principal_id("alpha:stranger"),
+            role: role("moderator"),
+        },
+    )
+}
+
+fn held(world: &World, who: &str) -> BTreeSet<Grant> {
+    strata_kernel::rules::effective_permissions(
+        &world.tenants[&tenant_id("alpha")],
+        &user(&format!("alpha:{who}")),
+    )
+}
+
+fn roles_held_by(world: &World, who: &str) -> BTreeSet<RoleId> {
+    strata_kernel::rules::roles_of(
+        &world.tenants[&tenant_id("alpha")],
+        &user(&format!("alpha:{who}")),
+    )
+}
+
+fn refused(result: Result<(World, Transition), DomainError>) -> DomainError {
+    match result {
+        Ok(_) => panic!("the intent was accepted"),
+        Err(error) => error,
+    }
+}
+
+fn team(id: &str) -> TeamId {
+    TeamId::new(id).unwrap()
+}
+
+fn define_team(id: &str) -> Intent {
+    Intent::DefineTeam {
+        team: team(id),
+        label: id.to_string(),
+    }
+}
+
+fn team_gets(id: &str, role_name: &str) -> Intent {
+    Intent::AssignTeamRole {
+        team: team(id),
+        role: role(role_name),
+    }
+}
+
+fn joins(id: &str, who: &str) -> Intent {
+    Intent::AddTeamMember {
+        team: team(id),
+        principal: principal_id(&format!("alpha:{who}")),
+    }
+}
+
+/// Verifies: ADM-150
+/// Verifies: ADM-151
+///
+/// A principal holds the roles of each team it belongs to, and so what the role permits, for as
+/// long as it belongs and no longer.
+#[test]
+fn a_team_confers_its_roles_while_the_principal_is_a_member() {
+    let world = access_world();
+    let world = must(&world, "alpha", "owner", 7_000, define_team("desk"));
+    let world = must(&world, "alpha", "owner", 7_001, team_gets("desk", "writer"));
+    let create = || new_note("From the desk", "from-the-desk");
+
+    let error = refused(step(&world, "alpha", "newbie", 7_002, create()));
+    assert_eq!(error.kind, ErrorKind::Unauthorized);
+    assert!(held(&world, "newbie").is_empty());
+
+    let world = must(&world, "alpha", "owner", 7_003, joins("desk", "newbie"));
+    assert!(roles_held_by(&world, "newbie").contains(&role("writer")));
+    assert_eq!(
+        held(&world, "newbie"),
+        BTreeSet::from([Grant::Object(object("note"), ObjectAction::Create)])
+    );
+    step(&world, "alpha", "newbie", 7_004, create()).expect("the team's role lets it create");
+
+    let world = must(
+        &world,
+        "alpha",
+        "owner",
+        7_005,
+        Intent::RemoveTeamMember {
+            team: team("desk"),
+            principal: principal_id("alpha:newbie"),
+        },
+    );
+    assert!(!roles_held_by(&world, "newbie").contains(&role("writer")));
+    assert!(held(&world, "newbie").is_empty());
+    let error = refused(step(&world, "alpha", "newbie", 7_006, create()));
+    assert_eq!(error.kind, ErrorKind::Unauthorized);
+}
+
+/// Verifies: ADM-151
+///
+/// What a principal holds is exactly the permissions of the roles assigned to it and of the
+/// roles of its teams, and nothing of another team's roles or of a role nobody gave it.
+#[test]
+fn a_principal_holds_the_union_of_its_roles_and_its_teams_roles_and_nothing_more() {
+    let world = access_world();
+    let world = must(&world, "alpha", "owner", 7_000, define_team("desk"));
+    let world = must(
+        &world,
+        "alpha",
+        "owner",
+        7_001,
+        team_gets("desk", "reviewer"),
+    );
+    let world = must(&world, "alpha", "owner", 7_002, define_team("press"));
+    let world = must(
+        &world,
+        "alpha",
+        "owner",
+        7_003,
+        team_gets("press", "publisher"),
+    );
+    let world = must(&world, "alpha", "owner", 7_004, joins("desk", "writer1"));
+
+    let direct = Grant::Object(object("note"), ObjectAction::Create);
+    let through_the_team = Grant::Object(object("note"), ObjectAction::Read);
+    assert_eq!(
+        held(&world, "writer1"),
+        BTreeSet::from([direct.clone(), through_the_team.clone()])
+    );
+    assert!(!held(&world, "writer1").contains(&Grant::Capability("content.publish".into())));
+    // Another holder of the direct role does not share the team's permission.
+    assert_eq!(held(&world, "writer2"), BTreeSet::from([direct]));
+    // A principal with no role holds nothing.
+    assert!(held(&world, "newbie").is_empty());
+
+    let world = must(&world, "alpha", "owner", 7_005, joins("press", "writer1"));
+    assert!(held(&world, "writer1").contains(&Grant::Capability("content.publish".into())));
+    assert!(held(&world, "writer1").contains(&through_the_team));
+}
+
+/// Verifies: ADM-150
+///
+/// A permission on an object type is a permission to act: a role that states one lets its holder
+/// do it with no policy naming the role.
+#[test]
+fn an_object_permission_of_a_role_authorises_the_action() {
+    let world = access_world();
+    let world = must(&world, "alpha", "owner", 7_000, define_team("readers"));
+    let world = must(
+        &world,
+        "alpha",
+        "owner",
+        7_001,
+        team_gets("readers", "reviewer"),
+    );
+    let world = must(&world, "alpha", "owner", 7_002, joins("readers", "newbie"));
+    let world = must(
+        &world,
+        "alpha",
+        "writer1",
+        7_003,
+        new_note("Draft", "draft"),
+    );
+    let read = ReadRequest::Records {
+        object: object("note"),
+        ids: vec![RecordId(1)],
+    };
+    let rows_for = |who: &str| {
+        world
+            .read(&read, &ctx("alpha", user(&format!("alpha:{who}")), 7_004))
+            .unwrap()
+            .rows
+    };
+    // No policy lets a reviewer read a draft; the role's permission does.
+    assert_eq!(rows_for("newbie").len(), 1);
+    assert_eq!(rows_for("writer2").len(), 1, "writers read notes by policy");
+    assert_eq!(
+        rows_for("stranger").len(),
+        1,
+        "a moderator holds the permission too"
+    );
+    assert!(rows_for("nobody").is_empty());
+}
+
+/// Verifies: ADM-152
+///
+/// A principal that manages members still may not assign a role granting a permission it does
+/// not hold, whether to a person, to a team, through a team's membership or in an invitation,
+/// and may assign one whose permissions it holds.
+#[test]
+fn assigning_a_role_is_refused_without_one_of_its_permissions() {
+    let world = access_world();
+    // `alpha:stranger` is a moderator: it manages members, holds people.manage and note read.
+    let world = must(&world, "alpha", "owner", 7_000, define_team("press"));
+    let world = must(
+        &world,
+        "alpha",
+        "owner",
+        7_001,
+        team_gets("press", "publisher"),
+    );
+    let world = must(&world, "alpha", "stranger", 7_002, define_team("desk"));
+
+    let confer_failed = |error: &DomainError, role_name: &str| {
+        assert_eq!(error.kind, ErrorKind::Unauthorized);
+        let rule = format!("permission:confer:{role_name}");
+        assert!(
+            error.evidence.iter().any(|c| c.rule == rule && !c.passed),
+            "no failed {rule} in {:?}",
+            error.evidence
+        );
+    };
+
+    let error = refused(step(
+        &world,
+        "alpha",
+        "stranger",
+        7_003,
+        Intent::AssignRole {
+            principal: principal_id("alpha:writer2"),
+            role: role("publisher"),
+        },
+    ));
+    confer_failed(&error, "publisher");
+    assert!(!roles_held_by(&world, "writer2").contains(&role("publisher")));
+
+    let error = refused(step(
+        &world,
+        "alpha",
+        "stranger",
+        7_004,
+        team_gets("desk", "publisher"),
+    ));
+    confer_failed(&error, "publisher");
+
+    let error = refused(step(
+        &world,
+        "alpha",
+        "stranger",
+        7_005,
+        joins("press", "writer2"),
+    ));
+    confer_failed(&error, "publisher");
+
+    let error = refused(step(
+        &world,
+        "alpha",
+        "stranger",
+        7_006,
+        Intent::CreateInvitation {
+            invitation: InvitationId::new("inv-over").unwrap(),
+            address: "ines@example.org".into(),
+            roles: BTreeSet::from([role("publisher")]),
+        },
+    ));
+    confer_failed(&error, "publisher");
+
+    let error = refused(step(
+        &world,
+        "alpha",
+        "stranger",
+        7_007,
+        Intent::AssignRole {
+            principal: principal_id("alpha:writer2"),
+            role: role("owner"),
+        },
+    ));
+    confer_failed(&error, "owner");
+
+    // A role granting a permission the assigner holds is accepted, to a person and to a team.
+    let world = must(
+        &world,
+        "alpha",
+        "stranger",
+        7_008,
+        Intent::AssignRole {
+            principal: principal_id("alpha:writer2"),
+            role: role("reviewer"),
+        },
+    );
+    assert!(roles_held_by(&world, "writer2").contains(&role("reviewer")));
+    let world = must(
+        &world,
+        "alpha",
+        "stranger",
+        7_009,
+        team_gets("desk", "reviewer"),
+    );
+    let world = must(&world, "alpha", "stranger", 7_010, joins("desk", "writer1"));
+    assert!(roles_held_by(&world, "writer1").contains(&role("reviewer")));
+
+    // Someone who does not manage members is refused by policy, as before.
+    let error = refused(step(
+        &world,
+        "alpha",
+        "writer1",
+        7_011,
+        Intent::AssignRole {
+            principal: principal_id("alpha:writer2"),
+            role: role("reviewer"),
+        },
+    ));
+    assert!(error
+        .evidence
+        .iter()
+        .any(|c| !c.passed && c.rule.starts_with("policy:")));
+
+    // The owner holds every permission and may assign anything.
+    must(
+        &world,
+        "alpha",
+        "owner",
+        7_012,
+        Intent::AssignRole {
+            principal: principal_id("alpha:writer2"),
+            role: role("publisher"),
+        },
+    );
+}
+
+/// A step as a person whose account has the verified address `address` (or none).
+fn step_verified(
+    world: &World,
+    who: &str,
+    now: i64,
+    address: Option<&str>,
+    intent: Intent,
+) -> Result<(World, Transition), DomainError> {
+    let mut context = ctx("alpha", user(&format!("alpha:{who}")), now);
+    context.verified_address = address.map(str::to_string);
+    world.step(&intent, &context)
+}
+
+/// Verifies: ADM-153
+///
+/// An invitation grants its roles to the one person who redeems it with the address it names:
+/// not to a person whose verified address is another, not to one with no verified address, and
+/// not a second time. The address is the one the shell verified for the acting person, in the
+/// context; the intent names the invitation and nothing else.
+#[test]
+fn an_invitation_grants_its_roles_to_the_one_person_with_its_address() {
+    let world = access_world();
+    let world = must(
+        &world,
+        "alpha",
+        "owner",
+        7_000,
+        Intent::CreateInvitation {
+            invitation: InvitationId::new("inv-ines").unwrap(),
+            address: "Ines@Example.org".into(),
+            roles: BTreeSet::from([role("writer")]),
+        },
+    );
+    let redeem = || Intent::RedeemInvitation {
+        invitation: InvitationId::new("inv-ines").unwrap(),
+    };
+    // The intent has no field a caller could put an address in: this pattern names them all.
+    let Intent::RedeemInvitation { invitation: _ } = redeem() else {
+        unreachable!()
+    };
+
+    // Another person, whose verified address is another, gets nothing, and is not told which
+    // address the invitation names.
+    let error = refused(step_verified(
+        &world,
+        "ines",
+        7_001,
+        Some("other@example.org"),
+        redeem(),
+    ));
+    assert_eq!(error.kind, ErrorKind::Unauthorized);
+    assert!(error
+        .evidence
+        .iter()
+        .any(|c| c.rule == "invitation:address_matches" && !c.passed));
+    assert!(!roles_held_by(&world, "ines").contains(&role("writer")));
+    assert!(!error.message.contains("ines@example.org"));
+    assert!(error
+        .evidence
+        .iter()
+        .all(|c| !c.detail.contains("ines@example.org")));
+
+    // A person whose account has no verified address gets nothing either.
+    let error = refused(step_verified(&world, "ines", 7_002, None, redeem()));
+    assert_eq!(error.kind, ErrorKind::Unauthorized);
+    assert!(error
+        .evidence
+        .iter()
+        .any(|c| c.rule == "invitation:address_matches"
+            && !c.passed
+            && c.detail.contains("no verified address")));
+    assert!(!roles_held_by(&world, "ines").contains(&role("writer")));
+
+    // The person with the named address gets the roles.
+    let (world, outcome) =
+        step_verified(&world, "ines", 7_003, Some("ines@example.org"), redeem()).unwrap();
+    assert_eq!(outcome.output, Output::Member);
+    assert!(roles_held_by(&world, "ines").contains(&role("writer")));
+
+    // A second redemption is refused, by the same person and by another with the address.
+    for who in ["ines", "other"] {
+        let error = refused(step_verified(
+            &world,
+            who,
+            7_004,
+            Some("ines@example.org"),
+            redeem(),
+        ));
+        assert!(error
+            .evidence
+            .iter()
+            .any(|c| c.rule == "invitation:redeemed_once" && !c.passed));
+    }
+    assert!(!roles_held_by(&world, "other").contains(&role("writer")));
+
+    // An anonymous visitor redeems nothing, whatever address the context carries.
+    let mut context = ctx("alpha", Principal::Anonymous, 7_005);
+    context.verified_address = Some("ines@example.org".into());
+    let error = refused(world.step(&redeem(), &context));
+    assert_eq!(error.kind, ErrorKind::Unauthorized);
+}
+
+/// Verifies: ADM-152
+///
+/// A role may be conferred only by a principal that holds every permission and capability it
+/// grants: one it lacks among several refuses the assignment, each kind of permission on its
+/// own, and what the principal holds through its roles and its teams' roles together counts.
+#[test]
+fn assigning_a_role_is_refused_unless_the_assigner_holds_all_of_its_permissions() {
+    let role_def = |id: &str| {
+        SchemaChange::DefineRole(RoleDef {
+            id: role(id),
+            label: id.into(),
+        })
+    };
+    let permissions =
+        |id: &str, permissions: Vec<Permission>| SchemaChange::DefineRolePermissions {
+            role: role(id),
+            permissions,
+        };
+    // `alpha:stranger` is a moderator: it manages members, holds people.manage and reads notes.
+    let world = must(
+        &access_world(),
+        "alpha",
+        "owner",
+        8_000,
+        Intent::ChangeSchema {
+            changes: vec![
+                role_def("reader_editor"),
+                role_def("reader_publisher"),
+                role_def("manager_reader"),
+                role_def("note_rw"),
+                permissions(
+                    "reader_editor",
+                    vec![object_permission(
+                        "note",
+                        &[ObjectAction::Read, ObjectAction::Update],
+                    )],
+                ),
+                permissions(
+                    "reader_publisher",
+                    vec![
+                        object_permission("note", &[ObjectAction::Read]),
+                        capability("content.publish"),
+                    ],
+                ),
+                permissions(
+                    "manager_reader",
+                    vec![
+                        object_permission("note", &[ObjectAction::Read]),
+                        capability("people.manage"),
+                    ],
+                ),
+                permissions(
+                    "note_rw",
+                    vec![object_permission(
+                        "note",
+                        &[ObjectAction::Read, ObjectAction::Create],
+                    )],
+                ),
+            ],
+            expected_version: None,
+            existing: ExistingData::Reject,
+        },
+    );
+    let assign = |role_name: &str| Intent::AssignRole {
+        principal: principal_id("alpha:writer2"),
+        role: role(role_name),
+    };
+    let confer_failed = |error: &DomainError, role_name: &str, lacking: &str| {
+        assert_eq!(error.kind, ErrorKind::Unauthorized);
+        let rule = format!("permission:confer:{role_name}");
+        let check = error
+            .evidence
+            .iter()
+            .find(|c| c.rule == rule && !c.passed)
+            .unwrap_or_else(|| panic!("no failed {rule} in {:?}", error.evidence));
+        assert!(
+            check.detail.contains(lacking),
+            "{} does not name {lacking}",
+            check.detail
+        );
+        assert!(
+            check.detail.contains("lacks 1 of the 2"),
+            "{}",
+            check.detail
+        );
+    };
+
+    // An object permission among two is missing: the one it holds does not make up for it.
+    let error = refused(step(
+        &world,
+        "alpha",
+        "stranger",
+        8_001,
+        assign("reader_editor"),
+    ));
+    confer_failed(&error, "reader_editor", "note:update");
+    assert!(!roles_held_by(&world, "writer2").contains(&role("reader_editor")));
+
+    // A capability among two is missing, though the object permission with it is held.
+    let error = refused(step(
+        &world,
+        "alpha",
+        "stranger",
+        8_002,
+        assign("reader_publisher"),
+    ));
+    confer_failed(&error, "reader_publisher", "capability content.publish");
+
+    // The same holds to a team, in a team's membership and in an invitation.
+    let world = must(&world, "alpha", "stranger", 8_003, define_team("desk"));
+    let error = refused(step(
+        &world,
+        "alpha",
+        "stranger",
+        8_004,
+        team_gets("desk", "reader_publisher"),
+    ));
+    confer_failed(&error, "reader_publisher", "capability content.publish");
+    let world = must(&world, "alpha", "owner", 8_005, define_team("crew"));
+    let world = must(
+        &world,
+        "alpha",
+        "owner",
+        8_006,
+        team_gets("crew", "reader_editor"),
+    );
+    let error = refused(step(
+        &world,
+        "alpha",
+        "stranger",
+        8_007,
+        joins("crew", "writer2"),
+    ));
+    confer_failed(&error, "reader_editor", "note:update");
+    let error = refused(step(
+        &world,
+        "alpha",
+        "stranger",
+        8_008,
+        Intent::CreateInvitation {
+            invitation: InvitationId::new("inv-partial").unwrap(),
+            address: "ines@example.org".into(),
+            roles: BTreeSet::from([role("reader_editor")]),
+        },
+    ));
+    confer_failed(&error, "reader_editor", "note:update");
+
+    // Holding every permission is enough: the object permission and the capability are held.
+    let world = must(&world, "alpha", "stranger", 8_009, assign("manager_reader"));
+    assert!(roles_held_by(&world, "writer2").contains(&role("manager_reader")));
+
+    // What the assigner holds through several roles and teams counts together: it reads notes
+    // as a moderator and creates them through a team that holds the writer role.
+    let error = refused(step(&world, "alpha", "stranger", 8_010, assign("note_rw")));
+    confer_failed(&error, "note_rw", "note:create");
+    let world = must(&world, "alpha", "owner", 8_011, team_gets("crew", "writer"));
+    let world = must(&world, "alpha", "owner", 8_012, joins("crew", "stranger"));
+    let world = must(&world, "alpha", "stranger", 8_013, assign("note_rw"));
+    assert!(roles_held_by(&world, "writer2").contains(&role("note_rw")));
+
+    // The owner holds every permission and confers any role.
+    must(&world, "alpha", "owner", 8_014, assign("reader_publisher"));
+}
+
+/// Verifies: ADM-151
+///
+/// A capability is held only through a role that names it, assigned to the principal or held by
+/// a team it belongs to: this is what the generated authorizer fills a principal's tenant roles
+/// and teams from.
+#[test]
+fn a_capability_is_held_only_through_a_role_that_names_it() {
+    let capabilities_of = |world: &World, who: &str| {
+        strata_kernel::rules::held_capabilities(
+            &world.tenants[&tenant_id("alpha")],
+            &user(&format!("alpha:{who}")),
+        )
+    };
+    let names = |items: &[&str]| -> BTreeSet<String> {
+        items.iter().map(|item| item.to_string()).collect()
+    };
+    let world = access_world();
+    // The moderator's role names people.manage; its object permission is no capability.
+    assert_eq!(
+        capabilities_of(&world, "stranger"),
+        names(&["people.manage"])
+    );
+    // A principal with no role holds none, and `reviewer`, with only an object permission,
+    // gives none.
+    assert_eq!(capabilities_of(&world, "writer1"), names(&[]));
+    let world = must(
+        &world,
+        "alpha",
+        "owner",
+        8_100,
+        Intent::AssignRole {
+            principal: principal_id("alpha:writer1"),
+            role: role("reviewer"),
+        },
+    );
+    assert_eq!(capabilities_of(&world, "writer1"), names(&[]));
+    // Through a team: the team's role names content.publish, and its members hold it only while
+    // they belong.
+    let world = must(&world, "alpha", "owner", 8_101, define_team("press"));
+    let world = must(
+        &world,
+        "alpha",
+        "owner",
+        8_102,
+        team_gets("press", "publisher"),
+    );
+    assert_eq!(capabilities_of(&world, "writer1"), names(&[]));
+    let world = must(&world, "alpha", "owner", 8_103, joins("press", "writer1"));
+    assert_eq!(
+        capabilities_of(&world, "writer1"),
+        names(&["content.publish"])
+    );
+    // Another principal, in no team, holds nothing of it.
+    assert_eq!(capabilities_of(&world, "writer2"), names(&[]));
+    let world = must(
+        &world,
+        "alpha",
+        "owner",
+        8_104,
+        Intent::RemoveTeamMember {
+            team: team("press"),
+            principal: principal_id("alpha:writer1"),
+        },
+    );
+    assert_eq!(capabilities_of(&world, "writer1"), names(&[]));
+}

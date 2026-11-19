@@ -20,7 +20,8 @@ use std::time::Instant;
 use strata_kernel::owner_role;
 use strata_kernel::rules::roles_of;
 use strata_protocol::api::{
-    Empty, ErrorCode, IdRequest, Mutation, SessionReply, ViewRequest, HEADER_CORRELATION,
+    Empty, ErrorCode, IdRequest, MembersRequest, Mutation, SessionReply, ViewRequest,
+    HEADER_CORRELATION,
 };
 use strata_protocol::ws::{SessionState, MAX_FRAME};
 
@@ -460,6 +461,17 @@ async fn mutate(
 ) -> Result<impl IntoResponse, ApiError> {
     as_caller(&app, &headers, move |app, identity| {
         ops::mutate(app, identity, &mutation)
+    })
+    .await
+}
+
+async fn members(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Json(request): Json<MembersRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    as_caller(&app, &headers, move |app, identity| {
+        ops::members(app, identity, &request)
     })
     .await
 }
@@ -1020,6 +1032,7 @@ pub fn router(app: Shared) -> Router {
         .route("/internal/session/logout", post(logout))
         .route("/internal/view", post(view))
         .route("/internal/mutate", post(mutate))
+        .route("/internal/members", post(members))
         .route("/internal/diagnostics", post(diagnostics))
         .route("/internal/platform/diagnostics", post(platform_diagnostics))
         .route("/internal/lab/overview", post(lab_overview))

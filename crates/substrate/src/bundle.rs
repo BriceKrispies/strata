@@ -21,7 +21,7 @@ pub struct Bundle {
     /// When the tenant is created. Later steps follow one millisecond apart.
     pub created_at: String,
     #[serde(default)]
-    pub roles: Vec<RoleDef>,
+    pub roles: Vec<RoleSpec>,
     #[serde(default)]
     pub objects: Vec<ObjectSpec>,
     #[serde(default)]
@@ -35,7 +35,46 @@ pub struct Bundle {
     #[serde(default)]
     pub members: Vec<MemberSpec>,
     #[serde(default)]
+    pub teams: Vec<TeamSpec>,
+    #[serde(default)]
     pub records: Vec<RecordSpec>,
+}
+
+/// A role: a name and the permissions it grants, each a capability name or actions on an object
+/// type.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RoleSpec {
+    pub id: RoleId,
+    pub label: String,
+    #[serde(default)]
+    pub permissions: Vec<PermissionSpec>,
+}
+
+/// One permission of a role, as a bundle writes it: a capability name as a bare string, or an
+/// object type with the actions on it (`{"object": "post", "actions": ["create"]}`). It becomes
+/// the kernel's [`Permission`].
+#[derive(Clone, Debug, Deserialize)]
+#[serde(untagged)]
+pub enum PermissionSpec {
+    Capability(String),
+    Object {
+        object: ObjectTypeId,
+        actions: BTreeSet<ObjectAction>,
+    },
+}
+
+impl PermissionSpec {
+    /// The kernel's permission.
+    pub fn permission(&self) -> Permission {
+        match self {
+            PermissionSpec::Capability(name) => Permission::Capability(name.clone()),
+            PermissionSpec::Object { object, actions } => Permission::Object {
+                object: object.clone(),
+                actions: actions.clone(),
+            },
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -161,6 +200,18 @@ pub struct MemberSpec {
     pub roles: Vec<RoleId>,
 }
 
+/// A team: a named set of principals that holds roles together.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TeamSpec {
+    pub id: TeamId,
+    pub label: String,
+    #[serde(default)]
+    pub roles: Vec<RoleId>,
+    #[serde(default)]
+    pub members: Vec<PrincipalId>,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RecordSpec {
@@ -254,7 +305,20 @@ impl Bundle {
     pub fn schema_changes(&self) -> Result<Vec<SchemaChange>, String> {
         let mut changes = Vec::new();
         for role in &self.roles {
-            changes.push(SchemaChange::DefineRole(role.clone()));
+            changes.push(SchemaChange::DefineRole(RoleDef {
+                id: role.id.clone(),
+                label: role.label.clone(),
+            }));
+            if !role.permissions.is_empty() {
+                changes.push(SchemaChange::DefineRolePermissions {
+                    role: role.id.clone(),
+                    permissions: role
+                        .permissions
+                        .iter()
+                        .map(PermissionSpec::permission)
+                        .collect(),
+                });
+            }
         }
         for object in &self.objects {
             changes.push(SchemaChange::DefineObject {
@@ -437,6 +501,7 @@ pub fn install<E>(
             session: None,
             now: Timestamp(at),
             correlation: format!("install:{}:{steps}", bundle.id),
+            verified_address: None,
         };
         execute(ctx, intent).map_err(|error| InstallError::Step { step, error })
     };
@@ -471,6 +536,43 @@ pub fn install<E>(
                 Intent::AssignRole {
                     principal: member.principal.clone(),
                     role: role.clone(),
+                },
+            )?;
+        }
+    }
+
+    for team in &bundle.teams {
+        at += 1;
+        run(
+            owner.clone(),
+            at,
+            format!("define team {}", team.id),
+            Intent::DefineTeam {
+                team: team.id.clone(),
+                label: team.label.clone(),
+            },
+        )?;
+        for role in &team.roles {
+            at += 1;
+            run(
+                owner.clone(),
+                at,
+                format!("assign {role} to team {}", team.id),
+                Intent::AssignTeamRole {
+                    team: team.id.clone(),
+                    role: role.clone(),
+                },
+            )?;
+        }
+        for principal in &team.members {
+            at += 1;
+            run(
+                owner.clone(),
+                at,
+                format!("add {principal} to team {}", team.id),
+                Intent::AddTeamMember {
+                    team: team.id.clone(),
+                    principal: principal.clone(),
                 },
             )?;
         }

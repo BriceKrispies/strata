@@ -292,9 +292,16 @@ fn some_policy_could_authorise(
         Intent::UpdateRecord { object, .. } => (Action::Update, Resource::Object(object.clone())),
         Intent::DeleteRecord { object, .. } => (Action::Delete, Resource::Object(object.clone())),
         Intent::ChangeSchema { .. } => (Action::Manage, Resource::Schema),
-        Intent::AssignRole { .. } | Intent::RevokeRole { .. } => {
-            (Action::Manage, Resource::Members)
-        }
+        Intent::AssignRole { .. }
+        | Intent::RevokeRole { .. }
+        | Intent::DefineTeam { .. }
+        | Intent::AssignTeamRole { .. }
+        | Intent::RevokeTeamRole { .. }
+        | Intent::AddTeamMember { .. }
+        | Intent::RemoveTeamMember { .. }
+        | Intent::CreateInvitation { .. } => (Action::Manage, Resource::Members),
+        // Redeeming needs no policy: any signed-in person may try.
+        Intent::RedeemInvitation { .. } => return matches!(principal, Principal::User(_)),
     };
     let roles = roles_held(state, principal);
     roles.contains(&role("owner"))

@@ -12,10 +12,11 @@ pub use strata_model_core::prelude::Timestamp;
 pub use strata_model_core::types::{
     Action, ArgSource, Check, CmpOp, ConstraintDef, ConstraintId, Context, Coverage, DeltaOp,
     DomainError, DomainEvent, Effect, ErrorKind, EventBody, ExistingData, Expr, FieldDef, FieldId,
-    FieldType, Intent, Need, ObjectTypeDef, ObjectTypeId, OnDelete, OrderKey, Output, PolicyDef,
-    PolicyId, Principal, PrincipalId, QueryDef, QueryId, ReadRequest, ReadResult, Record, RecordId,
-    Resource, RoleDef, RoleId, SchemaChange, SchemaVersion, Scope, SessionId, State, StateDelta,
-    StateRevision, TenantId, TenantSchema, TenantState, Value, ViewDef, ViewId, ViewSection,
+    FieldType, Grant, Intent, InvitationDef, InvitationId, Need, ObjectAction, ObjectTypeDef,
+    ObjectTypeId, OnDelete, OrderKey, Output, Permission, PolicyDef, PolicyId, Principal,
+    PrincipalId, QueryDef, QueryId, ReadRequest, ReadResult, Record, RecordId, Resource, RoleDef,
+    RoleId, SchemaChange, SchemaVersion, Scope, SessionId, State, StateDelta, StateRevision,
+    TeamDef, TeamId, TenantId, TenantSchema, TenantState, Value, ViewDef, ViewId, ViewSection,
     WorkflowDef, WorkflowId, WorkflowTransition,
 };
 

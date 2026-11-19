@@ -406,6 +406,31 @@ which admits nobody until the deployment says otherwise. `ServiceToken` is the s
 of a service network: the service scheme with the token, and anonymous calls that ask for no
 browser check; everything else is refused.
 
+`Access::requires` lists the capabilities a call needs (`auth.requires`). The generated
+authorizer checks them last, in one function, `routes::permitted`: for every capability, the
+tenant's plan entitles it or it is core, no feature flag gating it is off for the tenant, the
+caller holds it, and a delegation the caller acts under passes it on within its token's scopes.
+Two holes feed it: `entitlement(tenant)` (the tenant's plan and flag settings) and
+`holding(principal)` (the principal's platform roles, its tenant roles and its teams with their
+permissions, which are tenant data, its live grants, and the delegation it acts under). An
+anonymous caller, a service and a party proved by signature or provisioning token hold what the
+platform roles of their kind confer, which the specification fixes. `routes::OPERATIONS` is the
+operation catalogue (AGT-001..003): every contract reachable from outside its process with its
+description, access and the JSON Schema of its input; `routes::catalogue` marks each for a
+principal with whether it may be attempted, by the same check. `ServiceToken` does not read
+`requires`.
+
+**Tenant capabilities.** A tenant role is tenant data: its permissions are capability strings
+and actions on object types. `strata_kernel::rules::held_capabilities` gives the capabilities a
+principal holds in a tenant, exactly those named by a role assigned to it or by a role of a team
+it belongs to; the deployment's `holding` hole fills `Holding::tenant_roles` and `Holding::teams`
+from it (`role_capabilities` gives one role's). A role confers a capability only by naming it.
+Assigning a role, a team's role, a team membership or an invitation's roles is refused unless the
+assigner holds **every** permission and capability the role grants (ADM-152; the owner holds all).
+An invitation is redeemed with the signed-in account's verified address, which the backend puts in
+the kernel `Context` (`verified_address`, from the account store); the intent carries none
+(ADM-153). `POST /api/members/<operation>` is the route to these intents.
+
 `Routes::new` is the service network's listener (public and internal contracts);
 `Routes::gateway` faces browsers and the internet and serves public contracts only, so an
 internal contract has no route there and its path answers 404. A local contract is never served.

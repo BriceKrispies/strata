@@ -77,6 +77,7 @@ fn install_dev_accounts(app: &App, tenant: &TenantId, loaded: &LoadedTenant) -> 
             &account.password,
             principal,
             &account.display_name,
+            account.email.as_deref(),
         )
         .map_err(|e| e.describe())?;
         LOG.info(

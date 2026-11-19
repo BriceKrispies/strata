@@ -23,9 +23,9 @@ use std::sync::atomic::Ordering;
 use std::time::Instant;
 use strata_kernel::TenantId;
 use strata_protocol::api::{
-    valid_correlation, ErrorCode, ErrorReply, LoginReply, Mutation, SessionReply, SessionView,
-    ViewRequest, HEADER_CORRELATION, HEADER_ORIGIN, HEADER_SERVICE, HEADER_SESSION, HEADER_SITE,
-    HEADER_SOURCE,
+    valid_correlation, ErrorCode, ErrorReply, LoginReply, MembersRequest, Mutation, SessionReply,
+    SessionView, ViewRequest, HEADER_CORRELATION, HEADER_ORIGIN, HEADER_SERVICE, HEADER_SESSION,
+    HEADER_SITE, HEADER_SOURCE,
 };
 use strata_protocol::ws::SessionState;
 use strata_substrate::project::{project, ViewData};
@@ -1209,6 +1209,45 @@ async fn records(
         .map(Json)
 }
 
+/// Change who holds which role: `POST /api/members/<operation>` with the operation's inputs as
+/// the JSON body (`assign-role`, `revoke-role`, `add-team-member`, `remove-team-member`, `invite`
+/// and `redeem`, the contracts of the gateway). The request must come from one of our pages with
+/// the session's request token. The backend's kernel decides; this route adds nothing, and the
+/// body has no field for the address an invitation is redeemed with.
+async fn members(
+    State(bff): State<Shared>,
+    headers: HeaderMap,
+    Path(operation): Path<String>,
+    Json(body): Json<Json_>,
+) -> Result<Json<Json_>, Failure> {
+    let visit = visit(&bff, &headers)?;
+    let op = operation.replace('-', "_");
+    if !MembersRequest::OPS.contains(&op.as_str()) {
+        return Err(Failure::new(
+            ErrorCode::NotFound,
+            "No such endpoint.",
+            &visit.correlation,
+        ));
+    }
+    guard_write(&bff, &visit, &headers).await?;
+    let invalid = || {
+        Failure::new(
+            ErrorCode::Invalid,
+            "The request does not name what this operation needs.",
+            &visit.correlation,
+        )
+    };
+    let Json_::Object(mut fields) = body else {
+        return Err(invalid());
+    };
+    fields.insert("op".into(), Json_::String(op));
+    let request: MembersRequest =
+        serde_json::from_value(Json_::Object(fields)).map_err(|_| invalid())?;
+    backend(&bff, &visit, "/internal/members", &json!(request))
+        .await
+        .map(Json)
+}
+
 #[derive(serde::Deserialize)]
 struct PreviewRequest {
     markdown: String,
@@ -1838,6 +1877,7 @@ pub fn router(bff: Shared) -> Router {
         .route("/logout", post(logout))
         .route("/view", get(view))
         .route("/records", post(records))
+        .route("/members/:op", post(members))
         .route("/preview", post(preview))
         .route("/lab/overview", get(lab_overview))
         .route("/lab/run", post(lab_run))

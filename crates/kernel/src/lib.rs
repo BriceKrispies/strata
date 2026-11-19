@@ -43,7 +43,7 @@ pub use world::World;
 /// in code that names the types one by one.
 pub mod ext {
     pub use crate::intent::{CheckExt, DomainErrorExt, IntentExt};
-    pub use crate::schema::{TenantSchemaExt, WorkflowDefExt};
+    pub use crate::schema::{ObjectActionExt, PermissionExt, TenantSchemaExt, WorkflowDefExt};
     pub use crate::state::{CoverageExt, RecordExt, StateExt, TenantStateExt};
     pub use crate::types::{FieldTypeExt, ValueExt};
 }

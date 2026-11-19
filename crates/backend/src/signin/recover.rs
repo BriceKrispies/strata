@@ -293,6 +293,7 @@ mod tests {
             principal: PrincipalId::new("ines").unwrap(),
             display_name: "Ines".into(),
             password_hash: String::new(),
+            verified_email: None,
         }
     }
 

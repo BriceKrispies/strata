@@ -429,6 +429,7 @@ fn create_user(app: &App, caller: &Caller, body: &Json) -> Result<Answer, ApiErr
         display_name: user.display_name.clone(),
         // Not a password hash: no password opens this login.
         password_hash: String::new(),
+        verified_email: None,
     })?;
     if let Some(external) = external_id {
         app.store.put_identity(&FederatedIdentity {

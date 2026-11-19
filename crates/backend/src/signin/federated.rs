@@ -134,6 +134,7 @@ fn grant_default_role(
         session: None,
         now: app.now(),
         correlation: caller.correlation.clone(),
+        verified_address: None,
     };
     crate::ops::run_intent(
         app,
@@ -195,6 +196,7 @@ fn create(
         display_name,
         // Not a password hash: no password opens this login.
         password_hash: String::new(),
+        verified_email: None,
     };
     app.store.put_account(&account)?;
     if !tie(app, caller, admission, &who.subject, &principal)? {

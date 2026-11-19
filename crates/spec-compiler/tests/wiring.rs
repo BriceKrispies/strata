@@ -10,7 +10,10 @@
 //!   machines, through the memory store;
 //! - exposure and auth (WG-4908): an internal contract has no route through the gateway, only the
 //!   public contract is in `GATEWAY_ROUTES`, and the generated `SpecAuthorizer` refuses a missing
-//!   or wrong credential for every scheme.
+//!   or wrong credential for every scheme;
+//! - capabilities (WG-4954): the one capability check refuses a capability outside the plan,
+//!   with its flag off, outside the principal's roles or beyond a delegation, the authorizer
+//!   makes it on the call, and the operation catalogue lists every operation marked per principal.
 //!
 //! That an undeclared call does not compile is the `compile_fail` example in
 //! `src/backend/deps.rs`.
@@ -1160,5 +1163,461 @@ async fn each_scheme_refuses_a_missing_or_wrong_credential() {
     assert_eq!(
         refused(ask(&developing, dev_fixture, "/", &[("x-session", "s-good")]).await),
         None
+    );
+}
+
+/// The deployment of the capability tests (WG-4954): the site `t1.example` of tenant `t1`, the
+/// session `s-good` of person `ann` of `t1`, the delegation token `deleg` of an agent of `t1`,
+/// the tenant's plan and flag setting, and what the principal holds.
+struct Entitled {
+    plan: &'static str,
+    premium_on: bool,
+    holding: routes::Holding,
+}
+
+impl routes::AuthHoles for Entitled {
+    fn site(&self, request: &Presented<'_>) -> Option<Site> {
+        (request.header("host") == Some("t1.example")).then(|| Site {
+            tenant: "t1".into(),
+            origins: vec!["https://t1.example".into()],
+        })
+    }
+
+    async fn session(&self, request: &Presented<'_>) -> Result<Option<Principal>, String> {
+        Ok((request.header("x-session") == Some("s-good")).then(|| person("t1", NOW - 1_000)))
+    }
+
+    async fn delegation(&self, token: &str) -> Result<Option<Principal>, String> {
+        Ok((token == "deleg").then(|| Principal {
+            subject: "agent".into(),
+            kind: "agent".into(),
+            tenant: Some("t1".into()),
+            ..Principal::default()
+        }))
+    }
+
+    async fn entitlement(&self, tenant: &str) -> Result<Option<routes::Entitlement>, String> {
+        Ok((tenant == "t1").then(|| routes::Entitlement {
+            plan: self.plan.into(),
+            flags: vec![("premium-reports".into(), self.premium_on)],
+        }))
+    }
+
+    async fn holding(&self, principal: &Principal) -> Result<routes::Holding, String> {
+        let _ = principal;
+        Ok(self.holding.clone())
+    }
+
+    fn now_ms(&self) -> i64 {
+        NOW
+    }
+}
+
+/// A tenant role as tenant data, granting `capabilities`.
+fn tenant_role(id: &str, capabilities: &[&str]) -> routes::TenantRole {
+    routes::TenantRole {
+        id: id.into(),
+        capabilities: capabilities.iter().map(|c| c.to_string()).collect(),
+    }
+}
+
+/// The refusal of a public call with `scheme` requiring `requires`, presenting the session
+/// `s-good` and the delegation token `deleg` at `t1.example`, or `None` when it is admitted.
+async fn ask_entitled(
+    entitled: Entitled,
+    scheme: Scheme,
+    requires: &'static [&'static str],
+) -> Option<FailureCode> {
+    let authorizer = routes::SpecAuthorizer::new(entitled);
+    let access = Access {
+        exposure: Exposure::Public,
+        scheme,
+        requires,
+        tenant_scope: Some(TenantScope::Request),
+        ..Access::LOCAL
+    };
+    let mut map = HeaderMap::new();
+    map.insert("host", HeaderValue::from_static("t1.example"));
+    map.insert("x-session", HeaderValue::from_static("s-good"));
+    map.insert("authorization", HeaderValue::from_static("Bearer deleg"));
+    let presented = Presented {
+        headers: &map,
+        target: "/",
+        body: b"{}",
+    };
+    authorizer
+        .authorize(&access, &presented)
+        .await
+        .err()
+        .map(|r| r.code)
+}
+
+/// The one capability check, on the fixture's model: reports-premium is entitled only by plan
+/// pro, gated by premium-reports (off by default) and held through the tenant role editor; the
+/// grant support-access confers it to support in one tenant while it lasts; the delegation
+/// report-agent passes on ping alone.
+#[test]
+fn a_capability_outside_the_plan_the_roles_or_a_delegation_is_refused() {
+    use routes::{permitted, ActingFor, Asker, CapabilityRefusal, Entitlement, HeldGrant, Holding};
+    let pro_on = Entitlement {
+        plan: "pro".into(),
+        flags: vec![("premium-reports".into(), true)],
+    };
+    let basic_on = Entitlement {
+        plan: "basic".into(),
+        ..pro_on.clone()
+    };
+    let pro_default = Entitlement {
+        plan: "pro".into(),
+        flags: vec![],
+    };
+    let editor = Holding {
+        tenant_roles: vec![tenant_role("editor", &["ping", "reports-premium"])],
+        ..Holding::default()
+    };
+    let premium: &[&'static str] = &["reports-premium"];
+    let check = |holding: &Holding, entitlement: &Entitlement| {
+        permitted(
+            premium,
+            Asker::Principal(holding),
+            Some("t1"),
+            Some(entitlement),
+            NOW,
+        )
+    };
+
+    // Everything holds: entitled, switched on, held, not delegated.
+    assert_eq!(check(&editor, &pro_on), Ok(()));
+    // Outside the plan, and with no plan known.
+    assert_eq!(
+        check(&editor, &basic_on),
+        Err(CapabilityRefusal::NotEntitled("reports-premium"))
+    );
+    assert_eq!(
+        permitted(premium, Asker::Principal(&editor), Some("t1"), None, NOW),
+        Err(CapabilityRefusal::NotEntitled("reports-premium"))
+    );
+    // The flag at its default, off.
+    assert_eq!(
+        check(&editor, &pro_default),
+        Err(CapabilityRefusal::FlagOff {
+            capability: "reports-premium",
+            flag: "premium-reports"
+        })
+    );
+    // Outside the principal's roles: no role, or a role without it.
+    assert_eq!(
+        check(&Holding::default(), &pro_on),
+        Err(CapabilityRefusal::NotHeld("reports-premium"))
+    );
+    let pinger = Holding {
+        tenant_roles: vec![tenant_role("pinger", &["ping"])],
+        ..Holding::default()
+    };
+    assert_eq!(
+        check(&pinger, &pro_on),
+        Err(CapabilityRefusal::NotHeld("reports-premium"))
+    );
+    // Through a team: the team's roles count as the principal's own.
+    let member = Holding {
+        teams: vec![routes::Team {
+            id: "desk".into(),
+            roles: vec![tenant_role("editor", &["reports-premium"])],
+        }],
+        ..Holding::default()
+    };
+    assert_eq!(check(&member, &pro_on), Ok(()));
+    // A platform role confers what the specification lists: operator does not hold it.
+    let operator = Holding {
+        platform_roles: vec!["operator".into()],
+        ..Holding::default()
+    };
+    assert_eq!(
+        check(&operator, &pro_on),
+        Err(CapabilityRefusal::NotHeld("reports-premium"))
+    );
+    assert_eq!(
+        permitted(
+            &["ping"],
+            Asker::Principal(&operator),
+            Some("t1"),
+            None,
+            NOW
+        ),
+        Ok(())
+    );
+    // A grant: to a holder of its grantee role, in its own tenant, while it lasts.
+    let support = |tenant: &str, expires_ms: i64, role: &str| Holding {
+        platform_roles: vec![role.to_string()],
+        grants: vec![HeldGrant {
+            grant: "support-access".into(),
+            tenant: Some(tenant.into()),
+            expires_ms,
+        }],
+        ..Holding::default()
+    };
+    assert_eq!(check(&support("t1", NOW + 1, "support"), &pro_on), Ok(()));
+    assert_eq!(
+        check(&support("t2", NOW + 1, "support"), &pro_on),
+        Err(CapabilityRefusal::NotHeld("reports-premium"))
+    );
+    assert_eq!(
+        check(&support("t1", NOW, "support"), &pro_on),
+        Err(CapabilityRefusal::NotHeld("reports-premium"))
+    );
+    assert_eq!(
+        check(&support("t1", NOW + 1, "operator"), &pro_on),
+        Err(CapabilityRefusal::NotHeld("reports-premium"))
+    );
+    // Beyond a delegation: report-agent passes on ping only, within the scope reports:read, until
+    // it expires.
+    let delegated = |scopes: &[&str], expires_ms: i64| Holding {
+        acting_for: Some(ActingFor {
+            delegation: "report-agent".into(),
+            scopes: scopes.iter().map(|s| s.to_string()).collect(),
+            expires_ms,
+        }),
+        ..editor.clone()
+    };
+    assert_eq!(
+        check(&delegated(&["reports:read"], NOW + 1), &pro_on),
+        Err(CapabilityRefusal::BeyondDelegation("reports-premium"))
+    );
+    let ping: &[&'static str] = &["ping"];
+    let under =
+        |holding: &Holding| permitted(ping, Asker::Principal(holding), Some("t1"), None, NOW);
+    assert_eq!(under(&delegated(&["reports:read"], NOW + 1)), Ok(()));
+    assert_eq!(
+        under(&delegated(&[], NOW + 1)),
+        Err(CapabilityRefusal::BeyondDelegation("ping"))
+    );
+    assert_eq!(
+        under(&delegated(&["reports:read"], NOW)),
+        Err(CapabilityRefusal::BeyondDelegation("ping"))
+    );
+    // Callers without a principal hold what their platform roles confer.
+    assert_eq!(
+        permitted(&["jobs-cancel"], Asker::Anonymous, None, None, NOW),
+        Ok(())
+    );
+    assert_eq!(
+        permitted(&["jobs-submit"], Asker::Anonymous, None, None, NOW),
+        Err(CapabilityRefusal::NotHeld("jobs-submit"))
+    );
+    assert_eq!(
+        permitted(&["jobs-cancel"], Asker::Service, None, None, NOW),
+        Err(CapabilityRefusal::NotHeld("jobs-cancel"))
+    );
+    // A capability the specification does not declare is never admitted.
+    assert_eq!(
+        permitted(
+            &["undeclared"],
+            Asker::Principal(&editor),
+            Some("t1"),
+            Some(&pro_on),
+            NOW
+        ),
+        Err(CapabilityRefusal::NotEntitled("undeclared"))
+    );
+}
+
+/// The generated authorizer makes the capability check on the call: a session holding the
+/// capability on the right plan with the flag on is admitted, and one outside the plan, with the
+/// flag off, outside its roles, or under a delegation that does not pass it on is refused.
+#[tokio::test(flavor = "current_thread")]
+async fn the_authorizer_refuses_a_capability_outside_the_plan_the_roles_or_a_delegation() {
+    let editor = routes::Holding {
+        tenant_roles: vec![tenant_role("editor", &["ping", "reports-premium"])],
+        ..routes::Holding::default()
+    };
+    let entitled = |plan: &'static str, premium_on: bool, holding: &routes::Holding| Entitled {
+        plan,
+        premium_on,
+        holding: holding.clone(),
+    };
+    let premium: &'static [&'static str] = &["reports-premium"];
+    let ping: &'static [&'static str] = &["ping"];
+    let forbidden = Some(FailureCode::Forbidden);
+    let nobody = routes::Holding::default();
+    assert_eq!(
+        ask_entitled(entitled("pro", true, &editor), Scheme::Session, premium).await,
+        None
+    );
+    assert_eq!(
+        ask_entitled(entitled("basic", true, &editor), Scheme::Session, premium).await,
+        forbidden
+    );
+    assert_eq!(
+        ask_entitled(entitled("pro", false, &editor), Scheme::Session, premium).await,
+        forbidden
+    );
+    assert_eq!(
+        ask_entitled(entitled("pro", true, &nobody), Scheme::Session, premium).await,
+        forbidden
+    );
+    // Under a delegation: without a known delegation, and beyond the one it acts under.
+    assert_eq!(
+        ask_entitled(entitled("pro", true, &editor), Scheme::Delegation, ping).await,
+        forbidden
+    );
+    let delegated = routes::Holding {
+        acting_for: Some(routes::ActingFor {
+            delegation: "report-agent".into(),
+            scopes: vec!["reports:read".into()],
+            expires_ms: NOW + 60_000,
+        }),
+        ..editor.clone()
+    };
+    assert_eq!(
+        ask_entitled(entitled("pro", true, &delegated), Scheme::Delegation, ping).await,
+        None
+    );
+    assert_eq!(
+        ask_entitled(
+            entitled("pro", true, &delegated),
+            Scheme::Delegation,
+            premium
+        )
+        .await,
+        forbidden
+    );
+    // A contract that requires nothing asks for no capability check.
+    assert_eq!(
+        ask_entitled(entitled("basic", false, &nobody), Scheme::Session, &[]).await,
+        None
+    );
+}
+
+/// Verifies: ADM-151
+///
+/// A tenant capability is held only through a tenant role that names it, assigned to the
+/// principal or held by a team it belongs to: not through a role that has the capability's name,
+/// not through a tenant role that shares its id with a platform role, not through a team's role
+/// that names others. The one check and the authorizer agree.
+#[tokio::test(flavor = "current_thread")]
+async fn a_tenant_capability_is_held_only_through_a_role_that_names_it() {
+    use routes::{held, Asker, Holding};
+    let holds = |holding: &Holding, capability: &str| {
+        held(Asker::Principal(holding), Some("t1"), NOW).contains(capability)
+    };
+    let with_roles = |roles: Vec<routes::TenantRole>| Holding {
+        tenant_roles: roles,
+        ..Holding::default()
+    };
+    let with_team = |roles: Vec<routes::TenantRole>| Holding {
+        teams: vec![routes::Team {
+            id: "desk".into(),
+            roles,
+        }],
+        ..Holding::default()
+    };
+
+    // A role that names the capability confers it, directly and through a team.
+    assert!(holds(
+        &with_roles(vec![tenant_role("editor", &["reports-premium"])]),
+        "reports-premium"
+    ));
+    assert!(holds(
+        &with_team(vec![tenant_role("editor", &["reports-premium"])]),
+        "reports-premium"
+    ));
+    // A role called by the capability's name, but naming none, confers nothing; nor does a role
+    // that names another capability, directly or through a team.
+    for holding in [
+        with_roles(vec![tenant_role("reports-premium", &[])]),
+        with_roles(vec![tenant_role("editor", &["ping"])]),
+        with_team(vec![tenant_role("reports-premium", &["ping"])]),
+        with_team(vec![tenant_role("editor", &[])]),
+        Holding::default(),
+    ] {
+        assert!(!holds(&holding, "reports-premium"), "{holding:?}");
+    }
+    // A tenant role that shares its id with a platform role confers what the tenant says it
+    // does, not what the platform role confers: the operator's own capability is not held.
+    let platform_operator_holds = held(
+        Asker::Principal(&Holding {
+            platform_roles: vec!["operator".into()],
+            ..Holding::default()
+        }),
+        Some("t1"),
+        NOW,
+    );
+    assert!(platform_operator_holds.contains("ping"));
+    assert!(!holds(
+        &with_roles(vec![tenant_role("operator", &[])]),
+        "ping"
+    ));
+    assert!(!holds(
+        &with_team(vec![tenant_role("operator", &[])]),
+        "ping"
+    ));
+
+    // The generated authorizer admits a call needing it exactly when a role names it.
+    let premium: &'static [&'static str] = &["reports-premium"];
+    let admitted = |holding: Holding| {
+        ask_entitled(
+            Entitled {
+                plan: "pro",
+                premium_on: true,
+                holding,
+            },
+            Scheme::Session,
+            premium,
+        )
+    };
+    assert_eq!(
+        admitted(with_team(vec![tenant_role("editor", &["reports-premium"])])).await,
+        None
+    );
+    assert_eq!(
+        admitted(with_roles(vec![tenant_role("reports-premium", &[])])).await,
+        Some(FailureCode::Forbidden)
+    );
+}
+
+/// The operation catalogue lists every contract reachable from outside its process with its
+/// description and input schema, and marks each for a principal with whether it may be
+/// attempted, by the same check.
+#[test]
+fn the_operation_catalogue_lists_every_operation_marked_per_principal() {
+    let ids: Vec<&str> = routes::OPERATIONS.iter().map(|o| o.contract).collect();
+    assert_eq!(ids, ["submit-job", "cancel-job", "ping", "make-report"]);
+    let submit = routes::operation("CT-1").unwrap();
+    assert_eq!(submit.contract, "submit-job");
+    assert_eq!(submit.access.requires, ["jobs-submit"]);
+    let schema: serde_json::Value = serde_json::from_str(submit.input_schema).unwrap();
+    assert_eq!(schema["type"], "object");
+    assert_eq!(schema["properties"]["priority"]["type"], "integer");
+    assert_eq!(schema["required"], serde_json::json!(["job", "priority"]));
+
+    let may = |holding: &routes::Holding| -> Vec<(&'static str, bool)> {
+        routes::catalogue(Scheme::Session, holding, Some("t1"), None, NOW)
+            .into_iter()
+            .map(|entry| (entry.operation.contract, entry.may_attempt))
+            .collect()
+    };
+    // submit-job, cancel-job and make-report are internal: no principal attempts them through
+    // the catalogue. ping is public and needs ping, which operator confers.
+    let operator = routes::Holding {
+        platform_roles: vec!["operator".into()],
+        ..routes::Holding::default()
+    };
+    assert_eq!(
+        may(&operator),
+        [
+            ("submit-job", false),
+            ("cancel-job", false),
+            ("ping", true),
+            ("make-report", false)
+        ]
+    );
+    assert_eq!(
+        may(&routes::Holding::default()),
+        [
+            ("submit-job", false),
+            ("cancel-job", false),
+            ("ping", false),
+            ("make-report", false)
+        ]
     );
 }

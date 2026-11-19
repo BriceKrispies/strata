@@ -132,6 +132,7 @@ pub(crate) fn owner_context(
         session: None,
         now: app.now(),
         correlation: correlation.to_string(),
+        verified_address: None,
     })
 }
 

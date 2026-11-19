@@ -4,14 +4,15 @@
 use crate::expr::{self, Env};
 use crate::intent::{Check, CheckExt, DomainError, DomainErrorExt, ErrorKind};
 use crate::schema::{
-    Action, ObjectTypeDef, Resource, TenantSchema, TenantSchemaExt, WorkflowDefExt,
+    Action, Grant, ObjectAction, ObjectActionExt, ObjectTypeDef, Resource, TenantSchema,
+    TenantSchemaExt, WorkflowDefExt,
 };
 use crate::state::{
     Coverage, CoverageExt, Need, Principal, Record, RecordExt, TenantState, TenantStateExt,
 };
 use crate::types::{
-    owner_role, public_role, refs_in, FieldId, FieldTypeExt, ObjectTypeId, RecordId, RoleId,
-    Timestamp, Value, ValueExt,
+    owner_role, public_role, refs_in, FieldId, FieldTypeExt, ObjectTypeId, PrincipalId, RecordId,
+    RoleId, Timestamp, Value, ValueExt,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -88,17 +89,138 @@ impl<'a> Lookup<'a> {
     }
 }
 
-/// The roles a principal holds in a tenant. Everyone but the system holds `public`.
+/// The roles a person holds through the table of members and the teams of a schema: the roles
+/// assigned to it directly and the roles of each team it belongs to, and no other.
+pub fn assigned_roles(
+    members: &BTreeMap<PrincipalId, BTreeSet<RoleId>>,
+    schema: &TenantSchema,
+    id: &PrincipalId,
+) -> BTreeSet<RoleId> {
+    let mut roles = members.get(id).cloned().unwrap_or_default();
+    for team in schema.all_teams() {
+        if team.members.contains(id) {
+            roles.extend(team.roles.iter().cloned());
+        }
+    }
+    roles
+}
+
+/// The roles a principal holds in a tenant, directly or through a team. Everyone but the
+/// system holds `public`.
 pub fn roles_of(tenant: &TenantState, principal: &Principal) -> BTreeSet<RoleId> {
     match principal {
         Principal::System => BTreeSet::new(),
         Principal::Anonymous => BTreeSet::from([public_role()]),
         Principal::User(id) => {
-            let mut roles = tenant.members.get(id).cloned().unwrap_or_default();
+            let mut roles = assigned_roles(&tenant.members, &tenant.schema, id);
             roles.insert(public_role());
             roles
         }
     }
+}
+
+/// The permissions a principal holds (ADM-151): exactly the union of the permissions of every
+/// role in [`roles_of`], that is of each role assigned to it directly and of each role of each
+/// team it belongs to. The `owner` role is built in and also holds every permission; that is
+/// decided by [`holds_any`], not listed here.
+pub fn effective_permissions(tenant: &TenantState, principal: &Principal) -> BTreeSet<Grant> {
+    roles_of(tenant, principal)
+        .iter()
+        .flat_map(|role| tenant.schema.grants_of(role))
+        .collect()
+}
+
+/// Whether the principal holds at least one of `wanted`. The owner holds all of them.
+pub fn holds_any(tenant: &TenantState, principal: &Principal, wanted: &BTreeSet<Grant>) -> bool {
+    roles_of(tenant, principal).contains(&owner_role())
+        || !effective_permissions(tenant, principal).is_disjoint(wanted)
+}
+
+/// The grants of `wanted` the principal does not hold. The owner holds every one, so for the
+/// owner this is empty.
+pub fn missing_grants(
+    tenant: &TenantState,
+    principal: &Principal,
+    wanted: &BTreeSet<Grant>,
+) -> BTreeSet<Grant> {
+    if roles_of(tenant, principal).contains(&owner_role()) {
+        return BTreeSet::new();
+    }
+    let held = effective_permissions(tenant, principal);
+    wanted.difference(&held).cloned().collect()
+}
+
+/// A grant as a sentence fragment: `capability <name>` or `<object>:<verb>`.
+fn describe_grant(grant: &Grant) -> String {
+    match grant {
+        Grant::Capability(name) => format!("capability {name}"),
+        Grant::Object(object, verb) => {
+            let verb = format!("{verb:?}").to_lowercase();
+            format!("{object}:{verb}")
+        }
+    }
+}
+
+/// ADM-152: whether `principal` may confer `role`, which it may only when it holds **every**
+/// permission and capability the role grants (a strict superset, not an overlap). A role that
+/// grants nothing has nothing to over-grant, except the built-in `owner`, which only an owner
+/// confers. The check names the rule and the role; a refusal names what the principal lacks.
+pub fn may_confer(tenant: &TenantState, principal: &Principal, role: &RoleId) -> Check {
+    let rule = format!("permission:confer:{role}");
+    if *role == owner_role() {
+        return if roles_of(tenant, principal).contains(&owner_role()) {
+            Check::pass(rule, "an owner confers owner")
+        } else {
+            Check::fail(rule, "only an owner confers the owner role")
+        };
+    }
+    let grants = tenant.schema.grants_of(role);
+    if grants.is_empty() {
+        return Check::pass(rule, format!("role {role} grants no permission"));
+    }
+    let missing = missing_grants(tenant, principal, &grants);
+    if missing.is_empty() {
+        Check::pass(
+            rule,
+            format!("holds every permission that role {role} grants"),
+        )
+    } else {
+        let lacking: Vec<String> = missing.iter().map(describe_grant).collect();
+        Check::fail(
+            rule,
+            format!(
+                "lacks {} of the {} permissions that role {role} grants: {}",
+                missing.len(),
+                grants.len(),
+                lacking.join(", ")
+            ),
+        )
+    }
+}
+
+/// The capabilities a role names among its permissions: its capability strings, and nothing of
+/// its object-type permissions.
+pub fn role_capabilities(schema: &TenantSchema, role: &RoleId) -> BTreeSet<String> {
+    schema
+        .grants_of(role)
+        .into_iter()
+        .filter_map(|grant| match grant {
+            Grant::Capability(name) => Some(name),
+            Grant::Object(..) => None,
+        })
+        .collect()
+}
+
+/// The tenant capabilities a principal holds (ADM-151): those named by a role assigned to it
+/// directly or by a role of a team it belongs to, and no other. This is what the generated
+/// authorizer's `AuthHoles::holding` fills a principal's tenant roles and teams from; a
+/// capability is never held because of a role's name, only because a role names it. The owner
+/// holds what its own role names, like any role.
+pub fn held_capabilities(tenant: &TenantState, principal: &Principal) -> BTreeSet<String> {
+    roles_of(tenant, principal)
+        .iter()
+        .flat_map(|role| role_capabilities(&tenant.schema, role))
+        .collect()
 }
 
 /// The records a policy condition may read.
@@ -141,6 +263,12 @@ pub fn authorize(
     let what = format!("{action:?} on {resource:?}");
     if roles.contains(&owner_role()) {
         return (true, vec![Check::pass("policy:builtin_owner", what)]);
+    }
+    if let (Resource::Object(object), Some(verb)) = (resource, ObjectAction::of(action)) {
+        let grant = Grant::Object(object.clone(), verb);
+        if effective_permissions(tenant, principal).contains(&grant) {
+            return (true, vec![Check::pass("permission:role", what)]);
+        }
     }
     let no_params = BTreeMap::new();
     let env = Env {
@@ -204,7 +332,14 @@ pub fn may_attempt(
     resource: &Resource,
 ) -> bool {
     let roles = roles_of(tenant, principal);
+    let granted = match (resource, ObjectAction::of(action)) {
+        (Resource::Object(object), Some(verb)) => {
+            effective_permissions(tenant, principal).contains(&Grant::Object(object.clone(), verb))
+        }
+        _ => false,
+    };
     roles.contains(&owner_role())
+        || granted
         || tenant.schema.policies.values().any(|policy| {
             roles.contains(&policy.role)
                 && policy.actions.contains(&action)

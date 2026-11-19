@@ -1,7 +1,57 @@
 {
   "roles": [
-    { "id": "author", "label": "Author" },
-    { "id": "editor", "label": "Editor" }
+    {
+      "id": "author",
+      "label": "Author",
+      "permissions": [
+        "content-read",
+        "content-draft-read",
+        "content-write",
+        "media-sign",
+        "events-subscribe",
+        "catalogue-read",
+        "operation-invoke",
+        "change-propose",
+        "change-undo",
+        "records-read",
+        "change-project",
+        "assistant-converse"
+      ]
+    },
+    {
+      "id": "editor",
+      "label": "Editor",
+      "permissions": [
+        { "object": "post", "actions": ["read", "create", "update", "delete"] },
+        { "object": "category", "actions": ["create", "update", "delete"] },
+        { "object": "author", "actions": ["create", "update"] },
+        { "object": "publication", "actions": ["update"] },
+        "content-read",
+        "content-draft-read",
+        "content-write",
+        "media-sign",
+        "events-subscribe",
+        "catalogue-read",
+        "operation-invoke",
+        "change-propose",
+        "change-undo",
+        "records-read",
+        "change-project",
+        "assistant-converse",
+        "content-delete",
+        "content-restore",
+        "site-configure",
+        "change-approve",
+        "workflow-approve",
+        "jobs-read",
+        "mail-read"
+      ]
+    },
+    {
+      "id": "moderator",
+      "label": "Moderator",
+      "permissions": ["members-manage"]
+    }
   ],
   "objects": [
     {
@@ -99,6 +149,12 @@
     }
   ],
   "policies": [
+    {
+      "id": "moderators_manage_members",
+      "role": "moderator",
+      "on": "$members",
+      "actions": ["manage"]
+    },
     { "id": "public_reads_settings", "role": "public", "on": "publication", "actions": ["read"] },
     { "id": "public_reads_authors", "role": "public", "on": "author", "actions": ["read"] },
     { "id": "public_reads_categories", "role": "public", "on": "category", "actions": ["read"] },

@@ -725,6 +725,7 @@ fn samples() -> Vec<(&'static str, Json)> {
         session: Some(SessionId::new("sess:1").unwrap()),
         now: Timestamp(9),
         correlation: "c-1".into(),
+        verified_address: None,
     };
     s.push(("context", json(&context)));
     s.push(("context", json(&ctx("alpha", Principal::Anonymous, 5))));
