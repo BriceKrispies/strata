@@ -274,6 +274,7 @@ fn the_web_application_holds_what_specc_web_generates_from_the_specification() {
         "forms.js",
         "actions.js",
         "live.js",
+        "errors.js",
     ] {
         assert!(
             files.iter().any(|f| f.path == name),
@@ -315,6 +316,7 @@ const forms = await import({forms:?});
 const contracts = await import({contracts:?});
 const live = await import({live:?});
 const actions = await import({actions:?});
+const errors = await import({errors:?});
 assert.deepEqual(routes.matchRoute('/posts/slow-software', ''), {{ screen: 'screen-article', params: {{ slug: 'slow-software' }}, query: {{}} }});
 assert.deepEqual(routes.matchRoute('/desk/new', ''), {{ screen: 'screen-desk-new', params: {{}}, query: {{}} }});
 assert.deepEqual(routes.matchRoute('/search', '?q=wood+kiln&x=1'), {{ screen: 'screen-search', params: {{}}, query: {{ q: 'wood kiln' }} }});
@@ -322,7 +324,7 @@ assert.deepEqual(routes.matchRoute('/no/such/route', ''), {{ screen: 'screen-not
 assert.equal(routes.hrefFor('screen-search', {{ q: 'kiln' }}), '/search?q=kiln');
 assert.equal(routes.hrefFor('screen-search', {{ q: '' }}), '/search');
 assert.equal(routes.hrefFor('screen-desk-edit', {{ slug: 'on-sharpening' }}), '/desk/edit/on-sharpening');
-let {{ values, edited }} = forms.input('form-new-article-save', forms.initialValues('form-new-article-save', {{ topics: [{{ value: '', label: 'No topic' }}], authors: [] }}), [], 'title', 'Inès & the Café');
+let {{ values, edited }} = forms.input('form-new-article-save', forms.initialValues('form-new-article-save', {{ view: {{ topics: [{{ value: '', label: 'No topic' }}], authors: [] }} }}), [], 'title', 'Inès & the Café');
 assert.equal(values.slug, 'ines-the-cafe');
 ({{ values, edited }} = forms.input('form-new-article-save', values, edited, 'slug', 'mine'));
 ({{ values, edited }} = forms.input('form-new-article-save', values, edited, 'title', 'Other'));
@@ -338,12 +340,52 @@ assert.equal(live.refreshes('screen-front-page', 'ui-notice-received', {{ kind: 
 assert.equal(live.refreshes('screen-front-page', 'ui-notice-received', {{ kind: 'upsert', object: 'invoice' }}, view), false);
 assert.equal(actions.label('act-desk-delete', {{ title: 'On Sharpening' }}), 'Delete On Sharpening');
 assert.equal(actions.confirmText('act-desk-delete', {{ title: 'On Sharpening' }}), 'Confirm deleting On Sharpening');
+// The records contracts encode their inputs: trimmed, comma lists, numbers, empty as null (an
+// update) or left out (a create); an output repeating an input repeats it as sent.
+assert.deepEqual(contracts.request('update-article', {{ article: 3, expected_version: 2, title: ' T ', slug: 's', excerpt: '  ', body: 'b', category: '', author: '7', tags: 'a, ,b', cover: '', cover_alt: ' x ', featured: false }}).body.fields,
+  {{ title: 'T', slug: 's', excerpt: null, body: 'b', category: null, author: 7, tags: ['a', 'b'], cover: null, cover_alt: 'x', featured: null }});
+assert.deepEqual(contracts.request('create-article', {{ title: 'T', slug: 's', excerpt: '', body: 'b', category: '', author: '7', tags: '', cover: '', cover_alt: '', featured: false }}).body.fields,
+  {{ title: 'T', slug: 's', body: 'b', author: 7 }});
+assert.equal(contracts.decode('update-article', {{ id: 4, version: 2 }}, {{ slug: ' x ' }}).slug, 'x');
+// Publishing a new article is the second call of its form; the outcome reads both replies.
+assert.deepEqual(forms.followUp('form-new-article-publish', {{ response: {{ article_id: 4, version: 1, slug: 'x' }} }}), {{ contract: 'update-article', inputs: {{ article: 4, expected_version: 1, status: 'published' }} }});
+assert.equal(forms.followUp('form-new-article-save', {{ response: {{}} }}), null);
+assert.deepEqual(forms.bothResponses({{ article_id: 4, version: 1, slug: 'x' }}, {{ article_id: 4, version: 2, slug: undefined }}), {{ article_id: 4, version: 2, slug: 'x' }});
+// Initial values from the view model, and the principal's own author.
+const post = {{ fields: {{ title: 'T', slug: 's', body: 'b', author: 7, category: 2, tags: ['a', 'b'], featured: true }} }};
+const edit = forms.initialValues('form-edit-article-save-draft', {{ view: {{ data: {{ post }}, topics: [{{ value: '', label: 'No topic' }}], authors: [{{ value: '7', label: 'A' }}] }} }});
+assert.deepEqual([edit.title, edit.category, edit.author, edit.tags, edit.featured, edit.excerpt], ['T', '2', '7', 'a, b', true, '']);
+const authors = [{{ id: 5, fields: {{ principal: 'p-1' }} }}, {{ id: 9, fields: {{ principal: 'p-2' }} }}];
+const choices = [{{ value: '5', label: 'X' }}, {{ value: '9', label: 'Y' }}];
+assert.equal(forms.initialValues('form-new-article-save', {{ view: {{ data: {{ authors }}, authors: choices, topics: [] }}, principal: {{ id: 'p-2' }} }}).author, '9');
+assert.equal(forms.initialValues('form-new-article-save', {{ view: {{ data: {{ authors }}, authors: choices, topics: [] }}, principal: {{ id: 'p-3' }} }}).author, '5');
+assert.deepEqual(forms.held('form-settings', {{ publication_version: 3, name: 'x' }}), {{ publication_version: 3 }});
+assert.deepEqual(forms.succeeded('form-settings', {{ response: {{ version: 4 }} }}).view, {{ publication_version: 4 }});
+// The search is trimmed; a sign-in keeps its texts as typed.
+assert.deepEqual(forms.submitted('form-search', {{ q: '  kiln ' }}), {{ q: 'kiln' }});
+assert.deepEqual(forms.submitted('form-sign-in', {{ login: ' ines ' }}), {{ login: ' ines ', password: '' }});
+// Sign-out is offered on every screen; the delete confirmation is announced.
+assert.ok(actions.actionsOn('screen-lab').includes('act-sign-out-desk'));
+assert.ok(actions.actionsOn('screen-about').includes('act-sign-out-front-page'));
+assert.equal(actions.ACTIONS['act-desk-delete'].confirmAnnounce, 'Press Confirm delete to remove the article for good.');
+// The wording of refusals.
+const failed = {{ code: 'invalid', message: 'm', failed: [{{ rule: 'constraint:post.slug_format', detail: 'A slug uses lower-case letters [slug_format]' }}, {{ rule: 'required:post.title', detail: 'x' }}] }};
+assert.deepEqual(errors.refusal('form-edit-article-save-draft', failed), {{ errors: {{ slug: 'A slug uses lower-case letters.', title: 'This is required.' }}, formError: '', announce: 'Some fields need attention.', text: 'A slug uses lower-case letters.' }});
+assert.equal(errors.refusal('form-edit-article-save-draft', {{ code: 'conflict', message: 'm' }}).formError, 'This was changed somewhere else since you opened it. Reload to see the latest version.');
+assert.equal(errors.refusal('form-settings', {{ code: 'unavailable', message: '' }}).formError, 'That did not work. Try again.');
+assert.equal(errors.refusal('form-sign-in', {{ code: 'unauthenticated', message: 'The name or password is not right.' }}).formError, 'The name or password is not right.');
+assert.equal(errors.refusal('form-sign-in', {{ code: 'unavailable', message: 'The site could not be reached.' }}).formError, 'Signing in did not work. Try again.');
+assert.equal(errors.refusal('act-desk-delete', {{ code: 'forbidden', message: 'No.', failed: [{{ rule: 'policy:authors_own_posts', detail: 'x' }}] }}).text, 'Not done. You are not allowed to do this.');
+assert.equal(errors.refusal('act-sign-out-desk', {{ code: 'unauthenticated', message: 'x' }}).text, 'Signing out did not work. Try again.');
+// The impact lab refreshes on a notice of a schema change.
+assert.equal(live.refreshes('screen-lab', 'ui-notice-received', {{ kind: 'schema', object: '' }}, {{}}), true);
 "#,
         routes = url("routes.js"),
         forms = url("forms.js"),
         contracts = url("contracts.js"),
         live = url("live.js"),
         actions = url("actions.js"),
+        errors = url("errors.js"),
     );
     let dir = scratch_dir("kernel");
     let path = dir.join("kernel.mjs");

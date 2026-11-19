@@ -9,19 +9,21 @@ import { hrefFor } from './routes.js';
 /**
  * A field: the input it fills, its accessible name, its control, and whether it is derived.
  * @typedef {{ name: string, input: string, label: string, control: string, derived?: 'always' | 'until-edited' }} FormField
- * @typedef {{ screen: string, contract: string, submitLabel: string, show: string, navigates: boolean, fields: FormField[] }} FormInfo
+ * A form's `then` is the contract of its second call, `holds` the view-model outputs its success
+ * sets and holds while the form has unsaved changes.
+ * @typedef {{ screen: string, contract: string, submitLabel: string, show: string, navigates: boolean, then: string | null, holds: string[], fields: FormField[] }} FormInfo
  */
 
 /** @type {Record<string, FormInfo>} */
 export const FORMS = {
-  'form-sign-in': { screen: 'screen-sign-in', contract: 'sign-in-at-site', submitLabel: 'Sign in', show: 'inline', navigates: true, fields: [
+  'form-sign-in': { screen: 'screen-sign-in', contract: 'sign-in-at-site', submitLabel: 'Sign in', show: 'inline', navigates: true, then: null, holds: [], fields: [
     { name: 'login', input: 'login', label: 'Name', control: 'text' },
     { name: 'password', input: 'password', label: 'Password', control: 'password' },
   ] },
-  'form-search': { screen: 'screen-search', contract: 'read-search-page', submitLabel: 'Search', show: 'inline', navigates: true, fields: [
+  'form-search': { screen: 'screen-search', contract: 'read-search-page', submitLabel: 'Search', show: 'inline', navigates: true, then: null, holds: [], fields: [
     { name: 'q', input: 'q', label: 'Search the essays', control: 'text' },
   ] },
-  'form-new-article-save': { screen: 'screen-desk-new', contract: 'create-article', submitLabel: 'Save draft', show: 'inline', navigates: true, fields: [
+  'form-new-article-save': { screen: 'screen-desk-new', contract: 'create-article', submitLabel: 'Save draft', show: 'inline', navigates: true, then: null, holds: ['article_id', 'article_version'], fields: [
     { name: 'title', input: 'title', label: 'Title', control: 'text' },
     { name: 'slug', input: 'slug', label: 'Address', control: 'text', derived: 'until-edited' },
     { name: 'excerpt', input: 'excerpt', label: 'Excerpt', control: 'textarea' },
@@ -33,7 +35,7 @@ export const FORMS = {
     { name: 'cover_alt', input: 'cover_alt', label: 'Description of the image', control: 'textarea' },
     { name: 'featured', input: 'featured', label: 'Feature at the top of the front page', control: 'checkbox' },
   ] },
-  'form-new-article-publish': { screen: 'screen-desk-new', contract: 'create-article', submitLabel: 'Publish', show: 'inline', navigates: true, fields: [
+  'form-new-article-publish': { screen: 'screen-desk-new', contract: 'create-article', submitLabel: 'Publish', show: 'inline', navigates: true, then: 'update-article', holds: ['article_id', 'article_version'], fields: [
     { name: 'title', input: 'title', label: 'Title', control: 'text' },
     { name: 'slug', input: 'slug', label: 'Address', control: 'text', derived: 'until-edited' },
     { name: 'excerpt', input: 'excerpt', label: 'Excerpt', control: 'textarea' },
@@ -45,7 +47,7 @@ export const FORMS = {
     { name: 'cover_alt', input: 'cover_alt', label: 'Description of the image', control: 'textarea' },
     { name: 'featured', input: 'featured', label: 'Feature at the top of the front page', control: 'checkbox' },
   ] },
-  'form-edit-article-save-draft': { screen: 'screen-desk-edit', contract: 'update-article', submitLabel: 'Save draft', show: 'inline', navigates: true, fields: [
+  'form-edit-article-save-draft': { screen: 'screen-desk-edit', contract: 'update-article', submitLabel: 'Save draft', show: 'inline', navigates: true, then: null, holds: ['article_id', 'article_version'], fields: [
     { name: 'title', input: 'title', label: 'Title', control: 'text' },
     { name: 'slug', input: 'slug', label: 'Address', control: 'text' },
     { name: 'excerpt', input: 'excerpt', label: 'Excerpt', control: 'textarea' },
@@ -57,7 +59,7 @@ export const FORMS = {
     { name: 'cover_alt', input: 'cover_alt', label: 'Description of the image', control: 'textarea' },
     { name: 'featured', input: 'featured', label: 'Feature at the top of the front page', control: 'checkbox' },
   ] },
-  'form-edit-article-save-changes': { screen: 'screen-desk-edit', contract: 'update-article', submitLabel: 'Save changes', show: 'inline', navigates: true, fields: [
+  'form-edit-article-save-changes': { screen: 'screen-desk-edit', contract: 'update-article', submitLabel: 'Save changes', show: 'inline', navigates: true, then: null, holds: ['article_id', 'article_version'], fields: [
     { name: 'title', input: 'title', label: 'Title', control: 'text' },
     { name: 'slug', input: 'slug', label: 'Address', control: 'text' },
     { name: 'excerpt', input: 'excerpt', label: 'Excerpt', control: 'textarea' },
@@ -69,7 +71,7 @@ export const FORMS = {
     { name: 'cover_alt', input: 'cover_alt', label: 'Description of the image', control: 'textarea' },
     { name: 'featured', input: 'featured', label: 'Feature at the top of the front page', control: 'checkbox' },
   ] },
-  'form-edit-article-publish': { screen: 'screen-desk-edit', contract: 'update-article', submitLabel: 'Publish', show: 'inline', navigates: true, fields: [
+  'form-edit-article-publish': { screen: 'screen-desk-edit', contract: 'update-article', submitLabel: 'Publish', show: 'inline', navigates: true, then: null, holds: ['article_id', 'article_version'], fields: [
     { name: 'title', input: 'title', label: 'Title', control: 'text' },
     { name: 'slug', input: 'slug', label: 'Address', control: 'text' },
     { name: 'excerpt', input: 'excerpt', label: 'Excerpt', control: 'textarea' },
@@ -81,7 +83,7 @@ export const FORMS = {
     { name: 'cover_alt', input: 'cover_alt', label: 'Description of the image', control: 'textarea' },
     { name: 'featured', input: 'featured', label: 'Feature at the top of the front page', control: 'checkbox' },
   ] },
-  'form-edit-article-unpublish': { screen: 'screen-desk-edit', contract: 'update-article', submitLabel: 'Unpublish', show: 'inline', navigates: true, fields: [
+  'form-edit-article-unpublish': { screen: 'screen-desk-edit', contract: 'update-article', submitLabel: 'Unpublish', show: 'inline', navigates: true, then: null, holds: ['article_id', 'article_version'], fields: [
     { name: 'title', input: 'title', label: 'Title', control: 'text' },
     { name: 'slug', input: 'slug', label: 'Address', control: 'text' },
     { name: 'excerpt', input: 'excerpt', label: 'Excerpt', control: 'textarea' },
@@ -93,7 +95,7 @@ export const FORMS = {
     { name: 'cover_alt', input: 'cover_alt', label: 'Description of the image', control: 'textarea' },
     { name: 'featured', input: 'featured', label: 'Feature at the top of the front page', control: 'checkbox' },
   ] },
-  'form-settings': { screen: 'screen-desk-settings', contract: 'save-site-settings', submitLabel: 'Save settings', show: 'inline', navigates: false, fields: [
+  'form-settings': { screen: 'screen-desk-settings', contract: 'save-site-settings', submitLabel: 'Save settings', show: 'inline', navigates: false, then: null, holds: ['publication_version'], fields: [
     { name: 'name', input: 'name', label: 'Name', control: 'text' },
     { name: 'tagline', input: 'tagline', label: 'Tagline', control: 'text' },
     { name: 'accent', input: 'accent', label: 'Accent colour', control: 'radio' },
@@ -149,9 +151,9 @@ function sameSite(path, fallback) {
 
 /** Form `form-sign-in` of screen `screen-sign-in`: calls `sign-in-at-site`. */
 const formSignIn = {
-  /** @param {any} view */
-  initial(view) {
-    return this.derive({ login: '', password: '' }, [], { view });
+  /** @param {any} scope */
+  initial(scope) {
+    return this.derive({ login: '', password: '' }, [], scope ?? {});
   },
   options: {
 
@@ -180,17 +182,28 @@ const formSignIn = {
   inputs(values, _scope) {
     return { login: values.login, password: values.password };
   },
+  /** @param {Record<string, any>} raw */
+  submitted(raw) {
+    return { login: String(raw.login ?? ''), password: String(raw.password ?? '') };
+  },
+  /**
+   * @param {any} _scope
+   * @returns {{ contract: string, inputs: Record<string, any> } | null}
+   */
+  then(_scope) {
+    return null;
+  },
   /** @param {any} scope */
   succeeded(scope) {
-    return { navigate: sameSite(scope.query?.next, hrefFor('screen-desk', {})), toast: 'Signed in as ' + text(scope.response?.session?.display_name) + '.' };
+    return { navigate: sameSite(scope.query?.next, hrefFor('screen-desk', {})), toast: 'Signed in as ' + text(scope.response?.session?.display_name) + '.', view: null };
   },
 };
 
 /** Form `form-search` of screen `screen-search`: calls `read-search-page`. */
 const formSearch = {
-  /** @param {any} view */
-  initial(view) {
-    return this.derive({ q: '' }, [], { view });
+  /** @param {any} scope */
+  initial(scope) {
+    return this.derive({ q: '' }, [], scope ?? {});
   },
   options: {
 
@@ -217,17 +230,29 @@ const formSearch = {
   inputs(values, _scope) {
     return { q: values.q };
   },
+  /** @param {Record<string, any>} raw */
+  submitted(raw) {
+    return { q: String(raw.q ?? '').trim() };
+  },
+  /**
+   * @param {any} _scope
+   * @returns {{ contract: string, inputs: Record<string, any> } | null}
+   */
+  then(_scope) {
+    return null;
+  },
   /** @param {any} scope */
   succeeded(scope) {
-    return { navigate: hrefFor('screen-search', { q: scope.response?.q }), toast: null };
+    return { navigate: hrefFor('screen-search', { q: scope.response?.q }), toast: null, view: null };
   },
 };
 
 /** Form `form-new-article-save` of screen `screen-desk-new`: calls `create-article`. */
 const formNewArticleSave = {
-  /** @param {any} view */
-  initial(view) {
-    return this.derive({ title: '', slug: '', excerpt: '', body: '', category: this.options.category(view)[0]?.value ?? '', author: this.options.author(view)[0]?.value ?? '', tags: '', cover: '', cover_alt: '', featured: false }, [], { view });
+  /** @param {any} scope */
+  initial(scope) {
+    const view = scope?.view;
+    return this.derive({ title: '', slug: '', excerpt: '', body: '', category: this.options.category(view)[0]?.value ?? '', author: ((/** @type {any} */ o) => (o == null ? this.options.author(view)[0]?.value ?? '' : String(o?.id)))(((view?.data?.authors) ?? []).find((/** @type {any} */ o) => o?.fields?.principal != null && o?.fields?.principal === (scope.principal?.id))), tags: '', cover: '', cover_alt: '', featured: false }, [], scope ?? {});
   },
   options: {
     category: (/** @type {any} */ view) => ((view?.topics) ?? []).map((/** @type {any} */ o) => ({ value: o.value, label: String(o.label) })),
@@ -257,17 +282,29 @@ const formNewArticleSave = {
   inputs(values, _scope) {
     return { title: values.title, slug: values.slug, excerpt: values.excerpt, body: values.body, category: values.category, author: values.author, tags: values.tags, cover: values.cover, cover_alt: values.cover_alt, featured: values.featured };
   },
+  /** @param {Record<string, any>} raw */
+  submitted(raw) {
+    return { title: String(raw.title ?? ''), slug: String(raw.slug ?? ''), excerpt: String(raw.excerpt ?? ''), body: String(raw.body ?? ''), category: String(raw.category ?? ''), author: String(raw.author ?? ''), tags: String(raw.tags ?? ''), cover: String(raw.cover ?? ''), cover_alt: String(raw.cover_alt ?? ''), featured: raw.featured === true };
+  },
+  /**
+   * @param {any} _scope
+   * @returns {{ contract: string, inputs: Record<string, any> } | null}
+   */
+  then(_scope) {
+    return null;
+  },
   /** @param {any} scope */
   succeeded(scope) {
-    return { navigate: hrefFor('screen-desk-edit', { slug: scope.response?.slug }), toast: 'Draft saved.' };
+    return { navigate: hrefFor('screen-desk-edit', { slug: scope.response?.slug }), toast: 'Draft saved.', view: { article_id: scope.response?.article_id, article_version: scope.response?.version } };
   },
 };
 
 /** Form `form-new-article-publish` of screen `screen-desk-new`: calls `create-article`. */
 const formNewArticlePublish = {
-  /** @param {any} view */
-  initial(view) {
-    return this.derive({ title: '', slug: '', excerpt: '', body: '', category: this.options.category(view)[0]?.value ?? '', author: this.options.author(view)[0]?.value ?? '', tags: '', cover: '', cover_alt: '', featured: false }, [], { view });
+  /** @param {any} scope */
+  initial(scope) {
+    const view = scope?.view;
+    return this.derive({ title: '', slug: '', excerpt: '', body: '', category: this.options.category(view)[0]?.value ?? '', author: ((/** @type {any} */ o) => (o == null ? this.options.author(view)[0]?.value ?? '' : String(o?.id)))(((view?.data?.authors) ?? []).find((/** @type {any} */ o) => o?.fields?.principal != null && o?.fields?.principal === (scope.principal?.id))), tags: '', cover: '', cover_alt: '', featured: false }, [], scope ?? {});
   },
   options: {
     category: (/** @type {any} */ view) => ((view?.topics) ?? []).map((/** @type {any} */ o) => ({ value: o.value, label: String(o.label) })),
@@ -295,19 +332,31 @@ const formNewArticlePublish = {
    * @param {any} _scope
    */
   inputs(values, _scope) {
-    return { title: values.title, slug: values.slug, excerpt: values.excerpt, body: values.body, category: values.category, author: values.author, tags: values.tags, cover: values.cover, cover_alt: values.cover_alt, featured: values.featured, status: "published" };
+    return { title: values.title, slug: values.slug, excerpt: values.excerpt, body: values.body, category: values.category, author: values.author, tags: values.tags, cover: values.cover, cover_alt: values.cover_alt, featured: values.featured };
+  },
+  /** @param {Record<string, any>} raw */
+  submitted(raw) {
+    return { title: String(raw.title ?? ''), slug: String(raw.slug ?? ''), excerpt: String(raw.excerpt ?? ''), body: String(raw.body ?? ''), category: String(raw.category ?? ''), author: String(raw.author ?? ''), tags: String(raw.tags ?? ''), cover: String(raw.cover ?? ''), cover_alt: String(raw.cover_alt ?? ''), featured: raw.featured === true };
+  },
+  /**
+   * @param {any} scope
+   * @returns {{ contract: string, inputs: Record<string, any> } | null}
+   */
+  then(scope) {
+    return { contract: 'update-article', inputs: { article: scope.response?.article_id, expected_version: scope.response?.version, status: "published" } };
   },
   /** @param {any} scope */
   succeeded(scope) {
-    return { navigate: hrefFor('screen-desk-edit', { slug: scope.response?.slug }), toast: 'Published.' };
+    return { navigate: hrefFor('screen-desk-edit', { slug: scope.response?.slug }), toast: 'Published.', view: { article_id: scope.response?.article_id, article_version: scope.response?.version } };
   },
 };
 
 /** Form `form-edit-article-save-draft` of screen `screen-desk-edit`: calls `update-article`. */
 const formEditArticleSaveDraft = {
-  /** @param {any} view */
-  initial(view) {
-    return this.derive({ title: '', slug: '', excerpt: '', body: '', category: this.options.category(view)[0]?.value ?? '', author: this.options.author(view)[0]?.value ?? '', tags: '', cover: '', cover_alt: '', featured: false }, [], { view });
+  /** @param {any} scope */
+  initial(scope) {
+    const view = scope?.view;
+    return this.derive({ title: (view?.data?.post?.fields?.title) ?? '', slug: (view?.data?.post?.fields?.slug) ?? '', excerpt: (view?.data?.post?.fields?.excerpt) ?? '', body: (view?.data?.post?.fields?.body) ?? '', category: view?.data?.post?.fields?.category == null ? this.options.category(view)[0]?.value ?? '' : String(view?.data?.post?.fields?.category), author: view?.data?.post?.fields?.author == null ? this.options.author(view)[0]?.value ?? '' : String(view?.data?.post?.fields?.author), tags: view?.data?.post?.fields?.tags == null ? '' : (view?.data?.post?.fields?.tags).join(', '), cover: (view?.data?.post?.fields?.cover) ?? '', cover_alt: (view?.data?.post?.fields?.cover_alt) ?? '', featured: (view?.data?.post?.fields?.featured) ?? false }, [], scope ?? {});
   },
   options: {
     category: (/** @type {any} */ view) => ((view?.topics) ?? []).map((/** @type {any} */ o) => ({ value: o.value, label: String(o.label) })),
@@ -336,17 +385,29 @@ const formEditArticleSaveDraft = {
   inputs(values, scope) {
     return { title: values.title, slug: values.slug, excerpt: values.excerpt, body: values.body, category: values.category, author: values.author, tags: values.tags, cover: values.cover, cover_alt: values.cover_alt, featured: values.featured, article: scope.view?.article_id, expected_version: scope.view?.article_version };
   },
+  /** @param {Record<string, any>} raw */
+  submitted(raw) {
+    return { title: String(raw.title ?? ''), slug: String(raw.slug ?? ''), excerpt: String(raw.excerpt ?? ''), body: String(raw.body ?? ''), category: String(raw.category ?? ''), author: String(raw.author ?? ''), tags: String(raw.tags ?? ''), cover: String(raw.cover ?? ''), cover_alt: String(raw.cover_alt ?? ''), featured: raw.featured === true };
+  },
+  /**
+   * @param {any} _scope
+   * @returns {{ contract: string, inputs: Record<string, any> } | null}
+   */
+  then(_scope) {
+    return null;
+  },
   /** @param {any} scope */
   succeeded(scope) {
-    return { navigate: hrefFor('screen-desk-edit', { slug: scope.response?.slug }), toast: 'Draft saved.' };
+    return { navigate: hrefFor('screen-desk-edit', { slug: scope.response?.slug }), toast: 'Draft saved.', view: { article_id: scope.response?.article_id, article_version: scope.response?.version } };
   },
 };
 
 /** Form `form-edit-article-save-changes` of screen `screen-desk-edit`: calls `update-article`. */
 const formEditArticleSaveChanges = {
-  /** @param {any} view */
-  initial(view) {
-    return this.derive({ title: '', slug: '', excerpt: '', body: '', category: this.options.category(view)[0]?.value ?? '', author: this.options.author(view)[0]?.value ?? '', tags: '', cover: '', cover_alt: '', featured: false }, [], { view });
+  /** @param {any} scope */
+  initial(scope) {
+    const view = scope?.view;
+    return this.derive({ title: (view?.data?.post?.fields?.title) ?? '', slug: (view?.data?.post?.fields?.slug) ?? '', excerpt: (view?.data?.post?.fields?.excerpt) ?? '', body: (view?.data?.post?.fields?.body) ?? '', category: view?.data?.post?.fields?.category == null ? this.options.category(view)[0]?.value ?? '' : String(view?.data?.post?.fields?.category), author: view?.data?.post?.fields?.author == null ? this.options.author(view)[0]?.value ?? '' : String(view?.data?.post?.fields?.author), tags: view?.data?.post?.fields?.tags == null ? '' : (view?.data?.post?.fields?.tags).join(', '), cover: (view?.data?.post?.fields?.cover) ?? '', cover_alt: (view?.data?.post?.fields?.cover_alt) ?? '', featured: (view?.data?.post?.fields?.featured) ?? false }, [], scope ?? {});
   },
   options: {
     category: (/** @type {any} */ view) => ((view?.topics) ?? []).map((/** @type {any} */ o) => ({ value: o.value, label: String(o.label) })),
@@ -375,17 +436,29 @@ const formEditArticleSaveChanges = {
   inputs(values, scope) {
     return { title: values.title, slug: values.slug, excerpt: values.excerpt, body: values.body, category: values.category, author: values.author, tags: values.tags, cover: values.cover, cover_alt: values.cover_alt, featured: values.featured, article: scope.view?.article_id, expected_version: scope.view?.article_version };
   },
+  /** @param {Record<string, any>} raw */
+  submitted(raw) {
+    return { title: String(raw.title ?? ''), slug: String(raw.slug ?? ''), excerpt: String(raw.excerpt ?? ''), body: String(raw.body ?? ''), category: String(raw.category ?? ''), author: String(raw.author ?? ''), tags: String(raw.tags ?? ''), cover: String(raw.cover ?? ''), cover_alt: String(raw.cover_alt ?? ''), featured: raw.featured === true };
+  },
+  /**
+   * @param {any} _scope
+   * @returns {{ contract: string, inputs: Record<string, any> } | null}
+   */
+  then(_scope) {
+    return null;
+  },
   /** @param {any} scope */
   succeeded(scope) {
-    return { navigate: hrefFor('screen-desk-edit', { slug: scope.response?.slug }), toast: 'Changes saved.' };
+    return { navigate: hrefFor('screen-desk-edit', { slug: scope.response?.slug }), toast: 'Changes saved.', view: { article_id: scope.response?.article_id, article_version: scope.response?.version } };
   },
 };
 
 /** Form `form-edit-article-publish` of screen `screen-desk-edit`: calls `update-article`. */
 const formEditArticlePublish = {
-  /** @param {any} view */
-  initial(view) {
-    return this.derive({ title: '', slug: '', excerpt: '', body: '', category: this.options.category(view)[0]?.value ?? '', author: this.options.author(view)[0]?.value ?? '', tags: '', cover: '', cover_alt: '', featured: false }, [], { view });
+  /** @param {any} scope */
+  initial(scope) {
+    const view = scope?.view;
+    return this.derive({ title: (view?.data?.post?.fields?.title) ?? '', slug: (view?.data?.post?.fields?.slug) ?? '', excerpt: (view?.data?.post?.fields?.excerpt) ?? '', body: (view?.data?.post?.fields?.body) ?? '', category: view?.data?.post?.fields?.category == null ? this.options.category(view)[0]?.value ?? '' : String(view?.data?.post?.fields?.category), author: view?.data?.post?.fields?.author == null ? this.options.author(view)[0]?.value ?? '' : String(view?.data?.post?.fields?.author), tags: view?.data?.post?.fields?.tags == null ? '' : (view?.data?.post?.fields?.tags).join(', '), cover: (view?.data?.post?.fields?.cover) ?? '', cover_alt: (view?.data?.post?.fields?.cover_alt) ?? '', featured: (view?.data?.post?.fields?.featured) ?? false }, [], scope ?? {});
   },
   options: {
     category: (/** @type {any} */ view) => ((view?.topics) ?? []).map((/** @type {any} */ o) => ({ value: o.value, label: String(o.label) })),
@@ -414,17 +487,29 @@ const formEditArticlePublish = {
   inputs(values, scope) {
     return { title: values.title, slug: values.slug, excerpt: values.excerpt, body: values.body, category: values.category, author: values.author, tags: values.tags, cover: values.cover, cover_alt: values.cover_alt, featured: values.featured, article: scope.view?.article_id, expected_version: scope.view?.article_version, status: "published" };
   },
+  /** @param {Record<string, any>} raw */
+  submitted(raw) {
+    return { title: String(raw.title ?? ''), slug: String(raw.slug ?? ''), excerpt: String(raw.excerpt ?? ''), body: String(raw.body ?? ''), category: String(raw.category ?? ''), author: String(raw.author ?? ''), tags: String(raw.tags ?? ''), cover: String(raw.cover ?? ''), cover_alt: String(raw.cover_alt ?? ''), featured: raw.featured === true };
+  },
+  /**
+   * @param {any} _scope
+   * @returns {{ contract: string, inputs: Record<string, any> } | null}
+   */
+  then(_scope) {
+    return null;
+  },
   /** @param {any} scope */
   succeeded(scope) {
-    return { navigate: hrefFor('screen-desk-edit', { slug: scope.response?.slug }), toast: 'Published.' };
+    return { navigate: hrefFor('screen-desk-edit', { slug: scope.response?.slug }), toast: 'Published.', view: { article_id: scope.response?.article_id, article_version: scope.response?.version } };
   },
 };
 
 /** Form `form-edit-article-unpublish` of screen `screen-desk-edit`: calls `update-article`. */
 const formEditArticleUnpublish = {
-  /** @param {any} view */
-  initial(view) {
-    return this.derive({ title: '', slug: '', excerpt: '', body: '', category: this.options.category(view)[0]?.value ?? '', author: this.options.author(view)[0]?.value ?? '', tags: '', cover: '', cover_alt: '', featured: false }, [], { view });
+  /** @param {any} scope */
+  initial(scope) {
+    const view = scope?.view;
+    return this.derive({ title: (view?.data?.post?.fields?.title) ?? '', slug: (view?.data?.post?.fields?.slug) ?? '', excerpt: (view?.data?.post?.fields?.excerpt) ?? '', body: (view?.data?.post?.fields?.body) ?? '', category: view?.data?.post?.fields?.category == null ? this.options.category(view)[0]?.value ?? '' : String(view?.data?.post?.fields?.category), author: view?.data?.post?.fields?.author == null ? this.options.author(view)[0]?.value ?? '' : String(view?.data?.post?.fields?.author), tags: view?.data?.post?.fields?.tags == null ? '' : (view?.data?.post?.fields?.tags).join(', '), cover: (view?.data?.post?.fields?.cover) ?? '', cover_alt: (view?.data?.post?.fields?.cover_alt) ?? '', featured: (view?.data?.post?.fields?.featured) ?? false }, [], scope ?? {});
   },
   options: {
     category: (/** @type {any} */ view) => ((view?.topics) ?? []).map((/** @type {any} */ o) => ({ value: o.value, label: String(o.label) })),
@@ -453,17 +538,29 @@ const formEditArticleUnpublish = {
   inputs(values, scope) {
     return { title: values.title, slug: values.slug, excerpt: values.excerpt, body: values.body, category: values.category, author: values.author, tags: values.tags, cover: values.cover, cover_alt: values.cover_alt, featured: values.featured, article: scope.view?.article_id, expected_version: scope.view?.article_version, status: "draft" };
   },
+  /** @param {Record<string, any>} raw */
+  submitted(raw) {
+    return { title: String(raw.title ?? ''), slug: String(raw.slug ?? ''), excerpt: String(raw.excerpt ?? ''), body: String(raw.body ?? ''), category: String(raw.category ?? ''), author: String(raw.author ?? ''), tags: String(raw.tags ?? ''), cover: String(raw.cover ?? ''), cover_alt: String(raw.cover_alt ?? ''), featured: raw.featured === true };
+  },
+  /**
+   * @param {any} _scope
+   * @returns {{ contract: string, inputs: Record<string, any> } | null}
+   */
+  then(_scope) {
+    return null;
+  },
   /** @param {any} scope */
   succeeded(scope) {
-    return { navigate: hrefFor('screen-desk-edit', { slug: scope.response?.slug }), toast: 'Moved back to drafts.' };
+    return { navigate: hrefFor('screen-desk-edit', { slug: scope.response?.slug }), toast: 'Moved back to drafts.', view: { article_id: scope.response?.article_id, article_version: scope.response?.version } };
   },
 };
 
 /** Form `form-settings` of screen `screen-desk-settings`: calls `save-site-settings`. */
 const formSettings = {
-  /** @param {any} view */
-  initial(view) {
-    return this.derive({ name: '', tagline: '', accent: this.options.accent(view)[0]?.value ?? '', paper: this.options.paper(view)[0]?.value ?? '' }, [], { view });
+  /** @param {any} scope */
+  initial(scope) {
+    const view = scope?.view;
+    return this.derive({ name: (view?.data?.site?.fields?.name) ?? '', tagline: (view?.data?.site?.fields?.tagline) ?? '', accent: (view?.data?.site?.fields?.accent) ?? this.options.accent(view)[0]?.value ?? '', paper: (view?.data?.site?.fields?.paper) ?? this.options.paper(view)[0]?.value ?? '' }, [], scope ?? {});
   },
   options: {
     accent: (/** @type {any} */ view) => ((view?.accents) ?? []).map((/** @type {any} */ o) => ({ value: o, label: String(o) })),
@@ -491,9 +588,20 @@ const formSettings = {
   inputs(values, scope) {
     return { name: values.name, tagline: values.tagline, accent: values.accent, paper: values.paper, expected_version: scope.view?.publication_version, publication: scope.view?.publication_id };
   },
-  /** @param {any} _scope */
-  succeeded(_scope) {
-    return { navigate: null, toast: 'Settings saved.' };
+  /** @param {Record<string, any>} raw */
+  submitted(raw) {
+    return { name: String(raw.name ?? ''), tagline: String(raw.tagline ?? ''), accent: String(raw.accent ?? ''), paper: String(raw.paper ?? '') };
+  },
+  /**
+   * @param {any} _scope
+   * @returns {{ contract: string, inputs: Record<string, any> } | null}
+   */
+  then(_scope) {
+    return null;
+  },
+  /** @param {any} scope */
+  succeeded(scope) {
+    return { navigate: null, toast: 'Settings saved.', view: { publication_version: scope.response?.version } };
   },
 };
 
@@ -521,14 +629,26 @@ function of(form) {
 }
 
 /**
- * The values of a new form on a screen with this view model: empty texts, unchecked boxes, the
- * first choice of a select or radio, and the derived fields derived.
+ * The values of a form as it opens on a screen with this scope (`scope.view` its view model):
+ * the values its fields take from the view model, else empty texts, unchecked boxes and the
+ * first choice of a select or radio; and the derived fields derived.
  * @param {string} form
- * @param {any} view
+ * @param {any} scope
  * @returns {Record<string, any>}
  */
-export function initialValues(form, view) {
-  return of(form).initial(view);
+export function initialValues(form, scope) {
+  return of(form).initial(scope);
+}
+
+/**
+ * The values of a submission as the form holds them: texts (trimmed where the field says so)
+ * and checkboxes.
+ * @param {string} form
+ * @param {Record<string, any>} raw
+ * @returns {Record<string, any>}
+ */
+export function submitted(form, raw) {
+  return of(form).submitted(raw);
 }
 
 /**
@@ -583,12 +703,45 @@ export function inputs(form, values, scope) {
 }
 
 /**
- * What an accepted submission does: the address to open (or null) and the message to show (or
- * null). `scope.form` holds the submitted values and `scope.response` the outputs.
+ * The second call of a form, made when the first succeeds: its contract and inputs, or null.
+ * `scope.form` holds the submitted values and `scope.response` the first call's outputs.
  * @param {string} form
  * @param {any} scope
- * @returns {{ navigate: string | null, toast: string | null }}
+ * @returns {{ contract: string, inputs: Record<string, any> } | null}
+ */
+export function followUp(form, scope) {
+  return of(form).then(scope);
+}
+
+/**
+ * The outputs of a form's calls: the first's, with the second's where it has one.
+ * @param {any} first
+ * @param {any} second
+ * @returns {any}
+ */
+export function bothResponses(first, second) {
+  return { ...first, ...Object.fromEntries(Object.entries(second ?? {}).filter(([, v]) => v !== undefined)) };
+}
+
+/**
+ * What an accepted submission does: the address to open (or null), the message to show (or
+ * null) and the view-model outputs it sets (or null), which hold until the view model is read
+ * again. `scope.form` holds the submitted values and `scope.response` the outputs.
+ * @param {string} form
+ * @param {any} scope
+ * @returns {{ navigate: string | null, toast: string | null, view: Record<string, any> | null }}
  */
 export function succeeded(form, scope) {
   return of(form).succeeded(scope);
+}
+
+/**
+ * The view-model outputs a form holds while it has unsaved changes (those its success sets),
+ * as this view model has them.
+ * @param {string} form
+ * @param {any} view
+ * @returns {Record<string, any>}
+ */
+export function held(form, view) {
+  return Object.fromEntries((FORMS[form]?.holds ?? []).map((name) => [name, view?.[name]]));
 }
