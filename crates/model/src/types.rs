@@ -630,6 +630,12 @@ pub enum RunState {
     /// The value `cancelled`.
     #[serde(rename = "cancelled")]
     Cancelled,
+    /// The value `compensating`.
+    #[serde(rename = "compensating")]
+    Compensating,
+    /// The value `awaiting-approval`.
+    #[serde(rename = "awaiting-approval")]
+    AwaitingApproval,
 }
 
 impl RunState {
@@ -640,6 +646,8 @@ impl RunState {
             Self::Completed => "completed",
             Self::Failed => "failed",
             Self::Cancelled => "cancelled",
+            Self::Compensating => "compensating",
+            Self::AwaitingApproval => "awaiting-approval",
         }
     }
 }
@@ -696,6 +704,9 @@ pub enum MessageState {
     /// The value `failed`.
     #[serde(rename = "failed")]
     Failed,
+    /// The value `discarded`.
+    #[serde(rename = "discarded")]
+    Discarded,
 }
 
 impl MessageState {
@@ -706,6 +717,7 @@ impl MessageState {
             Self::Submitted => "submitted",
             Self::Sent => "sent",
             Self::Failed => "failed",
+            Self::Discarded => "discarded",
         }
     }
 }

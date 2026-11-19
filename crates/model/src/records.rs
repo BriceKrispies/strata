@@ -1536,6 +1536,35 @@ pub struct RecJob {
         skip_serializing_if = "Option::is_none"
     )]
     pub accepted_token: Option<u64>,
+    /// Field `errors`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub errors: Option<u32>,
+    /// Field `failed-at`.
+    #[serde(rename = "failed-at", default, skip_serializing_if = "Option::is_none")]
+    pub failed_at: Option<prelude::Timestamp>,
+    /// Field `gap`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gap: Option<i64>,
+    /// Field `prev-gap`.
+    #[serde(rename = "prev-gap", default, skip_serializing_if = "Option::is_none")]
+    pub prev_gap: Option<i64>,
+    /// Field `offered-at`.
+    #[serde(
+        rename = "offered-at",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub offered_at: Option<prelude::Timestamp>,
+    /// Field `cancelled`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cancelled: Option<bool>,
+    /// Field `attempts-at-cancel`.
+    #[serde(
+        rename = "attempts-at-cancel",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub attempts_at_cancel: Option<u64>,
 }
 
 /// The key of a [`RecJob`]: `job-id`.
@@ -1595,6 +1624,19 @@ pub struct RecSchedule {
     /// Field `next-due`.
     #[serde(rename = "next-due")]
     pub next_due: prelude::Timestamp,
+    /// Field `created`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created: Option<u64>,
+    /// Field `completions`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completions: Option<u64>,
+    /// Field `created-at-pause`.
+    #[serde(
+        rename = "created-at-pause",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub created_at_pause: Option<u64>,
 }
 
 /// The key of a [`RecSchedule`]: `schedule-id`.
@@ -1655,6 +1697,35 @@ pub struct RecWorkflowRun {
     pub state: types::RunState,
     /// Field `step`.
     pub step: u64,
+    /// Field `executions`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub executions: Option<u64>,
+    /// Field `completed`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completed: Option<u64>,
+    /// Field `compensated`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compensated: Option<u64>,
+    /// Field `last-comp`.
+    #[serde(rename = "last-comp", default, skip_serializing_if = "Option::is_none")]
+    pub last_comp: Option<u64>,
+    /// Field `prev-comp`.
+    #[serde(rename = "prev-comp", default, skip_serializing_if = "Option::is_none")]
+    pub prev_comp: Option<u64>,
+    /// Field `permitted-approvals`.
+    #[serde(
+        rename = "permitted-approvals",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub permitted_approvals: Option<u32>,
+    /// Field `refused-approvals`.
+    #[serde(
+        rename = "refused-approvals",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub refused_approvals: Option<u32>,
 }
 
 /// The key of a [`RecWorkflowRun`]: `run-id`.
@@ -3550,6 +3621,27 @@ pub struct RecMailMessage {
         skip_serializing_if = "Option::is_none"
     )]
     pub provider_reference: Option<String>,
+    /// Field `credential-reads`.
+    #[serde(
+        rename = "credential-reads",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub credential_reads: Option<u64>,
+    /// Field `fail-reason`.
+    #[serde(
+        rename = "fail-reason",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub fail_reason: Option<String>,
+    /// Field `attempts-at-fail`.
+    #[serde(
+        rename = "attempts-at-fail",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub attempts_at_fail: Option<u64>,
 }
 
 /// The key of a [`RecMailMessage`]: `message-id`.
@@ -3695,6 +3787,16 @@ pub struct RecSenderDomain {
     /// Field `signing-key`.
     #[serde(rename = "signing-key")]
     pub signing_key: types::WrappedSecret,
+    /// Field `last-from`.
+    #[serde(rename = "last-from", default, skip_serializing_if = "Option::is_none")]
+    pub last_from: Option<String>,
+    /// Field `last-signed-by`.
+    #[serde(
+        rename = "last-signed-by",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub last_signed_by: Option<String>,
 }
 
 /// The key of a [`RecSenderDomain`]: `domain`.
@@ -5796,6 +5898,1424 @@ impl RecClientVisit {
     pub fn key(&self) -> RecClientVisitKey {
         RecClientVisitKey {
             visit_id: self.visit_id.clone(),
+        }
+    }
+
+    /// Checks the field constraints, returning the first one the record breaks.
+    pub fn validate(&self) -> Result<(), prelude::ConstraintViolation> {
+        Ok(())
+    }
+}
+
+/// Trigger evaluation
+///
+/// Retention: Kept as long as the jobs it created.
+///
+/// Record `rec-trigger-run`, owned by component `automation-worker`, schema version 1.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecTriggerRun {
+    /// Field `correlation`.
+    pub correlation: types::CorrelationId,
+    /// Field `committed`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub committed: Option<u64>,
+    /// Field `jobs`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub jobs: Option<u64>,
+    /// Field `subscribers`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subscribers: Option<u64>,
+}
+
+/// The key of a [`RecTriggerRun`]: `correlation`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecTriggerRunKey {
+    /// Field `correlation`.
+    pub correlation: types::CorrelationId,
+}
+
+impl RecTriggerRun {
+    /// The record's id in the specification.
+    pub const ID: &str = "rec-trigger-run";
+
+    /// The version of the record's stored shape.
+    pub const SCHEMA_VERSION: u32 = 1;
+
+    /// The key fields, by their specification names.
+    pub const KEY: &[&str] = &["correlation"];
+
+    /// Sets of fields whose combined values are unique, by their specification names.
+    pub const UNIQUE: &[&[&str]] = &[];
+
+    /// The record's indexes.
+    pub const INDEXES: &[prelude::Index] = &[];
+
+    /// The fields that hold the key of another record, and what deleting it does.
+    pub const REFERENCES: &[prelude::Reference] = &[];
+
+    /// The record's key.
+    pub fn key(&self) -> RecTriggerRunKey {
+        RecTriggerRunKey {
+            correlation: self.correlation.clone(),
+        }
+    }
+
+    /// Checks the field constraints, returning the first one the record breaks.
+    pub fn validate(&self) -> Result<(), prelude::ConstraintViolation> {
+        Ok(())
+    }
+}
+
+/// Lease attempt
+///
+/// Retention: Kept with the job it belongs to.
+///
+/// Record `rec-lease-attempt`, owned by component `automation-worker`, schema version 1.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecLeaseAttempt {
+    /// Field `job-id`.
+    #[serde(rename = "job-id")]
+    pub job_id: types::JobId,
+    /// Field `token`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token: Option<u64>,
+    /// Field `reachable`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reachable: Option<bool>,
+}
+
+/// The key of a [`RecLeaseAttempt`]: `job-id`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecLeaseAttemptKey {
+    /// Field `job-id`.
+    #[serde(rename = "job-id")]
+    pub job_id: types::JobId,
+}
+
+impl RecLeaseAttempt {
+    /// The record's id in the specification.
+    pub const ID: &str = "rec-lease-attempt";
+
+    /// The version of the record's stored shape.
+    pub const SCHEMA_VERSION: u32 = 1;
+
+    /// The key fields, by their specification names.
+    pub const KEY: &[&str] = &["job-id"];
+
+    /// Sets of fields whose combined values are unique, by their specification names.
+    pub const UNIQUE: &[&[&str]] = &[];
+
+    /// The record's indexes.
+    pub const INDEXES: &[prelude::Index] = &[];
+
+    /// The fields that hold the key of another record, and what deleting it does.
+    pub const REFERENCES: &[prelude::Reference] = &[];
+
+    /// The record's key.
+    pub fn key(&self) -> RecLeaseAttemptKey {
+        RecLeaseAttemptKey {
+            job_id: self.job_id.clone(),
+        }
+    }
+
+    /// Checks the field constraints, returning the first one the record breaks.
+    pub fn validate(&self) -> Result<(), prelude::ConstraintViolation> {
+        Ok(())
+    }
+}
+
+/// Job admission
+///
+/// Retention: Kept while the tenant has due jobs.
+///
+/// Record `rec-job-admission`, owned by component `automation-worker`, schema version 1.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecJobAdmission {
+    /// Field `tenant-id`.
+    #[serde(rename = "tenant-id")]
+    pub tenant_id: types::TenantId,
+    /// Field `backlog`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backlog: Option<u64>,
+    /// Field `released`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub released: Option<u64>,
+    /// Field `batch`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub batch: Option<u64>,
+    /// Field `rate`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rate: Option<u64>,
+    /// Field `ticking`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ticking: Option<bool>,
+    /// Field `other-due-at`.
+    #[serde(
+        rename = "other-due-at",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub other_due_at: Option<prelude::Timestamp>,
+    /// Field `other-started-at`.
+    #[serde(
+        rename = "other-started-at",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub other_started_at: Option<prelude::Timestamp>,
+    /// Field `budget`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub budget: Option<prelude::DurationMs>,
+}
+
+/// The key of a [`RecJobAdmission`]: `tenant-id`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecJobAdmissionKey {
+    /// Field `tenant-id`.
+    #[serde(rename = "tenant-id")]
+    pub tenant_id: types::TenantId,
+}
+
+impl RecJobAdmission {
+    /// The record's id in the specification.
+    pub const ID: &str = "rec-job-admission";
+
+    /// The version of the record's stored shape.
+    pub const SCHEMA_VERSION: u32 = 1;
+
+    /// The key fields, by their specification names.
+    pub const KEY: &[&str] = &["tenant-id"];
+
+    /// Sets of fields whose combined values are unique, by their specification names.
+    pub const UNIQUE: &[&[&str]] = &[];
+
+    /// The record's indexes.
+    pub const INDEXES: &[prelude::Index] = &[];
+
+    /// The fields that hold the key of another record, and what deleting it does.
+    pub const REFERENCES: &[prelude::Reference] = &[];
+
+    /// The record's key.
+    pub fn key(&self) -> RecJobAdmissionKey {
+        RecJobAdmissionKey {
+            tenant_id: self.tenant_id.clone(),
+        }
+    }
+
+    /// Checks the field constraints, returning the first one the record breaks.
+    pub fn validate(&self) -> Result<(), prelude::ConstraintViolation> {
+        Ok(())
+    }
+}
+
+/// Wake scan
+///
+/// Retention: Kept for one scan interval.
+///
+/// Record `rec-wake-scan`, owned by component `automation-worker`, schema version 1.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecWakeScan {
+    /// Field `scan-id`.
+    #[serde(rename = "scan-id")]
+    pub scan_id: types::Identifier,
+    /// Field `scans`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scans: Option<u64>,
+    /// Field `awake-scans`.
+    #[serde(
+        rename = "awake-scans",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub awake_scans: Option<u64>,
+    /// Field `queries`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub queries: Option<u64>,
+}
+
+/// The key of a [`RecWakeScan`]: `scan-id`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecWakeScanKey {
+    /// Field `scan-id`.
+    #[serde(rename = "scan-id")]
+    pub scan_id: types::Identifier,
+}
+
+impl RecWakeScan {
+    /// The record's id in the specification.
+    pub const ID: &str = "rec-wake-scan";
+
+    /// The version of the record's stored shape.
+    pub const SCHEMA_VERSION: u32 = 1;
+
+    /// The key fields, by their specification names.
+    pub const KEY: &[&str] = &["scan-id"];
+
+    /// Sets of fields whose combined values are unique, by their specification names.
+    pub const UNIQUE: &[&[&str]] = &[];
+
+    /// The record's indexes.
+    pub const INDEXES: &[prelude::Index] = &[];
+
+    /// The fields that hold the key of another record, and what deleting it does.
+    pub const REFERENCES: &[prelude::Reference] = &[];
+
+    /// The record's key.
+    pub fn key(&self) -> RecWakeScanKey {
+        RecWakeScanKey {
+            scan_id: self.scan_id.clone(),
+        }
+    }
+
+    /// Checks the field constraints, returning the first one the record breaks.
+    pub fn validate(&self) -> Result<(), prelude::ConstraintViolation> {
+        Ok(())
+    }
+}
+
+/// Bulk change
+///
+/// Retention: Kept with the job it belongs to.
+///
+/// Record `rec-bulk-change`, owned by component `automation-worker`, schema version 1.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecBulkChange {
+    /// Field `job-id`.
+    #[serde(rename = "job-id")]
+    pub job_id: types::JobId,
+    /// Field `state`.
+    pub state: String,
+    /// Field `processed`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub processed: Option<u64>,
+    /// Field `recorded`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recorded: Option<u64>,
+    /// Field `failed`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failed: Option<u64>,
+}
+
+/// The key of a [`RecBulkChange`]: `job-id`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecBulkChangeKey {
+    /// Field `job-id`.
+    #[serde(rename = "job-id")]
+    pub job_id: types::JobId,
+}
+
+impl RecBulkChange {
+    /// The record's id in the specification.
+    pub const ID: &str = "rec-bulk-change";
+
+    /// The version of the record's stored shape.
+    pub const SCHEMA_VERSION: u32 = 1;
+
+    /// The key fields, by their specification names.
+    pub const KEY: &[&str] = &["job-id"];
+
+    /// Sets of fields whose combined values are unique, by their specification names.
+    pub const UNIQUE: &[&[&str]] = &[];
+
+    /// The record's indexes.
+    pub const INDEXES: &[prelude::Index] = &[];
+
+    /// The fields that hold the key of another record, and what deleting it does.
+    pub const REFERENCES: &[prelude::Reference] = &[];
+
+    /// The record's key.
+    pub fn key(&self) -> RecBulkChangeKey {
+        RecBulkChangeKey {
+            job_id: self.job_id.clone(),
+        }
+    }
+
+    /// Checks the field constraints, returning the first one the record breaks.
+    pub fn validate(&self) -> Result<(), prelude::ConstraintViolation> {
+        Ok(())
+    }
+}
+
+/// Workflow definition
+///
+/// Retention: Every version is kept in the schema history of the tenant.
+///
+/// Record `rec-workflow-definition`, owned by component `automation-worker`, schema version 1.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecWorkflowDefinition {
+    /// Field `workflow-id`.
+    #[serde(rename = "workflow-id")]
+    pub workflow_id: types::WorkflowId,
+    /// Field `schema-now`.
+    #[serde(
+        rename = "schema-now",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub schema_now: Option<u64>,
+    /// Field `saved`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub saved: Option<bool>,
+    /// Field `saved-under`.
+    #[serde(
+        rename = "saved-under",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub saved_under: Option<u64>,
+}
+
+/// The key of a [`RecWorkflowDefinition`]: `workflow-id`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecWorkflowDefinitionKey {
+    /// Field `workflow-id`.
+    #[serde(rename = "workflow-id")]
+    pub workflow_id: types::WorkflowId,
+}
+
+impl RecWorkflowDefinition {
+    /// The record's id in the specification.
+    pub const ID: &str = "rec-workflow-definition";
+
+    /// The version of the record's stored shape.
+    pub const SCHEMA_VERSION: u32 = 1;
+
+    /// The key fields, by their specification names.
+    pub const KEY: &[&str] = &["workflow-id"];
+
+    /// Sets of fields whose combined values are unique, by their specification names.
+    pub const UNIQUE: &[&[&str]] = &[];
+
+    /// The record's indexes.
+    pub const INDEXES: &[prelude::Index] = &[];
+
+    /// The fields that hold the key of another record, and what deleting it does.
+    pub const REFERENCES: &[prelude::Reference] = &[];
+
+    /// The record's key.
+    pub fn key(&self) -> RecWorkflowDefinitionKey {
+        RecWorkflowDefinitionKey {
+            workflow_id: self.workflow_id.clone(),
+        }
+    }
+
+    /// Checks the field constraints, returning the first one the record breaks.
+    pub fn validate(&self) -> Result<(), prelude::ConstraintViolation> {
+        Ok(())
+    }
+}
+
+/// Workflow activation
+///
+/// Retention: Kept as long as the definition.
+///
+/// Record `rec-workflow-activation`, owned by component `automation-worker`, schema version 1.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecWorkflowActivation {
+    /// Field `workflow-id`.
+    #[serde(rename = "workflow-id")]
+    pub workflow_id: types::WorkflowId,
+    /// Field `state`.
+    pub state: String,
+    /// Field `projections`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub projections: Option<u32>,
+    /// Field `catalogued`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub catalogued: Option<bool>,
+}
+
+/// The key of a [`RecWorkflowActivation`]: `workflow-id`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecWorkflowActivationKey {
+    /// Field `workflow-id`.
+    #[serde(rename = "workflow-id")]
+    pub workflow_id: types::WorkflowId,
+}
+
+impl RecWorkflowActivation {
+    /// The record's id in the specification.
+    pub const ID: &str = "rec-workflow-activation";
+
+    /// The version of the record's stored shape.
+    pub const SCHEMA_VERSION: u32 = 1;
+
+    /// The key fields, by their specification names.
+    pub const KEY: &[&str] = &["workflow-id"];
+
+    /// Sets of fields whose combined values are unique, by their specification names.
+    pub const UNIQUE: &[&[&str]] = &[];
+
+    /// The record's indexes.
+    pub const INDEXES: &[prelude::Index] = &[];
+
+    /// The fields that hold the key of another record, and what deleting it does.
+    pub const REFERENCES: &[prelude::Reference] = &[];
+
+    /// The record's key.
+    pub fn key(&self) -> RecWorkflowActivationKey {
+        RecWorkflowActivationKey {
+            workflow_id: self.workflow_id.clone(),
+        }
+    }
+
+    /// Checks the field constraints, returning the first one the record breaks.
+    pub fn validate(&self) -> Result<(), prelude::ConstraintViolation> {
+        Ok(())
+    }
+}
+
+/// Template install
+///
+/// Retention: Kept with the change it recorded.
+///
+/// Record `rec-template-install`, owned by component `runtime`, schema version 1.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecTemplateInstall {
+    /// Field `install-id`.
+    #[serde(rename = "install-id")]
+    pub install_id: types::Identifier,
+    /// Field `state`.
+    pub state: String,
+    /// Field `reviews`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reviews: Option<u32>,
+}
+
+/// The key of a [`RecTemplateInstall`]: `install-id`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecTemplateInstallKey {
+    /// Field `install-id`.
+    #[serde(rename = "install-id")]
+    pub install_id: types::Identifier,
+}
+
+impl RecTemplateInstall {
+    /// The record's id in the specification.
+    pub const ID: &str = "rec-template-install";
+
+    /// The version of the record's stored shape.
+    pub const SCHEMA_VERSION: u32 = 1;
+
+    /// The key fields, by their specification names.
+    pub const KEY: &[&str] = &["install-id"];
+
+    /// Sets of fields whose combined values are unique, by their specification names.
+    pub const UNIQUE: &[&[&str]] = &[];
+
+    /// The record's indexes.
+    pub const INDEXES: &[prelude::Index] = &[];
+
+    /// The fields that hold the key of another record, and what deleting it does.
+    pub const REFERENCES: &[prelude::Reference] = &[];
+
+    /// The record's key.
+    pub fn key(&self) -> RecTemplateInstallKey {
+        RecTemplateInstallKey {
+            install_id: self.install_id.clone(),
+        }
+    }
+
+    /// Checks the field constraints, returning the first one the record breaks.
+    pub fn validate(&self) -> Result<(), prelude::ConstraintViolation> {
+        Ok(())
+    }
+}
+
+/// Approval task
+///
+/// Retention: Until its recipients have acted on it or removed it.
+///
+/// Record `rec-approval-task`, owned by component `notification-service`, schema version 1.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecApprovalTask {
+    /// Field `task-id`.
+    #[serde(rename = "task-id")]
+    pub task_id: types::Identifier,
+    /// Field `named-evaluated`.
+    #[serde(
+        rename = "named-evaluated",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub named_evaluated: Option<u32>,
+    /// Field `items-named`.
+    #[serde(
+        rename = "items-named",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub items_named: Option<u32>,
+    /// Field `items-other`.
+    #[serde(
+        rename = "items-other",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub items_other: Option<u32>,
+}
+
+/// The key of a [`RecApprovalTask`]: `task-id`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecApprovalTaskKey {
+    /// Field `task-id`.
+    #[serde(rename = "task-id")]
+    pub task_id: types::Identifier,
+}
+
+impl RecApprovalTask {
+    /// The record's id in the specification.
+    pub const ID: &str = "rec-approval-task";
+
+    /// The version of the record's stored shape.
+    pub const SCHEMA_VERSION: u32 = 1;
+
+    /// The key fields, by their specification names.
+    pub const KEY: &[&str] = &["task-id"];
+
+    /// Sets of fields whose combined values are unique, by their specification names.
+    pub const UNIQUE: &[&[&str]] = &[];
+
+    /// The record's indexes.
+    pub const INDEXES: &[prelude::Index] = &[];
+
+    /// The fields that hold the key of another record, and what deleting it does.
+    pub const REFERENCES: &[prelude::Reference] = &[];
+
+    /// The record's key.
+    pub fn key(&self) -> RecApprovalTaskKey {
+        RecApprovalTaskKey {
+            task_id: self.task_id.clone(),
+        }
+    }
+
+    /// Checks the field constraints, returning the first one the record breaks.
+    pub fn validate(&self) -> Result<(), prelude::ConstraintViolation> {
+        Ok(())
+    }
+}
+
+/// Call step
+///
+/// Retention: Ninety days after the run it belongs to ends.
+///
+/// Record `rec-call-step`, owned by component `connector-runner`, schema version 1.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecCallStep {
+    /// Field `step-id`.
+    #[serde(rename = "step-id")]
+    pub step_id: types::Identifier,
+    /// Field `state`.
+    pub state: String,
+    /// Field `calls`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub calls: Option<u32>,
+}
+
+/// The key of a [`RecCallStep`]: `step-id`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecCallStepKey {
+    /// Field `step-id`.
+    #[serde(rename = "step-id")]
+    pub step_id: types::Identifier,
+}
+
+impl RecCallStep {
+    /// The record's id in the specification.
+    pub const ID: &str = "rec-call-step";
+
+    /// The version of the record's stored shape.
+    pub const SCHEMA_VERSION: u32 = 1;
+
+    /// The key fields, by their specification names.
+    pub const KEY: &[&str] = &["step-id"];
+
+    /// Sets of fields whose combined values are unique, by their specification names.
+    pub const UNIQUE: &[&[&str]] = &[];
+
+    /// The record's indexes.
+    pub const INDEXES: &[prelude::Index] = &[];
+
+    /// The fields that hold the key of another record, and what deleting it does.
+    pub const REFERENCES: &[prelude::Reference] = &[];
+
+    /// The record's key.
+    pub fn key(&self) -> RecCallStepKey {
+        RecCallStepKey {
+            step_id: self.step_id.clone(),
+        }
+    }
+
+    /// Checks the field constraints, returning the first one the record breaks.
+    pub fn validate(&self) -> Result<(), prelude::ConstraintViolation> {
+        Ok(())
+    }
+}
+
+/// Outbound call
+///
+/// Retention: Thirty days after the call ends.
+///
+/// Record `rec-outbound-call`, owned by component `outbound-gate`, schema version 1.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecOutboundCall {
+    /// Field `call-id`.
+    #[serde(rename = "call-id")]
+    pub call_id: types::Identifier,
+    /// Field `state`.
+    pub state: String,
+    /// Field `connected-net`.
+    #[serde(
+        rename = "connected-net",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub connected_net: Option<String>,
+    /// Field `redirect-net`.
+    #[serde(
+        rename = "redirect-net",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub redirect_net: Option<String>,
+    /// Field `received`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub received: Option<u64>,
+    /// Field `limit`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u64>,
+}
+
+/// The key of a [`RecOutboundCall`]: `call-id`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecOutboundCallKey {
+    /// Field `call-id`.
+    #[serde(rename = "call-id")]
+    pub call_id: types::Identifier,
+}
+
+impl RecOutboundCall {
+    /// The record's id in the specification.
+    pub const ID: &str = "rec-outbound-call";
+
+    /// The version of the record's stored shape.
+    pub const SCHEMA_VERSION: u32 = 1;
+
+    /// The key fields, by their specification names.
+    pub const KEY: &[&str] = &["call-id"];
+
+    /// Sets of fields whose combined values are unique, by their specification names.
+    pub const UNIQUE: &[&[&str]] = &[];
+
+    /// The record's indexes.
+    pub const INDEXES: &[prelude::Index] = &[];
+
+    /// The fields that hold the key of another record, and what deleting it does.
+    pub const REFERENCES: &[prelude::Reference] = &[];
+
+    /// The record's key.
+    pub fn key(&self) -> RecOutboundCallKey {
+        RecOutboundCallKey {
+            call_id: self.call_id.clone(),
+        }
+    }
+
+    /// Checks the field constraints, returning the first one the record breaks.
+    pub fn validate(&self) -> Result<(), prelude::ConstraintViolation> {
+        Ok(())
+    }
+}
+
+/// Webhook delivery
+///
+/// Retention: Thirty days after the last attempt.
+///
+/// Record `rec-webhook-delivery`, owned by component `automation-worker`, schema version 1.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecWebhookDelivery {
+    /// Field `delivery-id`.
+    #[serde(rename = "delivery-id")]
+    pub delivery_id: types::Identifier,
+    /// Field `target`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
+    /// Field `signed-by`.
+    #[serde(rename = "signed-by", default, skip_serializing_if = "Option::is_none")]
+    pub signed_by: Option<String>,
+    /// Field `attempts`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attempts: Option<u32>,
+    /// Field `log-attempts`.
+    #[serde(
+        rename = "log-attempts",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub log_attempts: Option<u32>,
+    /// Field `last-status`.
+    #[serde(
+        rename = "last-status",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub last_status: Option<u32>,
+    /// Field `log-status`.
+    #[serde(
+        rename = "log-status",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub log_status: Option<u32>,
+}
+
+/// The key of a [`RecWebhookDelivery`]: `delivery-id`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecWebhookDeliveryKey {
+    /// Field `delivery-id`.
+    #[serde(rename = "delivery-id")]
+    pub delivery_id: types::Identifier,
+}
+
+impl RecWebhookDelivery {
+    /// The record's id in the specification.
+    pub const ID: &str = "rec-webhook-delivery";
+
+    /// The version of the record's stored shape.
+    pub const SCHEMA_VERSION: u32 = 1;
+
+    /// The key fields, by their specification names.
+    pub const KEY: &[&str] = &["delivery-id"];
+
+    /// Sets of fields whose combined values are unique, by their specification names.
+    pub const UNIQUE: &[&[&str]] = &[];
+
+    /// The record's indexes.
+    pub const INDEXES: &[prelude::Index] = &[];
+
+    /// The fields that hold the key of another record, and what deleting it does.
+    pub const REFERENCES: &[prelude::Reference] = &[];
+
+    /// The record's key.
+    pub fn key(&self) -> RecWebhookDeliveryKey {
+        RecWebhookDeliveryKey {
+            delivery_id: self.delivery_id.clone(),
+        }
+    }
+
+    /// Checks the field constraints, returning the first one the record breaks.
+    pub fn validate(&self) -> Result<(), prelude::ConstraintViolation> {
+        Ok(())
+    }
+}
+
+/// Scheduled publication
+///
+/// Retention: Until the record is published or its publication time is removed.
+///
+/// Record `rec-scheduled-publication`, owned by component `automation-worker`, schema version 1.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecScheduledPublication {
+    /// Field `record-id`.
+    #[serde(rename = "record-id")]
+    pub record_id: types::RecordId,
+    /// Field `state`.
+    pub state: String,
+    /// Field `publish-at`.
+    #[serde(
+        rename = "publish-at",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub publish_at: Option<prelude::Timestamp>,
+    /// Field `job-runs`.
+    #[serde(rename = "job-runs", default, skip_serializing_if = "Option::is_none")]
+    pub job_runs: Option<u32>,
+    /// Field `published-at`.
+    #[serde(
+        rename = "published-at",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub published_at: Option<prelude::Timestamp>,
+}
+
+/// The key of a [`RecScheduledPublication`]: `record-id`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecScheduledPublicationKey {
+    /// Field `record-id`.
+    #[serde(rename = "record-id")]
+    pub record_id: types::RecordId,
+}
+
+impl RecScheduledPublication {
+    /// The record's id in the specification.
+    pub const ID: &str = "rec-scheduled-publication";
+
+    /// The version of the record's stored shape.
+    pub const SCHEMA_VERSION: u32 = 1;
+
+    /// The key fields, by their specification names.
+    pub const KEY: &[&str] = &["record-id"];
+
+    /// Sets of fields whose combined values are unique, by their specification names.
+    pub const UNIQUE: &[&[&str]] = &[];
+
+    /// The record's indexes.
+    pub const INDEXES: &[prelude::Index] = &[];
+
+    /// The fields that hold the key of another record, and what deleting it does.
+    pub const REFERENCES: &[prelude::Reference] = &[];
+
+    /// The record's key.
+    pub fn key(&self) -> RecScheduledPublicationKey {
+        RecScheduledPublicationKey {
+            record_id: self.record_id.clone(),
+        }
+    }
+
+    /// Checks the field constraints, returning the first one the record breaks.
+    pub fn validate(&self) -> Result<(), prelude::ConstraintViolation> {
+        Ok(())
+    }
+}
+
+/// Inbound delivery
+///
+/// Retention: Ninety days after the delivery.
+///
+/// Record `rec-inbound-delivery`, owned by component `automation-worker`, schema version 1.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecInboundDelivery {
+    /// Field `delivery-id`.
+    #[serde(rename = "delivery-id")]
+    pub delivery_id: types::Identifier,
+    /// Field `runs`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runs: Option<u32>,
+    /// Field `rejected`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rejected: Option<u32>,
+}
+
+/// The key of a [`RecInboundDelivery`]: `delivery-id`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecInboundDeliveryKey {
+    /// Field `delivery-id`.
+    #[serde(rename = "delivery-id")]
+    pub delivery_id: types::Identifier,
+}
+
+impl RecInboundDelivery {
+    /// The record's id in the specification.
+    pub const ID: &str = "rec-inbound-delivery";
+
+    /// The version of the record's stored shape.
+    pub const SCHEMA_VERSION: u32 = 1;
+
+    /// The key fields, by their specification names.
+    pub const KEY: &[&str] = &["delivery-id"];
+
+    /// Sets of fields whose combined values are unique, by their specification names.
+    pub const UNIQUE: &[&[&str]] = &[];
+
+    /// The record's indexes.
+    pub const INDEXES: &[prelude::Index] = &[];
+
+    /// The fields that hold the key of another record, and what deleting it does.
+    pub const REFERENCES: &[prelude::Reference] = &[];
+
+    /// The record's key.
+    pub fn key(&self) -> RecInboundDeliveryKey {
+        RecInboundDeliveryKey {
+            delivery_id: self.delivery_id.clone(),
+        }
+    }
+
+    /// Checks the field constraints, returning the first one the record breaks.
+    pub fn validate(&self) -> Result<(), prelude::ConstraintViolation> {
+        Ok(())
+    }
+}
+
+/// Mail request
+///
+/// Retention: Kept as long as the mail job it created.
+///
+/// Record `rec-mail-request`, owned by component `mail-dispatcher`, schema version 1.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecMailRequest {
+    /// Field `change-id`.
+    #[serde(rename = "change-id")]
+    pub change_id: types::CorrelationId,
+    /// Field `committed`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub committed: Option<u64>,
+    /// Field `jobs`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub jobs: Option<u64>,
+}
+
+/// The key of a [`RecMailRequest`]: `change-id`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecMailRequestKey {
+    /// Field `change-id`.
+    #[serde(rename = "change-id")]
+    pub change_id: types::CorrelationId,
+}
+
+impl RecMailRequest {
+    /// The record's id in the specification.
+    pub const ID: &str = "rec-mail-request";
+
+    /// The version of the record's stored shape.
+    pub const SCHEMA_VERSION: u32 = 1;
+
+    /// The key fields, by their specification names.
+    pub const KEY: &[&str] = &["change-id"];
+
+    /// Sets of fields whose combined values are unique, by their specification names.
+    pub const UNIQUE: &[&[&str]] = &[];
+
+    /// The record's indexes.
+    pub const INDEXES: &[prelude::Index] = &[];
+
+    /// The fields that hold the key of another record, and what deleting it does.
+    pub const REFERENCES: &[prelude::Reference] = &[];
+
+    /// The record's key.
+    pub fn key(&self) -> RecMailRequestKey {
+        RecMailRequestKey {
+            change_id: self.change_id.clone(),
+        }
+    }
+
+    /// Checks the field constraints, returning the first one the record breaks.
+    pub fn validate(&self) -> Result<(), prelude::ConstraintViolation> {
+        Ok(())
+    }
+}
+
+/// Mail quota
+///
+/// Retention: Kept for the quota window.
+///
+/// Record `rec-mail-quota`, owned by component `mail-dispatcher`, schema version 1.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecMailQuota {
+    /// Field `tenant-id`.
+    #[serde(rename = "tenant-id")]
+    pub tenant_id: types::TenantId,
+    /// Field `quota`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quota: Option<u32>,
+    /// Field `used-a`.
+    #[serde(rename = "used-a", default, skip_serializing_if = "Option::is_none")]
+    pub used_a: Option<u32>,
+    /// Field `used-b`.
+    #[serde(rename = "used-b", default, skip_serializing_if = "Option::is_none")]
+    pub used_b: Option<u32>,
+    /// Field `held-a`.
+    #[serde(rename = "held-a", default, skip_serializing_if = "Option::is_none")]
+    pub held_a: Option<u32>,
+    /// Field `held-b`.
+    #[serde(rename = "held-b", default, skip_serializing_if = "Option::is_none")]
+    pub held_b: Option<u32>,
+    /// Field `signins`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signins: Option<u32>,
+    /// Field `signins-sent`.
+    #[serde(
+        rename = "signins-sent",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub signins_sent: Option<u32>,
+}
+
+/// The key of a [`RecMailQuota`]: `tenant-id`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecMailQuotaKey {
+    /// Field `tenant-id`.
+    #[serde(rename = "tenant-id")]
+    pub tenant_id: types::TenantId,
+}
+
+impl RecMailQuota {
+    /// The record's id in the specification.
+    pub const ID: &str = "rec-mail-quota";
+
+    /// The version of the record's stored shape.
+    pub const SCHEMA_VERSION: u32 = 1;
+
+    /// The key fields, by their specification names.
+    pub const KEY: &[&str] = &["tenant-id"];
+
+    /// Sets of fields whose combined values are unique, by their specification names.
+    pub const UNIQUE: &[&[&str]] = &[];
+
+    /// The record's indexes.
+    pub const INDEXES: &[prelude::Index] = &[];
+
+    /// The fields that hold the key of another record, and what deleting it does.
+    pub const REFERENCES: &[prelude::Reference] = &[];
+
+    /// The record's key.
+    pub fn key(&self) -> RecMailQuotaKey {
+        RecMailQuotaKey {
+            tenant_id: self.tenant_id.clone(),
+        }
+    }
+
+    /// Checks the field constraints, returning the first one the record breaks.
+    pub fn validate(&self) -> Result<(), prelude::ConstraintViolation> {
+        Ok(())
+    }
+}
+
+/// Mail provider use
+///
+/// Retention: Thirty days after the send.
+///
+/// Record `rec-mail-provider-use`, owned by component `mail-dispatcher`, schema version 1.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecMailProviderUse {
+    /// Field `use-id`.
+    #[serde(rename = "use-id")]
+    pub use_id: types::Identifier,
+    /// Field `configured`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub configured: Option<String>,
+    /// Field `startup-provider`.
+    #[serde(
+        rename = "startup-provider",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub startup_provider: Option<String>,
+    /// Field `used-provider`.
+    #[serde(
+        rename = "used-provider",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub used_provider: Option<String>,
+    /// Field `configured-at-send`.
+    #[serde(
+        rename = "configured-at-send",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub configured_at_send: Option<String>,
+    /// Field `sends`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sends: Option<u32>,
+}
+
+/// The key of a [`RecMailProviderUse`]: `use-id`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecMailProviderUseKey {
+    /// Field `use-id`.
+    #[serde(rename = "use-id")]
+    pub use_id: types::Identifier,
+}
+
+impl RecMailProviderUse {
+    /// The record's id in the specification.
+    pub const ID: &str = "rec-mail-provider-use";
+
+    /// The version of the record's stored shape.
+    pub const SCHEMA_VERSION: u32 = 1;
+
+    /// The key fields, by their specification names.
+    pub const KEY: &[&str] = &["use-id"];
+
+    /// Sets of fields whose combined values are unique, by their specification names.
+    pub const UNIQUE: &[&[&str]] = &[];
+
+    /// The record's indexes.
+    pub const INDEXES: &[prelude::Index] = &[];
+
+    /// The fields that hold the key of another record, and what deleting it does.
+    pub const REFERENCES: &[prelude::Reference] = &[];
+
+    /// The record's key.
+    pub fn key(&self) -> RecMailProviderUseKey {
+        RecMailProviderUseKey {
+            use_id: self.use_id.clone(),
+        }
+    }
+
+    /// Checks the field constraints, returning the first one the record breaks.
+    pub fn validate(&self) -> Result<(), prelude::ConstraintViolation> {
+        Ok(())
+    }
+}
+
+/// Mail log read
+///
+/// Retention: Thirty days after the read.
+///
+/// Record `rec-mail-log-read`, owned by component `mail-dispatcher`, schema version 1.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecMailLogRead {
+    /// Field `read-id`.
+    #[serde(rename = "read-id")]
+    pub read_id: types::Identifier,
+    /// Field `returned`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub returned: Option<u32>,
+    /// Field `denied`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub denied: Option<u32>,
+}
+
+/// The key of a [`RecMailLogRead`]: `read-id`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecMailLogReadKey {
+    /// Field `read-id`.
+    #[serde(rename = "read-id")]
+    pub read_id: types::Identifier,
+}
+
+impl RecMailLogRead {
+    /// The record's id in the specification.
+    pub const ID: &str = "rec-mail-log-read";
+
+    /// The version of the record's stored shape.
+    pub const SCHEMA_VERSION: u32 = 1;
+
+    /// The key fields, by their specification names.
+    pub const KEY: &[&str] = &["read-id"];
+
+    /// Sets of fields whose combined values are unique, by their specification names.
+    pub const UNIQUE: &[&[&str]] = &[];
+
+    /// The record's indexes.
+    pub const INDEXES: &[prelude::Index] = &[];
+
+    /// The fields that hold the key of another record, and what deleting it does.
+    pub const REFERENCES: &[prelude::Reference] = &[];
+
+    /// The record's key.
+    pub fn key(&self) -> RecMailLogReadKey {
+        RecMailLogReadKey {
+            read_id: self.read_id.clone(),
+        }
+    }
+
+    /// Checks the field constraints, returning the first one the record breaks.
+    pub fn validate(&self) -> Result<(), prelude::ConstraintViolation> {
+        Ok(())
+    }
+}
+
+/// Mail render
+///
+/// Retention: Thirty days after the render.
+///
+/// Record `rec-mail-render`, owned by component `runtime`, schema version 1.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecMailRender {
+    /// Field `render-id`.
+    #[serde(rename = "render-id")]
+    pub render_id: types::Identifier,
+    /// Field `messages`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub messages: Option<u32>,
+    /// Field `html-parts`.
+    #[serde(
+        rename = "html-parts",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub html_parts: Option<u32>,
+    /// Field `text-parts`.
+    #[serde(
+        rename = "text-parts",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub text_parts: Option<u32>,
+    /// Field `raw-markup`.
+    #[serde(
+        rename = "raw-markup",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub raw_markup: Option<u32>,
+}
+
+/// The key of a [`RecMailRender`]: `render-id`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecMailRenderKey {
+    /// Field `render-id`.
+    #[serde(rename = "render-id")]
+    pub render_id: types::Identifier,
+}
+
+impl RecMailRender {
+    /// The record's id in the specification.
+    pub const ID: &str = "rec-mail-render";
+
+    /// The version of the record's stored shape.
+    pub const SCHEMA_VERSION: u32 = 1;
+
+    /// The key fields, by their specification names.
+    pub const KEY: &[&str] = &["render-id"];
+
+    /// Sets of fields whose combined values are unique, by their specification names.
+    pub const UNIQUE: &[&[&str]] = &[];
+
+    /// The record's indexes.
+    pub const INDEXES: &[prelude::Index] = &[];
+
+    /// The fields that hold the key of another record, and what deleting it does.
+    pub const REFERENCES: &[prelude::Reference] = &[];
+
+    /// The record's key.
+    pub fn key(&self) -> RecMailRenderKey {
+        RecMailRenderKey {
+            render_id: self.render_id.clone(),
+        }
+    }
+
+    /// Checks the field constraints, returning the first one the record breaks.
+    pub fn validate(&self) -> Result<(), prelude::ConstraintViolation> {
+        Ok(())
+    }
+}
+
+/// Delivery report
+///
+/// Retention: Thirty days after the report.
+///
+/// Record `rec-delivery-report`, owned by component `mail-dispatcher`, schema version 1.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecDeliveryReport {
+    /// Field `report-id`.
+    #[serde(rename = "report-id")]
+    pub report_id: types::Identifier,
+    /// Field `accepted`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accepted: Option<u32>,
+    /// Field `must-suppress`.
+    #[serde(
+        rename = "must-suppress",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub must_suppress: Option<u32>,
+    /// Field `suppressed`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub suppressed: Option<u32>,
+    /// Field `rejected`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rejected: Option<u32>,
+}
+
+/// The key of a [`RecDeliveryReport`]: `report-id`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecDeliveryReportKey {
+    /// Field `report-id`.
+    #[serde(rename = "report-id")]
+    pub report_id: types::Identifier,
+}
+
+impl RecDeliveryReport {
+    /// The record's id in the specification.
+    pub const ID: &str = "rec-delivery-report";
+
+    /// The version of the record's stored shape.
+    pub const SCHEMA_VERSION: u32 = 1;
+
+    /// The key fields, by their specification names.
+    pub const KEY: &[&str] = &["report-id"];
+
+    /// Sets of fields whose combined values are unique, by their specification names.
+    pub const UNIQUE: &[&[&str]] = &[];
+
+    /// The record's indexes.
+    pub const INDEXES: &[prelude::Index] = &[];
+
+    /// The fields that hold the key of another record, and what deleting it does.
+    pub const REFERENCES: &[prelude::Reference] = &[];
+
+    /// The record's key.
+    pub fn key(&self) -> RecDeliveryReportKey {
+        RecDeliveryReportKey {
+            report_id: self.report_id.clone(),
+        }
+    }
+
+    /// Checks the field constraints, returning the first one the record breaks.
+    pub fn validate(&self) -> Result<(), prelude::ConstraintViolation> {
+        Ok(())
+    }
+}
+
+/// Audience mail
+///
+/// Retention: Ninety days after the campaign.
+///
+/// Record `rec-audience-mail`, owned by component `mail-dispatcher`, schema version 1.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecAudienceMail {
+    /// Field `campaign-id`.
+    #[serde(rename = "campaign-id")]
+    pub campaign_id: types::Identifier,
+    /// Field `audience-sent`.
+    #[serde(
+        rename = "audience-sent",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub audience_sent: Option<u32>,
+    /// Field `with-unsubscribe`.
+    #[serde(
+        rename = "with-unsubscribe",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub with_unsubscribe: Option<u32>,
+    /// Field `unsubscribed`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unsubscribed: Option<u32>,
+    /// Field `clicks`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clicks: Option<u32>,
+}
+
+/// The key of a [`RecAudienceMail`]: `campaign-id`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecAudienceMailKey {
+    /// Field `campaign-id`.
+    #[serde(rename = "campaign-id")]
+    pub campaign_id: types::Identifier,
+}
+
+impl RecAudienceMail {
+    /// The record's id in the specification.
+    pub const ID: &str = "rec-audience-mail";
+
+    /// The version of the record's stored shape.
+    pub const SCHEMA_VERSION: u32 = 1;
+
+    /// The key fields, by their specification names.
+    pub const KEY: &[&str] = &["campaign-id"];
+
+    /// Sets of fields whose combined values are unique, by their specification names.
+    pub const UNIQUE: &[&[&str]] = &[];
+
+    /// The record's indexes.
+    pub const INDEXES: &[prelude::Index] = &[];
+
+    /// The fields that hold the key of another record, and what deleting it does.
+    pub const REFERENCES: &[prelude::Reference] = &[];
+
+    /// The record's key.
+    pub fn key(&self) -> RecAudienceMailKey {
+        RecAudienceMailKey {
+            campaign_id: self.campaign_id.clone(),
         }
     }
 
