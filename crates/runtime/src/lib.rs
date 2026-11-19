@@ -11,6 +11,8 @@
 //! - [`store`]: the storage traits the host uses, with [`memory`] and [`sqlite`]
 //!   implementations.
 //! - [`clock`]: the [`Clock`] every timer and retry reads, with a [`TestClock`] for tests.
+//! - [`routes`] and [`client`]: serving a contract over axum and calling one from another
+//!   component.
 //! - [`telemetry`]: the [`Telemetry`] hooks the runtime reports through.
 //!
 //! The crate knows nothing about tenants, identity or content: it depends on no other Strata
@@ -18,14 +20,17 @@
 
 #![forbid(unsafe_code)]
 
+pub mod client;
 pub mod clock;
 pub mod host;
 pub mod machine;
 pub mod memory;
+pub mod routes;
 pub mod sqlite;
 pub mod store;
 pub mod telemetry;
 
+pub use client::{CallError, Client, Credentials, NoCredentials};
 pub use clock::{Clock, SystemClock, TestClock, Time};
 pub use host::{
     Committed, DispatchError, DispatchReport, Dispatcher, Envelope, Handled, Host, HostError,
@@ -35,6 +40,10 @@ pub use machine::{
     Delivery, Emit, Isolation, Machine, Outcome, Receiver, RecordError, StepError, TimerCommand,
 };
 pub use memory::MemoryStore;
+pub use routes::{
+    Authorizer, Caller, Contract, ContractError, ContractSpec, Failure, FailureCode, Refusal,
+    Routes, ServiceToken,
+};
 pub use sqlite::{Database, SqliteMachineStore};
 pub use store::{
     MachineStore, NewMessage, NewTimer, OutboxEntry, OutboxStore, RecordStore, StorageError,

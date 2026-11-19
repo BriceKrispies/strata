@@ -36,14 +36,8 @@ fn hmac(key: &[u8], message: &[u8]) -> Vec<u8> {
     outer.finalize().to_vec()
 }
 
-/// Whether two strings are equal, taking the same time whatever they hold.
-pub fn same(a: &str, b: &str) -> bool {
-    a.len() == b.len()
-        && a.bytes()
-            .zip(b.bytes())
-            .fold(0u8, |acc, (x, y)| acc | (x ^ y))
-            == 0
-}
+/// Compare two secrets without stopping at the first difference.
+pub use strata_runtime::routes::same_secret as same;
 
 impl Issuer {
     pub fn new() -> Result<Self, String> {
