@@ -115,6 +115,78 @@ fn wiring_golden_output_matches_its_fixture_crate() {
     );
 }
 
+const CORE_SPEC: &str = "crates/spec-compiler/tests/fixtures/core/spec.jsonc";
+const CORE_CRATE: &str = "strata-spec-compiler-core-fixture";
+
+fn core_text() -> String {
+    fs::read_to_string(manifest_dir().join("tests/fixtures/core/spec.jsonc")).unwrap()
+}
+
+/// The pure crate of unions, maps and constraints: `crates/spec-compiler-core-fixture`, whose
+/// own tests pin the JSON each form serialises to.
+#[test]
+fn core_golden_output_matches_its_fixture_crate() {
+    let dir = manifest_dir().join("../spec-compiler-core-fixture");
+    let files = match strata_spec_compiler::generate_core(CORE_SPEC, &core_text(), CORE_CRATE) {
+        Ok(files) => files,
+        Err(diagnostics) => panic!(
+            "the core fixture was refused:\n{}",
+            diagnostics
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("\n")
+        ),
+    };
+    if std::env::var("SPECC_BLESS").as_deref() == Ok("1") {
+        output::write(&dir, &files).unwrap();
+        return;
+    }
+    let differences = output::compare(&dir, &files).unwrap();
+    assert!(
+        differences.is_empty(),
+        "crates/spec-compiler-core-fixture is not what specc generates from the core fixture: {differences:?}. Run the test with SPECC_BLESS=1 to rewrite it, and review the change."
+    );
+}
+
+/// Split into two crates, the pure crate holds the types that reach no uuid, the model crate
+/// depends on it, re-exports them and its representation types, and declares the rest.
+#[test]
+fn a_split_generation_puts_uuid_types_in_the_model_crate() {
+    let options = Options {
+        crate_name: "fixture-model".to_string(),
+        runtime: RuntimeDependency::Workspace,
+    };
+    let core = strata_spec_compiler::model_core::CoreDependency {
+        crate_name: "fixture-model-core".to_string(),
+        path: "../model-core".to_string(),
+    };
+    let (model, pure) =
+        strata_spec_compiler::generate_with_core(CORE_SPEC, &core_text(), &options, &core).unwrap();
+    let model_types = file_text(&model, "src/types.rs");
+    let pure_types = file_text(&pure, "src/types.rs");
+    assert!(model_types.contains("pub use fixture_model_core::types::*;"));
+    assert!(model_types.contains("pub struct AccountId(pub uuid::Uuid);"));
+    assert!(model_types.contains("pub struct Owner {"));
+    assert!(!model_types.contains("pub enum Expr"));
+    assert!(pure_types.contains("pub enum Expr"));
+    assert!(!pure_types.contains("AccountId"));
+    assert!(file_text(&model, "src/prelude.rs").contains("pub use fixture_model_core::prelude::"));
+    assert!(file_text(&model, "Cargo.toml")
+        .contains("fixture-model-core = { path = \"../model-core\" }"));
+    let pure_manifest = file_text(&pure, "Cargo.toml");
+    for forbidden in ["strata-runtime", "uuid", "tokio"] {
+        assert!(
+            !pure_manifest.contains(forbidden),
+            "{forbidden} in {pure_manifest}"
+        );
+    }
+    // The pure crate alone is the same pure crate.
+    let alone =
+        strata_spec_compiler::generate_core(CORE_SPEC, &core_text(), "fixture-model-core").unwrap();
+    assert_eq!(alone, pure);
+}
+
 #[test]
 fn only_a_specification_with_machines_gets_a_machines_module() {
     let full = fixture_files();

@@ -1,8 +1,8 @@
 //! The `specc` command.
 //!
 //! ```text
-//! specc generate     --spec <file> --out <dir> [--crate-name <name>] [--runtime <dir>]
-//! specc check        --spec <file> --out <dir> [--crate-name <name>] [--runtime <dir>]
+//! specc generate     --spec <file> --out <dir> [--crate-name <name>] [--runtime <dir>] [--core-out <dir> [--core-crate-name <name>]]
+//! specc check        --spec <file> --out <dir> [--crate-name <name>] [--runtime <dir>] [--core-out <dir> [--core-crate-name <name>]]
 //! specc deploy       --spec <file> --out <dir>
 //! specc check-deploy --spec <file> --out <dir>
 //! specc e2e          --spec <file> --out <dir>
@@ -34,6 +34,12 @@
 //! <message>` line per diagnostic and exit code 1. Usage errors exit with 2. The crate name
 //! defaults to the last component of `<dir>`.
 //!
+//! `--core-out` splits the generation in two crates (`strata_spec_compiler::model_core`): the pure
+//! crate, written into the `--core-out` directory and named `--core-crate-name` (by default that
+//! directory's last component), holds the representation types and every declared type that reaches
+//! no `uuid`; the crate in `--out` depends on it by relative path and re-exports them. `check` then
+//! compares both directories.
+//!
 //! A crate with implementation-level machines depends on `strata-runtime` by path: `--runtime`
 //! names the runtime crate's directory, by default `crates/runtime` of the Strata checkout specc
 //! was built from, and the manifest holds its path relative to `<dir>`.
@@ -43,12 +49,13 @@ use std::process::ExitCode;
 
 use strata_spec_compiler::emit::relative_path;
 use strata_spec_compiler::{
-    deploy, e2e, generate, output, scenarios, web, GeneratedFile, Options, RuntimeDependency,
+    deploy, e2e, generate, generate_with_core, model_core, output, scenarios, web, GeneratedFile,
+    Options, RuntimeDependency,
 };
 
 const USAGE: &str = "usage:
-  specc generate     --spec <file> --out <dir> [--crate-name <name>] [--runtime <dir>]
-  specc check        --spec <file> --out <dir> [--crate-name <name>] [--runtime <dir>]
+  specc generate     --spec <file> --out <dir> [--crate-name <name>] [--runtime <dir>] [--core-out <dir> [--core-crate-name <name>]]
+  specc check        --spec <file> --out <dir> [--crate-name <name>] [--runtime <dir>] [--core-out <dir> [--core-crate-name <name>]]
   specc deploy       --spec <file> --out <dir>
   specc check-deploy --spec <file> --out <dir>
   specc e2e          --spec <file> --out <dir>
@@ -83,6 +90,8 @@ struct Args {
     runtime: PathBuf,
     exegra_project: Option<String>,
     exegra_specs: Option<PathBuf>,
+    /// The pure crate's directory and package name, when the generation is split.
+    core: Option<(PathBuf, String)>,
 }
 
 fn parse_args(raw: &[String]) -> Result<Args, String> {
@@ -106,6 +115,8 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
     let mut runtime = None;
     let mut exegra_project = None;
     let mut exegra_specs = None;
+    let mut core_out = None;
+    let mut core_crate_name = None;
     let mut iter = rest.iter();
     while let Some(flag) = iter.next() {
         let slot = match flag.as_str() {
@@ -115,6 +126,8 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
             "--runtime" => &mut runtime,
             "--exegra-project" => &mut exegra_project,
             "--exegra-specs" => &mut exegra_specs,
+            "--core-out" => &mut core_out,
+            "--core-crate-name" => &mut core_crate_name,
             other => return Err(format!("unknown argument \"{other}\"")),
         };
         let Some(value) = iter.next() else {
@@ -142,6 +155,31 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
     if !scenario && (exegra_project.is_some() || exegra_specs.is_some()) {
         return Err("--exegra-project and --exegra-specs apply only to scenarios".to_string());
     }
+    let crate_command = matches!(command, Command::Generate | Command::Check);
+    if !crate_command && (core_out.is_some() || core_crate_name.is_some()) {
+        return Err(
+            "--core-out and --core-crate-name apply only to generate and check".to_string(),
+        );
+    }
+    if core_out.is_none() && core_crate_name.is_some() {
+        return Err("--core-crate-name needs --core-out".to_string());
+    }
+    let core = match core_out {
+        None => None,
+        Some(dir) => {
+            let dir = PathBuf::from(dir);
+            let name = match core_crate_name {
+                Some(name) => name,
+                None => dir
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .ok_or(
+                    "--core-out has no last component to name the crate; give --core-crate-name",
+                )?,
+            };
+            Some((dir, name))
+        }
+    };
     let crate_name = match crate_name {
         _ if deploys => String::new(),
         Some(name) => name,
@@ -163,6 +201,7 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
         runtime: PathBuf::from(runtime.unwrap_or_else(|| DEFAULT_RUNTIME.to_string())),
         exegra_project,
         exegra_specs: exegra_specs.map(PathBuf::from),
+        core,
     })
 }
 
@@ -205,6 +244,9 @@ fn main() -> ExitCode {
         crate_name: args.crate_name.clone(),
         runtime: RuntimeDependency::Path(runtime),
     };
+    if let Some((core_out, core_name)) = &args.core {
+        return run_split(&args, &text, &options, core_out, core_name);
+    }
     let files = match generate(&args.spec, &text, &options) {
         Ok(files) => files,
         Err(diagnostics) => {
@@ -231,6 +273,68 @@ fn main() -> ExitCode {
         | Command::CheckScenarios
         | Command::Web
         | Command::CheckWeb => ExitCode::from(2),
+    }
+}
+
+/// `generate` or `check` of a generation split into the model crate and the pure crate.
+fn run_split(
+    args: &Args,
+    text: &str,
+    options: &Options,
+    core_out: &Path,
+    core_name: &str,
+) -> ExitCode {
+    let path = match absolute(&args.out).and_then(|out| {
+        let core = absolute(core_out)?;
+        relative_path(&out, &core).ok_or_else(|| {
+            format!(
+                "{} and {} share no root, so the pure crate cannot be named by a relative path",
+                out.display(),
+                core.display()
+            )
+        })
+    }) {
+        Ok(path) => path,
+        Err(message) => {
+            eprintln!("specc: {message}");
+            return ExitCode::from(1);
+        }
+    };
+    let core = model_core::CoreDependency {
+        crate_name: core_name.to_string(),
+        path,
+    };
+    let (model, pure) = match generate_with_core(&args.spec, text, options, &core) {
+        Ok(files) => files,
+        Err(diagnostics) => {
+            for d in &diagnostics {
+                eprintln!("{d}");
+            }
+            eprintln!(
+                "specc: refused {} with {} diagnostic(s); nothing was written",
+                args.spec,
+                diagnostics.len()
+            );
+            return ExitCode::from(1);
+        }
+    };
+    let run = |out: &Path, files: &[GeneratedFile]| match args.command {
+        Command::Check => run_check(out, files),
+        _ => run_generate(out, files),
+    };
+    let pure_result = run(core_out, &pure);
+    let model_result = run(&args.out, &model);
+    let failed: Vec<String> = [(core_out, pure_result), (args.out.as_path(), model_result)]
+        .iter()
+        .filter(|(_, result)| *result != ExitCode::SUCCESS)
+        .map(|(dir, _)| dir.display().to_string())
+        .collect();
+    if failed.is_empty() {
+        ExitCode::SUCCESS
+    } else {
+        // The last line names every crate that failed, for callers that read only that line.
+        println!("specc: {} failed", failed.join(" and "));
+        ExitCode::from(1)
     }
 }
 
@@ -456,6 +560,45 @@ mod tests {
         assert_eq!(parsed.command, Command::Generate);
         assert_eq!(parsed.crate_name, "my-crate");
         assert_eq!(parsed.runtime, PathBuf::from(DEFAULT_RUNTIME));
+        assert_eq!(parsed.core, None);
+    }
+
+    #[test]
+    fn the_core_crate_is_named_after_its_directory() {
+        let parsed = parse_args(&args(&[
+            "generate",
+            "--spec",
+            "s.jsonc",
+            "--out",
+            "crates/model",
+            "--core-out",
+            "crates/model-core",
+        ]))
+        .unwrap();
+        assert_eq!(
+            parsed.core,
+            Some((PathBuf::from("crates/model-core"), "model-core".to_string()))
+        );
+        assert!(parse_args(&args(&[
+            "web",
+            "--spec",
+            "s",
+            "--out",
+            "o",
+            "--core-out",
+            "c"
+        ]))
+        .is_err());
+        assert!(parse_args(&args(&[
+            "generate",
+            "--spec",
+            "s",
+            "--out",
+            "o",
+            "--core-crate-name",
+            "c"
+        ]))
+        .is_err());
     }
 
     #[test]

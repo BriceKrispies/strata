@@ -20,7 +20,7 @@ use std::collections::BTreeMap;
 use serde_json::Value;
 
 use crate::diagnostic::Diagnostic;
-use crate::ir::{Contract, Event, Spec, TypeKind};
+use crate::ir::{Contract, Event, Spec, StructField, TypeKind};
 use crate::resolve::TypeRef;
 
 /// Code of a struct type reached under two wire cases that name its fields differently.
@@ -170,11 +170,18 @@ fn walk(spec: &Spec) -> (BTreeMap<String, (WireCase, String)>, Vec<Diagnostic>) 
         while let Some(t) = stack.pop() {
             match t {
                 TypeRef::List(inner) | TypeRef::Option(inner) => stack.push(*inner),
+                TypeRef::Map(key, value) => {
+                    stack.push(*key);
+                    stack.push(*value);
+                }
                 TypeRef::Builtin(_) => {}
                 TypeRef::Declared(id) => {
-                    let Some(TypeKind::Struct { fields }) = spec.type_decl(&id).map(|d| &d.kind)
-                    else {
-                        continue;
+                    let fields: Vec<&StructField> = match spec.type_decl(&id).map(|d| &d.kind) {
+                        Some(TypeKind::Struct { fields }) => fields.iter().collect(),
+                        Some(TypeKind::Union { variants, .. }) => {
+                            variants.iter().flat_map(|v| &v.fields).collect()
+                        }
+                        _ => continue,
                     };
                     match cases.get(&id) {
                         Some((seen, _)) if *seen == case => continue,
@@ -245,6 +252,11 @@ impl<'a> WireValues<'a> {
             (TypeRef::List(inner), Value::Array(items)) => {
                 Value::Array(items.iter().map(|i| self.value(inner, i)).collect())
             }
+            (TypeRef::Map(_, value), Value::Object(map)) => Value::Object(
+                map.iter()
+                    .map(|(k, m)| (k.clone(), self.value(value, m)))
+                    .collect(),
+            ),
             (TypeRef::Declared(id), Value::Object(map)) => {
                 let Some(TypeKind::Struct { fields }) = self.spec.type_decl(id).map(|d| &d.kind)
                 else {

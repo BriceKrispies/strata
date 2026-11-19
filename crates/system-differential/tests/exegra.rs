@@ -201,6 +201,7 @@ fn placeholder(spec: &Spec, t: &TypeRef) -> Value {
         },
         TypeRef::List(_) => json!([]),
         TypeRef::Option(_) => Value::Null,
+        TypeRef::Map(..) => json!({}),
         TypeRef::Declared(id) => match spec.type_decl(id).map(|d| &d.kind) {
             Some(TypeKind::Id { repr } | TypeKind::Scalar { repr }) => {
                 placeholder(spec, &TypeRef::parse(repr.as_deref().unwrap_or("string")))
@@ -218,7 +219,8 @@ fn placeholder(spec: &Spec, t: &TypeRef) -> Value {
                     })
                     .collect(),
             ),
-            None => Value::Null,
+            // No record field holds a union yet; its wire form depends on its encoding.
+            Some(TypeKind::Union { .. }) | None => Value::Null,
         },
     }
 }

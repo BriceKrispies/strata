@@ -62,17 +62,54 @@ pub fn toml_header(spec_path: &str) -> String {
 
 /// Every file of the generated crate, sorted by path. Assumes the readiness checks passed.
 pub fn crate_files(spec: &Spec, options: &Options) -> Result<Vec<GeneratedFile>, Vec<Diagnostic>> {
-    let mut files = vec![GeneratedFile {
+    crate_files_with(spec, options, None)
+}
+
+/// As [`crate_files`]; with `core`, the crate depends on the pure crate it names, re-exports its
+/// representation types and the declared types it holds, and declares only the rest.
+pub fn crate_files_with(
+    spec: &Spec,
+    options: &Options,
+    core: Option<&crate::model_core::CoreDependency>,
+) -> Result<Vec<GeneratedFile>, Vec<Diagnostic>> {
+    let core_ident = core.map(|c| c.crate_name.replace('-', "_"));
+    let mut toml = cargo_toml(spec, options);
+    if let Some(c) = core {
+        toml.push_str(&format!(
+            "{} = {{ path = \"{}\" }}\n",
+            c.crate_name,
+            toml_escape(&c.path)
+        ));
+    }
+    let files = vec![GeneratedFile {
         path: "Cargo.toml".to_string(),
-        contents: cargo_toml(spec, options),
+        contents: toml,
     }];
-    let mut errors = Vec::new();
-    let mut modules: Vec<(&str, TokenStream)> = vec![(prelude::MODULE, prelude::emit())];
+    let mut modules: Vec<(&str, TokenStream)> =
+        vec![(prelude::MODULE, prelude::emit_with(core_ident.as_deref()))];
     for backend in BACKENDS.iter().filter(|b| b.wanted(spec)) {
-        modules.push((backend.module(), backend.emit(spec)));
+        let tokens = match &core_ident {
+            Some(krate) if backend.module() == "types" => crate::backend::types::emit(
+                spec,
+                crate::backend::types::Selection::Rest { core_crate: krate },
+            ),
+            _ => backend.emit(spec),
+        };
+        modules.push((backend.module(), tokens));
     }
     let lib = lib_rs(spec, modules.iter().map(|(name, _)| *name));
     modules.push(("lib", lib));
+    rust_files(spec, files, modules)
+}
+
+/// The files of the modules, after `files`, sorted by path; or every diagnostic of a module that
+/// could not be written.
+pub(crate) fn rust_files(
+    spec: &Spec,
+    mut files: Vec<GeneratedFile>,
+    modules: Vec<(&str, TokenStream)>,
+) -> Result<Vec<GeneratedFile>, Vec<Diagnostic>> {
+    let mut errors = Vec::new();
     for (module, tokens) in modules {
         match rust_file(spec, tokens) {
             Ok(contents) => files.push(GeneratedFile {
@@ -256,7 +293,7 @@ fn cargo_toml(spec: &Spec, options: &Options) -> String {
 }
 
 /// `text` as the inside of a TOML basic string.
-fn toml_escape(text: &str) -> String {
+pub(crate) fn toml_escape(text: &str) -> String {
     text.replace('\\', "\\\\").replace('"', "\\\"")
 }
 

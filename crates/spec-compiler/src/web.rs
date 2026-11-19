@@ -361,6 +361,8 @@ pub(crate) fn raw_ty(t: &TypeRef) -> Ty {
         TypeRef::Declared(id) => Ty::Named(id.clone()),
         TypeRef::Option(inner) => Ty::Option(Box::new(raw_ty(inner))),
         TypeRef::List(inner) => Ty::List(Box::new(raw_ty(inner))),
+        // A map is opaque to expressions, like json: compared only with == and !=.
+        TypeRef::Map(..) => Ty::Named(t.text()),
     }
 }
 
@@ -383,7 +385,7 @@ pub(crate) fn expr_ty(spec: &Spec, t: &TypeRef) -> Ty {
                 None => Ty::Named(id.clone()),
             }
         }
-        TypeRef::Option(_) | TypeRef::List(_) => raw_ty(t),
+        TypeRef::Option(_) | TypeRef::List(_) | TypeRef::Map(..) => raw_ty(t),
     }
 }
 
@@ -414,6 +416,8 @@ pub(crate) fn js_check(spec: &Spec, cases: &Cases, t: &TypeRef, depth: usize) ->
         TypeRef::Option(inner) => {
             format!("check.option({})", js_check(spec, cases, inner, depth + 1))
         }
+        // A map's value is checked by the Rust decode; the browser passes it on as it is.
+        TypeRef::Map(..) => "check.any".to_string(),
         TypeRef::Declared(id) => match spec.type_decl(id).map(|d| &d.kind) {
             Some(TypeKind::Id { repr } | TypeKind::Scalar { repr }) => {
                 match repr.as_deref().and_then(Builtin::parse) {
@@ -439,7 +443,8 @@ pub(crate) fn js_check(spec: &Spec, cases: &Cases, t: &TypeRef, depth: usize) ->
                 );
                 format!("check.struct({members}{omittable})")
             }
-            None => "check.any".to_string(),
+            // A union's value is checked by the Rust decode; the browser passes it on as it is.
+            Some(TypeKind::Union { .. }) | None => "check.any".to_string(),
         },
     }
 }
@@ -498,6 +503,10 @@ pub(crate) fn js_type(
             "{} | null",
             js_type(spec, cases, inner, false, depth + 1)
         )),
+        TypeRef::Map(_, value) => format!(
+            "Record<string, {}>",
+            js_type(spec, cases, value, false, depth + 1)
+        ),
         TypeRef::Declared(id) => match spec.type_decl(id).map(|d| &d.kind) {
             Some(TypeKind::Id { repr } | TypeKind::Scalar { repr }) => {
                 match repr.as_deref().and_then(Builtin::parse) {
@@ -532,7 +541,7 @@ pub(crate) fn js_type(
                     .collect();
                 object_type(&items)
             }
-            None => "unknown".to_string(),
+            Some(TypeKind::Union { .. }) | None => "unknown".to_string(),
         },
     }
 }

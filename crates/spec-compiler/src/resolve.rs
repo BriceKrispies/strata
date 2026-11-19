@@ -1,7 +1,8 @@
 //! Type names and what they resolve to.
 //!
 //! A type name resolves when it is a built-in representation type, the id of a declared `type`,
-//! or `list<T>` / `option<T>` of a name that resolves (the shared generation-readiness format).
+//! `list<T>` / `option<T>` of a name that resolves, or `map<K, V>` of a key and a value that
+//! resolve (the shared generation-readiness format).
 
 use std::collections::BTreeSet;
 
@@ -137,6 +138,8 @@ pub enum TypeRef {
     List(Box<TypeRef>),
     /// `option<T>`
     Option(Box<TypeRef>),
+    /// `map<K, V>`: a JSON object, a `BTreeMap` in Rust.
+    Map(Box<TypeRef>, Box<TypeRef>),
 }
 
 impl TypeRef {
@@ -155,10 +158,82 @@ impl TypeRef {
         if let Some(inner) = wrapped("option<") {
             return TypeRef::Option(inner);
         }
+        if let Some(args) = text.strip_prefix("map<").and_then(|t| t.strip_suffix('>')) {
+            if let Some((key, value)) = split_top_comma(args) {
+                return TypeRef::Map(
+                    Box::new(TypeRef::parse(key)),
+                    Box::new(TypeRef::parse(value)),
+                );
+            }
+        }
         match Builtin::parse(text) {
             Some(b) => TypeRef::Builtin(b),
             None => TypeRef::Declared(text.to_string()),
         }
+    }
+}
+
+/// `K, V` split at its one comma outside angle brackets; `None` unless there are exactly two
+/// non-empty parts.
+fn split_top_comma(text: &str) -> Option<(&str, &str)> {
+    let mut depth = 0i32;
+    let mut at = None;
+    for (i, c) in text.char_indices() {
+        match c {
+            '<' => depth += 1,
+            '>' => depth -= 1,
+            ',' if depth == 0 => {
+                if at.is_some() {
+                    return None;
+                }
+                at = Some(i);
+            }
+            _ => {}
+        }
+    }
+    let i = at?;
+    let (key, value) = (text[..i].trim(), text[i + 1..].trim());
+    (!key.is_empty() && !value.is_empty()).then_some((key, value))
+}
+
+impl TypeRef {
+    /// The type name as the specification writes it.
+    pub fn text(&self) -> String {
+        match self {
+            TypeRef::Builtin(b) => b.as_str().to_string(),
+            TypeRef::Declared(id) => id.clone(),
+            TypeRef::List(inner) => format!("list<{}>", inner.text()),
+            TypeRef::Option(inner) => format!("option<{}>", inner.text()),
+            TypeRef::Map(k, v) => format!("map<{}, {}>", k.text(), v.text()),
+        }
+    }
+}
+
+/// True when the type can be the key of a `map<K, V>`: `string`, an integer built-in, or an id or
+/// scalar over one (Exegra's `type.map-key`). A key that does not resolve is not one.
+pub fn is_map_key(spec: &Spec, t: &TypeRef) -> bool {
+    let keyable = |b: Builtin| {
+        matches!(
+            b,
+            Builtin::String
+                | Builtin::U8
+                | Builtin::U16
+                | Builtin::U32
+                | Builtin::U64
+                | Builtin::I32
+                | Builtin::I64
+        )
+    };
+    match t {
+        TypeRef::Builtin(b) => keyable(*b),
+        TypeRef::Declared(id) => spec.type_decl(id).is_some_and(|d| match &d.kind {
+            TypeKind::Id { repr } | TypeKind::Scalar { repr } => repr
+                .as_deref()
+                .and_then(Builtin::parse)
+                .is_some_and(keyable),
+            _ => false,
+        }),
+        _ => false,
     }
 }
 
@@ -173,6 +248,7 @@ pub fn ref_resolves(spec: &Spec, t: &TypeRef) -> bool {
         TypeRef::Builtin(_) => true,
         TypeRef::Declared(id) => spec.type_decl(id).is_some(),
         TypeRef::List(inner) | TypeRef::Option(inner) => ref_resolves(spec, inner),
+        TypeRef::Map(k, v) => ref_resolves(spec, k) && ref_resolves(spec, v),
     }
 }
 
@@ -194,6 +270,7 @@ fn total(spec: &Spec, t: &TypeRef, visiting: &mut BTreeSet<String>) -> bool {
     match t {
         TypeRef::Builtin(b) => b.is_total(),
         TypeRef::List(inner) | TypeRef::Option(inner) => total(spec, inner, visiting),
+        TypeRef::Map(k, v) => total(spec, k, visiting) && total(spec, v, visiting),
         TypeRef::Declared(id) => {
             let Some(decl) = spec.type_decl(id) else {
                 return false;
@@ -211,6 +288,10 @@ fn total(spec: &Spec, t: &TypeRef, visiting: &mut BTreeSet<String>) -> bool {
                 TypeKind::Struct { fields } => fields
                     .iter()
                     .all(|f| total(spec, &TypeRef::parse(&f.type_name), visiting)),
+                TypeKind::Union { variants, .. } => variants
+                    .iter()
+                    .flat_map(|v| &v.fields)
+                    .all(|f| total(spec, &TypeRef::parse(&f.type_name), visiting)),
             };
             visiting.remove(id);
             result
@@ -223,7 +304,7 @@ pub fn is_copy(t: &TypeRef) -> bool {
     match t {
         TypeRef::Builtin(b) => b.is_copy(),
         TypeRef::Option(inner) => is_copy(inner),
-        TypeRef::Declared(_) | TypeRef::List(_) => false,
+        TypeRef::Declared(_) | TypeRef::List(_) | TypeRef::Map(..) => false,
     }
 }
 
@@ -258,6 +339,7 @@ mod tests {
             name: id.into(),
             description: None,
             kind,
+            constraints: Default::default(),
         }
     }
 
@@ -286,6 +368,24 @@ mod tests {
             )))))
         );
         assert_eq!(TypeRef::parse("list<>"), TypeRef::Declared("list<>".into()));
+        assert_eq!(
+            TypeRef::parse("map<string, list<map<u32, bool>>>"),
+            TypeRef::Map(
+                Box::new(TypeRef::Builtin(Builtin::String)),
+                Box::new(TypeRef::List(Box::new(TypeRef::Map(
+                    Box::new(TypeRef::Builtin(Builtin::U32)),
+                    Box::new(TypeRef::Builtin(Builtin::Bool))
+                ))))
+            )
+        );
+        assert_eq!(
+            TypeRef::parse("map<string,list<u8>>").text(),
+            "map<string, list<u8>>"
+        );
+        assert_eq!(
+            TypeRef::parse("map<string>"),
+            TypeRef::Declared("map<string>".into())
+        );
     }
 
     #[test]
