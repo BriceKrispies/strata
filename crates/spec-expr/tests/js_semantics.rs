@@ -1,5 +1,6 @@
 //! The generated JavaScript, run with `node`, against Exegra's own evaluator
-//! (`exegra/src/core/expr.js`). Skipped with a message when either is absent.
+//! (`exegra/src/core/expr.js`), which is given the declared types as an implementation-level
+//! machine's expressions are (WG-4902). Skipped with a message when either is absent.
 
 mod common;
 
@@ -10,7 +11,12 @@ use std::process::Command;
 use strata_spec_expr::{parse, to_js, Ty};
 
 fn env() -> TestScope {
-    scope(&[
+    scope(&vars())
+}
+
+/// The references and their types.
+fn vars() -> Vec<(&'static str, Ty)> {
+    vec![
         ("a", Ty::U32),
         ("b", Ty::U32),
         ("n", Ty::I64),
@@ -23,18 +29,28 @@ fn env() -> TestScope {
         ("t", Ty::String),
         ("o", Ty::Option(Box::new(Ty::U32))),
         ("event.token", Ty::U32),
-    ])
+    ]
+}
+
+/// The type name Exegra's evaluator reads for a type (`evalTypeOf` in `src/core/sim-input.js`).
+fn exegra_type(t: &Ty) -> String {
+    match t {
+        Ty::Option(_) => "option".to_string(),
+        Ty::Timestamp => "i64".to_string(),
+        Ty::Duration => "u64".to_string(),
+        other => other.to_string(),
+    }
 }
 
 #[derive(Clone, Copy, PartialEq)]
 enum Expect {
     /// Same value, or both raise an error.
     Same,
-    /// The JavaScript raises the overflow error; Exegra's unbounded double does not.
-    JsOverflow,
+    /// Both raise an error, the JavaScript its overflow error.
+    BothOverflow,
 }
 
-use Expect::{JsOverflow, Same};
+use Expect::{BothOverflow, Same};
 
 /// (expression, variables as a JSON object keyed by reference name, expectation)
 fn cases() -> Vec<(&'static str, &'static str, Expect)> {
@@ -82,13 +98,17 @@ fn cases() -> Vec<(&'static str, &'static str, Expect)> {
         ("a > b", r#"{"a":3,"b":2}"#, Same),
         ("a >= b", r#"{"a":2,"b":2}"#, Same),
         ("event.token + 1 == 8", r#"{"event.token":7}"#, Same),
-        ("a + b", r#"{"a":4294967295,"b":1}"#, JsOverflow),
-        ("a - b", r#"{"a":0,"b":1}"#, JsOverflow),
-        ("a * b", r#"{"a":65536,"b":65536}"#, JsOverflow),
-        ("-signed", r#"{"signed":-2147483648}"#, JsOverflow),
-        ("signed % -1", r#"{"signed":-2147483648}"#, JsOverflow),
-        ("n + 1", r#"{"n":9007199254740991}"#, JsOverflow),
-        ("n - 1", r#"{"n":-9007199254740991}"#, JsOverflow),
+        ("a + b", r#"{"a":4294967295,"b":1}"#, BothOverflow),
+        ("a - b", r#"{"a":0,"b":1}"#, BothOverflow),
+        ("a * b", r#"{"a":65536,"b":65536}"#, BothOverflow),
+        ("-signed", r#"{"signed":-2147483648}"#, BothOverflow),
+        ("signed % -1", r#"{"signed":-2147483648}"#, Same),
+        ("signed / -1", r#"{"signed":-2147483648}"#, BothOverflow),
+        ("signed / 2", r#"{"signed":-7}"#, Same),
+        ("a / b", r#"{"a":7,"b":2}"#, Same),
+        ("a / b", r#"{"a":7,"b":0}"#, BothOverflow),
+        ("n + 1", r#"{"n":9007199254740991}"#, BothOverflow),
+        ("n - 1", r#"{"n":-9007199254740991}"#, BothOverflow),
     ]
 }
 
@@ -123,6 +143,11 @@ fn generated_javascript_agrees_with_exegra_evaluator() {
     script.push_str("const { evaluate } = await import(pathToFileURL(process.argv[2]).href);\n");
     script.push_str("class Overflow extends Error {}\n");
     script.push_str("function __ov() { throw new Overflow('overflow'); }\n");
+    let types: serde_json::Map<String, Value> = vars()
+        .iter()
+        .map(|(n, t)| ((*n).to_string(), Value::String(exegra_type(t))))
+        .collect();
+    script.push_str(&format!("const types = {};\n", Value::Object(types)));
     script.push_str("const cases = [];\n");
     for (src, vars, _) in &table {
         let ast = parse(src).unwrap();
@@ -149,7 +174,7 @@ fn generated_javascript_agrees_with_exegra_evaluator() {
         "const run = (g) => { try { return { v: g() }; } catch (e) { return { err: e instanceof Overflow ? 'overflow' : 'error' }; } };\n\
          const out = cases.map((c) => ({\n\
            js: run(() => c.f(c.vars)),\n\
-           ex: run(() => evaluate(c.src, (path) => c.vars[path.join('.')])),\n\
+           ex: run(() => evaluate(c.src, (path) => c.vars[path.join('.')], (path) => types[path.join('.')])),\n\
          }));\n\
          console.log(JSON.stringify(out));\n",
     );
@@ -181,8 +206,8 @@ fn generated_javascript_agrees_with_exegra_evaluator() {
                     "`{src}` with {vars}: js {js}, exegra {ex}"
                 );
             }
-            Expect::JsOverflow => assert_eq!(
-                js["err"], "overflow",
+            Expect::BothOverflow => assert!(
+                js["err"] == "overflow" && ex.get("err").is_some(),
                 "`{src}` with {vars}: js {js}, exegra {ex}"
             ),
         }

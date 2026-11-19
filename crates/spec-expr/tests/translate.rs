@@ -50,13 +50,14 @@ fn literals() {
     assert_eq!(rust_as("2", &e, &Ty::F64), tok("2.0f64"));
     assert_eq!(rust_as("1.5", &e, &Ty::F64), tok("1.5f64"));
     assert_eq!(rust_as("-1.5", &e, &Ty::F64), tok("-1.5f64"));
+    // u64 and i64 stop at +-(2^53 - 1), the integers every engine holds exactly.
     assert_eq!(
-        rust_as("18446744073709551615", &e, &Ty::U64),
-        tok("18446744073709551615u64")
+        rust_as("9007199254740991", &e, &Ty::U64),
+        tok("9007199254740991u64")
     );
     assert_eq!(
-        rust_as("-9223372036854775808", &e, &Ty::I64),
-        tok("-9223372036854775808i64")
+        rust_as("-9007199254740991", &e, &Ty::I64),
+        tok("-9007199254740991i64")
     );
     assert_eq!(
         rust_as("null", &e, &Ty::Option(Box::new(Ty::U32))),
@@ -81,7 +82,25 @@ fn checked_integer_arithmetic() {
     );
     assert_eq!(
         rust("n % 2", &e),
-        tok(&format!("n.checked_rem(2i64).ok_or({OV})?"))
+        tok(&format!(
+            "{{ let __l = n; let __r = 2i64; if __r == 0 {{ return ::core::result::Result::Err({OV}); }} __l.wrapping_rem(__r) }}"
+        ))
+    );
+    assert_eq!(
+        rust("n + 1", &e),
+        tok(&format!(
+            "n.checked_add(1i64).filter(|__v| (-9007199254740991i64..=9007199254740991i64).contains(__v)).ok_or({OV})?"
+        ))
+    );
+    assert_eq!(
+        rust("lease.count.jl-done * 2", &e),
+        tok(&format!(
+            "lease_count_jl_done.checked_mul(2u64).filter(|__v| *__v <= 9007199254740991u64).ok_or({OV})?"
+        ))
+    );
+    assert_eq!(
+        rust("a / b", &e),
+        tok(&format!("a.checked_div(b).ok_or({OV})?"))
     );
     assert_eq!(
         rust("1 + a", &e),

@@ -1,13 +1,15 @@
 //! Type checking and translation to JavaScript, for the browser's frontend kernel.
 //!
 //! The typing rules are those of the Rust target (`check.rs`) so that one specification compiles
-//! to both targets or to neither: same operand rules, same refusal of integer `/` and of
-//! timestamp/duration arithmetic, same refusal of literals that do not fit.
+//! to both targets or to neither: same operand rules, same refusal of timestamp/duration
+//! arithmetic, same refusal of literals that do not fit.
 //!
-//! Semantics follow `src/core/expr.js` of Exegra: `==`/`!=` are `===`/`!==`, `&&`, `||` and `=>`
-//! short-circuit, `+` on strings concatenates, `null` is an option's `None`. A `json` value is
-//! compared structurally (as `serde_json::Value` is in the Rust target), with an inline deep
-//! equality, and is otherwise refused as in the Rust target. Operand types are
+//! Semantics follow Exegra's evaluation with declared types (`src/core/expr.js`, `docs/semantics.md`,
+//! "Values, numbers and time", WG-4902): `&&`, `||` and `=>` short-circuit, `+` on strings
+//! concatenates, `null` is an option's `None`. `==`/`!=` are structural: a list, a struct or a
+//! `json` value is compared with an inline deep equality (numbers by value), anything else with
+//! `===`/`!==`. Integer `/` truncates toward zero (`(l - l % r) / r`, exact on safe integers) and
+//! integer `%` takes the sign of the dividend; a zero divisor evaluates the overflow expression. Operand types are
 //! established statically, so the dynamic type checks Exegra performs at evaluation cannot fail
 //! in well-typed output and are not emitted.
 //!
@@ -529,7 +531,7 @@ impl Cx<'_> {
                 format!("operator \"{}\" needs numbers, got {ty}", op.symbol()),
             ));
         }
-        if ty == Ty::Json {
+        if matches!(ty, Ty::Json | Ty::List(_) | Ty::Named(_)) {
             let not = if op == BinOp::Ne { "!" } else { "" };
             return Ok(Out::known_at(
                 Ty::Bool,
@@ -581,26 +583,19 @@ impl Cx<'_> {
                     };
                     self.checked(signed, bits, format!("{} {sym} {}", l.at(lp), r.at(rp)))
                 }
-                BinOp::Rem => {
-                    let (lo, _) = range(signed, bits);
-                    let bad = if signed {
-                        format!("$r === 0 || ($r === -1 && $l === {lo})")
-                    } else {
-                        "$r === 0".to_string()
-                    };
+                // The exact remainder, sign of the dividend; `+ 0` turns `-0` into `0`.
+                BinOp::Rem => format!(
+                    "(($l, $r) => $r === 0 ? {ov} : $l % $r + 0)({}, {})",
+                    l.js, r.js
+                ),
+                // Truncating division: `$l - $l % $r` is a multiple of `$r`, so the quotient is
+                // exact; it is checked like any result (the `i32` minimum by `-1`).
+                _ => {
+                    let (lo, hi) = range(signed, bits);
                     format!(
-                        "(($l, $r) => {bad} ? {ov} : $l % $r)({}, {})",
+                        "(($l, $r) => $r === 0 ? {ov} : (($v) => $v >= {lo} && $v <= {hi} ? $v : {ov})(($l - $l % $r) / $r + 0))({}, {})",
                         l.js, r.js
                     )
-                }
-                _ => {
-                    return Err(self.err(
-                        e,
-                        TypeErrorKind::Unsupported,
-                        format!(
-                            "integer division is not supported: Exegra's \"/\" on {ty} is the exact quotient (7 / 2 is 3.5) while integer division truncates"
-                        ),
-                    ))
                 }
             };
             return Ok(Out::known(ty, js));
