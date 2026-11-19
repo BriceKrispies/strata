@@ -35,9 +35,14 @@ impl Scope for TestScope {
     }
 }
 
-/// The token text of Rust source, so that expectations are written as ordinary Rust.
+/// Token text without whitespace, so that expectations are written as ordinary Rust and token
+/// spacing (which differs between parsed and generated tokens) does not matter.
+fn squash(s: String) -> String {
+    s.split_whitespace().collect()
+}
+
 pub fn tok(src: &str) -> String {
-    src.parse::<TokenStream>().unwrap().to_string()
+    squash(src.parse::<TokenStream>().unwrap().to_string())
 }
 
 pub fn ty_of_ok(src: &str, s: &TestScope) -> Ty {
@@ -47,12 +52,12 @@ pub fn ty_of_ok(src: &str, s: &TestScope) -> Ty {
 
 pub fn rust(src: &str, s: &TestScope) -> String {
     let e = strata_spec_expr::parse(src).unwrap();
-    strata_spec_expr::to_rust(&e, s).unwrap().to_string()
+    squash(strata_spec_expr::to_rust(&e, s).unwrap().to_string())
 }
 
 pub fn rust_as(src: &str, s: &TestScope, ty: &Ty) -> String {
     let e = strata_spec_expr::parse(src).unwrap();
-    strata_spec_expr::to_rust_as(&e, s, ty).unwrap().to_string()
+    squash(strata_spec_expr::to_rust_as(&e, s, ty).unwrap().to_string())
 }
 
 pub fn type_err(src: &str, s: &TestScope) -> strata_spec_expr::TypeError {

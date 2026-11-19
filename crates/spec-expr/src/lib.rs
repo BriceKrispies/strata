@@ -17,8 +17,9 @@
 //! ```
 //!
 //! The generated expressions use `?` and, for `f64` division, `return Err(..)`: they belong in a
-//! function returning `Result<_, E>` where `E` is the scope's overflow error type. They are
-//! generously parenthesised, so the generated module should allow `unused_parens`.
+//! function returning `Result<_, E>` where `E` is the scope's overflow error type. Parentheses appear
+//! only where Rust precedence needs them; embed a result as an operand with your own parentheses.
+//! Nesting deeper than 64 levels is refused by the parser.
 
 mod ast;
 mod check;

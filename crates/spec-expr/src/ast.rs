@@ -88,6 +88,8 @@ pub struct Expr {
     pub kind: ExprKind,
     pub span: Span,
     pub source: Rc<str>,
+    /// Height of the tree from this node down; the parser bounds it.
+    pub height: usize,
 }
 
 impl PartialEq for Expr {

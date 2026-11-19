@@ -191,3 +191,19 @@ fn errors_render_with_source_and_caret() {
     assert!(text.contains("a & b"), "{text}");
     assert!(text.ends_with("  |   ^"), "{text}");
 }
+
+#[test]
+fn long_operator_chains_and_prefix_chains_are_bounded() {
+    let chain = format!("a{}", " + 1".repeat(150));
+    assert_eq!(rejected(&chain).0, "Expression is nested too deeply");
+    let prefix = format!("{}a", "!".repeat(150));
+    assert_eq!(rejected(&prefix).0, "Expression is nested too deeply");
+    let right = format!("{}a", "a => ".repeat(150));
+    assert_eq!(rejected(&right).0, "Expression is nested too deeply");
+    assert_eq!(
+        sexpr(&format!("a{}", " + 1".repeat(50)))
+            .matches('+')
+            .count(),
+        50
+    );
+}

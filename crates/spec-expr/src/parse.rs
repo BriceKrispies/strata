@@ -19,8 +19,9 @@ const LEVELS: [&[&str]; 7] = [
     &["*", "/", "%"],
 ];
 
-/// Nesting beyond this is refused (the JS parser would overflow its stack instead).
-const MAX_DEPTH: usize = 200;
+/// Nesting beyond this (parentheses, prefix operators or tree height) is refused; the JS parser would
+/// overflow its stack instead. Every later pass recurses to at most this depth.
+const MAX_DEPTH: usize = 64;
 
 #[derive(Debug, Clone, PartialEq)]
 enum Kind {
@@ -166,12 +167,21 @@ impl Parser<'_> {
         matches!(&self.peek().kind, Kind::Op(x) if *x == o)
     }
 
-    fn node(&self, kind: ExprKind, start: usize, end: usize) -> Expr {
-        Expr {
+    fn node(&self, kind: ExprKind, start: usize, end: usize) -> Result<Expr, ParseError> {
+        let height = 1 + match &kind {
+            ExprKind::Lit(_) | ExprKind::Ref(_) => 0,
+            ExprKind::Un(_, a) => a.height,
+            ExprKind::Bin(_, a, b) => a.height.max(b.height),
+        };
+        if height > MAX_DEPTH {
+            return Err(err(self.src, "Expression is nested too deeply", start));
+        }
+        Ok(Expr {
             kind,
             span: Span { start, end },
             source: self.shared.clone(),
-        }
+            height,
+        })
     }
 
     fn enter(&mut self) -> Result<(), ParseError> {
@@ -186,27 +196,27 @@ impl Parser<'_> {
         Ok(())
     }
 
-    fn binary(&mut self, level: usize) -> Result<Expr, ParseError> {
-        if level >= LEVELS.len() {
-            return self.unary();
-        }
-        let mut left = self.binary(level + 1)?;
+    /// Precedence climbing over the levels of `LEVELS`; `=>` (level 0) is right associative.
+    fn binary(&mut self, min: usize) -> Result<Expr, ParseError> {
+        let mut left = self.unary()?;
         while let Kind::Op(o) = self.peek().kind {
-            if !LEVELS[level].contains(&o) {
+            let Some(level) = LEVELS.iter().position(|l| l.contains(&o)) else {
+                break;
+            };
+            if level < min {
                 break;
             }
             self.p += 1;
             let op = bin_op(o);
-            if op == BinOp::Implies {
-                self.enter()?;
-                let right = self.binary(level)?;
-                self.depth -= 1;
-                let (s, e) = (left.span.start, right.span.end);
-                return Ok(self.node(ExprKind::Bin(op, Box::new(left), Box::new(right)), s, e));
-            }
-            let right = self.binary(level + 1)?;
+            self.enter()?;
+            let right = self.binary(if op == BinOp::Implies {
+                level
+            } else {
+                level + 1
+            })?;
+            self.depth -= 1;
             let (s, e) = (left.span.start, right.span.end);
-            left = self.node(ExprKind::Bin(op, Box::new(left), Box::new(right)), s, e);
+            left = self.node(ExprKind::Bin(op, Box::new(left), Box::new(right)), s, e)?;
         }
         Ok(left)
     }
@@ -220,7 +230,7 @@ impl Parser<'_> {
             self.depth -= 1;
             let op = if o == "!" { UnOp::Not } else { UnOp::Neg };
             let e = a.span.end;
-            return Ok(self.node(ExprKind::Un(op, Box::new(a)), pos, e));
+            return self.node(ExprKind::Un(op, Box::new(a)), pos, e);
         }
         self.primary()
     }
@@ -229,8 +239,8 @@ impl Parser<'_> {
         let tk = self.toks[self.p].clone();
         self.p += 1;
         match &tk.kind {
-            Kind::Num(t) => Ok(self.node(ExprKind::Lit(Lit::Num(t.clone())), tk.pos, tk.end)),
-            Kind::Str(s) => Ok(self.node(ExprKind::Lit(Lit::Str(s.clone())), tk.pos, tk.end)),
+            Kind::Num(t) => self.node(ExprKind::Lit(Lit::Num(t.clone())), tk.pos, tk.end),
+            Kind::Str(s) => self.node(ExprKind::Lit(Lit::Str(s.clone())), tk.pos, tk.end),
             Kind::Id(name) => {
                 let lit = match name.as_str() {
                     "true" => Some(Lit::Bool(true)),
@@ -239,7 +249,7 @@ impl Parser<'_> {
                     _ => None,
                 };
                 if let Some(l) = lit {
-                    return Ok(self.node(ExprKind::Lit(l), tk.pos, tk.end));
+                    return self.node(ExprKind::Lit(l), tk.pos, tk.end);
                 }
                 let mut path = vec![name.clone()];
                 let mut end = tk.end;
@@ -255,7 +265,7 @@ impl Parser<'_> {
                         _ => return Err(err(self.src, "Expected a name after \".\"", next.pos)),
                     }
                 }
-                Ok(self.node(ExprKind::Ref(path), tk.pos, end))
+                self.node(ExprKind::Ref(path), tk.pos, end)
             }
             Kind::Op("(") => {
                 self.enter()?;
