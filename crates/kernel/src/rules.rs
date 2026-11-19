@@ -119,7 +119,8 @@ impl<'a> Subject<'a> {
 ///
 /// Default deny. The `owner` role is allowed everything in its tenant. Otherwise at least one
 /// policy must match role, resource and action, and its condition must evaluate to `true`. A
-/// condition that fails to evaluate denies.
+/// condition that fails to evaluate denies. `lookup` lets a condition follow a reference into
+/// another record; without it, following one is an evaluation error and so denies.
 pub fn authorize(
     tenant: &TenantState,
     schema: &TenantSchema,
@@ -128,6 +129,7 @@ pub fn authorize(
     action: Action,
     resource: &Resource,
     subject: Subject<'_>,
+    lookup: Option<Lookup<'_>>,
 ) -> (bool, Vec<Check>) {
     let roles = roles_of(tenant, principal);
     let what = format!("{action:?} on {resource:?}");
@@ -143,6 +145,7 @@ pub fn authorize(
         now,
         principal,
         roles: &roles,
+        lookup,
     };
     let mut checks = Vec::new();
     for policy in schema.policies.values() {
@@ -363,6 +366,7 @@ pub fn validate_record(
             now,
             principal,
             roles: &roles,
+            lookup: Some(lookup),
         };
         for constraint in object.constraints.values() {
             let rule = format!("constraint:{name}.{}", constraint.id);

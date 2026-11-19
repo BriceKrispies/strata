@@ -307,6 +307,45 @@ test('an author cannot edit another author’s article; an editor can', async ({
   expect((await forged.json()).failed[0].rule).toBe('policy:authors_own_posts');
 });
 
+test('an author cannot write under another byline, feature a post or choose when it was published', async ({ page }) => {
+  await signIn(page, 'tomasz');
+  const csrf = (await (await page.request.get('/api/session')).json()).session.csrf_token;
+  const headers = { origin: BASE, 'x-csrf-token': csrf };
+  const INES = 2; // author records: Inès is the first, Tomasz the second
+  const TOMASZ = 3;
+  const OWN_DRAFT = 15; // "Notes Toward a Workbench", Tomasz's own unpublished draft
+  const farFuture = Date.UTC(2099, 0, 1);
+  const rules = async (response) => (await response.json()).failed.map((check) => check.rule);
+  const create = (fields) =>
+    page.request.post('/api/records', {
+      data: { op: 'create', object: 'post', fields: { title: 'Forged', slug: 'forged-byline', body: 'Text.', author: TOMASZ, ...fields } },
+      headers,
+    });
+  const update = (fields) => page.request.post('/api/records', { data: { op: 'update', object: 'post', id: OWN_DRAFT, fields }, headers });
+
+  // A post under Inès's byline is refused by the policy that grants authors creation.
+  const byline = await create({ author: INES });
+  expect(byline.ok()).toBe(false);
+  expect(await rules(byline)).toContain('policy:authors_write_posts');
+  // Featuring, or dating a post in the far future, is for editors.
+  const featured = await create({ featured: true });
+  expect(featured.ok()).toBe(false);
+  expect(await rules(featured)).toContain('constraint:post.featured_by_editors');
+  const dated = await create({ published_at: farFuture });
+  expect(dated.ok()).toBe(false);
+  expect(await rules(dated)).toContain('constraint:post.published_at_by_editors');
+  // The same on a post he does own: its byline, its feature and its date stay as they are.
+  expect(await rules(await update({ author: INES }))).toContain('constraint:post.author_fixed');
+  expect(await rules(await update({ featured: true }))).toContain('constraint:post.featured_by_editors');
+  expect(await rules(await update({ published_at: farFuture }))).toContain('constraint:post.published_at_by_editors');
+
+  // Nothing above got through: the front page still shows the editor's feature, and the draft is a draft.
+  await open(page, '/');
+  await expect(page.getByRole('heading', { level: 2, name: 'The Jig Is the Work' })).toBeVisible();
+  await open(page, '/desk');
+  await expect(page.getByRole('row', { name: /Notes Toward a Workbench/ })).toContainText('Draft');
+});
+
 test('a session that ends is noticed at once and the page falls back to signed out', async ({ page }) => {
   // The session-expiry fixture is the owner's.
   await signIn(page, 'admin');

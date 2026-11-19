@@ -1089,6 +1089,7 @@ fn expressions_use_three_valued_logic() {
         now: Timestamp(0),
         principal: &Principal::Anonymous,
         roles: &roles,
+        lookup: None,
     };
     let null = Expr::Lit(Value::Null);
     let t = Expr::Lit(Value::Bool(true));
