@@ -113,13 +113,31 @@ fn delivery(spec: &Value, event: &str) -> Delivery {
     }
 }
 
-/// True when the event stands for elapsed time, so its emits in the trace are timers.
-fn elapsed(spec: &Value, event: &str) -> bool {
-    spec["events"]
+/// For each effect of the transition that makes Exegra list an emitted event (an `emit` or a
+/// `timer`, in order), whether it is a timer. The kind is the effect's, not the event's.
+fn producing_effects_are_timers(spec: &Value, transition: &str) -> Vec<bool> {
+    let lease = spec["behaviors"]
         .as_array()
         .unwrap()
         .iter()
-        .any(|e| e["id"] == event && e["elapsed"] == json!(true))
+        .find(|b| b["id"] == BEHAVIOR)
+        .unwrap();
+    let t = lease["transitions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["id"] == transition)
+        .unwrap_or_else(|| panic!("no transition {transition}"));
+    t["effects"]
+        .as_array()
+        .map(|effects| {
+            effects
+                .iter()
+                .filter(|e| e.get("timer").is_some() || e.get("emit").is_some())
+                .map(|e| e.get("timer").is_some())
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// The lease's machine in a configuration of the trace.
@@ -245,11 +263,18 @@ fn the_generated_lease_steps_as_exegra_runs_it() {
         let transition = fired["transition"].as_str().unwrap();
         let mut exegra_emits = Vec::new();
         let mut exegra_timers = Vec::new();
-        for e in fired["emitted"].as_array().unwrap() {
+        let kinds = producing_effects_are_timers(&spec, transition);
+        let emitted = fired["emitted"].as_array().unwrap();
+        assert_eq!(
+            kinds.len(),
+            emitted.len(),
+            "{context}: the emitted entries and the emit and timer effects of {transition}"
+        );
+        for (e, is_timer) in emitted.iter().zip(&kinds) {
             let id = e["event"].as_str().unwrap();
             let value = json!({ "event": id, "payload": e["payload"] });
             let after = e["time"].as_i64().unwrap() - time;
-            if elapsed(&spec, id) {
+            if *is_timer {
                 exegra_timers.push((value, after));
             } else {
                 exegra_emits.push((value, after));

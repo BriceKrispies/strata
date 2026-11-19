@@ -41,7 +41,7 @@ const STATUS = { 'lv-idle-i': 'idle', 'lv-connecting-i': 'connecting', 'lv-open-
 /**
  * The kernel's view of the connection: the machine, the token of each running timer, and the
  * fields the rest of the kernel and the view read (status, lastSeq with null for none, ...).
- * @param {{ machine: { state: import('../generated/client-live-flow-impl.js').ClientLiveFlowImplState, vars: import('../generated/client-live-flow-impl.js').ClientLiveFlowImplVars }, timers: Record<string, number>, timerSeq: number }} ws
+ * @param {{ machine: { state: import('../generated/client-live-flow-impl.js').ClientLiveFlowImplState, vars: import('../generated/client-live-flow-impl.js').ClientLiveFlowImplVars }, timers: Record<string, number>, timerSeq: number, delayed: Record<number, any> }} ws
  */
 function project(ws) {
   const v = ws.machine.vars;
@@ -58,12 +58,36 @@ function project(ws) {
 
 /** The connection before the page starts. */
 export function liveInit() {
-  return project({ machine: live.initial(), timers: {}, timerSeq: 0 });
+  return project({ machine: live.initial(), timers: {}, timerSeq: 0, delayed: {} });
+}
+
+/**
+ * The effect an emit of the live connection asks for, or null when it asks for none.
+ * @param {{ event: string, payload: any }} e
+ * @param {any} state
+ * @param {{ token?: number }} msg
+ * @returns {Effect | null}
+ */
+function emitEffect(e, state, msg) {
+  switch (e.event) {
+    case 'ui-live-subscribe': {
+      const after = /** @type {{ after: number }} */ (e.payload).after;
+      return { type: 'ws_send', message: { type: 'subscribe', req: `r${state.nextId}`, sub: 'site', ...(after === 0 ? {} : { after }) } };
+    }
+    case 'ui-live-ack':
+      return { type: 'ws_send', message: { type: 'ack', n: /** @type {{ n: number }} */ (e.payload).n } };
+    case 'ui-live-ping':
+      return { type: 'ws_send', message: { type: 'ping', nonce: msg.token ?? 0 } };
+    case 'ui-live-close-requested':
+      return { type: 'ws_close' };
+    default:
+      return null;
+  }
 }
 
 /**
  * Step the live connection on an event. Returns the new state and the effects the machine's
- * emits and timers ask for (a reconnect waits a random half to all of the machine's delay), and
+ * emits and timers ask for (a timer waits exactly the machine's delay, with no jitter; a delayed emit waits its `afterMs`), and
  * a `ws_connect` when it moves from waiting to connecting; null when the machine ignores it.
  * @param {any} state
  * @param {string} event
@@ -77,28 +101,21 @@ export function liveStep(state, event, payload, msg) {
   if ('ignored' in out) return null;
   /** @type {Effect[]} */
   const effects = [];
+  let delayed = { ...ws.delayed };
+  let timerSeq = ws.timerSeq;
   for (const e of out.emits) {
-    switch (e.event) {
-      case 'ui-live-subscribe': {
-        const after = /** @type {{ after: number }} */ (e.payload).after;
-        effects.push({ type: 'ws_send', message: { type: 'subscribe', req: `r${state.nextId}`, sub: 'site', ...(after === 0 ? {} : { after }) } });
-        break;
-      }
-      case 'ui-live-ack':
-        effects.push({ type: 'ws_send', message: { type: 'ack', n: /** @type {{ n: number }} */ (e.payload).n } });
-        break;
-      case 'ui-live-ping':
-        effects.push({ type: 'ws_send', message: { type: 'ping', nonce: msg.token ?? 0 } });
-        break;
-      case 'ui-live-close-requested':
-        effects.push({ type: 'ws_close' });
-        break;
-      default:
-        break;
+    // A delayed emit (`after`) is delivered that long after the step, as the simulator does:
+    // it waits as a timer of its own and is performed when that timer fires.
+    if (typeof e.afterMs === 'number' && e.afterMs > 0) {
+      timerSeq += 1;
+      delayed = { ...delayed, [timerSeq]: e };
+      effects.push({ type: 'timer', name: 'emit', token: timerSeq, ms: e.afterMs });
+      continue;
     }
+    const effect = emitEffect(e, state, msg);
+    if (effect) effects.push(effect);
   }
   let timers = { ...ws.timers };
-  let timerSeq = ws.timerSeq;
   for (const t of out.timers) {
     if ('cancel' in t) {
       delete timers[t.cancel];
@@ -106,13 +123,13 @@ export function liveStep(state, event, payload, msg) {
     }
     timerSeq += 1;
     timers = { ...timers, [t.set]: timerSeq };
-    const ms = t.set === 'reconnect' ? Math.round(t.afterMs * (0.5 + msg.rand / 2)) : t.afterMs;
-    effects.push({ type: 'timer', name: t.set, token: timerSeq, ms });
+    // The wait is the machine's, exactly: the specification models no jitter.
+    effects.push({ type: 'timer', name: t.set, token: timerSeq, ms: t.afterMs });
   }
   if (ws.machine.state === 'lv-waiting-i' && out.state === 'lv-connecting-i') {
     effects.push({ type: 'ws_connect', csrf: state.session?.csrf_token });
   }
-  const next = project({ machine: { state: out.state, vars: out.vars }, timers, timerSeq });
+  const next = project({ machine: { state: out.state, vars: out.vars }, timers, timerSeq, delayed });
   return { state: { ...state, ws: next }, effects };
 }
 
@@ -124,6 +141,13 @@ export function liveStep(state, event, payload, msg) {
  * @returns {{ state: any, effects: Effect[] } | null}
  */
 export function liveTimer(state, msg) {
+  if (msg.name === 'emit') {
+    const emit = state.ws.delayed?.[msg.token];
+    if (!emit) return null;
+    const { [msg.token]: _sent, ...delayed } = state.ws.delayed ?? {};
+    const effect = emitEffect(emit, state, msg);
+    return { state: { ...state, ws: { ...state.ws, delayed } }, effects: effect ? [effect] : [] };
+  }
   const event = { heartbeat: 'ui-live-heartbeat-due', reconnect: 'ui-live-reconnect-due' }[msg.name];
   if (!event || state.ws.timers[msg.name] !== msg.token) return null;
   const { [msg.name]: _fired, ...timers } = state.ws.timers;
