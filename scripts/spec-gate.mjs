@@ -188,7 +188,14 @@ if (!startedMatch || started.size === 0) check('concordance.toml names started m
     env: { CARGO_BUILD_JOBS: '2', CARGO_TARGET_DIR: 'target/gate' },
   });
   check('specc check (crates/model is generated from the specification)', specc.ok,
-    specc.ok ? 'up to date' : `${exitText(specc)}: ${lastLine(specc.out)}; run specc generate and commit`);
+    specc.ok ? 'up to date' : `${exitText(specc)}: ${lastLine(specc.out)}; run npm run generate and commit`);
+
+  const web = run('cargo', ['run', '--quiet', '-p', 'strata-spec-compiler', '--bin', 'specc', '--',
+    'check-web', '--spec', 'specifications/spec.jsonc', '--out', 'web/src/generated'], {
+    env: { CARGO_BUILD_JOBS: '2', CARGO_TARGET_DIR: 'target/gate' },
+  });
+  check('specc check-web (web/src/generated is generated from the specification)', web.ok,
+    web.ok ? 'up to date' : `${exitText(web)}: ${lastLine(web.out)}; run npm run generate and commit`);
 }
 
 // ---------------------------------------------------------------------------------------------

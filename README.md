@@ -66,11 +66,13 @@ cd lean && lake build && lake env lean Audit.lean   # the proofs and the axioms 
 npm run spec               # the specification gate: the tests above except e2e, then Exegra and Concordance
 ```
 
-After changing the specification, regenerate the model crate (the gate fails while it is out of date):
+After changing the specification, regenerate the model crate and the web modules (the gate fails while either is out of date):
 
 ```sh
-cargo run -p strata-spec-compiler --bin specc -- generate --spec specifications/spec.jsonc --out crates/model --crate-name strata-model --runtime crates/runtime
+npm run generate
 ```
+
+This writes a placeholder `crates/model/src/lib.rs` if it is missing, then runs `specc generate` for `crates/model` and `specc web` for `web/src/generated`.
 
 `specc deploy`, `specc e2e` and `specc scenarios` write the deployment descriptors, Playwright tests and
 scenario tests from the same specification; `crates/spec-compiler` documents each. `docs/runtime.md`
