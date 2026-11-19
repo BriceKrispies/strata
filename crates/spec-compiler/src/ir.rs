@@ -483,6 +483,8 @@ pub struct Auth {
     pub step_up: Option<String>,
     /// The name of the secret a signature or signed address is verified with.
     pub secret: Option<String>,
+    /// `requires`: the capabilities a call needs, every one.
+    pub requires: Vec<String>,
     /// Why an anonymous contract is open to anyone.
     pub justification: Option<String>,
     /// The auth in words.
@@ -716,4 +718,123 @@ pub struct Instances {
     pub stored_in: Option<String>,
     /// True when the instances are counted (`count`) rather than keyed.
     pub counted: bool,
+}
+
+/// The capability model: `capabilities`, `plans`, `roles`, `grants`, `tokenScopes`,
+/// `delegations` and `featureFlags`, each list in declaration order.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AccessModel {
+    /// The `capabilities` section.
+    pub capabilities: Vec<Capability>,
+    /// The `plans` section.
+    pub plans: Vec<Plan>,
+    /// The `roles` section.
+    pub roles: Vec<Role>,
+    /// The `grants` section.
+    pub grants: Vec<Grant>,
+    /// The `tokenScopes` section.
+    pub token_scopes: Vec<TokenScope>,
+    /// The `delegations` section.
+    pub delegations: Vec<Delegation>,
+    /// The `featureFlags` section.
+    pub flags: Vec<FeatureFlag>,
+}
+
+impl AccessModel {
+    /// The capability with this id.
+    pub fn capability(&self, id: &str) -> Option<&Capability> {
+        self.capabilities.iter().find(|c| c.id == id)
+    }
+}
+
+/// A `capability` entity.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Capability {
+    /// The capability id.
+    pub id: String,
+    /// The display name, if any.
+    pub name: Option<String>,
+    /// The description, if any.
+    pub description: Option<String>,
+    /// `core`: every plan entitles it.
+    pub core: bool,
+}
+
+/// A `plan` entity.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Plan {
+    /// The plan id, which a tenant's plan names.
+    pub id: String,
+    /// The capabilities it entitles beyond the core ones.
+    pub capabilities: Vec<String>,
+}
+
+/// The level of a role (`role.level`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RoleLevel {
+    /// Defined by the specification: what it lists is what it confers.
+    Platform,
+    /// A role a tenant starts with, held as tenant data.
+    Tenant,
+}
+
+/// A `role` entity.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Role {
+    /// The role id.
+    pub id: String,
+    /// Platform or tenant.
+    pub level: RoleLevel,
+    /// Who may hold it (`person`, `service`, `agent`, `team`, `anonymous`, `external`).
+    pub holders: Vec<String>,
+    /// The capabilities it confers.
+    pub capabilities: Vec<String>,
+}
+
+/// A `grant` entity.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Grant {
+    /// The grant id.
+    pub id: String,
+    /// The role whose holders issue it.
+    pub issuer: Option<String>,
+    /// The role whose holders receive it.
+    pub grantee: Option<String>,
+    /// The capabilities it confers while it lasts.
+    pub capabilities: Vec<String>,
+    /// Whether each grant confers its capabilities in the one tenant it names.
+    pub per_tenant: bool,
+}
+
+/// A `tokenScope` entity.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TokenScope {
+    /// The scope id.
+    pub id: String,
+    /// The scope as a token carries it (its `name`, else its id).
+    pub name: String,
+    /// The capabilities it allows.
+    pub capabilities: Vec<String>,
+}
+
+/// A `delegation` entity.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Delegation {
+    /// The delegation id.
+    pub id: String,
+    /// What it is issued from.
+    pub from: Option<String>,
+    /// The capabilities it passes on.
+    pub capabilities: Vec<String>,
+}
+
+/// A `featureFlag` entity.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FeatureFlag {
+    /// The flag id, which a tenant's flag settings name.
+    pub id: String,
+    /// The capabilities it gates.
+    pub gates: Vec<String>,
+    /// `default: "on"`: its value for a tenant with no setting of its own (off otherwise).
+    pub default_on: bool,
 }

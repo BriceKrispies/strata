@@ -11,9 +11,10 @@ use serde_json::{Map, Number, Value};
 
 use crate::diagnostic::{Diagnostic, SPEC_ENTITY};
 use crate::ir::{
-    Auth, Behavior, Component, Constraints, Contract, ContractError, ContractField, Effect,
-    ErrorBody, ErrorWire, Event, Exposure, Index, Instances, OnDelete, PayloadField, Realisation,
-    Record, RecordField, Scheme, Spec, State, Storage, StructField, System, TenantScope,
+    AccessModel, Auth, Behavior, Capability, Component, Constraints, Contract, ContractError,
+    ContractField, Delegation, Effect, ErrorBody, ErrorWire, Event, Exposure, FeatureFlag, Grant,
+    Index, Instances, OnDelete, PayloadField, Plan, Realisation, Record, RecordField, Role,
+    RoleLevel, Scheme, Spec, State, Storage, StructField, System, TenantScope, TokenScope,
     Transition, TypeDecl, TypeKind, Variable,
 };
 use crate::jsonc;
@@ -146,7 +147,8 @@ impl Loader {
                 }
             }
         }
-        let constructs = self.constructs(top);
+        let mut constructs = self.constructs(top);
+        constructs.access = self.access_model(top);
         Some(Spec {
             path: path.replace('\\', "/"),
             system: system?,
@@ -709,6 +711,7 @@ impl Loader {
         let origin = self.opt_bool(a, "origin", id).unwrap_or(false);
         let step_up = self.opt_str(a, "stepUp", id);
         let secret = self.opt_str(a, "secret", id);
+        let requires = self.opt_str_list(a, "requires", id).unwrap_or_default();
         let justification = self.opt_str(a, "justification", id);
         let description = self.opt_str(a, "description", id);
         Some(Auth {
@@ -720,9 +723,117 @@ impl Loader {
             origin,
             step_up,
             secret,
+            requires,
             justification,
             description,
         })
+    }
+
+    /// The capability model: the `capabilities`, `plans`, `roles`, `grants`, `tokenScopes`,
+    /// `delegations` and `featureFlags` sections. Exegra checks that every name resolves and that
+    /// nothing passes on more than its source holds; only shapes are reported here.
+    fn access_model(&mut self, top: &Obj) -> AccessModel {
+        let mut out = AccessModel::default();
+        for (id, o) in self.section(top, "capabilities") {
+            let name = self.opt_str(o, "name", &id);
+            let description = self.opt_str(o, "description", &id);
+            let core = self.opt_bool(o, "core", &id).unwrap_or(false);
+            out.capabilities.push(Capability {
+                id,
+                name,
+                description,
+                core,
+            });
+        }
+        for (id, o) in self.section(top, "plans") {
+            let capabilities = self
+                .opt_str_list(o, "capabilities", &id)
+                .unwrap_or_default();
+            out.plans.push(Plan { id, capabilities });
+        }
+        for (id, o) in self.section(top, "roles") {
+            let level = match self.opt_str(o, "level", &id).as_deref() {
+                Some("platform") => RoleLevel::Platform,
+                Some("tenant") => RoleLevel::Tenant,
+                other => {
+                    self.shape(
+                        &id,
+                        format!(
+                            "\"level\" is {}; it must be platform or tenant",
+                            other.map_or("missing".to_string(), |t| format!("\"{t}\""))
+                        ),
+                    );
+                    continue;
+                }
+            };
+            let holders = self.opt_str_list(o, "holders", &id).unwrap_or_default();
+            let capabilities = self
+                .opt_str_list(o, "capabilities", &id)
+                .unwrap_or_default();
+            out.roles.push(Role {
+                id,
+                level,
+                holders,
+                capabilities,
+            });
+        }
+        for (id, o) in self.section(top, "grants") {
+            let issuer = self.opt_str(o, "issuer", &id);
+            let grantee = self.opt_str(o, "grantee", &id);
+            let capabilities = self
+                .opt_str_list(o, "capabilities", &id)
+                .unwrap_or_default();
+            let per_tenant = self.opt_bool(o, "perTenant", &id).unwrap_or(false);
+            out.grants.push(Grant {
+                id,
+                issuer,
+                grantee,
+                capabilities,
+                per_tenant,
+            });
+        }
+        for (id, o) in self.section(top, "tokenScopes") {
+            let name = self.opt_str(o, "name", &id).unwrap_or_else(|| id.clone());
+            let capabilities = self
+                .opt_str_list(o, "capabilities", &id)
+                .unwrap_or_default();
+            out.token_scopes.push(TokenScope {
+                id,
+                name,
+                capabilities,
+            });
+        }
+        for (id, o) in self.section(top, "delegations") {
+            let from = self.opt_str(o, "from", &id);
+            let capabilities = self
+                .opt_str_list(o, "capabilities", &id)
+                .unwrap_or_default();
+            out.delegations.push(Delegation {
+                id,
+                from,
+                capabilities,
+            });
+        }
+        for (id, o) in self.section(top, "featureFlags") {
+            let gates = self.opt_str_list(o, "gates", &id).unwrap_or_default();
+            let default_on = match self.opt_str(o, "default", &id).as_deref() {
+                None | Some("off") => false,
+                Some("on") => true,
+                Some(other) => {
+                    self.shape(
+                        &id,
+                        format!("\"default\" is \"{other}\"; it must be off or on"),
+                    );
+                    false
+                }
+            };
+            out.flags.push(FeatureFlag {
+                id,
+                gates,
+                default_on,
+            });
+        }
+        out
     }
 
     fn event(&mut self, id: &str, obj: &Obj) -> Option<Event> {

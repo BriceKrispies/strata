@@ -135,6 +135,10 @@ pub struct Access {
     pub scheme: Scheme,
     /// The roles any one of which admits the caller; empty when the scheme alone decides.
     pub roles: &'static [&'static str],
+    /// The capabilities a call needs, every one (`auth.requires`): the generated authorizer
+    /// checks the tenant's plan and flags, the principal's permissions and the delegation it
+    /// acts under against them. Empty when the contract names none.
+    pub requires: &'static [&'static str],
     /// Whether the tenant's own policies decide in the handler (the route then only establishes
     /// the principal).
     pub tenant_policies: bool,
@@ -159,6 +163,7 @@ impl Access {
         exposure: Exposure::Local,
         scheme: Scheme::InProcess,
         roles: &[],
+        requires: &[],
         tenant_policies: false,
         csrf: false,
         origin: false,
@@ -435,8 +440,10 @@ fn header<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
 /// a caller who presents it is subject `service` of kind `service`; [`Scheme::Anonymous`] admits
 /// anyone when the contract asks for no CSRF or origin check, which this authorizer cannot make;
 /// every other scheme, anything local, and any contract asking for roles, step-up or a
-/// development condition is refused. Also the matching [`Credentials`](crate::Credentials) on the
-/// client side.
+/// development condition is refused. It does not read [`Access::requires`]: the capabilities a
+/// service or an anonymous probe needs are fixed by the specification's platform roles, and only
+/// the generated authorizer checks them. Also the matching [`Credentials`](crate::Credentials) on
+/// the client side.
 #[derive(Clone)]
 pub struct ServiceToken {
     /// The header that carries the secret.

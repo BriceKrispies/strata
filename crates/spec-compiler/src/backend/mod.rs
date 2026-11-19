@@ -11,6 +11,7 @@ use proc_macro2::TokenStream;
 use crate::diagnostic::Diagnostic;
 use crate::ir::Spec;
 
+pub mod access_model;
 pub mod audits;
 pub mod contracts;
 pub mod deps;
