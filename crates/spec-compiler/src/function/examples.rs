@@ -138,11 +138,27 @@ pub(crate) fn literal(spec: &Spec, t: &Ty, v: &Value) -> Result<TokenStream, Ref
                         let inner = field_value(spec, f, content)?;
                         quote! { #p::#vi(#inner) }
                     } else {
+                        // Exegra writes every variant with fields but a newtype as an object of
+                        // its fields, a tuple variant too.
                         let Value::Object(fobj) = content else {
                             return Err(not_a(t, v));
                         };
-                        let inits = field_inits(spec, id, &var.fields, fobj)?;
-                        quote! { #p::#vi { #(#inits),* } }
+                        if let Some(k) = fobj
+                            .keys()
+                            .find(|k| !var.fields.iter().any(|f| &f.name == *k))
+                        {
+                            return Err(unsupported(format!(
+                                "the example gives variant {} of {id} the field {k}, which it does not have",
+                                var.name
+                            )));
+                        }
+                        if var.tuple {
+                            let values = positional(spec, id, &var.fields, fobj)?;
+                            quote! { #p::#vi(#(#values),*) }
+                        } else {
+                            let inits = field_inits(spec, id, &var.fields, fobj)?;
+                            quote! { #p::#vi { #(#inits),* } }
+                        }
                     }
                 }
                 _ => return Err(not_a(t, v)),
@@ -160,6 +176,34 @@ pub(crate) fn literal(spec: &Spec, t: &Ty, v: &Value) -> Result<TokenStream, Ref
                     .map(|x| literal(spec, of, x))
                     .collect::<Result<_, _>>()?;
                 quote! { vec![#(#items),*] }
+            }
+        }
+        Ty::Set(of) => {
+            let Value::Array(items) = v else {
+                return Err(not_a(t, v));
+            };
+            // Exegra holds a set as the list written, and iterates it in that order; the
+            // BTreeSet iterates in its own. They agree only on a list in that order without a
+            // repeated item, so an example writes a set so.
+            for (i, pair) in items.windows(2).enumerate() {
+                if order(spec, of, &pair[0], &pair[1])? != std::cmp::Ordering::Less {
+                    return Err(unsupported(format!(
+                        "the example set {} does not have item {} after item {} in the order of {}; a set's items are written in that order, each once, as the generated BTreeSet holds them",
+                        show(v),
+                        i + 2,
+                        i + 1,
+                        of.text()
+                    )));
+                }
+            }
+            if items.is_empty() {
+                quote! { std::collections::BTreeSet::new() }
+            } else {
+                let items: Vec<TokenStream> = items
+                    .iter()
+                    .map(|x| literal(spec, of, x))
+                    .collect::<Result<_, _>>()?;
+                quote! { std::collections::BTreeSet::from([#(#items),*]) }
             }
         }
         Ty::Option(of) => match v {
@@ -204,6 +248,192 @@ pub(crate) fn literal(spec: &Spec, t: &Ty, v: &Value) -> Result<TokenStream, Ref
     })
 }
 
+/// How two example values of type `t` compare in the order the generated type derives (`Ord`):
+/// a bool false first, a string by its bytes, an integer by value, an id or scalar by its
+/// representation, an enum value or a union variant by declaration order and then a variant's
+/// fields, a struct by its fields in order, an option `None` first, a list or set item by item,
+/// a map entry by entry in key order, a result `Ok` first.
+fn order(spec: &Spec, t: &Ty, a: &Value, b: &Value) -> Result<std::cmp::Ordering, Refusal> {
+    use std::cmp::Ordering;
+    let bad = |v: &Value| not_a(t, v);
+    Ok(match t {
+        Ty::Bool => match (a, b) {
+            (Value::Bool(x), Value::Bool(y)) => x.cmp(y),
+            (Value::Bool(_), _) => return Err(bad(b)),
+            _ => return Err(bad(a)),
+        },
+        Ty::Str => match (a, b) {
+            (Value::String(x), Value::String(y)) => x.as_bytes().cmp(y.as_bytes()),
+            (Value::String(_), _) => return Err(bad(b)),
+            _ => return Err(bad(a)),
+        },
+        Ty::Int(_) => {
+            let n = |v: &Value| {
+                v.as_i64()
+                    .map(i128::from)
+                    .or_else(|| v.as_u64().map(i128::from))
+                    .ok_or_else(|| bad(v))
+            };
+            n(a)?.cmp(&n(b)?)
+        }
+        Ty::Alias(_, repr) => order(spec, repr, a, b)?,
+        Ty::Enum(id) => {
+            let values = super::typing::enum_values(spec, id);
+            let at = |v: &Value| match v {
+                Value::String(s) => values.iter().position(|x| x == s).ok_or_else(|| bad(v)),
+                _ => Err(bad(v)),
+            };
+            at(a)?.cmp(&at(b)?)
+        }
+        Ty::Struct(id) => {
+            let (Value::Object(x), Value::Object(y)) = (a, b) else {
+                return Err(bad(if a.is_object() { b } else { a }));
+            };
+            fields_order(spec, &struct_fields(spec, id), x, y)?
+        }
+        Ty::Union(id) => {
+            let vs = variants(spec, id);
+            let split = |v: &Value| -> Result<(usize, Option<Value>), Refusal> {
+                let (name, content) = match v {
+                    Value::String(s) => (s.clone(), None),
+                    Value::Object(o) if o.len() == 1 => {
+                        let (k, c) = o.iter().next().expect("one entry");
+                        (k.clone(), Some(c.clone()))
+                    }
+                    _ => return Err(bad(v)),
+                };
+                let i = vs
+                    .iter()
+                    .position(|x| x.name == name)
+                    .ok_or_else(|| bad(v))?;
+                Ok((i, content))
+            };
+            let ((i, ca), (j, cb)) = (split(a)?, split(b)?);
+            if i != j {
+                return Ok(i.cmp(&j));
+            }
+            let var = &vs[i];
+            match (ca, cb) {
+                (None, None) => Ordering::Equal,
+                (Some(x), Some(y)) if var.newtype => {
+                    let ft = var.fields[0].read(spec)?;
+                    order(spec, &ft, &x, &y)?
+                }
+                (Some(Value::Object(x)), Some(Value::Object(y))) => {
+                    fields_order(spec, &var.fields, &x, &y)?
+                }
+                _ => return Err(bad(a)),
+            }
+        }
+        Ty::List(of) | Ty::Set(of) => {
+            let (Value::Array(x), Value::Array(y)) = (a, b) else {
+                return Err(bad(if a.is_array() { b } else { a }));
+            };
+            for (p, q) in x.iter().zip(y) {
+                let o = order(spec, of, p, q)?;
+                if o != Ordering::Equal {
+                    return Ok(o);
+                }
+            }
+            x.len().cmp(&y.len())
+        }
+        Ty::Option(of) => match (a, b) {
+            (Value::Null, Value::Null) => Ordering::Equal,
+            (Value::Null, _) => Ordering::Less,
+            (_, Value::Null) => Ordering::Greater,
+            _ => order(spec, of, a, b)?,
+        },
+        Ty::Map(k, v) => {
+            let (Value::Object(x), Value::Object(y)) = (a, b) else {
+                return Err(bad(if a.is_object() { b } else { a }));
+            };
+            let entries =
+                |m: &serde_json::Map<String, Value>| -> Result<Vec<(Value, Value)>, Refusal> {
+                    let mut out = Vec::new();
+                    for (key, value) in m {
+                        let kj = if int_kind(k).is_some() {
+                            key.parse::<i64>()
+                                .map(Value::from)
+                                .or_else(|_| key.parse::<u64>().map(Value::from))
+                                .map_err(|_| not_a(k, &Value::String(key.clone())))?
+                        } else {
+                            Value::String(key.clone())
+                        };
+                        out.push((kj, value.clone()));
+                    }
+                    let mut failed = None;
+                    out.sort_by(|p, q| match order(spec, k, &p.0, &q.0) {
+                        Ok(o) => o,
+                        Err(r) => {
+                            if failed.is_none() {
+                                failed = Some(r);
+                            }
+                            Ordering::Equal
+                        }
+                    });
+                    match failed {
+                        Some(r) => Err(r),
+                        None => Ok(out),
+                    }
+                };
+            let (ex, ey) = (entries(x)?, entries(y)?);
+            for ((pk, pv), (qk, qv)) in ex.iter().zip(&ey) {
+                let o = order(spec, k, pk, qk)?;
+                if o != Ordering::Equal {
+                    return Ok(o);
+                }
+                let o = order(spec, v, pv, qv)?;
+                if o != Ordering::Equal {
+                    return Ok(o);
+                }
+            }
+            ex.len().cmp(&ey.len())
+        }
+        Ty::Result(o, e) => {
+            let side = |v: &Value| -> Result<(bool, Value), Refusal> {
+                match v {
+                    Value::Object(m) if m.len() == 1 && m.contains_key("Ok") => {
+                        Ok((false, m["Ok"].clone()))
+                    }
+                    Value::Object(m) if m.len() == 1 && m.contains_key("Err") => {
+                        Ok((true, m["Err"].clone()))
+                    }
+                    _ => Err(bad(v)),
+                }
+            };
+            let ((ea, x), (eb, y)) = (side(a)?, side(b)?);
+            if ea != eb {
+                return Ok(ea.cmp(&eb));
+            }
+            order(spec, if ea { e } else { o }, &x, &y)?
+        }
+        Ty::Number | Ty::Unknown | Ty::Never => {
+            return Err(unsupported(
+                "an example value of a type that cannot be told",
+            ))
+        }
+    })
+}
+
+/// Two objects of the fields, field by field in declaration order (a field left out is null).
+fn fields_order(
+    spec: &Spec,
+    fields: &[FieldInfo],
+    x: &serde_json::Map<String, Value>,
+    y: &serde_json::Map<String, Value>,
+) -> Result<std::cmp::Ordering, Refusal> {
+    for f in fields {
+        let ft = f.read(spec)?;
+        let p = x.get(&f.name).unwrap_or(&Value::Null);
+        let q = y.get(&f.name).unwrap_or(&Value::Null);
+        let o = order(spec, &ft, p, q)?;
+        if o != std::cmp::Ordering::Equal {
+            return Ok(o);
+        }
+    }
+    Ok(std::cmp::Ordering::Equal)
+}
+
 /// A map key written as an object key: an integer key is a decimal string.
 fn map_key(spec: &Spec, k: &Ty, key: &str) -> Result<TokenStream, Refusal> {
     let key_json = if int_kind(k).is_some() {
@@ -245,9 +475,27 @@ fn field_inits(
     fields: &[FieldInfo],
     obj: &serde_json::Map<String, Value>,
 ) -> Result<Vec<TokenStream>, Refusal> {
+    let values = positional(spec, owner, fields, obj)?;
+    Ok(fields
+        .iter()
+        .zip(values)
+        .map(|(f, value)| {
+            let fid = snake_ident(&f.name);
+            quote! { #fid: #value }
+        })
+        .collect())
+}
+
+/// The values of the fields in declaration order (`None` for one left out), as a tuple variant
+/// takes them.
+fn positional(
+    spec: &Spec,
+    owner: &str,
+    fields: &[FieldInfo],
+    obj: &serde_json::Map<String, Value>,
+) -> Result<Vec<TokenStream>, Refusal> {
     let mut out = Vec::new();
     for f in fields {
-        let fid = snake_ident(&f.name);
         match obj.get(&f.name) {
             None | Some(Value::Null) => {
                 if !f.may_be_absent(spec) {
@@ -256,12 +504,9 @@ fn field_inits(
                         f.name
                     )));
                 }
-                out.push(quote! { #fid: None });
+                out.push(quote! { None });
             }
-            Some(v) => {
-                let value = field_value(spec, f, v)?;
-                out.push(quote! { #fid: #value });
-            }
+            Some(v) => out.push(field_value(spec, f, v)?),
         }
     }
     Ok(out)
