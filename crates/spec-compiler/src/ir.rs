@@ -875,8 +875,9 @@ pub enum Effect {
 pub struct Storage {
     /// The record id.
     pub record: Option<String>,
-    /// The key field.
-    pub key: Option<String>,
+    /// The key fields: the one field written as a string, or the list written for a record with
+    /// a composite key. `None` when no key is written (an empty list is read as none).
+    pub key: Option<Vec<String>>,
     /// `fields`: the record field each listed variable is held in (`None` when not a string),
     /// in the order written. A variable not listed is held in the field of its own name.
     pub fields: Vec<(String, Option<String>)>,
@@ -891,8 +892,8 @@ pub struct Storage {
 /// `instances`, as written.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Instances {
-    /// The payload field that keys the instances.
-    pub key: Option<String>,
+    /// The payload field that keys the instances (the one key field, as a string).
+    pub key: Option<Vec<String>>,
     /// The record each instance is stored in.
     pub stored_in: Option<String>,
     /// True when the instances are counted (`count`) rather than keyed.

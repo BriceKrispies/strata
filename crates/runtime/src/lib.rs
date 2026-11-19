@@ -63,6 +63,7 @@ pub use store::{
     DeadLetter, MachineStore, NewEntry, NewMessage, NewTimer, OutboxEntry, OutboxStore, QueueEntry,
     QueueStore, RecordStore, StorageError, StoredRecord, TimerEntry, TimerStore, Tx,
 };
+pub use strata_kernel::TenantId;
 pub use system::{
     Delivered, Member, Reached, RouteTable, Router, Routing, StepReport, System, SystemTick,
 };

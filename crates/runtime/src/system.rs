@@ -572,7 +572,12 @@ impl<S: MachineStore, D: Dispatcher<Value>> System<S, D> {
         self
     }
 
-    /// The store.
+    /// The tenant of this system's store, which is the tenant of every instance it holds.
+    pub fn tenant(&self) -> &crate::TenantId {
+        self.store.tenant()
+    }
+
+    /// The store the system runs on.
     pub fn store(&self) -> &Arc<S> {
         &self.store
     }

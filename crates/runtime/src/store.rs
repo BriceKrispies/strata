@@ -18,6 +18,7 @@
 use crate::clock::Time;
 use crate::machine::{Delivery, Isolation};
 use std::fmt;
+use strata_kernel::TenantId;
 
 /// Why a storage operation failed.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -250,6 +251,13 @@ pub trait Tx {
 
 /// Records, read and written in transactions.
 pub trait RecordStore: Send + Sync + 'static {
+    /// The tenant this store belongs to. A machine store is constructed for exactly one tenant,
+    /// and every row in it, a machine's record, an outbox entry or a timer, is in that tenant's
+    /// scope: there is no constructor without a tenant, and no way to give a store a second one,
+    /// so two tenants cannot share instance state by having equal record ids. Hosts take their
+    /// tenant from their store ([`Host::tenant`](crate::Host::tenant)).
+    fn tenant(&self) -> &TenantId;
+
     /// Whether this store can run a transaction at `isolation` or stronger.
     fn supports(&self, isolation: Isolation) -> bool;
 

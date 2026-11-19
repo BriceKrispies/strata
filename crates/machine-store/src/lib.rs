@@ -881,6 +881,10 @@ impl std::fmt::Debug for StorageApiMachineStore {
 }
 
 impl RecordStore for StorageApiMachineStore {
+    fn tenant(&self) -> &TenantId {
+        &self.tenant
+    }
+
     /// Every commit is guarded by the tenant's revision and every read in a transaction must see
     /// that revision, so each transaction is serializable.
     fn supports(&self, _: Isolation) -> bool {

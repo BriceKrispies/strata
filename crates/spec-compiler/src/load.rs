@@ -376,6 +376,16 @@ impl Loader {
         }
     }
 
+    /// `storage.key`: one field name, or the list of the key fields of a composite key.
+    fn key_fields(&mut self, obj: &Obj, entity: &str) -> Option<Vec<String>> {
+        match obj.get("key") {
+            Some(Value::Array(_)) => self
+                .opt_str_list(obj, "key", entity)
+                .filter(|k| !k.is_empty()),
+            _ => self.opt_str(obj, "key", entity).map(|k| vec![k]),
+        }
+    }
+
     pub(crate) fn req_str(&mut self, obj: &Obj, key: &str, entity: &str) -> Option<String> {
         if obj.get(key).is_none() {
             self.shape(entity, format!("\"{key}\" is required"));
@@ -1042,7 +1052,7 @@ impl Loader {
                 let state_values = string_map(self, "stateValues");
                 Some(Storage {
                     record: self.opt_str(st, "record", id),
-                    key: self.opt_str(st, "key", id),
+                    key: self.key_fields(st, id),
                     fields,
                     state: self.opt_str(st, "state", id),
                     state_values,
@@ -1058,7 +1068,7 @@ impl Loader {
             _ if memory => None,
             None | Some(Value::Null) => None,
             Some(Value::Object(i)) => Some(Instances {
-                key: self.opt_str(i, "key", id),
+                key: self.opt_str(i, "key", id).map(|k| vec![k]),
                 stored_in: self.opt_str(i, "storedIn", id),
                 counted: i.contains_key("count"),
                 max: i.get("max").and_then(Value::as_u64),
