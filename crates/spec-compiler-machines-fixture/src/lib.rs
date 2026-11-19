@@ -27,3 +27,5 @@ pub mod quotas;
 pub mod retries;
 
 pub mod audits;
+
+pub mod handlers;

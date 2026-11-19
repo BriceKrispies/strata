@@ -13,6 +13,8 @@ use crate::ir::Spec;
 
 pub mod audits;
 pub mod contracts;
+pub mod deps;
+pub mod handlers;
 pub mod machines;
 pub mod policies;
 pub mod prelude;
@@ -20,6 +22,7 @@ pub mod quotas;
 pub mod records;
 pub mod retentions;
 pub mod retries;
+pub mod routes;
 pub mod support;
 pub mod types;
 pub mod validations;
@@ -58,4 +61,7 @@ pub const BACKENDS: &[&dyn Backend] = &[
     &quotas::QuotasBackend,
     &retries::RetriesBackend,
     &audits::AuditsBackend,
+    &routes::RoutesBackend,
+    &deps::DepsBackend,
+    &handlers::HandlersBackend,
 ];
