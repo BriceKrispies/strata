@@ -33,6 +33,7 @@ pub mod output;
 pub mod readiness;
 pub mod render;
 pub mod resolve;
+pub mod scenarios;
 
 pub use diagnostic::Diagnostic;
 pub use emit::GeneratedFile;
