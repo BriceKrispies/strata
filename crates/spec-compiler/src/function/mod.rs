@@ -21,11 +21,19 @@
 //!   `iter()` (or `values()` / `keys()` of a map, without collecting them first). When the step
 //!   can return early (a `?` or a `fail`), it cannot sit in a closure, and the operation is a
 //!   `for` loop instead. `take`, `concat`, `keys`, `values`, `get`, `insert` and `remove` are
-//!   the slice and `BTreeMap` operations; `format` is `format!`.
+//!   the slice and `BTreeMap` operations; `format` is `format!`, its `{}` Display, its `{:?}`
+//!   the generated types' derived Debug (which Exegra's debug rule mirrors; refused for a value
+//!   holding a timestamp, which Exegra writes as a bare number) and its `{:json}`
+//!   `serde_json::to_string`.
+//! - The string operations: `startsWith` and `endsWith` are `str::starts_with`/`ends_with`,
+//!   `length` the characters of a string (`chars().count()`) or the items of a list or set,
+//!   `trim` is `str::trim` (Rust's White_Space, which Exegra's trim removes), `chars` the
+//!   characters as strings, and `isAsciiLowercase` and the other class tests, `snakeCase` and
+//!   `parseTime` (substrate's `parse_time`) are `support` helpers written as Exegra defines them.
 //! - `eval` and `check` of a language call its generated module ([`crate::language`]) through an
 //!   adapter that implements the module's environment traits over the environment struct.
 //!
-//! # Timestamps, sets and tuple variants
+//! # Timestamps, sets, tuple variants, shared and boxed values, f64
 //!
 //! - `timestamp` is `prelude::Timestamp(i64)`, a `Copy` value taken by value. Exegra types it as
 //!   a number, so it is compiled as an id over `i64` is: literals and `i64`s stand for it (built
@@ -45,6 +53,18 @@
 //! - A tuple variant (`Variant(T1, T2, ..)`) is built and taken apart by its declared field
 //!   names, as Exegra writes it: `T.V{a: x, b: y}` is `T::V(x, y)` and the pattern `V{b}` is
 //!   `T::V(_, b)`. An example writes it as `{"V": {"a": .., "b": ..}}`.
+//! - `shared<T>` is `Arc<T>`, and `T` to Exegra. Fields read through it (the `Arc` derefs), a
+//!   match on one matches `Arc::as_ref`, and it is borrowed as `&T` the same way. Where a plain
+//!   `T` is expected the value is cloned out (`<T as Clone>::clone(&arc)`); where a shared one is
+//!   expected a plain value is shared with `Arc::new` and a shared one cloned (`Arc::clone`).
+//!   Lists, options and map values of them convert item by item. An example writes it as a `T`.
+//! - A boxed field (`Box<T>`, a field holding its own recursive group) is read and bound as the
+//!   place in the box (`(*x.f)`, `(**b)`), and built with `Box::new`. An optional one
+//!   (`Option<Box<T>>`) is not compiled.
+//! - `f64` is `f64`. A number with a fraction is one; an integer stands for one (`as f64`), as in
+//!   Exegra, where both are numbers. It compares and computes as Exegra's numbers do (IEEE
+//!   doubles), and division or remainder by zero, an evaluation error in Exegra, is a fault. It
+//!   is not a sort key (it has no total order) nor a set item.
 //!
 //! Literals and branches are built in the id or scalar expected of them: a list literal, `if`,
 //! `match` or `let` where a `list<role-id>` or `set<role-id>` is expected builds its string
@@ -53,7 +73,7 @@
 //!
 //! # Ownership
 //!
-//! A parameter of a `Copy` type (bool, the integers, timestamp, options of them) is taken by
+//! A parameter of a `Copy` type (bool, the integers, f64, timestamp, options of them) is taken by
 //! value; every other parameter by reference (`&T`, including `&String` and `&Vec<T>`, so the
 //! module allows `clippy::ptr_arg`). Lets own their values. Items bound by a list operation and
 //! bindings of a
@@ -74,13 +94,14 @@
 //!
 //! # Not compiled (refused)
 //!
-//! `f64`, `duration`, `bytes`, `uuid`, `json` and `shared<T>`; number literals with a fraction;
-//! dividing a timestamp; `==` between a set and a list other than `[]`; an example set not
-//! written in order or with an item twice; reading or binding a boxed field (a field whose type
-//! holds its own type inline); an optional field of an option type; values of a constrained id
+//! `duration`, `bytes`, `uuid` and `json`; `print`, the unit value `()` and structural
+//! recursion; dividing a timestamp; `{:?}` of a value holding a timestamp; an f64 sort key or
+//! set item; `==` between a set and a list other than `[]`, or a shared and a plain value; an
+//! example set not written in order or with an item twice; an optional boxed field; an
+//! optional field of an option type; values of a constrained id
 //! or scalar built from their representation (but a string literal that meets the constraints);
-//! mixing two integer types where a value is passed (rather than computed or
-//! compared); names that become the same Rust name, or the name of a function.
+//! an integer passed where a narrower integer type is expected (a wider one is converted with
+//! `From`; computing and comparing mix any); names that become the same Rust name, or the name of a function.
 
 mod examples;
 mod rust;
@@ -784,7 +805,8 @@ fn assemble(
             clippy::nonminimal_bool,
             clippy::redundant_clone,
             clippy::single_match,
-            clippy::unnecessary_fold
+            clippy::unnecessary_fold,
+            clippy::float_cmp
         )]
 
         #types_use
@@ -855,14 +877,14 @@ mod tests {
     #[test]
     fn unsupported_types_and_recursion_are_refused() {
         let text = spec(
-            r#"{ "id": "half", "params": [{ "name": "x", "type": "f64" }], "returns": "f64", "body": "x",
-                 "examples": [{ "args": { "x": 1 }, "result": 1 }] }"#,
+            r#"{ "id": "half", "params": [{ "name": "x", "type": "bytes" }], "returns": "bytes", "body": "x",
+                 "examples": [{ "args": { "x": "AA==" }, "result": "AA==" }] }"#,
             "",
         );
         let d = refusals(&text);
         assert!(
             d.iter()
-                .any(|d| d.code == FUNCTION_UNSUPPORTED && d.message.contains("f64")),
+                .any(|d| d.code == FUNCTION_UNSUPPORTED && d.message.contains("bytes")),
             "{d:?}"
         );
         let text = spec(
@@ -1069,6 +1091,136 @@ mod tests {
                 "types :: Grant :: Object (\"post\" . to_string () , \"read\" . to_string ())"
             ),
             "{out}"
+        );
+    }
+
+    const REC: &str = r#"{"id": "rec", "name": "Rec", "kind": "struct", "fields": [{"name": "id", "type": "u64"}, {"name": "name", "type": "string"}]}, {"id": "store", "name": "Store", "kind": "struct", "fields": [{"name": "rows", "type": "map<u64, shared<rec>>"}, {"name": "top", "type": "shared<rec>"}]}"#;
+
+    #[test]
+    fn a_shared_value_is_read_through_its_arc_and_built_with_arc_new() {
+        let out = module(&spec(
+            r#"{"id": "top-name", "params": [{"name": "s", "type": "store"}], "returns": "string", "body": "s.top.name", "examples": [{"args": {"s": {"rows": {}, "top": {"id": 1, "name": "a"}}}, "result": "a"}]}, {"id": "top", "params": [{"name": "s", "type": "store"}], "returns": "rec", "body": "s.top", "examples": [{"args": {"s": {"rows": {}, "top": {"id": 1, "name": "a"}}}, "result": {"id": 1, "name": "a"}}]}, {"id": "row", "params": [{"name": "s", "type": "store"}, {"name": "id", "type": "u64"}], "returns": "option<rec>", "body": "get(s.rows, id)", "examples": [{"args": {"s": {"rows": {"2": {"id": 2, "name": "b"}}, "top": {"id": 1, "name": "a"}}, "id": 2}, "result": {"id": 2, "name": "b"}}, {"args": {"s": {"rows": {}, "top": {"id": 1, "name": "a"}}, "id": 2}, "result": null}]}, {"id": "with-top", "params": [{"name": "s", "type": "store"}, {"name": "r", "type": "rec"}], "returns": "store", "body": "store{rows: s.rows, top: r}", "examples": [{"args": {"s": {"rows": {}, "top": {"id": 1, "name": "a"}}, "r": {"id": 2, "name": "b"}}, "result": {"rows": {}, "top": {"id": 2, "name": "b"}}}]}"#,
+            REC,
+        ));
+        assert!(out.contains("s . top . name . clone ()"), "{out}");
+        assert!(
+            out.contains("< types :: Rec as Clone > :: clone (& s . top)"),
+            "{out}"
+        );
+        assert!(
+            out.contains("map (| item_ | < types :: Rec as Clone > :: clone (& item_))"),
+            "{out}"
+        );
+        assert!(
+            out.contains("top : std :: sync :: Arc :: new (r . clone ())"),
+            "{out}"
+        );
+        // An example writes a shared<T> as a T.
+        assert!(
+            out.contains("top : std :: sync :: Arc :: new (types :: Rec {"),
+            "{out}"
+        );
+    }
+
+    const FT: &str = r#"{"id": "ft", "name": "Field type", "kind": "union", "variants": [{"name": "str"}, {"name": "list", "newtype": true, "fields": [{"name": "value", "type": "ft"}]}]}"#;
+
+    #[test]
+    fn a_boxed_field_is_bound_as_the_value_in_its_box() {
+        let out = module(&spec(
+            r#"{"id": "list-of-str", "params": [{"name": "t", "type": "ft"}], "returns": "bool", "body": "match t { list(inner) => match inner { str => true, _ => false }, _ => false }", "examples": [{"args": {"t": {"list": "str"}}, "result": true}, {"args": {"t": {"list": {"list": "str"}}}, "result": false}, {"args": {"t": "str"}, "result": false}]}, {"id": "wrap", "params": [{"name": "t", "type": "ft"}], "returns": "ft", "body": "ft.list(t)", "examples": [{"args": {"t": "str"}, "result": {"list": "str"}}]}"#,
+            FT,
+        ));
+        assert!(out.contains("types :: Ft :: List (inner) =>"), "{out}");
+        assert!(
+            out.contains("match & (** inner)") || out.contains("match & (* * inner)"),
+            "{out}"
+        );
+        assert!(
+            out.contains("types :: Ft :: List (Box :: new (t . clone ()))"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn the_string_operations_are_rust_s_own_and_the_support_helpers() {
+        let out = module(&spec(
+            r#"{"id": "text-checks", "params": [{"name": "s", "type": "string"}], "returns": "bool", "body": "startsWith(s, 'ab') && endsWith(s, 'z') && isAsciiLowercase(s)", "examples": [{"args": {"s": "abz"}, "result": true}, {"args": {"s": "abZ"}, "result": false}]}, {"id": "sizes", "params": [{"name": "s", "type": "string"}, {"name": "xs", "type": "list<string>"}], "returns": "u64", "body": "length(s) + length(xs)", "examples": [{"args": {"s": "héllo", "xs": ["a"]}, "result": 6}]}, {"id": "tidy", "params": [{"name": "s", "type": "string"}], "returns": "list<string>", "body": "chars(trim(s))", "examples": [{"args": {"s": " ab\n"}, "result": ["a", "b"]}]}, {"id": "snake", "params": [{"name": "s", "type": "string"}], "returns": "string", "body": "snakeCase(s)", "examples": [{"args": {"s": "PostAuthor"}, "result": "post_author"}]}, {"id": "millis", "params": [{"name": "s", "type": "string"}], "returns": "i64", "body": "match parseTime(s) { Ok(ms) => ms, Err(e) => 0 - 1 }", "examples": [{"args": {"s": "1970-01-02"}, "result": 86400000}, {"args": {"s": "1970-01-01T00:01Z"}, "result": 60000}, {"args": {"s": "x"}, "result": -1}]}"#,
+            "",
+        ));
+        assert!(
+            out.contains("s . as_str () . starts_with (\"ab\")"),
+            "{out}"
+        );
+        assert!(out.contains("s . as_str () . ends_with (\"z\")"), "{out}");
+        assert!(
+            out.contains("support :: every_char (s . as_str () , char :: is_ascii_lowercase)"),
+            "{out}"
+        );
+        assert!(out.contains(". chars () . count ()"), "{out}");
+        assert!(out.contains("u64 :: try_from (xs . len ())"), "{out}");
+        assert!(out.contains(". trim () . to_string ()"), "{out}");
+        assert!(
+            out.contains(". chars () . map (String :: from) . collect :: < Vec < _ > > ()"),
+            "{out}"
+        );
+        assert!(
+            out.contains("fn snake_case (name : & str) -> String"),
+            "{out}"
+        );
+        assert!(
+            out.contains("fn parse_time (text : & str) -> Result < i64 , String >"),
+            "{out}"
+        );
+        assert!(out.contains("fn every_char"), "{out}");
+    }
+
+    const NUM: &str = r#"{"id": "num", "name": "Number", "kind": "union", "variants": [{"name": "pos-int", "newtype": true, "fields": [{"name": "value", "type": "u64"}]}, {"name": "float", "newtype": true, "fields": [{"name": "value", "type": "f64"}]}]}"#;
+
+    #[test]
+    fn an_f64_is_bound_formatted_compared_and_divided() {
+        let out = module(&spec(
+            r#"{"id": "num-text", "params": [{"name": "n", "type": "num"}], "returns": "string", "body": "match n { pos-int(u) => format('{}', u), float(x) => format('{} {:json} {:?}', x, x, n) }", "examples": [{"args": {"n": {"float": 2.5}}, "result": "2.5 2.5 Float(2.5)"}, {"args": {"n": {"float": 1}}, "result": "1 1.0 Float(1.0)"}, {"args": {"n": {"pos-int": 7}}, "result": "7"}]}, {"id": "half", "params": [{"name": "x", "type": "f64"}], "returns": "f64", "body": "x / 2", "examples": [{"args": {"x": 3}, "result": 1.5}]}, {"id": "bigger", "params": [{"name": "x", "type": "f64"}], "returns": "bool", "body": "x > 1.5", "examples": [{"args": {"x": 2}, "result": true}]}"#,
+            NUM,
+        ));
+        assert!(out.contains("types :: Num :: Float (x) =>"), "{out}");
+        assert!(
+            out.contains("format ! (\"{x} {} {:?}\" , serde_json :: to_string (x) . unwrap_or_default () , n)"),
+            "{out}"
+        );
+        assert!(out.contains("let divisor_ : f64 = 2.0 ;"), "{out}");
+        assert!(out.contains("Result < f64 , Fault >"), "{out}");
+        assert!(out.contains("x > 1.5"), "{out}");
+        // Example values of f64 are f64 literals.
+        assert!(out.contains("types :: Num :: Float (2.5)"), "{out}");
+    }
+
+    #[test]
+    fn an_integer_widens_with_from_and_does_not_narrow() {
+        let wide = r#"{ "id": "wide", "params": [{ "name": "x", "type": "u32" }], "returns": "u64", "body": "x",
+                 "examples": [{ "args": { "x": 3 }, "result": 3 }] }"#;
+        let out = module(&spec(wide, ""));
+        assert!(out.contains("u64 :: from (x)"), "{out}");
+        let narrow = wide.replace("\"u32\"", "\"u64\"");
+        let narrow = narrow.replacen("\"returns\": \"u64\"", "\"returns\": \"u32\"", 1);
+        let d = refusals(&spec(&narrow, ""));
+        assert!(
+            d.iter()
+                .any(|d| d.code == FUNCTION_UNSUPPORTED && d.message.contains("u64")),
+            "{d:?}"
+        );
+    }
+
+    #[test]
+    fn print_is_refused_as_not_compiled() {
+        let d = refusals(&spec(
+            r#"{ "id": "p", "params": [{ "name": "s", "type": "string" }], "returns": "string", "body": "print(l, s)",
+                 "examples": [{ "args": { "s": "a" }, "result": "a" }] }"#,
+            "",
+        ));
+        assert!(
+            d.iter()
+                .any(|d| d.code == FUNCTION_UNSUPPORTED && d.message.contains("print")),
+            "{d:?}"
         );
     }
 

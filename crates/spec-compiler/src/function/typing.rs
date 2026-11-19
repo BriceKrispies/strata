@@ -1,8 +1,8 @@
 //! Types of the body language, as Exegra types them (`typeFunction` in `src/core/function.js`),
-//! restricted to what specc compiles: booleans, strings, the integer types, `timestamp`, ids and
-//! scalars over those, enums, structs, unions (tuple variants included), lists, sets, options,
-//! maps and results. `f64`, `duration`, `bytes`, `uuid`, `json` and `shared<T>` are refused
-//! (`specc.function-unsupported`).
+//! restricted to what specc compiles: booleans, strings, the integer types, `f64`, `timestamp`,
+//! ids and scalars over those, enums, structs, unions (tuple variants included), lists, sets,
+//! options, maps, results and `shared<T>` (read as `T`, as Exegra reads it; [`unshared`]).
+//! `duration`, `bytes`, `uuid` and `json` are refused (`specc.function-unsupported`).
 //!
 //! - `timestamp` is a number type in Exegra, held as `prelude::Timestamp(i64)`: it is typed as an
 //!   alias over `i64` ([`Ty::timestamp`]), so it compares, computes and converts as an id over
@@ -30,6 +30,8 @@ pub(crate) enum Ty {
     Int(Builtin),
     /// A number literal, which takes the integer type of where it is used.
     Number,
+    /// `f64`.
+    Float,
     /// An id or scalar type over a bool, string or integer representation; `timestamp` too, as
     /// [`TIMESTAMP`] over `i64` ([`Ty::timestamp`]).
     Alias(String, Box<Ty>),
@@ -42,6 +44,8 @@ pub(crate) enum Ty {
     Option(Box<Ty>),
     Map(Box<Ty>, Box<Ty>),
     Result(Box<Ty>, Box<Ty>),
+    /// `shared<T>`: `T` to Exegra (its structure is `T`'s), an `Arc<T>` in Rust.
+    Shared(Box<Ty>),
     /// The type of `fail`, which fits anything.
     Never,
     /// The item of `[]` and `{}`, the inner type of `null`, which fits anything.
@@ -78,6 +82,10 @@ impl Ty {
         Ty::Map(Box::new(k), Box::new(v))
     }
 
+    pub(crate) fn shared(of: Ty) -> Ty {
+        Ty::Shared(Box::new(of))
+    }
+
     /// The type as the specification writes it.
     pub(crate) fn text(&self) -> String {
         match self {
@@ -85,6 +93,8 @@ impl Ty {
             Ty::Str => "string".into(),
             Ty::Int(b) => b.as_str().into(),
             Ty::Number => "a number".into(),
+            Ty::Float => "f64".into(),
+            Ty::Shared(of) => format!("shared<{}>", of.text()),
             Ty::Alias(id, _) | Ty::Enum(id) | Ty::Struct(id) | Ty::Union(id) => id.clone(),
             Ty::List(of) => format!("list<{}>", of.text()),
             Ty::Set(of) => format!("set<{}>", of.text()),
@@ -100,7 +110,7 @@ impl Ty {
     pub(crate) fn is_concrete(&self) -> bool {
         match self {
             Ty::Number | Ty::Unknown => false,
-            Ty::List(of) | Ty::Set(of) | Ty::Option(of) => of.is_concrete(),
+            Ty::List(of) | Ty::Set(of) | Ty::Option(of) | Ty::Shared(of) => of.is_concrete(),
             Ty::Map(k, v) | Ty::Result(k, v) => k.is_concrete() && v.is_concrete(),
             Ty::Alias(_, r) => r.is_concrete(),
             _ => true,
@@ -120,9 +130,17 @@ pub(crate) fn class(t: &Ty) -> Option<Class> {
     match t {
         Ty::Bool => Some(Class::Bool),
         Ty::Str => Some(Class::Str),
-        Ty::Int(_) | Ty::Number => Some(Class::Num),
-        Ty::Alias(_, r) => class(r),
+        Ty::Int(_) | Ty::Number | Ty::Float => Some(Class::Num),
+        Ty::Alias(_, r) | Ty::Shared(r) => class(r),
         _ => None,
+    }
+}
+
+/// The type a `shared<T>` holds: `T`, which is what Exegra reads it as. Anything else as it is.
+pub(crate) fn unshared(t: &Ty) -> &Ty {
+    match t {
+        Ty::Shared(of) => unshared(of),
+        other => other,
     }
 }
 
@@ -145,6 +163,7 @@ pub(crate) fn int_kind(t: &Ty) -> Option<Builtin> {
 
 /// Whether a value of type `from` may stand where `to` is expected (Exegra's `assignable`).
 pub(crate) fn assignable(from: &Ty, to: &Ty) -> bool {
+    let (from, to) = (unshared(from), unshared(to));
     if is_open(from) || is_open(to) {
         return true;
     }
@@ -188,6 +207,13 @@ pub(crate) fn join(a: &Ty, b: &Ty) -> Option<Ty> {
     }
     if is_open(b) {
         return Some(a.clone());
+    }
+    // Two shared values stay shared; a shared value with a plain one is held plain.
+    match (a, b) {
+        (Ty::Shared(x), Ty::Shared(y)) => return join(x, y).map(Ty::shared),
+        (Ty::Shared(x), _) => return join(x, b),
+        (_, Ty::Shared(y)) => return join(a, y),
+        _ => {}
     }
     if matches!(a, Ty::Option(_)) || matches!(b, Ty::Option(_)) {
         let ai = match a {
@@ -289,12 +315,7 @@ pub(crate) fn ty_of(spec: &Spec, t: &TypeRef) -> Result<Ty, Refusal> {
         TypeRef::Option(of) => Ty::option(ty_of(spec, of)?),
         TypeRef::Map(k, v) => Ty::map(ty_of(spec, k)?, ty_of(spec, v)?),
         TypeRef::Set(of) => Ty::set(ty_of(spec, of)?),
-        TypeRef::Shared(_) => {
-            return Err(unsupported(format!(
-                "the type {} is not compiled in functions yet",
-                t.text()
-            )));
-        }
+        TypeRef::Shared(of) => Ty::shared(ty_of(spec, of)?),
         TypeRef::Declared(id) => {
             if id.starts_with("set<") || id.starts_with("result<") {
                 return Err(unsupported(format!(
@@ -332,9 +353,10 @@ fn builtin(b: Builtin) -> Result<Ty, Refusal> {
             Ty::Int(b)
         }
         Builtin::Timestamp => Ty::timestamp(),
+        Builtin::F64 => Ty::Float,
         other => {
             return Err(unsupported(format!(
-                "the built-in type {} is not compiled in functions yet (bool, string, timestamp and the integer types are)",
+                "the built-in type {} is not compiled in functions yet (bool, string, f64, timestamp and the integer types are)",
                 other.as_str()
             )))
         }
@@ -472,7 +494,66 @@ pub(crate) struct CaseField {
     pub boxed: bool,
 }
 
+/// A placeholder of `format`: `{}` (Display), `{:?}` (Rust's derived Debug), `{:json}` (JSON
+/// text as serde_json writes it).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Hole {
+    Display,
+    Debug,
+    Json,
+}
+
+/// A format text as its pieces: each run of literal text and the placeholder after it, the
+/// last without one. Placeholders are found left to right as Exegra's
+/// `/\{(?::\?|:json)?\}/g` finds them.
+pub(crate) fn format_parts(text: &str) -> Vec<(String, Option<Hole>)> {
+    let mut out = Vec::new();
+    let mut lit = String::new();
+    let mut rest = text;
+    while let Some(c) = rest.chars().next() {
+        let hole = [
+            ("{}", Hole::Display),
+            ("{:?}", Hole::Debug),
+            ("{:json}", Hole::Json),
+        ]
+        .into_iter()
+        .find(|(h, _)| rest.starts_with(h));
+        if let Some((h, kind)) = hole {
+            out.push((std::mem::take(&mut lit), Some(kind)));
+            rest = &rest[h.len()..];
+        } else {
+            lit.push(c);
+            rest = &rest[c.len_utf8()..];
+        }
+    }
+    out.push((lit, None));
+    out
+}
+
+/// Whether `{:json}` writes a value of this type (Exegra's `jsonWritable`): a string, a number,
+/// a bool, an id or scalar over one, and options and lists of these.
+pub(crate) fn json_writable(t: &Ty) -> bool {
+    match t {
+        Ty::Option(of) | Ty::List(of) | Ty::Set(of) => json_writable(of),
+        Ty::Unknown | Ty::Never => true,
+        Ty::Bool | Ty::Str | Ty::Int(_) | Ty::Number | Ty::Float | Ty::Alias(..) => true,
+        _ => false,
+    }
+}
+
+/// A boxed field is bound as the value in its box; an optional one (`Option<Box<T>>`) is not.
+fn boxed_binding(f: &CaseField, t: &Ty, case: &str) -> Result<(), Refusal> {
+    if f.boxed && matches!(t, Ty::Option(_)) {
+        return Err(unsupported(format!(
+            "the field {} of {case} is an optional boxed field (Option<Box<T>>); binding it is not compiled yet",
+            f.name
+        )));
+    }
+    Ok(())
+}
+
 pub(crate) fn match_on(t: &Ty) -> Option<MatchOn> {
+    let t = unshared(t);
     Some(match t {
         Ty::Union(id) => MatchOn::Union(id.clone()),
         Ty::Option(of) => MatchOn::Option((**of).clone()),
@@ -634,7 +715,7 @@ impl<'a> Checker<'a> {
     }
 
     pub(crate) fn field_of(&self, t: &Ty, name: &str) -> Result<Ty, Refusal> {
-        match t {
+        match unshared(t) {
             Ty::Unknown | Ty::Never => Ok(Ty::Unknown),
             Ty::Struct(id) => {
                 let fields = struct_fields(self.spec, id);
@@ -642,12 +723,13 @@ impl<'a> Checker<'a> {
                     .iter()
                     .find(|f| f.name == name)
                     .ok_or_else(|| invalid(format!("{id} has no field \"{name}\"")))?;
-                if f.boxed {
+                let read = f.read(self.spec)?;
+                if f.boxed && matches!(read, Ty::Option(_)) {
                     return Err(unsupported(format!(
-                        "the field {name} of {id} is boxed (its type holds {id} again); reading it is not compiled yet"
+                        "the field {name} of {id} is an optional boxed field (Option<Box<T>>); reading it is not compiled yet"
                     )));
                 }
-                f.read(self.spec)
+                Ok(read)
             }
             _ => Err(invalid(format!(
                 "{} has no fields; it cannot be read as .{name}",
@@ -726,14 +808,9 @@ impl<'a> Checker<'a> {
     fn type_of(&mut self, e: &mut Expr, scope: &Scope) -> Result<Ty, Refusal> {
         let spec = self.spec;
         match &mut e.kind {
-            Kind::Num(text) => {
-                if text.contains('.') {
-                    return Err(unsupported(format!(
-                        "the number {text} has a fraction; functions compute with integers only"
-                    )));
-                }
-                Ok(Ty::Number)
-            }
+            // A number with a fraction is an f64: no integer type holds it.
+            Kind::Num(text) if text.contains('.') => Ok(Ty::Float),
+            Kind::Num(_) => Ok(Ty::Number),
             Kind::Str(_) => Ok(Ty::Str),
             Kind::Bool(_) => Ok(Ty::Bool),
             Kind::Null => Ok(Ty::option(Ty::Unknown)),
@@ -796,7 +873,8 @@ impl<'a> Checker<'a> {
                                 t.text()
                             )));
                         }
-                        if !matches!(a.kind, Kind::Num(_)) {
+                        // Negating an f64 cannot fail.
+                        if !matches!(a.kind, Kind::Num(_)) && t != Ty::Float {
                             self.arith = true;
                         }
                         Ok(t)
@@ -845,12 +923,16 @@ impl<'a> Checker<'a> {
                 if matches!(op, BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge) {
                     return Ok(Ty::Bool);
                 }
-                self.arith = true;
                 let t = if a != Ty::Number && is_number(&a) {
                     a
                 } else {
                     b
                 };
+                // f64 addition, subtraction and multiplication cannot fail; division and
+                // remainder by zero are an evaluation error in Exegra, a fault here.
+                if t != Ty::Float || matches!(op, BinOp::Div | BinOp::Rem) {
+                    self.arith = true;
+                }
                 if op == BinOp::Div && t.is_timestamp() {
                     // Exegra checks integer arithmetic only for the integer types; it divides a
                     // timestamp as a number, which can give a fraction an i64 cannot hold.
@@ -1041,13 +1123,9 @@ impl<'a> Checker<'a> {
                         }
                         if b != "_" {
                             let f = &case.fields[0];
-                            if f.boxed {
-                                return Err(unsupported(format!(
-                                    "the field {} of {name} is boxed; binding it is not compiled yet",
-                                    f.name
-                                )));
-                            }
-                            s2.push((b.clone(), f.ty.clone()?));
+                            let t = f.ty.clone()?;
+                            boxed_binding(f, &t, name)?;
+                            s2.push((b.clone(), t));
                         }
                     }
                     for (field, b) in fields.iter().flatten() {
@@ -1059,12 +1137,9 @@ impl<'a> Checker<'a> {
                                 invalid(format!("\"{name}\" has no field \"{field}\""))
                             })?;
                         if b != "_" {
-                            if f.boxed {
-                                return Err(unsupported(format!(
-                                    "the field {field} of {name} is boxed; binding it is not compiled yet"
-                                )));
-                            }
-                            s2.push((b.clone(), f.ty.clone()?));
+                            let t = f.ty.clone()?;
+                            boxed_binding(f, &t, name)?;
+                            s2.push((b.clone(), t));
                         }
                     }
                 }
@@ -1250,24 +1325,98 @@ impl<'a> Checker<'a> {
                         "the first argument of format is a string literal, such as \"policy:{}\"",
                     ));
                 };
-                let holes = text.matches("{}").count();
-                if holes != op.args.len() - 1 {
+                let holes: Vec<Hole> = format_parts(text)
+                    .into_iter()
+                    .filter_map(|(_, h)| h)
+                    .collect();
+                if holes.len() != op.args.len() - 1 {
                     return Err(invalid(format!(
-                        "format \"{text}\" has {holes} placeholders and {} values",
+                        "format \"{text}\" has {} placeholders and {} values",
+                        holes.len(),
                         op.args.len() - 1
                     )));
                 }
                 let t = walk_args(self, op)?;
-                for (i, a) in t.iter().enumerate().skip(1) {
-                    if class(a).is_none() && !matches!(a, Ty::Enum(_) | Ty::Unknown) {
-                        return Err(invalid(format!(
-                            "value {i} of format is {}; format writes numbers, strings, bools and enum values",
-                            a.text()
-                        )));
+                for (i, (a, hole)) in t.iter().skip(1).zip(&holes).enumerate() {
+                    let i = i + 1;
+                    match hole {
+                        // Exegra's {:?} writes any value but json and bytes, which functions do
+                        // not compile.
+                        Hole::Debug => {}
+                        Hole::Json => {
+                            if !json_writable(a) {
+                                return Err(invalid(format!(
+                                    "value {i} of format is {}; {{:json}} writes strings, numbers, bools, json, and options and lists of them",
+                                    a.text()
+                                )));
+                            }
+                        }
+                        Hole::Display => {
+                            if class(a).is_none() && !matches!(a, Ty::Enum(_) | Ty::Unknown) {
+                                return Err(invalid(format!(
+                                    "value {i} of format is {}; {{}} writes numbers, strings, bools and enum values ({{:?}} writes Rust's debug text of any value)",
+                                    a.text()
+                                )));
+                            }
+                        }
                     }
                 }
                 Ok(Ty::Str)
             }
+            "startsWith" | "endsWith" => {
+                arity(2, op)?;
+                let t = walk_args(self, op)?;
+                self.need(&t[0], &Ty::Str, &format!("the text of {name}"))?;
+                let what = if name == "startsWith" {
+                    "prefix"
+                } else {
+                    "suffix"
+                };
+                self.need(&t[1], &Ty::Str, &format!("the {what} of {name}"))?;
+                Ok(Ty::Bool)
+            }
+            "length" => {
+                arity(1, op)?;
+                let t = walk_args(self, op)?;
+                if !matches!(unshared(&t[0]), Ty::List(_) | Ty::Set(_)) {
+                    self.need(&t[0], &Ty::Str, "the argument of length")?;
+                }
+                Ok(Ty::Int(Builtin::U64))
+            }
+            "trim" | "snakeCase" => {
+                arity(1, op)?;
+                let t = walk_args(self, op)?;
+                self.need(&t[0], &Ty::Str, &format!("the argument of {name}"))?;
+                Ok(Ty::Str)
+            }
+            "chars" => {
+                arity(1, op)?;
+                let t = walk_args(self, op)?;
+                self.need(&t[0], &Ty::Str, "the argument of chars")?;
+                Ok(Ty::list(Ty::Str))
+            }
+            "isAsciiLowercase"
+            | "isAsciiUppercase"
+            | "isAsciiAlphabetic"
+            | "isAsciiDigit"
+            | "isAsciiAlphanumeric" => {
+                arity(1, op)?;
+                let t = walk_args(self, op)?;
+                self.need(&t[0], &Ty::Str, &format!("the argument of {name}"))?;
+                Ok(Ty::Bool)
+            }
+            "parseTime" => {
+                arity(1, op)?;
+                let t = walk_args(self, op)?;
+                self.need(&t[0], &Ty::Str, "the argument of parseTime")?;
+                Ok(Ty::Result(
+                    Box::new(Ty::Int(Builtin::I64)),
+                    Box::new(Ty::Str),
+                ))
+            }
+            "print" => Err(unsupported(
+                "print (a language's expression as text) is not compiled in functions yet",
+            )),
             "eval" | "check" => {
                 arity(3, op)?;
                 self.type_language(op, scope)
@@ -1360,7 +1509,7 @@ impl<'a> Checker<'a> {
         let t = self.walk(&mut op.args[1], scope)?;
         self.need(&t, &ast, &format!("the expression of {}", op.name))?;
         let env = self.walk(&mut op.args[2], scope)?;
-        let Ty::Struct(env_id) = env else {
+        let Ty::Struct(env_id) = unshared(&env).clone() else {
             return Err(invalid(format!(
                 "the environment of {} is {}, not a struct",
                 op.name,

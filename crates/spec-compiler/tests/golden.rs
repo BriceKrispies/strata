@@ -189,6 +189,12 @@ fn functions_golden_output_matches_its_fixture_crate() {
         "roles: &std::collections::BTreeSet<String>,",
         "types::Grant::Object(object, action) =>",
         "fn grants_of_example_1()",
+        // WG-4966: shared and boxed values, f64, the string operations.
+        "pub fn with_top(",
+        "pub fn double_negation(",
+        "pub fn num_text(",
+        "pub fn millis(",
+        "fn parse_time(",
     ] {
         assert!(functions.contains(f), "no {f} in src/functions.rs");
     }
@@ -220,18 +226,18 @@ fn a_function_specc_cannot_compile_is_refused() {
         };
     assert_eq!(refused(&text), Vec::<String>::new());
     // A parameter of a type functions do not compute with.
-    let float = text.replacen(
+    let bytes = text.replacen(
         "{\"name\":\"version\",\"type\":\"u64\"}",
-        "{\"name\":\"version\",\"type\":\"f64\"}",
+        "{\"name\":\"version\",\"type\":\"bytes\"}",
         1,
     );
-    assert_ne!(float, text);
+    assert_ne!(bytes, text);
     assert!(
-        refused(&float)
+        refused(&bytes)
             .iter()
             .any(|d| d.contains("specc.function-unsupported") && d.contains("check-version")),
         "{:?}",
-        refused(&float)
+        refused(&bytes)
     );
     // A body that does not type.
     let mistyped = text.replacen("a == action", "a == resource", 1);
