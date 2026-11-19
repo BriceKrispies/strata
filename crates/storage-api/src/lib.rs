@@ -392,6 +392,30 @@ pub struct OidcFlow {
     pub expires_at: Timestamp,
 }
 
+/// A sign-in at a SAML identity provider that has been started and not yet answered. The row is
+/// held server-side, found by the hash of the `RelayState` value the response returns with, is
+/// answered once, and lapses. It holds what the response must be checked against: the identifier
+/// of the authentication request it must answer, the hash of the nonce kept in the starting
+/// browser's cookie, and the address the sign-in started at.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SamlRequest {
+    pub tenant: TenantId,
+    /// A hash of the `RelayState` value.
+    pub id_hash: String,
+    /// The identifier of the provider in the tenant's configuration.
+    pub provider: String,
+    /// The `ID` of the authentication request, which the response's `InResponseTo` must name.
+    pub request_id: String,
+    /// A hash of the nonce kept in the cookie of the browser that started the sign-in.
+    pub binding_hash: String,
+    /// The origin the sign-in started at, and the one its assertion consumer address is at.
+    pub origin: String,
+    /// The principal that was signed in when it started, when the sign-in is to link the
+    /// identity to that principal's account (FED-012).
+    pub principal: Option<PrincipalId>,
+    pub expires_at: Timestamp,
+}
+
 /// A person at an external identity provider, tied to the principal they sign in as. Keyed by
 /// the tenant, the provider of its configuration and the provider's subject identifier, so that
 /// one provider's subject is never another provider's (FED-256).
@@ -575,6 +599,30 @@ pub trait Store: Send + Sync {
     fn take_oidc_flow(&self, tenant: &TenantId, id_hash: &str) -> StoreResult<Option<OidcFlow>>;
     /// Remove started sign-ins that have lapsed before `now`. Returns how many were removed.
     fn purge_oidc_flows(&self, now: Timestamp) -> StoreResult<u64>;
+
+    /// Keep a started SAML sign-in.
+    fn put_saml_request(&self, request: &SamlRequest) -> StoreResult<()>;
+    /// Take a started SAML sign-in, removing it in the same step, so that a response answers it
+    /// once whatever the timing. The row is returned whether or not it has lapsed: the caller
+    /// compares the time.
+    fn take_saml_request(&self, tenant: &TenantId, id_hash: &str)
+        -> StoreResult<Option<SamlRequest>>;
+    /// Remove started SAML sign-ins that have lapsed before `now`. Returns how many were removed.
+    fn purge_saml_requests(&self, now: Timestamp) -> StoreResult<u64>;
+
+    /// Remember that an assertion was accepted, by the hash of its identifier, until `expires_at`.
+    /// Returns `false`, and changes nothing, when the tenant already remembers an assertion of
+    /// that provider with that identifier: in one step, so that two presentations at once are one.
+    fn put_saml_assertion(
+        &self,
+        tenant: &TenantId,
+        provider: &str,
+        id_hash: &str,
+        expires_at: Timestamp,
+    ) -> StoreResult<bool>;
+    /// Forget assertions that would no longer be accepted at `now` whatever is remembered.
+    /// Returns how many were forgotten.
+    fn purge_saml_assertions(&self, now: Timestamp) -> StoreResult<u64>;
 
     /// Tie a provider's subject to a principal. Returns `false`, and keeps nothing, when the
     /// tenant already ties that provider's subject to a principal.

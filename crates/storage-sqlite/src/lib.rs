@@ -27,7 +27,7 @@ use strata_runtime::sqlite::{Database, DbError, Migration};
 use strata_storage_api::{
     check_event_sequence, field_matches, throttle_refund, throttle_step, Account, Capabilities,
     Commit, FederatedIdentity, Health, JournalEntry, OidcFlow, OutboxEntry, PasskeyCeremony,
-    PasskeyChallenge, PasskeyRecord, Receipt, SessionRecord, SignInLink, SnapshotInfo,
+    PasskeyChallenge, PasskeyRecord, Receipt, SamlRequest, SessionRecord, SignInLink, SnapshotInfo,
     StorageMigration, Store, StoreError, StoreResult, TenantSummary, ThrottleRow, ThrottleRule,
     ThrottleSettle, ThrottleVerdict,
 };
@@ -213,6 +213,33 @@ const MIGRATIONS: &[Migration] = &[
         PRIMARY KEY (tenant, provider, subject)
     );
     CREATE INDEX federated_identities_principal ON federated_identities(tenant, principal);
+    ",
+    },
+    // Version 6 belongs to the second-factor change, which is made on its own branch.
+    Migration {
+        version: 7,
+        name: "SAML sign-ins and accepted assertions",
+        sql: "
+    CREATE TABLE saml_requests (
+        tenant       TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+        id_hash      TEXT NOT NULL,
+        provider     TEXT NOT NULL,
+        request_id   TEXT NOT NULL,
+        binding_hash TEXT NOT NULL,
+        origin       TEXT NOT NULL,
+        principal    TEXT,
+        expires_at   INTEGER NOT NULL,
+        PRIMARY KEY (tenant, id_hash)
+    );
+    CREATE INDEX saml_requests_expiry ON saml_requests(expires_at);
+    CREATE TABLE saml_assertions (
+        tenant     TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+        provider   TEXT NOT NULL,
+        id_hash    TEXT NOT NULL,
+        expires_at INTEGER NOT NULL,
+        PRIMARY KEY (tenant, provider, id_hash)
+    );
+    CREATE INDEX saml_assertions_expiry ON saml_assertions(expires_at);
     ",
     },
 ];
@@ -1390,6 +1417,110 @@ impl Store for SqliteStore {
             .lock()?
             .execute(
                 "DELETE FROM oidc_flows WHERE expires_at < ?1",
+                params![now.0],
+            )
+            .map_err(db)?;
+        Ok(removed as u64)
+    }
+
+    fn put_saml_request(&self, request: &SamlRequest) -> StoreResult<()> {
+        self.lock()?
+            .execute(
+                "INSERT OR REPLACE INTO saml_requests (tenant, id_hash, provider, request_id, binding_hash, origin, principal, expires_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![
+                    request.tenant.as_str(),
+                    request.id_hash,
+                    request.provider,
+                    request.request_id,
+                    request.binding_hash,
+                    request.origin,
+                    request.principal.as_ref().map(|p| p.as_str()),
+                    request.expires_at.0,
+                ],
+            )
+            .map_err(db)?;
+        Ok(())
+    }
+
+    fn take_saml_request(
+        &self,
+        tenant: &TenantId,
+        id_hash: &str,
+    ) -> StoreResult<Option<SamlRequest>> {
+        // One statement reads and removes the row, so two responses cannot both take it.
+        let row = self
+            .lock()?
+            .query_row(
+                "DELETE FROM saml_requests WHERE tenant = ?1 AND id_hash = ?2
+                 RETURNING provider, request_id, binding_hash, origin, principal, expires_at",
+                params![tenant.as_str(), id_hash],
+                |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, String>(2)?,
+                        r.get::<_, String>(3)?,
+                        r.get::<_, Option<String>>(4)?,
+                        r.get::<_, i64>(5)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(db)?;
+        let Some((provider, request_id, binding_hash, origin, principal, expires_at)) = row else {
+            return Ok(None);
+        };
+        Ok(Some(SamlRequest {
+            tenant: tenant.clone(),
+            id_hash: id_hash.to_string(),
+            provider,
+            request_id,
+            binding_hash,
+            origin,
+            principal: principal
+                .map(PrincipalId::new)
+                .transpose()
+                .map_err(|e| StoreError::Corrupt(e.to_string()))?,
+            expires_at: Timestamp(expires_at),
+        }))
+    }
+
+    fn purge_saml_requests(&self, now: Timestamp) -> StoreResult<u64> {
+        let removed = self
+            .lock()?
+            .execute(
+                "DELETE FROM saml_requests WHERE expires_at < ?1",
+                params![now.0],
+            )
+            .map_err(db)?;
+        Ok(removed as u64)
+    }
+
+    fn put_saml_assertion(
+        &self,
+        tenant: &TenantId,
+        provider: &str,
+        id_hash: &str,
+        expires_at: Timestamp,
+    ) -> StoreResult<bool> {
+        // One statement, so that two presentations at once are one: the second changes no row.
+        let added = self
+            .lock()?
+            .execute(
+                "INSERT OR IGNORE INTO saml_assertions (tenant, provider, id_hash, expires_at)
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![tenant.as_str(), provider, id_hash, expires_at.0],
+            )
+            .map_err(db)?;
+        Ok(added == 1)
+    }
+
+    fn purge_saml_assertions(&self, now: Timestamp) -> StoreResult<u64> {
+        let removed = self
+            .lock()?
+            .execute(
+                "DELETE FROM saml_assertions WHERE expires_at < ?1",
                 params![now.0],
             )
             .map_err(db)?;

@@ -17,6 +17,7 @@
 //! | `STRATA_MAIL_FROM` | none | The sender address, required with `STRATA_SMTP_URL`. |
 //! | `STRATA_MAIL_DIR` | `var/mail` | Where the development sink writes `.eml` files (development only). |
 //! | `STRATA_OIDC_CONFIG` | unset | A JSON file of each tenant's OpenID Connect providers. Unset: no tenant has one. |
+//! | `STRATA_SAML_CONFIG` | unset | A JSON file of each tenant's SAML providers. Unset: no tenant has one. |
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -56,10 +57,16 @@ fn mailer(dev: bool) -> Result<Arc<dyn Mailer>, String> {
 /// The tenants' identity providers, from the platform configuration file when one is named.
 fn federation() -> Result<Federation, String> {
     let path = var("STRATA_OIDC_CONFIG", "");
-    if path.is_empty() {
-        return Ok(Federation::none());
+    let federation = if path.is_empty() {
+        Federation::none()
+    } else {
+        Federation::from_file(&PathBuf::from(path))?
+    };
+    let saml = var("STRATA_SAML_CONFIG", "");
+    if saml.is_empty() {
+        return Ok(federation);
     }
-    Federation::from_file(&PathBuf::from(path))
+    federation.with_saml_file(&PathBuf::from(saml))
 }
 
 fn start() -> Result<(Config, Arc<dyn Store>), String> {

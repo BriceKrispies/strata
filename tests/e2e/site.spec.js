@@ -1188,3 +1188,121 @@ test('a callback that no sign-in of this browser started is refused', async ({ p
   await expect(page.getByRole('heading', { level: 1, name: 'Sign in' })).toBeVisible();
   expect(page.url()).not.toContain('code=');
 });
+
+// Sign-in at a SAML provider. A mock SAML provider (tests/e2e/mock-saml.mjs) stands in for it: it
+// reads the authentication request, signs an assertion with a test key and posts the response to
+// the site's assertion consumer address at once, as whoever the test says. The site is configured
+// to trust it for Fieldnotes, to let its first sign-ins in as authors and to require addresses in
+// `saml.example` of it.
+const SAML_PROVIDER = 'http://127.0.0.1:4291';
+
+/** Tell the mock SAML provider who signs in next and what, if anything, is wrong with the assertion. */
+async function samlProvider(request, fields = {}) {
+  const reply = await request.post(`${SAML_PROVIDER}/__control`, { data: { reset: true, ...fields } });
+  expect(reply.ok()).toBe(true);
+}
+
+async function chooseSamlProvider(page) {
+  await open(page, '/login');
+  await page.getByRole('button', { name: 'Sign in with Mock SAML Provider' }).click();
+}
+
+test('the sign-in page offers the SAML provider, and signing in through it makes the person once', async ({ page, request }) => {
+  const subject = `e2e-saml-${Date.now()}`;
+  await samlProvider(request, { sub: subject, email: 'sam@saml.example', name: 'Sam Saml' });
+  const posts = [];
+  page.on('request', (r) => r.url().includes('/federation/saml/acs') && r.method() === 'POST' && posts.push(r.url()));
+
+  await chooseSamlProvider(page);
+  await expect(page.getByRole('heading', { level: 1, name: 'Writing desk' })).toBeVisible();
+  await expect(page.getByText('Signed in as Sam Saml')).toBeVisible();
+  // The response is not left in the address bar, nor anywhere the page keeps.
+  expect(page.url()).not.toContain('#');
+  expect(page.url()).not.toContain('SAMLResponse');
+  expect(posts).toHaveLength(1);
+
+  // The request the service made is the one a provider reads: for this site, for this provider.
+  const asked = (await (await request.get(`${SAML_PROVIDER}/__seen`)).json()).sso;
+  expect(asked).toHaveLength(1);
+  expect(asked[0].acs).toBe(`${BASE}/federation/saml/acs`);
+  expect(asked[0].issuer).toBe(`${BASE}/federation/saml/metadata/mock`);
+
+  // The second time the provider names the same person by another name, and the site keeps its own.
+  await page.getByRole('button', { name: 'Sign out', exact: true }).click();
+  await samlProvider(request, { sub: subject, email: 'sam@saml.example', name: 'Someone Else' });
+  await chooseSamlProvider(page);
+  await expect(page.getByText('Signed in as Sam Saml')).toBeVisible();
+  await page.getByRole('button', { name: 'Sign out', exact: true }).click();
+});
+
+test('an assertion that is wrong in any way signs no one in', async ({ page, request }) => {
+  const wrong = [
+    { name: 'unsigned', fields: { unsigned: true } },
+    { name: 'signer', fields: { signer: 'other' } },
+    { name: 'tampered', fields: { tamper: true } },
+    { name: 'audience', fields: { audience: 'http://127.0.0.1:4200/federation/saml/metadata/another' } },
+    { name: 'recipient', fields: { recipient: 'http://127.0.0.1:4200/federation/saml/other' } },
+    { name: 'issuer', fields: { issuer: 'http://127.0.0.1:4291/another-provider' } },
+    { name: 'expiry', fields: { exp_offset: -3600 } },
+    { name: 'status', fields: { deny: true } },
+  ];
+  for (const { name, fields } of wrong) {
+    await samlProvider(request, { sub: `e2e-saml-wrong-${name}`, email: 'x@saml.example', name: 'Nobody', ...fields });
+    await chooseSamlProvider(page);
+    await expect(page.getByRole('alert'), name).toContainText('not accepted');
+    await expect(page.getByRole('heading', { level: 1, name: 'Sign in' }), name).toBeVisible();
+    expect(page.url(), name).not.toContain('#');
+  }
+});
+
+test('an assertion that was accepted once is not accepted again', async ({ page, request }) => {
+  const identifier = `_e2e-replayed-${Date.now()}`;
+  const subject = `e2e-saml-replay-${Date.now()}`;
+  await samlProvider(request, { sub: subject, email: 'r@saml.example', name: 'Ria Replay', assertion_id: identifier });
+  await chooseSamlProvider(page);
+  await expect(page.getByText('Signed in as Ria Replay')).toBeVisible();
+  await page.getByRole('button', { name: 'Sign out', exact: true }).click();
+
+  // The provider answers a new request with the same assertion identifier.
+  await samlProvider(request, { sub: subject, email: 'r@saml.example', name: 'Ria Replay', assertion_id: identifier });
+  await chooseSamlProvider(page);
+  await expect(page.getByRole('alert')).toContainText('not accepted');
+  await expect(page.getByRole('heading', { level: 1, name: 'Sign in' })).toBeVisible();
+});
+
+test('a response posted to the assertion consumer address that no sign-in of this browser started is refused', async ({ page }) => {
+  await open(page, '/login');
+  const forged = '0123456789abcdef'.repeat(4);
+  await page.evaluate((relay) => {
+    const form = document.createElement('form');
+    form.method = 'post';
+    form.action = '/federation/saml/acs';
+    for (const [name, value] of [
+      ['SAMLResponse', btoa('<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol"/>')],
+      ['RelayState', relay],
+    ]) {
+      const input = document.createElement('input');
+      input.type = 'hidden';
+      input.name = name;
+      input.value = value;
+      form.append(input);
+    }
+    document.body.append(form);
+    form.submit();
+  }, forged);
+  await expect(page.getByRole('alert')).toContainText('not accepted');
+  await expect(page.getByRole('heading', { level: 1, name: 'Sign in' })).toBeVisible();
+  expect(page.url()).not.toContain('SAMLResponse');
+  expect(page.url()).not.toContain('#');
+});
+
+test('the metadata names this service and its assertion consumer address', async ({ request }) => {
+  const reply = await request.get('/federation/saml/metadata/mock');
+  expect(reply.status()).toBe(200);
+  expect(reply.headers()['content-type']).toContain('samlmetadata+xml');
+  const xml = await reply.text();
+  expect(xml).toContain(`entityID="${BASE}/federation/saml/metadata/mock"`);
+  expect(xml).toContain(`Location="${BASE}/federation/saml/acs"`);
+  expect(xml).toContain('WantAssertionsSigned="true"');
+  expect((await request.get('/federation/saml/metadata/nobody')).status()).toBe(404);
+});

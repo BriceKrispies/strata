@@ -6,17 +6,22 @@
 // address (`#s=<state>&x=<code>`); the page takes them out of the address bar once and sends them
 // in the body of `/api/sign-in/oidc`. The nonce that binds the sign-in to this browser is a cookie
 // the page cannot read, so it is not in anything here.
+//
+// A SAML provider is the same page flow with its own names: the list says which protocol a
+// provider is signed in with, the start is `/api/sign-in/saml/start`, and the provider's POST to
+// the gateway comes back as `#m=saml&r=<response>&t=<relay state>`, which the page sends in the
+// body of `/api/sign-in/saml`.
 // @ts-check
 
 export function oidcInit() {
   return {
     /** The providers the site offers, or `null` until they have been asked for. */
-    providers: /** @type {null | { id: string, label: string }[]} */ (null),
+    providers: /** @type {null | { id: string, label: string, protocol: 'oidc' | 'saml' }[]} */ (null),
     asked: false,
     busy: false,
     error: '',
     /** The answer the provider sent the page back with, until it has been sent. */
-    landing: /** @type {null | { state: string, code: string }} */ (null),
+    landing: /** @type {null | { state: string, code: string } | { saml: true, response: string, relay: string }} */ (null),
     /** `working` while the answer is being checked, `failed` when it was not accepted. */
     landingStatus: /** @type {'' | 'working' | 'failed'} */ (''),
     landingError: '',
@@ -29,15 +34,21 @@ function withOidc(state, patch) {
 
 const STATE = /^[0-9a-f]{64}$/i;
 const CODE = /^[\x21-\x7e]{1,2048}$/;
+const SAML_RESPONSE = /^[A-Za-z0-9+/=]{1,49152}$/;
 
 /**
  * What a page was opened with after the provider: the answer, or that the provider sent none.
  * @param {string} hash
- * @returns {{ state: string, code: string } | { failed: true } | null}
+ * @returns {{ state: string, code: string } | { saml: true, response: string, relay: string } | { failed: true } | null}
  */
 export function oidcFromHash(hash) {
   const params = new URLSearchParams(hash.replace(/^#/, ''));
   if (params.get('e')) return { failed: true };
+  if (params.get('m') === 'saml') {
+    const response = params.get('r') ?? '';
+    const relay = params.get('t') ?? '';
+    return SAML_RESPONSE.test(response) && STATE.test(relay) ? { saml: true, response, relay } : null;
+  }
   const stateValue = params.get('s') ?? '';
   const code = params.get('x') ?? '';
   return STATE.test(stateValue) && CODE.test(code) ? { state: stateValue, code } : null;
@@ -70,7 +81,9 @@ export function oidcLand(state, msg, { request }) {
   const [next, effect] = request(
     withOidc(state, { landing: null }),
     'oidc.sign_in',
-    { method: 'POST', path: '/api/sign-in/oidc', body: { state: landing.state, code: landing.code }, write: true },
+    'saml' in landing
+      ? { method: 'POST', path: '/api/sign-in/saml', body: { response: landing.response, relay_state: landing.relay }, write: true }
+      : { method: 'POST', path: '/api/sign-in/oidc', body: { state: landing.state, code: landing.code }, write: true },
     msg,
   );
   return { state: next, effects: [effect] };
@@ -91,7 +104,7 @@ function listed(body) {
   const list = Array.isArray(body?.providers) ? body.providers : [];
   return list
     .filter((p) => p && typeof p.id === 'string' && typeof p.label === 'string')
-    .map((p) => ({ id: p.id, label: p.label }));
+    .map((p) => ({ id: p.id, label: p.label, protocol: p.protocol === 'saml' ? 'saml' : 'oidc' }));
 }
 
 /**
@@ -103,12 +116,13 @@ export function oidcUpdate(state, msg, { request, signedIn }) {
   if (msg.type === 'action') {
     if (msg.name !== 'oidc.start') return null;
     const provider = msg.arg?.provider;
+    const protocol = msg.arg?.protocol === 'saml' ? 'saml' : 'oidc';
     if (state.oidc.busy || typeof provider !== 'string') return { state, effects: [] };
     const body = { provider, ...(state.route.query.next ? { next: state.route.query.next } : {}) };
     const [next, effect] = request(
       withOidc(state, { busy: true, error: '' }),
       'oidc.start',
-      { method: 'POST', path: '/api/sign-in/oidc/start', body, write: true },
+      { method: 'POST', path: `/api/sign-in/${protocol}/start`, body, write: true },
       msg,
     );
     return { state: next, effects: [effect] };

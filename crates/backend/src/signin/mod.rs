@@ -8,10 +8,12 @@
 //!
 //! Implements: IDN-001
 
+pub mod federated;
 pub mod link;
 pub mod oidc;
 pub mod passkey;
 pub mod password;
+pub mod saml;
 
 use crate::app::{ApiError, App, LOG};
 use crate::auth::{self, Caller};
@@ -48,6 +50,7 @@ static METHODS: &[&dyn SignInMethod] = &[
     &passkey::PasskeyMethod,
     &link::LinkMethod,
     &oidc::OidcMethod,
+    &saml::SamlMethod,
 ];
 
 pub fn method(name: &str) -> Option<&'static dyn SignInMethod> {
@@ -73,7 +76,7 @@ fn refused(method: &str) -> ApiError {
         match method {
             "passkey" => "The passkey was not accepted.",
             "link" => "The link was not accepted. Ask for a new one.",
-            "oidc" => "The sign-in with the identity provider was not accepted.",
+            "oidc" | "saml" => "The sign-in with the identity provider was not accepted.",
             _ => "The name or password is not right.",
         },
     )
@@ -101,6 +104,30 @@ pub(crate) fn rules(app: &App, method: &str, subject: &str, source: &str) -> [Th
             lock_ms: limits.account_lock_ms,
             lock_resets: true,
         },
+        ThrottleRule {
+            key: format!("source:{method}:{source}"),
+            max: limits.source_max,
+            window_ms: limits.window_ms,
+            lock_ms: limits.window_ms,
+            lock_resets: false,
+        },
+        ThrottleRule {
+            key: format!("realm:{method}"),
+            max: limits.realm_max,
+            window_ms: limits.window_ms,
+            lock_ms: limits.realm_interval_ms,
+            lock_resets: false,
+        },
+    ]
+}
+
+/// The limits the start of a sign-in at a provider counts against: the source across all
+/// providers and the realm across all sources. There is no limit on an account, because a start
+/// names none: counting starts per provider would lock the provider's button for everyone after a
+/// few clicks of anyone's.
+pub(crate) fn start_rules(app: &App, method: &str, source: &str) -> [ThrottleRule; 2] {
+    let limits = &app.cfg.throttle;
+    [
         ThrottleRule {
             key: format!("source:{method}:{source}"),
             max: limits.source_max,
@@ -239,6 +266,7 @@ mod tests {
         assert!(method("passkey").is_some());
         assert!(method("link").is_some());
         assert!(method("oidc").is_some());
+        assert!(method("saml").is_some());
         assert!(method("telepathy").is_none());
     }
 }

@@ -1673,7 +1673,22 @@
     {"id":"sign-access-token","name":"Sign an access token","ref":"H-013","realisation":"hand","milestone":4,"implementedBy":"identity-service","auth":"Local call inside the platform process; no network credential","idempotent":false,"inputs":[{"name":"claims","type":"value-map"},{"name":"key","type":"key-id"}],"outputs":[{"name":"token","type":"secret"}],"postconditions":["The token verifies with the published public key that carries the key identifier (TOK-008).","It is valid for at most 5 minutes (TOK-005)."],"errors":[]},
     {"id":"verify-access-token","name":"Verify an access token","ref":"H-014","realisation":"hand","milestone":4,"implementedBy":"identity-service","auth":"Local call inside the platform process; no network credential","idempotent":true,"inputs":[{"name":"token","type":"secret"},{"name":"audience","type":"string"},{"name":"now","type":"timestamp"}],"outputs":[{"name":"claims","type":"value-map"}],"postconditions":["A token whose audience names another client is refused (TOK-250).","A token issued for one tenant is refused by every other (TOK-006).","A token signed by a retired key is refused (TOK-251)."],"errors":[{"name":"invalid","condition":"The signature, audience, tenant or expiry is wrong.","type":"api-error"}]},
     {"id":"verify-identity-token","name":"Verify an OpenID Connect identity token","ref":"H-015","realisation":"hand","milestone":4,"implementedBy":"identity-service","auth":"Local call inside the platform process; no network credential","idempotent":true,"inputs":[{"name":"token","type":"secret"},{"name":"provider","type":"provider-id"},{"name":"nonce","type":"secret"},{"name":"now","type":"timestamp"}],"outputs":[{"name":"subject","type":"external-subject"},{"name":"email","type":"email-address","optional":true},{"name":"email-verified","type":"bool"}],"postconditions":["Only the signature method that the provider configuration names is accepted (FED-255).","A signing key of one provider verifies the tokens of that provider only (FED-256)."],"errors":[{"name":"invalid","condition":"The issuer, audience, signature or nonce fails verification.","type":"api-error"}]},
-    {"id":"verify-saml-assertion","name":"Verify a SAML assertion","ref":"H-016","realisation":"hand","milestone":4,"implementedBy":"identity-service","auth":"Local call inside the platform process; no network credential","idempotent":true,"inputs":[{"name":"response","type":"bytes"},{"name":"provider","type":"provider-id"}],"outputs":[{"name":"subject","type":"external-subject"},{"name":"attributes","type":"value-map"}],"postconditions":["The subject and attributes come only from the assertion whose signature covers them (FED-252).","The message is read with external entity and document type processing off (FED-251).","The subject is the complete text of the name identifier, comments excluded (FED-253)."],"errors":[{"name":"invalid","condition":"The signature, issuer, audience or recipient is wrong.","type":"api-error"}]},
+    {"id":"verify-saml-assertion","name":"Verify a SAML assertion","ref":"H-016","realisation":"hand","milestone":4,"implementedBy":"identity-service","auth":"Local call inside the platform process; no network credential","idempotent":true,"inputs":[{"name":"response","type":"bytes"},{"name":"provider","type":"provider-id"}],"outputs":[{"name":"subject","type":"external-subject"},{"name":"attributes","type":"value-map"}],"postconditions":[
+        "The subject and attributes come only from the assertion whose signature covers them (FED-252). The response holds exactly one assertion, a direct child of the response, with a signature of its own whose one reference is that assertion's identifier and resolves to that very element; a signed response around an unsigned assertion, a second assertion, an assertion moved elsewhere, a signature over another element and an assertion changed after it was signed are refused.",
+        "The signature is checked by an XML-DSig implementation that is maintained and not written here, with the certificates of the provider's configuration only: a key or certificate that the message brings is never used, duplicate identifiers are refused and every reference digest is computed here (FED-005).",
+        "The message is read with external entity and document type processing off (FED-251), at a bounded size, and an encrypted assertion, which this service cannot read, is refused and not taken for a signed one.",
+        "The subject is the complete text of the name identifier, comments excluded (FED-253); an identifier that holds an element, a second identifier, an empty one or one past 255 bytes is refused.",
+        "The issuer, on the assertion and on the response where it names one, is the entity identifier of the provider's configuration (FED-254).",
+        "The audience of every audience restriction names this service's entity identifier at the host the sign-in started at, and the recipient of a bearer confirmation and the destination of the response, where it names one, are this host's assertion consumer address (FED-008). A condition this service does not understand is not met.",
+        "The assertion is inside its validity with a skew that the configuration names (60 seconds by default): its conditions and its confirmation have an end, it is not valid before its beginning and it was not issued in the future.",
+        "The response reports success, and its assertion answers the request that was made (FED-007)."
+      ],"errors":[
+        {
+          "name": "invalid",
+          "condition": "The signature, issuer, audience, recipient, destination, time or request is wrong, or the message is not one that is read.",
+          "type": "api-error"
+        }
+      ]},
     {"id":"verify-passkey-assertion","name":"Verify a passkey assertion","ref":"H-017","realisation":"hand","milestone":3,"implementedBy":"identity-service","auth":"Local call inside the platform process; no network credential","idempotent":true,"inputs":[{"name":"assertion","type":"bytes"},{"name":"challenge","type":"challenge-id"},{"name":"host","type":"host"}],"outputs":[{"name":"credential","type":"credential-id"}],"postconditions":[
         "The assertion carries a challenge issued for this sign-in and bound to the address of the request (IDN-264).",
         "The relying party is the address of the tenant (IDN-007).",
@@ -2204,7 +2219,7 @@
         }
       ],
       "postconditions": [
-        "An address is in a bound domain when its part after the last @, in lower case, is one of the domains of an enabled provider of the realm (FED-009). A provider that is not enabled binds nothing, so that disabling it is how a realm lifts the binding.",
+        "An address is in a bound domain when its part after the last @, in lower case, is one of the domains of an enabled provider of the realm, of either protocol (FED-009). A provider that is not enabled binds nothing, so that disabling it is how a realm lifts the binding.",
         "A password for such an address is refused as a wrong password is, after the same work, so that neither the answer nor its time says that the domain is bound (IDN-255).",
         "A request for an emailed link for such an address is answered as one for an address with no account is, and no message is sent (IDN-006).",
         "A login with no @ is in no bound domain."
@@ -2251,12 +2266,194 @@
         "Where the realm decided to trust a provider that far, and only then, an address that the provider marks as verified links to the account whose login is that address. An address that is not marked verified links to nothing. By default no address links to anything (FED-257).",
         "A first sign-in creates a principal only when the realm enabled creation (FED-011). A realm that restricted the provider to domains lets in only a verified address in one of them.",
         "The principal created has a login that no password opens, holds the one default role that the realm names and no other, and its name is made from the realm, the provider and the subject, so that two first sign-ins that arrive together make one (FED-258).",
-        "A principal created and an identity linked are audit entries; the entry names the principal and the provider, and no address."
+        "A principal created and an identity linked are audit entries; the entry names the principal and the provider, and no address.",
+        "The same decision serves every protocol: a provider of the realm is an OpenID Connect or a SAML provider, a principal's name and login are made from the protocol as well as the realm, the provider and the subject, and the audit entries of a created principal and a linked identity name the protocol."
       ],
       "errors": [
         {
           "name": "unauthenticated",
           "condition": "The realm does not admit the identity.",
+          "type": "api-error"
+        }
+      ]
+    },
+    {
+      "id": "configure-saml-providers",
+      "name": "Configure the SAML providers of a tenant",
+      "ref": "H-050",
+      "realisation": "hand",
+      "milestone": 4,
+      "implementedBy": "identity-service",
+      "auth": "Platform operator, through the platform configuration file",
+      "idempotent": true,
+      "inputs": [
+        {
+          "name": "tenant",
+          "type": "string"
+        },
+        {
+          "name": "provider",
+          "type": "provider-id"
+        }
+      ],
+      "outputs": [],
+      "postconditions": [
+        "A tenant's SAML providers are platform configuration and not tenant data, as its OpenID Connect providers are: one file that the operator names (STRATA_SAML_CONFIG) maps each tenant to its providers. A tenant's own people cannot change who is let in by a provider, and the operator can.",
+        "A provider names an identifier of 1 to 32 lower-case letters, digits and hyphens, a label for the sign-in page, the entity identifier its assertions are issued under (FED-254), the address of its sign-on service, and one to four certificates in PEM that it signs with (FED-005), given inline or as files that are read when the process starts. Several certificates are for a rotation: an assertion signed by any one of them is the provider's.",
+        "A certificate that cannot be read, a sign-on address that is not HTTPS (HTTP is allowed in development only) or holds credentials, a skew outside 0 to 300 seconds and a provider named twice stop the process from starting. There is no secret in the file.",
+        "The entity identifier of this service for a provider is the one the file names, and otherwise the address of the provider's metadata at the host the sign-in started at, so that each host of the platform is a service provider of its own and an assertion issued for another host's is refused (FED-008).",
+        "A provider that is not enabled is offered on no sign-in page, cannot be started, accepts no response, has no metadata and binds none of its domains (FED-009, FED-011). Its domains, its first-sign-in creation, its default role and its link by address are those of an OpenID Connect provider and are decided in the same place (H-039).",
+        "An address the provider sends is treated as verified only where the operator says the provider checks addresses (email_verified): only then does it bind a domain at a first sign-in (FED-009) or link an account (FED-257)."
+      ],
+      "errors": [
+        {
+          "name": "invalid",
+          "condition": "The file does not parse, a certificate or an address in it is not usable, or a provider appears twice.",
+          "type": "api-error"
+        }
+      ]
+    },
+    {
+      "id": "start-saml-sign-in",
+      "name": "Start a sign-in at a SAML provider",
+      "ref": "H-051",
+      "realisation": "hand",
+      "milestone": 4,
+      "implementedBy": "identity-service",
+      "auth": "Anyone from one of the site's own pages, with the request token every sign-in carries; to link a provider to an account, the signed-in person",
+      "idempotent": false,
+      "inputs": [
+        {
+          "name": "provider",
+          "type": "provider-id"
+        },
+        {
+          "name": "next",
+          "type": "string",
+          "optional": true
+        },
+        {
+          "name": "link",
+          "type": "bool",
+          "optional": true
+        }
+      ],
+      "outputs": [
+        {
+          "name": "redirect",
+          "type": "string"
+        }
+      ],
+      "postconditions": [
+        "A sign-in at a SAML provider starts at this service and only here: a response is accepted only for a request this service made (FED-007, D-8). Sign-in started by the provider is not offered; a tenant that has not turned it on has none, and none can be turned on in this release.",
+        "The authentication request names this service by its entity identifier, the provider's sign-on address as its destination, the assertion consumer address of the host the sign-in started at, and the POST binding for the response. It is sent as the HTTP-Redirect binding: raw DEFLATE, base64, and a relay state, in the query of the provider's sign-on address.",
+        "A pending request is kept, found by the hash of the relay state, holding the identifier of the authentication request, the provider, the hash of a binding nonce, the address the sign-in started at, and the principal that was signed in when the person asked to link. The relay state and the identifier are random, and the relay state is in no log, audit entry or reply but the one that goes to the provider.",
+        "The binding nonce goes to the starting browser as a `__Host-` cookie, `Strict`, that the page cannot read, and is in no address. The return address is kept only when it is a path on the site (FED-250).",
+        "Starting is counted against the source and the realm and not against the provider, so that a few clicks of anyone's do not close the provider's button for everyone.",
+        "Metadata for the provider is served at the host the person asked at: this service's entity identifier, the one assertion consumer address, the POST binding, and that assertions are to be signed. It holds nothing secret and is not found for a provider that does not exist, is not enabled or is another site's."
+      ],
+      "errors": [
+        {
+          "name": "invalid",
+          "condition": "The provider does not exist or is not enabled.",
+          "type": "api-error"
+        },
+        {
+          "name": "forbidden",
+          "condition": "The request did not come from one of the site's own pages.",
+          "type": "api-error"
+        },
+        {
+          "name": "unauthenticated",
+          "condition": "A request to link was made by no one who is signed in.",
+          "type": "api-error"
+        },
+        {
+          "name": "unavailable",
+          "condition": "The provider's sign-on address is not one the browser may be sent to.",
+          "type": "api-error"
+        }
+      ]
+    },
+    {
+      "id": "carry-saml-response-to-sign-in-page",
+      "name": "Carry a SAML response from the provider's post to the sign-in page",
+      "ref": "H-053",
+      "realisation": "hand",
+      "milestone": 4,
+      "implementedBy": "identity-service",
+      "auth": "Anyone: the provider's page posts from another site and carries no session",
+      "idempotent": true,
+      "inputs": [
+        {
+          "name": "response",
+          "type": "secret"
+        },
+        {
+          "name": "relay-state",
+          "type": "secret"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "location",
+          "type": "string"
+        }
+      ],
+      "postconditions": [
+        "The assertion consumer address takes the provider's POST and signs no one in. It reads the form, moves the response and the relay state into the fragment of the sign-in page's address, which the browser sends nowhere, and answers with a redirect to it. The page takes them out of the address bar and sends them in the body of one request from the site's own origin, with the request token every sign-in carries and with the binding cookie, which is `Strict` and so does not accompany the provider's post.",
+        "A form that carries no base64 response, one past 48 KiB of base64, or a relay state that is not one this service makes sends the page to say that the provider did not sign the person in, and nothing else is read from it.",
+        "The return address of the sign-in is a cookie that holds a path on the site and nothing secret. It is `SameSite=None`, because the way back is a POST, which a `Lax` cookie does not accompany; it is read only as a path on the site (FED-250) and is cleared by this answer.",
+        "The address is answered at the hosts the platform serves and no other."
+      ],
+      "errors": [
+        {
+          "name": "not-found",
+          "condition": "No site is served at the address.",
+          "type": "api-error"
+        }
+      ]
+    },
+    {
+      "id": "consume-saml-response",
+      "name": "Check a SAML response and its assertion, once",
+      "ref": "H-052",
+      "realisation": "hand",
+      "milestone": 4,
+      "implementedBy": "identity-service",
+      "auth": "Anyone from one of the site's own pages, with the request token every sign-in carries",
+      "idempotent": false,
+      "inputs": [
+        {
+          "name": "relay-state",
+          "type": "secret"
+        },
+        {
+          "name": "response",
+          "type": "secret"
+        },
+        {
+          "name": "binding",
+          "type": "secret"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "subject",
+          "type": "external-subject"
+        }
+      ],
+      "postconditions": [
+        "The pending request is taken out of the store in the step that reads it, so a response answers once whatever follows, and it is accepted only through its lifetime, from the browser whose cookie holds the binding nonce and at the address it started at (FED-007). A response that answers no pending request is refused.",
+        "The assertion is checked as verify-saml-assertion states, against the provider's certificates and this host's entity identifier and assertion consumer address, and it must answer the request that was made (InResponseTo, on the assertion's confirmation and on the response where it names one).",
+        "The identifier of an assertion that passed every check is remembered, by hash, for the provider of the tenant, until it would no longer be accepted anyway (its end plus the skew), in the one step that also says whether it was already there. A second presentation, in any browser and at any time inside that window, is refused (FED-006). A message that is refused does not use its identifier up.",
+        "What the verified identity means for the realm is decided by resolve-federated-identity: the same for a SAML provider as for an OpenID Connect one.",
+        "Every refusal says the same to the person, whatever failed; the reason is in the log and holds no response, assertion, relay state, address or identifier. The attempt is limited like every other sign-in method's."
+      ],
+      "errors": [
+        {
+          "name": "unauthenticated",
+          "condition": "The response answers no pending request of this browser, or the assertion fails a check, or it was presented before.",
           "type": "api-error"
         }
       ]

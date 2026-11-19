@@ -76,9 +76,13 @@ const LINK_COOKIE: &str = "__Host-strata-link";
 /// The cookie that holds the nonce binding a sign-in at an identity provider to the browser that
 /// started it.
 const OIDC_COOKIE: &str = "__Host-strata-oidc";
+/// The same for a sign-in at a SAML provider.
+const SAML_COOKIE: &str = "__Host-strata-saml";
 /// The cookie that holds where to go after a sign-in at an identity provider. It is a path on this
 /// site and nothing secret, and it is `Lax` because the provider's redirect back is a navigation
-/// from another site, which a `Strict` cookie does not accompany.
+/// from another site, which a `Strict` cookie does not accompany. For a SAML provider the way back
+/// is a POST, which a `Lax` cookie does not accompany either, so that one is `None`: it holds a
+/// path and nothing else.
 const RETURN_COOKIE: &str = "__Host-strata-return";
 
 /// The value of a cookie that holds a nonce, when the browser holds a well-formed one.
@@ -399,10 +403,10 @@ async fn sign_in(
             &visit.correlation,
         )
     })?;
-    let binding = if method == "oidc" {
-        binding_of(headers, OIDC_COOKIE)
-    } else {
-        link_binding(headers)
+    let binding = match method {
+        "oidc" => binding_of(headers, OIDC_COOKIE),
+        "saml" => binding_of(headers, SAML_COOKIE),
+        _ => link_binding(headers),
     };
     let credentials = route
         .credentials(&body, binding.as_deref())
@@ -480,15 +484,31 @@ async fn link_request(
     Ok(response)
 }
 
-/// The identity providers the sign-in page offers at the address it is served at.
+/// The identity providers the sign-in page offers at the address it is served at, of both
+/// protocols, each with the protocol it is signed in with.
 async fn oidc_providers(
     State(bff): State<Shared>,
     headers: HeaderMap,
 ) -> Result<Json<Json_>, Failure> {
     let visit = visit(&bff, &headers)?;
-    backend(&bff, &visit, "/internal/sign-in/oidc/providers", &json!({}))
-        .await
-        .map(Json)
+    let mut offered = Vec::new();
+    for protocol in ["oidc", "saml"] {
+        let reply: Json_ = backend(
+            &bff,
+            &visit,
+            &format!("/internal/sign-in/{protocol}/providers"),
+            &json!({}),
+        )
+        .await?;
+        for provider in reply["providers"].as_array().into_iter().flatten() {
+            offered.push(json!({
+                "id": provider["id"],
+                "label": provider["label"],
+                "protocol": protocol,
+            }));
+        }
+    }
+    Ok(Json(json!({ "providers": offered })))
 }
 
 /// Begin a sign-in at an identity provider, from one of the site's own pages and with the request
@@ -500,8 +520,31 @@ async fn oidc_start(
     headers: HeaderMap,
     Json(body): Json<Json_>,
 ) -> Result<Response, Failure> {
-    let visit = visit(&bff, &headers)?;
-    guard_request(&bff, &visit, &headers).await?;
+    provider_start(&bff, &headers, body, "oidc").await
+}
+
+/// The same for a SAML provider: the answer is the address of its sign-on service, carrying the
+/// authentication request.
+async fn saml_start(
+    State(bff): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<Json_>,
+) -> Result<Response, Failure> {
+    provider_start(&bff, &headers, body, "saml").await
+}
+
+async fn provider_start(
+    bff: &Bff,
+    headers: &HeaderMap,
+    body: Json_,
+    protocol: &str,
+) -> Result<Response, Failure> {
+    let (binding_cookie, return_same_site) = match protocol {
+        "saml" => (SAML_COOKIE, "None"),
+        _ => (OIDC_COOKIE, "Lax"),
+    };
+    let visit = visit(bff, headers)?;
+    guard_request(bff, &visit, headers).await?;
     let Some(provider) = body.get("provider").and_then(Json_::as_str) else {
         return Err(Failure::new(
             ErrorCode::Invalid,
@@ -511,13 +554,19 @@ async fn oidc_start(
     };
     let mut sent = json!({
         "provider": provider,
-        "binding": binding_of(&headers, OIDC_COOKIE),
+        "binding": binding_of(headers, binding_cookie),
         "link": body.get("link").and_then(Json_::as_bool).unwrap_or(false),
     });
     if let Some(next) = body.get("next").and_then(Json_::as_str) {
         sent["next"] = json!(next);
     }
-    let reply: Json_ = backend(&bff, &visit, "/internal/sign-in/oidc/start", &sent).await?;
+    let reply: Json_ = backend(
+        bff,
+        &visit,
+        &format!("/internal/sign-in/{protocol}/start"),
+        &sent,
+    )
+    .await?;
     let unavailable = || {
         Failure::new(
             ErrorCode::Unavailable,
@@ -535,15 +584,20 @@ async fn oidc_start(
     let cookies = response.headers_mut();
     cookies.append(
         SET_COOKIE,
-        host_cookie(OIDC_COOKIE, binding, max_age, "Strict"),
+        host_cookie(binding_cookie, binding, max_age, "Strict"),
     );
     // A return address of an earlier start is replaced, or removed when this one has none.
     let kept = reply["return_to"].as_str().filter(|path| safe_path(path));
     cookies.append(
         SET_COOKIE,
         match kept {
-            Some(path) => host_cookie(RETURN_COOKIE, &percent_encode(path), max_age, "Lax"),
-            None => host_cookie(RETURN_COOKIE, "", 0, "Lax"),
+            Some(path) => host_cookie(
+                RETURN_COOKIE,
+                &percent_encode(path),
+                max_age,
+                return_same_site,
+            ),
+            None => host_cookie(RETURN_COOKIE, "", 0, return_same_site),
         },
     );
     Ok(response)
@@ -594,6 +648,117 @@ async fn oidc_callback(
     out.insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
     out.append(SET_COOKIE, host_cookie(RETURN_COOKIE, "", 0, "Lax"));
     response
+}
+
+/// The fields of a form body: names and values, decoded.
+fn form_fields(body: &[u8]) -> BTreeMap<String, String> {
+    String::from_utf8_lossy(body)
+        .split('&')
+        .filter_map(|pair| pair.split_once('='))
+        .map(|(name, value)| (percent_decode(name), percent_decode(value)))
+        .collect()
+}
+
+/// The most of a SAML response, as base64, that is carried to the sign-in page.
+const SAML_RESPONSE_CHARS: usize = 48 * 1024;
+
+/// Where a SAML provider posts the response (the assertion consumer address). The provider's page
+/// posts it from another site, so nothing here can rest on a cookie of the person's and nothing
+/// here signs anyone in. The response and the relay state are moved into the fragment of the
+/// sign-in page's address, which the browser does not send anywhere, and the page takes them out
+/// of the address bar and sends them in the body of `/api/sign-in/saml`, from the site's own
+/// origin, with the request token and with the binding cookie, which is `Strict` and so goes with
+/// that request and not with this navigation.
+///
+/// Implements: FED-005, FED-250, H-053
+async fn saml_acs(
+    State(bff): State<Shared>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    if let Err(failure) = visit(&bff, &headers) {
+        return failure.into_response();
+    }
+    let next = cookie_value(&headers, RETURN_COOKIE)
+        .map(|value| percent_decode(&value))
+        .filter(|path| safe_path(path));
+    let fields = form_fields(&body);
+    let response: Option<String> = fields.get("SAMLResponse").map(|value| {
+        value
+            .chars()
+            .filter(|c| !c.is_ascii_whitespace())
+            .collect::<String>()
+    });
+    let response = response.filter(|value| {
+        !value.is_empty()
+            && value.len() <= SAML_RESPONSE_CHARS
+            && value
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'/' | b'='))
+    });
+    let relay = fields
+        .get("RelayState")
+        .filter(|value| value.len() == 64 && value.bytes().all(|b| b.is_ascii_hexdigit()));
+    let mut location = "/login".to_string();
+    if let Some(next) = &next {
+        location.push_str(&format!("?next={}", percent_encode(next)));
+    }
+    match (response, relay) {
+        (Some(response), Some(relay)) => location.push_str(&format!(
+            "#m=saml&r={}&t={}",
+            percent_encode(&response),
+            percent_encode(relay)
+        )),
+        _ => location.push_str("#e=1"),
+    }
+    let mut redirect = StatusCode::SEE_OTHER.into_response();
+    let out = redirect.headers_mut();
+    if let Ok(value) = HeaderValue::from_str(&location) {
+        out.insert(LOCATION, value);
+    }
+    out.insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    out.append(SET_COOKIE, host_cookie(RETURN_COOKIE, "", 0, "None"));
+    redirect
+}
+
+/// This service's SAML metadata for a provider, at the address of the site being served: what
+/// the provider's administrator is given to configure it. Anyone may ask.
+async fn saml_metadata(
+    State(bff): State<Shared>,
+    headers: HeaderMap,
+    Path(provider): Path<String>,
+) -> Result<Response, Failure> {
+    let visit = visit(&bff, &headers)?;
+    let unavailable = || {
+        Failure::new(
+            ErrorCode::Unavailable,
+            "The service is not available right now.",
+            &visit.correlation,
+        )
+    };
+    let origin = bff
+        .cfg
+        .origins
+        .iter()
+        .find(|origin| origin_site(&bff, origin) == Some(&visit.site))
+        .ok_or_else(unavailable)?
+        .clone();
+    let reply: Json_ = backend(
+        &bff,
+        &visit,
+        "/internal/sign-in/saml/metadata",
+        &json!({ "provider": provider, "origin": origin }),
+    )
+    .await?;
+    let xml = reply["metadata"].as_str().ok_or_else(unavailable)?;
+    let mut response = xml.to_string().into_response();
+    let out = response.headers_mut();
+    out.insert(
+        CONTENT_TYPE,
+        HeaderValue::from_static("application/samlmetadata+xml; charset=utf-8"),
+    );
+    out.insert(CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+    Ok(response)
 }
 
 /// A challenge for signing in with a passkey. Anyone may ask, from one of the site's own pages
@@ -1246,6 +1411,7 @@ pub fn router(bff: Shared) -> Router {
         .route("/sign-in/link/request", post(link_request))
         .route("/sign-in/providers", get(oidc_providers))
         .route("/sign-in/oidc/start", post(oidc_start))
+        .route("/sign-in/saml/start", post(saml_start))
         .route("/passkeys", get(passkeys))
         .route("/passkeys/challenge", post(passkey_challenge))
         .route("/passkeys/register/start", post(passkey_register_start))
@@ -1270,6 +1436,8 @@ pub fn router(bff: Shared) -> Router {
         .nest("/api", api)
         .route("/ws", get(socket))
         .route("/federation/oidc/callback", get(oidc_callback))
+        .route("/federation/saml/acs", post(saml_acs))
+        .route("/federation/saml/metadata/:provider", get(saml_metadata))
         .nest_service("/assets", ServeDir::new(bff.cfg.dist.join("assets")))
         .nest_service("/media", ServeDir::new(bff.cfg.dist.join("media")))
         .fallback(get(page))

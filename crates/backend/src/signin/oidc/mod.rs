@@ -30,24 +30,22 @@ mod token;
 pub use config::{algorithm, Federation, Fetch, Http, Metadata, ProviderConfig, Secret};
 pub use token::{Asserted, Refusal};
 
+use super::federated::{self, Admission};
 use super::link::{encode, same_site_path, site_origin, well_formed};
-use super::{normalise_login, rules, throttled, SignInMethod};
+use super::{rules, throttled, SignInMethod};
 use crate::app::{ApiError, App, LOG};
 use crate::auth::{identify, random_hex, same_secret, token_hash, Caller, Identity};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use serde_json::{json, Value as Json};
 use sha2::{Digest, Sha256};
-use strata_kernel::{canon, owner_role, Context, Intent, Principal, PrincipalId, RoleId};
 use strata_protocol::api::ErrorCode;
-use strata_storage_api::{Account, FederatedIdentity, OidcFlow, ThrottleVerdict};
+use strata_storage_api::{Account, OidcFlow, ThrottleVerdict};
 
 pub struct OidcMethod;
 
 /// The longest authorisation code that is read.
 const CODE_BYTES: usize = 2048;
-/// The longest name that is kept for a person.
-const NAME_CHARS: usize = 80;
 /// The path at the site that a provider sends the browser back to.
 pub const CALLBACK_PATH: &str = "/federation/oidc/callback";
 
@@ -61,12 +59,20 @@ fn now_secs(app: &App) -> i64 {
 
 /// The refusal that says nothing about why, and the reason for the log.
 fn refuse(caller: &Caller, provider: &str, reason: &str) -> Result<Option<Account>, ApiError> {
-    LOG.warn(
-        "oidc.refused",
-        &caller.correlation,
-        json!({ "tenant": caller.site.as_str(), "provider": provider, "reason": reason }),
-    );
-    Ok(None)
+    federated::refuse(caller, "oidc", provider, reason)
+}
+
+/// The part of a provider's configuration that decides who gets in, for the policy the protocols
+/// share (`federated::resolve`).
+fn admission(provider: &ProviderConfig) -> Admission<'_> {
+    Admission {
+        protocol: "oidc",
+        provider: &provider.id,
+        domains: &provider.domains,
+        create_on_first_sign_in: provider.create_on_first_sign_in,
+        default_role: provider.default_role.as_deref(),
+        link_verified_email: provider.link_verified_email,
+    }
 }
 
 /// The providers the sign-in page offers for the address it is served at (FED-010).
@@ -274,210 +280,6 @@ fn redeem(
     }
 }
 
-/// Tie the provider's subject to the principal, or find that it already is.
-fn tie(
-    app: &App,
-    caller: &Caller,
-    provider: &ProviderConfig,
-    subject: &str,
-    principal: &PrincipalId,
-) -> Result<bool, ApiError> {
-    let added = app.store.put_identity(&FederatedIdentity {
-        tenant: caller.site.clone(),
-        provider: provider.id.clone(),
-        subject: subject.to_string(),
-        principal: principal.clone(),
-        created_at: app.now(),
-    })?;
-    if added {
-        return Ok(true);
-    }
-    Ok(app
-        .store
-        .identity(&caller.site, &provider.id, subject)?
-        .is_some_and(|known| known.principal == *principal))
-}
-
-fn account_of(
-    app: &App,
-    caller: &Caller,
-    provider: &ProviderConfig,
-    principal: &PrincipalId,
-) -> Result<Option<Account>, ApiError> {
-    match app.store.account_of(&caller.site, principal)? {
-        Some(account) => Ok(Some(account)),
-        None => refuse(caller, &provider.id, "no_account"),
-    }
-}
-
-/// Give a principal the one role the realm names for a first sign-in. The platform acts as the
-/// tenant's owner for it, as installing a bundle does; it is the only role this path grants
-/// (FED-258).
-///
-/// Implements: FED-258
-fn grant_default_role(
-    app: &App,
-    caller: &Caller,
-    provider: &ProviderConfig,
-    principal: &PrincipalId,
-) -> Result<(), ApiError> {
-    let Some(role) = &provider.default_role else {
-        return Ok(());
-    };
-    let role = RoleId::new(role.clone())
-        .map_err(|e| ApiError::hidden(ErrorCode::Internal, format!("default role: {e}")))?;
-    let tenant = app
-        .store
-        .load(&caller.site, &[])?
-        .tenant
-        .ok_or_else(|| ApiError::new(ErrorCode::NotFound, "no such site"))?;
-    let owner = tenant
-        .members
-        .iter()
-        .find(|(_, roles)| roles.contains(&owner_role()))
-        .map(|(principal, _)| principal.clone())
-        .ok_or_else(|| ApiError::hidden(ErrorCode::Internal, "the site has no owner"))?;
-    let ctx = Context {
-        tenant: caller.site.clone(),
-        principal: Principal::User(owner),
-        session: None,
-        now: app.now(),
-        correlation: caller.correlation.clone(),
-    };
-    crate::ops::run_intent(
-        app,
-        &ctx,
-        &Intent::AssignRole {
-            principal: principal.clone(),
-            role,
-        },
-        false,
-    )?;
-    Ok(())
-}
-
-/// Create the principal of a first sign-in: a login of its own that no password opens, the
-/// identity that ties it to the provider's subject, and the default role. The principal's name is
-/// made from the tenant, the provider and the subject, so that two first sign-ins that arrive
-/// together make one.
-///
-/// Implements: FED-011, FED-258
-fn create(
-    app: &App,
-    caller: &Caller,
-    provider: &ProviderConfig,
-    who: &Asserted,
-) -> Result<Option<Account>, ApiError> {
-    if !provider.domains.is_empty() {
-        let domain = who
-            .email
-            .as_deref()
-            .filter(|_| who.email_verified)
-            .and_then(|email| email.rsplit_once('@'))
-            .map(|(_, domain)| domain.to_lowercase());
-        if !domain.is_some_and(|domain| provider.domains.contains(&domain)) {
-            return refuse(caller, &provider.id, "domain");
-        }
-    }
-    let digest = canon::hash_bytes(
-        format!(
-            "oidc\0{}\0{}\0{}",
-            caller.site.as_str(),
-            provider.id,
-            who.subject
-        )
-        .as_bytes(),
-    );
-    let principal = PrincipalId::new(format!("user:oidc-{}", &digest[..24]))
-        .map_err(|e| ApiError::hidden(ErrorCode::Internal, format!("principal: {e}")))?;
-    let display_name = who
-        .name
-        .as_deref()
-        .map(|name| name.trim().chars().take(NAME_CHARS).collect::<String>())
-        .filter(|name| !name.is_empty())
-        .unwrap_or_else(|| "Signed-in person".to_string());
-    let account = Account {
-        tenant: caller.site.clone(),
-        login: format!("oidc:{}:{}", provider.id, &digest[..32]),
-        principal: principal.clone(),
-        display_name,
-        // Not a password hash: no password opens this login.
-        password_hash: String::new(),
-    };
-    app.store.put_account(&account)?;
-    if !tie(app, caller, provider, &who.subject, &principal)? {
-        return refuse(caller, &provider.id, "identity_tied_to_another");
-    }
-    grant_default_role(app, caller, provider, &principal)?;
-    app.audit(
-        "oidc.principal_created",
-        &caller.correlation,
-        json!({
-            "tenant": caller.site.as_str(),
-            "provider": provider.id,
-            "principal": principal.as_str(),
-            "role": provider.default_role,
-        }),
-    );
-    Ok(Some(account))
-}
-
-/// What a verified token means: whose account, if anyone's.
-///
-/// Implements: FED-011, FED-012, FED-257, H-039
-fn resolve(
-    app: &App,
-    caller: &Caller,
-    provider: &ProviderConfig,
-    flow: &OidcFlow,
-    who: &Asserted,
-) -> Result<Option<Account>, ApiError> {
-    if let Some(known) = app
-        .store
-        .identity(&caller.site, &provider.id, &who.subject)?
-    {
-        // A person who asked to link an identity that already belongs to another is refused.
-        if flow
-            .principal
-            .as_ref()
-            .is_some_and(|p| *p != known.principal)
-        {
-            return refuse(caller, &provider.id, "identity_tied_to_another");
-        }
-        return account_of(app, caller, provider, &known.principal);
-    }
-    if let Some(principal) = &flow.principal {
-        // The principal signed in before asking to link (FED-012).
-        if !tie(app, caller, provider, &who.subject, principal)? {
-            return refuse(caller, &provider.id, "identity_tied_to_another");
-        }
-        app.audit(
-            "oidc.identity_linked",
-            &caller.correlation,
-            json!({ "tenant": caller.site.as_str(), "provider": provider.id, "principal": principal.as_str(), "by": "sign_in" }),
-        );
-        return account_of(app, caller, provider, principal);
-    }
-    if provider.link_verified_email && who.email_verified {
-        if let Some(email) = &who.email {
-            if let Some(account) = app.store.account(&caller.site, &normalise_login(email))? {
-                if tie(app, caller, provider, &who.subject, &account.principal)? {
-                    app.audit(
-                        "oidc.identity_linked",
-                        &caller.correlation,
-                        json!({ "tenant": caller.site.as_str(), "provider": provider.id, "principal": account.principal.as_str(), "by": "verified_email" }),
-                    );
-                    return Ok(Some(account));
-                }
-            }
-        }
-    }
-    if provider.create_on_first_sign_in {
-        return create(app, caller, provider, who);
-    }
-    refuse(caller, &provider.id, "not_admitted")
-}
-
 impl SignInMethod for OidcMethod {
     fn name(&self) -> &'static str {
         "oidc"
@@ -542,7 +344,13 @@ impl SignInMethod for OidcMethod {
             Ok(who) => who,
             Err(reason) => return refuse(caller, &provider.id, reason),
         };
-        resolve(app, caller, provider, &flow, &who)
+        federated::resolve(
+            app,
+            caller,
+            &admission(provider),
+            flow.principal.as_ref(),
+            &who,
+        )
     }
 }
 

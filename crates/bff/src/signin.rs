@@ -106,8 +106,31 @@ impl SignInRoute for Oidc {
     }
 }
 
+/// A SAML provider: the `RelayState` and the response its page posted to the assertion consumer
+/// address, which the gateway moved into the fragment of the sign-in page, and the nonce of the
+/// browser that started the sign-in, which is in a cookie and not in the body.
+struct Saml;
+
+impl SignInRoute for Saml {
+    fn method(&self) -> &'static str {
+        "saml"
+    }
+
+    fn credentials(&self, body: &Json, binding: Option<&str>) -> Option<Json> {
+        Some(json!({
+            "relay_state": body.get("relay_state")?.as_str()?,
+            "response": body.get("response")?.as_str()?,
+            "binding": binding?,
+        }))
+    }
+
+    fn refusal(&self) -> &'static str {
+        "The sign-in with the identity provider was not accepted."
+    }
+}
+
 /// Every method the site offers.
-static ROUTES: &[&dyn SignInRoute] = &[&Password, &Passkey, &Link, &Oidc];
+static ROUTES: &[&dyn SignInRoute] = &[&Password, &Passkey, &Link, &Oidc, &Saml];
 
 pub fn route(method: &str) -> Option<&'static dyn SignInRoute> {
     ROUTES
@@ -176,6 +199,32 @@ mod tests {
         );
         assert!(route
             .credentials(&json!({ "state": "s" }), Some("x"))
+            .is_none());
+    }
+
+    #[test]
+    fn a_saml_sign_in_takes_its_browser_binding_from_the_cookie_and_never_from_the_body() {
+        let route = route("saml").expect("SAML providers are offered");
+        let body = json!({
+            "relay_state": "r",
+            "response": "PFJlc3BvbnNlLz4=",
+            "binding": "from-the-body",
+            "tenant": "other",
+        });
+        assert_eq!(
+            route.credentials(&body, Some("from-the-cookie")),
+            Some(json!({
+                "relay_state": "r",
+                "response": "PFJlc3BvbnNlLz4=",
+                "binding": "from-the-cookie",
+            }))
+        );
+        assert!(
+            route.credentials(&body, None).is_none(),
+            "a browser with no cookie is not the one that started it"
+        );
+        assert!(route
+            .credentials(&json!({ "relay_state": "r" }), Some("x"))
             .is_none());
     }
 
