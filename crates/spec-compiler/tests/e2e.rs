@@ -160,3 +160,45 @@ fn a_requirement_without_a_ref_is_refused() {
     let codes = refusal(|t| t.replace("\"ref\": \"R-10\", ", ""));
     assert_eq!(codes, [e2e::VERIFIES]);
 }
+
+#[test]
+fn an_expect_log_becomes_a_poll_of_the_service_log() {
+    let files = fixture_files();
+    let text = contents(&files, "sign-in-offline.spec.js");
+    assert!(text.contains("const LOG_FILES = [\"var/logs/backend.jsonl\"];"));
+    assert!(text.contains("  logFrom = logSizes();\n"));
+    assert!(text.contains(
+        "await expectLogLine(\"var/logs/backend.jsonl\", \"backend\", \"record.updated\", {\"tenant\":\"fieldnotes\",\"transition\":\"publish\"}, 8000);"
+    ));
+    assert!(!contents(&files, "read-an-essay.spec.js").contains("expectLogLine"));
+}
+
+#[test]
+fn an_expect_log_of_an_event_that_is_not_logged_is_refused() {
+    let codes = refusal(|t| {
+        t.replace(
+            "\"event\": \"record-updated\", \"fields\": { \"object\"",
+            "\"event\": \"page-pinged\", \"fields\": { \"object\"",
+        )
+    });
+    assert_eq!(codes, [e2e::LOG_EVENT]);
+}
+
+#[test]
+fn an_expect_log_in_the_log_of_another_service_is_refused() {
+    let codes = refusal(|t| {
+        t.replace("{ \"expectLog\": { \"service\": \"backend\", \"event\": \"record-updated\", \"fields\": { \"object\"", "{ \"expectLog\": { \"service\": \"bff\", \"event\": \"record-updated\", \"fields\": { \"object\"")
+    });
+    assert_eq!(codes, [e2e::LOG_EVENT]);
+}
+
+#[test]
+fn an_expect_log_of_a_member_the_line_does_not_hold_is_refused() {
+    let codes = refusal(|t| {
+        t.replace(
+            "\"fields\": { \"object\": \"post\" }",
+            "\"fields\": { \"body\": \"post\" }",
+        )
+    });
+    assert_eq!(codes, [e2e::LOG_EVENT]);
+}

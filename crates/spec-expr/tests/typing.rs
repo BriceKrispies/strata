@@ -70,8 +70,8 @@ fn literals_take_the_type_of_the_other_operand() {
     assert_eq!(ty_of_ok("small == 0", &e), Ty::Bool);
     assert_eq!(ty_of_ok("signed - 2147483647", &e), Ty::I32);
     assert_eq!(ty_of_ok("signed == -2147483648", &e), Ty::Bool);
-    assert_eq!(ty_of_ok("wide > -9223372036854775808", &e), Ty::Bool);
-    assert_eq!(ty_of_ok("c < 18446744073709551615", &e), Ty::Bool);
+    assert_eq!(ty_of_ok("wide > -9007199254740991", &e), Ty::Bool);
+    assert_eq!(ty_of_ok("c < 9007199254740991", &e), Ty::Bool);
     assert_eq!(ty_of_ok("a == -0", &e), Ty::Bool);
 }
 
@@ -87,6 +87,9 @@ fn literal_that_does_not_fit_is_an_error() {
         "a == -1",
         "c == 18446744073709551616",
         "wide == 9223372036854775808",
+        // u64 and i64 stop at +-(2^53 - 1) (docs/semantics.md, "Numbers").
+        "c == 9007199254740992",
+        "wide == -9007199254740992",
         "a + 1.5",
         "signed == 0.5",
     ] {
@@ -175,18 +178,14 @@ fn operators_must_apply_to_the_operand_type() {
 #[test]
 fn unsupported_but_legal_exegra() {
     let e = env();
-    for src in [
-        "a / b",
-        "c / 2",
-        "signed / 2",
-        "ts1 + ts2",
-        "d1 * d1",
-        "ts1 - ts2",
-    ] {
+    for src in ["ts1 + ts2", "d1 * d1", "ts1 - ts2"] {
         let err = type_err(src, &e);
         assert_eq!(err.kind, TypeErrorKind::Unsupported, "{src}: {err}");
     }
-    assert!(type_err("a / b", &e).message.contains("3.5"));
+    // Integer division truncates in Exegra too (WG-4902), so it is typed like the other operators.
+    assert_eq!(ty_of_ok("a / b", &e), Ty::U32);
+    assert_eq!(ty_of_ok("c / 2", &e), Ty::U64);
+    assert_eq!(ty_of_ok("signed / 2", &e), Ty::I32);
 }
 
 #[test]

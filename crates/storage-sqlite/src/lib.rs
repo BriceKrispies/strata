@@ -864,6 +864,17 @@ impl Store for SqliteStore {
         .transpose()
     }
 
+    fn remove_account(&self, tenant: &TenantId, login: &str) -> StoreResult<bool> {
+        let conn = self.lock()?;
+        let removed = conn
+            .execute(
+                "DELETE FROM accounts WHERE tenant = ?1 AND login = ?2",
+                params![tenant.as_str(), login],
+            )
+            .map_err(db)?;
+        Ok(removed > 0)
+    }
+
     fn create_snapshot(
         &self,
         tenant: &TenantId,
@@ -982,5 +993,16 @@ impl Store for SqliteStore {
             "DELETE FROM tenants; DELETE FROM sqlite_sequence WHERE name = 'events';",
         )
         .map_err(db)
+    }
+
+    fn reset_tenant(&self, tenant: &TenantId) -> StoreResult<()> {
+        let conn = self.lock()?;
+        // Every other table hangs off `tenants` with ON DELETE CASCADE.
+        conn.execute(
+            "DELETE FROM tenants WHERE id = ?1",
+            params![tenant.as_str()],
+        )
+        .map_err(db)?;
+        Ok(())
     }
 }

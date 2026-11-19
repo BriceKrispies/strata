@@ -6,8 +6,9 @@
 //! means: a constraint is violated only by `false`; a policy, guard or filter passes only on
 //! `true`. A type error is an evaluation error, never a silent `false`.
 
-use crate::ids::{FieldId, RoleId, Timestamp};
-use crate::schema::FieldDef;
+use crate::ids::{FieldId, ObjectTypeId, RoleId, Timestamp};
+use crate::rules::Lookup;
+use crate::schema::{FieldDef, ObjectTypeDef};
 use crate::state::{Principal, Record};
 use crate::value::{FieldType, Value};
 use serde::{Deserialize, Serialize};
@@ -41,6 +42,10 @@ pub enum Expr {
     /// A field, or a system attribute: `$id`, `$version`, `$created_by`, `$created_at`,
     /// `$updated_at`.
     Var(Scope, String),
+    /// A field, or system attribute, of the record that a reference field points at:
+    /// `new.author.principal` is the `principal` of the author record `new.author` refers to.
+    /// One hop only. `null` when the reference is empty or the record is gone.
+    Through(Scope, String, String),
     /// A named query parameter.
     Param(String),
     /// The context timestamp.
@@ -75,6 +80,10 @@ pub struct Env<'a> {
     pub now: Timestamp,
     pub principal: &'a Principal,
     pub roles: &'a BTreeSet<RoleId>,
+    /// The records a reference may be followed into (`Expr::Through`). Following a reference
+    /// is an evaluation error where there is none, or where the snapshot does not cover the
+    /// target, so a decision never rests on a record that was merely not loaded.
+    pub lookup: Option<Lookup<'a>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -201,6 +210,43 @@ pub fn eval(expr: &Expr, env: &Env<'_>) -> Result<Value, EvalError> {
             };
             attribute(record, name)?
         }
+        Expr::Through(scope, field, target) => {
+            let record = match scope {
+                Scope::Record => env.record,
+                Scope::Old => env.old,
+                Scope::New => env.new,
+            };
+            let Some(record) = record else {
+                return Ok(Value::Null);
+            };
+            let id = FieldId::new(field).map_err(|e| EvalError(e.to_string()))?;
+            match record.get(&id) {
+                Value::Null => Value::Null,
+                Value::Ref(target_id) => {
+                    let lookup = env
+                        .lookup
+                        .ok_or_else(|| EvalError(format!("{field} cannot be followed here")))?;
+                    let reference = lookup
+                        .tenant
+                        .schema
+                        .objects
+                        .get(&record.object)
+                        .and_then(|object| object.fields.get(&id))
+                        .and_then(|def| def.ty.ref_target());
+                    let Some((object, _, false)) = reference else {
+                        return Err(EvalError(format!("{field} is not a reference")));
+                    };
+                    match lookup
+                        .record(object, *target_id)
+                        .map_err(|e| EvalError(e.message))?
+                    {
+                        Some(found) => attribute(Some(found.as_ref()), target)?,
+                        None => Value::Null,
+                    }
+                }
+                other => return Err(type_error("following a reference", other)),
+            }
+        }
         Expr::Param(name) => env.params.get(name).cloned().unwrap_or(Value::Null),
         Expr::Now => Value::Time(env.now.0),
         Expr::Principal => match env.principal {
@@ -307,6 +353,25 @@ pub struct TypeEnv<'a> {
     pub fields: &'a BTreeMap<FieldId, FieldDef>,
     pub params: &'a BTreeSet<String>,
     pub roles: &'a BTreeSet<RoleId>,
+    /// Every object type, for following references.
+    pub objects: &'a BTreeMap<ObjectTypeId, ObjectTypeDef>,
+}
+
+/// The shape of a field or system attribute of a record with these fields.
+fn attribute_shape(fields: &BTreeMap<FieldId, FieldDef>, name: &str) -> Result<Shape, String> {
+    Ok(match name {
+        "$id" => Shape::Ref,
+        "$version" => Shape::Int,
+        "$created_at" | "$updated_at" => Shape::Time,
+        "$created_by" => Shape::Str,
+        field => {
+            let id = FieldId::new(field).map_err(|e| e.to_string())?;
+            let def = fields
+                .get(&id)
+                .ok_or_else(|| format!("unknown field {field}"))?;
+            shape_of_type(&def.ty)
+        }
+    })
 }
 
 fn expect(shape: Shape, allowed: &[Shape], what: &str) -> Result<(), String> {
@@ -321,20 +386,22 @@ fn expect(shape: Shape, allowed: &[Shape], what: &str) -> Result<(), String> {
 pub fn check(expr: &Expr, env: &TypeEnv<'_>) -> Result<Shape, String> {
     Ok(match expr {
         Expr::Lit(value) => shape_of_value(value),
-        Expr::Var(_, name) => match name.as_str() {
-            "$id" => Shape::Ref,
-            "$version" => Shape::Int,
-            "$created_at" | "$updated_at" => Shape::Time,
-            "$created_by" => Shape::Str,
-            field => {
-                let id = FieldId::new(field).map_err(|e| e.to_string())?;
-                let def = env
-                    .fields
-                    .get(&id)
-                    .ok_or_else(|| format!("unknown field {field}"))?;
-                shape_of_type(&def.ty)
-            }
-        },
+        Expr::Var(_, name) => attribute_shape(env.fields, name)?,
+        Expr::Through(_, field, target) => {
+            let id = FieldId::new(field).map_err(|e| e.to_string())?;
+            let def = env
+                .fields
+                .get(&id)
+                .ok_or_else(|| format!("unknown field {field}"))?;
+            let Some((object, _, false)) = def.ty.ref_target() else {
+                return Err(format!("{field} is not a single reference"));
+            };
+            let object = env
+                .objects
+                .get(object)
+                .ok_or_else(|| format!("unknown object type {object}"))?;
+            attribute_shape(&object.fields, target)?
+        }
         Expr::Param(name) => {
             if !env.params.contains(name) {
                 return Err(format!("undeclared parameter {name}"));
@@ -482,6 +549,14 @@ impl fmt::Display for Expr {
                     Scope::New => "new",
                 };
                 write!(f, "{scope}.{name}")
+            }
+            Expr::Through(scope, field, target) => {
+                let scope = match scope {
+                    Scope::Record => "record",
+                    Scope::Old => "old",
+                    Scope::New => "new",
+                };
+                write!(f, "{scope}.{field}.{target}")
             }
             Expr::Param(name) => write!(f, "param.{name}"),
             Expr::Now => f.write_str("now"),

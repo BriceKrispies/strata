@@ -413,3 +413,62 @@ fn a_specification_without_implementation_scenarios_and_a_bad_crate_name_are_ref
     let syntax = scenarios::generate(SPEC_PATH, "{", CRATE, None).unwrap_err();
     assert_eq!(syntax[0].code, scenarios::SYNTAX);
 }
+
+#[test]
+fn a_step_without_a_time_an_index_or_an_event_id_is_refused_not_defaulted() {
+    for (path, what) in [
+        (["steps", "0", "time"], "time"),
+        (["steps", "0", "index"], "index"),
+        (["steps", "0", "kind"], "kind"),
+    ] {
+        let mut trace = canned_trace();
+        trace[path[0]][0].as_object_mut().unwrap().remove(path[2]);
+        assert_eq!(
+            codes(generated(&spec_text(), &trace)),
+            [scenarios::TRACE_MISMATCH],
+            "a step with no {what}"
+        );
+    }
+    let mut trace = canned_trace();
+    trace["steps"][0]["event"]
+        .as_object_mut()
+        .unwrap()
+        .remove("id");
+    assert_eq!(
+        codes(generated(&spec_text(), &trace)),
+        [scenarios::TRACE_MISMATCH],
+        "a step with no event id"
+    );
+}
+
+#[test]
+fn only_the_machines_exegra_routed_an_event_to_are_stepped() {
+    let delivered = |trace: &Value| fixture_deliveries(&generated(&spec_text(), trace).unwrap());
+    let canned = canned_trace();
+    let before = delivered(&canned);
+
+    // The first step the lease receives, routed to nobody: its delivery is not written.
+    let mut trace = canned.clone();
+    let step = trace["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .position(|s| !s["fired"].as_array().unwrap().is_empty())
+        .unwrap();
+    trace["steps"][step]["fired"] = json!([]);
+    trace["steps"][step]["ignored"] = json!([]);
+    assert_eq!(delivered(&trace), before - 1);
+
+    // The same step, ignored: the delivery is written, expecting nothing to change.
+    let mut ignored = canned.clone();
+    let behavior = ignored["steps"][step]["fired"][0]["behavior"].clone();
+    ignored["steps"][step]["fired"] = json!([]);
+    ignored["steps"][step]["ignored"] =
+        json!([{ "behavior": behavior, "reason": "no-transition" }]);
+    assert_eq!(delivered(&ignored), before);
+}
+
+/// The number of deliveries a generated test file makes.
+fn fixture_deliveries(text: &str) -> usize {
+    text.matches(".deliver(").count()
+}

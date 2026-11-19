@@ -66,7 +66,7 @@ pub fn transition(
         tenant,
         coverage: &state.coverage,
     };
-    let mut draft = Draft::new(tenant, ctx);
+    let mut draft = Draft::new(tenant, ctx, lookup);
     let output = match intent {
         Intent::CreateTenant { .. } => unreachable!("handled above"),
         Intent::ChangeSchema {
@@ -206,6 +206,7 @@ fn touched_objects(changes: &[SchemaChange]) -> BTreeSet<ObjectTypeId> {
 struct Draft<'a> {
     tenant: &'a TenantState,
     ctx: &'a Context,
+    lookup: Lookup<'a>,
     ops: Vec<DeltaOp>,
     events: Vec<EventBody>,
     effects: Vec<Effect>,
@@ -214,10 +215,11 @@ struct Draft<'a> {
 }
 
 impl<'a> Draft<'a> {
-    fn new(tenant: &'a TenantState, ctx: &'a Context) -> Self {
+    fn new(tenant: &'a TenantState, ctx: &'a Context, lookup: Lookup<'a>) -> Self {
         Draft {
             tenant,
             ctx,
+            lookup,
             ops: Vec::new(),
             events: Vec::new(),
             effects: Vec::new(),
@@ -255,6 +257,7 @@ impl<'a> Draft<'a> {
             action,
             resource,
             subject,
+            Some(self.lookup),
         );
         self.evidence.extend(checks);
         if allowed {
@@ -419,6 +422,7 @@ fn create_record(
                 now: ctx.now,
                 principal: &ctx.principal,
                 roles: &roles,
+                lookup: Some(lookup),
             };
             let value = expr::eval(default, &env).map_err(|e| {
                 draft.reject(
@@ -567,6 +571,7 @@ fn update_record(
             now: ctx.now,
             principal: &ctx.principal,
             roles: &roles,
+            lookup: Some(lookup),
         };
         let mut fired = None;
         let mut refused = Vec::new();

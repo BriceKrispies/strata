@@ -6,7 +6,7 @@
 //! | `STRATA_BACKEND_URL` | `http://127.0.0.1:4101` | The backend's internal API. |
 //! | `STRATA_SERVICE_TOKEN` | none, required | Shared secret presented to the backend. |
 //! | `STRATA_SITES` | see below | `host=tenant` pairs: which tenant each host name serves. |
-//! | `STRATA_ORIGINS` | derived | Comma-separated origins browser requests may come from. |
+//! | `STRATA_ORIGINS` | derived | Comma-separated origins browser requests may come from. Each is accepted only on the site its host name serves. |
 //! | `STRATA_WEB_DIST` | `web/dist` | The built frontend. |
 //! | `STRATA_DEV` | unset | `1` exposes the development endpoints. |
 //!

@@ -188,7 +188,14 @@ if (!startedMatch || started.size === 0) check('concordance.toml names started m
     env: { CARGO_BUILD_JOBS: '2', CARGO_TARGET_DIR: 'target/gate' },
   });
   check('specc check (crates/model is generated from the specification)', specc.ok,
-    specc.ok ? 'up to date' : `${exitText(specc)}: ${lastLine(specc.out)}; run specc generate and commit`);
+    specc.ok ? 'up to date' : `${exitText(specc)}: ${lastLine(specc.out)}; run npm run generate and commit`);
+
+  const web = run('cargo', ['run', '--quiet', '-p', 'strata-spec-compiler', '--bin', 'specc', '--',
+    'check-web', '--spec', 'specifications/spec.jsonc', '--out', 'web/src/generated'], {
+    env: { CARGO_BUILD_JOBS: '2', CARGO_TARGET_DIR: 'target/gate' },
+  });
+  check('specc check-web (web/src/generated is generated from the specification)', web.ok,
+    web.ok ? 'up to date' : `${exitText(web)}: ${lastLine(web.out)}; run npm run generate and commit`);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -205,7 +212,8 @@ if (!noTest) {
   console.log('running tests (--no-test would reuse the recorded results instead)');
   // A private build directory, so a running development stack does not hold the binaries.
   const cargo = run('cargo', ['test', '--workspace', '--no-fail-fast'], {
-    env: { CARGO_BUILD_JOBS: '2', RUST_TEST_THREADS: '2', CARGO_TARGET_DIR: 'target/gate' },
+    // EXEGRA_HOME: the specc differential tests run Exegra and fail without it (no silent skip).
+    env: { CARGO_BUILD_JOBS: '2', RUST_TEST_THREADS: '2', CARGO_TARGET_DIR: 'target/gate', EXEGRA_HOME: exegraHome },
   });
   writeFileSync(join(resultsDir, 'cargo-test.txt'), cargo.out);
   const libtest = [...cargo.out.matchAll(/^test result: (?:ok|FAILED)\. (\d+) passed; (\d+) failed;/gm)];
@@ -416,7 +424,7 @@ const constructionPct = requirements.length ? ((realised.construction / requirem
 console.log(`construction share: ${realised.construction} of ${requirements.length} requirements (${constructionPct}%); checked ${realised.checked}, operational ${realised.operational}, missing ${realised.missing}`);
 const rust = rustLineShare(root);
 const generatedPct = rust.total ? ((rust.generated / rust.total) * 100).toFixed(1) : '0.0';
-console.log(`generated code: ${rust.generated} of ${rust.total} non-blank Rust lines under crates/ (${generatedPct}%); hand-written ${rust.handWritten}`);
+console.log(`generated code: ${rust.generated} of ${rust.total} non-blank Rust lines linked into the shipped binaries (${generatedPct}%); hand-written ${rust.handWritten}; crates ${rust.crates.join(', ')}; generated modules ${rust.generatedModules.join(', ') || 'none'}`);
 const cargoRecord = existsSync(join(resultsDir, 'cargo-test.txt')) ? readFileSync(join(resultsDir, 'cargo-test.txt'), 'utf8') : '';
 const genTests = generatedTests(root, cargoRecord);
 if (genTests.total === 0 && genTests.unmapped === 0) console.log('generated tests: none yet');

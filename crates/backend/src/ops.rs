@@ -8,7 +8,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use strata_kernel::{
-    read, Context, Intent, Need, ObjectTypeId, Output, ReadRequest, RecordId, TenantState,
+    read, visible, Check, Context, DomainError, ErrorKind, Intent, Need, ObjectTypeId, Output,
+    Principal, ReadRequest, Record, RecordId, TenantId, TenantState,
 };
 use strata_protocol::api::{ErrorCode, Mutation, MutationReply, ViewRequest};
 use strata_storage_api::{execute, ExecuteError, Executed};
@@ -37,7 +38,8 @@ pub fn run_intent(
     app.stats.in_flight.fetch_sub(1, Ordering::Relaxed);
     match &result {
         Ok(done) => {
-            app.stats.record(intent.name(), None, done.conflicts);
+            app.stats
+                .record(ctx.tenant.as_str(), intent.name(), None, done.conflicts);
             LOG.info(
                 "kernel.accepted",
                 &ctx.correlation,
@@ -53,7 +55,8 @@ pub fn run_intent(
             app.hub.kick.notify_one();
         }
         Err(ExecuteError::Domain(error)) => {
-            app.stats.record(intent.name(), Some(error.kind), 0);
+            app.stats
+                .record(ctx.tenant.as_str(), intent.name(), Some(error.kind), 0);
             let failed: Vec<&str> = error
                 .evidence
                 .iter()
@@ -141,7 +144,12 @@ pub fn mutate(
         },
     };
     let ctx = identity.context(app);
-    let done = run_intent(app, &ctx, &intent, identity.anonymous())?;
+    let done = match run_intent(app, &ctx, &intent, identity.anonymous()) {
+        Err(error) if error.0.kind.as_deref() == Some("Unauthorized") => {
+            return Err(hide_unreadable(app, identity, &intent).unwrap_or(error))
+        }
+        other => other?,
+    };
     let (object, id, version) = match &done.transition.output {
         Output::Record {
             object,
@@ -164,6 +172,52 @@ pub fn mutate(
         event_seq: done.transition.delta.event_seq,
         checks_passed: done.transition.evidence.len(),
     })
+}
+
+/// A refused change to a record the caller cannot even read answers exactly as a change to a
+/// record that does not exist: "not allowed" would tell them it is there. Returns the reply to
+/// send instead, or `None` when the record is readable and the refusal may stand.
+fn hide_unreadable(app: &App, identity: &Identity, intent: &Intent) -> Option<ApiError> {
+    let (Intent::UpdateRecord { object, id, .. } | Intent::DeleteRecord { object, id, .. }) =
+        intent
+    else {
+        return None;
+    };
+    let need = Need::Record {
+        object: object.clone(),
+        id: *id,
+    };
+    let readable = app
+        .store
+        .load(&identity.tenant, &[need])
+        .ok()
+        .and_then(|state| state.tenant)
+        .and_then(|tenant| {
+            tenant
+                .record(object, *id)
+                .map(|record| visible(&tenant, &identity.principal, record, app.now()))
+        })
+        .unwrap_or(false);
+    if readable {
+        return None;
+    }
+    // The kernel's own reply for a record that is not there.
+    let message = format!("no {object} {id}");
+    let missing = DomainError::new(ErrorKind::UnknownRecord, message.clone())
+        .with(vec![Check::fail("intent:unknown_record", message)]);
+    Some(ApiError::domain(missing, identity.anonymous()))
+}
+
+/// Who created a record is told only to its creator. Principal ids are login identities, so
+/// anyone else would learn the sign-in name of every author.
+fn without_others_authorship(principal: &Principal, record: &Arc<Record>) -> Arc<Record> {
+    let own = matches!(principal, Principal::User(id) if record.created_by.as_ref() == Some(id));
+    if own || record.created_by.is_none() {
+        return record.clone();
+    }
+    let mut shown = Record::clone(record);
+    shown.created_by = None;
+    Arc::new(shown)
 }
 
 /// Evaluate the view whose route matches a path. Every section is read from one snapshot, and
@@ -225,11 +279,18 @@ pub fn view(app: &App, identity: &Identity, request: &ViewRequest) -> Result<Vie
                 field,
                 found
                     .rows
-                    .into_iter()
-                    .map(|record| (record.id, record))
+                    .iter()
+                    .map(|record| {
+                        (
+                            record.id,
+                            without_others_authorship(&identity.principal, record),
+                        )
+                    })
                     .collect(),
             );
         }
+        // Later sections may read this one's row, authorship included; only what is sent is
+        // trimmed.
         if section.single {
             done.insert(name.clone(), result.rows.first().cloned());
         }
@@ -237,7 +298,11 @@ pub fn view(app: &App, identity: &Identity, request: &ViewRequest) -> Result<Vie
             name.clone(),
             SectionData {
                 single: section.single,
-                rows: result.rows,
+                rows: result
+                    .rows
+                    .iter()
+                    .map(|record| without_others_authorship(&identity.principal, record))
+                    .collect(),
                 included,
                 markdown: section.markdown.clone(),
             },
@@ -254,23 +319,83 @@ pub fn view(app: &App, identity: &Identity, request: &ViewRequest) -> Result<Vie
     })
 }
 
-/// Everything the diagnostics endpoint reports. Machine-readable, no secrets, no record contents.
-pub fn diagnostics(app: &App) -> Result<Json, ApiError> {
+fn session_line(s: &strata_storage_api::SessionRecord) -> Json {
+    json!({
+        "id": s.id.as_str(),
+        "tenant": s.tenant.as_str(),
+        "principal": s.principal.as_str(),
+        "created_at": s.created_at.0,
+        "last_seen_at": s.last_seen_at.0,
+        "expires_at": s.expires_at.0,
+    })
+}
+
+/// What a tenant's own diagnostics report: its sessions, connections, counters, events,
+/// rejections and runs, and the store's general condition. Nothing of any other tenant.
+/// Machine-readable, no secrets, no record contents.
+pub fn diagnostics(app: &App, tenant: &TenantId) -> Result<Json, ApiError> {
+    let now = app.now();
+    let name = tenant.as_str();
+    let sessions: Vec<Json> = app
+        .store
+        .live_sessions(now)?
+        .iter()
+        .filter(|s| s.tenant == *tenant)
+        .map(session_line)
+        .collect();
+    let connections = app
+        .hub
+        .connections
+        .lock()
+        .map(|c| {
+            json!(c
+                .iter()
+                .filter(|(_, connection)| connection.tenant == name)
+                .collect::<BTreeMap<_, _>>())
+        })
+        .unwrap_or(Json::Null);
+    let health = app.store.health()?;
+    let outbox_pending = app
+        .store
+        .outbox(100_000)?
+        .iter()
+        .filter(|entry| entry.event.tenant == *tenant)
+        .count();
+    let counters = app.stats.of(name);
+    let mine = |line: &Json| line["tenant"] == name;
+    Ok(json!({
+        "service": "backend",
+        "kernel_version": strata_kernel::KERNEL_VERSION,
+        "started_at": app.started_at,
+        "now": now.0,
+        "store": {
+            "capabilities": app.store.capabilities(),
+            "health": { "ok": health.ok, "detail": health.detail, "outbox_pending": outbox_pending },
+            "migrations": app.store.migrations()?,
+        },
+        "tenants": app.store.tenants()?.into_iter().filter(|t| t.id == *tenant).collect::<Vec<_>>(),
+        "sessions": sessions,
+        "connections": connections,
+        "pending_operations": app.stats.in_flight.load(Ordering::Relaxed),
+        "transitions": counters.transitions,
+        "rejections_by_kind": counters.rejections,
+        "conflicts_retried": counters.conflicts_retried,
+        "recent_events": app.stats.recent_events.list().into_iter().filter(mine).collect::<Vec<_>>(),
+        "recent_rejections": app.stats.recent_rejections.list().into_iter().filter(mine).collect::<Vec<_>>(),
+        "recent_runs": app.lab.recent().into_iter().filter(mine).collect::<Vec<_>>(),
+    }))
+}
+
+/// Everything the platform diagnostics report, every tenant included, with the audit entries.
+/// Served only on the backend's internal route to holders of the service credential; the BFF
+/// never relays it to a browser.
+pub fn platform_diagnostics(app: &App) -> Result<Json, ApiError> {
     let now = app.now();
     let sessions: Vec<Json> = app
         .store
         .live_sessions(now)?
         .iter()
-        .map(|s| {
-            json!({
-                "id": s.id.as_str(),
-                "tenant": s.tenant.as_str(),
-                "principal": s.principal.as_str(),
-                "created_at": s.created_at.0,
-                "last_seen_at": s.last_seen_at.0,
-                "expires_at": s.expires_at.0,
-            })
-        })
+        .map(session_line)
         .collect();
     let connections = app
         .hub
@@ -292,11 +417,10 @@ pub fn diagnostics(app: &App) -> Result<Json, ApiError> {
         "sessions": sessions,
         "connections": connections,
         "pending_operations": app.stats.in_flight.load(Ordering::Relaxed),
-        "transitions": app.stats.transitions.lock().map(|t| json!(*t)).unwrap_or(Json::Null),
-        "rejections_by_kind": app.stats.rejections.lock().map(|r| json!(*r)).unwrap_or(Json::Null),
-        "conflicts_retried": app.stats.conflicts_retried.load(Ordering::Relaxed),
+        "counters": app.stats.counters.lock().map(|c| json!(*c)).unwrap_or(Json::Null),
         "recent_events": app.stats.recent_events.list(),
         "recent_rejections": app.stats.recent_rejections.list(),
         "recent_runs": app.lab.recent(),
+        "audit": app.audit.list(),
     }))
 }

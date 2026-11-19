@@ -25,6 +25,7 @@ pub fn visible(
         Action::Read,
         &Resource::Object(record.object.clone()),
         Subject::stored(record),
+        None,
     )
     .0
 }
@@ -113,6 +114,7 @@ pub fn read(
                         now: ctx.now,
                         principal: &ctx.principal,
                         roles: &roles,
+                        lookup: Some(lookup),
                     };
                     let keep = expr::holds(filter, &env).map_err(|e| {
                         DomainError::new(ErrorKind::Evaluation, format!("query {query}: {e}")).with(

@@ -13,7 +13,8 @@ use futures_util::{SinkExt, StreamExt};
 use serde_json::json;
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
-use strata_kernel::{ObjectTypeId, Principal};
+use strata_kernel::rules::may_attempt;
+use strata_kernel::{Action, ObjectTypeId, Principal, Resource};
 use strata_protocol::log::now_ms;
 use strata_protocol::ws::{
     parse_client, ClientMessage, ServerMessage, SessionState, HEARTBEAT_MS, MAX_REPLAY,
@@ -102,13 +103,22 @@ impl Conn {
                 outgoing.push((name.clone(), found));
             }
         }
+        // The correlation id may have been chosen by the client that made the change. It goes
+        // back to that principal's own connections and to nobody else.
+        let own =
+            !self.identity.anonymous() && published.event.principal == self.identity.principal;
+        let correlation = if own {
+            published.event.correlation.clone()
+        } else {
+            String::new()
+        };
         for (sub, found) in outgoing {
             self.delivered += 1;
             self.send(ServerMessage::Event {
                 sub,
                 n: self.delivered,
                 seq,
-                correlation: published.event.correlation.clone(),
+                correlation: correlation.clone(),
                 notice: found,
             })?;
         }
@@ -235,7 +245,26 @@ impl Conn {
                 self.send(ServerMessage::Pong { nonce, head })
             }
             ClientMessage::Cancel { req, run } => {
-                let cancelled = self.app.lab.cancel(&run, &self.identity);
+                let identity = self.identity.clone();
+                let may_manage_schema = self
+                    .app
+                    .blocking(move |app: &App| {
+                        app.store
+                            .load(&identity.tenant, &[])
+                            .ok()
+                            .and_then(|state| state.tenant)
+                            .is_some_and(|tenant| {
+                                may_attempt(
+                                    &tenant,
+                                    &identity.principal,
+                                    Action::Manage,
+                                    &Resource::Schema,
+                                )
+                            })
+                    })
+                    .await
+                    .unwrap_or(false);
+                let cancelled = self.app.lab.cancel(&run, &self.identity, may_manage_schema);
                 if cancelled {
                     self.send(ServerMessage::Ok { req })
                 } else {

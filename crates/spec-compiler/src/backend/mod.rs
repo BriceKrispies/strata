@@ -24,6 +24,7 @@ pub mod retentions;
 pub mod retries;
 pub mod routes;
 pub mod support;
+pub mod telemetry;
 pub mod types;
 pub mod validations;
 pub mod view;
@@ -64,4 +65,5 @@ pub const BACKENDS: &[&dyn Backend] = &[
     &routes::RoutesBackend,
     &deps::DepsBackend,
     &handlers::HandlersBackend,
+    &telemetry::TelemetryBackend,
 ];

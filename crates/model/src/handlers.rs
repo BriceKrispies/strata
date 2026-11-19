@@ -184,6 +184,146 @@ pub mod commit_flow_impl {}
 /// The specification does not say how these events arrive, so nothing is generated for them: `src-attempt`.
 pub mod source_throttle_flow_impl {}
 
+/// How events reach machine `job-run-flow-impl` (Job run (implementation)).
+///
+/// The specification does not say how these events arrive, so nothing is generated for them: `jr-poll`, `jr-attempt-failed`, `jr-attempt-succeeded`, `jr-cancel`, `jr-created`.
+pub mod job_run_flow_impl {}
+
+/// How events reach machine `schedule-flow-impl` (Recurring schedule (implementation)).
+///
+/// The specification does not say how these events arrive, so nothing is generated for them: `sc-job-completed`, `sc-pause`, `sc-resume`.
+pub mod schedule_flow_impl {}
+
+/// How events reach machine `trigger-commit-flow-impl` (Trigger jobs of a committed event (implementation)).
+///
+/// The specification does not say how these events arrive, so nothing is generated for them: `tg-commit`, `tg-abort`.
+pub mod trigger_commit_flow_impl {}
+
+/// How events reach machine `lease-reach-flow-impl` (Lease and reach of the tenant database (implementation)).
+///
+/// The specification does not say how these events arrive, so nothing is generated for them: `lr-job-due`, `lr-unreachable`, `lr-reachable`.
+pub mod lease_reach_flow_impl {}
+
+/// How events reach machine `job-admission-flow-impl` (Job admission (implementation)).
+///
+/// The specification does not say how these events arrive, so nothing is generated for them: `ad-burst`, `ad-tick`, `ad-other-due`.
+pub mod job_admission_flow_impl {}
+
+/// How events reach machine `wake-flow-impl` (Wake scan (implementation)).
+///
+/// The specification does not say how these events arrive, so nothing is generated for them: `wk-scan`.
+pub mod wake_flow_impl {}
+
+/// How events reach machine `bulk-change-flow-impl` (Bulk change (implementation)).
+///
+/// The specification does not say how these events arrive, so nothing is generated for them: `bk-process`, `bk-interrupt`, `bk-resume`.
+pub mod bulk_change_flow_impl {}
+
+/// How events reach machine `workflow-definition-flow-impl` (Workflow definition schema version (implementation)).
+///
+/// The specification does not say how these events arrive, so nothing is generated for them: `wd-save`, `wd-migrate`.
+pub mod workflow_definition_flow_impl {}
+
+/// How events reach machine `workflow-activation-flow-impl` (Workflow activation (implementation)).
+///
+/// The specification does not say how these events arrive, so nothing is generated for them: `wa-project`, `wa-activate`.
+pub mod workflow_activation_flow_impl {}
+
+/// How events reach machine `template-install-flow-impl` (Template install (implementation)).
+///
+/// The specification does not say how these events arrive, so nothing is generated for them: `ti-review`, `ti-install`.
+pub mod template_install_flow_impl {}
+
+/// How events reach machine `workflow-run-flow-impl` (Workflow run (implementation)).
+///
+/// The specification does not say how these events arrive, so nothing is generated for them: `wr-advance`, `wr-restart`.
+pub mod workflow_run_flow_impl {}
+
+/// How events reach machine `workflow-compensation-flow-impl` (Workflow compensation (implementation)).
+///
+/// The specification does not say how these events arrive, so nothing is generated for them: `wc-step-done`, `wc-step-failed`, `wc-compensate`.
+pub mod workflow_compensation_flow_impl {}
+
+/// How events reach machine `approval-flow-impl` (Workflow approval (implementation)).
+///
+/// The specification does not say how these events arrive, so nothing is generated for them: `wp-approve`.
+pub mod approval_flow_impl {}
+
+/// How events reach machine `approval-inbox-flow-impl` (Approval task delivery (implementation)).
+///
+/// The specification does not say how these events arrive, so nothing is generated for them: `ni-evaluate`.
+pub mod approval_inbox_flow_impl {}
+
+/// How events reach machine `call-step-flow-impl` (External call step (implementation)).
+///
+/// The specification does not say how these events arrive, so nothing is generated for them: `cs-commit`, `cs-abort`, `cs-runner-poll`.
+pub mod call_step_flow_impl {}
+
+/// How events reach machine `outbound-call-flow-impl` (Outbound call (implementation)).
+///
+/// The specification does not say how these events arrive, so nothing is generated for them: `oc-request`, `oc-redirect`, `oc-chunk`, `oc-timeout`.
+pub mod outbound_call_flow_impl {}
+
+/// How events reach machine `webhook-delivery-flow-impl` (Outbound webhook delivery (implementation)).
+///
+/// The specification does not say how these events arrive, so nothing is generated for them: `wh-send`, `wh-response`.
+pub mod webhook_delivery_flow_impl {}
+
+/// How events reach machine `scheduled-publication-flow-impl` (Scheduled publication (implementation)).
+///
+/// The specification does not say how these events arrive, so nothing is generated for them: `sp-save`, `sp-job-run`.
+pub mod scheduled_publication_flow_impl {}
+
+/// How events reach machine `inbound-signature-flow-impl` (Inbound webhook signature (implementation)).
+///
+/// The specification does not say how these events arrive, so nothing is generated for them: `is-received`.
+pub mod inbound_signature_flow_impl {}
+
+/// How events reach machine `mail-enqueue-flow-impl` (Mail job of a change (implementation)).
+///
+/// The specification does not say how these events arrive, so nothing is generated for them: `me-commit`, `me-abort`.
+pub mod mail_enqueue_flow_impl {}
+
+/// How events reach machine `mail-attempt-flow-impl` (Mail attempt (implementation)).
+///
+/// The specification does not say how these events arrive, so nothing is generated for them: `mt-attempt`.
+pub mod mail_attempt_flow_impl {}
+
+/// How events reach machine `mail-quota-flow-impl` (Mail quota (implementation)).
+///
+/// The specification does not say how these events arrive, so nothing is generated for them: `mq-release`.
+pub mod mail_quota_flow_impl {}
+
+/// How events reach machine `mail-provider-flow-impl` (Mail provider selection (implementation)).
+///
+/// The specification does not say how these events arrive, so nothing is generated for them: `mp-configure`, `mp-send`.
+pub mod mail_provider_flow_impl {}
+
+/// How events reach machine `mail-log-read-flow-impl` (Mail log read (implementation)).
+///
+/// The specification does not say how these events arrive, so nothing is generated for them: `mr-read`.
+pub mod mail_log_read_flow_impl {}
+
+/// How events reach machine `sender-domain-flow-impl` (Sender domain (implementation)).
+///
+/// The specification does not say how these events arrive, so nothing is generated for them: `sd-verify`, `sd-send`.
+pub mod sender_domain_flow_impl {}
+
+/// How events reach machine `mail-render-flow-impl` (Mail rendering (implementation)).
+///
+/// The specification does not say how these events arrive, so nothing is generated for them: `rd-render`.
+pub mod mail_render_flow_impl {}
+
+/// How events reach machine `delivery-report-flow-impl` (Delivery report (implementation)).
+///
+/// The specification does not say how these events arrive, so nothing is generated for them: `dr-report`.
+pub mod delivery_report_flow_impl {}
+
+/// How events reach machine `audience-mail-flow-impl` (Audience mail (implementation)).
+///
+/// The specification does not say how these events arrive, so nothing is generated for them: `am-send`, `am-click`.
+pub mod audience_mail_flow_impl {}
+
 /// How events reach machine `samlv-flow-impl` (SAML response checks (implementation)).
 ///
 /// The specification does not say how these events arrive, so nothing is generated for them: `samlv-presented`.
@@ -276,7 +416,7 @@ pub mod asrt_flow_impl {}
 
 /// How events reach machine `session-lifetime-flow-impl` (Session lifetime (implementation)).
 ///
-/// The specification does not say how these events arrive, so nothing is generated for them: `sl-used`.
+/// The specification does not say how these events arrive, so nothing is generated for them: `sl-used`, `sl-issued`.
 pub mod session_lifetime_flow_impl {}
 
 /// How events reach machine `second-factor-flow-impl` (Second factor (implementation)).
