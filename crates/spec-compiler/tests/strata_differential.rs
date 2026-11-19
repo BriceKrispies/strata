@@ -202,141 +202,25 @@ where
     }
 }
 
+/// The callback of `strata_model::for_each_shipped_machine!` and `for_each_target_machine!`: the
+/// machines it is given, as one list of erased machines.
 macro_rules! registry {
-    ($($path:ident :: $module:ident :: $machine:ident),* $(,)?) => {
-        /// Every server machine of the model, by behavior id: the shipped ones (`machines`) and
-        /// the target ones (`target_machines`, which the `target-models` feature of
-        /// `strata-model` compiles and this crate's manifest enables).
-        fn rust_machines() -> BTreeMap<String, Box<dyn ErasedMachine>> {
-            let all: Vec<Box<dyn ErasedMachine>> = vec![
-                $(Box::new(Typed::<strata_model::$path::$module::$machine>(PhantomData))),*
-            ];
-            all.into_iter().map(|m| (m.name().to_string(), m)).collect()
-        }
-    };
+    ($($path:ident :: $module:ident :: $machine:ident),* $(,)?) => {{
+        let all: Vec<Box<dyn ErasedMachine>> = vec![
+            $(Box::new(Typed::<strata_model::$path::$module::$machine>(PhantomData))),*
+        ];
+        all
+    }};
 }
 
-registry! {
-    machines::gateway_session_flow_impl::GatewaySessionFlowImpl,
-    machines::origin_content_flow_impl::OriginContentFlowImpl,
-    machines::arc_outbox_delivery_flow_impl::ArcOutboxDeliveryFlowImpl,
-    machines::arc_rolling_change_flow_impl::ArcRollingChangeFlowImpl,
-    machines::preview_link_flow_impl::PreviewLinkFlowImpl,
-    machines::gateway_outage_flow_impl::GatewayOutageFlowImpl,
-    machines::token_render_flow_impl::TokenRenderFlowImpl,
-    machines::commit_flow_impl::CommitFlowImpl,
-    machines::template_install_flow_impl::TemplateInstallFlowImpl,
-    machines::mail_render_flow_impl::MailRenderFlowImpl,
-    machines::runtime_credential_flow_impl::RuntimeCredentialFlowImpl,
-    machines::kernel_upgrade_flow_impl::KernelUpgradeFlowImpl,
-    machines::draft_save_flow_impl::DraftSaveFlowImpl,
-    machines::asrt_flow_impl::AsrtFlowImpl,
-    machines::token_verifier_flow_impl::TokenVerifierFlowImpl,
-    target_machines::emailed_link_flow_impl::EmailedLinkFlowImpl,
-    target_machines::oidc_callback_flow_impl::OidcCallbackFlowImpl,
-    target_machines::session_authority_flow_impl::SessionAuthorityFlowImpl,
-    target_machines::job_lease_flow_impl::JobLeaseFlowImpl,
-    target_machines::edge_copy_flow_impl::EdgeCopyFlowImpl,
-    target_machines::provisioning_flow_impl::ProvisioningFlowImpl,
-    target_machines::proposal_flow_impl::ProposalFlowImpl,
-    target_machines::arc_outbox_consumer_flow_impl::ArcOutboxConsumerFlowImpl,
-    target_machines::inbound_run_flow_impl::InboundRunFlowImpl,
-    target_machines::cv_change_flow_impl::CvChangeFlowImpl,
-    target_machines::cv_authority_flow_impl::CvAuthorityFlowImpl,
-    target_machines::saml_assertion_flow_impl::SamlAssertionFlowImpl,
-    target_machines::guess_throttle_flow_impl::GuessThrottleFlowImpl,
-    target_machines::trigger_chain_flow_impl::TriggerChainFlowImpl,
-    target_machines::erasure_copy_flow_impl::ErasureCopyFlowImpl,
-    target_machines::subject_key_flow_impl::SubjectKeyFlowImpl,
-    target_machines::audit_chain_flow_impl::AuditChainFlowImpl,
-    target_machines::agent_halt_flow_impl::AgentHaltFlowImpl,
-    target_machines::approval_separation_flow_impl::ApprovalSeparationFlowImpl,
-    target_machines::mail_dispatch_flow_impl::MailDispatchFlowImpl,
-    target_machines::mail_adapter_flow_impl::MailAdapterFlowImpl,
-    target_machines::colour_switch_flow_impl::ColourSwitchFlowImpl,
-    target_machines::release_promotion_flow_impl::ReleasePromotionFlowImpl,
-    target_machines::migration_batch_flow_impl::MigrationBatchFlowImpl,
-    target_machines::tenant_move_flow_impl::TenantMoveFlowImpl,
-    target_machines::source_throttle_flow_impl::SourceThrottleFlowImpl,
-    target_machines::job_run_flow_impl::JobRunFlowImpl,
-    target_machines::schedule_flow_impl::ScheduleFlowImpl,
-    target_machines::trigger_commit_flow_impl::TriggerCommitFlowImpl,
-    target_machines::lease_reach_flow_impl::LeaseReachFlowImpl,
-    target_machines::job_admission_flow_impl::JobAdmissionFlowImpl,
-    target_machines::wake_flow_impl::WakeFlowImpl,
-    target_machines::bulk_change_flow_impl::BulkChangeFlowImpl,
-    target_machines::workflow_definition_flow_impl::WorkflowDefinitionFlowImpl,
-    target_machines::workflow_activation_flow_impl::WorkflowActivationFlowImpl,
-    target_machines::workflow_run_flow_impl::WorkflowRunFlowImpl,
-    target_machines::workflow_compensation_flow_impl::WorkflowCompensationFlowImpl,
-    target_machines::approval_flow_impl::ApprovalFlowImpl,
-    target_machines::approval_inbox_flow_impl::ApprovalInboxFlowImpl,
-    target_machines::call_step_flow_impl::CallStepFlowImpl,
-    target_machines::outbound_call_flow_impl::OutboundCallFlowImpl,
-    target_machines::webhook_delivery_flow_impl::WebhookDeliveryFlowImpl,
-    target_machines::scheduled_publication_flow_impl::ScheduledPublicationFlowImpl,
-    target_machines::inbound_signature_flow_impl::InboundSignatureFlowImpl,
-    target_machines::mail_enqueue_flow_impl::MailEnqueueFlowImpl,
-    target_machines::mail_attempt_flow_impl::MailAttemptFlowImpl,
-    target_machines::mail_quota_flow_impl::MailQuotaFlowImpl,
-    target_machines::mail_provider_flow_impl::MailProviderFlowImpl,
-    target_machines::mail_log_read_flow_impl::MailLogReadFlowImpl,
-    target_machines::sender_domain_flow_impl::SenderDomainFlowImpl,
-    target_machines::delivery_report_flow_impl::DeliveryReportFlowImpl,
-    target_machines::audience_mail_flow_impl::AudienceMailFlowImpl,
-    target_machines::tenant_suspension_flow_impl::TenantSuspensionFlowImpl,
-    target_machines::write_quota_flow_impl::WriteQuotaFlowImpl,
-    target_machines::plan_change_flow_impl::PlanChangeFlowImpl,
-    target_machines::connection_quota_flow_impl::ConnectionQuotaFlowImpl,
-    target_machines::bootstrap_credential_flow_impl::BootstrapCredentialFlowImpl,
-    target_machines::placement_choice_flow_impl::PlacementChoiceFlowImpl,
-    target_machines::tenant_deletion_flow_impl::TenantDeletionFlowImpl,
-    target_machines::backup_key_flow_impl::BackupKeyFlowImpl,
-    target_machines::export_restore_flow_impl::ExportRestoreFlowImpl,
-    target_machines::point_in_time_flow_impl::PointInTimeFlowImpl,
-    target_machines::placement_switch_flow_impl::PlacementSwitchFlowImpl,
-    target_machines::schema_change_flow_impl::SchemaChangeFlowImpl,
-    target_machines::layout_rollout_flow_impl::LayoutRolloutFlowImpl,
-    target_machines::staging_promotion_flow_impl::StagingPromotionFlowImpl,
-    target_machines::field_change_flow_impl::FieldChangeFlowImpl,
-    target_machines::workflow_version_flow_impl::WorkflowVersionFlowImpl,
-    target_machines::scheduled_job_check_flow_impl::ScheduledJobCheckFlowImpl,
-    target_machines::template_proposal_flow_impl::TemplateProposalFlowImpl,
-    target_machines::import_flow_impl::ImportFlowImpl,
-    target_machines::samlv_flow_impl::SamlvFlowImpl,
-    target_machines::oidcv_flow_impl::OidcvFlowImpl,
-    target_machines::oidcs_flow_impl::OidcsFlowImpl,
-    target_machines::fedp_flow_impl::FedpFlowImpl,
-    target_machines::fedc_flow_impl::FedcFlowImpl,
-    target_machines::fedl_flow_impl::FedlFlowImpl,
-    target_machines::prov_flow_impl::ProvFlowImpl,
-    target_machines::idpa_flow_impl::IdpaFlowImpl,
-    target_machines::tokiss_flow_impl::TokissFlowImpl,
-    target_machines::tokact_flow_impl::TokactFlowImpl,
-    target_machines::tokint_flow_impl::TokintFlowImpl,
-    target_machines::stepup_flow_impl::StepupFlowImpl,
-    target_machines::facg_flow_impl::FacgFlowImpl,
-    target_machines::realm_flow_impl::RealmFlowImpl,
-    target_machines::auditk_flow_impl::AuditkFlowImpl,
-    target_machines::ppreg_flow_impl::PpregFlowImpl,
-    target_machines::ppauth_flow_impl::PpauthFlowImpl,
-    target_machines::session_lifetime_flow_impl::SessionLifetimeFlowImpl,
-    target_machines::second_factor_flow_impl::SecondFactorFlowImpl,
-    target_machines::recovery_flow_impl::RecoveryFlowImpl,
-    target_machines::code_spend_flow_impl::CodeSpendFlowImpl,
-    target_machines::mfp_limit_flow_impl::MfpLimitFlowImpl,
-    target_machines::lea_limit_flow_impl::LeaLimitFlowImpl,
-    target_machines::leb_limit_flow_impl::LebLimitFlowImpl,
-    target_machines::sus_limit_flow_impl::SusLimitFlowImpl,
-    target_machines::tcl_limit_flow_impl::TclLimitFlowImpl,
-    target_machines::realm_rate_flow_impl::RealmRateFlowImpl,
-    target_machines::idp_outage_flow_impl::IdpOutageFlowImpl,
-    target_machines::provider_keys_flow_impl::ProviderKeysFlowImpl,
-    target_machines::idp_offer_flow_impl::IdpOfferFlowImpl,
-    target_machines::first_sign_in_role_flow_impl::FirstSignInRoleFlowImpl,
-    target_machines::signing_key_flow_impl::SigningKeyFlowImpl,
-    target_machines::signup_notice_flow_impl::SignupNoticeFlowImpl,
-    target_machines::new_device_flow_impl::NewDeviceFlowImpl,
+/// Every server machine of the model, by behavior id: the shipped ones (`machines`) and the
+/// target ones (`target_machines`, which the `target-models` feature of `strata-model` compiles
+/// and this crate's manifest enables). The lists are generated by specc into `strata-model`'s
+/// `lib.rs`, so a machine added to the specification is here after regeneration.
+fn rust_machines() -> BTreeMap<String, Box<dyn ErasedMachine>> {
+    let mut all: Vec<Box<dyn ErasedMachine>> = strata_model::for_each_shipped_machine!(registry);
+    all.extend(strata_model::for_each_target_machine!(registry));
+    all.into_iter().map(|m| (m.name().to_string(), m)).collect()
 }
 
 /// The Node process that steps the generated client machines, over lines of JSON.
@@ -1317,4 +1201,49 @@ fn the_generated_machines_step_as_exegra_runs_the_specification() {
         "no scenario exercises a delayed emit"
     );
     assert!(total.timers_set > 0, "no scenario exercises a timer");
+}
+
+/// Every stored server machine the specification declares at `level: "implementation"` is in the
+/// registry, and the registry holds no other. Client machines (the browser's, run as JavaScript)
+/// and memory machines (no `Machine` impl, so no registry entry) are left out of the comparison.
+#[test]
+fn every_server_implementation_machine_is_in_the_registry() {
+    let root = clean(&support::repo_root());
+    let path = "specifications/spec.jsonc";
+    let text = std::fs::read_to_string(root.join(path)).unwrap();
+    let json = jsonc::parse(&text).unwrap();
+    let (typed, client) = load::load_with_client_machines(path, &text).unwrap_or_else(|d| {
+        panic!(
+            "the specification was refused:\n{}",
+            d.iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("\n")
+        )
+    });
+    let client: BTreeSet<&str> = client.iter().map(|b| b.id.as_str()).collect();
+    let memory: BTreeSet<&str> = typed
+        .memory_machines
+        .iter()
+        .map(|b| b.id.as_str())
+        .collect();
+    let expected: BTreeSet<String> = items(&json, "behaviors")
+        .iter()
+        .filter(|b| b["level"] == json!("implementation"))
+        .map(|b| b["id"].as_str().unwrap().to_string())
+        .filter(|id| !client.contains(id.as_str()) && !memory.contains(id.as_str()))
+        .collect();
+    assert!(
+        !expected.is_empty(),
+        "the specification declares no server implementation machine"
+    );
+    let registry: BTreeSet<String> = rust_machines().into_keys().collect();
+    let missing: Vec<&String> = expected.difference(&registry).collect();
+    let extra: Vec<&String> = registry.difference(&expected).collect();
+    assert!(
+        missing.is_empty() && extra.is_empty(),
+        "the registry of generated machines is not the specification's server implementation machines.\n\
+         missing from the registry (regenerate strata-model): {missing:?}\n\
+         in the registry but not declared: {extra:?}"
+    );
 }

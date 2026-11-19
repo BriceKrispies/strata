@@ -211,6 +211,7 @@ fn lib_rs<'a>(spec: &Spec, modules: impl Iterator<Item = &'a str>) -> TokenStrea
             }
         })
         .collect();
+    let registry = crate::backend::machines::registry_macros(spec);
     quote! {
         #![doc = #summary]
         #![doc = ""]
@@ -219,6 +220,8 @@ fn lib_rs<'a>(spec: &Spec, modules: impl Iterator<Item = &'a str>) -> TokenStrea
         #![allow(clippy::enum_variant_names)]
 
         #(#declarations)*
+
+        #registry
     }
 }
 

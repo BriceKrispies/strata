@@ -243,6 +243,60 @@ fn in_declaration_order<'a>(a: &'a [Behavior], b: &'a [Behavior]) -> Vec<&'a Beh
     all
 }
 
+/// The registry macros of the generated `lib.rs`: `for_each_shipped_machine!(callback)` expands
+/// to `callback! { machines::<module>::<Type>, ... }` over every stored shipped machine, and
+/// `for_each_target_machine!(callback)` over every stored target machine. A caller that builds a
+/// registry from them cannot miss a machine the specification declares. Memory machines are not
+/// listed: they have no `strata_runtime::Machine` impl. The target macro is defined only with the
+/// `target-models` feature, the feature that compiles `target_machines`.
+pub fn registry_macros(spec: &Spec) -> TokenStream {
+    let shipped = registry_paths(&spec.machines, "machines");
+    let target = registry_paths(&spec.target_machines, "target_machines");
+    let mut out = TokenStream::new();
+    if !shipped.is_empty() {
+        out.extend(quote! {
+            #[doc = " Calls the macro `$callback` as `$callback! { machines::<module>::<Type>, ... }`, with every shipped stored implementation machine of the specification, in declaration order."]
+            #[macro_export]
+            macro_rules! for_each_shipped_machine {
+                ($callback:ident) => {
+                    $callback! {
+                        #(#shipped,)*
+                    }
+                };
+            }
+        });
+    }
+    if !target.is_empty() {
+        out.extend(quote! {
+            #[cfg(feature = "target-models")]
+            #[doc = " Calls the macro `$callback` as `$callback! { target_machines::<module>::<Type>, ... }`, with every target stored implementation machine of the specification, in declaration order. Expanding it needs the `target-models` feature."]
+            #[macro_export]
+            macro_rules! for_each_target_machine {
+                ($callback:ident) => {
+                    $callback! {
+                        #(#target,)*
+                    }
+                };
+            }
+        });
+    }
+    out
+}
+
+/// The paths `<module>::<machine module>::<machine type>` of the stored machines in `machines`.
+fn registry_paths(machines: &[Behavior], module: &str) -> Vec<TokenStream> {
+    let root = naming::ident(module);
+    machines
+        .iter()
+        .filter(|b| !b.memory)
+        .map(|b| {
+            let file = naming::ident(&naming::snake(&b.id).unwrap_or_default());
+            let ty = naming::ident(&naming::pascal(&b.id).unwrap_or_default());
+            quote! { #root::#file::#ty }
+        })
+        .collect()
+}
+
 /// The module-name and generation checks of the machines of one module.
 fn check_machines(
     spec: &Spec,
