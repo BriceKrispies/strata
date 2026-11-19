@@ -405,7 +405,7 @@ fn with_scenario(steps: Value) -> String {
     with(|s| {
         s["scenarios"] = json!([
             { "id": "run", "name": "Run", "description": "Runs the machine.",
-              "behaviors": ["m"], "steps": steps }
+              "behaviors": ["m"], "timeUnit": "ms", "steps": steps }
         ]);
     })
 }

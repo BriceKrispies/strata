@@ -55,6 +55,14 @@ for (const step of trace.steps) {
     pending.delete(step.event.timer.slice(prefix.length));
   }
 
+  // Exegra delivers an event only to the machines that react to it (its `fired` and `ignored`
+  // lists); the generated machine refuses any other event, so it is not fed one.
+  const ignoredHere = (step.ignored ?? []).some((i) => i.behavior === machineId);
+  if (!fired && !ignoredHere) {
+    checkMachine(`${context}, not delivered`, state, vars, step.config);
+    continue;
+  }
+
   const before = JSON.stringify(vars);
   const outcome = machine.step(state, vars, { event: id, payload: step.event.payload ?? {} }, time);
   assert.equal(JSON.stringify(vars), before, `${context}: the step changed its input variables`);
