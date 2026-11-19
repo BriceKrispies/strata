@@ -1327,6 +1327,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "strata-kernel",
  "tokio",
 ]
 

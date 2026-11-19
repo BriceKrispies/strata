@@ -149,8 +149,21 @@ fn key_field(spec: &Spec, b: &Behavior) -> Option<(String, String)> {
                 .as_ref()
                 .and_then(|i| Some((i.stored_in.clone()?, i.key.clone()?)))
         })?;
-    let field = spec.record(&record)?.field(&key)?;
-    Some((key, field.type_name.clone()))
+    // A composite key names no one request input or payload field: no handler keys by it.
+    let [key] = key.as_slice() else {
+        return None;
+    };
+    let field = spec.record(&record)?.field(key)?;
+    Some((key.clone(), field.type_name.clone()))
+}
+
+/// True when the machine is keyed by more than one field (a record with a composite key).
+fn composite_key(b: &Behavior) -> bool {
+    b.storage
+        .as_ref()
+        .and_then(|s| s.key.as_ref())
+        .or_else(|| b.instances.as_ref().and_then(|i| i.key.as_ref()))
+        .is_some_and(|k| k.len() > 1)
 }
 
 fn snake(name: &str) -> String {
@@ -190,6 +203,25 @@ impl Backend for HandlersBackend {
         for b in &spec.machines {
             if let Ok(name) = naming::snake(&b.id) {
                 modules.claim(&mut out, &b.id, &format!("machine \"{}\"", b.id), &name);
+            }
+            // A request or an event carries one key value, not the fields of a composite key.
+            if composite_key(b) {
+                for (e, ways) in arrivals(spec, b) {
+                    if ways
+                        .iter()
+                        .any(|w| matches!(w, Arrival::Contract(_) | Arrival::Published(_)))
+                    {
+                        out.push(Diagnostic::new(
+                            KEY,
+                            &b.id,
+                            format!(
+                                "Event \"{}\" reaches machine \"{}\" through a request or another machine, but the machine is keyed by several fields; a handler keys an instance by one input or payload field.",
+                                e.id, b.id
+                            ),
+                        ));
+                    }
+                }
+                continue;
             }
             // The machines backend refuses a machine without a key field.
             let Some((key, key_type)) = key_field(spec, b) else {

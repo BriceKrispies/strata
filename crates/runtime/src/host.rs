@@ -499,7 +499,12 @@ impl<M: Machine, S: MachineStore, D: Dispatcher<M::Emitted>> Host<M, S, D> {
         self
     }
 
-    /// The store this host writes to.
+    /// The tenant of this host's store, which is the tenant of every instance it holds.
+    pub fn tenant(&self) -> &crate::TenantId {
+        self.store.tenant()
+    }
+
+    /// The store the host runs on.
     pub fn store(&self) -> &Arc<S> {
         &self.store
     }

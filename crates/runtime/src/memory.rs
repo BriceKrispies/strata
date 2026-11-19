@@ -13,6 +13,7 @@ use crate::store::{
 };
 use std::collections::BTreeMap;
 use std::sync::{Mutex, MutexGuard};
+use strata_kernel::TenantId;
 
 #[derive(Clone, Debug, Default)]
 struct Data {
@@ -36,15 +37,23 @@ fn in_queue_order(entries: impl Iterator<Item = QueueEntry>) -> Vec<QueueEntry> 
 }
 
 /// A machine store held in memory. Its contents live as long as the value.
-#[derive(Debug, Default)]
+///
+/// It belongs to one tenant, given at construction; there is no `Default` and no constructor
+/// without a tenant. Rows are in that tenant's scope, and two tenants take two stores, so equal
+/// record ids in two tenants are two instances.
+#[derive(Debug)]
 pub struct MemoryStore {
+    tenant: TenantId,
     data: Mutex<Data>,
 }
 
 impl MemoryStore {
-    /// An empty store.
-    pub fn new() -> Self {
-        Self::default()
+    /// An empty store for `tenant`.
+    pub fn new(tenant: TenantId) -> Self {
+        MemoryStore {
+            tenant,
+            data: Mutex::new(Data::default()),
+        }
     }
 
     fn lock(&self) -> Result<MutexGuard<'_, Data>, StorageError> {
@@ -234,6 +243,10 @@ impl QueueStore for MemoryStore {
 }
 
 impl RecordStore for MemoryStore {
+    fn tenant(&self) -> &TenantId {
+        &self.tenant
+    }
+
     fn supports(&self, _: Isolation) -> bool {
         true
     }

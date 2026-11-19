@@ -45,7 +45,8 @@ use serde_json::{json, Value};
 // `target-models` feature of `strata-model`, which this crate's manifest enables).
 use strata_model::target_machines::dispatch;
 use strata_runtime::{
-    DispatchError, Dispatcher, Envelope, Member, MemoryStore, Router, System, TestClock, Time,
+    DispatchError, Dispatcher, Envelope, Member, MemoryStore, Router, System, TenantId, TestClock,
+    Time,
 };
 use strata_spec_compiler::ir::{Spec, TypeKind};
 use strata_spec_compiler::resolve::{Builtin, TypeRef};
@@ -349,7 +350,7 @@ async fn run(spec: &Spec, plan: &Plan<'_>, trace: &Value) -> Result<usize, (bool
     }
 
     let clock = TestClock::at(Time(0));
-    let store = Arc::new(MemoryStore::new());
+    let store = Arc::new(MemoryStore::new(TenantId::new("acme").unwrap()));
     let system = System::new(
         store,
         router.clone(),
@@ -366,15 +367,21 @@ async fn run(spec: &Spec, plan: &Plan<'_>, trace: &Value) -> Result<usize, (bool
         let record = spec
             .record(member.record)
             .unwrap_or_else(|| panic!("no record {}", member.record));
-        let key_field = storage
+        // The key fields: one, or several for a record with a composite key (a JSON array).
+        let key_fields = storage
             .key
             .clone()
             .or_else(|| b.instances.as_ref().and_then(|i| i.key.clone()))
             .expect("a generated machine has a key");
-        let key_type = record
-            .field(&key_field)
-            .map(|f| TypeRef::parse(&f.type_name))
-            .expect("the key is a record field");
+        let key_types: Vec<TypeRef> = key_fields
+            .iter()
+            .map(|k| {
+                record
+                    .field(k)
+                    .map(|f| TypeRef::parse(&f.type_name))
+                    .expect("the key is a record field")
+            })
+            .collect();
         let keys: Vec<Value> = if b.instances.is_some() {
             keyed
                 .iter()
@@ -382,7 +389,11 @@ async fn run(spec: &Spec, plan: &Plan<'_>, trace: &Value) -> Result<usize, (bool
                 .map(|(_, v)| v.clone())
                 .collect()
         } else {
-            let key = placeholder(spec, &key_type);
+            let key = if let [one] = key_types.as_slice() {
+                placeholder(spec, one)
+            } else {
+                Value::Array(key_types.iter().map(|t| placeholder(spec, t)).collect())
+            };
             let text = member.key_of(&key).map_err(|e| diverged(e.to_string()))?;
             singles.insert(member.name.to_string(), text);
             vec![key]
@@ -399,7 +410,13 @@ async fn run(spec: &Spec, plan: &Plan<'_>, trace: &Value) -> Result<usize, (bool
                     placeholder(spec, &TypeRef::parse(&f.type_name)),
                 );
             }
-            base.insert(key_field.clone(), key.clone());
+            if let [one] = key_fields.as_slice() {
+                base.insert(one.clone(), key.clone());
+            } else if let Value::Array(parts) = &key {
+                for (field, part) in key_fields.iter().zip(parts) {
+                    base.insert(field.clone(), part.clone());
+                }
+            }
             system
                 .init(member.name, &text, Value::Object(base))
                 .await

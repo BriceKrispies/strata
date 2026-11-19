@@ -8,12 +8,16 @@ use cases::*;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
-use strata_runtime::{Database, MemoryStore, SqliteMachineStore, Time};
+use strata_runtime::{Database, MemoryStore, SqliteMachineStore, TenantId, Time};
 
 static COUNTER: AtomicU32 = AtomicU32::new(0);
 
+fn tenant() -> TenantId {
+    TenantId::new("acme").unwrap()
+}
+
 fn memory() -> impl Fn() -> Arc<MemoryStore> {
-    let store = Arc::new(MemoryStore::new());
+    let store = Arc::new(MemoryStore::new(tenant()));
     move || store.clone()
 }
 
@@ -26,7 +30,11 @@ fn sqlite(name: &str) -> impl Fn() -> Arc<SqliteMachineStore> {
     for suffix in ["", "-wal", "-shm"] {
         let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
     }
-    move || Arc::new(SqliteMachineStore::open(Database::open(&path).unwrap(), Time(0)).unwrap())
+    move || {
+        Arc::new(
+            SqliteMachineStore::open(tenant(), Database::open(&path).unwrap(), Time(0)).unwrap(),
+        )
+    }
 }
 
 #[tokio::test]

@@ -16,7 +16,8 @@ use std::sync::{Arc, Mutex};
 use axum::http::HeaderMap;
 use strata_runtime::{
     Authorizer, CallError, Caller, Client, Contract, DispatchError, Dispatcher, Envelope,
-    FailureCode, Host, MemoryStore, NoCredentials, Refusal, Routes, ServiceToken, TestClock, Time,
+    FailureCode, Host, MemoryStore, NoCredentials, Refusal, Routes, ServiceToken, TenantId,
+    TestClock, Time,
 };
 use strata_spec_compiler_wiring_fixture::contracts::{
     self, CancelJobRequest, CancelJobResponse, MakeReportRequest, MakeReportResponse,
@@ -314,7 +315,7 @@ impl Dispatcher<machines::job::Emitted> for ToTracker {
 
 #[tokio::test(flavor = "current_thread")]
 async fn machine_handlers_bring_requests_and_published_events_to_the_machines() {
-    let store = Arc::new(MemoryStore::new());
+    let store = Arc::new(MemoryStore::new(TenantId::new("acme").unwrap()));
     let clock = Arc::new(TestClock::at(Time(1_000)));
     let tracker = Host::new(store.clone(), Arc::new(Nowhere), clock.clone()).unwrap();
     let job = Host::new(

@@ -324,9 +324,18 @@ pub trait MachineStore: RecordStore + OutboxStore + TimerStore {}   // blanket-i
 returns `Err` or the commit fails. Outbox ids and timer ids are assigned by the store and never
 reused.
 
+- Every machine store belongs to one tenant, given at construction (`RecordStore::tenant`):
+  `MemoryStore::new(tenant)`, `SqliteMachineStore::open(tenant, db, now)` and
+  `StorageApiMachineStore::new(store, tenant, clock)`. There is no constructor without a
+  tenant and no `Default`, so one store cannot be shared between tenants by accident; a host
+  takes its tenant from its store (`Host::tenant`, `System::tenant`). Instance keys are the
+  whole key of the machine's record (rule `storage.key-whole`), so two instances of one tenant
+  differ whenever their records do, and two tenants' equal record ids are two instances.
 - `MemoryStore`: the reference implementation, held in memory. A transaction works on a copy
   of the whole store that replaces the original only on success.
-- `SqliteMachineStore::open(db: Database, now)`: on a SQLite `Database`, with the tables
+- `SqliteMachineStore::open(tenant, db: Database, now)`: on a SQLite `Database` that belongs to
+  that tenant alone (migration 4 records it in `runtime_tenant`; opening the file for another
+  tenant is refused), with the tables
   `runtime_records`, `runtime_outbox` and `runtime_timers` and the migration ledger
   `runtime_migrations`. Migration 2 gives `runtime_outbox` its `delivery` and `not_before`
   columns (existing entries: `at-least-once`, not before 0).

@@ -22,6 +22,7 @@ use std::fmt;
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
+use strata_kernel::TenantId;
 
 /// Why a [`Database`] operation failed.
 #[derive(Debug)]
@@ -271,6 +272,16 @@ const MIGRATIONS: &[Migration] = &[
     CREATE INDEX runtime_outbox_not_before ON runtime_outbox(source, not_before, id);
     ",
     },
+    Migration {
+        version: 4,
+        name: "the tenant that owns the machine tables",
+        sql: "
+    CREATE TABLE runtime_tenant (
+        only_row INTEGER PRIMARY KEY CHECK (only_row = 1),
+        tenant   TEXT NOT NULL
+    );
+    ",
+    },
 ];
 
 const QUEUE_COLUMNS: &str =
@@ -300,6 +311,7 @@ pub const LEDGER: &str = "runtime_migrations";
 #[derive(Clone, Debug)]
 pub struct SqliteMachineStore {
     db: Database,
+    tenant: TenantId,
 }
 
 fn sql(error: rusqlite::Error) -> StorageError {
@@ -307,11 +319,36 @@ fn sql(error: rusqlite::Error) -> StorageError {
 }
 
 impl SqliteMachineStore {
-    /// The machine store on `db`, bringing its tables up to date. `now` is recorded in the
-    /// ledger for any migration applied.
-    pub fn open(db: Database, now: Time) -> Result<Self, StorageError> {
+    /// The machine store of `tenant` on `db`, bringing its tables up to date. `now` is recorded
+    /// in the ledger for any migration applied.
+    ///
+    /// The database belongs to one tenant: the first open records `tenant` in `runtime_tenant`,
+    /// and opening it for another tenant is refused with [`StorageError::Invalid`], so two
+    /// tenants cannot share the machine tables of one file. Give each tenant its own database.
+    pub fn open(tenant: TenantId, db: Database, now: Time) -> Result<Self, StorageError> {
         db.migrate(LEDGER, MIGRATIONS, now.0)?;
-        Ok(SqliteMachineStore { db })
+        db.write(StorageError::from, |tx| {
+            let held: Option<String> = tx
+                .query_row("SELECT tenant FROM runtime_tenant", [], |r| r.get(0))
+                .optional()
+                .map_err(sql)?;
+            match held {
+                None => {
+                    tx.execute(
+                        "INSERT INTO runtime_tenant (only_row, tenant) VALUES (1, ?1)",
+                        params![tenant.as_str()],
+                    )
+                    .map_err(sql)?;
+                    Ok(())
+                }
+                Some(held) if held == tenant.as_str() => Ok(()),
+                Some(held) => Err(StorageError::Invalid(format!(
+                    "the machine tables of {} belong to tenant {held}, not {tenant}",
+                    db.location()
+                ))),
+            }
+        })?;
+        Ok(SqliteMachineStore { db, tenant })
     }
 
     /// The database underneath.
@@ -545,6 +582,10 @@ impl QueueStore for SqliteMachineStore {
 }
 
 impl RecordStore for SqliteMachineStore {
+    fn tenant(&self) -> &TenantId {
+        &self.tenant
+    }
+
     fn supports(&self, _: Isolation) -> bool {
         true
     }

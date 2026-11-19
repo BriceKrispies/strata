@@ -8,7 +8,7 @@ use cases::*;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
-use strata_runtime::{Database, MemoryStore, SqliteMachineStore, Time};
+use strata_runtime::{Database, MemoryStore, SqliteMachineStore, TenantId, Time};
 
 static COUNTER: AtomicU32 = AtomicU32::new(0);
 
@@ -27,15 +27,23 @@ fn fresh_path(name: &str) -> PathBuf {
 
 /// The in-memory store: "reopening" hands back the same store, as a restarted process would
 /// find its database.
+fn tenant() -> TenantId {
+    TenantId::new("acme").unwrap()
+}
+
 fn memory() -> impl Fn() -> Arc<MemoryStore> {
-    let store = Arc::new(MemoryStore::new());
+    let store = Arc::new(MemoryStore::new(tenant()));
     move || store.clone()
 }
 
 /// A SQLite file: every reopen is a new connection to the file.
 fn sqlite(name: &str) -> impl Fn() -> Arc<SqliteMachineStore> {
     let path = fresh_path(name);
-    move || Arc::new(SqliteMachineStore::open(Database::open(&path).unwrap(), Time(0)).unwrap())
+    move || {
+        Arc::new(
+            SqliteMachineStore::open(tenant(), Database::open(&path).unwrap(), Time(0)).unwrap(),
+        )
+    }
 }
 
 #[tokio::test]

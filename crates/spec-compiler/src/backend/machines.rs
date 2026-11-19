@@ -90,6 +90,8 @@ pub const EFFECT_UNSUPPORTED: &str = "specc.effect-unsupported";
 pub const INSTANCES_COUNTED: &str = "specc.instances-counted";
 /// Code of a machine whose storage record or key is missing or unknown.
 pub const STORAGE: &str = "specc.machine-storage";
+/// Code of a machine key that is not the whole key of its record (Exegra's rule `storage.key-whole`).
+pub const KEY_WHOLE: &str = "storage.key-whole";
 /// Code of a `storage.fields` entry naming a variable the machine lacks or a field the record
 /// lacks, or of a record field asked to hold two of the key, the state and the variables
 /// (Exegra's rule of the same code).
@@ -1120,7 +1122,7 @@ impl<'a> Gen<'a> {
                     "ready.storage-mismatch",
                     format!(
                         "Machine \"{}\" is stored in record \"{}\" by \"{}\" according to storage, but in \"{}\" by \"{}\" according to instances.",
-                        b.id, a.0, a.1, b2.0, b2.1
+                        b.id, a.0, a.1.join(", "), b2.0, b2.1.join(", ")
                     ),
                 );
                 return None;
@@ -1145,22 +1147,52 @@ impl<'a> Gen<'a> {
             );
             return None;
         };
-        let Some(key_field) = record.field(&key) else {
+        // Every key field is a field of the record, and together they are the record's whole key,
+        // in its order: a machine keyed by part of the key would be one instance for every record
+        // that agrees on that part (Exegra's rule `storage.key-whole`, WG-4907).
+        let mut key_fields = Vec::new();
+        for k in &key {
+            let Some(f) = record.field(k) else {
+                self.refuse(
+                    STORAGE,
+                    format!(
+                        "The key \"{k}\" of machine \"{}\" is not a field of record \"{record_id}\".",
+                        b.id
+                    ),
+                );
+                return None;
+            };
+            key_fields.push(f);
+        }
+        let whole = record.key.clone().unwrap_or_default();
+        if key != whole {
             self.refuse(
-                STORAGE,
+                KEY_WHOLE,
                 format!(
-                    "The key \"{key}\" of machine \"{}\" is not a field of record \"{record_id}\".",
+                    "The key {key:?} of machine \"{}\" is not the whole key {whole:?} of record \"{record_id}\"; a machine is keyed by every key field of its record, in order, or records that agree on the named fields would share one instance.",
                     b.id
                 ),
             );
             return None;
-        };
-        let key_ref = TypeRef::parse(&key_field.type_name);
-        let mut key_ty = render::rust_type(spec, &key_ref, TypeScope::Other, &mut self.uses);
-        let key_copy = resolve::is_copy(&key_ref);
-        if key_field.optional {
-            key_ty = quote! { Option<#key_ty> };
         }
+        // The key's Rust type: the field's, or a tuple of the fields' for a composite key.
+        let key_types: Vec<(TokenStream, bool)> = key_fields
+            .iter()
+            .map(|f| {
+                let r = TypeRef::parse(&f.type_name);
+                let mut ty = render::rust_type(spec, &r, TypeScope::Other, &mut self.uses);
+                if f.optional {
+                    ty = quote! { Option<#ty> };
+                }
+                (ty, resolve::is_copy(&r) && !f.optional)
+            })
+            .collect();
+        let key_ty = if let [(ty, _)] = key_types.as_slice() {
+            ty.clone()
+        } else {
+            let tys = key_types.iter().map(|(t, _)| t);
+            quote! { (#(#tys),*) }
+        };
 
         let st = b.storage.clone();
         let explicit: Vec<(String, Option<String>)> =
@@ -1170,7 +1202,10 @@ impl<'a> Gen<'a> {
         let creates = st.as_ref().is_some_and(|s| s.creates);
 
         // What each record field holds: the key, a variable, the state.
-        let mut owned: Vec<(String, String)> = vec![(key.clone(), "the key".to_string())];
+        let mut owned: Vec<(String, String)> = key
+            .iter()
+            .map(|k| (k.clone(), "the key".to_string()))
+            .collect();
         for (v, f) in &explicit {
             if !b.variables.iter().any(|x| x.name == *v) {
                 self.refuse(
@@ -1295,11 +1330,21 @@ impl<'a> Gen<'a> {
         for f in &record.fields {
             let field = naming::ident(&naming::snake(&f.name).unwrap_or_default());
             let field_copy = resolve::is_copy(&TypeRef::parse(&f.type_name));
-            let value = if f.name == key {
-                if key_copy && !key_field.optional {
-                    quote! { *key }
+            let value = if let Some(at) = key.iter().position(|k| *k == f.name) {
+                let copy = key_types[at].1;
+                if key.len() == 1 {
+                    if copy {
+                        quote! { *key }
+                    } else {
+                        quote! { key.clone() }
+                    }
                 } else {
-                    quote! { key.clone() }
+                    let at = proc_macro2::Literal::usize_unsuffixed(at);
+                    if copy {
+                        quote! { key.#at }
+                    } else {
+                        quote! { key.#at.clone() }
+                    }
                 }
             } else if f.name == state_field && !matches!(state_code, StateCode::Unstored) {
                 uses_state = true;
@@ -1338,7 +1383,7 @@ impl<'a> Gen<'a> {
         Some(StorageCode {
             record: record.clone(),
             record_ty: naming::ident(&naming::pascal(&record.id).unwrap_or_default()),
-            key_field: key,
+            key_field: key.join("`, `"),
             key_ty,
             read_state,
             reads_record: !held.is_empty() || !matches!(state_code, StateCode::Unstored),
