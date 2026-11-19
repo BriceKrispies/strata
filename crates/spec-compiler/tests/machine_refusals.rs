@@ -216,6 +216,34 @@ fn storage_must_be_named_and_exist() {
     assert_refused(&text, "ready.storage-mismatch", "instances");
 }
 
+/// A machine is keyed by the whole key of its record (Exegra's rule `storage.key-whole`, WG-4907):
+/// a key naming part of a composite key, or the fields in another order, is refused, and the list
+/// of every key field in order is generated.
+#[test]
+fn the_machine_key_is_the_whole_record_key() {
+    let composite = |key: Value| {
+        with(|s| {
+            s["records"][0]["fields"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!({ "name": "part", "type": "string" }));
+            s["records"][0]["key"] = json!(["part", "id"]);
+            machine(s)["storage"]["key"] = key;
+        })
+    };
+    assert_refused(&composite(json!("id")), m::KEY_WHOLE, "whole key");
+    assert_refused(&composite(json!(["id"])), m::KEY_WHOLE, "whole key");
+    assert_refused(&composite(json!(["id", "part"])), m::KEY_WHOLE, "whole key");
+    let files = generate("spec.jsonc", &composite(json!(["part", "id"])), &options())
+        .unwrap_or_else(|d| panic!("refused: {d:?}"));
+    let code = &files
+        .iter()
+        .find(|f| f.path == "src/machines.rs")
+        .unwrap()
+        .contents;
+    assert!(code.contains("pub type Key = ("), "{code}");
+}
+
 #[test]
 fn variables_need_a_same_named_field_of_their_type() {
     let text = with(|s| {
