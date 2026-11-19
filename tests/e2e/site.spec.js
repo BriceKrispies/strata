@@ -286,18 +286,30 @@ test('an author cannot edit another author’s article; an editor can', async ({
   // Guessing the address of someone else's draft finds nothing.
   await open(page, '/desk/edit/notes-toward-a-workbench');
   await expect(page.getByRole('heading', { level: 1, name: 'There is nothing at this address' })).toBeVisible();
-  // And a forged write is refused by the kernel's policy, not by the page.
+  // A forged write to that draft finds nothing either: it answers exactly as an article that
+  // does not exist, so it does not tell her the draft is there.
   const csrf = (await (await page.request.get('/api/session')).json()).session.csrf_token;
-  const forged = await page.request.post('/api/records', {
-    data: { op: 'update', object: 'post', id: 15, fields: { title: 'Taken over' } },
-    headers: { origin: BASE, 'x-csrf-token': csrf },
-  });
+  const forge = (id) =>
+    page.request.post('/api/records', {
+      data: { op: 'update', object: 'post', id, fields: { title: 'Taken over' } },
+      headers: { origin: BASE, 'x-csrf-token': csrf },
+    });
+  const hidden = await forge(15);
+  const missing = await forge(9999);
+  expect(hidden.status()).toBe(404);
+  expect(missing.status()).toBe(404);
+  const [hiddenBody, missingBody] = [await hidden.json(), await missing.json()];
+  expect({ ...hiddenBody, message: '', failed: [], correlation: '' }).toEqual({ ...missingBody, message: '', failed: [], correlation: '' });
+  expect(hiddenBody.failed.map((c) => c.rule)).toEqual(missingBody.failed.map((c) => c.rule));
+  // An article she can read but did not write is refused by the kernel's policy, not by the page.
+  const forged = await forge(14);
   expect(forged.status()).toBe(403);
   expect((await forged.json()).failed[0].rule).toBe('policy:authors_own_posts');
 });
 
 test('a session that ends is noticed at once and the page falls back to signed out', async ({ page }) => {
-  await signIn(page, 'tomasz');
+  // The session-expiry fixture is the owner's.
+  await signIn(page, 'admin');
   await expect(page.locator('.colophon__live')).toHaveAttribute('data-connection', 'open');
   await mark(page);
   const csrf = (await (await page.request.get('/api/session')).json()).session.csrf_token;
@@ -710,4 +722,13 @@ test('no log line holds a password, a session token or a CSRF token', async ({ p
   const correlation = logs.match(/"correlation":"(c-\d+-[0-9a-f]{6})"/)?.[1];
   expect(correlation).toBeTruthy();
   expect(logs.split('\n').filter((line) => line.includes(correlation)).map((line) => JSON.parse(line).service)).toEqual(expect.arrayContaining(['backend', 'bff']));
+});
+
+test('the development fixtures refuse a visitor who holds only the request token', async ({ request }) => {
+  const { session } = await (await request.get('/api/session')).json();
+  expect(session.authenticated).toBe(false);
+  for (const action of ['reset', 'expire-session']) {
+    const refused = await request.post(`/api/dev/${action}`, { headers: { origin: BASE, 'x-csrf-token': session.csrf_token } });
+    expect(refused.status()).toBe(401);
+  }
 });

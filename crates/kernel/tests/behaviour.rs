@@ -1123,3 +1123,83 @@ fn expressions_use_three_valued_logic() {
         Ok(Value::Bool(false))
     );
 }
+
+/// A unique clash names the record it clashes with only to someone who may read that record.
+/// Anyone else learns that the value is taken, and nothing about a hidden record's identifier.
+#[test]
+fn a_unique_clash_with_a_hidden_record_does_not_name_it() {
+    // A `guest` may create notes but reads only what the public reads: published ones.
+    let guest = Intent::ChangeSchema {
+        changes: vec![
+            SchemaChange::DefineRole(RoleDef {
+                id: role("guest"),
+                label: "Guest".into(),
+            }),
+            SchemaChange::DefinePolicy(PolicyDef {
+                id: PolicyId::new("guests_create_notes").unwrap(),
+                role: role("guest"),
+                resource: Resource::Object(object("note")),
+                actions: BTreeSet::from([Action::Create]),
+                condition: None,
+            }),
+        ],
+        expected_version: None,
+        existing: ExistingData::Reject,
+    };
+    let world = must(&notes_world(), "alpha", "owner", 5_000, guest);
+    let world = must(
+        &world,
+        "alpha",
+        "owner",
+        5_001,
+        Intent::AssignRole {
+            principal: principal_id("alpha:stranger"),
+            role: role("guest"),
+        },
+    );
+    // writer1's draft, which the guest cannot read.
+    let world = must(
+        &world,
+        "alpha",
+        "writer1",
+        5_002,
+        new_note("Hidden", "hidden"),
+    );
+    let hidden = 1;
+
+    let refused = step(
+        &world,
+        "alpha",
+        "stranger",
+        5_003,
+        new_note("Mine", "hidden"),
+    )
+    .expect_err("the slug is taken");
+    assert_eq!(refused.kind, ErrorKind::UniqueViolated);
+    let told = format!("{} {:?}", refused.message, refused.evidence);
+    assert!(
+        !told.contains(&format!("record {hidden}")),
+        "the hidden record was named: {told}"
+    );
+    assert!(refused
+        .evidence
+        .iter()
+        .any(|c| !c.passed && c.rule == "unique:note.slug"));
+
+    // A writer, who reads every note, is told which record holds the value.
+    let refused = step(
+        &world,
+        "alpha",
+        "writer2",
+        5_004,
+        new_note("Mine", "hidden"),
+    )
+    .expect_err("the slug is taken");
+    assert!(
+        refused
+            .message
+            .contains(&format!("record {hidden} already has this value")),
+        "{}",
+        refused.message
+    );
+}

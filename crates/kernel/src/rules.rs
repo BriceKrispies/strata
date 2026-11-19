@@ -303,10 +303,18 @@ pub fn validate_record(
                 .into_iter()
                 .find(|other| other.id != candidate.id);
             match clash {
-                Some(other) => out.fail(
+                // The clashing record is named only to someone who may read it: anyone else
+                // would learn that a hidden record exists and what its identifier is.
+                Some(other) if crate::read::visible(lookup.tenant, principal, other, now) => out
+                    .fail(
+                        ErrorKind::UniqueViolated,
+                        format!("unique:{at}"),
+                        format!("record {} already has this value", other.id),
+                    ),
+                Some(_) => out.fail(
                     ErrorKind::UniqueViolated,
                     format!("unique:{at}"),
-                    format!("record {} already has this value", other.id),
+                    "another record already has this value",
                 ),
                 None => out.pass(format!("unique:{at}"), "no other record has this value"),
             }

@@ -112,11 +112,27 @@ pub fn visit(bff: &Bff, headers: &HeaderMap) -> Result<Visit, Failure> {
     })
 }
 
-/// Whether the request's `Origin` is one of ours. Browsers send it on every cross-origin
-/// request and on every same-origin request that is not a plain GET.
-pub fn origin_allowed(bff: &Bff, headers: &HeaderMap) -> bool {
-    text(headers, ORIGIN)
-        .is_some_and(|origin| bff.cfg.origins.iter().any(|allowed| allowed == origin))
+/// The site an origin such as `http://tidewater.localhost:4100` belongs to: the tenant its host
+/// name serves.
+fn origin_site<'a>(bff: &'a Bff, origin: &str) -> Option<&'a TenantId> {
+    let authority = origin.split_once("://")?.1;
+    let authority = authority.split('/').next().unwrap_or(authority);
+    let host = match authority.rsplit_once(':') {
+        Some((name, port)) if !port.is_empty() && port.chars().all(|c| c.is_ascii_digit()) => name,
+        _ => authority,
+    };
+    bff.cfg.sites.get(&host.to_lowercase())
+}
+
+/// Whether the request's `Origin` is one of ours, and one of the site being served. Browsers send
+/// it on every cross-origin request and on every same-origin request that is not a plain GET. An
+/// origin of another site this process serves is not accepted: each site's pages act on that
+/// site only.
+pub fn origin_allowed(bff: &Bff, site: &TenantId, headers: &HeaderMap) -> bool {
+    text(headers, ORIGIN).is_some_and(|origin| {
+        bff.cfg.origins.iter().any(|allowed| allowed == origin)
+            && origin_site(bff, origin) == Some(site)
+    })
 }
 
 /// Call the backend's internal API as this visit.
@@ -210,7 +226,7 @@ async fn presented_token(bff: &Bff, visit: &Visit, given: &str) -> Result<Option
 /// session, whether or not there is a session yet. Returns whether the session is live.
 async fn guard_request(bff: &Bff, visit: &Visit, headers: &HeaderMap) -> Result<bool, Failure> {
     let refuse = |message| Failure::new(ErrorCode::Forbidden, message, &visit.correlation);
-    if !origin_allowed(bff, headers) {
+    if !origin_allowed(bff, &visit.site, headers) {
         LOG.warn(
             "csrf.origin_refused",
             &visit.correlation,
@@ -236,7 +252,7 @@ async fn guard_write(
     headers: &HeaderMap,
 ) -> Result<SessionView, Failure> {
     let refuse = |message| Failure::new(ErrorCode::Forbidden, message, &visit.correlation);
-    if !origin_allowed(bff, headers) {
+    if !origin_allowed(bff, &visit.site, headers) {
         LOG.warn(
             "csrf.origin_refused",
             &visit.correlation,
@@ -458,7 +474,7 @@ async fn preview(
     Json(request): Json<PreviewRequest>,
 ) -> Result<Json<Json_>, Failure> {
     let visit = visit(&bff, &headers)?;
-    if !origin_allowed(&bff, &headers) {
+    if !origin_allowed(&bff, &visit.site, &headers) {
         return Err(Failure::new(
             ErrorCode::Forbidden,
             "This request did not come from the site.",
@@ -537,8 +553,6 @@ async fn diagnostics(
             "service": "bff",
             "open_sockets": bff.sockets.load(Ordering::Relaxed),
             "pending_requests": bff.in_flight.load(Ordering::Relaxed),
-            "sites": bff.cfg.sites.iter().map(|(host, tenant)| json!({ "host": host, "tenant": tenant.as_str() })).collect::<Vec<_>>(),
-            "allowed_origins": bff.cfg.origins,
         },
         "backend": backend_report,
     })))
@@ -561,7 +575,16 @@ async fn dev(
             ))
         }
     };
-    guard_request(&bff, &visit, &headers).await?;
+    // A signed-in session with its own request token, and the site's owner: the request token
+    // handed to visitors without a session opens nothing here. The backend checks the owner too.
+    let session = guard_write(&bff, &visit, &headers).await?;
+    if !session.roles.iter().any(|role| role == "owner") {
+        return Err(Failure::new(
+            ErrorCode::Forbidden,
+            "Only the site's owner may use this.",
+            &visit.correlation,
+        ));
+    }
     backend(&bff, &visit, path, &json!({})).await.map(Json)
 }
 
@@ -572,7 +595,7 @@ async fn socket(
     upgrade: WebSocketUpgrade,
 ) -> Result<Response, Failure> {
     let visit = visit(&bff, &headers)?;
-    if !origin_allowed(&bff, &headers) {
+    if !origin_allowed(&bff, &visit.site, &headers) {
         LOG.warn(
             "ws.origin_refused",
             &visit.correlation,

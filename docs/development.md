@@ -46,7 +46,10 @@ file; `{ "$file": "posts/x.md" }` reads a field from a file. On start, any bundl
 does not exist is installed by issuing its intents through the ordinary command path, with the
 timestamps written in the bundle, so the same bundles always produce the same state.
 
-`POST /api/dev/reset` (development only) empties the store and installs the bundles again.
+`POST /api/dev/reset` (development only, the site's owner signed in) removes the owner's own tenant
+and installs its bundle again; other tenants are not touched. Development logins
+(`accounts.dev.json`) are installed only in development mode, and a start without `STRATA_DEV=1`
+removes any that still open with their published password and ends their sessions.
 
 ## Logs
 
@@ -77,13 +80,17 @@ the log files and fails if any of them appears.
 
 ## Diagnostics
 
-`GET /api/diagnostics` (schema managers only), or the Diagnostics tab of the Impact Lab:
-store capabilities, health and layout history; tenants with revision, schema version and event
-sequence; live sessions (ids, never tokens); WebSocket connections with their subscriptions and
-delivery counters; operations in flight; kernel transitions accepted and rejected by intent;
-rejections by kind; the last fifty rejections with the checks that failed; the last fifty
-published events; recent simulation runs. `GET /internal/health` on the backend needs no token
-and reports the store's own integrity check.
+`GET /api/diagnostics` (schema managers only), or the Diagnostics tab of the Impact Lab, reports
+the caller's own tenant and nothing of any other: store capabilities, health and layout history;
+the tenant's revision, schema version and event sequence; its live sessions (ids, never tokens);
+its WebSocket connections with their subscriptions and delivery counters; operations in flight;
+its kernel transitions accepted and rejected by intent; its rejections by kind; its recent
+rejections with the checks that failed; its recent published events; its recent simulation runs.
+
+`POST /internal/platform/diagnostics` on the backend reports every tenant, plus the audit entries
+(such as a session token presented on another tenant's site). It needs only the service token and
+the BFF has no route to it. `GET /internal/health` on the backend needs no token and reports the
+store's own integrity check.
 
 ## Tests
 
