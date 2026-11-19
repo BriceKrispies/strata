@@ -27,6 +27,7 @@ pub mod e2e;
 pub mod emit;
 pub mod ir;
 pub mod jsonc;
+pub mod language;
 pub mod load;
 pub mod model_core;
 pub mod naming;

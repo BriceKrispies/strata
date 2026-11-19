@@ -213,6 +213,7 @@ impl Loader {
         }
         let constructs = self.constructs(top);
         let telemetry = self.telemetry(top);
+        let languages = self.languages(top);
         Some(Spec {
             path: path.replace('\\', "/"),
             system: system?,
@@ -224,6 +225,7 @@ impl Loader {
             machines,
             constructs,
             telemetry,
+            languages,
         })
     }
 

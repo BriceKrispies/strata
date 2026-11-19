@@ -5,7 +5,9 @@
 //! axum, rusqlite). The pure crate holds what needs none of that:
 //!
 //! - `prelude`: the representation types (`Timestamp`, `DurationMs`, the safe-integer decoders);
-//! - `types`: every declared type that reaches no `uuid`.
+//! - `types`: every declared type that reaches no `uuid`;
+//! - one module per declared `language` ([`crate::language`]): its parser, printer, static
+//!   checker and evaluator over the language's AST and value types.
 //!
 //! Its only dependencies are serde, serde_json and regex (sha2 is allowed for what later needs
 //! it). The model crate generated beside it depends on it by path, re-exports its prelude's
@@ -20,6 +22,7 @@ use crate::backend::{prelude, types};
 use crate::diagnostic::Diagnostic;
 use crate::emit::{self, GeneratedFile, REGEX_VERSION, SERDE_JSON_VERSION, SERDE_VERSION};
 use crate::ir::Spec;
+use crate::language;
 
 /// How the model crate names the pure crate beside it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -36,11 +39,15 @@ pub fn crate_files(spec: &Spec, crate_name: &str) -> Result<Vec<GeneratedFile>, 
         path: "Cargo.toml".to_string(),
         contents: cargo_toml(spec, crate_name),
     }];
-    let modules: Vec<(&str, TokenStream)> = vec![
+    let languages: Vec<String> = spec.languages.iter().map(language::module_name).collect();
+    let mut modules: Vec<(&str, TokenStream)> = vec![
         (prelude::MODULE, prelude::emit_core()),
         ("types", types::emit(spec, types::Selection::Core)),
-        ("lib", lib_rs(spec)),
     ];
+    for (lang, module) in spec.languages.iter().zip(&languages) {
+        modules.push((module.as_str(), language::emit(spec, lang)));
+    }
+    modules.push(("lib", lib_rs(spec, &languages)));
     emit::rust_files(spec, files, modules)
 }
 
@@ -61,7 +68,7 @@ fn cargo_toml(spec: &Spec, crate_name: &str) -> String {
     )
 }
 
-fn lib_rs(spec: &Spec) -> TokenStream {
+fn lib_rs(spec: &Spec, languages: &[String]) -> TokenStream {
     let summary = format!(
         " {}: the pure part of its specification's model, as Rust: the declared types that reach no runtime type.",
         spec.system.name
@@ -72,7 +79,8 @@ fn lib_rs(spec: &Spec) -> TokenStream {
         spec.system.id
     );
     let modules: Vec<Ident> = ["prelude", "types"]
-        .iter()
+        .into_iter()
+        .chain(languages.iter().map(String::as_str))
         .map(|m| Ident::new(m, Span::call_site()))
         .collect();
     quote! {

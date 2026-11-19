@@ -31,6 +31,8 @@ pub struct Spec {
     pub constructs: crate::constructs::Constructs,
     /// `system.telemetry` and the sensitive types: what the telemetry backend needs.
     pub telemetry: Telemetry,
+    /// The `languages` section: expression languages the specified system's users write.
+    pub languages: Vec<crate::language::Language>,
 }
 
 /// `system.telemetry` and the types a log line may never hold.

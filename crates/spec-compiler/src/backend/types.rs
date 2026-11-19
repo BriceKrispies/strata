@@ -576,6 +576,16 @@ fn reaches_inline(spec: &Spec, from: &str, to: &str) -> bool {
     false
 }
 
+/// True when a field of `owner` (of a struct or of a union's variant) is written `Box<T>`, as
+/// [`field_type`] writes it: it holds a type of `owner`'s recursive group inline.
+pub(crate) fn field_is_boxed(spec: &Spec, owner: &TypeDecl, f: &StructField) -> bool {
+    let mut t = TypeRef::parse(&f.type_name);
+    while let TypeRef::Option(inner) = t {
+        t = *inner;
+    }
+    matches!(t, TypeRef::Declared(id) if reaches_inline(spec, &id, &owner.id))
+}
+
 /// True when the declared type is in the pure crate: it reaches no `uuid` (the pure crate's
 /// dependencies are serde, serde_json, sha2 and regex only).
 pub fn is_core_type(spec: &Spec, id: &str) -> bool {

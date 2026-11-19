@@ -97,6 +97,18 @@ pub fn crate_files_with(
         };
         modules.push((backend.module(), tokens));
     }
+    // A language lives in the pure crate when there is one; otherwise in this crate.
+    let languages: Vec<String> = if core.is_none() {
+        spec.languages
+            .iter()
+            .map(crate::language::module_name)
+            .collect()
+    } else {
+        Vec::new()
+    };
+    for (lang, module) in spec.languages.iter().zip(&languages) {
+        modules.push((module.as_str(), crate::language::emit(spec, lang)));
+    }
     let lib = lib_rs(spec, modules.iter().map(|(name, _)| *name));
     modules.push(("lib", lib));
     rust_files(spec, files, modules)
