@@ -106,7 +106,7 @@ export function shell(model) {
     ),
     h(
       'main',
-      { id: 'main', tabindex: '-1', class: wide ? 'main main--wide' : 'main', 'aria-busy': s.refreshing ? 'true' : 'false', 'data-page': model.page.kind },
+      { id: 'main', tabindex: '-1', 'aria-label': 'Content', class: wide ? 'main main--wide' : 'main', 'aria-busy': s.refreshing ? 'true' : 'false', 'data-page': model.page.kind },
       body(model.page, s),
     ),
     h(
@@ -114,12 +114,12 @@ export function shell(model) {
       { class: 'colophon' },
       h('p', { class: 'colophon__name' }, s.siteName),
       s.tagline ? h('p', null, s.tagline) : null,
-      h('p', { class: 'colophon__live', 'data-connection': s.connection }, CONNECTION[s.connection] ?? ''),
+      h('p', { class: 'colophon__live', role: 'status', 'aria-label': 'Live connection', 'data-connection': s.connection }, CONNECTION[s.connection] ?? ''),
     ),
     h('div', { class: 'visually-hidden', role: 'status', 'aria-live': 'polite', id: 'announcer' }, model.announce),
     h(
       'div',
-      { class: 'toasts' },
+      { class: 'toasts', role: 'region', 'aria-label': 'Messages' },
       model.toasts.map((t) =>
         h(
           'div',

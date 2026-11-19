@@ -87,7 +87,7 @@ export function editor(page) {
     h('h1', { class: 'page-title' }, page.isNew ? 'New article' : 'Edit article'),
     h(
       'p',
-      { class: 'editor__state' },
+      { class: 'editor__state', role: 'group', 'aria-label': 'Article state' },
       h('span', { class: `status status--${page.status}` }, STATUS[page.status] ?? page.status),
       page.dirty ? h('span', { class: 'editor__dirty' }, 'Unsaved changes') : page.isNew ? null : h('span', { class: 'editor__dirty' }, 'All changes saved'),
       page.viewHref && page.status === 'published' ? h('a', { href: page.viewHref }, 'View the published article') : null,
@@ -156,7 +156,7 @@ export function editor(page) {
           ? null
           : h(
               'div',
-              { class: 'editor__preview prose', 'aria-live': 'polite', 'aria-busy': page.preview?.pending ? 'true' : 'false' },
+              { class: 'editor__preview prose', role: 'region', 'aria-label': 'Preview', 'aria-live': 'polite', 'aria-busy': page.preview?.pending ? 'true' : 'false' },
               page.preview?.failed
                 ? h('p', { class: 'empty' }, 'The preview could not be produced. Your text is safe; switch back to Write.')
                 : page.preview?.blocks
