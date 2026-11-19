@@ -480,17 +480,17 @@ impl Store for SqliteStore {
 
     fn load(&self, tenant: &TenantId, needs: &[Need]) -> StoreResult<State> {
         self.db.read(dbe, |tx| {
-        let Some(Header { mut state }) = header(&tx, tenant)? else {
+        let Some(Header { mut state }) = header(tx, tenant)? else {
             return Ok(State::absent(tenant.clone()));
         };
         for need in needs {
             let rows = match need {
                 Need::Record { object, id } => select_strings(
-                    &tx,
+                    tx,
                     "SELECT data FROM records WHERE tenant = ?1 AND object = ?2 AND id = ?3",
                     &[&tenant.as_str(), &object.as_str(), &(id.0 as i64)],
                 )?,
-                Need::AllOf(object) => all_of(&tx, tenant, object)?,
+                Need::AllOf(object) => all_of(tx, tenant, object)?,
                 Need::ByField {
                     object,
                     field,
@@ -499,7 +499,7 @@ impl Store for SqliteStore {
                     let key = encode(value);
                     if key.len() <= MAX_INDEXED {
                         select_strings(
-                            &tx,
+                            tx,
                             "SELECT r.data FROM record_index i
                              JOIN records r ON r.tenant = i.tenant AND r.object = i.object AND r.id = i.id
                              WHERE i.tenant = ?1 AND i.object = ?2 AND i.field = ?3 AND i.value = ?4",
@@ -507,7 +507,7 @@ impl Store for SqliteStore {
                         )?
                     } else {
                         let mut matching = Vec::new();
-                        for data in all_of(&tx, tenant, object)? {
+                        for data in all_of(tx, tenant, object)? {
                             let record: Record = decode(&data, "record")?;
                             if field_matches(&record, field, value) {
                                 matching.push(data);
@@ -540,7 +540,7 @@ impl Store for SqliteStore {
         self.db.write(dbe, |tx| {
         let delta = &commit.delta;
         let tenant = delta.tenant.as_str();
-        let current = header(&tx, &delta.tenant)?;
+        let current = header(tx, &delta.tenant)?;
         let found = current.as_ref().map(|h| h.state.revision);
         if found != delta.base_revision {
             return Err(StoreError::Conflict {
@@ -631,7 +631,7 @@ impl Store for SqliteStore {
         }
         for op in &delta.ops {
             match op {
-                DeltaOp::PutRecord(record) => write_record(&tx, &delta.tenant, record)?,
+                DeltaOp::PutRecord(record) => write_record(tx, &delta.tenant, record)?,
                 DeltaOp::DeleteRecord { object, id } => {
                     tx.execute(
                         "DELETE FROM records WHERE tenant = ?1 AND object = ?2 AND id = ?3",
@@ -953,7 +953,7 @@ impl Store for SqliteStore {
         )
         .map_err(db)?;
         for record in state.records.values().flat_map(|records| records.values()) {
-            write_record(&tx, tenant, record)?;
+            write_record(tx, tenant, record)?;
         }
         tx.execute(
             "DELETE FROM events WHERE tenant = ?1 AND seq > ?2",
