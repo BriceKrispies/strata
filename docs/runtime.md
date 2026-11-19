@@ -48,17 +48,25 @@ pub trait Machine: Send + Sync + 'static {
     fn from_record(record: &Self::Record) -> Result<(Self::State, Self::Vars), RecordError>;
     fn to_record(key: &Self::Key, state: &Self::State, vars: &Self::Vars,
                  previous: Option<&Self::Record>) -> Self::Record;
-    fn step(state: &Self::State, vars: &Self::Vars, event: &Self::Event)
+    fn step(state: &Self::State, vars: &Self::Vars, event: &Self::Event, now: Time)
         -> Result<Outcome<Self>, StepError>;
 }
 ```
 
-- Everything is pure. Elapsed time reaches a machine only as an event fired by a timer it set
-  (an event with `elapsed: true`).
-- `step` takes the first enabled transition in declaration order. An ignored event (`ignores`)
-  returns the same state and variables with nothing emitted. A missing transition is
-  `StepError::NoTransition`, a terminal state `StepError::Terminal`, and anything else the code
-  refuses is `StepError::Rejected`.
+- Everything is pure. A machine has no clock of its own: `now` is the host clock's time when the
+  transition's transaction runs (for a fired timer, when it is fired, which may be after its
+  deadline). It is what the specification's guards and effects call `time`, so time in an
+  implementation-level machine is milliseconds since the Unix epoch, and a timer's `after` is
+  milliseconds too. Elapsed time also reaches a machine as an event fired by a timer it set (an
+  event with `elapsed: true`).
+- `step` takes the first enabled transition in declaration order. An ignored event returns the
+  same state and variables with nothing emitted. Generated machines follow Exegra here: an event
+  the state lists in `ignores`, an event no transition of the state is enabled for, and an event
+  reaching a terminal state are all ignored (Exegra's `ignored` outcome), never an error. A
+  failing evaluation, such as checked arithmetic that overflows, is
+  `StepError::Rejected` and nothing is committed, as a failing step is not committed in Exegra.
+  `StepError::NoTransition` and `StepError::Terminal` remain for hand-written machines that
+  refuse instead.
 - `to_record` receives the record as loaded so that fields the machine does not own are carried
   over.
 - The key's JSON text is its storage key, so two keys are the same instance exactly when they
@@ -111,9 +119,10 @@ and called from another component with
 ## What generated code calls
 
 - `Outcome`, `Emit`, `TimerCommand`, `Delivery`, `Receiver`, `Isolation`, `StepError`,
-  `RecordError` from `step` and the record conversions.
+  `RecordError` and `Time` from `step` and the record conversions.
 - `Routes::serve` and `Client::call` / `Client::call_with` for contracts.
-- Nothing else. Generated code never touches a store, a clock or a socket.
+- Nothing else. Generated code never touches a store, a clock or a socket; the time it reads is
+  the `now` the host passes to `step`.
 
 ## What stays hand-written
 
@@ -174,7 +183,7 @@ For one event, in one transaction opened at `M::ISOLATION` or stronger:
 
 1. Load the record of `key` from collection `M::RECORD`. With no record, start from
    `M::initial(key)`; otherwise `M::from_record`.
-2. Run `M::step`.
+2. Run `M::step` with `now`, the clock's time read once for the transaction.
 3. Save `M::to_record(..)` with the version that was loaded as the expected version; a different
    stored version is a conflict. The version starts at 1 and grows by one per save. An ignored
    event is saved too (the version grows; nothing else changes).

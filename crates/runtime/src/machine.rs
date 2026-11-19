@@ -1,11 +1,12 @@
 //! What generated code implements for an implementation-level machine.
 //!
 //! The compiler turns each `behavior` with `level: "implementation"` into one type implementing
-//! [`Machine`]: a pure `step` from `(state, vars, event)` to an [`Outcome`], plus the conversion
+//! [`Machine`]: a pure `step` from `(state, vars, event, now)` to an [`Outcome`], plus the conversion
 //! between the machine's instance and the record it is stored in (`instances.storedIn`). The
 //! [`Host`](crate::Host) does everything around that call: loading, the transaction, persisting,
 //! the outbox and the timers.
 
+use crate::clock::Time;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use std::fmt::{self, Debug};
@@ -216,8 +217,10 @@ impl std::error::Error for RecordError {}
 
 /// An implementation-level machine. Generated code implements this once per behavior.
 ///
-/// Everything here is pure: no clock, no storage, no randomness. Elapsed time reaches the machine
-/// only as events fired by timers it set.
+/// Everything here is pure: no storage, no randomness, and no clock of its own. The current time
+/// is an argument of [`Machine::step`], read from the host's [`Clock`](crate::Clock); it is what
+/// the specification's guards and effects call `time`, in milliseconds since the Unix epoch.
+/// Elapsed time also reaches the machine as events fired by timers it set.
 pub trait Machine: Send + Sync + 'static {
     /// The behavior's id. Names the machine's timers and outbox entries in storage.
     const NAME: &'static str;
@@ -255,11 +258,16 @@ pub trait Machine: Send + Sync + 'static {
         previous: Option<&Self::Record>,
     ) -> Self::Record;
 
-    /// Take one transition: the first enabled transition from `state` on `event`, in declaration
-    /// order, or an ignore (the same state and variables, nothing emitted).
+    /// Take one transition at time `now`: the first enabled transition from `state` on `event`,
+    /// in declaration order, or an ignore (the same state and variables, nothing emitted).
+    ///
+    /// `now` is the host clock's time when the transaction runs (for a fired timer, the time it
+    /// is fired, which may be later than its deadline). Timer durations in the outcome are
+    /// measured from it.
     fn step(
         state: &Self::State,
         vars: &Self::Vars,
         event: &Self::Event,
+        now: Time,
     ) -> Result<Outcome<Self>, StepError>;
 }

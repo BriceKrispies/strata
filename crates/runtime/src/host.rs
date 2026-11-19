@@ -288,7 +288,7 @@ fn transition<M: Machine>(
         Some(record) => M::from_record(record)?,
         None => M::initial(key),
     };
-    let outcome = M::step(&state, &vars, event)?;
+    let outcome = M::step(&state, &vars, event, now)?;
     let record = M::to_record(key, &outcome.state, &outcome.vars, previous.as_ref());
     let version = tx.save(
         M::RECORD,

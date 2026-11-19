@@ -4,7 +4,8 @@
 //!
 //! The lease: `Grant` hands out a new token and arms an expiry timer; a `Result` is accepted
 //! only with the current token; when the timer fires, the lease is granted again to the same
-//! holder with a fresh token.
+//! holder with a fresh token. Every grant records the time it was made, which the host passes to
+//! `step` from its clock.
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -12,7 +13,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use strata_runtime::{
-    Database, Delivery, DispatchError, Dispatcher, Envelope, Host, Isolation, Machine,
+    Clock, Database, Delivery, DispatchError, Dispatcher, Envelope, Host, Isolation, Machine,
     MachineStore, MemoryStore, Outcome, RecordError, SqliteMachineStore, StepError, TestClock,
     Time,
 };
@@ -28,6 +29,7 @@ struct LeaseVars {
     token: u64,
     holder: Option<String>,
     accepted: u64,
+    granted_at: Time,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -51,6 +53,7 @@ struct LeaseRecord {
     token: u64,
     holder: Option<String>,
     accepted: u64,
+    granted_at: Time,
     /// Not the machine's: carried over from the previous record on every save.
     note: String,
 }
@@ -59,7 +62,7 @@ const TERM: Duration = Duration::from_secs(30);
 
 struct Lease;
 
-fn grant(vars: &LeaseVars, holder: String) -> Outcome<Lease> {
+fn grant(vars: &LeaseVars, holder: String, now: Time) -> Outcome<Lease> {
     let token = vars.token + 1;
     Outcome::to(
         Phase::Granted,
@@ -67,6 +70,7 @@ fn grant(vars: &LeaseVars, holder: String) -> Outcome<Lease> {
             token,
             holder: Some(holder.clone()),
             accepted: vars.accepted,
+            granted_at: now,
         },
     )
     .emit(
@@ -96,6 +100,7 @@ impl Machine for Lease {
                 token: 0,
                 holder: None,
                 accepted: 0,
+                granted_at: Time(0),
             },
         )
     }
@@ -110,6 +115,7 @@ impl Machine for Lease {
                 token: record.token,
                 holder: record.holder.clone(),
                 accepted: record.accepted,
+                granted_at: record.granted_at,
             },
         ))
     }
@@ -126,6 +132,7 @@ impl Machine for Lease {
             token: vars.token,
             holder: vars.holder.clone(),
             accepted: vars.accepted,
+            granted_at: vars.granted_at,
             note: previous.map_or_else(|| "created by the lease".into(), |p| p.note.clone()),
         }
     }
@@ -134,10 +141,11 @@ impl Machine for Lease {
         state: &Phase,
         vars: &LeaseVars,
         event: &LeaseEvent,
+        now: Time,
     ) -> Result<Outcome<Lease>, StepError> {
         let unchanged = || Outcome::to(*state, vars.clone());
         Ok(match (state, event) {
-            (Phase::Idle, LeaseEvent::Grant { holder }) => grant(vars, holder.clone()),
+            (Phase::Idle, LeaseEvent::Grant { holder }) => grant(vars, holder.clone(), now),
             // Already granted: the grant is ignored.
             (Phase::Granted, LeaseEvent::Grant { .. }) => unchanged(),
             (Phase::Granted, LeaseEvent::Result { token, value }) if *token == vars.token => {
@@ -147,6 +155,7 @@ impl Machine for Lease {
                         token: vars.token,
                         holder: None,
                         accepted: vars.accepted + 1,
+                        granted_at: vars.granted_at,
                     },
                 )
                 .emit(
@@ -166,7 +175,7 @@ impl Machine for Lease {
             ),
             (Phase::Granted, LeaseEvent::Expired { token }) if *token == vars.token => {
                 let holder = vars.holder.clone().unwrap_or_default();
-                grant(vars, holder)
+                grant(vars, holder, now)
             }
             // A timer from an earlier grant.
             (_, LeaseEvent::Expired { .. }) => unchanged(),
@@ -265,6 +274,7 @@ async fn persists<S: MachineStore>(open: impl Fn() -> Arc<S>) {
             .unwrap();
         assert_eq!(handled.state, Phase::Granted);
         assert_eq!(handled.vars.token, 1);
+        assert_eq!(handled.vars.granted_at, clock.now());
         assert_eq!(handled.version, 1);
         assert_eq!(handled.dispatched.delivered, 1);
     }
@@ -391,6 +401,8 @@ async fn fires_timers<S: MachineStore>(open: impl Fn() -> Arc<S>) {
     assert_eq!(fired.dispatched.delivered, 1);
     let (state, vars, _) = host.load(&key("a")).await.unwrap().unwrap();
     assert_eq!((state, vars.token), (Phase::Granted, 2));
+    // The re-grant ran at the clock's time when the timer fired.
+    assert_eq!(vars.granted_at, clock.now());
     assert_eq!(
         receivers.seen().last().unwrap().event,
         LeaseEmit::Granted {
