@@ -598,8 +598,16 @@ fn test(
             match (result, &sig.returns, v) {
                 (false, Ty::Bool, Value::Bool(true)) => quote! { assert!(#call); },
                 (false, Ty::Bool, Value::Bool(false)) => quote! { assert!(!#call); },
-                (false, _, _) => quote! { assert_eq!(#call, #want); },
-                (true, _, _) => quote! { assert_eq!(#call, Ok(#want)); },
+                // The expected value is bound with the return type first: an empty list compares
+                // with a list of any item type, so `assert_eq!(f(..), Vec::new())` cannot infer it.
+                (false, _, _) => {
+                    let ret = rust_ty(&sig.returns)?;
+                    quote! { let want_: #ret = #want; assert_eq!(#call, want_); }
+                }
+                (true, _, _) => {
+                    let ret = rust_ty(&sig.returns)?;
+                    quote! { let want_: #ret = #want; assert_eq!(#call, Ok(want_)); }
+                }
             }
         }
         Outcome::Error(v) => {

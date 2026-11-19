@@ -854,7 +854,7 @@ fn a_member_of_a_team_holding_editor_edits_like_an_editor() {
     };
     world
         .step(&category("by-team"), &ctx(user("cy")))
-        .unwrap_or_else(|e| panic!("a team member could not create a category: {e}"));
+        .unwrap_or_else(|e| panic!("a team member could not create a category: {}", strata_kernel::ext::DomainErrorExt::describe(&e)));
     let refused = world
         .step(&category("by-nobody"), &ctx(user("dee")))
         .expect_err("a person with no role creates no category");

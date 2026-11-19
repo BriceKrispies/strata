@@ -134,7 +134,7 @@ impl Store for MemoryStore {
         }
         check_event_sequence(commit, current.as_ref().map_or(0, |t| t.event_seq))?;
         let next = apply_delta(current.as_deref(), &commit.delta)
-            .map_err(|e| StoreError::Invalid(e.to_string()))?;
+            .map_err(|e| StoreError::Invalid(strata_kernel::ext::DomainErrorExt::describe(&e)))?;
 
         // Nothing above changed the store; everything below cannot fail.
         inner.tenants.insert(tenant.clone(), Arc::new(next));

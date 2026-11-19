@@ -226,6 +226,7 @@ fn placeholder(spec: &Spec, t: &TypeRef) -> Value {
         },
         TypeRef::List(_) | TypeRef::Set(_) => json!([]),
         TypeRef::Option(_) => Value::Null,
+        TypeRef::Shared(inner) => placeholder(spec, inner),
         TypeRef::Map(..) => json!({}),
         TypeRef::Declared(id) => match spec.type_decl(id).map(|d| &d.kind) {
             Some(TypeKind::Id { repr } | TypeKind::Scalar { repr }) => {
