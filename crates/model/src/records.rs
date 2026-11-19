@@ -5747,6 +5747,9 @@ pub struct RecClientVisit {
     /// Field `missed-pongs`.
     #[serde(rename = "missed-pongs")]
     pub missed_pongs: u8,
+    /// Field `heartbeat-ms`.
+    #[serde(rename = "heartbeat-ms")]
+    pub heartbeat_ms: u32,
     /// Field `requests`.
     pub requests: u32,
     /// Field `answers`.

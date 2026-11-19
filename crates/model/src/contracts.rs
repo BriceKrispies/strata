@@ -10164,7 +10164,23 @@ pub struct ReadFrontPageRequest {}
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct ReadFrontPageResponse {
     /// Field `view`.
-    pub view: types::ViewData,
+    pub view: String,
+    /// Field `title`.
+    pub title: String,
+    /// Field `path`.
+    pub path: String,
+    /// Field `params`.
+    pub params: types::ValueMap,
+    /// Field `data`.
+    pub data: types::FrontPageData,
+    /// Field `depends_on`.
+    pub depends_on: Vec<String>,
+    /// Field `revision`.
+    pub revision: types::StateRevision,
+    /// Field `schema_version`.
+    pub schema_version: types::SchemaVersion,
+    /// Field `theme`.
+    pub theme: types::ViewTheme,
 }
 
 /// The errors of contract `read-front-page`: Read the front page view.
@@ -10196,7 +10212,23 @@ pub struct ReadArticlePageRequest {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct ReadArticlePageResponse {
     /// Field `view`.
-    pub view: types::ViewData,
+    pub view: String,
+    /// Field `title`.
+    pub title: String,
+    /// Field `path`.
+    pub path: String,
+    /// Field `params`.
+    pub params: types::ValueMap,
+    /// Field `data`.
+    pub data: types::ArticlePageData,
+    /// Field `depends_on`.
+    pub depends_on: Vec<String>,
+    /// Field `revision`.
+    pub revision: types::StateRevision,
+    /// Field `schema_version`.
+    pub schema_version: types::SchemaVersion,
+    /// Field `theme`.
+    pub theme: types::ViewTheme,
 }
 
 /// The errors of contract `read-article-page`: Read the view of one article.
@@ -10229,7 +10261,23 @@ pub struct ReadTopicsPageRequest {}
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct ReadTopicsPageResponse {
     /// Field `view`.
-    pub view: types::ViewData,
+    pub view: String,
+    /// Field `title`.
+    pub title: String,
+    /// Field `path`.
+    pub path: String,
+    /// Field `params`.
+    pub params: types::ValueMap,
+    /// Field `data`.
+    pub data: types::TopicsPageData,
+    /// Field `depends_on`.
+    pub depends_on: Vec<String>,
+    /// Field `revision`.
+    pub revision: types::StateRevision,
+    /// Field `schema_version`.
+    pub schema_version: types::SchemaVersion,
+    /// Field `theme`.
+    pub theme: types::ViewTheme,
 }
 
 /// The errors of contract `read-topics-page`: Read the view of the topic index.
@@ -10261,7 +10309,23 @@ pub struct ReadTopicPageRequest {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct ReadTopicPageResponse {
     /// Field `view`.
-    pub view: types::ViewData,
+    pub view: String,
+    /// Field `title`.
+    pub title: String,
+    /// Field `path`.
+    pub path: String,
+    /// Field `params`.
+    pub params: types::ValueMap,
+    /// Field `data`.
+    pub data: types::TopicPageData,
+    /// Field `depends_on`.
+    pub depends_on: Vec<String>,
+    /// Field `revision`.
+    pub revision: types::StateRevision,
+    /// Field `schema_version`.
+    pub schema_version: types::SchemaVersion,
+    /// Field `theme`.
+    pub theme: types::ViewTheme,
 }
 
 /// The errors of contract `read-topic-page`: Read the view of one topic.
@@ -10294,7 +10358,23 @@ pub struct ReadAuthorsPageRequest {}
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct ReadAuthorsPageResponse {
     /// Field `view`.
-    pub view: types::ViewData,
+    pub view: String,
+    /// Field `title`.
+    pub title: String,
+    /// Field `path`.
+    pub path: String,
+    /// Field `params`.
+    pub params: types::ValueMap,
+    /// Field `data`.
+    pub data: types::AuthorsPageData,
+    /// Field `depends_on`.
+    pub depends_on: Vec<String>,
+    /// Field `revision`.
+    pub revision: types::StateRevision,
+    /// Field `schema_version`.
+    pub schema_version: types::SchemaVersion,
+    /// Field `theme`.
+    pub theme: types::ViewTheme,
 }
 
 /// The errors of contract `read-authors-page`: Read the view of the author index.
@@ -10326,7 +10406,23 @@ pub struct ReadAuthorPageRequest {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct ReadAuthorPageResponse {
     /// Field `view`.
-    pub view: types::ViewData,
+    pub view: String,
+    /// Field `title`.
+    pub title: String,
+    /// Field `path`.
+    pub path: String,
+    /// Field `params`.
+    pub params: types::ValueMap,
+    /// Field `data`.
+    pub data: types::AuthorPageData,
+    /// Field `depends_on`.
+    pub depends_on: Vec<String>,
+    /// Field `revision`.
+    pub revision: types::StateRevision,
+    /// Field `schema_version`.
+    pub schema_version: types::SchemaVersion,
+    /// Field `theme`.
+    pub theme: types::ViewTheme,
 }
 
 /// The errors of contract `read-author-page`: Read the view of one author.
@@ -10363,7 +10459,23 @@ pub struct ReadSearchPageRequest {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct ReadSearchPageResponse {
     /// Field `view`.
-    pub view: types::ViewData,
+    pub view: String,
+    /// Field `title`.
+    pub title: String,
+    /// Field `path`.
+    pub path: String,
+    /// Field `params`.
+    pub params: types::ValueMap,
+    /// Field `data`.
+    pub data: types::SearchPageData,
+    /// Field `depends_on`.
+    pub depends_on: Vec<String>,
+    /// Field `revision`.
+    pub revision: types::StateRevision,
+    /// Field `schema_version`.
+    pub schema_version: types::SchemaVersion,
+    /// Field `theme`.
+    pub theme: types::ViewTheme,
     /// Field `q`.
     pub q: String,
 }
@@ -10394,7 +10506,23 @@ pub struct ReadAboutPageRequest {}
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct ReadAboutPageResponse {
     /// Field `view`.
-    pub view: types::ViewData,
+    pub view: String,
+    /// Field `title`.
+    pub title: String,
+    /// Field `path`.
+    pub path: String,
+    /// Field `params`.
+    pub params: types::ValueMap,
+    /// Field `data`.
+    pub data: types::AboutPageData,
+    /// Field `depends_on`.
+    pub depends_on: Vec<String>,
+    /// Field `revision`.
+    pub revision: types::StateRevision,
+    /// Field `schema_version`.
+    pub schema_version: types::SchemaVersion,
+    /// Field `theme`.
+    pub theme: types::ViewTheme,
 }
 
 /// The errors of contract `read-about-page`: Read the view of the about page.
@@ -10459,7 +10587,23 @@ pub struct ReadSignInViewRequest {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct ReadSignInViewResponse {
     /// Field `view`.
-    pub view: types::ViewData,
+    pub view: String,
+    /// Field `title`.
+    pub title: String,
+    /// Field `path`.
+    pub path: String,
+    /// Field `params`.
+    pub params: types::ValueMap,
+    /// Field `data`.
+    pub data: types::SitePageData,
+    /// Field `depends_on`.
+    pub depends_on: Vec<String>,
+    /// Field `revision`.
+    pub revision: types::StateRevision,
+    /// Field `schema_version`.
+    pub schema_version: types::SchemaVersion,
+    /// Field `theme`.
+    pub theme: types::ViewTheme,
 }
 
 /// The errors of contract `read-sign-in-view`: Read the view of the sign-in page.
@@ -10488,7 +10632,23 @@ pub struct ReadDeskViewRequest {}
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct ReadDeskViewResponse {
     /// Field `view`.
-    pub view: types::ViewData,
+    pub view: String,
+    /// Field `title`.
+    pub title: String,
+    /// Field `path`.
+    pub path: String,
+    /// Field `params`.
+    pub params: types::ValueMap,
+    /// Field `data`.
+    pub data: types::DeskPageData,
+    /// Field `depends_on`.
+    pub depends_on: Vec<String>,
+    /// Field `revision`.
+    pub revision: types::StateRevision,
+    /// Field `schema_version`.
+    pub schema_version: types::SchemaVersion,
+    /// Field `theme`.
+    pub theme: types::ViewTheme,
     /// Field `articles`.
     pub articles: Vec<types::DeskArticle>,
 }
@@ -10527,7 +10687,27 @@ pub struct ReadNewArticleViewRequest {}
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct ReadNewArticleViewResponse {
     /// Field `view`.
-    pub view: types::ViewData,
+    pub view: String,
+    /// Field `title`.
+    pub title: String,
+    /// Field `path`.
+    pub path: String,
+    /// Field `params`.
+    pub params: types::ValueMap,
+    /// Field `data`.
+    pub data: types::NewArticlePageData,
+    /// Field `depends_on`.
+    pub depends_on: Vec<String>,
+    /// Field `revision`.
+    pub revision: types::StateRevision,
+    /// Field `schema_version`.
+    pub schema_version: types::SchemaVersion,
+    /// Field `theme`.
+    pub theme: types::ViewTheme,
+    /// Field `topics`.
+    pub topics: Vec<types::OptionChoice>,
+    /// Field `authors`.
+    pub authors: Vec<types::OptionChoice>,
 }
 
 /// The errors of contract `read-new-article-view`: Read the view for a new article.
@@ -10567,13 +10747,33 @@ pub struct ReadEditArticleViewRequest {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct ReadEditArticleViewResponse {
     /// Field `view`.
-    pub view: types::ViewData,
+    pub view: String,
+    /// Field `title`.
+    pub title: String,
+    /// Field `path`.
+    pub path: String,
+    /// Field `params`.
+    pub params: types::ValueMap,
+    /// Field `data`.
+    pub data: types::EditArticlePageData,
+    /// Field `depends_on`.
+    pub depends_on: Vec<String>,
+    /// Field `revision`.
+    pub revision: types::StateRevision,
+    /// Field `schema_version`.
+    pub schema_version: types::SchemaVersion,
+    /// Field `theme`.
+    pub theme: types::ViewTheme,
     /// Field `article-id`.
     #[serde(rename = "article-id")]
     pub article_id: types::RecordId,
     /// Field `article-version`.
     #[serde(rename = "article-version")]
     pub article_version: u64,
+    /// Field `topics`.
+    pub topics: Vec<types::OptionChoice>,
+    /// Field `authors`.
+    pub authors: Vec<types::OptionChoice>,
 }
 
 /// The errors of contract `read-edit-article-view`: Read the view for editing an article.
@@ -10614,13 +10814,33 @@ pub struct ReadSettingsViewRequest {}
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct ReadSettingsViewResponse {
     /// Field `view`.
-    pub view: types::ViewData,
+    pub view: String,
+    /// Field `title`.
+    pub title: String,
+    /// Field `path`.
+    pub path: String,
+    /// Field `params`.
+    pub params: types::ValueMap,
+    /// Field `data`.
+    pub data: types::SitePageData,
+    /// Field `depends_on`.
+    pub depends_on: Vec<String>,
+    /// Field `revision`.
+    pub revision: types::StateRevision,
+    /// Field `schema_version`.
+    pub schema_version: types::SchemaVersion,
+    /// Field `theme`.
+    pub theme: types::ViewTheme,
     /// Field `publication-id`.
     #[serde(rename = "publication-id")]
     pub publication_id: types::RecordId,
     /// Field `publication-version`.
     #[serde(rename = "publication-version")]
     pub publication_version: u64,
+    /// Field `accents`.
+    pub accents: Vec<String>,
+    /// Field `papers`.
+    pub papers: Vec<String>,
 }
 
 /// The errors of contract `read-settings-view`: Read the view of the publication settings.
@@ -10657,7 +10877,23 @@ pub struct ReadLabViewRequest {}
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct ReadLabViewResponse {
     /// Field `view`.
-    pub view: types::ViewData,
+    pub view: String,
+    /// Field `title`.
+    pub title: String,
+    /// Field `path`.
+    pub path: String,
+    /// Field `params`.
+    pub params: types::ValueMap,
+    /// Field `data`.
+    pub data: types::SitePageData,
+    /// Field `depends_on`.
+    pub depends_on: Vec<String>,
+    /// Field `revision`.
+    pub revision: types::StateRevision,
+    /// Field `schema_version`.
+    pub schema_version: types::SchemaVersion,
+    /// Field `theme`.
+    pub theme: types::ViewTheme,
 }
 
 /// The errors of contract `read-lab-view`: Read the view of the impact lab.
@@ -13414,6 +13650,7 @@ pub trait Gateway {
     /// Postconditions:
     ///
     /// - The view is the one the tenant's view definition for this page names (CMS-002); it holds the publication, the featured article, the recent articles and the topics.
+    /// - The outputs are the members of the view model the BFF answers as JSON, under the names it uses: view (the view definition), title, path (the address asked for), params, data (the sections of the view, each a row or a list of rows, as the type of data says), depends_on (the object types whose changes alter the view), revision, schema_version and theme.
     ///
     /// Authorisation: Anyone; no session is needed
     ///
@@ -13433,6 +13670,7 @@ pub trait Gateway {
     ///
     /// - The view is the one the tenant's view definition for this page names (CMS-002); it holds the article with this address and the recent articles.
     /// - A draft is invisible to principals whose policies permit published content alone (CMS-003).
+    /// - The outputs are the members of the view model the BFF answers as JSON, under the names it uses: view (the view definition), title, path (the address asked for), params, data (the sections of the view, each a row or a list of rows, as the type of data says), depends_on (the object types whose changes alter the view), revision, schema_version and theme.
     ///
     /// Authorisation: Anyone; no session is needed
     ///
@@ -13451,6 +13689,7 @@ pub trait Gateway {
     /// Postconditions:
     ///
     /// - The view is the one the tenant's view definition for this page names (CMS-002); it holds every topic and the recent articles, from which the page counts the articles of each topic.
+    /// - The outputs are the members of the view model the BFF answers as JSON, under the names it uses: view (the view definition), title, path (the address asked for), params, data (the sections of the view, each a row or a list of rows, as the type of data says), depends_on (the object types whose changes alter the view), revision, schema_version and theme.
     ///
     /// Authorisation: Anyone; no session is needed
     ///
@@ -13469,6 +13708,7 @@ pub trait Gateway {
     /// Postconditions:
     ///
     /// - The view is the one the tenant's view definition for this page names (CMS-002); it holds the topic with this address, its published articles and every topic.
+    /// - The outputs are the members of the view model the BFF answers as JSON, under the names it uses: view (the view definition), title, path (the address asked for), params, data (the sections of the view, each a row or a list of rows, as the type of data says), depends_on (the object types whose changes alter the view), revision, schema_version and theme.
     ///
     /// Authorisation: Anyone; no session is needed
     ///
@@ -13487,6 +13727,7 @@ pub trait Gateway {
     /// Postconditions:
     ///
     /// - The view is the one the tenant's view definition for this page names (CMS-002); it holds every author.
+    /// - The outputs are the members of the view model the BFF answers as JSON, under the names it uses: view (the view definition), title, path (the address asked for), params, data (the sections of the view, each a row or a list of rows, as the type of data says), depends_on (the object types whose changes alter the view), revision, schema_version and theme.
     ///
     /// Authorisation: Anyone; no session is needed
     ///
@@ -13505,6 +13746,7 @@ pub trait Gateway {
     /// Postconditions:
     ///
     /// - The view is the one the tenant's view definition for this page names (CMS-002); it holds the author with this address and the author's published articles.
+    /// - The outputs are the members of the view model the BFF answers as JSON, under the names it uses: view (the view definition), title, path (the address asked for), params, data (the sections of the view, each a row or a list of rows, as the type of data says), depends_on (the object types whose changes alter the view), revision, schema_version and theme.
     ///
     /// Authorisation: Anyone; no session is needed
     ///
@@ -13524,6 +13766,7 @@ pub trait Gateway {
     ///
     /// - The view is the one the tenant's view definition for this page names (CMS-002); it holds the published articles whose title, excerpt or text contain the query, when the query has at least two characters.
     /// - The output q repeats the query, so that a search form can address the results page.
+    /// - The outputs are the members of the view model the BFF answers as JSON, under the names it uses: view (the view definition), title, path (the address asked for), params, data (the sections of the view, each a row or a list of rows, as the type of data says), depends_on (the object types whose changes alter the view), revision, schema_version and theme.
     ///
     /// Authorisation: Anyone; no session is needed
     ///
@@ -13542,6 +13785,7 @@ pub trait Gateway {
     /// Postconditions:
     ///
     /// - The view is the one the tenant's view definition for this page names (CMS-002); it holds the publication with its about and colophon text, and every author.
+    /// - The outputs are the members of the view model the BFF answers as JSON, under the names it uses: view (the view definition), title, path (the address asked for), params, data (the sections of the view, each a row or a list of rows, as the type of data says), depends_on (the object types whose changes alter the view), revision, schema_version and theme.
     ///
     /// Authorisation: Anyone; no session is needed
     ///
@@ -13579,6 +13823,7 @@ pub trait Gateway {
     ///
     /// - The view is the one the tenant's view definition for this page names (CMS-002); it holds the publication.
     /// - The query parameter next names the address to open after signing in; the web application follows it only when it starts with one "/" (it refuses "//").
+    /// - The outputs are the members of the view model the BFF answers as JSON, under the names it uses: view (the view definition), title, path (the address asked for), params, data (the sections of the view, each a row or a list of rows, as the type of data says), depends_on (the object types whose changes alter the view), revision, schema_version and theme.
     ///
     /// Authorisation: Anyone; no session is needed
     ///
@@ -13598,6 +13843,7 @@ pub trait Gateway {
     ///
     /// - The view holds the publication and the articles the principal wrote, or every article for an editor or the owner (CMS-003).
     /// - The output articles lists the articles of the view, each with its identifier, its version, its title, its address, its text and its status, so that a change made from the list names the version it started from.
+    /// - The outputs are the members of the view model the BFF answers as JSON, under the names it uses: view (the view definition), title, path (the address asked for), params, data (the sections of the view, each a row or a list of rows, as the type of data says), depends_on (the object types whose changes alter the view), revision, schema_version and theme.
     ///
     /// Authorisation: A signed-in principal whose policies permit the operation
     ///
@@ -13616,6 +13862,8 @@ pub trait Gateway {
     /// Postconditions:
     ///
     /// - The view holds the publication, every topic and every author.
+    /// - The outputs are the members of the view model the BFF answers as JSON, under the names it uses: view (the view definition), title, path (the address asked for), params, data (the sections of the view, each a row or a list of rows, as the type of data says), depends_on (the object types whose changes alter the view), revision, schema_version and theme.
+    /// - The outputs topics and authors list the choices of the topic and author controls: one entry per topic (its identifier as text, its name), led by an entry with an empty value and the label "No topic", and one per author (its identifier as text, its name). The web application builds them from the data of the same view; the BFF does not yet put them in the view model (its desk projection of articles is the model for it).
     ///
     /// Authorisation: A signed-in principal whose policies permit the operation
     ///
@@ -13636,6 +13884,8 @@ pub trait Gateway {
     ///
     /// - The view holds the publication, the article with this address, every topic and every author.
     /// - The outputs article-id and article-version repeat the identifier and the version of the article held in the view, so that a save names the version it started from.
+    /// - The outputs are the members of the view model the BFF answers as JSON, under the names it uses: view (the view definition), title, path (the address asked for), params, data (the sections of the view, each a row or a list of rows, as the type of data says), depends_on (the object types whose changes alter the view), revision, schema_version and theme.
+    /// - The outputs topics and authors list the choices of the topic and author controls, as for a new article. The web application builds them from the data of the same view; the BFF does not yet put them in the view model.
     ///
     /// Authorisation: A signed-in principal whose policies permit the operation
     ///
@@ -13657,6 +13907,8 @@ pub trait Gateway {
     ///
     /// - The view holds the publication record.
     /// - The outputs publication-id and publication-version repeat the identifier and the version of the publication record held in the view, so that a save names the version it started from.
+    /// - The outputs are the members of the view model the BFF answers as JSON, under the names it uses: view (the view definition), title, path (the address asked for), params, data (the sections of the view, each a row or a list of rows, as the type of data says), depends_on (the object types whose changes alter the view), revision, schema_version and theme.
+    /// - The outputs accents and papers list the names a swatch can take (the accent tokens moss, clay, ink, ochre and plum; the paper tokens linen, stone and chalk). The web application holds them as constants; the BFF does not yet put them in the view model.
     ///
     /// Authorisation: A signed-in principal whose policies permit the operation
     ///
@@ -13675,6 +13927,7 @@ pub trait Gateway {
     /// Postconditions:
     ///
     /// - The view holds the publication. The page itself is drawn only for a principal who may manage the schema.
+    /// - The outputs are the members of the view model the BFF answers as JSON, under the names it uses: view (the view definition), title, path (the address asked for), params, data (the sections of the view, each a row or a list of rows, as the type of data says), depends_on (the object types whose changes alter the view), revision, schema_version and theme.
     ///
     /// Authorisation: A signed-in principal whose policies permit the operation
     ///

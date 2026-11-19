@@ -1593,6 +1593,518 @@ pub struct DeskArticle {
     pub status: String,
 }
 
+/// Publication Fields
+///
+/// The fields of the publication record as the BFF projects them (object publication of the tenant template), under the names the JSON uses.
+///
+/// Specification type `publication-fields`: a struct.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct PublicationFields {
+    /// Field `key`.
+    pub key: String,
+    /// Field `name`.
+    pub name: String,
+    /// Field `tagline`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tagline: Option<String>,
+    /// Field `about`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub about: Option<String>,
+    /// Field `colophon`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub colophon: Option<String>,
+    /// Field `accent`.
+    pub accent: String,
+    /// Field `paper`.
+    pub paper: String,
+}
+
+/// Author Fields
+///
+/// The fields of an author record as the BFF projects them (object author).
+///
+/// Specification type `author-fields`: a struct.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct AuthorFields {
+    /// Field `name`.
+    pub name: String,
+    /// Field `slug`.
+    pub slug: String,
+    /// Field `title`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// Field `bio`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bio: Option<String>,
+    /// Field `principal`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub principal: Option<String>,
+}
+
+/// Category Fields
+///
+/// The fields of a topic record as the BFF projects them (object category).
+///
+/// Specification type `category-fields`: a struct.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct CategoryFields {
+    /// Field `name`.
+    pub name: String,
+    /// Field `slug`.
+    pub slug: String,
+    /// Field `description`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
+/// Post Fields
+///
+/// The fields of an article record as the BFF projects them (object post). The JSON names are snake_case (published_at, cover_alt); the contract inputs that save them use cover-alt.
+///
+/// Specification type `post-fields`: a struct.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct PostFields {
+    /// Field `title`.
+    pub title: String,
+    /// Field `slug`.
+    pub slug: String,
+    /// Field `excerpt`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub excerpt: Option<String>,
+    /// Field `body`.
+    pub body: String,
+    /// Field `author`.
+    pub author: RecordId,
+    /// Field `category`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category: Option<RecordId>,
+    /// Field `tags`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tags: Option<Vec<String>>,
+    /// Field `status`.
+    pub status: String,
+    /// Field `featured`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub featured: Option<bool>,
+    /// Field `published_at`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub published_at: Option<prelude::Timestamp>,
+    /// Field `cover`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cover: Option<String>,
+    /// Field `cover_alt`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cover_alt: Option<String>,
+}
+
+/// Author Record
+///
+/// An author record included in an article row (refs.author): the projection of a record without refs or blocks of its own (substrate project_record).
+///
+/// Specification type `author-record`: a struct.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct AuthorRecord {
+    /// Field `id`.
+    pub id: RecordId,
+    /// Field `object`.
+    pub object: String,
+    /// Field `version`.
+    pub version: u64,
+    /// Field `created_at`.
+    pub created_at: prelude::Timestamp,
+    /// Field `updated_at`.
+    pub updated_at: prelude::Timestamp,
+    /// Field `created_by`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_by: Option<PrincipalId>,
+    /// Field `fields`.
+    pub fields: AuthorFields,
+}
+
+/// Category Record
+///
+/// A topic record included in an article row (refs.category).
+///
+/// Specification type `category-record`: a struct.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct CategoryRecord {
+    /// Field `id`.
+    pub id: RecordId,
+    /// Field `object`.
+    pub object: String,
+    /// Field `version`.
+    pub version: u64,
+    /// Field `created_at`.
+    pub created_at: prelude::Timestamp,
+    /// Field `updated_at`.
+    pub updated_at: prelude::Timestamp,
+    /// Field `created_by`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_by: Option<PrincipalId>,
+    /// Field `fields`.
+    pub fields: CategoryFields,
+}
+
+/// Post Refs
+///
+/// The records an article row includes through its reference fields (the view definition includes author and category); each is absent when the reference is empty.
+///
+/// Specification type `post-refs`: a struct.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct PostRefs {
+    /// Field `author`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author: Option<AuthorRecord>,
+    /// Field `category`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category: Option<CategoryRecord>,
+}
+
+/// Publication Row
+///
+/// One publication record as a view section holds it (substrate project_row): the record members, refs (an empty object here), blocks of its markdown fields and reading_minutes when it has any.
+///
+/// Specification type `publication-row`: a struct.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct PublicationRow {
+    /// Field `id`.
+    pub id: RecordId,
+    /// Field `object`.
+    pub object: String,
+    /// Field `version`.
+    pub version: u64,
+    /// Field `created_at`.
+    pub created_at: prelude::Timestamp,
+    /// Field `updated_at`.
+    pub updated_at: prelude::Timestamp,
+    /// Field `created_by`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_by: Option<PrincipalId>,
+    /// Field `fields`.
+    pub fields: PublicationFields,
+    /// Field `refs`.
+    pub refs: ValueMap,
+    /// Field `blocks`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blocks: Option<ValueMap>,
+    /// Field `reading_minutes`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reading_minutes: Option<u32>,
+}
+
+/// Author Row
+///
+/// One author record as a view section holds it; the markdown field bio is in blocks.
+///
+/// Specification type `author-row`: a struct.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct AuthorRow {
+    /// Field `id`.
+    pub id: RecordId,
+    /// Field `object`.
+    pub object: String,
+    /// Field `version`.
+    pub version: u64,
+    /// Field `created_at`.
+    pub created_at: prelude::Timestamp,
+    /// Field `updated_at`.
+    pub updated_at: prelude::Timestamp,
+    /// Field `created_by`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_by: Option<PrincipalId>,
+    /// Field `fields`.
+    pub fields: AuthorFields,
+    /// Field `refs`.
+    pub refs: ValueMap,
+    /// Field `blocks`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blocks: Option<ValueMap>,
+    /// Field `reading_minutes`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reading_minutes: Option<u32>,
+}
+
+/// Category Row
+///
+/// One topic record as a view section holds it.
+///
+/// Specification type `category-row`: a struct.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct CategoryRow {
+    /// Field `id`.
+    pub id: RecordId,
+    /// Field `object`.
+    pub object: String,
+    /// Field `version`.
+    pub version: u64,
+    /// Field `created_at`.
+    pub created_at: prelude::Timestamp,
+    /// Field `updated_at`.
+    pub updated_at: prelude::Timestamp,
+    /// Field `created_by`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_by: Option<PrincipalId>,
+    /// Field `fields`.
+    pub fields: CategoryFields,
+    /// Field `refs`.
+    pub refs: ValueMap,
+    /// Field `blocks`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blocks: Option<ValueMap>,
+    /// Field `reading_minutes`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reading_minutes: Option<u32>,
+}
+
+/// Post Row
+///
+/// One article record as a view section holds it: its fields, the author and the topic it refers to (refs), and the blocks of its body with the reading time.
+///
+/// Specification type `post-row`: a struct.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct PostRow {
+    /// Field `id`.
+    pub id: RecordId,
+    /// Field `object`.
+    pub object: String,
+    /// Field `version`.
+    pub version: u64,
+    /// Field `created_at`.
+    pub created_at: prelude::Timestamp,
+    /// Field `updated_at`.
+    pub updated_at: prelude::Timestamp,
+    /// Field `created_by`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_by: Option<PrincipalId>,
+    /// Field `fields`.
+    pub fields: PostFields,
+    /// Field `refs`.
+    pub refs: PostRefs,
+    /// Field `blocks`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blocks: Option<ValueMap>,
+    /// Field `reading_minutes`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reading_minutes: Option<u32>,
+}
+
+/// View Theme
+///
+/// The resolved theme of a view: the accent and paper names the publication settings give, or the defaults when a setting is not one of the theme tokens.
+///
+/// Specification type `view-theme`: a struct.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct ViewTheme {
+    /// Field `accent`.
+    pub accent: String,
+    /// Field `paper`.
+    pub paper: String,
+}
+
+/// Option Choice
+///
+/// One entry of a choice control: the value the form submits and the label it shows.
+///
+/// Specification type `option-choice`: a struct.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct OptionChoice {
+    /// Field `value`.
+    pub value: String,
+    /// Field `label`.
+    pub label: String,
+}
+
+/// Front Page Data
+///
+/// The sections of the front page view: the publication, the featured article, the recent articles and the topics.
+///
+/// Specification type `front-page-data`: a struct.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct FrontPageData {
+    /// Field `site`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub site: Option<PublicationRow>,
+    /// Field `featured`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub featured: Option<PostRow>,
+    /// Field `recent`.
+    pub recent: Vec<PostRow>,
+    /// Field `categories`.
+    pub categories: Vec<CategoryRow>,
+}
+
+/// Article Page Data
+///
+/// The sections of an article view: the publication, the article with this address (null when none) and the recent articles.
+///
+/// Specification type `article-page-data`: a struct.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct ArticlePageData {
+    /// Field `site`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub site: Option<PublicationRow>,
+    /// Field `post`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub post: Option<PostRow>,
+    /// Field `recent`.
+    pub recent: Vec<PostRow>,
+}
+
+/// Topics Page Data
+///
+/// The sections of the topic index view.
+///
+/// Specification type `topics-page-data`: a struct.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct TopicsPageData {
+    /// Field `site`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub site: Option<PublicationRow>,
+    /// Field `categories`.
+    pub categories: Vec<CategoryRow>,
+    /// Field `recent`.
+    pub recent: Vec<PostRow>,
+}
+
+/// Topic Page Data
+///
+/// The sections of a topic view.
+///
+/// Specification type `topic-page-data`: a struct.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct TopicPageData {
+    /// Field `site`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub site: Option<PublicationRow>,
+    /// Field `category`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category: Option<CategoryRow>,
+    /// Field `posts`.
+    pub posts: Vec<PostRow>,
+    /// Field `categories`.
+    pub categories: Vec<CategoryRow>,
+}
+
+/// Authors Page Data
+///
+/// The sections of the author index view.
+///
+/// Specification type `authors-page-data`: a struct.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct AuthorsPageData {
+    /// Field `site`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub site: Option<PublicationRow>,
+    /// Field `authors`.
+    pub authors: Vec<AuthorRow>,
+}
+
+/// Author Page Data
+///
+/// The sections of an author view.
+///
+/// Specification type `author-page-data`: a struct.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct AuthorPageData {
+    /// Field `site`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub site: Option<PublicationRow>,
+    /// Field `author`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author: Option<AuthorRow>,
+    /// Field `posts`.
+    pub posts: Vec<PostRow>,
+}
+
+/// Search Page Data
+///
+/// The sections of the search view.
+///
+/// Specification type `search-page-data`: a struct.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct SearchPageData {
+    /// Field `site`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub site: Option<PublicationRow>,
+    /// Field `results`.
+    pub results: Vec<PostRow>,
+}
+
+/// About Page Data
+///
+/// The sections of the about view; the markdown fields about and colophon of the publication are in its blocks.
+///
+/// Specification type `about-page-data`: a struct.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct AboutPageData {
+    /// Field `site`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub site: Option<PublicationRow>,
+    /// Field `authors`.
+    pub authors: Vec<AuthorRow>,
+}
+
+/// Site Page Data
+///
+/// The sections of a view that holds the publication alone (sign in, settings, the impact lab).
+///
+/// Specification type `site-page-data`: a struct.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct SitePageData {
+    /// Field `site`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub site: Option<PublicationRow>,
+}
+
+/// Desk Page Data
+///
+/// The sections of the writing desk view.
+///
+/// Specification type `desk-page-data`: a struct.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct DeskPageData {
+    /// Field `site`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub site: Option<PublicationRow>,
+    /// Field `posts`.
+    pub posts: Vec<PostRow>,
+}
+
+/// New Article Page Data
+///
+/// The sections of the view for a new article.
+///
+/// Specification type `new-article-page-data`: a struct.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct NewArticlePageData {
+    /// Field `site`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub site: Option<PublicationRow>,
+    /// Field `categories`.
+    pub categories: Vec<CategoryRow>,
+    /// Field `authors`.
+    pub authors: Vec<AuthorRow>,
+}
+
+/// Edit Article Page Data
+///
+/// The sections of the view for editing an article.
+///
+/// Specification type `edit-article-page-data`: a struct.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct EditArticlePageData {
+    /// Field `site`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub site: Option<PublicationRow>,
+    /// Field `post`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub post: Option<PostRow>,
+    /// Field `categories`.
+    pub categories: Vec<CategoryRow>,
+    /// Field `authors`.
+    pub authors: Vec<AuthorRow>,
+}
+
 /// Domain Binding
 ///
 /// A domain name bound to a tenant.
