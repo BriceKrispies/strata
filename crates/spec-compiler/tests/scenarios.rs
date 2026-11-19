@@ -148,11 +148,13 @@ fn every_delivery_to_the_lease_is_a_call_and_every_value_is_the_traces() {
         }
     }
     // Receivers and deliveries come from the specification.
-    assert!(text.contains("(\"worker\", \"at-least-once\","));
-    assert!(text.contains("(\"ledger\", \"at-least-once\","));
-    assert!(text.contains("(\"worker\", \"at-most-once\","));
+    // rustfmt may break a tuple across lines, so these compare with whitespace removed.
+    let flat: String = text.chars().filter(|c| !c.is_whitespace()).collect();
+    assert!(flat.contains("(\"worker\",\"at-least-once\","));
+    assert!(flat.contains("(\"ledger\",\"at-least-once\","));
+    assert!(flat.contains("(\"worker\",\"at-most-once\","));
     // A timer set carries its name and its delay in milliseconds.
-    assert!(text.contains("(\"expiry\", 30,"));
+    assert!(flat.contains("(\"expiry\",30,"));
 }
 
 /// The mutation check: the expected values are the trace's, so altering the trace's final state
