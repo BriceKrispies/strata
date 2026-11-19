@@ -258,7 +258,12 @@ pub mod lease {
                             value: payload.value.clone(),
                         });
                         Ok(Outcome::to(State::Idle, next)
-                            .emit("ledger", Delivery::AtLeastOnce, emitted_2)
+                            .emit_after(
+                                "ledger",
+                                Delivery::AtLeastOnce,
+                                emitted_2,
+                                Duration::from_millis(5),
+                            )
                             .cancel_timer("expiry"))
                     } else {
                         Ok(Outcome::to(State::Granted, vars.clone()).emit(

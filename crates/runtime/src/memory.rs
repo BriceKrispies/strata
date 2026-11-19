@@ -92,6 +92,8 @@ impl Tx for MemoryTx<'_> {
                 receiver: message.receiver.clone(),
                 event: message.event.clone(),
                 created_at: message.created_at,
+                delivery: message.delivery,
+                not_before: message.not_before,
                 attempts: 0,
                 next_attempt_at: message.next_attempt_at,
                 last_error: None,
@@ -163,7 +165,7 @@ impl OutboxStore for MemoryStore {
             .lock()?
             .outbox
             .values()
-            .filter(|m| m.source == source && m.next_attempt_at <= now)
+            .filter(|m| m.source == source && m.next_attempt_at <= now && m.not_before <= now)
             .take(limit)
             .cloned()
             .collect())

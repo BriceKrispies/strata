@@ -81,6 +81,10 @@ pub struct Emit<E> {
     pub delivery: Delivery,
     /// The event itself.
     pub event: E,
+    /// For a delayed emit (`{emit, after}`): how long after the step it is dispatched. It goes
+    /// to the outbox in the step's transaction and the outbox drain hands it out once the clock
+    /// reaches the step's time plus this. `None`: dispatched right after commit.
+    pub after: Option<Duration>,
 }
 
 /// A change to the instance's timers, made by a transition.
@@ -135,6 +139,25 @@ impl<M: Machine + ?Sized> Outcome<M> {
             receiver: Receiver::new(receiver),
             delivery,
             event,
+            after: None,
+        });
+        self
+    }
+
+    /// Also emit `event` to `receiver` with `delivery`, `after` the step: a delayed emit, held
+    /// in the outbox until then. Unlike a timer, it goes to the receiver, not to this instance.
+    pub fn emit_after(
+        mut self,
+        receiver: &str,
+        delivery: Delivery,
+        event: M::Emitted,
+        after: Duration,
+    ) -> Self {
+        self.emits.push(Emit {
+            receiver: Receiver::new(receiver),
+            delivery,
+            event,
+            after: Some(after),
         });
         self
     }

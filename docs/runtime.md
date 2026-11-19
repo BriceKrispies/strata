@@ -91,10 +91,14 @@ pub trait Machine: Send + Sync + 'static {
   serialise identically.
 
 `Outcome<M>` holds the next `state` and `vars`, the `emits` in effect order (each an
-`Emit { receiver: Receiver, delivery: Delivery, event }`), and the `timers`
-(`TimerCommand::Set { name, after, event }` or `TimerCommand::Cancel { name }`). Generated code
-builds one with `Outcome::to(state, vars).emit(receiver, delivery, event).set_timer(name, after,
-event).cancel_timer(name)`.
+`Emit { receiver: Receiver, delivery: Delivery, event, after: Option<Duration> }`), and the
+`timers` (`TimerCommand::Set { name, after, event }` or `TimerCommand::Cancel { name }`).
+Generated code builds one with `Outcome::to(state, vars).emit(receiver, delivery, event)
+.emit_after(receiver, delivery, event, after).set_timer(name, after, event).cancel_timer(name)`.
+
+A delayed emit (`emit_after`, the specification's `{emit, to, after}`) and a timer are different
+things: the delayed emit goes to its receiver `after` the step, through the outbox; a timer fires
+its event back at the same instance. Neither stands in for the other.
 
 `Isolation` is `ReadCommitted < Snapshot < Serializable`. `Delivery` is `AtMostOnce` or
 `AtLeastOnce`. A `Receiver` is the behavior, component or contract id an emit is addressed to.
@@ -210,7 +214,9 @@ For one event, in one transaction opened at `M::ISOLATION` or stronger:
    event is saved too (the version grows; nothing else changes).
 4. Apply the timer commands in order. `Set` stores a timer `(M::NAME, key, name)` firing at
    `now + after`, replacing a timer of the same name with a new id; `Cancel` removes it.
-5. Write every `at-least-once` emit to the outbox, held back from the drain until
+5. Write every delayed emit to the outbox with `not_before = next_attempt_at = now + after`,
+   whatever its delivery. Write every immediate `at-least-once` emit to the outbox, held back
+   from the drain until
    `now + retry.first`.
 6. Commit.
 
@@ -234,6 +240,12 @@ After commit, emits are dispatched in the order the step emitted them.
   kept at the longest delay and reported.
 - **`at-most-once`.** Not written anywhere. Dispatched once after commit. A failed dispatch is
   counted as dropped and reported; a process stop before dispatch loses it. Never retried.
+- **Delayed emits.** Never dispatched at commit (`Committed::delayed` lists their outbox ids).
+  `drain_outbox` offers an entry only once the clock has reached its `not_before`. A delayed
+  `at-least-once` emit is then treated exactly like the entry above: retried with the same id
+  until a dispatch succeeds. A delayed `at-most-once` emit is removed from the outbox first and
+  then dispatched once, with `Envelope::id = None`; a failed dispatch is dropped, and a stop
+  between removal and dispatch loses it. Both survive a restart until they are due.
 
 The default `RetryPolicy` is `first = 1 s`, `factor = 2`, `max = 300 s`:
 `delay(n) = min(first * factor^(n-1), max)`.
@@ -304,7 +316,8 @@ reused.
   of the whole store that replaces the original only on success.
 - `SqliteMachineStore::open(db: Database, now)`: on a SQLite `Database`, with the tables
   `runtime_records`, `runtime_outbox` and `runtime_timers` and the migration ledger
-  `runtime_migrations`.
+  `runtime_migrations`. Migration 2 gives `runtime_outbox` its `delivery` and `not_before`
+  columns (existing entries: `at-least-once`, not before 0).
 
 ### SQLite
 

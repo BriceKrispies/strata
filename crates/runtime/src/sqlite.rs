@@ -11,6 +11,7 @@
 //! own tables and its own migration ledger.
 
 use crate::clock::Time;
+use crate::machine::Delivery;
 use crate::machine::Isolation;
 use crate::store::{
     NewMessage, NewTimer, OutboxEntry, OutboxStore, RecordStore, StorageError, StoredRecord,
@@ -194,10 +195,11 @@ impl Database {
 }
 
 /// The machine store's layout, recorded in the `runtime_migrations` ledger.
-const MIGRATIONS: &[Migration] = &[Migration {
-    version: 1,
-    name: "machine records, outbox and timers",
-    sql: "
+const MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        name: "machine records, outbox and timers",
+        sql: "
     CREATE TABLE runtime_records (
         collection TEXT NOT NULL,
         key        TEXT NOT NULL,
@@ -228,7 +230,16 @@ const MIGRATIONS: &[Migration] = &[Migration {
     );
     CREATE INDEX runtime_timers_due ON runtime_timers(machine, fire_at);
     ",
-}];
+    },
+    Migration {
+        version: 2,
+        name: "outbox delivery and not-before time, for delayed emits",
+        sql: "
+    ALTER TABLE runtime_outbox ADD COLUMN delivery TEXT NOT NULL DEFAULT 'at-least-once';
+    ALTER TABLE runtime_outbox ADD COLUMN not_before INTEGER NOT NULL DEFAULT 0;
+    ",
+    },
+];
 
 /// The ledger table of the machine store's migrations.
 pub const LEDGER: &str = "runtime_migrations";
@@ -308,15 +319,17 @@ impl Tx for SqliteTx<'_, '_> {
     fn enqueue(&mut self, message: &NewMessage) -> Result<u64, StorageError> {
         self.tx
             .execute(
-                "INSERT INTO runtime_outbox (source, key, receiver, event, created_at, next_attempt_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                "INSERT INTO runtime_outbox (source, key, receiver, event, created_at, next_attempt_at, delivery, not_before)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
                 params![
                     message.source,
                     message.key,
                     message.receiver,
                     message.event,
                     message.created_at.0,
-                    message.next_attempt_at.0
+                    message.next_attempt_at.0,
+                    message.delivery.name(),
+                    message.not_before.0
                 ],
             )
             .map_err(sql)?;
@@ -388,6 +401,11 @@ fn outbox_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<OutboxEntry> {
         attempts: row.get(6)?,
         next_attempt_at: Time(row.get(7)?),
         last_error: row.get(8)?,
+        delivery: match row.get::<_, String>(9)?.as_str() {
+            "at-most-once" => Delivery::AtMostOnce,
+            _ => Delivery::AtLeastOnce,
+        },
+        not_before: Time(row.get(10)?),
     })
 }
 
@@ -401,8 +419,10 @@ impl OutboxStore for SqliteMachineStore {
         let conn = self.db.lock()?;
         let mut statement = conn
             .prepare_cached(
-                "SELECT id, source, key, receiver, event, created_at, attempts, next_attempt_at, last_error
-                 FROM runtime_outbox WHERE source = ?1 AND next_attempt_at <= ?2 ORDER BY id LIMIT ?3",
+                "SELECT id, source, key, receiver, event, created_at, attempts, next_attempt_at, last_error,
+                        delivery, not_before
+                 FROM runtime_outbox WHERE source = ?1 AND next_attempt_at <= ?2 AND not_before <= ?2
+                 ORDER BY id LIMIT ?3",
             )
             .map_err(sql)?;
         let rows = statement

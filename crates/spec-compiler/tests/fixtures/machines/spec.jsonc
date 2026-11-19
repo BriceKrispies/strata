@@ -5,7 +5,8 @@
 // crates/spec-compiler-machines-fixture.
 //
 // - lease: one lease per record, a token raised on every grant, a result accepted only with the
-//   current token, and a timer that grants again when the lease expires.
+//   current token (recorded at the ledger 5 ms later, a delayed emit), and a timer that grants
+//   again when the lease expires.
 // - job: keyed instances, otherwise, ignores, an at-least-once and an at-most-once emit, a timer
 //   and a cancel, terminal states, and a record field the machine does not own.
 // - hold: a machine that does not create its records (someone else does): variables mapped onto
@@ -97,7 +98,7 @@
         { "id": "accept", "from": "granted", "to": "idle", "on": "lease-result", "guard": "event.token == token",
           "effects": [
             { "set": "accepted", "to": "accepted + 1" },
-            { "emit": "result-accepted", "to": "ledger", "payload": { "token": "event.token", "value": "event.value" } },
+            { "emit": "result-accepted", "to": "ledger", "after": 5, "payload": { "token": "event.token", "value": "event.value" } },
             { "cancel": "expiry" }
           ] },
         { "id": "stale-granted", "from": "granted", "to": "granted", "on": "lease-result", "otherwise": true,

@@ -7,12 +7,17 @@
 //!    if the machine creates records ([`Machine::CREATES`]) and otherwise refuses the event with
 //!    [`HostError::RecordMissing`],
 //! 3. runs [`Machine::step`],
-//! 4. saves the new record, applies the timer commands, and writes every `at-least-once` emit to
-//!    the outbox, all in that same transaction,
+//! 4. saves the new record, applies the timer commands, and writes every `at-least-once` emit and
+//!    every delayed emit to the outbox, all in that same transaction,
 //! 5. commits, and only then
-//! 6. dispatches the emits in order: an `at-least-once` emit is removed from the outbox when its
-//!    dispatch succeeds and deferred with backoff when it fails; an `at-most-once` emit is
-//!    dispatched once and forgotten either way.
+//! 6. dispatches the immediate emits in order: an `at-least-once` emit is removed from the outbox
+//!    when its dispatch succeeds and deferred with backoff when it fails; an `at-most-once` emit
+//!    is dispatched once and forgotten either way.
+//!
+//! A delayed emit ([`Outcome::emit_after`](crate::Outcome::emit_after)) is not dispatched at
+//! commit: its outbox entry carries a not-before time (the step's time plus the delay), and
+//! [`Host::drain_outbox`] hands it to the receiver once the clock reaches it, with the same
+//! guarantees: `at-least-once` retried until delivered, `at-most-once` removed and dispatched once.
 //!
 //! If the step fails, the transaction is rolled back and nothing is saved, scheduled or emitted.
 //! If the process stops between commit and dispatch, the `at-least-once` emits are still in the
@@ -210,8 +215,10 @@ pub struct Committed<M: Machine> {
     pub vars: M::Vars,
     /// The record version written.
     pub version: u64,
-    /// The emits, in order, waiting for dispatch.
+    /// The immediate emits, in order, waiting for dispatch.
     pub emits: Vec<Envelope<M::Emitted>>,
+    /// The outbox ids of the delayed emits, in order: the outbox drain dispatches them when due.
+    pub delayed: Vec<u64>,
 }
 
 /// What happened to a batch of dispatches.
@@ -335,7 +342,22 @@ fn transition<M: Machine>(
         }
     }
     let mut emits = Vec::with_capacity(outcome.emits.len());
+    let mut delayed = Vec::new();
     for emit in outcome.emits {
+        if let Some(after) = emit.after {
+            let due = now.after(after);
+            delayed.push(tx.enqueue(&NewMessage {
+                source: M::NAME.to_string(),
+                key: key_text.clone(),
+                receiver: emit.receiver.0.clone(),
+                event: encode(&emit.event)?,
+                created_at: now,
+                delivery: emit.delivery,
+                not_before: due,
+                next_attempt_at: due,
+            })?);
+            continue;
+        }
         let id = match emit.delivery {
             Delivery::AtLeastOnce => Some(tx.enqueue(&NewMessage {
                 source: M::NAME.to_string(),
@@ -343,6 +365,8 @@ fn transition<M: Machine>(
                 receiver: emit.receiver.0.clone(),
                 event: encode(&emit.event)?,
                 created_at: now,
+                delivery: Delivery::AtLeastOnce,
+                not_before: now,
                 next_attempt_at: now.after(hold),
             })?),
             Delivery::AtMostOnce => None,
@@ -362,6 +386,7 @@ fn transition<M: Machine>(
         vars: outcome.vars,
         version,
         emits,
+        delayed,
     }))
 }
 
@@ -572,12 +597,23 @@ impl<M: Machine, S: MachineStore, D: Dispatcher<M::Emitted>> Host<M, S, D> {
                     continue;
                 }
             };
+            if entry.delivery == Delivery::AtMostOnce {
+                // A delayed at-most-once emit: removed first, then dispatched once, so a stop
+                // between the two loses it rather than sending it twice. If it cannot be removed
+                // it stays for a later drain and is not dispatched now.
+                let id = entry.id;
+                match self.on_store(move |store| store.mark_delivered(id)).await {
+                    Ok(Ok(())) => {}
+                    _ => continue,
+                }
+            }
+            let at_least_once = entry.delivery == Delivery::AtLeastOnce;
             let envelope = Envelope {
-                id: Some(entry.id),
+                id: at_least_once.then_some(entry.id),
                 source: entry.source,
                 key: entry.key,
                 receiver: Receiver(entry.receiver),
-                delivery: Delivery::AtLeastOnce,
+                delivery: entry.delivery,
                 event,
             };
             report.add(self.deliver(envelope, entry.attempts).await);

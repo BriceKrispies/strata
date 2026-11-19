@@ -147,8 +147,24 @@ fn emits_the_runtime_cannot_deliver_are_refused() {
     assert_refused(&text, m::EMIT_LINK, "via");
     let text = with(|s| effects(s)[2]["fanout"] = json!(true));
     assert_refused(&text, m::EMIT_LINK, "fanout");
-    let text = with(|s| effects(s)[2]["after"] = json!(5));
-    assert_refused(&text, m::EMIT_DELAYED, "ev-out");
+    let text = with(|s| effects(s)[2]["after"] = json!({ "dist": "exponential", "mean": 5 }));
+    assert_refused(&text, m::EMIT_AFTER, "ev-out");
+    let text = with(|s| effects(s)[2]["after"] = json!(2.5));
+    assert_refused(&text, m::EMIT_AFTER, "ev-out");
+    // A whole number of milliseconds is a delayed emit.
+    let files = generate(
+        "spec.jsonc",
+        &with(|s| effects(s)[2]["after"] = json!(5)),
+        &options(),
+    )
+    .unwrap();
+    let code = &files
+        .iter()
+        .find(|f| f.path == "src/machines.rs")
+        .unwrap()
+        .contents;
+    assert!(code.contains("Duration::from_millis(5)"));
+    assert!(code.contains(".emit_after("));
     let text = with(|s| {
         let e = effects(s)[2].as_object_mut().unwrap();
         e.remove("to");

@@ -11,7 +11,7 @@
 //! [`RecordStore::transact`] call, and is committed whole or not at all.
 
 use crate::clock::Time;
-use crate::machine::Isolation;
+use crate::machine::{Delivery, Isolation};
 use std::fmt;
 
 /// Why a storage operation failed.
@@ -50,7 +50,7 @@ pub struct StoredRecord {
     pub version: u64,
 }
 
-/// An at-least-once event to put in the outbox.
+/// An event to put in the outbox: an `at-least-once` emit, or a delayed emit of either delivery.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NewMessage {
     /// The emitting machine's name.
@@ -63,12 +63,20 @@ pub struct NewMessage {
     pub event: String,
     /// When the transition committed.
     pub created_at: Time,
-    /// When the outbox may first hand it out for dispatch. The host sets this a little after the
-    /// commit, so that its own dispatch right after commit is not raced by the outbox drain.
+    /// Its delivery guarantee: an `at-least-once` entry is retried until delivered, an
+    /// `at-most-once` one is removed and dispatched once.
+    pub delivery: Delivery,
+    /// The earliest time it may be dispatched: the step's time plus the delay of a delayed emit,
+    /// otherwise the step's time.
+    pub not_before: Time,
+    /// When the outbox may first hand it out for dispatch, never before `not_before`. For an
+    /// immediate emit the host sets this a little after the commit, so that its own dispatch
+    /// right after commit is not raced by the outbox drain.
     pub next_attempt_at: Time,
 }
 
-/// An entry of the outbox: an at-least-once event not yet delivered.
+/// An entry of the outbox: an event not yet dispatched (an `at-least-once` one not yet
+/// delivered).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OutboxEntry {
     /// Assigned by the store when the entry is written, unique and never reused. Receivers use
@@ -84,6 +92,10 @@ pub struct OutboxEntry {
     pub event: String,
     /// When the transition committed.
     pub created_at: Time,
+    /// Its delivery guarantee.
+    pub delivery: Delivery,
+    /// The earliest time it may be dispatched.
+    pub not_before: Time,
     /// Dispatch attempts that failed so far.
     pub attempts: u32,
     /// When it is next due for dispatch.
@@ -140,7 +152,7 @@ pub trait Tx {
         expected: Option<u64>,
     ) -> Result<u64, StorageError>;
 
-    /// Put an at-least-once event in the outbox. Returns its id.
+    /// Put an event in the outbox. Returns its id.
     fn enqueue(&mut self, message: &NewMessage) -> Result<u64, StorageError>;
 
     /// Set a timer, replacing one of the same machine, key and name. Returns its id.
@@ -172,7 +184,8 @@ pub trait RecordStore: Send + Sync + 'static {
 
 /// The outbox, outside any transition's transaction.
 pub trait OutboxStore: Send + Sync + 'static {
-    /// Entries of `source` whose `next_attempt_at` is at or before `now`, oldest first.
+    /// Entries of `source` whose `next_attempt_at` and `not_before` are at or before `now`,
+    /// oldest first.
     fn due_messages(
         &self,
         source: &str,

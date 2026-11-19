@@ -5,8 +5,10 @@
 //! (`node $EXEGRA_HOME/cli/exegra.js trace lease-run --project machines --specs tests/fixtures`),
 //! and the generated `Lease::step` of `crates/spec-compiler-machines-fixture` is driven with the
 //! same events at the same times. After every step the state, the variables, the emitted events
-//! (with the receiver and delivery the specification gives them), the timers set and the timers
-//! pending must agree with the trace. Exegra's time is read as milliseconds.
+//! (with the receiver and delivery the specification gives them, and the delay of a delayed emit:
+//! Exegra schedules it `after` the step, the generated outcome carries it as `Emit::after`), the
+//! timers set and the timers pending must agree with the trace. Exegra's time is read as
+//! milliseconds.
 //!
 //! Skipped, with a message, when `EXEGRA_HOME` is not set to an Exegra checkout or `node` cannot
 //! be run.
@@ -183,6 +185,7 @@ fn the_generated_lease_steps_as_exegra_runs_it() {
 
     let mut timers: BTreeSet<String> = BTreeSet::new();
     let mut fired_steps = 0;
+    let mut delayed_emits = 0;
     for step in trace["steps"].as_array().unwrap() {
         let index = &step["index"];
         let time = step["time"].as_i64().unwrap();
@@ -246,27 +249,31 @@ fn the_generated_lease_steps_as_exegra_runs_it() {
         );
         assert_machine(&context, outcome.state, &outcome.vars, &step["config"]);
 
-        // Emits: the same events and payloads, in order, each to the effect's `to` with its
-        // event's delivery.
+        // Emits: the same events and payloads, in order, each with the same delay (0 for an
+        // immediate emit), to the effect's `to` with its event's delivery.
         let transition = fired["transition"].as_str().unwrap();
         let mut exegra_emits = Vec::new();
         let mut exegra_timers = Vec::new();
         for e in fired["emitted"].as_array().unwrap() {
             let id = e["event"].as_str().unwrap();
             let value = json!({ "event": id, "payload": e["payload"] });
+            let after = e["time"].as_i64().unwrap() - time;
             if elapsed(&spec, id) {
-                let after = e["time"].as_i64().unwrap() - time;
                 exegra_timers.push((value, after));
             } else {
-                exegra_emits.push(value);
+                exegra_emits.push((value, after));
             }
         }
-        let emits: Vec<Value> = outcome
+        let emits: Vec<(Value, i64)> = outcome
             .emits
             .iter()
-            .map(|e| serde_json::to_value(&e.event).unwrap())
+            .map(|e| {
+                let after = e.after.map_or(0, |d| i64::try_from(d.as_millis()).unwrap());
+                (serde_json::to_value(&e.event).unwrap(), after)
+            })
             .collect();
-        assert_eq!(emits, exegra_emits, "{context}: emitted events");
+        assert_eq!(emits, exegra_emits, "{context}: emitted events and delays");
+        delayed_emits += emits.iter().filter(|(_, after)| *after > 0).count();
         let expected_receivers = receivers(&spec, transition);
         assert_eq!(
             outcome.emits.len(),
@@ -310,5 +317,9 @@ fn the_generated_lease_steps_as_exegra_runs_it() {
     assert!(
         fired_steps >= 8,
         "the scenario should exercise the lease; it fired {fired_steps} times"
+    );
+    assert!(
+        delayed_emits >= 1,
+        "the scenario should exercise a delayed emit of the lease"
     );
 }

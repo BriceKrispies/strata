@@ -13,7 +13,8 @@
 //!   before it, so a later `set` or payload sees an earlier `set`; the machine then moves to the
 //!   transition's target state;
 //! - an `emit` becomes an emit of the outcome, addressed to its `to` with its event's
-//!   `delivery`; a `timer` sets a named timer firing its event at the same instance after
+//!   `delivery`; an `emit` with `after` (whole milliseconds) becomes a delayed emit of the
+//!   outcome (`Outcome::emit_after`), dispatched to the receiver once that delay has passed; a `timer` sets a named timer firing its event at the same instance after
 //!   `after` milliseconds, replacing one of the same name; a `cancel` removes it;
 //! - an event with no enabled transition, whether the state lists it in `ignores`, no guard
 //!   holds, or the state is terminal, is ignored: the same state and variables, nothing emitted
@@ -50,8 +51,9 @@ pub const EXPRESSION: &str = "specc.machine-expression";
 pub const RESOURCE_EFFECT: &str = "specc.resource-effect";
 /// Code of an emit over a link (`via`, `size`, `fanout`).
 pub const EMIT_LINK: &str = "specc.emit-link";
-/// Code of an emit with a delay (`after`).
-pub const EMIT_DELAYED: &str = "specc.emit-delayed";
+/// Code of an emit whose delay (`after`) is not a whole number of milliseconds (a distribution,
+/// an expression or a fraction).
+pub const EMIT_AFTER: &str = "specc.emit-after";
 /// Code of an emit without a `to` (a reply, or addressing by scenario routes).
 pub const EMIT_UNADDRESSED: &str = "specc.emit-unaddressed";
 /// Code of a timer whose `after` is not a whole number of milliseconds.
@@ -1418,18 +1420,19 @@ impl<'a> Gen<'a> {
                         );
                         ok = false;
                     }
-                    let delayed = match after {
-                        None | Some(Value::Null) => false,
-                        Some(Value::Number(n)) => n.as_u64() != Some(0),
-                        Some(_) => true,
+                    let delay = match after {
+                        None | Some(Value::Null) => Some(0),
+                        Some(Value::Number(n)) => n.as_u64(),
+                        Some(_) => None,
                     };
-                    if delayed {
+                    let Some(delay) = delay else {
                         self.refuse(
-                            EMIT_DELAYED,
-                            format!("{what} of machine \"{}\" emits \"{event}\" with a delay (\"after\"); the runtime emits at commit. Use a timer.", b.id),
+                            EMIT_AFTER,
+                            format!("{what} of machine \"{}\" emits \"{event}\" after a delay that is not a whole number of milliseconds; generated code delays an emit by a fixed number of milliseconds only.", b.id),
                         );
                         ok = false;
-                    }
+                        continue;
+                    };
                     let Some(receiver) = to.clone() else {
                         let how = match target.as_deref() {
                             Some("reply") => "replies to the sender".to_string(),
@@ -1471,7 +1474,15 @@ impl<'a> Gen<'a> {
                     } else {
                         value
                     };
-                    chain.push(quote! { .emit(#receiver, #delivery, #value) });
+                    if delay > 0 {
+                        self.has_timers = true;
+                        let millis = Literal::u64_unsuffixed(delay);
+                        chain.push(quote! {
+                            .emit_after(#receiver, #delivery, #value, Duration::from_millis(#millis))
+                        });
+                    } else {
+                        chain.push(quote! { .emit(#receiver, #delivery, #value) });
+                    }
                 }
                 Effect::Timer {
                     name,
