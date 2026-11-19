@@ -110,9 +110,7 @@ pub fn chain_tenant_created(
 }
 
 /// The index of the first entry of audit `tenant-created` whose chain field is not what the chain gives, if any.
-pub fn verify_tenant_created(
-    entries: &[crate::records::RecTenantAudit],
-) -> Result<(), usize> {
+pub fn verify_tenant_created(entries: &[crate::records::RecTenantAudit]) -> Result<(), usize> {
     for (i, entry) in entries.iter().enumerate() {
         let previous = i.checked_sub(1).and_then(|j| entries.get(j));
         let digest = hash_tenant_created(entry, previous);
@@ -181,8 +179,16 @@ fn hash_account_closing(
     };
     feed(&mut hasher, "previous", &previous_hash);
     feed(&mut hasher, "actor", entry.actor.as_bytes());
-    feed(&mut hasher, "account", entry.account.0.to_string().as_bytes());
-    feed(&mut hasher, "grace", entry.grace.0.0.to_string().as_bytes());
+    feed(
+        &mut hasher,
+        "account",
+        entry.account.0.to_string().as_bytes(),
+    );
+    feed(
+        &mut hasher,
+        "grace",
+        entry.grace.0 .0.to_string().as_bytes(),
+    );
     feed(&mut hasher, "at", entry.at.0.to_string().as_bytes());
     hasher.finalize().into()
 }
@@ -197,9 +203,7 @@ pub fn chain_account_closing(
 }
 
 /// The index of the first entry of audit `account-closing` whose chain field is not what the chain gives, if any.
-pub fn verify_account_closing(
-    entries: &[crate::records::RecCloseAudit],
-) -> Result<(), usize> {
+pub fn verify_account_closing(entries: &[crate::records::RecCloseAudit]) -> Result<(), usize> {
     for (i, entry) in entries.iter().enumerate() {
         let previous = i.checked_sub(1).and_then(|j| entries.get(j));
         let digest = hash_account_closing(entry, previous);
@@ -235,10 +239,7 @@ pub fn audit_account_read(
 impl AccountReadEntry {
     /// Completes the entry into a record.
     /// The key fields the audit does not capture come from `key`; the chain field starts empty.
-    pub fn into_record(
-        self,
-        key: crate::records::RecAccessLogKey,
-    ) -> crate::records::RecAccessLog {
+    pub fn into_record(self, key: crate::records::RecAccessLogKey) -> crate::records::RecAccessLog {
         crate::records::RecAccessLog {
             log_id: key.log_id,
             who: self.who,

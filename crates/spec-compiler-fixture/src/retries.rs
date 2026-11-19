@@ -52,16 +52,14 @@ impl RetryPolicy {
         if failures == 0 || failures >= self.attempts {
             return None;
         }
-        Some(
-            match self.backoff {
-                Backoff::Fixed { base } => base,
-                Backoff::Exponential { base, cap } => {
-                    let doublings = (failures - 1).min(31);
-                    let wait = base.saturating_mul(1u32 << doublings);
-                    cap.map_or(wait, |cap| wait.min(cap))
-                }
-            },
-        )
+        Some(match self.backoff {
+            Backoff::Fixed { base } => base,
+            Backoff::Exponential { base, cap } => {
+                let doublings = (failures - 1).min(31);
+                let wait = base.saturating_mul(1u32 << doublings);
+                cap.map_or(wait, |cap| wait.min(cap))
+            }
+        })
     }
 }
 
@@ -95,10 +93,12 @@ pub const ALL: &[RetryPolicy] = &[RETRY_GET_ACCOUNT, RETRY_ENTRY_EVENT];
 
 /// The retry policy of a contract, by the contract's id.
 pub fn for_contract(contract: &str) -> Option<&'static RetryPolicy> {
-    ALL.iter().find(|p| matches!(p.target, Target::Contract(id) if id == contract))
+    ALL.iter()
+        .find(|p| matches!(p.target, Target::Contract(id) if id == contract))
 }
 
 /// The retry policy of an event, by the event's id.
 pub fn for_event(event: &str) -> Option<&'static RetryPolicy> {
-    ALL.iter().find(|p| matches!(p.target, Target::Event(id) if id == event))
+    ALL.iter()
+        .find(|p| matches!(p.target, Target::Event(id) if id == event))
 }

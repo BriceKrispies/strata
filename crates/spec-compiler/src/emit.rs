@@ -1,5 +1,9 @@
-//! Crate assembly: the backends' modules, the prelude, `lib.rs` and `Cargo.toml`, formatted by
-//! prettyplease and headed with the generated-file marker.
+//! Crate assembly: the backends' modules, the prelude, `lib.rs` and `Cargo.toml`, printed by
+//! prettyplease, formatted by rustfmt (so the generated crate passes `cargo fmt --check`) and
+//! headed with the generated-file marker.
+
+use std::io::Write;
+use std::process::{Command, Stdio};
 
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::quote;
@@ -20,6 +24,9 @@ pub const SHA2_VERSION: &str = "0.10.9";
 
 /// Code of a module that does not parse as Rust: a defect in specc, never in the specification.
 pub const INTERNAL: &str = "specc.internal";
+/// Code of a run where `rustfmt` cannot be started: specc refuses rather than write unformatted
+/// code.
+pub const RUSTFMT_MISSING: &str = "specc.rustfmt-missing";
 
 /// The start of the first line of every file specc writes. Only files that start with one of
 /// these are ever replaced or removed.
@@ -69,10 +76,23 @@ pub fn crate_files(spec: &Spec, options: &Options) -> Result<Vec<GeneratedFile>,
                 path: format!("src/{module}.rs"),
                 contents,
             }),
-            Err(e) => errors.push(Diagnostic::new(
+            Err(FileError::Syntax(e)) => errors.push(Diagnostic::new(
                 INTERNAL,
                 module,
                 format!("specc produced a module that is not valid Rust ({e}); this is a defect in specc."),
+            )),
+            Err(FileError::RustfmtMissing(e)) => {
+                errors.push(Diagnostic::new(
+                    RUSTFMT_MISSING,
+                    module,
+                    format!("rustfmt could not be started ({e}); specc formats its output with the rustfmt on PATH (rustup component add rustfmt) and does not write unformatted code."),
+                ));
+                break;
+            }
+            Err(FileError::Rustfmt(e)) => errors.push(Diagnostic::new(
+                INTERNAL,
+                module,
+                format!("rustfmt refused a module specc produced ({e}); this is a defect in specc."),
             )),
         }
     }
@@ -83,10 +103,48 @@ pub fn crate_files(spec: &Spec, options: &Options) -> Result<Vec<GeneratedFile>,
     Ok(files)
 }
 
-fn rust_file(spec: &Spec, tokens: TokenStream) -> Result<String, syn::Error> {
-    let file: syn::File = syn::parse2(tokens)?;
+/// Why a module could not be written.
+enum FileError {
+    /// The tokens are not a Rust file.
+    Syntax(syn::Error),
+    /// `rustfmt` could not be started.
+    RustfmtMissing(std::io::Error),
+    /// `rustfmt` ran and failed.
+    Rustfmt(String),
+}
+
+fn rust_file(spec: &Spec, tokens: TokenStream) -> Result<String, FileError> {
+    let file: syn::File = syn::parse2(tokens).map_err(FileError::Syntax)?;
     let body = separate_items(&prettyplease::unparse(&file));
-    Ok(format!("{}\n{body}", rust_header(&spec.path)))
+    rustfmt(&format!("{}\n{body}", rust_header(&spec.path)))
+}
+
+/// `text` formatted by `rustfmt --edition 2021` (the generated crate's edition) from PATH.
+fn rustfmt(text: &str) -> Result<String, FileError> {
+    let mut child = Command::new("rustfmt")
+        .args(["--edition", "2021", "--emit", "stdout"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(FileError::RustfmtMissing)?;
+    // Written from another thread so a large file cannot fill both pipes and stall.
+    let mut stdin = child.stdin.take().expect("stdin is piped");
+    let input = text.to_string();
+    let writer = std::thread::spawn(move || stdin.write_all(input.as_bytes()));
+    let output = child
+        .wait_with_output()
+        .map_err(|e| FileError::Rustfmt(e.to_string()))?;
+    writer
+        .join()
+        .map_err(|_| FileError::Rustfmt("writing to rustfmt panicked".to_string()))?
+        .map_err(|e| FileError::Rustfmt(e.to_string()))?;
+    if !output.status.success() {
+        return Err(FileError::Rustfmt(
+            String::from_utf8_lossy(&output.stderr).trim().to_string(),
+        ));
+    }
+    String::from_utf8(output.stdout).map_err(|e| FileError::Rustfmt(e.to_string()))
 }
 
 /// Puts one blank line before every item that prettyplease left directly after the previous one,

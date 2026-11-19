@@ -87,8 +87,7 @@ pub const ALL: &[ValidationError] = &[
 
 /// The pattern of validation `val-slug-pattern`, matched against the whole value.
 static VAL_SLUG_PATTERN_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new("\\A(?:[a-z][a-z0-9-]*)\\z")
-        .expect("specc checked that the pattern compiles")
+    Regex::new("\\A(?:[a-z][a-z0-9-]*)\\z").expect("specc checked that the pattern compiles")
 });
 
 fn check_val_slug_required(
@@ -134,10 +133,7 @@ fn expr_val_seats_even(
     request: &crate::contracts::CreateTenantRequest,
     value: u32,
 ) -> Result<bool, crate::support::Overflow> {
-    Ok(
-        value.checked_rem(2u32).ok_or(crate::support::Overflow)? == 0u32
-            || request.slug == "trial",
-    )
+    Ok(value.checked_rem(2u32).ok_or(crate::support::Overflow)? == 0u32 || request.slug == "trial")
 }
 
 fn check_val_seats_even(
@@ -160,9 +156,7 @@ fn check_val_category(
     Ok(())
 }
 
-fn check_val_name_bytes(
-    record: &crate::records::RecAccount,
-) -> Result<(), ValidationError> {
+fn check_val_name_bytes(record: &crate::records::RecAccount) -> Result<(), ValidationError> {
     if let Some(value) = &record.display_name {
         if value.as_str().len() > 200 {
             return Err(VAL_NAME_BYTES);
@@ -178,10 +172,8 @@ fn expr_val_balance_sign(
     Ok(value.0 >= 0i64 || record.enabled.0)
 }
 
-fn check_val_balance_sign(
-    record: &crate::records::RecAccount,
-) -> Result<(), ValidationError> {
-    if !matches!(expr_val_balance_sign(record, & record.balance), Ok(true)) {
+fn check_val_balance_sign(record: &crate::records::RecAccount) -> Result<(), ValidationError> {
+    if !matches!(expr_val_balance_sign(record, &record.balance), Ok(true)) {
         return Err(VAL_BALANCE_SIGN);
     }
     Ok(())

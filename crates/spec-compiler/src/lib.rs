@@ -7,16 +7,20 @@
 //! 2. [`readiness`]: every backend checks that the specification states what it needs; any
 //!    diagnostic refuses the whole generation.
 //! 3. [`backend`]: each backend emits one module as tokens; [`emit`] assembles the crate
-//!    (`Cargo.toml`, `lib.rs`, the prelude and the modules) and formats it with prettyplease.
+//!    (`Cargo.toml`, `lib.rs`, the prelude and the modules), prints it with prettyplease and
+//!    formats it with the `rustfmt` on PATH (`--edition 2021`), so the generated crate passes
+//!    `cargo fmt --check`. Without rustfmt the generation is refused (`specc.rustfmt-missing`)
+//!    rather than written unformatted.
 //! 4. [`output`]: the files are written to a directory, or a directory is compared with them.
 //!
-//! Output depends only on the specification text, the path it is named by and the crate name:
+//! Output depends only on the specification text, the path it is named by, the crate name and
+//! the rustfmt version (the repository pins its toolchain in `rust-toolchain.toml`):
 //! everything is emitted in declaration order, nothing iterates a hash map, and nothing records
 //! a time.
 
 pub mod backend;
-pub mod constructs;
 pub mod budget;
+pub mod constructs;
 pub mod deploy;
 pub mod diagnostic;
 pub mod emit;

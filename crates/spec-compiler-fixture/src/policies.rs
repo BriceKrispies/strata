@@ -70,7 +70,7 @@ pub fn authorize_get_account(
     record: Option<&crate::records::RecAccount>,
 ) -> Decision {
     if matches!(
-        record.map(| record | policy_pol_read_account(caller, request, record)),
+        record.map(|record| policy_pol_read_account(caller, request, record)),
         Some(Ok(true))
     ) {
         return Decision::Allow;
@@ -83,9 +83,6 @@ pub fn authorize_get_account(
 /// A matching deny policy refuses; otherwise a matching allow policy permits.
 ///
 /// Otherwise the contract's policy default decides: allow.
-pub fn authorize_ping(
-    _caller: &Caller,
-    _request: &crate::contracts::PingRequest,
-) -> Decision {
+pub fn authorize_ping(_caller: &Caller, _request: &crate::contracts::PingRequest) -> Decision {
     Decision::Allow
 }

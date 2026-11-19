@@ -29,6 +29,10 @@ the runtime.
 
 ## What generated code implements
 
+The compiler (`crates/spec-compiler`, `specc`) writes the generated crate formatted by rustfmt
+from the toolchain on PATH, so it passes `cargo fmt --check`; when rustfmt cannot be run it
+refuses with `specc.rustfmt-missing` instead of writing unformatted code.
+
 ### `Machine` (one per `behavior` with `level: "implementation"`)
 
 ```rust

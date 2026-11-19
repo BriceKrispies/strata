@@ -108,7 +108,9 @@ impl RecJob {
 
     /// The record's key.
     pub fn key(&self) -> RecJobKey {
-        RecJobKey { job: self.job.clone() }
+        RecJobKey {
+            job: self.job.clone(),
+        }
     }
 
     /// Checks the field constraints, returning the first one the record breaks.
@@ -131,7 +133,11 @@ pub struct RecHold {
     #[serde(rename = "held-by")]
     pub held_by: types::Principal,
     /// Field `released-at`.
-    #[serde(rename = "released-at", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "released-at",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub released_at: Option<prelude::Timestamp>,
     /// Field `reason`.
     pub reason: String,

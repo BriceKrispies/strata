@@ -83,18 +83,17 @@ impl Quota {
     /// Counts one call or event at `now` against the scope's `counter` (`None` when
     /// the scope has none yet). The window is fixed: it starts at its first count.
     pub fn check(&self, counter: Option<Counter>, now: Timestamp) -> QuotaOutcome {
-        let window = i64::try_from(self.window.as_millis()).unwrap_or(i64::MAX).max(1);
+        let window = i64::try_from(self.window.as_millis())
+            .unwrap_or(i64::MAX)
+            .max(1);
         let current = match counter {
-            Some(
-                c,
-            ) if now >= c.window_start
-                && now.0.saturating_sub(c.window_start.0) < window => c,
-            _ => {
-                Counter {
-                    window_start: now,
-                    count: 0,
-                }
+            Some(c) if now >= c.window_start && now.0.saturating_sub(c.window_start.0) < window => {
+                c
             }
+            _ => Counter {
+                window_start: now,
+                count: 0,
+            },
         };
         if current.count < self.limit {
             QuotaOutcome::Allowed(Counter {
@@ -148,5 +147,7 @@ pub fn for_contract(contract: &str) -> impl Iterator<Item = &'static Quota> + '_
 
 /// The quotas on an event, by the event's id.
 pub fn for_event(event: &str) -> impl Iterator<Item = &'static Quota> + '_ {
-    QUOTAS.iter().filter(move |q| matches!(q.target, Target::Event(id) if id == event))
+    QUOTAS
+        .iter()
+        .filter(move |q| matches!(q.target, Target::Event(id) if id == event))
 }
