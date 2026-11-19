@@ -7,10 +7,12 @@
 use crate::app::{ApiError, App, Shared, LOG};
 use crate::auth::Identity;
 use crate::hub::RunMessage;
+use crate::limits::Limits;
 use serde::Deserialize;
 use serde_json::{json, Value as Json};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{sync_channel, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex};
 use strata_kernel::{ExistingData, Principal, PrincipalId, TenantId, TenantState, World};
 use strata_protocol::api::ErrorCode;
@@ -51,18 +53,113 @@ struct Run {
     cancel: Arc<AtomicBool>,
 }
 
+type Job = Box<dyn FnOnce() + Send + 'static>;
+
+/// A fixed number of worker threads and a bounded queue in front of them. Work that finds the
+/// queue full is refused, not started on a thread of its own.
+pub struct Pool {
+    queue: SyncSender<Job>,
+}
+
+impl Pool {
+    pub fn new(name: &str, workers: usize, queue: usize) -> Self {
+        let (sender, receiver) = sync_channel::<Job>(queue);
+        let receiver = Arc::new(Mutex::new(receiver));
+        for n in 0..workers.max(1) {
+            let receiver = receiver.clone();
+            let _ = std::thread::Builder::new()
+                .name(format!("{name}-{n}"))
+                .spawn(move || loop {
+                    let job = match receiver.lock() {
+                        Ok(receiver) => receiver.recv(),
+                        Err(_) => return,
+                    };
+                    match job {
+                        // A job that panics must not take its worker with it.
+                        Ok(job) => {
+                            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(job));
+                        }
+                        // The pool was dropped: no more work will come.
+                        Err(_) => return,
+                    }
+                });
+        }
+        Pool { queue: sender }
+    }
+
+    /// Queue `job`, or refuse it when every worker is busy and the queue is full.
+    pub fn submit(&self, job: impl FnOnce() + Send + 'static) -> Result<(), ApiError> {
+        self.queue
+            .try_send(Box::new(job))
+            .map_err(|error| match error {
+                TrySendError::Full(_) | TrySendError::Disconnected(_) => ApiError::new(
+                    ErrorCode::Throttled,
+                    "The Impact Lab is busy. Try again in a moment.",
+                ),
+            })
+    }
+}
+
+/// Verification runs: which tenants have one going and when each last started one.
 #[derive(Default)]
+struct Verifying {
+    running: BTreeSet<String>,
+    last_started: BTreeMap<String, i64>,
+}
+
 pub struct Lab {
     runs: Mutex<BTreeMap<String, Run>>,
     order: Mutex<Vec<String>>,
-    verification: Mutex<Option<Json>>,
+    /// The last verification report of each tenant that asked for one.
+    verification: Mutex<BTreeMap<String, Json>>,
+    verifying: Mutex<Verifying>,
+    /// Projections.
+    pool: Pool,
+    /// Lean builds: one at a time, whichever tenant asked.
+    verify_pool: Pool,
+    runs_per_tenant: usize,
+    verify_interval_ms: i64,
 }
 
 const KEPT_RUNS: usize = 12;
 
+impl Default for Lab {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Lab {
     pub fn new() -> Self {
-        Self::default()
+        Self::with_limits(&Limits::default())
+    }
+
+    pub fn with_limits(limits: &Limits) -> Self {
+        Lab {
+            runs: Mutex::default(),
+            order: Mutex::default(),
+            verification: Mutex::default(),
+            verifying: Mutex::default(),
+            pool: Pool::new("lab", limits.lab_workers, limits.lab_queue),
+            verify_pool: Pool::new("lab-verify", 1, 2),
+            runs_per_tenant: limits.lab_runs_per_tenant,
+            verify_interval_ms: limits.verify_interval_ms,
+        }
+    }
+
+    /// The tenant's last verification report.
+    pub fn verification_of(&self, tenant: &TenantId) -> Option<Json> {
+        self.verification
+            .lock()
+            .ok()
+            .and_then(|reports| reports.get(tenant.as_str()).cloned())
+    }
+
+    fn remove(&self, id: &str) {
+        if let (Ok(mut runs), Ok(mut order)) = (self.runs.lock(), self.order.lock()) {
+            runs.remove(id);
+            order.retain(|kept| kept != id);
+        }
     }
 
     /// Recent runs for diagnostics: what was asked and how it ended, not the full results.
@@ -107,7 +204,22 @@ impl Lab {
     }
 
     fn insert(&self, id: &str, run: Run) {
+        let _ = self.insert_within(id, run, usize::MAX);
+    }
+
+    /// Record a new run unless its tenant already has `most` running (or waiting for a worker).
+    fn insert_within(&self, id: &str, run: Run, most: usize) -> Result<(), ApiError> {
         if let (Ok(mut runs), Ok(mut order)) = (self.runs.lock(), self.order.lock()) {
+            let active = runs
+                .values()
+                .filter(|other| other.tenant == run.tenant && other.status == "running")
+                .count();
+            if active >= most {
+                return Err(ApiError::new(
+                    ErrorCode::Throttled,
+                    "This site already has as many projections running as it may. Wait for one to finish or cancel it.",
+                ));
+            }
             runs.insert(id.to_string(), run);
             order.push(id.to_string());
             while order.len() > KEPT_RUNS {
@@ -115,6 +227,7 @@ impl Lab {
                 runs.remove(&oldest);
             }
         }
+        Ok(())
     }
 
     fn finish(&self, id: &str, status: &'static str, summary: Json, result: Option<Json>) {
@@ -270,7 +383,7 @@ pub fn overview(app: &App, identity: &Identity) -> Result<Json, ApiError> {
         "snapshots": app.store.snapshots(&identity.tenant)?,
         "presets": PRESETS.iter().map(|(id, title, about, change)| json!({ "id": id, "title": title, "about": about, "change": change })).collect::<Vec<_>>(),
         "classes": classes,
-        "verification": app.lab.verification.lock().ok().and_then(|v| v.clone()),
+        "verification": app.lab.verification_of(&identity.tenant),
         "recent_runs": app.lab.recent().into_iter().filter(|r| r["tenant"] == identity.tenant.as_str()).collect::<Vec<_>>(),
     }))
 }
@@ -467,7 +580,7 @@ pub fn start(
     let id = format!("run_{}", crate::auth::random_hex(6)?);
     let cancel = Arc::new(AtomicBool::new(false));
     let summary = json!({ "change": request.change, "source": request.source, "steps": scenario.schedule.len() });
-    app.lab.insert(
+    app.lab.insert_within(
         &id,
         Run {
             tenant: identity.tenant.clone(),
@@ -478,7 +591,8 @@ pub fn start(
             result: None,
             cancel: cancel.clone(),
         },
-    );
+        app.lab.runs_per_tenant,
+    )?;
     LOG.info("lab.started", &identity.correlation, json!({ "run": id, "tenant": identity.tenant.as_str(), "source": request.source, "steps": scenario.schedule.len() }));
 
     let (shared, run_id, tenant, correlation) = (
@@ -487,7 +601,7 @@ pub fn start(
         identity.tenant.clone(),
         identity.correlation.clone(),
     );
-    std::thread::spawn(move || {
+    let job = move || {
         let send = |kind: &str, payload: Json| {
             let _ = shared.hub.runs.send(RunMessage {
                 tenant: tenant.clone(),
@@ -540,7 +654,11 @@ pub fn start(
                 send("cancelled", json!({}));
             }
         }
-    });
+    };
+    if let Err(busy) = app.lab.pool.submit(job) {
+        app.lab.remove(&id);
+        return Err(busy);
+    }
     Ok(json!({ "run": id, "steps": steps, "apply_at": before_step }))
 }
 
@@ -583,7 +701,10 @@ pub fn replay_live(app: &App, identity: &Identity) -> Result<Json, ApiError> {
 pub use replay_live as replay;
 
 /// Build the Lean project, audit the proofs and run the correspondence fixtures, in the
-/// background. The report arrives over the WebSocket and is kept for the overview.
+/// background. The report arrives over the WebSocket and is kept, per tenant, for the overview.
+///
+/// A build is heavy, so it is limited: one at a time on the whole backend (on its own worker),
+/// one at a time and at most one per `verify_interval_ms` for each tenant.
 pub fn verify(shared: &Shared, app: &App, identity: &Identity) -> Result<Json, ApiError> {
     let principal = principal_of(identity)?;
     let id = format!("verify_{}", crate::auth::random_hex(4)?);
@@ -595,12 +716,47 @@ pub fn verify(shared: &Shared, app: &App, identity: &Identity) -> Result<Json, A
         app.now().0,
     );
     let correlation = identity.correlation.clone();
-    std::thread::spawn(move || {
+    let key = tenant.as_str().to_string();
+    {
+        let mut verifying =
+            app.lab.verifying.lock().map_err(|_| {
+                ApiError::hidden(ErrorCode::Internal, "verification state poisoned")
+            })?;
+        if verifying.running.contains(&key) {
+            return Err(ApiError::new(
+                ErrorCode::Throttled,
+                "A verification of this site is already running.",
+            ));
+        }
+        if verifying
+            .last_started
+            .get(&key)
+            .is_some_and(|last| now - last < app.lab.verify_interval_ms)
+        {
+            return Err(ApiError::new(
+                ErrorCode::Throttled,
+                "This site was verified a moment ago. Wait a minute and try again.",
+            ));
+        }
+        verifying.running.insert(key.clone());
+        verifying.last_started.insert(key.clone(), now);
+    }
+    let job = move || {
+        // Frees the tenant's place however the build ends, a panic included.
+        struct Done(Shared, String);
+        impl Drop for Done {
+            fn drop(&mut self) {
+                if let Ok(mut verifying) = self.0.lab.verifying.lock() {
+                    verifying.running.remove(&self.1);
+                }
+            }
+        }
+        let _done = Done(shared.clone(), key.clone());
         let report = strata_verification::lean::verify(&lean_dir, now);
         LOG.info("lab.verified", &correlation, json!({ "all_checked": report.all_checked, "theorems": report.theorems.len(), "problem": report.problem }));
         let payload = json!(report);
-        if let Ok(mut slot) = shared.lab.verification.lock() {
-            *slot = Some(payload.clone());
+        if let Ok(mut reports) = shared.lab.verification.lock() {
+            reports.insert(key.clone(), payload.clone());
         }
         let _ = shared.hub.runs.send(RunMessage {
             tenant,
@@ -609,7 +765,15 @@ pub fn verify(shared: &Shared, app: &App, identity: &Identity) -> Result<Json, A
             kind: "verification".into(),
             payload,
         });
-    });
+    };
+    let key = identity.tenant.as_str().to_string();
+    if let Err(busy) = app.lab.verify_pool.submit(job) {
+        if let Ok(mut verifying) = app.lab.verifying.lock() {
+            verifying.running.remove(&key);
+            verifying.last_started.remove(&key);
+        }
+        return Err(busy);
+    }
     Ok(json!({ "run": id }))
 }
 
@@ -660,6 +824,59 @@ mod tests {
             },
         );
         cancel
+    }
+
+    /// Work beyond the workers and the queue is refused, not given a thread of its own, and
+    /// queued work runs once a worker is free.
+    #[test]
+    fn a_pool_runs_a_bounded_amount_of_work() {
+        use std::sync::mpsc::channel;
+        let pool = Pool::new("test", 1, 1);
+        let (release, held) = channel::<()>();
+        let (started, running) = channel::<()>();
+        pool.submit(move || {
+            let _ = started.send(());
+            let _ = held.recv();
+        })
+        .expect("the worker takes it");
+        running
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("the worker started");
+        let (done, finished) = channel::<()>();
+        pool.submit(move || {
+            let _ = done.send(());
+        })
+        .expect("the queue holds one");
+        let refused = pool.submit(|| {}).expect_err("worker busy, queue full");
+        assert_eq!(refused.0.code, ErrorCode::Throttled);
+        release.send(()).unwrap();
+        finished
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("the queued job ran once the worker was free");
+    }
+
+    /// A tenant has only so many runs going at once; another tenant is not affected.
+    #[test]
+    fn a_tenant_may_have_only_so_many_runs_going() {
+        let lab = Lab::new();
+        let run = |tenant: &str| Run {
+            tenant: TenantId::new(tenant).unwrap(),
+            principal: PrincipalId::new("user:admin").unwrap(),
+            status: "running",
+            started_at: 0,
+            summary: Json::Null,
+            result: None,
+            cancel: Arc::new(AtomicBool::new(false)),
+        };
+        assert!(lab.insert_within("run_1", run("fieldnotes"), 2).is_ok());
+        assert!(lab.insert_within("run_2", run("fieldnotes"), 2).is_ok());
+        let refused = lab
+            .insert_within("run_3", run("fieldnotes"), 2)
+            .unwrap_err();
+        assert_eq!(refused.0.code, ErrorCode::Throttled);
+        assert!(lab.insert_within("run_4", run("tidewater"), 2).is_ok());
+        lab.finish("run_1", "finished", Json::Null, None);
+        assert!(lab.insert_within("run_5", run("fieldnotes"), 2).is_ok());
     }
 
     /// A run is cancelled by the person who started it or by someone who may change the schema

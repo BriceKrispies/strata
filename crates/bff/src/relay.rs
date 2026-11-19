@@ -6,13 +6,16 @@
 //! pass through bounded queues, and a side that cannot keep up ends the connection, after which
 //! the browser reconnects and resumes from the sequence it last processed.
 
+use crate::limits::Places;
 use crate::routes::Visit;
 use crate::{Shared, LOG};
 use axum::extract::ws::{CloseFrame, Message as BrowserMessage, WebSocket};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::json;
 use std::sync::atomic::Ordering;
-use strata_protocol::api::{HEADER_CORRELATION, HEADER_SERVICE, HEADER_SESSION, HEADER_SITE};
+use strata_protocol::api::{
+    HEADER_CORRELATION, HEADER_SERVICE, HEADER_SESSION, HEADER_SITE, HEADER_SOURCE,
+};
 use strata_protocol::ws::{parse_client, ServerMessage};
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
@@ -20,10 +23,13 @@ use tokio_tungstenite::tungstenite::Message as UpstreamMessage;
 
 const QUEUE: usize = 128;
 
-pub async fn relay(bff: Shared, visit: Visit, browser: WebSocket) {
+/// Relay one browser socket until it ends. `places` are its places under the per-session and
+/// per-source caps, held until the end.
+pub async fn relay(bff: Shared, visit: Visit, places: Places, browser: WebSocket) {
     bff.sockets.fetch_add(1, Ordering::Relaxed);
     let reason = pump(&bff, &visit, browser).await;
     bff.sockets.fetch_sub(1, Ordering::Relaxed);
+    drop(places);
     LOG.info(
         "ws.relay_closed",
         &visit.correlation,
@@ -49,6 +55,9 @@ async fn pump(bff: &Shared, visit: &Visit, browser: WebSocket) -> &'static str {
     put(HEADER_CORRELATION, &visit.correlation);
     if let Some(token) = &visit.token {
         put(HEADER_SESSION, token);
+    }
+    if let Some(source) = &visit.source {
+        put(HEADER_SOURCE, source);
     }
     let upstream = match tokio_tungstenite::connect_async(request).await {
         Ok((upstream, _)) => upstream,

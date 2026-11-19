@@ -8,6 +8,7 @@
 use crate::app::{App, Shared, LOG};
 use crate::auth::{session_state, Identity};
 use crate::hub::{Connection, Published};
+use crate::limits::SocketPlaces;
 use axum::extract::ws::{Message, WebSocket};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::json;
@@ -25,7 +26,10 @@ use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::mpsc;
 
 const OUTBOUND_QUEUE: usize = 256;
-const DIAG_PER_CONNECTION: u32 = 200;
+/// The store is asked whether the session still holds this often. A session that is revoked or
+/// ends on request is announced on the hub and closes its sockets at once; this only catches the
+/// idle timeout, which no event announces. Expiry by time needs no store read: see the tick.
+const SESSION_RECHECK: Duration = Duration::from_secs(30);
 
 struct Subscription {
     selector: Selector,
@@ -42,6 +46,8 @@ struct Conn {
     delivered: u64,
     acknowledged: u64,
     diag_budget: u32,
+    /// The visitor's address, for the per-source log budget.
+    source: Option<String>,
 }
 
 /// The queue is full or the writer has gone: the connection is over.
@@ -281,7 +287,13 @@ impl Conn {
                 correlation,
                 detail,
             } => {
-                if self.app.cfg.dev && self.diag_budget > 0 {
+                if self.app.cfg.dev
+                    && self.diag_budget > 0
+                    && self
+                        .app
+                        .admission
+                        .diag_allowed(self.source.as_deref(), now_ms())
+                {
                     self.diag_budget -= 1;
                     let line = json!({ "conn": self.id, "browser_level": level, "detail": detail });
                     strata_protocol::log::Logger { service: "browser" }.info(
@@ -297,7 +309,10 @@ impl Conn {
 }
 
 /// Serve one upgraded connection until it ends.
-pub async fn serve(app: Shared, identity: Identity, socket: WebSocket) {
+///
+/// `places` are the socket's places under the per-session and per-source caps; they are held
+/// until the connection ends.
+pub async fn serve(app: Shared, identity: Identity, places: SocketPlaces, socket: WebSocket) {
     let (mut sink, mut stream) = socket.split();
     let (out, mut outbound) = mpsc::channel::<ServerMessage>(OUTBOUND_QUEUE);
     let writer = tokio::spawn(async move {
@@ -327,7 +342,8 @@ pub async fn serve(app: Shared, identity: Identity, socket: WebSocket) {
         subs: BTreeMap::new(),
         delivered: 0,
         acknowledged: 0,
-        diag_budget: DIAG_PER_CONNECTION,
+        diag_budget: app.cfg.limits.diag_per_socket,
+        source: places.source.clone(),
     };
     let correlation = conn.identity.correlation.clone();
     LOG.info(
@@ -354,6 +370,7 @@ pub async fn serve(app: Shared, identity: Identity, socket: WebSocket) {
 
     let mut last_heard = Instant::now();
     let mut tick = tokio::time::interval(Duration::from_secs(2));
+    let mut last_checked = Instant::now();
     let mut reason = "client closed";
     while alive {
         let step: Result<(), Closed> = tokio::select! {
@@ -405,7 +422,22 @@ pub async fn serve(app: Shared, identity: Identity, socket: WebSocket) {
                 if last_heard.elapsed() > Duration::from_millis(HEARTBEAT_MS * 3) {
                     reason = "heartbeat missed";
                     Err(Closed)
-                } else if let Some(session) = conn.identity.session.clone() {
+                } else if conn
+                    .identity
+                    .session
+                    .as_ref()
+                    .is_some_and(|s| now_ms() >= s.expires_at.0)
+                {
+                    reason = "session ended";
+                    let _ = conn.send(ServerMessage::Session { state: SessionState::Expired });
+                    Err(Closed)
+                } else if let Some(session) = conn
+                    .identity
+                    .session
+                    .clone()
+                    .filter(|_| last_checked.elapsed() >= SESSION_RECHECK)
+                {
+                    last_checked = Instant::now();
                     let current = app
                         .blocking(move |app: &App| {
                             app.store.session(&session.id).ok().flatten().map(|s| session_state(app, &s, app.now().0))
@@ -434,6 +466,7 @@ pub async fn serve(app: Shared, identity: Identity, socket: WebSocket) {
     if let Ok(mut connections) = app.hub.connections.lock() {
         connections.remove(&id);
     }
+    drop(places);
     LOG.info(
         "ws.closed",
         &correlation,

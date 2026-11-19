@@ -2,6 +2,7 @@
 
 use crate::hub::Hub;
 use crate::lab::Lab;
+use crate::limits::{Admission, Limits};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
@@ -32,6 +33,8 @@ pub struct Config {
     pub session_ttl_ms: i64,
     /// A session unused for this long ends.
     pub session_idle_ms: i64,
+    /// What one visitor, session or tenant may cost. See [`Limits`].
+    pub limits: Limits,
 }
 
 /// A bounded list of recent things, newest last.
@@ -132,6 +135,8 @@ pub struct App {
     pub hub: Hub,
     pub stats: Stats,
     pub lab: Lab,
+    /// Socket, sign-in and hashing limits in force.
+    pub admission: Admission,
     pub started_at: i64,
     /// Failed logins per `tenant/login`: `(count, locked until)`.
     pub throttle: Mutex<BTreeMap<String, (u32, i64)>>,
@@ -144,11 +149,12 @@ pub type Shared = Arc<App>;
 impl App {
     pub fn new(cfg: Config, store: Arc<dyn Store>) -> Shared {
         Arc::new(App {
+            lab: Lab::with_limits(&cfg.limits),
+            admission: Admission::new(&cfg.limits),
             cfg,
             store,
             hub: Hub::new(),
             stats: Stats::new(),
-            lab: Lab::new(),
             started_at: now_ms(),
             throttle: Mutex::new(BTreeMap::new()),
             audit: Recent::new(200),

@@ -16,7 +16,7 @@ use strata_kernel::{
 use strata_model::telemetry;
 use strata_protocol::api::{
     valid_correlation, ErrorCode, LoginReply, LoginRequest, SessionView, HEADER_CORRELATION,
-    HEADER_SERVICE, HEADER_SESSION, HEADER_SITE,
+    HEADER_SERVICE, HEADER_SESSION, HEADER_SITE, HEADER_SOURCE,
 };
 use strata_protocol::ws::SessionState;
 use strata_storage_api::{Account, SessionRecord};
@@ -27,6 +27,8 @@ pub struct Caller {
     pub site: TenantId,
     pub token: Option<String>,
     pub correlation: String,
+    /// The visitor's address as the BFF established it; `None` for calls that are not a visitor's.
+    pub source: Option<String>,
 }
 
 /// Who a request acts as, after the session has been checked.
@@ -88,10 +90,16 @@ pub fn caller(headers: &HeaderMap) -> Result<Caller, ApiError> {
         .ok_or_else(|| {
             ApiError::new(ErrorCode::Invalid, "missing site").with_correlation(&correlation)
         })?;
+    // The BFF writes a bare IP address here. Anything else is not a source, and no key longer
+    // than an address is ever kept.
+    let source = header(headers, HEADER_SOURCE)
+        .filter(|value| value.parse::<std::net::IpAddr>().is_ok())
+        .map(str::to_string);
     Ok(Caller {
         site,
         token: header(headers, HEADER_SESSION).map(str::to_string),
         correlation,
+        source,
     })
 }
 

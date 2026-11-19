@@ -9,6 +9,7 @@ pub mod auth;
 pub mod http;
 pub mod hub;
 pub mod lab;
+pub mod limits;
 pub mod ops;
 pub mod seed;
 pub mod ws;

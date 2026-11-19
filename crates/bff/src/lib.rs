@@ -17,6 +17,7 @@
 //!   from the browser are validated against protocol v1, and both directions go through bounded
 //!   queues.
 
+pub mod limits;
 pub mod relay;
 pub mod routes;
 pub mod token;
@@ -24,7 +25,7 @@ pub mod token;
 use serde_json::json;
 use std::collections::BTreeMap;
 use std::future::Future;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::atomic::AtomicI64;
 use std::sync::Arc;
@@ -50,6 +51,11 @@ pub struct Config {
     /// The built frontend: `index.html`, `assets/`, `media/`.
     pub dist: PathBuf,
     pub dev: bool,
+    /// Proxies in front of this process whose `X-Forwarded-For` is believed (exact addresses).
+    /// Empty when browsers connect directly. See [`limits::client_address`].
+    pub trusted_proxies: Vec<IpAddr>,
+    /// Sockets one session and one source address may hold.
+    pub limits: limits::Limits,
 }
 
 impl Config {
@@ -76,6 +82,8 @@ pub struct Bff {
     pub http: reqwest::Client,
     pub sockets: AtomicI64,
     pub in_flight: AtomicI64,
+    /// Per-session and per-source caps on open sockets.
+    pub admission: limits::Admission,
     /// `index.html` as built, read once at start.
     pub index: Option<String>,
     /// Issues and checks the request tokens of browsers that have no session.
@@ -98,11 +106,13 @@ pub async fn run(
         json!({
             "address": address.to_string(),
             "backend": cfg.backend,
+            "trusted_proxies": cfg.trusted_proxies.iter().map(ToString::to_string).collect::<Vec<_>>(),
             "sites": cfg.sites.iter().map(|(host, tenant)| format!("{host}={tenant}")).collect::<Vec<_>>(),
             "frontend_built": index.is_some(),
         }),
     );
     let bff = Arc::new(Bff {
+        admission: limits::Admission::new(&cfg.limits),
         cfg,
         http: reqwest::Client::builder()
             .build()

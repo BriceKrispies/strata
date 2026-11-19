@@ -21,7 +21,10 @@ fn bff_for(backend_url: String) -> Bff {
             origins: vec![],
             dist: PathBuf::new(),
             dev: true,
+            trusted_proxies: vec![],
+            limits: Default::default(),
         },
+        admission: strata_bff::limits::Admission::new(&Default::default()),
         http: reqwest::Client::new(),
         sockets: AtomicI64::new(0),
         in_flight: AtomicI64::new(0),
@@ -35,6 +38,7 @@ fn visit(session: Option<&str>) -> Visit {
         site: TenantId::new("fieldnotes").unwrap(),
         token: session.map(str::to_string),
         correlation: "c-visit-7".into(),
+        source: None,
     }
 }
 
@@ -51,6 +55,7 @@ async fn stand_in() -> String {
             "site": get("x-strata-site"),
             "correlation": get("x-correlation-id"),
             "session": get("x-strata-session"),
+            "source": get("x-strata-source"),
         }))
     }
     async fn refuse() -> (StatusCode, Json<Json_>) {
@@ -115,4 +120,24 @@ async fn the_internal_call_carries_its_credentials_and_reports_failures_as_unava
         .unwrap();
     assert_eq!(unreachable.0.code, ErrorCode::Unavailable);
     assert_eq!(unreachable.0.correlation, "c-visit-7");
+}
+
+/// The visitor's source address goes to the backend with the call, and only when there is one.
+#[tokio::test]
+async fn the_internal_call_states_the_visitors_source() {
+    let bff = bff_for(stand_in().await);
+    let from = Visit {
+        source: Some("203.0.113.9".into()),
+        ..visit(None)
+    };
+    let seen: Json_ = backend(&bff, &from, "/echo", &json!({}))
+        .await
+        .ok()
+        .unwrap();
+    assert_eq!(seen["source"], "203.0.113.9");
+    let none: Json_ = backend(&bff, &visit(None), "/echo", &json!({}))
+        .await
+        .ok()
+        .unwrap();
+    assert_eq!(none["source"], Json_::Null);
 }

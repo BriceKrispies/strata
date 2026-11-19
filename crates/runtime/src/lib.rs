@@ -31,6 +31,7 @@ pub mod client;
 pub mod clock;
 pub mod host;
 pub mod jobs;
+pub mod limits;
 pub mod machine;
 pub mod memory;
 pub mod routes;
