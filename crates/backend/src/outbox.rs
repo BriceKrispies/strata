@@ -1,0 +1,208 @@
+//! The outbox publisher, as the generated machine `arc-outbox-delivery-flow-impl`.
+//!
+//! The machine is the schedule; this module is the plumbing around it, and is meant as the
+//! pattern for the other generated machines the backend will run:
+//!
+//! - **A System over a machine store.** [`strata_runtime::System`] runs the machine on
+//!   [`StorageApiMachineStore`], so its record, queue and timers are committed through the
+//!   persistence contract like any other state. The store is a private one: the machine's records
+//!   must not become domain events of a tenant.
+//! - **A commit hook.** [`Outbox::committed`] is called after a commit (and once at start-up, for
+//!   events committed before a stop). It offers the machine `rt-committed`, which sets its sweep
+//!   timer (500 ms), and then `arc-ob-publish-now`, the kick.
+//! - **An outside dispatcher.** What the machine emits to `notice-queue` leaves the system through
+//!   [`Publisher`], whose one action is [`crate::hub::publish_pending`]: the broadcast fan-out to
+//!   WebSocket subscribers stays hand-written plumbing.
+//! - **A clock.** The sweep is the machine's timer; [`System::run`] delivers it when it is due.
+//!
+//! An event reaches the hub only through the publisher, which reads the store's outbox, so only
+//! after its commit. Without a kick the sweep publishes it 500 ms after the commit.
+
+use crate::app::{App, Shared, LOG};
+use crate::hub::publish_pending;
+use serde_json::{json, Value};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, Weak};
+use std::time::Duration;
+use strata_kernel::TenantId;
+use strata_machine_store::StorageApiMachineStore;
+use strata_model::machines::arc_outbox_delivery_flow_impl::ArcOutboxDeliveryFlowImpl;
+use strata_runtime::{
+    DispatchError, Dispatcher, Envelope, HostError, Machine, Member, RouteTable, Router, Routing,
+    System, SystemClock,
+};
+use strata_storage_api::memory::MemoryStore;
+
+/// The machine's name.
+const MACHINE: &str = ArcOutboxDeliveryFlowImpl::NAME;
+/// The key (JSON text) of the one instance: the backend's publisher.
+const KEY: &str = "0";
+/// The receiver the machine emits to when events are to be published.
+const NOTICE_QUEUE: &str = "notice-queue";
+/// How often the host looks for due timers and queued events.
+const TICK: Duration = Duration::from_millis(50);
+
+/// The events the backend offers the machine from outside.
+const ROUTES: RouteTable = &[
+    (
+        "rt-committed",
+        &[Routing::every(ArcOutboxDeliveryFlowImpl::NAME)],
+    ),
+    (
+        "arc-ob-publish-now",
+        &[Routing::every(ArcOutboxDeliveryFlowImpl::NAME)],
+    ),
+];
+
+fn event(id: &str) -> Value {
+    json!({ "event": id, "payload": {} })
+}
+
+/// The record the instance is set up over: what a commit leaves in `rec-event`, with nothing of
+/// the event itself, since the machine reads none of it.
+fn base_record() -> Value {
+    json!({
+        "seq": 0,
+        "revision": 0,
+        "body": "",
+        "actor": "system",
+        "correlation": "00000000-0000-0000-0000-000000000000",
+        "state": "arc-od-idle-i",
+    })
+}
+
+/// The dispatcher of the machine's emits: publishes what is waiting in the store's outbox.
+pub struct Publisher {
+    app: Weak<App>,
+    /// One publication at a time, so that two dispatches cannot move the same events twice.
+    serial: Arc<Mutex<()>>,
+}
+
+impl Publisher {
+    pub fn new(app: &Shared) -> Self {
+        Publisher {
+            app: Arc::downgrade(app),
+            serial: Arc::new(Mutex::new(())),
+        }
+    }
+}
+
+impl Dispatcher<Value> for Publisher {
+    async fn dispatch(&self, envelope: &Envelope<Value>) -> Result<(), DispatchError> {
+        if envelope.receiver.as_str() != NOTICE_QUEUE {
+            return Err(DispatchError(format!(
+                "no receiver {}",
+                envelope.receiver.as_str()
+            )));
+        }
+        let Some(app) = self.app.upgrade() else {
+            return Err(DispatchError("the backend has stopped".into()));
+        };
+        let serial = self.serial.clone();
+        app.blocking(move |app| {
+            let _turn = serial.lock().unwrap_or_else(|e| e.into_inner());
+            loop {
+                match publish_pending(app) {
+                    Ok(0) => return Ok(()),
+                    Ok(_) => {}
+                    Err(error) => return Err(DispatchError(error.to_string())),
+                }
+            }
+        })
+        .await
+        .map_err(|error| DispatchError(error.describe()))?
+    }
+}
+
+type OutboxSystem = System<StorageApiMachineStore, Publisher>;
+
+struct Inner {
+    system: OutboxSystem,
+    /// One commit hook at a time: arming, offering and delivering are a sequence.
+    turn: tokio::sync::Mutex<()>,
+    /// Whether a commit also kicks the publisher. Always on; a development request turns it off
+    /// so that the sweep can be seen to do its work.
+    kick: AtomicBool,
+}
+
+/// The outbox publisher: the machine on its host.
+#[derive(Clone)]
+pub struct Outbox {
+    inner: Arc<Inner>,
+}
+
+impl Outbox {
+    /// The machine on a System of its own, dispatching into `app`.
+    pub fn new(app: &Shared) -> Result<Outbox, String> {
+        let store = Arc::new(StorageApiMachineStore::new(
+            Arc::new(MemoryStore::new()),
+            TenantId::new("outbox-machine").map_err(|e| e.to_string())?,
+            Arc::new(SystemClock),
+        ));
+        let router = Router::new(vec![Member::of::<ArcOutboxDeliveryFlowImpl>()], ROUTES);
+        let system = System::new(
+            store,
+            router,
+            Arc::new(Publisher::new(app)),
+            Arc::new(SystemClock),
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(Outbox {
+            inner: Arc::new(Inner {
+                system,
+                turn: tokio::sync::Mutex::new(()),
+                kick: AtomicBool::new(true),
+            }),
+        })
+    }
+
+    /// Run the host for as long as the process lives: it delivers the sweep timer when it is due
+    /// and hands what the machine emits to the dispatcher.
+    pub fn run(&self) {
+        let system = self.inner.system.clone();
+        tokio::spawn(async move { system.run(TICK, std::future::pending()).await });
+    }
+
+    /// Whether commits kick the publisher.
+    pub fn set_kick(&self, kick: bool) {
+        self.inner.kick.store(kick, Ordering::Relaxed);
+    }
+
+    /// A commit was made: from any thread, without waiting. Does nothing outside a runtime.
+    pub fn committed(&self) {
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        let this = self.clone();
+        runtime.spawn(async move { this.on_commit().await });
+    }
+
+    /// Offer the machine the commit and the kick, and deliver what follows.
+    pub async fn on_commit(&self) {
+        let _turn = self.inner.turn.lock().await;
+        let kick = self.inner.kick.load(Ordering::Relaxed);
+        if let Err(error) = self.offer(kick).await {
+            LOG.error("outbox.failed", "", json!({ "error": error.to_string() }));
+        }
+    }
+
+    async fn offer(&self, kick: bool) -> Result<(), HostError> {
+        let system = &self.inner.system;
+        // One instance serves every commit: put it back to its start when it has finished.
+        let waiting = system
+            .instance(MACHINE, KEY)
+            .await?
+            .is_some_and(|(state, _)| {
+                matches!(state.as_str(), Some("arc-od-idle-i" | "arc-od-pending-i"))
+            });
+        if !waiting {
+            system.init(MACHINE, KEY, base_record()).await?;
+        }
+        system.submit(event("rt-committed")).await?;
+        if kick {
+            system.submit(event("arc-ob-publish-now")).await?;
+        }
+        system.tick().await?;
+        Ok(())
+    }
+}

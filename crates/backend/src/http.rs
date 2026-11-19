@@ -243,7 +243,7 @@ async fn dev_reset(State(app): State<Shared>, headers: HeaderMap) -> Result<Json
         Ok(json!({ "reset": true, "tenant": identity.tenant.as_str() }))
     })
     .await?;
-    app.hub.kick.notify_one();
+    app.hub.committed();
     Ok(reply)
 }
 
@@ -263,6 +263,22 @@ async fn dev_expire(
         Ok(json!({ "expired": true }))
     })
     .await
+}
+
+/// Development only: stop or resume the kick that follows each commit, so that the outbox
+/// machine's own sweep can be seen publishing what a missed kick left behind.
+async fn dev_outbox(
+    State(app): State<Shared>,
+    Json(request): Json<Json_>,
+) -> Result<Json<Json_>, ApiError> {
+    if !app.cfg.dev {
+        return Err(ApiError::new(ErrorCode::NotFound, "There is nothing here."));
+    }
+    let kick = request.get("kick").and_then(Json_::as_bool).unwrap_or(true);
+    if let Some(outbox) = app.hub.outbox.get() {
+        outbox.set_kick(kick);
+    }
+    Ok(Json(json!({ "kick": kick })))
 }
 
 async fn socket(
@@ -321,6 +337,7 @@ pub fn router(app: Shared) -> Router {
         .route("/internal/lab/verify", post(lab_verify))
         .route("/internal/dev/reset", post(dev_reset))
         .route("/internal/dev/expire-session", post(dev_expire))
+        .route("/internal/dev/outbox", post(dev_outbox))
         .route("/internal/ws", get(socket))
         .layer(middleware::from_fn_with_state(app.clone(), gate))
         .with_state(app)

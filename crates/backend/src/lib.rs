@@ -10,6 +10,7 @@ pub mod http;
 pub mod hub;
 pub mod lab;
 pub mod ops;
+pub mod outbox;
 pub mod seed;
 pub mod ws;
 
@@ -47,7 +48,12 @@ pub async fn run(
         }),
     );
 
-    tokio::spawn(hub::publisher(app.clone()));
+    // The publisher is the generated outbox machine. Events committed before a stop are still in
+    // the store's outbox, so the first commit hook runs now.
+    let outbox = outbox::Outbox::new(&app)?;
+    let _ = app.hub.outbox.set(outbox.clone());
+    outbox.run();
+    outbox.committed();
     let janitor = app.clone();
     tokio::spawn(async move {
         jobs::every(Duration::from_secs(600), || async {

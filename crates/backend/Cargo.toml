@@ -13,6 +13,7 @@ strata-kernel.workspace = true
 strata-substrate.workspace = true
 strata-storage-api.workspace = true
 strata-storage-sqlite.workspace = true
+strata-machine-store.workspace = true
 strata-protocol.workspace = true
 strata-simulation.workspace = true
 strata-verification.workspace = true

@@ -52,7 +52,7 @@ pub fn run_intent(
                     "conflicts_retried": done.conflicts,
                 }),
             );
-            app.hub.kick.notify_one();
+            app.hub.committed();
         }
         Err(ExecuteError::Domain(error)) => {
             app.stats
