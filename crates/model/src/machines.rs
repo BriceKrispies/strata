@@ -16350,6 +16350,6005 @@ pub mod audience_mail_flow_impl {
     }
 }
 
+/// Tenant suspension (implementation)
+///
+/// One tenant on its trial or plan. A write is accepted while the tenant is active and refused while it is suspended. A trial that ends without a chosen plan suspends the tenant and keeps all of its records; a trial that ends after a plan was chosen does not.
+///
+/// Specification behavior `tenant-suspension-flow-impl`, an implementation-level machine.
+pub mod tenant_suspension_flow_impl {
+    use serde::{Deserialize, Serialize};
+
+    use strata_runtime::{Delivery, Isolation, Machine, Outcome, RecordError, StepError, Time};
+
+    use crate::{records, types};
+
+    /// The states of machine `tenant-suspension-flow-impl`.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+
+    pub enum State {
+        /// State `ts-active-i`: Trial or plan in force.
+        #[serde(rename = "ts-active-i")]
+        TsActiveI,
+        /// State `ts-suspended-i`: Suspended. Ignores `ts-plan-chosen`, `ts-trial-ended`.
+        #[serde(rename = "ts-suspended-i")]
+        TsSuspendedI,
+    }
+
+    impl State {
+        /// The state's id in the specification.
+        pub fn id(self) -> &'static str {
+            match self {
+                State::TsActiveI => "ts-active-i",
+                State::TsSuspendedI => "ts-suspended-i",
+            }
+        }
+
+        /// The state with this id in the specification.
+        pub fn from_id(id: &str) -> Option<State> {
+            match id {
+                "ts-active-i" => Some(State::TsActiveI),
+                "ts-suspended-i" => Some(State::TsSuspendedI),
+                _ => None,
+            }
+        }
+    }
+
+    /// The variables of the machine.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct Vars {
+        /// Variable `records`.
+        pub records: u64,
+        /// Variable `suspended`.
+        pub suspended: bool,
+        /// Variable `recordsAtSuspend`.
+        #[serde(rename = "recordsAtSuspend")]
+        pub records_at_suspend: u64,
+        /// Variable `planChosen`.
+        #[serde(rename = "planChosen")]
+        pub plan_chosen: bool,
+    }
+
+    /// The payload of event `ts-write-requested`: Write requested.
+    ///
+    /// A state-changing request of the tenant.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct TsWriteRequestedPayload {
+        /// Field `tenant-id`.
+        #[serde(rename = "tenant-id")]
+        pub tenant_id: types::TenantId,
+    }
+
+    /// The payload of event `ts-plan-chosen`: Plan chosen.
+    ///
+    /// The tenant owner chooses a plan.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct TsPlanChosenPayload {
+        /// Field `tenant-id`.
+        #[serde(rename = "tenant-id")]
+        pub tenant_id: types::TenantId,
+    }
+
+    /// The payload of event `ts-trial-ended`: Trial ended.
+    ///
+    /// The trial period of the tenant ends.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct TsTrialEndedPayload {
+        /// Field `tenant-id`.
+        #[serde(rename = "tenant-id")]
+        pub tenant_id: types::TenantId,
+    }
+
+    /// The payload of event `ts-write-accepted`: Write accepted.
+    ///
+    /// The write is committed.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct TsWriteAcceptedPayload {}
+
+    /// The payload of event `ts-write-refused`: Write refused.
+    ///
+    /// The write is refused because the tenant is suspended.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct TsWriteRefusedPayload {}
+
+    /// The payload of event `ts-tenant-suspended`: Tenant suspended.
+    ///
+    /// The tenant is suspended and its data is kept.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct TsTenantSuspendedPayload {}
+
+    /// The events machine `tenant-suspension-flow-impl` receives, including those its timers fire.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Event {
+        /// Event `ts-write-requested`: Write requested.
+        #[serde(rename = "ts-write-requested")]
+        TsWriteRequested(TsWriteRequestedPayload),
+        /// Event `ts-plan-chosen`: Plan chosen.
+        #[serde(rename = "ts-plan-chosen")]
+        TsPlanChosen(TsPlanChosenPayload),
+        /// Event `ts-trial-ended`: Trial ended.
+        #[serde(rename = "ts-trial-ended")]
+        TsTrialEnded(TsTrialEndedPayload),
+    }
+
+    /// The events machine `tenant-suspension-flow-impl` emits.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Emitted {
+        /// Event `ts-write-accepted`: Write accepted.
+        #[serde(rename = "ts-write-accepted")]
+        TsWriteAccepted(TsWriteAcceptedPayload),
+        /// Event `ts-write-refused`: Write refused.
+        #[serde(rename = "ts-write-refused")]
+        TsWriteRefused(TsWriteRefusedPayload),
+        /// Event `ts-tenant-suspended`: Tenant suspended.
+        #[serde(rename = "ts-tenant-suspended")]
+        TsTenantSuspended(TsTenantSuspendedPayload),
+    }
+
+    /// The instance key: field `tenant-id` of record `rec-tenant-suspension`.
+    pub type Key = types::TenantId;
+
+    /// Machine `tenant-suspension-flow-impl`, stored in record `rec-tenant-suspension` by `tenant-id`.
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct TenantSuspensionFlowImpl;
+
+    /// The refusal of a step whose arithmetic overflows or divides by zero.
+    fn overflow(transition: &str) -> StepError {
+        StepError::Rejected(format!(
+            "transition {transition} overflowed or divided by zero"
+        ))
+    }
+
+    impl Machine for TenantSuspensionFlowImpl {
+        const NAME: &'static str = "tenant-suspension-flow-impl";
+
+        const RECORD: &'static str = "rec-tenant-suspension";
+
+        const ISOLATION: Isolation = Isolation::Serializable;
+
+        const CREATES: bool = false;
+
+        type State = State;
+
+        type Vars = Vars;
+
+        type Event = Event;
+
+        type Emitted = Emitted;
+
+        type Key = Key;
+
+        type Record = records::RecTenantSuspension;
+
+        fn initial(_key: &Key) -> (State, Vars) {
+            (
+                State::TsActiveI,
+                Vars {
+                    records: 0u64,
+                    suspended: false,
+                    records_at_suspend: 0u64,
+                    plan_chosen: false,
+                },
+            )
+        }
+
+        fn from_record(
+            record: &records::RecTenantSuspension,
+        ) -> Result<(State, Vars), RecordError> {
+            let state = State::from_id(&record.state).ok_or_else(|| {
+                RecordError(format!(
+                    "{:?} is not a state of machine `tenant-suspension-flow-impl`",
+                    record.state
+                ))
+            })?;
+            Ok((
+                state,
+                Vars {
+                    records: record.records,
+                    suspended: record.suspended,
+                    records_at_suspend: record.records_at_suspend,
+                    plan_chosen: record.plan_chosen,
+                },
+            ))
+        }
+
+        fn to_record(
+            key: &Key,
+            state: &State,
+            vars: &Vars,
+            _previous: Option<&records::RecTenantSuspension>,
+        ) -> Result<records::RecTenantSuspension, RecordError> {
+            Ok(records::RecTenantSuspension {
+                tenant_id: key.clone(),
+                records: vars.records,
+                suspended: vars.suspended,
+                records_at_suspend: vars.records_at_suspend,
+                plan_chosen: vars.plan_chosen,
+                state: state.id().to_string(),
+            })
+        }
+
+        fn is_elapsed(event: &Event) -> bool {
+            let _ = event;
+            false
+        }
+
+        fn validate_record(record: &records::RecTenantSuspension) -> Result<(), String> {
+            record.validate().map_err(|violation| violation.to_string())
+        }
+
+        fn step(
+            state: &State,
+            vars: &Vars,
+            event: &Event,
+            _now: Time,
+        ) -> Result<Outcome<Self>, StepError> {
+            match (state, event) {
+                (State::TsActiveI, Event::TsWriteRequested(_)) => {
+                    let mut next = vars.clone();
+                    next.records = next
+                        .records
+                        .checked_add(1u64)
+                        .filter(|__v| *__v <= 9007199254740991u64)
+                        .ok_or(overflow("ts-write-i"))?;
+                    let emitted_2 = Emitted::TsWriteAccepted(TsWriteAcceptedPayload {});
+                    Ok(Outcome::to(State::TsActiveI, next).emit(
+                        "gateway",
+                        Delivery::AtMostOnce,
+                        emitted_2,
+                    ))
+                }
+                (State::TsActiveI, Event::TsPlanChosen(_)) => {
+                    let mut next = vars.clone();
+                    next.plan_chosen = true;
+                    Ok(Outcome::to(State::TsActiveI, next))
+                }
+                (State::TsActiveI, Event::TsTrialEnded(_)) => {
+                    if !vars.plan_chosen {
+                        let mut next = vars.clone();
+                        next.suspended = true;
+                        next.records_at_suspend = next.records;
+                        let emitted_3 = Emitted::TsTenantSuspended(TsTenantSuspendedPayload {});
+                        Ok(Outcome::to(State::TsSuspendedI, next).emit(
+                            "operator-console",
+                            Delivery::AtMostOnce,
+                            emitted_3,
+                        ))
+                    } else {
+                        if vars.plan_chosen {
+                            Ok(Outcome::to(State::TsActiveI, vars.clone()))
+                        } else {
+                            Ok(Outcome::ignore(*state, vars.clone()))
+                        }
+                    }
+                }
+                (State::TsSuspendedI, Event::TsWriteRequested(_)) => {
+                    Ok(Outcome::to(State::TsSuspendedI, vars.clone()).emit(
+                        "gateway",
+                        Delivery::AtMostOnce,
+                        Emitted::TsWriteRefused(TsWriteRefusedPayload {}),
+                    ))
+                }
+                _ => Ok(Outcome::ignore(*state, vars.clone())),
+            }
+        }
+    }
+}
+
+/// Write against plan quotas (implementation)
+///
+/// One tenant writing records and files against the quotas of its plan: two records and one file here. A write that would exceed a quota is refused, and the refusal names the quota it would exceed.
+///
+/// Specification behavior `write-quota-flow-impl`, an implementation-level machine.
+pub mod write_quota_flow_impl {
+    use serde::{Deserialize, Serialize};
+
+    use strata_runtime::{Delivery, Isolation, Machine, Outcome, RecordError, StepError, Time};
+
+    use crate::{records, types};
+
+    /// The states of machine `write-quota-flow-impl`.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+
+    pub enum State {
+        /// State `wq-open-i`: Accepting writes.
+        #[serde(rename = "wq-open-i")]
+        WqOpenI,
+    }
+
+    impl State {
+        /// The state's id in the specification.
+        pub fn id(self) -> &'static str {
+            match self {
+                State::WqOpenI => "wq-open-i",
+            }
+        }
+
+        /// The state with this id in the specification.
+        pub fn from_id(id: &str) -> Option<State> {
+            match id {
+                "wq-open-i" => Some(State::WqOpenI),
+                _ => None,
+            }
+        }
+    }
+
+    /// The variables of the machine.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct Vars {
+        /// Variable `recordsUsed`.
+        #[serde(rename = "recordsUsed")]
+        pub records_used: u64,
+        /// Variable `filesUsed`.
+        #[serde(rename = "filesUsed")]
+        pub files_used: u64,
+        /// Variable `refusedFor`.
+        #[serde(rename = "refusedFor")]
+        pub refused_for: String,
+    }
+
+    /// The payload of event `wq-write-requested`: Write requested.
+    ///
+    /// A write of a record or of a file.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct WqWriteRequestedPayload {
+        /// Field `tenant-id`.
+        #[serde(rename = "tenant-id")]
+        pub tenant_id: types::TenantId,
+        /// Field `kind`.
+        pub kind: String,
+    }
+
+    /// The payload of event `wq-write-accepted`: Write accepted.
+    ///
+    /// The write is committed.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct WqWriteAcceptedPayload {}
+
+    /// The payload of event `wq-refused-records`: Refused: record quota.
+    ///
+    /// The write is refused naming the record quota.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct WqRefusedRecordsPayload {}
+
+    /// The payload of event `wq-refused-files`: Refused: file quota.
+    ///
+    /// The write is refused naming the file quota.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct WqRefusedFilesPayload {}
+
+    /// The events machine `write-quota-flow-impl` receives, including those its timers fire.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Event {
+        /// Event `wq-write-requested`: Write requested.
+        #[serde(rename = "wq-write-requested")]
+        WqWriteRequested(WqWriteRequestedPayload),
+    }
+
+    /// The events machine `write-quota-flow-impl` emits.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Emitted {
+        /// Event `wq-write-accepted`: Write accepted.
+        #[serde(rename = "wq-write-accepted")]
+        WqWriteAccepted(WqWriteAcceptedPayload),
+        /// Event `wq-refused-records`: Refused: record quota.
+        #[serde(rename = "wq-refused-records")]
+        WqRefusedRecords(WqRefusedRecordsPayload),
+        /// Event `wq-refused-files`: Refused: file quota.
+        #[serde(rename = "wq-refused-files")]
+        WqRefusedFiles(WqRefusedFilesPayload),
+    }
+
+    /// The instance key: field `tenant-id` of record `rec-write-quota`.
+    pub type Key = types::TenantId;
+
+    /// Machine `write-quota-flow-impl`, stored in record `rec-write-quota` by `tenant-id`.
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct WriteQuotaFlowImpl;
+
+    /// The refusal of a step whose arithmetic overflows or divides by zero.
+    fn overflow(transition: &str) -> StepError {
+        StepError::Rejected(format!(
+            "transition {transition} overflowed or divided by zero"
+        ))
+    }
+
+    impl Machine for WriteQuotaFlowImpl {
+        const NAME: &'static str = "write-quota-flow-impl";
+
+        const RECORD: &'static str = "rec-write-quota";
+
+        const ISOLATION: Isolation = Isolation::Serializable;
+
+        const CREATES: bool = false;
+
+        type State = State;
+
+        type Vars = Vars;
+
+        type Event = Event;
+
+        type Emitted = Emitted;
+
+        type Key = Key;
+
+        type Record = records::RecWriteQuota;
+
+        fn initial(_key: &Key) -> (State, Vars) {
+            (
+                State::WqOpenI,
+                Vars {
+                    records_used: 0u64,
+                    files_used: 0u64,
+                    refused_for: String::from(""),
+                },
+            )
+        }
+
+        fn from_record(record: &records::RecWriteQuota) -> Result<(State, Vars), RecordError> {
+            let state = State::from_id(&record.state).ok_or_else(|| {
+                RecordError(format!(
+                    "{:?} is not a state of machine `write-quota-flow-impl`",
+                    record.state
+                ))
+            })?;
+            Ok((
+                state,
+                Vars {
+                    records_used: record.records_used,
+                    files_used: record.files_used,
+                    refused_for: record.refused_for.clone(),
+                },
+            ))
+        }
+
+        fn to_record(
+            key: &Key,
+            state: &State,
+            vars: &Vars,
+            _previous: Option<&records::RecWriteQuota>,
+        ) -> Result<records::RecWriteQuota, RecordError> {
+            Ok(records::RecWriteQuota {
+                tenant_id: key.clone(),
+                records_used: vars.records_used,
+                files_used: vars.files_used,
+                refused_for: vars.refused_for.clone(),
+                state: state.id().to_string(),
+            })
+        }
+
+        fn is_elapsed(event: &Event) -> bool {
+            let _ = event;
+            false
+        }
+
+        fn validate_record(record: &records::RecWriteQuota) -> Result<(), String> {
+            record.validate().map_err(|violation| violation.to_string())
+        }
+
+        fn step(
+            state: &State,
+            vars: &Vars,
+            event: &Event,
+            _now: Time,
+        ) -> Result<Outcome<Self>, StepError> {
+            match (state, event) {
+                (State::WqOpenI, Event::WqWriteRequested(payload)) => {
+                    if payload.kind == "record" && vars.records_used < 2u64 {
+                        let mut next = vars.clone();
+                        next.records_used = next
+                            .records_used
+                            .checked_add(1u64)
+                            .filter(|__v| *__v <= 9007199254740991u64)
+                            .ok_or(overflow("wq-record-accepted-i"))?;
+                        let emitted_2 = Emitted::WqWriteAccepted(WqWriteAcceptedPayload {});
+                        Ok(Outcome::to(State::WqOpenI, next).emit(
+                            "gateway",
+                            Delivery::AtMostOnce,
+                            emitted_2,
+                        ))
+                    } else {
+                        if payload.kind == "record" && vars.records_used >= 2u64 {
+                            let mut next = vars.clone();
+                            next.refused_for = ::std::string::String::from("records");
+                            let emitted_2 = Emitted::WqRefusedRecords(WqRefusedRecordsPayload {});
+                            Ok(Outcome::to(State::WqOpenI, next).emit(
+                                "gateway",
+                                Delivery::AtMostOnce,
+                                emitted_2,
+                            ))
+                        } else {
+                            if payload.kind == "file" && vars.files_used < 1u64 {
+                                let mut next = vars.clone();
+                                next.files_used = next
+                                    .files_used
+                                    .checked_add(1u64)
+                                    .filter(|__v| *__v <= 9007199254740991u64)
+                                    .ok_or(overflow("wq-file-accepted-i"))?;
+                                let emitted_2 = Emitted::WqWriteAccepted(WqWriteAcceptedPayload {});
+                                Ok(Outcome::to(State::WqOpenI, next).emit(
+                                    "gateway",
+                                    Delivery::AtMostOnce,
+                                    emitted_2,
+                                ))
+                            } else {
+                                if payload.kind == "file" && vars.files_used >= 1u64 {
+                                    let mut next = vars.clone();
+                                    next.refused_for = ::std::string::String::from("files");
+                                    let emitted_2 =
+                                        Emitted::WqRefusedFiles(WqRefusedFilesPayload {});
+                                    Ok(Outcome::to(State::WqOpenI, next).emit(
+                                        "gateway",
+                                        Delivery::AtMostOnce,
+                                        emitted_2,
+                                    ))
+                                } else {
+                                    Ok(Outcome::ignore(*state, vars.clone()))
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Plan change (implementation)
+///
+/// A tenant that holds three records and one file asks for a plan with different quotas. The change is refused while the tenant holds more of a metered quantity than the new plan allows, and the refusal names that quantity.
+///
+/// Specification behavior `plan-change-flow-impl`, an implementation-level machine.
+pub mod plan_change_flow_impl {
+    use serde::{Deserialize, Serialize};
+
+    use strata_runtime::{Delivery, Isolation, Machine, Outcome, RecordError, StepError, Time};
+
+    use crate::{prelude, records, types};
+
+    /// The states of machine `plan-change-flow-impl`.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+
+    pub enum State {
+        /// State `pc-open-i`: Plan in force.
+        #[serde(rename = "pc-open-i")]
+        PcOpenI,
+    }
+
+    impl State {
+        /// The state's id in the specification.
+        pub fn id(self) -> &'static str {
+            match self {
+                State::PcOpenI => "pc-open-i",
+            }
+        }
+
+        /// The state with this id in the specification.
+        pub fn from_id(id: &str) -> Option<State> {
+            match id {
+                "pc-open-i" => Some(State::PcOpenI),
+                _ => None,
+            }
+        }
+    }
+
+    /// The variables of the machine.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct Vars {
+        /// Variable `holdsRecords`.
+        #[serde(rename = "holdsRecords")]
+        pub holds_records: u64,
+        /// Variable `holdsFiles`.
+        #[serde(rename = "holdsFiles")]
+        pub holds_files: u64,
+        /// Variable `planRecords`.
+        #[serde(rename = "planRecords")]
+        pub plan_records: u64,
+        /// Variable `planFiles`.
+        #[serde(rename = "planFiles")]
+        pub plan_files: u64,
+        /// Variable `refusedFor`.
+        #[serde(rename = "refusedFor")]
+        pub refused_for: String,
+    }
+
+    /// The payload of event `pc-change-requested`: Plan change requested.
+    ///
+    /// The tenant asks for a plan with the given quotas.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct PcChangeRequestedPayload {
+        /// Field `tenant-id`.
+        #[serde(rename = "tenant-id")]
+        pub tenant_id: types::TenantId,
+        #[serde(deserialize_with = "prelude::safe_u64")]
+        /// Field `recordsLimit`.
+        #[serde(rename = "recordsLimit")]
+        pub records_limit: u64,
+        #[serde(deserialize_with = "prelude::safe_u64")]
+        /// Field `filesLimit`.
+        #[serde(rename = "filesLimit")]
+        pub files_limit: u64,
+    }
+
+    /// The payload of event `pc-plan-changed`: Plan changed.
+    ///
+    /// The new plan is in force.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct PcPlanChangedPayload {}
+
+    /// The payload of event `pc-refused-records`: Refused: records held.
+    ///
+    /// The change is refused naming the record quantity.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct PcRefusedRecordsPayload {}
+
+    /// The payload of event `pc-refused-files`: Refused: files held.
+    ///
+    /// The change is refused naming the file quantity.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct PcRefusedFilesPayload {}
+
+    /// The events machine `plan-change-flow-impl` receives, including those its timers fire.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Event {
+        /// Event `pc-change-requested`: Plan change requested.
+        #[serde(rename = "pc-change-requested")]
+        PcChangeRequested(PcChangeRequestedPayload),
+    }
+
+    /// The events machine `plan-change-flow-impl` emits.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Emitted {
+        /// Event `pc-plan-changed`: Plan changed.
+        #[serde(rename = "pc-plan-changed")]
+        PcPlanChanged(PcPlanChangedPayload),
+        /// Event `pc-refused-records`: Refused: records held.
+        #[serde(rename = "pc-refused-records")]
+        PcRefusedRecords(PcRefusedRecordsPayload),
+        /// Event `pc-refused-files`: Refused: files held.
+        #[serde(rename = "pc-refused-files")]
+        PcRefusedFiles(PcRefusedFilesPayload),
+    }
+
+    /// The instance key: field `tenant-id` of record `rec-plan-change`.
+    pub type Key = types::TenantId;
+
+    /// Machine `plan-change-flow-impl`, stored in record `rec-plan-change` by `tenant-id`.
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct PlanChangeFlowImpl;
+
+    impl Machine for PlanChangeFlowImpl {
+        const NAME: &'static str = "plan-change-flow-impl";
+
+        const RECORD: &'static str = "rec-plan-change";
+
+        const ISOLATION: Isolation = Isolation::Serializable;
+
+        const CREATES: bool = false;
+
+        type State = State;
+
+        type Vars = Vars;
+
+        type Event = Event;
+
+        type Emitted = Emitted;
+
+        type Key = Key;
+
+        type Record = records::RecPlanChange;
+
+        fn initial(_key: &Key) -> (State, Vars) {
+            (
+                State::PcOpenI,
+                Vars {
+                    holds_records: 3u64,
+                    holds_files: 1u64,
+                    plan_records: 10u64,
+                    plan_files: 5u64,
+                    refused_for: String::from(""),
+                },
+            )
+        }
+
+        fn from_record(record: &records::RecPlanChange) -> Result<(State, Vars), RecordError> {
+            let state = State::from_id(&record.state).ok_or_else(|| {
+                RecordError(format!(
+                    "{:?} is not a state of machine `plan-change-flow-impl`",
+                    record.state
+                ))
+            })?;
+            Ok((
+                state,
+                Vars {
+                    holds_records: record.holds_records,
+                    holds_files: record.holds_files,
+                    plan_records: record.plan_records,
+                    plan_files: record.plan_files,
+                    refused_for: record.refused_for.clone(),
+                },
+            ))
+        }
+
+        fn to_record(
+            key: &Key,
+            state: &State,
+            vars: &Vars,
+            _previous: Option<&records::RecPlanChange>,
+        ) -> Result<records::RecPlanChange, RecordError> {
+            Ok(records::RecPlanChange {
+                tenant_id: key.clone(),
+                holds_records: vars.holds_records,
+                holds_files: vars.holds_files,
+                plan_records: vars.plan_records,
+                plan_files: vars.plan_files,
+                refused_for: vars.refused_for.clone(),
+                state: state.id().to_string(),
+            })
+        }
+
+        fn is_elapsed(event: &Event) -> bool {
+            let _ = event;
+            false
+        }
+
+        fn validate_record(record: &records::RecPlanChange) -> Result<(), String> {
+            record.validate().map_err(|violation| violation.to_string())
+        }
+
+        fn step(
+            state: &State,
+            vars: &Vars,
+            event: &Event,
+            _now: Time,
+        ) -> Result<Outcome<Self>, StepError> {
+            match (state, event) {
+                (State::PcOpenI, Event::PcChangeRequested(payload)) => {
+                    if vars.holds_records <= payload.records_limit
+                        && vars.holds_files <= payload.files_limit
+                    {
+                        let mut next = vars.clone();
+                        next.plan_records = payload.records_limit;
+                        next.plan_files = payload.files_limit;
+                        let emitted_3 = Emitted::PcPlanChanged(PcPlanChangedPayload {});
+                        Ok(Outcome::to(State::PcOpenI, next).emit(
+                            "operator-console",
+                            Delivery::AtMostOnce,
+                            emitted_3,
+                        ))
+                    } else {
+                        if vars.holds_records > payload.records_limit {
+                            let mut next = vars.clone();
+                            next.refused_for = ::std::string::String::from("records");
+                            let emitted_2 = Emitted::PcRefusedRecords(PcRefusedRecordsPayload {});
+                            Ok(Outcome::to(State::PcOpenI, next).emit(
+                                "operator-console",
+                                Delivery::AtMostOnce,
+                                emitted_2,
+                            ))
+                        } else {
+                            if vars.holds_records <= payload.records_limit
+                                && vars.holds_files > payload.files_limit
+                            {
+                                let mut next = vars.clone();
+                                next.refused_for = ::std::string::String::from("files");
+                                let emitted_2 = Emitted::PcRefusedFiles(PcRefusedFilesPayload {});
+                                Ok(Outcome::to(State::PcOpenI, next).emit(
+                                    "operator-console",
+                                    Delivery::AtMostOnce,
+                                    emitted_2,
+                                ))
+                            } else {
+                                Ok(Outcome::ignore(*state, vars.clone()))
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Connection quota per tenant (implementation)
+///
+/// The connection counters of two tenants, a and b, against a quota of two connections each. A tenant that exceeds its quota receives a throttling response and the other tenant is served. The model puts both tenants in one machine, so this one is a single unit and has no keyed instances.
+///
+/// Specification behavior `connection-quota-flow-impl`, an implementation-level machine.
+pub mod connection_quota_flow_impl {
+    use serde::{Deserialize, Serialize};
+
+    use strata_runtime::{Delivery, Isolation, Machine, Outcome, RecordError, StepError, Time};
+
+    use crate::records;
+
+    /// The states of machine `connection-quota-flow-impl`.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+
+    pub enum State {
+        /// State `cq-open-i`: Serving.
+        #[serde(rename = "cq-open-i")]
+        CqOpenI,
+    }
+
+    impl State {
+        /// The state's id in the specification.
+        pub fn id(self) -> &'static str {
+            match self {
+                State::CqOpenI => "cq-open-i",
+            }
+        }
+
+        /// The state with this id in the specification.
+        pub fn from_id(id: &str) -> Option<State> {
+            match id {
+                "cq-open-i" => Some(State::CqOpenI),
+                _ => None,
+            }
+        }
+    }
+
+    /// The variables of the machine.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct Vars {
+        /// Variable `connsA`.
+        #[serde(rename = "connsA")]
+        pub conns_a: u64,
+        /// Variable `connsB`.
+        #[serde(rename = "connsB")]
+        pub conns_b: u64,
+    }
+
+    /// The payload of event `cq-connection-requested`: Connection requested.
+    ///
+    /// A tenant opens a connection.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct CqConnectionRequestedPayload {
+        /// Field `tenant`.
+        pub tenant: String,
+    }
+
+    /// The payload of event `cq-served`: Connection served.
+    ///
+    /// The connection is opened.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct CqServedPayload {}
+
+    /// The payload of event `cq-throttled`: Connection throttled.
+    ///
+    /// The tenant receives a throttling response.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct CqThrottledPayload {}
+
+    /// The events machine `connection-quota-flow-impl` receives, including those its timers fire.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Event {
+        /// Event `cq-connection-requested`: Connection requested.
+        #[serde(rename = "cq-connection-requested")]
+        CqConnectionRequested(CqConnectionRequestedPayload),
+    }
+
+    /// The events machine `connection-quota-flow-impl` emits.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Emitted {
+        /// Event `cq-served`: Connection served.
+        #[serde(rename = "cq-served")]
+        CqServed(CqServedPayload),
+        /// Event `cq-throttled`: Connection throttled.
+        #[serde(rename = "cq-throttled")]
+        CqThrottled(CqThrottledPayload),
+    }
+
+    /// The instance key: field `scope` of record `rec-connection-quota`.
+    pub type Key = String;
+
+    /// Machine `connection-quota-flow-impl`, stored in record `rec-connection-quota` by `scope`.
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct ConnectionQuotaFlowImpl;
+
+    /// The refusal of a step whose arithmetic overflows or divides by zero.
+    fn overflow(transition: &str) -> StepError {
+        StepError::Rejected(format!(
+            "transition {transition} overflowed or divided by zero"
+        ))
+    }
+
+    impl Machine for ConnectionQuotaFlowImpl {
+        const NAME: &'static str = "connection-quota-flow-impl";
+
+        const RECORD: &'static str = "rec-connection-quota";
+
+        const ISOLATION: Isolation = Isolation::Serializable;
+
+        const CREATES: bool = false;
+
+        type State = State;
+
+        type Vars = Vars;
+
+        type Event = Event;
+
+        type Emitted = Emitted;
+
+        type Key = Key;
+
+        type Record = records::RecConnectionQuota;
+
+        fn initial(_key: &Key) -> (State, Vars) {
+            (
+                State::CqOpenI,
+                Vars {
+                    conns_a: 0u64,
+                    conns_b: 0u64,
+                },
+            )
+        }
+
+        fn from_record(record: &records::RecConnectionQuota) -> Result<(State, Vars), RecordError> {
+            let state = State::from_id(&record.state).ok_or_else(|| {
+                RecordError(format!(
+                    "{:?} is not a state of machine `connection-quota-flow-impl`",
+                    record.state
+                ))
+            })?;
+            Ok((
+                state,
+                Vars {
+                    conns_a: record.conns_a,
+                    conns_b: record.conns_b,
+                },
+            ))
+        }
+
+        fn to_record(
+            key: &Key,
+            state: &State,
+            vars: &Vars,
+            _previous: Option<&records::RecConnectionQuota>,
+        ) -> Result<records::RecConnectionQuota, RecordError> {
+            Ok(records::RecConnectionQuota {
+                scope: key.clone(),
+                conns_a: vars.conns_a,
+                conns_b: vars.conns_b,
+                state: state.id().to_string(),
+            })
+        }
+
+        fn is_elapsed(event: &Event) -> bool {
+            let _ = event;
+            false
+        }
+
+        fn validate_record(record: &records::RecConnectionQuota) -> Result<(), String> {
+            record.validate().map_err(|violation| violation.to_string())
+        }
+
+        fn step(
+            state: &State,
+            vars: &Vars,
+            event: &Event,
+            _now: Time,
+        ) -> Result<Outcome<Self>, StepError> {
+            match (state, event) {
+                (State::CqOpenI, Event::CqConnectionRequested(payload)) => {
+                    if payload.tenant == "a" && vars.conns_a < 2u64 {
+                        let mut next = vars.clone();
+                        next.conns_a = next
+                            .conns_a
+                            .checked_add(1u64)
+                            .filter(|__v| *__v <= 9007199254740991u64)
+                            .ok_or(overflow("cq-serve-a-i"))?;
+                        let emitted_2 = Emitted::CqServed(CqServedPayload {});
+                        Ok(Outcome::to(State::CqOpenI, next).emit(
+                            "gateway",
+                            Delivery::AtMostOnce,
+                            emitted_2,
+                        ))
+                    } else {
+                        if payload.tenant == "a" && vars.conns_a >= 2u64 {
+                            Ok(Outcome::to(State::CqOpenI, vars.clone()).emit(
+                                "gateway",
+                                Delivery::AtMostOnce,
+                                Emitted::CqThrottled(CqThrottledPayload {}),
+                            ))
+                        } else {
+                            if payload.tenant == "b" && vars.conns_b < 2u64 {
+                                let mut next = vars.clone();
+                                next.conns_b = next
+                                    .conns_b
+                                    .checked_add(1u64)
+                                    .filter(|__v| *__v <= 9007199254740991u64)
+                                    .ok_or(overflow("cq-serve-b-i"))?;
+                                let emitted_2 = Emitted::CqServed(CqServedPayload {});
+                                Ok(Outcome::to(State::CqOpenI, next).emit(
+                                    "gateway",
+                                    Delivery::AtMostOnce,
+                                    emitted_2,
+                                ))
+                            } else {
+                                if payload.tenant == "b" && vars.conns_b >= 2u64 {
+                                    Ok(Outcome::to(State::CqOpenI, vars.clone()).emit(
+                                        "gateway",
+                                        Delivery::AtMostOnce,
+                                        Emitted::CqThrottled(CqThrottledPayload {}),
+                                    ))
+                                } else {
+                                    Ok(Outcome::ignore(*state, vars.clone()))
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Bootstrap credential (implementation)
+///
+/// The bootstrap credential that provisioning issues for the first owner of a tenant. One credential is issued; it is accepted once and refused after its first use and after its expiry.
+///
+/// Specification behavior `bootstrap-credential-flow-impl`, an implementation-level machine.
+pub mod bootstrap_credential_flow_impl {
+    use serde::{Deserialize, Serialize};
+
+    use strata_runtime::{Delivery, Isolation, Machine, Outcome, RecordError, StepError, Time};
+
+    use crate::{records, types};
+
+    /// The states of machine `bootstrap-credential-flow-impl`.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+
+    pub enum State {
+        /// State `bc-none-i`: Not issued. Ignores `bc-expiry-reached`.
+        #[serde(rename = "bc-none-i")]
+        BcNoneI,
+        /// State `bc-issued-i`: Issued.
+        #[serde(rename = "bc-issued-i")]
+        BcIssuedI,
+        /// State `bc-used-i`: Used. Ignores `bc-issue-requested`, `bc-expiry-reached`.
+        #[serde(rename = "bc-used-i")]
+        BcUsedI,
+        /// State `bc-expired-i`: Expired. Ignores `bc-issue-requested`, `bc-expiry-reached`.
+        #[serde(rename = "bc-expired-i")]
+        BcExpiredI,
+    }
+
+    impl State {
+        /// The state's id in the specification.
+        pub fn id(self) -> &'static str {
+            match self {
+                State::BcNoneI => "bc-none-i",
+                State::BcIssuedI => "bc-issued-i",
+                State::BcUsedI => "bc-used-i",
+                State::BcExpiredI => "bc-expired-i",
+            }
+        }
+
+        /// The state with this id in the specification.
+        pub fn from_id(id: &str) -> Option<State> {
+            match id {
+                "bc-none-i" => Some(State::BcNoneI),
+                "bc-issued-i" => Some(State::BcIssuedI),
+                "bc-used-i" => Some(State::BcUsedI),
+                "bc-expired-i" => Some(State::BcExpiredI),
+                _ => None,
+            }
+        }
+    }
+
+    /// The variables of the machine.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct Vars {
+        /// Variable `issued`.
+        pub issued: u64,
+        /// Variable `accepted`.
+        pub accepted: u64,
+        /// Variable `expired`.
+        pub expired: bool,
+    }
+
+    /// The payload of event `bc-issue-requested`: Issue requested.
+    ///
+    /// Provisioning asks for the bootstrap credential of the first owner.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct BcIssueRequestedPayload {
+        /// Field `tenant-id`.
+        #[serde(rename = "tenant-id")]
+        pub tenant_id: types::TenantId,
+    }
+
+    /// The payload of event `bc-presented`: Credential presented.
+    ///
+    /// The first owner presents the bootstrap credential.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct BcPresentedPayload {
+        /// Field `tenant-id`.
+        #[serde(rename = "tenant-id")]
+        pub tenant_id: types::TenantId,
+    }
+
+    /// The payload of event `bc-expiry-reached`: Expiry reached.
+    ///
+    /// The credential reaches the end of its lifetime.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct BcExpiryReachedPayload {
+        /// Field `tenant-id`.
+        #[serde(rename = "tenant-id")]
+        pub tenant_id: types::TenantId,
+    }
+
+    /// The payload of event `bc-credential-issued`: Credential issued.
+    ///
+    /// The credential is issued to the first owner.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct BcCredentialIssuedPayload {}
+
+    /// The payload of event `bc-accepted`: Credential accepted.
+    ///
+    /// The first owner is let in.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct BcAcceptedPayload {}
+
+    /// The payload of event `bc-refused`: Credential refused.
+    ///
+    /// The credential is refused.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct BcRefusedPayload {}
+
+    /// The events machine `bootstrap-credential-flow-impl` receives, including those its timers fire.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Event {
+        /// Event `bc-issue-requested`: Issue requested.
+        #[serde(rename = "bc-issue-requested")]
+        BcIssueRequested(BcIssueRequestedPayload),
+        /// Event `bc-presented`: Credential presented.
+        #[serde(rename = "bc-presented")]
+        BcPresented(BcPresentedPayload),
+        /// Event `bc-expiry-reached`: Expiry reached.
+        #[serde(rename = "bc-expiry-reached")]
+        BcExpiryReached(BcExpiryReachedPayload),
+    }
+
+    /// The events machine `bootstrap-credential-flow-impl` emits.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Emitted {
+        /// Event `bc-credential-issued`: Credential issued.
+        #[serde(rename = "bc-credential-issued")]
+        BcCredentialIssued(BcCredentialIssuedPayload),
+        /// Event `bc-accepted`: Credential accepted.
+        #[serde(rename = "bc-accepted")]
+        BcAccepted(BcAcceptedPayload),
+        /// Event `bc-refused`: Credential refused.
+        #[serde(rename = "bc-refused")]
+        BcRefused(BcRefusedPayload),
+    }
+
+    /// The instance key: field `tenant-id` of record `rec-bootstrap-credential`.
+    pub type Key = types::TenantId;
+
+    /// Machine `bootstrap-credential-flow-impl`, stored in record `rec-bootstrap-credential` by `tenant-id`.
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct BootstrapCredentialFlowImpl;
+
+    /// The refusal of a step whose arithmetic overflows or divides by zero.
+    fn overflow(transition: &str) -> StepError {
+        StepError::Rejected(format!(
+            "transition {transition} overflowed or divided by zero"
+        ))
+    }
+
+    impl Machine for BootstrapCredentialFlowImpl {
+        const NAME: &'static str = "bootstrap-credential-flow-impl";
+
+        const RECORD: &'static str = "rec-bootstrap-credential";
+
+        const ISOLATION: Isolation = Isolation::Serializable;
+
+        const CREATES: bool = false;
+
+        type State = State;
+
+        type Vars = Vars;
+
+        type Event = Event;
+
+        type Emitted = Emitted;
+
+        type Key = Key;
+
+        type Record = records::RecBootstrapCredential;
+
+        fn initial(_key: &Key) -> (State, Vars) {
+            (
+                State::BcNoneI,
+                Vars {
+                    issued: 0u64,
+                    accepted: 0u64,
+                    expired: false,
+                },
+            )
+        }
+
+        fn from_record(
+            record: &records::RecBootstrapCredential,
+        ) -> Result<(State, Vars), RecordError> {
+            let state = State::from_id(&record.state).ok_or_else(|| {
+                RecordError(format!(
+                    "{:?} is not a state of machine `bootstrap-credential-flow-impl`",
+                    record.state
+                ))
+            })?;
+            Ok((
+                state,
+                Vars {
+                    issued: record.issued,
+                    accepted: record.accepted,
+                    expired: record.expired,
+                },
+            ))
+        }
+
+        fn to_record(
+            key: &Key,
+            state: &State,
+            vars: &Vars,
+            _previous: Option<&records::RecBootstrapCredential>,
+        ) -> Result<records::RecBootstrapCredential, RecordError> {
+            Ok(records::RecBootstrapCredential {
+                tenant_id: key.clone(),
+                issued: vars.issued,
+                accepted: vars.accepted,
+                expired: vars.expired,
+                state: state.id().to_string(),
+            })
+        }
+
+        fn is_elapsed(event: &Event) -> bool {
+            let _ = event;
+            false
+        }
+
+        fn validate_record(record: &records::RecBootstrapCredential) -> Result<(), String> {
+            record.validate().map_err(|violation| violation.to_string())
+        }
+
+        fn step(
+            state: &State,
+            vars: &Vars,
+            event: &Event,
+            _now: Time,
+        ) -> Result<Outcome<Self>, StepError> {
+            match (state, event) {
+                (State::BcNoneI, Event::BcIssueRequested(_)) => {
+                    let mut next = vars.clone();
+                    next.issued = next
+                        .issued
+                        .checked_add(1u64)
+                        .filter(|__v| *__v <= 9007199254740991u64)
+                        .ok_or(overflow("bc-issue-i"))?;
+                    let emitted_2 = Emitted::BcCredentialIssued(BcCredentialIssuedPayload {});
+                    Ok(Outcome::to(State::BcIssuedI, next).emit(
+                        "operator-console",
+                        Delivery::AtMostOnce,
+                        emitted_2,
+                    ))
+                }
+                (State::BcNoneI, Event::BcPresented(_)) => {
+                    Ok(Outcome::to(State::BcNoneI, vars.clone()).emit(
+                        "gateway",
+                        Delivery::AtMostOnce,
+                        Emitted::BcRefused(BcRefusedPayload {}),
+                    ))
+                }
+                (State::BcIssuedI, Event::BcIssueRequested(_)) => {
+                    Ok(Outcome::to(State::BcIssuedI, vars.clone()).emit(
+                        "gateway",
+                        Delivery::AtMostOnce,
+                        Emitted::BcRefused(BcRefusedPayload {}),
+                    ))
+                }
+                (State::BcIssuedI, Event::BcPresented(_)) => {
+                    let mut next = vars.clone();
+                    next.accepted = next
+                        .accepted
+                        .checked_add(1u64)
+                        .filter(|__v| *__v <= 9007199254740991u64)
+                        .ok_or(overflow("bc-present-first-i"))?;
+                    let emitted_2 = Emitted::BcAccepted(BcAcceptedPayload {});
+                    Ok(Outcome::to(State::BcUsedI, next).emit(
+                        "gateway",
+                        Delivery::AtMostOnce,
+                        emitted_2,
+                    ))
+                }
+                (State::BcIssuedI, Event::BcExpiryReached(_)) => {
+                    let mut next = vars.clone();
+                    next.expired = true;
+                    Ok(Outcome::to(State::BcExpiredI, next))
+                }
+                (State::BcUsedI, Event::BcPresented(_)) => {
+                    Ok(Outcome::to(State::BcUsedI, vars.clone()).emit(
+                        "gateway",
+                        Delivery::AtMostOnce,
+                        Emitted::BcRefused(BcRefusedPayload {}),
+                    ))
+                }
+                (State::BcExpiredI, Event::BcPresented(_)) => {
+                    Ok(Outcome::to(State::BcExpiredI, vars.clone()).emit(
+                        "gateway",
+                        Delivery::AtMostOnce,
+                        Emitted::BcRefused(BcRefusedPayload {}),
+                    ))
+                }
+                _ => Ok(Outcome::ignore(*state, vars.clone())),
+            }
+        }
+    }
+}
+
+/// Placement by region (implementation)
+///
+/// A tenant is created with a region. Its database and its stored files are placed in that region when the region is one the platform offers (eu and us here); a region it does not offer refuses the creation and places nothing.
+///
+/// Specification behavior `placement-choice-flow-impl`, an implementation-level machine.
+pub mod placement_choice_flow_impl {
+    use serde::{Deserialize, Serialize};
+
+    use strata_runtime::{Delivery, Isolation, Machine, Outcome, RecordError, StepError, Time};
+
+    use crate::{records, types};
+
+    /// The states of machine `placement-choice-flow-impl`.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+
+    pub enum State {
+        /// State `rg-idle-i`: Not placed.
+        #[serde(rename = "rg-idle-i")]
+        RgIdleI,
+        /// State `rg-placed-i`: Placed. Terminal.
+        #[serde(rename = "rg-placed-i")]
+        RgPlacedI,
+        /// State `rg-unplaced-i`: Refused. Terminal.
+        #[serde(rename = "rg-unplaced-i")]
+        RgUnplacedI,
+    }
+
+    impl State {
+        /// The state's id in the specification.
+        pub fn id(self) -> &'static str {
+            match self {
+                State::RgIdleI => "rg-idle-i",
+                State::RgPlacedI => "rg-placed-i",
+                State::RgUnplacedI => "rg-unplaced-i",
+            }
+        }
+
+        /// The state with this id in the specification.
+        pub fn from_id(id: &str) -> Option<State> {
+            match id {
+                "rg-idle-i" => Some(State::RgIdleI),
+                "rg-placed-i" => Some(State::RgPlacedI),
+                "rg-unplaced-i" => Some(State::RgUnplacedI),
+                _ => None,
+            }
+        }
+    }
+
+    /// The variables of the machine.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct Vars {
+        /// Variable `requested`.
+        pub requested: String,
+        /// Variable `dbRegion`.
+        #[serde(rename = "dbRegion")]
+        pub db_region: String,
+        /// Variable `filesRegion`.
+        #[serde(rename = "filesRegion")]
+        pub files_region: String,
+        /// Variable `placed`.
+        pub placed: bool,
+    }
+
+    /// The payload of event `rg-create-requested`: Creation requested.
+    ///
+    /// A tenant is created with a region.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct RgCreateRequestedPayload {
+        /// Field `tenant-id`.
+        #[serde(rename = "tenant-id")]
+        pub tenant_id: types::TenantId,
+        /// Field `region`.
+        pub region: String,
+    }
+
+    /// The payload of event `rg-tenant-placed`: Tenant placed.
+    ///
+    /// The database and the files of the tenant are placed.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct RgTenantPlacedPayload {}
+
+    /// The payload of event `rg-placement-refused`: Placement refused.
+    ///
+    /// The region is not one the platform offers.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct RgPlacementRefusedPayload {}
+
+    /// The events machine `placement-choice-flow-impl` receives, including those its timers fire.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Event {
+        /// Event `rg-create-requested`: Creation requested.
+        #[serde(rename = "rg-create-requested")]
+        RgCreateRequested(RgCreateRequestedPayload),
+    }
+
+    /// The events machine `placement-choice-flow-impl` emits.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Emitted {
+        /// Event `rg-tenant-placed`: Tenant placed.
+        #[serde(rename = "rg-tenant-placed")]
+        RgTenantPlaced(RgTenantPlacedPayload),
+        /// Event `rg-placement-refused`: Placement refused.
+        #[serde(rename = "rg-placement-refused")]
+        RgPlacementRefused(RgPlacementRefusedPayload),
+    }
+
+    /// The instance key: field `tenant-id` of record `rec-placement-choice`.
+    pub type Key = types::TenantId;
+
+    /// Machine `placement-choice-flow-impl`, stored in record `rec-placement-choice` by `tenant-id`.
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct PlacementChoiceFlowImpl;
+
+    impl Machine for PlacementChoiceFlowImpl {
+        const NAME: &'static str = "placement-choice-flow-impl";
+
+        const RECORD: &'static str = "rec-placement-choice";
+
+        const ISOLATION: Isolation = Isolation::Serializable;
+
+        const CREATES: bool = false;
+
+        type State = State;
+
+        type Vars = Vars;
+
+        type Event = Event;
+
+        type Emitted = Emitted;
+
+        type Key = Key;
+
+        type Record = records::RecPlacementChoice;
+
+        fn initial(_key: &Key) -> (State, Vars) {
+            (
+                State::RgIdleI,
+                Vars {
+                    requested: String::from(""),
+                    db_region: String::from(""),
+                    files_region: String::from(""),
+                    placed: false,
+                },
+            )
+        }
+
+        fn from_record(record: &records::RecPlacementChoice) -> Result<(State, Vars), RecordError> {
+            let state = State::from_id(&record.state).ok_or_else(|| {
+                RecordError(format!(
+                    "{:?} is not a state of machine `placement-choice-flow-impl`",
+                    record.state
+                ))
+            })?;
+            Ok((
+                state,
+                Vars {
+                    requested: record.requested.clone(),
+                    db_region: record.db_region.clone(),
+                    files_region: record.files_region.clone(),
+                    placed: record.placed,
+                },
+            ))
+        }
+
+        fn to_record(
+            key: &Key,
+            state: &State,
+            vars: &Vars,
+            _previous: Option<&records::RecPlacementChoice>,
+        ) -> Result<records::RecPlacementChoice, RecordError> {
+            Ok(records::RecPlacementChoice {
+                tenant_id: key.clone(),
+                requested: vars.requested.clone(),
+                db_region: vars.db_region.clone(),
+                files_region: vars.files_region.clone(),
+                placed: vars.placed,
+                state: state.id().to_string(),
+            })
+        }
+
+        fn is_elapsed(event: &Event) -> bool {
+            let _ = event;
+            false
+        }
+
+        fn validate_record(record: &records::RecPlacementChoice) -> Result<(), String> {
+            record.validate().map_err(|violation| violation.to_string())
+        }
+
+        fn step(
+            state: &State,
+            vars: &Vars,
+            event: &Event,
+            _now: Time,
+        ) -> Result<Outcome<Self>, StepError> {
+            match (state, event) {
+                (State::RgIdleI, Event::RgCreateRequested(payload)) => {
+                    if payload.region == "eu" || payload.region == "us" {
+                        let mut next = vars.clone();
+                        next.requested = payload.region.clone();
+                        next.db_region = payload.region.clone();
+                        next.files_region = payload.region.clone();
+                        next.placed = true;
+                        let emitted_5 = Emitted::RgTenantPlaced(RgTenantPlacedPayload {});
+                        Ok(Outcome::to(State::RgPlacedI, next).emit(
+                            "operator-console",
+                            Delivery::AtMostOnce,
+                            emitted_5,
+                        ))
+                    } else {
+                        if payload.region != "eu" && payload.region != "us" {
+                            Ok(Outcome::to(State::RgUnplacedI, vars.clone()).emit(
+                                "operator-console",
+                                Delivery::AtMostOnce,
+                                Emitted::RgPlacementRefused(RgPlacementRefusedPayload {}),
+                            ))
+                        } else {
+                            Ok(Outcome::ignore(*state, vars.clone()))
+                        }
+                    }
+                }
+                _ => Ok(Outcome::ignore(*state, vars.clone())),
+            }
+        }
+    }
+}
+
+/// Tenant deletion (implementation)
+///
+/// Deleting a tenant removes its database, then its stored files, then destroys its encryption key. The tenant is reported deleted only after all three; a step that fails leaves the tenant undeleted.
+///
+/// Specification behavior `tenant-deletion-flow-impl`, an implementation-level machine.
+pub mod tenant_deletion_flow_impl {
+    use serde::{Deserialize, Serialize};
+
+    use strata_runtime::{Delivery, Isolation, Machine, Outcome, RecordError, StepError, Time};
+
+    use crate::{records, types};
+
+    /// The states of machine `tenant-deletion-flow-impl`.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+
+    pub enum State {
+        /// State `td-live-i`: Live. Ignores `td-database-removed`, `td-files-removed`, `td-key-destroyed`, `td-step-failed`.
+        #[serde(rename = "td-live-i")]
+        TdLiveI,
+        /// State `td-removing-database-i`: Removing the database. Ignores `td-delete-requested`, `td-files-removed`, `td-key-destroyed`.
+        #[serde(rename = "td-removing-database-i")]
+        TdRemovingDatabaseI,
+        /// State `td-removing-files-i`: Removing the files. Ignores `td-delete-requested`, `td-database-removed`, `td-key-destroyed`.
+        #[serde(rename = "td-removing-files-i")]
+        TdRemovingFilesI,
+        /// State `td-destroying-key-i`: Destroying the key. Ignores `td-delete-requested`, `td-database-removed`, `td-files-removed`.
+        #[serde(rename = "td-destroying-key-i")]
+        TdDestroyingKeyI,
+        /// State `td-deleted-i`: Deleted. Terminal.
+        #[serde(rename = "td-deleted-i")]
+        TdDeletedI,
+        /// State `td-retained-i`: Deletion stopped. Terminal.
+        #[serde(rename = "td-retained-i")]
+        TdRetainedI,
+    }
+
+    impl State {
+        /// The state's id in the specification.
+        pub fn id(self) -> &'static str {
+            match self {
+                State::TdLiveI => "td-live-i",
+                State::TdRemovingDatabaseI => "td-removing-database-i",
+                State::TdRemovingFilesI => "td-removing-files-i",
+                State::TdDestroyingKeyI => "td-destroying-key-i",
+                State::TdDeletedI => "td-deleted-i",
+                State::TdRetainedI => "td-retained-i",
+            }
+        }
+
+        /// The state with this id in the specification.
+        pub fn from_id(id: &str) -> Option<State> {
+            match id {
+                "td-live-i" => Some(State::TdLiveI),
+                "td-removing-database-i" => Some(State::TdRemovingDatabaseI),
+                "td-removing-files-i" => Some(State::TdRemovingFilesI),
+                "td-destroying-key-i" => Some(State::TdDestroyingKeyI),
+                "td-deleted-i" => Some(State::TdDeletedI),
+                "td-retained-i" => Some(State::TdRetainedI),
+                _ => None,
+            }
+        }
+    }
+
+    /// The variables of the machine.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct Vars {
+        /// Variable `database`.
+        pub database: bool,
+        /// Variable `files`.
+        pub files: bool,
+        /// Variable `key`.
+        pub key: bool,
+        /// Variable `deleted`.
+        pub deleted: bool,
+    }
+
+    /// The payload of event `td-delete-requested`: Deletion requested.
+    ///
+    /// The tenant is to be deleted.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct TdDeleteRequestedPayload {
+        /// Field `tenant-id`.
+        #[serde(rename = "tenant-id")]
+        pub tenant_id: types::TenantId,
+    }
+
+    /// The payload of event `td-database-removed`: Database removed.
+    ///
+    /// The database of the tenant is gone.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct TdDatabaseRemovedPayload {
+        /// Field `tenant-id`.
+        #[serde(rename = "tenant-id")]
+        pub tenant_id: types::TenantId,
+    }
+
+    /// The payload of event `td-files-removed`: Files removed.
+    ///
+    /// The stored files of the tenant are gone.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct TdFilesRemovedPayload {
+        /// Field `tenant-id`.
+        #[serde(rename = "tenant-id")]
+        pub tenant_id: types::TenantId,
+    }
+
+    /// The payload of event `td-key-destroyed`: Key destroyed.
+    ///
+    /// The encryption key of the tenant is destroyed.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct TdKeyDestroyedPayload {
+        /// Field `tenant-id`.
+        #[serde(rename = "tenant-id")]
+        pub tenant_id: types::TenantId,
+    }
+
+    /// The payload of event `td-step-failed`: Deletion step failed.
+    ///
+    /// A step of the deletion failed.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct TdStepFailedPayload {
+        /// Field `tenant-id`.
+        #[serde(rename = "tenant-id")]
+        pub tenant_id: types::TenantId,
+    }
+
+    /// The payload of event `td-tenant-deleted`: Tenant deleted.
+    ///
+    /// The directory reports the tenant as deleted.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct TdTenantDeletedPayload {}
+
+    /// The payload of event `td-deletion-failed`: Deletion stopped.
+    ///
+    /// The deletion stopped before it was complete.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct TdDeletionFailedPayload {}
+
+    /// The events machine `tenant-deletion-flow-impl` receives, including those its timers fire.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Event {
+        /// Event `td-delete-requested`: Deletion requested.
+        #[serde(rename = "td-delete-requested")]
+        TdDeleteRequested(TdDeleteRequestedPayload),
+        /// Event `td-database-removed`: Database removed.
+        #[serde(rename = "td-database-removed")]
+        TdDatabaseRemoved(TdDatabaseRemovedPayload),
+        /// Event `td-files-removed`: Files removed.
+        #[serde(rename = "td-files-removed")]
+        TdFilesRemoved(TdFilesRemovedPayload),
+        /// Event `td-key-destroyed`: Key destroyed.
+        #[serde(rename = "td-key-destroyed")]
+        TdKeyDestroyed(TdKeyDestroyedPayload),
+        /// Event `td-step-failed`: Deletion step failed.
+        #[serde(rename = "td-step-failed")]
+        TdStepFailed(TdStepFailedPayload),
+    }
+
+    /// The events machine `tenant-deletion-flow-impl` emits.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Emitted {
+        /// Event `td-tenant-deleted`: Tenant deleted.
+        #[serde(rename = "td-tenant-deleted")]
+        TdTenantDeleted(TdTenantDeletedPayload),
+        /// Event `td-deletion-failed`: Deletion stopped.
+        #[serde(rename = "td-deletion-failed")]
+        TdDeletionFailed(TdDeletionFailedPayload),
+    }
+
+    /// The instance key: field `tenant-id` of record `rec-tenant-deletion`.
+    pub type Key = types::TenantId;
+
+    /// Machine `tenant-deletion-flow-impl`, stored in record `rec-tenant-deletion` by `tenant-id`.
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct TenantDeletionFlowImpl;
+
+    impl Machine for TenantDeletionFlowImpl {
+        const NAME: &'static str = "tenant-deletion-flow-impl";
+
+        const RECORD: &'static str = "rec-tenant-deletion";
+
+        const ISOLATION: Isolation = Isolation::Serializable;
+
+        const CREATES: bool = false;
+
+        type State = State;
+
+        type Vars = Vars;
+
+        type Event = Event;
+
+        type Emitted = Emitted;
+
+        type Key = Key;
+
+        type Record = records::RecTenantDeletion;
+
+        fn initial(_key: &Key) -> (State, Vars) {
+            (
+                State::TdLiveI,
+                Vars {
+                    database: true,
+                    files: true,
+                    key: true,
+                    deleted: false,
+                },
+            )
+        }
+
+        fn from_record(record: &records::RecTenantDeletion) -> Result<(State, Vars), RecordError> {
+            let state = State::from_id(&record.state).ok_or_else(|| {
+                RecordError(format!(
+                    "{:?} is not a state of machine `tenant-deletion-flow-impl`",
+                    record.state
+                ))
+            })?;
+            Ok((
+                state,
+                Vars {
+                    database: record.database,
+                    files: record.files,
+                    key: record.key,
+                    deleted: record.deleted,
+                },
+            ))
+        }
+
+        fn to_record(
+            key: &Key,
+            state: &State,
+            vars: &Vars,
+            _previous: Option<&records::RecTenantDeletion>,
+        ) -> Result<records::RecTenantDeletion, RecordError> {
+            Ok(records::RecTenantDeletion {
+                tenant_id: key.clone(),
+                database: vars.database,
+                files: vars.files,
+                key: vars.key,
+                deleted: vars.deleted,
+                state: state.id().to_string(),
+            })
+        }
+
+        fn is_elapsed(event: &Event) -> bool {
+            let _ = event;
+            false
+        }
+
+        fn validate_record(record: &records::RecTenantDeletion) -> Result<(), String> {
+            record.validate().map_err(|violation| violation.to_string())
+        }
+
+        fn step(
+            state: &State,
+            vars: &Vars,
+            event: &Event,
+            _now: Time,
+        ) -> Result<Outcome<Self>, StepError> {
+            match (state, event) {
+                (State::TdLiveI, Event::TdDeleteRequested(_)) => {
+                    Ok(Outcome::to(State::TdRemovingDatabaseI, vars.clone()))
+                }
+                (State::TdRemovingDatabaseI, Event::TdDatabaseRemoved(_)) => {
+                    let mut next = vars.clone();
+                    next.database = false;
+                    Ok(Outcome::to(State::TdRemovingFilesI, next))
+                }
+                (State::TdRemovingDatabaseI, Event::TdStepFailed(_)) => {
+                    Ok(Outcome::to(State::TdRetainedI, vars.clone()).emit(
+                        "operator-console",
+                        Delivery::AtMostOnce,
+                        Emitted::TdDeletionFailed(TdDeletionFailedPayload {}),
+                    ))
+                }
+                (State::TdRemovingFilesI, Event::TdFilesRemoved(_)) => {
+                    let mut next = vars.clone();
+                    next.files = false;
+                    Ok(Outcome::to(State::TdDestroyingKeyI, next))
+                }
+                (State::TdRemovingFilesI, Event::TdStepFailed(_)) => {
+                    Ok(Outcome::to(State::TdRetainedI, vars.clone()).emit(
+                        "operator-console",
+                        Delivery::AtMostOnce,
+                        Emitted::TdDeletionFailed(TdDeletionFailedPayload {}),
+                    ))
+                }
+                (State::TdDestroyingKeyI, Event::TdKeyDestroyed(_)) => {
+                    let mut next = vars.clone();
+                    next.key = false;
+                    next.deleted = true;
+                    let emitted_3 = Emitted::TdTenantDeleted(TdTenantDeletedPayload {});
+                    Ok(Outcome::to(State::TdDeletedI, next).emit(
+                        "operator-console",
+                        Delivery::AtMostOnce,
+                        emitted_3,
+                    ))
+                }
+                (State::TdDestroyingKeyI, Event::TdStepFailed(_)) => {
+                    Ok(Outcome::to(State::TdRetainedI, vars.clone()).emit(
+                        "operator-console",
+                        Delivery::AtMostOnce,
+                        Emitted::TdDeletionFailed(TdDeletionFailedPayload {}),
+                    ))
+                }
+                _ => Ok(Outcome::ignore(*state, vars.clone())),
+            }
+        }
+    }
+}
+
+/// Reading a backup (implementation)
+///
+/// The backup of tenant a. A read of it succeeds only with the key of tenant a; a key of any other tenant is refused.
+///
+/// Specification behavior `backup-key-flow-impl`, an implementation-level machine.
+pub mod backup_key_flow_impl {
+    use serde::{Deserialize, Serialize};
+
+    use strata_runtime::{Delivery, Isolation, Machine, Outcome, RecordError, StepError, Time};
+
+    use crate::{records, types};
+
+    /// The states of machine `backup-key-flow-impl`.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+
+    pub enum State {
+        /// State `bk-open-i`: Backup held.
+        #[serde(rename = "bk-open-i")]
+        BkOpenI,
+    }
+
+    impl State {
+        /// The state's id in the specification.
+        pub fn id(self) -> &'static str {
+            match self {
+                State::BkOpenI => "bk-open-i",
+            }
+        }
+
+        /// The state with this id in the specification.
+        pub fn from_id(id: &str) -> Option<State> {
+            match id {
+                "bk-open-i" => Some(State::BkOpenI),
+                _ => None,
+            }
+        }
+    }
+
+    /// The variables of the machine.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct Vars {
+        /// Variable `backupOwner`.
+        #[serde(rename = "backupOwner")]
+        pub backup_owner: String,
+        /// Variable `readsAccepted`.
+        #[serde(rename = "readsAccepted")]
+        pub reads_accepted: u64,
+        /// Variable `lastReadKeyOwner`.
+        #[serde(rename = "lastReadKeyOwner")]
+        pub last_read_key_owner: String,
+    }
+
+    /// The payload of event `bk-read-requested`: Read requested.
+    ///
+    /// The backup is read with the key of the named tenant.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct BkReadRequestedPayload {
+        /// Field `tenant-id`.
+        #[serde(rename = "tenant-id")]
+        pub tenant_id: types::TenantId,
+        /// Field `keyOwner`.
+        #[serde(rename = "keyOwner")]
+        pub key_owner: String,
+    }
+
+    /// The payload of event `bk-read-accepted`: Read accepted.
+    ///
+    /// The backup is decrypted.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct BkReadAcceptedPayload {}
+
+    /// The payload of event `bk-read-refused`: Read refused.
+    ///
+    /// The key does not open the backup.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct BkReadRefusedPayload {}
+
+    /// The events machine `backup-key-flow-impl` receives, including those its timers fire.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Event {
+        /// Event `bk-read-requested`: Read requested.
+        #[serde(rename = "bk-read-requested")]
+        BkReadRequested(BkReadRequestedPayload),
+    }
+
+    /// The events machine `backup-key-flow-impl` emits.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Emitted {
+        /// Event `bk-read-accepted`: Read accepted.
+        #[serde(rename = "bk-read-accepted")]
+        BkReadAccepted(BkReadAcceptedPayload),
+        /// Event `bk-read-refused`: Read refused.
+        #[serde(rename = "bk-read-refused")]
+        BkReadRefused(BkReadRefusedPayload),
+    }
+
+    /// The instance key: field `tenant-id` of record `rec-backup-key`.
+    pub type Key = types::TenantId;
+
+    /// Machine `backup-key-flow-impl`, stored in record `rec-backup-key` by `tenant-id`.
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct BackupKeyFlowImpl;
+
+    /// The refusal of a step whose arithmetic overflows or divides by zero.
+    fn overflow(transition: &str) -> StepError {
+        StepError::Rejected(format!(
+            "transition {transition} overflowed or divided by zero"
+        ))
+    }
+
+    impl Machine for BackupKeyFlowImpl {
+        const NAME: &'static str = "backup-key-flow-impl";
+
+        const RECORD: &'static str = "rec-backup-key";
+
+        const ISOLATION: Isolation = Isolation::Serializable;
+
+        const CREATES: bool = false;
+
+        type State = State;
+
+        type Vars = Vars;
+
+        type Event = Event;
+
+        type Emitted = Emitted;
+
+        type Key = Key;
+
+        type Record = records::RecBackupKey;
+
+        fn initial(_key: &Key) -> (State, Vars) {
+            (
+                State::BkOpenI,
+                Vars {
+                    backup_owner: String::from("a"),
+                    reads_accepted: 0u64,
+                    last_read_key_owner: String::from(""),
+                },
+            )
+        }
+
+        fn from_record(record: &records::RecBackupKey) -> Result<(State, Vars), RecordError> {
+            let state = State::from_id(&record.state).ok_or_else(|| {
+                RecordError(format!(
+                    "{:?} is not a state of machine `backup-key-flow-impl`",
+                    record.state
+                ))
+            })?;
+            Ok((
+                state,
+                Vars {
+                    backup_owner: record.backup_owner.clone(),
+                    reads_accepted: record.reads_accepted,
+                    last_read_key_owner: record.last_read_key_owner.clone(),
+                },
+            ))
+        }
+
+        fn to_record(
+            key: &Key,
+            state: &State,
+            vars: &Vars,
+            _previous: Option<&records::RecBackupKey>,
+        ) -> Result<records::RecBackupKey, RecordError> {
+            Ok(records::RecBackupKey {
+                tenant_id: key.clone(),
+                backup_owner: vars.backup_owner.clone(),
+                reads_accepted: vars.reads_accepted,
+                last_read_key_owner: vars.last_read_key_owner.clone(),
+                state: state.id().to_string(),
+            })
+        }
+
+        fn is_elapsed(event: &Event) -> bool {
+            let _ = event;
+            false
+        }
+
+        fn validate_record(record: &records::RecBackupKey) -> Result<(), String> {
+            record.validate().map_err(|violation| violation.to_string())
+        }
+
+        fn step(
+            state: &State,
+            vars: &Vars,
+            event: &Event,
+            _now: Time,
+        ) -> Result<Outcome<Self>, StepError> {
+            match (state, event) {
+                (State::BkOpenI, Event::BkReadRequested(payload)) => {
+                    if payload.key_owner == vars.backup_owner {
+                        let mut next = vars.clone();
+                        next.reads_accepted = next
+                            .reads_accepted
+                            .checked_add(1u64)
+                            .filter(|__v| *__v <= 9007199254740991u64)
+                            .ok_or(overflow("bk-read-i"))?;
+                        next.last_read_key_owner = payload.key_owner.clone();
+                        let emitted_3 = Emitted::BkReadAccepted(BkReadAcceptedPayload {});
+                        Ok(Outcome::to(State::BkOpenI, next).emit(
+                            "operator-console",
+                            Delivery::AtMostOnce,
+                            emitted_3,
+                        ))
+                    } else {
+                        if payload.key_owner != vars.backup_owner {
+                            Ok(Outcome::to(State::BkOpenI, vars.clone()).emit(
+                                "operator-console",
+                                Delivery::AtMostOnce,
+                                Emitted::BkReadRefused(BkReadRefusedPayload {}),
+                            ))
+                        } else {
+                            Ok(Outcome::ignore(*state, vars.clone()))
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Runtime database credentials (implementation)
+///
+/// One runtime instance. It holds the database credential of a placement only while it serves that placement: the credential is issued when it starts serving and ends when it stops. A request to open a database without a credential for that placement is refused.
+///
+/// Specification behavior `runtime-credential-flow-impl`, an implementation-level machine.
+pub mod runtime_credential_flow_impl {
+    use serde::{Deserialize, Serialize};
+
+    use strata_runtime::{Delivery, Isolation, Machine, Outcome, RecordError, StepError, Time};
+
+    use crate::{records, types};
+
+    /// The states of machine `runtime-credential-flow-impl`.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+
+    pub enum State {
+        /// State `rc-running-i`: Running.
+        #[serde(rename = "rc-running-i")]
+        RcRunningI,
+    }
+
+    impl State {
+        /// The state's id in the specification.
+        pub fn id(self) -> &'static str {
+            match self {
+                State::RcRunningI => "rc-running-i",
+            }
+        }
+
+        /// The state with this id in the specification.
+        pub fn from_id(id: &str) -> Option<State> {
+            match id {
+                "rc-running-i" => Some(State::RcRunningI),
+                _ => None,
+            }
+        }
+    }
+
+    /// The variables of the machine.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct Vars {
+        /// Variable `servedPlacement`.
+        #[serde(rename = "servedPlacement")]
+        pub served_placement: String,
+        /// Variable `credentialFor`.
+        #[serde(rename = "credentialFor")]
+        pub credential_for: String,
+    }
+
+    /// The payload of event `rc-serve-requested`: Serve requested.
+    ///
+    /// The instance starts to serve a placement.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct RcServeRequestedPayload {
+        /// Field `tenant-id`.
+        #[serde(rename = "tenant-id")]
+        pub tenant_id: types::TenantId,
+        /// Field `placement`.
+        pub placement: String,
+    }
+
+    /// The payload of event `rc-stop-serving`: Stop serving.
+    ///
+    /// The instance stops serving its placement.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct RcStopServingPayload {
+        /// Field `tenant-id`.
+        #[serde(rename = "tenant-id")]
+        pub tenant_id: types::TenantId,
+    }
+
+    /// The payload of event `rc-open-requested`: Open requested.
+    ///
+    /// The instance opens the tenant database of a placement.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct RcOpenRequestedPayload {
+        /// Field `tenant-id`.
+        #[serde(rename = "tenant-id")]
+        pub tenant_id: types::TenantId,
+        /// Field `placement`.
+        pub placement: String,
+    }
+
+    /// The payload of event `rc-database-opened`: Database opened.
+    ///
+    /// The instance opened the database with its credential.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct RcDatabaseOpenedPayload {}
+
+    /// The payload of event `rc-open-refused`: Open refused.
+    ///
+    /// The instance holds no credential for the placement.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct RcOpenRefusedPayload {}
+
+    /// The events machine `runtime-credential-flow-impl` receives, including those its timers fire.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Event {
+        /// Event `rc-serve-requested`: Serve requested.
+        #[serde(rename = "rc-serve-requested")]
+        RcServeRequested(RcServeRequestedPayload),
+        /// Event `rc-stop-serving`: Stop serving.
+        #[serde(rename = "rc-stop-serving")]
+        RcStopServing(RcStopServingPayload),
+        /// Event `rc-open-requested`: Open requested.
+        #[serde(rename = "rc-open-requested")]
+        RcOpenRequested(RcOpenRequestedPayload),
+    }
+
+    /// The events machine `runtime-credential-flow-impl` emits.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Emitted {
+        /// Event `rc-database-opened`: Database opened.
+        #[serde(rename = "rc-database-opened")]
+        RcDatabaseOpened(RcDatabaseOpenedPayload),
+        /// Event `rc-open-refused`: Open refused.
+        #[serde(rename = "rc-open-refused")]
+        RcOpenRefused(RcOpenRefusedPayload),
+    }
+
+    /// The instance key: field `tenant-id` of record `rec-runtime-credential`.
+    pub type Key = types::TenantId;
+
+    /// Machine `runtime-credential-flow-impl`, stored in record `rec-runtime-credential` by `tenant-id`.
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct RuntimeCredentialFlowImpl;
+
+    impl Machine for RuntimeCredentialFlowImpl {
+        const NAME: &'static str = "runtime-credential-flow-impl";
+
+        const RECORD: &'static str = "rec-runtime-credential";
+
+        const ISOLATION: Isolation = Isolation::Serializable;
+
+        const CREATES: bool = false;
+
+        type State = State;
+
+        type Vars = Vars;
+
+        type Event = Event;
+
+        type Emitted = Emitted;
+
+        type Key = Key;
+
+        type Record = records::RecRuntimeCredential;
+
+        fn initial(_key: &Key) -> (State, Vars) {
+            (
+                State::RcRunningI,
+                Vars {
+                    served_placement: String::from(""),
+                    credential_for: String::from(""),
+                },
+            )
+        }
+
+        fn from_record(
+            record: &records::RecRuntimeCredential,
+        ) -> Result<(State, Vars), RecordError> {
+            let state = State::from_id(&record.state).ok_or_else(|| {
+                RecordError(format!(
+                    "{:?} is not a state of machine `runtime-credential-flow-impl`",
+                    record.state
+                ))
+            })?;
+            Ok((
+                state,
+                Vars {
+                    served_placement: record.served_placement.clone(),
+                    credential_for: record.credential_for.clone(),
+                },
+            ))
+        }
+
+        fn to_record(
+            key: &Key,
+            state: &State,
+            vars: &Vars,
+            _previous: Option<&records::RecRuntimeCredential>,
+        ) -> Result<records::RecRuntimeCredential, RecordError> {
+            Ok(records::RecRuntimeCredential {
+                tenant_id: key.clone(),
+                served_placement: vars.served_placement.clone(),
+                credential_for: vars.credential_for.clone(),
+                state: state.id().to_string(),
+            })
+        }
+
+        fn is_elapsed(event: &Event) -> bool {
+            let _ = event;
+            false
+        }
+
+        fn validate_record(record: &records::RecRuntimeCredential) -> Result<(), String> {
+            record.validate().map_err(|violation| violation.to_string())
+        }
+
+        fn step(
+            state: &State,
+            vars: &Vars,
+            event: &Event,
+            _now: Time,
+        ) -> Result<Outcome<Self>, StepError> {
+            match (state, event) {
+                (State::RcRunningI, Event::RcServeRequested(payload)) => {
+                    let mut next = vars.clone();
+                    next.served_placement = payload.placement.clone();
+                    next.credential_for = payload.placement.clone();
+                    Ok(Outcome::to(State::RcRunningI, next))
+                }
+                (State::RcRunningI, Event::RcStopServing(_)) => {
+                    let mut next = vars.clone();
+                    next.served_placement = ::std::string::String::from("");
+                    next.credential_for = ::std::string::String::from("");
+                    Ok(Outcome::to(State::RcRunningI, next))
+                }
+                (State::RcRunningI, Event::RcOpenRequested(payload)) => {
+                    if vars.credential_for != "" && payload.placement == vars.credential_for {
+                        Ok(Outcome::to(State::RcRunningI, vars.clone()).emit(
+                            "tenant-database",
+                            Delivery::AtMostOnce,
+                            Emitted::RcDatabaseOpened(RcDatabaseOpenedPayload {}),
+                        ))
+                    } else {
+                        if vars.credential_for == "" || payload.placement != vars.credential_for {
+                            Ok(Outcome::to(State::RcRunningI, vars.clone()).emit(
+                                "tenant-database",
+                                Delivery::AtMostOnce,
+                                Emitted::RcOpenRefused(RcOpenRefusedPayload {}),
+                            ))
+                        } else {
+                            Ok(Outcome::ignore(*state, vars.clone()))
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Export and restore of a tenant (implementation)
+///
+/// A tenant is exported and the export is restored. As in the tenant move, the canonical hash of a state is modelled as the number of writes it holds. A restore is accepted only into an empty installation, and the restored state holds exactly the writes the export held.
+///
+/// Specification behavior `export-restore-flow-impl`, an implementation-level machine.
+pub mod export_restore_flow_impl {
+    use serde::{Deserialize, Serialize};
+
+    use strata_runtime::{Delivery, Isolation, Machine, Outcome, RecordError, StepError, Time};
+
+    use crate::{records, types};
+
+    /// The states of machine `export-restore-flow-impl`.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+
+    pub enum State {
+        /// State `er-live-i`: Live. Ignores `er-restore-requested`.
+        #[serde(rename = "er-live-i")]
+        ErLiveI,
+        /// State `er-exported-i`: Exported. Ignores `er-export-requested`.
+        #[serde(rename = "er-exported-i")]
+        ErExportedI,
+        /// State `er-restored-i`: Restored. Terminal.
+        #[serde(rename = "er-restored-i")]
+        ErRestoredI,
+    }
+
+    impl State {
+        /// The state's id in the specification.
+        pub fn id(self) -> &'static str {
+            match self {
+                State::ErLiveI => "er-live-i",
+                State::ErExportedI => "er-exported-i",
+                State::ErRestoredI => "er-restored-i",
+            }
+        }
+
+        /// The state with this id in the specification.
+        pub fn from_id(id: &str) -> Option<State> {
+            match id {
+                "er-live-i" => Some(State::ErLiveI),
+                "er-exported-i" => Some(State::ErExportedI),
+                "er-restored-i" => Some(State::ErRestoredI),
+                _ => None,
+            }
+        }
+    }
+
+    /// The variables of the machine.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct Vars {
+        /// Variable `version`.
+        pub version: u64,
+        /// Variable `exportedVersion`.
+        #[serde(rename = "exportedVersion")]
+        pub exported_version: u64,
+        /// Variable `restoredVersion`.
+        #[serde(rename = "restoredVersion")]
+        pub restored_version: u64,
+        /// Variable `restored`.
+        pub restored: bool,
+    }
+
+    /// The payload of event `er-write-requested`: Write requested.
+    ///
+    /// A write to the tenant.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct ErWriteRequestedPayload {
+        /// Field `tenant-id`.
+        #[serde(rename = "tenant-id")]
+        pub tenant_id: types::TenantId,
+    }
+
+    /// The payload of event `er-export-requested`: Export requested.
+    ///
+    /// The tenant is exported.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct ErExportRequestedPayload {
+        /// Field `tenant-id`.
+        #[serde(rename = "tenant-id")]
+        pub tenant_id: types::TenantId,
+    }
+
+    /// The payload of event `er-restore-requested`: Restore requested.
+    ///
+    /// The export is restored into an installation.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct ErRestoreRequestedPayload {
+        /// Field `tenant-id`.
+        #[serde(rename = "tenant-id")]
+        pub tenant_id: types::TenantId,
+        /// Field `empty`.
+        pub empty: bool,
+    }
+
+    /// The payload of event `er-tenant-restored`: Tenant restored.
+    ///
+    /// The export is restored.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct ErTenantRestoredPayload {}
+
+    /// The payload of event `er-restore-refused`: Restore refused.
+    ///
+    /// The installation is not empty.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct ErRestoreRefusedPayload {}
+
+    /// The events machine `export-restore-flow-impl` receives, including those its timers fire.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Event {
+        /// Event `er-write-requested`: Write requested.
+        #[serde(rename = "er-write-requested")]
+        ErWriteRequested(ErWriteRequestedPayload),
+        /// Event `er-export-requested`: Export requested.
+        #[serde(rename = "er-export-requested")]
+        ErExportRequested(ErExportRequestedPayload),
+        /// Event `er-restore-requested`: Restore requested.
+        #[serde(rename = "er-restore-requested")]
+        ErRestoreRequested(ErRestoreRequestedPayload),
+    }
+
+    /// The events machine `export-restore-flow-impl` emits.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Emitted {
+        /// Event `er-tenant-restored`: Tenant restored.
+        #[serde(rename = "er-tenant-restored")]
+        ErTenantRestored(ErTenantRestoredPayload),
+        /// Event `er-restore-refused`: Restore refused.
+        #[serde(rename = "er-restore-refused")]
+        ErRestoreRefused(ErRestoreRefusedPayload),
+    }
+
+    /// The instance key: field `tenant-id` of record `rec-export-restore`.
+    pub type Key = types::TenantId;
+
+    /// Machine `export-restore-flow-impl`, stored in record `rec-export-restore` by `tenant-id`.
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct ExportRestoreFlowImpl;
+
+    /// The refusal of a step whose arithmetic overflows or divides by zero.
+    fn overflow(transition: &str) -> StepError {
+        StepError::Rejected(format!(
+            "transition {transition} overflowed or divided by zero"
+        ))
+    }
+
+    impl Machine for ExportRestoreFlowImpl {
+        const NAME: &'static str = "export-restore-flow-impl";
+
+        const RECORD: &'static str = "rec-export-restore";
+
+        const ISOLATION: Isolation = Isolation::Serializable;
+
+        const CREATES: bool = false;
+
+        type State = State;
+
+        type Vars = Vars;
+
+        type Event = Event;
+
+        type Emitted = Emitted;
+
+        type Key = Key;
+
+        type Record = records::RecExportRestore;
+
+        fn initial(_key: &Key) -> (State, Vars) {
+            (
+                State::ErLiveI,
+                Vars {
+                    version: 0u64,
+                    exported_version: 0u64,
+                    restored_version: 0u64,
+                    restored: false,
+                },
+            )
+        }
+
+        fn from_record(record: &records::RecExportRestore) -> Result<(State, Vars), RecordError> {
+            let state = State::from_id(&record.state).ok_or_else(|| {
+                RecordError(format!(
+                    "{:?} is not a state of machine `export-restore-flow-impl`",
+                    record.state
+                ))
+            })?;
+            Ok((
+                state,
+                Vars {
+                    version: record.version,
+                    exported_version: record.exported_version,
+                    restored_version: record.restored_version,
+                    restored: record.restored,
+                },
+            ))
+        }
+
+        fn to_record(
+            key: &Key,
+            state: &State,
+            vars: &Vars,
+            _previous: Option<&records::RecExportRestore>,
+        ) -> Result<records::RecExportRestore, RecordError> {
+            Ok(records::RecExportRestore {
+                tenant_id: key.clone(),
+                version: vars.version,
+                exported_version: vars.exported_version,
+                restored_version: vars.restored_version,
+                restored: vars.restored,
+                state: state.id().to_string(),
+            })
+        }
+
+        fn is_elapsed(event: &Event) -> bool {
+            let _ = event;
+            false
+        }
+
+        fn validate_record(record: &records::RecExportRestore) -> Result<(), String> {
+            record.validate().map_err(|violation| violation.to_string())
+        }
+
+        fn step(
+            state: &State,
+            vars: &Vars,
+            event: &Event,
+            _now: Time,
+        ) -> Result<Outcome<Self>, StepError> {
+            match (state, event) {
+                (State::ErLiveI, Event::ErWriteRequested(_)) => {
+                    let mut next = vars.clone();
+                    next.version = next
+                        .version
+                        .checked_add(1u64)
+                        .filter(|__v| *__v <= 9007199254740991u64)
+                        .ok_or(overflow("er-write-i"))?;
+                    Ok(Outcome::to(State::ErLiveI, next))
+                }
+                (State::ErLiveI, Event::ErExportRequested(_)) => {
+                    let mut next = vars.clone();
+                    next.exported_version = next.version;
+                    Ok(Outcome::to(State::ErExportedI, next))
+                }
+                (State::ErExportedI, Event::ErWriteRequested(_)) => {
+                    let mut next = vars.clone();
+                    next.version = next
+                        .version
+                        .checked_add(1u64)
+                        .filter(|__v| *__v <= 9007199254740991u64)
+                        .ok_or(overflow("er-write-after-export-i"))?;
+                    Ok(Outcome::to(State::ErExportedI, next))
+                }
+                (State::ErExportedI, Event::ErRestoreRequested(payload)) => {
+                    if payload.empty {
+                        let mut next = vars.clone();
+                        next.restored_version = next.exported_version;
+                        next.restored = true;
+                        let emitted_3 = Emitted::ErTenantRestored(ErTenantRestoredPayload {});
+                        Ok(Outcome::to(State::ErRestoredI, next).emit(
+                            "operator-console",
+                            Delivery::AtMostOnce,
+                            emitted_3,
+                        ))
+                    } else {
+                        if !payload.empty {
+                            Ok(Outcome::to(State::ErExportedI, vars.clone()).emit(
+                                "operator-console",
+                                Delivery::AtMostOnce,
+                                Emitted::ErRestoreRefused(ErRestoreRefusedPayload {}),
+                            ))
+                        } else {
+                            Ok(Outcome::ignore(*state, vars.clone()))
+                        }
+                    }
+                }
+                _ => Ok(Outcome::ignore(*state, vars.clone())),
+            }
+        }
+    }
+}
+
+/// Point-in-time restore (implementation)
+///
+/// A tenant is restored to a point in time. The journal records the state hash at the point (modelled as the number of writes the state holds, as in the tenant move); the restored tenant holds the writes up to the point and none after it.
+///
+/// Specification behavior `point-in-time-flow-impl`, an implementation-level machine.
+pub mod point_in_time_flow_impl {
+    use serde::{Deserialize, Serialize};
+
+    use strata_runtime::{Delivery, Isolation, Machine, Outcome, RecordError, StepError, Time};
+
+    use crate::{records, types};
+
+    /// The states of machine `point-in-time-flow-impl`.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+
+    pub enum State {
+        /// State `pt-live-i`: Live.
+        #[serde(rename = "pt-live-i")]
+        PtLiveI,
+        /// State `pt-restored-i`: Restored. Terminal.
+        #[serde(rename = "pt-restored-i")]
+        PtRestoredI,
+    }
+
+    impl State {
+        /// The state's id in the specification.
+        pub fn id(self) -> &'static str {
+            match self {
+                State::PtLiveI => "pt-live-i",
+                State::PtRestoredI => "pt-restored-i",
+            }
+        }
+
+        /// The state with this id in the specification.
+        pub fn from_id(id: &str) -> Option<State> {
+            match id {
+                "pt-live-i" => Some(State::PtLiveI),
+                "pt-restored-i" => Some(State::PtRestoredI),
+                _ => None,
+            }
+        }
+    }
+
+    /// The variables of the machine.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct Vars {
+        /// Variable `version`.
+        pub version: u64,
+        /// Variable `journalPoint`.
+        #[serde(rename = "journalPoint")]
+        pub journal_point: u64,
+        /// Variable `pointMarked`.
+        #[serde(rename = "pointMarked")]
+        pub point_marked: bool,
+        /// Variable `restoredTo`.
+        #[serde(rename = "restoredTo")]
+        pub restored_to: u64,
+        /// Variable `restored`.
+        pub restored: bool,
+    }
+
+    /// The payload of event `pt-write-requested`: Write requested.
+    ///
+    /// A write to the tenant.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct PtWriteRequestedPayload {
+        /// Field `tenant-id`.
+        #[serde(rename = "tenant-id")]
+        pub tenant_id: types::TenantId,
+    }
+
+    /// The payload of event `pt-point-reached`: Point reached.
+    ///
+    /// The point in time the tenant will be restored to; the journal records the hash.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct PtPointReachedPayload {
+        /// Field `tenant-id`.
+        #[serde(rename = "tenant-id")]
+        pub tenant_id: types::TenantId,
+    }
+
+    /// The payload of event `pt-restore-requested`: Restore requested.
+    ///
+    /// The tenant is restored to the point.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct PtRestoreRequestedPayload {
+        /// Field `tenant-id`.
+        #[serde(rename = "tenant-id")]
+        pub tenant_id: types::TenantId,
+    }
+
+    /// The payload of event `pt-tenant-restored`: Tenant restored.
+    ///
+    /// The tenant holds the state of the point.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct PtTenantRestoredPayload {}
+
+    /// The payload of event `pt-restore-refused`: Restore refused.
+    ///
+    /// No point in time was recorded.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct PtRestoreRefusedPayload {}
+
+    /// The events machine `point-in-time-flow-impl` receives, including those its timers fire.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Event {
+        /// Event `pt-write-requested`: Write requested.
+        #[serde(rename = "pt-write-requested")]
+        PtWriteRequested(PtWriteRequestedPayload),
+        /// Event `pt-point-reached`: Point reached.
+        #[serde(rename = "pt-point-reached")]
+        PtPointReached(PtPointReachedPayload),
+        /// Event `pt-restore-requested`: Restore requested.
+        #[serde(rename = "pt-restore-requested")]
+        PtRestoreRequested(PtRestoreRequestedPayload),
+    }
+
+    /// The events machine `point-in-time-flow-impl` emits.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Emitted {
+        /// Event `pt-tenant-restored`: Tenant restored.
+        #[serde(rename = "pt-tenant-restored")]
+        PtTenantRestored(PtTenantRestoredPayload),
+        /// Event `pt-restore-refused`: Restore refused.
+        #[serde(rename = "pt-restore-refused")]
+        PtRestoreRefused(PtRestoreRefusedPayload),
+    }
+
+    /// The instance key: field `tenant-id` of record `rec-point-in-time`.
+    pub type Key = types::TenantId;
+
+    /// Machine `point-in-time-flow-impl`, stored in record `rec-point-in-time` by `tenant-id`.
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct PointInTimeFlowImpl;
+
+    /// The refusal of a step whose arithmetic overflows or divides by zero.
+    fn overflow(transition: &str) -> StepError {
+        StepError::Rejected(format!(
+            "transition {transition} overflowed or divided by zero"
+        ))
+    }
+
+    impl Machine for PointInTimeFlowImpl {
+        const NAME: &'static str = "point-in-time-flow-impl";
+
+        const RECORD: &'static str = "rec-point-in-time";
+
+        const ISOLATION: Isolation = Isolation::Serializable;
+
+        const CREATES: bool = false;
+
+        type State = State;
+
+        type Vars = Vars;
+
+        type Event = Event;
+
+        type Emitted = Emitted;
+
+        type Key = Key;
+
+        type Record = records::RecPointInTime;
+
+        fn initial(_key: &Key) -> (State, Vars) {
+            (
+                State::PtLiveI,
+                Vars {
+                    version: 0u64,
+                    journal_point: 0u64,
+                    point_marked: false,
+                    restored_to: 0u64,
+                    restored: false,
+                },
+            )
+        }
+
+        fn from_record(record: &records::RecPointInTime) -> Result<(State, Vars), RecordError> {
+            let state = State::from_id(&record.state).ok_or_else(|| {
+                RecordError(format!(
+                    "{:?} is not a state of machine `point-in-time-flow-impl`",
+                    record.state
+                ))
+            })?;
+            Ok((
+                state,
+                Vars {
+                    version: record.version,
+                    journal_point: record.journal_point,
+                    point_marked: record.point_marked,
+                    restored_to: record.restored_to,
+                    restored: record.restored,
+                },
+            ))
+        }
+
+        fn to_record(
+            key: &Key,
+            state: &State,
+            vars: &Vars,
+            _previous: Option<&records::RecPointInTime>,
+        ) -> Result<records::RecPointInTime, RecordError> {
+            Ok(records::RecPointInTime {
+                tenant_id: key.clone(),
+                version: vars.version,
+                journal_point: vars.journal_point,
+                point_marked: vars.point_marked,
+                restored_to: vars.restored_to,
+                restored: vars.restored,
+                state: state.id().to_string(),
+            })
+        }
+
+        fn is_elapsed(event: &Event) -> bool {
+            let _ = event;
+            false
+        }
+
+        fn validate_record(record: &records::RecPointInTime) -> Result<(), String> {
+            record.validate().map_err(|violation| violation.to_string())
+        }
+
+        fn step(
+            state: &State,
+            vars: &Vars,
+            event: &Event,
+            _now: Time,
+        ) -> Result<Outcome<Self>, StepError> {
+            match (state, event) {
+                (State::PtLiveI, Event::PtWriteRequested(_)) => {
+                    let mut next = vars.clone();
+                    next.version = next
+                        .version
+                        .checked_add(1u64)
+                        .filter(|__v| *__v <= 9007199254740991u64)
+                        .ok_or(overflow("pt-write-i"))?;
+                    Ok(Outcome::to(State::PtLiveI, next))
+                }
+                (State::PtLiveI, Event::PtPointReached(_)) => {
+                    let mut next = vars.clone();
+                    next.journal_point = next.version;
+                    next.point_marked = true;
+                    Ok(Outcome::to(State::PtLiveI, next))
+                }
+                (State::PtLiveI, Event::PtRestoreRequested(_)) => {
+                    if vars.point_marked {
+                        let mut next = vars.clone();
+                        next.restored_to = next.journal_point;
+                        next.restored = true;
+                        let emitted_3 = Emitted::PtTenantRestored(PtTenantRestoredPayload {});
+                        Ok(Outcome::to(State::PtRestoredI, next).emit(
+                            "operator-console",
+                            Delivery::AtMostOnce,
+                            emitted_3,
+                        ))
+                    } else {
+                        if !vars.point_marked {
+                            Ok(Outcome::to(State::PtLiveI, vars.clone()).emit(
+                                "operator-console",
+                                Delivery::AtMostOnce,
+                                Emitted::PtRestoreRefused(PtRestoreRefusedPayload {}),
+                            ))
+                        } else {
+                            Ok(Outcome::ignore(*state, vars.clone()))
+                        }
+                    }
+                }
+                _ => Ok(Outcome::ignore(*state, vars.clone())),
+            }
+        }
+    }
+}
+
+/// Serving under a newer kernel (implementation)
+///
+/// A tenant served by one kernel version is moved to a newer one. The journal of the tenant is replayed under the newer version; the tenant is served by it only when the replay reaches the state hash the journal records (modelled as a number).
+///
+/// Specification behavior `kernel-upgrade-flow-impl`, an implementation-level machine.
+pub mod kernel_upgrade_flow_impl {
+    use serde::{Deserialize, Serialize};
+
+    use strata_runtime::{Delivery, Isolation, Machine, Outcome, RecordError, StepError, Time};
+
+    use crate::{prelude, records, types};
+
+    /// The states of machine `kernel-upgrade-flow-impl`.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+
+    pub enum State {
+        /// State `ku-old-i`: Served by the current version.
+        #[serde(rename = "ku-old-i")]
+        KuOldI,
+        /// State `ku-new-i`: Served by the newer version. Terminal.
+        #[serde(rename = "ku-new-i")]
+        KuNewI,
+    }
+
+    impl State {
+        /// The state's id in the specification.
+        pub fn id(self) -> &'static str {
+            match self {
+                State::KuOldI => "ku-old-i",
+                State::KuNewI => "ku-new-i",
+            }
+        }
+
+        /// The state with this id in the specification.
+        pub fn from_id(id: &str) -> Option<State> {
+            match id {
+                "ku-old-i" => Some(State::KuOldI),
+                "ku-new-i" => Some(State::KuNewI),
+                _ => None,
+            }
+        }
+    }
+
+    /// The variables of the machine.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct Vars {
+        /// Variable `journalHash`.
+        #[serde(rename = "journalHash")]
+        pub journal_hash: u64,
+        /// Variable `replayed`.
+        pub replayed: bool,
+        /// Variable `replayedHash`.
+        #[serde(rename = "replayedHash")]
+        pub replayed_hash: u64,
+        /// Variable `servedByNew`.
+        #[serde(rename = "servedByNew")]
+        pub served_by_new: bool,
+    }
+
+    /// The payload of event `ku-replay-finished`: Replay finished.
+    ///
+    /// The journal was replayed under the newer version.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct KuReplayFinishedPayload {
+        /// Field `tenant-id`.
+        #[serde(rename = "tenant-id")]
+        pub tenant_id: types::TenantId,
+        #[serde(deserialize_with = "prelude::safe_u64")]
+        /// Field `replayedHash`.
+        #[serde(rename = "replayedHash")]
+        pub replayed_hash: u64,
+    }
+
+    /// The payload of event `ku-serve-requested`: Serving requested.
+    ///
+    /// The tenant is to be served by the newer version.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct KuServeRequestedPayload {
+        /// Field `tenant-id`.
+        #[serde(rename = "tenant-id")]
+        pub tenant_id: types::TenantId,
+    }
+
+    /// The payload of event `ku-served-by-new`: Served by the newer version.
+    ///
+    /// The tenant is served by the newer kernel version.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct KuServedByNewPayload {}
+
+    /// The payload of event `ku-serve-refused`: Serving refused.
+    ///
+    /// The replay did not reach the recorded hash.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct KuServeRefusedPayload {}
+
+    /// The events machine `kernel-upgrade-flow-impl` receives, including those its timers fire.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Event {
+        /// Event `ku-replay-finished`: Replay finished.
+        #[serde(rename = "ku-replay-finished")]
+        KuReplayFinished(KuReplayFinishedPayload),
+        /// Event `ku-serve-requested`: Serving requested.
+        #[serde(rename = "ku-serve-requested")]
+        KuServeRequested(KuServeRequestedPayload),
+    }
+
+    /// The events machine `kernel-upgrade-flow-impl` emits.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Emitted {
+        /// Event `ku-served-by-new`: Served by the newer version.
+        #[serde(rename = "ku-served-by-new")]
+        KuServedByNew(KuServedByNewPayload),
+        /// Event `ku-serve-refused`: Serving refused.
+        #[serde(rename = "ku-serve-refused")]
+        KuServeRefused(KuServeRefusedPayload),
+    }
+
+    /// The instance key: field `tenant-id` of record `rec-kernel-upgrade`.
+    pub type Key = types::TenantId;
+
+    /// Machine `kernel-upgrade-flow-impl`, stored in record `rec-kernel-upgrade` by `tenant-id`.
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct KernelUpgradeFlowImpl;
+
+    impl Machine for KernelUpgradeFlowImpl {
+        const NAME: &'static str = "kernel-upgrade-flow-impl";
+
+        const RECORD: &'static str = "rec-kernel-upgrade";
+
+        const ISOLATION: Isolation = Isolation::Serializable;
+
+        const CREATES: bool = false;
+
+        type State = State;
+
+        type Vars = Vars;
+
+        type Event = Event;
+
+        type Emitted = Emitted;
+
+        type Key = Key;
+
+        type Record = records::RecKernelUpgrade;
+
+        fn initial(_key: &Key) -> (State, Vars) {
+            (
+                State::KuOldI,
+                Vars {
+                    journal_hash: 5u64,
+                    replayed: false,
+                    replayed_hash: 0u64,
+                    served_by_new: false,
+                },
+            )
+        }
+
+        fn from_record(record: &records::RecKernelUpgrade) -> Result<(State, Vars), RecordError> {
+            let state = State::from_id(&record.state).ok_or_else(|| {
+                RecordError(format!(
+                    "{:?} is not a state of machine `kernel-upgrade-flow-impl`",
+                    record.state
+                ))
+            })?;
+            Ok((
+                state,
+                Vars {
+                    journal_hash: record.journal_hash,
+                    replayed: record.replayed,
+                    replayed_hash: record.replayed_hash,
+                    served_by_new: record.served_by_new,
+                },
+            ))
+        }
+
+        fn to_record(
+            key: &Key,
+            state: &State,
+            vars: &Vars,
+            _previous: Option<&records::RecKernelUpgrade>,
+        ) -> Result<records::RecKernelUpgrade, RecordError> {
+            Ok(records::RecKernelUpgrade {
+                tenant_id: key.clone(),
+                journal_hash: vars.journal_hash,
+                replayed: vars.replayed,
+                replayed_hash: vars.replayed_hash,
+                served_by_new: vars.served_by_new,
+                state: state.id().to_string(),
+            })
+        }
+
+        fn is_elapsed(event: &Event) -> bool {
+            let _ = event;
+            false
+        }
+
+        fn validate_record(record: &records::RecKernelUpgrade) -> Result<(), String> {
+            record.validate().map_err(|violation| violation.to_string())
+        }
+
+        fn step(
+            state: &State,
+            vars: &Vars,
+            event: &Event,
+            _now: Time,
+        ) -> Result<Outcome<Self>, StepError> {
+            match (state, event) {
+                (State::KuOldI, Event::KuReplayFinished(payload)) => {
+                    let mut next = vars.clone();
+                    next.replayed = true;
+                    next.replayed_hash = payload.replayed_hash;
+                    Ok(Outcome::to(State::KuOldI, next))
+                }
+                (State::KuOldI, Event::KuServeRequested(_)) => {
+                    if vars.replayed && vars.replayed_hash == vars.journal_hash {
+                        let mut next = vars.clone();
+                        next.served_by_new = true;
+                        let emitted_2 = Emitted::KuServedByNew(KuServedByNewPayload {});
+                        Ok(Outcome::to(State::KuNewI, next).emit(
+                            "gateway",
+                            Delivery::AtMostOnce,
+                            emitted_2,
+                        ))
+                    } else {
+                        if !vars.replayed || vars.replayed_hash != vars.journal_hash {
+                            Ok(Outcome::to(State::KuOldI, vars.clone()).emit(
+                                "operator-console",
+                                Delivery::AtMostOnce,
+                                Emitted::KuServeRefused(KuServeRefusedPayload {}),
+                            ))
+                        } else {
+                            Ok(Outcome::ignore(*state, vars.clone()))
+                        }
+                    }
+                }
+                _ => Ok(Outcome::ignore(*state, vars.clone())),
+            }
+        }
+    }
+}
+
+/// Directory switch of a tenant placement (implementation)
+///
+/// The directory switches a tenant from its source placement to its target placement. A request that began before the switch completes on the source and one that begins after it uses the target; the address of the tenant resolves to the same tenant before and after the switch.
+///
+/// Specification behavior `placement-switch-flow-impl`, an implementation-level machine.
+pub mod placement_switch_flow_impl {
+    use serde::{Deserialize, Serialize};
+
+    use strata_runtime::{Isolation, Machine, Outcome, RecordError, StepError, Time};
+
+    use crate::{records, types};
+
+    /// The states of machine `placement-switch-flow-impl`.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+
+    pub enum State {
+        /// State `ps-serving-i`: Directory serving.
+        #[serde(rename = "ps-serving-i")]
+        PsServingI,
+    }
+
+    impl State {
+        /// The state's id in the specification.
+        pub fn id(self) -> &'static str {
+            match self {
+                State::PsServingI => "ps-serving-i",
+            }
+        }
+
+        /// The state with this id in the specification.
+        pub fn from_id(id: &str) -> Option<State> {
+            match id {
+                "ps-serving-i" => Some(State::PsServingI),
+                _ => None,
+            }
+        }
+    }
+
+    /// The variables of the machine.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct Vars {
+        /// Variable `placement`.
+        pub placement: String,
+        /// Variable `addressTenant`.
+        #[serde(rename = "addressTenant")]
+        pub address_tenant: String,
+        /// Variable `r1On`.
+        #[serde(rename = "r1On")]
+        pub r1_on: String,
+        /// Variable `r2On`.
+        #[serde(rename = "r2On")]
+        pub r2_on: String,
+        /// Variable `r1DoneOn`.
+        #[serde(rename = "r1DoneOn")]
+        pub r1_done_on: String,
+        /// Variable `r2DoneOn`.
+        #[serde(rename = "r2DoneOn")]
+        pub r2_done_on: String,
+        /// Variable `resolvedTenant`.
+        #[serde(rename = "resolvedTenant")]
+        pub resolved_tenant: String,
+    }
+
+    /// The payload of event `ps-switched`: Directory switched.
+    ///
+    /// The directory names the target placement.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct PsSwitchedPayload {
+        /// Field `tenant-id`.
+        #[serde(rename = "tenant-id")]
+        pub tenant_id: types::TenantId,
+    }
+
+    /// The payload of event `ps-request-begun`: Request begun.
+    ///
+    /// A request begins.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct PsRequestBegunPayload {
+        /// Field `tenant-id`.
+        #[serde(rename = "tenant-id")]
+        pub tenant_id: types::TenantId,
+        /// Field `req`.
+        pub req: String,
+    }
+
+    /// The payload of event `ps-request-completed`: Request completed.
+    ///
+    /// A request completes.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct PsRequestCompletedPayload {
+        /// Field `tenant-id`.
+        #[serde(rename = "tenant-id")]
+        pub tenant_id: types::TenantId,
+        /// Field `req`.
+        pub req: String,
+    }
+
+    /// The payload of event `ps-address-resolved`: Address resolved.
+    ///
+    /// The address of the tenant is resolved.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct PsAddressResolvedPayload {
+        /// Field `tenant-id`.
+        #[serde(rename = "tenant-id")]
+        pub tenant_id: types::TenantId,
+    }
+
+    /// The events machine `placement-switch-flow-impl` receives, including those its timers fire.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Event {
+        /// Event `ps-switched`: Directory switched.
+        #[serde(rename = "ps-switched")]
+        PsSwitched(PsSwitchedPayload),
+        /// Event `ps-request-begun`: Request begun.
+        #[serde(rename = "ps-request-begun")]
+        PsRequestBegun(PsRequestBegunPayload),
+        /// Event `ps-request-completed`: Request completed.
+        #[serde(rename = "ps-request-completed")]
+        PsRequestCompleted(PsRequestCompletedPayload),
+        /// Event `ps-address-resolved`: Address resolved.
+        #[serde(rename = "ps-address-resolved")]
+        PsAddressResolved(PsAddressResolvedPayload),
+    }
+
+    /// The events machine `placement-switch-flow-impl` emits.
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+    pub enum Emitted {}
+
+    /// The instance key: field `tenant-id` of record `rec-placement-switch`.
+    pub type Key = types::TenantId;
+
+    /// Machine `placement-switch-flow-impl`, stored in record `rec-placement-switch` by `tenant-id`.
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct PlacementSwitchFlowImpl;
+
+    impl Machine for PlacementSwitchFlowImpl {
+        const NAME: &'static str = "placement-switch-flow-impl";
+
+        const RECORD: &'static str = "rec-placement-switch";
+
+        const ISOLATION: Isolation = Isolation::Serializable;
+
+        const CREATES: bool = false;
+
+        type State = State;
+
+        type Vars = Vars;
+
+        type Event = Event;
+
+        type Emitted = Emitted;
+
+        type Key = Key;
+
+        type Record = records::RecPlacementSwitch;
+
+        fn initial(_key: &Key) -> (State, Vars) {
+            (
+                State::PsServingI,
+                Vars {
+                    placement: String::from("source"),
+                    address_tenant: String::from("t1"),
+                    r1_on: String::from(""),
+                    r2_on: String::from(""),
+                    r1_done_on: String::from(""),
+                    r2_done_on: String::from(""),
+                    resolved_tenant: String::from(""),
+                },
+            )
+        }
+
+        fn from_record(record: &records::RecPlacementSwitch) -> Result<(State, Vars), RecordError> {
+            let state = State::from_id(&record.state).ok_or_else(|| {
+                RecordError(format!(
+                    "{:?} is not a state of machine `placement-switch-flow-impl`",
+                    record.state
+                ))
+            })?;
+            Ok((
+                state,
+                Vars {
+                    placement: record.placement.clone(),
+                    address_tenant: record.address_tenant.clone(),
+                    r1_on: record.r1_on.clone(),
+                    r2_on: record.r2_on.clone(),
+                    r1_done_on: record.r1_done_on.clone(),
+                    r2_done_on: record.r2_done_on.clone(),
+                    resolved_tenant: record.resolved_tenant.clone(),
+                },
+            ))
+        }
+
+        fn to_record(
+            key: &Key,
+            state: &State,
+            vars: &Vars,
+            _previous: Option<&records::RecPlacementSwitch>,
+        ) -> Result<records::RecPlacementSwitch, RecordError> {
+            Ok(records::RecPlacementSwitch {
+                tenant_id: key.clone(),
+                placement: vars.placement.clone(),
+                address_tenant: vars.address_tenant.clone(),
+                r1_on: vars.r1_on.clone(),
+                r2_on: vars.r2_on.clone(),
+                r1_done_on: vars.r1_done_on.clone(),
+                r2_done_on: vars.r2_done_on.clone(),
+                resolved_tenant: vars.resolved_tenant.clone(),
+                state: state.id().to_string(),
+            })
+        }
+
+        fn is_elapsed(event: &Event) -> bool {
+            let _ = event;
+            false
+        }
+
+        fn validate_record(record: &records::RecPlacementSwitch) -> Result<(), String> {
+            record.validate().map_err(|violation| violation.to_string())
+        }
+
+        fn step(
+            state: &State,
+            vars: &Vars,
+            event: &Event,
+            _now: Time,
+        ) -> Result<Outcome<Self>, StepError> {
+            match (state, event) {
+                (State::PsServingI, Event::PsSwitched(_)) => {
+                    let mut next = vars.clone();
+                    next.placement = ::std::string::String::from("target");
+                    Ok(Outcome::to(State::PsServingI, next))
+                }
+                (State::PsServingI, Event::PsRequestBegun(payload)) => {
+                    if payload.req == "r1" {
+                        let mut next = vars.clone();
+                        next.r1_on = next.placement.clone();
+                        Ok(Outcome::to(State::PsServingI, next))
+                    } else {
+                        if payload.req == "r2" {
+                            let mut next = vars.clone();
+                            next.r2_on = next.placement.clone();
+                            Ok(Outcome::to(State::PsServingI, next))
+                        } else {
+                            Ok(Outcome::ignore(*state, vars.clone()))
+                        }
+                    }
+                }
+                (State::PsServingI, Event::PsRequestCompleted(payload)) => {
+                    if payload.req == "r1" {
+                        let mut next = vars.clone();
+                        next.r1_done_on = next.r1_on.clone();
+                        Ok(Outcome::to(State::PsServingI, next))
+                    } else {
+                        if payload.req == "r2" {
+                            let mut next = vars.clone();
+                            next.r2_done_on = next.r2_on.clone();
+                            Ok(Outcome::to(State::PsServingI, next))
+                        } else {
+                            Ok(Outcome::ignore(*state, vars.clone()))
+                        }
+                    }
+                }
+                (State::PsServingI, Event::PsAddressResolved(_)) => {
+                    let mut next = vars.clone();
+                    next.resolved_tenant = next.address_tenant.clone();
+                    Ok(Outcome::to(State::PsServingI, next))
+                }
+            }
+        }
+    }
+}
+
+/// Schema change run (implementation)
+///
+/// One schema change of one tenant, applied as a migration run of two batches. The change is previewed before it is applied; the run records its preview, its batches, its outcome and the principal that started it. A run that fails leaves the tenant in the form it had and names the failure; a run the tenant owner stops records its cursor and the tenant keeps serving its readers.
+///
+/// Specification behavior `schema-change-flow-impl`, an implementation-level machine.
+pub mod schema_change_flow_impl {
+    use serde::{Deserialize, Serialize};
+
+    use strata_runtime::{Delivery, Isolation, Machine, Outcome, RecordError, StepError, Time};
+
+    use crate::{records, types};
+
+    /// The states of machine `schema-change-flow-impl`.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+
+    pub enum State {
+        /// State `sc-idle-i`: Not started. Ignores `sc-batch-committed`, `sc-batch-failed`, `sc-stop-requested`.
+        #[serde(rename = "sc-idle-i")]
+        ScIdleI,
+        /// State `sc-previewed-i`: Previewed. Ignores `sc-preview-requested`, `sc-batch-committed`, `sc-batch-failed`, `sc-stop-requested`.
+        #[serde(rename = "sc-previewed-i")]
+        ScPreviewedI,
+        /// State `sc-running-i`: Running. Ignores `sc-preview-requested`, `sc-apply-requested`.
+        #[serde(rename = "sc-running-i")]
+        ScRunningI,
+        /// State `sc-completed-i`: Complete. Terminal.
+        #[serde(rename = "sc-completed-i")]
+        ScCompletedI,
+        /// State `sc-failed-i`: Failed. Terminal.
+        #[serde(rename = "sc-failed-i")]
+        ScFailedI,
+        /// State `sc-stopped-i`: Stopped. Terminal.
+        #[serde(rename = "sc-stopped-i")]
+        ScStoppedI,
+    }
+
+    impl State {
+        /// The state's id in the specification.
+        pub fn id(self) -> &'static str {
+            match self {
+                State::ScIdleI => "sc-idle-i",
+                State::ScPreviewedI => "sc-previewed-i",
+                State::ScRunningI => "sc-running-i",
+                State::ScCompletedI => "sc-completed-i",
+                State::ScFailedI => "sc-failed-i",
+                State::ScStoppedI => "sc-stopped-i",
+            }
+        }
+
+        /// The state with this id in the specification.
+        pub fn from_id(id: &str) -> Option<State> {
+            match id {
+                "sc-idle-i" => Some(State::ScIdleI),
+                "sc-previewed-i" => Some(State::ScPreviewedI),
+                "sc-running-i" => Some(State::ScRunningI),
+                "sc-completed-i" => Some(State::ScCompletedI),
+                "sc-failed-i" => Some(State::ScFailedI),
+                "sc-stopped-i" => Some(State::ScStoppedI),
+                _ => None,
+            }
+        }
+    }
+
+    /// The variables of the machine.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct Vars {
+        /// Variable `previewRef`.
+        #[serde(rename = "previewRef")]
+        pub preview_ref: String,
+        /// Variable `startedBy`.
+        #[serde(rename = "startedBy")]
+        pub started_by: String,
+        /// Variable `started`.
+        pub started: bool,
+        /// Variable `batches`.
+        pub batches: u64,
+        /// Variable `layoutVersion`.
+        #[serde(rename = "layoutVersion")]
+        pub layout_version: u64,
+        /// Variable `priorVersion`.
+        #[serde(rename = "priorVersion")]
+        pub prior_version: u64,
+        /// Variable `failure`.
+        pub failure: String,
+        /// Variable `stopped`.
+        pub stopped: bool,
+        /// Variable `cursorRecorded`.
+        #[serde(rename = "cursorRecorded")]
+        pub cursor_recorded: u64,
+        /// Variable `serving`.
+        pub serving: bool,
+    }
+
+    /// The payload of event `sc-preview-requested`: Preview requested.
+    ///
+    /// The change is previewed on a copy of the tenant.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct ScPreviewRequestedPayload {
+        /// Field `tenant-id`.
+        #[serde(rename = "tenant-id")]
+        pub tenant_id: types::TenantId,
+        /// Field `preview`.
+        pub preview: String,
+    }
+
+    /// The payload of event `sc-apply-requested`: Apply requested.
+    ///
+    /// A principal applies the change to the tenant.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct ScApplyRequestedPayload {
+        /// Field `tenant-id`.
+        #[serde(rename = "tenant-id")]
+        pub tenant_id: types::TenantId,
+        /// Field `principal`.
+        pub principal: String,
+    }
+
+    /// The payload of event `sc-batch-committed`: Batch committed.
+    ///
+    /// A batch of the run commits.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct ScBatchCommittedPayload {
+        /// Field `tenant-id`.
+        #[serde(rename = "tenant-id")]
+        pub tenant_id: types::TenantId,
+    }
+
+    /// The payload of event `sc-batch-failed`: Batch failed.
+    ///
+    /// A batch of the run fails.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct ScBatchFailedPayload {
+        /// Field `tenant-id`.
+        #[serde(rename = "tenant-id")]
+        pub tenant_id: types::TenantId,
+        /// Field `reason`.
+        pub reason: String,
+    }
+
+    /// The payload of event `sc-stop-requested`: Stop requested.
+    ///
+    /// The tenant owner stops the run.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct ScStopRequestedPayload {
+        /// Field `tenant-id`.
+        #[serde(rename = "tenant-id")]
+        pub tenant_id: types::TenantId,
+    }
+
+    /// The payload of event `sc-run-started`: Run started.
+    ///
+    /// The migration run starts.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct ScRunStartedPayload {}
+
+    /// The payload of event `sc-apply-refused`: Apply refused.
+    ///
+    /// The change was not previewed.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct ScApplyRefusedPayload {}
+
+    /// The payload of event `sc-run-complete`: Run complete.
+    ///
+    /// The run converted the tenant.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct ScRunCompletePayload {}
+
+    /// The payload of event `sc-run-failed`: Run failed.
+    ///
+    /// The run failed and the tenant keeps its form.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct ScRunFailedPayload {}
+
+    /// The payload of event `sc-run-stopped`: Run stopped.
+    ///
+    /// The run stopped at its recorded cursor.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct ScRunStoppedPayload {}
+
+    /// The events machine `schema-change-flow-impl` receives, including those its timers fire.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Event {
+        /// Event `sc-preview-requested`: Preview requested.
+        #[serde(rename = "sc-preview-requested")]
+        ScPreviewRequested(ScPreviewRequestedPayload),
+        /// Event `sc-apply-requested`: Apply requested.
+        #[serde(rename = "sc-apply-requested")]
+        ScApplyRequested(ScApplyRequestedPayload),
+        /// Event `sc-batch-committed`: Batch committed.
+        #[serde(rename = "sc-batch-committed")]
+        ScBatchCommitted(ScBatchCommittedPayload),
+        /// Event `sc-batch-failed`: Batch failed.
+        #[serde(rename = "sc-batch-failed")]
+        ScBatchFailed(ScBatchFailedPayload),
+        /// Event `sc-stop-requested`: Stop requested.
+        #[serde(rename = "sc-stop-requested")]
+        ScStopRequested(ScStopRequestedPayload),
+    }
+
+    /// The events machine `schema-change-flow-impl` emits.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Emitted {
+        /// Event `sc-run-started`: Run started.
+        #[serde(rename = "sc-run-started")]
+        ScRunStarted(ScRunStartedPayload),
+        /// Event `sc-apply-refused`: Apply refused.
+        #[serde(rename = "sc-apply-refused")]
+        ScApplyRefused(ScApplyRefusedPayload),
+        /// Event `sc-run-complete`: Run complete.
+        #[serde(rename = "sc-run-complete")]
+        ScRunComplete(ScRunCompletePayload),
+        /// Event `sc-run-failed`: Run failed.
+        #[serde(rename = "sc-run-failed")]
+        ScRunFailed(ScRunFailedPayload),
+        /// Event `sc-run-stopped`: Run stopped.
+        #[serde(rename = "sc-run-stopped")]
+        ScRunStopped(ScRunStoppedPayload),
+    }
+
+    /// The instance key: field `tenant-id` of record `rec-schema-change`.
+    pub type Key = types::TenantId;
+
+    /// Machine `schema-change-flow-impl`, stored in record `rec-schema-change` by `tenant-id`.
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct SchemaChangeFlowImpl;
+
+    /// The refusal of a step whose arithmetic overflows or divides by zero.
+    fn overflow(transition: &str) -> StepError {
+        StepError::Rejected(format!(
+            "transition {transition} overflowed or divided by zero"
+        ))
+    }
+
+    impl Machine for SchemaChangeFlowImpl {
+        const NAME: &'static str = "schema-change-flow-impl";
+
+        const RECORD: &'static str = "rec-schema-change";
+
+        const ISOLATION: Isolation = Isolation::Serializable;
+
+        const CREATES: bool = false;
+
+        type State = State;
+
+        type Vars = Vars;
+
+        type Event = Event;
+
+        type Emitted = Emitted;
+
+        type Key = Key;
+
+        type Record = records::RecSchemaChange;
+
+        fn initial(_key: &Key) -> (State, Vars) {
+            (
+                State::ScIdleI,
+                Vars {
+                    preview_ref: String::from(""),
+                    started_by: String::from(""),
+                    started: false,
+                    batches: 0u64,
+                    layout_version: 1u64,
+                    prior_version: 1u64,
+                    failure: String::from(""),
+                    stopped: false,
+                    cursor_recorded: 0u64,
+                    serving: true,
+                },
+            )
+        }
+
+        fn from_record(record: &records::RecSchemaChange) -> Result<(State, Vars), RecordError> {
+            let state = State::from_id(&record.state).ok_or_else(|| {
+                RecordError(format!(
+                    "{:?} is not a state of machine `schema-change-flow-impl`",
+                    record.state
+                ))
+            })?;
+            Ok((
+                state,
+                Vars {
+                    preview_ref: record.preview_ref.clone(),
+                    started_by: record.started_by.clone(),
+                    started: record.started,
+                    batches: record.batches,
+                    layout_version: record.layout_version,
+                    prior_version: record.prior_version,
+                    failure: record.failure.clone(),
+                    stopped: record.stopped,
+                    cursor_recorded: record.cursor_recorded,
+                    serving: record.serving,
+                },
+            ))
+        }
+
+        fn to_record(
+            key: &Key,
+            state: &State,
+            vars: &Vars,
+            _previous: Option<&records::RecSchemaChange>,
+        ) -> Result<records::RecSchemaChange, RecordError> {
+            Ok(records::RecSchemaChange {
+                tenant_id: key.clone(),
+                preview_ref: vars.preview_ref.clone(),
+                started_by: vars.started_by.clone(),
+                started: vars.started,
+                batches: vars.batches,
+                layout_version: vars.layout_version,
+                prior_version: vars.prior_version,
+                failure: vars.failure.clone(),
+                stopped: vars.stopped,
+                cursor_recorded: vars.cursor_recorded,
+                serving: vars.serving,
+                state: state.id().to_string(),
+            })
+        }
+
+        fn is_elapsed(event: &Event) -> bool {
+            let _ = event;
+            false
+        }
+
+        fn validate_record(record: &records::RecSchemaChange) -> Result<(), String> {
+            record.validate().map_err(|violation| violation.to_string())
+        }
+
+        fn step(
+            state: &State,
+            vars: &Vars,
+            event: &Event,
+            _now: Time,
+        ) -> Result<Outcome<Self>, StepError> {
+            match (state, event) {
+                (State::ScIdleI, Event::ScPreviewRequested(payload)) => {
+                    let mut next = vars.clone();
+                    next.preview_ref = payload.preview.clone();
+                    Ok(Outcome::to(State::ScPreviewedI, next))
+                }
+                (State::ScIdleI, Event::ScApplyRequested(_)) => {
+                    Ok(Outcome::to(State::ScIdleI, vars.clone()).emit(
+                        "operator-console",
+                        Delivery::AtMostOnce,
+                        Emitted::ScApplyRefused(ScApplyRefusedPayload {}),
+                    ))
+                }
+                (State::ScPreviewedI, Event::ScApplyRequested(payload)) => {
+                    let mut next = vars.clone();
+                    next.started = true;
+                    next.started_by = payload.principal.clone();
+                    let emitted_3 = Emitted::ScRunStarted(ScRunStartedPayload {});
+                    Ok(Outcome::to(State::ScRunningI, next).emit(
+                        "operator-console",
+                        Delivery::AtMostOnce,
+                        emitted_3,
+                    ))
+                }
+                (State::ScRunningI, Event::ScBatchCommitted(_)) => {
+                    if vars.batches < 1u64 {
+                        let mut next = vars.clone();
+                        next.batches = next
+                            .batches
+                            .checked_add(1u64)
+                            .filter(|__v| *__v <= 9007199254740991u64)
+                            .ok_or(overflow("sc-batch-i"))?;
+                        Ok(Outcome::to(State::ScRunningI, next))
+                    } else {
+                        if vars.batches >= 1u64 {
+                            let mut next = vars.clone();
+                            next.batches = next
+                                .batches
+                                .checked_add(1u64)
+                                .filter(|__v| *__v <= 9007199254740991u64)
+                                .ok_or(overflow("sc-finish-i"))?;
+                            next.layout_version = 2u64;
+                            let emitted_3 = Emitted::ScRunComplete(ScRunCompletePayload {});
+                            Ok(Outcome::to(State::ScCompletedI, next).emit(
+                                "operator-console",
+                                Delivery::AtMostOnce,
+                                emitted_3,
+                            ))
+                        } else {
+                            Ok(Outcome::ignore(*state, vars.clone()))
+                        }
+                    }
+                }
+                (State::ScRunningI, Event::ScBatchFailed(payload)) => {
+                    let mut next = vars.clone();
+                    next.failure = payload.reason.clone();
+                    let emitted_2 = Emitted::ScRunFailed(ScRunFailedPayload {});
+                    Ok(Outcome::to(State::ScFailedI, next).emit(
+                        "operator-console",
+                        Delivery::AtMostOnce,
+                        emitted_2,
+                    ))
+                }
+                (State::ScRunningI, Event::ScStopRequested(_)) => {
+                    let mut next = vars.clone();
+                    next.stopped = true;
+                    next.cursor_recorded = next.batches;
+                    let emitted_3 = Emitted::ScRunStopped(ScRunStoppedPayload {});
+                    Ok(Outcome::to(State::ScStoppedI, next).emit(
+                        "operator-console",
+                        Delivery::AtMostOnce,
+                        emitted_3,
+                    ))
+                }
+                _ => Ok(Outcome::ignore(*state, vars.clone())),
+            }
+        }
+    }
+}
+
+/// Layout change across tenants (implementation)
+///
+/// A change to the storage layout applied to the databases of two tenants, a and b, one tenant at a time, with the outcome recorded for each. A tenant whose change fails stays on its previous layout and keeps serving, and the other tenant is still changed. The model puts both tenants in one machine, so this one is a single unit and has no keyed instances.
+///
+/// Specification behavior `layout-rollout-flow-impl`, an implementation-level machine.
+pub mod layout_rollout_flow_impl {
+    use serde::{Deserialize, Serialize};
+
+    use strata_runtime::{Isolation, Machine, Outcome, RecordError, StepError, Time};
+
+    use crate::records;
+
+    /// The states of machine `layout-rollout-flow-impl`.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+
+    pub enum State {
+        /// State `lr-open-i`: Rolling out.
+        #[serde(rename = "lr-open-i")]
+        LrOpenI,
+    }
+
+    impl State {
+        /// The state's id in the specification.
+        pub fn id(self) -> &'static str {
+            match self {
+                State::LrOpenI => "lr-open-i",
+            }
+        }
+
+        /// The state with this id in the specification.
+        pub fn from_id(id: &str) -> Option<State> {
+            match id {
+                "lr-open-i" => Some(State::LrOpenI),
+                _ => None,
+            }
+        }
+    }
+
+    /// The variables of the machine.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct Vars {
+        /// Variable `layoutA`.
+        #[serde(rename = "layoutA")]
+        pub layout_a: u64,
+        /// Variable `layoutB`.
+        #[serde(rename = "layoutB")]
+        pub layout_b: u64,
+        /// Variable `outcomeA`.
+        #[serde(rename = "outcomeA")]
+        pub outcome_a: String,
+        /// Variable `outcomeB`.
+        #[serde(rename = "outcomeB")]
+        pub outcome_b: String,
+        /// Variable `servingA`.
+        #[serde(rename = "servingA")]
+        pub serving_a: bool,
+        /// Variable `servingB`.
+        #[serde(rename = "servingB")]
+        pub serving_b: bool,
+    }
+
+    /// The payload of event `lr-apply-requested`: Layout change requested.
+    ///
+    /// The change is applied to the database of one tenant.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct LrApplyRequestedPayload {
+        /// Field `tenant`.
+        pub tenant: String,
+        /// Field `ok`.
+        pub ok: bool,
+    }
+
+    /// The events machine `layout-rollout-flow-impl` receives, including those its timers fire.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Event {
+        /// Event `lr-apply-requested`: Layout change requested.
+        #[serde(rename = "lr-apply-requested")]
+        LrApplyRequested(LrApplyRequestedPayload),
+    }
+
+    /// The events machine `layout-rollout-flow-impl` emits.
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+    pub enum Emitted {}
+
+    /// The instance key: field `scope` of record `rec-layout-rollout`.
+    pub type Key = String;
+
+    /// Machine `layout-rollout-flow-impl`, stored in record `rec-layout-rollout` by `scope`.
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct LayoutRolloutFlowImpl;
+
+    impl Machine for LayoutRolloutFlowImpl {
+        const NAME: &'static str = "layout-rollout-flow-impl";
+
+        const RECORD: &'static str = "rec-layout-rollout";
+
+        const ISOLATION: Isolation = Isolation::Serializable;
+
+        const CREATES: bool = false;
+
+        type State = State;
+
+        type Vars = Vars;
+
+        type Event = Event;
+
+        type Emitted = Emitted;
+
+        type Key = Key;
+
+        type Record = records::RecLayoutRollout;
+
+        fn initial(_key: &Key) -> (State, Vars) {
+            (
+                State::LrOpenI,
+                Vars {
+                    layout_a: 1u64,
+                    layout_b: 1u64,
+                    outcome_a: String::from(""),
+                    outcome_b: String::from(""),
+                    serving_a: true,
+                    serving_b: true,
+                },
+            )
+        }
+
+        fn from_record(record: &records::RecLayoutRollout) -> Result<(State, Vars), RecordError> {
+            let state = State::from_id(&record.state).ok_or_else(|| {
+                RecordError(format!(
+                    "{:?} is not a state of machine `layout-rollout-flow-impl`",
+                    record.state
+                ))
+            })?;
+            Ok((
+                state,
+                Vars {
+                    layout_a: record.layout_a,
+                    layout_b: record.layout_b,
+                    outcome_a: record.outcome_a.clone(),
+                    outcome_b: record.outcome_b.clone(),
+                    serving_a: record.serving_a,
+                    serving_b: record.serving_b,
+                },
+            ))
+        }
+
+        fn to_record(
+            key: &Key,
+            state: &State,
+            vars: &Vars,
+            _previous: Option<&records::RecLayoutRollout>,
+        ) -> Result<records::RecLayoutRollout, RecordError> {
+            Ok(records::RecLayoutRollout {
+                scope: key.clone(),
+                layout_a: vars.layout_a,
+                layout_b: vars.layout_b,
+                outcome_a: vars.outcome_a.clone(),
+                outcome_b: vars.outcome_b.clone(),
+                serving_a: vars.serving_a,
+                serving_b: vars.serving_b,
+                state: state.id().to_string(),
+            })
+        }
+
+        fn is_elapsed(event: &Event) -> bool {
+            let _ = event;
+            false
+        }
+
+        fn validate_record(record: &records::RecLayoutRollout) -> Result<(), String> {
+            record.validate().map_err(|violation| violation.to_string())
+        }
+
+        fn step(
+            state: &State,
+            vars: &Vars,
+            event: &Event,
+            _now: Time,
+        ) -> Result<Outcome<Self>, StepError> {
+            match (state, event) {
+                (State::LrOpenI, Event::LrApplyRequested(payload)) => {
+                    if payload.tenant == "a" && payload.ok {
+                        let mut next = vars.clone();
+                        next.layout_a = 2u64;
+                        next.outcome_a = ::std::string::String::from("applied");
+                        Ok(Outcome::to(State::LrOpenI, next))
+                    } else {
+                        if payload.tenant == "a" && !payload.ok {
+                            let mut next = vars.clone();
+                            next.outcome_a = ::std::string::String::from("failed");
+                            Ok(Outcome::to(State::LrOpenI, next))
+                        } else {
+                            if payload.tenant == "b" && payload.ok {
+                                let mut next = vars.clone();
+                                next.layout_b = 2u64;
+                                next.outcome_b = ::std::string::String::from("applied");
+                                Ok(Outcome::to(State::LrOpenI, next))
+                            } else {
+                                if payload.tenant == "b" && !payload.ok {
+                                    let mut next = vars.clone();
+                                    next.outcome_b = ::std::string::String::from("failed");
+                                    Ok(Outcome::to(State::LrOpenI, next))
+                                } else {
+                                    Ok(Outcome::ignore(*state, vars.clone()))
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Promotion of a staging migration (implementation)
+///
+/// A migration applied to a staging tenant. It reaches the production tenant only as a migration run of that tenant, previewed against the production data; applying it to staging changes nothing in production.
+///
+/// Specification behavior `staging-promotion-flow-impl`, an implementation-level machine.
+pub mod staging_promotion_flow_impl {
+    use serde::{Deserialize, Serialize};
+
+    use strata_runtime::{Delivery, Isolation, Machine, Outcome, RecordError, StepError, Time};
+
+    use crate::{records, types};
+
+    /// The states of machine `staging-promotion-flow-impl`.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+
+    pub enum State {
+        /// State `sp-both-i`: Staging and production.
+        #[serde(rename = "sp-both-i")]
+        SpBothI,
+    }
+
+    impl State {
+        /// The state's id in the specification.
+        pub fn id(self) -> &'static str {
+            match self {
+                State::SpBothI => "sp-both-i",
+            }
+        }
+
+        /// The state with this id in the specification.
+        pub fn from_id(id: &str) -> Option<State> {
+            match id {
+                "sp-both-i" => Some(State::SpBothI),
+                _ => None,
+            }
+        }
+    }
+
+    /// The variables of the machine.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct Vars {
+        /// Variable `stagingApplied`.
+        #[serde(rename = "stagingApplied")]
+        pub staging_applied: bool,
+        /// Variable `prodPreviewed`.
+        #[serde(rename = "prodPreviewed")]
+        pub prod_previewed: bool,
+        /// Variable `prodRunStarted`.
+        #[serde(rename = "prodRunStarted")]
+        pub prod_run_started: bool,
+        /// Variable `prodChanged`.
+        #[serde(rename = "prodChanged")]
+        pub prod_changed: bool,
+    }
+
+    /// The payload of event `sp-staging-applied`: Applied to staging.
+    ///
+    /// The migration is applied to the staging tenant.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct SpStagingAppliedPayload {
+        /// Field `tenant-id`.
+        #[serde(rename = "tenant-id")]
+        pub tenant_id: types::TenantId,
+    }
+
+    /// The payload of event `sp-prod-preview-requested`: Production preview requested.
+    ///
+    /// The migration is previewed against the production data.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct SpProdPreviewRequestedPayload {
+        /// Field `tenant-id`.
+        #[serde(rename = "tenant-id")]
+        pub tenant_id: types::TenantId,
+    }
+
+    /// The payload of event `sp-promote-requested`: Promotion requested.
+    ///
+    /// The migration is to reach the production tenant.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct SpPromoteRequestedPayload {
+        /// Field `tenant-id`.
+        #[serde(rename = "tenant-id")]
+        pub tenant_id: types::TenantId,
+    }
+
+    /// The payload of event `sp-prod-run-started`: Production run started.
+    ///
+    /// A migration run of the production tenant starts.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct SpProdRunStartedPayload {}
+
+    /// The payload of event `sp-promote-refused`: Promotion refused.
+    ///
+    /// The migration was not previewed against production.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct SpPromoteRefusedPayload {}
+
+    /// The events machine `staging-promotion-flow-impl` receives, including those its timers fire.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Event {
+        /// Event `sp-staging-applied`: Applied to staging.
+        #[serde(rename = "sp-staging-applied")]
+        SpStagingApplied(SpStagingAppliedPayload),
+        /// Event `sp-prod-preview-requested`: Production preview requested.
+        #[serde(rename = "sp-prod-preview-requested")]
+        SpProdPreviewRequested(SpProdPreviewRequestedPayload),
+        /// Event `sp-promote-requested`: Promotion requested.
+        #[serde(rename = "sp-promote-requested")]
+        SpPromoteRequested(SpPromoteRequestedPayload),
+    }
+
+    /// The events machine `staging-promotion-flow-impl` emits.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Emitted {
+        /// Event `sp-prod-run-started`: Production run started.
+        #[serde(rename = "sp-prod-run-started")]
+        SpProdRunStarted(SpProdRunStartedPayload),
+        /// Event `sp-promote-refused`: Promotion refused.
+        #[serde(rename = "sp-promote-refused")]
+        SpPromoteRefused(SpPromoteRefusedPayload),
+    }
+
+    /// The instance key: field `tenant-id` of record `rec-staging-promotion`.
+    pub type Key = types::TenantId;
+
+    /// Machine `staging-promotion-flow-impl`, stored in record `rec-staging-promotion` by `tenant-id`.
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct StagingPromotionFlowImpl;
+
+    impl Machine for StagingPromotionFlowImpl {
+        const NAME: &'static str = "staging-promotion-flow-impl";
+
+        const RECORD: &'static str = "rec-staging-promotion";
+
+        const ISOLATION: Isolation = Isolation::Serializable;
+
+        const CREATES: bool = false;
+
+        type State = State;
+
+        type Vars = Vars;
+
+        type Event = Event;
+
+        type Emitted = Emitted;
+
+        type Key = Key;
+
+        type Record = records::RecStagingPromotion;
+
+        fn initial(_key: &Key) -> (State, Vars) {
+            (
+                State::SpBothI,
+                Vars {
+                    staging_applied: false,
+                    prod_previewed: false,
+                    prod_run_started: false,
+                    prod_changed: false,
+                },
+            )
+        }
+
+        fn from_record(
+            record: &records::RecStagingPromotion,
+        ) -> Result<(State, Vars), RecordError> {
+            let state = State::from_id(&record.state).ok_or_else(|| {
+                RecordError(format!(
+                    "{:?} is not a state of machine `staging-promotion-flow-impl`",
+                    record.state
+                ))
+            })?;
+            Ok((
+                state,
+                Vars {
+                    staging_applied: record.staging_applied,
+                    prod_previewed: record.prod_previewed,
+                    prod_run_started: record.prod_run_started,
+                    prod_changed: record.prod_changed,
+                },
+            ))
+        }
+
+        fn to_record(
+            key: &Key,
+            state: &State,
+            vars: &Vars,
+            _previous: Option<&records::RecStagingPromotion>,
+        ) -> Result<records::RecStagingPromotion, RecordError> {
+            Ok(records::RecStagingPromotion {
+                tenant_id: key.clone(),
+                staging_applied: vars.staging_applied,
+                prod_previewed: vars.prod_previewed,
+                prod_run_started: vars.prod_run_started,
+                prod_changed: vars.prod_changed,
+                state: state.id().to_string(),
+            })
+        }
+
+        fn is_elapsed(event: &Event) -> bool {
+            let _ = event;
+            false
+        }
+
+        fn validate_record(record: &records::RecStagingPromotion) -> Result<(), String> {
+            record.validate().map_err(|violation| violation.to_string())
+        }
+
+        fn step(
+            state: &State,
+            vars: &Vars,
+            event: &Event,
+            _now: Time,
+        ) -> Result<Outcome<Self>, StepError> {
+            match (state, event) {
+                (State::SpBothI, Event::SpStagingApplied(_)) => {
+                    let mut next = vars.clone();
+                    next.staging_applied = true;
+                    Ok(Outcome::to(State::SpBothI, next))
+                }
+                (State::SpBothI, Event::SpProdPreviewRequested(_)) => {
+                    let mut next = vars.clone();
+                    next.prod_previewed = true;
+                    Ok(Outcome::to(State::SpBothI, next))
+                }
+                (State::SpBothI, Event::SpPromoteRequested(_)) => {
+                    if vars.prod_previewed {
+                        let mut next = vars.clone();
+                        next.prod_run_started = true;
+                        next.prod_changed = true;
+                        let emitted_3 = Emitted::SpProdRunStarted(SpProdRunStartedPayload {});
+                        Ok(Outcome::to(State::SpBothI, next).emit(
+                            "operator-console",
+                            Delivery::AtMostOnce,
+                            emitted_3,
+                        ))
+                    } else {
+                        if !vars.prod_previewed {
+                            Ok(Outcome::to(State::SpBothI, vars.clone()).emit(
+                                "operator-console",
+                                Delivery::AtMostOnce,
+                                Emitted::SpPromoteRefused(SpPromoteRefusedPayload {}),
+                            ))
+                        } else {
+                            Ok(Outcome::ignore(*state, vars.clone()))
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Field added and field renamed (implementation)
+///
+/// Two schema changes of one tenant. A new field takes, for each existing record, the value of the expression its change declares (here the base of the record times a factor of 2). A rename keeps the values under the new name and a request under the old name is refused.
+///
+/// Specification behavior `field-change-flow-impl`, an implementation-level machine.
+pub mod field_change_flow_impl {
+    use serde::{Deserialize, Serialize};
+
+    use strata_runtime::{Delivery, Isolation, Machine, Outcome, RecordError, StepError, Time};
+
+    use crate::{records, types};
+
+    /// The states of machine `field-change-flow-impl`.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+
+    pub enum State {
+        /// State `fc-open-i`: Tenant serving.
+        #[serde(rename = "fc-open-i")]
+        FcOpenI,
+    }
+
+    impl State {
+        /// The state's id in the specification.
+        pub fn id(self) -> &'static str {
+            match self {
+                State::FcOpenI => "fc-open-i",
+            }
+        }
+
+        /// The state with this id in the specification.
+        pub fn from_id(id: &str) -> Option<State> {
+            match id {
+                "fc-open-i" => Some(State::FcOpenI),
+                _ => None,
+            }
+        }
+    }
+
+    /// The variables of the machine.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct Vars {
+        /// Variable `base1`.
+        pub base1: u64,
+        /// Variable `base2`.
+        pub base2: u64,
+        /// Variable `factor`.
+        pub factor: u64,
+        /// Variable `newField1`.
+        #[serde(rename = "newField1")]
+        pub new_field1: u64,
+        /// Variable `newField2`.
+        #[serde(rename = "newField2")]
+        pub new_field2: u64,
+        /// Variable `added`.
+        pub added: bool,
+        /// Variable `oldName`.
+        #[serde(rename = "oldName")]
+        pub old_name: String,
+        /// Variable `fieldName`.
+        #[serde(rename = "fieldName")]
+        pub field_name: String,
+        /// Variable `value`.
+        pub value: String,
+        /// Variable `renamed`.
+        pub renamed: bool,
+        /// Variable `lastServedName`.
+        #[serde(rename = "lastServedName")]
+        pub last_served_name: String,
+        /// Variable `lastServedValue`.
+        #[serde(rename = "lastServedValue")]
+        pub last_served_value: String,
+    }
+
+    /// The payload of event `fc-field-added`: New field applied.
+    ///
+    /// The change that adds a field is applied to the existing records.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct FcFieldAddedPayload {
+        /// Field `tenant-id`.
+        #[serde(rename = "tenant-id")]
+        pub tenant_id: types::TenantId,
+    }
+
+    /// The payload of event `fc-rename-applied`: Rename applied.
+    ///
+    /// The change that renames a field is applied.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct FcRenameAppliedPayload {
+        /// Field `tenant-id`.
+        #[serde(rename = "tenant-id")]
+        pub tenant_id: types::TenantId,
+        /// Field `newName`.
+        #[serde(rename = "newName")]
+        pub new_name: String,
+    }
+
+    /// The payload of event `fc-read-requested`: Read requested.
+    ///
+    /// A request names the field.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct FcReadRequestedPayload {
+        /// Field `tenant-id`.
+        #[serde(rename = "tenant-id")]
+        pub tenant_id: types::TenantId,
+        /// Field `name`.
+        pub name: String,
+    }
+
+    /// The payload of event `fc-served`: Field served.
+    ///
+    /// The request is answered with the value of the field.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct FcServedPayload {}
+
+    /// The payload of event `fc-read-refused`: Request refused.
+    ///
+    /// The request names a field the tenant does not have.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct FcReadRefusedPayload {}
+
+    /// The events machine `field-change-flow-impl` receives, including those its timers fire.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Event {
+        /// Event `fc-field-added`: New field applied.
+        #[serde(rename = "fc-field-added")]
+        FcFieldAdded(FcFieldAddedPayload),
+        /// Event `fc-rename-applied`: Rename applied.
+        #[serde(rename = "fc-rename-applied")]
+        FcRenameApplied(FcRenameAppliedPayload),
+        /// Event `fc-read-requested`: Read requested.
+        #[serde(rename = "fc-read-requested")]
+        FcReadRequested(FcReadRequestedPayload),
+    }
+
+    /// The events machine `field-change-flow-impl` emits.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Emitted {
+        /// Event `fc-served`: Field served.
+        #[serde(rename = "fc-served")]
+        FcServed(FcServedPayload),
+        /// Event `fc-read-refused`: Request refused.
+        #[serde(rename = "fc-read-refused")]
+        FcReadRefused(FcReadRefusedPayload),
+    }
+
+    /// The instance key: field `tenant-id` of record `rec-field-change`.
+    pub type Key = types::TenantId;
+
+    /// Machine `field-change-flow-impl`, stored in record `rec-field-change` by `tenant-id`.
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct FieldChangeFlowImpl;
+
+    /// The refusal of a step whose arithmetic overflows or divides by zero.
+    fn overflow(transition: &str) -> StepError {
+        StepError::Rejected(format!(
+            "transition {transition} overflowed or divided by zero"
+        ))
+    }
+
+    impl Machine for FieldChangeFlowImpl {
+        const NAME: &'static str = "field-change-flow-impl";
+
+        const RECORD: &'static str = "rec-field-change";
+
+        const ISOLATION: Isolation = Isolation::Serializable;
+
+        const CREATES: bool = false;
+
+        type State = State;
+
+        type Vars = Vars;
+
+        type Event = Event;
+
+        type Emitted = Emitted;
+
+        type Key = Key;
+
+        type Record = records::RecFieldChange;
+
+        fn initial(_key: &Key) -> (State, Vars) {
+            (
+                State::FcOpenI,
+                Vars {
+                    base1: 1u64,
+                    base2: 5u64,
+                    factor: 2u64,
+                    new_field1: 0u64,
+                    new_field2: 0u64,
+                    added: false,
+                    old_name: String::from("title"),
+                    field_name: String::from("title"),
+                    value: String::from("v1"),
+                    renamed: false,
+                    last_served_name: String::from(""),
+                    last_served_value: String::from(""),
+                },
+            )
+        }
+
+        fn from_record(record: &records::RecFieldChange) -> Result<(State, Vars), RecordError> {
+            let state = State::from_id(&record.state).ok_or_else(|| {
+                RecordError(format!(
+                    "{:?} is not a state of machine `field-change-flow-impl`",
+                    record.state
+                ))
+            })?;
+            Ok((
+                state,
+                Vars {
+                    base1: record.base1,
+                    base2: record.base2,
+                    factor: record.factor,
+                    new_field1: record.new_field1,
+                    new_field2: record.new_field2,
+                    added: record.added,
+                    old_name: record.old_name.clone(),
+                    field_name: record.field_name.clone(),
+                    value: record.value.clone(),
+                    renamed: record.renamed,
+                    last_served_name: record.last_served_name.clone(),
+                    last_served_value: record.last_served_value.clone(),
+                },
+            ))
+        }
+
+        fn to_record(
+            key: &Key,
+            state: &State,
+            vars: &Vars,
+            _previous: Option<&records::RecFieldChange>,
+        ) -> Result<records::RecFieldChange, RecordError> {
+            Ok(records::RecFieldChange {
+                tenant_id: key.clone(),
+                base1: vars.base1,
+                base2: vars.base2,
+                factor: vars.factor,
+                new_field1: vars.new_field1,
+                new_field2: vars.new_field2,
+                added: vars.added,
+                old_name: vars.old_name.clone(),
+                field_name: vars.field_name.clone(),
+                value: vars.value.clone(),
+                renamed: vars.renamed,
+                last_served_name: vars.last_served_name.clone(),
+                last_served_value: vars.last_served_value.clone(),
+                state: state.id().to_string(),
+            })
+        }
+
+        fn is_elapsed(event: &Event) -> bool {
+            let _ = event;
+            false
+        }
+
+        fn validate_record(record: &records::RecFieldChange) -> Result<(), String> {
+            record.validate().map_err(|violation| violation.to_string())
+        }
+
+        fn step(
+            state: &State,
+            vars: &Vars,
+            event: &Event,
+            _now: Time,
+        ) -> Result<Outcome<Self>, StepError> {
+            match (state, event) {
+                (State::FcOpenI, Event::FcFieldAdded(_)) => {
+                    let mut next = vars.clone();
+                    next.new_field1 = next
+                        .base1
+                        .checked_mul(next.factor)
+                        .filter(|__v| *__v <= 9007199254740991u64)
+                        .ok_or(overflow("fc-add-field-i"))?;
+                    next.new_field2 = next
+                        .base2
+                        .checked_mul(next.factor)
+                        .filter(|__v| *__v <= 9007199254740991u64)
+                        .ok_or(overflow("fc-add-field-i"))?;
+                    next.added = true;
+                    Ok(Outcome::to(State::FcOpenI, next))
+                }
+                (State::FcOpenI, Event::FcRenameApplied(payload)) => {
+                    let mut next = vars.clone();
+                    next.field_name = payload.new_name.clone();
+                    next.renamed = true;
+                    next.last_served_name = ::std::string::String::from("");
+                    Ok(Outcome::to(State::FcOpenI, next))
+                }
+                (State::FcOpenI, Event::FcReadRequested(payload)) => {
+                    if payload.name == vars.field_name {
+                        let mut next = vars.clone();
+                        next.last_served_name = payload.name.clone();
+                        next.last_served_value = next.value.clone();
+                        let emitted_3 = Emitted::FcServed(FcServedPayload {});
+                        Ok(Outcome::to(State::FcOpenI, next).emit(
+                            "gateway",
+                            Delivery::AtMostOnce,
+                            emitted_3,
+                        ))
+                    } else {
+                        if payload.name != vars.field_name {
+                            Ok(Outcome::to(State::FcOpenI, vars.clone()).emit(
+                                "gateway",
+                                Delivery::AtMostOnce,
+                                Emitted::FcReadRefused(FcReadRefusedPayload {}),
+                            ))
+                        } else {
+                            Ok(Outcome::ignore(*state, vars.clone()))
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Saving a draft across a schema change (implementation)
+///
+/// An author saves a draft made under a schema version. A save under the current version succeeds; a save under a prior version is refused with the current version named, and the text of the draft is kept.
+///
+/// Specification behavior `draft-save-flow-impl`, an implementation-level machine.
+pub mod draft_save_flow_impl {
+    use serde::{Deserialize, Serialize};
+
+    use strata_runtime::{Delivery, Isolation, Machine, Outcome, RecordError, StepError, Time};
+
+    use crate::{prelude, records, types};
+
+    /// The states of machine `draft-save-flow-impl`.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+
+    pub enum State {
+        /// State `ds-open-i`: Tenant serving.
+        #[serde(rename = "ds-open-i")]
+        DsOpenI,
+    }
+
+    impl State {
+        /// The state's id in the specification.
+        pub fn id(self) -> &'static str {
+            match self {
+                State::DsOpenI => "ds-open-i",
+            }
+        }
+
+        /// The state with this id in the specification.
+        pub fn from_id(id: &str) -> Option<State> {
+            match id {
+                "ds-open-i" => Some(State::DsOpenI),
+                _ => None,
+            }
+        }
+    }
+
+    /// The variables of the machine.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct Vars {
+        /// Variable `schemaVersion`.
+        #[serde(rename = "schemaVersion")]
+        pub schema_version: u64,
+        /// Variable `saved`.
+        pub saved: u64,
+        /// Variable `lastSavedAgainst`.
+        #[serde(rename = "lastSavedAgainst")]
+        pub last_saved_against: u64,
+        /// Variable `schemaAtSave`.
+        #[serde(rename = "schemaAtSave")]
+        pub schema_at_save: u64,
+        /// Variable `refusedNamed`.
+        #[serde(rename = "refusedNamed")]
+        pub refused_named: u64,
+        /// Variable `draftText`.
+        #[serde(rename = "draftText")]
+        pub draft_text: String,
+    }
+
+    /// The payload of event `ds-schema-changed`: Schema changed.
+    ///
+    /// A schema change is applied; the schema version increases.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct DsSchemaChangedPayload {
+        /// Field `tenant-id`.
+        #[serde(rename = "tenant-id")]
+        pub tenant_id: types::TenantId,
+    }
+
+    /// The payload of event `ds-save-requested`: Save requested.
+    ///
+    /// The author saves a draft made under the given schema version.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct DsSaveRequestedPayload {
+        /// Field `tenant-id`.
+        #[serde(rename = "tenant-id")]
+        pub tenant_id: types::TenantId,
+        #[serde(deserialize_with = "prelude::safe_u64")]
+        /// Field `draftVersion`.
+        #[serde(rename = "draftVersion")]
+        pub draft_version: u64,
+    }
+
+    /// The payload of event `ds-saved`: Draft saved.
+    ///
+    /// The draft is saved.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct DsSavedPayload {}
+
+    /// The payload of event `ds-save-refused`: Save refused.
+    ///
+    /// The draft was made under a prior schema version.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct DsSaveRefusedPayload {}
+
+    /// The events machine `draft-save-flow-impl` receives, including those its timers fire.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Event {
+        /// Event `ds-schema-changed`: Schema changed.
+        #[serde(rename = "ds-schema-changed")]
+        DsSchemaChanged(DsSchemaChangedPayload),
+        /// Event `ds-save-requested`: Save requested.
+        #[serde(rename = "ds-save-requested")]
+        DsSaveRequested(DsSaveRequestedPayload),
+    }
+
+    /// The events machine `draft-save-flow-impl` emits.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Emitted {
+        /// Event `ds-saved`: Draft saved.
+        #[serde(rename = "ds-saved")]
+        DsSaved(DsSavedPayload),
+        /// Event `ds-save-refused`: Save refused.
+        #[serde(rename = "ds-save-refused")]
+        DsSaveRefused(DsSaveRefusedPayload),
+    }
+
+    /// The instance key: field `tenant-id` of record `rec-draft-save`.
+    pub type Key = types::TenantId;
+
+    /// Machine `draft-save-flow-impl`, stored in record `rec-draft-save` by `tenant-id`.
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct DraftSaveFlowImpl;
+
+    /// The refusal of a step whose arithmetic overflows or divides by zero.
+    fn overflow(transition: &str) -> StepError {
+        StepError::Rejected(format!(
+            "transition {transition} overflowed or divided by zero"
+        ))
+    }
+
+    impl Machine for DraftSaveFlowImpl {
+        const NAME: &'static str = "draft-save-flow-impl";
+
+        const RECORD: &'static str = "rec-draft-save";
+
+        const ISOLATION: Isolation = Isolation::Serializable;
+
+        const CREATES: bool = false;
+
+        type State = State;
+
+        type Vars = Vars;
+
+        type Event = Event;
+
+        type Emitted = Emitted;
+
+        type Key = Key;
+
+        type Record = records::RecDraftSave;
+
+        fn initial(_key: &Key) -> (State, Vars) {
+            (
+                State::DsOpenI,
+                Vars {
+                    schema_version: 1u64,
+                    saved: 0u64,
+                    last_saved_against: 0u64,
+                    schema_at_save: 0u64,
+                    refused_named: 0u64,
+                    draft_text: String::from("x"),
+                },
+            )
+        }
+
+        fn from_record(record: &records::RecDraftSave) -> Result<(State, Vars), RecordError> {
+            let state = State::from_id(&record.state).ok_or_else(|| {
+                RecordError(format!(
+                    "{:?} is not a state of machine `draft-save-flow-impl`",
+                    record.state
+                ))
+            })?;
+            Ok((
+                state,
+                Vars {
+                    schema_version: record.schema_version,
+                    saved: record.saved,
+                    last_saved_against: record.last_saved_against,
+                    schema_at_save: record.schema_at_save,
+                    refused_named: record.refused_named,
+                    draft_text: record.draft_text.clone(),
+                },
+            ))
+        }
+
+        fn to_record(
+            key: &Key,
+            state: &State,
+            vars: &Vars,
+            _previous: Option<&records::RecDraftSave>,
+        ) -> Result<records::RecDraftSave, RecordError> {
+            Ok(records::RecDraftSave {
+                tenant_id: key.clone(),
+                schema_version: vars.schema_version,
+                saved: vars.saved,
+                last_saved_against: vars.last_saved_against,
+                schema_at_save: vars.schema_at_save,
+                refused_named: vars.refused_named,
+                draft_text: vars.draft_text.clone(),
+                state: state.id().to_string(),
+            })
+        }
+
+        fn is_elapsed(event: &Event) -> bool {
+            let _ = event;
+            false
+        }
+
+        fn validate_record(record: &records::RecDraftSave) -> Result<(), String> {
+            record.validate().map_err(|violation| violation.to_string())
+        }
+
+        fn step(
+            state: &State,
+            vars: &Vars,
+            event: &Event,
+            _now: Time,
+        ) -> Result<Outcome<Self>, StepError> {
+            match (state, event) {
+                (State::DsOpenI, Event::DsSchemaChanged(_)) => {
+                    let mut next = vars.clone();
+                    next.schema_version = next
+                        .schema_version
+                        .checked_add(1u64)
+                        .filter(|__v| *__v <= 9007199254740991u64)
+                        .ok_or(overflow("ds-schema-change-i"))?;
+                    Ok(Outcome::to(State::DsOpenI, next))
+                }
+                (State::DsOpenI, Event::DsSaveRequested(payload)) => {
+                    if payload.draft_version == vars.schema_version {
+                        let mut next = vars.clone();
+                        next.saved = next
+                            .saved
+                            .checked_add(1u64)
+                            .filter(|__v| *__v <= 9007199254740991u64)
+                            .ok_or(overflow("ds-save-i"))?;
+                        next.last_saved_against = payload.draft_version;
+                        next.schema_at_save = next.schema_version;
+                        let emitted_4 = Emitted::DsSaved(DsSavedPayload {});
+                        Ok(Outcome::to(State::DsOpenI, next).emit(
+                            "gateway",
+                            Delivery::AtMostOnce,
+                            emitted_4,
+                        ))
+                    } else {
+                        if payload.draft_version != vars.schema_version {
+                            let mut next = vars.clone();
+                            next.refused_named = next.schema_version;
+                            let emitted_2 = Emitted::DsSaveRefused(DsSaveRefusedPayload {});
+                            Ok(Outcome::to(State::DsOpenI, next).emit(
+                                "gateway",
+                                Delivery::AtMostOnce,
+                                emitted_2,
+                            ))
+                        } else {
+                            Ok(Outcome::ignore(*state, vars.clone()))
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Workflow run across a definition change (implementation)
+///
+/// A workflow run started under one definition version. Its steps run under that version when the definition changes; a run that the new definition cannot continue stops with the steps it did recorded.
+///
+/// Specification behavior `workflow-version-flow-impl`, an implementation-level machine.
+pub mod workflow_version_flow_impl {
+    use serde::{Deserialize, Serialize};
+
+    use strata_runtime::{Delivery, Isolation, Machine, Outcome, RecordError, StepError, Time};
+
+    use crate::{records, types};
+
+    /// The states of machine `workflow-version-flow-impl`.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+
+    pub enum State {
+        /// State `wf-idle-i`: Not started. Ignores `wf-definition-changed`, `wf-step-due`.
+        #[serde(rename = "wf-idle-i")]
+        WfIdleI,
+        /// State `wf-running-i`: Running. Ignores `wf-run-started`.
+        #[serde(rename = "wf-running-i")]
+        WfRunningI,
+        /// State `wf-stopped-i`: Stopped. Terminal.
+        #[serde(rename = "wf-stopped-i")]
+        WfStoppedI,
+    }
+
+    impl State {
+        /// The state's id in the specification.
+        pub fn id(self) -> &'static str {
+            match self {
+                State::WfIdleI => "wf-idle-i",
+                State::WfRunningI => "wf-running-i",
+                State::WfStoppedI => "wf-stopped-i",
+            }
+        }
+
+        /// The state with this id in the specification.
+        pub fn from_id(id: &str) -> Option<State> {
+            match id {
+                "wf-idle-i" => Some(State::WfIdleI),
+                "wf-running-i" => Some(State::WfRunningI),
+                "wf-stopped-i" => Some(State::WfStoppedI),
+                _ => None,
+            }
+        }
+    }
+
+    /// The variables of the machine.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct Vars {
+        /// Variable `definitionVersion`.
+        #[serde(rename = "definitionVersion")]
+        pub definition_version: u64,
+        /// Variable `runVersion`.
+        #[serde(rename = "runVersion")]
+        pub run_version: u64,
+        /// Variable `lastStepVersion`.
+        #[serde(rename = "lastStepVersion")]
+        pub last_step_version: u64,
+        /// Variable `steps`.
+        pub steps: u64,
+        /// Variable `stopped`.
+        pub stopped: bool,
+        /// Variable `recordedSteps`.
+        #[serde(rename = "recordedSteps")]
+        pub recorded_steps: u64,
+    }
+
+    /// The payload of event `wf-run-started`: Run started.
+    ///
+    /// A run starts under the definition version in force.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct WfRunStartedPayload {
+        /// Field `tenant-id`.
+        #[serde(rename = "tenant-id")]
+        pub tenant_id: types::TenantId,
+    }
+
+    /// The payload of event `wf-definition-changed`: Definition changed.
+    ///
+    /// The definition of the workflow changes.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct WfDefinitionChangedPayload {
+        /// Field `tenant-id`.
+        #[serde(rename = "tenant-id")]
+        pub tenant_id: types::TenantId,
+        /// Field `retained`.
+        pub retained: bool,
+    }
+
+    /// The payload of event `wf-step-due`: Step due.
+    ///
+    /// The next step of the run is due.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct WfStepDuePayload {
+        /// Field `tenant-id`.
+        #[serde(rename = "tenant-id")]
+        pub tenant_id: types::TenantId,
+    }
+
+    /// The payload of event `wf-run-stopped`: Run stopped.
+    ///
+    /// The run stopped and its state is recorded.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct WfRunStoppedPayload {}
+
+    /// The events machine `workflow-version-flow-impl` receives, including those its timers fire.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Event {
+        /// Event `wf-run-started`: Run started.
+        #[serde(rename = "wf-run-started")]
+        WfRunStarted(WfRunStartedPayload),
+        /// Event `wf-definition-changed`: Definition changed.
+        #[serde(rename = "wf-definition-changed")]
+        WfDefinitionChanged(WfDefinitionChangedPayload),
+        /// Event `wf-step-due`: Step due.
+        #[serde(rename = "wf-step-due")]
+        WfStepDue(WfStepDuePayload),
+    }
+
+    /// The events machine `workflow-version-flow-impl` emits.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Emitted {
+        /// Event `wf-run-stopped`: Run stopped.
+        #[serde(rename = "wf-run-stopped")]
+        WfRunStopped(WfRunStoppedPayload),
+    }
+
+    /// The instance key: field `tenant-id` of record `rec-workflow-version`.
+    pub type Key = types::TenantId;
+
+    /// Machine `workflow-version-flow-impl`, stored in record `rec-workflow-version` by `tenant-id`.
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct WorkflowVersionFlowImpl;
+
+    /// The refusal of a step whose arithmetic overflows or divides by zero.
+    fn overflow(transition: &str) -> StepError {
+        StepError::Rejected(format!(
+            "transition {transition} overflowed or divided by zero"
+        ))
+    }
+
+    impl Machine for WorkflowVersionFlowImpl {
+        const NAME: &'static str = "workflow-version-flow-impl";
+
+        const RECORD: &'static str = "rec-workflow-version";
+
+        const ISOLATION: Isolation = Isolation::Serializable;
+
+        const CREATES: bool = false;
+
+        type State = State;
+
+        type Vars = Vars;
+
+        type Event = Event;
+
+        type Emitted = Emitted;
+
+        type Key = Key;
+
+        type Record = records::RecWorkflowVersion;
+
+        fn initial(_key: &Key) -> (State, Vars) {
+            (
+                State::WfIdleI,
+                Vars {
+                    definition_version: 1u64,
+                    run_version: 0u64,
+                    last_step_version: 0u64,
+                    steps: 0u64,
+                    stopped: false,
+                    recorded_steps: 0u64,
+                },
+            )
+        }
+
+        fn from_record(record: &records::RecWorkflowVersion) -> Result<(State, Vars), RecordError> {
+            let state = State::from_id(&record.state).ok_or_else(|| {
+                RecordError(format!(
+                    "{:?} is not a state of machine `workflow-version-flow-impl`",
+                    record.state
+                ))
+            })?;
+            Ok((
+                state,
+                Vars {
+                    definition_version: record.definition_version,
+                    run_version: record.run_version,
+                    last_step_version: record.last_step_version,
+                    steps: record.steps,
+                    stopped: record.stopped,
+                    recorded_steps: record.recorded_steps,
+                },
+            ))
+        }
+
+        fn to_record(
+            key: &Key,
+            state: &State,
+            vars: &Vars,
+            _previous: Option<&records::RecWorkflowVersion>,
+        ) -> Result<records::RecWorkflowVersion, RecordError> {
+            Ok(records::RecWorkflowVersion {
+                tenant_id: key.clone(),
+                definition_version: vars.definition_version,
+                run_version: vars.run_version,
+                last_step_version: vars.last_step_version,
+                steps: vars.steps,
+                stopped: vars.stopped,
+                recorded_steps: vars.recorded_steps,
+                state: state.id().to_string(),
+            })
+        }
+
+        fn is_elapsed(event: &Event) -> bool {
+            let _ = event;
+            false
+        }
+
+        fn validate_record(record: &records::RecWorkflowVersion) -> Result<(), String> {
+            record.validate().map_err(|violation| violation.to_string())
+        }
+
+        fn step(
+            state: &State,
+            vars: &Vars,
+            event: &Event,
+            _now: Time,
+        ) -> Result<Outcome<Self>, StepError> {
+            match (state, event) {
+                (State::WfIdleI, Event::WfRunStarted(_)) => {
+                    let mut next = vars.clone();
+                    next.run_version = next.definition_version;
+                    Ok(Outcome::to(State::WfRunningI, next))
+                }
+                (State::WfRunningI, Event::WfDefinitionChanged(payload)) => {
+                    if payload.retained {
+                        let mut next = vars.clone();
+                        next.definition_version = next
+                            .definition_version
+                            .checked_add(1u64)
+                            .filter(|__v| *__v <= 9007199254740991u64)
+                            .ok_or(overflow("wf-change-retained-i"))?;
+                        Ok(Outcome::to(State::WfRunningI, next))
+                    } else {
+                        if !payload.retained {
+                            let mut next = vars.clone();
+                            next.definition_version = next
+                                .definition_version
+                                .checked_add(1u64)
+                                .filter(|__v| *__v <= 9007199254740991u64)
+                                .ok_or(overflow("wf-change-withdrawn-i"))?;
+                            next.stopped = true;
+                            next.recorded_steps = next.steps;
+                            let emitted_4 = Emitted::WfRunStopped(WfRunStoppedPayload {});
+                            Ok(Outcome::to(State::WfStoppedI, next).emit(
+                                "operator-console",
+                                Delivery::AtMostOnce,
+                                emitted_4,
+                            ))
+                        } else {
+                            Ok(Outcome::ignore(*state, vars.clone()))
+                        }
+                    }
+                }
+                (State::WfRunningI, Event::WfStepDue(_)) => {
+                    let mut next = vars.clone();
+                    next.steps = next
+                        .steps
+                        .checked_add(1u64)
+                        .filter(|__v| *__v <= 9007199254740991u64)
+                        .ok_or(overflow("wf-step-i"))?;
+                    next.last_step_version = next.run_version;
+                    Ok(Outcome::to(State::WfRunningI, next))
+                }
+                _ => Ok(Outcome::ignore(*state, vars.clone())),
+            }
+        }
+    }
+}
+
+/// Scheduled job against the schema (implementation)
+///
+/// A scheduled job defined against schema version 1. When it falls due it is checked against the schema version in force: it runs when the definition still fits, and is refused with the changed field named when it does not.
+///
+/// Specification behavior `scheduled-job-check-flow-impl`, an implementation-level machine.
+pub mod scheduled_job_check_flow_impl {
+    use serde::{Deserialize, Serialize};
+
+    use strata_runtime::{Delivery, Isolation, Machine, Outcome, RecordError, StepError, Time};
+
+    use crate::{records, types};
+
+    /// The states of machine `scheduled-job-check-flow-impl`.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+
+    pub enum State {
+        /// State `sj-open-i`: Schedule held.
+        #[serde(rename = "sj-open-i")]
+        SjOpenI,
+    }
+
+    impl State {
+        /// The state's id in the specification.
+        pub fn id(self) -> &'static str {
+            match self {
+                State::SjOpenI => "sj-open-i",
+            }
+        }
+
+        /// The state with this id in the specification.
+        pub fn from_id(id: &str) -> Option<State> {
+            match id {
+                "sj-open-i" => Some(State::SjOpenI),
+                _ => None,
+            }
+        }
+    }
+
+    /// The variables of the machine.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct Vars {
+        /// Variable `schemaVersion`.
+        #[serde(rename = "schemaVersion")]
+        pub schema_version: u64,
+        /// Variable `jobDefinedAgainst`.
+        #[serde(rename = "jobDefinedAgainst")]
+        pub job_defined_against: u64,
+        /// Variable `changedField`.
+        #[serde(rename = "changedField")]
+        pub changed_field: String,
+        /// Variable `runs`.
+        pub runs: u64,
+        /// Variable `lastRunSchema`.
+        #[serde(rename = "lastRunSchema")]
+        pub last_run_schema: u64,
+        /// Variable `lastRunDefinedAgainst`.
+        #[serde(rename = "lastRunDefinedAgainst")]
+        pub last_run_defined_against: u64,
+        /// Variable `refusedNaming`.
+        #[serde(rename = "refusedNaming")]
+        pub refused_naming: String,
+    }
+
+    /// The payload of event `sj-schema-changed`: Schema changed.
+    ///
+    /// A schema change is applied to the tenant.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct SjSchemaChangedPayload {
+        /// Field `tenant-id`.
+        #[serde(rename = "tenant-id")]
+        pub tenant_id: types::TenantId,
+        /// Field `field`.
+        pub field: String,
+    }
+
+    /// The payload of event `sj-job-due`: Job due.
+    ///
+    /// The job falls due.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct SjJobDuePayload {
+        /// Field `tenant-id`.
+        #[serde(rename = "tenant-id")]
+        pub tenant_id: types::TenantId,
+    }
+
+    /// The payload of event `sj-job-run`: Job run.
+    ///
+    /// The job runs.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct SjJobRunPayload {}
+
+    /// The payload of event `sj-job-refused`: Job refused.
+    ///
+    /// The definition of the job no longer fits the schema.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct SjJobRefusedPayload {}
+
+    /// The events machine `scheduled-job-check-flow-impl` receives, including those its timers fire.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Event {
+        /// Event `sj-schema-changed`: Schema changed.
+        #[serde(rename = "sj-schema-changed")]
+        SjSchemaChanged(SjSchemaChangedPayload),
+        /// Event `sj-job-due`: Job due.
+        #[serde(rename = "sj-job-due")]
+        SjJobDue(SjJobDuePayload),
+    }
+
+    /// The events machine `scheduled-job-check-flow-impl` emits.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Emitted {
+        /// Event `sj-job-run`: Job run.
+        #[serde(rename = "sj-job-run")]
+        SjJobRun(SjJobRunPayload),
+        /// Event `sj-job-refused`: Job refused.
+        #[serde(rename = "sj-job-refused")]
+        SjJobRefused(SjJobRefusedPayload),
+    }
+
+    /// The instance key: field `tenant-id` of record `rec-scheduled-job-check`.
+    pub type Key = types::TenantId;
+
+    /// Machine `scheduled-job-check-flow-impl`, stored in record `rec-scheduled-job-check` by `tenant-id`.
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct ScheduledJobCheckFlowImpl;
+
+    /// The refusal of a step whose arithmetic overflows or divides by zero.
+    fn overflow(transition: &str) -> StepError {
+        StepError::Rejected(format!(
+            "transition {transition} overflowed or divided by zero"
+        ))
+    }
+
+    impl Machine for ScheduledJobCheckFlowImpl {
+        const NAME: &'static str = "scheduled-job-check-flow-impl";
+
+        const RECORD: &'static str = "rec-scheduled-job-check";
+
+        const ISOLATION: Isolation = Isolation::Serializable;
+
+        const CREATES: bool = false;
+
+        type State = State;
+
+        type Vars = Vars;
+
+        type Event = Event;
+
+        type Emitted = Emitted;
+
+        type Key = Key;
+
+        type Record = records::RecScheduledJobCheck;
+
+        fn initial(_key: &Key) -> (State, Vars) {
+            (
+                State::SjOpenI,
+                Vars {
+                    schema_version: 1u64,
+                    job_defined_against: 1u64,
+                    changed_field: String::from(""),
+                    runs: 0u64,
+                    last_run_schema: 0u64,
+                    last_run_defined_against: 0u64,
+                    refused_naming: String::from(""),
+                },
+            )
+        }
+
+        fn from_record(
+            record: &records::RecScheduledJobCheck,
+        ) -> Result<(State, Vars), RecordError> {
+            let state = State::from_id(&record.state).ok_or_else(|| {
+                RecordError(format!(
+                    "{:?} is not a state of machine `scheduled-job-check-flow-impl`",
+                    record.state
+                ))
+            })?;
+            Ok((
+                state,
+                Vars {
+                    schema_version: record.schema_version,
+                    job_defined_against: record.job_defined_against,
+                    changed_field: record.changed_field.clone(),
+                    runs: record.runs,
+                    last_run_schema: record.last_run_schema,
+                    last_run_defined_against: record.last_run_defined_against,
+                    refused_naming: record.refused_naming.clone(),
+                },
+            ))
+        }
+
+        fn to_record(
+            key: &Key,
+            state: &State,
+            vars: &Vars,
+            _previous: Option<&records::RecScheduledJobCheck>,
+        ) -> Result<records::RecScheduledJobCheck, RecordError> {
+            Ok(records::RecScheduledJobCheck {
+                tenant_id: key.clone(),
+                schema_version: vars.schema_version,
+                job_defined_against: vars.job_defined_against,
+                changed_field: vars.changed_field.clone(),
+                runs: vars.runs,
+                last_run_schema: vars.last_run_schema,
+                last_run_defined_against: vars.last_run_defined_against,
+                refused_naming: vars.refused_naming.clone(),
+                state: state.id().to_string(),
+            })
+        }
+
+        fn is_elapsed(event: &Event) -> bool {
+            let _ = event;
+            false
+        }
+
+        fn validate_record(record: &records::RecScheduledJobCheck) -> Result<(), String> {
+            record.validate().map_err(|violation| violation.to_string())
+        }
+
+        fn step(
+            state: &State,
+            vars: &Vars,
+            event: &Event,
+            _now: Time,
+        ) -> Result<Outcome<Self>, StepError> {
+            match (state, event) {
+                (State::SjOpenI, Event::SjSchemaChanged(payload)) => {
+                    let mut next = vars.clone();
+                    next.schema_version = next
+                        .schema_version
+                        .checked_add(1u64)
+                        .filter(|__v| *__v <= 9007199254740991u64)
+                        .ok_or(overflow("sj-schema-change-i"))?;
+                    next.changed_field = payload.field.clone();
+                    Ok(Outcome::to(State::SjOpenI, next))
+                }
+                (State::SjOpenI, Event::SjJobDue(_)) => {
+                    if vars.job_defined_against == vars.schema_version {
+                        let mut next = vars.clone();
+                        next.runs = next
+                            .runs
+                            .checked_add(1u64)
+                            .filter(|__v| *__v <= 9007199254740991u64)
+                            .ok_or(overflow("sj-run-i"))?;
+                        next.last_run_schema = next.schema_version;
+                        next.last_run_defined_against = next.job_defined_against;
+                        let emitted_4 = Emitted::SjJobRun(SjJobRunPayload {});
+                        Ok(Outcome::to(State::SjOpenI, next).emit(
+                            "operator-console",
+                            Delivery::AtMostOnce,
+                            emitted_4,
+                        ))
+                    } else {
+                        if vars.job_defined_against != vars.schema_version {
+                            let mut next = vars.clone();
+                            next.refused_naming = next.changed_field.clone();
+                            let emitted_2 = Emitted::SjJobRefused(SjJobRefusedPayload {});
+                            Ok(Outcome::to(State::SjOpenI, next).emit(
+                                "operator-console",
+                                Delivery::AtMostOnce,
+                                emitted_2,
+                            ))
+                        } else {
+                            Ok(Outcome::ignore(*state, vars.clone()))
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Template version proposal (implementation)
+///
+/// A newer version of an installed template. It reaches the tenant as a proposal that carries its projection; nothing changes until the tenant approves, and an apply before the approval is refused.
+///
+/// Specification behavior `template-proposal-flow-impl`, an implementation-level machine.
+pub mod template_proposal_flow_impl {
+    use serde::{Deserialize, Serialize};
+
+    use strata_runtime::{Delivery, Isolation, Machine, Outcome, RecordError, StepError, Time};
+
+    use crate::{records, types};
+
+    /// The states of machine `template-proposal-flow-impl`.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+
+    pub enum State {
+        /// State `tp-idle-i`: No proposal. Ignores `tp-tenant-approved`.
+        #[serde(rename = "tp-idle-i")]
+        TpIdleI,
+        /// State `tp-proposed-i`: Proposed. Ignores `tp-version-published`.
+        #[serde(rename = "tp-proposed-i")]
+        TpProposedI,
+        /// State `tp-approved-i`: Approved. Ignores `tp-version-published`, `tp-tenant-approved`.
+        #[serde(rename = "tp-approved-i")]
+        TpApprovedI,
+        /// State `tp-applied-i`: Applied. Terminal.
+        #[serde(rename = "tp-applied-i")]
+        TpAppliedI,
+    }
+
+    impl State {
+        /// The state's id in the specification.
+        pub fn id(self) -> &'static str {
+            match self {
+                State::TpIdleI => "tp-idle-i",
+                State::TpProposedI => "tp-proposed-i",
+                State::TpApprovedI => "tp-approved-i",
+                State::TpAppliedI => "tp-applied-i",
+            }
+        }
+
+        /// The state with this id in the specification.
+        pub fn from_id(id: &str) -> Option<State> {
+            match id {
+                "tp-idle-i" => Some(State::TpIdleI),
+                "tp-proposed-i" => Some(State::TpProposedI),
+                "tp-approved-i" => Some(State::TpApprovedI),
+                "tp-applied-i" => Some(State::TpAppliedI),
+                _ => None,
+            }
+        }
+    }
+
+    /// The variables of the machine.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct Vars {
+        /// Variable `projected`.
+        pub projected: bool,
+        /// Variable `approved`.
+        pub approved: bool,
+        /// Variable `applied`.
+        pub applied: bool,
+    }
+
+    /// The payload of event `tp-version-published`: Newer version published.
+    ///
+    /// A newer version of the installed template exists.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct TpVersionPublishedPayload {
+        /// Field `tenant-id`.
+        #[serde(rename = "tenant-id")]
+        pub tenant_id: types::TenantId,
+    }
+
+    /// The payload of event `tp-tenant-approved`: Tenant approved.
+    ///
+    /// The tenant approves the proposal.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct TpTenantApprovedPayload {
+        /// Field `tenant-id`.
+        #[serde(rename = "tenant-id")]
+        pub tenant_id: types::TenantId,
+    }
+
+    /// The payload of event `tp-apply-requested`: Apply requested.
+    ///
+    /// The proposal is to be applied.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct TpApplyRequestedPayload {
+        /// Field `tenant-id`.
+        #[serde(rename = "tenant-id")]
+        pub tenant_id: types::TenantId,
+    }
+
+    /// The payload of event `tp-proposal-created`: Proposal created.
+    ///
+    /// A proposal with its projection is offered to the tenant.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct TpProposalCreatedPayload {}
+
+    /// The payload of event `tp-template-applied`: Template applied.
+    ///
+    /// The newer version is applied to the tenant.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct TpTemplateAppliedPayload {}
+
+    /// The payload of event `tp-apply-refused`: Apply refused.
+    ///
+    /// The tenant has not approved the proposal.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct TpApplyRefusedPayload {}
+
+    /// The events machine `template-proposal-flow-impl` receives, including those its timers fire.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Event {
+        /// Event `tp-version-published`: Newer version published.
+        #[serde(rename = "tp-version-published")]
+        TpVersionPublished(TpVersionPublishedPayload),
+        /// Event `tp-tenant-approved`: Tenant approved.
+        #[serde(rename = "tp-tenant-approved")]
+        TpTenantApproved(TpTenantApprovedPayload),
+        /// Event `tp-apply-requested`: Apply requested.
+        #[serde(rename = "tp-apply-requested")]
+        TpApplyRequested(TpApplyRequestedPayload),
+    }
+
+    /// The events machine `template-proposal-flow-impl` emits.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Emitted {
+        /// Event `tp-proposal-created`: Proposal created.
+        #[serde(rename = "tp-proposal-created")]
+        TpProposalCreated(TpProposalCreatedPayload),
+        /// Event `tp-template-applied`: Template applied.
+        #[serde(rename = "tp-template-applied")]
+        TpTemplateApplied(TpTemplateAppliedPayload),
+        /// Event `tp-apply-refused`: Apply refused.
+        #[serde(rename = "tp-apply-refused")]
+        TpApplyRefused(TpApplyRefusedPayload),
+    }
+
+    /// The instance key: field `tenant-id` of record `rec-template-proposal`.
+    pub type Key = types::TenantId;
+
+    /// Machine `template-proposal-flow-impl`, stored in record `rec-template-proposal` by `tenant-id`.
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct TemplateProposalFlowImpl;
+
+    impl Machine for TemplateProposalFlowImpl {
+        const NAME: &'static str = "template-proposal-flow-impl";
+
+        const RECORD: &'static str = "rec-template-proposal";
+
+        const ISOLATION: Isolation = Isolation::Serializable;
+
+        const CREATES: bool = false;
+
+        type State = State;
+
+        type Vars = Vars;
+
+        type Event = Event;
+
+        type Emitted = Emitted;
+
+        type Key = Key;
+
+        type Record = records::RecTemplateProposal;
+
+        fn initial(_key: &Key) -> (State, Vars) {
+            (
+                State::TpIdleI,
+                Vars {
+                    projected: false,
+                    approved: false,
+                    applied: false,
+                },
+            )
+        }
+
+        fn from_record(
+            record: &records::RecTemplateProposal,
+        ) -> Result<(State, Vars), RecordError> {
+            let state = State::from_id(&record.state).ok_or_else(|| {
+                RecordError(format!(
+                    "{:?} is not a state of machine `template-proposal-flow-impl`",
+                    record.state
+                ))
+            })?;
+            Ok((
+                state,
+                Vars {
+                    projected: record.projected,
+                    approved: record.approved,
+                    applied: record.applied,
+                },
+            ))
+        }
+
+        fn to_record(
+            key: &Key,
+            state: &State,
+            vars: &Vars,
+            _previous: Option<&records::RecTemplateProposal>,
+        ) -> Result<records::RecTemplateProposal, RecordError> {
+            Ok(records::RecTemplateProposal {
+                tenant_id: key.clone(),
+                projected: vars.projected,
+                approved: vars.approved,
+                applied: vars.applied,
+                state: state.id().to_string(),
+            })
+        }
+
+        fn is_elapsed(event: &Event) -> bool {
+            let _ = event;
+            false
+        }
+
+        fn validate_record(record: &records::RecTemplateProposal) -> Result<(), String> {
+            record.validate().map_err(|violation| violation.to_string())
+        }
+
+        fn step(
+            state: &State,
+            vars: &Vars,
+            event: &Event,
+            _now: Time,
+        ) -> Result<Outcome<Self>, StepError> {
+            match (state, event) {
+                (State::TpIdleI, Event::TpVersionPublished(_)) => {
+                    let mut next = vars.clone();
+                    next.projected = true;
+                    let emitted_2 = Emitted::TpProposalCreated(TpProposalCreatedPayload {});
+                    Ok(Outcome::to(State::TpProposedI, next).emit(
+                        "operator-console",
+                        Delivery::AtMostOnce,
+                        emitted_2,
+                    ))
+                }
+                (State::TpIdleI, Event::TpApplyRequested(_)) => {
+                    Ok(Outcome::to(State::TpIdleI, vars.clone()).emit(
+                        "operator-console",
+                        Delivery::AtMostOnce,
+                        Emitted::TpApplyRefused(TpApplyRefusedPayload {}),
+                    ))
+                }
+                (State::TpProposedI, Event::TpTenantApproved(_)) => {
+                    let mut next = vars.clone();
+                    next.approved = true;
+                    Ok(Outcome::to(State::TpApprovedI, next))
+                }
+                (State::TpProposedI, Event::TpApplyRequested(_)) => {
+                    Ok(Outcome::to(State::TpProposedI, vars.clone()).emit(
+                        "operator-console",
+                        Delivery::AtMostOnce,
+                        Emitted::TpApplyRefused(TpApplyRefusedPayload {}),
+                    ))
+                }
+                (State::TpApprovedI, Event::TpApplyRequested(_)) => {
+                    let mut next = vars.clone();
+                    next.applied = true;
+                    let emitted_2 = Emitted::TpTemplateApplied(TpTemplateAppliedPayload {});
+                    Ok(Outcome::to(State::TpAppliedI, next).emit(
+                        "operator-console",
+                        Delivery::AtMostOnce,
+                        emitted_2,
+                    ))
+                }
+                _ => Ok(Outcome::ignore(*state, vars.clone())),
+            }
+        }
+    }
+}
+
+/// Import of records and pages (implementation)
+///
+/// An import into one tenant. A record the tenant already holds is updated and not duplicated, so the import can be run again; each former address that an imported page names gets a redirect.
+///
+/// Specification behavior `import-flow-impl`, an implementation-level machine.
+pub mod import_flow_impl {
+    use serde::{Deserialize, Serialize};
+
+    use strata_runtime::{Isolation, Machine, Outcome, RecordError, StepError, Time};
+
+    use crate::{prelude, records, types};
+
+    /// The states of machine `import-flow-impl`.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+
+    pub enum State {
+        /// State `im-open-i`: Tenant serving.
+        #[serde(rename = "im-open-i")]
+        ImOpenI,
+    }
+
+    impl State {
+        /// The state's id in the specification.
+        pub fn id(self) -> &'static str {
+            match self {
+                State::ImOpenI => "im-open-i",
+            }
+        }
+
+        /// The state with this id in the specification.
+        pub fn from_id(id: &str) -> Option<State> {
+            match id {
+                "im-open-i" => Some(State::ImOpenI),
+                _ => None,
+            }
+        }
+    }
+
+    /// The variables of the machine.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct Vars {
+        /// Variable `holdsR1`.
+        #[serde(rename = "holdsR1")]
+        pub holds_r1: bool,
+        /// Variable `holdsR2`.
+        #[serde(rename = "holdsR2")]
+        pub holds_r2: bool,
+        /// Variable `held`.
+        pub held: u64,
+        /// Variable `updates`.
+        pub updates: u64,
+        /// Variable `formerAddresses`.
+        #[serde(rename = "formerAddresses")]
+        pub former_addresses: u64,
+        /// Variable `redirects`.
+        pub redirects: u64,
+    }
+
+    /// The payload of event `im-record-imported`: Record imported.
+    ///
+    /// A record of the archive is imported.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct ImRecordImportedPayload {
+        /// Field `tenant-id`.
+        #[serde(rename = "tenant-id")]
+        pub tenant_id: types::TenantId,
+        /// Field `record`.
+        pub record: String,
+    }
+
+    /// The payload of event `im-page-imported`: Page imported.
+    ///
+    /// A page of the archive is imported; it names former addresses.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct ImPageImportedPayload {
+        /// Field `tenant-id`.
+        #[serde(rename = "tenant-id")]
+        pub tenant_id: types::TenantId,
+        #[serde(deserialize_with = "prelude::safe_u64")]
+        /// Field `formers`.
+        pub formers: u64,
+    }
+
+    /// The events machine `import-flow-impl` receives, including those its timers fire.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Event {
+        /// Event `im-record-imported`: Record imported.
+        #[serde(rename = "im-record-imported")]
+        ImRecordImported(ImRecordImportedPayload),
+        /// Event `im-page-imported`: Page imported.
+        #[serde(rename = "im-page-imported")]
+        ImPageImported(ImPageImportedPayload),
+    }
+
+    /// The events machine `import-flow-impl` emits.
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+    pub enum Emitted {}
+
+    /// The instance key: field `tenant-id` of record `rec-import`.
+    pub type Key = types::TenantId;
+
+    /// Machine `import-flow-impl`, stored in record `rec-import` by `tenant-id`.
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct ImportFlowImpl;
+
+    /// The refusal of a step whose arithmetic overflows or divides by zero.
+    fn overflow(transition: &str) -> StepError {
+        StepError::Rejected(format!(
+            "transition {transition} overflowed or divided by zero"
+        ))
+    }
+
+    impl Machine for ImportFlowImpl {
+        const NAME: &'static str = "import-flow-impl";
+
+        const RECORD: &'static str = "rec-import";
+
+        const ISOLATION: Isolation = Isolation::Serializable;
+
+        const CREATES: bool = false;
+
+        type State = State;
+
+        type Vars = Vars;
+
+        type Event = Event;
+
+        type Emitted = Emitted;
+
+        type Key = Key;
+
+        type Record = records::RecImport;
+
+        fn initial(_key: &Key) -> (State, Vars) {
+            (
+                State::ImOpenI,
+                Vars {
+                    holds_r1: false,
+                    holds_r2: false,
+                    held: 0u64,
+                    updates: 0u64,
+                    former_addresses: 0u64,
+                    redirects: 0u64,
+                },
+            )
+        }
+
+        fn from_record(record: &records::RecImport) -> Result<(State, Vars), RecordError> {
+            let state = State::from_id(&record.state).ok_or_else(|| {
+                RecordError(format!(
+                    "{:?} is not a state of machine `import-flow-impl`",
+                    record.state
+                ))
+            })?;
+            Ok((
+                state,
+                Vars {
+                    holds_r1: record.holds_r1,
+                    holds_r2: record.holds_r2,
+                    held: record.held,
+                    updates: record.updates,
+                    former_addresses: record.former_addresses,
+                    redirects: record.redirects,
+                },
+            ))
+        }
+
+        fn to_record(
+            key: &Key,
+            state: &State,
+            vars: &Vars,
+            _previous: Option<&records::RecImport>,
+        ) -> Result<records::RecImport, RecordError> {
+            Ok(records::RecImport {
+                tenant_id: key.clone(),
+                holds_r1: vars.holds_r1,
+                holds_r2: vars.holds_r2,
+                held: vars.held,
+                updates: vars.updates,
+                former_addresses: vars.former_addresses,
+                redirects: vars.redirects,
+                state: state.id().to_string(),
+            })
+        }
+
+        fn is_elapsed(event: &Event) -> bool {
+            let _ = event;
+            false
+        }
+
+        fn validate_record(record: &records::RecImport) -> Result<(), String> {
+            record.validate().map_err(|violation| violation.to_string())
+        }
+
+        fn step(
+            state: &State,
+            vars: &Vars,
+            event: &Event,
+            _now: Time,
+        ) -> Result<Outcome<Self>, StepError> {
+            match (state, event) {
+                (State::ImOpenI, Event::ImRecordImported(payload)) => {
+                    if payload.record == "r1" && !vars.holds_r1 {
+                        let mut next = vars.clone();
+                        next.holds_r1 = true;
+                        next.held = next
+                            .held
+                            .checked_add(1u64)
+                            .filter(|__v| *__v <= 9007199254740991u64)
+                            .ok_or(overflow("im-create-r1-i"))?;
+                        Ok(Outcome::to(State::ImOpenI, next))
+                    } else {
+                        if payload.record == "r1" && vars.holds_r1 {
+                            let mut next = vars.clone();
+                            next.updates = next
+                                .updates
+                                .checked_add(1u64)
+                                .filter(|__v| *__v <= 9007199254740991u64)
+                                .ok_or(overflow("im-update-r1-i"))?;
+                            Ok(Outcome::to(State::ImOpenI, next))
+                        } else {
+                            if payload.record == "r2" && !vars.holds_r2 {
+                                let mut next = vars.clone();
+                                next.holds_r2 = true;
+                                next.held = next
+                                    .held
+                                    .checked_add(1u64)
+                                    .filter(|__v| *__v <= 9007199254740991u64)
+                                    .ok_or(overflow("im-create-r2-i"))?;
+                                Ok(Outcome::to(State::ImOpenI, next))
+                            } else {
+                                if payload.record == "r2" && vars.holds_r2 {
+                                    let mut next = vars.clone();
+                                    next.updates = next
+                                        .updates
+                                        .checked_add(1u64)
+                                        .filter(|__v| *__v <= 9007199254740991u64)
+                                        .ok_or(overflow("im-update-r2-i"))?;
+                                    Ok(Outcome::to(State::ImOpenI, next))
+                                } else {
+                                    Ok(Outcome::ignore(*state, vars.clone()))
+                                }
+                            }
+                        }
+                    }
+                }
+                (State::ImOpenI, Event::ImPageImported(payload)) => {
+                    let mut next = vars.clone();
+                    next.former_addresses = next
+                        .former_addresses
+                        .checked_add(payload.formers)
+                        .filter(|__v| *__v <= 9007199254740991u64)
+                        .ok_or(overflow("im-page-i"))?;
+                    next.redirects = next
+                        .redirects
+                        .checked_add(payload.formers)
+                        .filter(|__v| *__v <= 9007199254740991u64)
+                        .ok_or(overflow("im-page-i"))?;
+                    Ok(Outcome::to(State::ImOpenI, next))
+                }
+            }
+        }
+    }
+}
+
 /// How events travel between the machines, as Exegra delivers them: for every event,
 /// each machine with a transition on it and how the event finds its instance there
 /// (Exegra's route `by: key`, from the scenarios' `routes`, or every instance). An
@@ -17065,6 +23064,385 @@ pub mod dispatch {
             "jr-created",
             &[strata_runtime::Routing::every("job-run-flow-impl")],
         ),
+        (
+            "ts-write-requested",
+            &[strata_runtime::Routing::by_key(
+                "tenant-suspension-flow-impl",
+                "tenant-id",
+            )],
+        ),
+        (
+            "ts-plan-chosen",
+            &[strata_runtime::Routing::by_key(
+                "tenant-suspension-flow-impl",
+                "tenant-id",
+            )],
+        ),
+        (
+            "ts-trial-ended",
+            &[strata_runtime::Routing::by_key(
+                "tenant-suspension-flow-impl",
+                "tenant-id",
+            )],
+        ),
+        (
+            "wq-write-requested",
+            &[strata_runtime::Routing::by_key(
+                "write-quota-flow-impl",
+                "tenant-id",
+            )],
+        ),
+        (
+            "pc-change-requested",
+            &[strata_runtime::Routing::by_key(
+                "plan-change-flow-impl",
+                "tenant-id",
+            )],
+        ),
+        (
+            "cq-connection-requested",
+            &[strata_runtime::Routing::every("connection-quota-flow-impl")],
+        ),
+        (
+            "bc-issue-requested",
+            &[strata_runtime::Routing::by_key(
+                "bootstrap-credential-flow-impl",
+                "tenant-id",
+            )],
+        ),
+        (
+            "bc-presented",
+            &[strata_runtime::Routing::by_key(
+                "bootstrap-credential-flow-impl",
+                "tenant-id",
+            )],
+        ),
+        (
+            "bc-expiry-reached",
+            &[strata_runtime::Routing::by_key(
+                "bootstrap-credential-flow-impl",
+                "tenant-id",
+            )],
+        ),
+        (
+            "rg-create-requested",
+            &[strata_runtime::Routing::by_key(
+                "placement-choice-flow-impl",
+                "tenant-id",
+            )],
+        ),
+        (
+            "td-delete-requested",
+            &[strata_runtime::Routing::by_key(
+                "tenant-deletion-flow-impl",
+                "tenant-id",
+            )],
+        ),
+        (
+            "td-database-removed",
+            &[strata_runtime::Routing::by_key(
+                "tenant-deletion-flow-impl",
+                "tenant-id",
+            )],
+        ),
+        (
+            "td-files-removed",
+            &[strata_runtime::Routing::by_key(
+                "tenant-deletion-flow-impl",
+                "tenant-id",
+            )],
+        ),
+        (
+            "td-key-destroyed",
+            &[strata_runtime::Routing::by_key(
+                "tenant-deletion-flow-impl",
+                "tenant-id",
+            )],
+        ),
+        (
+            "td-step-failed",
+            &[strata_runtime::Routing::by_key(
+                "tenant-deletion-flow-impl",
+                "tenant-id",
+            )],
+        ),
+        (
+            "bk-read-requested",
+            &[strata_runtime::Routing::by_key(
+                "backup-key-flow-impl",
+                "tenant-id",
+            )],
+        ),
+        (
+            "rc-serve-requested",
+            &[strata_runtime::Routing::by_key(
+                "runtime-credential-flow-impl",
+                "tenant-id",
+            )],
+        ),
+        (
+            "rc-stop-serving",
+            &[strata_runtime::Routing::by_key(
+                "runtime-credential-flow-impl",
+                "tenant-id",
+            )],
+        ),
+        (
+            "rc-open-requested",
+            &[strata_runtime::Routing::by_key(
+                "runtime-credential-flow-impl",
+                "tenant-id",
+            )],
+        ),
+        (
+            "er-write-requested",
+            &[strata_runtime::Routing::by_key(
+                "export-restore-flow-impl",
+                "tenant-id",
+            )],
+        ),
+        (
+            "er-export-requested",
+            &[strata_runtime::Routing::by_key(
+                "export-restore-flow-impl",
+                "tenant-id",
+            )],
+        ),
+        (
+            "er-restore-requested",
+            &[strata_runtime::Routing::by_key(
+                "export-restore-flow-impl",
+                "tenant-id",
+            )],
+        ),
+        (
+            "pt-write-requested",
+            &[strata_runtime::Routing::by_key(
+                "point-in-time-flow-impl",
+                "tenant-id",
+            )],
+        ),
+        (
+            "pt-point-reached",
+            &[strata_runtime::Routing::by_key(
+                "point-in-time-flow-impl",
+                "tenant-id",
+            )],
+        ),
+        (
+            "pt-restore-requested",
+            &[strata_runtime::Routing::by_key(
+                "point-in-time-flow-impl",
+                "tenant-id",
+            )],
+        ),
+        (
+            "ku-replay-finished",
+            &[strata_runtime::Routing::by_key(
+                "kernel-upgrade-flow-impl",
+                "tenant-id",
+            )],
+        ),
+        (
+            "ku-serve-requested",
+            &[strata_runtime::Routing::by_key(
+                "kernel-upgrade-flow-impl",
+                "tenant-id",
+            )],
+        ),
+        (
+            "ps-switched",
+            &[strata_runtime::Routing::by_key(
+                "placement-switch-flow-impl",
+                "tenant-id",
+            )],
+        ),
+        (
+            "ps-request-begun",
+            &[strata_runtime::Routing::by_key(
+                "placement-switch-flow-impl",
+                "tenant-id",
+            )],
+        ),
+        (
+            "ps-request-completed",
+            &[strata_runtime::Routing::by_key(
+                "placement-switch-flow-impl",
+                "tenant-id",
+            )],
+        ),
+        (
+            "ps-address-resolved",
+            &[strata_runtime::Routing::by_key(
+                "placement-switch-flow-impl",
+                "tenant-id",
+            )],
+        ),
+        (
+            "sc-preview-requested",
+            &[strata_runtime::Routing::by_key(
+                "schema-change-flow-impl",
+                "tenant-id",
+            )],
+        ),
+        (
+            "sc-apply-requested",
+            &[strata_runtime::Routing::by_key(
+                "schema-change-flow-impl",
+                "tenant-id",
+            )],
+        ),
+        (
+            "sc-batch-committed",
+            &[strata_runtime::Routing::by_key(
+                "schema-change-flow-impl",
+                "tenant-id",
+            )],
+        ),
+        (
+            "sc-batch-failed",
+            &[strata_runtime::Routing::by_key(
+                "schema-change-flow-impl",
+                "tenant-id",
+            )],
+        ),
+        (
+            "sc-stop-requested",
+            &[strata_runtime::Routing::by_key(
+                "schema-change-flow-impl",
+                "tenant-id",
+            )],
+        ),
+        (
+            "lr-apply-requested",
+            &[strata_runtime::Routing::every("layout-rollout-flow-impl")],
+        ),
+        (
+            "sp-staging-applied",
+            &[strata_runtime::Routing::by_key(
+                "staging-promotion-flow-impl",
+                "tenant-id",
+            )],
+        ),
+        (
+            "sp-prod-preview-requested",
+            &[strata_runtime::Routing::by_key(
+                "staging-promotion-flow-impl",
+                "tenant-id",
+            )],
+        ),
+        (
+            "sp-promote-requested",
+            &[strata_runtime::Routing::by_key(
+                "staging-promotion-flow-impl",
+                "tenant-id",
+            )],
+        ),
+        (
+            "fc-field-added",
+            &[strata_runtime::Routing::by_key(
+                "field-change-flow-impl",
+                "tenant-id",
+            )],
+        ),
+        (
+            "fc-rename-applied",
+            &[strata_runtime::Routing::by_key(
+                "field-change-flow-impl",
+                "tenant-id",
+            )],
+        ),
+        (
+            "fc-read-requested",
+            &[strata_runtime::Routing::by_key(
+                "field-change-flow-impl",
+                "tenant-id",
+            )],
+        ),
+        (
+            "ds-schema-changed",
+            &[strata_runtime::Routing::by_key(
+                "draft-save-flow-impl",
+                "tenant-id",
+            )],
+        ),
+        (
+            "ds-save-requested",
+            &[strata_runtime::Routing::by_key(
+                "draft-save-flow-impl",
+                "tenant-id",
+            )],
+        ),
+        (
+            "wf-run-started",
+            &[strata_runtime::Routing::by_key(
+                "workflow-version-flow-impl",
+                "tenant-id",
+            )],
+        ),
+        (
+            "wf-definition-changed",
+            &[strata_runtime::Routing::by_key(
+                "workflow-version-flow-impl",
+                "tenant-id",
+            )],
+        ),
+        (
+            "wf-step-due",
+            &[strata_runtime::Routing::by_key(
+                "workflow-version-flow-impl",
+                "tenant-id",
+            )],
+        ),
+        (
+            "sj-schema-changed",
+            &[strata_runtime::Routing::by_key(
+                "scheduled-job-check-flow-impl",
+                "tenant-id",
+            )],
+        ),
+        (
+            "sj-job-due",
+            &[strata_runtime::Routing::by_key(
+                "scheduled-job-check-flow-impl",
+                "tenant-id",
+            )],
+        ),
+        (
+            "tp-version-published",
+            &[strata_runtime::Routing::by_key(
+                "template-proposal-flow-impl",
+                "tenant-id",
+            )],
+        ),
+        (
+            "tp-tenant-approved",
+            &[strata_runtime::Routing::by_key(
+                "template-proposal-flow-impl",
+                "tenant-id",
+            )],
+        ),
+        (
+            "tp-apply-requested",
+            &[strata_runtime::Routing::by_key(
+                "template-proposal-flow-impl",
+                "tenant-id",
+            )],
+        ),
+        (
+            "im-record-imported",
+            &[strata_runtime::Routing::by_key(
+                "import-flow-impl",
+                "tenant-id",
+            )],
+        ),
+        (
+            "im-page-imported",
+            &[strata_runtime::Routing::by_key(
+                "import-flow-impl",
+                "tenant-id",
+            )],
+        ),
     ];
 
     /// Every machine, in declaration order.
@@ -17160,6 +23538,45 @@ pub mod dispatch {
             strata_runtime::Member::of::<super::delivery_report_flow_impl::DeliveryReportFlowImpl>(
             ),
             strata_runtime::Member::of::<super::audience_mail_flow_impl::AudienceMailFlowImpl>(),
+            strata_runtime::Member::of::<
+                super::tenant_suspension_flow_impl::TenantSuspensionFlowImpl,
+            >(),
+            strata_runtime::Member::of::<super::write_quota_flow_impl::WriteQuotaFlowImpl>(),
+            strata_runtime::Member::of::<super::plan_change_flow_impl::PlanChangeFlowImpl>(),
+            strata_runtime::Member::of::<super::connection_quota_flow_impl::ConnectionQuotaFlowImpl>(
+            ),
+            strata_runtime::Member::of::<
+                super::bootstrap_credential_flow_impl::BootstrapCredentialFlowImpl,
+            >(),
+            strata_runtime::Member::of::<super::placement_choice_flow_impl::PlacementChoiceFlowImpl>(
+            ),
+            strata_runtime::Member::of::<super::tenant_deletion_flow_impl::TenantDeletionFlowImpl>(
+            ),
+            strata_runtime::Member::of::<super::backup_key_flow_impl::BackupKeyFlowImpl>(),
+            strata_runtime::Member::of::<
+                super::runtime_credential_flow_impl::RuntimeCredentialFlowImpl,
+            >(),
+            strata_runtime::Member::of::<super::export_restore_flow_impl::ExportRestoreFlowImpl>(),
+            strata_runtime::Member::of::<super::point_in_time_flow_impl::PointInTimeFlowImpl>(),
+            strata_runtime::Member::of::<super::kernel_upgrade_flow_impl::KernelUpgradeFlowImpl>(),
+            strata_runtime::Member::of::<super::placement_switch_flow_impl::PlacementSwitchFlowImpl>(
+            ),
+            strata_runtime::Member::of::<super::schema_change_flow_impl::SchemaChangeFlowImpl>(),
+            strata_runtime::Member::of::<super::layout_rollout_flow_impl::LayoutRolloutFlowImpl>(),
+            strata_runtime::Member::of::<
+                super::staging_promotion_flow_impl::StagingPromotionFlowImpl,
+            >(),
+            strata_runtime::Member::of::<super::field_change_flow_impl::FieldChangeFlowImpl>(),
+            strata_runtime::Member::of::<super::draft_save_flow_impl::DraftSaveFlowImpl>(),
+            strata_runtime::Member::of::<super::workflow_version_flow_impl::WorkflowVersionFlowImpl>(
+            ),
+            strata_runtime::Member::of::<
+                super::scheduled_job_check_flow_impl::ScheduledJobCheckFlowImpl,
+            >(),
+            strata_runtime::Member::of::<
+                super::template_proposal_flow_impl::TemplateProposalFlowImpl,
+            >(),
+            strata_runtime::Member::of::<super::import_flow_impl::ImportFlowImpl>(),
         ]
     }
 
