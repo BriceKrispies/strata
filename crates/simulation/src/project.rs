@@ -10,6 +10,7 @@ use crate::engine::{
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
+use strata_kernel::ext::*;
 use strata_kernel::rules::Lookup;
 use strata_kernel::{
     plan_migration, Check, Context, Coverage, ErrorKind, ExistingData, Intent, Principal,

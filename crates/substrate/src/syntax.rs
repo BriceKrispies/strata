@@ -311,13 +311,14 @@ pub fn parse(source: &str) -> Result<Expr, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use strata_kernel::ExprExt;
 
     #[test]
     fn parses_precedence_and_calls() {
         let expr =
             parse("len(new.title) <= 120 and not is_null(new.slug) or has_role(editor)").unwrap();
         assert_eq!(
-            expr.to_string(),
+            expr.printed().to_string(),
             "(((len(new.title) <= 120) and not(is_null(new.slug))) or has_role(editor))"
         );
     }
@@ -334,7 +335,7 @@ mod tests {
             "is_slug(new.slug)",
         ] {
             let parsed = parse(source).unwrap();
-            assert_eq!(parse(&parsed.to_string()).unwrap(), parsed, "{source}");
+            assert_eq!(parse(&parsed.printed().to_string()).unwrap(), parsed, "{source}");
         }
     }
 

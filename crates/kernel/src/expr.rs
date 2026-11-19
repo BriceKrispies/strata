@@ -6,70 +6,15 @@
 //! means: a constraint is violated only by `false`; a policy, guard or filter passes only on
 //! `true`. A type error is an evaluation error, never a silent `false`.
 
-use crate::ids::{FieldId, ObjectTypeId, RoleId, Timestamp};
 use crate::rules::Lookup;
 use crate::schema::{FieldDef, ObjectTypeDef};
-use crate::state::{Principal, Record};
-use crate::value::{FieldType, Value};
-use serde::{Deserialize, Serialize};
+use crate::state::{Principal, Record, RecordExt};
+pub use crate::types::{CmpOp, Expr, Scope};
+use crate::types::{
+    FieldId, FieldType, FieldTypeExt, ObjectTypeId, RoleId, Timestamp, Value, ValueExt,
+};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-
-/// Which record a variable reads from.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub enum Scope {
-    /// The record being accessed: the stored record, or the candidate when creating.
-    Record,
-    /// The stored record before an update. All fields are `null` on create.
-    Old,
-    /// The candidate record after a create or update.
-    New,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub enum CmpOp {
-    Eq,
-    Ne,
-    Lt,
-    Le,
-    Gt,
-    Ge,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub enum Expr {
-    Lit(Value),
-    /// A field, or a system attribute: `$id`, `$version`, `$created_by`, `$created_at`,
-    /// `$updated_at`.
-    Var(Scope, String),
-    /// A field, or system attribute, of the record that a reference field points at:
-    /// `new.author.principal` is the `principal` of the author record `new.author` refers to.
-    /// One hop only. `null` when the reference is empty or the record is gone.
-    Through(Scope, String, String),
-    /// A named query parameter.
-    Param(String),
-    /// The context timestamp.
-    Now,
-    /// The acting principal's id as a string, `null` for anonymous and system.
-    Principal,
-    HasRole(RoleId),
-    Not(Box<Expr>),
-    And(Vec<Expr>),
-    Or(Vec<Expr>),
-    Cmp(CmpOp, Box<Expr>, Box<Expr>),
-    /// Membership of the left value in the right list.
-    In(Box<Expr>, Box<Expr>),
-    IsNull(Box<Expr>),
-    /// Character count of a string, element count of a list.
-    Len(Box<Expr>),
-    Lower(Box<Expr>),
-    /// Substring test for strings, element test for lists.
-    Contains(Box<Expr>, Box<Expr>),
-    StartsWith(Box<Expr>, Box<Expr>),
-    /// Lower-case letters and digits separated by single hyphens.
-    IsSlug(Box<Expr>),
-    If(Box<Expr>, Box<Expr>, Box<Expr>),
-}
 
 /// Everything an expression may observe.
 pub struct Env<'a> {
@@ -533,14 +478,31 @@ fn write_joined(items: &[Expr], word: &str, f: &mut fmt::Formatter<'_>) -> fmt::
         if i > 0 {
             write!(f, " {word} ")?;
         }
-        write!(f, "{item}")?;
+        write!(f, "{}", Printed(item))?;
     }
     f.write_str(")")
 }
 
-impl fmt::Display for Expr {
+/// An expression as the authoring syntax writes it: what `{}` of [`ExprExt::printed`] shows.
+#[derive(Clone, Copy, Debug)]
+pub struct Printed<'a>(pub &'a Expr);
+
+/// What the kernel asks of an [`Expr`].
+pub trait ExprExt {
+    /// The expression in the authoring syntax that `strata_substrate::syntax` parses, for
+    /// `format!` and `to_string`.
+    fn printed(&self) -> Printed<'_>;
+}
+
+impl ExprExt for Expr {
+    fn printed(&self) -> Printed<'_> {
+        Printed(self)
+    }
+}
+
+impl fmt::Display for Printed<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
+        match self.0 {
             Expr::Lit(value) => write_value(value, f),
             Expr::Var(scope, name) => {
                 let scope = match scope {
@@ -562,7 +524,7 @@ impl fmt::Display for Expr {
             Expr::Now => f.write_str("now"),
             Expr::Principal => f.write_str("principal"),
             Expr::HasRole(role) => write!(f, "has_role({role})"),
-            Expr::Not(inner) => write!(f, "not({inner})"),
+            Expr::Not(inner) => write!(f, "not({})", Printed(inner)),
             Expr::And(items) => write_joined(items, "and", f),
             Expr::Or(items) => write_joined(items, "or", f),
             Expr::Cmp(op, left, right) => {
@@ -574,16 +536,16 @@ impl fmt::Display for Expr {
                     CmpOp::Gt => ">",
                     CmpOp::Ge => ">=",
                 };
-                write!(f, "({left} {op} {right})")
+                write!(f, "({} {op} {})", Printed(left), Printed(right))
             }
-            Expr::In(item, list) => write!(f, "({item} in {list})"),
-            Expr::IsNull(inner) => write!(f, "is_null({inner})"),
-            Expr::Len(inner) => write!(f, "len({inner})"),
-            Expr::Lower(inner) => write!(f, "lower({inner})"),
-            Expr::Contains(a, b) => write!(f, "contains({a}, {b})"),
-            Expr::StartsWith(a, b) => write!(f, "starts_with({a}, {b})"),
-            Expr::IsSlug(inner) => write!(f, "is_slug({inner})"),
-            Expr::If(c, t, o) => write!(f, "if({c}, {t}, {o})"),
+            Expr::In(item, list) => write!(f, "({} in {})", Printed(item), Printed(list)),
+            Expr::IsNull(inner) => write!(f, "is_null({})", Printed(inner)),
+            Expr::Len(inner) => write!(f, "len({})", Printed(inner)),
+            Expr::Lower(inner) => write!(f, "lower({})", Printed(inner)),
+            Expr::Contains(a, b) => write!(f, "contains({}, {})", Printed(a), Printed(b)),
+            Expr::StartsWith(a, b) => write!(f, "starts_with({}, {})", Printed(a), Printed(b)),
+            Expr::IsSlug(inner) => write!(f, "is_slug({})", Printed(inner)),
+            Expr::If(c, t, o) => write!(f, "if({}, {}, {})", Printed(c), Printed(t), Printed(o)),
         }
     }
 }

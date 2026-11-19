@@ -208,8 +208,13 @@ fn the_substrate_names_no_ambient_capability() {
 }
 
 #[test]
-fn the_kernel_depends_only_on_serialisation_and_hashing() {
-    assert_eq!(dependencies("kernel"), ["serde", "serde_json", "sha2"]);
+fn the_kernel_depends_only_on_serialisation_hashing_and_its_generated_types() {
+    // strata-model-core holds the kernel's data types, generated from the specification; its
+    // own dependency test (crates/model-core/tests/dependencies.rs) keeps it pure.
+    assert_eq!(
+        dependencies("kernel"),
+        ["serde", "serde_json", "sha2", "strata-model-core"]
+    );
     assert_eq!(
         dependencies("substrate"),
         ["strata-kernel", "serde", "serde_json"]

@@ -1,12 +1,14 @@
 //! Authorized reads. A read never changes state and never returns a record the principal's
 //! policies do not grant.
 
-use crate::expr::{self, Env};
-use crate::ids::Timestamp;
-use crate::intent::{Check, Context, DomainError, ErrorKind, ReadRequest, ReadResult};
+use crate::expr::{self, Env, ExprExt};
+use crate::intent::{
+    Check, CheckExt, Context, DomainError, DomainErrorExt, ErrorKind, ReadRequest, ReadResult,
+};
 use crate::rules::{authorize, roles_of, Lookup, Subject};
 use crate::schema::{Action, Resource, TenantSchema};
 use crate::state::{Need, Principal, Record, State, TenantState};
+use crate::types::Timestamp;
 use std::sync::Arc;
 
 /// Whether a principal may read a record. The same decision `read` makes per row; the shell
@@ -118,7 +120,10 @@ pub fn read(
                     };
                     let keep = expr::holds(filter, &env).map_err(|e| {
                         DomainError::new(ErrorKind::Evaluation, format!("query {query}: {e}")).with(
-                            vec![Check::fail(format!("query:{query}"), filter.to_string())],
+                            vec![Check::fail(
+                                format!("query:{query}"),
+                                filter.printed().to_string(),
+                            )],
                         )
                     })?;
                     if !keep {

@@ -13,6 +13,7 @@ mod system;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
+use strata_kernel::ext::*;
 use strata_kernel::{EventBody, FieldId, ObjectTypeId, TenantId, Value};
 use strata_machine_store::{StorageApiMachineStore, OUTBOX, TIMERS};
 use strata_runtime::store::{NewMessage, NewTimer, OutboxStore, RecordStore, TimerStore};

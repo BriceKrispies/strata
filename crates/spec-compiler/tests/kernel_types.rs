@@ -129,6 +129,10 @@ fn check(types: &Types, used: &mut BTreeSet<String>, ty: &str, value: &Json) -> 
     if let Some(done) = builtin(ty, value) {
         return done;
     }
+    // A shared value (`Arc<T>` in Rust) is exactly a T on the wire.
+    if let Some(inner) = ty.strip_prefix("shared<").and_then(|t| t.strip_suffix('>')) {
+        return check(types, used, inner, value);
+    }
     if let Some(inner) = ty.strip_prefix("option<").and_then(|t| t.strip_suffix('>')) {
         return if value.is_null() {
             Ok(())

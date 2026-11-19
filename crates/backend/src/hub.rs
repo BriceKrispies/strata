@@ -10,6 +10,7 @@ use serde_json::{json, Value as Json};
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use strata_kernel::ext::*;
 use strata_kernel::{
     DomainEvent, EventBody, PrincipalId, Record, SessionId, TenantId, TenantState, Value,
 };

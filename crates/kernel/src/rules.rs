@@ -1,12 +1,18 @@
 //! Guarded state access, authorization and record validation. These are the rules every
 //! transition and read is built from.
 
-use crate::expr::{self, Env};
-use crate::ids::{owner_role, public_role, FieldId, ObjectTypeId, RecordId, RoleId, Timestamp};
-use crate::intent::{Check, DomainError, ErrorKind};
-use crate::schema::{Action, ObjectTypeDef, Resource, TenantSchema};
-use crate::state::{Coverage, Need, Principal, Record, TenantState};
-use crate::value::{refs_in, Value};
+use crate::expr::{self, Env, ExprExt};
+use crate::intent::{Check, CheckExt, DomainError, DomainErrorExt, ErrorKind};
+use crate::schema::{
+    Action, ObjectTypeDef, Resource, TenantSchema, TenantSchemaExt, WorkflowDefExt,
+};
+use crate::state::{
+    Coverage, CoverageExt, Need, Principal, Record, RecordExt, TenantState, TenantStateExt,
+};
+use crate::types::{
+    owner_role, public_role, refs_in, FieldId, FieldTypeExt, ObjectTypeId, RecordId, RoleId,
+    Timestamp, Value, ValueExt,
+};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
@@ -165,17 +171,21 @@ pub fn authorize(
                 Ok(Value::Bool(true)) => {
                     return (
                         true,
-                        vec![Check::pass(rule, format!("{what} where {condition}"))],
+                        vec![Check::pass(
+                            rule,
+                            format!("{what} where {}", condition.printed()),
+                        )],
                     )
                 }
                 Ok(other) => checks.push(Check::fail(
                     rule,
                     format!(
-                        "{condition} is {}",
+                        "{} is {}",
+                        condition.printed(),
                         if other.is_null() { "null" } else { "false" }
                     ),
                 )),
-                Err(e) => checks.push(Check::fail(rule, format!("{condition}: {e}"))),
+                Err(e) => checks.push(Check::fail(rule, format!("{}: {e}", condition.printed()))),
             },
         }
     }
@@ -374,13 +384,13 @@ pub fn validate_record(
                 Ok(Value::Bool(false)) => out.fail(
                     ErrorKind::ConstraintViolated,
                     rule,
-                    format!("{} [{}]", constraint.message, constraint.expr),
+                    format!("{} [{}]", constraint.message, constraint.expr.printed()),
                 ),
-                Ok(_) => out.pass(rule, constraint.expr.to_string()),
+                Ok(_) => out.pass(rule, constraint.expr.printed().to_string()),
                 Err(e) => out.fail(
                     ErrorKind::Evaluation,
                     rule,
-                    format!("{}: {e}", constraint.expr),
+                    format!("{}: {e}", constraint.expr.printed()),
                 ),
             }
         }

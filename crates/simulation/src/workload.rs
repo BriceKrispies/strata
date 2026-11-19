@@ -10,6 +10,7 @@
 
 use crate::engine::{Rng, Scheduled};
 use std::collections::BTreeMap;
+use strata_kernel::ext::*;
 use strata_kernel::{
     CmpOp, Context, Expr, FieldDef, FieldId, FieldType, Intent, ObjectTypeDef, Principal, Record,
     RecordId, Scope, TenantId, TenantSchema, TenantState, Timestamp, Value, World,

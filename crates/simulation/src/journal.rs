@@ -12,7 +12,8 @@
 
 use serde::{Deserialize, Serialize};
 use strata_kernel::{
-    canon, Context, Intent, StateRevision, TenantId, TenantState, World, KERNEL_VERSION,
+    canon, Context, DomainErrorExt, Intent, StateRevision, TenantId, TenantState, World,
+    KERNEL_VERSION,
 };
 
 /// The part of a journal entry a replay needs. Mirrors `strata_storage_api::JournalEntry`
@@ -73,7 +74,7 @@ pub fn replay_journal(
                     None
                 }
             }
-            Err(error) => Some(format!("the kernel now rejects it: {error}")),
+            Err(error) => Some(format!("the kernel now rejects it: {}", error.describe())),
         };
         match problem {
             None => agreed += 1,

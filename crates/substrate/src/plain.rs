@@ -3,6 +3,7 @@
 
 use serde_json::{json, Value as Json};
 use std::collections::BTreeMap;
+use strata_kernel::ext::*;
 use strata_kernel::{FieldId, FieldType, ObjectTypeDef, RecordId, Value};
 
 /// Days since the Unix epoch of a proleptic Gregorian date.

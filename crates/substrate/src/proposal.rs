@@ -16,6 +16,7 @@
 //! It is a convenience for people; the kernel only ever sees the changes.
 
 use crate::syntax;
+use strata_kernel::ext::*;
 use strata_kernel::{
     ConstraintDef, ConstraintId, FieldDef, FieldId, FieldType, ObjectTypeId, SchemaChange,
     TenantSchema,

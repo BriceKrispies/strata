@@ -47,8 +47,8 @@ pub struct TenantId(pub String);
 
 impl TenantId {
     /// The value, when it meets the type's constraints.
-    pub fn new(value: String) -> Result<Self, TypeConstraintViolation> {
-        let value = Self(value);
+    pub fn new(value: impl Into<String>) -> Result<Self, TypeConstraintViolation> {
+        let value = Self(value.into());
         value.validate()?;
         Ok(value)
     }
@@ -85,6 +85,19 @@ impl From<TenantId> for String {
     }
 }
 
+impl TenantId {
+    /// The value as text.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for TenantId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 /// The pattern of type `principal-id`.
 static PRINCIPAL_ID_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new("^[A-Za-z0-9_:.-]+$").expect("specc checked that the pattern compiles")
@@ -103,8 +116,8 @@ pub struct PrincipalId(pub String);
 
 impl PrincipalId {
     /// The value, when it meets the type's constraints.
-    pub fn new(value: String) -> Result<Self, TypeConstraintViolation> {
-        let value = Self(value);
+    pub fn new(value: impl Into<String>) -> Result<Self, TypeConstraintViolation> {
+        let value = Self(value.into());
         value.validate()?;
         Ok(value)
     }
@@ -141,6 +154,19 @@ impl From<PrincipalId> for String {
     }
 }
 
+impl PrincipalId {
+    /// The value as text.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for PrincipalId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 /// The pattern of type `session-id`.
 static SESSION_ID_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new("^[A-Za-z0-9_:.-]+$").expect("specc checked that the pattern compiles")
@@ -159,8 +185,8 @@ pub struct SessionId(pub String);
 
 impl SessionId {
     /// The value, when it meets the type's constraints.
-    pub fn new(value: String) -> Result<Self, TypeConstraintViolation> {
-        let value = Self(value);
+    pub fn new(value: impl Into<String>) -> Result<Self, TypeConstraintViolation> {
+        let value = Self(value.into());
         value.validate()?;
         Ok(value)
     }
@@ -197,6 +223,19 @@ impl From<SessionId> for String {
     }
 }
 
+impl SessionId {
+    /// The value as text.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for SessionId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 /// The pattern of type `object-type-id`.
 static OBJECT_TYPE_ID_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new("^[a-z][a-z0-9_]*$").expect("specc checked that the pattern compiles")
@@ -215,8 +254,8 @@ pub struct ObjectTypeId(pub String);
 
 impl ObjectTypeId {
     /// The value, when it meets the type's constraints.
-    pub fn new(value: String) -> Result<Self, TypeConstraintViolation> {
-        let value = Self(value);
+    pub fn new(value: impl Into<String>) -> Result<Self, TypeConstraintViolation> {
+        let value = Self(value.into());
         value.validate()?;
         Ok(value)
     }
@@ -253,6 +292,19 @@ impl From<ObjectTypeId> for String {
     }
 }
 
+impl ObjectTypeId {
+    /// The value as text.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for ObjectTypeId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 /// The pattern of type `workflow-id`.
 static WORKFLOW_ID_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new("^[a-z][a-z0-9_]*$").expect("specc checked that the pattern compiles")
@@ -271,8 +323,8 @@ pub struct WorkflowId(pub String);
 
 impl WorkflowId {
     /// The value, when it meets the type's constraints.
-    pub fn new(value: String) -> Result<Self, TypeConstraintViolation> {
-        let value = Self(value);
+    pub fn new(value: impl Into<String>) -> Result<Self, TypeConstraintViolation> {
+        let value = Self(value.into());
         value.validate()?;
         Ok(value)
     }
@@ -309,196 +361,371 @@ impl From<WorkflowId> for String {
     }
 }
 
+impl WorkflowId {
+    /// The value as text.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for WorkflowId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 /// record-id
 ///
 /// Allocated from the tenant counter (kernel RecordId).
 ///
 /// Specification type `record-id`: an identifier represented as `u64`.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct RecordId(pub u64);
+
+impl std::fmt::Display for RecordId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.0, f)
+    }
+}
 
 /// placement-id
 ///
 /// Specification type `placement-id`: an identifier represented as `uuid`.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct PlacementId(pub uuid::Uuid);
+
+impl std::fmt::Display for PlacementId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.0, f)
+    }
+}
 
 /// credential-id
 ///
 /// Specification type `credential-id`: an identifier represented as `uuid`.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct CredentialId(pub uuid::Uuid);
+
+impl std::fmt::Display for CredentialId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.0, f)
+    }
+}
 
 /// link-id
 ///
 /// Specification type `link-id`: an identifier represented as `uuid`.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct LinkId(pub uuid::Uuid);
+
+impl std::fmt::Display for LinkId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.0, f)
+    }
+}
 
 /// provider-id
 ///
 /// Specification type `provider-id`: an identifier represented as `uuid`.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct ProviderId(pub uuid::Uuid);
+
+impl std::fmt::Display for ProviderId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.0, f)
+    }
+}
 
 /// challenge-id
 ///
 /// Specification type `challenge-id`: an identifier represented as `uuid`.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct ChallengeId(pub uuid::Uuid);
+
+impl std::fmt::Display for ChallengeId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.0, f)
+    }
+}
 
 /// grant-id
 ///
 /// Specification type `grant-id`: an identifier represented as `uuid`.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct GrantId(pub uuid::Uuid);
+
+impl std::fmt::Display for GrantId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.0, f)
+    }
+}
 
 /// job-id
 ///
 /// Specification type `job-id`: an identifier represented as `uuid`.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct JobId(pub uuid::Uuid);
+
+impl std::fmt::Display for JobId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.0, f)
+    }
+}
 
 /// schedule-id
 ///
 /// Specification type `schedule-id`: an identifier represented as `uuid`.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct ScheduleId(pub uuid::Uuid);
+
+impl std::fmt::Display for ScheduleId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.0, f)
+    }
+}
 
 /// run-id
 ///
 /// Specification type `run-id`: an identifier represented as `uuid`.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct RunId(pub uuid::Uuid);
+
+impl std::fmt::Display for RunId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.0, f)
+    }
+}
 
 /// proposal-id
 ///
 /// Specification type `proposal-id`: an identifier represented as `uuid`.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct ProposalId(pub uuid::Uuid);
+
+impl std::fmt::Display for ProposalId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.0, f)
+    }
+}
 
 /// submission-id
 ///
 /// Specification type `submission-id`: an identifier represented as `uuid`.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct SubmissionId(pub uuid::Uuid);
+
+impl std::fmt::Display for SubmissionId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.0, f)
+    }
+}
 
 /// conversation-id
 ///
 /// Specification type `conversation-id`: an identifier represented as `uuid`.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct ConversationId(pub uuid::Uuid);
+
+impl std::fmt::Display for ConversationId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.0, f)
+    }
+}
 
 /// turn-id
 ///
 /// Specification type `turn-id`: an identifier represented as `uuid`.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct TurnId(pub uuid::Uuid);
+
+impl std::fmt::Display for TurnId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.0, f)
+    }
+}
 
 /// pending-id
 ///
 /// Specification type `pending-id`: an identifier represented as `uuid`.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct PendingId(pub uuid::Uuid);
+
+impl std::fmt::Display for PendingId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.0, f)
+    }
+}
 
 /// consent-id
 ///
 /// Specification type `consent-id`: an identifier represented as `uuid`.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct ConsentId(pub uuid::Uuid);
+
+impl std::fmt::Display for ConsentId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.0, f)
+    }
+}
 
 /// visitor-id
 ///
 /// Specification type `visitor-id`: an identifier represented as `uuid`.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct VisitorId(pub uuid::Uuid);
+
+impl std::fmt::Display for VisitorId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.0, f)
+    }
+}
 
 /// log-id
 ///
 /// Specification type `log-id`: an identifier represented as `uuid`.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct LogId(pub uuid::Uuid);
+
+impl std::fmt::Display for LogId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.0, f)
+    }
+}
 
 /// request-id
 ///
 /// Specification type `request-id`: an identifier represented as `uuid`.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct RequestId(pub uuid::Uuid);
+
+impl std::fmt::Display for RequestId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.0, f)
+    }
+}
 
 /// key-id
 ///
 /// Specification type `key-id`: an identifier represented as `uuid`.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct KeyId(pub uuid::Uuid);
+
+impl std::fmt::Display for KeyId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.0, f)
+    }
+}
 
 /// subprocessor-id
 ///
 /// Specification type `subprocessor-id`: an identifier represented as `uuid`.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct SubprocessorId(pub uuid::Uuid);
+
+impl std::fmt::Display for SubprocessorId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.0, f)
+    }
+}
 
 /// hold-id
 ///
 /// Specification type `hold-id`: an identifier represented as `uuid`.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct HoldId(pub uuid::Uuid);
+
+impl std::fmt::Display for HoldId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.0, f)
+    }
+}
 
 /// message-id
 ///
 /// Specification type `message-id`: an identifier represented as `uuid`.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct MessageId(pub uuid::Uuid);
+
+impl std::fmt::Display for MessageId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.0, f)
+    }
+}
 
 /// release-id
 ///
 /// Specification type `release-id`: an identifier represented as `uuid`.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct ReleaseId(pub uuid::Uuid);
+
+impl std::fmt::Display for ReleaseId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.0, f)
+    }
+}
 
 /// move-id
 ///
 /// Specification type `move-id`: an identifier represented as `uuid`.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct MoveId(pub uuid::Uuid);
+
+impl std::fmt::Display for MoveId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.0, f)
+    }
+}
 
 /// correlation-id
 ///
 /// Specification type `correlation-id`: an identifier represented as `uuid`.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct CorrelationId(pub uuid::Uuid);
+
+impl std::fmt::Display for CorrelationId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.0, f)
+    }
+}
 
 /// identifier
 ///
 /// Specification type `identifier`: an identifier represented as `uuid`.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct Identifier(pub uuid::Uuid);
+
+impl std::fmt::Display for Identifier {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.0, f)
+    }
+}
 
 /// cluster-id
 ///
@@ -507,12 +734,38 @@ pub struct Identifier(pub uuid::Uuid);
 #[serde(transparent)]
 pub struct ClusterId(pub String);
 
+impl ClusterId {
+    /// The value as text.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for ClusterId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 /// region-id
 ///
 /// Specification type `region-id`: an identifier represented as `string`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct RegionId(pub String);
+
+impl RegionId {
+    /// The value as text.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for RegionId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
 
 /// database-id
 ///
@@ -521,12 +774,38 @@ pub struct RegionId(pub String);
 #[serde(transparent)]
 pub struct DatabaseId(pub String);
 
+impl DatabaseId {
+    /// The value as text.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for DatabaseId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 /// plan-id
 ///
 /// Specification type `plan-id`: an identifier represented as `string`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct PlanId(pub String);
+
+impl PlanId {
+    /// The value as text.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for PlanId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
 
 /// form-id
 ///
@@ -535,12 +814,38 @@ pub struct PlanId(pub String);
 #[serde(transparent)]
 pub struct FormId(pub String);
 
+impl FormId {
+    /// The value as text.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for FormId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 /// template-id
 ///
 /// Specification type `template-id`: an identifier represented as `string`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct TemplateId(pub String);
+
+impl TemplateId {
+    /// The value as text.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for TemplateId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
 
 /// environment-id
 ///
@@ -549,12 +854,38 @@ pub struct TemplateId(pub String);
 #[serde(transparent)]
 pub struct EnvironmentId(pub String);
 
+impl EnvironmentId {
+    /// The value as text.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for EnvironmentId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 /// colour-id
 ///
 /// Specification type `colour-id`: an identifier represented as `string`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct ColourId(pub String);
+
+impl ColourId {
+    /// The value as text.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for ColourId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
 
 /// migration-id
 ///
@@ -563,12 +894,32 @@ pub struct ColourId(pub String);
 #[serde(transparent)]
 pub struct MigrationId(pub String);
 
+impl MigrationId {
+    /// The value as text.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for MigrationId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 /// host
 ///
 /// Specification type `host`: a scalar represented as `string`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct Host(pub String);
+
+impl Host {
+    /// The value as text.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
 
 /// display-name
 ///
@@ -577,12 +928,26 @@ pub struct Host(pub String);
 #[serde(transparent)]
 pub struct DisplayName(pub String);
 
+impl DisplayName {
+    /// The value as text.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 /// email-address
 ///
 /// Specification type `email-address`: a scalar represented as `string`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct EmailAddress(pub String);
+
+impl EmailAddress {
+    /// The value as text.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
 
 /// hash
 ///
@@ -593,12 +958,26 @@ pub struct EmailAddress(pub String);
 #[serde(transparent)]
 pub struct Hash(pub String);
 
+impl Hash {
+    /// The value as text.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 /// external-subject
 ///
 /// Specification type `external-subject`: a scalar represented as `string`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct ExternalSubject(pub String);
+
+impl ExternalSubject {
+    /// The value as text.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
 
 /// url
 ///
@@ -607,12 +986,26 @@ pub struct ExternalSubject(pub String);
 #[serde(transparent)]
 pub struct Url(pub String);
 
+impl Url {
+    /// The value as text.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 /// domain
 ///
 /// Specification type `domain`: a scalar represented as `string`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct Domain(pub String);
+
+impl Domain {
+    /// The value as text.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
 
 /// ip-address
 ///
@@ -621,12 +1014,26 @@ pub struct Domain(pub String);
 #[serde(transparent)]
 pub struct IpAddress(pub String);
 
+impl IpAddress {
+    /// The value as text.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 /// address-text
 ///
 /// Specification type `address-text`: a scalar represented as `string`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct AddressText(pub String);
+
+impl AddressText {
+    /// The value as text.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
 
 /// text
 ///
@@ -637,6 +1044,13 @@ pub struct AddressText(pub String);
 #[serde(transparent)]
 pub struct Text(pub String);
 
+impl Text {
+    /// The value as text.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 /// reference
 ///
 /// A reference to a record or a copy, in text form.
@@ -645,6 +1059,13 @@ pub struct Text(pub String);
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct Reference(pub String);
+
+impl Reference {
+    /// The value as text.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
 
 /// wrapped-secret
 ///
@@ -671,6 +1092,13 @@ pub struct Secret(pub Vec<u8>);
 #[serde(transparent)]
 pub struct Expression(pub String);
 
+impl Expression {
+    /// The value as text.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 /// value-map
 ///
 /// A map of field values as JSON text.
@@ -679,6 +1107,13 @@ pub struct Expression(pub String);
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct ValueMap(pub String);
+
+impl ValueMap {
+    /// The value as text.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
 
 /// change-set
 ///
@@ -689,6 +1124,13 @@ pub struct ValueMap(pub String);
 #[serde(transparent)]
 pub struct ChangeSet(pub String);
 
+impl ChangeSet {
+    /// The value as text.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 /// structured-blocks
 ///
 /// Structured content blocks as JSON text.
@@ -697,6 +1139,13 @@ pub struct ChangeSet(pub String);
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct StructuredBlocks(pub String);
+
+impl StructuredBlocks {
+    /// The value as text.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
 
 /// recurrence
 ///
@@ -707,6 +1156,13 @@ pub struct StructuredBlocks(pub String);
 #[serde(transparent)]
 pub struct Recurrence(pub String);
 
+impl Recurrence {
+    /// The value as text.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 /// workflow-state
 ///
 /// The state a tenant workflow gives a record; tenant-defined.
@@ -716,10 +1172,17 @@ pub struct Recurrence(pub String);
 #[serde(transparent)]
 pub struct WorkflowState(pub String);
 
+impl WorkflowState {
+    /// The value as text.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 /// tenant-state
 ///
 /// Specification type `tenant-lifecycle`: an enumeration, serialised as the specification's values.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum TenantLifecycle {
     /// The value `provisioning`.
     #[serde(rename = "provisioning")]
@@ -746,7 +1209,7 @@ impl TenantLifecycle {
 /// principal-state
 ///
 /// Specification type `principal-state`: an enumeration, serialised as the specification's values.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum PrincipalState {
     /// The value `active`.
     #[serde(rename = "active")]
@@ -773,7 +1236,7 @@ impl PrincipalState {
 /// certificate-state
 ///
 /// Specification type `certificate-state`: an enumeration, serialised as the specification's values.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum CertificateState {
     /// The value `pending`.
     #[serde(rename = "pending")]
@@ -800,7 +1263,7 @@ impl CertificateState {
 /// domain-state
 ///
 /// Specification type `domain-state`: an enumeration, serialised as the specification's values.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum DomainState {
     /// The value `pending`.
     #[serde(rename = "pending")]
@@ -823,7 +1286,7 @@ impl DomainState {
 /// job-state
 ///
 /// Specification type `job-state`: an enumeration, serialised as the specification's values.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum JobState {
     /// The value `waiting`.
     #[serde(rename = "waiting")]
@@ -862,7 +1325,7 @@ impl JobState {
 /// run-state
 ///
 /// Specification type `run-state`: an enumeration, serialised as the specification's values.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum RunState {
     /// The value `running`.
     #[serde(rename = "running")]
@@ -901,7 +1364,7 @@ impl RunState {
 /// proposal-state
 ///
 /// Specification type `proposal-state`: an enumeration, serialised as the specification's values.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum ProposalState {
     /// The value `projecting`.
     #[serde(rename = "projecting")]
@@ -936,7 +1399,7 @@ impl ProposalState {
 /// message-state
 ///
 /// Specification type `message-state`: an enumeration, serialised as the specification's values.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum MessageState {
     /// The value `queued`.
     #[serde(rename = "queued")]
@@ -971,7 +1434,7 @@ impl MessageState {
 /// release-state
 ///
 /// Specification type `release-state`: an enumeration, serialised as the specification's values.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum ReleaseState {
     /// The value `candidate`.
     #[serde(rename = "candidate")]
@@ -1002,7 +1465,7 @@ impl ReleaseState {
 /// migration-state
 ///
 /// Specification type `migration-state`: an enumeration, serialised as the specification's values.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum MigrationState {
     /// The value `not-started`.
     #[serde(rename = "not-started")]
@@ -1033,7 +1496,7 @@ impl MigrationState {
 /// move-state
 ///
 /// Specification type `move-state`: an enumeration, serialised as the specification's values.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum MoveState {
     /// The value `source-serves`.
     #[serde(rename = "source-serves")]
@@ -1068,7 +1531,7 @@ impl MoveState {
 /// principal-kind
 ///
 /// Specification type `principal-kind`: an enumeration, serialised as the specification's values.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum PrincipalKind {
     /// The value `person`.
     #[serde(rename = "person")]
@@ -1095,7 +1558,7 @@ impl PrincipalKind {
 /// credential-kind
 ///
 /// Specification type `credential-kind`: an enumeration, serialised as the specification's values.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum CredentialKind {
     /// The value `password`.
     #[serde(rename = "password")]
@@ -1122,7 +1585,7 @@ impl CredentialKind {
 /// provider-protocol
 ///
 /// Specification type `provider-protocol`: an enumeration, serialised as the specification's values.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum ProviderProtocol {
     /// The value `oidc`.
     #[serde(rename = "oidc")]
@@ -1145,7 +1608,7 @@ impl ProviderProtocol {
 /// challenge-kind
 ///
 /// Specification type `challenge-kind`: an enumeration, serialised as the specification's values.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum ChallengeKind {
     /// The value `link`.
     #[serde(rename = "link")]
@@ -1172,7 +1635,7 @@ impl ChallengeKind {
 /// conversation-state
 ///
 /// Specification type `conversation-state`: an enumeration, serialised as the specification's values.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum ConversationState {
     /// The value `open`.
     #[serde(rename = "open")]
@@ -1195,7 +1658,7 @@ impl ConversationState {
 /// turn-state
 ///
 /// Specification type `turn-state`: an enumeration, serialised as the specification's values.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum TurnState {
     /// The value `streaming`.
     #[serde(rename = "streaming")]
@@ -1226,7 +1689,7 @@ impl TurnState {
 /// pending-action-state
 ///
 /// Specification type `pending-action-state`: an enumeration, serialised as the specification's values.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum PendingActionState {
     /// The value `previewed`.
     #[serde(rename = "previewed")]
@@ -1261,7 +1724,7 @@ impl PendingActionState {
 /// consent-decision
 ///
 /// Specification type `consent-decision`: an enumeration, serialised as the specification's values.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum ConsentDecision {
     /// The value `granted`.
     #[serde(rename = "granted")]
@@ -1288,7 +1751,7 @@ impl ConsentDecision {
 /// signal-kind
 ///
 /// Specification type `signal-kind`: an enumeration, serialised as the specification's values.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum SignalKind {
     /// The value `log`.
     #[serde(rename = "log")]
@@ -1315,7 +1778,7 @@ impl SignalKind {
 /// job-attempt-outcome
 ///
 /// Specification type `job-attempt-outcome`: an enumeration, serialised as the specification's values.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum JobAttemptOutcome {
     /// The value `completed`.
     #[serde(rename = "completed")]
@@ -1342,7 +1805,7 @@ impl JobAttemptOutcome {
 /// subject-key-state
 ///
 /// Specification type `subject-key-state`: an enumeration, serialised as the specification's values.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum SubjectKeyState {
     /// The value `live`.
     #[serde(rename = "live")]
@@ -1365,7 +1828,7 @@ impl SubjectKeyState {
 /// suppression-reason
 ///
 /// Specification type `suppression-reason`: an enumeration, serialised as the specification's values.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum SuppressionReason {
     /// The value `bounce`.
     #[serde(rename = "bounce")]
@@ -1392,7 +1855,7 @@ impl SuppressionReason {
 /// rollback-class
 ///
 /// Specification type `rollback-class`: an enumeration, serialised as the specification's values.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum RollbackClass {
     /// The value `rollback-safe`.
     #[serde(rename = "rollback-safe")]
@@ -1415,7 +1878,7 @@ impl RollbackClass {
 /// environment-kind
 ///
 /// Specification type `environment-kind`: an enumeration, serialised as the specification's values.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum EnvironmentKind {
     /// The value `stage`.
     #[serde(rename = "stage")]
@@ -1591,6 +2054,19 @@ pub struct ArchiveManifest {
 #[serde(transparent)]
 pub struct ArchiveRef(pub String);
 
+impl ArchiveRef {
+    /// The value as text.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for ArchiveRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 /// Audit Entry
 ///
 /// One entry of the hash-chained audit log.
@@ -1655,6 +2131,13 @@ pub struct Commit {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct CopyKey(pub String);
+
+impl CopyKey {
+    /// The value as text.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
 
 /// Deletion Certificate
 ///
@@ -2239,7 +2722,7 @@ pub struct ErasureReceipt {
 /// strata_protocol::api::ErrorCode; each has one HTTP status.
 ///
 /// Specification type `error-code`: an enumeration, serialised as the specification's values.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum ErrorCode {
     /// The value `unauthenticated`.
     #[serde(rename = "unauthenticated")]
@@ -2335,6 +2818,13 @@ pub struct FieldDifference {
 #[serde(transparent)]
 pub struct HtmlPage(pub String);
 
+impl HtmlPage {
+    /// The value as text.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 /// Identity Assertion
 ///
 /// An assertion signed by the identity service about one session.
@@ -2382,7 +2872,7 @@ pub struct InboxNotice {
 /// The outcome a worker reports for one attempt.
 ///
 /// Specification type `job-outcome`: an enumeration, serialised as the specification's values.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum JobOutcome {
     /// The value `succeeded`.
     #[serde(rename = "succeeded")]
@@ -2494,7 +2984,7 @@ pub struct LayoutOutcome {
 /// The phases of a storage layout change.
 ///
 /// Specification type `layout-phase`: an enumeration, serialised as the specification's values.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum LayoutPhase {
     /// The value `expanding`.
     #[serde(rename = "expanding")]
@@ -2847,9 +3337,15 @@ pub struct Scenario {
 /// The version of a tenant schema.
 ///
 /// Specification type `schema-version`: an identifier represented as `u64`.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct SchemaVersion(pub u64);
+
+impl std::fmt::Display for SchemaVersion {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.0, f)
+    }
+}
 
 /// Scim User
 ///
@@ -3024,9 +3520,15 @@ pub struct SpendEntry {
 /// The revision of a tenant state; each accepted transition advances it by one.
 ///
 /// Specification type `state-revision`: an identifier represented as `u64`.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct StateRevision(pub u64);
+
+impl std::fmt::Display for StateRevision {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.0, f)
+    }
+}
 
 /// Storage Migration
 ///
@@ -3067,7 +3569,7 @@ pub struct StoreError {
 /// strata_storage_api::StoreError variants.
 ///
 /// Specification type `store-error-kind`: an enumeration, serialised as the specification's values.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum StoreErrorKind {
     /// The value `conflict`.
     #[serde(rename = "conflict")]
@@ -3107,6 +3609,13 @@ impl StoreErrorKind {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct StoreHandle(pub String);
+
+impl StoreHandle {
+    /// The value as text.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
 
 /// Tenant Bundle
 ///
@@ -3151,7 +3660,7 @@ pub struct TenantDirectoryEntry {
 /// Whether a tenant is production, staging or sandbox.
 ///
 /// Specification type `tenant-kind`: an enumeration, serialised as the specification's values.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum TenantKind {
     /// The value `production`.
     #[serde(rename = "production")]
@@ -3311,6 +3820,13 @@ pub struct WebhookDelivery {
 #[serde(transparent)]
 pub struct SessionToken(pub String);
 
+impl SessionToken {
+    /// The value as text.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 /// The pattern of type `field-id`.
 static FIELD_ID_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new("^[a-z][a-z0-9_]*$").expect("specc checked that the pattern compiles")
@@ -3329,8 +3845,8 @@ pub struct FieldId(pub String);
 
 impl FieldId {
     /// The value, when it meets the type's constraints.
-    pub fn new(value: String) -> Result<Self, TypeConstraintViolation> {
-        let value = Self(value);
+    pub fn new(value: impl Into<String>) -> Result<Self, TypeConstraintViolation> {
+        let value = Self(value.into());
         value.validate()?;
         Ok(value)
     }
@@ -3367,6 +3883,19 @@ impl From<FieldId> for String {
     }
 }
 
+impl FieldId {
+    /// The value as text.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for FieldId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 /// The pattern of type `role-id`.
 static ROLE_ID_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new("^[a-z][a-z0-9_]*$").expect("specc checked that the pattern compiles")
@@ -3385,8 +3914,8 @@ pub struct RoleId(pub String);
 
 impl RoleId {
     /// The value, when it meets the type's constraints.
-    pub fn new(value: String) -> Result<Self, TypeConstraintViolation> {
-        let value = Self(value);
+    pub fn new(value: impl Into<String>) -> Result<Self, TypeConstraintViolation> {
+        let value = Self(value.into());
         value.validate()?;
         Ok(value)
     }
@@ -3423,6 +3952,19 @@ impl From<RoleId> for String {
     }
 }
 
+impl RoleId {
+    /// The value as text.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for RoleId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 /// The pattern of type `policy-id`.
 static POLICY_ID_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new("^[a-z][a-z0-9_]*$").expect("specc checked that the pattern compiles")
@@ -3441,8 +3983,8 @@ pub struct PolicyId(pub String);
 
 impl PolicyId {
     /// The value, when it meets the type's constraints.
-    pub fn new(value: String) -> Result<Self, TypeConstraintViolation> {
-        let value = Self(value);
+    pub fn new(value: impl Into<String>) -> Result<Self, TypeConstraintViolation> {
+        let value = Self(value.into());
         value.validate()?;
         Ok(value)
     }
@@ -3479,6 +4021,19 @@ impl From<PolicyId> for String {
     }
 }
 
+impl PolicyId {
+    /// The value as text.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for PolicyId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 /// The pattern of type `constraint-id`.
 static CONSTRAINT_ID_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new("^[a-z][a-z0-9_]*$").expect("specc checked that the pattern compiles")
@@ -3497,8 +4052,8 @@ pub struct ConstraintId(pub String);
 
 impl ConstraintId {
     /// The value, when it meets the type's constraints.
-    pub fn new(value: String) -> Result<Self, TypeConstraintViolation> {
-        let value = Self(value);
+    pub fn new(value: impl Into<String>) -> Result<Self, TypeConstraintViolation> {
+        let value = Self(value.into());
         value.validate()?;
         Ok(value)
     }
@@ -3535,6 +4090,19 @@ impl From<ConstraintId> for String {
     }
 }
 
+impl ConstraintId {
+    /// The value as text.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for ConstraintId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 /// The pattern of type `query-id`.
 static QUERY_ID_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new("^[a-z][a-z0-9_]*$").expect("specc checked that the pattern compiles")
@@ -3553,8 +4121,8 @@ pub struct QueryId(pub String);
 
 impl QueryId {
     /// The value, when it meets the type's constraints.
-    pub fn new(value: String) -> Result<Self, TypeConstraintViolation> {
-        let value = Self(value);
+    pub fn new(value: impl Into<String>) -> Result<Self, TypeConstraintViolation> {
+        let value = Self(value.into());
         value.validate()?;
         Ok(value)
     }
@@ -3591,6 +4159,19 @@ impl From<QueryId> for String {
     }
 }
 
+impl QueryId {
+    /// The value as text.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for QueryId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 /// The pattern of type `view-id`.
 static VIEW_ID_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new("^[a-z][a-z0-9_]*$").expect("specc checked that the pattern compiles")
@@ -3609,8 +4190,8 @@ pub struct ViewId(pub String);
 
 impl ViewId {
     /// The value, when it meets the type's constraints.
-    pub fn new(value: String) -> Result<Self, TypeConstraintViolation> {
-        let value = Self(value);
+    pub fn new(value: impl Into<String>) -> Result<Self, TypeConstraintViolation> {
+        let value = Self(value.into());
         value.validate()?;
         Ok(value)
     }
@@ -3647,12 +4228,25 @@ impl From<ViewId> for String {
     }
 }
 
+impl ViewId {
+    /// The value as text.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for ViewId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 /// On Delete
 ///
 /// strata_kernel::OnDelete.
 ///
 /// Specification type `on-delete`: a union, externally tagged.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum OnDelete {
     /// The variant `restrict`.
     Restrict,
@@ -3714,7 +4308,7 @@ pub enum FieldType {
 /// strata_kernel::Scope.
 ///
 /// Specification type `scope`: a union, externally tagged.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum Scope {
     /// The variant `record`.
     Record,
@@ -3729,7 +4323,7 @@ pub enum Scope {
 /// strata_kernel::CmpOp.
 ///
 /// Specification type `cmp-op`: a union, externally tagged.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum CmpOp {
     /// The variant `eq`.
     Eq,
@@ -3863,7 +4457,7 @@ pub struct RoleDef {
 /// strata_kernel::Action.
 ///
 /// Specification type `action`: a union, externally tagged.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum Action {
     /// The variant `read`.
     Read,
@@ -4125,13 +4719,15 @@ pub struct TenantState {
     /// Field `event-seq`.
     pub event_seq: u64,
     /// Field `schema`.
-    pub schema: TenantSchema,
+    pub schema: std::sync::Arc<TenantSchema>,
     /// Field `members`.
     #[serde(deserialize_with = "decode_map_principal_id_set_role_id")]
     pub members: std::collections::BTreeMap<PrincipalId, std::collections::BTreeSet<RoleId>>,
     /// Field `records`.
-    pub records:
-        std::collections::BTreeMap<ObjectTypeId, std::collections::BTreeMap<RecordId, Record>>,
+    pub records: std::collections::BTreeMap<
+        ObjectTypeId,
+        std::collections::BTreeMap<RecordId, std::sync::Arc<Record>>,
+    >,
 }
 
 /// Need
@@ -4184,7 +4780,7 @@ pub struct State {
     /// Field `tenant-id`.
     pub tenant_id: TenantId,
     /// Field `tenant`.
-    pub tenant: Option<TenantState>,
+    pub tenant: Option<std::sync::Arc<TenantState>>,
     /// Field `coverage`.
     pub coverage: Coverage,
 }
@@ -4213,7 +4809,7 @@ pub struct Context {
 /// strata_kernel::ExistingData: how a schema change treats records that do not conform.
 ///
 /// Specification type `existing-data`: a union, externally tagged.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum ExistingData {
     /// The variant `reject`.
     Reject,
@@ -4384,7 +4980,7 @@ pub struct Check {
 /// strata_kernel::ErrorKind.
 ///
 /// Specification type `error-kind`: a union, externally tagged.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum ErrorKind {
     /// The variant `tenant-mismatch`.
     TenantMismatch,
@@ -4464,7 +5060,7 @@ pub enum DeltaOp {
         name: String,
     },
     /// The variant `put-schema`.
-    PutSchema(TenantSchema),
+    PutSchema(std::sync::Arc<TenantSchema>),
     /// The variant `put-member`.
     PutMember {
         /// Field `principal`.
@@ -4474,7 +5070,7 @@ pub enum DeltaOp {
         roles: std::collections::BTreeSet<RoleId>,
     },
     /// The variant `put-record`.
-    PutRecord(Record),
+    PutRecord(std::sync::Arc<Record>),
     /// The variant `delete-record`.
     DeleteRecord {
         /// Field `object`.
@@ -4537,19 +5133,19 @@ pub enum EventBody {
     /// The variant `record-created`.
     RecordCreated {
         /// Field `record`.
-        record: Record,
+        record: std::sync::Arc<Record>,
     },
     /// The variant `record-updated`.
     RecordUpdated {
         /// Field `before`.
-        before: Record,
+        before: std::sync::Arc<Record>,
         /// Field `after`.
-        after: Record,
+        after: std::sync::Arc<Record>,
     },
     /// The variant `record-deleted`.
     RecordDeleted {
         /// Field `before`.
-        before: Record,
+        before: std::sync::Arc<Record>,
     },
 }
 
@@ -4679,7 +5275,7 @@ pub enum ReadRequest {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct ReadResult {
     /// Field `rows`.
-    pub rows: Vec<Record>,
+    pub rows: Vec<std::sync::Arc<Record>>,
     /// Field `revision`.
     pub revision: StateRevision,
     /// Field `schema-version`.

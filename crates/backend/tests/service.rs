@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use strata_backend::app::Config;
+use strata_kernel::ext::*;
 use strata_kernel::{
     canon, CmpOp, Context, ExistingData, Expr, FieldId, Intent, ObjectTypeId, OrderKey, Principal,
     PrincipalId, QueryDef, QueryId, SchemaChange, Scope, TenantId, Timestamp, Value, ViewDef,
