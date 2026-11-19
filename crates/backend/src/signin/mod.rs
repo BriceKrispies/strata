@@ -6,15 +6,25 @@
 //! uniform refusal, the audit entry and the start of the session. A passkey, an emailed link or
 //! an identity provider is one more module and one more line in the list.
 //!
-//! Implements: IDN-001
+//! After the first factor is right, one more stage is shared by every method too: a realm that
+//! asks for a second factor, or an account that has one, gets a waiting sign-in and no session until
+//! the second factor is verified (IDN-018, IDN-267). See [`second`].
+//!
+//! Implements: IDN-001, IDN-018
 
 pub mod link;
 pub mod oidc;
 pub mod passkey;
 pub mod password;
+pub mod recover;
+pub mod recovery_codes;
+pub mod second;
+pub mod stepup;
+pub mod totp;
 
 use crate::app::{ApiError, App, LOG};
 use crate::auth::{self, Caller};
+use serde::Serialize;
 use serde_json::{json, Value as Json};
 use strata_kernel::canon;
 use strata_protocol::api::{ErrorCode, LoginReply};
@@ -40,6 +50,22 @@ pub trait SignInMethod: Send + Sync {
         subject: &str,
         request: &Json,
     ) -> Result<Option<Account>, ApiError>;
+
+    /// How many factors a right credential of this method proves on its own. A password, an
+    /// emailed link and an identity provider's answer prove one; a passkey proves two, because
+    /// the library requires the authenticator to verify the person as well (IDN-267).
+    fn factors(&self) -> u8 {
+        1
+    }
+}
+
+/// What a sign-in yields: a session, or a waiting sign-in that a second factor completes.
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
+pub enum SignInOutcome {
+    Session(LoginReply),
+    /// `{ "second_factor": { "challenge", "methods", "enrol", "expires_in" } }`.
+    Pending(Json),
 }
 
 /// Every method the backend offers.
@@ -131,7 +157,7 @@ pub fn sign_in(
     caller: &Caller,
     method_name: &str,
     request: &Json,
-) -> Result<LoginReply, ApiError> {
+) -> Result<SignInOutcome, ApiError> {
     let Some(method) = method(method_name) else {
         return Err(ApiError::new(
             ErrorCode::NotFound,
@@ -204,7 +230,12 @@ pub fn sign_in(
     // A method may have changed the tenant while it checked the credential (a first sign-in
     // gives its principal a role), and the session's reply says what the person may do.
     let tenant = app.store.load(&caller.site, &[])?.tenant.unwrap_or(tenant);
-    auth::start_session(app, caller, &tenant, account, name)
+    // The first factor alone may not be enough: this stage is the same for every method
+    // (IDN-018, IDN-267).
+    if let Some(waiting) = second::stage(app, caller, name, method.factors(), &account)? {
+        return Ok(SignInOutcome::Pending(waiting));
+    }
+    auth::start_session(app, caller, &tenant, account, name).map(SignInOutcome::Session)
 }
 
 #[cfg(test)]
@@ -240,5 +271,13 @@ mod tests {
         assert!(method("link").is_some());
         assert!(method("oidc").is_some());
         assert!(method("telepathy").is_none());
+    }
+
+    /// Verifies: IDN-267
+    #[test]
+    fn only_a_passkey_proves_two_factors_on_its_own() {
+        for (name, factors) in [("password", 1), ("link", 1), ("oidc", 1), ("passkey", 2)] {
+            assert_eq!(method(name).unwrap().factors(), factors, "{name}");
+        }
     }
 }

@@ -134,6 +134,8 @@ fn session(id: &str, tenant: &str, principal: &str, expires: i64) -> SessionReco
         last_seen_at: Timestamp(10),
         expires_at: Timestamp(expires),
         revoked_at: None,
+        authenticated_at: Timestamp(10),
+        network: None,
     }
 }
 

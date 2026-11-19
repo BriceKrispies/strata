@@ -98,6 +98,7 @@ async fn start_with(federation: Federation, adjust: impl FnOnce(&mut Config)) ->
         link_ttl_ms: 900_000,
         mail: sink.clone(),
         federation: Arc::new(federation),
+        factors: Default::default(),
     };
     adjust(&mut cfg);
     tokio::spawn(strata_backend::run(

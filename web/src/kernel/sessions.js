@@ -30,7 +30,7 @@ export function sessionsUpdate(state, msg, { request, toast }) {
       return { state: next, effects: [effect] };
     }
     if (msg.name === 'sessions.revoke_others') {
-      const [next, effect] = request(withSessions(state, { busy: true, error: '' }), 'sessions.revoke_others', { method: 'POST', path: '/api/sessions/revoke-others', body: {}, write: true }, msg);
+      const [next, effect] = request(withSessions(state, { busy: true, error: '' }), 'sessions.revoke_others', { method: 'POST', path: '/api/sessions/revoke-others', body: {}, write: true, meta: { retry: { name: msg.name, arg: msg.arg } } }, msg);
       return { state: next, effects: [effect] };
     }
     return null;

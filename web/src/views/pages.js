@@ -2,7 +2,7 @@
 // @ts-check
 
 import { h } from '../components/dom.js';
-import { date, index, marginNotes, prose } from '../components/parts.js';
+import { date, index, marginNotes, prose, qrCode } from '../components/parts.js';
 
 function topicList(topics, label) {
   if (!topics.length) return null;
@@ -210,7 +210,43 @@ export function about(page) {
   ];
 }
 
+/** The code prompt of a sign-in that is waiting for its second factor. */
+function secondFactor(s) {
+  const recovery = s.factor === 'recovery';
+  return [
+    h('h1', { class: 'page-title' }, 'One more step'),
+    h(
+      'form',
+      { class: 'form form--narrow', 'data-form': 'second', 'data-second-factor': true, novalidate: true },
+      s.enrol
+        ? h(
+            'div',
+            null,
+            h('p', { class: 'standfirst' }, 'This site asks for a second factor. Scan this code with an authenticator application.'),
+            qrCode(s.enrol.qr, 'QR code for your authenticator'),
+            h('p', null, 'Or type this secret: ', h('code', { 'data-totp-secret': true }, s.enrol.secret)),
+          )
+        : h('p', { class: 'standfirst' }, recovery ? 'Enter one of your recovery codes.' : 'Enter the code your authenticator shows.'),
+      s.error ? h('p', { class: 'form__error', role: 'alert', id: 'second-error' }, s.error) : null,
+      h(
+        'div',
+        { class: 'field' },
+        h('label', { for: 'second-code' }, recovery ? 'Recovery code' : 'Code'),
+        h('input', { id: 'second-code', name: 'code', type: 'text', value: s.code, autocomplete: 'one-time-code', autocapitalize: 'none', spellcheck: 'false', required: true }),
+      ),
+      h('button', { class: 'button', type: 'submit', disabled: s.busy }, s.busy ? 'Checking…' : 'Continue'),
+    ),
+    !s.enrol && s.methods.includes('recovery')
+      ? h('p', null, h('button', { class: 'button button--quiet', type: 'button', 'data-action': 'factors.use', 'data-arg': JSON.stringify({ factor: recovery ? 'totp' : 'recovery' }) }, recovery ? 'Use my authenticator' : 'Use a recovery code'))
+      : null,
+    !s.enrol && s.methods.includes('passkey') && s.passkeys
+      ? h('p', null, h('button', { class: 'button button--quiet', type: 'button', disabled: s.busy, 'data-action': 'factors.use_passkey' }, 'Use a passkey'))
+      : null,
+  ];
+}
+
 export function login(page) {
+  if (page.second) return secondFactor(page.second);
   if (page.signedIn) {
     return [
       h('h1', { class: 'page-title' }, 'You are signed in'),

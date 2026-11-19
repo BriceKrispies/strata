@@ -1,6 +1,7 @@
 // End-to-end tests in a real browser, against the built frontend served by the BFF.
 import AxeBuilder from '@axe-core/playwright';
 import { expect, test } from '@playwright/test';
+import { createHmac } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 
 const BASE = 'http://127.0.0.1:4200';
@@ -1187,4 +1188,155 @@ test('a callback that no sign-in of this browser started is refused', async ({ p
   await expect(page.getByRole('alert')).toContainText('not accepted');
   await expect(page.getByRole('heading', { level: 1, name: 'Sign in' })).toBeVisible();
   expect(page.url()).not.toContain('code=');
+});
+
+// ---- Second factors, recovery codes and step-up (IDN-018, IDN-019) ----
+
+/** RFC 4648 base32, as an authenticator application reads the secret. */
+function base32Bytes(text) {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+  let bits = '';
+  for (const c of text.replace(/=+$/, '').toUpperCase()) bits += alphabet.indexOf(c).toString(2).padStart(5, '0');
+  const bytes = [];
+  for (let i = 0; i + 8 <= bits.length; i += 8) bytes.push(parseInt(bits.slice(i, i + 8), 2));
+  return Buffer.from(bytes);
+}
+
+/** RFC 6238 with SHA-1, six digits, thirty-second steps: the algorithm of the `totp-rs` crate. */
+function totpAt(secret, step) {
+  const counter = Buffer.alloc(8);
+  counter.writeBigUInt64BE(BigInt(step));
+  const mac = createHmac('sha1', base32Bytes(secret)).update(counter).digest();
+  const offset = mac[mac.length - 1] & 15;
+  const value = mac.readUInt32BE(offset) & 0x7fffffff;
+  return String(value % 1_000_000).padStart(6, '0');
+}
+
+let lastStep = -1;
+/** A code the server has not seen: the earliest step after the last one used that it accepts. */
+async function nextCode(secret) {
+  for (;;) {
+    const now = Math.floor(Date.now() / 30_000);
+    const step = Math.max(lastStep + 1, now - 1);
+    if (step <= now + 1) {
+      lastStep = step;
+      return totpAt(secret, step);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+}
+
+async function passwordSignInOf(page, name) {
+  await page.getByRole('button', { name: 'Sign out', exact: true }).click();
+  await open(page, '/login');
+  await page.getByLabel('Name').fill(name);
+  await page.getByLabel('Password').fill(`strata-dev-${name}`);
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+}
+
+test('a person adds an authenticator, signs in with it, uses a recovery code once, and steps up before a sensitive operation', async ({ page }) => {
+  test.setTimeout(150_000);
+  await signIn(page, 'tomasz');
+  const section = page.getByRole('region', { name: 'Second factor' });
+  await expect(section.getByText('You sign in with one factor.')).toBeVisible();
+
+  // Enrol: a QR code and the secret in text; the factor counts only once a code proves it.
+  await section.getByRole('button', { name: 'Set up an authenticator' }).click();
+  await expect(section.getByRole('img', { name: 'QR code for your authenticator' })).toBeVisible();
+  const secret = (await section.locator('[data-totp-secret]').textContent()).trim();
+  expect(secret).toMatch(/^[A-Z2-7]{32}$/);
+  await section.getByLabel('Code from your authenticator').fill('000000');
+  await section.getByRole('button', { name: 'Turn on' }).click();
+  await expect(section.getByRole('alert')).toContainText('not accepted');
+  await section.getByLabel('Code from your authenticator').fill(await nextCode(secret));
+  await section.getByRole('button', { name: 'Turn on' }).click();
+  await expect(page.locator('.toast', { hasText: 'Authenticator added.' })).toBeVisible();
+  await expect(section.getByText('An authenticator is set up.')).toBeVisible();
+
+  // Recovery codes: shown once.
+  await section.getByRole('button', { name: 'Make new recovery codes' }).click();
+  const shown = section.locator('[data-recovery-codes] li');
+  await expect(shown).toHaveCount(10);
+  const codes = (await shown.allTextContents()).map((c) => c.trim());
+  await section.getByRole('button', { name: 'I have saved them' }).click();
+  await expect(section.locator('[data-recovery-codes]')).toHaveCount(0);
+  await expect(section.getByText('10 recovery codes left.')).toBeVisible();
+
+  // Signing in now yields no session until the second factor is given.
+  await passwordSignInOf(page, 'tomasz');
+  await expect(page.getByRole('heading', { level: 1, name: 'One more step' })).toBeVisible();
+  expect((await (await page.request.get('/api/session')).json()).session.authenticated).toBe(false);
+  await page.getByLabel('Code', { exact: true }).fill('000000');
+  await page.getByRole('button', { name: 'Continue' }).click();
+  await expect(page.getByRole('alert')).toContainText('not accepted');
+  await page.getByLabel('Code', { exact: true }).fill(await nextCode(secret));
+  await page.getByRole('button', { name: 'Continue' }).click();
+  await expect(page.getByRole('heading', { level: 1, name: 'Writing desk' })).toBeVisible();
+
+  // A recovery code signs in once.
+  await passwordSignInOf(page, 'tomasz');
+  await page.getByRole('button', { name: 'Use a recovery code' }).click();
+  await page.getByLabel('Recovery code').fill(codes[0]);
+  await page.getByRole('button', { name: 'Continue' }).click();
+  await expect(page.getByRole('heading', { level: 1, name: 'Writing desk' })).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Second factor' }).getByText('9 recovery codes left.')).toBeVisible();
+
+  await passwordSignInOf(page, 'tomasz');
+  await page.getByRole('button', { name: 'Use a recovery code' }).click();
+  await page.getByLabel('Recovery code').fill(codes[0]);
+  await page.getByRole('button', { name: 'Continue' }).click();
+  await expect(page.getByRole('alert')).toContainText('not accepted');
+  await expect(page.getByRole('heading', { level: 1, name: 'One more step' })).toBeVisible();
+  // Another code of the set still works.
+  await page.getByLabel('Recovery code').fill(codes[1]);
+  await page.getByRole('button', { name: 'Continue' }).click();
+  await expect(page.getByRole('heading', { level: 1, name: 'Writing desk' })).toBeVisible();
+
+  // Step-up: an old authentication is refused for a sensitive operation, and a fresh code lets it
+  // through, asked again by the page itself.
+  const csrf = (await (await page.request.get('/api/session')).json()).session.csrf_token;
+  const aged = await page.request.post('/api/dev/age-authentication', { headers: { origin: BASE, 'x-csrf-token': csrf } });
+  expect((await aged.json()).aged).toBe(true);
+  const factors = page.getByRole('region', { name: 'Second factor' });
+  await factors.getByRole('button', { name: 'Make new recovery codes' }).click();
+  const prompt = factors.getByRole('alertdialog', { name: 'Confirm that it is you' });
+  await expect(prompt).toBeVisible();
+  await expect(factors.locator('[data-recovery-codes]')).toHaveCount(0);
+  await prompt.getByLabel('Authenticator code').fill('000000');
+  await prompt.getByRole('button', { name: 'Confirm' }).click();
+  await expect(prompt.getByRole('alert')).toBeVisible();
+  await prompt.getByLabel('Authenticator code').fill(await nextCode(secret));
+  await prompt.getByRole('button', { name: 'Confirm' }).click();
+  await expect(factors.locator('[data-recovery-codes] li')).toHaveCount(10);
+  await expect(prompt).toHaveCount(0);
+
+  // Leave the person as found: no authenticator.
+  await factors.getByRole('button', { name: 'I have saved them' }).click();
+  await factors.getByRole('button', { name: 'Remove the authenticator' }).click();
+  await expect(page.locator('.toast', { hasText: 'Authenticator removed.' })).toBeVisible();
+  await expect(factors.getByText('You sign in with one factor.')).toBeVisible();
+});
+
+test('a person without an authenticator steps up with the password before a sensitive operation', async ({ page }) => {
+  await signIn(page, 'tomasz');
+  const csrf = (await (await page.request.get('/api/session')).json()).session.csrf_token;
+  await page.request.post('/api/dev/age-authentication', { headers: { origin: BASE, 'x-csrf-token': csrf } });
+  // The backend refuses the operation, with the kind the page answers.
+  const refused = await page.request.post('/api/sessions/revoke-others', { headers: { origin: BASE, 'x-csrf-token': csrf }, data: {} });
+  expect(refused.status()).toBe(403);
+  expect((await refused.json()).kind).toBe('step_up_required');
+
+  const section = page.getByRole('region', { name: 'Where you are signed in' });
+  await expect(section).toBeVisible();
+  await page.getByRole('region', { name: 'Second factor' }).getByRole('button', { name: 'Set up an authenticator' }).click();
+  const prompt = page.getByRole('alertdialog', { name: 'Confirm that it is you' });
+  await expect(prompt).toBeVisible();
+  await prompt.getByLabel('Password').fill('not the password');
+  await prompt.getByRole('button', { name: 'Confirm' }).click();
+  await expect(prompt.getByRole('alert')).toBeVisible();
+  await prompt.getByLabel('Password').fill('strata-dev-tomasz');
+  await prompt.getByRole('button', { name: 'Confirm' }).click();
+  // The operation that was refused goes through: the enrolment starts.
+  await expect(page.getByRole('img', { name: 'QR code for your authenticator' })).toBeVisible();
+  await page.getByRole('button', { name: 'Cancel' }).click();
 });

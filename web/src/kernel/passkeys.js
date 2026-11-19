@@ -59,11 +59,11 @@ export function passkeysUpdate(state, msg, { request, toast, signedIn }) {
     }
     if (p.busy) return { state, effects: [] };
     if (msg.name === 'passkeys.add' && p.supported) {
-      const [next, effect] = request(withPasskeys(state, { busy: true, error: '' }), 'passkeys.register_start', { method: 'POST', path: '/api/passkeys/register/start', body: {}, write: true }, msg);
+      const [next, effect] = request(withPasskeys(state, { busy: true, error: '' }), 'passkeys.register_start', { method: 'POST', path: '/api/passkeys/register/start', body: {}, write: true, meta: { retry: { name: 'passkeys.add' } } }, msg);
       return { state: next, effects: [effect] };
     }
     if (msg.name === 'passkeys.remove' && typeof msg.arg?.id === 'string') {
-      const [next, effect] = request(withPasskeys(state, { busy: true, error: '' }), 'passkeys.remove', { method: 'POST', path: '/api/passkeys/remove', body: { id: msg.arg.id }, write: true }, msg);
+      const [next, effect] = request(withPasskeys(state, { busy: true, error: '' }), 'passkeys.remove', { method: 'POST', path: '/api/passkeys/remove', body: { id: msg.arg.id }, write: true, meta: { retry: { name: msg.name, arg: msg.arg } } }, msg);
       return { state: next, effects: [effect] };
     }
     return null;

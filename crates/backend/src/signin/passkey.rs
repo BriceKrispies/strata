@@ -207,15 +207,41 @@ impl SignInMethod for PasskeyMethod {
         subject: &str,
         request: &Json,
     ) -> Result<Option<Account>, ApiError> {
-        let Some(challenge) = take(app, caller, subject, PasskeyCeremony::SignIn)? else {
+        match assert(app, caller, subject, &request["assertion"])? {
+            Some(principal) => app
+                .store
+                .account_of(&caller.site, &principal)
+                .map_err(Into::into),
+            None => Ok(None),
+        }
+    }
+
+    /// A passkey proves possession of the authenticator and, because the library requires user
+    /// verification, the person's own presence or knowledge: two factors (IDN-267).
+    fn factors(&self) -> u8 {
+        2
+    }
+}
+
+/// Check an assertion against the challenge issued for it and say whose passkey signed it. It is
+/// the whole of the protocol check, for a sign-in and for a second factor alike: the challenge
+/// answers once, at the address it was issued for, and the credential is the person's own.
+///
+/// Implements: H-017, IDN-007, IDN-264
+pub(super) fn assert(
+    app: &App,
+    caller: &Caller,
+    challenge_id: &str,
+    assertion: &Json,
+) -> Result<Option<PrincipalId>, ApiError> {
+    {
+        let Some(challenge) = take(app, caller, challenge_id, PasskeyCeremony::SignIn)? else {
             return Ok(None);
         };
         let Ok((webauthn, _)) = relying_party(Some(&challenge.origin)) else {
             return Ok(None);
         };
-        let Ok(assertion) =
-            serde_json::from_value::<PublicKeyCredential>(request["assertion"].clone())
-        else {
+        let Ok(assertion) = serde_json::from_value::<PublicKeyCredential>(assertion.clone()) else {
             return Ok(None);
         };
         let Ok(state) = serde_json::from_str::<DiscoverableAuthentication>(&challenge.state) else {
@@ -256,10 +282,14 @@ impl SignInMethod for PasskeyMethod {
         credential.update_credential(&result);
         app.store
             .update_passkey(&caller.site, &record.id, &encode(&credential)?, app.now())?;
-        app.store
-            .account_of(&caller.site, &record.principal)
-            .map_err(Into::into)
+        Ok(Some(record.principal))
     }
+}
+
+/// Whether the person holds any passkey, which makes a passkey one of the ways to give a second
+/// factor.
+pub fn held(app: &App, tenant: &TenantId, principal: &PrincipalId) -> Result<bool, ApiError> {
+    Ok(!app.store.passkeys(tenant, principal)?.is_empty())
 }
 
 /// Begin adding a passkey to the signed-in person's account: a challenge bound to the session.
@@ -269,6 +299,8 @@ pub fn register_start(app: &App, caller: &Caller, identity: &Identity) -> Result
     let Some(session) = &identity.session else {
         return Err(sign_in_needed());
     };
+    // Adding a way in is a sensitive operation (IDN-019).
+    super::stepup::require_fresh(app, caller, identity)?;
     let (webauthn, origin) = relying_party(caller.origin.as_deref())?;
     let held = app.store.passkeys(&caller.site, &session.principal)?;
     if held.len() >= MAX_PER_PERSON {
@@ -318,6 +350,7 @@ pub fn register_finish(
     let Some(session) = &identity.session else {
         return Err(sign_in_needed());
     };
+    super::stepup::require_fresh(app, caller, identity)?;
     let challenge_id = request
         .get("challenge")
         .and_then(Json::as_str)
@@ -394,6 +427,8 @@ pub fn remove(app: &App, caller: &Caller, identity: &Identity, id: &str) -> Resu
     let Some(session) = &identity.session else {
         return Err(sign_in_needed());
     };
+    // Removing a way in is a sensitive operation (IDN-019).
+    super::stepup::require_fresh(app, caller, identity)?;
     if !app
         .store
         .remove_passkey(&caller.site, &session.principal, id)?

@@ -27,9 +27,9 @@ use strata_runtime::sqlite::{Database, DbError, Migration};
 use strata_storage_api::{
     check_event_sequence, field_matches, throttle_refund, throttle_step, Account, Capabilities,
     Commit, FederatedIdentity, Health, JournalEntry, OidcFlow, OutboxEntry, PasskeyCeremony,
-    PasskeyChallenge, PasskeyRecord, Receipt, SessionRecord, SignInLink, SnapshotInfo,
-    StorageMigration, Store, StoreError, StoreResult, TenantSummary, ThrottleRow, ThrottleRule,
-    ThrottleSettle, ThrottleVerdict,
+    PasskeyChallenge, PasskeyRecord, PendingSignIn, Receipt, RecoveryRequest, SessionRecord,
+    SignInLink, SnapshotInfo, StorageMigration, Store, StoreError, StoreResult, TenantSummary,
+    ThrottleRow, ThrottleRule, ThrottleSettle, ThrottleVerdict, TotpRecord,
 };
 
 /// The ledger table of the tenant store's migrations.
@@ -178,6 +178,7 @@ const MIGRATIONS: &[Migration] = &[
         tenant       TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
         id_hash      TEXT NOT NULL,
         principal    TEXT NOT NULL,
+        login        TEXT NOT NULL,
         token_hash   TEXT NOT NULL,
         binding_hash TEXT NOT NULL,
         origin       TEXT NOT NULL,
@@ -213,6 +214,55 @@ const MIGRATIONS: &[Migration] = &[
         PRIMARY KEY (tenant, provider, subject)
     );
     CREATE INDEX federated_identities_principal ON federated_identities(tenant, principal);
+    ",
+    },
+    Migration {
+        version: 6,
+        name: "second factors, recovery codes, pending sign-ins, recovery requests and session authentication",
+        sql: "
+    CREATE TABLE totp_factors (
+        tenant     TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+        principal  TEXT NOT NULL,
+        secret     TEXT NOT NULL,
+        confirmed  INTEGER NOT NULL,
+        last_step  INTEGER NOT NULL,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (tenant, principal)
+    );
+    CREATE TABLE recovery_codes (
+        tenant     TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+        principal  TEXT NOT NULL,
+        code_hash  TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (tenant, principal, code_hash)
+    );
+    CREATE TABLE pending_sign_ins (
+        tenant     TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+        id_hash    TEXT NOT NULL,
+        principal  TEXT NOT NULL,
+        method     TEXT NOT NULL,
+        factors    INTEGER NOT NULL,
+        attempts   INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL,
+        PRIMARY KEY (tenant, id_hash)
+    );
+    CREATE INDEX pending_sign_ins_expiry ON pending_sign_ins(expires_at);
+    CREATE TABLE recovery_requests (
+        tenant       TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+        id_hash      TEXT NOT NULL,
+        principal    TEXT NOT NULL,
+        token_hash   TEXT NOT NULL,
+        cancel_hash  TEXT NOT NULL,
+        requested_at INTEGER NOT NULL,
+        completes_at INTEGER NOT NULL,
+        expires_at   INTEGER NOT NULL,
+        PRIMARY KEY (tenant, id_hash)
+    );
+    CREATE INDEX recovery_requests_principal ON recovery_requests(tenant, principal);
+    CREATE INDEX recovery_requests_expiry ON recovery_requests(expires_at);
+    ALTER TABLE sessions ADD COLUMN authenticated_at INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE sessions ADD COLUMN network TEXT;
+    UPDATE sessions SET authenticated_at = created_at;
     ",
     },
 ];
@@ -427,6 +477,38 @@ fn passkey_record(
     })
 }
 
+type RecoveryRow = (String, String, String, String, i64, i64, i64);
+
+fn recovery_from(row: &rusqlite::Row<'_>) -> rusqlite::Result<RecoveryRow> {
+    Ok((
+        row.get(0)?,
+        row.get(1)?,
+        row.get(2)?,
+        row.get(3)?,
+        row.get(4)?,
+        row.get(5)?,
+        row.get(6)?,
+    ))
+}
+
+fn recovery_request(
+    tenant: &TenantId,
+    id_hash: &str,
+    (principal, login, token_hash, cancel_hash, requested_at, completes_at, expires_at): RecoveryRow,
+) -> StoreResult<RecoveryRequest> {
+    Ok(RecoveryRequest {
+        tenant: tenant.clone(),
+        id_hash: id_hash.to_string(),
+        principal: PrincipalId::new(principal).map_err(|e| StoreError::Corrupt(e.to_string()))?,
+        login,
+        token_hash,
+        cancel_hash,
+        requested_at: Timestamp(requested_at),
+        completes_at: Timestamp(completes_at),
+        expires_at: Timestamp(expires_at),
+    })
+}
+
 fn session_from(
     row: &rusqlite::Row<'_>,
 ) -> rusqlite::Result<(
@@ -440,6 +522,8 @@ fn session_from(
     i64,
     i64,
     Option<i64>,
+    i64,
+    Option<String>,
 )> {
     Ok((
         row.get(0)?,
@@ -452,11 +536,13 @@ fn session_from(
         row.get(7)?,
         row.get(8)?,
         row.get(9)?,
+        row.get(10)?,
+        row.get(11)?,
     ))
 }
 
 const SESSION_COLUMNS: &str =
-    "id, token_hash, csrf_token, tenant, principal, display_name, created_at, last_seen_at, expires_at, revoked_at";
+    "id, token_hash, csrf_token, tenant, principal, display_name, created_at, last_seen_at, expires_at, revoked_at, authenticated_at, network";
 
 fn sessions_where(
     conn: &Connection,
@@ -483,6 +569,8 @@ fn sessions_where(
                 seen,
                 expires,
                 revoked,
+                authenticated,
+                network,
             )| {
                 let bad = |e: strata_kernel::IdError| StoreError::Corrupt(e.to_string());
                 Ok(SessionRecord {
@@ -496,6 +584,8 @@ fn sessions_where(
                     last_seen_at: Timestamp(seen),
                     expires_at: Timestamp(expires),
                     revoked_at: revoked.map(Timestamp),
+                    authenticated_at: Timestamp(authenticated),
+                    network,
                 })
             },
         )
@@ -920,10 +1010,11 @@ impl Store for SqliteStore {
         }
         conn.execute(
             &format!(
-                "INSERT INTO sessions ({SESSION_COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+                "INSERT INTO sessions ({SESSION_COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
                  ON CONFLICT (id) DO UPDATE SET token_hash = excluded.token_hash, csrf_token = excluded.csrf_token,
                     display_name = excluded.display_name, last_seen_at = excluded.last_seen_at,
-                    expires_at = excluded.expires_at, revoked_at = excluded.revoked_at"
+                    expires_at = excluded.expires_at, revoked_at = excluded.revoked_at,
+                    authenticated_at = excluded.authenticated_at, network = excluded.network"
             ),
             params![
                 session.id.as_str(),
@@ -935,7 +1026,9 @@ impl Store for SqliteStore {
                 session.created_at.0,
                 session.last_seen_at.0,
                 session.expires_at.0,
-                session.revoked_at.map(|t| t.0)
+                session.revoked_at.map(|t| t.0),
+                session.authenticated_at.0,
+                session.network
             ],
         )
         .map_err(db)?;
@@ -1441,6 +1534,371 @@ impl Store for SqliteStore {
                 .map_err(|e| StoreError::Corrupt(e.to_string()))?,
             created_at: Timestamp(created_at),
         }))
+    }
+
+    fn put_totp(&self, totp: &TotpRecord) -> StoreResult<bool> {
+        // An unconfirmed enrolment is replaced; a confirmed one is not.
+        let changed = self
+            .lock()?
+            .execute(
+                "INSERT INTO totp_factors (tenant, principal, secret, confirmed, last_step, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                 ON CONFLICT (tenant, principal) DO UPDATE SET secret = excluded.secret,
+                    confirmed = excluded.confirmed, last_step = excluded.last_step,
+                    created_at = excluded.created_at
+                 WHERE totp_factors.confirmed = 0",
+                params![
+                    totp.tenant.as_str(),
+                    totp.principal.as_str(),
+                    totp.secret,
+                    totp.confirmed,
+                    totp.last_step,
+                    totp.created_at.0,
+                ],
+            )
+            .map_err(db)?;
+        Ok(changed == 1)
+    }
+
+    fn totp(&self, tenant: &TenantId, principal: &PrincipalId) -> StoreResult<Option<TotpRecord>> {
+        let row = self
+            .lock()?
+            .query_row(
+                "SELECT secret, confirmed, last_step, created_at FROM totp_factors
+                 WHERE tenant = ?1 AND principal = ?2",
+                params![tenant.as_str(), principal.as_str()],
+                |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, bool>(1)?,
+                        r.get::<_, i64>(2)?,
+                        r.get::<_, i64>(3)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(db)?;
+        Ok(
+            row.map(|(secret, confirmed, last_step, created_at)| TotpRecord {
+                tenant: tenant.clone(),
+                principal: principal.clone(),
+                secret,
+                confirmed,
+                last_step,
+                created_at: Timestamp(created_at),
+            }),
+        )
+    }
+
+    fn confirm_totp(
+        &self,
+        tenant: &TenantId,
+        principal: &PrincipalId,
+        step: i64,
+    ) -> StoreResult<bool> {
+        let changed = self
+            .lock()?
+            .execute(
+                "UPDATE totp_factors SET confirmed = 1, last_step = ?3
+                 WHERE tenant = ?1 AND principal = ?2 AND confirmed = 0",
+                params![tenant.as_str(), principal.as_str(), step],
+            )
+            .map_err(db)?;
+        Ok(changed == 1)
+    }
+
+    fn use_totp_step(
+        &self,
+        tenant: &TenantId,
+        principal: &PrincipalId,
+        step: i64,
+    ) -> StoreResult<bool> {
+        // One statement checks the step and remembers it, so two uses of one code cannot both win.
+        let changed = self
+            .lock()?
+            .execute(
+                "UPDATE totp_factors SET last_step = ?3
+                 WHERE tenant = ?1 AND principal = ?2 AND confirmed = 1 AND last_step < ?3",
+                params![tenant.as_str(), principal.as_str(), step],
+            )
+            .map_err(db)?;
+        Ok(changed == 1)
+    }
+
+    fn remove_totp(&self, tenant: &TenantId, principal: &PrincipalId) -> StoreResult<bool> {
+        let removed = self
+            .lock()?
+            .execute(
+                "DELETE FROM totp_factors WHERE tenant = ?1 AND principal = ?2",
+                params![tenant.as_str(), principal.as_str()],
+            )
+            .map_err(db)?;
+        Ok(removed == 1)
+    }
+
+    fn replace_recovery_codes(
+        &self,
+        tenant: &TenantId,
+        principal: &PrincipalId,
+        hashes: &[String],
+        at: Timestamp,
+    ) -> StoreResult<()> {
+        self.db.write(dbe, |tx| {
+            tx.execute(
+                "DELETE FROM recovery_codes WHERE tenant = ?1 AND principal = ?2",
+                params![tenant.as_str(), principal.as_str()],
+            )
+            .map_err(db)?;
+            for hash in hashes {
+                tx.execute(
+                    "INSERT OR IGNORE INTO recovery_codes (tenant, principal, code_hash, created_at)
+                     VALUES (?1, ?2, ?3, ?4)",
+                    params![tenant.as_str(), principal.as_str(), hash, at.0],
+                )
+                .map_err(db)?;
+            }
+            Ok(())
+        })
+    }
+
+    fn spend_recovery_code(
+        &self,
+        tenant: &TenantId,
+        principal: &PrincipalId,
+        hash: &str,
+    ) -> StoreResult<bool> {
+        // One statement removes the row, so two presentations of one code cannot both win.
+        let removed = self
+            .lock()?
+            .execute(
+                "DELETE FROM recovery_codes WHERE tenant = ?1 AND principal = ?2 AND code_hash = ?3",
+                params![tenant.as_str(), principal.as_str(), hash],
+            )
+            .map_err(db)?;
+        Ok(removed == 1)
+    }
+
+    fn recovery_codes_left(&self, tenant: &TenantId, principal: &PrincipalId) -> StoreResult<u32> {
+        let left: i64 = self
+            .lock()?
+            .query_row(
+                "SELECT COUNT(*) FROM recovery_codes WHERE tenant = ?1 AND principal = ?2",
+                params![tenant.as_str(), principal.as_str()],
+                |r| r.get(0),
+            )
+            .map_err(db)?;
+        Ok(left as u32)
+    }
+
+    fn put_pending(&self, pending: &PendingSignIn) -> StoreResult<()> {
+        self.lock()?
+            .execute(
+                "INSERT OR REPLACE INTO pending_sign_ins (tenant, id_hash, principal, method, factors, attempts, expires_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![
+                    pending.tenant.as_str(),
+                    pending.id_hash,
+                    pending.principal.as_str(),
+                    pending.method,
+                    i64::from(pending.factors),
+                    i64::from(pending.attempts),
+                    pending.expires_at.0,
+                ],
+            )
+            .map_err(db)?;
+        Ok(())
+    }
+
+    fn attempt_pending(
+        &self,
+        tenant: &TenantId,
+        id_hash: &str,
+        now: Timestamp,
+        max: u32,
+    ) -> StoreResult<Option<PendingSignIn>> {
+        self.db.write(dbe, |tx| {
+            let row = tx
+                .query_row(
+                    "SELECT principal, method, factors, attempts, expires_at FROM pending_sign_ins
+                     WHERE tenant = ?1 AND id_hash = ?2",
+                    params![tenant.as_str(), id_hash],
+                    |r| {
+                        Ok((
+                            r.get::<_, String>(0)?,
+                            r.get::<_, String>(1)?,
+                            r.get::<_, i64>(2)?,
+                            r.get::<_, i64>(3)?,
+                            r.get::<_, i64>(4)?,
+                        ))
+                    },
+                )
+                .optional()
+                .map_err(db)?;
+            let Some((principal, method, factors, attempts, expires_at)) = row else {
+                return Ok(None);
+            };
+            if expires_at <= now.0 || attempts >= i64::from(max) {
+                tx.execute(
+                    "DELETE FROM pending_sign_ins WHERE tenant = ?1 AND id_hash = ?2",
+                    params![tenant.as_str(), id_hash],
+                )
+                .map_err(db)?;
+                return Ok(None);
+            }
+            tx.execute(
+                "UPDATE pending_sign_ins SET attempts = attempts + 1 WHERE tenant = ?1 AND id_hash = ?2",
+                params![tenant.as_str(), id_hash],
+            )
+            .map_err(db)?;
+            Ok(Some(PendingSignIn {
+                tenant: tenant.clone(),
+                id_hash: id_hash.to_string(),
+                principal: PrincipalId::new(principal)
+                    .map_err(|e| StoreError::Corrupt(e.to_string()))?,
+                method,
+                factors: factors as u8,
+                attempts: (attempts + 1) as u32,
+                expires_at: Timestamp(expires_at),
+            }))
+        })
+    }
+
+    fn take_pending(
+        &self,
+        tenant: &TenantId,
+        id_hash: &str,
+        now: Timestamp,
+    ) -> StoreResult<Option<PendingSignIn>> {
+        // One statement reads and removes the row, so two answers cannot both take it.
+        let row = self
+            .lock()?
+            .query_row(
+                "DELETE FROM pending_sign_ins WHERE tenant = ?1 AND id_hash = ?2
+                 RETURNING principal, method, factors, attempts, expires_at",
+                params![tenant.as_str(), id_hash],
+                |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, i64>(2)?,
+                        r.get::<_, i64>(3)?,
+                        r.get::<_, i64>(4)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(db)?;
+        let Some((principal, method, factors, attempts, expires_at)) = row else {
+            return Ok(None);
+        };
+        if expires_at <= now.0 {
+            return Ok(None);
+        }
+        Ok(Some(PendingSignIn {
+            tenant: tenant.clone(),
+            id_hash: id_hash.to_string(),
+            principal: PrincipalId::new(principal)
+                .map_err(|e| StoreError::Corrupt(e.to_string()))?,
+            method,
+            factors: factors as u8,
+            attempts: attempts as u32,
+            expires_at: Timestamp(expires_at),
+        }))
+    }
+
+    fn put_recovery(&self, request: &RecoveryRequest) -> StoreResult<()> {
+        self.db.write(dbe, |tx| {
+            tx.execute(
+                "DELETE FROM recovery_requests WHERE tenant = ?1 AND principal = ?2",
+                params![request.tenant.as_str(), request.principal.as_str()],
+            )
+            .map_err(db)?;
+            tx.execute(
+                "INSERT OR REPLACE INTO recovery_requests
+                    (tenant, id_hash, principal, login, token_hash, cancel_hash, requested_at, completes_at, expires_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                params![
+                    request.tenant.as_str(),
+                    request.id_hash,
+                    request.principal.as_str(),
+                    request.login,
+                    request.token_hash,
+                    request.cancel_hash,
+                    request.requested_at.0,
+                    request.completes_at.0,
+                    request.expires_at.0,
+                ],
+            )
+            .map_err(db)?;
+            Ok(())
+        })
+    }
+
+    fn recovery(&self, tenant: &TenantId, id_hash: &str) -> StoreResult<Option<RecoveryRequest>> {
+        let row = self
+            .lock()?
+            .query_row(
+                "SELECT principal, login, token_hash, cancel_hash, requested_at, completes_at, expires_at
+                 FROM recovery_requests WHERE tenant = ?1 AND id_hash = ?2",
+                params![tenant.as_str(), id_hash],
+                recovery_from,
+            )
+            .optional()
+            .map_err(db)?;
+        row.map(|row| recovery_request(tenant, id_hash, row))
+            .transpose()
+    }
+
+    fn take_recovery(
+        &self,
+        tenant: &TenantId,
+        id_hash: &str,
+    ) -> StoreResult<Option<RecoveryRequest>> {
+        let row = self
+            .lock()?
+            .query_row(
+                "DELETE FROM recovery_requests WHERE tenant = ?1 AND id_hash = ?2
+                 RETURNING principal, login, token_hash, cancel_hash, requested_at, completes_at, expires_at",
+                params![tenant.as_str(), id_hash],
+                recovery_from,
+            )
+            .optional()
+            .map_err(db)?;
+        row.map(|row| recovery_request(tenant, id_hash, row))
+            .transpose()
+    }
+
+    fn cancel_recovery(
+        &self,
+        tenant: &TenantId,
+        id_hash: &str,
+        cancel_hash: &str,
+    ) -> StoreResult<bool> {
+        let removed = self
+            .lock()?
+            .execute(
+                "DELETE FROM recovery_requests WHERE tenant = ?1 AND id_hash = ?2 AND cancel_hash = ?3",
+                params![tenant.as_str(), id_hash, cancel_hash],
+            )
+            .map_err(db)?;
+        Ok(removed == 1)
+    }
+
+    fn purge_factor_challenges(&self, now: Timestamp) -> StoreResult<u64> {
+        let conn = self.lock()?;
+        let pending = conn
+            .execute(
+                "DELETE FROM pending_sign_ins WHERE expires_at <= ?1",
+                params![now.0],
+            )
+            .map_err(db)?;
+        let recoveries = conn
+            .execute(
+                "DELETE FROM recovery_requests WHERE expires_at <= ?1",
+                params![now.0],
+            )
+            .map_err(db)?;
+        Ok((pending + recoveries) as u64)
     }
 
     fn put_account(&self, account: &Account) -> StoreResult<()> {

@@ -200,6 +200,14 @@ pub struct SessionRecord {
     /// Absolute end of the session.
     pub expires_at: Timestamp,
     pub revoked_at: Option<Timestamp>,
+    /// When the person last proved who they are for this session: at sign-in, and again at each
+    /// step-up. A sensitive operation needs this to be recent (IDN-019).
+    pub authenticated_at: Timestamp,
+    /// A keyed hash of the network context that authenticated the session, and never the address
+    /// itself (D-704, PRV-364). A session that appears from another context is a new arrival
+    /// (IDN-260).
+    #[serde(default)]
+    pub network: Option<String>,
 }
 
 /// A locally managed login. Authentication lives in the shell; the kernel only knows principals.
@@ -404,6 +412,59 @@ pub struct FederatedIdentity {
     pub created_at: Timestamp,
 }
 
+/// A time-based one-time password factor of one person (RFC 6238). The secret has to be read back
+/// to check a code, so it cannot be hashed; it is sealed with an authenticated cipher under a key
+/// the store never sees, and bound to the tenant and the person.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TotpRecord {
+    pub tenant: TenantId,
+    pub principal: PrincipalId,
+    /// The sealed secret, as the backend wrote it. Opaque to the store.
+    pub secret: String,
+    /// Whether the person has proved they hold the secret with a code. An unconfirmed
+    /// enrolment is no factor yet.
+    pub confirmed: bool,
+    /// The time step of the last code accepted, so that a code is accepted once; `-1` when none.
+    pub last_step: i64,
+    pub created_at: Timestamp,
+}
+
+/// A sign-in whose first factor was right and which waits for the second. It is held server-side,
+/// found by the hash of the identifier the browser holds, and it lapses. It is the only thing a
+/// first factor alone yields (IDN-018).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PendingSignIn {
+    pub tenant: TenantId,
+    /// A hash of the identifier the browser holds.
+    pub id_hash: String,
+    pub principal: PrincipalId,
+    /// The method that proved the first factor.
+    pub method: String,
+    /// How many factors that method proved.
+    pub factors: u8,
+    /// How many presentations of a second factor have been counted against this sign-in.
+    pub attempts: u32,
+    pub expires_at: Timestamp,
+}
+
+/// An account recovery that has been asked for and not yet completed. It holds the hashes of two
+/// tokens: the one that completes it once the delay has passed, and the one that cancels it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RecoveryRequest {
+    pub tenant: TenantId,
+    /// A hash of the identifier the links carry.
+    pub id_hash: String,
+    pub principal: PrincipalId,
+    /// The login whose password the recovery sets: the one the recovery was asked for.
+    pub login: String,
+    pub token_hash: String,
+    pub cancel_hash: String,
+    pub requested_at: Timestamp,
+    /// The recovery may complete from this time (D-700: twenty-four hours after the request).
+    pub completes_at: Timestamp,
+    pub expires_at: Timestamp,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SnapshotInfo {
     pub tenant: TenantId,
@@ -586,6 +647,91 @@ pub trait Store: Send + Sync {
         provider: &str,
         subject: &str,
     ) -> StoreResult<Option<FederatedIdentity>>;
+
+    /// Keep a TOTP enrolment that is not confirmed. Returns `false`, and keeps nothing, when the
+    /// person already holds a confirmed one: a confirmed factor is removed before it is replaced.
+    fn put_totp(&self, totp: &TotpRecord) -> StoreResult<bool>;
+    /// The person's TOTP factor, confirmed or not.
+    fn totp(&self, tenant: &TenantId, principal: &PrincipalId) -> StoreResult<Option<TotpRecord>>;
+    /// Confirm an enrolment with the time step of the code that proved it. Returns whether an
+    /// unconfirmed enrolment was there.
+    fn confirm_totp(
+        &self,
+        tenant: &TenantId,
+        principal: &PrincipalId,
+        step: i64,
+    ) -> StoreResult<bool>;
+    /// Accept a code of this time step, once: returns `true` and remembers the step only when it
+    /// is later than every step accepted before, in one atomic step, so that a code that was
+    /// used is refused whatever the timing (replay).
+    fn use_totp_step(
+        &self,
+        tenant: &TenantId,
+        principal: &PrincipalId,
+        step: i64,
+    ) -> StoreResult<bool>;
+    /// Remove the person's TOTP factor. Returns whether it was there.
+    fn remove_totp(&self, tenant: &TenantId, principal: &PrincipalId) -> StoreResult<bool>;
+
+    /// Replace the person's recovery codes with these hashes, in one step.
+    fn replace_recovery_codes(
+        &self,
+        tenant: &TenantId,
+        principal: &PrincipalId,
+        hashes: &[String],
+        at: Timestamp,
+    ) -> StoreResult<()>;
+    /// Spend one recovery code: removes it and returns `true` only for the call that removed it,
+    /// so a code answers once whatever the timing.
+    fn spend_recovery_code(
+        &self,
+        tenant: &TenantId,
+        principal: &PrincipalId,
+        hash: &str,
+    ) -> StoreResult<bool>;
+    /// How many recovery codes the person has left.
+    fn recovery_codes_left(&self, tenant: &TenantId, principal: &PrincipalId) -> StoreResult<u32>;
+
+    /// Keep a sign-in that waits for its second factor.
+    fn put_pending(&self, pending: &PendingSignIn) -> StoreResult<()>;
+    /// Count one presentation against a waiting sign-in and return it, in one atomic step. A
+    /// sign-in that has lapsed, or that has already had `max` presentations counted, is removed
+    /// and not returned.
+    fn attempt_pending(
+        &self,
+        tenant: &TenantId,
+        id_hash: &str,
+        now: Timestamp,
+        max: u32,
+    ) -> StoreResult<Option<PendingSignIn>>;
+    /// Take a waiting sign-in, removing it in the same step, so that it yields one session
+    /// whatever the timing. A lapsed one is removed and not returned.
+    fn take_pending(
+        &self,
+        tenant: &TenantId,
+        id_hash: &str,
+        now: Timestamp,
+    ) -> StoreResult<Option<PendingSignIn>>;
+
+    /// Keep an account recovery that was asked for. It replaces an earlier one of the same person.
+    fn put_recovery(&self, request: &RecoveryRequest) -> StoreResult<()>;
+    /// An account recovery, left in place.
+    fn recovery(&self, tenant: &TenantId, id_hash: &str) -> StoreResult<Option<RecoveryRequest>>;
+    /// Take an account recovery, removing it in the same step.
+    fn take_recovery(
+        &self,
+        tenant: &TenantId,
+        id_hash: &str,
+    ) -> StoreResult<Option<RecoveryRequest>>;
+    /// Cancel a recovery whose cancel token hashes to `cancel_hash`. Returns whether it was there.
+    fn cancel_recovery(
+        &self,
+        tenant: &TenantId,
+        id_hash: &str,
+        cancel_hash: &str,
+    ) -> StoreResult<bool>;
+    /// Remove waiting sign-ins and recoveries that have lapsed at `now`. Returns how many.
+    fn purge_factor_challenges(&self, now: Timestamp) -> StoreResult<u64>;
 
     /// Keep a copy of the tenant's complete state as it is now.
     fn create_snapshot(

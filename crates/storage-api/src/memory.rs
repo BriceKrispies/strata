@@ -6,11 +6,11 @@
 use crate::{
     check_event_sequence, partial_state, throttle_refund, throttle_step, Account, Capabilities,
     Commit, FederatedIdentity, Health, JournalEntry, OidcFlow, OutboxEntry, PasskeyChallenge,
-    PasskeyRecord, Receipt, SessionRecord, SignInLink, SnapshotInfo, StorageMigration, Store,
-    StoreError, StoreResult, TenantSummary, ThrottleRow, ThrottleRule, ThrottleSettle,
-    ThrottleVerdict,
+    PasskeyRecord, PendingSignIn, Receipt, RecoveryRequest, SessionRecord, SignInLink,
+    SnapshotInfo, StorageMigration, Store, StoreError, StoreResult, TenantSummary, ThrottleRow,
+    ThrottleRule, ThrottleSettle, ThrottleVerdict, TotpRecord,
 };
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex, MutexGuard};
 use strata_kernel::{
     apply_delta, canon, DomainEvent, Need, PrincipalId, SessionId, State, TenantId, TenantState,
@@ -31,6 +31,10 @@ struct Inner {
     links: BTreeMap<(TenantId, String), SignInLink>,
     flows: BTreeMap<(TenantId, String), OidcFlow>,
     identities: BTreeMap<(TenantId, String, String), FederatedIdentity>,
+    totp: BTreeMap<(TenantId, PrincipalId), TotpRecord>,
+    recovery_codes: BTreeMap<(TenantId, PrincipalId), BTreeSet<String>>,
+    pending: BTreeMap<(TenantId, String), PendingSignIn>,
+    recoveries: BTreeMap<(TenantId, String), RecoveryRequest>,
     snapshots: BTreeMap<(TenantId, u64), (SnapshotInfo, Arc<TenantState>)>,
 }
 
@@ -505,6 +509,199 @@ impl Store for MemoryStore {
             .cloned())
     }
 
+    fn put_totp(&self, totp: &TotpRecord) -> StoreResult<bool> {
+        let mut inner = self.lock()?;
+        let slot = (totp.tenant.clone(), totp.principal.clone());
+        if inner.totp.get(&slot).is_some_and(|held| held.confirmed) {
+            return Ok(false);
+        }
+        inner.totp.insert(slot, totp.clone());
+        Ok(true)
+    }
+
+    fn totp(&self, tenant: &TenantId, principal: &PrincipalId) -> StoreResult<Option<TotpRecord>> {
+        Ok(self
+            .lock()?
+            .totp
+            .get(&(tenant.clone(), principal.clone()))
+            .cloned())
+    }
+
+    fn confirm_totp(
+        &self,
+        tenant: &TenantId,
+        principal: &PrincipalId,
+        step: i64,
+    ) -> StoreResult<bool> {
+        let mut inner = self.lock()?;
+        match inner.totp.get_mut(&(tenant.clone(), principal.clone())) {
+            Some(record) if !record.confirmed => {
+                record.confirmed = true;
+                record.last_step = step;
+                Ok(true)
+            }
+            _ => Ok(false),
+        }
+    }
+
+    fn use_totp_step(
+        &self,
+        tenant: &TenantId,
+        principal: &PrincipalId,
+        step: i64,
+    ) -> StoreResult<bool> {
+        let mut inner = self.lock()?;
+        match inner.totp.get_mut(&(tenant.clone(), principal.clone())) {
+            Some(record) if record.confirmed && record.last_step < step => {
+                record.last_step = step;
+                Ok(true)
+            }
+            _ => Ok(false),
+        }
+    }
+
+    fn remove_totp(&self, tenant: &TenantId, principal: &PrincipalId) -> StoreResult<bool> {
+        Ok(self
+            .lock()?
+            .totp
+            .remove(&(tenant.clone(), principal.clone()))
+            .is_some())
+    }
+
+    fn replace_recovery_codes(
+        &self,
+        tenant: &TenantId,
+        principal: &PrincipalId,
+        hashes: &[String],
+        _at: Timestamp,
+    ) -> StoreResult<()> {
+        self.lock()?.recovery_codes.insert(
+            (tenant.clone(), principal.clone()),
+            hashes.iter().cloned().collect(),
+        );
+        Ok(())
+    }
+
+    fn spend_recovery_code(
+        &self,
+        tenant: &TenantId,
+        principal: &PrincipalId,
+        hash: &str,
+    ) -> StoreResult<bool> {
+        Ok(self
+            .lock()?
+            .recovery_codes
+            .get_mut(&(tenant.clone(), principal.clone()))
+            .is_some_and(|codes| codes.remove(hash)))
+    }
+
+    fn recovery_codes_left(&self, tenant: &TenantId, principal: &PrincipalId) -> StoreResult<u32> {
+        Ok(self
+            .lock()?
+            .recovery_codes
+            .get(&(tenant.clone(), principal.clone()))
+            .map_or(0, |codes| codes.len() as u32))
+    }
+
+    fn put_pending(&self, pending: &PendingSignIn) -> StoreResult<()> {
+        self.lock()?.pending.insert(
+            (pending.tenant.clone(), pending.id_hash.clone()),
+            pending.clone(),
+        );
+        Ok(())
+    }
+
+    fn attempt_pending(
+        &self,
+        tenant: &TenantId,
+        id_hash: &str,
+        now: Timestamp,
+        max: u32,
+    ) -> StoreResult<Option<PendingSignIn>> {
+        let mut inner = self.lock()?;
+        let slot = (tenant.clone(), id_hash.to_string());
+        let Some(held) = inner.pending.get_mut(&slot) else {
+            return Ok(None);
+        };
+        if held.expires_at <= now || held.attempts >= max {
+            inner.pending.remove(&slot);
+            return Ok(None);
+        }
+        held.attempts += 1;
+        Ok(Some(held.clone()))
+    }
+
+    fn take_pending(
+        &self,
+        tenant: &TenantId,
+        id_hash: &str,
+        now: Timestamp,
+    ) -> StoreResult<Option<PendingSignIn>> {
+        let taken = self
+            .lock()?
+            .pending
+            .remove(&(tenant.clone(), id_hash.to_string()));
+        Ok(taken.filter(|pending| pending.expires_at > now))
+    }
+
+    fn put_recovery(&self, request: &RecoveryRequest) -> StoreResult<()> {
+        let mut inner = self.lock()?;
+        inner
+            .recoveries
+            .retain(|(t, _), r| !(t == &request.tenant && r.principal == request.principal));
+        inner.recoveries.insert(
+            (request.tenant.clone(), request.id_hash.clone()),
+            request.clone(),
+        );
+        Ok(())
+    }
+
+    fn recovery(&self, tenant: &TenantId, id_hash: &str) -> StoreResult<Option<RecoveryRequest>> {
+        Ok(self
+            .lock()?
+            .recoveries
+            .get(&(tenant.clone(), id_hash.to_string()))
+            .cloned())
+    }
+
+    fn take_recovery(
+        &self,
+        tenant: &TenantId,
+        id_hash: &str,
+    ) -> StoreResult<Option<RecoveryRequest>> {
+        Ok(self
+            .lock()?
+            .recoveries
+            .remove(&(tenant.clone(), id_hash.to_string())))
+    }
+
+    fn cancel_recovery(
+        &self,
+        tenant: &TenantId,
+        id_hash: &str,
+        cancel_hash: &str,
+    ) -> StoreResult<bool> {
+        let mut inner = self.lock()?;
+        let slot = (tenant.clone(), id_hash.to_string());
+        if inner
+            .recoveries
+            .get(&slot)
+            .is_some_and(|r| r.cancel_hash == cancel_hash)
+        {
+            inner.recoveries.remove(&slot);
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
+    fn purge_factor_challenges(&self, now: Timestamp) -> StoreResult<u64> {
+        let mut inner = self.lock()?;
+        let count = inner.pending.len() + inner.recoveries.len();
+        inner.pending.retain(|_, p| p.expires_at > now);
+        inner.recoveries.retain(|_, r| r.expires_at > now);
+        Ok((count - inner.pending.len() - inner.recoveries.len()) as u64)
+    }
+
     fn put_account(&self, account: &Account) -> StoreResult<()> {
         let mut inner = self.lock()?;
         if !inner.tenants.contains_key(&account.tenant) {
@@ -620,6 +817,10 @@ impl Store for MemoryStore {
         inner.links.retain(|(t, _), _| t != tenant);
         inner.flows.retain(|(t, _), _| t != tenant);
         inner.identities.retain(|(t, _, _), _| t != tenant);
+        inner.totp.retain(|(t, _), _| t != tenant);
+        inner.recovery_codes.retain(|(t, _), _| t != tenant);
+        inner.pending.retain(|(t, _), _| t != tenant);
+        inner.recoveries.retain(|(t, _), _| t != tenant);
         inner.snapshots.retain(|(t, _), _| t != tenant);
         Ok(())
     }

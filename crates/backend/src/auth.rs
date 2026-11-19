@@ -260,8 +260,17 @@ pub fn login(
     caller: &Caller,
     method: &str,
     request: &serde_json::Value,
-) -> Result<LoginReply, ApiError> {
+) -> Result<crate::signin::SignInOutcome, ApiError> {
     crate::signin::sign_in(app, caller, method, request)
+}
+
+/// The network context a request comes from, as a keyed hash: the key is the service token, so a
+/// copy of a session record holds no address and cannot be matched to one without it (D-704,
+/// PRV-364). `None` when the gateway did not say where the request came from.
+pub fn network_hash(app: &App, caller: &Caller) -> Option<String> {
+    (caller.source != "unknown").then(|| {
+        canon::hash_bytes(format!("network {} {}", app.cfg.service_token, caller.source).as_bytes())
+    })
 }
 
 /// Start the session of an account that a sign-in method has accepted.
@@ -289,6 +298,8 @@ pub(crate) fn start_session(
         last_seen_at: now,
         expires_at: strata_kernel::Timestamp(now.0 + app.cfg.session_ttl_ms),
         revoked_at: None,
+        authenticated_at: now,
+        network: network_hash(app, caller),
     };
     app.store.put_session(&session)?;
     telemetry::session_started(
@@ -401,6 +412,31 @@ pub fn revoke_own_session(app: &App, identity: &Identity, id: &str) -> Result<()
         return Err(not_found());
     }
     revoke(app, target, &identity.correlation)
+}
+
+/// End every live session of a person in a tenant. Returns how many (IDN-020).
+pub fn revoke_all_of(
+    app: &App,
+    tenant: &TenantId,
+    principal: &PrincipalId,
+    correlation: &str,
+) -> Result<usize, ApiError> {
+    let now = app.now().0;
+    let live: Vec<SessionRecord> = app
+        .store
+        .live_sessions(app.now())?
+        .into_iter()
+        .filter(|s| {
+            s.tenant == *tenant
+                && s.principal == *principal
+                && session_state(app, s, now) == SessionState::Active
+        })
+        .collect();
+    let count = live.len();
+    for session in live {
+        revoke(app, session, correlation)?;
+    }
+    Ok(count)
 }
 
 /// Revoke every live session of the caller but the one making the request. Returns how many.

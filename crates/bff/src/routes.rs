@@ -413,13 +413,35 @@ async fn sign_in(
                 &visit.correlation,
             )
         })?;
-    let reply: LoginReply = backend(
+    let reply: Json_ = backend(
         bff,
         &visit,
         &format!("/internal/session/sign-in/{method}"),
         &credentials,
     )
     .await?;
+    finish_sign_in(&visit, reply)
+}
+
+/// What a sign-in answers. A first factor that is not enough yields no session and no cookie, only
+/// the waiting sign-in the browser answers with its second factor. A session's token goes in the
+/// cookie and nowhere else.
+fn finish_sign_in(visit: &Visit, reply: Json_) -> Result<Response, Failure> {
+    if let Some(waiting) = reply.get("second_factor") {
+        return Ok(Json(json!({ "second_factor": waiting, "state": "pending" })).into_response());
+    }
+    let reply: LoginReply = serde_json::from_value(reply).map_err(|e| {
+        LOG.error(
+            "backend.unreadable",
+            &visit.correlation,
+            json!({ "path": "sign-in", "error": e.to_string() }),
+        );
+        Failure::new(
+            ErrorCode::Unavailable,
+            "The service is not available right now.",
+            &visit.correlation,
+        )
+    })?;
     let lifetime = reply
         .session
         .expires_at
@@ -430,6 +452,148 @@ async fn sign_in(
         .headers_mut()
         .insert(SET_COOKIE, session_cookie(&reply.token, lifetime));
     Ok(response)
+}
+
+/// Give the second factor of a waiting sign-in, from one of the site's own pages and with the
+/// request token every sign-in carries. Only the fields of a second factor go on to the backend. A
+/// right one answers like a sign-in: the session's cookie.
+async fn second_factor(
+    State(bff): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<Json_>,
+) -> Result<Response, Failure> {
+    let visit = visit(&bff, &headers)?;
+    guard_request(&bff, &visit, &headers).await?;
+    let sent = json!({
+        "challenge": body.get("challenge"),
+        "factor": body.get("factor"),
+        "code": body.get("code"),
+        "passkey_challenge": body.get("passkey_challenge"),
+        "assertion": body.get("assertion"),
+    });
+    let reply: Json_ = backend(&bff, &visit, "/internal/session/second-factor", &sent).await?;
+    finish_sign_in(&visit, reply)
+}
+
+/// The signed-in person's factors, for the desk.
+async fn factors(State(bff): State<Shared>, headers: HeaderMap) -> Result<Json<Json_>, Failure> {
+    let visit = visit(&bff, &headers)?;
+    backend(&bff, &visit, "/internal/factors", &json!({}))
+        .await
+        .map(Json)
+}
+
+async fn totp_start(State(bff): State<Shared>, headers: HeaderMap) -> Result<Json<Json_>, Failure> {
+    guarded(&bff, &headers, "/internal/factors/totp/start", json!({})).await
+}
+
+async fn totp_confirm(
+    State(bff): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<Json_>,
+) -> Result<Json<Json_>, Failure> {
+    guarded(
+        &bff,
+        &headers,
+        "/internal/factors/totp/confirm",
+        json!({ "code": body.get("code") }),
+    )
+    .await
+}
+
+async fn totp_remove(
+    State(bff): State<Shared>,
+    headers: HeaderMap,
+) -> Result<Json<Json_>, Failure> {
+    guarded(&bff, &headers, "/internal/factors/totp/remove", json!({})).await
+}
+
+async fn recovery_codes(
+    State(bff): State<Shared>,
+    headers: HeaderMap,
+) -> Result<Json<Json_>, Failure> {
+    guarded(
+        &bff,
+        &headers,
+        "/internal/factors/recovery-codes",
+        json!({}),
+    )
+    .await
+}
+
+/// Give a fresh factor to the session before a sensitive operation: a password, an authenticator's
+/// code or a passkey's assertion, and nothing else of the body.
+async fn step_up(
+    State(bff): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<Json_>,
+) -> Result<Json<Json_>, Failure> {
+    let mut sent = json!({});
+    for field in ["password", "code", "challenge", "assertion"] {
+        if let Some(value) = body.get(field) {
+            sent[field] = value.clone();
+        }
+    }
+    guarded(&bff, &headers, "/internal/session/step-up", sent).await
+}
+
+/// Ask for an account recovery. Anyone may, from one of the site's own pages; the answer is the
+/// same whether or not the address has an account.
+async fn recovery_request(
+    State(bff): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<Json_>,
+) -> Result<Json<Json_>, Failure> {
+    let visit = visit(&bff, &headers)?;
+    guard_request(&bff, &visit, &headers).await?;
+    backend(
+        &bff,
+        &visit,
+        "/internal/recovery/request",
+        &json!({ "email": body.get("email") }),
+    )
+    .await
+    .map(Json)
+}
+
+/// Complete a recovery with the link of its message, once its delay has passed.
+async fn recovery_complete(
+    State(bff): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<Json_>,
+) -> Result<Json<Json_>, Failure> {
+    let visit = visit(&bff, &headers)?;
+    guard_request(&bff, &visit, &headers).await?;
+    backend(
+        &bff,
+        &visit,
+        "/internal/recovery/complete",
+        &json!({
+            "challenge": body.get("challenge"),
+            "token": body.get("token"),
+            "password": body.get("password"),
+        }),
+    )
+    .await
+    .map(Json)
+}
+
+/// Cancel a recovery with the link of its notice.
+async fn recovery_cancel(
+    State(bff): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<Json_>,
+) -> Result<Json<Json_>, Failure> {
+    let visit = visit(&bff, &headers)?;
+    guard_request(&bff, &visit, &headers).await?;
+    backend(
+        &bff,
+        &visit,
+        "/internal/recovery/cancel",
+        &json!({ "challenge": body.get("challenge"), "cancel": body.get("cancel") }),
+    )
+    .await
+    .map(Json)
 }
 
 async fn login(
@@ -982,6 +1146,7 @@ async fn dev(
     let visit = visit(&bff, &headers)?;
     let path = match (bff.cfg.dev, action.as_str()) {
         (true, "expire-session") => "/internal/dev/expire-session",
+        (true, "age-authentication") => "/internal/dev/age-authentication",
         (true, "reset") => "/internal/dev/reset",
         (true, "mail-outbox") => "/internal/dev/mail-outbox",
         _ => {
@@ -995,7 +1160,8 @@ async fn dev(
     // A signed-in session with its own request token, and the site's owner: the request token
     // handed to visitors without a session opens nothing here. The backend checks the owner too.
     let session = guard_write(&bff, &visit, &headers).await?;
-    if !session.roles.iter().any(|role| role == "owner") {
+    // Ageing the caller's own authentication touches nothing but that session, so it asks for no role.
+    if action != "age-authentication" && !session.roles.iter().any(|role| role == "owner") {
         return Err(Failure::new(
             ErrorCode::Forbidden,
             "Only the site's owner may use this.",
@@ -1242,6 +1408,7 @@ pub fn router(bff: Shared) -> Router {
     let api = Router::new()
         .route("/session", get(session))
         .route("/login", post(login))
+        .route("/sign-in/second-factor", post(second_factor))
         .route("/sign-in/:method", post(login_with))
         .route("/sign-in/link/request", post(link_request))
         .route("/sign-in/providers", get(oidc_providers))
@@ -1251,6 +1418,15 @@ pub fn router(bff: Shared) -> Router {
         .route("/passkeys/register/start", post(passkey_register_start))
         .route("/passkeys/register/finish", post(passkey_register_finish))
         .route("/passkeys/remove", post(passkey_remove))
+        .route("/session/step-up", post(step_up))
+        .route("/factors", get(factors))
+        .route("/factors/totp/start", post(totp_start))
+        .route("/factors/totp/confirm", post(totp_confirm))
+        .route("/factors/totp/remove", post(totp_remove))
+        .route("/factors/recovery-codes", post(recovery_codes))
+        .route("/recovery/request", post(recovery_request))
+        .route("/recovery/complete", post(recovery_complete))
+        .route("/recovery/cancel", post(recovery_cancel))
         .route("/sessions", get(sessions))
         .route("/sessions/revoke", post(session_revoke))
         .route("/sessions/revoke-others", post(sessions_revoke_others))

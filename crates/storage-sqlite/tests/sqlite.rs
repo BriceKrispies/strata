@@ -71,6 +71,8 @@ fn committed_data_survives_a_reopen() {
         last_seen_at: Timestamp(11),
         expires_at: Timestamp(1_000_000),
         revoked_at: None,
+        authenticated_at: Timestamp(10),
+        network: None,
     };
     let account = Account {
         tenant: alpha.clone(),
@@ -140,7 +142,7 @@ fn committed_data_survives_a_reopen() {
     assert_eq!(store.snapshots(&alpha).unwrap(), vec![snapshot]);
     assert_eq!(store.journal_after(&alpha, 0, 10).unwrap().len(), 3);
     let migrations = store.migrations().unwrap();
-    assert_eq!(migrations.len(), 5);
+    assert_eq!(migrations.len(), 6);
     assert_eq!(
         migrations[0].applied_at,
         Timestamp(1),
@@ -510,4 +512,157 @@ fn identity_provider_sign_ins_are_taken_once_and_identities_are_tied_once() {
     );
     store.reset_tenant(&alpha).unwrap();
     assert!(store.identity(&alpha, "acme", "sub-1").unwrap().is_none());
+}
+
+/// Second-factor state: a confirmed authenticator is not replaced, a time step is accepted once,
+/// a recovery code is spent once, a waiting sign-in counts its presentations and is taken once,
+/// and a recovery is replaced by a newer one of the same person. All of it is durable.
+#[test]
+fn second_factor_state_is_durable_and_answers_once() {
+    use strata_storage_api::{PendingSignIn, RecoveryRequest, TotpRecord};
+    let path = fresh_path("factors");
+    let alpha = tenant_id("alpha");
+    let ines = principal_id("user:ines");
+    let totp = |confirmed: bool| TotpRecord {
+        tenant: alpha.clone(),
+        principal: ines.clone(),
+        secret: "sealed".into(),
+        confirmed,
+        last_step: -1,
+        created_at: Timestamp(1),
+    };
+    {
+        let store = SqliteStore::open(&path, Timestamp(1)).unwrap();
+        execute(
+            &store,
+            &Intent::CreateTenant {
+                name: "alpha".into(),
+                owner: principal_id("alpha:owner"),
+            },
+            &ctx("alpha", Principal::System, 10),
+        )
+        .unwrap();
+
+        assert!(store.put_totp(&totp(false)).unwrap());
+        assert!(
+            !store.use_totp_step(&alpha, &ines, 5).unwrap(),
+            "unconfirmed is no factor"
+        );
+        assert!(store.confirm_totp(&alpha, &ines, 10).unwrap());
+        assert!(
+            !store.put_totp(&totp(false)).unwrap(),
+            "a confirmed factor is not replaced"
+        );
+        assert!(
+            !store.use_totp_step(&alpha, &ines, 10).unwrap(),
+            "the step of the confirming code"
+        );
+        assert!(store.use_totp_step(&alpha, &ines, 11).unwrap());
+        assert!(
+            !store.use_totp_step(&alpha, &ines, 11).unwrap(),
+            "a step is accepted once"
+        );
+
+        let hashes = vec!["h1".to_string(), "h2".to_string()];
+        store
+            .replace_recovery_codes(&alpha, &ines, &hashes, Timestamp(5))
+            .unwrap();
+        assert!(store.spend_recovery_code(&alpha, &ines, "h1").unwrap());
+        assert!(
+            !store.spend_recovery_code(&alpha, &ines, "h1").unwrap(),
+            "a code is spent once"
+        );
+        assert_eq!(store.recovery_codes_left(&alpha, &ines).unwrap(), 1);
+
+        let waiting = PendingSignIn {
+            tenant: alpha.clone(),
+            id_hash: "w".into(),
+            principal: ines.clone(),
+            method: "password".into(),
+            factors: 1,
+            attempts: 0,
+            expires_at: Timestamp(100),
+        };
+        store.put_pending(&waiting).unwrap();
+        assert_eq!(
+            store
+                .attempt_pending(&alpha, "w", Timestamp(50), 2)
+                .unwrap()
+                .unwrap()
+                .attempts,
+            1
+        );
+        assert_eq!(
+            store
+                .attempt_pending(&alpha, "w", Timestamp(50), 2)
+                .unwrap()
+                .unwrap()
+                .attempts,
+            2
+        );
+        assert!(
+            store
+                .attempt_pending(&alpha, "w", Timestamp(50), 2)
+                .unwrap()
+                .is_none(),
+            "spent"
+        );
+        assert!(store
+            .take_pending(&alpha, "w", Timestamp(50))
+            .unwrap()
+            .is_none());
+        store.put_pending(&waiting).unwrap();
+        assert!(store
+            .take_pending(&alpha, "w", Timestamp(50))
+            .unwrap()
+            .is_some());
+        assert!(
+            store
+                .take_pending(&alpha, "w", Timestamp(50))
+                .unwrap()
+                .is_none(),
+            "taken once"
+        );
+        store.put_pending(&waiting).unwrap();
+        assert!(
+            store
+                .take_pending(&alpha, "w", Timestamp(100))
+                .unwrap()
+                .is_none(),
+            "lapsed"
+        );
+
+        let request = |id: &str| RecoveryRequest {
+            tenant: alpha.clone(),
+            id_hash: id.into(),
+            principal: ines.clone(),
+            login: "ines".into(),
+            token_hash: "t".into(),
+            cancel_hash: "c".into(),
+            requested_at: Timestamp(1),
+            completes_at: Timestamp(2),
+            expires_at: Timestamp(3),
+        };
+        store.put_recovery(&request("r1")).unwrap();
+        store.put_recovery(&request("r2")).unwrap();
+        assert!(
+            store.recovery(&alpha, "r1").unwrap().is_none(),
+            "replaced by the newer request"
+        );
+        assert!(!store.cancel_recovery(&alpha, "r2", "wrong").unwrap());
+        assert!(store.cancel_recovery(&alpha, "r2", "c").unwrap());
+        store.put_recovery(&request("r3")).unwrap();
+        assert_eq!(
+            store.take_recovery(&alpha, "r3").unwrap().unwrap().login,
+            "ines"
+        );
+        assert!(store.take_recovery(&alpha, "r3").unwrap().is_none());
+    }
+    // Reopened: what was kept is still there.
+    let store = SqliteStore::open(&path, Timestamp(2)).unwrap();
+    assert!(store.totp(&alpha, &ines).unwrap().unwrap().confirmed);
+    assert_eq!(store.totp(&alpha, &ines).unwrap().unwrap().last_step, 11);
+    assert_eq!(store.recovery_codes_left(&alpha, &ines).unwrap(), 1);
+    store.reset_tenant(&alpha).unwrap();
+    assert!(store.totp(&alpha, &ines).unwrap().is_none());
 }

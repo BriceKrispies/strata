@@ -633,6 +633,8 @@ mod tests {
             last_seen_at: Timestamp(0),
             expires_at: Timestamp(i64::MAX),
             revoked_at: None,
+            authenticated_at: Timestamp(0),
+            network: None,
         });
         Identity {
             tenant,

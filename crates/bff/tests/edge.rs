@@ -39,6 +39,7 @@ async fn start_with(throttle: strata_backend::app::ThrottleLimits) -> Edge {
         link_ttl_ms: 900_000,
         mail: std::sync::Arc::new(strata_backend::mail::DevSink::memory()),
         federation: std::sync::Arc::new(strata_backend::signin::oidc::Federation::none()),
+        factors: Default::default(),
         throttle,
     };
     tokio::spawn(strata_backend::run(
