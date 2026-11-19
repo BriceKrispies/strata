@@ -17,12 +17,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use strata_bff::Config;
 
-fn var(name: &str, default: &str) -> String {
-    std::env::var(name)
-        .ok()
-        .filter(|v| !v.is_empty())
-        .unwrap_or_else(|| default.to_string())
-}
+use strata_runtime::server::{self, env_var as var};
 
 fn config() -> Result<Config, String> {
     let addr: SocketAddr = var("STRATA_BFF_ADDR", "127.0.0.1:4100")
@@ -68,17 +63,9 @@ fn config() -> Result<Config, String> {
 async fn main() {
     let result = async {
         let cfg = config()?;
-        let listener = tokio::net::TcpListener::bind(cfg.addr)
-            .await
-            .map_err(|e| format!("{}: {e}", cfg.addr))?;
-        let shutdown = async {
-            let _ = tokio::signal::ctrl_c().await;
-        };
-        strata_bff::run(cfg, listener, shutdown).await
+        let listener = server::bind(cfg.addr).await?;
+        strata_bff::run(cfg, listener, server::interrupted()).await
     }
     .await;
-    if let Err(problem) = result {
-        eprintln!("strata-bff: {problem}");
-        std::process::exit(1);
-    }
+    server::exit_on_error("strata-bff", result);
 }

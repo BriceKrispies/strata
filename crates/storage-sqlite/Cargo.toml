@@ -10,6 +10,7 @@ publish.workspace = true
 [dependencies]
 strata-kernel.workspace = true
 strata-storage-api.workspace = true
+strata-runtime.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 rusqlite.workspace = true

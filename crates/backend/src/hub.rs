@@ -137,7 +137,9 @@ pub fn publish_pending(app: &crate::app::App) -> Result<usize, strata_storage_ap
 
 /// Publish committed events for as long as the process lives.
 pub async fn publisher(app: Shared) {
-    loop {
+    // A commit wakes the pump at once; the idle period covers commits made by another process.
+    let wake = app.clone();
+    strata_runtime::jobs::pump(&wake.hub.kick, Duration::from_millis(500), || async {
         let drained = app.blocking(|app| {
             let mut total = 0;
             loop {
@@ -151,7 +153,6 @@ pub async fn publisher(app: Shared) {
         if let Ok(Err(error)) = drained.await {
             LOG.error("outbox.failed", "", json!({ "error": error.to_string() }));
         }
-        // A commit wakes us at once; the timeout covers commits made by another process.
-        let _ = tokio::time::timeout(Duration::from_millis(500), app.hub.kick.notified()).await;
-    }
+    })
+    .await
 }

@@ -1,0 +1,382 @@
+# The runtime crate
+
+`crates/runtime` (package `strata-runtime`) is the hand-written, generic code that code generated
+from `specifications/spec.jsonc` plugs into. Generated code supplies types, records, contracts
+and implementation-level machines. The runtime supplies everything those need to run, once, for
+every machine and contract: the machine host, the stores it uses, contract routes and clients,
+the clock, telemetry, and the process bootstrap the services share.
+
+Two different things are called "runtime". The specification's component `runtime` (C-10) is the
+service that runs the kernel for a tenant, and today that is `crates/backend`. This document is
+about the crate `strata-runtime`, which any component can build on.
+
+## The line
+
+The runtime is generic over generated types through traits. It depends on no other Strata crate,
+and `crates/runtime/tests/dependencies.rs` fails the build if it declares or names
+`strata-kernel`, `strata-substrate`, `strata-backend`, `strata-bff` or `strata-protocol`, or any
+other `strata-*` crate. Dependencies run the other way: `storage-sqlite`, `backend` and `bff` use
+the runtime.
+
+| Belongs to the runtime | Stays platform-specific |
+|---|---|
+| Running a machine's step in a transaction, persisting its record, the outbox, timers | What a machine does (generated `step`), and what a record holds |
+| SQLite connection setup, pragmas, migration ledger, `IMMEDIATE` write and read transactions | The tenant store's tables and statements (`storage-sqlite`) |
+| Serving a contract: authorization hook, body decoding, timeout, idempotent replay, wire format | Who may call: the `Authorizer` (service token, sessions, tenants) |
+| Calling a contract: typed client, retries for idempotent contracts | Credentials a caller presents |
+| Clock, telemetry hooks, constant-time secret comparison | Identity, sessions, CSRF, tenant resolution, content, views |
+| Process bootstrap: environment, bind, serve until shutdown, exit status, blocking work, background loops | Each service's configuration, routes and background work |
+
+## What generated code implements
+
+### `Machine` (one per `behavior` with `level: "implementation"`)
+
+```rust
+pub trait Machine: Send + Sync + 'static {
+    const NAME: &'static str;        // the behavior id
+    const RECORD: &'static str;      // instances.storedIn
+    const ISOLATION: Isolation;      // transaction.isolation
+
+    type State: Clone + Debug + Send + Sync + 'static;
+    type Vars: Clone + Debug + Send + Sync + 'static;
+    type Event: Serialize + DeserializeOwned + Clone + Debug + Send + Sync + 'static;
+    type Emitted: Serialize + DeserializeOwned + Clone + Debug + Send + Sync + 'static;
+    type Key: Serialize + DeserializeOwned + Clone + Debug + Send + Sync + 'static;    // instances.key
+    type Record: Serialize + DeserializeOwned + Clone + Debug + Send + Sync + 'static;
+
+    fn initial(key: &Self::Key) -> (Self::State, Self::Vars);
+    fn from_record(record: &Self::Record) -> Result<(Self::State, Self::Vars), RecordError>;
+    fn to_record(key: &Self::Key, state: &Self::State, vars: &Self::Vars,
+                 previous: Option<&Self::Record>) -> Self::Record;
+    fn step(state: &Self::State, vars: &Self::Vars, event: &Self::Event)
+        -> Result<Outcome<Self>, StepError>;
+}
+```
+
+- Everything is pure. Elapsed time reaches a machine only as an event fired by a timer it set
+  (an event with `elapsed: true`).
+- `step` takes the first enabled transition in declaration order. An ignored event (`ignores`)
+  returns the same state and variables with nothing emitted. A missing transition is
+  `StepError::NoTransition`, a terminal state `StepError::Terminal`, and anything else the code
+  refuses is `StepError::Rejected`.
+- `to_record` receives the record as loaded so that fields the machine does not own are carried
+  over.
+- The key's JSON text is its storage key, so two keys are the same instance exactly when they
+  serialise identically.
+
+`Outcome<M>` holds the next `state` and `vars`, the `emits` in effect order (each an
+`Emit { receiver: Receiver, delivery: Delivery, event }`), and the `timers`
+(`TimerCommand::Set { name, after, event }` or `TimerCommand::Cancel { name }`). Generated code
+builds one with `Outcome::to(state, vars).emit(receiver, delivery, event).set_timer(name, after,
+event).cancel_timer(name)`.
+
+`Isolation` is `ReadCommitted < Snapshot < Serializable`. `Delivery` is `AtMostOnce` or
+`AtLeastOnce`. A `Receiver` is the behavior, component or contract id an emit is addressed to.
+
+### `Contract` (one per contract operation)
+
+```rust
+pub struct ContractSpec {
+    pub id: &'static str,        // ref, e.g. "CT-012"
+    pub path: &'static str,      // the route it is served at
+    pub auth: &'static str,      // auth
+    pub timeout: Duration,       // timeoutMs
+    pub idempotent: bool,        // idempotent
+}
+
+pub trait Contract: Send + Sync + 'static {
+    const SPEC: ContractSpec;
+    type Request: Serialize + DeserializeOwned + Send + Sync + 'static;
+    type Response: Serialize + DeserializeOwned + Send + 'static;
+    type Error: Serialize + DeserializeOwned + ContractError + Send + 'static;
+}
+
+pub trait ContractError {
+    fn status(&self) -> u16;     // the HTTP status the error travels with
+}
+```
+
+The generated async trait for a contract (methods returning `impl Future + Send`) is served by
+registering one handler per operation:
+
+```rust
+Routes::new(authorizer)
+    .serve::<GrantLease, _, _>(move |caller, request| { let s = service.clone(); async move { s.grant(caller, request).await } })
+    .into_router()   // an axum Router, merged into the service's router
+```
+
+and called from another component with
+`Client::new(base, credentials)?.call::<GrantLease>(&request).await`.
+
+## What generated code calls
+
+- `Outcome`, `Emit`, `TimerCommand`, `Delivery`, `Receiver`, `Isolation`, `StepError`,
+  `RecordError` from `step` and the record conversions.
+- `Routes::serve` and `Client::call` / `Client::call_with` for contracts.
+- Nothing else. Generated code never touches a store, a clock or a socket.
+
+## What stays hand-written
+
+Per deployment, outside generated code:
+
+- A `Dispatcher<E>` per machine: maps a `Receiver` id to a channel, a client call or another
+  host.
+
+  ```rust
+  pub trait Dispatcher<E>: Send + Sync + 'static {
+      fn dispatch(&self, envelope: &Envelope<E>) -> impl Future<Output = Result<(), DispatchError>> + Send;
+  }
+  ```
+
+  `Envelope { id: Option<u64>, source, key, receiver, delivery, event }`. `id` is the outbox id
+  of an `at-least-once` event and stays the same on every redelivery.
+- An `Authorizer`: interprets a contract's `auth` requirement against the request headers.
+
+  ```rust
+  pub trait Authorizer: Send + Sync + 'static {
+      fn authorize(&self, requirement: &str, headers: &HeaderMap)
+          -> impl Future<Output = Result<Caller, Refusal>> + Send;
+  }
+  ```
+
+  `ServiceToken { header, secret }` is provided: the requirement `none` admits anyone, any other
+  requirement needs the secret in the header. Session- and tenant-based authorization stays in
+  the services.
+- `Credentials` for outgoing calls (`fn apply(&self, RequestBuilder) -> RequestBuilder`);
+  `NoCredentials` and `ServiceToken` are provided.
+- Which store, clock and telemetry a host runs with, and where `Host::run` is spawned.
+- Contracts with `realisation: "hand"` (holes): their trait implementation is written by hand
+  and marked `/// Implements: H-nnn`; the runtime serves it like any other.
+- Everything platform-specific listed in the table above.
+
+## The machine host
+
+`Host<M, S, D>` runs machine `M` against a store `S: MachineStore` and a dispatcher
+`D: Dispatcher<M::Emitted>`, reading time from an `Arc<dyn Clock>`. `Host::new` fails with
+`HostError::Unsupported` when the store cannot run `M::ISOLATION`.
+
+| Method | Does |
+|---|---|
+| `handle(key, event)` | `commit`, then `dispatch` |
+| `commit(key, event)` | the transaction below; returns `Committed` without dispatching |
+| `dispatch(committed)` | dispatches its emits in order |
+| `fire_due_timers()` | fires every due timer of `M` |
+| `drain_outbox()` | dispatches every due outbox entry of `M` |
+| `tick()` | `fire_due_timers`, then `drain_outbox` |
+| `run(period, shutdown)` | `tick` every `period` until `shutdown` |
+| `load(key)` | the stored state, variables and record version |
+
+Store calls are synchronous and run on a blocking worker thread (`tokio::task::spawn_blocking`).
+
+### The transition transaction
+
+For one event, in one transaction opened at `M::ISOLATION` or stronger:
+
+1. Load the record of `key` from collection `M::RECORD`. With no record, start from
+   `M::initial(key)`; otherwise `M::from_record`.
+2. Run `M::step`.
+3. Save `M::to_record(..)` with the version that was loaded as the expected version; a different
+   stored version is a conflict. The version starts at 1 and grows by one per save. An ignored
+   event is saved too (the version grows; nothing else changes).
+4. Apply the timer commands in order. `Set` stores a timer `(M::NAME, key, name)` firing at
+   `now + after`, replacing a timer of the same name with a new id; `Cancel` removes it.
+5. Write every `at-least-once` emit to the outbox, held back from the drain until
+   `now + retry.first`.
+6. Commit.
+
+If any step fails (a `StepError`, a `RecordError`, an encoding failure, a storage failure or a
+conflict), the transaction is rolled back: no record, timer or outbox entry is written and
+nothing is dispatched. The error is returned as a `HostError`. The host does not retry a
+conflicting transaction itself.
+
+### Delivery
+
+After commit, emits are dispatched in the order the step emitted them.
+
+- **`at-least-once`.** Written to the outbox in the transaction. On a successful dispatch the
+  entry is removed. On a failed dispatch it stays, with `attempts` increased and
+  `next_attempt_at = now + retry.delay(attempts)`. `drain_outbox` offers every entry whose
+  `next_attempt_at` has passed, with the same id, until a dispatch succeeds. If the process stops
+  after commit and before dispatch, the entry is still in the outbox and is offered once the hold
+  (`retry.first`) has passed. A receiver may therefore see an event more than once (a dispatch that
+  succeeded but whose removal failed or was cut off, or two hosts draining one store), and must
+  drop duplicates by `Envelope::id`. Retries never stop. An entry whose event cannot be decoded is
+  kept at the longest delay and reported.
+- **`at-most-once`.** Not written anywhere. Dispatched once after commit. A failed dispatch is
+  counted as dropped and reported; a process stop before dispatch loses it. Never retried.
+
+The default `RetryPolicy` is `first = 1 s`, `factor = 2`, `max = 300 s`:
+`delay(n) = min(first * factor^(n-1), max)`.
+
+There is no ordering guarantee between deliveries once a retry is involved: a deferred entry is
+redelivered after later ones may have arrived.
+
+### Timers
+
+`fire_due_timers` lists the timers of `M` whose `fire_at` is at or before the clock's `now`,
+earliest first. Each one is fired in its own transaction: the timer is removed by id, then its
+event goes through the transition transaction above, and both commit together. A timer that was
+cancelled or replaced since it was listed is not removed by id and nothing happens. So a timer
+fires at most once per setting, and a fired timer's effects and its removal are atomic. A timer
+whose step fails (`StepError`, `RecordError` or an encoding failure) can never succeed, so it is
+removed in a separate transaction without effect, counted as discarded and reported. A storage
+failure leaves the timer in place for the next tick.
+
+Timers fire late, never early: they fire on the first `tick` at or after `fire_at`.
+
+### Isolation
+
+Each store states which isolation levels it can run (`RecordStore::supports`). Both provided
+stores run every transaction serializably, which satisfies every declared level: the in-memory
+store holds one mutex for the whole transaction and the SQLite store opens every transaction
+`IMMEDIATE` on its single connection.
+
+## Storage traits
+
+Records, events and keys cross the storage traits as JSON text, so one store holds every machine
+and an adapter is written once.
+
+```rust
+pub trait Tx {
+    fn load(&mut self, collection: &str, key: &str) -> Result<Option<StoredRecord>, StorageError>;
+    fn save(&mut self, collection: &str, key: &str, data: &str, expected: Option<u64>) -> Result<u64, StorageError>;
+    fn enqueue(&mut self, message: &NewMessage) -> Result<u64, StorageError>;
+    fn set_timer(&mut self, timer: &NewTimer) -> Result<u64, StorageError>;
+    fn cancel_timer(&mut self, machine: &str, key: &str, name: &str) -> Result<bool, StorageError>;
+    fn take_timer(&mut self, id: u64) -> Result<bool, StorageError>;
+}
+
+pub trait RecordStore: Send + Sync + 'static {
+    fn supports(&self, isolation: Isolation) -> bool;
+    fn transact<T, E>(&self, isolation: Isolation, work: impl FnOnce(&mut dyn Tx) -> Result<T, E>)
+        -> Result<T, E> where E: From<StorageError>;
+}
+
+pub trait OutboxStore: Send + Sync + 'static {
+    fn due_messages(&self, source: &str, now: Time, limit: usize) -> Result<Vec<OutboxEntry>, StorageError>;
+    fn mark_delivered(&self, id: u64) -> Result<(), StorageError>;
+    fn defer(&self, id: u64, attempts: u32, next_attempt_at: Time, error: &str) -> Result<(), StorageError>;
+    fn pending(&self) -> Result<u64, StorageError>;
+}
+
+pub trait TimerStore: Send + Sync + 'static {
+    fn due_timers(&self, machine: &str, now: Time, limit: usize) -> Result<Vec<TimerEntry>, StorageError>;
+}
+
+pub trait MachineStore: RecordStore + OutboxStore + TimerStore {}   // blanket-implemented
+```
+
+`transact` commits when `work` returns `Ok` and rolls back, keeping none of its writes, when it
+returns `Err` or the commit fails. Outbox ids and timer ids are assigned by the store and never
+reused.
+
+- `MemoryStore`: the reference implementation, held in memory. A transaction works on a copy
+  of the whole store that replaces the original only on success.
+- `SqliteMachineStore::open(db: Database, now)`: on a SQLite `Database`, with the tables
+  `runtime_records`, `runtime_outbox` and `runtime_timers` and the migration ledger
+  `runtime_migrations`.
+
+### SQLite
+
+`sqlite::Database` is the one way Strata opens a SQLite file: a single connection behind a mutex,
+a busy timeout of 5 s, `journal_mode = WAL`, `synchronous = FULL`, `foreign_keys = ON`.
+
+```rust
+impl Database {
+    pub fn open(path: &Path) -> Result<Self, DbError>;
+    pub fn open_in_memory() -> Result<Self, DbError>;
+    pub fn location(&self) -> &str;
+    pub fn durable(&self) -> bool;
+    pub fn lock(&self) -> Result<MutexGuard<'_, Connection>, DbError>;
+    pub fn migrate(&self, ledger: &str, migrations: &[Migration], now: i64) -> Result<(), DbError>;
+    pub fn write<T, E>(&self, error: impl Fn(DbError) -> E,
+                       work: impl FnOnce(&Transaction<'_>) -> Result<T, E>) -> Result<T, E>;
+    pub fn read<T, E>(&self, error: impl Fn(DbError) -> E,
+                      work: impl FnOnce(&Transaction<'_>) -> Result<T, E>) -> Result<T, E>;
+}
+```
+
+`migrate` applies, in one `IMMEDIATE` transaction, the steps above the highest version recorded
+in the named ledger table. `write` runs an `IMMEDIATE` transaction and commits on `Ok`; `read`
+runs a read transaction that sees only whole commits. The tenant store (`SqliteStore`) runs on a
+`Database` with the ledger `storage_migrations`, and `SqliteStore::database()` hands the same
+database to `SqliteMachineStore`, so machine state can live in the tenant store's file.
+
+## Contracts on the wire
+
+- `POST <SPEC.path>` with the request as a JSON body.
+- Success: status 200 and the response as JSON.
+- Contract error: the error's `status()` and `{"kind": "contract", "error": <error>}`.
+- Runtime failure: `{"kind": "runtime", "code": <code>, "message": <text>}` with the code's status:
+  `unauthenticated` 401, `forbidden` 403, `invalid_request` 400, `timeout` 504, `unavailable`
+  503, `internal` 500.
+
+Per call, the server: asks the `Authorizer` about `SPEC.auth` and answers its refusal at once;
+for an idempotent contract with an `idempotency-key` header, replays an answer already given to
+the same caller subject under the same key, without running the handler (the last 1024 answers
+are kept in memory, per `Routes`); decodes the body (`invalid_request` if it does not decode);
+runs the handler, dropping it and answering `timeout` if it has not finished within
+`SPEC.timeout`; records the answer for replay when the contract is idempotent and a key was given.
+Runtime failures are not recorded for replay.
+
+The client sends `idempotency-key` (fresh per call, the same across its retries) for idempotent
+contracts and the correlation id in `x-correlation-id` when given. It retries an idempotent
+contract up to 3 times (`Client::with_attempts`) on a transport failure or a runtime `timeout` or
+`unavailable`; a contract that is not idempotent is sent once. Its error is
+`CallError::{Contract(E), Runtime { code, message }, Transport(String), Codec(String)}`.
+
+## Clock and telemetry
+
+```rust
+pub struct Time(pub i64);                       // milliseconds since the Unix epoch
+pub trait Clock: Send + Sync + 'static { fn now(&self) -> Time; }
+```
+
+`SystemClock` reads the wall clock. `TestClock::at(t)` stands still until `advance(d)` or
+`set(t)`; clones share their time. Every deadline and retry decision reads the clock; only
+telemetry durations use the process's monotonic clock.
+
+```rust
+pub trait Telemetry: Send + Sync + 'static {
+    fn event(&self, level: Level, name: &str, fields: &[Field<'_>]);
+    fn metric(&self, name: &str, value: f64, fields: &[Field<'_>]);
+    fn span(&self, name: &str, elapsed: Duration, ok: bool, fields: &[Field<'_>]);
+}
+```
+
+`NoTelemetry` drops everything (the host's and the routes' default). `JsonLines { service }`
+writes one JSON object per line on standard output in the services' log shape. The runtime
+reports names, keys, receivers, ids, counts and durations, never payloads or record contents:
+`machine.transition` and `contract.call` spans, `outbox.deferred`, `outbox.unmarked`,
+`outbox.unreadable`, `emit.dropped`, `timer.discarded` and `machine.tick_failed` events.
+
+## Shared process code
+
+- `server::env_var`, `server::env_number`, `server::bind`, `server::serve` (axum until a shutdown
+  future, then finish requests in flight), `server::interrupted` (Ctrl-C),
+  `server::exit_on_error`, `server::blocking` (store work off the executor).
+- `jobs::every(period, work)` (the backend's session purge) and `jobs::pump(wake, idle, work)`
+  (the backend's outbox publisher: woken by each commit, polling every 500 ms for commits made by
+  another process).
+- `routes::same_secret`, the constant-time comparison the backend's service-token gate and the
+  BFF's request tokens use.
+
+## What moved, and what did not
+
+Moved into the runtime, with the crates now calling it:
+
+- From `storage-sqlite`: opening the connection with its pragmas, the migration runner and its
+  ledger, the `IMMEDIATE` write and read transaction handling. The tenant store's tables,
+  statements and semantics are unchanged and stay there.
+- From `backend`: serving the router until shutdown, the blocking-work helper behind
+  `App::blocking`, the outbox publisher's wake-or-poll loop and the session purge's periodic loop,
+  the start-up's environment reading, binding, Ctrl-C and exit.
+- From `bff`: serving until shutdown, environment reading, binding, Ctrl-C and exit.
+- From both: the constant-time secret comparison.
+
+Left where it is, as platform-specific: the tenant outbox itself (the `events` table and its
+`published` flag, the kernel's `DomainEvent`s and their visibility decision in the hub), sessions,
+accounts and sign-in, the service-token gate's route list, CSRF and site resolution in the BFF,
+the BFF's call to the backend (its error type is the protocol's `ErrorReply`, not a contract's),
+view projection, the WebSocket relay, the Impact Lab, seeding and the structured logger in
+`strata-protocol`.
