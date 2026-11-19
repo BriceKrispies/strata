@@ -192,11 +192,13 @@
         "author": "@tomasz",
         "category": "@craft",
         "tags": ["woodworking", "tools", "knowledge"],
-        "featured": true,
         "cover": "/media/jig.svg",
         "cover_alt": "A plywood fixture holding a chair leg at an angle, with pencil marks and a date along its edge."
       },
-      "then": [{ "as": "user:tomasz", "at": "2026-11-12T07:00:00Z", "set": { "status": "published" } }]
+      "then": [
+        { "as": "user:tomasz", "at": "2026-11-12T07:00:00Z", "set": { "status": "published" } },
+        { "as": "user:ines", "at": "2026-11-12T08:00:00Z", "set": { "featured": true } }
+      ]
     },
     {
       "object": "post",

@@ -236,6 +236,7 @@ impl TenantSchema {
                 fields: &object.fields,
                 params: &no_params,
                 roles: &roles,
+                objects: &self.objects,
             };
             for field in object.fields.values() {
                 let at = format!("{}.{}", object.id, field.id);
@@ -258,6 +259,7 @@ impl TenantSchema {
                         fields: &no_fields,
                         params: &no_params,
                         roles: &roles,
+                        objects: &self.objects,
                     };
                     if let Err(e) = expr::check(default, &env) {
                         problems.push(format!("{at}: default: {e}"));
@@ -305,6 +307,7 @@ impl TenantSchema {
                     fields: fields.unwrap_or(&no_fields),
                     params: &no_params,
                     roles: &roles,
+                    objects: &self.objects,
                 };
                 if matches!(policy.resource, Resource::AnyObject) && mentions_field(condition) {
                     problems.push(format!("{at}: a policy on every object cannot read fields"));
@@ -332,6 +335,7 @@ impl TenantSchema {
                 fields: &object.fields,
                 params: &no_params,
                 roles: &roles,
+                objects: &self.objects,
             };
             for transition in &workflow.transitions {
                 if let Some(guard) = &transition.guard {
@@ -363,6 +367,7 @@ impl TenantSchema {
                 fields: &object.fields,
                 params: &query.params,
                 roles: &roles,
+                objects: &self.objects,
             };
             if let Some(filter) = &query.filter {
                 if let Err(e) = expr::check(filter, &env) {
@@ -444,6 +449,7 @@ impl TenantSchema {
 fn mentions_field(expr: &Expr) -> bool {
     match expr {
         Expr::Var(_, name) => !name.starts_with('$'),
+        Expr::Through(..) => true,
         Expr::Lit(_) | Expr::Param(_) | Expr::Now | Expr::Principal | Expr::HasRole(_) => false,
         Expr::Not(a) | Expr::IsNull(a) | Expr::Len(a) | Expr::Lower(a) | Expr::IsSlug(a) => {
             mentions_field(a)
