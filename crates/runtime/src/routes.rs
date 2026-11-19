@@ -146,6 +146,10 @@ pub struct Caller {
     pub subject: Option<String>,
     /// The request's correlation id, or empty.
     pub correlation: String,
+    /// Whatever else the authorizer established about the caller, by name, such as the
+    /// principal's `kind`, `role` or `tenant`. The runtime never reads it; generated contract
+    /// routes read `kind`, `role` and `tenant` for the specification's policies and audits.
+    pub attributes: BTreeMap<String, String>,
 }
 
 /// Decides who may call a contract. Written by hand per deployment.
@@ -175,7 +179,7 @@ fn header<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
 }
 
 /// A shared secret in a header: the requirement `none` lets anyone call, any other requirement
-/// needs the secret. Also the matching [`Credentials`](crate::Credentials) on the client side.
+/// needs the secret, and a caller who presents it is subject `service` of kind `service`. Also the matching [`Credentials`](crate::Credentials) on the client side.
 #[derive(Clone)]
 pub struct ServiceToken {
     /// The header that carries the secret.
@@ -206,12 +210,14 @@ impl Authorizer for ServiceToken {
             return Ok(Caller {
                 subject: None,
                 correlation,
+                attributes: BTreeMap::new(),
             });
         }
         if self.presented(headers) {
             Ok(Caller {
                 subject: Some("service".into()),
                 correlation,
+                attributes: BTreeMap::from([("kind".to_string(), "service".to_string())]),
             })
         } else {
             Err(Refusal {
@@ -306,11 +312,28 @@ impl<A: Authorizer> Routes<A> {
     /// (`invalid_request` if it does not decode); the handler runs, and is dropped with a
     /// `timeout` answer if it does not finish within `C::SPEC.timeout`; its answer is recorded
     /// for replay when the contract is idempotent and a key was given.
-    pub fn serve<C, F, Fut>(mut self, handler: F) -> Self
+    pub fn serve<C, F, Fut>(self, handler: F) -> Self
     where
         C: Contract,
         F: Fn(Caller, C::Request) -> Fut + Clone + Send + Sync + 'static,
         Fut: Future<Output = Result<C::Response, C::Error>> + Send + 'static,
+    {
+        self.serve_checked::<C, _, _>(move |caller, request| {
+            let answer = handler(caller, request);
+            async move { answer.await.map_err(|error| Failure::Contract { error }) }
+        })
+    }
+
+    /// Serve contract `C` with a `handler` that may also refuse a call itself, with a
+    /// [`Failure::Runtime`]: generated routes answer a request that breaks a validation rule with
+    /// [`FailureCode::InvalidRequest`] and one the policies refuse with
+    /// [`FailureCode::Forbidden`] this way. Everything else is as in [`Routes::serve`]; a runtime
+    /// failure is never recorded for replay.
+    pub fn serve_checked<C, F, Fut>(mut self, handler: F) -> Self
+    where
+        C: Contract,
+        F: Fn(Caller, C::Request) -> Fut + Clone + Send + Sync + 'static,
+        Fut: Future<Output = Result<C::Response, Failure<C::Error>>> + Send + 'static,
     {
         let authorizer = self.authorizer.clone();
         let replay = self.replay.clone();
@@ -357,7 +380,7 @@ where
     C: Contract,
     A: Authorizer,
     F: Fn(Caller, C::Request) -> Fut,
-    Fut: Future<Output = Result<C::Response, C::Error>>,
+    Fut: Future<Output = Result<C::Response, Failure<C::Error>>>,
 {
     let caller = match authorizer.authorize(C::SPEC.auth, &headers).await {
         Ok(caller) => caller,
@@ -386,7 +409,8 @@ where
             )
         }
         Ok(Ok(response)) => serde_json::to_vec(&response).map(|body| (200, body)),
-        Ok(Err(error)) => {
+        Ok(Err(Failure::Runtime { code, message })) => return runtime_failure(code, message),
+        Ok(Err(Failure::Contract { error })) => {
             let status = error.status();
             serde_json::to_vec(&Failure::<&C::Error>::Contract { error: &error })
                 .map(|body| (status, body))

@@ -213,7 +213,7 @@ fn lib_rs<'a>(spec: &Spec, modules: impl Iterator<Item = &'a str>) -> TokenStrea
 }
 
 fn cargo_toml(spec: &Spec, options: &Options) -> String {
-    let runtime = if spec.machines.is_empty() {
+    let runtime = if !crate::backend::routes::uses_runtime(spec) {
         String::new()
     } else {
         match &options.runtime {

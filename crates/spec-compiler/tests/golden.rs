@@ -1,6 +1,7 @@
 //! The golden fixtures: generating from `tests/fixtures/full/spec.jsonc` gives exactly the crate
 //! `crates/spec-compiler-fixture`, and from `tests/fixtures/machines/spec.jsonc` exactly
-//! `crates/spec-compiler-machines-fixture`; the workspace compiles both. Run with `SPECC_BLESS=1`
+//! `crates/spec-compiler-machines-fixture`, and from `tests/fixtures/wiring/spec.jsonc` exactly
+//! `crates/spec-compiler-wiring-fixture`; the workspace compiles all three. Run with `SPECC_BLESS=1`
 //! to rewrite those crates from the current compiler instead of comparing.
 
 use std::fs;
@@ -14,6 +15,8 @@ const FIXTURE_SPEC: &str = "crates/spec-compiler/tests/fixtures/full/spec.jsonc"
 const FIXTURE_CRATE: &str = "strata-spec-compiler-fixture";
 const MACHINES_SPEC: &str = "crates/spec-compiler/tests/fixtures/machines/spec.jsonc";
 const MACHINES_CRATE: &str = "strata-spec-compiler-machines-fixture";
+const WIRING_SPEC: &str = "crates/spec-compiler/tests/fixtures/wiring/spec.jsonc";
+const WIRING_CRATE: &str = "strata-spec-compiler-wiring-fixture";
 
 fn manifest_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -31,6 +34,11 @@ fn machines_files() -> Vec<GeneratedFile> {
     let text =
         fs::read_to_string(manifest_dir().join("tests/fixtures/machines/spec.jsonc")).unwrap();
     generated(MACHINES_SPEC, &text, MACHINES_CRATE)
+}
+
+fn wiring_files() -> Vec<GeneratedFile> {
+    let text = fs::read_to_string(manifest_dir().join("tests/fixtures/wiring/spec.jsonc")).unwrap();
+    generated(WIRING_SPEC, &text, WIRING_CRATE)
 }
 
 fn generated(spec: &str, text: &str, crate_name: &str) -> Vec<GeneratedFile> {
@@ -93,9 +101,25 @@ fn machines_golden_output_matches_its_fixture_crate() {
 }
 
 #[test]
-fn only_a_specification_with_machines_gets_a_machines_module_and_the_runtime() {
+fn wiring_golden_output_matches_its_fixture_crate() {
+    let dir = manifest_dir().join("../spec-compiler-wiring-fixture");
+    let files = wiring_files();
+    if std::env::var("SPECC_BLESS").as_deref() == Ok("1") {
+        output::write(&dir, &files).unwrap();
+        return;
+    }
+    let differences = output::compare(&dir, &files).unwrap();
+    assert!(
+        differences.is_empty(),
+        "crates/spec-compiler-wiring-fixture is not what specc generates from the wiring fixture: {differences:?}.          Run the test with SPECC_BLESS=1 to rewrite it, and review the change."
+    );
+}
+
+#[test]
+fn only_a_specification_with_machines_gets_a_machines_module() {
     let full = fixture_files();
     assert!(!full.iter().any(|f| f.path == "src/machines.rs"));
+    assert!(!full.iter().any(|f| f.path == "src/handlers.rs"));
     let manifest = |files: &[GeneratedFile]| {
         files
             .iter()
@@ -104,11 +128,19 @@ fn only_a_specification_with_machines_gets_a_machines_module_and_the_runtime() {
             .contents
             .clone()
     };
-    assert!(!manifest(&full).contains("strata-runtime"));
+    // The full fixture's components serve contracts, so it uses the runtime for its routes.
+    assert!(manifest(&full).contains(
+        "strata-runtime.workspace = true
+"
+    ));
 
     let machines = machines_files();
     let paths: Vec<&str> = machines.iter().map(|f| f.path.as_str()).collect();
     assert!(paths.contains(&"src/machines.rs"));
+    assert!(paths.contains(&"src/handlers.rs"));
+    // No component of the machines fixture implements a contract: no routes, no deps.
+    assert!(!paths.contains(&"src/routes.rs"));
+    assert!(!paths.contains(&"src/deps.rs"));
     assert!(manifest(&machines).contains(
         "strata-runtime.workspace = true
 "
@@ -156,6 +188,7 @@ fn the_crate_has_the_expected_files_each_with_a_header() {
             "Cargo.toml",
             "src/audits.rs",
             "src/contracts.rs",
+            "src/deps.rs",
             "src/lib.rs",
             "src/policies.rs",
             "src/prelude.rs",
@@ -163,6 +196,7 @@ fn the_crate_has_the_expected_files_each_with_a_header() {
             "src/records.rs",
             "src/retentions.rs",
             "src/retries.rs",
+            "src/routes.rs",
             "src/support.rs",
             "src/types.rs",
             "src/validations.rs"
@@ -184,6 +218,7 @@ fn the_crate_has_the_expected_files_each_with_a_header() {
 fn generation_is_deterministic() {
     assert_eq!(fixture_files(), fixture_files());
     assert_eq!(machines_files(), machines_files());
+    assert_eq!(wiring_files(), wiring_files());
 }
 
 #[test]
@@ -352,4 +387,27 @@ fn the_command_generates_checks_and_refuses() {
     assert_eq!(usage.status.code(), Some(2));
 
     fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn the_wiring_reaches_the_generated_crate() {
+    let files = wiring_files();
+    let routes = file_text(&files, "src/routes.rs");
+    assert!(routes.contains("path: \"/api/jobs/submit\","));
+    assert!(routes.contains("path: \"/scheduler/cancel-job\","));
+    assert!(routes.contains("pub fn scheduler_routes<A, S, H>("));
+    assert!(routes.contains("pub struct SchedulerClient<K: strata_runtime::Credentials = strata_runtime::NoCredentials>"));
+    assert!(routes.contains("impl GatewayHooks for () {}"));
+    assert!(routes.contains("fn append_job_submitted_audit("));
+
+    let deps = file_text(&files, "src/deps.rs");
+    assert!(deps.contains("pub fn scheduler(&self) -> &crate::routes::SchedulerClient<K>"));
+    assert!(deps.contains("`worker`: implements no contract."));
+    assert!(deps.contains("pub struct SchedulerDeps<K"));
+    assert!(deps.contains("pub struct ReportsDeps;"));
+
+    let handlers = file_text(&files, "src/handlers.rs");
+    assert!(handlers.contains("pub async fn submit_job<S, D>("));
+    assert!(handlers.contains("pub async fn deliver_from_job<S, D>("));
+    assert!(handlers.contains("nothing is generated for them: `tracker-reset`."));
 }

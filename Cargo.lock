@@ -1321,6 +1321,7 @@ dependencies = [
 name = "strata-spec-compiler"
 version = "0.1.0"
 dependencies = [
+ "axum",
  "prettyplease",
  "proc-macro2",
  "quote",
@@ -1329,8 +1330,10 @@ dependencies = [
  "serde_json",
  "strata-runtime",
  "strata-spec-compiler-machines-fixture",
+ "strata-spec-compiler-wiring-fixture",
  "strata-spec-expr",
  "syn 2.0.119",
+ "tokio",
 ]
 
 [[package]]
@@ -1340,6 +1343,7 @@ dependencies = [
  "regex",
  "serde",
  "sha2",
+ "strata-runtime",
  "uuid",
 ]
 
@@ -1350,6 +1354,16 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
+ "strata-runtime",
+ "uuid",
+]
+
+[[package]]
+name = "strata-spec-compiler-wiring-fixture"
+version = "0.1.0"
+dependencies = [
+ "regex",
+ "serde",
  "strata-runtime",
  "uuid",
 ]

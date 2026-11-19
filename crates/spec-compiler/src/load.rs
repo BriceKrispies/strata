@@ -1,7 +1,8 @@
 //! Loading: JSONC text to the typed IR.
 //!
 //! Only the sections specc reads are loaded (`system`, `components`, `types`, `records`,
-//! `contracts`, `events`, and the behaviors with `level: "implementation"`); unknown sections and
+//! `contracts`, `events`, the behaviors with `level: "implementation"`, and the `calls`
+//! relationships, which become [`Component::calls`]); unknown sections and
 //! properties are left to Exegra's own validation. A value
 //! of the wrong JSON type is a `specc.spec-shape` diagnostic, and loading carries on so every
 //! problem is reported at once.
@@ -69,11 +70,25 @@ impl Loader {
                 None
             }
         };
-        let components = self
+        let mut components: Vec<Component> = self
             .section(top, "components")
             .into_iter()
             .filter_map(|(entity, obj)| self.component(&entity, obj))
             .collect();
+        for (entity, obj) in self.section(top, "relationships") {
+            if self.opt_str(obj, "kind", &entity).as_deref() != Some("calls") {
+                continue;
+            }
+            let from = self.opt_str(obj, "from", &entity);
+            let to = self.opt_str(obj, "to", &entity);
+            if let (Some(from), Some(to)) = (from, to) {
+                if let Some(c) = components.iter_mut().find(|c| c.id == from) {
+                    if !c.calls.contains(&to) {
+                        c.calls.push(to);
+                    }
+                }
+            }
+        }
         let types = self
             .section(top, "types")
             .into_iter()
@@ -247,6 +262,7 @@ impl Loader {
         Some(Component {
             id: id.to_string(),
             name,
+            calls: Vec::new(),
         })
     }
 
@@ -459,6 +475,14 @@ impl Loader {
         let auth = self.opt_str(obj, "auth", id);
         let idempotent = self.opt_bool(obj, "idempotent", id);
         let timeout_ms = self.opt_number(obj, "timeoutMs", id);
+        let (binding_method, binding_path) = match obj.get("binding") {
+            None | Some(Value::Null) => (None, None),
+            Some(Value::Object(b)) => (self.opt_str(b, "method", id), self.opt_str(b, "path", id)),
+            Some(_) => {
+                self.shape(id, "\"binding\" must be an object");
+                (None, None)
+            }
+        };
         Some(Contract {
             id: id.to_string(),
             name: name?,
@@ -474,6 +498,8 @@ impl Loader {
             auth,
             idempotent,
             timeout_ms,
+            binding_method,
+            binding_path,
         })
     }
 
@@ -495,6 +521,8 @@ impl Loader {
         }
         let delivery = self.opt_str(obj, "delivery", id);
         let elapsed = self.opt_bool(obj, "elapsed", id).unwrap_or(false);
+        let contract = self.opt_str(obj, "contract", id);
+        let role = self.opt_str(obj, "role", id);
         Some(Event {
             id: id.to_string(),
             name: name?,
@@ -502,6 +530,8 @@ impl Loader {
             payload,
             delivery,
             elapsed,
+            contract,
+            role,
         })
     }
 

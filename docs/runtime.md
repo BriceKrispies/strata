@@ -138,13 +138,22 @@ Routes::new(authorizer)
 and called from another component with
 `Client::new(base, credentials)?.call::<GrantLease>(&request).await`.
 
+`Routes::serve_checked` takes a handler whose error is a `Failure<C::Error>` instead of the
+contract's error, so the handler can also refuse a call as the runtime does
+(`Failure::Runtime { code, message }`); generated routes answer a broken validation rule with
+`invalid_request` and a policy's deny with `forbidden` that way. `serve` is `serve_checked` with
+every error a contract error. A runtime failure is never recorded for replay.
+
 ## What generated code calls
 
 - `Outcome`, `Emit`, `TimerCommand`, `Delivery`, `Receiver`, `Isolation`, `StepError`,
   `RecordError` and `Time` from `step` and the record conversions.
-- `Routes::serve` and `Client::call` / `Client::call_with` for contracts.
-- Nothing else. Generated code never touches a store, a clock or a socket; the time it reads is
-  the `now` the host passes to `step`.
+- `Routes::serve_checked`, `Client::call` and `Client::call_retrying` for contracts (the
+  `routes` module), and `Host::handle` to bring a request or another machine's event to a
+  machine (the `handlers` module).
+- Nothing else. Generated code never touches a store or a socket itself; a machine's time is the
+  `now` the host passes to `step`, and the time an audit records is the routes' `hooks.now()`,
+  the system clock unless the deployment overrides it.
 
 ## What stays hand-written
 
@@ -171,8 +180,11 @@ Per deployment, outside generated code:
   ```
 
   `ServiceToken { header, secret }` is provided: the requirement `none` admits anyone, any other
-  requirement needs the secret in the header. Session- and tenant-based authorization stays in
-  the services.
+  requirement needs the secret in the header, and a caller presenting it is subject `service`
+  with the attribute `kind = service`. Session- and tenant-based authorization stays in the
+  services. `Caller { subject, correlation, attributes }`: `attributes` is whatever else the
+  authorizer established, by name; the runtime never reads it, and generated routes read
+  `kind`, `tenant` and `role` from it for the specification's policies and audits.
 - `Credentials` for outgoing calls (`fn apply(&self, RequestBuilder) -> RequestBuilder`);
   `NoCredentials` and `ServiceToken` are provided.
 - Which store, clock and telemetry a host runs with, and where `Host::run` is spawned.
@@ -393,14 +405,15 @@ identifies a repeat. The error of a call is
 
 Policies, validations, retentions, quotas, retries and audits are generated into pure code in the
 generated crate (modules `policies`, `validations`, `retentions`, `quotas`, `retries`, `audits`,
-and `support` for the types they share). The generated crate does not depend on this runtime;
-a deployment connects the two by hand:
+and `support` for the types they share). These modules do not use this runtime; the generated
+routes (below) apply them to every call of a served contract, and a deployment that serves a
+contract by hand applies them itself:
 
 - **Who is acting.** `support::Caller { kind, id, tenant, role }` is what generated policies and
-  audits read. The deployment's `Authorizer` builds one from what it authenticated (the runtime's
-  own `Caller` carries only the subject and the correlation id) and calls
+  audits read. Generated routes build it from the runtime's `Caller`: the subject is the id, the
+  attributes `kind`, `tenant` and `role` the rest. They call
   `policies::authorize_<contract>(&caller, &request[, record])`, which returns
-  `support::Decision::{Allow, Deny}`. Refuse a `Deny` with `FailureCode::Forbidden`.
+  `support::Decision::{Allow, Deny}`, and refuse a `Deny` with `FailureCode::Forbidden`.
 - **Validation.** Call `request.validate()` (and `record.validate_rules()`) before running a
   handler; answer an `Err(ValidationError { id, message })` with `FailureCode::InvalidRequest`.
 - **Quotas.** `quotas::QUOTAS` lists every quota; a counter store keeps one `quotas::Counter` per
@@ -413,6 +426,56 @@ a deployment connects the two by hand:
   `into_record` completes it with the storage key; for a `chained-hash` audit
   `audits::chain_<id>(&mut record, previous)` sets the chain field before the append and
   `verify_<id>` checks a stored log.
+
+## Wiring in generated code
+
+specc also generates the code that connects the contracts and machines to this runtime, in
+three modules of the generated crate (`crates/spec-compiler-wiring-fixture` is an example):
+
+- **`routes`.** Per contract a component implements, a unit type implementing `Contract`. Its
+  `SPEC.id` is the contract's `ref` (its id without one), `auth` its `auth` (`none` without one),
+  `timeout` its `timeoutMs` (30 s without one), `idempotent` its `idempotent` (false without one).
+  **The path** is the contract's `binding.path` when it states one, and otherwise
+  `/<implementing component>/<contract id>`; a path must be plain segments (letters, digits,
+  `-`, `_`, `.`, `~`) without parameters, since every contract is a `POST` of a JSON body. A
+  contract error travels with status 422.
+
+  Per implementing component `<C>`:
+
+  ```rust
+  pub trait <C>Hooks: Send + Sync + 'static { /* only what its contracts need */ }
+  pub fn <c>_routes<A, S, H>(routes: Routes<A>, service: Arc<S>, hooks: Arc<H>) -> Routes<A>
+  where A: Authorizer, S: contracts::<C> + Send + Sync + 'static, H: <C>Hooks;
+  pub struct <C>Client<K: Credentials = NoCredentials> { client: Client<K> }
+  impl<K: Credentials> <C>Client<K> {
+      pub fn new(client: Client<K>) -> Self;
+      pub async fn <contract>(&self, request: &<Contract>Request)
+          -> Result<<Contract>Response, CallError<<Contract>Error>>;   // one per contract
+  }
+  ```
+
+  Each route runs, after the runtime's authorizer and decoding: `request.validate()` when the
+  contract has validations (`invalid_request`); `policies::authorize_<contract>` with the record
+  `hooks.<contract>_resource(&request)` loads when a policy names a `resource` (`forbidden`);
+  `hooks.count(&QUOTA, &caller)` for each quota on the contract (a refusing quota answers with its
+  contract error, whose payload `hooks.<quota>_exceeded(retry_after)` gives when it has one; a
+  queueing or throttling quota calls `hooks.wait`); the trait method; and on success
+  `hooks.append_<audit>(audits::audit_<audit>(.., hooks.now()))` for each audit. A hook that
+  fails answers `unavailable` before the call and `internal` after it. `()` implements a hooks
+  trait that requires nothing. A client method of a contract with a retry policy calls under it.
+- **`deps`.** Per implementing component, `<C>Deps` holds exactly one `<D>Client` per component
+  `<D>` it calls (relationships of kind `calls` whose target implements contracts), built by
+  `<C>Deps::new(<d>, ..)` and read by `deps.<d>()`. An implementation handed its `Deps` can reach
+  only what the specification says it calls; a call it does not declare has no client and does
+  not compile.
+- **`handlers`.** Per machine, a module with the glue for each event whose arrival the
+  specification states. An event that names a contract (`contract`, `role: request`) gets
+  `<contract>_event(&request) -> (Key, Event)` and `<contract>(&host, &request)`, which calls
+  `Host::handle`; the key and payload come from the request's inputs of the same names. An event
+  another machine emits to this machine's id gets `from_<emitter>(&emitted)` and
+  `deliver_from_<emitter>(&host, &emitted)`, for the emitter's `Dispatcher`. Events fired by the
+  machine's own timers need nothing. Events whose arrival is not stated get nothing and are
+  listed in the module's documentation.
 
 ## Clock and telemetry
 

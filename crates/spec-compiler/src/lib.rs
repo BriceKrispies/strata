@@ -46,8 +46,9 @@ pub const CRATE_NAME_INVALID: &str = "specc.crate-name-invalid";
 pub struct Options {
     /// The package name of the generated crate.
     pub crate_name: String,
-    /// How the generated crate depends on `strata-runtime`, which its machines implement. Only
-    /// written into the manifest when the specification has an implementation-level machine.
+    /// How the generated crate depends on `strata-runtime`, which its machines implement and its
+    /// contract routes and clients use. Only written into the manifest when the specification
+    /// has an implementation-level machine or a contract a component implements.
     pub runtime: RuntimeDependency,
 }
 
