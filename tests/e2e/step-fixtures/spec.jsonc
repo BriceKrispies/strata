@@ -1,0 +1,523 @@
+// The step fixtures of the generated journeys (WG-4897). Every step kind specc lowers has a
+// journey that passes (pass-*) and one that must fail (violates-*) against the pages of
+// server.mjs: each generated assertion is shown to fail on a page that violates it. A step that
+// asserts nothing (a navigation, a mark, an emulation) is shown by the assertion after it.
+//
+//   specc e2e --spec tests/e2e/step-fixtures/spec.jsonc --out tests/e2e/step-checks --expect-fail-prefix violates-
+//   npx playwright test -c tests/e2e/step-fixtures/playwright.config.js
+//
+// Only specc reads this file; it is not an Exegra project.
+{
+  "system": {
+    "id": "step-fixtures",
+    "telemetry": {
+      "services": [
+        { "id": "backend", "log": "var/step-fixtures/backend.jsonl" },
+        { "id": "bff", "log": "var/step-fixtures/bff.jsonl" }
+      ]
+    }
+  },
+  "events": [
+    { "id": "ev-notice", "name": "Something changed" },
+    {
+      "id": "ev-done", "name": "Thing done",
+      "logging": { "logged": true, "service": "backend", "level": "info", "name": "thing.done", "tenant": "tenant", "fields": [{ "field": "object" }] }
+    }
+  ],
+  "screens": [
+    { "id": "page", "name": "A fixture page", "route": "/p/:name", "query": ["mode"] },
+    { "id": "other", "name": "Another page", "route": "/other" },
+    { "id": "live", "name": "A live page", "route": "/live", "query": ["norefresh"] },
+    { "id": "lost", "name": "Nothing here", "route": "*missing" }
+  ],
+  "forms": [
+    {
+      "id": "f-login", "screen": "page", "contract": "sign-in", "submitLabel": "Sign in",
+      "fields": [
+        { "name": "name", "input": "name", "label": "Name", "control": "text" },
+        { "name": "remember", "input": "remember", "label": "Remember me", "control": "checkbox" },
+        { "name": "topic", "input": "topic", "label": "Topic", "control": "select", "options": [{ "value": "d", "label": "Design" }, { "value": "c", "label": "Craft" }] },
+        { "name": "shade", "input": "shade", "label": "Shade", "control": "radio", "options": [{ "value": "dk", "label": "Dark" }, { "value": "lt", "label": "Light" }] },
+        { "name": "accent", "input": "accent", "label": "Accent", "control": "radio", "optionsFrom": { "path": "accents" } },
+        { "name": "count", "input": "count", "label": "Count", "control": "number" }
+      ]
+    }
+  ],
+  "actions": [
+    { "id": "act-delete", "screen": "page", "label": "Delete ${item.title}", "contract": "delete", "forEach": "rows", "confirm": "Confirm deleting ${item.title}" },
+    { "id": "act-out", "screen": "page", "label": "Sign out", "contract": "sign-out" }
+  ],
+  "liveBindings": [{ "id": "live-notice", "screen": "live", "event": "ev-notice", "refresh": "whole" }],
+  "uiScenarios": [
+    { "id": "pass-goto", "name": "goto opens a drawn page", "steps": [
+      { "goto": { "screen": "page", "params": { "name": "basic" } } },
+      { "expectRole": { "role": "heading", "level": 1, "name": "Basic page" } }
+    ] },
+    { "id": "violates-goto", "name": "goto fails on a page that is never drawn", "steps": [
+      { "goto": { "screen": "page", "params": { "name": "noready" } } }
+    ] },
+    { "id": "pass-gotoPath", "name": "gotoPath opens an address", "steps": [
+      { "gotoPath": { "path": "/p/basic" } },
+      { "expectStatus": 200 }
+    ] },
+    { "id": "violates-gotoPath", "name": "gotoPath fails on a page that is never drawn", "steps": [
+      { "gotoPath": { "path": "/p/noready" } }
+    ] },
+    { "id": "pass-reload", "name": "reload draws the page again", "steps": [
+      { "goto": { "screen": "page", "params": { "name": "basic" } } },
+      { "reload": {} },
+      { "expectTitle": { "text": "Basic" } }
+    ] },
+    { "id": "violates-reload", "name": "a reload loses the marker", "steps": [
+      { "goto": { "screen": "page", "params": { "name": "basic" } } },
+      { "mark": "m" },
+      { "reload": true },
+      { "expectNoReload": "m" }
+    ] },
+    { "id": "pass-back", "name": "back returns to the page before", "steps": [
+      { "goto": { "screen": "page", "params": { "name": "basic" } } },
+      { "click": { "role": "link", "name": "Other" } },
+      { "expectScreen": "other" },
+      { "back": {} },
+      { "expectScreen": "page" }
+    ] },
+    { "id": "violates-back", "name": "after back the other page is gone", "steps": [
+      { "goto": { "screen": "page", "params": { "name": "basic" } } },
+      { "click": { "role": "link", "name": "Other" } },
+      { "back": {} },
+      { "expectScreen": "other" }
+    ] },
+    { "id": "pass-click", "name": "click follows a link", "steps": [
+      { "goto": { "screen": "page", "params": { "name": "basic" } } },
+      { "click": { "role": "link", "name": "Other", "within": { "role": "navigation", "name": "Links" } } },
+      { "expectRole": { "role": "heading", "level": 1, "name": "Other page" } }
+    ] },
+    { "id": "violates-click", "name": "click fails when the element is missing", "steps": [
+      { "goto": { "screen": "page", "params": { "name": "basic" } } },
+      { "click": { "role": "button", "name": "Absent" } }
+    ] },
+    { "id": "pass-focus", "name": "focus moves the focus", "steps": [
+      { "goto": { "screen": "page", "params": { "name": "basic" } } },
+      { "focus": { "role": "textbox", "name": "Name" } },
+      { "expectRole": { "role": "textbox", "name": "Name", "state": "focused" } }
+    ] },
+    { "id": "violates-focus", "name": "focus fails when the element is missing", "steps": [
+      { "goto": { "screen": "page", "params": { "name": "basic" } } },
+      { "focus": { "role": "textbox", "name": "Absent" } }
+    ] },
+    { "id": "pass-clickAction", "name": "an action is pressed and confirmed", "steps": [
+      { "goto": { "screen": "page", "params": { "name": "desk" } } },
+      { "clickAction": { "action": "act-delete", "item": { "title": "Kiln" }, "confirm": true } },
+      { "expectText": { "text": "Deleted.", "within": { "role": "region", "name": "Messages" } } },
+      { "clickAction": { "action": "act-out" } },
+      { "expectText": { "text": "Signed out.", "within": { "role": "region", "name": "Messages" } } }
+    ] },
+    { "id": "violates-clickAction", "name": "an action of a row that is not there", "steps": [
+      { "goto": { "screen": "page", "params": { "name": "desk" } } },
+      { "clickAction": { "action": "act-delete", "item": { "title": "Nope" } } }
+    ] },
+    { "id": "pass-fill", "name": "fill sets every kind of control", "steps": [
+      { "goto": { "screen": "page", "params": { "name": "form" } } },
+      { "fill": { "role": "textbox", "name": "Name", "value": "first" } },
+      { "expectAttribute": { "role": "textbox", "name": "Name", "attribute": "value", "value": "first" } },
+      { "fill": { "form": "f-login", "field": "name", "value": "ines" } },
+      { "fill": { "form": "f-login", "field": "remember", "value": true } },
+      { "fill": { "form": "f-login", "field": "topic", "value": "Craft" } },
+      { "fill": { "form": "f-login", "field": "shade", "value": "dk" } },
+      { "fill": { "form": "f-login", "field": "accent", "value": "plum" } },
+      { "fill": { "form": "f-login", "field": "count", "value": 3 } },
+      { "expectAttribute": { "role": "textbox", "name": "Name", "attribute": "value", "value": "ines" } },
+      { "expectRole": { "role": "checkbox", "name": "Remember me", "state": "checked" } },
+      { "expectAttribute": { "role": "combobox", "name": "Topic", "attribute": "value", "value": "c" } },
+      { "expectRole": { "role": "radio", "name": "Dark", "state": "checked" } },
+      { "expectRole": { "role": "radio", "name": "Plum", "state": "checked" } },
+      { "expectAttribute": { "role": "spinbutton", "name": "Count", "attribute": "value", "value": "3" } }
+    ] },
+    { "id": "violates-fill", "name": "fill fails where the form is not", "steps": [
+      { "goto": { "screen": "other" } },
+      { "fill": { "form": "f-login", "field": "name", "value": "ines" } }
+    ] },
+    { "id": "pass-submit", "name": "submit presses the form's button", "steps": [
+      { "goto": { "screen": "page", "params": { "name": "form" } } },
+      { "fill": { "form": "f-login", "field": "name", "value": "ines" } },
+      { "submit": { "form": "f-login" } },
+      { "expectText": { "text": "Submitted ines" } }
+    ] },
+    { "id": "violates-submit", "name": "submit fails where the form is not", "steps": [
+      { "goto": { "screen": "other" } },
+      { "submit": { "form": "f-login" } }
+    ] },
+    { "id": "pass-press", "name": "press types into the focused control", "steps": [
+      { "goto": { "screen": "page", "params": { "name": "basic" } } },
+      { "focus": { "role": "textbox", "name": "Name" } },
+      { "press": "x" },
+      { "expectAttribute": { "role": "textbox", "name": "Name", "attribute": "value", "value": "x" } }
+    ] },
+    { "id": "violates-press", "name": "a key typed is not another key", "steps": [
+      { "goto": { "screen": "page", "params": { "name": "basic" } } },
+      { "focus": { "role": "textbox", "name": "Name" } },
+      { "press": "x" },
+      { "expectAttribute": { "role": "textbox", "name": "Name", "attribute": "value", "value": "y" } }
+    ] },
+    { "id": "pass-expectText", "name": "visible text is found, in its scope", "steps": [
+      { "goto": { "screen": "page", "params": { "name": "basic" } } },
+      { "expectText": { "text": "Hello there" } },
+      { "expectText": { "pattern": "Revision \\d+", "within": { "role": "region", "name": "Snapshot" } } }
+    ] },
+    { "id": "violates-expectText-absent", "name": "text that is not there", "steps": [
+      { "goto": { "screen": "page", "params": { "name": "basic" } } },
+      { "expectText": { "text": "Goodbye" } }
+    ] },
+    { "id": "violates-expectText-case", "name": "text in another case", "steps": [
+      { "goto": { "screen": "page", "params": { "name": "basic" } } },
+      { "expectText": { "text": "hello there" } }
+    ] },
+    { "id": "violates-expectText-hidden", "name": "text that is hidden", "steps": [
+      { "goto": { "screen": "page", "params": { "name": "basic" } } },
+      { "expectText": { "text": "Secret note" } }
+    ] },
+    { "id": "violates-expectText-within", "name": "text outside its scope", "steps": [
+      { "goto": { "screen": "page", "params": { "name": "basic" } } },
+      { "expectText": { "text": "Hello there", "within": { "role": "region", "name": "Snapshot" }, "timeoutMs": 1500 } }
+    ] },
+    { "id": "pass-expectNoText", "name": "absent and hidden text is not shown", "steps": [
+      { "goto": { "screen": "page", "params": { "name": "basic" } } },
+      { "expectNoText": { "text": "Goodbye" } },
+      { "expectNoText": { "text": "Secret note" } }
+    ] },
+    { "id": "violates-expectNoText", "name": "text that is shown", "steps": [
+      { "goto": { "screen": "page", "params": { "name": "basic" } } },
+      { "expectNoText": { "text": "Hello there" } }
+    ] },
+    { "id": "pass-expectTitle", "name": "the title", "steps": [
+      { "goto": { "screen": "page", "params": { "name": "basic" } } },
+      { "expectTitle": { "text": "Basic" } },
+      { "expectTitle": { "pattern": "^Bas" } }
+    ] },
+    { "id": "violates-expectTitle", "name": "another title", "steps": [
+      { "goto": { "screen": "page", "params": { "name": "basic" } } },
+      { "expectTitle": { "text": "Other" } }
+    ] },
+    { "id": "pass-expectScreen", "name": "the screen and its address", "steps": [
+      { "goto": { "screen": "page", "params": { "name": "basic", "mode": "plain" } } },
+      { "expectScreen": "page" },
+      { "expectScreen": { "screen": "page", "params": { "name": "basic", "mode": "plain" } } },
+      { "gotoPath": { "path": "/nowhere" } },
+      { "expectScreen": "lost" }
+    ] },
+    { "id": "violates-expectScreen", "name": "another screen", "steps": [
+      { "goto": { "screen": "page", "params": { "name": "basic" } } },
+      { "expectScreen": "other" }
+    ] },
+    { "id": "violates-expectScreen-params", "name": "another address of the screen", "steps": [
+      { "goto": { "screen": "page", "params": { "name": "basic" } } },
+      { "expectScreen": { "screen": "page", "params": { "name": "other" } } }
+    ] },
+    { "id": "violates-expectScreen-query", "name": "a query parameter that is not there", "steps": [
+      { "goto": { "screen": "page", "params": { "name": "basic" } } },
+      { "expectScreen": { "screen": "page", "params": { "name": "basic", "mode": "plain" } } }
+    ] },
+    { "id": "violates-expectScreen-catch-all", "name": "an address no route answers is not a routed screen", "steps": [
+      { "gotoPath": { "path": "/nowhere" } },
+      { "expectScreen": "page" }
+    ] },
+    { "id": "pass-expectRole", "name": "the states of elements", "steps": [
+      { "goto": { "screen": "page", "params": { "name": "basic" } } },
+      { "expectRole": { "role": "heading", "level": 1, "name": "Basic page" } },
+      { "expectRole": { "role": "heading", "namePattern": "^Bas" } },
+      { "expectRole": { "role": "region", "name": "Hidden panel", "state": "hidden" } },
+      { "expectRole": { "role": "button", "name": "Disabled", "state": "disabled" } },
+      { "expectRole": { "role": "button", "name": "Stay", "state": "enabled" } },
+      { "expectRole": { "role": "checkbox", "name": "Agree", "state": "checked" } },
+      { "expectRole": { "role": "checkbox", "name": "Spam", "state": "unchecked" } }
+    ] },
+    { "id": "violates-expectRole-hidden-absent", "name": "a hidden element must exist", "steps": [
+      { "goto": { "screen": "page", "params": { "name": "basic" } } },
+      { "expectRole": { "role": "region", "name": "No such panel", "state": "hidden" } }
+    ] },
+    { "id": "violates-expectRole-visible", "name": "a hidden element is not visible", "steps": [
+      { "goto": { "screen": "page", "params": { "name": "basic" } } },
+      { "expectRole": { "role": "region", "name": "Hidden panel" } }
+    ] },
+    { "id": "violates-expectRole-level", "name": "a heading of another level", "steps": [
+      { "goto": { "screen": "page", "params": { "name": "basic" } } },
+      { "expectRole": { "role": "heading", "level": 2, "name": "Basic page" } }
+    ] },
+    { "id": "violates-expectRole-disabled", "name": "an enabled button is not disabled", "steps": [
+      { "goto": { "screen": "page", "params": { "name": "basic" } } },
+      { "expectRole": { "role": "button", "name": "Stay", "state": "disabled" } }
+    ] },
+    { "id": "pass-expectCount", "name": "counting elements", "steps": [
+      { "goto": { "screen": "page", "params": { "name": "basic" } } },
+      { "expectCount": { "role": "article", "count": 3 } },
+      { "expectCount": { "role": "heading", "level": 1, "count": 1 } }
+    ] },
+    { "id": "violates-expectCount", "name": "another count", "steps": [
+      { "goto": { "screen": "page", "params": { "name": "basic" } } },
+      { "expectCount": { "role": "article", "count": 2 } }
+    ] },
+    { "id": "pass-expectAttribute", "name": "attributes of the document and of elements", "steps": [
+      { "goto": { "screen": "page", "params": { "name": "basic" } } },
+      { "expectAttribute": { "attribute": "data-mode", "value": "calm" } },
+      { "expectAttribute": { "attribute": "lang", "pattern": "^en$" } },
+      { "expectAttribute": { "role": "link", "name": "Other", "attribute": "href", "value": "/other" } }
+    ] },
+    { "id": "violates-expectAttribute", "name": "another value", "steps": [
+      { "goto": { "screen": "page", "params": { "name": "basic" } } },
+      { "expectAttribute": { "attribute": "data-mode", "value": "loud" } }
+    ] },
+    { "id": "pass-expectStatus", "name": "the status of navigations", "steps": [
+      { "goto": { "screen": "page", "params": { "name": "basic" } } },
+      { "expectStatus": 200 },
+      { "gotoPath": { "path": "/nowhere" } },
+      { "expectStatus": 404 }
+    ] },
+    { "id": "violates-expectStatus", "name": "another status", "steps": [
+      { "gotoPath": { "path": "/nowhere" } },
+      { "expectStatus": 200 }
+    ] },
+    { "id": "pass-mark", "name": "the marker survives what happens inside the page", "steps": [
+      { "goto": { "screen": "page", "params": { "name": "basic" } } },
+      { "mark": "m" },
+      { "click": { "role": "button", "name": "Stay" } },
+      { "expectNoReload": "m" }
+    ] },
+    { "id": "violates-expectNoReload", "name": "a navigation loses the marker", "steps": [
+      { "goto": { "screen": "page", "params": { "name": "basic" } } },
+      { "mark": "m" },
+      { "goto": { "screen": "page", "params": { "name": "basic" } } },
+      { "expectNoReload": "m" }
+    ] },
+    { "id": "pass-recordRequests", "name": "the requests a worker makes", "steps": [
+      { "recordRequests": "r" },
+      { "goto": { "screen": "page", "params": { "name": "worker" } } },
+      { "expectRequests": { "log": "r", "to": "/api/view", "atLeast": 1, "fromWorker": true } },
+      { "expectRequests": { "log": "r", "to": "^ws://", "fromWorker": true } },
+      { "expectRequests": { "log": "r", "to": "^(http|ws)://127\\.0\\.0\\.1:4300/", "only": true } },
+      { "expectNoRequest": { "log": "r", "path": "^/api/act$" } }
+    ] },
+    { "id": "violates-expectRequests-worker", "name": "a request the page itself made", "steps": [
+      { "recordRequests": "r" },
+      { "goto": { "screen": "page", "params": { "name": "mainfetch" } } },
+      { "expectRequests": { "log": "r", "to": "/api/view", "fromWorker": true } }
+    ] },
+    { "id": "violates-expectRequests-only", "name": "a request elsewhere", "steps": [
+      { "recordRequests": "r" },
+      { "goto": { "screen": "page", "params": { "name": "mainfetch" } } },
+      { "expectRequests": { "log": "r", "to": "^http://127\\.0\\.0\\.1:4300/p/", "only": true } }
+    ] },
+    { "id": "violates-expectRequests-count", "name": "requests that were not made", "steps": [
+      { "recordRequests": "r" },
+      { "goto": { "screen": "page", "params": { "name": "basic" } } },
+      { "expectRequests": { "log": "r", "to": "/api/view" } }
+    ] },
+    { "id": "violates-expectNoRequest", "name": "a request that was made", "steps": [
+      { "recordRequests": "r" },
+      { "goto": { "screen": "page", "params": { "name": "mainfetch" } } },
+      { "expectNoRequest": { "log": "r", "path": "^/api/view$" } }
+    ] },
+    { "id": "pass-apiCall", "name": "API calls, their replies and captures", "steps": [
+      { "goto": { "screen": "page", "params": { "name": "basic" } } },
+      { "apiCall": { "method": "GET", "path": "/api/json", "expectStatus": 200, "expectJson": { "session.csrf_token": "tok-123", "list.0.name": "a" }, "capture": { "csrf": "session.csrf_token" } } },
+      { "apiCall": { "method": "POST", "path": "/api/echo", "headers": { "x-token": "${csrf}" }, "body": { "a": "${csrf}" }, "expectStatus": 200, "expectJson": { "body.a": "tok-123", "headers.x-token": "tok-123" }, "expectBodyIncludes": ["tok-123"], "expectBodyExcludes": ["nope"] } },
+      { "apiCall": { "method": "GET", "path": "/api/json", "anonymous": true, "expectStatus": 200 } }
+    ] },
+    { "id": "violates-apiCall-status", "name": "another status", "steps": [
+      { "apiCall": { "method": "GET", "path": "/api/json", "expectStatus": 404 } }
+    ] },
+    { "id": "violates-apiCall-json", "name": "another value in the reply", "steps": [
+      { "apiCall": { "method": "GET", "path": "/api/json", "expectJson": { "session.csrf_token": "other" } } }
+    ] },
+    { "id": "violates-apiCall-excludes", "name": "a reply that holds what it must not", "steps": [
+      { "apiCall": { "method": "GET", "path": "/api/json", "expectBodyExcludes": ["tok-123"] } }
+    ] },
+    { "id": "pass-capture", "name": "values captured from the page, a header and a cookie", "steps": [
+      { "goto": { "screen": "page", "params": { "name": "basic" } } },
+      { "capture": { "name": "snap", "from": "text", "element": { "role": "region", "name": "Snapshot" } } },
+      { "expectText": { "text": "${snap}", "within": { "role": "region", "name": "Snapshot" } } },
+      { "capture": { "name": "where", "from": "attribute", "element": { "role": "link", "name": "Other" }, "attribute": "href" } },
+      { "expectAttribute": { "role": "link", "name": "Other", "attribute": "href", "value": "${where}" } },
+      { "apiCall": { "method": "GET", "path": "/api/login" } },
+      { "capture": { "name": "token", "from": "header", "header": "x-token" } },
+      { "capture": { "name": "sid", "from": "cookie", "cookie": "__Host-sid" } },
+      { "apiCall": { "method": "POST", "path": "/api/echo", "body": { "a": "${token}", "b": "${sid}" }, "expectJson": { "body.a": "abc", "body.b": "sid-123" } } }
+    ] },
+    { "id": "violates-capture", "name": "nothing to capture", "steps": [
+      { "goto": { "screen": "page", "params": { "name": "basic" } } },
+      { "capture": { "name": "snap", "from": "text", "element": { "role": "region", "name": "Absent" } } }
+    ] },
+    { "id": "pass-expectCookie", "name": "a cookie and its attributes", "steps": [
+      { "goto": { "screen": "page", "params": { "name": "basic" } } },
+      { "apiCall": { "method": "GET", "path": "/api/login" } },
+      { "expectCookie": { "name": "__Host-sid", "attributes": { "httpOnly": true, "secure": true, "sameSite": "Strict", "path": "/", "hostPrefix": true } } },
+      { "expectCookie": { "name": "never", "absent": true } }
+    ] },
+    { "id": "violates-expectCookie-attributes", "name": "a cookie without the attribute", "steps": [
+      { "goto": { "screen": "page", "params": { "name": "basic" } } },
+      { "apiCall": { "method": "GET", "path": "/api/login" } },
+      { "expectCookie": { "name": "plain", "attributes": { "httpOnly": true } } }
+    ] },
+    { "id": "violates-expectCookie-absent", "name": "a cookie that is there", "steps": [
+      { "goto": { "screen": "page", "params": { "name": "basic" } } },
+      { "apiCall": { "method": "GET", "path": "/api/login" } },
+      { "expectCookie": { "name": "__Host-sid", "absent": true } }
+    ] },
+    { "id": "pass-setCookie", "name": "a cookie set for the page", "steps": [
+      { "setCookie": { "name": "flavour", "value": "oat", "host": "127.0.0.1:4300" } },
+      { "goto": { "screen": "page", "params": { "name": "cookies" } } },
+      { "expectText": { "text": "flavour=oat" } }
+    ] },
+    { "id": "violates-setCookie", "name": "the cookie holds what was set", "steps": [
+      { "setCookie": { "name": "flavour", "value": "oat", "host": "127.0.0.1:4300" } },
+      { "goto": { "screen": "page", "params": { "name": "cookies" } } },
+      { "expectText": { "text": "flavour=rye", "timeoutMs": 1500 } }
+    ] },
+    { "id": "pass-emulate", "name": "media and device emulation", "steps": [
+      { "emulate": { "touch": true, "mobile": true } },
+      { "emulate": { "colorScheme": "dark", "reducedMotion": "reduce" } },
+      { "goto": { "screen": "page", "params": { "name": "scheme" } } },
+      { "expectAttribute": { "attribute": "data-scheme", "value": "dark" } },
+      { "expectAttribute": { "attribute": "data-touch", "value": "yes" } }
+    ] },
+    { "id": "violates-emulate", "name": "the emulated scheme is the one the page sees", "steps": [
+      { "emulate": { "colorScheme": "light" } },
+      { "goto": { "screen": "page", "params": { "name": "scheme" } } },
+      { "expectAttribute": { "attribute": "data-scheme", "value": "dark" } }
+    ] },
+    { "id": "pass-expectNoOverflow", "name": "nothing wider than the viewport", "steps": [
+      { "goto": { "screen": "page", "params": { "name": "basic" } } },
+      { "expectNoOverflow": {} }
+    ] },
+    { "id": "violates-expectNoOverflow", "name": "an element wider than the viewport", "steps": [
+      { "goto": { "screen": "page", "params": { "name": "wide" } } },
+      { "expectNoOverflow": true }
+    ] },
+    { "id": "pass-expectBeside", "name": "the notes are left of the text", "steps": [
+      { "goto": { "screen": "page", "params": { "name": "side" } } },
+      { "expectBeside": { "a": { "role": "complementary", "name": "Notes" }, "b": { "role": "region", "name": "Text" }, "side": "left" } }
+    ] },
+    { "id": "violates-expectBeside", "name": "the notes are not right of the text", "steps": [
+      { "goto": { "screen": "page", "params": { "name": "side" } } },
+      { "expectBeside": { "a": { "role": "complementary", "name": "Notes" }, "b": { "role": "region", "name": "Text" }, "side": "right" } }
+    ] },
+    { "id": "pass-switchBrowser", "name": "each browser keeps its page", "browsers": ["a", "b"], "steps": [
+      { "goto": { "screen": "page", "params": { "name": "basic" } } },
+      { "switchBrowser": "b" },
+      { "goto": { "screen": "other" } },
+      { "switchBrowser": "a" },
+      { "expectScreen": "page" },
+      { "switchBrowser": "b" },
+      { "expectScreen": "other" }
+    ] },
+    { "id": "violates-switchBrowser", "name": "the first browser did not move", "browsers": ["a", "b"], "steps": [
+      { "goto": { "screen": "page", "params": { "name": "basic" } } },
+      { "switchBrowser": "b" },
+      { "goto": { "screen": "other" } },
+      { "switchBrowser": "a" },
+      { "expectScreen": "other" }
+    ] },
+    { "id": "pass-goOffline", "name": "the network goes and comes back", "steps": [
+      { "goto": { "screen": "page", "params": { "name": "online" } } },
+      { "goOffline": {} },
+      { "expectAttribute": { "attribute": "data-online", "value": "false" } },
+      { "goOnline": {} },
+      { "expectAttribute": { "attribute": "data-online", "value": "true" } }
+    ] },
+    { "id": "violates-goOffline", "name": "offline is not online", "steps": [
+      { "goto": { "screen": "page", "params": { "name": "online" } } },
+      { "goOffline": {} },
+      { "expectAttribute": { "attribute": "data-online", "value": "true" } }
+    ] },
+    { "id": "violates-goOnline", "name": "online again is not offline", "steps": [
+      { "goto": { "screen": "page", "params": { "name": "online" } } },
+      { "goOffline": true },
+      { "goOnline": true },
+      { "expectAttribute": { "attribute": "data-online", "value": "false" } }
+    ] },
+    { "id": "pass-setViewport", "name": "a viewport the box fits", "steps": [
+      { "goto": { "screen": "page", "params": { "name": "responsive" } } },
+      { "setViewport": { "width": 800, "height": 600 } },
+      { "expectNoOverflow": {} }
+    ] },
+    { "id": "violates-setViewport", "name": "a viewport the box does not fit", "steps": [
+      { "goto": { "screen": "page", "params": { "name": "responsive" } } },
+      { "setViewport": { "width": 400, "height": 600 } },
+      { "expectNoOverflow": {} }
+    ] },
+    { "id": "pass-axeScan", "name": "an accessible page", "steps": [
+      { "goto": { "screen": "page", "params": { "name": "basic" } } },
+      { "axeScan": {} }
+    ] },
+    { "id": "violates-axeScan", "name": "an image without text and a field without a label", "steps": [
+      { "goto": { "screen": "page", "params": { "name": "inaccessible" } } },
+      { "axeScan": true }
+    ] },
+    { "id": "pass-expectLog", "name": "a logged event linked to the browser's request", "steps": [
+      { "goto": { "screen": "page", "params": { "name": "act" } } },
+      { "click": { "role": "button", "name": "Act" } },
+      { "expectText": { "text": "Done: Act" } },
+      { "expectLog": { "service": "backend", "event": "ev-done", "fields": { "tenant": "t1", "object": "post" } } },
+      { "logScan": { "forbid": ["leak-\\w+"] } }
+    ] },
+    { "id": "violates-expectLog-fields", "name": "a line with other fields", "steps": [
+      { "goto": { "screen": "page", "params": { "name": "act" } } },
+      { "click": { "role": "button", "name": "Act" } },
+      { "expectLog": { "service": "backend", "event": "ev-done", "fields": { "object": "page" }, "timeoutMs": 2000 } }
+    ] },
+    { "id": "violates-expectLog-correlation", "name": "a line whose correlation no browser sent", "steps": [
+      { "goto": { "screen": "page", "params": { "name": "act" } } },
+      { "click": { "role": "button", "name": "Act unlinked" } },
+      { "expectLog": { "service": "backend", "event": "ev-done", "fields": { "object": "post" }, "timeoutMs": 2000 } }
+    ] },
+    { "id": "violates-expectLog-bff", "name": "a line no other service's line links to", "steps": [
+      { "goto": { "screen": "page", "params": { "name": "act" } } },
+      { "click": { "role": "button", "name": "Act alone" } },
+      { "expectLog": { "service": "backend", "event": "ev-done", "fields": { "object": "post" }, "timeoutMs": 2000 } }
+    ] },
+    { "id": "violates-expectLog-allowlist", "name": "a line with a member its allowlist does not name", "steps": [
+      { "goto": { "screen": "page", "params": { "name": "act" } } },
+      { "click": { "role": "button", "name": "Act extra" } },
+      { "expectLog": { "service": "backend", "event": "ev-done", "fields": { "object": "post" }, "timeoutMs": 2000 } }
+    ] },
+    { "id": "violates-expectLog-level", "name": "a line at another level", "steps": [
+      { "goto": { "screen": "page", "params": { "name": "act" } } },
+      { "click": { "role": "button", "name": "Act quietly" } },
+      { "expectLog": { "service": "backend", "event": "ev-done", "fields": { "object": "post" }, "timeoutMs": 2000 } }
+    ] },
+    { "id": "violates-logScan", "name": "a line with a secret", "steps": [
+      { "goto": { "screen": "page", "params": { "name": "act" } } },
+      { "click": { "role": "button", "name": "Act leaking" } },
+      { "expectText": { "text": "Done: Act leaking" } },
+      { "logScan": { "forbid": ["leak-\\w+"] } }
+    ] },
+    { "id": "pass-waitFor", "name": "a live notice, then the screen refetches its view", "steps": [
+      { "goto": { "screen": "live" } },
+      { "apiCall": { "method": "POST", "path": "/api/notify" } },
+      { "waitFor": { "event": "ev-notice" } }
+    ] },
+    { "id": "violates-waitFor-no-notice", "name": "the navigation's own fetch is no refresh", "steps": [
+      { "goto": { "screen": "live" } },
+      { "waitFor": { "event": "ev-notice", "timeoutMs": 1500 } }
+    ] },
+    { "id": "violates-waitFor-no-refresh", "name": "a notice the page does not act on", "steps": [
+      { "goto": { "screen": "live", "params": { "norefresh": "1" } } },
+      { "apiCall": { "method": "POST", "path": "/api/notify" } },
+      { "waitFor": { "event": "ev-notice", "timeoutMs": 1500 } }
+    ] },
+    { "id": "violates-waitFor-screen", "name": "a click led to a screen the event does not refresh", "steps": [
+      { "goto": { "screen": "live" } },
+      { "click": { "role": "link", "name": "Elsewhere" } },
+      { "apiCall": { "method": "POST", "path": "/api/notify" } },
+      { "waitFor": { "event": "ev-notice", "timeoutMs": 1500 } }
+    ] },
+    { "id": "pass-expectNoEvent", "name": "no notice while nothing changes", "steps": [
+      { "goto": { "screen": "live" } },
+      { "expectNoEvent": { "event": "ev-notice", "forMs": 300 } }
+    ] },
+    { "id": "violates-expectNoEvent", "name": "a notice that arrives", "steps": [
+      { "goto": { "screen": "live" } },
+      { "apiCall": { "method": "POST", "path": "/api/notify" } },
+      { "expectNoEvent": { "event": "ev-notice", "forMs": 500 } }
+    ] }
+  ]
+}

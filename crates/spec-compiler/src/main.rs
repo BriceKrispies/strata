@@ -5,8 +5,8 @@
 //! specc check        --spec <file> --out <dir> [--spec-hash <hash>] [--crate-name <name>] [--runtime <dir>]
 //! specc deploy       --spec <file> --out <dir> [--spec-hash <hash>]
 //! specc check-deploy --spec <file> --out <dir> [--spec-hash <hash>]
-//! specc e2e          --spec <file> --out <dir> [--spec-hash <hash>]
-//! specc check-e2e    --spec <file> --out <dir> [--spec-hash <hash>]
+//! specc e2e          --spec <file> --out <dir> [--spec-hash <hash>] [--origin <url>] [--expect-fail-prefix <id prefix>]
+//! specc check-e2e    --spec <file> --out <dir> [--spec-hash <hash>] [--origin <url>] [--expect-fail-prefix <id prefix>]
 //! specc scenarios       --spec <file> --out <dir> [--spec-hash <hash>] [--crate-name <name>] [--exegra-project <id>] [--exegra-specs <dir>]
 //! specc check-scenarios --spec <file> --out <dir> [--spec-hash <hash>] [--crate-name <name>] [--exegra-project <id>] [--exegra-specs <dir>]
 //! specc web          --spec <file> --out <dir> [--spec-hash <hash>]
@@ -28,6 +28,11 @@
 //! `EXEGRA_HOME` is not set. The crate name defaults to the name of `<dir>`'s parent; the Exegra
 //! project to the name of the specification's directory and the specs directory to that
 //! directory's parent.
+//!
+//! `e2e` and `check-e2e` write the Playwright journeys (`strata_spec_compiler::e2e`). `--origin`
+//! is the origin the journeys' absolute addresses were written against, which the tests move to
+//! `STRATA_E2E_BASE_URL` when that is set; journeys whose id starts with `--expect-fail-prefix`
+//! are generated as tests that must fail (the fixtures that show each assertion can fail).
 //!
 //! `deploy` and `check-deploy` do for the deployment files (a compose stack, Kubernetes
 //! manifests and Prometheus alert rules; see `strata_spec_compiler::deploy`) what `generate`
@@ -55,8 +60,8 @@ const USAGE: &str = "usage:
   specc check        --spec <file> --out <dir> [--spec-hash <hash>] [--crate-name <name>] [--runtime <dir>]
   specc deploy       --spec <file> --out <dir> [--spec-hash <hash>]
   specc check-deploy --spec <file> --out <dir> [--spec-hash <hash>]
-  specc e2e          --spec <file> --out <dir> [--spec-hash <hash>]
-  specc check-e2e    --spec <file> --out <dir> [--spec-hash <hash>]
+  specc e2e          --spec <file> --out <dir> [--spec-hash <hash>] [--origin <url>] [--expect-fail-prefix <id prefix>]
+  specc check-e2e    --spec <file> --out <dir> [--spec-hash <hash>] [--origin <url>] [--expect-fail-prefix <id prefix>]
   specc scenarios       --spec <file> --out <dir> [--spec-hash <hash>] [--crate-name <name>] [--exegra-project <id>] [--exegra-specs <dir>]
   specc check-scenarios --spec <file> --out <dir> [--spec-hash <hash>] [--crate-name <name>] [--exegra-project <id>] [--exegra-specs <dir>]
   specc web          --spec <file> --out <dir> [--spec-hash <hash>]
@@ -89,6 +94,7 @@ struct Args {
     spec_hash: Option<String>,
     exegra_project: Option<String>,
     exegra_specs: Option<PathBuf>,
+    e2e: e2e::Options,
 }
 
 fn parse_args(raw: &[String]) -> Result<Args, String> {
@@ -113,6 +119,8 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
     let mut spec_hash = None;
     let mut exegra_project = None;
     let mut exegra_specs = None;
+    let mut origin = None;
+    let mut expect_fail_prefix = None;
     let mut iter = rest.iter();
     while let Some(flag) = iter.next() {
         let slot = match flag.as_str() {
@@ -123,6 +131,8 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
             "--spec-hash" => &mut spec_hash,
             "--exegra-project" => &mut exegra_project,
             "--exegra-specs" => &mut exegra_specs,
+            "--origin" => &mut origin,
+            "--expect-fail-prefix" => &mut expect_fail_prefix,
             other => return Err(format!("unknown argument \"{other}\"")),
         };
         let Some(value) = iter.next() else {
@@ -153,6 +163,10 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
     if deploys && crate_name.is_some() {
         return Err("--crate-name does not apply to deploy or e2e".to_string());
     }
+    let end_to_end = matches!(command, Command::E2e | Command::CheckE2e);
+    if !end_to_end && (origin.is_some() || expect_fail_prefix.is_some()) {
+        return Err("--origin and --expect-fail-prefix apply only to e2e".to_string());
+    }
     let scenario = matches!(command, Command::Scenarios | Command::CheckScenarios);
     if !scenario && (exegra_project.is_some() || exegra_specs.is_some()) {
         return Err("--exegra-project and --exegra-specs apply only to scenarios".to_string());
@@ -179,6 +193,10 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
         spec_hash,
         exegra_project,
         exegra_specs: exegra_specs.map(PathBuf::from),
+        e2e: e2e::Options {
+            origin,
+            expect_fail_prefix,
+        },
     })
 }
 
@@ -307,7 +325,7 @@ fn run_web(args: &Args, text: &str) -> ExitCode {
 }
 
 fn run_e2e(args: &Args, text: &str) -> ExitCode {
-    let output = match e2e::generate(&args.header_source(), text) {
+    let output = match e2e::generate_with(&args.header_source(), text, &args.e2e) {
         Ok(output) => output,
         Err(diagnostics) => {
             for d in &diagnostics {
