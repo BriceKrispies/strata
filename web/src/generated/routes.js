@@ -38,16 +38,26 @@ export function route(screen) {
   return BY_SCREEN.get(screen) ?? null;
 }
 
+/** A path as text, escapes decoded; one that is not valid is kept as written. @param {string} text */
+function decoded(text) {
+  try {
+    return decodeURIComponent(text);
+  } catch {
+    return text;
+  }
+}
+
 /**
  * The screen that answers an address, with its route and query parameters. Of the routes that
- * answer the path, the one with the most literal segments wins; the catch-all answers every
- * other path. Only the screen's own query parameters are kept.
+ * answer the path, the one with the most literal segments wins (the generator refuses two that
+ * tie); the catch-all answers every other path. Only the screen's own query parameters are kept.
  * @param {string} path
  * @param {string | Record<string, string>} [search] The query string (`?q=kiln`) or its parameters.
  * @returns {{ screen: string, params: Record<string, string>, query: Record<string, string> } | null}
  */
 export function matchRoute(path, search = '') {
-  const parts = path.split('/').filter((s) => s !== '');
+  // An empty segment is a segment: `//` is not `/`, and answers only the catch-all.
+  const parts = path === '/' ? [] : path.replace(/^\//, '').split('/');
   /** @type {{ entry: Route, params: Record<string, string>, literals: number } | null} */
   let best = null;
   for (const entry of ROUTES) {
@@ -61,6 +71,7 @@ export function matchRoute(path, search = '') {
       if (pattern.startsWith(':')) {
         try {
           params[pattern.slice(1)] = decodeURIComponent(parts[i]);
+          if (parts[i] === '') ok = false;
         } catch {
           ok = false;
         }
@@ -75,7 +86,7 @@ export function matchRoute(path, search = '') {
   const entry = best?.entry ?? ROUTES.find((r) => r.catchAll) ?? null;
   if (!entry) return null;
   /** @type {Record<string, string>} */
-  const params = best ? best.params : entry.params.length ? { [entry.params[0]]: path } : {};
+  const params = best ? best.params : entry.params.length ? { [entry.params[0]]: decoded(path) } : {};
   const given = typeof search === 'string' ? new URLSearchParams(search) : new URLSearchParams(Object.entries(search));
   /** @type {Record<string, string>} */
   const query = {};

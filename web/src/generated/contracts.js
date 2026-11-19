@@ -441,11 +441,11 @@ export function createArticle(inputs) {
 /**
  * The outputs of `create-article` from the records endpoint's reply (`{id, version}`) and the inputs it repeats.
  * @param {any} body
- * @param {any} inputs
+ * @param {any} _inputs
  * @returns {{ article_id: number, version: number, slug: string }}
  */
-export function decodeCreateArticle(body, inputs) {
-  return { article_id: body?.id, version: body?.version, slug: encoded(inputs?.slug, { trim: true }) };
+export function decodeCreateArticle(body, _inputs) {
+  return { article_id: body?.id, version: body?.version, slug: body?.fields?.slug };
 }
 
 /**
@@ -460,11 +460,11 @@ export function updateArticle(inputs) {
 /**
  * The outputs of `update-article` from the records endpoint's reply (`{id, version}`) and the inputs it repeats.
  * @param {any} body
- * @param {any} inputs
+ * @param {any} _inputs
  * @returns {{ article_id: number, version: number, slug: string }}
  */
-export function decodeUpdateArticle(body, inputs) {
-  return { article_id: body?.id, version: body?.version, slug: encoded(inputs?.slug, { trim: true }) };
+export function decodeUpdateArticle(body, _inputs) {
+  return { article_id: body?.id, version: body?.version, slug: body?.fields?.slug };
 }
 
 /**

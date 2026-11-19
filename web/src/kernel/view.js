@@ -2,6 +2,7 @@
 // Pure and serialisable. The main thread never sees kernel state, only this.
 // @ts-check
 
+import * as actions from '../generated/actions.js';
 import { labView } from './lab.js';
 
 /** Cover images bundled with the application. Tenant data may only name one of these. */
@@ -58,6 +59,22 @@ function entry(row, optimistic = {}) {
     coverAlt: f.cover_alt ?? '',
     status: optimistic[row.id] ?? f.status,
     pending: row.id in optimistic,
+  };
+}
+
+/**
+ * The names the generated actions give a desk row's buttons: the row of the view model the
+ * action runs on, filled into the action's label (and, for delete, its confirmation).
+ * @param {any} model @param {any} row
+ */
+function deskLabels(model, row) {
+  const item = (/** @type {string} */ action) =>
+    actions.rows(action, model).find((/** @type {any} */ r) => r.article_id === row.id) ?? { title: row.fields.title };
+  return {
+    publish: actions.label('act-desk-publish', item('act-desk-publish')),
+    unpublish: actions.label('act-desk-unpublish', item('act-desk-unpublish')),
+    remove: actions.label('act-desk-delete', item('act-desk-delete')),
+    confirmRemove: actions.confirmText('act-desk-delete', item('act-desk-delete')) ?? '',
   };
 }
 
@@ -142,7 +159,7 @@ function page(state) {
         canSettings: (session.may?.publication ?? []).includes('update'),
         canLab: session.may_manage_schema,
         posts: d.posts
-          .map((r) => ({ ...entry(r, state.optimistic), confirming: state.confirmDelete === r.id }))
+          .map((r) => ({ ...entry(r, state.optimistic), confirming: state.confirmDelete === r.id, labels: deskLabels(model, r) }))
           .filter((p) => p.status !== 'deleted'),
       };
     case 'desk_new':

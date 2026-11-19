@@ -8,324 +8,324 @@ use serde::{Deserialize, Serialize};
 
 use crate::{prelude, types};
 
-/// The pattern of field `tenant-id` of record `rec-tenant`.
+/// The pattern of field `tenant-id` of record `rec-tenant`, matched against the whole value.
 static REC_TENANT_TENANT_ID_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new("^[a-z][a-z0-9_]*$").expect("specc checked that the pattern compiles")
+    Regex::new("\\A(?:^[a-z][a-z0-9_]*$)\\z").expect("specc checked that the pattern compiles")
 });
 
-/// The pattern of field `tenant-id` of record `rec-domain-binding`.
+/// The pattern of field `tenant-id` of record `rec-domain-binding`, matched against the whole value.
 static REC_DOMAIN_BINDING_TENANT_ID_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new("^[a-z][a-z0-9_]*$").expect("specc checked that the pattern compiles")
+    Regex::new("\\A(?:^[a-z][a-z0-9_]*$)\\z").expect("specc checked that the pattern compiles")
 });
 
-/// The pattern of field `tenant-id` of record `rec-wake-entry`.
+/// The pattern of field `tenant-id` of record `rec-wake-entry`, matched against the whole value.
 static REC_WAKE_ENTRY_TENANT_ID_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new("^[a-z][a-z0-9_]*$").expect("specc checked that the pattern compiles")
+    Regex::new("\\A(?:^[a-z][a-z0-9_]*$)\\z").expect("specc checked that the pattern compiles")
 });
 
-/// The pattern of field `principal-id` of record `rec-principal`.
+/// The pattern of field `principal-id` of record `rec-principal`, matched against the whole value.
 static REC_PRINCIPAL_PRINCIPAL_ID_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new("^[A-Za-z0-9_:.-]+$").expect("specc checked that the pattern compiles")
+    Regex::new("\\A(?:^[A-Za-z0-9_:.-]+$)\\z").expect("specc checked that the pattern compiles")
 });
 
-/// The pattern of field `principal-id` of record `rec-credential`.
+/// The pattern of field `principal-id` of record `rec-credential`, matched against the whole value.
 static REC_CREDENTIAL_PRINCIPAL_ID_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new("^[A-Za-z0-9_:.-]+$").expect("specc checked that the pattern compiles")
+    Regex::new("\\A(?:^[A-Za-z0-9_:.-]+$)\\z").expect("specc checked that the pattern compiles")
 });
 
-/// The pattern of field `principal-id` of record `rec-identity-link`.
+/// The pattern of field `principal-id` of record `rec-identity-link`, matched against the whole value.
 static REC_IDENTITY_LINK_PRINCIPAL_ID_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new("^[A-Za-z0-9_:.-]+$").expect("specc checked that the pattern compiles")
+    Regex::new("\\A(?:^[A-Za-z0-9_:.-]+$)\\z").expect("specc checked that the pattern compiles")
 });
 
-/// The pattern of field `session-id` of record `rec-session`.
+/// The pattern of field `session-id` of record `rec-session`, matched against the whole value.
 static REC_SESSION_SESSION_ID_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new("^[A-Za-z0-9_:.-]+$").expect("specc checked that the pattern compiles")
+    Regex::new("\\A(?:^[A-Za-z0-9_:.-]+$)\\z").expect("specc checked that the pattern compiles")
 });
 
-/// The pattern of field `principal-id` of record `rec-session`.
+/// The pattern of field `principal-id` of record `rec-session`, matched against the whole value.
 static REC_SESSION_PRINCIPAL_ID_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new("^[A-Za-z0-9_:.-]+$").expect("specc checked that the pattern compiles")
+    Regex::new("\\A(?:^[A-Za-z0-9_:.-]+$)\\z").expect("specc checked that the pattern compiles")
 });
 
-/// The pattern of field `principal-id` of record `rec-challenge`.
+/// The pattern of field `principal-id` of record `rec-challenge`, matched against the whole value.
 static REC_CHALLENGE_PRINCIPAL_ID_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new("^[A-Za-z0-9_:.-]+$").expect("specc checked that the pattern compiles")
+    Regex::new("\\A(?:^[A-Za-z0-9_:.-]+$)\\z").expect("specc checked that the pattern compiles")
 });
 
-/// The pattern of field `principal-id` of record `rec-grant`.
+/// The pattern of field `principal-id` of record `rec-grant`, matched against the whole value.
 static REC_GRANT_PRINCIPAL_ID_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new("^[A-Za-z0-9_:.-]+$").expect("specc checked that the pattern compiles")
+    Regex::new("\\A(?:^[A-Za-z0-9_:.-]+$)\\z").expect("specc checked that the pattern compiles")
 });
 
-/// The pattern of field `delegator` of record `rec-grant`.
+/// The pattern of field `delegator` of record `rec-grant`, matched against the whole value.
 static REC_GRANT_DELEGATOR_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new("^[A-Za-z0-9_:.-]+$").expect("specc checked that the pattern compiles")
+    Regex::new("\\A(?:^[A-Za-z0-9_:.-]+$)\\z").expect("specc checked that the pattern compiles")
 });
 
-/// The pattern of field `object` of record `rec-content`.
+/// The pattern of field `object` of record `rec-content`, matched against the whole value.
 static REC_CONTENT_OBJECT_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new("^[a-z][a-z0-9_]*$").expect("specc checked that the pattern compiles")
+    Regex::new("\\A(?:^[a-z][a-z0-9_]*$)\\z").expect("specc checked that the pattern compiles")
 });
 
-/// The pattern of field `created-by` of record `rec-content`.
+/// The pattern of field `created-by` of record `rec-content`, matched against the whole value.
 static REC_CONTENT_CREATED_BY_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new("^[A-Za-z0-9_:.-]+$").expect("specc checked that the pattern compiles")
+    Regex::new("\\A(?:^[A-Za-z0-9_:.-]+$)\\z").expect("specc checked that the pattern compiles")
 });
 
-/// The pattern of field `actor` of record `rec-event`.
+/// The pattern of field `actor` of record `rec-event`, matched against the whole value.
 static REC_EVENT_ACTOR_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new("^[A-Za-z0-9_:.-]+$").expect("specc checked that the pattern compiles")
+    Regex::new("\\A(?:^[A-Za-z0-9_:.-]+$)\\z").expect("specc checked that the pattern compiles")
 });
 
-/// The pattern of field `workflow` of record `rec-workflow-run`.
+/// The pattern of field `workflow` of record `rec-workflow-run`, matched against the whole value.
 static REC_WORKFLOW_RUN_WORKFLOW_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new("^[a-z][a-z0-9_]*$").expect("specc checked that the pattern compiles")
+    Regex::new("\\A(?:^[a-z][a-z0-9_]*$)\\z").expect("specc checked that the pattern compiles")
 });
 
-/// The pattern of field `actor` of record `rec-audit-entry`.
+/// The pattern of field `actor` of record `rec-audit-entry`, matched against the whole value.
 static REC_AUDIT_ENTRY_ACTOR_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new("^[A-Za-z0-9_:.-]+$").expect("specc checked that the pattern compiles")
+    Regex::new("\\A(?:^[A-Za-z0-9_:.-]+$)\\z").expect("specc checked that the pattern compiles")
 });
 
-/// The pattern of field `on-behalf-of` of record `rec-audit-entry`.
+/// The pattern of field `on-behalf-of` of record `rec-audit-entry`, matched against the whole value.
 static REC_AUDIT_ENTRY_ON_BEHALF_OF_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new("^[A-Za-z0-9_:.-]+$").expect("specc checked that the pattern compiles")
+    Regex::new("\\A(?:^[A-Za-z0-9_:.-]+$)\\z").expect("specc checked that the pattern compiles")
 });
 
-/// The pattern of field `actor` of record `rec-platform-audit-entry`.
+/// The pattern of field `actor` of record `rec-platform-audit-entry`, matched against the whole value.
 static REC_PLATFORM_AUDIT_ENTRY_ACTOR_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new("^[A-Za-z0-9_:.-]+$").expect("specc checked that the pattern compiles")
+    Regex::new("\\A(?:^[A-Za-z0-9_:.-]+$)\\z").expect("specc checked that the pattern compiles")
 });
 
-/// The pattern of field `author` of record `rec-proposal`.
+/// The pattern of field `author` of record `rec-proposal`, matched against the whole value.
 static REC_PROPOSAL_AUTHOR_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new("^[A-Za-z0-9_:.-]+$").expect("specc checked that the pattern compiles")
+    Regex::new("\\A(?:^[A-Za-z0-9_:.-]+$)\\z").expect("specc checked that the pattern compiles")
 });
 
-/// The pattern of field `approver` of record `rec-proposal`.
+/// The pattern of field `approver` of record `rec-proposal`, matched against the whole value.
 static REC_PROPOSAL_APPROVER_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new("^[A-Za-z0-9_:.-]+$").expect("specc checked that the pattern compiles")
+    Regex::new("\\A(?:^[A-Za-z0-9_:.-]+$)\\z").expect("specc checked that the pattern compiles")
 });
 
-/// The pattern of field `principal-id` of record `rec-cnv-conversation`.
+/// The pattern of field `principal-id` of record `rec-cnv-conversation`, matched against the whole value.
 static REC_CNV_CONVERSATION_PRINCIPAL_ID_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new("^[A-Za-z0-9_:.-]+$").expect("specc checked that the pattern compiles")
+    Regex::new("\\A(?:^[A-Za-z0-9_:.-]+$)\\z").expect("specc checked that the pattern compiles")
 });
 
-/// The pattern of field `actor` of record `rec-cnv-turn`.
+/// The pattern of field `actor` of record `rec-cnv-turn`, matched against the whole value.
 static REC_CNV_TURN_ACTOR_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new("^[A-Za-z0-9_:.-]+$").expect("specc checked that the pattern compiles")
+    Regex::new("\\A(?:^[A-Za-z0-9_:.-]+$)\\z").expect("specc checked that the pattern compiles")
 });
 
-/// The pattern of field `person` of record `rec-cnv-pending-action`.
+/// The pattern of field `person` of record `rec-cnv-pending-action`, matched against the whole value.
 static REC_CNV_PENDING_ACTION_PERSON_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new("^[A-Za-z0-9_:.-]+$").expect("specc checked that the pattern compiles")
+    Regex::new("\\A(?:^[A-Za-z0-9_:.-]+$)\\z").expect("specc checked that the pattern compiles")
 });
 
-/// The pattern of field `assistant` of record `rec-cnv-pending-action`.
+/// The pattern of field `assistant` of record `rec-cnv-pending-action`, matched against the whole value.
 static REC_CNV_PENDING_ACTION_ASSISTANT_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new("^[A-Za-z0-9_:.-]+$").expect("specc checked that the pattern compiles")
+    Regex::new("\\A(?:^[A-Za-z0-9_:.-]+$)\\z").expect("specc checked that the pattern compiles")
 });
 
-/// The pattern of field `tenant-id` of record `rec-log-line`.
+/// The pattern of field `tenant-id` of record `rec-log-line`, matched against the whole value.
 static REC_LOG_LINE_TENANT_ID_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new("^[a-z][a-z0-9_]*$").expect("specc checked that the pattern compiles")
+    Regex::new("\\A(?:^[a-z][a-z0-9_]*$)\\z").expect("specc checked that the pattern compiles")
 });
 
-/// The pattern of field `subject` of record `rec-subject-key`.
+/// The pattern of field `subject` of record `rec-subject-key`, matched against the whole value.
 static REC_SUBJECT_KEY_SUBJECT_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new("^[A-Za-z0-9_:.-]+$").expect("specc checked that the pattern compiles")
+    Regex::new("\\A(?:^[A-Za-z0-9_:.-]+$)\\z").expect("specc checked that the pattern compiles")
 });
 
-/// The pattern of field `principal-id` of record `rec-restriction`.
+/// The pattern of field `principal-id` of record `rec-restriction`, matched against the whole value.
 static REC_RESTRICTION_PRINCIPAL_ID_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new("^[A-Za-z0-9_:.-]+$").expect("specc checked that the pattern compiles")
+    Regex::new("\\A(?:^[A-Za-z0-9_:.-]+$)\\z").expect("specc checked that the pattern compiles")
 });
 
-/// The pattern of field `set-by` of record `rec-legal-hold`.
+/// The pattern of field `set-by` of record `rec-legal-hold`, matched against the whole value.
 static REC_LEGAL_HOLD_SET_BY_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new("^[A-Za-z0-9_:.-]+$").expect("specc checked that the pattern compiles")
+    Regex::new("\\A(?:^[A-Za-z0-9_:.-]+$)\\z").expect("specc checked that the pattern compiles")
 });
 
-/// The pattern of field `operator` of record `rec-access-grant`.
+/// The pattern of field `operator` of record `rec-access-grant`, matched against the whole value.
 static REC_ACCESS_GRANT_OPERATOR_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new("^[A-Za-z0-9_:.-]+$").expect("specc checked that the pattern compiles")
+    Regex::new("\\A(?:^[A-Za-z0-9_:.-]+$)\\z").expect("specc checked that the pattern compiles")
 });
 
-/// The pattern of field `issued-by` of record `rec-access-grant`.
+/// The pattern of field `issued-by` of record `rec-access-grant`, matched against the whole value.
 static REC_ACCESS_GRANT_ISSUED_BY_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new("^[A-Za-z0-9_:.-]+$").expect("specc checked that the pattern compiles")
+    Regex::new("\\A(?:^[A-Za-z0-9_:.-]+$)\\z").expect("specc checked that the pattern compiles")
 });
 
-/// The pattern of field `uploaded-by` of record `rec-file-bytes`.
+/// The pattern of field `uploaded-by` of record `rec-file-bytes`, matched against the whole value.
 static REC_FILE_BYTES_UPLOADED_BY_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new("^[A-Za-z0-9_:.-]+$").expect("specc checked that the pattern compiles")
+    Regex::new("\\A(?:^[A-Za-z0-9_:.-]+$)\\z").expect("specc checked that the pattern compiles")
 });
 
-/// The pattern of field `recipient` of record `rec-mail-message`.
+/// The pattern of field `recipient` of record `rec-mail-message`, matched against the whole value.
 static REC_MAIL_MESSAGE_RECIPIENT_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new("^[A-Za-z0-9_:.-]+$").expect("specc checked that the pattern compiles")
+    Regex::new("\\A(?:^[A-Za-z0-9_:.-]+$)\\z").expect("specc checked that the pattern compiles")
 });
 
-/// The pattern of field `author` of record `rec-release-record`.
+/// The pattern of field `author` of record `rec-release-record`, matched against the whole value.
 static REC_RELEASE_RECORD_AUTHOR_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new("^[A-Za-z0-9_:.-]+$").expect("specc checked that the pattern compiles")
+    Regex::new("\\A(?:^[A-Za-z0-9_:.-]+$)\\z").expect("specc checked that the pattern compiles")
 });
 
-/// The pattern of field `tenant-id` of record `rec-migration-run`.
+/// The pattern of field `tenant-id` of record `rec-migration-run`, matched against the whole value.
 static REC_MIGRATION_RUN_TENANT_ID_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new("^[a-z][a-z0-9_]*$").expect("specc checked that the pattern compiles")
+    Regex::new("\\A(?:^[a-z][a-z0-9_]*$)\\z").expect("specc checked that the pattern compiles")
 });
 
-/// The pattern of field `started-by` of record `rec-migration-run`.
+/// The pattern of field `started-by` of record `rec-migration-run`, matched against the whole value.
 static REC_MIGRATION_RUN_STARTED_BY_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new("^[A-Za-z0-9_:.-]+$").expect("specc checked that the pattern compiles")
+    Regex::new("\\A(?:^[A-Za-z0-9_:.-]+$)\\z").expect("specc checked that the pattern compiles")
 });
 
-/// The pattern of field `tenant-id` of record `rec-tenant-move`.
+/// The pattern of field `tenant-id` of record `rec-tenant-move`, matched against the whole value.
 static REC_TENANT_MOVE_TENANT_ID_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new("^[a-z][a-z0-9_]*$").expect("specc checked that the pattern compiles")
+    Regex::new("\\A(?:^[a-z][a-z0-9_]*$)\\z").expect("specc checked that the pattern compiles")
 });
 
-/// The pattern of field `recipient` of record `rec-inbox-item`.
+/// The pattern of field `recipient` of record `rec-inbox-item`, matched against the whole value.
 static REC_INBOX_ITEM_RECIPIENT_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new("^[A-Za-z0-9_:.-]+$").expect("specc checked that the pattern compiles")
+    Regex::new("\\A(?:^[A-Za-z0-9_:.-]+$)\\z").expect("specc checked that the pattern compiles")
 });
 
-/// The pattern of field `subscriber` of record `rec-subscription`.
+/// The pattern of field `subscriber` of record `rec-subscription`, matched against the whole value.
 static REC_SUBSCRIPTION_SUBSCRIBER_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new("^[A-Za-z0-9_:.-]+$").expect("specc checked that the pattern compiles")
+    Regex::new("\\A(?:^[A-Za-z0-9_:.-]+$)\\z").expect("specc checked that the pattern compiles")
 });
 
-/// The pattern of field `created-by` of record `rec-redirect`.
+/// The pattern of field `created-by` of record `rec-redirect`, matched against the whole value.
 static REC_REDIRECT_CREATED_BY_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new("^[A-Za-z0-9_:.-]+$").expect("specc checked that the pattern compiles")
+    Regex::new("\\A(?:^[A-Za-z0-9_:.-]+$)\\z").expect("specc checked that the pattern compiles")
 });
 
-/// The pattern of field `tenant-id` of record `rec-feature-flag`.
+/// The pattern of field `tenant-id` of record `rec-feature-flag`, matched against the whole value.
 static REC_FEATURE_FLAG_TENANT_ID_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new("^[a-z][a-z0-9_]*$").expect("specc checked that the pattern compiles")
+    Regex::new("\\A(?:^[a-z][a-z0-9_]*$)\\z").expect("specc checked that the pattern compiles")
 });
 
-/// The pattern of field `tenant-id` of record `rec-plan`.
+/// The pattern of field `tenant-id` of record `rec-plan`, matched against the whole value.
 static REC_PLAN_TENANT_ID_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new("^[a-z][a-z0-9_]*$").expect("specc checked that the pattern compiles")
+    Regex::new("\\A(?:^[a-z][a-z0-9_]*$)\\z").expect("specc checked that the pattern compiles")
 });
 
-/// The pattern of field `tenant-id` of record `rec-usage-meter`.
+/// The pattern of field `tenant-id` of record `rec-usage-meter`, matched against the whole value.
 static REC_USAGE_METER_TENANT_ID_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new("^[a-z][a-z0-9_]*$").expect("specc checked that the pattern compiles")
+    Regex::new("\\A(?:^[a-z][a-z0-9_]*$)\\z").expect("specc checked that the pattern compiles")
 });
 
-/// The pattern of field `principal-id` of record `rec-erasure-receipt`.
+/// The pattern of field `principal-id` of record `rec-erasure-receipt`, matched against the whole value.
 static REC_ERASURE_RECEIPT_PRINCIPAL_ID_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new("^[A-Za-z0-9_:.-]+$").expect("specc checked that the pattern compiles")
+    Regex::new("\\A(?:^[A-Za-z0-9_:.-]+$)\\z").expect("specc checked that the pattern compiles")
 });
 
-/// The pattern of field `tenant-id` of record `rec-audit-chain`.
+/// The pattern of field `tenant-id` of record `rec-audit-chain`, matched against the whole value.
 static REC_AUDIT_CHAIN_TENANT_ID_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new("^[a-z][a-z0-9_]*$").expect("specc checked that the pattern compiles")
+    Regex::new("\\A(?:^[a-z][a-z0-9_]*$)\\z").expect("specc checked that the pattern compiles")
 });
 
-/// The pattern of field `tenant-id` of record `rec-tenant-suspension`.
+/// The pattern of field `tenant-id` of record `rec-tenant-suspension`, matched against the whole value.
 static REC_TENANT_SUSPENSION_TENANT_ID_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new("^[a-z][a-z0-9_]*$").expect("specc checked that the pattern compiles")
+    Regex::new("\\A(?:^[a-z][a-z0-9_]*$)\\z").expect("specc checked that the pattern compiles")
 });
 
-/// The pattern of field `tenant-id` of record `rec-write-quota`.
+/// The pattern of field `tenant-id` of record `rec-write-quota`, matched against the whole value.
 static REC_WRITE_QUOTA_TENANT_ID_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new("^[a-z][a-z0-9_]*$").expect("specc checked that the pattern compiles")
+    Regex::new("\\A(?:^[a-z][a-z0-9_]*$)\\z").expect("specc checked that the pattern compiles")
 });
 
-/// The pattern of field `tenant-id` of record `rec-plan-change`.
+/// The pattern of field `tenant-id` of record `rec-plan-change`, matched against the whole value.
 static REC_PLAN_CHANGE_TENANT_ID_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new("^[a-z][a-z0-9_]*$").expect("specc checked that the pattern compiles")
+    Regex::new("\\A(?:^[a-z][a-z0-9_]*$)\\z").expect("specc checked that the pattern compiles")
 });
 
-/// The pattern of field `tenant-id` of record `rec-bootstrap-credential`.
+/// The pattern of field `tenant-id` of record `rec-bootstrap-credential`, matched against the whole value.
 static REC_BOOTSTRAP_CREDENTIAL_TENANT_ID_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new("^[a-z][a-z0-9_]*$").expect("specc checked that the pattern compiles")
+    Regex::new("\\A(?:^[a-z][a-z0-9_]*$)\\z").expect("specc checked that the pattern compiles")
 });
 
-/// The pattern of field `tenant-id` of record `rec-placement-choice`.
+/// The pattern of field `tenant-id` of record `rec-placement-choice`, matched against the whole value.
 static REC_PLACEMENT_CHOICE_TENANT_ID_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new("^[a-z][a-z0-9_]*$").expect("specc checked that the pattern compiles")
+    Regex::new("\\A(?:^[a-z][a-z0-9_]*$)\\z").expect("specc checked that the pattern compiles")
 });
 
-/// The pattern of field `tenant-id` of record `rec-tenant-deletion`.
+/// The pattern of field `tenant-id` of record `rec-tenant-deletion`, matched against the whole value.
 static REC_TENANT_DELETION_TENANT_ID_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new("^[a-z][a-z0-9_]*$").expect("specc checked that the pattern compiles")
+    Regex::new("\\A(?:^[a-z][a-z0-9_]*$)\\z").expect("specc checked that the pattern compiles")
 });
 
-/// The pattern of field `tenant-id` of record `rec-backup-key`.
+/// The pattern of field `tenant-id` of record `rec-backup-key`, matched against the whole value.
 static REC_BACKUP_KEY_TENANT_ID_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new("^[a-z][a-z0-9_]*$").expect("specc checked that the pattern compiles")
+    Regex::new("\\A(?:^[a-z][a-z0-9_]*$)\\z").expect("specc checked that the pattern compiles")
 });
 
-/// The pattern of field `tenant-id` of record `rec-runtime-credential`.
+/// The pattern of field `tenant-id` of record `rec-runtime-credential`, matched against the whole value.
 static REC_RUNTIME_CREDENTIAL_TENANT_ID_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new("^[a-z][a-z0-9_]*$").expect("specc checked that the pattern compiles")
+    Regex::new("\\A(?:^[a-z][a-z0-9_]*$)\\z").expect("specc checked that the pattern compiles")
 });
 
-/// The pattern of field `tenant-id` of record `rec-export-restore`.
+/// The pattern of field `tenant-id` of record `rec-export-restore`, matched against the whole value.
 static REC_EXPORT_RESTORE_TENANT_ID_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new("^[a-z][a-z0-9_]*$").expect("specc checked that the pattern compiles")
+    Regex::new("\\A(?:^[a-z][a-z0-9_]*$)\\z").expect("specc checked that the pattern compiles")
 });
 
-/// The pattern of field `tenant-id` of record `rec-point-in-time`.
+/// The pattern of field `tenant-id` of record `rec-point-in-time`, matched against the whole value.
 static REC_POINT_IN_TIME_TENANT_ID_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new("^[a-z][a-z0-9_]*$").expect("specc checked that the pattern compiles")
+    Regex::new("\\A(?:^[a-z][a-z0-9_]*$)\\z").expect("specc checked that the pattern compiles")
 });
 
-/// The pattern of field `tenant-id` of record `rec-kernel-upgrade`.
+/// The pattern of field `tenant-id` of record `rec-kernel-upgrade`, matched against the whole value.
 static REC_KERNEL_UPGRADE_TENANT_ID_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new("^[a-z][a-z0-9_]*$").expect("specc checked that the pattern compiles")
+    Regex::new("\\A(?:^[a-z][a-z0-9_]*$)\\z").expect("specc checked that the pattern compiles")
 });
 
-/// The pattern of field `tenant-id` of record `rec-placement-switch`.
+/// The pattern of field `tenant-id` of record `rec-placement-switch`, matched against the whole value.
 static REC_PLACEMENT_SWITCH_TENANT_ID_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new("^[a-z][a-z0-9_]*$").expect("specc checked that the pattern compiles")
+    Regex::new("\\A(?:^[a-z][a-z0-9_]*$)\\z").expect("specc checked that the pattern compiles")
 });
 
-/// The pattern of field `tenant-id` of record `rec-schema-change`.
+/// The pattern of field `tenant-id` of record `rec-schema-change`, matched against the whole value.
 static REC_SCHEMA_CHANGE_TENANT_ID_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new("^[a-z][a-z0-9_]*$").expect("specc checked that the pattern compiles")
+    Regex::new("\\A(?:^[a-z][a-z0-9_]*$)\\z").expect("specc checked that the pattern compiles")
 });
 
-/// The pattern of field `tenant-id` of record `rec-staging-promotion`.
+/// The pattern of field `tenant-id` of record `rec-staging-promotion`, matched against the whole value.
 static REC_STAGING_PROMOTION_TENANT_ID_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new("^[a-z][a-z0-9_]*$").expect("specc checked that the pattern compiles")
+    Regex::new("\\A(?:^[a-z][a-z0-9_]*$)\\z").expect("specc checked that the pattern compiles")
 });
 
-/// The pattern of field `tenant-id` of record `rec-field-change`.
+/// The pattern of field `tenant-id` of record `rec-field-change`, matched against the whole value.
 static REC_FIELD_CHANGE_TENANT_ID_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new("^[a-z][a-z0-9_]*$").expect("specc checked that the pattern compiles")
+    Regex::new("\\A(?:^[a-z][a-z0-9_]*$)\\z").expect("specc checked that the pattern compiles")
 });
 
-/// The pattern of field `tenant-id` of record `rec-draft-save`.
+/// The pattern of field `tenant-id` of record `rec-draft-save`, matched against the whole value.
 static REC_DRAFT_SAVE_TENANT_ID_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new("^[a-z][a-z0-9_]*$").expect("specc checked that the pattern compiles")
+    Regex::new("\\A(?:^[a-z][a-z0-9_]*$)\\z").expect("specc checked that the pattern compiles")
 });
 
-/// The pattern of field `tenant-id` of record `rec-workflow-version`.
+/// The pattern of field `tenant-id` of record `rec-workflow-version`, matched against the whole value.
 static REC_WORKFLOW_VERSION_TENANT_ID_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new("^[a-z][a-z0-9_]*$").expect("specc checked that the pattern compiles")
+    Regex::new("\\A(?:^[a-z][a-z0-9_]*$)\\z").expect("specc checked that the pattern compiles")
 });
 
-/// The pattern of field `tenant-id` of record `rec-scheduled-job-check`.
+/// The pattern of field `tenant-id` of record `rec-scheduled-job-check`, matched against the whole value.
 static REC_SCHEDULED_JOB_CHECK_TENANT_ID_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new("^[a-z][a-z0-9_]*$").expect("specc checked that the pattern compiles")
+    Regex::new("\\A(?:^[a-z][a-z0-9_]*$)\\z").expect("specc checked that the pattern compiles")
 });
 
-/// The pattern of field `tenant-id` of record `rec-template-proposal`.
+/// The pattern of field `tenant-id` of record `rec-template-proposal`, matched against the whole value.
 static REC_TEMPLATE_PROPOSAL_TENANT_ID_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new("^[a-z][a-z0-9_]*$").expect("specc checked that the pattern compiles")
+    Regex::new("\\A(?:^[a-z][a-z0-9_]*$)\\z").expect("specc checked that the pattern compiles")
 });
 
-/// The pattern of field `tenant-id` of record `rec-import`.
+/// The pattern of field `tenant-id` of record `rec-import`, matched against the whole value.
 static REC_IMPORT_TENANT_ID_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new("^[a-z][a-z0-9_]*$").expect("specc checked that the pattern compiles")
+    Regex::new("\\A(?:^[a-z][a-z0-9_]*$)\\z").expect("specc checked that the pattern compiles")
 });
 
 /// Tenant

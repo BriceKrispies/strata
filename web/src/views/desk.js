@@ -48,11 +48,11 @@ export function desk(page) {
                     ? h('a', { class: 'button button--small button--quiet', href: p.href }, 'View')
                     : null,
                   p.status === 'published'
-                    ? h('button', { class: 'button button--small button--quiet', type: 'button', disabled: p.pending, 'data-action': 'post.unpublish', 'data-arg': arg({ id: p.id, version: p.version }), 'aria-label': `Unpublish ${p.title}` }, 'Unpublish')
-                    : h('button', { class: 'button button--small', type: 'button', disabled: p.pending, 'data-action': 'post.publish', 'data-arg': arg({ id: p.id, version: p.version }), 'aria-label': `Publish ${p.title}` }, 'Publish'),
+                    ? h('button', { class: 'button button--small button--quiet', type: 'button', disabled: p.pending, 'data-action': 'post.unpublish', 'data-arg': arg({ id: p.id, version: p.version }), 'aria-label': p.labels.unpublish }, 'Unpublish')
+                    : h('button', { class: 'button button--small', type: 'button', disabled: p.pending, 'data-action': 'post.publish', 'data-arg': arg({ id: p.id, version: p.version }), 'aria-label': p.labels.publish }, 'Publish'),
                   p.confirming
-                    ? h('button', { class: 'button button--small button--danger', type: 'button', 'data-action': 'post.delete', 'data-arg': arg({ id: p.id, version: p.version }), 'aria-label': `Confirm deleting ${p.title}` }, 'Confirm delete')
-                    : h('button', { class: 'button button--small button--quiet', type: 'button', 'data-action': 'post.ask_delete', 'data-arg': arg({ id: p.id }), 'aria-label': `Delete ${p.title}` }, 'Delete'),
+                    ? h('button', { class: 'button button--small button--danger', type: 'button', 'data-action': 'post.delete', 'data-arg': arg({ id: p.id, version: p.version }), 'aria-label': p.labels.confirmRemove }, 'Confirm delete')
+                    : h('button', { class: 'button button--small button--quiet', type: 'button', 'data-action': 'post.ask_delete', 'data-arg': arg({ id: p.id }), 'aria-label': p.labels.remove }, 'Delete'),
                 ),
               ),
             ),

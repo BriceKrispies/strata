@@ -33,6 +33,7 @@ pub mod output;
 pub mod readiness;
 pub mod render;
 pub mod resolve;
+pub mod rules;
 pub mod scenarios;
 pub mod web;
 pub mod web_kernel;

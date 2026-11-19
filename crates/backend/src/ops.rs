@@ -171,6 +171,12 @@ pub fn mutate(
         revision: done.receipt.revision.0,
         event_seq: done.transition.delta.event_seq,
         checks_passed: done.transition.evidence.len(),
+        fields: match mutation {
+            Mutation::Create { fields, .. } | Mutation::Update { fields, .. } => {
+                Some(fields.clone())
+            }
+            Mutation::Delete { .. } => None,
+        },
     })
 }
 

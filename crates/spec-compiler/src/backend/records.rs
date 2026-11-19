@@ -437,7 +437,7 @@ fn check_constraints(spec: &Spec, r: &Record, f: &RecordField, out: &mut Vec<Dia
         }
     }
     if let Some(p) = &c.pattern {
-        if let Err(e) = regex::Regex::new(p) {
+        if let Err(e) = regex::Regex::new(&crate::rules::anchored(p)) {
             let reason = e
                 .to_string()
                 .split_whitespace()
@@ -691,11 +691,17 @@ fn field_checks(
     let pattern_static = match &c.pattern {
         Some(p) => {
             let name = format_ident!("{}", pattern_static_name(r, f)?);
-            let doc = format!(" The pattern of field `{}` of record `{}`.", f.name, r.id);
+            // Matched against the whole value, as a validation's pattern is, and as the page
+            // matches it.
+            let anchored = crate::rules::anchored(p);
+            let doc = format!(
+                " The pattern of field `{}` of record `{}`, matched against the whole value.",
+                f.name, r.id
+            );
             statics.push(quote! {
                 #[doc = #doc]
                 static #name: LazyLock<Regex> =
-                    LazyLock::new(|| Regex::new(#p).expect("specc checked that the pattern compiles"));
+                    LazyLock::new(|| Regex::new(#anchored).expect("specc checked that the pattern compiles"));
             });
             Some(name)
         }

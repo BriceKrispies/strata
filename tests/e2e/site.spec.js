@@ -279,6 +279,34 @@ test('an author writes a draft, sees validation from the kernel, publishes, and 
   await reader.context().close();
 });
 
+test('a delete confirmation does not survive leaving the desk and coming back', async ({ page }) => {
+  await signIn(page, 'tomasz');
+  await writeDraft(page, 'Left Armed');
+  await page.getByRole('link', { name: 'Back to the desk' }).click();
+  await page.getByRole('button', { name: 'Delete Left Armed', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Confirm deleting Left Armed' })).toBeVisible();
+
+  // Away and back by the browser's history, and away and back by a link: each disarms it.
+  await page.goBack();
+  await page.goForward();
+  await ready(page);
+  await expect(page.getByRole('button', { name: 'Confirm deleting Left Armed' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Delete Left Armed', exact: true })).toBeVisible();
+
+  await page.getByRole('button', { name: 'Delete Left Armed', exact: true }).click();
+  await page.getByRole('link', { name: 'Write a new article' }).click();
+  await expect(page.getByRole('heading', { level: 1, name: 'New article' })).toBeVisible();
+  await page.goBack();
+  await ready(page);
+  await expect(page.getByRole('button', { name: 'Confirm deleting Left Armed' })).toHaveCount(0);
+
+  // One press now only asks; the article is still there.
+  await page.getByRole('button', { name: 'Delete Left Armed', exact: true }).click();
+  await expect(page.getByRole('row', { name: /Left Armed/ })).toHaveCount(1);
+  await page.getByRole('button', { name: 'Confirm deleting Left Armed' }).click();
+  await expect(page.locator('.toast', { hasText: 'Deleted.' })).toBeVisible();
+});
+
 test('an author cannot edit another author’s article; an editor can', async ({ page }) => {
   await signIn(page, 'mirela');
   await expect(page.getByRole('row', { name: /The Jig Is the Work/ })).toHaveCount(0);
