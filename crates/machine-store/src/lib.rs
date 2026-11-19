@@ -818,6 +818,8 @@ impl Tx for ApiTx<'_> {
 pub struct StorageApiMachineStore {
     store: Arc<dyn Store>,
     tenant: TenantId,
+    /// The same tenant under the runtime's own name type.
+    owner: strata_runtime::TenantId,
     clock: Arc<dyn Clock>,
     gate: Mutex<()>,
 }
@@ -827,9 +829,14 @@ impl StorageApiMachineStore {
     /// is created on first use. `clock` stamps what the store records (creation and update
     /// times, event times); the host's own clock still decides what is due.
     pub fn new(store: Arc<dyn Store>, tenant: TenantId, clock: Arc<dyn Clock>) -> Self {
+        // The kernel's tenant id and the runtime's tenant name have one rule, so a kernel id is
+        // always a runtime name.
+        let owner = strata_runtime::TenantId::new(tenant.as_str())
+            .expect("a kernel tenant id is a runtime tenant name");
         StorageApiMachineStore {
             store,
             tenant,
+            owner,
             clock,
             gate: Mutex::new(()),
         }
@@ -883,8 +890,8 @@ impl std::fmt::Debug for StorageApiMachineStore {
 }
 
 impl RecordStore for StorageApiMachineStore {
-    fn tenant(&self) -> &TenantId {
-        &self.tenant
+    fn tenant(&self) -> &strata_runtime::TenantId {
+        &self.owner
     }
 
     /// Every commit is guarded by the tenant's revision and every read in a transaction must see

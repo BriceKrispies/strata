@@ -40,6 +40,7 @@ pub mod sqlite;
 pub mod store;
 pub mod system;
 pub mod telemetry;
+pub mod tenant;
 
 pub use client::{
     random_key, CallBackoff, CallError, CallRetry, Client, Credentials, KeySource, NoCredentials,
@@ -64,8 +65,8 @@ pub use store::{
     DeadLetter, MachineStore, NewEntry, NewMessage, NewTimer, OutboxEntry, OutboxStore, QueueEntry,
     QueueStore, RecordStore, StorageError, StoredRecord, TimerEntry, TimerStore, Tx,
 };
-pub use strata_kernel::TenantId;
 pub use system::{
     Delivered, Member, Reached, RouteTable, Router, Routing, StepReport, System, SystemTick,
 };
 pub use telemetry::{JsonLines, Level, NoTelemetry, Telemetry};
+pub use tenant::{InvalidTenant, TenantId};

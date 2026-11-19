@@ -56,351 +56,62 @@
       ] }
   ],
   "contracts": [
-    {
-      "id": "load-counters",
-      "name": "Load counters",
-      "ref": "CT-001",
-      "realisation": "generated",
-      "implementedBy": "store",
-      "inputs": [
-        {
-          "name": "needs",
-          "type": "list<counter-need>"
-        }
-      ],
-      "outputs": [
-        {
-          "name": "counters",
-          "type": "map<string, u64>"
-        },
-        {
-          "name": "revision",
-          "type": "u64"
-        }
-      ],
-      "postconditions": [
-        "counters holds every counter a need names that exists, and revision is the store's revision they were read at."
-      ],
+    { "id": "load-counters", "name": "Load counters", "ref": "CT-001", "exposure": "local", "auth": { "scheme": "in-process" }, "realisation": "generated", "implementedBy": "store",
+      "inputs": [{ "name": "needs", "type": "list<counter-need>" }],
+      "outputs": [{ "name": "counters", "type": "map<string, u64>" }, { "name": "revision", "type": "u64" }],
+      "postconditions": ["counters holds every counter a need names that exists, and revision is the store's revision they were read at."],
+      "errors": [{ "name": "unavailable", "condition": "The store did not answer.", "status": 503 }] },
+    { "id": "commit-bump", "name": "Commit a bump", "ref": "CT-002", "exposure": "local", "auth": { "scheme": "in-process" }, "realisation": "generated", "implementedBy": "store",
+      "inputs": [{ "name": "bump", "type": "bump" }, { "name": "revision", "type": "u64" }],
+      "outputs": [{ "name": "revision", "type": "u64" }],
+      "postconditions": ["The counter of the bump holds its value, and revision is the store's new revision."],
       "errors": [
-        {
-          "name": "unavailable",
-          "condition": "The store did not answer.",
-          "status": 503
-        }
-      ],
-      "exposure": "local",
-      "auth": {
-        "scheme": "in-process"
-      }
-    },
-    {
-      "id": "commit-bump",
-      "name": "Commit a bump",
-      "ref": "CT-002",
-      "realisation": "generated",
-      "implementedBy": "store",
-      "inputs": [
-        {
-          "name": "bump",
-          "type": "bump"
-        },
-        {
-          "name": "revision",
-          "type": "u64"
-        }
-      ],
-      "outputs": [
-        {
-          "name": "revision",
-          "type": "u64"
-        }
-      ],
-      "postconditions": [
-        "The counter of the bump holds its value, and revision is the store's new revision."
-      ],
-      "errors": [
-        {
-          "name": "conflict",
-          "condition": "Another commit changed the store since revision.",
-          "status": 409
-        },
-        {
-          "name": "unavailable",
-          "condition": "The store did not answer.",
-          "status": 503
-        }
-      ],
-      "exposure": "local",
-      "auth": {
-        "scheme": "in-process"
-      }
-    },
-    {
-      "id": "mutate-counter",
-      "name": "Change a counter",
-      "ref": "CT-003",
-      "realisation": "generated",
-      "implementedBy": "store",
+        { "name": "conflict", "condition": "Another commit changed the store since revision.", "status": 409 },
+        { "name": "unavailable", "condition": "The store did not answer.", "status": 503 }
+      ] },
+    { "id": "mutate-counter", "name": "Change a counter", "ref": "CT-003", "exposure": "local", "auth": { "scheme": "in-process" }, "realisation": "generated", "implementedBy": "store",
       "bffRoute": "POST /api/counters records",
-      "inputs": [
-        {
-          "name": "op",
-          "type": "string"
-        },
-        {
-          "name": "name",
-          "type": "string"
-        },
-        {
-          "name": "value",
-          "type": "u64",
-          "optional": true
-        }
-      ],
-      "outputs": [
-        {
-          "name": "revision",
-          "type": "u64"
-        }
-      ],
-      "postconditions": [
-        "The generic counter endpoint: op names the change."
-      ],
+      "inputs": [{ "name": "op", "type": "string" }, { "name": "name", "type": "string" }, { "name": "value", "type": "u64", "optional": true }],
+      "outputs": [{ "name": "revision", "type": "u64" }],
+      "postconditions": ["The generic counter endpoint: op names the change."],
+      "errors": [{ "name": "unavailable", "condition": "The store did not answer.", "status": 503 }] },
+    { "id": "pick-larger", "name": "Pick the larger count", "ref": "CT-004", "exposure": "local", "auth": { "scheme": "in-process" }, "realisation": "derived",
+      "derivation": { "kind": "pure", "function": "larger" },
+      "inputs": [{ "name": "a", "type": "u64" }, { "name": "b", "type": "u64" }],
+      "outputs": [{ "name": "larger", "type": "u64" }],
+      "errors": [] },
+    { "id": "read-counter", "name": "Read a counter", "ref": "CT-005", "exposure": "local", "auth": { "scheme": "in-process" }, "realisation": "derived",
+      "derivation": { "kind": "read", "needs": "read-needs", "load": "load-counters", "decide": "read-value" },
+      "inputs": [{ "name": "name", "type": "string" }],
+      "outputs": [{ "name": "value", "type": "u64" }],
       "errors": [
-        {
-          "name": "unavailable",
-          "condition": "The store did not answer.",
-          "status": 503
-        }
-      ],
-      "exposure": "local",
-      "auth": {
-        "scheme": "in-process"
-      }
-    },
-    {
-      "id": "pick-larger",
-      "name": "Pick the larger count",
-      "ref": "CT-004",
-      "realisation": "derived",
-      "derivation": {
-        "kind": "pure",
-        "function": "larger"
-      },
-      "inputs": [
-        {
-          "name": "a",
-          "type": "u64"
-        },
-        {
-          "name": "b",
-          "type": "u64"
-        }
-      ],
-      "outputs": [
-        {
-          "name": "larger",
-          "type": "u64"
-        }
-      ],
-      "errors": [],
-      "exposure": "local",
-      "auth": {
-        "scheme": "in-process"
-      }
-    },
-    {
-      "id": "read-counter",
-      "name": "Read a counter",
-      "ref": "CT-005",
-      "realisation": "derived",
-      "derivation": {
-        "kind": "read",
-        "needs": "read-needs",
-        "load": "load-counters",
-        "decide": "read-value"
-      },
-      "inputs": [
-        {
-          "name": "name",
-          "type": "string"
-        }
-      ],
-      "outputs": [
-        {
-          "name": "value",
-          "type": "u64"
-        }
-      ],
+        { "name": "missing", "condition": "The counter does not exist.", "type": "counter-need", "status": 500 },
+        { "name": "unavailable", "condition": "The store did not answer.", "status": 503 }
+      ] },
+    { "id": "copy-counter", "name": "Copy a counter", "ref": "CT-006", "exposure": "local", "auth": { "scheme": "in-process" }, "realisation": "derived",
+      "derivation": { "kind": "command", "needs": "copy-needs", "load": "load-counters", "decide": "decide-copy", "commit": "commit-bump",
+        "conflict": "conflict", "insufficient": "Missing", "needRounds": 4, "retries": 3 },
+      "inputs": [{ "name": "source", "type": "string" }, { "name": "target", "type": "string" }],
+      "outputs": [{ "name": "revision", "type": "u64" }, { "name": "value", "type": "u64" }],
       "errors": [
-        {
-          "name": "missing",
-          "condition": "The counter does not exist.",
-          "type": "counter-need",
-          "status": 500
-        },
-        {
-          "name": "unavailable",
-          "condition": "The store did not answer.",
-          "status": 503
-        }
-      ],
-      "exposure": "local",
-      "auth": {
-        "scheme": "in-process"
-      }
-    },
-    {
-      "id": "copy-counter",
-      "name": "Copy a counter",
-      "ref": "CT-006",
-      "realisation": "derived",
-      "derivation": {
-        "kind": "command",
-        "needs": "copy-needs",
-        "load": "load-counters",
-        "decide": "decide-copy",
-        "commit": "commit-bump",
-        "conflict": "conflict",
-        "insufficient": "Missing",
-        "needRounds": 4,
-        "retries": 3
-      },
-      "inputs": [
-        {
-          "name": "source",
-          "type": "string"
-        },
-        {
-          "name": "target",
-          "type": "string"
-        }
-      ],
-      "outputs": [
-        {
-          "name": "revision",
-          "type": "u64"
-        },
-        {
-          "name": "value",
-          "type": "u64"
-        }
-      ],
+        { "name": "missing", "condition": "A counter does not exist, or more were asked for than needRounds allows.", "type": "counter-need", "status": 500 },
+        { "name": "conflict", "condition": "Every commit lost its race, retries times over.", "status": 409 },
+        { "name": "unavailable", "condition": "The store did not answer.", "status": 503 }
+      ] },
+    { "id": "copy-counter-once", "name": "Copy a counter without asking twice", "ref": "CT-007", "exposure": "local", "auth": { "scheme": "in-process" }, "realisation": "derived",
+      "derivation": { "kind": "command", "needs": "copy-needs", "load": "load-counters", "decide": "decide-copy", "commit": "commit-bump",
+        "conflict": "conflict", "insufficient": "Missing", "needRounds": 0, "retries": 0 },
+      "inputs": [{ "name": "source", "type": "string" }, { "name": "target", "type": "string" }],
+      "outputs": [{ "name": "revision", "type": "u64" }, { "name": "value", "type": "u64" }],
       "errors": [
-        {
-          "name": "missing",
-          "condition": "A counter does not exist, or more were asked for than needRounds allows.",
-          "type": "counter-need",
-          "status": 500
-        },
-        {
-          "name": "conflict",
-          "condition": "Every commit lost its race, retries times over.",
-          "status": 409
-        },
-        {
-          "name": "unavailable",
-          "condition": "The store did not answer.",
-          "status": 503
-        }
-      ],
-      "exposure": "local",
-      "auth": {
-        "scheme": "in-process"
-      }
-    },
-    {
-      "id": "copy-counter-once",
-      "name": "Copy a counter without asking twice",
-      "ref": "CT-007",
-      "realisation": "derived",
-      "derivation": {
-        "kind": "command",
-        "needs": "copy-needs",
-        "load": "load-counters",
-        "decide": "decide-copy",
-        "commit": "commit-bump",
-        "conflict": "conflict",
-        "insufficient": "Missing",
-        "needRounds": 0,
-        "retries": 0
-      },
-      "inputs": [
-        {
-          "name": "source",
-          "type": "string"
-        },
-        {
-          "name": "target",
-          "type": "string"
-        }
-      ],
-      "outputs": [
-        {
-          "name": "revision",
-          "type": "u64"
-        },
-        {
-          "name": "value",
-          "type": "u64"
-        }
-      ],
-      "errors": [
-        {
-          "name": "missing",
-          "condition": "The decision asked for a counter that was not loaded.",
-          "type": "counter-need",
-          "status": 500
-        },
-        {
-          "name": "conflict",
-          "condition": "The commit lost its race.",
-          "status": 409
-        },
-        {
-          "name": "unavailable",
-          "condition": "The store did not answer.",
-          "status": 503
-        }
-      ],
-      "exposure": "local",
-      "auth": {
-        "scheme": "in-process"
-      }
-    },
-    {
-      "id": "edit-counter",
-      "name": "Edit a counter",
-      "ref": "CT-008",
-      "realisation": "facade",
+        { "name": "missing", "condition": "The decision asked for a counter that was not loaded.", "type": "counter-need", "status": 500 },
+        { "name": "conflict", "condition": "The commit lost its race.", "status": 409 },
+        { "name": "unavailable", "condition": "The store did not answer.", "status": 503 }
+      ] },
+    { "id": "edit-counter", "name": "Edit a counter", "ref": "CT-008", "exposure": "local", "auth": { "scheme": "in-process" }, "realisation": "facade",
       "bffRoute": "POST /api/counters records update counter",
-      "inputs": [
-        {
-          "name": "name",
-          "type": "string"
-        },
-        {
-          "name": "value",
-          "type": "u64"
-        }
-      ],
-      "outputs": [
-        {
-          "name": "revision",
-          "type": "u64"
-        }
-      ],
-      "errors": [
-        {
-          "name": "unavailable",
-          "condition": "The store did not answer.",
-          "status": 503
-        }
-      ],
-      "exposure": "local",
-      "auth": {
-        "scheme": "in-process"
-      }
-    }
+      "inputs": [{ "name": "name", "type": "string" }, { "name": "value", "type": "u64" }],
+      "outputs": [{ "name": "revision", "type": "u64" }],
+      "errors": [{ "name": "unavailable", "condition": "The store did not answer.", "status": 503 }] }
   ]
 }

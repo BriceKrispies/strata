@@ -246,7 +246,15 @@ fn every_primitive_evaluates_as_the_kernel_does() {
     let table: Vec<(&str, Result<Value, String>)> = vec![
         // Literals.
         ("null", null.clone()),
-        ("[1, 'a', time(2), ref(3)]", Ok(Value::List(vec![Value::Int(1), text("a"), Value::Time(2), Value::Ref(3)]))),
+        (
+            "[1, 'a', time(2), ref(3)]",
+            Ok(Value::List(vec![
+                Value::Int(1),
+                text("a"),
+                Value::Time(2),
+                Value::Ref(3),
+            ])),
+        ),
         // len, lower.
         ("len(new.title)", Ok(Value::Int(5))),
         ("len('h\u{e9}llo')", Ok(Value::Int(5))),
@@ -262,12 +270,18 @@ fn every_primitive_evaluates_as_the_kernel_does() {
         ("contains(new.tags, 1)", f.clone()),
         ("contains(null, 'x')", null.clone()),
         ("contains(new.title, null)", null.clone()),
-        ("contains(new.title, 3)", err("contains does not apply to a string")),
+        (
+            "contains(new.title, 3)",
+            err("contains does not apply to a string"),
+        ),
         ("contains(3, 'x')", err("contains does not apply to a int")),
         ("starts_with(new.title, 'He')", t.clone()),
         ("starts_with(new.title, 'el')", f.clone()),
         ("starts_with(null, 'x')", null.clone()),
-        ("starts_with(new.rank, 'x')", err("starts_with does not apply to a int")),
+        (
+            "starts_with(new.rank, 'x')",
+            err("starts_with does not apply to a int"),
+        ),
         ("is_slug(new.slug)", t.clone()),
         ("is_slug('-a')", f.clone()),
         ("is_slug('a--b')", f.clone()),
@@ -298,7 +312,10 @@ fn every_primitive_evaluates_as_the_kernel_does() {
         ("new.missing == null", null.clone()),
         ("1 < 'a'", err("cannot compare a int with a string")),
         ("1 == 'a'", err("cannot compare a int with a string")),
-        ("ref(1) < ref(2)", err("ordering does not apply to a reference")),
+        (
+            "ref(1) < ref(2)",
+            err("ordering does not apply to a reference"),
+        ),
         ("true < false", err("ordering does not apply to a bool")),
         ("[1] < [2]", err("ordering does not apply to a list")),
         // not, and, or, is_null, if.
@@ -344,8 +361,14 @@ fn every_primitive_evaluates_as_the_kernel_does() {
         ("new.category.name", null.clone()),
         ("new.dangling.name", null.clone()),
         ("old.author.name", null.clone()),
-        ("new.title.name", err("following a reference does not apply to a string")),
-        ("new.tags.name", err("following a reference does not apply to a list")),
+        (
+            "new.title.name",
+            err("following a reference does not apply to a string"),
+        ),
+        (
+            "new.tags.name",
+            err("following a reference does not apply to a list"),
+        ),
         ("new.other.name", err("other is not a reference")),
         ("new.Bad.name", err(&field_id_error("Bad"))),
     ];
@@ -493,23 +516,41 @@ fn the_check_gives_shapes_and_refuses_as_the_kernel_does() {
         ("1 and true", err("and/or does not accept a Int operand")),
         ("true or 'a'", err("and/or does not accept a Str operand")),
         ("1 == 'a'", err("cannot compare Int with Str")),
-        ("true < false", err("ordering does not accept a Bool operand")),
-        ("ref(1) < null", err("ordering does not accept a Ref operand")),
+        (
+            "true < false",
+            err("ordering does not accept a Bool operand"),
+        ),
+        (
+            "ref(1) < null",
+            err("ordering does not accept a Ref operand"),
+        ),
         ("1 in 2", err("in does not accept a Int operand")),
         ("len(1)", err("len does not accept a Int operand")),
         ("lower(1)", err("lower does not accept a Int operand")),
         ("is_slug(1)", err("is_slug does not accept a Int operand")),
-        ("contains(new.title, 1)", err("contains does not accept a Int operand")),
-        ("contains(1, 'a')", err("contains does not accept a Int operand")),
+        (
+            "contains(new.title, 1)",
+            err("contains does not accept a Int operand"),
+        ),
+        (
+            "contains(1, 'a')",
+            err("contains does not accept a Int operand"),
+        ),
         ("if(1, 2, 3)", err("if does not accept a Int operand")),
         ("if(true, 1, 'a')", err("if branches differ: Int and Str")),
         // The kernel checks both operands of contains before their shapes, and each operand of
         // starts_with before the next.
         ("contains(1, new.nope)", err("unknown field nope")),
-        ("starts_with(1, new.nope)", err("starts_with does not accept a Int operand")),
+        (
+            "starts_with(1, new.nope)",
+            err("starts_with does not accept a Int operand"),
+        ),
         ("1 == new.nope", err("unknown field nope")),
         ("new.nope and 1", err("unknown field nope")),
-        ("1 and new.nope", err("and/or does not accept a Int operand")),
+        (
+            "1 and new.nope",
+            err("and/or does not accept a Int operand"),
+        ),
     ];
     let mut failures = Vec::new();
     for (source, expected) in table {

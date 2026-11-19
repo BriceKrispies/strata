@@ -287,11 +287,9 @@ fn scenario_lease_run() {
         },
     );
 
-    // Step 9, t=45: result-accepted
-
-    // Step 10, t=50: lease-requested
+    // Step 9, t=50: lease-requested
     run_lease.deliver(
-        "step 10 (t=50, lease-requested)",
+        "step 9 (t=50, lease-requested)",
         50,
         None,
         json!({"event":"lease-requested","payload":{"holder":"w2"}}),
@@ -311,6 +309,8 @@ fn scenario_lease_run() {
             pending: &["expiry"],
         },
     );
+
+    // Step 10, t=50: result-accepted
 
     // Step 11, t=50: lease-granted
 
@@ -369,5 +369,5 @@ fn scenario_lease_run() {
         },
     );
 
-    // Step 16, t=100: result-accepted
+    // Step 16, t=105: result-accepted
 }

@@ -65,7 +65,9 @@ fn builds_the_declared_variants() {
         }
     );
     // A run of one n-ary operator is one list; a single operand is not wrapped.
-    assert!(matches!(parse("true and true and true").unwrap(), Expr::And(items) if items.len() == 3));
+    assert!(
+        matches!(parse("true and true and true").unwrap(), Expr::And(items) if items.len() == 3)
+    );
     assert_eq!(parse("(true)").unwrap(), Expr::Lit(Value::Bool(true)));
     assert_eq!(
         parse("[time(5), null, -2, [1]]").unwrap(),

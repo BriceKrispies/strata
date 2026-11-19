@@ -1221,6 +1221,9 @@ async fn members(
     Json(body): Json<Json_>,
 ) -> Result<Json<Json_>, Failure> {
     let visit = visit(&bff, &headers)?;
+    // The write guard comes first: a request without our origin and the session's token is
+    // refused before anything about it, the operation's name included, is looked at.
+    guard_write(&bff, &visit, &headers).await?;
     let op = operation.replace('-', "_");
     if !MembersRequest::OPS.contains(&op.as_str()) {
         return Err(Failure::new(
@@ -1229,7 +1232,6 @@ async fn members(
             &visit.correlation,
         ));
     }
-    guard_write(&bff, &visit, &headers).await?;
     let invalid = || {
         Failure::new(
             ErrorCode::Invalid,
@@ -1832,6 +1834,9 @@ async fn identity_write(
     Json(body): Json<Json_>,
 ) -> Result<Response, Failure> {
     let visit = visit(&bff, &headers)?;
+    // The write guard comes first, as for every other write: a request without our origin and
+    // the session's token is refused before its action is looked up.
+    guard_write(&bff, &visit, &headers).await?;
     let Some((_, path)) = IDENTITY_WRITES
         .iter()
         .find(|(name, _)| *name == action.trim_start_matches('/'))
@@ -1842,7 +1847,6 @@ async fn identity_write(
             &visit.correlation,
         ));
     };
-    guard_write(&bff, &visit, &headers).await?;
     let reply: Json_ = backend(&bff, &visit, path, &body).await?;
     Ok(uncached(reply))
 }

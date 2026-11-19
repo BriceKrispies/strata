@@ -15,7 +15,7 @@ use serde_json::json;
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 use strata_kernel::rules::may_attempt;
-use strata_kernel::{Action, ObjectTypeId, Principal, Resource};
+use strata_kernel::{Action, EventBody, ObjectTypeId, Principal, Resource};
 use strata_protocol::log::now_ms;
 use strata_protocol::ws::{
     parse_client, ClientMessage, ServerMessage, SessionState, HEARTBEAT_MS, MAX_REPLAY,
@@ -27,7 +27,8 @@ use tokio::sync::mpsc;
 
 const OUTBOUND_QUEUE: usize = 256;
 /// The store is asked whether the session still holds this often. A session that is revoked or
-/// ends on request is announced on the hub and closes its sockets at once; this only catches the
+/// ends on request is announced on the hub and closes its sockets at once; a published change of
+/// the person's roles makes the next tick ask at once (whoever committed it); this catches the
 /// idle timeout, which no event announces. Expiry by time needs no store read: see the tick.
 const SESSION_RECHECK: Duration = Duration::from_secs(30);
 
@@ -371,6 +372,10 @@ pub async fn serve(app: Shared, identity: Identity, places: SocketPlaces, socket
     let mut last_heard = Instant::now();
     let mut tick = tokio::time::interval(Duration::from_secs(2));
     let mut last_checked = Instant::now();
+    // A published change of this person's roles: whoever committed it (this process, another
+    // replica, a command line tool), their sessions may have ended with it, so the next tick
+    // asks the store instead of waiting for the recheck.
+    let mut recheck_soon = false;
     let mut reason = "client closed";
     while alive {
         let step: Result<(), Closed> = tokio::select! {
@@ -389,7 +394,13 @@ pub async fn serve(app: Shared, identity: Identity, places: SocketPlaces, socket
                 Some(Ok(Message::Close(_))) | Some(Err(_)) | None => Err(Closed),
             },
             published = events.recv() => match published {
-                Ok(published) => conn.deliver(&published),
+                Ok(published) => {
+                    if let EventBody::MemberChanged { principal, .. } = &published.event.body {
+                        recheck_soon |= published.event.tenant == conn.identity.tenant
+                            && matches!(&conn.identity.principal, Principal::User(id) if id == principal);
+                    }
+                    conn.deliver(&published)
+                }
                 Err(RecvError::Lagged(_)) => {
                     reason = "fell behind the event stream";
                     let head = conn.head().await;
@@ -435,9 +446,10 @@ pub async fn serve(app: Shared, identity: Identity, places: SocketPlaces, socket
                     .identity
                     .session
                     .clone()
-                    .filter(|_| last_checked.elapsed() >= SESSION_RECHECK)
+                    .filter(|_| recheck_soon || last_checked.elapsed() >= SESSION_RECHECK)
                 {
                     last_checked = Instant::now();
+                    recheck_soon = false;
                     let current = app
                         .blocking(move |app: &App| {
                             app.store.session(&session.id).ok().flatten().map(|s| session_state(app, &s, app.now().0))

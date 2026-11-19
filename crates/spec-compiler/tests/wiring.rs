@@ -172,6 +172,17 @@ impl routes::SubmitJobHooks for Hooks {
 }
 
 /// Serves `router` on an ephemeral local port and returns its base address.
+/// A reports component for a scheduler to call. A closed port would not do: Linux refuses the
+/// connection at once, but Windows answers only after its connection retries (about two
+/// seconds), which is longer than submit-job's timeout.
+async fn reports_server() -> String {
+    serve(
+        routes::reports_routes(Routes::new(Principals), Arc::new(Reports), Arc::new(()))
+            .into_router(),
+    )
+    .await
+}
+
 async fn serve(router: axum::Router) -> String {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
@@ -562,9 +573,10 @@ async fn one_contract_is_served_alone_and_answers_with_the_error_body() {
 /// Ping takes a session, so it is refused without a principal.
 #[tokio::test(flavor = "current_thread")]
 async fn refusals_answer_with_the_error_body_at_the_status_of_their_kind() {
+    let reports = reports_server().await;
     let scheduler = Arc::new(Scheduler {
         deps: deps::SchedulerDeps::new(routes::ReportsClient::new(
-            Client::new("http://127.0.0.1:9", NoCredentials).unwrap(),
+            Client::new(&reports, NoCredentials).unwrap(),
         )),
         submitted: Mutex::new(Vec::new()),
     });
@@ -634,10 +646,11 @@ async fn an_internal_contract_is_unreachable_through_the_gateway() {
         <routes::SubmitJob as Contract>::SPEC.access.exposure,
         Exposure::Internal
     );
+    let reports = reports_server().await;
     let scheduler = || {
         Arc::new(Scheduler {
             deps: deps::SchedulerDeps::new(routes::ReportsClient::new(
-                Client::new("http://127.0.0.1:9", NoCredentials).unwrap(),
+                Client::new(&reports, NoCredentials).unwrap(),
             )),
             submitted: Mutex::new(Vec::new()),
         })

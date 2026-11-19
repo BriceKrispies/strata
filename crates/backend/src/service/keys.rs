@@ -69,14 +69,19 @@ fn generate(now: i64) -> Result<SigningKey, ApiError> {
     };
     // PKCS#8 and SubjectPublicKeyInfo PEM with LF line endings: the same text OpenSSL wrote, so
     // keys stored before this change still load.
-    let private_pem = secret.to_pkcs8_pem(LineEnding::LF).map_err(internal)?.to_string();
+    let private_pem = secret
+        .to_pkcs8_pem(LineEnding::LF)
+        .map_err(internal)?
+        .to_string();
     let public = secret.public_key();
     let public_pem = public.to_public_key_pem(LineEnding::LF).map_err(internal)?;
     // The uncompressed point: 0x04, x, y.
     let encoded = public.to_encoded_point(false);
     let point = encoded.as_bytes();
     if point.len() != 65 || point[0] != 4 {
-        return Err(internal("the public key is not an uncompressed P-256 point"));
+        return Err(internal(
+            "the public key is not an uncompressed P-256 point",
+        ));
     }
     Ok(SigningKey {
         kid: format!("k_{}", random_hex(8)?),

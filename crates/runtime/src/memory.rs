@@ -11,9 +11,9 @@ use crate::store::{
     DeadLetter, NewEntry, NewMessage, NewTimer, OutboxEntry, OutboxStore, QueueEntry, QueueStore,
     RecordStore, StorageError, StoredRecord, TimerEntry, TimerStore, Tx,
 };
+use crate::TenantId;
 use std::collections::BTreeMap;
 use std::sync::{Mutex, MutexGuard};
-use strata_kernel::TenantId;
 
 #[derive(Clone, Debug, Default)]
 struct Data {

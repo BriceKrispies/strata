@@ -87,7 +87,7 @@ fn syntax_and_shape_errors_are_refused() {
     assert_eq!(codes("[]"), ["specc.spec-shape"]);
     assert_refused_with(
         &spec(json!({ "types": [ { "id": "t", "name": "T", "kind": "union" } ] })),
-        "specc.spec-shape",
+        "specc.type-union",
         "t",
     );
 }
@@ -113,7 +113,7 @@ fn type_rules_are_checked() {
         { "id": "no-values", "name": "V", "kind": "enum", "values": [] },
         { "id": "no-fields", "name": "F", "kind": "struct", "fields": [] },
         { "id": "bad-field", "name": "G", "kind": "struct", "fields": [ { "name": "x", "type": "nope" } ] },
-        { "id": "loop", "name": "L", "kind": "struct", "fields": [ { "name": "next", "type": "option<loop>" } ] },
+        { "id": "loop", "name": "L", "kind": "struct", "fields": [ { "name": "next", "type": "loop" } ] },
         { "id": "ok-tree", "name": "T", "kind": "struct", "fields": [ { "name": "kids", "type": "list<ok-tree>" } ] }
     ]);
     let text = spec(json!({ "types": types }));

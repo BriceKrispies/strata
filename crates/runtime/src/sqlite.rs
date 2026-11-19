@@ -17,12 +17,12 @@ use crate::store::{
     DeadLetter, NewEntry, NewMessage, NewTimer, OutboxEntry, OutboxStore, QueueEntry, QueueStore,
     RecordStore, StorageError, StoredRecord, TimerEntry, TimerStore, Tx,
 };
+use crate::TenantId;
 use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
 use std::fmt;
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
-use strata_kernel::TenantId;
 
 /// Why a [`Database`] operation failed.
 #[derive(Debug)]

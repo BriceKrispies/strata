@@ -45,8 +45,8 @@ pub struct Slug(pub String);
 
 impl Slug {
     /// The value, when it meets the type's constraints.
-    pub fn new(value: String) -> Result<Self, TypeConstraintViolation> {
-        let value = Self(value);
+    pub fn new(value: impl Into<String>) -> Result<Self, TypeConstraintViolation> {
+        let value = Self(value.into());
         value.validate()?;
         Ok(value)
     }
@@ -89,6 +89,19 @@ impl From<Slug> for String {
     }
 }
 
+impl Slug {
+    /// The value as text.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for Slug {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 /// Token
 ///
 /// Specification type `token`: a scalar represented as `bytes`.
@@ -100,8 +113,8 @@ pub struct Token(pub Vec<u8>);
 
 impl Token {
     /// The value, when it meets the type's constraints.
-    pub fn new(value: Vec<u8>) -> Result<Self, TypeConstraintViolation> {
-        let value = Self(value);
+    pub fn new(value: impl Into<Vec<u8>>) -> Result<Self, TypeConstraintViolation> {
+        let value = Self(value.into());
         value.validate()?;
         Ok(value)
     }
@@ -141,14 +154,20 @@ impl From<Token> for Vec<u8> {
 /// Tenant reference
 ///
 /// Specification type `tenant-ref`: an identifier represented as `u64`.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct TenantRef(pub u64);
+
+impl std::fmt::Display for TenantRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.0, f)
+    }
+}
 
 /// Seat count
 ///
 /// Specification type `seat-count`: a scalar represented as `u32`.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct SeatCount(pub u32);
 
@@ -244,7 +263,8 @@ pub enum Change {
 /// Comparison
 ///
 /// Specification type `cmp`: an enumeration, serialised as the specification's values.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+
 pub enum Cmp {
     /// The value `Eq`.
     #[serde(rename = "Eq")]
@@ -323,9 +343,15 @@ pub struct Chain {
 /// Account id
 ///
 /// Specification type `account-id`: an identifier represented as `uuid`.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct AccountId(pub uuid::Uuid);
+
+impl std::fmt::Display for AccountId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.0, f)
+    }
+}
 
 /// Owner
 ///

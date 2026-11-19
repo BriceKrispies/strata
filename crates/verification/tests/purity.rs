@@ -179,6 +179,8 @@ fn dependencies(crate_dir: &str) -> Vec<String> {
         .unwrap_or("");
     section
         .lines()
+        .map(str::trim)
+        .filter(|line| !line.starts_with('#'))
         .filter_map(|line| line.split(['.', '=', ' ']).next())
         .filter(|name| !name.is_empty())
         .map(str::to_string)

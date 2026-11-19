@@ -17,8 +17,8 @@
 
 use crate::clock::Time;
 use crate::machine::{Delivery, Isolation};
+use crate::TenantId;
 use std::fmt;
-use strata_kernel::TenantId;
 
 /// Why a storage operation failed.
 #[derive(Clone, Debug, PartialEq, Eq)]

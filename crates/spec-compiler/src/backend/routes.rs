@@ -2348,7 +2348,7 @@ mod tests {
         assert_eq!(ids, ["pub", "own"]);
         let text = squeezed(RoutesBackend.emit(&s));
         let table = text
-            .split("GATEWAY_ROUTES")
+            .split("constGATEWAY_ROUTES")
             .nth(1)
             .and_then(|rest| rest.split("];").next())
             .unwrap_or_default()

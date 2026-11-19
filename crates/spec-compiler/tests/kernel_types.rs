@@ -35,7 +35,7 @@ use regex::Regex;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use serde_json::Value as Json;
-use strata_kernel::testkit::{ctx, field, notes_world, object, principal_id, role, tenant_id};
+use strata_kernel::testkit::{ctx, field, object, principal_id, role, starting_worlds, tenant_id};
 use strata_kernel::*;
 use strata_model::types as generated;
 use strata_spec_compiler::jsonc;
@@ -639,8 +639,18 @@ fn needs() -> Vec<Need> {
 
 fn samples() -> Vec<(&'static str, Json)> {
     let mut s: Vec<(&'static str, Json)> = Vec::new();
-    let world = notes_world();
+    // A starting world whose alpha tenant holds records, so the record maps are sampled too.
     let alpha = tenant_id("alpha");
+    let world = starting_worlds()
+        .into_iter()
+        .map(|(_, world)| world)
+        .find(|world| {
+            world
+                .tenants
+                .get(&alpha)
+                .is_some_and(|t| t.records.values().any(|by_id| !by_id.is_empty()))
+        })
+        .expect("a starting world with records");
     let tenant = world.tenants.get(&alpha).expect("alpha").clone();
     let owner = Principal::User(principal_id("alpha:owner"));
 

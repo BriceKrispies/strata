@@ -23,10 +23,10 @@ use super::stepup;
 use super::{rules, throttled};
 use crate::app::{ApiError, App};
 use crate::auth::{random_hex, same_secret, Caller, Identity};
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use base64::Engine;
 use aes_gcm::aead::{Aead, Payload};
 use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::Engine;
 use serde_json::{json, Value as Json};
 use strata_kernel::{PrincipalId, TenantId};
 use strata_protocol::api::ErrorCode;
@@ -72,7 +72,13 @@ pub(super) fn seal(
     // AES-256-GCM's output is the ciphertext followed by its 16-byte tag, so the sealed form is
     // nonce, ciphertext, tag: the same layout as before.
     let sealed = cipher
-        .encrypt(Nonce::from_slice(&nonce), Payload { msg: secret, aad: &aad })
+        .encrypt(
+            Nonce::from_slice(&nonce),
+            Payload {
+                msg: secret,
+                aad: &aad,
+            },
+        )
         .map_err(|e| ApiError::hidden(ErrorCode::Internal, format!("sealing a secret: {e}")))?;
     let mut out = Vec::with_capacity(NONCE_BYTES + sealed.len());
     out.extend_from_slice(&nonce);
@@ -95,7 +101,13 @@ pub(super) fn open(
     let cipher = Aes256Gcm::new_from_slice(&app.cfg.factors.seal_key.0).ok()?;
     let aad = bound_to(tenant, principal);
     cipher
-        .decrypt(Nonce::from_slice(nonce), Payload { msg: sealed_and_tag, aad: &aad })
+        .decrypt(
+            Nonce::from_slice(nonce),
+            Payload {
+                msg: sealed_and_tag,
+                aad: &aad,
+            },
+        )
         .ok()
 }
 

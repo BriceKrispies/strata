@@ -679,6 +679,9 @@ fn a_journal_of_real_commits_replays_to_the_live_state() {
             "change_schema",
             "assign_role",
             "revoke_role",
+            "define_team",
+            "assign_team_role",
+            "add_team_member",
             "create_record",
             "update_record",
             "delete_record"

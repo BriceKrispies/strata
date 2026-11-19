@@ -304,8 +304,16 @@ async fn the_session_cookie_carries_the_host_prefix_and_secure() {
 /// development actions. The routes outside `/api` are a provider's own posts, which come from
 /// another site and carry no session of the person's: they are tested on their own.
 fn post_routes() -> Vec<String> {
-    include_str!("../src/routes.rs")
-        .lines()
+    // The routes of the `/api` router only: the routes outside it (the OAuth token and
+    // introspection endpoints, federation callbacks) authenticate a client or a provider, not a
+    // session, so they take no session token.
+    let source = include_str!("../src/routes.rs");
+    let api = source
+        .split("let api = Router::new()")
+        .nth(1)
+        .and_then(|rest| rest.split(".fallback(api_not_found)").next())
+        .expect("the /api router in routes.rs");
+    api.lines()
         .filter(|line| {
             line.contains(".route(\"") && line.contains("post(") && !line.contains("\"/federation/")
         })

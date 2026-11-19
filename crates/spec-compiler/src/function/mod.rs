@@ -1207,7 +1207,7 @@ mod tests {
         assert!(out.contains("u64 :: try_from (xs . len ())"), "{out}");
         assert!(out.contains(". trim () . to_string ()"), "{out}");
         assert!(
-            out.contains(". chars () . map (String :: from) . collect :: < Vec < _ > > ()"),
+            out.contains(". chars () . map (String :: from) . collect :: < Vec < _ >> ()"),
             "{out}"
         );
         assert!(
@@ -1298,7 +1298,7 @@ mod tests {
         );
         assert!(
             out.contains(
-                "collect :: < Result < std :: collections :: BTreeMap < _ , _ > , _ > > () ?"
+                "collect :: < Result < std :: collections :: BTreeMap < _ , _ > , _ >> () ?"
             ),
             "{out}"
         );
