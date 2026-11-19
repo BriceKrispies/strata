@@ -27,6 +27,8 @@ pub struct Spec {
     /// The behaviors with `level: "implementation"`, in declaration order. Model-level
     /// behaviors are not loaded: nothing is generated from them.
     pub machines: Vec<Behavior>,
+    /// The cross-cutting constructs: policies, validations, retentions, quotas, retries, audits.
+    pub constructs: crate::constructs::Constructs,
 }
 
 impl Spec {

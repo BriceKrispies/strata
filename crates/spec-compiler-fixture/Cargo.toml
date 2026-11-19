@@ -8,4 +8,5 @@ publish = false
 [dependencies]
 regex = "1.13.1"
 serde = { version = "1.0.228", features = ["derive"] }
+sha2 = "0.10.9"
 uuid = { version = "1.24.0", features = ["serde"] }

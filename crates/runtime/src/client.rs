@@ -4,9 +4,12 @@
 //! serves and decodes the answer into the contract's response or error. Credentials are added by
 //! a [`Credentials`] value, written by hand per deployment.
 //!
-//! Retries: a call to an idempotent contract is sent up to [`Client::with_attempts`] times
-//! (default 3), with the same `idempotency-key` header each time, when it fails in transport or
-//! with a runtime `timeout` or `unavailable`. A call to a contract that is not idempotent is sent
+//! Retries: a call to an idempotent contract is sent up to [`CallRetry::attempts`] times
+//! (default 3, set with [`Client::with_attempts`] or [`Client::with_retry`]), with the same
+//! `idempotency-key` header each time, when it fails in transport or with a runtime `timeout` or
+//! `unavailable`. The wait between attempts and the time one attempt may take come from the
+//! [`CallRetry`] too; [`Client::call_retrying`] takes one for a single call, such as the policy the
+//! specification states for that contract. A call to a contract that is not idempotent is sent
 //! once.
 
 use crate::routes::{Contract, Failure, FailureCode, ServiceToken, CORRELATION, IDEMPOTENCY_KEY};
@@ -79,13 +82,67 @@ impl<E> CallError<E> {
     }
 }
 
+/// How the wait between attempts of a call grows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CallBackoff {
+    /// The wait after the n-th failure is `step * n`.
+    Linear(Duration),
+    /// Every wait is the same.
+    Fixed(Duration),
+    /// The wait after the n-th failure is `base * 2^(n-1)`, at most `cap` when there is one.
+    Exponential {
+        /// The wait after the first failure.
+        base: Duration,
+        /// The longest wait.
+        cap: Option<Duration>,
+    },
+}
+
+/// When and how often a call is repeated: the numbers of a retry policy of the specification.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CallRetry {
+    /// The most attempts, the first included (at least one).
+    pub attempts: u32,
+    /// How the wait between attempts grows.
+    pub backoff: CallBackoff,
+    /// How long one attempt may take, instead of the contract's timeout.
+    pub timeout: Option<Duration>,
+}
+
+impl Default for CallRetry {
+    /// Three attempts, waiting 100 ms after the first failure and 200 ms after the second, each
+    /// bounded by the contract's timeout.
+    fn default() -> Self {
+        CallRetry {
+            attempts: 3,
+            backoff: CallBackoff::Linear(Duration::from_millis(100)),
+            timeout: None,
+        }
+    }
+}
+
+impl CallRetry {
+    /// The wait after `failures` failed attempts (1 for the first failure).
+    pub fn wait_after(&self, failures: u32) -> Duration {
+        let failures = failures.max(1);
+        match self.backoff {
+            CallBackoff::Linear(step) => step.saturating_mul(failures),
+            CallBackoff::Fixed(wait) => wait,
+            CallBackoff::Exponential { base, cap } => {
+                let wait = base.saturating_mul(1u32 << (failures - 1).min(31));
+                cap.map_or(wait, |cap| wait.min(cap))
+            }
+        }
+    }
+}
+
 /// A typed client for the contracts one component serves.
 #[derive(Clone, Debug)]
 pub struct Client<K: Credentials> {
     http: reqwest::Client,
     base: String,
     credentials: K,
-    attempts: u32,
+    retry: CallRetry,
 }
 
 fn idempotency_key() -> String {
@@ -107,13 +164,22 @@ impl<K: Credentials> Client<K> {
                 .map_err(|e| e.to_string())?,
             base: base.trim_end_matches('/').to_string(),
             credentials,
-            attempts: 3,
+            retry: CallRetry::default(),
         })
     }
 
     /// Send an idempotent call at most `attempts` times (at least once).
     pub fn with_attempts(mut self, attempts: u32) -> Self {
-        self.attempts = attempts.max(1);
+        self.retry.attempts = attempts.max(1);
+        self
+    }
+
+    /// Repeat idempotent calls as `retry` says, unless a call brings its own policy.
+    pub fn with_retry(mut self, retry: CallRetry) -> Self {
+        self.retry = CallRetry {
+            attempts: retry.attempts.max(1),
+            ..retry
+        };
         self
     }
 
@@ -131,14 +197,32 @@ impl<K: Credentials> Client<K> {
         request: &C::Request,
         correlation: &str,
     ) -> Result<C::Response, CallError<C::Error>> {
-        let attempts = if C::SPEC.idempotent { self.attempts } else { 1 };
+        self.call_retrying::<C>(request, correlation, &self.retry)
+            .await
+    }
+
+    /// Call contract `C` with `retry` in place of the client's own policy, such as the one the
+    /// specification states for that contract.
+    pub async fn call_retrying<C: Contract>(
+        &self,
+        request: &C::Request,
+        correlation: &str,
+        retry: &CallRetry,
+    ) -> Result<C::Response, CallError<C::Error>> {
+        let attempts = if C::SPEC.idempotent {
+            retry.attempts.max(1)
+        } else {
+            1
+        };
         let key = idempotency_key();
         let mut attempt = 1;
         loop {
-            let result = self.once::<C>(request, correlation, &key).await;
+            let result = self
+                .once::<C>(request, correlation, &key, retry.timeout)
+                .await;
             match result {
                 Err(error) if attempt < attempts && error.retryable() => {
-                    tokio::time::sleep(Duration::from_millis(100 * u64::from(attempt))).await;
+                    tokio::time::sleep(retry.wait_after(attempt)).await;
                     attempt += 1;
                 }
                 other => return other,
@@ -151,13 +235,14 @@ impl<K: Credentials> Client<K> {
         request: &C::Request,
         correlation: &str,
         key: &str,
+        timeout: Option<Duration>,
     ) -> Result<C::Response, CallError<C::Error>> {
         let mut builder = self
             .http
             .post(format!("{}{}", self.base, C::SPEC.path))
             // The server answers `timeout` itself at the contract's timeout; this only covers a
             // server that does not answer at all.
-            .timeout(C::SPEC.timeout + Duration::from_secs(1))
+            .timeout(timeout.unwrap_or(C::SPEC.timeout) + Duration::from_secs(1))
             .json(request);
         if C::SPEC.idempotent {
             builder = builder.header(IDEMPOTENCY_KEY, key);
@@ -191,5 +276,44 @@ impl<K: Credentials> Client<K> {
                 message: format!("status {status} without a failure body"),
             }),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_default_waits_as_the_client_always_did() {
+        let retry = CallRetry::default();
+        assert_eq!(retry.attempts, 3);
+        assert_eq!(retry.wait_after(1), Duration::from_millis(100));
+        assert_eq!(retry.wait_after(2), Duration::from_millis(200));
+    }
+
+    #[test]
+    fn exponential_waits_double_up_to_the_cap() {
+        let retry = CallRetry {
+            attempts: 6,
+            backoff: CallBackoff::Exponential {
+                base: Duration::from_millis(100),
+                cap: Some(Duration::from_millis(350)),
+            },
+            timeout: None,
+        };
+        assert_eq!(retry.wait_after(1), Duration::from_millis(100));
+        assert_eq!(retry.wait_after(2), Duration::from_millis(200));
+        assert_eq!(retry.wait_after(3), Duration::from_millis(350));
+        assert_eq!(retry.wait_after(40), Duration::from_millis(350));
+    }
+
+    #[test]
+    fn fixed_waits_do_not_grow() {
+        let retry = CallRetry {
+            attempts: 2,
+            backoff: CallBackoff::Fixed(Duration::from_secs(1)),
+            timeout: None,
+        };
+        assert_eq!(retry.wait_after(1), retry.wait_after(5));
     }
 }

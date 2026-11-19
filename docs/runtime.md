@@ -23,7 +23,7 @@ the runtime.
 | Running a machine's step in a transaction, persisting its record, the outbox, timers | What a machine does (generated `step`), and what a record holds |
 | SQLite connection setup, pragmas, migration ledger, `IMMEDIATE` write and read transactions | The tenant store's tables and statements (`storage-sqlite`) |
 | Serving a contract: authorization hook, body decoding, timeout, idempotent replay, wire format | Who may call: the `Authorizer` (service token, sessions, tenants) |
-| Calling a contract: typed client, retries for idempotent contracts | Credentials a caller presents |
+| Calling a contract: typed client, retries for idempotent contracts (`CallRetry`) | Credentials a caller presents |
 | Clock, telemetry hooks, constant-time secret comparison | Identity, sessions, CSRF, tenant resolution, content, views |
 | Process bootstrap: environment, bind, serve until shutdown, exit status, blocking work, background loops | Each service's configuration, routes and background work |
 
@@ -330,9 +330,55 @@ Runtime failures are not recorded for replay.
 
 The client sends `idempotency-key` (fresh per call, the same across its retries) for idempotent
 contracts and the correlation id in `x-correlation-id` when given. It retries an idempotent
-contract up to 3 times (`Client::with_attempts`) on a transport failure or a runtime `timeout` or
-`unavailable`; a contract that is not idempotent is sent once. Its error is
+contract on a transport failure or a runtime `timeout` or `unavailable`; a contract that is not
+idempotent is sent once. How often and how long it waits is a `CallRetry`:
+
+```rust
+pub struct CallRetry { pub attempts: u32, pub backoff: CallBackoff, pub timeout: Option<Duration> }
+pub enum CallBackoff {
+    Linear(Duration),                                   // wait step * n after the n-th failure
+    Fixed(Duration),                                    // always the same wait
+    Exponential { base: Duration, cap: Option<Duration> }, // base * 2^(n-1), at most cap
+}
+```
+
+The default is 3 attempts with `Linear(100 ms)` and no timeout of its own (an attempt is bounded by
+the contract's `SPEC.timeout`, plus one second for the transport). `Client::with_attempts(n)` sets
+the attempts, `Client::with_retry(policy)` the whole policy, and
+`Client::call_retrying::<C>(&request, correlation, &policy)` makes one call under another policy.
+`CallRetry::timeout`, when set, replaces `SPEC.timeout` for each attempt.
+
+A retry policy of the specification (`retry` entity) is generated as a `RetryPolicy` constant in
+the generated crate's `retries` module, which depends on no runtime. Its numbers map one to one:
+`attempts` to `CallRetry::attempts`, `backoff` (`Fixed { base }` or `Exponential { base, cap }`) to
+`CallBackoff`, `timeout` to `CallRetry::timeout`, and its `idempotency_key` names the input that
+identifies a repeat. The error of a call is
 `CallError::{Contract(E), Runtime { code, message }, Transport(String), Codec(String)}`.
+
+## Cross-cutting constructs in generated code
+
+Policies, validations, retentions, quotas, retries and audits are generated into pure code in the
+generated crate (modules `policies`, `validations`, `retentions`, `quotas`, `retries`, `audits`,
+and `support` for the types they share). The generated crate does not depend on this runtime;
+a deployment connects the two by hand:
+
+- **Who is acting.** `support::Caller { kind, id, tenant, role }` is what generated policies and
+  audits read. The deployment's `Authorizer` builds one from what it authenticated (the runtime's
+  own `Caller` carries only the subject and the correlation id) and calls
+  `policies::authorize_<contract>(&caller, &request[, record])`, which returns
+  `support::Decision::{Allow, Deny}`. Refuse a `Deny` with `FailureCode::Forbidden`.
+- **Validation.** Call `request.validate()` (and `record.validate_rules()`) before running a
+  handler; answer an `Err(ValidationError { id, message })` with `FailureCode::InvalidRequest`.
+- **Quotas.** `quotas::QUOTAS` lists every quota; a counter store keeps one `quotas::Counter` per
+  scope and calls `Quota::check(counter, now)`, which is pure. On `Exceeded`, answer with the
+  contract error named by `Quota::error`.
+- **Retention.** `retentions::RETENTIONS` is what a periodic job (`jobs::every`) executes: delete,
+  call the record's `anonymise()`, or archive to the named component, for each record whose
+  period has passed.
+- **Audits.** `audits::audit_<id>(&caller, &request, &response, now)` gives the entry to append;
+  `into_record` completes it with the storage key; for a `chained-hash` audit
+  `audits::chain_<id>(&mut record, previous)` sets the chain field before the append and
+  `verify_<id>` checks a stored log.
 
 ## Clock and telemetry
 

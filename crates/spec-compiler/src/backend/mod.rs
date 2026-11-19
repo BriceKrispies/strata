@@ -11,11 +11,19 @@ use proc_macro2::TokenStream;
 use crate::diagnostic::Diagnostic;
 use crate::ir::Spec;
 
+pub mod audits;
 pub mod contracts;
 pub mod machines;
+pub mod policies;
 pub mod prelude;
+pub mod quotas;
 pub mod records;
+pub mod retentions;
+pub mod retries;
+pub mod support;
 pub mod types;
+pub mod validations;
+pub mod view;
 
 /// One part of the specification compiled to one module of the generated crate.
 pub trait Backend {
@@ -43,4 +51,11 @@ pub const BACKENDS: &[&dyn Backend] = &[
     &records::RecordsBackend,
     &contracts::ContractsBackend,
     &machines::MachinesBackend,
+    &support::SupportBackend,
+    &policies::PoliciesBackend,
+    &validations::ValidationsBackend,
+    &retentions::RetentionsBackend,
+    &quotas::QuotasBackend,
+    &retries::RetriesBackend,
+    &audits::AuditsBackend,
 ];

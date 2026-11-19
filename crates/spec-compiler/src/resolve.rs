@@ -240,6 +240,7 @@ mod tests {
             contracts: vec![],
             events: vec![],
             machines: vec![],
+            constructs: Default::default(),
         }
     }
 
