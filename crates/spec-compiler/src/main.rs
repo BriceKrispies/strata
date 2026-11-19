@@ -5,6 +5,8 @@
 //! specc check        --spec <file> --out <dir> [--crate-name <name>] [--runtime <dir>]
 //! specc deploy       --spec <file> --out <dir>
 //! specc check-deploy --spec <file> --out <dir>
+//! specc e2e          --spec <file> --out <dir>
+//! specc check-e2e    --spec <file> --out <dir>
 //! ```
 //!
 //! `deploy` and `check-deploy` do for the deployment files (a compose stack, Kubernetes
@@ -24,13 +26,17 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use strata_spec_compiler::emit::relative_path;
-use strata_spec_compiler::{deploy, generate, output, GeneratedFile, Options, RuntimeDependency};
+use strata_spec_compiler::{
+    deploy, e2e, generate, output, GeneratedFile, Options, RuntimeDependency,
+};
 
 const USAGE: &str = "usage:
   specc generate     --spec <file> --out <dir> [--crate-name <name>] [--runtime <dir>]
   specc check        --spec <file> --out <dir> [--crate-name <name>] [--runtime <dir>]
   specc deploy       --spec <file> --out <dir>
-  specc check-deploy --spec <file> --out <dir>";
+  specc check-deploy --spec <file> --out <dir>
+  specc e2e          --spec <file> --out <dir>
+  specc check-e2e    --spec <file> --out <dir>";
 
 /// The runtime crate of the checkout specc was built from.
 const DEFAULT_RUNTIME: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../runtime");
@@ -41,6 +47,8 @@ enum Command {
     Check,
     Deploy,
     CheckDeploy,
+    E2e,
+    CheckE2e,
 }
 
 struct Args {
@@ -57,6 +65,8 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
         Some((c, rest)) if c == "check" => (Command::Check, rest),
         Some((c, rest)) if c == "deploy" => (Command::Deploy, rest),
         Some((c, rest)) if c == "check-deploy" => (Command::CheckDeploy, rest),
+        Some((c, rest)) if c == "e2e" => (Command::E2e, rest),
+        Some((c, rest)) if c == "check-e2e" => (Command::CheckE2e, rest),
         Some((c, _)) => return Err(format!("unknown command \"{c}\"")),
         None => return Err("no command given".to_string()),
     };
@@ -82,9 +92,12 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
     }
     let spec = spec.ok_or("--spec is required")?;
     let out = PathBuf::from(out.ok_or("--out is required")?);
-    let deploys = matches!(command, Command::Deploy | Command::CheckDeploy);
+    let deploys = matches!(
+        command,
+        Command::Deploy | Command::CheckDeploy | Command::E2e | Command::CheckE2e
+    );
     if deploys && crate_name.is_some() {
-        return Err("--crate-name does not apply to deploy".to_string());
+        return Err("--crate-name does not apply to deploy or e2e".to_string());
     }
     let crate_name = match crate_name {
         _ if deploys => String::new(),
@@ -122,6 +135,9 @@ fn main() -> ExitCode {
     if matches!(args.command, Command::Deploy | Command::CheckDeploy) {
         return run_deploy(&args, &text);
     }
+    if matches!(args.command, Command::E2e | Command::CheckE2e) {
+        return run_e2e(&args, &text);
+    }
     let runtime = match runtime_path(&args.out, &args.runtime) {
         Ok(path) => path,
         Err(message) => {
@@ -151,7 +167,9 @@ fn main() -> ExitCode {
         Command::Generate => run_generate(&args.out, &files),
         Command::Check => run_check(&args.out, &files),
         // Handled before generation.
-        Command::Deploy | Command::CheckDeploy => ExitCode::from(2),
+        Command::Deploy | Command::CheckDeploy | Command::E2e | Command::CheckE2e => {
+            ExitCode::from(2)
+        }
     }
 }
 
@@ -175,6 +193,27 @@ fn run_deploy(args: &Args, text: &str) -> ExitCode {
     }
     match args.command {
         Command::CheckDeploy => run_check(&args.out, &output.files),
+        _ => run_generate(&args.out, &output.files),
+    }
+}
+
+fn run_e2e(args: &Args, text: &str) -> ExitCode {
+    let output = match e2e::generate(&args.spec, text) {
+        Ok(output) => output,
+        Err(diagnostics) => {
+            for d in &diagnostics {
+                eprintln!("{d}");
+            }
+            eprintln!(
+                "specc: refused {} with {} diagnostic(s); nothing was written",
+                args.spec,
+                diagnostics.len()
+            );
+            return ExitCode::from(1);
+        }
+    };
+    match args.command {
+        Command::CheckE2e => run_check(&args.out, &output.files),
         _ => run_generate(&args.out, &output.files),
     }
 }
