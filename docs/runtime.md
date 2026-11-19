@@ -396,6 +396,20 @@ which admits nobody until the deployment says otherwise. `ServiceToken` is the s
 of a service network: the service scheme with the token, and anonymous calls that ask for no
 browser check; everything else is refused.
 
+`Access::requires` lists the capabilities a call needs (`auth.requires`). The generated
+authorizer checks them last, in one function, `routes::permitted`: for every capability, the
+tenant's plan entitles it or it is core, no feature flag gating it is off for the tenant, the
+caller holds it, and a delegation the caller acts under passes it on within its token's scopes.
+Two holes feed it: `entitlement(tenant)` (the tenant's plan and flag settings) and
+`holding(principal)` (the principal's platform roles, its tenant roles and its teams with their
+permissions, which are tenant data, its live grants, and the delegation it acts under). An
+anonymous caller, a service and a party proved by signature or provisioning token hold what the
+platform roles of their kind confer, which the specification fixes. `routes::OPERATIONS` is the
+operation catalogue (AGT-001..003): every contract reachable from outside its process with its
+description, access and the JSON Schema of its input; `routes::catalogue` marks each for a
+principal with whether it may be attempted, by the same check. `ServiceToken` does not read
+`requires`.
+
 `Routes::new` is the service network's listener (public and internal contracts);
 `Routes::gateway` faces browsers and the internet and serves public contracts only, so an
 internal contract has no route there and its path answers 404. A local contract is never served.
