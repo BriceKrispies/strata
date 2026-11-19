@@ -476,13 +476,22 @@ pub enum Effect {
     },
 }
 
-/// `storage: {record, key}`.
+/// `storage: {record, key, fields, state, stateValues, creates}`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Storage {
     /// The record id.
     pub record: Option<String>,
     /// The key field.
     pub key: Option<String>,
+    /// `fields`: the record field each listed variable is held in (`None` when not a string),
+    /// in the order written. A variable not listed is held in the field of its own name.
+    pub fields: Vec<(String, Option<String>)>,
+    /// `state`: the record field holding the state, when given (default `state`).
+    pub state: Option<String>,
+    /// `stateValues`: the stored value of each listed state (`None` when not a string).
+    pub state_values: Option<Vec<(String, Option<String>)>>,
+    /// `creates`: true when an event for a key with no record creates the record.
+    pub creates: bool,
 }
 
 /// `instances`, as written.

@@ -8,6 +8,11 @@
 //   current token, and a timer that grants again when the lease expires.
 // - job: keyed instances, otherwise, ignores, an at-least-once and an at-most-once emit, a timer
 //   and a cancel, terminal states, and a record field the machine does not own.
+// - hold: a machine that does not create its records (someone else does): variables mapped onto
+//   differently named fields (one of a declared id type over the variable's repr, one optional),
+//   the state in an enum field through stateValues, and required and optional fields it does not
+//   hold, carried over from the existing record.
+// lease and job create their records (storage.creates).
 {
   "exegra": "0.1",
   "system": { "id": "machines-fixture", "name": "Machines fixture" },
@@ -33,7 +38,21 @@
         { "name": "state", "type": "string" },
         { "name": "attempts", "type": "u32" },
         { "name": "note", "type": "string", "optional": true }
+      ] },
+    { "id": "rec-hold", "name": "Hold", "owner": "lease-service", "key": ["hold-id"], "schemaVersion": 1,
+      "fields": [
+        { "name": "hold-id", "type": "hold-id" },
+        { "name": "status", "type": "hold-status" },
+        { "name": "held-by", "type": "principal" },
+        { "name": "released-at", "type": "timestamp", "optional": true },
+        { "name": "reason", "type": "string" },
+        { "name": "memo", "type": "string", "optional": true }
       ] }
+  ],
+  "types": [
+    { "id": "hold-id", "name": "Hold id", "kind": "id", "repr": "uuid" },
+    { "id": "principal", "name": "Principal", "kind": "id", "repr": "string" },
+    { "id": "hold-status", "name": "Hold status", "kind": "enum", "values": ["active", "released", "expired"] }
   ],
   "events": [
     { "id": "lease-requested", "name": "Lease requested", "payload": [ { "name": "holder", "type": "string" } ] },
@@ -46,7 +65,9 @@
     { "id": "job-tick", "name": "Job retry due", "elapsed": true, "payload": [ { "name": "job", "type": "string" } ] },
     { "id": "job-cancel", "name": "Job cancelled", "payload": [ { "name": "job", "type": "string" } ] },
     { "id": "job-started", "name": "Job started", "delivery": "at-least-once", "payload": [ { "name": "job", "type": "string" }, { "name": "attempts", "type": "u32" } ] },
-    { "id": "job-dropped", "name": "Job dropped", "delivery": "at-most-once", "payload": [ { "name": "job", "type": "string" } ] }
+    { "id": "job-dropped", "name": "Job dropped", "delivery": "at-most-once", "payload": [ { "name": "job", "type": "string" } ] },
+    { "id": "hold-taken", "name": "Hold taken", "payload": [ { "name": "holder", "type": "string" } ] },
+    { "id": "hold-released", "name": "Hold released" }
   ],
   "behaviors": [
     {
@@ -58,7 +79,7 @@
         { "name": "accepted", "type": "number", "initial": 0, "repr": "u32" },
         { "name": "granted", "type": "number", "initial": 0, "repr": "timestamp" }
       ],
-      "storage": { "record": "rec-lease", "key": "lease-id" },
+      "storage": { "record": "rec-lease", "key": "lease-id", "creates": true },
       "transaction": { "scope": "transition", "isolation": "serializable" },
       "states": [
         { "id": "idle", "name": "Free", "ignores": ["lease-expired"] },
@@ -103,7 +124,7 @@
       "variables": [
         { "name": "attempts", "type": "number", "initial": 0, "repr": "u32" }
       ],
-      "instances": { "key": "job", "storedIn": "rec-job" },
+      "instances": { "key": "job", "storedIn": "rec-job" }, "storage": { "record": "rec-job", "key": "job", "creates": true },
       "transaction": { "scope": "transition", "isolation": "snapshot" },
       "states": [
         { "id": "idle", "name": "Waiting", "ignores": ["job-tick", "job-cancel"] },
@@ -136,6 +157,28 @@
           "effects": [
             { "cancel": "retry" }
           ] }
+      ]
+    },
+    {
+      "id": "hold", "name": "Hold", "subject": "lease-service", "initial": "h-active", "level": "implementation",
+      "description": "A hold someone else creates: taken over by a new holder while active, released once.",
+      "variables": [
+        { "name": "holder", "type": "string", "initial": "", "repr": "string" },
+        { "name": "releasedAt", "type": "number", "initial": 0, "repr": "timestamp" }
+      ],
+      "storage": { "record": "rec-hold", "key": "hold-id",
+        "fields": { "holder": "held-by", "releasedAt": "released-at" },
+        "state": "status", "stateValues": { "h-active": "active", "h-released": "released" } },
+      "transaction": { "scope": "transition", "isolation": "serializable" },
+      "states": [
+        { "id": "h-active", "name": "Active" },
+        { "id": "h-released", "name": "Released", "terminal": true }
+      ],
+      "transitions": [
+        { "id": "take", "from": "h-active", "to": "h-active", "on": "hold-taken", "otherwise": true,
+          "effects": [ { "set": "holder", "to": "event.holder" } ] },
+        { "id": "release", "from": "h-active", "to": "h-released", "on": "hold-released", "otherwise": true,
+          "effects": [ { "set": "releasedAt", "to": "time" } ] }
       ]
     }
   ],

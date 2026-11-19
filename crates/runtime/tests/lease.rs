@@ -1,6 +1,8 @@
 //! A hand-written lease machine driven through the host, on the in-memory store and on a SQLite
 //! file: persistence, at-least-once redelivery after a crash between commit and dispatch, timers
-//! fired by the test clock, and at-most-once emits that are never retried.
+//! fired by the test clock, and at-most-once emits that are never retried. A second machine over
+//! the same records that does not create them shows the host refusing an event for a key with no
+//! record.
 //!
 //! The lease: `Grant` hands out a new token and arms an expiry timer; a `Result` is accepted
 //! only with the current token; when the timer fires, the lease is granted again to the same
@@ -13,9 +15,9 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use strata_runtime::{
-    Clock, Database, Delivery, DispatchError, Dispatcher, Envelope, Host, Isolation, Machine,
-    MachineStore, MemoryStore, Outcome, RecordError, SqliteMachineStore, StepError, TestClock,
-    Time,
+    Clock, Database, Delivery, DispatchError, Dispatcher, Envelope, Host, HostError, Isolation,
+    Machine, MachineStore, MemoryStore, Outcome, RecordError, SqliteMachineStore, StepError,
+    TestClock, Time,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -85,6 +87,7 @@ impl Machine for Lease {
     const NAME: &'static str = "lease";
     const RECORD: &'static str = "leases";
     const ISOLATION: Isolation = Isolation::Serializable;
+    const CREATES: bool = true;
 
     type State = Phase;
     type Vars = LeaseVars;
@@ -125,8 +128,8 @@ impl Machine for Lease {
         state: &Phase,
         vars: &LeaseVars,
         previous: Option<&LeaseRecord>,
-    ) -> LeaseRecord {
-        LeaseRecord {
+    ) -> Result<LeaseRecord, RecordError> {
+        Ok(LeaseRecord {
             id: key.clone(),
             phase: *state,
             token: vars.token,
@@ -134,7 +137,7 @@ impl Machine for Lease {
             accepted: vars.accepted,
             granted_at: vars.granted_at,
             note: previous.map_or_else(|| "created by the lease".into(), |p| p.note.clone()),
-        }
+        })
     }
 
     fn step(
@@ -179,6 +182,59 @@ impl Machine for Lease {
             }
             // A timer from an earlier grant.
             (_, LeaseEvent::Expired { .. }) => unchanged(),
+        })
+    }
+}
+
+/// The lease machine over the same records, except that it does not create them: it steps only
+/// leases [`Lease`] has created.
+struct Borrowed;
+
+impl Machine for Borrowed {
+    const NAME: &'static str = "borrowed-lease";
+    const RECORD: &'static str = Lease::RECORD;
+    const ISOLATION: Isolation = Isolation::Serializable;
+    const CREATES: bool = false;
+
+    type State = Phase;
+    type Vars = LeaseVars;
+    type Event = LeaseEvent;
+    type Emitted = LeaseEmit;
+    type Key = String;
+    type Record = LeaseRecord;
+
+    fn initial(key: &String) -> (Phase, LeaseVars) {
+        Lease::initial(key)
+    }
+
+    fn from_record(record: &LeaseRecord) -> Result<(Phase, LeaseVars), RecordError> {
+        Lease::from_record(record)
+    }
+
+    fn to_record(
+        key: &String,
+        state: &Phase,
+        vars: &LeaseVars,
+        previous: Option<&LeaseRecord>,
+    ) -> Result<LeaseRecord, RecordError> {
+        let Some(previous) = previous else {
+            return Err(RecordError("borrowed-lease does not create leases".into()));
+        };
+        Lease::to_record(key, state, vars, Some(previous))
+    }
+
+    fn step(
+        state: &Phase,
+        vars: &LeaseVars,
+        event: &LeaseEvent,
+        now: Time,
+    ) -> Result<Outcome<Borrowed>, StepError> {
+        let o = Lease::step(state, vars, event, now)?;
+        Ok(Outcome {
+            state: o.state,
+            vars: o.vars,
+            emits: o.emits,
+            timers: o.timers,
         })
     }
 }
@@ -493,6 +549,52 @@ async fn never_retries_at_most_once<S: MachineStore>(open: impl Fn() -> Arc<S>) 
     clock.advance(Duration::from_secs(600));
     assert_eq!(host.tick().await.unwrap().dispatched.delivered, 0);
     assert_eq!(receivers.attempts.load(Ordering::SeqCst), before + 1);
+}
+
+async fn refuses_a_missing_record_when_not_creating<S: MachineStore>(open: impl Fn() -> Arc<S>) {
+    let (clock, receivers) = start();
+    let store = open();
+    let borrowed: Host<Borrowed, S, Receivers> =
+        Host::new(store.clone(), receivers.clone(), Arc::new(clock.clone())).unwrap();
+    let grant = || LeaseEvent::Grant {
+        holder: "w1".into(),
+    };
+
+    // No record for the key: refused, and nothing stored, scheduled or emitted.
+    let refused = borrowed.handle(key("a"), grant()).await;
+    match refused {
+        Err(HostError::RecordMissing { machine, key }) => {
+            assert_eq!(machine, "borrowed-lease");
+            assert_eq!(key, "\"a\"");
+        }
+        Err(other) => panic!("expected RecordMissing, got {other}"),
+        Ok(_) => panic!("an event for a key with no record was accepted"),
+    }
+    assert!(borrowed.load(&key("a")).await.unwrap().is_none());
+    assert_eq!(store.pending().unwrap(), 0);
+    clock.advance(TERM * 2);
+    assert_eq!(borrowed.tick().await.unwrap().fired, 0);
+    assert!(receivers.seen().is_empty());
+
+    // Once the creating machine has made the record, the same event steps it.
+    let lease = host(store.clone(), &receivers, &clock);
+    lease
+        .handle(key("a"), LeaseEvent::Expired { token: 0 })
+        .await
+        .unwrap();
+    let handled = borrowed.handle(key("a"), grant()).await.unwrap();
+    assert_eq!((handled.state, handled.vars.token), (Phase::Granted, 1));
+    assert_eq!(handled.version, 2);
+}
+
+#[tokio::test]
+async fn memory_refuses_a_missing_record_when_not_creating() {
+    refuses_a_missing_record_when_not_creating(memory()).await;
+}
+
+#[tokio::test]
+async fn sqlite_refuses_a_missing_record_when_not_creating() {
+    refuses_a_missing_record_when_not_creating(sqlite("not-creating")).await;
 }
 
 #[tokio::test]

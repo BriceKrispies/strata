@@ -545,10 +545,30 @@ impl Loader {
         }
         let storage = match obj.get("storage") {
             None | Some(Value::Null) => None,
-            Some(Value::Object(st)) => Some(Storage {
-                record: self.opt_str(st, "record", id),
-                key: self.opt_str(st, "key", id),
-            }),
+            Some(Value::Object(st)) => {
+                let string_map = |this: &mut Self, key: &str| match st.get(key) {
+                    None | Some(Value::Null) => None,
+                    Some(Value::Object(m)) => Some(
+                        m.iter()
+                            .map(|(k, v)| (k.clone(), v.as_str().map(str::to_string)))
+                            .collect::<Vec<_>>(),
+                    ),
+                    Some(_) => {
+                        this.shape(id, format!("\"storage.{key}\" must be an object"));
+                        None
+                    }
+                };
+                let fields = string_map(self, "fields").unwrap_or_default();
+                let state_values = string_map(self, "stateValues");
+                Some(Storage {
+                    record: self.opt_str(st, "record", id),
+                    key: self.opt_str(st, "key", id),
+                    fields,
+                    state: self.opt_str(st, "state", id),
+                    state_values,
+                    creates: self.opt_bool(st, "creates", id).unwrap_or(false),
+                })
+            }
             Some(_) => {
                 self.shape(id, "\"storage\" must be an object");
                 None

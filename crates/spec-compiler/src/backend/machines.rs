@@ -37,7 +37,7 @@ use strata_spec_expr::{self as expr, Binding, ExprKind, Ty};
 
 use super::Backend;
 use crate::diagnostic::Diagnostic;
-use crate::ir::{Behavior, Effect, Event, Record, Spec, Transition, TypeKind};
+use crate::ir::{Behavior, Effect, Event, Record, RecordField, Spec, Transition, TypeKind};
 use crate::naming;
 use crate::render::{self, Doc, Field, Namespace, Scope as TypeScope, Uses};
 use crate::resolve::{self, Builtin, TypeRef};
@@ -62,14 +62,18 @@ pub const EFFECT_UNSUPPORTED: &str = "specc.effect-unsupported";
 pub const INSTANCES_COUNTED: &str = "specc.instances-counted";
 /// Code of a machine whose storage record or key is missing or unknown.
 pub const STORAGE: &str = "specc.machine-storage";
-/// Code of a variable with no same-named field in the storage record.
-pub const VARIABLE_UNSTORED: &str = "specc.variable-unstored";
-/// Code of a variable whose record field has a different type.
-pub const VARIABLE_FIELD_TYPE: &str = "specc.variable-field-type";
+/// Code of a `storage.fields` entry naming a variable the machine lacks or a field the record
+/// lacks, or of a record field asked to hold two of the key, the state and the variables
+/// (Exegra's rule of the same code).
+pub const FIELD_UNKNOWN: &str = "ready.storage-field-unknown";
+/// Code of a variable held in no field of the storage record.
+pub const VARIABLE_UNMAPPED: &str = "ready.storage-variable-unmapped";
+/// Code of a variable whose record field has a type its repr does not fit.
+pub const FIELD_TYPE: &str = "ready.storage-field-type";
 /// Code of a machine state the storage record cannot hold.
-pub const STATE_UNSTORED: &str = "specc.state-unstored";
-/// Code of a required record field the machine does not fill.
-pub const FIELD_UNFILLED: &str = "specc.record-field-unfilled";
+pub const STATE_FIELD: &str = "ready.storage-state-field";
+/// Code of a required record field a creating machine does not fill.
+pub const CREATES_UNFILLED: &str = "ready.storage-creates-unfilled";
 /// Code of a reference to an event that is not declared.
 pub const EVENT_UNKNOWN: &str = "specc.event-unknown";
 /// Code of a reference to a state the machine does not declare.
@@ -798,31 +802,131 @@ impl<'a> Gen<'a> {
             key_ty = quote! { Option<#key_ty> };
         }
 
-        let has_state_var = self.vars.iter().any(|v| v.name == "state");
-        let state_field = record.field("state");
-        let mut state_stored = false;
-        match state_field {
-            Some(_) if has_state_var => {
+        let st = b.storage.clone();
+        let explicit: Vec<(String, Option<String>)> =
+            st.as_ref().map(|s| s.fields.clone()).unwrap_or_default();
+        let state_explicit = st.as_ref().and_then(|s| s.state.clone());
+        let state_values = st.as_ref().and_then(|s| s.state_values.clone());
+        let creates = st.as_ref().is_some_and(|s| s.creates);
+
+        // What each record field holds: the key, a variable, the state.
+        let mut owned: Vec<(String, String)> = vec![(key.clone(), "the key".to_string())];
+        for (v, f) in &explicit {
+            if !b.variables.iter().any(|x| x.name == *v) {
                 self.refuse(
-                    STATE_UNSTORED,
-                    format!("Record \"{record_id}\" has one field \"state\", but machine \"{}\" would store both its state and its variable \"state\" there.", b.id),
+                    FIELD_UNKNOWN,
+                    format!(
+                        "storage.fields of \"{}\" maps \"{v}\", which is not one of its variables.",
+                        b.id
+                    ),
+                );
+            } else if f.as_deref().is_none_or(|f| record.field(f).is_none()) {
+                self.refuse(
+                    FIELD_UNKNOWN,
+                    format!(
+                        "storage.fields of \"{}\" maps variable \"{v}\" to {}, which is not a field of record \"{record_id}\".",
+                        b.id,
+                        f.as_deref().map_or("a non-string".to_string(), |f| format!("\"{f}\""))
+                    ),
                 );
             }
-            Some(f) if f.type_name == "string" && !f.optional => state_stored = true,
-            Some(f) => self.refuse(
-                STATE_UNSTORED,
-                format!(
-                    "Field \"state\" of record \"{record_id}\" has type \"{}\"{}; machine \"{}\" stores its state as a required string.",
-                    f.type_name,
-                    if f.optional { " and is optional" } else { "" },
-                    b.id
-                ),
-            ),
-            None if b.states.len() > 1 => self.refuse(
-                STATE_UNSTORED,
-                format!("Record \"{record_id}\" has no field \"state\" to hold the state of machine \"{}\".", b.id),
-            ),
-            None => {}
+        }
+        // The variables and the record fields holding them.
+        let mut held: Vec<(Slot, String)> = Vec::new();
+        for v in &b.variables {
+            let mapped = explicit.iter().find(|(name, _)| *name == v.name);
+            let f = match mapped {
+                Some((_, Some(f))) if record.field(f).is_some() => f.clone(),
+                Some(_) => continue, // reported above
+                None => v.name.clone(),
+            };
+            if record.field(&f).is_none() {
+                self.refuse(
+                    VARIABLE_UNMAPPED,
+                    format!(
+                        "Variable \"{}\" of \"{}\" is held in no field of record \"{record_id}\": the record has no field \"{}\" and storage.fields does not map the variable.",
+                        v.name, b.id, v.name
+                    ),
+                );
+                continue;
+            }
+            if let Some((_, taken)) = owned.iter().find(|(name, _)| *name == f) {
+                let taken = taken.clone();
+                self.refuse(
+                    FIELD_UNKNOWN,
+                    format!(
+                        "Field \"{f}\" of record \"{record_id}\" already holds {taken}, so variable \"{}\" of \"{}\" cannot be held there too.",
+                        v.name, b.id
+                    ),
+                );
+                continue;
+            }
+            owned.push((f.clone(), format!("variable \"{}\"", v.name)));
+            let Some(slot) = self.vars.iter().find(|s| s.name == v.name).cloned() else {
+                continue; // its repr is refused already
+            };
+            let field = record.field(&f).expect("checked above");
+            if fit(spec, &slot.type_name, field).is_none() {
+                let (optional, base) = field_base(field);
+                self.refuse(
+                    FIELD_TYPE,
+                    format!(
+                        "Variable \"{}\" of \"{}\" has repr \"{}\", but field \"{f}\" of record \"{record_id}\" holds {}\"{base}\".",
+                        v.name,
+                        b.id,
+                        slot.type_name,
+                        if optional { "an optional " } else { "" },
+                    ),
+                );
+                continue;
+            }
+            held.push((slot, f));
+        }
+
+        // The state: stored when the machine says where, or has more than one state, or the
+        // record has a free "state" field.
+        let state_field = state_explicit
+            .clone()
+            .unwrap_or_else(|| "state".to_string());
+        let stores_state = state_explicit.is_some()
+            || state_values.is_some()
+            || b.states.len() > 1
+            || (record.field("state").is_some() && !owned.iter().any(|(f, _)| f == "state"));
+        let state_code = if stores_state {
+            match state_storage(
+                spec,
+                b,
+                record,
+                &state_field,
+                state_values.as_deref(),
+                &owned,
+                &mut self.uses,
+            ) {
+                Ok(code) => code,
+                Err(message) => {
+                    self.refuse(STATE_FIELD, message);
+                    StateCode::Unstored
+                }
+            }
+        } else {
+            StateCode::Unstored
+        };
+
+        // A creating machine writes whole records; a non-creating one carries over the rest.
+        if creates {
+            for f in &record.fields {
+                let holds_state = stores_state && f.name == state_field;
+                if field_base(f).0 || owned.iter().any(|(o, _)| *o == f.name) || holds_state {
+                    continue;
+                }
+                self.refuse(
+                    CREATES_UNFILLED,
+                    format!(
+                        "\"{}\" creates records of \"{record_id}\" (storage.creates), but required field \"{}\" is neither its key, its state nor one of its variables, so a new record would leave it unset.",
+                        b.id, f.name
+                    ),
+                );
+            }
         }
 
         let mut to_fields = Vec::new();
@@ -830,97 +934,137 @@ impl<'a> Gen<'a> {
         let mut uses_state = false;
         for f in &record.fields {
             let field = naming::ident(&naming::snake(&f.name).unwrap_or_default());
+            let field_copy = resolve::is_copy(&TypeRef::parse(&f.type_name));
             let value = if f.name == key {
                 if key_copy && !key_field.optional {
                     quote! { *key }
                 } else {
                     quote! { key.clone() }
                 }
-            } else if f.name == "state" && state_stored {
+            } else if f.name == state_field && !matches!(state_code, StateCode::Unstored) {
                 uses_state = true;
-                quote! { state.id().to_string() }
-            } else if let Some(v) = self.vars.iter().find(|v| v.name == f.name).cloned() {
-                let fits = if f.optional {
-                    v.type_name == format!("option<{}>", f.type_name)
-                } else {
-                    v.type_name == f.type_name
-                };
-                if !fits {
-                    self.refuse(
-                        VARIABLE_FIELD_TYPE,
-                        format!(
-                            "Variable \"{}\" of machine \"{}\" has repr \"{}\", but field \"{}\" of record \"{record_id}\" holds {}\"{}\".",
-                            v.name,
-                            b.id,
-                            v.type_name,
-                            f.name,
-                            if f.optional { "an optional " } else { "" },
-                            f.type_name
-                        ),
-                    );
-                    continue;
-                }
-                let vf = &v.field;
-                if resolve::is_copy(&TypeRef::parse(&v.type_name)) {
-                    quote! { vars.#vf }
-                } else {
-                    quote! { vars.#vf.clone() }
-                }
-            } else if f.optional {
-                uses_previous = true;
-                if resolve::is_copy(&TypeRef::parse(&f.type_name)) {
-                    quote! { previous.and_then(|p| p.#field) }
-                } else {
-                    quote! { previous.and_then(|p| p.#field.clone()) }
-                }
+                state_code.write()
+            } else if let Some((slot, _)) = held.iter().find(|(_, hf)| *hf == f.name) {
+                self.write_field(slot, f)
             } else {
-                self.refuse(
-                    FIELD_UNFILLED,
-                    format!(
-                        "Field \"{}\" of record \"{record_id}\" is required, but it is neither the key, the state nor a variable of machine \"{}\", so the record of a new instance cannot be written.",
-                        f.name, b.id
-                    ),
-                );
-                continue;
+                uses_previous = true;
+                match (creates, field_copy) {
+                    (false, true) => quote! { previous.#field },
+                    (false, false) => quote! { previous.#field.clone() },
+                    (true, true) => quote! { previous.and_then(|p| p.#field) },
+                    (true, false) => quote! { previous.and_then(|p| p.#field.clone()) },
+                }
             };
             to_fields.push(quote! { #field: #value });
         }
-        for v in &self.vars {
-            if record.field(&v.name).is_none() {
-                self.out.push(Diagnostic::new(
-                    VARIABLE_UNSTORED,
-                    &b.id,
-                    format!(
-                        "Variable \"{}\" of machine \"{}\" has no field of the same name in record \"{record_id}\", which holds the machine.",
-                        v.name, b.id
-                    ),
-                ));
-            }
+        let mut from_fields = Vec::new();
+        for (slot, f) in &held {
+            let field = record.field(f).expect("checked above");
+            let read = self.read_field(slot, field);
+            let vf = &slot.field;
+            from_fields.push(quote! { #vf: #read });
         }
-        let from_fields: Vec<TokenStream> = self
-            .vars
-            .iter()
-            .map(|v| {
-                let vf = &v.field;
-                let rf = naming::ident(&naming::snake(&v.name).unwrap_or_default());
-                if resolve::is_copy(&TypeRef::parse(&v.type_name)) {
-                    quote! { #vf: record.#rf }
-                } else {
-                    quote! { #vf: record.#rf.clone() }
-                }
-            })
-            .collect();
+        let only = naming::ident(
+            &b.states
+                .first()
+                .and_then(|s| naming::pascal(&s.id).ok())
+                .unwrap_or_default(),
+        );
+        let read_state = state_code.read(
+            &naming::ident(&naming::snake(&state_field).unwrap_or_default()),
+            &b.id,
+            &only,
+        );
         Some(StorageCode {
             record: record.clone(),
             record_ty: naming::ident(&naming::pascal(&record.id).unwrap_or_default()),
             key_field: key,
             key_ty,
-            state_stored,
+            read_state,
+            reads_record: !held.is_empty() || !matches!(state_code, StateCode::Unstored),
+            creates,
             uses_state,
             uses_previous,
             to_fields,
             from_fields,
         })
+    }
+
+    /// The value of record field `f` holding the variable of `slot`, in `to_record`.
+    fn write_field(&mut self, slot: &Slot, f: &RecordField) -> TokenStream {
+        let vf = &slot.field;
+        let value = if resolve::is_copy(&TypeRef::parse(&slot.type_name)) {
+            quote! { vars.#vf }
+        } else {
+            quote! { vars.#vf.clone() }
+        };
+        match fit(self.spec, &slot.type_name, f) {
+            Some(Fit::Option) | None => value,
+            Some(Fit::Same { optional }) => wrap_some(value, optional),
+            Some(Fit::Declared { optional, base }) => {
+                let ty = render::rust_type(
+                    self.spec,
+                    &TypeRef::Declared(base),
+                    TypeScope::Other,
+                    &mut self.uses,
+                );
+                wrap_some(quote! { #ty(#value) }, optional)
+            }
+        }
+    }
+
+    /// The value of the variable of `slot` read from record field `f`, in `from_record`. An
+    /// unset optional field gives the variable its initial value.
+    fn read_field(&mut self, slot: &Slot, f: &RecordField) -> TokenStream {
+        let rf = naming::ident(&naming::snake(&f.name).unwrap_or_default());
+        let copy = resolve::is_copy(&TypeRef::parse(&slot.type_name));
+        let (optional, declared) = match fit(self.spec, &slot.type_name, f) {
+            Some(Fit::Option) | None => {
+                return if copy {
+                    quote! { record.#rf }
+                } else {
+                    quote! { record.#rf.clone() }
+                };
+            }
+            Some(Fit::Same { optional }) => (optional, false),
+            Some(Fit::Declared { optional, .. }) => (optional, true),
+        };
+        let inner = |base: TokenStream| {
+            let base = if declared {
+                quote! { #base.0 }
+            } else {
+                base
+            };
+            if copy {
+                base
+            } else {
+                quote! { #base.clone() }
+            }
+        };
+        if !optional {
+            return inner(quote! { record.#rf });
+        }
+        let set = if declared || !copy {
+            inner(quote! { v })
+        } else {
+            quote! { *v }
+        };
+        let initial = self
+            .b
+            .variables
+            .iter()
+            .find(|v| v.name == slot.name)
+            .and_then(|v| v.initial.clone());
+        // An initial value that cannot be written is refused when the variables are assembled.
+        let unset = initial
+            .and_then(|i| self.literal(&i, &TypeRef::parse(&slot.type_name)).ok())
+            .unwrap_or_else(|| quote! { Default::default() });
+        quote! {
+            match &record.#rf {
+                Some(v) => #set,
+                None => #unset,
+            }
+        }
     }
 
     /// The scope of one transition: its guard reads `base` = `vars`, its effects `next` when
@@ -1586,20 +1730,25 @@ impl<'a> Gen<'a> {
         } else {
             quote! { vars }
         };
-        let record_param = if self.vars.is_empty() && !storage.state_stored {
-            quote! { _record }
-        } else {
+        let record_param = if storage.reads_record {
             quote! { record }
+        } else {
+            quote! { _record }
         };
-        let read_state = if storage.state_stored {
-            let message = format!("{{:?}} is not a state of machine `{}`", b.id);
+        let read_state = &storage.read_state;
+        let creates = storage.creates;
+        let previous_required = if storage.uses_previous && !creates {
+            let message = format!(
+                "machine `{}` does not create records of `{}`, and the key has none",
+                b.id, record_id
+            );
             quote! {
-                let state = State::from_id(&record.state)
-                    .ok_or_else(|| RecordError(format!(#message, record.state)))?;
+                let Some(previous) = previous else {
+                    return Err(RecordError(#message.to_string()));
+                };
             }
         } else {
-            let only = &states[0];
-            quote! { let state = State::#only; }
+            TokenStream::new()
         };
         let initial_state = &states[initial];
         let name = &b.id;
@@ -1724,6 +1873,7 @@ impl<'a> Gen<'a> {
                 const NAME: &'static str = #name;
                 const RECORD: &'static str = #record_id;
                 const ISOLATION: Isolation = #isolation;
+                const CREATES: bool = #creates;
 
                 type State = State;
                 type Vars = Vars;
@@ -1746,8 +1896,9 @@ impl<'a> Gen<'a> {
                     #state_param: &State,
                     #vars_param: &Vars,
                     #previous_param: Option<&records::#record_ty>,
-                ) -> records::#record_ty {
-                    records::#record_ty { #(#to_fields),* }
+                ) -> Result<records::#record_ty, RecordError> {
+                    #previous_required
+                    Ok(records::#record_ty { #(#to_fields),* })
                 }
 
                 fn step(state: &State, vars: &Vars, event: &Event, #now: Time) -> Result<Outcome<Self>, StepError> {
@@ -1802,11 +1953,269 @@ struct StorageCode {
     record_ty: Ident,
     key_field: String,
     key_ty: TokenStream,
-    state_stored: bool,
+    /// The statements of `from_record` that bind `state`.
+    read_state: TokenStream,
+    /// True when `from_record` reads the record at all.
+    reads_record: bool,
+    creates: bool,
     uses_state: bool,
     uses_previous: bool,
     to_fields: Vec<TokenStream>,
     from_fields: Vec<TokenStream>,
+}
+
+/// A record field's type split into whether it may be unset and the type it holds when set: a
+/// field that is optional or whose type is `option<T>` is optional with base T.
+fn field_base(f: &RecordField) -> (bool, String) {
+    let t = f.type_name.trim();
+    match t.strip_prefix("option<").and_then(|r| r.strip_suffix('>')) {
+        Some(inner) => (true, inner.trim().to_string()),
+        None => (f.optional, t.to_string()),
+    }
+}
+
+/// How a variable is held in a record field.
+enum Fit {
+    /// A variable of repr `option<T>` in an optional field of type T: stored as it is.
+    Option,
+    /// A field of the variable's repr, optional or not.
+    Same { optional: bool },
+    /// A field of declared id or scalar type `base` whose repr is the variable's repr.
+    Declared { optional: bool, base: String },
+}
+
+/// How a variable of representation `repr` fits record field `f`, or `None` when it does not
+/// (Exegra's `reprFitsField`).
+fn fit(spec: &Spec, repr: &str, f: &RecordField) -> Option<Fit> {
+    let r = repr.trim();
+    let (optional, base) = field_base(f);
+    if let Some(inner) = r.strip_prefix("option<").and_then(|r| r.strip_suffix('>')) {
+        return (optional && base == inner.trim()).then_some(Fit::Option);
+    }
+    if base == r {
+        return Some(Fit::Same { optional });
+    }
+    let declared = spec.type_decl(&base).and_then(|d| match &d.kind {
+        TypeKind::Id { repr } | TypeKind::Scalar { repr } => repr.as_deref().map(str::trim),
+        _ => None,
+    });
+    (declared == Some(r)).then_some(Fit::Declared { optional, base })
+}
+
+fn wrap_some(value: TokenStream, optional: bool) -> TokenStream {
+    if optional {
+        quote! { Some(#value) }
+    } else {
+        value
+    }
+}
+
+/// How the state is held in its record field.
+enum StateCode {
+    /// Not stored: the machine has one state.
+    Unstored,
+    /// A string field holding each state's id.
+    Ids,
+    /// A string field holding a value per state (`stateValues`).
+    Strings(Vec<(Ident, String)>),
+    /// An enum field: its Rust type, the variant per state, and whether the enum has values no
+    /// state is stored as.
+    Enum {
+        ty: TokenStream,
+        variants: Vec<(Ident, Ident)>,
+        partial: bool,
+    },
+}
+
+impl StateCode {
+    /// The value of the state field in `to_record`.
+    fn write(&self) -> TokenStream {
+        match self {
+            StateCode::Unstored => TokenStream::new(),
+            StateCode::Ids => quote! { state.id().to_string() },
+            StateCode::Strings(values) => {
+                let (states, values): (Vec<_>, Vec<_>) = values.iter().cloned().unzip();
+                quote! {
+                    match state {
+                        #( State::#states => #values, )*
+                    }
+                    .to_string()
+                }
+            }
+            StateCode::Enum { ty, variants, .. } => {
+                let (states, values): (Vec<_>, Vec<_>) = variants.iter().cloned().unzip();
+                quote! {
+                    match state {
+                        #( State::#states => #ty::#values, )*
+                    }
+                }
+            }
+        }
+    }
+
+    /// The statements of `from_record` binding `state` from record field `field`.
+    fn read(&self, field: &Ident, machine: &str, only: &Ident) -> TokenStream {
+        let message = format!("{{:?}} is not a state of machine `{machine}`");
+        let other_message = format!("{{other:?}} is not a state of machine `{machine}`");
+        match self {
+            StateCode::Unstored => quote! { let state = State::#only; },
+            StateCode::Ids => quote! {
+                let state = State::from_id(&record.#field)
+                    .ok_or_else(|| RecordError(format!(#message, record.#field)))?;
+            },
+            StateCode::Strings(values) => {
+                let (states, values): (Vec<_>, Vec<_>) = values.iter().cloned().unzip();
+                quote! {
+                    let state = match record.#field.as_str() {
+                        #( #values => State::#states, )*
+                        other => return Err(RecordError(format!(#other_message))),
+                    };
+                }
+            }
+            StateCode::Enum {
+                ty,
+                variants,
+                partial,
+            } => {
+                let (states, values): (Vec<_>, Vec<_>) = variants.iter().cloned().unzip();
+                let rest = if *partial {
+                    quote! { other => return Err(RecordError(format!(#other_message))), }
+                } else {
+                    TokenStream::new()
+                };
+                quote! {
+                    let state = match &record.#field {
+                        #( #ty::#values => State::#states, )*
+                        #rest
+                    };
+                }
+            }
+        }
+    }
+}
+
+/// How the state of `b` is held in `field` of `record`, or why it cannot be (Exegra's
+/// `stateFieldProblem`).
+fn state_storage(
+    spec: &Spec,
+    b: &Behavior,
+    record: &Record,
+    field: &str,
+    state_values: Option<&[(String, Option<String>)]>,
+    owned: &[(String, String)],
+    uses: &mut Uses,
+) -> Result<StateCode, String> {
+    let record_id = &record.id;
+    let Some(f) = record.field(field) else {
+        return Err(format!(
+            "Record \"{record_id}\" has no field \"{field}\" to hold the state of \"{}\" (storage.state names the field; default \"state\").",
+            b.id
+        ));
+    };
+    if let Some((_, taken)) = owned.iter().find(|(o, _)| o == field) {
+        return Err(format!(
+            "Field \"{field}\" of record \"{record_id}\" holds {taken}, so it cannot also hold the state of \"{}\".",
+            b.id
+        ));
+    }
+    let (optional, base) = field_base(f);
+    let enum_values = spec.type_decl(&base).and_then(|d| match &d.kind {
+        TypeKind::Enum { values } => Some(values.clone()),
+        _ => None,
+    });
+    if optional {
+        return Err(format!(
+            "Field \"{field}\" of record \"{record_id}\" is optional; the state of \"{}\" needs a required field.",
+            b.id
+        ));
+    }
+    if base != "string" && enum_values.is_none() {
+        return Err(format!(
+            "Field \"{field}\" of record \"{record_id}\" has type \"{base}\"; the state of \"{}\" is held in a string or an enum field.",
+            b.id
+        ));
+    }
+    if let Some(sv) = state_values {
+        for (k, v) in sv {
+            if !b.states.iter().any(|s| s.id == *k) {
+                return Err(format!(
+                    "storage.stateValues of \"{}\" names \"{k}\", which is not one of its states.",
+                    b.id
+                ));
+            }
+            if v.is_none() {
+                return Err(format!(
+                    "storage.stateValues of \"{}\" gives state \"{k}\" a value that is not a string.",
+                    b.id
+                ));
+            }
+        }
+    }
+    let stored: Vec<String> = b
+        .states
+        .iter()
+        .map(|s| {
+            state_values
+                .and_then(|sv| sv.iter().find(|(k, _)| *k == s.id))
+                .and_then(|(_, v)| v.clone())
+                .unwrap_or_else(|| s.id.clone())
+        })
+        .collect();
+    if let Some(dup) = stored
+        .iter()
+        .enumerate()
+        .find(|(i, v)| stored[..*i].contains(v))
+        .map(|(_, v)| v)
+    {
+        return Err(format!(
+            "Two states of \"{}\" would be stored as \"{dup}\" in field \"{field}\", so the state could not be read back.",
+            b.id
+        ));
+    }
+    let states: Vec<Ident> = b
+        .states
+        .iter()
+        .map(|s| naming::ident(&naming::pascal(&s.id).unwrap_or_default()))
+        .collect();
+    let Some(values) = enum_values else {
+        if state_values.is_none() {
+            return Ok(StateCode::Ids);
+        }
+        return Ok(StateCode::Strings(states.into_iter().zip(stored).collect()));
+    };
+    let missing: Vec<usize> = (0..stored.len())
+        .filter(|i| !values.contains(&stored[*i]))
+        .collect();
+    if !missing.is_empty() {
+        let list = |items: Vec<&String>| {
+            items
+                .iter()
+                .map(|v| format!("\"{v}\""))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        return Err(format!(
+            "Field \"{field}\" of record \"{record_id}\" is enum \"{base}\", whose values do not include {} (for state{} {} of \"{}\"); map the states through storage.stateValues.",
+            list(missing.iter().map(|i| &stored[*i]).collect()),
+            if missing.len() > 1 { "s" } else { "" },
+            list(missing.iter().map(|i| &b.states[*i].id).collect()),
+            b.id
+        ));
+    }
+    let ty = render::rust_type(spec, &TypeRef::Declared(base), TypeScope::Other, uses);
+    let variants = states
+        .into_iter()
+        .zip(
+            stored
+                .iter()
+                .map(|v| naming::ident(&naming::pascal(v).unwrap_or_default())),
+        )
+        .collect();
+    Ok(StateCode::Enum {
+        ty,
+        variants,
+        partial: values.len() > stored.len(),
+    })
 }
 
 /// A scope with nothing in it, for literals.

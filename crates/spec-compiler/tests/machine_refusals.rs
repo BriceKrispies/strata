@@ -208,9 +208,25 @@ fn variables_need_a_same_named_field_of_their_type() {
             .unwrap()
             .push(json!({ "name": "extra", "type": "number", "initial": 0, "repr": "u32" }));
     });
-    assert_refused(&text, m::VARIABLE_UNSTORED, "extra");
+    assert_refused(&text, m::VARIABLE_UNMAPPED, "extra");
     let text = with(|s| machine(s)["variables"][0]["repr"] = json!("u64"));
-    assert_refused(&text, m::VARIABLE_FIELD_TYPE, "count");
+    assert_refused(&text, m::FIELD_TYPE, "count");
+}
+
+#[test]
+fn storage_fields_must_name_a_variable_and_a_field() {
+    let text = with(|s| machine(s)["storage"]["fields"] = json!({ "count": "nope" }));
+    assert_refused(&text, m::FIELD_UNKNOWN, "nope");
+    let text = with(|s| machine(s)["storage"]["fields"] = json!({ "nope": "count" }));
+    assert_refused(&text, m::FIELD_UNKNOWN, "nope");
+    let text = with(|s| machine(s)["storage"]["fields"] = json!({ "count": "id" }));
+    assert_refused(&text, m::FIELD_UNKNOWN, "the key");
+    // A mapped variable is held in the field it names.
+    let text = with(|s| {
+        s["records"][0]["fields"][2]["name"] = json!("total");
+        machine(s)["storage"]["fields"] = json!({ "count": "total" });
+    });
+    assert!(generate("spec.jsonc", &text, &options()).is_ok());
 }
 
 #[test]
@@ -221,26 +237,57 @@ fn the_state_needs_a_string_field() {
             .unwrap()
             .retain(|f| f["name"] != "state");
     });
-    assert_refused(&text, m::STATE_UNSTORED, "no field \"state\"");
+    assert_refused(&text, m::STATE_FIELD, "no field \"state\"");
     let text = with(|s| s["records"][0]["fields"][1]["type"] = json!("u32"));
-    assert_refused(&text, m::STATE_UNSTORED, "u32");
+    assert_refused(&text, m::STATE_FIELD, "u32");
+    // An enum field must cover every state, through stateValues when its values differ.
+    let text = with(|s| {
+        s["types"] =
+            json!([{ "id": "phase", "name": "Phase", "kind": "enum", "values": ["x", "y"] }]);
+        s["records"][0]["fields"][1]["type"] = json!("phase");
+    });
+    assert_refused(&text, m::STATE_FIELD, "map the states");
+    let text = with(|s| {
+        s["types"] =
+            json!([{ "id": "phase", "name": "Phase", "kind": "enum", "values": ["x", "y"] }]);
+        s["records"][0]["fields"][1]["type"] = json!("phase");
+        machine(s)["storage"]["stateValues"] = json!({ "a": "x", "b": "y" });
+    });
+    assert!(generate("spec.jsonc", &text, &options()).is_ok());
 }
 
 #[test]
-fn required_fields_the_machine_does_not_own_are_refused() {
+fn required_fields_a_creating_machine_does_not_own_are_refused() {
+    let text = with(|s| {
+        s["records"][0]["fields"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({ "name": "owner", "type": "string" }));
+        machine(s)["storage"]["creates"] = json!(true);
+    });
+    assert_refused(&text, m::CREATES_UNFILLED, "owner");
+    // A machine that does not create records carries them over from the existing record.
     let text = with(|s| {
         s["records"][0]["fields"]
             .as_array_mut()
             .unwrap()
             .push(json!({ "name": "owner", "type": "string" }));
     });
-    assert_refused(&text, m::FIELD_UNFILLED, "owner");
-    // An optional one is carried over from the previous record instead.
+    let files = generate("spec.jsonc", &text, &options()).unwrap();
+    let code = &files
+        .iter()
+        .find(|f| f.path == "src/machines.rs")
+        .unwrap()
+        .contents;
+    assert!(code.contains("const CREATES: bool = false;"));
+    assert!(code.contains("owner: previous.owner.clone()"));
+    // An optional one a creating machine carries over when there is a previous record.
     let text = with(|s| {
         s["records"][0]["fields"]
             .as_array_mut()
             .unwrap()
             .push(json!({ "name": "owner", "type": "string", "optional": true }));
+        machine(s)["storage"]["creates"] = json!(true);
     });
     assert!(generate("spec.jsonc", &text, &options()).is_ok());
 }

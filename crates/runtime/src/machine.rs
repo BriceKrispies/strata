@@ -228,6 +228,11 @@ pub trait Machine: Send + Sync + 'static {
     const RECORD: &'static str;
     /// The isolation of the transition transaction (`transaction.isolation`).
     const ISOLATION: Isolation;
+    /// Whether an event for a key with no record creates the record (`storage.creates`). When
+    /// false, the machine steps only records that already exist: the host refuses an event for a
+    /// key with no record with [`HostError::RecordMissing`](crate::HostError::RecordMissing),
+    /// storing, scheduling and emitting nothing.
+    const CREATES: bool;
 
     /// The machine's control states.
     type State: Clone + Debug + Send + Sync + 'static;
@@ -243,20 +248,22 @@ pub trait Machine: Send + Sync + 'static {
     /// The record type instances are stored in.
     type Record: Serialize + DeserializeOwned + Clone + Debug + Send + Sync + 'static;
 
-    /// The state and variables of an instance that has no record yet.
+    /// The state and variables of an instance that has no record yet. The host calls it only
+    /// when [`Machine::CREATES`] is true.
     fn initial(key: &Self::Key) -> (Self::State, Self::Vars);
 
     /// Read the instance out of its record.
     fn from_record(record: &Self::Record) -> Result<(Self::State, Self::Vars), RecordError>;
 
     /// Write the instance into a record. `previous` is the record as loaded, when there was one,
-    /// so fields the machine does not own are carried over.
+    /// so fields the machine does not own are carried over. A machine that does not create
+    /// records refuses a missing `previous` (the host never passes one).
     fn to_record(
         key: &Self::Key,
         state: &Self::State,
         vars: &Self::Vars,
         previous: Option<&Self::Record>,
-    ) -> Self::Record;
+    ) -> Result<Self::Record, RecordError>;
 
     /// Take one transition at time `now`: the first enabled transition from `state` on `event`,
     /// in declaration order, or an ignore (the same state and variables, nothing emitted).

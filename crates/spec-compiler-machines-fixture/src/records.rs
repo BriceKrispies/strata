@@ -2,7 +2,7 @@
 //! The stored records of the specification: their shapes, keys and constraints, and what storage needs to know about them.
 use serde::{Deserialize, Serialize};
 
-use crate::prelude;
+use crate::{prelude, types};
 
 /// Lease
 ///
@@ -109,6 +109,69 @@ impl RecJob {
     /// The record's key.
     pub fn key(&self) -> RecJobKey {
         RecJobKey { job: self.job.clone() }
+    }
+
+    /// Checks the field constraints, returning the first one the record breaks.
+    pub fn validate(&self) -> Result<(), prelude::ConstraintViolation> {
+        Ok(())
+    }
+}
+
+/// Hold
+///
+/// Record `rec-hold`, owned by component `lease-service`, schema version 1.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecHold {
+    /// Field `hold-id`.
+    #[serde(rename = "hold-id")]
+    pub hold_id: types::HoldId,
+    /// Field `status`.
+    pub status: types::HoldStatus,
+    /// Field `held-by`.
+    #[serde(rename = "held-by")]
+    pub held_by: types::Principal,
+    /// Field `released-at`.
+    #[serde(rename = "released-at", default, skip_serializing_if = "Option::is_none")]
+    pub released_at: Option<prelude::Timestamp>,
+    /// Field `reason`.
+    pub reason: String,
+    /// Field `memo`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memo: Option<String>,
+}
+
+/// The key of a [`RecHold`]: `hold-id`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RecHoldKey {
+    /// Field `hold-id`.
+    #[serde(rename = "hold-id")]
+    pub hold_id: types::HoldId,
+}
+
+impl RecHold {
+    /// The record's id in the specification.
+    pub const ID: &str = "rec-hold";
+
+    /// The version of the record's stored shape.
+    pub const SCHEMA_VERSION: u32 = 1;
+
+    /// The key fields, by their specification names.
+    pub const KEY: &[&str] = &["hold-id"];
+
+    /// Sets of fields whose combined values are unique, by their specification names.
+    pub const UNIQUE: &[&[&str]] = &[];
+
+    /// The record's indexes.
+    pub const INDEXES: &[prelude::Index] = &[];
+
+    /// The fields that hold the key of another record, and what deleting it does.
+    pub const REFERENCES: &[prelude::Reference] = &[];
+
+    /// The record's key.
+    pub fn key(&self) -> RecHoldKey {
+        RecHoldKey {
+            hold_id: self.hold_id.clone(),
+        }
     }
 
     /// Checks the field constraints, returning the first one the record breaks.

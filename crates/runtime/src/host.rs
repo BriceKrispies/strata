@@ -3,7 +3,9 @@
 //! For one incoming event the host
 //!
 //! 1. opens one transaction at the machine's declared isolation (or stronger),
-//! 2. loads the instance's record by key, or starts from [`Machine::initial`] when there is none,
+//! 2. loads the instance's record by key, or, when there is none, starts from [`Machine::initial`]
+//!    if the machine creates records ([`Machine::CREATES`]) and otherwise refuses the event with
+//!    [`HostError::RecordMissing`],
 //! 3. runs [`Machine::step`],
 //! 4. saves the new record, applies the timer commands, and writes every `at-least-once` emit to
 //!    the outbox, all in that same transaction,
@@ -122,6 +124,14 @@ pub enum HostError {
     Step(StepError),
     /// The stored record does not hold an instance.
     Record(RecordError),
+    /// The machine does not create records (`storage.creates` false) and the key has no record:
+    /// the event is refused and nothing was stored, scheduled or emitted.
+    RecordMissing {
+        /// The machine.
+        machine: &'static str,
+        /// The key (JSON text).
+        key: String,
+    },
     /// A key, record or event could not be encoded or decoded.
     Codec(String),
     /// The store cannot run the machine's declared isolation.
@@ -141,6 +151,12 @@ impl fmt::Display for HostError {
             HostError::Storage(e) => e.fmt(f),
             HostError::Step(e) => e.fmt(f),
             HostError::Record(e) => e.fmt(f),
+            HostError::RecordMissing { machine, key } => {
+                write!(
+                    f,
+                    "{machine} has no record for key {key} and does not create records"
+                )
+            }
             HostError::Codec(why) => write!(f, "encoding: {why}"),
             HostError::Unsupported { machine, isolation } => {
                 write!(
@@ -286,10 +302,16 @@ fn transition<M: Machine>(
     let previous: Option<M::Record> = stored.as_ref().map(|s| decode(&s.data)).transpose()?;
     let (state, vars) = match &previous {
         Some(record) => M::from_record(record)?,
-        None => M::initial(key),
+        None if M::CREATES => M::initial(key),
+        None => {
+            return Err(HostError::RecordMissing {
+                machine: M::NAME,
+                key: key_text,
+            })
+        }
     };
     let outcome = M::step(&state, &vars, event, now)?;
-    let record = M::to_record(key, &outcome.state, &outcome.vars, previous.as_ref());
+    let record = M::to_record(key, &outcome.state, &outcome.vars, previous.as_ref())?;
     let version = tx.save(
         M::RECORD,
         &key_text,
@@ -590,7 +612,12 @@ impl<M: Machine, S: MachineStore, D: Dispatcher<M::Emitted>> Host<M, S, D> {
                     report.dispatched.add(self.dispatch(committed).await);
                 }
                 Ok(None) => {}
-                Err(error @ (HostError::Step(_) | HostError::Record(_) | HostError::Codec(_))) => {
+                Err(
+                    error @ (HostError::Step(_)
+                    | HostError::Record(_)
+                    | HostError::RecordMissing { .. }
+                    | HostError::Codec(_)),
+                ) => {
                     // The step can never succeed for this timer; firing it again would fail the
                     // same way, so it is removed on its own.
                     let why = error.to_string();

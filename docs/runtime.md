@@ -36,6 +36,7 @@ pub trait Machine: Send + Sync + 'static {
     const NAME: &'static str;        // the behavior id
     const RECORD: &'static str;      // instances.storedIn
     const ISOLATION: Isolation;      // transaction.isolation
+    const CREATES: bool;             // storage.creates
 
     type State: Clone + Debug + Send + Sync + 'static;
     type Vars: Clone + Debug + Send + Sync + 'static;
@@ -47,7 +48,7 @@ pub trait Machine: Send + Sync + 'static {
     fn initial(key: &Self::Key) -> (Self::State, Self::Vars);
     fn from_record(record: &Self::Record) -> Result<(Self::State, Self::Vars), RecordError>;
     fn to_record(key: &Self::Key, state: &Self::State, vars: &Self::Vars,
-                 previous: Option<&Self::Record>) -> Self::Record;
+                 previous: Option<&Self::Record>) -> Result<Self::Record, RecordError>;
     fn step(state: &Self::State, vars: &Self::Vars, event: &Self::Event, now: Time)
         -> Result<Outcome<Self>, StepError>;
 }
@@ -69,6 +70,19 @@ pub trait Machine: Send + Sync + 'static {
   refuse instead.
 - `to_record` receives the record as loaded so that fields the machine does not own are carried
   over.
+- Where the machine is held in its record is `storage` in the specification: each variable in
+  the field `storage.fields` maps it to (default the field of its own name), the state in
+  `storage.state` (default `state`, a string field or an enum field, through
+  `storage.stateValues` when the enum's values are not the state ids). A variable may sit in an
+  optional field of its repr, read back as its initial value when unset, or in a field of a
+  declared id or scalar type over its repr. The compiler refuses a machine whose storage does
+  not fit with Exegra's `ready.storage-*` codes, so a specification Exegra accepts is one specc
+  accepts.
+- `CREATES` is `storage.creates`. A creating machine (`true`) starts a key with no record from
+  `initial` and writes every required field itself. A non-creating machine (`false`, the
+  default) steps only records that already exist, made by someone else such as a contract: its
+  `to_record` copies every field it does not hold from `previous`, and refuses a missing
+  `previous` with a `RecordError` (the host never passes one; see below).
 - The key's JSON text is its storage key, so two keys are the same instance exactly when they
   serialise identically.
 
@@ -181,8 +195,11 @@ Store calls are synchronous and run on a blocking worker thread (`tokio::task::s
 
 For one event, in one transaction opened at `M::ISOLATION` or stronger:
 
-1. Load the record of `key` from collection `M::RECORD`. With no record, start from
-   `M::initial(key)`; otherwise `M::from_record`.
+1. Load the record of `key` from collection `M::RECORD` and read it with `M::from_record`.
+   With no record, a creating machine (`M::CREATES`) starts from `M::initial(key)`; a
+   non-creating one refuses the event with `HostError::RecordMissing { machine, key }`, which
+   `handle` and `commit` return to the caller: nothing is stored, scheduled or emitted. A timer
+   whose key has no record any more is discarded like a timer whose step fails.
 2. Run `M::step` with `now`, the clock's time read once for the transaction.
 3. Save `M::to_record(..)` with the version that was loaded as the expected version; a different
    stored version is a conflict. The version starts at 1 and grows by one per save. An ignored
@@ -193,8 +210,8 @@ For one event, in one transaction opened at `M::ISOLATION` or stronger:
    `now + retry.first`.
 6. Commit.
 
-If any step fails (a `StepError`, a `RecordError`, an encoding failure, a storage failure or a
-conflict), the transaction is rolled back: no record, timer or outbox entry is written and
+If any step fails (a `StepError`, a `RecordError`, a missing record of a non-creating machine,
+an encoding failure, a storage failure or a conflict), the transaction is rolled back: no record, timer or outbox entry is written and
 nothing is dispatched. The error is returned as a `HostError`. The host does not retry a
 conflicting transaction itself.
 

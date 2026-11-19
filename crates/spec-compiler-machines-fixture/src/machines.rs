@@ -171,6 +171,8 @@ pub mod lease {
 
         const ISOLATION: Isolation = Isolation::Serializable;
 
+        const CREATES: bool = true;
+
         type State = State;
 
         type Vars = Vars;
@@ -218,15 +220,15 @@ pub mod lease {
             state: &State,
             vars: &Vars,
             _previous: Option<&records::RecLease>,
-        ) -> records::RecLease {
-            records::RecLease {
+        ) -> Result<records::RecLease, RecordError> {
+            Ok(records::RecLease {
                 lease_id: key.clone(),
                 state: state.id().to_string(),
                 token: vars.token,
                 holder: vars.holder.clone(),
                 accepted: vars.accepted,
                 granted: vars.granted,
-            }
+            })
         }
 
         fn step(
@@ -487,6 +489,8 @@ pub mod job {
 
         const ISOLATION: Isolation = Isolation::Snapshot;
 
+        const CREATES: bool = true;
+
         type State = State;
 
         type Vars = Vars;
@@ -516,13 +520,13 @@ pub mod job {
             state: &State,
             vars: &Vars,
             previous: Option<&records::RecJob>,
-        ) -> records::RecJob {
-            records::RecJob {
+        ) -> Result<records::RecJob, RecordError> {
+            Ok(records::RecJob {
                 job: key.clone(),
                 state: state.id().to_string(),
                 attempts: vars.attempts,
                 note: previous.and_then(|p| p.note.clone()),
-            }
+            })
         }
 
         fn step(
@@ -601,6 +605,209 @@ pub mod job {
                 }
                 (State::Running, Event::JobCancel(_)) => {
                     Ok(Outcome::to(State::Done, vars.clone()).cancel_timer("retry"))
+                }
+                _ => Ok(Outcome::to(*state, vars.clone())),
+            }
+        }
+    }
+}
+
+/// Hold
+///
+/// A hold someone else creates: taken over by a new holder while active, released once.
+///
+/// Specification behavior `hold`, an implementation-level machine.
+pub mod hold {
+    use serde::{Deserialize, Serialize};
+
+    use strata_runtime::{Isolation, Machine, Outcome, RecordError, StepError, Time};
+
+    use crate::{prelude, records, types};
+
+    /// The states of machine `hold`.
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Hash,
+        Serialize,
+        Deserialize
+    )]
+
+    pub enum State {
+        /// State `h-active`: Active.
+        #[serde(rename = "h-active")]
+        HActive,
+        /// State `h-released`: Released. Terminal.
+        #[serde(rename = "h-released")]
+        HReleased,
+    }
+
+    impl State {
+        /// The state's id in the specification.
+        pub fn id(self) -> &'static str {
+            match self {
+                State::HActive => "h-active",
+                State::HReleased => "h-released",
+            }
+        }
+
+        /// The state with this id in the specification.
+        pub fn from_id(id: &str) -> Option<State> {
+            match id {
+                "h-active" => Some(State::HActive),
+                "h-released" => Some(State::HReleased),
+                _ => None,
+            }
+        }
+    }
+
+    /// The variables of the machine.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct Vars {
+        /// Variable `holder`.
+        pub holder: String,
+        /// Variable `releasedAt`.
+        #[serde(rename = "releasedAt")]
+        pub released_at: prelude::Timestamp,
+    }
+
+    /// The payload of event `hold-taken`: Hold taken.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct HoldTakenPayload {
+        /// Field `holder`.
+        pub holder: String,
+    }
+
+    /// The payload of event `hold-released`: Hold released.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct HoldReleasedPayload {}
+
+    /// The events machine `hold` receives, including those its timers fire.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(tag = "event", content = "payload")]
+    pub enum Event {
+        /// Event `hold-taken`: Hold taken.
+        #[serde(rename = "hold-taken")]
+        HoldTaken(HoldTakenPayload),
+        /// Event `hold-released`: Hold released.
+        #[serde(rename = "hold-released")]
+        HoldReleased(HoldReleasedPayload),
+    }
+
+    /// The events machine `hold` emits.
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+    pub enum Emitted {}
+
+    /// The instance key: field `hold-id` of record `rec-hold`.
+    pub type Key = types::HoldId;
+
+    /// Machine `hold`, stored in record `rec-hold` by `hold-id`.
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct Hold;
+
+    impl Machine for Hold {
+        const NAME: &'static str = "hold";
+
+        const RECORD: &'static str = "rec-hold";
+
+        const ISOLATION: Isolation = Isolation::Serializable;
+
+        const CREATES: bool = false;
+
+        type State = State;
+
+        type Vars = Vars;
+
+        type Event = Event;
+
+        type Emitted = Emitted;
+
+        type Key = Key;
+
+        type Record = records::RecHold;
+
+        fn initial(_key: &Key) -> (State, Vars) {
+            (
+                State::HActive,
+                Vars {
+                    holder: String::from(""),
+                    released_at: prelude::Timestamp(0i64),
+                },
+            )
+        }
+
+        fn from_record(record: &records::RecHold) -> Result<(State, Vars), RecordError> {
+            let state = match &record.status {
+                types::HoldStatus::Active => State::HActive,
+                types::HoldStatus::Released => State::HReleased,
+                other => {
+                    return Err(
+                        RecordError(
+                            format!("{other:?} is not a state of machine `hold`"),
+                        ),
+                    );
+                }
+            };
+            Ok((
+                state,
+                Vars {
+                    holder: record.held_by.0.clone(),
+                    released_at: match &record.released_at {
+                        Some(v) => *v,
+                        None => prelude::Timestamp(0i64),
+                    },
+                },
+            ))
+        }
+
+        fn to_record(
+            key: &Key,
+            state: &State,
+            vars: &Vars,
+            previous: Option<&records::RecHold>,
+        ) -> Result<records::RecHold, RecordError> {
+            let Some(previous) = previous else {
+                return Err(
+                    RecordError(
+                        "machine `hold` does not create records of `rec-hold`, and the key has none"
+                            .to_string(),
+                    ),
+                );
+            };
+            Ok(records::RecHold {
+                hold_id: key.clone(),
+                status: match state {
+                    State::HActive => types::HoldStatus::Active,
+                    State::HReleased => types::HoldStatus::Released,
+                },
+                held_by: types::Principal(vars.holder.clone()),
+                released_at: Some(vars.released_at),
+                reason: previous.reason.clone(),
+                memo: previous.memo.clone(),
+            })
+        }
+
+        fn step(
+            state: &State,
+            vars: &Vars,
+            event: &Event,
+            now: Time,
+        ) -> Result<Outcome<Self>, StepError> {
+            match (state, event) {
+                (State::HActive, Event::HoldTaken(payload)) => {
+                    let mut next = vars.clone();
+                    next.holder = payload.holder.clone();
+                    Ok(Outcome::to(State::HActive, next))
+                }
+                (State::HActive, Event::HoldReleased(_)) => {
+                    let mut next = vars.clone();
+                    next.released_at = prelude::Timestamp(now.0);
+                    Ok(Outcome::to(State::HReleased, next))
                 }
                 _ => Ok(Outcome::to(*state, vars.clone())),
             }

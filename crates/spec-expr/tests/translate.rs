@@ -175,10 +175,7 @@ fn comparisons() {
     assert_eq!(rust("f < 1.5", &e), tok("f < 1.5f64"));
     assert_eq!(rust("ts1 < ts2", &e), tok("ts1 < ts2"));
     assert_eq!(rust("p == q", &e), tok("p == q"));
-    assert_eq!(
-        rust("s == 'x'", &e),
-        tok("s == \"x\"")
-    );
+    assert_eq!(rust("s == 'x'", &e), tok("s == \"x\""));
     assert_eq!(
         rust("o == null", &e),
         tok("o == ::core::option::Option::None")
