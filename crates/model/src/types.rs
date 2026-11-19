@@ -1334,7 +1334,7 @@ pub struct AgentEntry {
 
 /// Api Error
 ///
-/// strata_protocol::api::ErrorReply: the error body of every HTTP operation.
+/// strata_protocol::api::ErrorReply: the error body of every HTTP operation (system.generation.errorBody). kind and failed are left out when absent, and the correlation is the request's correlation id as given.
 ///
 /// Specification type `api-error`: a struct.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -1347,9 +1347,10 @@ pub struct ApiError {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
     /// Field `failed`.
-    pub failed: Vec<Check>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failed: Option<Vec<Check>>,
     /// Field `correlation`.
-    pub correlation: CorrelationId,
+    pub correlation: String,
 }
 
 /// Archive Manifest
@@ -2178,7 +2179,7 @@ pub struct ErasureReceipt {
 
 /// Error Code
 ///
-/// strata_protocol::api::ErrorCode; each has one HTTP status.
+/// strata_protocol::api::ErrorCode, as it is written on the wire (snake_case); each has one HTTP status, the one system.generation.errorKinds gives the error kind of the same name.
 ///
 /// Specification type `error-code`: an enumeration, serialised as the specification's values.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -2189,8 +2190,8 @@ pub enum ErrorCode {
     /// The value `forbidden`.
     #[serde(rename = "forbidden")]
     Forbidden,
-    /// The value `not-found`.
-    #[serde(rename = "not-found")]
+    /// The value `not_found`.
+    #[serde(rename = "not_found")]
     NotFound,
     /// The value `conflict`.
     #[serde(rename = "conflict")]
@@ -2215,7 +2216,7 @@ impl ErrorCode {
         match self {
             Self::Unauthenticated => "unauthenticated",
             Self::Forbidden => "forbidden",
-            Self::NotFound => "not-found",
+            Self::NotFound => "not_found",
             Self::Conflict => "conflict",
             Self::Invalid => "invalid",
             Self::Throttled => "throttled",
