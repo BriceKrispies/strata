@@ -898,13 +898,14 @@ fn compare_scenario(
                 stats.ignored += 1;
                 continue;
             }
-            let out =
-                match result {
-                    StepResult::Refused(why) => return Err(format!(
+            let out = match result {
+                StepResult::Refused(why) => {
+                    return Err(format!(
                         "{context}: the generated machine refused an event Exegra delivered: {why}"
-                    )),
-                    StepResult::Stepped(out) => out,
-                };
+                    ))
+                }
+                StepResult::Stepped(out) => out,
+            };
             let config = &step["config"]["machines"][config_key(info, &instance_key)];
             if config.is_null() {
                 return Err(format!(

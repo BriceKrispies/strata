@@ -685,6 +685,8 @@ mod delay_tests {
             instances: None,
             isolation: None,
             time_units: units.iter().map(|u| (*u).to_string()).collect(),
+            routes: Vec::new(),
+            injected: Vec::new(),
         }
     }
 

@@ -63,6 +63,7 @@ const PAYLOADS = new Map([
   ['ui-live-closed', check.payload({})],
   ['ui-live-reconnect-due', check.payload({})],
   ['ui-live-reset', check.payload({})],
+  ['ui-live-resync', check.payload({ head: check.integer(0, 9007199254740991) })],
 ]);
 
 /**
@@ -368,7 +369,7 @@ export function step(state, vars, event, now) {
           const emits = [];
           /** @type {ClientLiveFlowImplTimer[]} */
           const timers = [];
-          next.lastSeq = event.payload.head;
+          next.lastSeq = (event.payload.head ?? (() => { throw new StepError('absent', 'event field head is absent'); })());
           return { state: 'lv-open-i', vars: next, emits, timers };
         }
         default:

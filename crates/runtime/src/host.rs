@@ -386,6 +386,7 @@ fn transition<M: Machine>(
             version: stored.map_or(0, |s| s.version),
             emits: Vec::new(),
             delayed: Vec::new(),
+            emitted: Vec::new(),
         }));
     }
     let record = M::to_record(key, &outcome.state, &outcome.vars, previous.as_ref())?;
