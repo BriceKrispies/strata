@@ -74,6 +74,18 @@
 //!  10. Not exercised, and not mirrored: conditions that follow a reference are
 //!      `InsufficientState` in the hand-written kernel when the snapshot lacks the record
 //!      (difference 2 states the rest).
+//!  11. Not exercised, and not mirrored: planned named queries (`strata_kernel::query_plan`,
+//!      KRN-2520 to KRN-2524). The hand-written kernel serves a query whose filter has an
+//!      indexable condition from `Need::IndexPage` candidates, pages them with a
+//!      `PageCursor::At` or `After` cursor, plans `read_needs` as index pages, evaluates every
+//!      query filter and order on the record as the reader receives it, and adds a
+//!      `query-plan:<query>` warning to the evidence of a schema change that defines a scan or
+//!      turns a planned query into one. The generated `kernel-read`, `read-needs` and
+//!      `change-schema` still scan every filtered query and refuse an `at` cursor; the spec
+//!      functions are wired afterwards. The rows of a planned read equal the scan's
+//!      (`tests/query_plan.rs`), so only the cursor, the needs and the evidence differ. Guarded:
+//!      `compare_read` fails on a read of a query that has an index plan, and
+//!      `compare_transition` fails on a schema change whose evidence would hold a scan warning.
 //!
 //! Differences 5 to 9 are guarded: `assert_no_input_of_a_known_difference` runs on every
 //! snapshot the test decides or reads, and fails when a snapshot has a field read condition, an
@@ -642,6 +654,41 @@ fn assert_no_input_of_a_known_difference(state: &State) {
     }
 }
 
+/// Difference 11 of the header: a read of a query with an index plan is not compared, because the
+/// generated `kernel-read` scans it and issues another cursor.
+fn assert_not_planned(state: &State, request: &ReadRequest) {
+    let (Some(tenant), ReadRequest::Named { query, .. }) = (&state.tenant, request) else {
+        return;
+    };
+    if let Some(def) = tenant.schema.queries.get(query) {
+        assert!(
+            !matches!(
+                strata_kernel::query_plan::plan_query(&tenant.schema, def),
+                strata_kernel::query_plan::QueryPlan::Index(_)
+            ),
+            "query {query} has an index plan; the generated kernel-read scans it (difference 11)"
+        );
+    }
+}
+
+/// Difference 11 of the header: a schema change whose evidence holds a scan warning is not
+/// compared, because the generated `change-schema` writes no such warning.
+fn assert_no_scan_warning(state: &State, intent: &Intent, hand: &Result<Transition, DomainError>) {
+    let (Intent::ChangeSchema { changes, .. }, Ok(accepted), Some(tenant)) =
+        (intent, hand, &state.tenant)
+    else {
+        return;
+    };
+    for op in &accepted.delta.ops {
+        if let DeltaOp::PutSchema(after) = op {
+            assert!(
+                strata_kernel::query_plan::scan_warnings(&tenant.schema, after, changes).is_empty(),
+                "the schema change warns of a scan; the generated change-schema does not (difference 11)"
+            );
+        }
+    }
+}
+
 #[derive(Default)]
 struct Tally {
     compared: usize,
@@ -663,6 +710,7 @@ fn compare_transition(state: &State, intent: &Intent, context: &Context, tally: 
     );
     assert_no_input_of_a_known_difference(state);
     let hand = transition(state, intent, context);
+    assert_no_scan_warning(state, intent, &hand);
     let texts = texts_for(state, intent);
     let mut generated = match spec::kernel_transition(state, intent, context, &texts) {
         Ok(result) => Ok(result),
@@ -707,6 +755,7 @@ fn compare_read(state: &State, request: &ReadRequest, context: &Context, tally: 
         context.principal, context.tenant, state.tenant_id
     );
     assert_no_input_of_a_known_difference(state);
+    assert_not_planned(state, request);
     let hand = read(state, request, context);
     // Only the query filters are printed by a read; the intent is none.
     let texts = texts_for(

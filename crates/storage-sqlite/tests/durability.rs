@@ -353,20 +353,21 @@ fn a_file_made_at_an_older_level_is_upgraded_with_its_data() {
                 rusqlite::params![current.to_string_lossy()],
             )
             .unwrap();
-            for table in [
-                "tenant",
-                "schema_history",
-                "records",
-                "record_index",
-                "events",
-                "journal",
-            ] {
+            for table in ["tenant", "schema_history", "records", "events", "journal"] {
                 conn.execute(
                     &format!("INSERT INTO main.{table} SELECT * FROM cur.{table}"),
                     [],
                 )
                 .unwrap();
             }
+            // The current layout's record index has the order keys of migration 12, which the
+            // older level has not.
+            conn.execute(
+                "INSERT INTO main.record_index (object, field, value, id)
+                 SELECT object, field, value, id FROM cur.record_index",
+                [],
+            )
+            .unwrap();
             conn.execute(
                 "INSERT INTO accounts (login, principal, display_name, password_hash)
                  VALUES ('owner', 'alpha:owner', 'Owner', '$argon2id$placeholder')",

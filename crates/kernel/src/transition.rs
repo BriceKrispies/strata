@@ -1845,6 +1845,12 @@ fn change_schema(
             .iter()
             .map(|line| Check::pass("schema:change", line.clone())),
     );
+    // KRN-2524: which queries are scans, and why.
+    draft.evidence.extend(crate::query_plan::scan_warnings(
+        &draft.tenant.schema,
+        &migration.schema,
+        changes,
+    ));
 
     let affected: BTreeSet<(ObjectTypeId, RecordId)> = migration
         .violations

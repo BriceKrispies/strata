@@ -35,6 +35,7 @@
 //!
 //! What adapters may differ in is stated by [`Capabilities`], not hidden.
 
+pub mod covering;
 pub mod memory;
 
 #[cfg(feature = "conformance")]
@@ -1165,6 +1166,23 @@ pub fn partial_state(tenant: &TenantState, needs: &[Need]) -> State {
                         .all(|(field, value)| field_matches(record, field, value))
                 })
                 .collect(),
+            Need::IndexPage {
+                object,
+                field,
+                lower,
+                upper,
+                descending,
+                after,
+                limit,
+            } => strata_kernel::query_plan::index_page(
+                tenant.records_of(object),
+                field,
+                lower,
+                upper,
+                *descending,
+                after.as_ref(),
+                *limit,
+            ),
         };
         for record in found {
             thin.records

@@ -347,9 +347,11 @@ pub fn view(app: &App, identity: &Identity, request: &ViewRequest) -> Result<Vie
             }
         }
     }
-    let needs: Vec<Need> = depends_on.iter().cloned().map(Need::AllOf).collect();
-    let state = app.store.load(&identity.tenant, &needs)?;
+    // Each section loads only the page its query reads (WG-5104, KRN-2526).
     let ctx = identity.context(app);
+    let state = crate::view_load::load_view_state(app, &ctx, def, &depends_on, |section, done| {
+        section_request(section, &route, &request.request, done)
+    })?;
     let anonymous = identity.anonymous();
     let fail = |error| ApiError::domain(error, anonymous);
 

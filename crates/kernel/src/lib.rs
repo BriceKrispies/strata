@@ -22,6 +22,7 @@ pub mod definitions;
 pub mod expr;
 pub mod intent;
 pub mod limits;
+pub mod query_plan;
 pub mod read;
 pub mod rules;
 pub mod schema;

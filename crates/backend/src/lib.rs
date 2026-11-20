@@ -21,6 +21,7 @@ pub mod sealing;
 pub mod seed;
 pub mod service;
 pub mod signin;
+pub mod view_load;
 pub mod ws;
 
 use app::{App, Config, Shared, LOG};
