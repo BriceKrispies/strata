@@ -288,6 +288,12 @@ fn verify_password(password: &str, stored: &str) -> bool {
 
 /// Whether `password` opens the stored hash.
 pub(crate) fn is_password(password: &str, stored: &str) -> bool {
+    if PasswordHash::new(stored).is_err() {
+        // An account no password opens (empty or unreadable hash) costs the same work as a wrong
+        // password, so that the time does not say which accounts have no password.
+        verify_password(password, decoy_hash());
+        return false;
+    }
     verify_password(password, stored)
 }
 
@@ -573,6 +579,20 @@ mod tests {
             "$argon2id$v=19$m=1,t=1,p=1$$",
         ] {
             assert!(!verify_password("correct horse", junk), "{junk:?}");
+        }
+    }
+
+    /// IDN-255: an account that no password opens costs the work of a wrong one, and is never
+    /// opened, not even by the password the decoy hash was made from.
+    #[test]
+    fn an_account_with_no_usable_hash_is_checked_against_the_decoy_and_never_opens() {
+        assert!(
+            PasswordHash::new(decoy_hash()).is_ok(),
+            "the decoy is a real hash"
+        );
+        for stored in ["", "plain text", "$argon2id$broken"] {
+            assert!(!is_password("decoy-password", stored), "{stored:?}");
+            assert!(!is_password("", stored), "{stored:?}");
         }
     }
 

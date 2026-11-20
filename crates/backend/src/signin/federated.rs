@@ -50,6 +50,29 @@ pub struct Admission<'a> {
     pub link_verified_email: bool,
 }
 
+/// The rules a provider's admission settings must keep, checked when the configuration is loaded:
+/// linking by verified email and first sign-in both need the provider's domains, and a first
+/// sign-in never grants the owner role.
+///
+/// Implements: FED-011, FED-257, FED-258
+pub fn check_admission(
+    domains: &[String],
+    create_on_first_sign_in: bool,
+    link_verified_email: bool,
+    default_role: Option<&str>,
+) -> Result<(), &'static str> {
+    if link_verified_email && domains.is_empty() {
+        return Err("link_verified_email needs domains");
+    }
+    if create_on_first_sign_in && domains.is_empty() {
+        return Err("create_on_first_sign_in needs domains");
+    }
+    if default_role.is_some_and(|role| role.trim() == "owner") {
+        return Err("default_role cannot be owner");
+    }
+    Ok(())
+}
+
 /// The refusal that says nothing about why, and the reason for the log.
 pub fn refuse(
     caller: &Caller,
@@ -249,7 +272,12 @@ pub fn resolve(
         return account_of(app, caller, admission, principal);
     }
     if admission.link_verified_email && who.email_verified {
-        if let Some(email) = &who.email {
+        if let Some(email) = who.email.as_ref().filter(|email| {
+            // Only an address in a domain the provider decides for may link (FED-257).
+            email.rsplit_once('@').is_some_and(|(_, domain)| {
+                admission.domains.contains(&domain.trim().to_lowercase())
+            })
+        }) {
             if let Some(account) = app.store.account(&caller.site, &normalise_login(email))? {
                 if tie(app, caller, admission, &who.subject, &account.principal)? {
                     app.audit(

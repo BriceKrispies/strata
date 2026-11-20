@@ -23,7 +23,7 @@ use crate::app::{ApiError, App, LOG};
 use crate::auth::{self, hash_password, random_hex, same_secret, token_hash, Caller};
 use crate::mail::Mail;
 use serde_json::{json, Value as Json};
-use strata_kernel::Timestamp;
+use strata_kernel::{PrincipalId, Timestamp};
 use strata_protocol::api::ErrorCode;
 use strata_storage_api::{Account, RecoveryRequest, ThrottleSettle, ThrottleVerdict};
 
@@ -152,6 +152,25 @@ pub fn request(app: &App, caller: &Caller, body: &Json) -> Result<Json, ApiError
                 "contacts": contacts(&account).len(),
             }),
         );
+    } else {
+        // The same durable write, for a placeholder principal that no token opens, so that what
+        // the request costs does not say whether the address has a recoverable account.
+        let id = totp::token()?;
+        let now = app.now();
+        let policy = &app.cfg.factors;
+        let completes_at = Timestamp(now.0 + policy.recovery_delay_ms);
+        app.store.put_recovery(&RecoveryRequest {
+            tenant: caller.site.clone(),
+            id_hash: token_hash(&id),
+            principal: PrincipalId::new("user:recovery-decoy".to_string())
+                .map_err(|e| ApiError::hidden(ErrorCode::Internal, format!("decoy: {e}")))?,
+            login: String::new(),
+            token_hash: token_hash(&random_hex(HEX_LEN / 2)?),
+            cancel_hash: token_hash(&random_hex(HEX_LEN / 2)?),
+            requested_at: now,
+            completes_at,
+            expires_at: Timestamp(completes_at.0 + policy.recovery_window_ms),
+        })?;
     }
     Ok(json!({ "requested": true }))
 }

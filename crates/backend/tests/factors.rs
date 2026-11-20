@@ -195,6 +195,39 @@ impl Backend {
         secret
     }
 
+    /// An emailed-link sign-in for an address with an account, answered whole.
+    async fn link_sign_in(&self, email: &str) -> (u16, Json) {
+        let (status, requested) = self
+            .call(
+                None,
+                "/internal/sign-in/link/request",
+                json!({ "email": email }),
+            )
+            .await;
+        assert_eq!(status, 200, "{requested}");
+        let binding = requested["binding"].as_str().unwrap().to_string();
+        let message = self.mail.outbox().pop().expect("a message was sent");
+        let fragment = message
+            .text
+            .split("#c=")
+            .nth(1)
+            .expect("the link has a fragment");
+        let challenge = fragment.split('&').next().unwrap();
+        let token = fragment
+            .split("&t=")
+            .nth(1)
+            .unwrap()
+            .split_whitespace()
+            .next()
+            .unwrap();
+        self.call(
+            None,
+            "/internal/session/sign-in/link",
+            json!({ "challenge": challenge, "token": token, "binding": binding }),
+        )
+        .await
+    }
+
     /// Make a session look as if it authenticated `ago_ms` ago.
     fn age(&self, token: &str, ago_ms: i64) {
         let mut session = self
@@ -286,14 +319,17 @@ async fn a_method_that_proves_one_factor_gets_no_session_in_a_realm_that_asks_fo
 }
 
 /// IDN-018: a realm that asks for a second factor of a person who has none has the person add one
-/// in the same step, and the first right code both confirms it and signs in.
+/// in the same step, once an emailed link has shown control of the address, and the first right
+/// code both confirms it and signs in.
 #[tokio::test]
 async fn a_realm_that_requires_a_second_factor_enrols_one_at_sign_in() {
     let backend = start_with(|cfg| {
         cfg.factors.realm_required.insert(tenant());
     })
     .await;
-    let waiting = backend.waiting("tomasz").await;
+    let (status, body) = backend.link_sign_in("mirela@fieldnotes.example").await;
+    assert_eq!(status, 200, "{body}");
+    let waiting = body["second_factor"].clone();
     assert_eq!(waiting["methods"], json!(["totp"]));
     let secret = waiting["enrol"]["secret"]
         .as_str()
@@ -309,10 +345,84 @@ async fn a_realm_that_requires_a_second_factor_enrols_one_at_sign_in() {
     assert!(
         backend
             .store
-            .totp(&tenant(), &principal("tomasz"))
+            .totp(&tenant(), &principal("mirela"))
             .unwrap()
             .unwrap()
             .confirmed
+    );
+}
+
+/// IDN-018: a password alone is no proof of control, so a person with no second factor cannot
+/// enrol one with it, and no authenticator is begun.
+#[tokio::test]
+async fn a_password_alone_cannot_enrol_the_first_second_factor() {
+    let backend = start_with(|cfg| {
+        cfg.factors.realm_required.insert(tenant());
+    })
+    .await;
+    let (status, refused) = backend.sign_in("tomasz", "strata-dev-tomasz").await;
+    assert_eq!(status, 403, "{refused}");
+    assert_eq!(refused["kind"], "second_factor_enrolment_needs_proof");
+    assert!(refused.get("token").is_none());
+    assert!(refused.get("second_factor").is_none());
+    assert!(backend
+        .store
+        .totp(&tenant(), &principal("tomasz"))
+        .unwrap()
+        .is_none());
+}
+
+/// FED-015: a person deactivated while a sign-in waits for the second factor gets no session.
+#[tokio::test]
+async fn a_person_deactivated_while_a_sign_in_waits_gets_no_session() {
+    let backend = start().await;
+    let secret = backend.enrol("ines").await;
+    let waiting = backend.waiting("ines").await;
+    backend
+        .store
+        .doc_put(&tenant(), "disabled", "user:ines", "{}", false)
+        .unwrap();
+    let (status, refused) = backend
+        .second(
+            waiting["challenge"].as_str().unwrap(),
+            "totp",
+            &code(&secret, 0),
+        )
+        .await;
+    assert_eq!(status, 401, "{refused}");
+    assert!(refused.get("token").is_none());
+}
+
+/// IDN-006: a link requested for an address with no account does the same durable write as one
+/// with an account, so that what it costs does not tell them apart.
+#[tokio::test]
+async fn a_link_request_for_an_unknown_address_writes_like_one_for_a_known_address() {
+    let backend = start().await;
+    let decoy = canon::hash_bytes(b"link-decoy");
+    assert!(backend
+        .store
+        .take_sign_in_link(&tenant(), &decoy)
+        .unwrap()
+        .is_none());
+    let (status, reply) = backend
+        .call(
+            None,
+            "/internal/sign-in/link/request",
+            json!({ "email": "nobody@nowhere.example" }),
+        )
+        .await;
+    assert_eq!(status, 200, "{reply}");
+    assert!(
+        backend.mail.outbox().is_empty(),
+        "no mail to an unknown address"
+    );
+    assert!(
+        backend
+            .store
+            .take_sign_in_link(&tenant(), &decoy)
+            .unwrap()
+            .is_some(),
+        "the request did the write"
     );
 }
 

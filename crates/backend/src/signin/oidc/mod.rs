@@ -32,7 +32,7 @@ pub use token::{Asserted, Refusal};
 
 use super::federated::{self, Admission};
 use super::link::{encode, same_site_path, site_origin, well_formed};
-use super::{start_rules, throttled, SignInMethod};
+use super::{start_rules, stepup, throttled, SignInMethod};
 use crate::app::{ApiError, App, LOG};
 use crate::auth::{identify, random_hex, same_secret, token_hash, Caller, Identity};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -131,7 +131,11 @@ pub fn start(
 
     let link = body.get("link").and_then(Json::as_bool).unwrap_or(false);
     let principal = match (&identity.session, link) {
-        (Some(session), true) => Some(session.principal.clone()),
+        (Some(session), true) => {
+            // Linking a way of signing in needs a recent authentication, as adding a factor does.
+            stepup::require_fresh(app, caller, identity)?;
+            Some(session.principal.clone())
+        }
         (None, true) => {
             return Err(ApiError::new(
                 ErrorCode::Unauthenticated,
@@ -340,6 +344,9 @@ impl SignInMethod for OidcMethod {
                 .is_some_and(|session| session.principal == *principal)
             {
                 return refuse(caller, &provider.id, "link_session");
+            }
+            if stepup::require_fresh(app, caller, &identity).is_err() {
+                return refuse(caller, &provider.id, "link_not_fresh");
             }
         }
         let who = match redeem(app, caller, provider, &flow, text("code")) {

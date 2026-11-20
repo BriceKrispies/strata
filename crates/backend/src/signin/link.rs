@@ -24,7 +24,7 @@ use crate::app::{ApiError, App, LOG};
 use crate::auth::{random_hex, same_secret, token_hash, Caller};
 use crate::mail::Mail;
 use serde_json::{json, Value as Json};
-use strata_kernel::Timestamp;
+use strata_kernel::{PrincipalId, Timestamp};
 use strata_protocol::api::ErrorCode;
 use strata_storage_api::{Account, SignInLink, ThrottleVerdict};
 
@@ -136,40 +136,53 @@ pub fn request(app: &App, caller: &Caller, body: &Json) -> Result<Json, ApiError
         }
         _ => None,
     };
-    if let (Some(account), Some(address)) = (account, address) {
+    // An unknown address does the same durable write, for a placeholder principal that no token
+    // opens, so that what the request costs does not say whether the address has an account.
+    let recipient = account.zip(address);
+    {
         let challenge = random_hex(HEX_LEN / 2)?;
         let token = random_hex(HEX_LEN / 2)?;
         let now = app.now();
+        let (principal, id_hash) = match &recipient {
+            Some((account, _)) => (account.principal.clone(), token_hash(&challenge)),
+            None => (
+                PrincipalId::new("user:link-decoy".to_string())
+                    .map_err(|e| ApiError::hidden(ErrorCode::Internal, format!("decoy: {e}")))?,
+                token_hash("link-decoy"),
+            ),
+        };
         app.store.put_sign_in_link(&SignInLink {
             tenant: caller.site.clone(),
-            id_hash: token_hash(&challenge),
-            principal: account.principal,
+            id_hash,
+            principal,
             token_hash: token_hash(&token),
             binding_hash: token_hash(&binding),
             origin: origin.clone(),
             expires_at: Timestamp(now.0 + app.cfg.link_ttl_ms),
         })?;
-        let next = body
-            .get("next")
-            .and_then(Json::as_str)
-            .and_then(same_site_path);
-        let minutes = (app.cfg.link_ttl_ms / 60_000).max(1);
-        let mail = Mail {
-            to: address,
-            subject: "Your sign-in link".into(),
-            text: format!(
-                "Open this link in the browser where you asked for it, within {minutes} minutes. \
-                 It works once.\n\n{}\n\nIf you did not ask for it, ignore this message.",
-                link_address(&origin, next, &challenge, &token)
-            ),
-        };
-        if let Err(error) = app.cfg.mail.send(&mail) {
-            // Not told to the person: that the address has an account is not for them to learn.
-            LOG.error(
-                "link.not_sent",
-                &caller.correlation,
-                json!({ "tenant": caller.site.as_str(), "error": error.0 }),
-            );
+        if let Some((_, address)) = recipient {
+            let next = body
+                .get("next")
+                .and_then(Json::as_str)
+                .and_then(same_site_path);
+            let minutes = (app.cfg.link_ttl_ms / 60_000).max(1);
+            let mail = Mail {
+                to: address,
+                subject: "Your sign-in link".into(),
+                text: format!(
+                    "Open this link in the browser where you asked for it, within {minutes} minutes. \
+                     It works once.\n\n{}\n\nIf you did not ask for it, ignore this message.",
+                    link_address(&origin, next, &challenge, &token)
+                ),
+            };
+            if let Err(error) = app.cfg.mail.send(&mail) {
+                // Not told to the person: that the address has an account is not for them to learn.
+                LOG.error(
+                    "link.not_sent",
+                    &caller.correlation,
+                    json!({ "tenant": caller.site.as_str(), "error": error.0 }),
+                );
+            }
         }
     }
     LOG.info(
