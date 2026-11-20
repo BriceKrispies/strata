@@ -85,6 +85,7 @@ pub fn create_tenant(app: &App, request: CreateTenant) -> Result<Json, ApiError>
         to: login.clone(),
         subject: format!("Your site {} is ready", bundle.name),
         text: crate::signin::invite::first_sign_in_text(&link),
+        ..Mail::default()
     };
     let notified = match app.cfg.mail.send(&mail) {
         Ok(()) => true,

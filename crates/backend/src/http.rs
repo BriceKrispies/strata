@@ -1193,6 +1193,30 @@ pub fn router(app: Shared) -> Router {
             post(crate::worker::routes::settle_route),
         )
         .route(
+            "/internal/mail/send",
+            post(crate::dispatch::routes::send_route),
+        )
+        .route(
+            "/internal/mail/messages",
+            post(crate::dispatch::routes::messages_route),
+        )
+        .route(
+            "/internal/mail/counts",
+            post(crate::dispatch::routes::counts_route),
+        )
+        .route(
+            "/internal/mail/categories",
+            post(crate::dispatch::routes::categories_route),
+        )
+        .route(
+            "/internal/mail/suppressions",
+            post(crate::dispatch::routes::suppressions_route),
+        )
+        .route(
+            "/internal/mail/subscription",
+            post(crate::dispatch::routes::subscription_route),
+        )
+        .route(
             "/internal/jobs/list",
             post(crate::worker::routes::jobs_list_route),
         )

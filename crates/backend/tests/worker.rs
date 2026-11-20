@@ -177,7 +177,7 @@ fn broken() -> AutomationDef {
     automation("broken", "writer", "bad", vec![("bad", bad)])
 }
 
-/// `mailer`: sends mail, a kind of step that is not built.
+/// `mailer`: sends mail, run as a writer, who does not hold messages-send.
 fn mailer() -> AutomationDef {
     automation(
         "mailer",
@@ -543,8 +543,10 @@ fn a_run_acts_with_its_run_as_roles_only() {
     assert_eq!(published, 1);
 }
 
+// A send-mail step acts as the automation principal: run as a role that does not hold
+// messages-send, it fails its run with the reason, once, and sends nothing.
 #[test]
-fn a_step_of_a_kind_that_is_not_built_fails_its_run_and_says_so() {
+fn a_send_mail_step_without_the_send_permission_fails_its_run_and_says_so() {
     let app = app();
     install(&app, "alpha");
     let job = start(&app, "alpha", "mailer", 7, T0);
@@ -553,8 +555,9 @@ fn a_step_of_a_kind_that_is_not_built_fails_its_run_and_says_so() {
     assert_eq!(run.state, RunState::Failed);
     assert_eq!(
         run.error.as_deref(),
-        Some("step kind send-mail is not built")
+        Some("automation mailer may not send mail: its run-as roles do not hold messages-send")
     );
+    assert!(app.cfg.mail.outbox().is_empty());
     // It is not retried.
     assert_eq!(
         worker::tick(&app, "w1", &config(), &at(T0 + 3_600_000)).jobs,

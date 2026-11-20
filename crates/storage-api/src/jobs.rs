@@ -213,6 +213,10 @@ pub enum JobWork {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         step: Option<StepName>,
     },
+    /// Send mail (job kind `mail`): one message, or one batch of a send to a segment, for the
+    /// mail dispatcher (D-451, D-6561, EML-005). `request` is the dispatcher's request
+    /// (`strata_backend::dispatch::MailRequest`) as JSON, kept as given.
+    Mail { request: serde_json::Value },
 }
 
 /// A job to create: its key, what it does, when it is due and how it is retried.

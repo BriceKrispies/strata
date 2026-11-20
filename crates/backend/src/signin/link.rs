@@ -174,8 +174,11 @@ pub fn request(app: &App, caller: &Caller, body: &Json) -> Result<Json, ApiError
                      It works once.\n\n{}\n\nIf you did not ask for it, ignore this message.",
                     link_address(&origin, next, &challenge, &token)
                 ),
+                ..Mail::default()
             };
-            if let Err(error) = app.cfg.mail.send(&mail) {
+            // Through the mail dispatcher as sign-in mail (EML-1563): never held, and in the mail
+            // log of the tenant.
+            if let Err(error) = crate::dispatch::send_sign_in(app, &caller.site, &mail) {
                 // Not told to the person: that the address has an account is not for them to learn.
                 LOG.error(
                     "link.not_sent",
@@ -183,6 +186,10 @@ pub fn request(app: &App, caller: &Caller, body: &Json) -> Result<Json, ApiError
                     json!({ "tenant": caller.site.as_str(), "error": error.0 }),
                 );
             }
+        } else {
+            // The same durable write as the mail log entry of a real sign-in message, so that
+            // what the request costs does not say whether the address has an account.
+            crate::dispatch::store::decoy_write(app, &caller.site);
         }
     }
     LOG.info(

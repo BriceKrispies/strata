@@ -19,8 +19,10 @@
 //! is created due then: nothing sleeps, D-6535), invoke a tenant operation ([`super::invoke`]), stop
 //! at an approval ([`super::approvals`]), and end. A step that fails for good starts the compensation
 //! of the completed steps ([`super::saga`]). Every other kind of the catalogue fails
-//! its step with the error "step kind ... is not built", recorded on the step and the run; it is
-//! never skipped.
+//! is created due then: nothing sleeps, D-6535), send mail (a mail job of the dispatcher created
+//! as the automation principal and keyed by the step key, [`crate::dispatch::step_send`]), and
+//! end. Every other kind of the catalogue fails its step with the error "step kind ... is not
+//! built", recorded on the step and the run; it is never skipped.
 
 use crate::app::App;
 use std::collections::{BTreeMap, BTreeSet};
@@ -223,6 +225,9 @@ pub fn run_job(app: &App, tenant: &TenantId, lease: &Lease, now: Timestamp) -> O
         } => super::saga::compensate(app, tenant, lease, run, automation, step, *of_sequence, now),
         JobWork::Deliver { .. } => {
             crate::outbound::deliveries::run_delivery(app, tenant, lease, now)
+        }
+        JobWork::Mail { request } => {
+            crate::dispatch::deliver::run_job(app, tenant, lease, request, now)
         }
     }
 }
@@ -1037,6 +1042,36 @@ pub(super) fn act(
                     ("delivery", Value::Str(delivery.to_string())),
                     ("status", Value::Int(0)),
                 ],
+                next: then(),
+            })
+        }
+        AutomationStep::SendMail {
+            template,
+            to,
+            category,
+        } => {
+            // A send as the automation principal, keyed by the step key: an attempt made again
+            // after a crash between doing and reporting names the same mail job (EML-1560,
+            // D-6560, WG-5149).
+            let to = eval("to", to)?;
+            let message = crate::dispatch::step_send(
+                app,
+                tenant,
+                &def.id,
+                template,
+                &to,
+                category.as_deref(),
+                key,
+                now,
+            )
+            .map_err(|(message, retry)| StepError { message, retry })?;
+            let id = serde_json::from_value::<strata_model::types::Identifier>(
+                serde_json::Value::String(message.clone()),
+            )
+            .map_err(|e| StepError::fatal(format!("message id {message}: {e}")))?;
+            Ok(Done {
+                result: AutomationStepResult::SendMail { message: id },
+                outputs: vec![("message", Value::Str(message))],
                 next: then(),
             })
         }
