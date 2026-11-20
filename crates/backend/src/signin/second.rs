@@ -125,6 +125,7 @@ pub fn stage(
             .throttle_reserve(tenant, std::slice::from_ref(&rule), app.now())?
     {
         app.decision(
+            &caller.site,
             method,
             "prompt-limit",
             &["well-formed", "throttle", "credential", "prompt-limit"],
@@ -139,6 +140,7 @@ pub fn stage(
         // alone has not. Otherwise whoever holds a stolen password owns the factor.
         if !matches!(method, "link" | "oidc" | "saml" | "passkey") {
             app.decision(
+                &caller.site,
                 method,
                 "second-factor-enrolment-refused",
                 &["well-formed", "throttle", "credential"],
@@ -174,6 +176,7 @@ pub fn stage(
         expires_at: strata_kernel::Timestamp(app.now().0 + limits.pending_ttl_ms),
     })?;
     app.decision(
+        &caller.site,
         method,
         "second-factor-asked",
         &["well-formed", "throttle", "credential"],
@@ -259,6 +262,7 @@ pub fn verify(app: &App, caller: &Caller, request: &Json) -> Result<SignInOutcom
             app.store.take_pending(&caller.site, &id_hash, app.now())?;
         }
         app.decision(
+            &caller.site,
             &pending.method,
             "second-factor-refused",
             &["well-formed", "throttle", "credential", "second-factor"],
@@ -295,6 +299,7 @@ pub fn verify(app: &App, caller: &Caller, request: &Json) -> Result<SignInOutcom
     // A person their provider deactivated while the sign-in waited gets no session (FED-015).
     if crate::service::is_disabled(app, &caller.site, principal)? {
         app.decision(
+            &caller.site,
             &pending.method,
             "refused",
             &[
@@ -309,6 +314,7 @@ pub fn verify(app: &App, caller: &Caller, request: &Json) -> Result<SignInOutcom
         return Err(not_accepted());
     }
     app.decision(
+        &caller.site,
         &pending.method,
         "accepted",
         &["well-formed", "throttle", "credential", "second-factor"],

@@ -8,6 +8,10 @@
 //   saml  a mock SAML provider on 4291, which the site stack trusts for Fieldnotes too
 //   hmr   backend 4211, BFF 4210, Vite 5183 (the development loop, for the hot-reload test), served
 //         from a throwaway copy of web/ in var/hmr-web, because that test edits source files
+//
+// Both stacks start the binaries that `node scripts/dev.mjs` built (`--no-build`), which it builds
+// with the backend's `development` feature. A backend built without it refuses to start with
+// STRATA_DEV=1, so a stale build fails at start-up with that reason.
 import { fileURLToPath } from 'node:url';
 import { defineConfig, devices } from '@playwright/test';
 

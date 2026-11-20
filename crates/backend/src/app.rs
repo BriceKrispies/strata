@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex};
 use strata_kernel::{DomainError, ErrorKind, TenantId, Timestamp};
 use strata_protocol::api::{ErrorCode, ErrorReply};
 use strata_protocol::log::{now_ms, Logger};
-use strata_storage_api::{ExecuteError, Store, StoreError};
+use strata_storage_api::{AuditEntry, ExecuteError, Store, StoreError};
 
 pub const LOG: Logger = Logger { service: "backend" };
 
@@ -276,8 +276,12 @@ pub struct App {
     /// Socket, sign-in and hashing limits in force.
     pub admission: Admission,
     pub started_at: i64,
-    /// Recent security-relevant events, newest last. Reported by the platform diagnostics only.
+    /// Recent security-relevant events, newest last: a cache for the development diagnostics.
+    /// The record is the tenant's audit trail in the store; this ring is lost on restart.
     pub audit: Recent<serde_json::Value>,
+    /// Recent authentication decisions, newest last. Kept apart from `audit`, so that a flood of
+    /// sign-in attempts cannot push a security event out of its ring. Also only a cache.
+    pub decisions: Recent<serde_json::Value>,
     /// Milliseconds added to the clock. Zero except in development, where a test moves time
     /// forward to see a lifetime or a revocation bound pass.
     pub clock_skew_ms: AtomicI64,
@@ -298,33 +302,97 @@ impl App {
             stats: Stats::new(),
             started_at: now_ms(),
             audit: Recent::new(1000),
+            decisions: Recent::new(1000),
             clock_skew_ms: AtomicI64::new(0),
             identity_outage: AtomicBool::new(false),
         })
     }
 
-    /// Record a security-relevant event: an audit entry the platform diagnostics report, and a
-    /// warning in the log that an alert can be raised on (`event` starts with `audit.`).
+    /// Record a security-relevant event: a line in the audit trail of the tenant it names (the
+    /// `tenant` field, or `session_tenant`), a warning in the log that an alert can be raised on
+    /// (`event` starts with `audit.`), and an entry in the diagnostics ring. An event that names
+    /// no tenant is logged and kept in the ring only.
     pub fn audit(&self, event: &str, correlation: &str, fields: serde_json::Value) {
         let mut entry = json!({ "at": now_ms(), "event": event, "correlation": correlation });
         if let (Some(entry), serde_json::Value::Object(fields)) = (entry.as_object_mut(), &fields) {
             entry.extend(fields.clone());
         }
-        LOG.warn(&format!("audit.{event}"), correlation, fields);
+        LOG.warn(&format!("audit.{event}"), correlation, fields.clone());
+        let tenant = ["tenant", "session_tenant"]
+            .iter()
+            .find_map(|key| fields.get(key).and_then(|v| v.as_str()))
+            .map(str::to_string);
+        if let Some(tenant) = tenant {
+            self.keep("audit", &tenant, event, correlation, &fields);
+        }
         self.audit.push(entry);
     }
 
     /// Record an authentication decision: the method, the outcome and the checks evaluated
-    /// (IDN-021). It names no secret, and no account that was not signed in (IDN-022).
-    pub fn decision(&self, method: &str, outcome: &str, checks: &[&str], correlation: &str) {
-        self.audit.push(json!({
+    /// (IDN-021). It names no secret, and no account that was not signed in (IDN-022). Written to
+    /// the audit trail of `tenant` and to the log.
+    pub fn decision(
+        &self,
+        tenant: &TenantId,
+        method: &str,
+        outcome: &str,
+        checks: &[&str],
+        correlation: &str,
+    ) {
+        let fields = json!({ "method": method, "outcome": outcome, "checks": checks });
+        LOG.info("auth.decision", correlation, fields.clone());
+        self.keep(
+            "decision",
+            tenant.as_str(),
+            "auth.decision",
+            correlation,
+            &fields,
+        );
+        let mut entry = json!({
             "at": now_ms(),
             "event": "auth.decision",
             "correlation": correlation,
-            "method": method,
-            "outcome": outcome,
-            "checks": checks,
-        }));
+            "tenant": tenant.as_str(),
+        });
+        if let (Some(entry), serde_json::Value::Object(fields)) = (entry.as_object_mut(), &fields) {
+            entry.extend(fields.clone());
+        }
+        self.decisions.push(entry);
+    }
+
+    /// Write one line of a tenant's audit trail. A failure is logged as an error and does not
+    /// stop the request: the line is in the log either way.
+    fn keep(
+        &self,
+        kind: &str,
+        tenant: &str,
+        event: &str,
+        correlation: &str,
+        fields: &serde_json::Value,
+    ) {
+        let written = TenantId::new(tenant)
+            .map_err(|e| e.to_string())
+            .and_then(|tenant| {
+                self.store
+                    .audit_append(
+                        &tenant,
+                        &AuditEntry {
+                            at: now_ms(),
+                            kind: kind.to_string(),
+                            event: event.to_string(),
+                            correlation: correlation.to_string(),
+                            data: fields.to_string(),
+                        },
+                    )
+                    .map_err(|e| e.to_string())
+            });
+        if let Err(error) = written {
+            LOG.error(
+                "audit.write_failed",
+                correlation,
+                json!({ "tenant": tenant, "event": event, "error": error }),
+            );
+        }
     }
 
     /// The one place the backend reads the clock for domain purposes.

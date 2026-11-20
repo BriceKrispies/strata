@@ -159,7 +159,7 @@ function requireFresh(output, sources, what) {
 
 if (!flag('no-build')) {
   say('Building the backend and the BFF…');
-  const built = spawnSync('cargo', ['build', '-p', 'strata-backend', '-p', 'strata-bff'], { cwd: root, stdio: 'inherit' });
+  const built = spawnSync('cargo', ['build', '-p', 'strata-backend', '-p', 'strata-bff', '--features', 'strata-backend/development'], { cwd: root, stdio: 'inherit' });
   if (built.status !== 0) process.exit(built.status ?? 1);
 } else {
   const crateSources = [join(root, 'crates'), join(root, 'Cargo.toml'), join(root, 'Cargo.lock')];

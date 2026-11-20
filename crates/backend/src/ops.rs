@@ -474,7 +474,6 @@ pub fn diagnostics(app: &App, tenant: &TenantId) -> Result<Json, ApiError> {
         "tenants": app.store.tenant_summary(tenant)?.into_iter().collect::<Vec<_>>(),
         "sessions": sessions,
         "connections": connections,
-        "pending_operations": app.stats.in_flight.load(Ordering::Relaxed),
         "transitions": counters.transitions,
         "rejections_by_kind": counters.rejections,
         "conflicts_retried": counters.conflicts_retried,
@@ -485,8 +484,8 @@ pub fn diagnostics(app: &App, tenant: &TenantId) -> Result<Json, ApiError> {
 }
 
 /// Everything the platform diagnostics report, every tenant included, with the audit entries.
-/// Served only on the backend's internal route to holders of the service credential; the BFF
-/// never relays it to a browser.
+/// Served only on the backend's internal route, and only in development: no operator identity
+/// exists to hold it to outside it. The BFF never relays it to a browser.
 pub fn platform_diagnostics(app: &App) -> Result<Json, ApiError> {
     let now = app.now();
     // One tenant at a time, so a tenant that cannot be read hides nobody else's sessions.
@@ -522,5 +521,6 @@ pub fn platform_diagnostics(app: &App) -> Result<Json, ApiError> {
         "recent_rejections": app.stats.recent_rejections.list(),
         "recent_runs": app.lab.recent(),
         "audit": app.audit.list(),
+        "decisions": app.decisions.list(),
     }))
 }

@@ -210,6 +210,7 @@ pub fn complete(app: &App, caller: &Caller, body: &Json) -> Result<Json, ApiErro
     if now < held.completes_at {
         // Right, and too early: nothing is consumed, and the contacts still have their time.
         app.decision(
+            &caller.site,
             "recovery",
             "too-early",
             &["well-formed", "throttle", "credential"],

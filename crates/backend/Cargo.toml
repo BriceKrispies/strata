@@ -7,6 +7,11 @@ rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
 
+[features]
+# The development routes (`/internal/dev/*`) and nothing else. Off in a production build; `STRATA_DEV=1`
+# is refused by a binary built without it.
+development = []
+
 [dependencies]
 strata-runtime.workspace = true
 strata-kernel.workspace = true
@@ -44,6 +49,15 @@ aes-gcm = "=0.10.3"
 [dev-dependencies]
 webauthn-authenticator-rs = { version = "=0.6.2", default-features = false, features = ["softpasskey"] }
 tokio-tungstenite.workspace = true
+
+# These drive the running service through the development routes.
+[[test]]
+name = "service"
+required-features = ["development"]
+
+[[test]]
+name = "tokens"
+required-features = ["development"]
 
 [lints]
 workspace = true

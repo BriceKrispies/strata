@@ -123,6 +123,23 @@ fn an_idempotency_key_survives_a_restart() {
         .is_some());
 }
 
+/// The audit trail is kept per tenant, and what was appended is there after the file is closed and
+/// opened again.
+#[test]
+fn the_audit_trail_survives_a_reopen() {
+    let path = fresh_path("audit");
+    {
+        let store = SqliteStore::open(&path, Timestamp(1)).unwrap();
+        conformance::audit_is_kept_per_tenant(&store);
+    }
+    let store = SqliteStore::open(&path, Timestamp(2)).unwrap();
+    let lines = store
+        .audit_list(&tenant_id("alpha"), Some("audit"), 10)
+        .unwrap();
+    assert_eq!(lines.len(), 1, "the line kept before the reopen");
+    assert_eq!(lines[0].event, "signing_key.compromised");
+}
+
 /// Verifies: STO-003
 ///
 /// Everything the adapter acknowledges is there after the file is closed and opened again: the
@@ -221,7 +238,7 @@ fn committed_data_survives_a_reopen() {
     assert_eq!(store.snapshots(&alpha).unwrap(), vec![snapshot]);
     assert_eq!(store.journal_after(&alpha, 0, 10).unwrap().len(), 3);
     let migrations = store.migrations().unwrap();
-    assert_eq!(migrations.len(), 1, "the control database's steps");
+    assert_eq!(migrations.len(), 2, "the control database's steps");
     assert_eq!(
         migrations[0].applied_at,
         Timestamp(1),
@@ -230,7 +247,7 @@ fn committed_data_survives_a_reopen() {
     let file = store.tenant_file(&alpha).unwrap().unwrap();
     assert_eq!(
         count(&file, "SELECT COUNT(*) FROM tenant_migrations"),
-        9,
+        11,
         "the tenant file's steps"
     );
     assert!(store.health().unwrap().ok);

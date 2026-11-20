@@ -6,7 +6,7 @@ use crate::service::{self, clients, keys, scim, tokens};
 use crate::signin::{
     link, oidc, passkey, recover, recovery_codes, saml, second, stepup, totp, SignInOutcome,
 };
-use crate::{lab, ops, provision, seed, ws};
+use crate::{lab, ops, provision, ws};
 use axum::extract::ws::WebSocketUpgrade;
 use axum::extract::{Path, Request, State};
 use axum::http::HeaderMap;
@@ -17,16 +17,18 @@ use axum::{Json, Router};
 use serde::Serialize;
 use serde_json::{json, Value as Json_};
 use std::time::Instant;
-use strata_kernel::owner_role;
-use strata_kernel::rules::roles_of;
 use strata_protocol::api::{
     valid_idempotency_key, Empty, ErrorCode, IdRequest, MembersRequest, Mutation, SessionReply,
     ViewRequest, HEADER_CORRELATION, HEADER_IDEMPOTENCY,
 };
-use strata_protocol::ws::{SessionState, MAX_FRAME};
+use strata_protocol::ws::MAX_FRAME;
 
 /// Run blocking work as the identified caller and wrap the result as JSON.
-async fn as_caller<T, F>(app: &Shared, headers: &HeaderMap, work: F) -> Result<Json<T>, ApiError>
+pub(crate) async fn as_caller<T, F>(
+    app: &Shared,
+    headers: &HeaderMap,
+    work: F,
+) -> Result<Json<T>, ApiError>
 where
     T: Serialize + Send + 'static,
     F: FnOnce(&App, &Identity) -> Result<T, ApiError> + Send + 'static,
@@ -44,7 +46,11 @@ where
 }
 
 /// Run blocking work as the identified caller, with what the caller asserted as well.
-async fn as_caller_at<T, F>(app: &Shared, headers: &HeaderMap, work: F) -> Result<Json<T>, ApiError>
+pub(crate) async fn as_caller_at<T, F>(
+    app: &Shared,
+    headers: &HeaderMap,
+    work: F,
+) -> Result<Json<T>, ApiError>
 where
     T: Serialize + Send + 'static,
     F: FnOnce(&App, &Caller, &Identity) -> Result<T, ApiError> + Send + 'static,
@@ -86,10 +92,17 @@ async fn health(State(app): State<Shared>) -> Result<Json<Json_>, ApiError> {
     // Liveness only: it opens no tenant file. The integrity check is in the platform
     // diagnostics, behind the service credential.
     app.blocking(|app| app.store.liveness()).await??;
+    // The publisher moves committed events to the sockets; if its task has stopped, nothing is
+    // published, so the backend is not well. Before it is started there is nothing to report.
+    let publisher = app.hub.outbox.get().map(|outbox| outbox.status());
+    let publisher_ok = publisher
+        .as_ref()
+        .is_none_or(|status| status["running"] == true);
     Ok(Json(json!({
-        "ok": true,
+        "ok": publisher_ok,
         "service": "backend",
         "kernel_version": strata_kernel::KERNEL_VERSION,
+        "publisher": publisher,
     })))
 }
 
@@ -572,10 +585,25 @@ async fn diagnostics(
     .await
 }
 
-/// Every tenant's diagnostics and the audit entries. The service credential is the only
-/// requirement, so this is for the operator's tools on the backend's own network; the BFF has no
-/// route to it.
-async fn platform_diagnostics(State(app): State<Shared>) -> Result<Json<Json_>, ApiError> {
+/// Every tenant's diagnostics and the audit entries. The backend has no operator identity to hold
+/// a caller to, and the service credential is shared with the BFF, so the route exists only in
+/// development; outside it the answer is "not found". Each call is an audit entry.
+async fn platform_diagnostics(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+) -> Result<Json<Json_>, ApiError> {
+    if !app.cfg.dev {
+        return Err(ApiError::new(ErrorCode::NotFound, "not available"));
+    }
+    let correlation = headers
+        .get(HEADER_CORRELATION)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("");
+    app.audit(
+        "platform.diagnostics_read",
+        correlation,
+        json!({ "scope": "every tenant" }),
+    );
     app.blocking(ops::platform_diagnostics).await?.map(Json)
 }
 
@@ -642,137 +670,21 @@ async fn lab_replay(
     .await
 }
 
+/// Runs `lake` on the machine, so it exists only in development: a production backend never starts
+/// a build tool.
 async fn lab_verify(
     State(app): State<Shared>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, ApiError> {
+    if !app.cfg.dev {
+        return Err(ApiError::new(ErrorCode::NotFound, "not available"));
+    }
     let shared = app.clone();
     as_caller(&app, &headers, move |app, identity| {
         require_schema_manager(app, identity)?;
         lab::verify(&shared, app, identity)
     })
     .await
-}
-
-/// Development fixtures are for the tenant's owner, signed in, on a backend in development mode.
-/// Outside development mode they do not exist.
-fn require_dev_owner(app: &App, identity: &Identity) -> Result<(), ApiError> {
-    if !app.cfg.dev {
-        return Err(ApiError::new(ErrorCode::NotFound, "not available"));
-    }
-    if identity.anonymous() {
-        return Err(ApiError::new(
-            ErrorCode::Unauthenticated,
-            "Sign in as the site's owner to use this.",
-        ));
-    }
-    let tenant = ops::header(app, identity)?;
-    if roles_of(&tenant, &identity.principal).contains(&owner_role()) {
-        Ok(())
-    } else {
-        Err(ApiError::new(
-            ErrorCode::Forbidden,
-            "Only the site's owner may use this.",
-        ))
-    }
-}
-
-/// Development only: remove the caller's tenant and install its bundle again. Other tenants are
-/// not touched.
-async fn dev_reset(State(app): State<Shared>, headers: HeaderMap) -> Result<Json<Json_>, ApiError> {
-    let reply = as_caller_at(&app, &headers, |app, caller, identity| {
-        require_dev_owner(app, identity)?;
-        // Wiping a tenant's data is one of the owner's sensitive operations (IDN-019).
-        stepup::require_fresh(app, caller, identity)?;
-        let session = identity.session.as_ref().map(|s| s.id.as_str().to_string());
-        app.audit(
-            "dev.reset",
-            &identity.correlation,
-            json!({ "tenant": identity.tenant.as_str(), "session": session }),
-        );
-        seed::reset_tenant(app, &identity.tenant)
-            .map_err(|problem| ApiError::hidden(ErrorCode::Internal, problem))?;
-        Ok(json!({ "reset": true, "tenant": identity.tenant.as_str() }))
-    })
-    .await?;
-    app.hub.committed();
-    Ok(reply)
-}
-
-/// Development only: the messages the development sink holds, so that a test can read the link in
-/// one.
-async fn dev_mail_outbox(
-    State(app): State<Shared>,
-    headers: HeaderMap,
-) -> Result<Json<Json_>, ApiError> {
-    as_caller(&app, &headers, |app, identity| {
-        require_dev_owner(app, identity)?;
-        let messages: Vec<Json_> = app
-            .cfg
-            .mail
-            .outbox()
-            .into_iter()
-            .map(|mail| json!({ "to": mail.to, "subject": mail.subject, "text": mail.text }))
-            .collect();
-        Ok(json!({ "messages": messages }))
-    })
-    .await
-}
-
-/// Development only: make the caller's own session look as if it authenticated long ago, so that a
-/// test can see a sensitive operation ask for a fresh factor.
-async fn dev_age_authentication(
-    State(app): State<Shared>,
-    headers: HeaderMap,
-) -> Result<Json<Json_>, ApiError> {
-    as_caller(&app, &headers, |app, identity| {
-        // Only the caller's own session is touched, so no role is asked for; development only.
-        if !app.cfg.dev {
-            return Err(ApiError::new(ErrorCode::NotFound, "not available"));
-        }
-        let Some(mut session) = identity.session.clone() else {
-            return Ok(json!({ "aged": false }));
-        };
-        session.authenticated_at =
-            strata_kernel::Timestamp(app.now().0 - app.cfg.factors.step_up_age_ms - 60_000);
-        app.store.put_session(&session)?;
-        Ok(json!({ "aged": true }))
-    })
-    .await
-}
-
-/// Development only: end the caller's own session as if its time had run out.
-async fn dev_expire(
-    State(app): State<Shared>,
-    headers: HeaderMap,
-) -> Result<Json<Json_>, ApiError> {
-    as_caller(&app, &headers, |app, identity| {
-        require_dev_owner(app, identity)?;
-        let Some(mut session) = identity.session.clone() else {
-            return Ok(json!({ "expired": false }));
-        };
-        session.expires_at = strata_kernel::Timestamp(app.now().0 - 1);
-        app.store.put_session(&session)?;
-        let _ = app.hub.sessions.send((session.id, SessionState::Expired));
-        Ok(json!({ "expired": true }))
-    })
-    .await
-}
-
-/// Development only: stop or resume the kick that follows each commit, so that the outbox
-/// machine's own sweep can be seen publishing what a missed kick left behind.
-async fn dev_outbox(
-    State(app): State<Shared>,
-    Json(request): Json<Json_>,
-) -> Result<Json<Json_>, ApiError> {
-    if !app.cfg.dev {
-        return Err(ApiError::new(ErrorCode::NotFound, "There is nothing here."));
-    }
-    let kick = request.get("kick").and_then(Json_::as_bool).unwrap_or(true);
-    if let Some(outbox) = app.hub.outbox.get() {
-        outbox.set_kick(kick);
-    }
-    Ok(Json(json!({ "kick": kick })))
 }
 
 /// Run blocking work for a request that is not a person's: nothing is looked up about who sent
@@ -1008,38 +920,6 @@ async fn scim_request(
     .await
 }
 
-/// Development only: move this process's clock forward, to see a lifetime or a revocation bound
-/// pass without waiting for it.
-async fn dev_clock(
-    State(app): State<Shared>,
-    Json(body): Json<Json_>,
-) -> Result<Json<Json_>, ApiError> {
-    if !app.cfg.dev {
-        return Err(ApiError::new(ErrorCode::NotFound, "not available"));
-    }
-    let advance = body.get("advance_ms").and_then(Json_::as_i64).unwrap_or(0);
-    let total = app
-        .clock_skew_ms
-        .fetch_add(advance, std::sync::atomic::Ordering::Relaxed)
-        + advance;
-    Ok(Json(json!({ "skew_ms": total })))
-}
-
-/// Development only: make the identity service answer as if it could not be reached, or again as
-/// it should (IDN-300, IDN-301).
-async fn dev_identity_outage(
-    State(app): State<Shared>,
-    Json(body): Json<Json_>,
-) -> Result<Json<Json_>, ApiError> {
-    if !app.cfg.dev {
-        return Err(ApiError::new(ErrorCode::NotFound, "not available"));
-    }
-    let on = body.get("on").and_then(Json_::as_bool).unwrap_or(false);
-    app.identity_outage
-        .store(on, std::sync::atomic::Ordering::Relaxed);
-    Ok(Json(json!({ "identity_outage": on })))
-}
-
 async fn socket(
     State(app): State<Shared>,
     headers: HeaderMap,
@@ -1094,7 +974,7 @@ async fn gate(State(app): State<Shared>, request: Request, next: Next) -> Respon
 }
 
 pub fn router(app: Shared) -> Router {
-    Router::new()
+    let router = Router::new()
         .route("/internal/health", get(health))
         .route("/internal/session", post(session))
         .route("/internal/session/login", post(login))
@@ -1144,16 +1024,6 @@ pub fn router(app: Shared) -> Router {
         .route("/internal/lab/result", post(lab_result))
         .route("/internal/lab/replay", post(lab_replay))
         .route("/internal/lab/verify", post(lab_verify))
-        .route("/internal/dev/reset", post(dev_reset))
-        .route("/internal/dev/expire-session", post(dev_expire))
-        .route("/internal/dev/outbox", post(dev_outbox))
-        .route(
-            "/internal/dev/age-authentication",
-            post(dev_age_authentication),
-        )
-        .route("/internal/dev/mail-outbox", post(dev_mail_outbox))
-        .route("/internal/dev/clock", post(dev_clock))
-        .route("/internal/dev/identity-outage", post(dev_identity_outage))
         .route("/internal/token", post(token))
         .route("/internal/token/verify", post(token_verify))
         .route("/internal/token/introspect", post(token_introspect))
@@ -1187,7 +1057,16 @@ pub fn router(app: Shared) -> Router {
             post(provisioning_group_remove),
         )
         .route("/internal/scim", post(scim_request))
-        .route("/internal/ws", get(socket))
+        .route("/internal/ws", get(socket));
+    // The development routes are compiled only with the `development` feature, and mounted only
+    // when the process was started in development mode.
+    #[cfg(feature = "development")]
+    let router = if app.cfg.dev {
+        crate::dev::mount(router)
+    } else {
+        router
+    };
+    router
         .layer(middleware::from_fn_with_state(app.clone(), gate))
         .with_state(app)
 }

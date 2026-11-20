@@ -267,14 +267,18 @@ fn titles(view: &Json, section: &str) -> Vec<String> {
 /// The routes of the backend's router and the method each answers, read from its definition so
 /// that a route added later is covered without anyone remembering to list it.
 fn routes() -> Vec<(String, bool)> {
-    include_str!("../src/http.rs")
-        .lines()
-        .filter(|line| line.contains(".route(\""))
-        .map(|line| {
-            let path = line.split('"').nth(1).expect("a route path").to_string();
-            (path, line.contains("get("))
-        })
-        .collect()
+    [
+        include_str!("../src/http.rs"),
+        include_str!("../src/dev.rs"),
+    ]
+    .into_iter()
+    .flat_map(str::lines)
+    .filter(|line| line.contains(".route(\""))
+    .map(|line| {
+        let path = line.split('"').nth(1).expect("a route path").to_string();
+        (path, line.contains("get("))
+    })
+    .collect()
 }
 
 /// Verifies: RUN-003
@@ -2244,7 +2248,8 @@ async fn sign_in_goes_through_the_method_named_and_no_other() {
 /// Verifies: IDN-022
 #[tokio::test]
 async fn every_sign_in_decision_is_audited_and_no_secret_is_in_the_trail() {
-    let backend = start().await;
+    let store = Arc::new(MemoryStore::new());
+    let backend = start_on(store.clone(), |_| {}).await;
     let token = backend.login("fieldnotes", "ines", "strata-dev-ines").await;
     backend
         .attempt("fieldnotes", "ines", "hunter2-the-wrong-one")
@@ -2254,33 +2259,34 @@ async fn every_sign_in_decision_is_audited_and_no_secret_is_in_the_trail() {
             .attempt("fieldnotes", "mirela", "hunter2-the-wrong-one")
             .await;
     }
-    let (status, platform) = backend
-        .call(
-            "fieldnotes",
-            None,
-            "/internal/platform/diagnostics",
-            json!({}),
-        )
-        .await;
-    assert_eq!(status, 200);
-    let decisions: Vec<&Json> = platform["audit"]
-        .as_array()
-        .unwrap()
+    // The trail is the tenant's, in the store, not in the backend's memory, and no other tenant
+    // has it.
+    drop(backend);
+    let fieldnotes = TenantId::new("fieldnotes").unwrap();
+    let lines = store
+        .audit_list(&fieldnotes, Some("decision"), 1000)
+        .unwrap();
+    let decisions: Vec<Json> = lines
         .iter()
-        .filter(|entry| entry["event"] == "auth.decision")
+        .map(|line| serde_json::from_str(&line.data).unwrap())
         .collect();
     let outcomes = |outcome: &str| decisions.iter().filter(|d| d["outcome"] == outcome).count();
     assert_eq!(outcomes("accepted"), 1);
     assert_eq!(outcomes("refused"), 11);
     assert_eq!(outcomes("throttled"), 1);
-    for decision in &decisions {
+    for (line, decision) in lines.iter().zip(&decisions) {
+        assert_eq!(line.event, "auth.decision");
         assert_eq!(decision["method"], "password");
         assert!(
             decision["checks"].as_array().is_some_and(|c| !c.is_empty()),
             "{decision}"
         );
     }
-    let trail = platform.to_string();
+    assert!(store
+        .audit_list(&TenantId::new("tidewater").unwrap(), None, 1000)
+        .unwrap()
+        .is_empty());
+    let trail = serde_json::to_string(&lines).unwrap();
     for secret in [
         token.as_str(),
         "hunter2-the-wrong-one",

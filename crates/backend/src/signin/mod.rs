@@ -204,7 +204,13 @@ pub fn sign_in(
         return Err(ApiError::new(ErrorCode::NotFound, "no such site"));
     };
     let Some(subject) = method.subject(request) else {
-        app.decision(name, "refused", &["well-formed"], &caller.correlation);
+        app.decision(
+            &caller.site,
+            name,
+            "refused",
+            &["well-formed"],
+            &caller.correlation,
+        );
         return Err(refused(name));
     };
 
@@ -214,6 +220,7 @@ pub fn sign_in(
             .throttle_reserve(&caller.site, &rules, app.now())?
     {
         app.decision(
+            &caller.site,
             name,
             "throttled",
             &["well-formed", "throttle"],
@@ -229,6 +236,7 @@ pub fn sign_in(
 
     let Some(account) = method.verify(app, caller, &subject, request)? else {
         app.decision(
+            &caller.site,
             name,
             "refused",
             &["well-formed", "throttle", "credential"],
@@ -244,6 +252,7 @@ pub fn sign_in(
     // A person their provider deactivated signs in by no method (FED-015).
     if crate::service::is_disabled(app, &caller.site, &account.principal)? {
         app.decision(
+            &caller.site,
             name,
             "refused",
             &["well-formed", "throttle", "credential", "active"],
@@ -267,6 +276,7 @@ pub fn sign_in(
             .throttle_settle(&caller.site, &rule.key, rule.max, ThrottleSettle::Refund)?;
     }
     app.decision(
+        &caller.site,
         name,
         "accepted",
         &["well-formed", "throttle", "credential"],

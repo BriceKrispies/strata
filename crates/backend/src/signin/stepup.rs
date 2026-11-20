@@ -64,6 +64,7 @@ pub fn require_fresh(app: &App, caller: &Caller, identity: &Identity) -> Result<
     };
     if age > app.cfg.factors.step_up_age_ms || moved {
         app.decision(
+            &caller.site,
             "step-up",
             "required",
             &[if moved { "network" } else { "age" }],
@@ -123,6 +124,7 @@ pub fn confirm(
     };
     if !accepted {
         app.decision(
+            &caller.site,
             "step-up",
             "refused",
             &["well-formed", "throttle", "credential"],
@@ -151,6 +153,7 @@ pub fn confirm(
         renewed.network.as_deref(),
     )?;
     app.decision(
+        &caller.site,
         "step-up",
         "accepted",
         &["well-formed", "throttle", "credential"],

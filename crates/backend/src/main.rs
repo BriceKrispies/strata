@@ -8,7 +8,7 @@
 //! | `STRATA_DB` | `var/strata.db` | SQLite control database (the tenant directory). |
 //! | `STRATA_TENANT_FILES` | `<STRATA_DB stem>-tenants` beside it | Directory of the per-tenant SQLite files. |
 //! | `STRATA_TENANTS` | `tenants` | Directory of tenant bundles to install. |
-//! | `STRATA_DEV` | unset | `1` enables development logins and fixture endpoints. |
+//! | `STRATA_DEV` | unset | `1` enables development logins and fixture endpoints. Refused unless built with `--features development`. |
 //! | `STRATA_LEAN_DIR` | `lean` | The Lean project, for verification runs. |
 //! | `STRATA_SESSION_TTL_MS` | 12 hours | Absolute session lifetime. |
 //! | `STRATA_SESSION_IDLE_MS` | 2 hours | Idle session lifetime. |
@@ -46,7 +46,7 @@
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
-use strata_backend::app::{Config, FactorPolicy, SealKey, LOG};
+use strata_backend::app::{Config, FactorPolicy, SealKey};
 use strata_backend::limits::Limits;
 use strata_backend::mail::{DevSink, Mailer, Smtp};
 use strata_backend::signin::oidc::Federation;
@@ -71,12 +71,37 @@ fn mailer(dev: bool) -> Result<Arc<dyn Mailer>, String> {
         let dir = PathBuf::from(var("STRATA_MAIL_DIR", "var/mail"));
         return Ok(Arc::new(DevSink::files(dir)));
     }
-    LOG.warn(
-        "mail.unconfigured",
-        "",
-        serde_json::json!({ "note": "STRATA_SMTP_URL is not set; mail is kept in memory and not sent" }),
-    );
-    Ok(Arc::new(DevSink::memory()))
+    Err(unconfigured_mail())
+}
+
+/// Why a start outside development with no mail transport is refused.
+fn unconfigured_mail() -> String {
+    "STRATA_SMTP_URL is not set: outside development the backend needs an SMTP server      (with STRATA_MAIL_FROM) to send sign-in links and recovery mail; it will not keep mail in memory"
+        .to_string()
+}
+
+/// Whether development mode was asked for. A build without the `development` feature has no
+/// development routes and refuses to start in it.
+fn development() -> Result<bool, String> {
+    let dev = var("STRATA_DEV", "") == "1";
+    if dev && !cfg!(feature = "development") {
+        return Err("STRATA_DEV=1 needs a backend built with the `development` cargo feature                     (cargo build -p strata-backend --features development)"
+            .to_string());
+    }
+    Ok(dev)
+}
+
+/// Outside development the directory of tenant bundles must exist: a backend without it would
+/// serve nothing, or install nothing, without saying why.
+fn tenants_dir(dev: bool) -> Result<PathBuf, String> {
+    let dir = PathBuf::from(var("STRATA_TENANTS", "tenants"));
+    if !dev && !dir.is_dir() {
+        return Err(format!(
+            "STRATA_TENANTS: {} is not a directory; outside development the tenants directory must exist",
+            dir.display()
+        ));
+    }
+    Ok(dir)
 }
 
 /// The tenants' identity providers, from the platform configuration file when one is named.
@@ -243,13 +268,13 @@ fn start() -> Result<(Config, Arc<dyn Store>), String> {
         }
         other => return Err(format!("STRATA_STORE: unknown adapter {other:?}")),
     };
-    let dev = var("STRATA_DEV", "") == "1";
+    let dev = development()?;
     let policy = factors(&service_token, dev)?;
     let cfg = Config {
         addr,
         service_token,
-        dev: var("STRATA_DEV", "") == "1",
-        tenants_dir: PathBuf::from(var("STRATA_TENANTS", "tenants")),
+        dev,
+        tenants_dir: tenants_dir(dev)?,
         lean_dir: PathBuf::from(var("STRATA_LEAN_DIR", "lean")),
         session_ttl_ms: number(
             "STRATA_SESSION_TTL_MS",
@@ -262,7 +287,7 @@ fn start() -> Result<(Config, Arc<dyn Store>), String> {
         throttle: Default::default(),
         passkey_challenge_ttl_ms: number("STRATA_PASSKEY_CHALLENGE_TTL_MS", 300_000)?,
         link_ttl_ms: number("STRATA_LINK_TTL_MS", 15 * 60_000)?,
-        mail: mailer(var("STRATA_DEV", "") == "1")?,
+        mail: mailer(dev)?,
         federation: Arc::new(federation()?),
         factors: policy,
         limits: limits()?,
@@ -309,5 +334,29 @@ mod tests {
         assert_eq!(policy.seal_key, SealKey::derive(KEY));
         assert!(run(false, KEY, "short").is_err());
         assert!(run(false, KEY, TOKEN).is_err());
+    }
+
+    #[test]
+    fn a_start_outside_development_without_mail_or_tenants_is_refused_with_a_named_reason() {
+        let mail = unconfigured_mail();
+        assert!(mail.contains("STRATA_SMTP_URL"), "{mail}");
+        let missing = std::env::temp_dir().join("strata-no-such-tenants-directory");
+        std::env::set_var("STRATA_TENANTS", &missing);
+        let refused = tenants_dir(false).unwrap_err();
+        assert!(refused.contains("STRATA_TENANTS"), "{refused}");
+        assert!(
+            tenants_dir(true).is_ok(),
+            "development does not insist on it"
+        );
+        std::env::remove_var("STRATA_TENANTS");
+    }
+
+    #[cfg(not(feature = "development"))]
+    #[test]
+    fn development_mode_is_refused_by_a_build_without_the_feature() {
+        std::env::set_var("STRATA_DEV", "1");
+        let refused = development().unwrap_err();
+        std::env::remove_var("STRATA_DEV");
+        assert!(refused.contains("development"), "{refused}");
     }
 }

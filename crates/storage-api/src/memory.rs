@@ -4,12 +4,12 @@
 //! that the rest of the system does not depend on SQLite. It is not durable and says so.
 
 use crate::{
-    check_event_sequence, partial_state, throttle_refund, throttle_step, Account, Capabilities,
-    Commit, FederatedIdentity, Health, IdempotencyEntry, IdempotentResult, JournalEntry, OidcFlow,
-    OutboxEntry, PasskeyChallenge, PasskeyRecord, PendingSignIn, Receipt, RecoveryRequest,
-    SamlRequest, SessionRecord, SignInLink, SnapshotInfo, StorageMigration, Store, StoreError,
-    StoreResult, TenantSummary, ThrottleRow, ThrottleRule, ThrottleSettle, ThrottleVerdict,
-    TotpRecord, IDEMPOTENCY_RETENTION_MS,
+    check_event_sequence, partial_state, throttle_refund, throttle_step, Account, AuditEntry,
+    Capabilities, Commit, FederatedIdentity, Health, IdempotencyEntry, IdempotentResult,
+    JournalEntry, OidcFlow, OutboxEntry, PasskeyChallenge, PasskeyRecord, PendingSignIn, Receipt,
+    RecoveryRequest, SamlRequest, SessionRecord, SignInLink, SnapshotInfo, StorageMigration, Store,
+    StoreError, StoreResult, TenantSummary, ThrottleRow, ThrottleRule, ThrottleSettle,
+    ThrottleVerdict, TotpRecord, IDEMPOTENCY_RETENTION_MS,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -44,6 +44,7 @@ struct Inner {
     pending: BTreeMap<(TenantId, String), PendingSignIn>,
     recoveries: BTreeMap<(TenantId, String), RecoveryRequest>,
     docs: BTreeMap<(TenantId, String, String), String>,
+    audit: BTreeMap<TenantId, Vec<AuditEntry>>,
     snapshots: BTreeMap<(TenantId, u64), (SnapshotInfo, Arc<TenantState>)>,
     /// Results by tenant, principal scope and key, with the receipt of the commit.
     idempotency: BTreeMap<(TenantId, String, String), (IdempotencyEntry, Receipt)>,
@@ -1003,6 +1004,42 @@ impl Store for MemoryStore {
             .is_some())
     }
 
+    fn audit_append(&self, tenant: &TenantId, entry: &AuditEntry) -> StoreResult<()> {
+        let mut inner = self.lock()?;
+        if !inner.tenants.contains_key(tenant) {
+            return Err(StoreError::NotFound(format!("tenant {tenant}")));
+        }
+        inner
+            .audit
+            .entry(tenant.clone())
+            .or_default()
+            .push(entry.clone());
+        Ok(())
+    }
+
+    fn audit_list(
+        &self,
+        tenant: &TenantId,
+        kind: Option<&str>,
+        limit: usize,
+    ) -> StoreResult<Vec<AuditEntry>> {
+        let inner = self.lock()?;
+        let mut lines: Vec<AuditEntry> = inner
+            .audit
+            .get(tenant)
+            .map(|lines| {
+                lines
+                    .iter()
+                    .filter(|line| kind.is_none_or(|k| line.kind == k))
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default();
+        let excess = lines.len().saturating_sub(limit);
+        lines.drain(..excess);
+        Ok(lines)
+    }
+
     fn verified_address(
         &self,
         tenant: &TenantId,
@@ -1115,6 +1152,7 @@ impl Store for MemoryStore {
         inner.pending.retain(|(t, _), _| t != tenant);
         inner.recoveries.retain(|(t, _), _| t != tenant);
         inner.docs.retain(|(t, _, _), _| t != tenant);
+        inner.audit.remove(tenant);
         inner.snapshots.retain(|(t, _), _| t != tenant);
         Ok(())
     }

@@ -355,7 +355,7 @@ const tscCli = join(root, 'node_modules', 'typescript', 'bin', 'tsc');
 if (!noTest) {
   console.log('running tests (--no-test would reuse the recorded results instead)');
   // A private build directory, so a running development stack does not hold the binaries.
-  const cargo = run('cargo', ['test', '--workspace', '--no-fail-fast'], { env: cargoEnv, timeoutMs: LONG_TIMEOUT_MS });
+  const cargo = run('cargo', ['test', '--workspace', '--no-fail-fast', '--features', 'strata-backend/development'], { env: cargoEnv, timeoutMs: LONG_TIMEOUT_MS });
   writeFileSync(join(resultsDir, 'cargo-test.txt'), cargo.out);
   const cargoRead = readCargo(cargo.out, cargo.ok);
   const cargoOk = cargoRead.ok;

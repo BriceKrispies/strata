@@ -6,6 +6,8 @@
 
 pub mod app;
 pub mod auth;
+#[cfg(feature = "development")]
+pub mod dev;
 pub mod http;
 pub mod hub;
 pub mod lab;
@@ -67,24 +69,52 @@ pub async fn run(
     let janitor = app.clone();
     tokio::spawn(async move {
         jobs::every(Duration::from_secs(600), || async {
-            let _ = janitor
-                .blocking(|app| {
-                    // Counters of failed sign-ins that have run out, and sessions that ended
-                    // a day ago.
-                    let _ = app.store.purge_throttle(app.now());
-                    let _ = app.store.purge_passkey_challenges(app.now());
-                    let _ = app.store.purge_sign_in_links(app.now());
-                    let _ = app.store.purge_oidc_flows(app.now());
-                    let _ = app.store.purge_factor_challenges(app.now());
-                    let _ = app.store.purge_saml_requests(app.now());
-                    let _ = app.store.purge_saml_assertions(app.now());
-                    app.store
-                        .purge_sessions(strata_kernel::Timestamp(app.now().0 - 86_400_000))
-                })
-                .await;
+            match janitor.blocking(purge).await {
+                Ok(()) => {}
+                Err(error) => LOG.error("janitor.failed", "", json!({ "error": error.describe() })),
+            }
         })
         .await
     });
 
     server::serve(listener, http::router(app), shutdown).await
+}
+
+/// One pass of the janitor: counters of failed sign-ins that have run out, challenges, links and
+/// flows that lapsed, and sessions that ended a day ago. A failed purge is logged, with its name,
+/// and the pass goes on with the others, so that one locked table does not stop the rest.
+fn purge(app: &App) {
+    let now = app.now();
+    let results = [
+        ("throttle", app.store.purge_throttle(now)),
+        (
+            "passkey_challenges",
+            app.store.purge_passkey_challenges(now),
+        ),
+        ("sign_in_links", app.store.purge_sign_in_links(now)),
+        ("oidc_flows", app.store.purge_oidc_flows(now)),
+        ("factor_challenges", app.store.purge_factor_challenges(now)),
+        ("saml_requests", app.store.purge_saml_requests(now)),
+        ("saml_assertions", app.store.purge_saml_assertions(now)),
+        (
+            "sessions",
+            app.store
+                .purge_sessions(strata_kernel::Timestamp(now.0 - 86_400_000)),
+        ),
+    ];
+    for (what, result) in results {
+        match result {
+            Ok(0) => {}
+            Ok(removed) => LOG.info(
+                "janitor.purged",
+                "",
+                json!({ "what": what, "removed": removed }),
+            ),
+            Err(error) => LOG.error(
+                "janitor.purge_failed",
+                "",
+                json!({ "what": what, "error": error.to_string() }),
+            ),
+        }
+    }
 }

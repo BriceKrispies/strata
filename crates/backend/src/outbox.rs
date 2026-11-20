@@ -26,12 +26,13 @@
 use crate::app::{App, Shared, LOG};
 use crate::hub::publish_pending;
 use serde_json::{json, Value};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 use strata_kernel::TenantId;
 use strata_machine_store::StorageApiMachineStore;
 use strata_model::machines::arc_outbox_delivery_flow_impl::ArcOutboxDeliveryFlowImpl;
+use strata_runtime::telemetry::{Field, JsonLines, Level, Telemetry};
 use strata_runtime::{
     DispatchError, Dispatcher, Envelope, HostError, Machine, Member, RouteTable, Router, Routing,
     System, SystemClock,
@@ -124,6 +125,33 @@ impl Dispatcher<Value> for Publisher {
 
 type OutboxSystem = System<StorageApiMachineStore, Publisher>;
 
+/// The publisher's telemetry: every report goes to the log as JSON lines, and the errors are
+/// counted so that health can say the publisher is failing.
+struct Beat {
+    lines: JsonLines,
+    errors: AtomicU64,
+    last_error_at: AtomicI64,
+}
+
+impl Telemetry for Beat {
+    fn event(&self, level: Level, name: &str, fields: &[Field<'_>]) {
+        if matches!(level, Level::Error) {
+            self.errors.fetch_add(1, Ordering::Relaxed);
+            self.last_error_at
+                .store(strata_protocol::log::now_ms(), Ordering::Relaxed);
+        }
+        self.lines.event(level, name, fields);
+    }
+
+    fn metric(&self, name: &str, value: f64, fields: &[Field<'_>]) {
+        self.lines.metric(name, value, fields);
+    }
+
+    fn span(&self, name: &str, elapsed: Duration, ok: bool, fields: &[Field<'_>]) {
+        self.lines.span(name, elapsed, ok, fields);
+    }
+}
+
 struct Inner {
     system: OutboxSystem,
     /// One commit hook at a time: arming, offering and delivering are a sequence.
@@ -131,6 +159,9 @@ struct Inner {
     /// Whether a commit also kicks the publisher. Always on; a development request turns it off
     /// so that the sweep can be seen to do its work.
     kick: AtomicBool,
+    beat: Arc<Beat>,
+    /// The task that runs the host; finished means the publisher has stopped.
+    task: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
 /// The outbox publisher: the machine on its host.
@@ -148,18 +179,26 @@ impl Outbox {
             Arc::new(SystemClock),
         ));
         let router = Router::new(vec![Member::of::<ArcOutboxDeliveryFlowImpl>()], ROUTES);
+        let beat = Arc::new(Beat {
+            lines: JsonLines { service: "backend" },
+            errors: AtomicU64::new(0),
+            last_error_at: AtomicI64::new(0),
+        });
         let system = System::new(
             store,
             router,
             Arc::new(Publisher::new(app)),
             Arc::new(SystemClock),
         )
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| e.to_string())?
+        .with_telemetry(beat.clone());
         Ok(Outbox {
             inner: Arc::new(Inner {
                 system,
                 turn: tokio::sync::Mutex::new(()),
                 kick: AtomicBool::new(true),
+                beat,
+                task: Mutex::new(None),
             }),
         })
     }
@@ -168,7 +207,29 @@ impl Outbox {
     /// and hands what the machine emits to the dispatcher.
     pub fn run(&self) {
         let system = self.inner.system.clone();
-        tokio::spawn(async move { system.run(TICK, std::future::pending()).await });
+        let task = tokio::spawn(async move { system.run(TICK, std::future::pending()).await });
+        if let Ok(mut slot) = self.inner.task.lock() {
+            *slot = Some(task);
+        }
+    }
+
+    /// Whether the publisher's task is still running.
+    pub fn running(&self) -> bool {
+        self.inner
+            .task
+            .lock()
+            .map(|slot| slot.as_ref().is_some_and(|task| !task.is_finished()))
+            .unwrap_or(false)
+    }
+
+    /// The publisher's condition, for health: whether it runs, and how often its ticks failed and
+    /// when last.
+    pub fn status(&self) -> serde_json::Value {
+        json!({
+            "running": self.running(),
+            "tick_failures": self.inner.beat.errors.load(Ordering::Relaxed),
+            "last_failure_at": self.inner.beat.last_error_at.load(Ordering::Relaxed),
+        })
     }
 
     /// Whether commits kick the publisher.
