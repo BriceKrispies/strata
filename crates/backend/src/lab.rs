@@ -42,7 +42,24 @@ pub struct RunRequest {
     /// Apply the change before this step of the schedule.
     #[serde(default)]
     pub apply_at: Option<usize>,
+    /// The revision of the tenant the projection is taken at (AGT-422). The projection starts
+    /// from the tenant's recorded history up to and including this revision: the live state when
+    /// it is the current revision, otherwise the journal replayed to it. Absent means the
+    /// current revision.
+    #[serde(default)]
+    pub revision: Option<u64>,
+    /// Refuse with a conflict that names the current revision when the tenant is no longer at
+    /// `revision`, instead of projecting against the past. The Lab page sets it, so that a
+    /// projection shown next to the current site is never one of an older site.
+    #[serde(default)]
+    pub require_current: bool,
 }
+
+/// What a result says about how long it is kept.
+const RETENTION: &str = "Results are held in this backend process only. They are lost when it restarts, and a site keeps its last 12 runs.";
+
+/// Journal entries are read in pages of this many.
+const JOURNAL_PAGE: usize = 5_000;
 
 struct Run {
     tenant: TenantId,
@@ -114,6 +131,9 @@ pub struct Lab {
     /// The last verification report of each tenant that asked for one.
     verification: Mutex<BTreeMap<String, Json>>,
     verifying: Mutex<Verifying>,
+    /// How many finished runs of each tenant were dropped to keep to `KEPT_RUNS`, since this
+    /// process started.
+    evicted: Mutex<BTreeMap<String, u64>>,
     /// Projections.
     pool: Pool,
     /// Lean builds: one at a time, whichever tenant asked.
@@ -141,6 +161,7 @@ impl Lab {
             order: Mutex::default(),
             verification: Mutex::default(),
             verifying: Mutex::default(),
+            evicted: Mutex::default(),
             pool: Pool::new("lab", limits.lab_workers, limits.lab_queue),
             verify_pool: Pool::new("lab-verify", 1, 2),
             runs_per_tenant: limits.lab_runs_per_tenant,
@@ -200,8 +221,17 @@ impl Lab {
         let runs = self.runs.lock().ok()?;
         let run = runs.get(id).filter(|run| run.tenant == identity.tenant)?;
         Some(
-            json!({ "id": id, "status": run.status, "summary": run.summary, "result": run.result }),
+            json!({ "id": id, "status": run.status, "summary": run.summary, "result": run.result, "retention": RETENTION }),
         )
+    }
+
+    /// How many of the tenant's runs this process has dropped to keep to `KEPT_RUNS`.
+    pub fn evicted_of(&self, tenant: &TenantId) -> u64 {
+        self.evicted
+            .lock()
+            .ok()
+            .and_then(|evicted| evicted.get(tenant.as_str()).copied())
+            .unwrap_or(0)
     }
 
     fn insert(&self, id: &str, run: Run) {
@@ -242,6 +272,9 @@ impl Lab {
                 };
                 let oldest = order.remove(at);
                 runs.remove(&oldest);
+                if let Ok(mut evicted) = self.evicted.lock() {
+                    *evicted.entry(tenant.as_str().to_string()).or_insert(0) += 1;
+                }
             }
         }
         Ok(())
@@ -266,6 +299,117 @@ fn principal_of(identity: &Identity) -> Result<PrincipalId, ApiError> {
             "Sign in to use the Impact Lab.",
         )),
     }
+}
+
+/// Every journal entry of the tenant up to and including `revision`, oldest first, read in pages.
+fn journal_through(
+    app: &App,
+    tenant: &TenantId,
+    revision: u64,
+) -> Result<Vec<strata_storage_api::JournalEntry>, ApiError> {
+    let mut entries = Vec::new();
+    let mut after = 0;
+    loop {
+        let page = app.store.journal_after(tenant, after, JOURNAL_PAGE)?;
+        let Some(last) = page.last() else {
+            break;
+        };
+        after = last.revision.0;
+        entries.extend(
+            page.into_iter()
+                .filter(|entry| entry.revision.0 <= revision),
+        );
+        if after >= revision {
+            break;
+        }
+    }
+    Ok(entries)
+}
+
+/// The tenant as a projection starts: its state at the revision the caller named, and the
+/// revision the tenant is at now.
+struct Basis {
+    state: Arc<TenantState>,
+    revision: u64,
+    current: u64,
+}
+
+/// Decide the state a projection starts from (AGT-422). The revision named is the current one:
+/// the live state. An earlier one: the journal replayed to it, which must reproduce every
+/// recorded delta. A later one does not exist. With `require_current`, any revision but the
+/// current one is a conflict that names the current one.
+fn basis(
+    app: &App,
+    identity: &Identity,
+    request: &RunRequest,
+    live: &Arc<TenantState>,
+) -> Result<Basis, ApiError> {
+    let current = live.revision.0;
+    let at = request.revision.unwrap_or(current);
+    if request.require_current && at != current {
+        let mut error = ApiError::new(
+            ErrorCode::Conflict,
+            format!("The site is at revision {current}, not {at}: it changed since this projection was asked for. Project again."),
+        );
+        error.0.kind = Some("StaleRevision".to_string());
+        return Err(error);
+    }
+    if at > current {
+        return Err(ApiError::new(
+            ErrorCode::Invalid,
+            format!("The site has no revision {at} yet; it is at revision {current}."),
+        ));
+    }
+    if at == current {
+        return Ok(Basis {
+            state: live.clone(),
+            revision: at,
+            current,
+        });
+    }
+    let entries: Vec<Recorded> = journal_through(app, &identity.tenant, at)?
+        .into_iter()
+        .map(|e| Recorded {
+            revision: e.revision,
+            kernel_version: e.kernel_version,
+            intent: e.intent,
+            context: e.context,
+            delta_hash: e.delta_hash,
+            events_hash: e.events_hash,
+        })
+        .collect();
+    if entries.last().map(|entry| entry.revision.0) != Some(at) {
+        return Err(ApiError::new(
+            ErrorCode::NotFound,
+            format!("The recorded history has no revision {at}."),
+        ));
+    }
+    let report = replay_journal(&identity.tenant, &entries, None);
+    if report.agreed != report.entries {
+        return Err(ApiError::new(
+            ErrorCode::Unavailable,
+            format!(
+                "The recorded history up to revision {at} does not replay under this kernel{}.",
+                report
+                    .first_mismatch
+                    .map(|(revision, problem)| format!(" (revision {revision}: {problem})"))
+                    .unwrap_or_default()
+            ),
+        ));
+    }
+    let state = report
+        .replayed
+        .tenants
+        .get(&identity.tenant)
+        .cloned()
+        .ok_or_else(|| {
+            ApiError::new(ErrorCode::NotFound, format!("no site {}", identity.tenant))
+        })?;
+    Ok(Basis {
+        state,
+        revision: at,
+        current,
+    })
 }
 
 fn complete(app: &App, tenant: &TenantId) -> Result<Arc<TenantState>, ApiError> {
@@ -368,7 +512,7 @@ pub fn overview(app: &App, identity: &Identity) -> Result<Json, ApiError> {
         .values()
         .map(|q| json!({ "id": q.id.as_str(), "object": q.object.as_str(), "where": q.filter.as_ref().map(|f| f.to_string()), "params": q.params, "limit": q.limit }))
         .collect();
-    let journal = app.store.journal_after(&identity.tenant, 0, 100_000)?.len();
+    let journal = app.store.journal_count(&identity.tenant)?;
     let classes: Vec<Json> = [
         Class::Proven,
         Class::Reproduced,
@@ -403,6 +547,11 @@ pub fn overview(app: &App, identity: &Identity) -> Result<Json, ApiError> {
         "classes": classes,
         "verification": app.lab.verification_of(&identity.tenant),
         "recent_runs": app.lab.recent().into_iter().filter(|r| r["tenant"] == identity.tenant.as_str()).collect::<Vec<_>>(),
+        "runs_kept": {
+            "most_per_site": KEPT_RUNS,
+            "dropped_since_start": app.lab.evicted_of(&identity.tenant),
+            "note": RETENTION,
+        },
     }))
 }
 
@@ -456,7 +605,12 @@ fn present(
             "seed": scenario.seed,
             "faults": scenario.faults,
             "apply_at": projection.proposal.before_step,
+            "revision": request.revision,
+            "require_current": request.require_current,
         },
+        "revision": snapshot["revision"].clone(),
+        "current_revision": snapshot["current_revision"].clone(),
+        "retention": RETENTION,
         "snapshot": snapshot,
         "kernel_version": projection.baseline.kernel_version,
         "change_outcome": projection.change_outcome,
@@ -488,7 +642,7 @@ fn build_scenario(
     app: &App,
     identity: &Identity,
     request: &RunRequest,
-    live: &Arc<TenantState>,
+    basis: &Basis,
 ) -> Result<Scenario, ApiError> {
     let seed = request.seed.unwrap_or(1);
     let faults = if request.faults {
@@ -504,7 +658,9 @@ fn build_scenario(
             // The simulated world holds the requesting tenant alone: a run never reads, and the
             // process never copies into memory for it, another tenant's records.
             let mut world = World::default();
-            world.tenants.insert(identity.tenant.clone(), live.clone());
+            world
+                .tenants
+                .insert(identity.tenant.clone(), basis.state.clone());
             let steps = request.steps.unwrap_or(60).clamp(5, 300);
             let schedule = generate(&world, &identity.tenant, seed, steps, app.now().0, 60_000);
             Ok(Scenario {
@@ -516,9 +672,7 @@ fn build_scenario(
             })
         }
         "journal" => {
-            let schedule: Vec<Scheduled> = app
-                .store
-                .journal_after(&identity.tenant, 0, 100_000)?
+            let schedule: Vec<Scheduled> = journal_through(app, &identity.tenant, basis.revision)?
                 .into_iter()
                 .map(|entry| Scheduled {
                     label: format!(
@@ -555,7 +709,9 @@ pub fn start(
 ) -> Result<Json, ApiError> {
     let principal = principal_of(identity)?;
     let live = complete(app, &identity.tenant)?;
-    let changes = proposal::parse(&live.schema, &request.change)
+    let basis = basis(app, identity, &request, &live)?;
+    let state = basis.state.clone();
+    let changes = proposal::parse(&state.schema, &request.change)
         .map_err(|problem| ApiError::new(ErrorCode::Invalid, problem))?;
     let existing = match request.existing.as_str() {
         "reject" => ExistingData::Reject,
@@ -567,7 +723,7 @@ pub fn start(
             ))
         }
     };
-    let scenario = build_scenario(app, identity, &request, &live)?;
+    let scenario = build_scenario(app, identity, &request, &basis)?;
     // A recorded journal starts from nothing, so the change can only apply once the tenant and
     // its schema exist: after the first two entries.
     let earliest = if request.source == "journal" { 2 } else { 0 };
@@ -583,10 +739,11 @@ pub fn start(
         before_step,
     };
     let snapshot = json!({
-        "revision": live.revision.0,
-        "schema_version": live.schema.version.0,
-        "records": live.record_count(),
-        "state_hash": strata_kernel::canon::hash_of(&*live),
+        "revision": basis.revision,
+        "current_revision": basis.current,
+        "schema_version": state.schema.version.0,
+        "records": state.record_count(),
+        "state_hash": strata_kernel::canon::hash_of(&*state),
     });
 
     let steps = scenario.schedule.len();
@@ -708,16 +865,16 @@ pub fn start(
         app.lab.remove(&id);
         return Err(busy);
     }
-    Ok(json!({ "run": id, "steps": steps, "apply_at": before_step }))
+    Ok(
+        json!({ "run": id, "steps": steps, "apply_at": before_step, "revision": basis.revision, "current_revision": basis.current }),
+    )
 }
 
 /// Replay the tenant's journal of committed transitions from nothing and compare with the live
 /// state.
 pub fn replay_live(app: &App, identity: &Identity) -> Result<Json, ApiError> {
     let live = complete(app, &identity.tenant)?;
-    let entries: Vec<Recorded> = app
-        .store
-        .journal_after(&identity.tenant, 0, 100_000)?
+    let entries: Vec<Recorded> = journal_through(app, &identity.tenant, u64::MAX)?
         .into_iter()
         .map(|e| Recorded {
             revision: e.revision,

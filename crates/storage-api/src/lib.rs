@@ -742,6 +742,9 @@ pub trait Store: Send + Sync {
         limit: usize,
     ) -> StoreResult<Vec<JournalEntry>>;
 
+    /// How many journal entries a tenant has, without reading them. An absent tenant has none.
+    fn journal_count(&self, tenant: &TenantId) -> StoreResult<u64>;
+
     fn put_session(&self, session: &SessionRecord) -> StoreResult<()>;
     /// Move a session's last-seen time to `at`. Touches nothing else, so it can never undo a
     /// revocation that landed after the caller read the session. An absent session is ignored.

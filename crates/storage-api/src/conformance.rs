@@ -646,6 +646,14 @@ fn the_journal_replays_to_the_stored_state(store: &dyn Store) {
     let alpha = tenant_id("alpha");
     let mut replayed = World::default();
     let mut after = 0;
+    // The count agrees with the entries and is per tenant; an absent tenant has none.
+    let counted = store.journal_count(&alpha).unwrap();
+    assert_eq!(
+        counted,
+        store.journal_after(&alpha, 0, 1_000).unwrap().len() as u64
+    );
+    assert!(counted > 0);
+    assert_eq!(store.journal_count(&tenant_id("nobody")).unwrap(), 0);
     loop {
         let page = store.journal_after(&alpha, after, 3).unwrap();
         if page.is_empty() {

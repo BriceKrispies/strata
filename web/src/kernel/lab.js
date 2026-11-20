@@ -5,6 +5,9 @@
 // only tracks what was asked, how far the run has got, and what came back.
 // @ts-check
 
+/** What the page says when the site moved on after the revision a projection was asked at. */
+export const STALE = 'The site changed since this projection: project again.';
+
 const TABS = ['projection', 'metadata', 'evidence', 'diagnostics'];
 
 export function labInit() {
@@ -58,6 +61,7 @@ export function labUpdate(state, msg, { request, toast }) {
     case 'submit': {
       if (lab.run?.status === 'running') return { state, effects: [] };
       const form = { ...lab.form, ...Object.fromEntries(Object.entries(msg.values).map(([k, v]) => [k, k === 'faults' ? v === true : String(v)])) };
+      /** @type {Record<string, unknown>} */
       const body = {
         change: form.change,
         existing: form.existing,
@@ -66,6 +70,13 @@ export function labUpdate(state, msg, { request, toast }) {
         seed: Math.max(0, Math.floor(Number(form.seed) || 0)),
         faults: form.faults === true,
       };
+      // The projection is taken at the revision the page showed; if the site has moved on, the
+      // backend refuses and the person projects again.
+      const shown = lab.overview?.tenant?.revision;
+      if (Number.isInteger(shown)) {
+        body.revision = shown;
+        body.require_current = true;
+      }
       const [next, effect] = request(
         withLab(state, { form, formError: '', run: { id: null, status: 'starting', progress: null }, result: null }),
         'lab.run', { method: 'POST', path: '/api/lab/run', body, write: true }, msg,
@@ -135,6 +146,11 @@ export function labUpdate(state, msg, { request, toast }) {
           if (!msg.ok) return { state: withLab(state, { loading: false, error: error.message }), effects: [] };
           return { state: withLab(state, { loading: false, overview: msg.body, verification: lab.verification ?? msg.body.verification }), effects: [] };
         case 'lab.run': {
+          if (!msg.ok && (error.code === 'conflict' || msg.status === 409)) {
+            const text = STALE;
+            const [next, effect] = request(withLab(state, { run: null, formError: text }), 'lab.overview', { path: '/api/lab/overview' }, msg);
+            return { state: { ...next, announce: text, focus: { target: 'lab-change', token: msg.id } }, effects: [effect] };
+          }
           if (!msg.ok) {
             return { state: { ...withLab(state, { run: null, formError: error.message }), announce: error.message, focus: { target: 'lab-change', token: msg.id } }, effects: [] };
           }

@@ -314,6 +314,15 @@ impl Store for MemoryStore {
             .collect())
     }
 
+    fn journal_count(&self, tenant: &TenantId) -> StoreResult<u64> {
+        Ok(self
+            .lock()?
+            .journal
+            .iter()
+            .filter(|entry| entry.tenant == *tenant)
+            .count() as u64)
+    }
+
     fn put_session(&self, session: &SessionRecord) -> StoreResult<()> {
         let mut inner = self.lock()?;
         if !inner.tenants.contains_key(&session.tenant) {

@@ -347,7 +347,7 @@ function result(page) {
       'dl',
       { class: 'facts' },
       h('div', null, h('dt', null, 'Kernel'), h('dd', null, r.kernel_version)),
-      h('div', null, h('dt', null, 'Snapshot'), h('dd', null, `revision ${r.snapshot.revision}, schema version ${r.snapshot.schema_version}, `, short(r.snapshot.state_hash))),
+      h('div', null, h('dt', null, 'Snapshot'), h('dd', null, `revision ${r.revision ?? r.snapshot.revision}${r.current_revision !== undefined && r.current_revision !== (r.revision ?? r.snapshot.revision) ? ` (the site is now at revision ${r.current_revision})` : ''}, schema version ${r.snapshot.schema_version}, `, short(r.snapshot.state_hash))),
       h('div', null, h('dt', null, 'Schedule'), h('dd', null, `${r.request.source}, ${r.request.steps} operations, seed ${r.request.seed}, change applied before step ${r.request.apply_at + 1}`)),
       h('div', null, h('dt', null, 'Baseline trace'), h('dd', null, short(r.baseline.trace_hash), ` ${r.baseline.accepted} accepted, ${r.baseline.rejected} rejected`)),
       h('div', null, h('dt', null, 'Branch trace'), h('dd', null, short(r.branch.trace_hash), ` ${r.branch.accepted} accepted, ${r.branch.rejected} rejected`)),
@@ -369,6 +369,9 @@ function projection(page) {
       short(t.state_hash),
       '. A projection works on a copy; the live publication is never changed from this page.',
     ),
+    page.overview.runs_kept
+      ? h('p', { class: 'lab-note' }, `${page.overview.runs_kept.note}${page.overview.runs_kept.dropped_since_start ? ` ${page.overview.runs_kept.dropped_since_start} earlier ${page.overview.runs_kept.dropped_since_start === 1 ? 'run was' : 'runs were'} dropped since it started.` : ''}`)
+      : null,
     form(page),
     progress(page.run),
     page.run?.status === 'cancelled' ? h('p', { class: 'lab-note', role: 'status' }, 'The last projection was cancelled before it finished.') : null,

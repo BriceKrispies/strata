@@ -660,6 +660,10 @@ fn findings(projection: &Projection) -> Vec<Finding> {
 
 /// Run the baseline and the branch and compare them.
 ///
+/// The scenario's initial world is whatever the caller builds: the Lab builds it from the
+/// tenant's recorded history at the revision a request names (AGT-422).
+/// Implements: CT-164
+///
 /// `progress` receives `(phase, done, total)` with phase 0 for the baseline, 1 for the branch
 /// and 2 for minimisation; returning `false` cancels.
 pub fn project(

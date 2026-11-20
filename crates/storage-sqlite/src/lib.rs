@@ -1960,6 +1960,15 @@ impl Store for SqliteStore {
         .collect()
     }
 
+    fn journal_count(&self, tenant: &TenantId) -> StoreResult<u64> {
+        Ok(self
+            .on_tenant(tenant, |conn| {
+                conn.query_row("SELECT COUNT(*) FROM journal", [], |r| r.get::<_, i64>(0))
+                    .map_err(db)
+            })?
+            .unwrap_or(0) as u64)
+    }
+
     fn put_session(&self, session: &SessionRecord) -> StoreResult<()> {
         self.existing(&session.tenant)?;
         // The directory keeps the tenant a session was first stored under, and its token hash
