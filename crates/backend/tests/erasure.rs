@@ -508,18 +508,25 @@ fn the_subject_is_erased_and_the_rest_is_kept(store: Arc<dyn Store>) {
     // The receipt names what was reached and what was not, and is kept.
     assert!(!receipt.complete);
     for copy in [
+        "values written before sealing",
         "events and outbox",
         "journal",
         "snapshots",
-        "backups and exports",
+        "backup images",
+        "exports",
         "audit log",
-        "schema history",
-        "subject key",
     ] {
         assert!(
             receipt.not_reached.iter().any(|line| line.contains(copy)),
             "the receipt does not name {copy}: {:?}",
             receipt.not_reached
+        );
+    }
+    for copy in ["subject keys", "schema history"] {
+        assert!(
+            receipt.reached.iter().any(|line| line.contains(copy)),
+            "the receipt does not name {copy} as reached: {:?}",
+            receipt.reached
         );
     }
     assert!(receipt

@@ -12,6 +12,9 @@
 //!   times is one index range (`record_index_ord`, and `record_index_ord_desc` for the descending
 //!   order, whose ties are still in ascending id order).
 //!
+//! A sealed value (`strata_storage_api::sealed`) has a row for each blind hash it carries and no
+//! kind, and none at all when its field is not searchable.
+//!
 //! An equality page is answered from the primary key `(object, field, value, id)` in id order,
 //! for a value of any kind whose key fits; a range page of integers or of times from `ord`. Every
 //! other page (a value without a key, a range of another kind or of mixed kinds) is answered by
@@ -79,6 +82,18 @@ fn ord_of(value: &Value) -> Option<i64> {
 pub(crate) fn index_rows(record: &Record) -> Vec<IndexRow> {
     let mut rows: BTreeMap<(String, String), (Option<i64>, Option<i64>)> = BTreeMap::new();
     for (field, value) in &record.fields {
+        // A sealed value is indexed by its blind hashes only, and not at all when its field is
+        // not searchable (D-6585, WG-5112); no index page ever answers one (no kind).
+        if let Some(blinds) = strata_storage_api::sealed::index_values(value) {
+            for blind in blinds {
+                let key = encode(&blind);
+                if key.len() <= INDEX_KEY_BYTES {
+                    rows.entry((field.as_str().to_string(), key))
+                        .or_insert((None, None));
+                }
+            }
+            continue;
+        }
         match value {
             Value::List(items) => {
                 for item in items {

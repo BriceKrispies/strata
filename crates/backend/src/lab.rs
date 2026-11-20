@@ -18,7 +18,7 @@ use strata_kernel::ext::*;
 use strata_kernel::{ExistingData, Principal, PrincipalId, TenantId, TenantState, World};
 use strata_protocol::api::ErrorCode;
 use strata_simulation::engine::{replay as replay_trace, Faults, Scenario, Scheduled};
-use strata_simulation::journal::{replay_journal, Recorded};
+use strata_simulation::journal::{replay_journal_with, JournalReplay, Recorded};
 use strata_simulation::project::{project, Projection, Proposal};
 use strata_simulation::workload::generate;
 use strata_substrate::proposal;
@@ -301,6 +301,23 @@ fn principal_of(identity: &Identity) -> Result<PrincipalId, ApiError> {
     }
 }
 
+/// Replay a tenant's journal as the sealed store wrote it: an entry agrees when it hashes as
+/// recorded plainly or in the sealed form, and one that still holds a value under a destroyed
+/// key is reported as redacted (D-350, PRV-361).
+fn replay_sealed(
+    app: &App,
+    tenant: &TenantId,
+    entries: &[Recorded],
+    live: Option<&TenantState>,
+) -> JournalReplay {
+    replay_journal_with(tenant, entries, live, &|before, transition| {
+        app.sealed
+            .journal_hashes(tenant, before, &transition.delta, &transition.events)
+            .ok()
+            .flatten()
+    })
+}
+
 /// Every journal entry of the tenant up to and including `revision`, oldest first, read in pages.
 fn journal_through(
     app: &App,
@@ -384,7 +401,15 @@ fn basis(
             format!("The recorded history has no revision {at}."),
         ));
     }
-    let report = replay_journal(&identity.tenant, &entries, None);
+    let report = replay_sealed(app, &identity.tenant, &entries, None);
+    if let Some((revision, _)) = report.redacted.first() {
+        return Err(ApiError::new(
+            ErrorCode::Unavailable,
+            format!(
+                "The recorded history up to revision {at} holds values of an erased person from revision {revision} on, so it cannot be decided again."
+            ),
+        ));
+    }
     if report.agreed != report.entries {
         return Err(ApiError::new(
             ErrorCode::Unavailable,
@@ -885,7 +910,7 @@ pub fn replay_live(app: &App, identity: &Identity) -> Result<Json, ApiError> {
             events_hash: e.events_hash,
         })
         .collect();
-    let report = replay_journal(&identity.tenant, &entries, Some(&live));
+    let report = replay_sealed(app, &identity.tenant, &entries, Some(&live));
     LOG.info(
         "lab.replayed",
         &identity.correlation,

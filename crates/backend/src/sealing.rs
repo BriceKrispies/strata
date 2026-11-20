@@ -18,7 +18,11 @@ const TAG_BYTES: usize = 16;
 
 /// Seal `secret` under the current key, bound to `aad`.
 pub fn seal(app: &App, aad: &[u8], secret: &[u8]) -> Result<String, ApiError> {
-    let key = &app.cfg.factors.seal_key;
+    seal_with(&app.cfg.factors.seal_key, aad, secret)
+}
+
+/// Seal `secret` under `key`, bound to `aad`, in the form [`seal`] writes.
+pub fn seal_with(key: &SealKey, aad: &[u8], secret: &[u8]) -> Result<String, ApiError> {
     let mut nonce = [0u8; NONCE_BYTES];
     getrandom::getrandom(&mut nonce)
         .map_err(|e| ApiError::new(ErrorCode::Unavailable, format!("no randomness: {e}")))?;
@@ -54,7 +58,16 @@ fn open_with(key: &SealKey, aad: &[u8], bytes: &[u8]) -> Option<Vec<u8>> {
 /// Open a sealed secret, or `None` when it was not sealed for `aad` under a key we hold.
 pub fn open(app: &App, aad: &[u8], sealed: &str) -> Option<Vec<u8>> {
     let policy = &app.cfg.factors;
-    let keys = || std::iter::once(&policy.seal_key).chain(policy.previous_seal_keys.iter());
+    let keys: Vec<&SealKey> = std::iter::once(&policy.seal_key)
+        .chain(policy.previous_seal_keys.iter())
+        .collect();
+    open_among(&keys, aad, sealed)
+}
+
+/// Open a sealed secret with the one of `keys` it names, or `None` when it was not sealed for
+/// `aad` under one of them.
+pub fn open_among(keys: &[&SealKey], aad: &[u8], sealed: &str) -> Option<Vec<u8>> {
+    let keys = || keys.iter().copied();
     match sealed.split_once('.') {
         Some((id, body)) => {
             let bytes = URL_SAFE_NO_PAD.decode(body).ok()?;

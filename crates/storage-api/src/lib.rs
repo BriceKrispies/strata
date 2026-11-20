@@ -37,6 +37,7 @@
 //! What adapters may differ in is stated by [`Capabilities`], not hidden.
 
 pub mod admission;
+pub mod audit_chain;
 pub mod covering;
 pub mod jobs;
 pub mod memory;
@@ -44,6 +45,7 @@ pub mod search;
 pub mod segment_jobs;
 pub mod segment_pump;
 pub mod schedules;
+pub mod sealed;
 pub mod segments;
 
 #[cfg(feature = "conformance")]
@@ -1214,6 +1216,20 @@ pub trait Store: Send + Sync {
         kind: Option<&str>,
         limit: usize,
     ) -> StoreResult<Vec<AuditEntry>>;
+    /// At most `limit` lines of the tenant's audit trail with a sequence number above `after`,
+    /// oldest first, each as stored (its sealed members sealed) with its sequence number and the
+    /// chain value stored with it ([`audit_chain`], PRV-359, PRV-360). A tenant with none has an
+    /// empty list. An adapter that keeps no chain says so.
+    fn audit_chain(
+        &self,
+        _tenant: &TenantId,
+        _after: u64,
+        _limit: usize,
+    ) -> StoreResult<Vec<audit_chain::ChainedAuditEntry>> {
+        Err(StoreError::Unavailable(
+            "this store keeps no audit chain".into(),
+        ))
+    }
 
     /// The verified e-mail address of the account of `principal` in `tenant`, if it has an
     /// account and the account has one.
@@ -1651,6 +1667,8 @@ pub fn check_event_sequence(commit: &Commit, stored_event_seq: u64) -> StoreResu
 pub fn field_matches(record: &Record, field: &strata_kernel::FieldId, value: &Value) -> bool {
     match record.get(field) {
         Value::List(items) => items.contains(value),
+        // A sealed value answers the blind hash of its plain value (D-6585, [`sealed`]).
+        Value::Str(stored) if sealed::is_blind(value) => sealed::blind_matches(stored, value),
         other => other == value,
     }
 }
