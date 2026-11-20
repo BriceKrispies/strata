@@ -41,6 +41,7 @@ pub mod products;
 pub mod query_plan;
 pub mod read;
 pub mod retention;
+pub mod rule_reads;
 pub mod rules;
 pub mod schema;
 pub mod search;
