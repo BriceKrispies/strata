@@ -20,8 +20,10 @@
 //! What a job does is [`steps`]; the lease, run and report sequence is [`leases`]; the routes the
 //! tenant owner lists runs, steps and exception records through are [`routes`].
 
+pub mod fan_out;
 pub mod leases;
 pub mod routes;
+pub mod segment_work;
 pub mod steps;
 
 use crate::app::{App, Shared, LOG};

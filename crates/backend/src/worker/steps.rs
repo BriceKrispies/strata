@@ -86,7 +86,7 @@ pub fn step_policy(step: &AutomationStepDef) -> RetryPolicy {
 }
 
 /// The job of the step `step` at position `sequence` of a run, due at `due`.
-fn step_job(
+pub(super) fn step_job(
     run: &str,
     automation: &WorkflowId,
     step: &StepName,
@@ -108,13 +108,16 @@ fn step_job(
 }
 
 /// The automation of a schema.
-fn automation_of<'a>(schema: &'a TenantSchema, id: &WorkflowId) -> Option<&'a AutomationDef> {
+pub(super) fn automation_of<'a>(
+    schema: &'a TenantSchema,
+    id: &WorkflowId,
+) -> Option<&'a AutomationDef> {
     schema.automations.as_ref().and_then(|all| all.get(id))
 }
 
 /// An exception record of the run of a job, with an id derived from the job and the reason.
 #[allow(clippy::too_many_arguments)]
-fn exception(
+pub(super) fn exception(
     tenant: &TenantId,
     kind: ExceptionKind,
     reason: &str,
@@ -185,6 +188,7 @@ pub fn run_job(app: &App, tenant: &TenantId, lease: &Lease, now: Timestamp) -> O
             step,
             sequence,
         } => run_step(app, tenant, lease, run, automation, step, *sequence, now),
+        JobWork::Segment(work) => super::segment_work::run(app, tenant, lease, work, now),
     }
 }
 
@@ -350,20 +354,20 @@ fn start_run(
 }
 
 /// Why a step did not complete, and whether an attempt made again may.
-struct StepError {
-    message: String,
-    retry: bool,
+pub(super) struct StepError {
+    pub(super) message: String,
+    pub(super) retry: bool,
 }
 
 impl StepError {
-    fn retry(message: impl Into<String>) -> Self {
+    pub(super) fn retry(message: impl Into<String>) -> Self {
         StepError {
             message: message.into(),
             retry: true,
         }
     }
 
-    fn fatal(message: impl Into<String>) -> Self {
+    pub(super) fn fatal(message: impl Into<String>) -> Self {
         StepError {
             message: message.into(),
             retry: false,
@@ -372,16 +376,16 @@ impl StepError {
 }
 
 /// Where a run goes after a step.
-enum Next {
+pub(super) enum Next {
     Step(StepName, Timestamp),
     End,
 }
 
 /// A completed step: its typed result (WFL-1523), the outputs it binds, and where the run goes.
-struct Done {
-    result: AutomationStepResult,
-    outputs: Vec<(&'static str, Value)>,
-    next: Next,
+pub(super) struct Done {
+    pub(super) result: AutomationStepResult,
+    pub(super) outputs: Vec<(&'static str, Value)>,
+    pub(super) next: Next,
 }
 
 /// Run one step of a run.
@@ -490,6 +494,10 @@ fn run_step(
         None => Err(StepError::fatal(format!(
             "automation {automation} has no step {step}: its definition changed"
         ))),
+        // A fan-out is a step of many jobs, one for each batch of members (WG-5152).
+        Some(step_def) if matches!(step_def.action, AutomationStep::FanOut { .. }) => {
+            return super::fan_out::begin(automation, step, step_def, run, record, sequence, now)
+        }
         Some(step_def) => act(app, tenant, def, step_def, &run, &key, job, now),
     };
     match attempt {
@@ -642,7 +650,7 @@ fn kind_name(action: &AutomationStep) -> &'static str {
 
 /// Carry out one step's action.
 #[allow(clippy::too_many_arguments)]
-fn act(
+pub(super) fn act(
     app: &App,
     tenant: &TenantId,
     def: &AutomationDef,
