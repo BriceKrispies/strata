@@ -2,6 +2,7 @@
 // @ts-check
 
 import { h } from '../components/dom.js';
+import { hrefFor } from '../generated/routes.js';
 import { control, date, prose, qrCode } from '../components/parts.js';
 
 const STATUS = { draft: 'Draft', published: 'Published' };
@@ -182,9 +183,9 @@ export function desk(page) {
     h(
       'p',
       { class: 'toolbar' },
-      page.canWrite ? h('a', { class: 'button', href: '/desk/new' }, 'Write a new article') : null,
-      page.canSettings ? h('a', { class: 'button button--quiet', href: '/desk/settings' }, 'Publication settings') : null,
-      page.canLab ? h('a', { class: 'button button--quiet', href: '/lab' }, 'Impact Lab') : null,
+      page.canWrite ? h('a', { class: 'button', href: hrefFor('screen-desk-new') }, 'Write a new article') : null,
+      page.canSettings ? h('a', { class: 'button button--quiet', href: hrefFor('screen-desk-settings') }, 'Publication settings') : null,
+      page.canLab ? h('a', { class: 'button button--quiet', href: hrefFor('screen-lab') }, 'Impact Lab') : null,
     ),
     page.posts.length
       ? h(
@@ -376,7 +377,7 @@ export function editor(page) {
         page.status === 'published'
           ? h('button', { class: 'button button--quiet', type: 'button', disabled: page.busy, 'data-action': 'editor.unpublish' }, 'Unpublish')
           : h('button', { class: 'button', type: 'button', disabled: page.busy, 'data-action': 'editor.publish' }, 'Publish'),
-        h('a', { class: 'button button--quiet', href: '/desk' }, 'Back to the desk'),
+        h('a', { class: 'button button--quiet', href: hrefFor('screen-desk') }, 'Back to the desk'),
       ),
     ),
   ];
@@ -427,7 +428,7 @@ export function settings(page) {
         'div',
         { class: 'form__actions' },
         h('button', { class: 'button', type: 'submit', disabled: page.busy }, page.busy ? 'Saving…' : 'Save settings'),
-        h('a', { class: 'button button--quiet', href: '/desk' }, 'Back to the desk'),
+        h('a', { class: 'button button--quiet', href: hrefFor('screen-desk') }, 'Back to the desk'),
       ),
     ),
   ];

@@ -2,6 +2,7 @@
 // @ts-check
 
 import { h } from '../components/dom.js';
+import { hrefFor } from '../generated/routes.js';
 import { missing } from './pages.js';
 import { rendererOf } from './renderers.js';
 
@@ -32,7 +33,7 @@ export function shell(model) {
       h(
         'div',
         { class: 'masthead__row' },
-        h('a', { class: 'masthead__name', href: '/', 'aria-current': model.page.kind === 'home' ? 'page' : null }, s.siteName || 'Strata'),
+        h('a', { class: 'masthead__name', href: hrefFor('screen-front-page'), 'aria-current': model.page.kind === 'home' ? 'page' : null }, s.siteName || 'Strata'),
         h(
           'button',
           { class: 'masthead__toggle', type: 'button', 'aria-expanded': s.menuOpen ? 'true' : 'false', 'aria-controls': 'site-menu', 'data-action': 'menu' },
@@ -52,7 +53,7 @@ export function shell(model) {
           ),
           h(
             'form',
-            { class: 'masthead__search', role: 'search', 'data-form': 'search', action: '/search' },
+            { class: 'masthead__search', role: 'search', 'data-form': 'search', action: hrefFor('screen-search') },
             h('label', { class: 'visually-hidden', for: 'site-q' }, 'Search the essays'),
             h('input', { id: 'site-q', name: 'q', type: 'search', placeholder: 'Search', value: s.searchQ, 'data-rev': s.searchQ, autocomplete: 'off' }),
             h('button', { class: 'visually-hidden', type: 'submit' }, 'Search'),
