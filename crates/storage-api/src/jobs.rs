@@ -235,6 +235,10 @@ pub enum JobWork {
         /// The position of the batch in its send, from one.
         number: u64,
     },
+    /// One run of the digest chain of a tenant (NTF-1572, D-6573): the digests whose period has
+    /// ended are delivered, and the job creates the next one an hour on while a person still has
+    /// a preference of mode digest.
+    Digest { step: u64 },
     /// Scan a stored file of the tenant (CMS-260): one job per file, named by its content hash.
     ScanFile { file: String },
     /// Produce one declared rendition of a clean file (CMS-009).

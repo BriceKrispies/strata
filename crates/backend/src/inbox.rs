@@ -32,9 +32,10 @@
 //!
 //! # What is not built
 //!
-//! Subscriptions (`subscribe-notifications`), digests (D-6573), the notices the platform itself
-//! produces (NTF-152), the mail copy of a notice and the expansion of the fields of a record into
-//! a notice (NTF-1570) are not built here; each is named in the report of the slice.
+//! Subscriptions (`subscribe-notifications`), the notices the platform itself produces
+//! (NTF-152), the mail copy of a notice and the expansion of the fields of a record into a notice
+//! (NTF-1570) are not built here; each is named in the report of the slice. Digests (D-6573,
+//! NTF-1572) and the end of an inbox item at an erasure (ret-inbox-item) are in [`digest`].
 //!
 //! Implements: CT-182, CT-183, CT-821, CT-822, CT-823, CT-824, CT-826
 
@@ -61,6 +62,8 @@ use strata_kernel::{
 use strata_protocol::api::ErrorCode;
 use strata_storage_api::jobs::{derived_uuid, JobWork, NewJob, RetryPolicy};
 use strata_storage_api::segments as kept;
+
+pub mod digest;
 
 /// The capability of sending a notice or a message (EML-1560).
 pub const MESSAGES_SEND: &str = "messages-send";
@@ -312,6 +315,10 @@ pub struct Item {
     #[serde(default)]
     pub record: Option<u64>,
     pub push: PushState,
+    /// For each channel, the digest this item was listed in (NTF-1572): an item is listed once
+    /// for each channel.
+    #[serde(default)]
+    pub digested: BTreeMap<String, String>,
 }
 
 impl Item {
@@ -499,9 +506,14 @@ fn save_preference(
     category: &str,
     channel: &str,
     mode: Mode,
+    period: digest::Period,
 ) -> Result<(), ApiError> {
     let key = preference_key(recipient, category, channel);
-    let text = encode(PREFERENCE_KIND, &key, &json!({ "mode": mode }))?;
+    let text = encode(
+        PREFERENCE_KIND,
+        &key,
+        &json!({ "mode": mode, "period": period }),
+    )?;
     app.store
         .doc_put(tenant, PREFERENCE_KIND, &key, &text, false)?;
     Ok(())
@@ -832,6 +844,7 @@ pub fn deliver(
         reference: notice.reference.clone(),
         record: notice.record,
         push,
+        digested: BTreeMap::new(),
     };
     if !create_item(app, tenant, &item)? {
         // A send of the same key won the race.
@@ -843,6 +856,14 @@ pub fn deliver(
             mail: None,
         });
     }
+    // The person has an inbox: an erasure finds the items that name a record there (ret-inbox-item).
+    app.store.doc_put(
+        tenant,
+        digest::RECIPIENT_KIND,
+        recipient.as_str(),
+        "{}",
+        true,
+    )?;
     if push == PushState::Sent {
         let unread = unread_count(&load_items(app, tenant, recipient)?, None);
         announce(app, tenant, "arrived", &item, unread, now.0);
@@ -1259,7 +1280,7 @@ pub async fn remove(
 }
 
 /// Set the mode of the caller for a category on a channel (CT-826, NTF-1571): `{ "category",
-/// "channel": "mail" | "inbox", "mode": "on" | "off" | "digest" }`. The preference is the caller's
+/// "channel": "mail" | "inbox", "mode": "on" | "off" | "digest", "period": "daily" | "weekly" }`. The preference is the caller's
 /// own. A category the tenant does not declare is not found, and off for a required category is
 /// refused.
 ///
@@ -1286,7 +1307,18 @@ pub async fn set_preference(
                 "{category} is a required category and cannot be turned off."
             )));
         }
-        save_preference(app, &identity.tenant, &me, category, channel, mode)?;
+        let period = match body.get("period") {
+            None | Some(Json_::Null) => digest::Period::Daily,
+            Some(given) => given
+                .as_str()
+                .and_then(digest::Period::parse)
+                .ok_or_else(|| invalid("period is daily or weekly."))?,
+        };
+        save_preference(app, &identity.tenant, &me, category, channel, mode, period)?;
+        if mode == Mode::Digest {
+            // The chain of digest jobs delivers the digest when its period ends (NTF-1572).
+            digest::ensure_chain(app, &identity.tenant, app.now())?;
+        }
         Ok(json!({}))
     })
     .await

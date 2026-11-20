@@ -1316,3 +1316,209 @@ fn an_automation_without_messages_send_fails_its_step_and_makes_no_notice() {
     );
     assert!(notices_of(&app, "alpha:reader").is_empty());
 }
+
+// ---------------------------------------------------------------------------------------------
+// Digests (NTF-1572) and the end of an inbox item (ret-inbox-item)
+// ---------------------------------------------------------------------------------------------
+
+const HOUR: i64 = 3_600_000;
+const DAY: i64 = 24 * HOUR;
+/// A UTC midnight; a daily period of a person in UTC ends at 09:00.
+const DAY0: i64 = 20_000 * DAY;
+
+fn person(name: &str) -> PrincipalId {
+    principal_id(&format!("alpha:{name}"))
+}
+
+/// The tenant of `install`, with the category `news` and the mode of `alpha:reader` for it on the
+/// inbox channel.
+fn digest_fixture(app: &App, mode: &str) {
+    install(app);
+    let tenant = tenant_id("alpha");
+    app.store
+        .doc_put(
+            &tenant,
+            inbox::CATEGORY_KIND,
+            "news",
+            &json!({ "purpose": "transactional" }).to_string(),
+            false,
+        )
+        .unwrap();
+    set_mode(app, "reader", mode);
+}
+
+fn set_mode(app: &App, who: &str, mode: &str) {
+    app.store
+        .doc_put(
+            &tenant_id("alpha"),
+            "notice-preference",
+            &format!("alpha:{who}|news|inbox"),
+            &json!({ "mode": mode, "period": "daily" }).to_string(),
+            false,
+        )
+        .unwrap();
+}
+
+/// A notice of the category `news` for `who`, made at `at`, about the record `record`.
+fn notify_at(app: &App, who: &str, key: &str, at: i64, record: Option<u64>) -> inbox::Delivery {
+    let tenant = tenant_id("alpha");
+    let state = app.store.load(&tenant, &[]).unwrap().tenant.unwrap();
+    let notice = inbox::Notice {
+        topic: "app.news".into(),
+        category: Some("news".into()),
+        template: "update".into(),
+        values: BTreeMap::new(),
+        reference: None,
+        record,
+        mail: false,
+    };
+    inbox::deliver(
+        app,
+        &tenant,
+        &state,
+        &person(who),
+        key,
+        &notice,
+        Timestamp(at),
+    )
+    .unwrap()
+}
+
+fn items_of(app: &App, who: &str) -> Vec<Json> {
+    notices_of(app, &format!("alpha:{who}"))
+        .into_iter()
+        .map(|(_, text)| serde_json::from_str(&text).unwrap())
+        .collect()
+}
+
+fn digests_of(app: &App, who: &str) -> Vec<Json> {
+    items_of(app, who)
+        .into_iter()
+        .filter(|item| item["topic"] == inbox::digest::DIGEST_TOPIC)
+        .collect()
+}
+
+// Verifies: NTF-3101
+#[test]
+fn a_digest_lists_the_notices_of_a_period_once_and_an_empty_period_sends_none() {
+    let app = app();
+    digest_fixture(&app, "digest");
+    let tenant = tenant_id("alpha");
+    notify_at(&app, "reader", "n-1", DAY0 + 10 * HOUR, None);
+    notify_at(&app, "reader", "n-2", DAY0 + 11 * HOUR, None);
+    let run = |at: i64| {
+        inbox::digest::run_due(&app, &tenant, Timestamp(at))
+            .unwrap()
+            .digests
+    };
+    // The period that holds the notices has not ended at noon.
+    assert_eq!(run(DAY0 + 12 * HOUR), 0);
+    assert!(digests_of(&app, "reader").is_empty());
+    // At 09:00 the next day it has: one message lists both.
+    assert_eq!(run(DAY0 + 34 * HOUR), 1);
+    let made = digests_of(&app, "reader");
+    assert_eq!(made.len(), 1);
+    assert_eq!(made[0]["title"], "2 new notices");
+    assert_eq!(made[0]["body"], "An update\nAn update");
+    // Running again, in the same period or an hour later, makes no second message.
+    assert_eq!(run(DAY0 + 34 * HOUR), 0);
+    assert_eq!(run(DAY0 + 35 * HOUR), 0);
+    assert_eq!(digests_of(&app, "reader").len(), 1);
+    // A notice made after the boundary waits for the next period and has a digest of its own.
+    notify_at(&app, "reader", "n-3", DAY0 + 35 * HOUR, None);
+    assert_eq!(run(DAY0 + 40 * HOUR), 0);
+    assert_eq!(run(DAY0 + 58 * HOUR), 1);
+    let mut titles: Vec<String> = digests_of(&app, "reader")
+        .iter()
+        .map(|item| item["title"].as_str().unwrap().to_string())
+        .collect();
+    titles.sort();
+    assert_eq!(titles, ["1 new notice", "2 new notices"]);
+    // A period with no notice sends none.
+    assert_eq!(run(DAY0 + 82 * HOUR), 0);
+    assert_eq!(digests_of(&app, "reader").len(), 2);
+    // A person whose mode is on has no digest.
+    notify_at(&app, "other", "n-4", DAY0 + 10 * HOUR, None);
+    set_mode(&app, "other", "on");
+    run(DAY0 + 106 * HOUR);
+    assert!(digests_of(&app, "other").is_empty());
+}
+
+// Verifies: NTF-3101
+#[test]
+fn the_digest_chain_delivers_through_the_worker_and_ends_with_the_last_digest_preference() {
+    let app = app();
+    digest_fixture(&app, "digest");
+    let tenant = tenant_id("alpha");
+    notify_at(&app, "reader", "n-1", DAY0 + 10 * HOUR, None);
+    let config = WorkerConfig::from_limits(&Default::default());
+    assert!(inbox::digest::ensure_chain(&app, &tenant, Timestamp(DAY0 + 33 * HOUR + 10)).unwrap());
+    assert!(
+        !inbox::digest::ensure_chain(&app, &tenant, Timestamp(DAY0 + 33 * HOUR + 20)).unwrap(),
+        "one open job at a time"
+    );
+    assert_eq!(
+        worker::tick(&app, "w1", &config, &at(DAY0 + 33 * HOUR)).jobs,
+        0
+    );
+    assert_eq!(
+        worker::tick(&app, "w1", &config, &at(DAY0 + 34 * HOUR)).jobs,
+        1
+    );
+    assert_eq!(digests_of(&app, "reader").len(), 1);
+    let next = |step: u64| {
+        app.store
+            .jobs_list(&tenant, None, 20)
+            .unwrap()
+            .iter()
+            .any(|job| matches!(job.work, JobWork::Digest { step: s } if s == step))
+    };
+    assert!(next(1), "a digest preference remains, so the chain goes on");
+    // The last digest preference is turned off: the next run ends the chain.
+    set_mode(&app, "reader", "on");
+    worker::tick(&app, "w1", &config, &at(DAY0 + 35 * HOUR));
+    assert!(!next(2));
+}
+
+// Verifies: NTF-3103
+#[test]
+fn an_inbox_item_ends_when_the_record_it_names_is_erased_or_its_person_is() {
+    let app = app();
+    digest_fixture(&app, "on");
+    let tenant = tenant_id("alpha");
+    notify_at(&app, "reader", "n-1", T0, Some(42));
+    notify_at(&app, "reader", "n-2", T0 + 1, Some(7));
+    notify_at(&app, "reader", "n-3", T0 + 2, None);
+    notify_at(&app, "other", "n-4", T0 + 3, Some(42));
+    set_mode(&app, "other", "off");
+    let ended = inbox::digest::end_for_erasure(
+        &app,
+        &tenant,
+        &person("other"),
+        &BTreeSet::from([42]),
+        Timestamp(T0 + 10),
+    )
+    .unwrap();
+    assert_eq!(
+        ended.items, 2,
+        "the reader's item that names 42, and the subject's own"
+    );
+    assert_eq!(ended.preferences, 1);
+    let live = |who: &str| {
+        items_of(&app, who)
+            .into_iter()
+            .filter(|item| item["removed_at"].is_null())
+            .count()
+    };
+    assert_eq!(live("reader"), 2, "the other notices of the reader stay");
+    assert_eq!(live("other"), 0);
+    // An ended item holds no text, only its id.
+    for item in items_of(&app, "reader") {
+        if !item["removed_at"].is_null() {
+            assert_eq!(item["title"], "");
+            assert_eq!(item["body"], "");
+        }
+    }
+    // A send that is repeated after the end makes nothing again (CT-183).
+    assert!(!notify_at(&app, "reader", "n-1", T0 + 20, Some(42)).created);
+}

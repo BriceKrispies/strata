@@ -475,6 +475,14 @@ pub fn erase_subject(app: &App, ctx: &Context, subject: &PrincipalId) -> Result<
     // with the erasure.
     reached.extend(rights.receipt_lines(subject));
     end_with_erasure(app, tenant, subject)?;
+    // The inbox items that name an erased record, and the person's own, end with it
+    // (ret-inbox-item, NTF-151).
+    let erased: BTreeSet<u64> = changed.iter().map(|record| record.id.0).collect();
+    let inbox = crate::inbox::digest::end_for_erasure(app, tenant, subject, &erased, ctx.now)?;
+    reached.push(format!(
+        "inbox items (rec-inbox-item) and notification preferences: {} items ended (those of the person and those that name an erased record, text erased, the id kept as a tombstone), {} preferences removed; erasure point: the end of the item (ret-inbox-item)",
+        inbox.items, inbox.preferences
+    ));
     let receipt = Receipt {
         request: ctx.correlation.clone(),
         principal: subject.as_str().to_string(),
