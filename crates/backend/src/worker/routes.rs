@@ -25,7 +25,11 @@ const MAX_PAGE: u64 = 100;
 const DEFAULT_PAGE: u64 = 50;
 
 /// The caller is signed in and holds the capability `name`; the owner holds every capability.
-fn require_capability(app: &App, identity: &Identity, name: &str) -> Result<(), ApiError> {
+pub(super) fn require_capability(
+    app: &App,
+    identity: &Identity,
+    name: &str,
+) -> Result<(), ApiError> {
     if identity.anonymous() {
         return Err(ApiError::new(
             ErrorCode::Unauthenticated,
@@ -46,7 +50,7 @@ fn require_capability(app: &App, identity: &Identity, name: &str) -> Result<(), 
 
 /// A tenant named in the request must be the caller's: another is refused, recorded as an audit
 /// entry and raised as an alert (TEN-1140, THR-259).
-fn same_tenant(app: &App, identity: &Identity, body: &Json_) -> Result<(), ApiError> {
+pub(super) fn same_tenant(app: &App, identity: &Identity, body: &Json_) -> Result<(), ApiError> {
     match body.get("tenant").and_then(Json_::as_str) {
         Some(named) if named != identity.tenant.as_str() => {
             app.audit(
@@ -111,6 +115,7 @@ fn run_summary(run: &RunRecord) -> Json_ {
         "hop": run.hop,
         "caused_by": run.caused_by.as_str(),
         "on_behalf_of": run.on_behalf_of.as_ref().map(|p| p.as_str()),
+        "started_by": run.started_by.as_ref().map(|p| p.as_str()),
         "started_at": run.started_at.0,
         "ended_at": run.ended_at.map(|t| t.0),
         "error": run.error,
@@ -126,6 +131,7 @@ fn step_summary(step: &StepRecord) -> Json_ {
         "attempts": step.attempts,
         "result": step.result,
         "errors": step.errors,
+        "approval": step.approval,
         "started_at": step.started_at.0,
         "ended_at": step.ended_at.map(|t| t.0),
     })

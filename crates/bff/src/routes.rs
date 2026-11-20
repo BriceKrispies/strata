@@ -2449,6 +2449,49 @@ async fn automation_settle(
     Ok(uncached(reply))
 }
 
+/// The commands on automation runs, each relayed to the backend, which decides who may give them:
+/// start a run (start-workflow-run), decide an approval (approve-workflow-step) and activate an
+/// automation (activate-workflow). Writes: the origin and the session's token are checked first.
+async fn automation_command(
+    State(bff): State<Shared>,
+    headers: HeaderMap,
+    Path(action): Path<String>,
+    Json(body): Json<Json_>,
+) -> Result<Response, Failure> {
+    let visit = visit(&bff, &headers)?;
+    let (path, inputs): (&str, &[&str]) = match action.as_str() {
+        "start-run" => (
+            "/internal/automation/start",
+            &["workflow", "input", "idempotency_key"][..],
+        ),
+        "approve" => (
+            "/internal/automation/approve",
+            &["run", "approved", "comment"][..],
+        ),
+        "activate" => (
+            "/internal/automation/activate",
+            &["workflow", "projection"][..],
+        ),
+        _ => {
+            return Err(Failure::new(
+                ErrorCode::NotFound,
+                "No such endpoint.",
+                &visit.correlation,
+            ))
+        }
+    };
+    guard_write(&bff, &visit, &headers).await?;
+    let request: serde_json::Map<String, Json_> = inputs
+        .iter()
+        .filter_map(|name| {
+            body.get(*name)
+                .map(|value| ((*name).to_string(), value.clone()))
+        })
+        .collect();
+    let reply: Json_ = backend(&bff, &visit, path, &Json_::Object(request)).await?;
+    Ok(uncached(reply))
+}
+
 /// The segment endpoints (CT-290 to CT-293, CT-813 to CT-815), each relayed to the backend, which
 /// decides who may call it. A change (define, remove) and a test are writes and pass the write
 /// guard; the others are reads that carry their inputs as a body.
@@ -2605,6 +2648,7 @@ pub fn router(bff: Shared) -> Router {
         .route("/automation/runs/:run/steps", get(automation_steps))
         .route("/automation/exceptions", get(automation_exceptions))
         .route("/automation/exceptions/settle", post(automation_settle))
+        .route("/automation/commands/:action", post(automation_command))
         .route("/products", get(products_list))
         .route("/products/:action", post(products_write))
         .fallback(api_not_found);

@@ -92,6 +92,7 @@ fn automation(
         defined_by: None,
         defined_at: None,
         suspended_for: None,
+        state: None,
     }
 }
 

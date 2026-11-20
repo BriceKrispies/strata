@@ -631,6 +631,7 @@ fn schema_changes() -> Vec<SchemaChange> {
             defined_by: None,
             defined_at: None,
             suspended_for: None,
+            state: None,
         }),
         SchemaChange::RemoveAutomation(WorkflowId::new("award").unwrap()),
         SchemaChange::DefineOperation(TenantOperationDef {

@@ -15,7 +15,9 @@
 //! Built: create, update and delete a record, post to the ledger (decided by the kernel's ledger
 //! module through the intent post-ledger, keyed by the step key), branch on a condition (on a record read through the
 //! kernel as the automation principal), wait for a duration or until a time (the next step's job
-//! is created due then: nothing sleeps, D-6535), and end. Every other kind of the catalogue fails
+//! is created due then: nothing sleeps, D-6535), invoke a tenant operation ([`super::invoke`]), stop
+//! at an approval ([`super::approvals`]), and end. A step that fails for good starts the compensation
+//! of the completed steps ([`super::saga`]). Every other kind of the catalogue fails
 //! its step with the error "step kind ... is not built", recorded on the step and the run; it is
 //! never skipped.
 
@@ -60,12 +62,12 @@ pub fn step_key(tenant: &TenantId, automation: &WorkflowId, run: &str, step: &St
 }
 
 /// The key of the job of the step at `sequence` of a run.
-fn step_job_key(run: &str, sequence: u64) -> String {
+pub(super) fn step_job_key(run: &str, sequence: u64) -> String {
     format!("step:{run}:{sequence}")
 }
 
 /// Milliseconds as the store counts them.
-fn ms(value: u64) -> i64 {
+pub(super) fn ms(value: u64) -> i64 {
     i64::try_from(value).unwrap_or(i64::MAX)
 }
 
@@ -86,7 +88,7 @@ pub fn step_policy(step: &AutomationStepDef) -> RetryPolicy {
 }
 
 /// The job of the step `step` at position `sequence` of a run, due at `due`.
-fn step_job(
+pub(super) fn step_job(
     run: &str,
     automation: &WorkflowId,
     step: &StepName,
@@ -108,13 +110,16 @@ fn step_job(
 }
 
 /// The automation of a schema.
-fn automation_of<'a>(schema: &'a TenantSchema, id: &WorkflowId) -> Option<&'a AutomationDef> {
+pub(super) fn automation_of<'a>(
+    schema: &'a TenantSchema,
+    id: &WorkflowId,
+) -> Option<&'a AutomationDef> {
     schema.automations.as_ref().and_then(|all| all.get(id))
 }
 
 /// An exception record of the run of a job, with an id derived from the job and the reason.
 #[allow(clippy::too_many_arguments)]
-fn exception(
+pub(super) fn exception(
     tenant: &TenantId,
     kind: ExceptionKind,
     reason: &str,
@@ -185,6 +190,18 @@ pub fn run_job(app: &App, tenant: &TenantId, lease: &Lease, now: Timestamp) -> O
             step,
             sequence,
         } => run_step(app, tenant, lease, run, automation, step, *sequence, now),
+        JobWork::ApprovalTimeout {
+            run,
+            automation,
+            step,
+            sequence,
+        } => super::approvals::timeout(app, tenant, lease, run, automation, step, *sequence, now),
+        JobWork::Compensate {
+            run,
+            automation,
+            step,
+            of_sequence,
+        } => super::saga::compensate(app, tenant, lease, run, automation, step, *of_sequence, now),
     }
 }
 
@@ -204,7 +221,7 @@ struct StartOf<'a> {
 
 /// A failure of a job that is not a step of a run: retried while its policy allows, then failed
 /// with a dead-lettered record.
-fn job_failure(
+pub(super) fn job_failure(
     tenant: &TenantId,
     lease: &Lease,
     automation: &WorkflowId,
@@ -304,6 +321,9 @@ fn start_run(
             ..WorkerWrites::default()
         });
     }
+    if let Some(outcome) = super::commands::inactive_outcome(tenant, lease, def, now) {
+        return outcome;
+    }
     let Some(first) = def.steps.get(&def.start) else {
         return job_failure(
             tenant,
@@ -316,6 +336,8 @@ fn start_run(
             now,
         );
     };
+    let mut params = start.params.clone();
+    let started_by = super::commands::take_starter(app, tenant, start.event_seq, &mut params);
     let run = RunRecord {
         run: run_id.clone(),
         automation: start.automation.clone(),
@@ -329,7 +351,8 @@ fn start_run(
             .caused_by
             .unwrap_or_else(|| automation_principal(start.automation)),
         on_behalf_of: start.on_behalf_of,
-        params: start.params.clone(),
+        started_by,
+        params,
         started_at: now,
         ended_at: None,
         error: None,
@@ -350,20 +373,20 @@ fn start_run(
 }
 
 /// Why a step did not complete, and whether an attempt made again may.
-struct StepError {
-    message: String,
-    retry: bool,
+pub(super) struct StepError {
+    pub(super) message: String,
+    pub(super) retry: bool,
 }
 
 impl StepError {
-    fn retry(message: impl Into<String>) -> Self {
+    pub(super) fn retry(message: impl Into<String>) -> Self {
         StepError {
             message: message.into(),
             retry: true,
         }
     }
 
-    fn fatal(message: impl Into<String>) -> Self {
+    pub(super) fn fatal(message: impl Into<String>) -> Self {
         StepError {
             message: message.into(),
             retry: false,
@@ -372,16 +395,16 @@ impl StepError {
 }
 
 /// Where a run goes after a step.
-enum Next {
+pub(super) enum Next {
     Step(StepName, Timestamp),
     End,
 }
 
 /// A completed step: its typed result (WFL-1523), the outputs it binds, and where the run goes.
-struct Done {
-    result: AutomationStepResult,
-    outputs: Vec<(&'static str, Value)>,
-    next: Next,
+pub(super) struct Done {
+    pub(super) result: AutomationStepResult,
+    pub(super) outputs: Vec<(&'static str, Value)>,
+    pub(super) next: Next,
 }
 
 /// Run one step of a run.
@@ -417,6 +440,7 @@ fn run_step(
         idempotency_key: key.clone(),
         result: None,
         errors: job.errors.clone(),
+        approval: None,
         started_at: job.created_at,
         ended_at: None,
     };
@@ -479,6 +503,19 @@ fn run_step(
             exceptions: vec![suspended],
             jobs: Vec::new(),
         });
+    }
+    if let Some(outcome) = super::approvals::begin(
+        app,
+        tenant,
+        lease,
+        schema.as_deref(),
+        def,
+        step,
+        &run,
+        &record,
+        now,
+    ) {
+        return outcome;
     }
     let attempt = match def.steps.get(step) {
         _ if lease.exhausted => Err(StepError::fatal(
@@ -550,6 +587,7 @@ fn run_step(
                 .errors
                 .push(format!("attempt {}: {}", job.attempt, error.message));
             let mut exceptions = Vec::new();
+            let mut compensation = Vec::new();
             if fails {
                 record.state = StepState::Failed;
                 record.ended_at = Some(now);
@@ -571,6 +609,7 @@ fn run_step(
                         now,
                     ));
                 }
+                compensation = super::saga::begin(app, tenant, def, &mut run, sequence, now);
             } else {
                 record.state = StepState::Due;
             }
@@ -580,7 +619,7 @@ fn run_step(
                     runs: vec![run],
                     steps: vec![record],
                     exceptions,
-                    jobs: Vec::new(),
+                    jobs: compensation,
                 },
             }
         }
@@ -590,7 +629,7 @@ fn run_step(
 /// The context a step is decided in: the automation principal, no session, the run as the
 /// correlation, the step key when the step changes the tenant, and one hop more than the event
 /// that started the run, so that the triggers its events match count the chain (D-6531, D-7202).
-fn step_context(
+pub(super) fn step_context(
     tenant: &TenantId,
     automation: &WorkflowId,
     run: &RunRecord,
@@ -636,13 +675,14 @@ fn kind_name(action: &AutomationStep) -> &'static str {
         AutomationStep::Branch { .. } => "branch",
         AutomationStep::FanOut { .. } => "fan-out",
         AutomationStep::RequestApproval { .. } => "request-approval",
+        AutomationStep::InvokeOperation { .. } => "invoke-operation",
         AutomationStep::End => "end",
     }
 }
 
 /// Carry out one step's action.
 #[allow(clippy::too_many_arguments)]
-fn act(
+pub(super) fn act(
     app: &App,
     tenant: &TenantId,
     def: &AutomationDef,
@@ -855,6 +895,9 @@ fn act(
                 },
                 other => Err(StepError::fatal(format!("unexpected output {other:?}"))),
             }
+        }
+        AutomationStep::InvokeOperation { operation, inputs } => {
+            super::invoke::run(operation, inputs, key, &eval, &decide, &then)
         }
         AutomationStep::End => Ok(Done {
             result: AutomationStepResult::End,

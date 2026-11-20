@@ -396,7 +396,7 @@ fn detail(text: String) -> String {
 /// Decide one trigger whose event matches `event`, in the state after the transition (`lookup`,
 /// `schema`): the effect it appends, or `None` (D-7200). In order: a paused trigger appends
 /// nothing; a missing automation declines with `automation-removed` and a suspended one with
-/// `run-as-suspended`, whatever the condition; an event about a record the automation principal
+/// `run-as-suspended`, and a draft with `automation-inactive`, whatever the condition; an event about a record the automation principal
 /// may not read appends nothing; a condition that reads what the principal may not read, or that
 /// cannot be evaluated, declines with `condition-failed`, and a false one appends nothing; past
 /// the hop limit the trigger declines with `hop-limit`; a run key that is null or cannot be
@@ -440,6 +440,12 @@ fn decide(
                 "automation {} is suspended: its definer may not confer role {role}",
                 automation.id
             ),
+        ));
+    }
+    if !crate::activation::is_active(automation) {
+        return Ok(decline(
+            AutomationExceptionReason::AutomationInactive,
+            crate::activation::inactive_detail(automation),
         ));
     }
     let principal = Principal::User(automation_principal(&automation.id));

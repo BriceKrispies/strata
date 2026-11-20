@@ -809,6 +809,7 @@ fn an_automation_does_not_send_a_notice_template_as_mail() {
         defined_by: None,
         defined_at: None,
         suspended_for: None,
+        state: None,
     };
     let error = refused(
         &world,
