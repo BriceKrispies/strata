@@ -43,12 +43,17 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use strata_kernel::ext::*;
+use strata_kernel::WorkflowId;
 use strata_kernel::{
     canon, Coverage, DeltaOp, DomainEvent, Need, ObjectTypeId, PrincipalId, Record, RoleId,
     SessionId, SettingId, SettingOverride, SettingValues, State, StateRevision, TenantId,
     TenantSchema, TenantState, Timestamp, Value,
 };
 use strata_runtime::sqlite::{Database, DbError, Migration};
+use strata_storage_api::jobs::{
+    self, ExceptionKind, ExceptionRecord, Job, JobChange, JobReport, Lease, NewJob, Reported,
+    RunRecord, RunState, Settled, StepRecord, WorkerWrites,
+};
 use strata_storage_api::{
     check_event_sequence, field_matches, throttle_refund, throttle_step, Account, AuditEntry,
     Capabilities, Commit, FederatedIdentity, Health, IdempotentResult, JournalEntry, OidcFlow,
@@ -111,6 +116,21 @@ const CONTROL_MIGRATIONS: &[Migration] = &[
     DROP TABLE session_directory_old;
     DROP TABLE tenant_directory_old;
     CREATE INDEX session_directory_tenant ON session_directory(tenant);
+    ",
+    },
+    Migration {
+        version: 3,
+        name: "job wake index",
+        // The wake index of the automation worker (SCH-007, SCH-008): per tenant, the earliest
+        // time one of its jobs is due, and a counter that each writer raises so that a refresh
+        // never overwrites a time lowered after it read. Nothing of a job is here.
+        sql: "
+    CREATE TABLE job_wake (
+        tenant  TEXT PRIMARY KEY REFERENCES tenant_directory(id) ON DELETE CASCADE,
+        due_at  INTEGER NOT NULL,
+        touched INTEGER NOT NULL
+    );
+    CREATE INDEX job_wake_due ON job_wake(due_at);
     ",
     },
 ];
@@ -406,6 +426,44 @@ const TENANT_MIGRATIONS: &[Migration] = &[
     CREATE TABLE setting_revisions (
         setting  TEXT PRIMARY KEY,
         revision INTEGER NOT NULL
+    );
+    ",
+    },
+    Migration {
+        version: 13,
+        name: "automation worker jobs, runs, steps and exceptions",
+        // A row's columns are what the statements look it up by; `data` is the whole value as
+        // canonical JSON. A leased job's `due_at` is the expiry of its lease, so one index finds
+        // both the due jobs and the expired leases (SCH-001, SCH-010).
+        sql: "
+    CREATE TABLE jobs (
+        seq    INTEGER PRIMARY KEY AUTOINCREMENT,
+        id     TEXT NOT NULL UNIQUE,
+        key    TEXT NOT NULL UNIQUE,
+        state  TEXT NOT NULL,
+        due_at INTEGER NOT NULL,
+        data   TEXT NOT NULL
+    );
+    CREATE INDEX jobs_due ON jobs(due_at) WHERE state IN ('waiting', 'leased');
+    CREATE TABLE automation_runs (
+        seq        INTEGER PRIMARY KEY AUTOINCREMENT,
+        run        TEXT NOT NULL UNIQUE,
+        automation TEXT NOT NULL,
+        state      TEXT NOT NULL,
+        data       TEXT NOT NULL
+    );
+    CREATE TABLE automation_steps (
+        run      TEXT NOT NULL,
+        sequence INTEGER NOT NULL,
+        data     TEXT NOT NULL,
+        PRIMARY KEY (run, sequence)
+    );
+    CREATE TABLE automation_exceptions (
+        seq     INTEGER PRIMARY KEY AUTOINCREMENT,
+        id      TEXT NOT NULL UNIQUE,
+        kind    TEXT NOT NULL,
+        settled INTEGER NOT NULL,
+        data    TEXT NOT NULL
     );
     ",
     },
@@ -996,6 +1054,262 @@ fn remove_files(path: &Path) -> StoreResult<()> {
         }
     }
     Ok(())
+}
+
+// ---- Jobs of the automation worker (strata_storage_api::jobs) ----
+
+/// The states of a job that has not ended, as the statements test them.
+const OPEN_JOB: &str = "state IN ('waiting', 'leased')";
+
+/// The first problem of a list of jobs to create, as a refusal.
+fn check_jobs(new: &[NewJob]) -> StoreResult<()> {
+    match new.iter().find_map(jobs::job_problem) {
+        Some(problem) => Err(StoreError::Invalid(problem)),
+        None => Ok(()),
+    }
+}
+
+/// Create the jobs whose keys the file does not hold yet; the ids of all, in order.
+fn insert_jobs(
+    tx: &Connection,
+    tenant: &TenantId,
+    new: &[NewJob],
+    now: Timestamp,
+) -> StoreResult<Vec<String>> {
+    check_jobs(new)?;
+    let mut ids = Vec::with_capacity(new.len());
+    for wanted in new {
+        let job = jobs::new_job(tenant, wanted, now);
+        tx.execute(
+            "INSERT OR IGNORE INTO jobs (id, key, state, due_at, data) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                job.id,
+                job.key,
+                job.state.as_str(),
+                job.due_at.0,
+                encode(&job)
+            ],
+        )
+        .map_err(db)?;
+        ids.push(job.id);
+    }
+    Ok(ids)
+}
+
+/// Write a changed job back.
+fn put_job(tx: &Connection, job: &Job) -> StoreResult<()> {
+    tx.execute(
+        "UPDATE jobs SET state = ?2, due_at = ?3, data = ?4 WHERE id = ?1",
+        params![job.id, job.state.as_str(), job.due_at.0, encode(job)],
+    )
+    .map_err(db)?;
+    Ok(())
+}
+
+/// The rows of `(seq, data)` a statement selects.
+fn seq_rows(
+    tx: &Connection,
+    sql: &str,
+    args: &[&dyn rusqlite::ToSql],
+) -> StoreResult<Vec<(u64, String)>> {
+    let mut statement = tx.prepare_cached(sql).map_err(db)?;
+    let rows = statement
+        .query_map(args, |row| {
+            Ok((row.get::<_, i64>(0)? as u64, row.get::<_, String>(1)?))
+        })
+        .map_err(db)?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(db)
+}
+
+/// The jobs a statement over `(seq, data)` selects.
+fn jobs_of(tx: &Connection, sql: &str, args: &[&dyn rusqlite::ToSql]) -> StoreResult<Vec<Job>> {
+    seq_rows(tx, sql, args)?
+        .into_iter()
+        .map(|(seq, data)| {
+            let mut job: Job = decode(&data, "job")?;
+            job.seq = seq;
+            Ok(job)
+        })
+        .collect()
+}
+
+fn job_by_id(tx: &Connection, id: &str) -> StoreResult<Option<Job>> {
+    Ok(jobs_of(tx, "SELECT seq, data FROM jobs WHERE id = ?1", &[&id])?.pop())
+}
+
+fn runs_of(
+    tx: &Connection,
+    sql: &str,
+    args: &[&dyn rusqlite::ToSql],
+) -> StoreResult<Vec<RunRecord>> {
+    seq_rows(tx, sql, args)?
+        .into_iter()
+        .map(|(seq, data)| {
+            let mut run: RunRecord = decode(&data, "automation run")?;
+            run.seq = seq;
+            Ok(run)
+        })
+        .collect()
+}
+
+fn exceptions_of(
+    tx: &Connection,
+    sql: &str,
+    args: &[&dyn rusqlite::ToSql],
+) -> StoreResult<Vec<ExceptionRecord>> {
+    seq_rows(tx, sql, args)?
+        .into_iter()
+        .map(|(seq, data)| {
+            let mut record: ExceptionRecord = decode(&data, "automation exception")?;
+            record.seq = seq;
+            Ok(record)
+        })
+        .collect()
+}
+
+/// Exception records whose ids the file does not hold yet.
+fn insert_exceptions(tx: &Connection, records: &[ExceptionRecord]) -> StoreResult<()> {
+    for record in records {
+        tx.execute(
+            "INSERT OR IGNORE INTO automation_exceptions (id, kind, settled, data) VALUES (?1, ?2, ?3, ?4)",
+            params![
+                record.id,
+                record.kind.as_str(),
+                i64::from(record.settled),
+                encode(record)
+            ],
+        )
+        .map_err(db)?;
+    }
+    Ok(())
+}
+
+/// Everything of `writes`, as `Store::automation_write` states, in the caller's transaction.
+fn write_automation(
+    tx: &Connection,
+    tenant: &TenantId,
+    writes: &WorkerWrites,
+    now: Timestamp,
+) -> StoreResult<()> {
+    for run in &writes.runs {
+        tx.execute(
+            "INSERT INTO automation_runs (run, automation, state, data) VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(run) DO UPDATE SET automation = excluded.automation, state = excluded.state, data = excluded.data",
+            params![
+                run.run,
+                run.automation.as_str(),
+                run.state.as_str(),
+                encode(run)
+            ],
+        )
+        .map_err(db)?;
+    }
+    for step in &writes.steps {
+        tx.execute(
+            "INSERT OR REPLACE INTO automation_steps (run, sequence, data) VALUES (?1, ?2, ?3)",
+            params![step.run, step.sequence as i64, encode(step)],
+        )
+        .map_err(db)?;
+    }
+    insert_exceptions(tx, &writes.exceptions)?;
+    insert_jobs(tx, tenant, &writes.jobs, now)?;
+    Ok(())
+}
+
+/// The jobs and exception records of a commit, in its transaction (SCH-004, SCH-1532).
+fn insert_commit_work(tx: &Connection, commit: &Commit) -> StoreResult<()> {
+    insert_jobs(
+        tx,
+        &commit.delta.tenant,
+        &commit.jobs,
+        commit.journal.context.now,
+    )?;
+    insert_exceptions(tx, &commit.exceptions)
+}
+
+impl SqliteStore {
+    /// Lower the wake time of a tenant to `due` (SCH-008: the index holds a tenant id and a due
+    /// time, and a counter, never anything of a job).
+    fn wake_at(&self, tenant: &TenantId, due: i64) -> StoreResult<()> {
+        self.control.write(dbe, |tx| {
+            tx.execute(
+                "INSERT INTO job_wake (tenant, due_at, touched) VALUES (?1, ?2, 1)
+                 ON CONFLICT(tenant) DO UPDATE SET due_at = MIN(due_at, excluded.due_at), touched = touched + 1",
+                params![tenant.as_str(), due],
+            )
+            .map_err(db)?;
+            Ok(())
+        })
+    }
+
+    /// Set the wake time of a tenant to the earliest time a job of its file is due, or remove it
+    /// when none is open. The counter is read first and the write made only if no other writer
+    /// raised it since, so a time lowered by a job created meanwhile is never overwritten.
+    fn wake_refresh(&self, tenant: &TenantId, file: &Database) -> StoreResult<()> {
+        let seen: Option<i64> = self
+            .control
+            .lock()
+            .map_err(dbe)?
+            .query_row(
+                "SELECT touched FROM job_wake WHERE tenant = ?1",
+                params![tenant.as_str()],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(db)?;
+        let next: Option<i64> = file
+            .lock()
+            .map_err(dbe)?
+            .query_row(
+                &format!("SELECT MIN(due_at) FROM jobs WHERE {OPEN_JOB}"),
+                [],
+                |r| r.get::<_, Option<i64>>(0),
+            )
+            .map_err(db)?;
+        match (seen, next) {
+            (None, None) => Ok(()),
+            (None, Some(due)) => self.wake_at(tenant, due),
+            (Some(touched), None) => self.control.write(dbe, |tx| {
+                tx.execute(
+                    "DELETE FROM job_wake WHERE tenant = ?1 AND touched = ?2",
+                    params![tenant.as_str(), touched],
+                )
+                .map_err(db)?;
+                Ok(())
+            }),
+            (Some(touched), Some(due)) => self.control.write(dbe, |tx| {
+                tx.execute(
+                    "UPDATE job_wake SET due_at = ?2, touched = touched + 1 WHERE tenant = ?1 AND touched = ?3",
+                    params![tenant.as_str(), due, touched],
+                )
+                .map_err(db)?;
+                Ok(())
+            }),
+        }
+    }
+
+    /// Run `work` in a write transaction of the file of a tenant, then refresh the tenant's wake
+    /// time; `None` when the tenant has no file. When the work may create jobs, `creates` is the
+    /// earliest time one is due: the wake time is lowered to it before the work, so that a crash
+    /// between the work and the refresh cannot leave a job that nothing wakes for. A wake time
+    /// that is too early costs one look at the file and is put right by that look, so a failed
+    /// refresh is not an error of the work.
+    fn on_jobs<T>(
+        &self,
+        tenant: &TenantId,
+        creates: Option<i64>,
+        work: impl FnOnce(&Transaction<'_>) -> StoreResult<T>,
+    ) -> StoreResult<Option<T>> {
+        let Some(file) = self.tenant_db(tenant)? else {
+            return Ok(None);
+        };
+        if let Some(due) = creates {
+            self.wake_at(tenant, due)?;
+        }
+        let done = file.write(dbe, work)?;
+        let _ = self.wake_refresh(tenant, &file);
+        Ok(Some(done))
+    }
 }
 
 impl SqliteStore {
@@ -1665,6 +1979,7 @@ impl SqliteStore {
             )
             .map_err(db)?;
         }
+        insert_commit_work(tx, commit)?;
         for principal in &commit.revoke_sessions {
             tx.execute(
                 "UPDATE sessions SET revoked_at = ?1 WHERE principal = ?2 AND revoked_at IS NULL",
@@ -1912,10 +2227,22 @@ impl Store for SqliteStore {
                     "delta does not fit the tenant's existence".into(),
                 ));
             };
-            return file.write(dbe, |tx| Self::apply(tx, commit));
+            // Jobs the commit creates are woken for before and after it (see `on_jobs`).
+            let wake = commit.jobs.iter().map(|job| job.due_at.0).min();
+            if let Some(due) = wake {
+                self.wake_at(&delta.tenant, due)?;
+            }
+            let receipt = file.write(dbe, |tx| Self::apply(tx, commit))?;
+            if let Some(due) = wake {
+                let _ = self.wake_at(&delta.tenant, due);
+            }
+            return Ok(receipt);
         }
         let (file, created) = self.create_tenant_db(&delta.tenant, commit.journal.context.now)?;
         let result = file.write(dbe, |tx| Self::apply(tx, commit));
+        if let (Ok(_), Some(due)) = (&result, commit.jobs.iter().map(|job| job.due_at.0).min()) {
+            let _ = self.wake_at(&delta.tenant, due);
+        }
         if result.is_err() && created {
             // The file this call made holds nothing: take it away again.
             let empty = header(&*file.lock().map_err(dbe)?, &delta.tenant)?.is_none();
@@ -3534,6 +3861,287 @@ impl Store for SqliteStore {
 
     fn reset_tenant(&self, tenant: &TenantId) -> StoreResult<()> {
         self.remove_tenant(tenant)
+    }
+
+    fn jobs_create(
+        &self,
+        tenant: &TenantId,
+        new: &[NewJob],
+        now: Timestamp,
+    ) -> StoreResult<Vec<String>> {
+        check_jobs(new)?;
+        self.existing(tenant)?;
+        let earliest = new.iter().map(|job| job.due_at.0).min();
+        self.on_jobs(tenant, earliest, |tx| insert_jobs(tx, tenant, new, now))?
+            .ok_or_else(|| StoreError::NotFound(format!("tenant {tenant}")))
+    }
+
+    fn job(&self, tenant: &TenantId, id: &str) -> StoreResult<Option<Job>> {
+        Ok(self
+            .on_tenant(tenant, |conn| job_by_id(conn, id))?
+            .flatten())
+    }
+
+    fn jobs_list(
+        &self,
+        tenant: &TenantId,
+        before: Option<u64>,
+        limit: usize,
+    ) -> StoreResult<Vec<Job>> {
+        let before = before.map_or(i64::MAX, |b| b as i64);
+        Ok(self
+            .on_tenant(tenant, |conn| {
+                jobs_of(
+                    conn,
+                    "SELECT seq, data FROM jobs WHERE seq < ?1 ORDER BY seq DESC LIMIT ?2",
+                    &[&before, &(limit as i64)],
+                )
+            })?
+            .unwrap_or_default())
+    }
+
+    fn job_lease(
+        &self,
+        tenant: &TenantId,
+        worker: &str,
+        now: Timestamp,
+    ) -> StoreResult<Option<Lease>> {
+        Ok(self
+            .on_jobs(tenant, None, |tx| {
+                let sql = format!(
+                    "SELECT seq, data FROM jobs WHERE {OPEN_JOB} AND due_at <= ?1 ORDER BY due_at, seq LIMIT 1"
+                );
+                let Some(job) = jobs_of(tx, &sql, &[&now.0])?.pop() else {
+                    return Ok(None);
+                };
+                let lease = jobs::apply_lease(&job, worker, now);
+                put_job(tx, &lease.job)?;
+                Ok(Some(lease))
+            })?
+            .flatten())
+    }
+
+    fn job_report(
+        &self,
+        tenant: &TenantId,
+        id: &str,
+        token: u64,
+        report: &JobReport,
+        writes: &WorkerWrites,
+        now: Timestamp,
+    ) -> StoreResult<Reported> {
+        check_jobs(&writes.jobs)?;
+        let earliest = writes.jobs.iter().map(|job| job.due_at.0).min();
+        Ok(self
+            .on_jobs(tenant, earliest, |tx| {
+                let Some(job) = job_by_id(tx, id)? else {
+                    return Ok(Reported::Refused(format!("no job {id}")));
+                };
+                let next = match jobs::apply_report(&job, token, report, now) {
+                    Ok(next) => next,
+                    Err(why) => return Ok(Reported::Refused(why)),
+                };
+                put_job(tx, &next)?;
+                write_automation(tx, tenant, writes, now)?;
+                Ok(Reported::Recorded(next))
+            })?
+            .unwrap_or_else(|| Reported::Refused(format!("no tenant {tenant}"))))
+    }
+
+    fn job_cancel(
+        &self,
+        tenant: &TenantId,
+        id: &str,
+        reason: &str,
+        now: Timestamp,
+    ) -> StoreResult<JobChange> {
+        Ok(self
+            .on_jobs(tenant, None, |tx| {
+                let Some(job) = job_by_id(tx, id)? else {
+                    return Ok(JobChange::NotFound);
+                };
+                let change = jobs::apply_cancel(&job, reason, now);
+                if let JobChange::Changed(next) = &change {
+                    put_job(tx, next)?;
+                }
+                Ok(change)
+            })?
+            .unwrap_or(JobChange::NotFound))
+    }
+
+    fn job_retry(&self, tenant: &TenantId, id: &str, now: Timestamp) -> StoreResult<JobChange> {
+        Ok(self
+            .on_jobs(tenant, Some(now.0), |tx| {
+                let Some(job) = job_by_id(tx, id)? else {
+                    return Ok(JobChange::NotFound);
+                };
+                let change = jobs::apply_retry(&job, now);
+                if let JobChange::Changed(next) = &change {
+                    put_job(tx, next)?;
+                }
+                Ok(change)
+            })?
+            .unwrap_or(JobChange::NotFound))
+    }
+
+    fn jobs_due(&self, now: Timestamp, limit: usize) -> StoreResult<Vec<TenantId>> {
+        // The wake index only: no tenant file is opened to find due work (SCH-007).
+        let conn = self.control.lock().map_err(dbe)?;
+        select_strings(
+            &conn,
+            "SELECT w.tenant FROM job_wake w JOIN tenant_directory d ON d.id = w.tenant
+             WHERE d.state = 'active' AND w.due_at <= ?1 ORDER BY w.due_at, w.tenant LIMIT ?2",
+            &[&now.0, &(limit as i64)],
+        )?
+        .into_iter()
+        .map(|id| TenantId::new(id).map_err(corrupt_id))
+        .collect()
+    }
+
+    fn automation_write(
+        &self,
+        tenant: &TenantId,
+        writes: &WorkerWrites,
+        now: Timestamp,
+    ) -> StoreResult<()> {
+        check_jobs(&writes.jobs)?;
+        self.existing(tenant)?;
+        let earliest = writes.jobs.iter().map(|job| job.due_at.0).min();
+        self.on_jobs(tenant, earliest, |tx| {
+            write_automation(tx, tenant, writes, now)
+        })?
+        .ok_or_else(|| StoreError::NotFound(format!("tenant {tenant}")))
+    }
+
+    fn automation_run(&self, tenant: &TenantId, run: &str) -> StoreResult<Option<RunRecord>> {
+        Ok(self
+            .on_tenant(tenant, |conn| {
+                Ok(runs_of(
+                    conn,
+                    "SELECT seq, data FROM automation_runs WHERE run = ?1",
+                    &[&run],
+                )?
+                .pop())
+            })?
+            .flatten())
+    }
+
+    fn automation_runs(
+        &self,
+        tenant: &TenantId,
+        automation: Option<&WorkflowId>,
+        state: Option<RunState>,
+        before: Option<u64>,
+        limit: usize,
+    ) -> StoreResult<Vec<RunRecord>> {
+        let before = before.map_or(i64::MAX, |b| b as i64);
+        let automation = automation.map(|a| a.as_str().to_string());
+        let state = state.map(|s| s.as_str());
+        Ok(self
+            .on_tenant(tenant, |conn| {
+                runs_of(
+                    conn,
+                    "SELECT seq, data FROM automation_runs
+                     WHERE seq < ?1 AND (?2 IS NULL OR automation = ?2) AND (?3 IS NULL OR state = ?3)
+                     ORDER BY seq DESC LIMIT ?4",
+                    &[&before, &automation, &state, &(limit as i64)],
+                )
+            })?
+            .unwrap_or_default())
+    }
+
+    fn automation_steps(
+        &self,
+        tenant: &TenantId,
+        run: &str,
+        after: Option<u64>,
+        limit: usize,
+    ) -> StoreResult<Vec<StepRecord>> {
+        let after = after.map_or(0, |a| a as i64);
+        Ok(self
+            .on_tenant(tenant, |conn| {
+                select_strings(
+                    conn,
+                    "SELECT data FROM automation_steps WHERE run = ?1 AND sequence > ?2
+                     ORDER BY sequence LIMIT ?3",
+                    &[&run, &after, &(limit as i64)],
+                )?
+                .iter()
+                .map(|data| decode(data, "automation step"))
+                .collect()
+            })?
+            .unwrap_or_default())
+    }
+
+    fn automation_exceptions(
+        &self,
+        tenant: &TenantId,
+        kind: Option<ExceptionKind>,
+        unsettled: bool,
+        before: Option<u64>,
+        limit: usize,
+    ) -> StoreResult<Vec<ExceptionRecord>> {
+        let before = before.map_or(i64::MAX, |b| b as i64);
+        let kind = kind.map(|k| k.as_str());
+        let unsettled = i64::from(unsettled);
+        Ok(self
+            .on_tenant(tenant, |conn| {
+                exceptions_of(
+                    conn,
+                    "SELECT seq, data FROM automation_exceptions
+                     WHERE seq < ?1 AND (?2 IS NULL OR kind = ?2) AND (?3 = 0 OR settled = 0)
+                     ORDER BY seq DESC LIMIT ?4",
+                    &[&before, &kind, &unsettled, &(limit as i64)],
+                )
+            })?
+            .unwrap_or_default())
+    }
+
+    fn automation_exception_settle(
+        &self,
+        tenant: &TenantId,
+        id: &str,
+        release: bool,
+        now: Timestamp,
+    ) -> StoreResult<Settled> {
+        let creates = release.then_some(now.0);
+        Ok(self
+            .on_jobs(tenant, creates, |tx| {
+                let Some(mut record) = exceptions_of(
+                    tx,
+                    "SELECT seq, data FROM automation_exceptions WHERE id = ?1",
+                    &[&id],
+                )?
+                .pop() else {
+                    return Ok(Settled::NotFound);
+                };
+                if let Some(why) = jobs::settle_problem(&record, release) {
+                    return Ok(Settled::Conflict(why));
+                }
+                let mut released = None;
+                if release {
+                    let job_id = record.job.clone().unwrap_or_default();
+                    let Some(job) = job_by_id(tx, &job_id)? else {
+                        return Ok(Settled::Conflict(format!("no job {job_id} to release")));
+                    };
+                    let JobChange::Changed(next) = jobs::apply_retry(&job, now) else {
+                        return Ok(Settled::Conflict(format!(
+                            "job {job_id} has not failed and cannot be given another attempt"
+                        )));
+                    };
+                    put_job(tx, &next)?;
+                    released = Some(job_id);
+                }
+                record.settled = true;
+                record.seq = 0;
+                tx.execute(
+                    "UPDATE automation_exceptions SET settled = 1, data = ?2 WHERE id = ?1",
+                    params![id, encode(&record)],
+                )
+                .map_err(db)?;
+                Ok(Settled::Done { job: released })
+            })?
+            .unwrap_or(Settled::NotFound))
     }
 
     fn begin_provisioning(&self, tenant: &TenantId) -> StoreResult<()> {

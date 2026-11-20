@@ -98,6 +98,12 @@
 //!      (`without_kernel_only`). The suspension is guarded: the corpus's automation acts with no
 //!      run-as role, so it is never suspended, and `assert_no_input_of_a_known_difference` fails
 //!      on one that has a role. No principal of the corpus starts with `automation:`.
+//!  11. Not exercised, and not mirrored: the automation principal (`strata_kernel::automation`,
+//!      WFL-1527). The hand-written `roles_of` gives a principal `automation:<id>` exactly the
+//!      run-as roles of its automation, and `refuse_reserved_principals` refuses the prefix for
+//!      a named person and for a caller with a session; the generated `roles-of` and
+//!      `reserved-principal` do not yet. Guarded: `assert_no_automation_principal` fails on a
+//!      context whose principal has the prefix.
 //!
 //! Difference 7 is guarded: `assert_no_input_of_a_known_difference` runs on every snapshot the
 //! test decides or reads, and fails when a snapshot has an automation step with a retry, a
@@ -923,7 +929,7 @@ fn assert_no_input_of_a_known_difference(state: &State) {
     }
 }
 
-/// Difference 11: a result without what `strata_kernel::triggers` adds and the generated
+/// Difference 10: a result without what `strata_kernel::triggers` adds and the generated
 /// functions do not state: the effects of triggers, the transitions a record-updated event names,
 /// and the definer and time written on a trigger or an automation.
 fn without_kernel_only(result: &mut Result<Transition, DomainError>) {
@@ -961,6 +967,17 @@ fn without_kernel_only(result: &mut Result<Transition, DomainError>) {
     }
 }
 
+/// Difference 11 of the header: fail when a decision or read is made as an automation principal,
+/// whose roles the generated functions do not mirror.
+fn assert_no_automation_principal(context: &Context) {
+    if let Principal::User(id) = &context.principal {
+        assert!(
+            strata_kernel::automation::automation_named(id).is_none(),
+            "{id} is an automation principal; the generated roles-of and reserved-principal do not mirror it (difference 11)"
+        );
+    }
+}
+
 #[derive(Default)]
 struct Tally {
     compared: usize,
@@ -981,6 +998,7 @@ fn compare_transition(state: &State, intent: &Intent, context: &Context, tally: 
         state.tenant_id
     );
     assert_no_input_of_a_known_difference(state);
+    assert_no_automation_principal(context);
     let mut hand = transition(state, intent, context);
     without_kernel_only(&mut hand);
     let texts = texts_for(state, intent);
@@ -1028,6 +1046,7 @@ fn compare_read(state: &State, request: &ReadRequest, context: &Context, tally: 
         context.principal, context.tenant, state.tenant_id
     );
     assert_no_input_of_a_known_difference(state);
+    assert_no_automation_principal(context);
     let hand = read(state, request, context);
     // Only the query filters are printed by a read; the intent is none.
     let texts = texts_for(

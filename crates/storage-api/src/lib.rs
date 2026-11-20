@@ -35,10 +35,16 @@
 //!
 //! What adapters may differ in is stated by [`Capabilities`], not hidden.
 
+pub mod jobs;
 pub mod memory;
 
 #[cfg(feature = "conformance")]
 pub mod conformance;
+
+use jobs::{
+    ExceptionKind, ExceptionRecord, Job, JobChange, JobReport, Lease, NewJob, Reported, RunRecord,
+    RunState, Settled, StepRecord, WorkerWrites,
+};
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -49,7 +55,7 @@ use strata_kernel::ext::*;
 use strata_kernel::{
     canon, Context, Coverage, DomainError, DomainEvent, Effect, ErrorKind, EventBody, Intent, Need,
     Principal, PrincipalId, ReadRequest, ReadResult, Record, SessionId, State, StateDelta,
-    StateRevision, TenantId, TenantState, Timestamp, Transition, Value,
+    StateRevision, TenantId, TenantState, Timestamp, Transition, Value, WorkflowId,
 };
 
 /// What an adapter actually provides. Reported in diagnostics and checked by the conformance
@@ -169,6 +175,14 @@ pub struct Commit {
     /// The idempotency key of the request, when it had one.
     #[serde(default)]
     pub idempotency: Option<IdempotencyEntry>,
+    /// The jobs the commit creates, in its own transaction (SCH-004, EML-005). A job whose key
+    /// the tenant holds already is not created again.
+    #[serde(default)]
+    pub jobs: Vec<NewJob>,
+    /// The exception records the decision writes, in its own transaction (SCH-1532). A record
+    /// whose id the tenant holds already is not written again.
+    #[serde(default)]
+    pub exceptions: Vec<ExceptionRecord>,
 }
 
 /// The scope of an idempotency key within a tenant: the principal, as canonical JSON.
@@ -180,7 +194,11 @@ impl Commit {
     /// The commit for an accepted transition.
     /// Implements: CT-262
     pub fn of(intent: &Intent, context: &Context, transition: &Transition) -> Commit {
+        let (jobs, exceptions) =
+            jobs::trigger_intake(&transition.delta.tenant, transition, context.now);
         Commit {
+            jobs,
+            exceptions,
             delta: transition.delta.clone(),
             events: transition.events.clone(),
             journal: JournalEntry {
@@ -1081,6 +1099,128 @@ pub trait Store: Send + Sync {
     /// Remove one tenant and everything that belongs to it: its state, events, journal,
     /// sessions, logins and snapshots. Other tenants are untouched. For development fixtures.
     fn reset_tenant(&self, tenant: &TenantId) -> StoreResult<()>;
+
+    // ---- Jobs of the automation worker (crate::jobs, SCH-001 to SCH-015) ----
+
+    /// Create jobs of a tenant outside a commit, each once for its key: a key the tenant holds
+    /// already creates nothing (SCH-004). Returns the id of each, in order. A malformed job
+    /// refuses the whole call and creates nothing; a tenant that does not exist is `NotFound`.
+    fn jobs_create(
+        &self,
+        tenant: &TenantId,
+        jobs: &[NewJob],
+        now: Timestamp,
+    ) -> StoreResult<Vec<String>>;
+
+    /// One job of a tenant.
+    fn job(&self, tenant: &TenantId, id: &str) -> StoreResult<Option<Job>>;
+
+    /// At most `limit` jobs of a tenant, newest first, created before the job of sequence number
+    /// `before` when one is given.
+    fn jobs_list(
+        &self,
+        tenant: &TenantId,
+        before: Option<u64>,
+        limit: usize,
+    ) -> StoreResult<Vec<Job>>;
+
+    /// Lease the job of a tenant that has been due longest at `now` (earliest `due_at`, then the
+    /// oldest), to `worker`: a waiting job that is due (never one that is not, SCH-001) or a
+    /// leased one whose lease expired (SCH-010). The lease raises the job's fencing token
+    /// ([`jobs::apply_lease`]). `None` when nothing is due.
+    fn job_lease(
+        &self,
+        tenant: &TenantId,
+        worker: &str,
+        now: Timestamp,
+    ) -> StoreResult<Option<Lease>>;
+
+    /// Record the outcome of the attempt that holds lease `token` ([`jobs::apply_report`]) and,
+    /// in the same transaction, `writes`. A refused report writes nothing (SCH-011, SCH-012).
+    fn job_report(
+        &self,
+        tenant: &TenantId,
+        id: &str,
+        token: u64,
+        report: &JobReport,
+        writes: &WorkerWrites,
+        now: Timestamp,
+    ) -> StoreResult<Reported>;
+
+    /// Cancel a job: no later attempt happens, and a report for the attempt in progress is
+    /// refused (SCH-006).
+    fn job_cancel(
+        &self,
+        tenant: &TenantId,
+        id: &str,
+        reason: &str,
+        now: Timestamp,
+    ) -> StoreResult<JobChange>;
+
+    /// Give a failed job one more attempt, due now ([`jobs::apply_retry`]).
+    fn job_retry(&self, tenant: &TenantId, id: &str, now: Timestamp) -> StoreResult<JobChange>;
+
+    /// The tenants that have a job due at `now`, the longest due first, at most `limit`. Found
+    /// without reading the database of a tenant that has none (SCH-007): an adapter keeps a wake
+    /// index of a tenant id and a due time per tenant and nothing of a job (SCH-008).
+    fn jobs_due(&self, now: Timestamp, limit: usize) -> StoreResult<Vec<TenantId>>;
+
+    /// Write run, step and exception records and jobs of a tenant in one transaction, outside a
+    /// report: a run record is replaced, a step record is replaced, an exception record and a job
+    /// whose id or key exists already are not written again.
+    fn automation_write(
+        &self,
+        tenant: &TenantId,
+        writes: &WorkerWrites,
+        now: Timestamp,
+    ) -> StoreResult<()>;
+
+    /// One run of a tenant.
+    fn automation_run(&self, tenant: &TenantId, run: &str) -> StoreResult<Option<RunRecord>>;
+
+    /// At most `limit` runs of a tenant, newest first, of one automation and in one state when
+    /// those are given, first written before the run of sequence number `before` when one is.
+    fn automation_runs(
+        &self,
+        tenant: &TenantId,
+        automation: Option<&WorkflowId>,
+        state: Option<RunState>,
+        before: Option<u64>,
+        limit: usize,
+    ) -> StoreResult<Vec<RunRecord>>;
+
+    /// At most `limit` steps of one run, in their order, after position `after` when one is
+    /// given.
+    fn automation_steps(
+        &self,
+        tenant: &TenantId,
+        run: &str,
+        after: Option<u64>,
+        limit: usize,
+    ) -> StoreResult<Vec<StepRecord>>;
+
+    /// At most `limit` exception records of a tenant, newest first, of one kind when one is
+    /// given, only those not settled with `unsettled`, written before the record of sequence
+    /// number `before` when one is.
+    fn automation_exceptions(
+        &self,
+        tenant: &TenantId,
+        kind: Option<ExceptionKind>,
+        unsettled: bool,
+        before: Option<u64>,
+        limit: usize,
+    ) -> StoreResult<Vec<ExceptionRecord>>;
+
+    /// Settle a parked or dead-lettered exception record: mark it settled and, when `release`,
+    /// give its job one more attempt with the same work and so the same step key (SCH-1524,
+    /// AGT-418), in one transaction.
+    fn automation_exception_settle(
+        &self,
+        tenant: &TenantId,
+        id: &str,
+        release: bool,
+        now: Timestamp,
+    ) -> StoreResult<Settled>;
 
     /// Mark a tenant as being installed: the directory lists it as `provisioning`, which no
     /// request reaches, until [`Store::finish_provisioning`]. Called after the install's first

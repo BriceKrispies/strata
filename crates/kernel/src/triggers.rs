@@ -58,30 +58,12 @@ pub use strata_model_core::types::{AutomationDecline, AutomationExceptionReason,
 /// and declines with `hop-limit` past it (SCH-300, SCH-1532, D-7202).
 pub const HOP_LIMIT: u32 = 8;
 
-/// The prefix of the principal an automation acts as (D-6525).
-pub const AUTOMATION_PREFIX: &str = "automation:";
+/// The automation principal and its reserved prefix live in [`crate::automation`], the one rule
+/// the worker and the triggers share (D-6525, WFL-1527).
+pub use crate::automation::{automation_principal, automation_roles, AUTOMATION_PREFIX};
 
 /// The longest detail a declined exception carries (rec-automation-exception.detail).
 const MAX_DETAIL: usize = 256;
-
-/// The principal an automation acts as: `automation:<workflow-id>` (D-6525, WFL-1527).
-pub fn automation_principal(id: &WorkflowId) -> PrincipalId {
-    PrincipalId::new(format!("{AUTOMATION_PREFIX}{id}"))
-        .expect("a workflow id after the automation prefix is a valid principal id")
-}
-
-/// The roles an automation principal holds: the run-as roles of its automation, and none when
-/// the schema has no such automation or the automation is suspended (WFL-1527, WFL-1529). `None`
-/// for a principal id that is not an automation principal's.
-pub fn automation_roles(schema: &TenantSchema, id: &PrincipalId) -> Option<BTreeSet<RoleId>> {
-    let name = id.as_str().strip_prefix(AUTOMATION_PREFIX)?;
-    let held = WorkflowId::new(name)
-        .ok()
-        .and_then(|id| schema.automations.as_ref()?.get(&id))
-        .filter(|def| def.suspended_for.is_none())
-        .map(|def| def.run_as.roles.clone());
-    Some(held.unwrap_or_default())
-}
 
 /// The changes of a schema change with every definition of a trigger or an automation stamped
 /// with who defined it and when, from the context and never from the input (D-7204, WFL-2201):

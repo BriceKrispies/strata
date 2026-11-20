@@ -3,6 +3,10 @@
 //! It exists to state the contract in the simplest possible code, to back tests, and to show
 //! that the rest of the system does not depend on SQLite. It is not durable and says so.
 
+use crate::jobs::{
+    self, ExceptionKind, ExceptionRecord, Job, JobChange, JobReport, Lease, NewJob, Reported,
+    RunRecord, RunState, Settled, StepRecord, WorkerWrites,
+};
 use crate::{
     check_event_sequence, partial_state, throttle_refund, throttle_step, Account, AuditEntry,
     Capabilities, Commit, FederatedIdentity, Health, IdempotencyEntry, IdempotentResult,
@@ -17,7 +21,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use strata_kernel::ext::*;
 use strata_kernel::{
     apply_delta, canon, DomainEvent, Need, PrincipalId, SessionId, State, TenantId, TenantState,
-    Timestamp,
+    Timestamp, WorkflowId,
 };
 
 #[derive(Default)]
@@ -48,6 +52,86 @@ struct Inner {
     snapshots: BTreeMap<(TenantId, u64), (SnapshotInfo, Arc<TenantState>)>,
     /// Results by tenant, principal scope and key, with the receipt of the commit.
     idempotency: BTreeMap<(TenantId, String, String), (IdempotencyEntry, Receipt)>,
+    /// Jobs of the automation worker per tenant, in creation order: a job's `seq` is its index
+    /// plus one.
+    jobs: BTreeMap<TenantId, Vec<Job>>,
+    /// Runs per tenant, in the order they were first written: a run's `seq` is its index plus one.
+    runs: BTreeMap<TenantId, Vec<RunRecord>>,
+    /// Steps by tenant, run and position.
+    steps: BTreeMap<(TenantId, String, u64), StepRecord>,
+    /// Exception records per tenant, in the order they were written: `seq` is the index plus one.
+    exceptions: BTreeMap<TenantId, Vec<ExceptionRecord>>,
+}
+
+impl Inner {
+    /// Create the jobs whose keys the tenant does not hold yet; the ids of all, in order.
+    fn add_jobs(&mut self, tenant: &TenantId, new: &[NewJob], now: Timestamp) -> Vec<String> {
+        let list = self.jobs.entry(tenant.clone()).or_default();
+        new.iter()
+            .map(|wanted| {
+                let id = jobs::job_id(tenant, &wanted.key);
+                if !list.iter().any(|job| job.id == id) {
+                    let mut job = jobs::new_job(tenant, wanted, now);
+                    job.seq = list.len() as u64 + 1;
+                    list.push(job);
+                }
+                id
+            })
+            .collect()
+    }
+
+    /// Exception records whose ids the tenant does not hold yet.
+    fn add_exceptions(&mut self, tenant: &TenantId, records: &[ExceptionRecord]) {
+        let list = self.exceptions.entry(tenant.clone()).or_default();
+        for record in records {
+            if !list.iter().any(|held| held.id == record.id) {
+                let mut record = record.clone();
+                record.seq = list.len() as u64 + 1;
+                list.push(record);
+            }
+        }
+    }
+
+    /// Everything of `writes`, as [`crate::Store::automation_write`] states.
+    fn write(&mut self, tenant: &TenantId, writes: &WorkerWrites, now: Timestamp) {
+        let runs = self.runs.entry(tenant.clone()).or_default();
+        for run in &writes.runs {
+            match runs.iter_mut().find(|held| held.run == run.run) {
+                Some(held) => {
+                    let seq = held.seq;
+                    *held = run.clone();
+                    held.seq = seq;
+                }
+                None => {
+                    let mut run = run.clone();
+                    run.seq = runs.len() as u64 + 1;
+                    runs.push(run);
+                }
+            }
+        }
+        for step in &writes.steps {
+            self.steps.insert(
+                (tenant.clone(), step.run.clone(), step.sequence),
+                step.clone(),
+            );
+        }
+        self.add_exceptions(tenant, &writes.exceptions);
+        self.add_jobs(tenant, &writes.jobs, now);
+    }
+
+    fn job_mut(&mut self, tenant: &TenantId, id: &str) -> Option<&mut Job> {
+        self.jobs
+            .get_mut(tenant)
+            .and_then(|list| list.iter_mut().find(|job| job.id == id))
+    }
+}
+
+/// The first problem of a list of jobs to create, as a refusal.
+fn check_jobs(new: &[NewJob]) -> StoreResult<()> {
+    match new.iter().find_map(jobs::job_problem) {
+        Some(problem) => Err(StoreError::Invalid(problem)),
+        None => Ok(()),
+    }
 }
 
 #[derive(Default)]
@@ -173,11 +257,15 @@ impl Store for MemoryStore {
                 ));
             }
         }
+        check_jobs(&commit.jobs)?;
         let next = apply_delta(current.as_deref(), &commit.delta)
             .map_err(|e| StoreError::Invalid(strata_kernel::ext::DomainErrorExt::describe(&e)))?;
 
         // Nothing above changed the store; everything below cannot fail.
         inner.tenants.insert(tenant.clone(), Arc::new(next));
+        let now = commit.journal.context.now;
+        inner.add_jobs(tenant, &commit.jobs, now);
+        inner.add_exceptions(tenant, &commit.exceptions);
         let mut last_position = None;
         for event in &commit.events {
             let next = inner.positions.entry(tenant.clone()).or_insert(0);
@@ -200,7 +288,6 @@ impl Store for MemoryStore {
                 (entry.clone(), receipt.clone()),
             );
         }
-        let now = commit.journal.context.now;
         for session in inner.sessions.values_mut() {
             if session.tenant == *tenant
                 && commit.revoke_sessions.contains(&session.principal)
@@ -1215,6 +1302,291 @@ impl Store for MemoryStore {
         inner.docs.retain(|(t, _, _), _| t != tenant);
         inner.audit.remove(tenant);
         inner.snapshots.retain(|(t, _), _| t != tenant);
+        inner.jobs.remove(tenant);
+        inner.runs.remove(tenant);
+        inner.steps.retain(|(t, _, _), _| t != tenant);
+        inner.exceptions.remove(tenant);
         Ok(())
+    }
+
+    fn jobs_create(
+        &self,
+        tenant: &TenantId,
+        new: &[NewJob],
+        now: Timestamp,
+    ) -> StoreResult<Vec<String>> {
+        check_jobs(new)?;
+        let mut inner = self.lock()?;
+        if !inner.tenants.contains_key(tenant) {
+            return Err(StoreError::NotFound(format!("tenant {tenant}")));
+        }
+        Ok(inner.add_jobs(tenant, new, now))
+    }
+
+    fn job(&self, tenant: &TenantId, id: &str) -> StoreResult<Option<Job>> {
+        Ok(self
+            .lock()?
+            .jobs
+            .get(tenant)
+            .and_then(|list| list.iter().find(|job| job.id == id).cloned()))
+    }
+
+    fn jobs_list(
+        &self,
+        tenant: &TenantId,
+        before: Option<u64>,
+        limit: usize,
+    ) -> StoreResult<Vec<Job>> {
+        Ok(self
+            .lock()?
+            .jobs
+            .get(tenant)
+            .map(|list| {
+                list.iter()
+                    .rev()
+                    .filter(|job| before.is_none_or(|b| job.seq < b))
+                    .take(limit)
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default())
+    }
+
+    fn job_lease(
+        &self,
+        tenant: &TenantId,
+        worker: &str,
+        now: Timestamp,
+    ) -> StoreResult<Option<Lease>> {
+        let mut inner = self.lock()?;
+        let Some(list) = inner.jobs.get_mut(tenant) else {
+            return Ok(None);
+        };
+        let Some(job) = list
+            .iter_mut()
+            .filter(|job| jobs::leasable(job, now))
+            .min_by_key(|job| (job.due_at, job.seq))
+        else {
+            return Ok(None);
+        };
+        let lease = jobs::apply_lease(job, worker, now);
+        *job = lease.job.clone();
+        Ok(Some(lease))
+    }
+
+    fn job_report(
+        &self,
+        tenant: &TenantId,
+        id: &str,
+        token: u64,
+        report: &JobReport,
+        writes: &WorkerWrites,
+        now: Timestamp,
+    ) -> StoreResult<Reported> {
+        check_jobs(&writes.jobs)?;
+        let mut inner = self.lock()?;
+        let Some(job) = inner.job_mut(tenant, id) else {
+            return Ok(Reported::Refused(format!("no job {id}")));
+        };
+        let next = match jobs::apply_report(job, token, report, now) {
+            Ok(next) => next,
+            Err(why) => return Ok(Reported::Refused(why)),
+        };
+        *job = next.clone();
+        inner.write(tenant, writes, now);
+        Ok(Reported::Recorded(next))
+    }
+
+    fn job_cancel(
+        &self,
+        tenant: &TenantId,
+        id: &str,
+        reason: &str,
+        now: Timestamp,
+    ) -> StoreResult<JobChange> {
+        let mut inner = self.lock()?;
+        let Some(job) = inner.job_mut(tenant, id) else {
+            return Ok(JobChange::NotFound);
+        };
+        let change = jobs::apply_cancel(job, reason, now);
+        if let JobChange::Changed(next) = &change {
+            *job = next.clone();
+        }
+        Ok(change)
+    }
+
+    fn job_retry(&self, tenant: &TenantId, id: &str, now: Timestamp) -> StoreResult<JobChange> {
+        let mut inner = self.lock()?;
+        let Some(job) = inner.job_mut(tenant, id) else {
+            return Ok(JobChange::NotFound);
+        };
+        let change = jobs::apply_retry(job, now);
+        if let JobChange::Changed(next) = &change {
+            *job = next.clone();
+        }
+        Ok(change)
+    }
+
+    fn jobs_due(&self, now: Timestamp, limit: usize) -> StoreResult<Vec<TenantId>> {
+        // In memory every tenant is at hand: the earliest due job of each tenant is its wake time.
+        let inner = self.lock()?;
+        let mut due: Vec<(Timestamp, &TenantId)> = inner
+            .jobs
+            .iter()
+            .filter(|(tenant, _)| inner.tenants.contains_key(*tenant))
+            .filter_map(|(tenant, list)| {
+                list.iter()
+                    .filter(|job| jobs::leasable(job, now))
+                    .map(|job| job.due_at)
+                    .min()
+                    .map(|at| (at, tenant))
+            })
+            .collect();
+        due.sort();
+        Ok(due
+            .into_iter()
+            .take(limit)
+            .map(|(_, tenant)| tenant.clone())
+            .collect())
+    }
+
+    fn automation_write(
+        &self,
+        tenant: &TenantId,
+        writes: &WorkerWrites,
+        now: Timestamp,
+    ) -> StoreResult<()> {
+        check_jobs(&writes.jobs)?;
+        let mut inner = self.lock()?;
+        if !inner.tenants.contains_key(tenant) {
+            return Err(StoreError::NotFound(format!("tenant {tenant}")));
+        }
+        inner.write(tenant, writes, now);
+        Ok(())
+    }
+
+    fn automation_run(&self, tenant: &TenantId, run: &str) -> StoreResult<Option<RunRecord>> {
+        Ok(self
+            .lock()?
+            .runs
+            .get(tenant)
+            .and_then(|list| list.iter().find(|held| held.run == run).cloned()))
+    }
+
+    fn automation_runs(
+        &self,
+        tenant: &TenantId,
+        automation: Option<&WorkflowId>,
+        state: Option<RunState>,
+        before: Option<u64>,
+        limit: usize,
+    ) -> StoreResult<Vec<RunRecord>> {
+        Ok(self
+            .lock()?
+            .runs
+            .get(tenant)
+            .map(|list| {
+                list.iter()
+                    .rev()
+                    .filter(|run| before.is_none_or(|b| run.seq < b))
+                    .filter(|run| automation.is_none_or(|a| run.automation == *a))
+                    .filter(|run| state.is_none_or(|s| run.state == s))
+                    .take(limit)
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default())
+    }
+
+    fn automation_steps(
+        &self,
+        tenant: &TenantId,
+        run: &str,
+        after: Option<u64>,
+        limit: usize,
+    ) -> StoreResult<Vec<StepRecord>> {
+        Ok(self
+            .lock()?
+            .steps
+            .range(
+                (
+                    tenant.clone(),
+                    run.to_string(),
+                    after.map_or(0, |a| a.saturating_add(1)),
+                )..=(tenant.clone(), run.to_string(), u64::MAX),
+            )
+            .take(limit)
+            .map(|(_, step)| step.clone())
+            .collect())
+    }
+
+    fn automation_exceptions(
+        &self,
+        tenant: &TenantId,
+        kind: Option<ExceptionKind>,
+        unsettled: bool,
+        before: Option<u64>,
+        limit: usize,
+    ) -> StoreResult<Vec<ExceptionRecord>> {
+        Ok(self
+            .lock()?
+            .exceptions
+            .get(tenant)
+            .map(|list| {
+                list.iter()
+                    .rev()
+                    .filter(|record| before.is_none_or(|b| record.seq < b))
+                    .filter(|record| kind.is_none_or(|k| record.kind == k))
+                    .filter(|record| !unsettled || !record.settled)
+                    .take(limit)
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default())
+    }
+
+    fn automation_exception_settle(
+        &self,
+        tenant: &TenantId,
+        id: &str,
+        release: bool,
+        now: Timestamp,
+    ) -> StoreResult<Settled> {
+        let mut inner = self.lock()?;
+        let Some(record) = inner
+            .exceptions
+            .get(tenant)
+            .and_then(|list| list.iter().find(|record| record.id == id))
+            .cloned()
+        else {
+            return Ok(Settled::NotFound);
+        };
+        if let Some(why) = jobs::settle_problem(&record, release) {
+            return Ok(Settled::Conflict(why));
+        }
+        let mut released = None;
+        if release {
+            let job_id = record.job.clone().unwrap_or_default();
+            let Some(job) = inner.job_mut(tenant, &job_id) else {
+                return Ok(Settled::Conflict(format!("no job {job_id} to release")));
+            };
+            match jobs::apply_retry(job, now) {
+                JobChange::Changed(next) => *job = next,
+                _ => {
+                    return Ok(Settled::Conflict(format!(
+                        "job {job_id} has not failed and cannot be given another attempt"
+                    )))
+                }
+            }
+            released = Some(job_id);
+        }
+        if let Some(held) = inner
+            .exceptions
+            .get_mut(tenant)
+            .and_then(|list| list.iter_mut().find(|record| record.id == id))
+        {
+            held.settled = true;
+        }
+        Ok(Settled::Done { job: released })
     }
 }

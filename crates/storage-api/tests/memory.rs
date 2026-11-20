@@ -38,6 +38,12 @@ fn memory_store_keeps_documents() {
     conformance::documents_are_scoped_to_their_tenant_and_kind(&MemoryStore::new());
 }
 
+/// The jobs of the automation worker and its run, step and exception records.
+#[test]
+fn memory_store_keeps_jobs() {
+    conformance::jobs_conform(&MemoryStore::new());
+}
+
 /// The security audit trail is kept per tenant.
 #[test]
 fn memory_store_keeps_the_audit_trail() {

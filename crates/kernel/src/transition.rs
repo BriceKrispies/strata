@@ -179,17 +179,13 @@ fn refuse_reserved_principals(intent: &Intent, ctx: &Context) -> Result<(), Doma
             ));
         }
     }
-    // WFL-1527: an automation principal holds its run-as roles and no other, so nobody is made
-    // a member under its id. It may act as the caller: the automation worker acts as it.
-    if let Some(id) = named.filter(|id| id.as_str().starts_with(crate::triggers::AUTOMATION_PREFIX))
+    if let Some(problem) =
+        crate::automation::reserved_problem(named, &ctx.principal, ctx.session.is_some())
     {
         return Err(refuse(
             ErrorKind::InvalidIntent,
             "principal:id_is_not_reserved",
-            format!(
-                "the principal id {id} starts with the reserved prefix {}",
-                crate::triggers::AUTOMATION_PREFIX
-            ),
+            problem,
         ));
     }
     Ok(())

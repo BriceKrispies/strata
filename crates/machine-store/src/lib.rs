@@ -328,6 +328,8 @@ impl<'a> ApiTx<'a> {
             events,
             revoke_sessions: Vec::new(),
             idempotency: None,
+            jobs: Vec::new(),
+            exceptions: Vec::new(),
         };
         match store.commit(&commit) {
             // Another writer created it first: the caller loads it again.
@@ -629,6 +631,8 @@ impl<'a> ApiTx<'a> {
             events,
             revoke_sessions: Vec::new(),
             idempotency: None,
+            jobs: Vec::new(),
+            exceptions: Vec::new(),
         };
         self.store.commit(&commit).map_err(storage)?;
         Ok(())

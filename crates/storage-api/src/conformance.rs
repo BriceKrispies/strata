@@ -1431,6 +1431,398 @@ fn reset_removes_everything(store: &dyn Store) {
     Pair::new(store);
 }
 
+/// The jobs of the automation worker (`crate::jobs`): created once per key, alone or with the
+/// commit that causes them and never by one that is refused; offered no earlier than they are
+/// due and only to their tenant; leased with a fencing token that refuses a superseded report;
+/// ended in exactly one outcome; retried with a growing delay up to the attempts of their policy
+/// and then failed with every error; cancelled for good; found through the wake index; and the
+/// run, step and exception records written with them, listed and settled.
+///
+/// Not a row of the conformance table: the adapters' tests call it by name, as they call
+/// [`documents_are_scoped_to_their_tenant_and_kind`].
+// Verifies: SCH-001, SCH-004, SCH-006, SCH-010, SCH-011, SCH-012, SCH-013, SCH-014
+pub fn jobs_conform(store: &dyn Store) {
+    use crate::jobs::{
+        ExceptionKind, ExceptionRecord, JobChange, JobReport, JobState, JobWork, NewJob, Reported,
+        RetryPolicy, RunRecord, RunState, Settled, StepRecord, StepState, WorkerWrites,
+    };
+    Pair::new(store);
+    let alpha = tenant_id("alpha");
+    let beta = tenant_id("beta");
+    let automation = WorkflowId::new("award").expect("id");
+    let job = |key: &str, due: i64| NewJob {
+        key: key.to_string(),
+        work: JobWork::Step {
+            run: "run-1".into(),
+            automation: automation.clone(),
+            step: StepName::new("first").expect("name"),
+            sequence: 1,
+        },
+        due_at: Timestamp(due),
+        policy: RetryPolicy {
+            attempts: 2,
+            first_delay_ms: 100,
+            max_delay_ms: 1_000,
+            lease_ms: 50,
+        },
+    };
+    let none = WorkerWrites::default();
+    let recorded = |reported: Reported| match reported {
+        Reported::Recorded(job) => job,
+        Reported::Refused(why) => panic!("the report was refused: {why}"),
+    };
+
+    // Created once for its key, in its own tenant only.
+    let ids = store
+        .jobs_create(
+            &alpha,
+            &[job("a", 5_000), job("a", 5_000)],
+            Timestamp(4_000),
+        )
+        .unwrap();
+    assert_eq!(ids[0], ids[1], "one key, one job");
+    assert_eq!(store.jobs_list(&alpha, None, 10).unwrap().len(), 1);
+    assert!(store.jobs_list(&beta, None, 10).unwrap().is_empty());
+    assert!(matches!(
+        store.jobs_create(&tenant_id("gamma"), &[job("a", 5_000)], Timestamp(4_000)),
+        Err(StoreError::NotFound(_))
+    ));
+    assert!(matches!(
+        store.jobs_create(&alpha, &[job("", 5_000)], Timestamp(4_000)),
+        Err(StoreError::Invalid(_))
+    ));
+
+    // Offered no earlier than it is due (SCH-001), to its own tenant, and found by the wake
+    // index then and not before.
+    assert!(store
+        .job_lease(&alpha, "w1", Timestamp(4_999))
+        .unwrap()
+        .is_none());
+    assert!(store.jobs_due(Timestamp(4_999), 10).unwrap().is_empty());
+    assert_eq!(
+        store.jobs_due(Timestamp(5_000), 10).unwrap(),
+        vec![alpha.clone()]
+    );
+    assert!(store
+        .job_lease(&beta, "w1", Timestamp(5_000))
+        .unwrap()
+        .is_none());
+    let first = store
+        .job_lease(&alpha, "w1", Timestamp(5_000))
+        .unwrap()
+        .expect("the job is due");
+    assert_eq!(first.job.id, ids[0]);
+    assert_eq!(first.expires_at, Timestamp(5_050));
+    assert!(!first.exhausted);
+    assert!(
+        store
+            .job_lease(&alpha, "w2", Timestamp(5_049))
+            .unwrap()
+            .is_none(),
+        "held while the lease lasts"
+    );
+
+    // The lease expires and another worker takes the job (SCH-010); the first worker's late
+    // report is refused by the token and writes nothing (SCH-011).
+    let second = store
+        .job_lease(&alpha, "w2", Timestamp(5_051))
+        .unwrap()
+        .expect("the lease expired");
+    assert!(second.token > first.token);
+    let run = RunRecord {
+        run: "run-1".into(),
+        automation: automation.clone(),
+        trigger: None,
+        event_seq: Some(3),
+        state: RunState::Running,
+        step: Some(StepName::new("first").expect("name")),
+        steps: 1,
+        hop: 0,
+        caused_by: principal_id("automation:award"),
+        on_behalf_of: None,
+        params: BTreeMap::new(),
+        started_at: Timestamp(5_000),
+        ended_at: None,
+        error: None,
+        seq: 0,
+    };
+    let step = StepRecord {
+        run: "run-1".into(),
+        sequence: 1,
+        step: StepName::new("first").expect("name"),
+        state: StepState::Completed,
+        attempts: 2,
+        job: Some(ids[0].clone()),
+        idempotency_key: "k".into(),
+        result: None,
+        errors: Vec::new(),
+        started_at: Timestamp(5_000),
+        ended_at: Some(Timestamp(5_060)),
+    };
+    let writes = WorkerWrites {
+        runs: vec![run.clone()],
+        steps: vec![step],
+        exceptions: Vec::new(),
+        jobs: vec![job("b", 6_000)],
+    };
+    assert!(matches!(
+        store
+            .job_report(
+                &alpha,
+                &ids[0],
+                first.token,
+                &JobReport::Succeeded,
+                &writes,
+                Timestamp(5_052)
+            )
+            .unwrap(),
+        Reported::Refused(_)
+    ));
+    assert!(store.automation_run(&alpha, "run-1").unwrap().is_none());
+    assert_eq!(store.jobs_list(&alpha, None, 10).unwrap().len(), 1);
+    let done = recorded(
+        store
+            .job_report(
+                &alpha,
+                &ids[0],
+                second.token,
+                &JobReport::Succeeded,
+                &writes,
+                Timestamp(5_060),
+            )
+            .unwrap(),
+    );
+    assert_eq!(done.state, JobState::Completed);
+    // Exactly one outcome (SCH-012): a second report is refused.
+    assert!(matches!(
+        store
+            .job_report(
+                &alpha,
+                &ids[0],
+                second.token,
+                &JobReport::Succeeded,
+                &none,
+                Timestamp(5_061)
+            )
+            .unwrap(),
+        Reported::Refused(_)
+    ));
+    assert_eq!(
+        store
+            .automation_run(&alpha, "run-1")
+            .unwrap()
+            .map(|r| r.state),
+        Some(RunState::Running)
+    );
+    assert_eq!(
+        store
+            .automation_steps(&alpha, "run-1", None, 10)
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        store
+            .automation_runs(&alpha, Some(&automation), Some(RunState::Running), None, 10)
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(store
+        .automation_runs(&alpha, None, Some(RunState::Completed), None, 10)
+        .unwrap()
+        .is_empty());
+    let listed = store.jobs_list(&alpha, None, 10).unwrap();
+    assert_eq!(listed.len(), 2, "the job the report created");
+    assert!(listed[0].seq > listed[1].seq, "newest first");
+    assert_eq!(
+        store
+            .jobs_list(&alpha, Some(listed[0].seq), 10)
+            .unwrap()
+            .len(),
+        1
+    );
+
+    // A failed attempt is retried after its delay (SCH-013); the last fails the job with every
+    // error (SCH-014).
+    let b = store
+        .job_lease(&alpha, "w1", Timestamp(6_000))
+        .unwrap()
+        .expect("b is due");
+    let failure = |error: &str| JobReport::Failed {
+        error: error.to_string(),
+        retry: true,
+    };
+    let waiting = recorded(
+        store
+            .job_report(
+                &alpha,
+                &b.job.id,
+                b.token,
+                &failure("one"),
+                &none,
+                Timestamp(6_001),
+            )
+            .unwrap(),
+    );
+    assert_eq!(waiting.state, JobState::Waiting);
+    assert_eq!(waiting.due_at, Timestamp(6_101));
+    assert!(store
+        .job_lease(&alpha, "w1", Timestamp(6_100))
+        .unwrap()
+        .is_none());
+    let b2 = store
+        .job_lease(&alpha, "w1", Timestamp(6_101))
+        .unwrap()
+        .expect("retried");
+    let failed = recorded(
+        store
+            .job_report(
+                &alpha,
+                &b.job.id,
+                b2.token,
+                &failure("two"),
+                &none,
+                Timestamp(6_102),
+            )
+            .unwrap(),
+    );
+    assert_eq!(failed.state, JobState::Failed);
+    assert_eq!(failed.errors.len(), 2);
+    assert_eq!(failed.reason.as_deref(), Some("attempts-exhausted"));
+    assert!(store.jobs_due(Timestamp(9_000), 10).unwrap().is_empty());
+
+    // A dead-lettered record is listed until it is settled; releasing it gives its job one more
+    // attempt.
+    let dead = ExceptionRecord {
+        id: "x-1".into(),
+        kind: ExceptionKind::DeadLettered,
+        reason: "attempts-exhausted".into(),
+        trigger: None,
+        automation: Some(automation.clone()),
+        run: Some("run-1".into()),
+        step: None,
+        event_seq: None,
+        job: Some(b.job.id.clone()),
+        hop: None,
+        at: Timestamp(6_102),
+        detail: String::new(),
+        settled: false,
+        seq: 0,
+    };
+    store
+        .automation_write(
+            &alpha,
+            &WorkerWrites {
+                exceptions: vec![dead.clone(), dead.clone()],
+                ..WorkerWrites::default()
+            },
+            Timestamp(6_103),
+        )
+        .unwrap();
+    let unsettled = store
+        .automation_exceptions(&alpha, None, true, None, 10)
+        .unwrap();
+    assert_eq!(unsettled.len(), 1, "written once");
+    assert_eq!(
+        store
+            .automation_exception_settle(&alpha, "x-1", true, Timestamp(7_000))
+            .unwrap(),
+        Settled::Done {
+            job: Some(b.job.id.clone())
+        }
+    );
+    assert!(matches!(
+        store
+            .automation_exception_settle(&alpha, "x-1", false, Timestamp(7_000))
+            .unwrap(),
+        Settled::Conflict(_)
+    ));
+    assert_eq!(
+        store
+            .automation_exception_settle(&alpha, "x-2", false, Timestamp(7_000))
+            .unwrap(),
+        Settled::NotFound
+    );
+    assert!(store
+        .automation_exceptions(&alpha, None, true, None, 10)
+        .unwrap()
+        .is_empty());
+    assert_eq!(
+        store.job(&alpha, &b.job.id).unwrap().map(|j| j.state),
+        Some(JobState::Waiting)
+    );
+
+    // Cancelling prevents every later attempt (SCH-006).
+    assert!(matches!(
+        store
+            .job_cancel(&alpha, &b.job.id, "not wanted", Timestamp(7_001))
+            .unwrap(),
+        JobChange::Changed(_)
+    ));
+    assert!(matches!(
+        store
+            .job_retry(&alpha, &b.job.id, Timestamp(7_002))
+            .unwrap(),
+        JobChange::Unchanged(_)
+    ));
+    assert!(store
+        .job_lease(&alpha, "w1", Timestamp(9_000))
+        .unwrap()
+        .is_none());
+    assert!(store.jobs_due(Timestamp(9_000), 10).unwrap().is_empty());
+    assert_eq!(
+        store
+            .job_cancel(&alpha, "no-such-job", "x", Timestamp(7_003))
+            .unwrap(),
+        JobChange::NotFound
+    );
+
+    // The jobs and exception records of a commit are written with it, and a commit that is
+    // refused writes none (SCH-004).
+    let state = store.load_complete(&alpha).unwrap();
+    let intent = new_note("Jobbed", "jobbed");
+    let context = ctx("alpha", user("alpha:writer1"), 10_000);
+    let transition = strata_kernel::transition(&state, &intent, &context).expect("accepted");
+    let mut commit = Commit::of(&intent, &context, &transition);
+    commit.jobs.push(job("c", 10_000));
+    commit.exceptions.push(ExceptionRecord {
+        id: "x-3".into(),
+        kind: ExceptionKind::Declined,
+        reason: "hop-limit".into(),
+        settled: true,
+        ..dead.clone()
+    });
+    store.commit(&commit).unwrap();
+    let mut stale = commit.clone();
+    stale.jobs = vec![job("d", 10_000)];
+    stale.exceptions[0].id = "x-4".into();
+    assert!(matches!(
+        store.commit(&stale),
+        Err(StoreError::Conflict { .. })
+    ));
+    let keys: Vec<String> = store
+        .jobs_list(&alpha, None, 10)
+        .unwrap()
+        .into_iter()
+        .map(|j| j.key)
+        .collect();
+    assert!(keys.contains(&"c".to_string()), "{keys:?}");
+    assert!(!keys.contains(&"d".to_string()), "{keys:?}");
+    let declined = store
+        .automation_exceptions(&alpha, Some(ExceptionKind::Declined), false, None, 10)
+        .unwrap();
+    assert_eq!(declined.len(), 1);
+    assert_eq!(declined[0].id, "x-3");
+    assert!(matches!(
+        store
+            .automation_exception_settle(&alpha, "x-3", false, Timestamp(10_001))
+            .unwrap(),
+        Settled::Conflict(_)
+    ));
+    assert_eq!(store.jobs_due(Timestamp(10_000), 10).unwrap(), vec![alpha]);
+}
+
 /// A check: the case of the conformance table it establishes (`specifications/spec.jsonc`,
 /// section `cases-storage-conformance`), its name, and the check itself.
 type Check = (&'static str, &'static str, fn(&dyn Store));
