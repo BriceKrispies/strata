@@ -8,7 +8,7 @@
     "platform": { "min": "0.2" },
     "imports": {
       "spec": "../../../specifications/spec.jsonc",
-      "entities": ["product-module", "media-deliver", "media-sign", "self-file-upload", "upload-scan", "records-read", "setting-read", "setting-write-tenant"]
+      "entities": ["product-module", "ui-notice-received", "ui-session-ended", "api-error", "media-deliver", "media-sign", "self-file-upload", "upload-scan", "records-read", "setting-read", "setting-write-tenant"]
     }
   },
 
@@ -466,8 +466,8 @@
 
   // Tenant settings: the default licence term and the watermark default.
   "settings": [
-    { "id": "assets__default_term_days", "label": "Default licence term (days)", "type": "i64", "default": 365, "levels": ["tenant"] },
-    { "id": "assets__watermark_default", "label": "Watermark by default", "type": "bool", "default": false, "levels": ["tenant", "team"] }
+    { "id": "assets__default_term_days", "label": "Default licence term (days)", "type": "i64", "default": {"Int": 365}, "levels": ["tenant"] },
+    { "id": "assets__watermark_default", "label": "Watermark by default", "type": "bool", "default": {"Bool": false}, "levels": ["tenant", "team"] }
   ],
 
   // An event kind the tenant can subscribe to.

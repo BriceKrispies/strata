@@ -8,7 +8,7 @@
     "platform": { "min": "0.2" },
     "imports": {
       "spec": "../../../specifications/spec.jsonc",
-      "entities": ["product-module", "catalogue-read", "ledger-read", "workflow-approve"]
+      "entities": ["product-module", "ui-notice-received", "ui-session-ended", "api-error", "catalogue-read", "ledger-read", "workflow-approve"]
     }
   },
 
@@ -230,7 +230,7 @@
   ],
 
   "settings": [
-    { "id": "commerce__default_currency", "label": "Default currency", "type": "string", "default": "gbp", "levels": ["tenant", "team"] }
+    { "id": "commerce__default_currency", "label": "Default currency", "type": "string", "default": {"Str": "gbp"}, "levels": ["tenant", "team"] }
   ],
 
   "queries": [

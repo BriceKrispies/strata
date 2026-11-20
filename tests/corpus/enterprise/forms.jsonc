@@ -8,7 +8,7 @@
     "platform": { "min": "0.2" },
     "imports": {
       "spec": "../../../specifications/spec.jsonc",
-      "entities": ["product-module", "form-submit", "consent-record", "webhook-receive", "webhooks-manage"]
+      "entities": ["product-module", "ui-notice-received", "ui-session-ended", "api-error", "form-submit", "consent-record", "webhook-receive", "webhooks-manage"]
     }
   },
   "records": [
@@ -558,8 +558,8 @@
         { "name": "retire", "from": "published", "to": "retired", "guard": "old.status == 'published'", "set": { "retired_at": "now" } } ] }
   ],
   "settings": [
-    { "id": "forms__default_retention_days", "label": "Default retention for submissions", "type": "i64", "default": 730, "levels": ["tenant"] },
-    { "id": "forms__default_locale", "label": "Default locale", "type": "string", "default": "en-GB", "levels": ["tenant", "team"] }
+    { "id": "forms__default_retention_days", "label": "Default retention for submissions", "type": "i64", "default": {"Int": 730}, "levels": ["tenant"] },
+    { "id": "forms__default_locale", "label": "Default locale", "type": "string", "default": {"Str": "en-GB"}, "levels": ["tenant", "team"] }
   ],
   "mailTemplates": [
     { "id": "forms__submission_mail", "subject": "We received your response",
@@ -579,7 +579,7 @@
       "start": "notify",
       "steps": {
         "notify": { "action": { "CreateNotice": { "template": "forms__submission_notice", "to": "param.owner", "record": "param.record" } }, "next": "hook", "retry": { "attempts": 3 } },
-        "hook": { "action": { "CallWebhook": { "subscription": "forms-webhook", "body": { "submission": "param.record", "event": "'form.submitted'" } } }, "next": "mail", "timeout": 15000 },
+        "hook": { "action": { "CallWebhook": { "subscription": "7a2d3b4c-4e5f-4a6b-9c7d-1e2f3a4b5c62", "body": { "submission": "param.record", "event": "'form.submitted'" } } }, "next": "mail", "timeout": 15000 },
         "mail": { "action": { "SendMail": { "template": "forms__submission_mail", "to": "param.owner", "category": "transactional" } }, "next": "done", "timeout": 30000 },
         "done": { "action": "End" } } }
   ],

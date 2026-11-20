@@ -8,7 +8,7 @@
     "platform": { "min": "0.2" },
     "imports": {
       "spec": "../../../specifications/spec.jsonc",
-      "entities": ["product-module", "content-read", "content-write", "automations-read", "outbound-call", "messages-send"]
+      "entities": ["product-module", "ui-notice-received", "ui-session-ended", "api-error", "content-read", "content-write", "automations-read", "outbound-call", "messages-send"]
     }
   },
   "types": [
@@ -353,9 +353,9 @@
     { "id": "publishing__on_job_created", "on": { "RecordCreated": { "object": "publishing__publish_job" } },
       "automation": "publishing__run_publish" },
     { "id": "publishing__partner_webhook", "on": { "InboundWebhook": { "endpoint": "partner-cms" } },
-      "condition": "param.release != null", "automation": "publishing__syndicate_release" },
+      "condition": "param.hop < 4", "automation": "publishing__syndicate_release" },
     { "id": "publishing__on_release_published", "on": { "DeclaredEvent": { "kind": "app.publishing-released" } },
-      "condition": "param.release != null", "automation": "publishing__fan_out_channels" }
+      "condition": "param.hop < 4", "automation": "publishing__fan_out_channels" }
   ],
   "automations": [
     { "id": "publishing__run_publish", "label": "Run a publish job when it is created",
@@ -376,13 +376,14 @@
       "run-as": { "roles": ["publishing__publish_operator"] }, "run-key": "param.release",
       "start": "push",
       "steps": {
-        "push": { "action": { "CallWebhook": { "subscription": "publishing-syndication", "body": { "release": "param.release", "channel": "param.channel" } } }, "next": "pause", "retry": { "attempts": 5 }, "timeout": 30000 },
+        "push": { "action": { "CallWebhook": { "subscription": "8b3e4c5d-5f6a-4b7c-8d9e-2f3a4b5c6d73", "body": { "release": "param.release", "channel": "param.channel" } } }, "next": "pause", "retry": { "attempts": 5 }, "timeout": 30000 },
         "pause": { "action": { "WaitFor": { "duration": 900000 } }, "next": "notify_owner" },
         "notify_owner": { "action": { "SendMail": { "template": "publishing__syndication_mail", "to": "param.owner", "category": "transactional" } }, "next": "done", "timeout": 30000 },
         "done": { "action": "End" } } }
   ],
   "operations": [
     { "id": "publishing__publish_now", "label": "Publish a release now",
+      "conditions": [],
       "inputs": [
         { "name": "channel", "ty": "Str", "required": true, "label": "Channel" },
         { "name": "release", "ty": "Str", "required": true, "label": "Release" } ],

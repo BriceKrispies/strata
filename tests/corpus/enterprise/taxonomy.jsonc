@@ -8,7 +8,7 @@
     "platform": { "min": "0.2" },
     "imports": {
       "spec": "../../../specifications/spec.jsonc",
-      "entities": ["product-module"]
+      "entities": ["product-module", "ui-notice-received", "ui-session-ended", "api-error"]
     }
   },
 
@@ -172,8 +172,8 @@
   ],
 
   "settings": [
-    { "id": "taxonomy__max_tree_depth", "label": "Maximum category depth", "type": "i64", "default": 8, "levels": ["tenant"] },
-    { "id": "taxonomy__default_region", "label": "Default region code", "type": "string", "default": "world", "levels": ["tenant", "team"] }
+    { "id": "taxonomy__max_tree_depth", "label": "Maximum category depth", "type": "i64", "default": {"Int": 8}, "levels": ["tenant"] },
+    { "id": "taxonomy__default_region", "label": "Default region code", "type": "string", "default": {"Str": "world"}, "levels": ["tenant", "team"] }
   ],
 
   "contracts": [
@@ -309,6 +309,7 @@
 
   "operations": [
     { "id": "taxonomy__move_category", "label": "Move a category under a new parent",
+      "conditions": [],
       "inputs": [ { "name": "category", "ty": "Str", "required": true, "label": "The category" },
                   { "name": "parent", "ty": "Str", "required": false, "label": "The new parent" } ],
       "invokers": { "signed-in": true, "roles": ["taxonomy__category_curator"] },
@@ -328,7 +329,7 @@
 
   "triggers": [
     { "id": "taxonomy__on_category_created", "on": { "RecordCreated": { "object": "taxonomy__category" } },
-      "condition": "param.owner != null", "automation": "taxonomy__notify_category_created" }
+      "condition": "param.hop < 4", "automation": "taxonomy__notify_category_created" }
   ],
 
   "automations": [

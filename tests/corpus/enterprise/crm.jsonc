@@ -8,7 +8,7 @@
     "platform": { "min": "0.2" },
     "imports": {
       "spec": "../../../specifications/spec.jsonc",
-      "entities": ["product-module", "consent-record"]
+      "entities": ["product-module", "ui-notice-received", "ui-session-ended", "api-error", "consent-record"]
     }
   },
   "records": [
@@ -383,8 +383,8 @@
         { "name": "disqualify", "from": "working", "to": "disqualified", "guard": "old.status == 'working'", "set": {} } ] }
   ],
   "settings": [
-    { "id": "crm__default_region", "label": "Default region for new records", "type": "string", "default": "emea", "levels": ["tenant", "team"] },
-    { "id": "crm__retention_days", "label": "Default retention for contacts", "type": "i64", "default": 1095, "levels": ["tenant"] }
+    { "id": "crm__default_region", "label": "Default region for new records", "type": "string", "default": {"Str": "emea"}, "levels": ["tenant", "team"] },
+    { "id": "crm__retention_days", "label": "Default retention for contacts", "type": "i64", "default": {"Int": 1095}, "levels": ["tenant"] }
   ],
   "mailTemplates": [
     { "id": "crm__qualified_mail", "subject": "Thank you for your enquiry",

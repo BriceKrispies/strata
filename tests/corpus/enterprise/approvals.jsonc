@@ -8,7 +8,7 @@
     "platform": { "min": "0.2" },
     "imports": {
       "spec": "../../../specifications/spec.jsonc",
-      "entities": ["product-module", "records-read", "workflow-approve", "setting-read", "setting-write-tenant", "self-record-write"]
+      "entities": ["product-module", "ui-notice-received", "ui-session-ended", "api-error", "records-read", "workflow-approve", "setting-read", "setting-write-tenant", "self-record-write"]
     }
   },
   "types": [
@@ -395,7 +395,7 @@
   ],
   "triggers": [
     { "id": "approvals__on_legal_start", "on": { "RecordUpdated": { "object": "approvals__approval_request", "transition": "start_legal" } },
-      "condition": "param.request != null", "automation": "approvals__legal_review" }
+      "condition": "param.hop < 4", "automation": "approvals__legal_review" }
   ],
   "automations": [
     { "id": "approvals__legal_review", "label": "Run the legal stage of an approval request",
@@ -442,7 +442,7 @@
       "body": "[{\"type\":\"paragraph\",\"inlines\":[{\"type\":\"text\",\"text\":\"A stage of your approval request has a decision.\"}]}]" }
   ],
   "settings": [
-    { "id": "approvals__sla_hours", "label": "Approval SLA hours", "type": "i64", "default": 48, "levels": ["tenant", "team"] },
-    { "id": "approvals__escalation_contact_role", "label": "Escalation contact role", "type": "string", "default": "approval_admin", "levels": ["tenant"] }
+    { "id": "approvals__sla_hours", "label": "Approval SLA hours", "type": "i64", "default": {"Int": 48}, "levels": ["tenant", "team"] },
+    { "id": "approvals__escalation_contact_role", "label": "Escalation contact role", "type": "string", "default": {"Str": "approval_admin"}, "levels": ["tenant"] }
   ]
 }

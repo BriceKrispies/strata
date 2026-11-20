@@ -8,7 +8,7 @@
     "platform": { "min": "0.2" },
     "imports": {
       "spec": "../../../specifications/spec.jsonc",
-      "entities": ["product-module", "records-read", "setting-read"]
+      "entities": ["product-module", "ui-notice-received", "ui-session-ended", "api-error", "records-read", "setting-read"]
     }
   },
 
@@ -525,6 +525,7 @@
       "steps": [
         { "CreateRecord": { "id": "new_employee", "object": "people__employee", "fields": { "employee_number": "param.employee_number", "given_name": "param.given_name", "family_name": "param.family_name", "email": "param.email", "phone": "param.phone", "region": "param.region", "start_date": "param.start_date", "status": "'active'" } } } ] },
     { "id": "people__transfer_cost_centre", "label": "Move an employee to another cost centre",
+      "conditions": [],
       "inputs": [
         { "name": "employee_number", "ty": "Str", "required": true, "label": "Employee number" },
         { "name": "cost_centre", "ty": "Int", "required": true, "label": "Cost centre id" } ],
@@ -548,8 +549,8 @@
 
   // Settings: configuration of the module.
   "settings": [
-    { "id": "people__leave_approval_days", "label": "Days to decide a leave request", "type": "i64", "default": 5, "levels": ["tenant"] },
-    { "id": "people__default_region", "label": "Default region for new starters", "type": "string", "default": "emea", "levels": ["tenant", "team"] }
+    { "id": "people__leave_approval_days", "label": "Days to decide a leave request", "type": "i64", "default": {"Int": 5}, "levels": ["tenant"] },
+    { "id": "people__default_region", "label": "Default region for new starters", "type": "string", "default": {"Str": "emea"}, "levels": ["tenant", "team"] }
   ],
 
   // Declared events that other modules may subscribe to.

@@ -8,7 +8,7 @@
     "platform": { "min": "0.2" },
     "imports": {
       "spec": "../../../specifications/spec.jsonc",
-      "entities": ["product-module", "aggregate-read", "records-read", "setting-read"]
+      "entities": ["product-module", "ui-notice-received", "ui-session-ended", "api-error", "aggregate-read", "records-read", "setting-read"]
     }
   },
 
@@ -203,7 +203,7 @@
     { "id": "analytics__executive_board", "route": "/analytics/executive", "title": "Executive dashboards",
       "sections": { "main": { "query": "analytics__published_executive_dashboards", "args": {}, "include": [], "markdown": [], "single": false } } },
     { "id": "analytics__regional_board", "route": "/analytics/regional", "title": "Regional dashboards",
-      "sections": { "main": { "query": "analytics__regional_dashboards", "args": { "region": "'emea'" }, "include": [], "markdown": [], "single": false } } }
+      "sections": { "main": { "query": "analytics__regional_dashboards", "args": { "region": {"Const": {"Str": "emea"}} }, "include": [], "markdown": [], "single": false } } }
   ],
 
   "workflows": [
@@ -386,8 +386,8 @@
   ],
 
   "settings": [
-    { "id": "analytics__refresh_minutes", "label": "Dashboard refresh", "type": "i64", "default": 15, "levels": ["tenant", "team"] },
-    { "id": "analytics__default_time_zone", "label": "Default time zone", "type": "string", "default": "Europe/London", "levels": ["tenant"] }
+    { "id": "analytics__refresh_minutes", "label": "Dashboard refresh", "type": "i64", "default": {"Int": 15}, "levels": ["tenant", "team"] },
+    { "id": "analytics__default_time_zone", "label": "Default time zone", "type": "string", "default": {"Str": "Europe/London"}, "levels": ["tenant"] }
   ],
 
   "mailTemplates": [

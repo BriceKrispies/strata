@@ -101,11 +101,27 @@ From `crates/spec-compiler/src/layers.rs`, as the checker reads them:
   `policy`, `operation`, and `object` names an entity of the same file. The only exceptions are two expression field
   names (`segment` in a fields map), which are not references.
 
+## specc findings
+
+The first specc run refused every file with 342 authoring diagnostics, and nothing was written. They were fixed in
+place, with no entity removed, so the total stays at 1,290:
+
+- `layer.import-missing` (300): every file now imports `ui-notice-received`, `ui-session-ended` and `api-error`, which
+  the live bindings and the contract error types use.
+- `layer.value-invalid` (22): setting defaults are wrapped in the `value` union (`{"Int": n}`, `{"Str": "..."}`,
+  `{"Bool": b}`). Five operations gained the `conditions` list the operation definition requires. Three webhook
+  subscriptions are uuids. The translator policy compared a Ref with a Str, so the assignment object gained a
+  `translator_principal` string field.
+- `layer.outside-catalogue` (12): setting defaults that were bare strings are wrapped in `value` variants. The analytics
+  view argument is `{"Const": {"Str": "emea"}}`, an arg-source variant.
+- `layer.expr-unknown-param` (6) and `layer.expr-type` (1): trigger conditions now read `param.hop < 4`, which every
+  trigger's scope binds. The policy comparison is above.
+
+specc is not run again here. The coordinator re-runs it.
+
 ## Not verified
 
-The corpus has not been run through specc, the kernel, or Exegra. The task that produced it forbids building or running
-programs, so the shapes follow the fixtures and the platform's own entries and are unchecked by the real validator.
-Known points to check first when WG-5292 runs it:
+The shapes beyond specc's first run are unchecked. Known points to check first when WG-5292 runs it:
 
 - Operation input references (`param.<name>`) and the `record.$id` scope in fan-out CreateRecord steps.
 - FanOut steps (`next` key) and the `timeout` on RequestApproval, which has no timed-out branch.

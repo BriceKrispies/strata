@@ -8,7 +8,7 @@
     "platform": { "min": "0.2" },
     "imports": {
       "spec": "../../../specifications/spec.jsonc",
-      "entities": ["product-module", "content-read", "content-write", "content-draft-read"]
+      "entities": ["product-module", "ui-notice-received", "ui-session-ended", "api-error", "content-read", "content-write", "content-draft-read"]
     }
   },
 
@@ -536,7 +536,7 @@
   // Starts the publish automation when an article moves through the publish transition.
   "triggers": [
     { "id": "content__on_publish", "on": { "RecordUpdated": { "object": "content__article", "transition": "publish" } },
-      "condition": "param.owner != null", "automation": "content__notify_publish" }
+      "condition": "param.hop < 4", "automation": "content__notify_publish" }
   ],
 
   // Composite operations: publish and retire an article, each a single UpdateRecord on the article.
@@ -568,8 +568,8 @@
 
   // Tenant settings: the default locale and the default embargo length in minutes.
   "settings": [
-    { "id": "content__default_locale", "label": "Default locale", "type": "string", "default": "en-GB", "levels": ["tenant", "team"] },
-    { "id": "content__embargo_minutes", "label": "Default embargo", "type": "i64", "default": 60, "levels": ["tenant"] }
+    { "id": "content__default_locale", "label": "Default locale", "type": "string", "default": {"Str": "en-GB"}, "levels": ["tenant", "team"] },
+    { "id": "content__embargo_minutes", "label": "Default embargo", "type": "i64", "default": {"Int": 60}, "levels": ["tenant"] }
   ],
 
   // Audience of articles still in draft.

@@ -8,7 +8,7 @@
     "platform": { "min": "0.2" },
     "imports": {
       "spec": "../../../specifications/spec.jsonc",
-      "entities": ["product-module", "segments-define", "segments-read", "messages-send", "automations-define", "automations-read", "consent-record", "workflow-approve", "setting-read", "setting-write-tenant"]
+      "entities": ["product-module", "ui-notice-received", "ui-session-ended", "api-error", "segments-define", "segments-read", "messages-send", "automations-define", "automations-read", "consent-record", "workflow-approve", "setting-read", "setting-write-tenant"]
     }
   },
 
@@ -162,8 +162,8 @@
   ],
 
   "settings": [
-    { "id": "marketing__frequency_cap", "label": "Messages per member per week", "type": "i64", "default": 3, "levels": ["tenant", "team"] },
-    { "id": "marketing__quiet_hours_start", "label": "Quiet hours start", "type": "string", "default": "21:00", "levels": ["tenant"] }
+    { "id": "marketing__frequency_cap", "label": "Messages per member per week", "type": "i64", "default": {"Int": 3}, "levels": ["tenant", "team"] },
+    { "id": "marketing__quiet_hours_start", "label": "Quiet hours start", "type": "string", "default": {"Str": "21:00"}, "levels": ["tenant"] }
   ],
 
   "workflows": [

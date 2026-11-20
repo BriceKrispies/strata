@@ -8,7 +8,7 @@
     "platform": { "min": "0.2" },
     "imports": {
       "spec": "../../../specifications/spec.jsonc",
-      "entities": ["product-module"]
+      "entities": ["product-module", "ui-notice-received", "ui-session-ended", "api-error"]
     }
   },
 
@@ -129,6 +129,7 @@
       "fields": {
         "job": { "id": "job", "label": "Job", "ty": { "Ref": { "target": "localisation__translation_job", "on-delete": "Restrict" } }, "required": true, "unique": false },
         "translator": { "id": "translator", "label": "Translator", "ty": { "Ref": { "target": "localisation__translator", "on-delete": "Restrict" } }, "required": true, "unique": false },
+        "translator_principal": { "id": "translator_principal", "label": "Translator principal", "ty": "Str", "required": true, "unique": false },
         "state": { "id": "state", "label": "State", "ty": "Str", "required": true, "unique": false },
         "rate_unit": { "id": "rate_unit", "label": "Rate unit", "ty": "Str", "required": true, "unique": false } },
       "constraints": {},
@@ -166,7 +167,7 @@
     { "id": "localisation__emea_jobs", "role": "localisation__emea_coordinator", "resource": { "Object": "localisation__translation_job" }, "actions": ["Create", "Read", "Update"], "condition": "record.region == 'emea'" },
     { "id": "localisation__apac_jobs", "role": "localisation__apac_coordinator", "resource": { "Object": "localisation__translation_job" }, "actions": ["Create", "Read", "Update"], "condition": "record.region == 'apac'" },
     { "id": "localisation__americas_jobs", "role": "localisation__americas_coordinator", "resource": { "Object": "localisation__translation_job" }, "actions": ["Create", "Read", "Update"], "condition": "record.region == 'americas'" },
-    { "id": "localisation__translator_own_assignments", "role": "localisation__translator_role", "resource": { "Object": "localisation__translator_assignment" }, "actions": ["Read", "Update"], "condition": "record.translator == principal" },
+    { "id": "localisation__translator_own_assignments", "role": "localisation__translator_role", "resource": { "Object": "localisation__translator_assignment" }, "actions": ["Read", "Update"], "condition": "record.translator_principal == principal" },
     { "id": "localisation__editor_glossary", "role": "localisation__glossary_editor", "resource": { "Object": "localisation__glossary_term" }, "actions": ["Create", "Read", "Update"] },
     { "id": "localisation__manager_translators", "role": "localisation__project_manager", "resource": { "Object": "localisation__translator" }, "actions": ["Create", "Read", "Update", "Delete"] }
   ],
@@ -182,8 +183,8 @@
   ],
 
   "settings": [
-    { "id": "localisation__fallback_locale", "label": "Fallback locale", "type": "string", "default": "en-gb", "levels": ["tenant", "team"] },
-    { "id": "localisation__tm_min_match", "label": "Minimum translation memory match percentage", "type": "i64", "default": 75, "levels": ["tenant"] }
+    { "id": "localisation__fallback_locale", "label": "Fallback locale", "type": "string", "default": {"Str": "en-gb"}, "levels": ["tenant", "team"] },
+    { "id": "localisation__tm_min_match", "label": "Minimum translation memory match percentage", "type": "i64", "default": {"Int": 75}, "levels": ["tenant"] }
   ],
 
   "contracts": [
@@ -335,6 +336,7 @@
 
   "operations": [
     { "id": "localisation__accept_assignment", "label": "Accept a translation assignment",
+      "conditions": [],
       "inputs": [ { "name": "assignment", "ty": "Str", "required": true, "label": "The assignment" } ],
       "invokers": { "signed-in": true, "roles": ["localisation__translator_role"] },
       "subject": { "object": "localisation__translator_assignment", "input": "assignment" },
@@ -344,7 +346,7 @@
 
   "triggers": [
     { "id": "localisation__on_job_delivered", "on": { "RecordUpdated": { "object": "localisation__translation_job", "transition": "deliver" } },
-      "condition": "param.translator != null", "automation": "localisation__notify_delivery" }
+      "condition": "param.hop < 4", "automation": "localisation__notify_delivery" }
   ],
 
   "automations": [

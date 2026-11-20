@@ -8,7 +8,7 @@
     "platform": { "min": "0.2" },
     "imports": {
       "spec": "../../../specifications/spec.jsonc",
-      "entities": ["product-module", "automations-read", "webhook-receive", "webhooks-manage", "ledger-read", "ledger-configure"]
+      "entities": ["product-module", "ui-notice-received", "ui-session-ended", "api-error", "automations-read", "webhook-receive", "webhooks-manage", "ledger-read", "ledger-configure"]
     }
   },
 
@@ -363,8 +363,8 @@
   ],
 
   "settings": [
-    { "id": "automation__sync_batch_size", "label": "Sync batch size", "type": "i64", "default": 50, "levels": ["tenant", "team"] },
-    { "id": "automation__run_retention_days", "label": "Run log retention", "type": "i64", "default": 90, "levels": ["tenant"] }
+    { "id": "automation__sync_batch_size", "label": "Sync batch size", "type": "i64", "default": {"Int": 50}, "levels": ["tenant", "team"] },
+    { "id": "automation__run_retention_days", "label": "Run log retention", "type": "i64", "default": {"Int": 90}, "levels": ["tenant"] }
   ],
 
   "segments": [
@@ -400,7 +400,7 @@
     { "id": "automation__on_connector_event", "on": { "InboundWebhook": { "endpoint": "connector-events" } },
       "automation": "automation__sync_connectors" },
     { "id": "automation__on_rotation", "on": { "RecordUpdated": { "object": "automation__webhook_subscription", "transition": "rotate" } },
-      "condition": "param.owner != null", "automation": "automation__rotation_notice" },
+      "condition": "param.hop < 4", "automation": "automation__rotation_notice" },
     { "id": "automation__on_api_call", "on": { "LedgerPosted": { "unit": "automation__api_calls" } },
       "automation": "automation__budget_watch" },
     { "id": "automation__on_run_finished", "on": { "DeclaredEvent": { "kind": "app.automation-run-finished" } },
@@ -413,7 +413,7 @@
       "start": "fan",
       "steps": {
         "fan": { "action": { "FanOut": { "segment": "automation__active_connectors", "batch": 50, "each": "sync" } }, "next": "fan_done" },
-        "sync": { "action": { "CallWebhook": { "subscription": "connector-sync", "body": { "connector": "record.$id", "requested_at": "now" } } }, "next": "sync_done", "retry": { "attempts": 3 } },
+        "sync": { "action": { "CallWebhook": { "subscription": "6f1c2a9e-3b4d-4e5f-8a9b-0c1d2e3f4a51", "body": { "connector": "record.$id", "requested_at": "now" } } }, "next": "sync_done", "retry": { "attempts": 3 } },
         "fan_done": { "action": "End" },
         "sync_done": { "action": "End" } } },
     { "id": "automation__rotation_notice", "label": "Tell the connector admin that a subscription secret was rotated",

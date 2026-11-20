@@ -8,7 +8,7 @@
     "platform": { "min": "0.2" },
     "imports": {
       "spec": "../../../specifications/spec.jsonc",
-      "entities": ["product-module", "records-read", "content-read", "content-write"]
+      "entities": ["product-module", "ui-notice-received", "ui-session-ended", "api-error", "records-read", "content-read", "content-write"]
     }
   },
 
@@ -414,6 +414,7 @@
       "steps": [
         { "UpdateRecord": { "id": "apply", "object": "service__case", "record": "record.$id", "fields": { "status": "param.status", "priority": "param.priority" } } } ] },
     { "id": "service__reassign_case", "label": "Reassign a case to another queue",
+      "conditions": [],
       "inputs": [
         { "name": "case_reference", "ty": "Str", "required": true, "label": "Case reference" },
         { "name": "queue", "ty": "Int", "required": true, "label": "Queue id" } ],
@@ -437,8 +438,8 @@
 
   // Settings: configuration of the module.
   "settings": [
-    { "id": "service__first_response_minutes", "label": "First response target in minutes", "type": "i64", "default": 240, "levels": ["tenant", "team"] },
-    { "id": "service__default_channel", "label": "Default channel for new cases", "type": "string", "default": "email", "levels": ["tenant"] }
+    { "id": "service__first_response_minutes", "label": "First response target in minutes", "type": "i64", "default": {"Int": 240}, "levels": ["tenant", "team"] },
+    { "id": "service__default_channel", "label": "Default channel for new cases", "type": "string", "default": {"Str": "email"}, "levels": ["tenant"] }
   ],
 
   // Declared events that other modules may subscribe to.
