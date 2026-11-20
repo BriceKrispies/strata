@@ -162,6 +162,10 @@ pub(crate) fn rust_files(
     if !errors.is_empty() {
         return Err(errors);
     }
+    let collisions = crate::output::path_collisions(&files);
+    if !collisions.is_empty() {
+        return Err(collisions);
+    }
     files.sort();
     Ok(files)
 }

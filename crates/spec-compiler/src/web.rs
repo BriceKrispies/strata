@@ -109,7 +109,11 @@ pub fn generate(spec_path: &str, text: &str) -> Result<Vec<GeneratedFile>, Vec<D
             ));
             continue;
         };
-        if format!("{}.js", b.id) == RUNTIME_FILE || !used.insert(pascal.clone()) {
+        let file = format!("{}.js", b.id).to_lowercase();
+        if file == RUNTIME_FILE
+            || crate::web_kernel::KERNEL_FILES.contains(&file.as_str())
+            || !used.insert(pascal.clone())
+        {
             diagnostics.push(Diagnostic::new(
                 NAME,
                 &b.id,
@@ -136,6 +140,10 @@ pub fn generate(spec_path: &str, text: &str) -> Result<Vec<GeneratedFile>, Vec<D
         path: RUNTIME_FILE.to_string(),
         contents: format!("{}\n{RUNTIME}", rust_header(&spec.path)),
     });
+    let collisions = crate::output::path_collisions(&files);
+    if !collisions.is_empty() {
+        return Err(collisions);
+    }
     files.sort();
     Ok(files)
 }

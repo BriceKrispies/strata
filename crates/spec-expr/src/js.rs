@@ -139,6 +139,17 @@ enum Pair {
 /// and members in any order, arrays element by element, everything else by `===`.
 const JSON_EQ: &str = "(($a, $b) => { const $eq = (x, y) => x === y || (typeof x === 'object' && typeof y === 'object' && x !== null && y !== null && Array.isArray(x) === Array.isArray(y) && Object.keys(x).length === Object.keys(y).length && Object.keys(x).every((k) => Object.prototype.hasOwnProperty.call(y, k) && $eq(x[k], y[k]))); return $eq($a, $b); })";
 
+/// True when `===` would compare two equal values of this type by reference: a list, a declared
+/// type (a struct is an object), `json`, bytes, or an option of any of them. Rust's `==` compares
+/// all of these by value, so the page compares them structurally too.
+fn needs_structural_eq(t: &Ty) -> bool {
+    match t {
+        Ty::Json | Ty::List(_) | Ty::Named(_) | Ty::Bytes => true,
+        Ty::Option(inner) => needs_structural_eq(inner),
+        _ => false,
+    }
+}
+
 fn is_float(t: &Ty) -> bool {
     matches!(t, Ty::F64)
 }
@@ -538,7 +549,8 @@ impl Cx<'_> {
                 format!("operator \"{}\" needs numbers, got {ty}", op.symbol()),
             ));
         }
-        if matches!(ty, Ty::Json | Ty::List(_) | Ty::Named(_)) {
+        // A comparison with the `null` literal is by `===`: nothing but `null` equals it.
+        if needs_structural_eq(&ty) && l.js != "null" && r.js != "null" {
             let not = if op == BinOp::Ne { "!" } else { "" };
             return Ok(Out::known_at(
                 Ty::Bool,

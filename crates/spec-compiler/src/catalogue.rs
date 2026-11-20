@@ -24,7 +24,8 @@ use std::fmt::Write as _;
 
 use serde_json::{Map, Value};
 
-use crate::codetext::line_text;
+// Everything the catalogue writes from the specification is Markdown-escaped.
+use crate::codetext::markdown_text as line_text;
 use crate::diagnostic::{Diagnostic, SPEC_ENTITY};
 use crate::emit::{GeneratedFile, HEADER_MARKERS};
 use crate::jsonc;
@@ -50,7 +51,7 @@ pub fn generate(spec_path: &str, text: &str) -> Result<CatalogueOutput, Vec<Diag
     let spec_path = spec_path.replace('\\', "/");
     let value = jsonc::parse(text).map_err(|e| {
         vec![Diagnostic::new(
-            SYNTAX,
+            e.code(SYNTAX),
             SPEC_ENTITY,
             format!("the specification is not valid JSONC: {e}"),
         )]

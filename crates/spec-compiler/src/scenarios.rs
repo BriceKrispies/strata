@@ -189,7 +189,7 @@ pub fn generate(
     }
     let mut names = crate::codetext::Claims::new(FILE, &[]);
     for sc in &plan.scenarios {
-        if let Err(clash) = names.claim(&sc.id, &test_name(&sc.id)) {
+        if let Err(clash) = names.claim_unique(&sc.id, &test_name(&sc.id)) {
             d.push(clash);
         }
         d.extend(check_scenario(&plan, sc));
@@ -503,7 +503,7 @@ fn items<'a>(top: &'a Map<String, Value>, key: &str) -> Vec<&'a Map<String, Valu
 fn load(text: &str) -> Result<Plan, Vec<Diagnostic>> {
     let value = jsonc::parse(text).map_err(|e| {
         vec![Diagnostic::new(
-            SYNTAX,
+            e.code(SYNTAX),
             SPEC_ENTITY,
             format!("the specification is not valid JSONC: {e}"),
         )]

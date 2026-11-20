@@ -286,7 +286,7 @@ fn check_product(
         Ok(value) => value,
         Err(e) => {
             out.push(Diagnostic::new(
-                SYNTAX,
+                e.code(SYNTAX),
                 &file,
                 format!("{file} is not valid JSONC: {e}; correct the syntax."),
             ));

@@ -24,6 +24,8 @@ use crate::jsonc;
 pub const SYNTAX: &str = "specc.spec-syntax";
 /// The code of a value with the wrong shape.
 pub const SHAPE: &str = "specc.spec-shape";
+/// Two entities of one access-model section share an id.
+pub const DUPLICATE_ID: &str = "specc.duplicate-id";
 
 /// Loads a specification. `path` is the path to print in headers and diagnostics.
 pub fn load(path: &str, text: &str) -> Result<Spec, Vec<Diagnostic>> {
@@ -39,7 +41,7 @@ pub fn load_with_client_machines(
 ) -> Result<(Spec, Vec<Behavior>), Vec<Diagnostic>> {
     let value = jsonc::parse(text).map_err(|e| {
         vec![Diagnostic::new(
-            SYNTAX,
+            e.code(SYNTAX),
             SPEC_ENTITY,
             format!("the specification is not valid JSONC: {e}"),
         )]
@@ -368,6 +370,25 @@ impl Loader {
             match obj.get("id") {
                 Some(Value::String(id)) => out.push((id.clone(), obj)),
                 _ => self.shape(&fallback, "an entity needs a string \"id\""),
+            }
+        }
+        out
+    }
+
+    /// Like [`Loader::section`], but refuses a second entity with an id the section already
+    /// has, and drops it: a lookup by id would silently take the first.
+    fn unique_section<'a>(&mut self, top: &'a Obj, name: &str) -> Vec<(String, &'a Obj)> {
+        let mut seen = std::collections::BTreeSet::new();
+        let mut out = Vec::new();
+        for (id, obj) in self.section(top, name) {
+            if seen.insert(id.clone()) {
+                out.push((id, obj));
+            } else {
+                self.diagnostics.push(Diagnostic::new(
+                    DUPLICATE_ID,
+                    &id,
+                    format!("Section \"{name}\" has more than one entity with the id \"{id}\"; every id in it must be unique, because a lookup by id would take only the first."),
+                ));
             }
         }
         out
@@ -1057,7 +1078,7 @@ impl Loader {
     /// nothing passes on more than its source holds; only shapes are reported here.
     fn access_model(&mut self, top: &Obj) -> AccessModel {
         let mut out = AccessModel::default();
-        for (id, o) in self.section(top, "capabilities") {
+        for (id, o) in self.unique_section(top, "capabilities") {
             let name = self.opt_str(o, "name", &id);
             let description = self.opt_str(o, "description", &id);
             let core = self.opt_bool(o, "core", &id).unwrap_or(false);
@@ -1068,13 +1089,13 @@ impl Loader {
                 core,
             });
         }
-        for (id, o) in self.section(top, "plans") {
+        for (id, o) in self.unique_section(top, "plans") {
             let capabilities = self
                 .opt_str_list(o, "capabilities", &id)
                 .unwrap_or_default();
             out.plans.push(Plan { id, capabilities });
         }
-        for (id, o) in self.section(top, "roles") {
+        for (id, o) in self.unique_section(top, "roles") {
             let level = match self.opt_str(o, "level", &id).as_deref() {
                 Some("platform") => RoleLevel::Platform,
                 Some("tenant") => RoleLevel::Tenant,
@@ -1100,7 +1121,7 @@ impl Loader {
                 capabilities,
             });
         }
-        for (id, o) in self.section(top, "grants") {
+        for (id, o) in self.unique_section(top, "grants") {
             let issuer = self.opt_str(o, "issuer", &id);
             let grantee = self.opt_str(o, "grantee", &id);
             let capabilities = self
@@ -1115,7 +1136,7 @@ impl Loader {
                 per_tenant,
             });
         }
-        for (id, o) in self.section(top, "tokenScopes") {
+        for (id, o) in self.unique_section(top, "tokenScopes") {
             let name = self.opt_str(o, "name", &id).unwrap_or_else(|| id.clone());
             let capabilities = self
                 .opt_str_list(o, "capabilities", &id)
@@ -1126,7 +1147,7 @@ impl Loader {
                 capabilities,
             });
         }
-        for (id, o) in self.section(top, "delegations") {
+        for (id, o) in self.unique_section(top, "delegations") {
             let from = self.opt_str(o, "from", &id);
             let capabilities = self
                 .opt_str_list(o, "capabilities", &id)
@@ -1137,7 +1158,7 @@ impl Loader {
                 capabilities,
             });
         }
-        for (id, o) in self.section(top, "featureFlags") {
+        for (id, o) in self.unique_section(top, "featureFlags") {
             let gates = self.opt_str_list(o, "gates", &id).unwrap_or_default();
             let default_on = match self.opt_str(o, "default", &id).as_deref() {
                 None | Some("off") => false,

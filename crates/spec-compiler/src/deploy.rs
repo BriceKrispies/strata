@@ -175,7 +175,7 @@ fn string<'a>(obj: &'a Map<String, Value>, key: &str) -> Option<&'a str> {
 pub fn load(text: &str) -> Result<Plan, Vec<Diagnostic>> {
     let value = jsonc::parse(text).map_err(|e| {
         vec![Diagnostic::new(
-            SYNTAX,
+            e.code(SYNTAX),
             SPEC_ENTITY,
             format!("the specification is not valid JSONC: {e}"),
         )]

@@ -193,7 +193,10 @@ fn check(types: &Types, used: &mut BTreeSet<String>, ty: &str, value: &Json) -> 
                     }
                 }
                 if let Some(pattern) = c.get("pattern").and_then(Json::as_str) {
-                    if !Regex::new(pattern).unwrap().is_match(text) {
+                    if !Regex::new(&strata_spec_compiler::rules::anchored(pattern))
+                        .unwrap()
+                        .is_match(text)
+                    {
                         return Err(format!("{ty}: {text:?} does not match {pattern}"));
                     }
                 }
