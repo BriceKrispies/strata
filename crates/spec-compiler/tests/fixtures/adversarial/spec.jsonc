@@ -41,11 +41,11 @@
     { "id": "login-abandoned", "name": "Login abandoned", "delivery": "at-most-once", "payload": [ { "name": "attempts", "type": "u32" } ] }
   ],
   "contracts": [
-    { "id": "class", "name": "Class */ \u2028 \r fn injected() {} // \u202e", "ref": "CT-1", "realisation": "generated", "implementedBy": "gateway", "exposure": "public", "auth": { "scheme": "session", "csrf": true, "origin": true },
+    { "id": "class", "name": "Class */ \u2028 \r fn injected() {} // \u202e", "ref": "CT-1", "realisation": "generated", "implementedBy": "gateway", "exposure": "public", "tenantScope": "request", "auth": { "scheme": "session", "csrf": true, "origin": true },
       "bffRoute": "POST /api/class", "idempotent": true, "timeoutMs": 2000,
       "inputs": [{ "name": "title", "type": "string" }, { "name": "slug", "type": "string" }],
       "outputs": [{ "name": "ok", "type": "bool" }] },
-    { "id": "step-2", "name": "Second step \"quoted\" 'single' \\ backslash \u0001", "ref": "CT-2", "realisation": "generated", "implementedBy": "gateway", "exposure": "public", "auth": { "scheme": "session", "csrf": true, "origin": true },
+    { "id": "step-2", "name": "Second step \"quoted\" 'single' \\ backslash \u0001", "ref": "CT-2", "realisation": "generated", "implementedBy": "gateway", "exposure": "public", "tenantScope": "request", "auth": { "scheme": "session", "csrf": true, "origin": true },
       "bffRoute": "POST /api/two", "idempotent": true, "timeoutMs": 2000,
       "inputs": [{ "name": "value", "type": "string" }],
       "outputs": [] }

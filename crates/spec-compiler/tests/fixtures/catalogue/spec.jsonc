@@ -12,28 +12,28 @@
   ],
   "contracts": [
     {
-      "id": "publish-post", "name": "Publish a post", "implementedBy": "worker", "exposure": "public", "idempotent": true,
+      "id": "publish-post", "name": "Publish a post", "implementedBy": "worker", "exposure": "public", "tenantScope": "request", "idempotent": true,
       "auth": { "scheme": "session", "requires": ["post-write", "post-publish"] },
       "inputs": [{ "name": "post", "type": "post-id" }, { "name": "tags", "type": "list<tag>", "optional": true }],
       "outputs": [{ "name": "state", "type": "post-state" }],
       "errors": [{ "name": "forbidden", "type": "api-error" }, { "name": "not-found", "type": "api-error" }]
     },
     {
-      "id": "read-post", "name": "Read a post", "implementedBy": "gateway", "exposure": "public", "idempotent": true,
+      "id": "read-post", "name": "Read a post", "implementedBy": "gateway", "exposure": "public", "tenantScope": "request", "idempotent": true,
       "auth": { "scheme": "anonymous", "requires": ["post-read"] },
       "inputs": [{ "name": "post", "type": "post-id" }],
       "outputs": [{ "name": "post", "type": "post" }],
       "errors": []
     },
     {
-      "id": "archive-post", "name": "Archive a post", "exposure": "public", "idempotent": false,
+      "id": "archive-post", "name": "Archive a post", "exposure": "public", "tenantScope": "request", "idempotent": false,
       "auth": { "scheme": "service", "requires": [] },
       "inputs": [],
       "outputs": [],
       "errors": [{ "name": "forbidden", "type": "api-error" }]
     },
     {
-      "id": "sweep-posts", "name": "Sweep posts", "implementedBy": "worker", "exposure": "internal", "idempotent": true,
+      "id": "sweep-posts", "name": "Sweep posts", "implementedBy": "worker", "exposure": "internal", "tenantScope": "none", "idempotent": true,
       "auth": { "scheme": "in-process", "requires": [] },
       "inputs": [{ "name": "never-listed", "type": "unlisted" }],
       "outputs": [],
