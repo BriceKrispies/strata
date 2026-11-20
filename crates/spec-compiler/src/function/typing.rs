@@ -51,6 +51,9 @@ pub(crate) enum Ty {
     Result(Box<Ty>, Box<Ty>),
     /// `shared<T>`: `T` to Exegra (its structure is `T`'s), an `Arc<T>` in Rust.
     Shared(Box<Ty>),
+    /// `unit` (Exegra WG-4957): the type with one value, Rust's `()`, written `null` in an
+    /// example. It fits only itself.
+    Unit,
     /// The type of `fail`, which fits anything.
     Never,
     /// The item of `[]` and `{}`, the inner type of `null`, which fits anything.
@@ -120,6 +123,7 @@ impl Ty {
             Ty::Option(of) => format!("option<{}>", of.text()),
             Ty::Map(k, v) => format!("map<{}, {}>", k.text(), v.text()),
             Ty::Result(o, e) => format!("result<{}, {}>", o.text(), e.text()),
+            Ty::Unit => "unit".into(),
             Ty::Never => "never".into(),
             Ty::Unknown => "unknown".into(),
         }
@@ -215,6 +219,7 @@ pub(crate) fn assignable(from: &Ty, to: &Ty) -> bool {
         (Ty::Enum(a), Ty::Enum(b))
         | (Ty::Struct(a), Ty::Struct(b))
         | (Ty::Union(a), Ty::Union(b)) => a == b,
+        (Ty::Unit, Ty::Unit) => true,
         _ => false,
     }
 }
@@ -344,6 +349,10 @@ pub(crate) fn ty_of(spec: &Spec, t: &TypeRef) -> Result<Ty, Refusal> {
         TypeRef::Set(of) => Ty::set(ty_of(spec, of)?),
         TypeRef::Shared(of) => Ty::shared(ty_of(spec, of)?),
         TypeRef::Declared(id) => {
+            // The built-in `unit`, unless a declared type of that name shadows it.
+            if id == "unit" && spec.type_decl(id).is_none() {
+                return Ok(Ty::Unit);
+            }
             if id.starts_with("set<") || id.starts_with("result<") {
                 return Err(unsupported(format!(
                     "the type {id} is not compiled in functions yet"
@@ -851,6 +860,7 @@ impl<'a> Checker<'a> {
             Kind::Str(_) => Ok(Ty::Str),
             Kind::Bool(_) => Ok(Ty::Bool),
             Kind::Null => Ok(Ty::option(Ty::Unknown)),
+            Kind::Unit => Ok(Ty::Unit),
             Kind::Ref(path, res) => {
                 let head = &path[0];
                 if let Some(t) = lookup(scope, head) {

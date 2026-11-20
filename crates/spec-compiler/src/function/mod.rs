@@ -39,6 +39,9 @@
 //!   reference is an error, as before. `print(L, e)` is `ToString::to_string` of `e`: the
 //!   language module implements `Display` for its AST type with the printer of its authoring
 //!   syntax, which is the kernel's `Display` of `Expr` (WG-4966).
+//! - `unit` (Exegra WG-4957) is Rust's `()`: the type of a function that can fail but gives
+//!   nothing returns `Result<(), E>`, `()` is the value, `==` compares it, `{:?}` writes `()`,
+//!   and an example writes it as `null`. A declared type named `unit` shadows it, as in Exegra.
 //! - A function calls itself by structural recursion only ([`recursion`], Exegra WG-4957): every
 //!   call of itself passes, at one union parameter, a strict sub-value of it. It is ordinary
 //!   recursive Rust; Exegra bounds neither depth nor steps, and every such recursion ends on a
@@ -138,7 +141,7 @@
 //!
 //! # Not compiled (refused)
 //!
-//! `bytes`, `uuid` and `json`; the unit value `()`; a call of itself that is not
+//! `bytes`, `uuid` and `json`; a call of itself that is not
 //! structural, and mutual recursion; dividing a timestamp or a duration; `{:?}` of a value
 //! holding a timestamp or a duration; an f64 sort key or
 //! set item; `==` between a set and a list other than `[]`, or a shared and a plain value; an
@@ -900,7 +903,11 @@ fn assemble(
             clippy::redundant_clone,
             clippy::single_match,
             clippy::unnecessary_fold,
-            clippy::float_cmp
+            clippy::float_cmp,
+            clippy::unit_arg,
+            clippy::unit_cmp,
+            clippy::let_unit_value,
+            clippy::unused_unit
         )]
 
         #types_use
@@ -1406,6 +1413,27 @@ mod tests {
             ),
             "{out}"
         );
+    }
+
+    // WG-4966: the built-in unit is Rust's (); an example writes it as null, and a declared type
+    // named unit shadows it.
+    #[test]
+    fn unit_is_rusts_unit_and_an_example_writes_it_as_null() {
+        let text = spec(
+            r#"{ "id": "nothing", "params": [{ "name": "n", "type": "i64" }], "returns": "unit", "body": "()",
+                 "examples": [{ "args": { "n": 1 }, "result": null }] },
+               { "id": "same", "params": [{ "name": "n", "type": "i64" }], "returns": "bool", "body": "call nothing(n) == ()",
+                 "examples": [{ "args": { "n": 1 }, "result": true }] }"#,
+            "",
+        );
+        let out = module(&text);
+        assert!(out.contains("pub fn nothing ("), "{out}");
+        assert!(out.contains("-> ()"), "{out}");
+        assert!(out.contains("fn nothing_example_1"), "{out}");
+        assert!(out.contains("fn same_example_1"), "{out}");
+        // A value other than null is not an example of unit.
+        let wrong = text.replacen(r#""result": null"#, r#""result": 1"#, 1);
+        assert!(!refusals(&wrong).is_empty());
     }
 
     // WG-4966: print(L, e) is the Display the language module implements for its AST type; a

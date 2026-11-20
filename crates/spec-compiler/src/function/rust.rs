@@ -128,7 +128,7 @@ struct Binding {
 /// True when the generated Rust type is `Copy`.
 pub(crate) fn is_copy(t: &Ty) -> bool {
     match t {
-        Ty::Bool | Ty::Int(_) | Ty::Number | Ty::Float | Ty::Wide => true,
+        Ty::Bool | Ty::Int(_) | Ty::Number | Ty::Float | Ty::Wide | Ty::Unit => true,
         // prelude::Timestamp and prelude::DurationMs are Copy.
         Ty::Alias(..) if t.is_prelude_number() => true,
         Ty::Option(of) => is_copy(of),
@@ -183,6 +183,7 @@ pub(crate) fn rust_ty(t: &Ty) -> Result<TokenStream, Refusal> {
         }
         Ty::Float => quote! { f64 },
         Ty::Wide => quote! { i128 },
+        Ty::Unit => quote! { () },
         Ty::Shared(of) => {
             let of = rust_ty(of)?;
             quote! { std::sync::Arc<#of> }
@@ -1070,6 +1071,7 @@ impl<'a> Gen<'a> {
             }
             Kind::Bool(b) => Ok(Code::new(quote! { #b }, Prec::Postfix)),
             Kind::Null => Ok(Code::new(quote! { None }, Prec::Postfix)),
+            Kind::Unit => Ok(Code::new(quote! { () }, Prec::Postfix)),
             Kind::Ref(path, res) => self.reference(path, *res),
             Kind::Field(a, name) => {
                 let c = self.raw(a, None)?;

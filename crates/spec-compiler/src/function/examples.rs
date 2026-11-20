@@ -257,6 +257,11 @@ pub(crate) fn literal(spec: &Spec, t: &Ty, v: &Value) -> Result<TokenStream, Ref
             }
             _ => return Err(not_a(t, v)),
         },
+        // Exegra writes the unit value as null.
+        Ty::Unit => match v {
+            Value::Null => quote! { () },
+            _ => return Err(not_a(t, v)),
+        },
         Ty::Number | Ty::Wide | Ty::Unknown | Ty::Never => {
             return Err(unsupported(
                 "an example value of a type that cannot be told",
@@ -429,6 +434,11 @@ fn order(spec: &Spec, t: &Ty, a: &Value, b: &Value) -> Result<std::cmp::Ordering
             }
             order(spec, if ea { e } else { o }, &x, &y)?
         }
+        Ty::Unit => match (a, b) {
+            (Value::Null, Value::Null) => Ordering::Equal,
+            (Value::Null, _) => return Err(bad(b)),
+            _ => return Err(bad(a)),
+        },
         Ty::Number | Ty::Wide | Ty::Unknown | Ty::Never => {
             return Err(unsupported(
                 "an example value of a type that cannot be told",

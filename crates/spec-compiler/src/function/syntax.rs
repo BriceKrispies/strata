@@ -13,7 +13,7 @@
 //! multiply : unary ( ( '*' | '/' | '%' ) unary )*
 //! unary    : '!' unary | '-' unary | 'try' unary | postfix
 //! postfix  : primary ( '.' name )*
-//! primary  : number | string | 'true' | 'false' | 'null' | '(' expr ')'
+//! primary  : number | string | 'true' | 'false' | 'null' | '(' ')' | '(' expr ')'   () is unit
 //!          | '[' ( expr ( ',' expr )* )? ']' | '{' '}'
 //!          | 'if' expr 'then' expr 'else' expr | 'let' name '=' expr 'in' expr
 //!          | 'match' expr '{' arm ( ',' arm )* ','? '}'
@@ -149,6 +149,8 @@ pub(crate) enum Kind {
     Str(String),
     Bool(bool),
     Null,
+    /// `()`, the unit value.
+    Unit,
     Ref(Vec<String>, Res),
     Un(UnOp, Box<Expr>),
     Bin(BinOp, Box<Expr>, Box<Expr>),
@@ -597,6 +599,10 @@ impl Parser {
             }
             Tok::Op("(") => {
                 self.p += 1;
+                if self.is_op(")") {
+                    self.p += 1;
+                    return Ok(Expr::new(Kind::Unit, pos));
+                }
                 let inner = self.nested(|p| p.expr())?;
                 self.expect_op(")")?;
                 return Ok(inner);
@@ -754,6 +760,7 @@ pub(crate) fn each_child(e: &Expr, f: &mut dyn FnMut(&Expr)) {
         | Kind::Str(_)
         | Kind::Bool(_)
         | Kind::Null
+        | Kind::Unit
         | Kind::Ref(..)
         | Kind::EmptyMap => {}
         Kind::Un(_, a) | Kind::Field(a, _) | Kind::Newtype(_, a) | Kind::Try(a) => f(a),

@@ -53,7 +53,6 @@
     {"id":"decision","name":"Decision","kind":"struct","fields":[{"name":"allowed","type":"bool"},{"name":"checks","type":"list<rule-check>"}]},
     {"id":"auth-state","name":"Authorization state","kind":"struct","fields":[{"name":"granted","type":"option<rule-check>"},{"name":"checks","type":"list<rule-check>"}]},
     {"id":"domain-error","name":"Domain error","kind":"union","variants":[{"name":"VersionConflict","fields":[{"name":"message","type":"string"}]}]},
-    {"id":"unit","name":"Unit","kind":"union","variants":[{"name":"Unit"}]},
     {"id":"grant","name":"Grant","kind":"union","description":"strata_kernel::Grant: Object(ObjectTypeId, ObjectAction) is a tuple variant.","variants":[{"name":"Capability","newtype":true,"fields":[{"name":"name","type":"string"}]},{"name":"Object","tuple":true,"fields":[{"name":"object","type":"string"},{"name":"action","type":"action"}]}]},
     {"id": "rec", "name": "Rec", "kind": "struct", "fields": [{"name": "id", "type": "u64"}, {"name": "name", "type": "string"}], "description": "A record (WG-4966)."},
     {"id": "store", "name": "Store", "kind": "struct", "fields": [{"name": "rows", "type": "map<u64, shared<rec>>"}, {"name": "top", "type": "shared<rec>"}], "description": "A store of shared records, as the kernel holds tenant state (WG-4966): shared<T> is an Arc<T>."},
@@ -218,12 +217,12 @@
       "params": [{"name":"version","type":"u64"},{"name":"expected","type":"option<u64>"}],
       "returns": "unit",
       "errors": "domain-error",
-      "body": "match expected { Some(v) => if v != version then fail(domain-error.VersionConflict{message: format(\"record is at version {}, expected {}\", version, v)}) else unit.Unit, None => unit.Unit }",
+      "body": "match expected { Some(v) => if v != version then fail(domain-error.VersionConflict{message: format(\"record is at version {}, expected {}\", version, v)}) else (), None => () }",
       "examples": [
         {"description":"behaviour.rs a_stale_expected_version_is_a_conflict","args":{"version":2,"expected":1},"error":{"VersionConflict":{"message":"record is at version 2, expected 1"}}},
         {"description":"behaviour.rs every_rejection_lists_at_least_one_failed_check, stale version","args":{"version":1,"expected":7},"error":{"VersionConflict":{"message":"record is at version 1, expected 7"}}},
-        {"args":{"version":2,"expected":2},"result":"Unit"},
-        {"args":{"version":2,"expected":null},"result":"Unit"}
+        {"description":"The built-in unit (WG-4966): () is the value, null in an example.","args":{"version":2,"expected":2},"result":null},
+        {"args":{"version":2,"expected":null},"result":null}
       ]
     },
     {
