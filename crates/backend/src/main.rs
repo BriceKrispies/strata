@@ -50,7 +50,7 @@ use std::sync::Arc;
 use strata_backend::app::{Config, FactorPolicy, SealKey};
 use strata_backend::limits::Limits;
 use strata_backend::mail::{DevSink, Mailer, Smtp};
-use strata_backend::signin::oidc::Federation;
+use strata_backend::signin::oidc::{Federation, Http};
 use strata_kernel::{TenantId, Timestamp};
 use strata_protocol::log::now_ms;
 use strata_storage_api::memory::MemoryStore;
@@ -105,14 +105,17 @@ fn tenants_dir(dev: bool) -> Result<PathBuf, String> {
     Ok(dir)
 }
 
-/// The tenants' identity providers, from the platform configuration file when one is named.
-fn federation() -> Result<Federation, String> {
+/// The tenants' identity providers, from the platform configuration file when one is named. They
+/// are fetched from through the outbound gate, with the development exception only in development
+/// (FED-261, FED-2644).
+fn federation(dev: bool) -> Result<Federation, String> {
     let path = var("STRATA_OIDC_CONFIG", "");
     let federation = if path.is_empty() {
         Federation::none()
     } else {
         Federation::from_file(&PathBuf::from(path))?
-    };
+    }
+    .with_fetch(Arc::new(Http::new(dev)));
     let saml = var("STRATA_SAML_CONFIG", "");
     if saml.is_empty() {
         return Ok(federation);
@@ -289,7 +292,7 @@ fn start() -> Result<(Config, Arc<dyn Store>), String> {
         passkey_challenge_ttl_ms: number("STRATA_PASSKEY_CHALLENGE_TTL_MS", 300_000)?,
         link_ttl_ms: number("STRATA_LINK_TTL_MS", 15 * 60_000)?,
         mail: mailer(dev)?,
-        federation: Arc::new(federation()?),
+        federation: Arc::new(federation(dev)?),
         factors: policy,
         limits: limits()?,
     };

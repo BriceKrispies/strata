@@ -393,7 +393,7 @@ async fn guard_request(bff: &Bff, visit: &Visit, headers: &HeaderMap) -> Result<
 }
 
 /// Require a state-changing request to come from our own pages with the session's CSRF token.
-async fn guard_write(
+pub(crate) async fn guard_write(
     bff: &Bff,
     visit: &Visit,
     headers: &HeaderMap,
@@ -2232,7 +2232,7 @@ async fn api_not_found(headers: HeaderMap) -> Failure {
 }
 
 /// A JSON answer that no cache keeps.
-fn uncached(body: Json_) -> Response {
+pub(crate) fn uncached(body: Json_) -> Response {
     let mut response = Json(body).into_response();
     response
         .headers_mut()
@@ -2791,6 +2791,23 @@ pub fn router(bff: Shared) -> Router {
         .route("/automation/commands/:action", post(automation_command))
         .route("/products", get(products_list))
         .route("/products/:action", post(products_write))
+        .route("/webhooks/deliveries", get(crate::webhooks::deliveries))
+        .route(
+            "/webhooks/endpoints",
+            post(crate::webhooks::endpoint_create),
+        )
+        .route(
+            "/webhooks/endpoints/rotate",
+            post(crate::webhooks::endpoint_rotate),
+        )
+        .route(
+            "/webhooks/subscriptions",
+            post(crate::webhooks::subscription_create),
+        )
+        .route(
+            "/webhooks/subscriptions/rotate",
+            post(crate::webhooks::subscription_rotate),
+        )
         .fallback(api_not_found);
     Router::new()
         .nest("/api", api)
@@ -2800,6 +2817,10 @@ pub fn router(bff: Shared) -> Router {
         .route("/federation/saml/metadata/:provider", get(saml_metadata))
         .route("/token", post(oauth_token))
         .route("/introspect", post(oauth_introspect))
+        .route(
+            "/webhooks/inbound/:endpoint",
+            post(crate::webhooks::inbound),
+        )
         .route("/keys", get(signing_keys))
         .route("/.well-known/jwks.json", get(signing_keys))
         .route("/scim/v2/*rest", any(scim))

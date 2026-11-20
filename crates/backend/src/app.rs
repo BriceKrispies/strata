@@ -291,6 +291,8 @@ pub struct App {
     pub identity_outage: AtomicBool,
     /// The aggregate results kept for an audience class (D-5064, D-5065).
     pub aggregate_copies: crate::aggregates::Copies,
+    /// The outbound gate, set on first use or by a test (`crate::outbound::gate`).
+    pub outbound: std::sync::OnceLock<Arc<crate::outbound::Gate>>,
 }
 
 pub type Shared = Arc<App>;
@@ -311,6 +313,7 @@ impl App {
             clock_skew_ms: AtomicI64::new(0),
             identity_outage: AtomicBool::new(false),
             aggregate_copies: Default::default(),
+            outbound: std::sync::OnceLock::new(),
         })
     }
 

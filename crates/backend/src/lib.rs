@@ -19,6 +19,7 @@ pub mod limits;
 pub mod mail;
 pub mod operations;
 pub mod ops;
+pub mod outbound;
 pub mod outbox;
 pub mod product_segments;
 pub mod products;

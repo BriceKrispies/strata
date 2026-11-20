@@ -198,6 +198,21 @@ pub enum JobWork {
         /// The position in the run of the completed step it undoes.
         of_sequence: u64,
     },
+    /// Make one attempt of an outbound webhook delivery through the outbound gate (WFL-010,
+    /// WFL-250, INT-152): the delivery's log entry names it, the body is the JSON text the
+    /// `call-webhook` step built, and the attempts are the job's.
+    Deliver {
+        subscription: String,
+        delivery: String,
+        body: String,
+        /// The automation, run and step that queued it, for an exception record.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        automation: Option<WorkflowId>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        run: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        step: Option<StepName>,
+    },
 }
 
 /// A job to create: its key, what it does, when it is due and how it is retried.
