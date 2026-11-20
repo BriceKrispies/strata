@@ -12,8 +12,9 @@ use strata_kernel::ext::*;
 use strata_kernel::refs_in;
 use strata_kernel::types::{AggregateId, AggregateRequest, AggregateResult};
 use strata_kernel::{
-    ArgSource, FieldId, ObjectTypeId, PageCursor, ReadRequest, Record, RecordId, SchemaVersion,
-    StateRevision, TenantSchema, Value, ViewDef, ViewId, ViewSection,
+    ArgSource, FieldId, ObjectTypeId, PageCursor, Principal, ReadRequest, Record, RecordId,
+    SchemaVersion, SettingId, StateRevision, TenantSchema, TenantState, Value, ViewDef, ViewId,
+    ViewSection,
 };
 
 /// Find the view whose route pattern matches a path, with the values of its `:name` segments.
@@ -101,12 +102,53 @@ pub fn section_order(view: &ViewDef) -> Vec<&String> {
 }
 
 /// The read request for one section, given the route and request parameters and the single rows
-/// of the sections already evaluated.
+/// of the sections already evaluated. An argument that comes from a setting is null here: see
+/// [`section_request_with`].
 pub fn section_request(
     section: &ViewSection,
     route: &BTreeMap<String, String>,
     request: &BTreeMap<String, String>,
     done: &BTreeMap<String, Option<Arc<Record>>>,
+) -> ReadRequest {
+    section_request_with(section, route, request, done, &BTreeMap::new())
+}
+
+/// The settings a view reads: the setting of each section argument that comes from one (SET-1540).
+pub fn view_settings(view: &ViewDef) -> BTreeSet<SettingId> {
+    view.sections
+        .values()
+        .flat_map(|section| section.args.values())
+        .filter_map(|source| match source {
+            ArgSource::Setting(setting) => Some(setting.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The value of each setting a view reads, resolved for the reader (SET-1540): what an argument
+/// that comes from a setting is given. A setting the tenant does not define resolves to nothing,
+/// and its argument is null. Pure: the same tenant, reader and view give the same values.
+pub fn resolved_settings(
+    tenant: &TenantState,
+    principal: &Principal,
+    view: &ViewDef,
+) -> BTreeMap<SettingId, Value> {
+    view_settings(view)
+        .into_iter()
+        .filter_map(|setting| {
+            let found = strata_kernel::settings::resolve(tenant, principal, &setting).ok()?;
+            Some((setting, found.value))
+        })
+        .collect()
+}
+
+/// [`section_request`] with the settings the reader resolves, as [`resolved_settings`] gives them.
+pub fn section_request_with(
+    section: &ViewSection,
+    route: &BTreeMap<String, String>,
+    request: &BTreeMap<String, String>,
+    done: &BTreeMap<String, Option<Arc<Record>>>,
+    settings: &BTreeMap<SettingId, Value>,
 ) -> ReadRequest {
     let text = |value: Option<&String>| value.map_or(Value::Null, |s| Value::Str(s.clone()));
     let params = section
@@ -117,6 +159,9 @@ pub fn section_request(
                 ArgSource::Route(key) => text(route.get(key)),
                 ArgSource::Request(key) => text(request.get(key)),
                 ArgSource::Const(value) => value.clone(),
+                ArgSource::Setting(setting) => {
+                    settings.get(setting).cloned().unwrap_or(Value::Null)
+                }
                 ArgSource::Section {
                     section,
                     attribute: name,
@@ -228,7 +273,19 @@ pub fn aggregate_request(
     request: &BTreeMap<String, String>,
     done: &BTreeMap<String, Option<Arc<Record>>>,
 ) -> AggregateRequest {
-    let params = match section_request(section, route, request, done) {
+    aggregate_request_with(section, aggregate, route, request, done, &BTreeMap::new())
+}
+
+/// [`aggregate_request`] with the settings the reader resolves ([`resolved_settings`]).
+pub fn aggregate_request_with(
+    section: &ViewSection,
+    aggregate: &AggregateId,
+    route: &BTreeMap<String, String>,
+    request: &BTreeMap<String, String>,
+    done: &BTreeMap<String, Option<Arc<Record>>>,
+    settings: &BTreeMap<SettingId, Value>,
+) -> AggregateRequest {
+    let params = match section_request_with(section, route, request, done, settings) {
         ReadRequest::Named { params, .. } => params,
         ReadRequest::Records { .. } => BTreeMap::new(),
     };
