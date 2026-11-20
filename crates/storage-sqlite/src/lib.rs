@@ -58,6 +58,9 @@ use strata_storage_api::jobs::{
     self, ExceptionKind, ExceptionRecord, Job, JobChange, JobReport, Lease, NewJob, Reported,
     RunRecord, RunState, Settled, StepRecord, WorkerWrites,
 };
+use strata_storage_api::schedules::{
+    self, AutomationPurged, AutomationRetention, Schedule, ScheduleSet,
+};
 use strata_storage_api::segments::{write_conflict, SegmentCommit};
 use strata_storage_api::{
     check_event_sequence, field_matches, throttle_refund, throttle_step, Account, AuditEntry,
@@ -65,7 +68,7 @@ use strata_storage_api::{
     OutboxEntry, OutboxFault, PasskeyCeremony, PasskeyChallenge, PasskeyRecord, PendingSignIn,
     PrincipalRemoval, Receipt, RecoveryRequest, SamlRequest, SessionRecord, SignInLink,
     SnapshotInfo, StorageMigration, Store, StoreError, StoreResult, TenantSummary, ThrottleRow,
-    ThrottleRule, ThrottleSettle, ThrottleVerdict, TotpRecord, IDEMPOTENCY_RETENTION_MS,
+    ThrottleRule, ThrottleSettle, ThrottleVerdict, TotpRecord,
 };
 
 mod index_page;
@@ -527,7 +530,33 @@ const TENANT_MIGRATIONS: &[Migration] = &[
         name: "order keys of the record index",
         sql: index_page::ORDER_KEYS_SQL,
     },
+    SCHEDULES_RUN_KEYS_RETENTION,
 ];
+
+/// The step after the last numbered one (WG-5155, WG-5157, WG-5164): the schedules of the worker
+/// (rec-schedule), the run keys of its automations (rec-automation-run-key), and the retention
+/// of an idempotency entry as a property of the entry (`expires_at`: the time of its recording and
+/// the retention its request stated). The rows that exist get the twenty-four hours they had.
+/// The coordinator numbers this step.
+const SCHEDULES_RUN_KEYS_RETENTION: Migration = Migration {
+    version: 17,
+    name: "schedules, run keys and per-entry idempotency retention",
+    sql: "
+    ALTER TABLE idempotency ADD COLUMN expires_at INTEGER;
+    UPDATE idempotency SET expires_at = recorded_at + 86400000;
+    CREATE INDEX idempotency_expires ON idempotency(expires_at);
+    CREATE TABLE schedules (
+        id   TEXT PRIMARY KEY,
+        data TEXT NOT NULL
+    );
+    CREATE TABLE automation_run_keys (
+        automation TEXT NOT NULL,
+        key        TEXT NOT NULL,
+        run        TEXT NOT NULL,
+        PRIMARY KEY (automation, key)
+    );
+    ",
+};
 
 /// The steps of a tenant file's layout, for tests that build a file at an older level.
 #[doc(hidden)]
@@ -1249,6 +1278,67 @@ fn write_automation(
     }
     insert_exceptions(tx, &writes.exceptions)?;
     insert_jobs(tx, tenant, &writes.jobs, now)?;
+    for claim in &writes.run_keys {
+        tx.execute(
+            "INSERT OR IGNORE INTO automation_run_keys (automation, key, run) VALUES (?1, ?2, ?3)",
+            params![claim.automation.as_str(), claim.key, claim.run],
+        )
+        .map_err(db)?;
+    }
+    for automation in &writes.run_keys_released {
+        tx.execute(
+            "DELETE FROM automation_run_keys WHERE automation = ?1",
+            params![automation.as_str()],
+        )
+        .map_err(db)?;
+    }
+    if let Some(advance) = &writes.schedule_advance {
+        if let Some(held) = schedule_by_id(tx, &advance.schedule)? {
+            let (next, create) = schedules::apply_completion(&held, advance);
+            put_schedule(tx, &next)?;
+            if let Some(job) = create {
+                insert_jobs(tx, tenant, std::slice::from_ref(&job), now)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The earliest time a job that `writes` creates is due, the next job of a schedule included.
+fn earliest_due(writes: &WorkerWrites) -> Option<i64> {
+    writes
+        .jobs
+        .iter()
+        .map(|job| job.due_at.0)
+        .chain(
+            writes
+                .schedule_advance
+                .iter()
+                .filter_map(|advance| advance.next_due.map(|due| due.0)),
+        )
+        .min()
+}
+
+/// One schedule of the file.
+fn schedule_by_id(tx: &Connection, id: &str) -> StoreResult<Option<Schedule>> {
+    let data: Option<String> = tx
+        .query_row(
+            "SELECT data FROM schedules WHERE id = ?1",
+            params![id],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(db)?;
+    data.map(|data| decode(&data, "schedule")).transpose()
+}
+
+/// Write a schedule, replacing the one of its id.
+fn put_schedule(tx: &Connection, schedule: &Schedule) -> StoreResult<()> {
+    tx.execute(
+        "INSERT OR REPLACE INTO schedules (id, data) VALUES (?1, ?2)",
+        params![schedule.id, encode(schedule)],
+    )
+    .map_err(db)?;
     Ok(())
 }
 
@@ -1995,17 +2085,17 @@ impl SqliteStore {
             params![commit.journal.revision.0 as i64, encode(&commit.journal)],
         )
         .map_err(db)?;
-        // A key is kept for its retention, counted from the commit that recorded it; the rows
-        // past it go in the same transaction as the next commit.
+        // A key is kept for the retention of its entry, counted from the commit that recorded it
+        // (`expires_at`); the rows past it go in the same transaction as the next commit.
         tx.execute(
-            "DELETE FROM idempotency WHERE recorded_at < ?1",
-            params![commit.journal.context.now.0 - IDEMPOTENCY_RETENTION_MS],
+            "DELETE FROM idempotency WHERE expires_at < ?1",
+            params![commit.journal.context.now.0],
         )
         .map_err(db)?;
         if let Some(entry) = &commit.idempotency {
             tx.execute(
-                "INSERT INTO idempotency (principal, key, request_hash, recorded_at, revision, last_position, result)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                "INSERT INTO idempotency (principal, key, request_hash, recorded_at, revision, last_position, result, expires_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
                 params![
                     entry.principal,
                     entry.key,
@@ -2013,7 +2103,8 @@ impl SqliteStore {
                     entry.recorded_at.0,
                     delta.new_revision.0 as i64,
                     last_position.map(|p| p as i64),
-                    encode(&entry.result)
+                    encode(&entry.result),
+                    entry.recorded_at.0.saturating_add(entry.retention_ms)
                 ],
             )
             .map_err(db)?;
@@ -2865,8 +2956,8 @@ impl Store for SqliteStore {
         let row = conn
             .query_row(
                 "SELECT request_hash, revision, last_position, result FROM idempotency
-                 WHERE principal = ?1 AND key = ?2 AND recorded_at >= ?3",
-                params![principal, key, now.0 - IDEMPOTENCY_RETENTION_MS],
+                 WHERE principal = ?1 AND key = ?2 AND expires_at >= ?3",
+                params![principal, key, now.0],
                 |row| {
                     Ok((
                         row.get::<_, String>(0)?,
@@ -4540,7 +4631,7 @@ impl Store for SqliteStore {
         now: Timestamp,
     ) -> StoreResult<Reported> {
         check_jobs(&writes.jobs)?;
-        let earliest = writes.jobs.iter().map(|job| job.due_at.0).min();
+        let earliest = earliest_due(writes);
         Ok(self
             .on_jobs(tenant, earliest, |tx| {
                 let Some(job) = job_by_id(tx, id)? else {
@@ -4615,7 +4706,7 @@ impl Store for SqliteStore {
     ) -> StoreResult<()> {
         check_jobs(&writes.jobs)?;
         self.existing(tenant)?;
-        let earliest = writes.jobs.iter().map(|job| job.due_at.0).min();
+        let earliest = earliest_due(writes);
         self.on_jobs(tenant, earliest, |tx| {
             write_automation(tx, tenant, writes, now)
         })?
@@ -4751,6 +4842,155 @@ impl Store for SqliteStore {
                 Ok(Settled::Done { job: released })
             })?
             .unwrap_or(Settled::NotFound))
+    }
+
+    fn schedule_set(
+        &self,
+        tenant: &TenantId,
+        set: &ScheduleSet,
+        now: Timestamp,
+    ) -> StoreResult<Schedule> {
+        self.existing(tenant)?;
+        self.on_jobs(tenant, set.due.map(|due| due.0), |tx| {
+            let held = schedule_by_id(tx, &set.id)?;
+            let outcome = schedules::apply_set(held.as_ref(), set, now);
+            if let Some(problem) = outcome.create.as_ref().and_then(jobs::job_problem) {
+                return Err(StoreError::Invalid(problem));
+            }
+            if outcome.replace_open {
+                let sql = format!(
+                    "SELECT seq, data FROM jobs WHERE {OPEN_JOB}
+                     AND json_extract(data, '$.work.\"schedule-due\".schedule') = ?1"
+                );
+                for job in jobs_of(tx, &sql, &[&set.id])? {
+                    if let JobChange::Changed(next) =
+                        jobs::apply_cancel(&job, "the rule of the schedule was changed", now)
+                    {
+                        put_job(tx, &next)?;
+                    }
+                }
+            }
+            put_schedule(tx, &outcome.schedule)?;
+            if let Some(job) = &outcome.create {
+                insert_jobs(tx, tenant, std::slice::from_ref(job), now)?;
+            }
+            Ok(outcome.schedule)
+        })?
+        .ok_or_else(|| StoreError::NotFound(format!("tenant {tenant}")))
+    }
+
+    fn schedule(&self, tenant: &TenantId, id: &str) -> StoreResult<Option<Schedule>> {
+        Ok(self
+            .on_tenant(tenant, |conn| schedule_by_id(conn, id))?
+            .flatten())
+    }
+
+    fn schedules(&self, tenant: &TenantId) -> StoreResult<Vec<Schedule>> {
+        Ok(self
+            .on_tenant(tenant, |conn| {
+                select_strings(conn, "SELECT data FROM schedules ORDER BY id", &[])?
+                    .iter()
+                    .map(|data| decode(data, "schedule"))
+                    .collect()
+            })?
+            .unwrap_or_default())
+    }
+
+    fn run_key_holder(
+        &self,
+        tenant: &TenantId,
+        automation: &WorkflowId,
+        key: &str,
+    ) -> StoreResult<Option<String>> {
+        let automation = automation.as_str();
+        Ok(self
+            .on_tenant(tenant, |conn| {
+                conn.query_row(
+                    "SELECT run FROM automation_run_keys WHERE automation = ?1 AND key = ?2",
+                    params![automation, key],
+                    |r| r.get::<_, String>(0),
+                )
+                .optional()
+                .map_err(db)
+            })?
+            .flatten())
+    }
+
+    fn open_run_key_starts(
+        &self,
+        tenant: &TenantId,
+        automation: &WorkflowId,
+        key: &str,
+    ) -> StoreResult<Vec<Job>> {
+        let automation = automation.as_str();
+        let sql = format!(
+            "SELECT seq, data FROM jobs WHERE {OPEN_JOB}
+             AND json_extract(data, '$.work.\"start-run\".run_key') = ?1
+             AND json_extract(data, '$.work.\"start-run\".automation') = ?2"
+        );
+        Ok(self
+            .on_tenant(tenant, |conn| jobs_of(conn, &sql, &[&key, &automation]))?
+            .unwrap_or_default())
+    }
+
+    fn purge_automation(
+        &self,
+        now: Timestamp,
+        retention: &AutomationRetention,
+    ) -> StoreResult<AutomationPurged> {
+        let jobs_before = now.0.saturating_sub(retention.jobs_ms);
+        let runs_before = now.0.saturating_sub(retention.runs_ms);
+        let exceptions_before = now.0.saturating_sub(retention.exceptions_ms);
+        let mut total = AutomationPurged::default();
+        for tenant in self.directory()? {
+            let Some(file) = self.tenant_db(&tenant)? else {
+                continue;
+            };
+            let ended_runs = "state IN ('completed', 'failed', 'cancelled')
+                 AND json_extract(data, '$.ended_at') <= ?1";
+            let done = file.write(dbe, |tx| {
+                let steps = tx
+                    .execute(
+                        &format!(
+                            "DELETE FROM automation_steps WHERE run IN
+                             (SELECT run FROM automation_runs WHERE {ended_runs})"
+                        ),
+                        params![runs_before],
+                    )
+                    .map_err(db)? as u64;
+                let runs = tx
+                    .execute(
+                        &format!("DELETE FROM automation_runs WHERE {ended_runs}"),
+                        params![runs_before],
+                    )
+                    .map_err(db)? as u64;
+                let jobs = tx
+                    .execute(
+                        "DELETE FROM jobs WHERE state IN ('completed', 'failed', 'cancelled')
+                         AND json_extract(data, '$.ended_at') <= ?1",
+                        params![jobs_before],
+                    )
+                    .map_err(db)? as u64;
+                let exceptions = tx
+                    .execute(
+                        "DELETE FROM automation_exceptions
+                         WHERE json_extract(data, '$.at') <= ?1 AND (kind IN ('declined', 'held') OR settled = 1)",
+                        params![exceptions_before],
+                    )
+                    .map_err(db)? as u64;
+                Ok(AutomationPurged {
+                    jobs,
+                    runs,
+                    steps,
+                    exceptions,
+                })
+            })?;
+            total.jobs += done.jobs;
+            total.runs += done.runs;
+            total.steps += done.steps;
+            total.exceptions += done.exceptions;
+        }
+        Ok(total)
     }
 
     fn begin_provisioning(&self, tenant: &TenantId) -> StoreResult<()> {

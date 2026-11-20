@@ -44,6 +44,16 @@ fn memory_store_keeps_jobs() {
     conformance::jobs_conform(&MemoryStore::new());
 }
 
+/// Schedules, run keys, the retention of idempotency entries and the purge of the worker's
+/// records.
+#[test]
+fn memory_store_keeps_schedules_run_keys_retention_and_purges() {
+    conformance::schedules_conform(&MemoryStore::new());
+    conformance::run_keys_conform(&MemoryStore::new());
+    conformance::idempotency_retention_is_a_property_of_the_entry(&MemoryStore::new());
+    conformance::automation_purge_conforms(&MemoryStore::new());
+}
+
 /// The security audit trail is kept per tenant.
 #[test]
 fn memory_store_keeps_the_audit_trail() {

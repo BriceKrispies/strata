@@ -161,6 +161,15 @@ pub enum JobWork {
         /// The position of the step in its run, from one.
         sequence: u64,
     },
+    /// A recurring schedule falls due (SCH-003, D-6531): the trigger events of the schedule start
+    /// their runs at hop zero, and the next job of the schedule is created in the transaction
+    /// that completes this one. The key of the job is [`crate::schedules::job_key`].
+    ScheduleDue {
+        /// The schedule, by its identifier (a UUID in its text form).
+        schedule: String,
+        /// The occurrence this job is for: the due time it was created with.
+        due: Timestamp,
+    },
 }
 
 /// A job to create: its key, what it does, when it is due and how it is retried.
@@ -230,6 +239,11 @@ pub enum JobReport {
     Failed {
         error: String,
         retry: bool,
+    },
+    /// The attempt could not be made yet and is not a failure: the job waits until `until` and
+    /// the attempt is not counted (SCH-1534: a run that must wait for an earlier run of its key).
+    Deferred {
+        until: Timestamp,
     },
 }
 
@@ -448,6 +462,27 @@ pub struct WorkerWrites {
     pub exceptions: Vec<ExceptionRecord>,
     #[serde(default)]
     pub jobs: Vec<NewJob>,
+    /// The run keys the writes claim for their runs (D-6534). A key held already is left to the
+    /// run that holds it.
+    #[serde(default)]
+    pub run_keys: Vec<RunKeyClaim>,
+    /// The automations whose run keys are released, because the automation was removed (D-6539).
+    #[serde(default)]
+    pub run_keys_released: Vec<WorkflowId>,
+    /// The completion of a schedule's job: the next job of the schedule, when the schedule is not
+    /// paused, is created in the same transaction (SCH-003, SCH-005).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schedule_advance: Option<crate::schedules::ScheduleAdvance>,
+}
+
+/// The claim of a run key by the run that started for it (rec-automation-run-key, D-6534).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RunKeyClaim {
+    pub automation: WorkflowId,
+    /// The hash of the key the automation's expression gave.
+    pub key: String,
+    /// The run that started for the key.
+    pub run: String,
 }
 
 /// What settling an exception did (contract settle-automation-exception).
@@ -578,7 +613,7 @@ pub fn apply_lease(job: &Job, worker: &str, now: Timestamp) -> Lease {
 /// or one on the last attempt of its policy.
 pub fn report_fails_job(job: &Job, report: &JobReport) -> bool {
     match report {
-        JobReport::Succeeded => false,
+        JobReport::Succeeded | JobReport::Deferred { .. } => false,
         JobReport::Failed { retry, .. } => !retry || job.attempt >= job.policy.attempts,
     }
 }
@@ -614,6 +649,11 @@ pub fn apply_report(
     let mut next = job.clone();
     next.worker = None;
     match report {
+        JobReport::Deferred { until } => {
+            next.state = JobState::Waiting;
+            next.due_at = (*until).max(now);
+            next.attempt = job.attempt.saturating_sub(1);
+        }
         JobReport::Succeeded => {
             next.state = JobState::Completed;
             next.ended_at = Some(now);
@@ -671,6 +711,43 @@ pub fn apply_retry(job: &Job, now: Timestamp) -> JobChange {
     JobChange::Changed(next)
 }
 
+/// Whether an ended job is past its retention at `now`: thirty days after its outcome (rec-job).
+pub fn job_expired(
+    job: &Job,
+    now: Timestamp,
+    retention: &crate::schedules::AutomationRetention,
+) -> bool {
+    job.state.ended()
+        && job
+            .ended_at
+            .is_some_and(|ended| ended.0 <= now.0.saturating_sub(retention.jobs_ms))
+}
+
+/// Whether an ended run is past its retention at `now`: ninety days after it ended
+/// (rec-workflow-run); its steps go with it.
+pub fn run_expired(
+    run: &RunRecord,
+    now: Timestamp,
+    retention: &crate::schedules::AutomationRetention,
+) -> bool {
+    run.state.ended()
+        && run
+            .ended_at
+            .is_some_and(|ended| ended.0 <= now.0.saturating_sub(retention.runs_ms))
+}
+
+/// Whether an exception record is past its retention at `now`: a declined or held record
+/// ninety days after it was written, a parked or dead-lettered one only once the tenant owner has
+/// settled it and ninety days have passed; an unsettled one never (OPS-348).
+pub fn exception_expired(
+    record: &ExceptionRecord,
+    now: Timestamp,
+    retention: &crate::schedules::AutomationRetention,
+) -> bool {
+    let kept_for_good = record.kind.settled_by_owner() && !record.settled;
+    !kept_for_good && record.at.0 <= now.0.saturating_sub(retention.exceptions_ms)
+}
+
 /// Why an exception record cannot be settled, or `None` when it can (contract
 /// settle-automation-exception): only a parked or dead-lettered record that is not settled yet,
 /// and only one that names a job when it is released. Releasing a parked event offers the event
@@ -722,15 +799,15 @@ pub fn trigger_intake(
     (jobs, exceptions)
 }
 
-/// The job that starts the run a trigger asked for.
+/// The job that starts the run a trigger asked for. Each event of each trigger has its job, with a
+/// run key or without: the worker, not the key of the job, decides that a repeated run key starts
+/// no run and writes a declined record (SCH-1536, D-6534), and that the runs of one key start in
+/// the order of their events (SCH-1534, D-6532).
 fn start_job(start: &AutomationStart, now: Timestamp) -> NewJob {
-    let key = match &start.run_key {
-        Some(run_key) => format!("start:{}:key:{run_key}", start.automation),
-        None => format!(
-            "start:{}:{}:{}",
-            start.trigger, start.automation, start.event_seq
-        ),
-    };
+    let key = format!(
+        "start:{}:{}:{}",
+        start.trigger, start.automation, start.event_seq
+    );
     NewJob {
         key,
         work: JobWork::StartRun {
@@ -839,7 +916,7 @@ mod tests {
         };
         let (jobs, exceptions) = trigger_intake(&tenant(), &transition, Timestamp(50));
         assert_eq!(jobs.len(), 1);
-        assert_eq!(jobs[0].key, "start:award:key:abc");
+        assert_eq!(jobs[0].key, "start:on_publish:award:7");
         assert_eq!(jobs[0].due_at, Timestamp(50));
         let JobWork::StartRun {
             hop,
