@@ -120,13 +120,24 @@ pub fn transition(
             subject,
             resume_object,
             resume_after,
+            held_objects,
+            addressed_invitations,
         } => erase_subject(
             &mut draft,
             lookup,
             subject,
             resume_object.as_ref(),
             *resume_after,
+            held_objects,
+            addressed_invitations,
         )?,
+        Intent::ExpireRecords { object, ids } => {
+            let done = crate::retention::decide(lookup, draft.ctx, object, ids)?;
+            draft.ops.extend(done.ops);
+            draft.events.extend(done.events);
+            draft.evidence.extend(done.evidence);
+            done.output
+        }
         Intent::WriteSetting {
             setting,
             level,
@@ -279,6 +290,7 @@ pub fn needs(schema: Option<&TenantSchema>, intent: &Intent) -> Vec<Need> {
             }
         }
         Intent::EraseSubject { .. } => out.extend(crate::erasure::needs(schema, intent)),
+        Intent::ExpireRecords { .. } => out.extend(crate::retention::needs(schema, intent)),
         Intent::ChangeSchema { changes, .. } => {
             // Re-validation looks up every reference of every record of a touched type, in the
             // schema as it will be. Load each such type whole: one need per object type, however
@@ -1032,8 +1044,18 @@ fn erase_subject(
     subject: &PrincipalId,
     resume_object: Option<&ObjectTypeId>,
     resume_after: Option<RecordId>,
+    held_objects: &[ObjectTypeId],
+    addressed_invitations: &[InvitationId],
 ) -> Result<Output, DomainError> {
-    let done = crate::erasure::decide(lookup, draft.ctx, subject, resume_object, resume_after)?;
+    let done = crate::erasure::decide(
+        lookup,
+        draft.ctx,
+        subject,
+        resume_object,
+        resume_after,
+        held_objects,
+        addressed_invitations,
+    )?;
     draft.ops.extend(done.ops);
     draft.events.extend(done.events);
     draft.effects.extend(done.effects);

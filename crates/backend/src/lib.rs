@@ -28,6 +28,7 @@ pub mod product_segments;
 pub mod products;
 pub mod provision;
 pub mod quota;
+pub mod retention;
 pub mod sealing;
 pub mod search;
 pub mod seed;
@@ -35,6 +36,8 @@ pub mod segments;
 pub mod service;
 pub mod settings;
 pub mod signin;
+pub mod subject_export;
+pub mod subject_rights;
 pub mod view_load;
 pub mod worker;
 pub mod ws;
@@ -114,6 +117,8 @@ pub async fn run(
 /// flows that lapsed, and sessions that ended a day ago. A failed purge is logged, with its name,
 /// and the pass goes on with the others, so that one locked table does not stop the rest.
 fn purge(app: &App) {
+    // Every tenant has a retention chain (PRV-357); a tenant without one gets it here.
+    retention::ensure_all(app);
     let now = app.now();
     let results = [
         ("throttle", app.store.purge_throttle(now)),

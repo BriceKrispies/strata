@@ -25,8 +25,14 @@
 //!   issued and nobody has redeemed or revoked (revoked, by the acting owner). The address of an
 //!   invitation the principal redeemed is cleared. The sessions of the principal end with the
 //!   commit.
-//! - **Restrictions and legal holds.** No store of restrictions or holds exists yet (PRV-352,
-//!   PRV-355), so none blocks an erasure; the receipt of the backend says so.
+//! - **Legal holds.** A record of a type the intent names in `held-objects` is not changed: the
+//!   decision lists it in `not-erased` as held, so a hold on a record type suspends the erasure of
+//!   what it covers and the rest of the subject is erased (PRV-355). A hold on the subject itself
+//!   refuses the whole erasure before any decision (the backend, `subject_rights`).
+//! - **Invitations addressed to the subject.** The kernel holds no address of a person, so the
+//!   shell names the pending invitations addressed to the subject's verified address in
+//!   `addressed-invitations`: each is revoked and its address cleared (WG-5117). The intent carries
+//!   the ids, never the address.
 //!
 //! Needs are planned: records that name the principal through a text field come by the index
 //! (`by-field`); records of a type whose subject is the creator come in pages of [`BATCH`] by
@@ -42,8 +48,8 @@ use crate::schema::TenantSchemaExt;
 use crate::state::{Need, Principal, Record, RecordExt};
 use crate::types::ValueExt;
 use crate::types::{
-    owner_role, DataSubject, FieldDef, FieldId, FieldType, FieldTypeExt, ObjectTypeDef,
-    ObjectTypeId, PrincipalId, RecordId, TeamDef, TenantSchema, Timestamp, Value,
+    owner_role, DataSubject, FieldDef, FieldId, FieldType, FieldTypeExt, InvitationId,
+    ObjectTypeDef, ObjectTypeId, PrincipalId, RecordId, TeamDef, TenantSchema, Timestamp, Value,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -64,15 +70,16 @@ pub struct Erasure {
 
 /// Object types with a field declared personal, in id order, each with the text fields that name
 /// the subject of some personal field and whether some personal field has the creator for its
-/// subject.
-struct Declared<'a> {
-    object: &'a ObjectTypeDef,
-    links: BTreeSet<FieldId>,
-    unresolved: BTreeSet<FieldId>,
-    creator: bool,
+/// subject. The export of a subject (`subject_export`) enumerates through the same declarations,
+/// so the two never disagree about what belongs to a subject.
+pub(crate) struct Declared<'a> {
+    pub(crate) object: &'a ObjectTypeDef,
+    pub(crate) links: BTreeSet<FieldId>,
+    pub(crate) unresolved: BTreeSet<FieldId>,
+    pub(crate) creator: bool,
 }
 
-fn declared(schema: &TenantSchema) -> Vec<Declared<'_>> {
+pub(crate) fn declared(schema: &TenantSchema) -> Vec<Declared<'_>> {
     let mut out = Vec::new();
     for object in schema.objects.values() {
         let mut found = Declared {
@@ -115,7 +122,7 @@ fn holds_text(ty: &FieldType) -> bool {
 
 /// The first object type, in id order, whose records are scanned for a creator, from the one the
 /// cursor names on.
-fn scan_from<'a>(
+pub(crate) fn scan_from<'a>(
     declared: &'a [Declared<'a>],
     resume_object: Option<&ObjectTypeId>,
 ) -> Option<&'a Declared<'a>> {
@@ -124,7 +131,7 @@ fn scan_from<'a>(
         .find(|d| d.creator && resume_object.is_none_or(|from| d.object.id >= *from))
 }
 
-fn page_need(object: &ObjectTypeId, after: Option<RecordId>) -> Need {
+pub(crate) fn page_need(object: &ObjectTypeId, after: Option<RecordId>) -> Need {
     Need::PageOf {
         object: object.clone(),
         after,
@@ -138,6 +145,7 @@ pub fn needs(schema: &TenantSchema, intent: &Intent) -> Vec<Need> {
         subject,
         resume_object,
         resume_after,
+        ..
     } = intent
     else {
         return Vec::new();
@@ -185,7 +193,7 @@ fn empty_of(ty: &FieldType) -> Option<Value> {
 }
 
 /// Whether `field` of `record` belongs to the subject.
-fn is_subject_of(field: &FieldDef, record: &Record, subject: &PrincipalId) -> bool {
+pub(crate) fn is_subject_of(field: &FieldDef, record: &Record, subject: &PrincipalId) -> bool {
     match field.personal.as_ref().map(|p| &p.subject) {
         Some(DataSubject::Creator) => record.created_by.as_ref() == Some(subject),
         Some(DataSubject::Field { field: link }) => holds(record.get(link), subject),
@@ -297,6 +305,8 @@ pub fn decide(
     subject: &PrincipalId,
     resume_object: Option<&ObjectTypeId>,
     resume_after: Option<RecordId>,
+    held_objects: &[ObjectTypeId],
+    addressed_invitations: &[InvitationId],
 ) -> Result<Erasure, DomainError> {
     let tenant = lookup.tenant;
     let schema: &TenantSchema = &tenant.schema;
@@ -344,12 +354,17 @@ pub fn decide(
             && offer.redeemed_by.is_none()
             && offer.revoked_by.is_none();
         let redeemed = offer.redeemed_by.as_ref() == Some(subject) && !offer.address.is_empty();
-        if issued_open || redeemed {
+        // An invitation the shell found addressed to the subject, still pending (WG-5117): it is
+        // revoked and loses its address, so it cannot be redeemed and holds nothing of the person.
+        let addressed_open = addressed_invitations.contains(&offer.id)
+            && offer.redeemed_by.is_none()
+            && offer.revoked_by.is_none();
+        if issued_open || redeemed || addressed_open {
             if let Some(stored) = next_schema.invitation_mut(&offer.id) {
-                if issued_open {
+                if issued_open || addressed_open {
                     stored.revoked_by = Some(actor.clone());
                 }
-                if redeemed {
+                if redeemed || addressed_open {
                     stored.address = String::new();
                 }
             }
@@ -416,6 +431,21 @@ pub fn decide(
                     plan: &mut Vec<(ObjectTypeId, Erased)>,
                     held: &mut BTreeSet<String>| {
         if !seen.insert((d.object.id.clone(), record.id)) {
+            return;
+        }
+        // A legal hold on the record type suspends the erasure of its records (PRV-355). Only a
+        // record that holds something of the subject is reported.
+        if held_objects.contains(&d.object.id) {
+            if d.object
+                .fields
+                .values()
+                .any(|field| is_subject_of(field, record, subject))
+            {
+                held.insert(format!(
+                    "held {} record {}: a legal hold on the record type suspends its erasure (PRV-355)",
+                    d.object.id, record.id
+                ));
+            }
             return;
         }
         let (erased, notes) = erase_record(d.object, record, subject, now);

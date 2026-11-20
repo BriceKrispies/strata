@@ -273,6 +273,8 @@ pub fn run_job(app: &App, tenant: &TenantId, lease: &Lease, now: Timestamp) -> O
         JobWork::Rendition { file, rendition } => {
             crate::files::scan::run_rendition_job(tenant, file, rendition)
         }
+        JobWork::Retention { .. } => crate::retention::run(app, tenant, lease, now),
+        JobWork::SubjectExport { .. } => crate::subject_export::run(app, tenant, lease, now),
     }
 }
 

@@ -167,6 +167,14 @@
     },
     {
       "package": "strata-backend",
+      "target": "subject_rights",
+      "tier": "full",
+      "seconds": null,
+      "unmeasured": true,
+      "reason": "Subject export, restriction, legal holds and the retention sweep, each on the memory store and SQLite, with the worker running the jobs; scoped runs include it when the backend or the kernel changed"
+    },
+    {
+      "package": "strata-backend",
       "target": "tokens",
       "tier": "routine",
       "seconds": 3.08

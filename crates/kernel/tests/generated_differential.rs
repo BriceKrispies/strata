@@ -154,12 +154,15 @@
 //!  16. Not exercised, and not mirrored: the erasure of a data subject (`EraseSubject`,
 //!      `crates/kernel/src/erasure.rs`, D-7460). The generated `intent-decision` refuses it with
 //!      `erasure:decided_by_the_kernel` and the generated `needs` plans nothing for it. The
-//!      operation generator draws no erasure, and `compare_transition` fails on one.
 //!  17. Not mirrored: the checks of an invoke-operation step (`definitions::invoke_operation_problems`,
 //!      WG-5154): the operation exists, the run-as roles may invoke it, and its inputs are declared,
 //!      present when required and of the shape of their type. The generated
 //!      `automation-step-problems` checks only the expressions of its inputs. Guarded:
 //!      `assert_no_input_of_a_known_difference` fails on an automation that holds such a step.
+//!      operation generator draws no erasure, and `compare_transition` fails on one. The same
+//!      holds for the deletion of records past their retention (`ExpireRecords`,
+//!      `crates/kernel/src/retention.rs`, PRV-357): refused by the generated `intent-decision`
+//!      with `retention:decided_by_the_kernel`, nothing planned by the generated `needs`.
 //!
 //! Every difference that is not compared through an adjustment is guarded, so that a corpus that
 //! grows into one is told to mirror the rule or to count the difference here:
@@ -1148,6 +1151,10 @@ fn compare_transition(state: &State, intent: &Intent, context: &Context, tally: 
     assert!(
         !matches!(intent, Intent::EraseSubject { .. }),
         "{label}: the generated functions do not decide an erasure (difference 16)"
+    );
+    assert!(
+        !matches!(intent, Intent::ExpireRecords { .. }),
+        "{label}: the generated functions do not decide a retention deletion (difference 16)"
     );
     assert_no_automation_principal(context);
     let mut hand = transition(state, intent, context);

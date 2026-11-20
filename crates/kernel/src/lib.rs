@@ -37,6 +37,7 @@ pub mod operations;
 pub mod products;
 pub mod query_plan;
 pub mod read;
+pub mod retention;
 pub mod rules;
 pub mod schema;
 pub mod search;
@@ -44,6 +45,7 @@ pub mod segment_flow;
 pub mod segments;
 pub mod settings;
 pub mod state;
+pub mod subject_export;
 pub mod templates;
 #[cfg(any(test, feature = "testkit"))]
 pub mod testkit;
