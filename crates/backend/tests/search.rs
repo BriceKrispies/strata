@@ -221,6 +221,40 @@ async fn a_word_only_a_hidden_field_holds_is_not_a_hit_for_a_reader_who_may_not_
     }
 }
 
+/// No search hit tells a visitor a login name (WG-4953), even when an author's login identity is
+/// a searchable field: the public searches for the logins themselves, for the authors' names and
+/// for words of the posts, and no hit it receives holds a login anywhere, while an editor's search
+/// for the same words does.
+#[tokio::test]
+async fn no_search_hit_tells_a_visitor_a_login_name() {
+    let (backend, store) = started().await;
+    declare_author_search(&store);
+    let editor = backend.login("ines").await;
+    let logins = ["user:ines", "user:tomasz", "user:mirela", "user:admin"];
+    let words = [
+        "ines", "tomasz", "mirela", "admin", "user", "the", "kil", "jig", "wren", "okafor",
+    ];
+    let mut public_hits = 0;
+    let mut editor_text = String::new();
+    for word in words {
+        let hits = backend.hits(None, word).await;
+        public_hits += hits.len();
+        let text = Json::Array(hits).to_string();
+        for login in logins {
+            assert!(
+                !text.contains(login),
+                "a search for {word:?} told a visitor {login}: {text}"
+            );
+        }
+        editor_text.push_str(&Json::Array(backend.hits(Some(&editor), word).await).to_string());
+    }
+    assert!(public_hits > 0, "the public's searches found something");
+    assert!(
+        editor_text.contains("user:ines") && editor_text.contains("user:tomasz"),
+        "an editor's hits carry the logins she may read: {editor_text}"
+    );
+}
+
 #[tokio::test]
 async fn pages_resume_exactly_and_a_cursor_that_is_not_ours_is_refused() {
     let (backend, _store) = started().await;

@@ -1665,6 +1665,81 @@ async fn an_authors_login_name_is_not_in_any_public_view() {
     assert!(all.contains("user:tomasz") && all.contains("user:mirela"));
 }
 
+/// No live notice tells a visitor a login name (WG-4953): an anonymous socket subscribed to
+/// everything hears a post created, published and edited, and an author record changed, and no
+/// frame it receives names a login. A notice names the record and its version, never its
+/// contents, and the correlation id of another principal's request is not passed on.
+#[tokio::test]
+async fn no_live_notice_tells_a_visitor_a_login_name() {
+    let backend = start().await;
+    let author = backend
+        .login("fieldnotes", "tomasz", "strata-dev-tomasz")
+        .await;
+    let editor = backend.login("fieldnotes", "ines", "strata-dev-ines").await;
+    let mut public = backend.socket("fieldnotes", None).await;
+    let mut frames = vec![next(&mut public).await];
+    say(
+        &mut public,
+        json!({ "type": "subscribe", "req": "r1", "sub": "all" }),
+    )
+    .await;
+    frames.push(next(&mut public).await);
+
+    let draft = json!({ "op": "create", "object": "post", "fields": { "title": "Heard", "slug": "heard", "body": "Text.", "author": 3 } });
+    let (_, created) = backend
+        .call("fieldnotes", Some(&author), "/internal/mutate", draft)
+        .await;
+    let id = created["id"].as_u64().unwrap();
+    for change in [
+        json!({ "op": "update", "object": "post", "id": id, "fields": { "status": "published" } }),
+        json!({ "op": "update", "object": "post", "id": id, "fields": { "body": "More text." } }),
+    ] {
+        let (status, body) = backend
+            .call("fieldnotes", Some(&author), "/internal/mutate", change)
+            .await;
+        assert_eq!(status, 200, "{body}");
+    }
+    // An editor changes an author record, whose login identity the public may not read.
+    backend
+        .call(
+            "fieldnotes",
+            Some(&editor),
+            "/internal/mutate",
+            json!({ "op": "update", "object": "author", "id": 3, "fields": { "name": "Tomasz W." } }),
+        )
+        .await;
+
+    // Everything the visitor hears until the socket goes quiet.
+    while let Ok(Some(Ok(frame))) =
+        tokio::time::timeout(Duration::from_millis(800), public.next()).await
+    {
+        if let Message::Text(text) = frame {
+            frames.push(serde_json::from_str(&text).unwrap());
+        }
+    }
+    let events: Vec<&Json> = frames.iter().filter(|f| f["type"] == "event").collect();
+    assert!(
+        events.len() >= 2,
+        "the visitor hears the published post and its edit: {frames:?}"
+    );
+    let text = Json::Array(frames.clone()).to_string();
+    for login in ["user:ines", "user:tomasz", "user:mirela", "user:admin"] {
+        assert!(
+            !text.contains(login),
+            "a notice told a visitor {login}: {text}"
+        );
+    }
+    for event in events {
+        let notice = event["notice"].as_object().unwrap();
+        assert!(
+            notice
+                .keys()
+                .all(|key| ["kind", "object", "id", "version"].contains(&key.as_str())),
+            "a record notice carries no field of the record: {event}"
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------------------------
 // The outbox publisher, which is the generated machine `arc-outbox-delivery-flow-impl` on the
 // runtime's System: a commit offers it `rt-committed` and then the kick (`arc-ob-publish-now`);
