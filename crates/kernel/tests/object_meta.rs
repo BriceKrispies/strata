@@ -946,6 +946,395 @@ fn a_schema_that_declares_nothing_new_keeps_the_hash_and_the_encoding_it_had() {
 }
 
 // ---------------------------------------------------------------------------------------------
+// A change from outside a product to an entity it owns (D-6582, INT-1582).
+// ---------------------------------------------------------------------------------------------
+
+fn record_at(product: &str, version: &str, owns: Vec<EntityRef>) -> SchemaChange {
+    SchemaChange::RecordProduct(InstalledProduct {
+        product: ProductId::new(product).unwrap(),
+        version: version.into(),
+        platform: None,
+        owns,
+        schema_version: None,
+    })
+}
+
+fn badges_entities() -> Vec<SchemaChange> {
+    vec![
+        SchemaChange::DefineObject {
+            id: object("badges__award"),
+            label: "Award".into(),
+        },
+        SchemaChange::DefineField {
+            object: object("badges__award"),
+            field: field_def("note", FieldType::Str, false),
+        },
+        SchemaChange::DefineRole(RoleDef {
+            id: role("badges__awarder"),
+            label: "Awarder".into(),
+        }),
+        catalogue(Edit::DefineToken(TokenDecl {
+            name: "badges__first".into(),
+            expression: Expression("record.title".into()),
+            fallback: "friend".into(),
+        })),
+        catalogue(Edit::DefineMailTemplate(mail("badges__welcome"))),
+    ]
+}
+
+fn badges_owns() -> Vec<EntityRef> {
+    vec![
+        owned(EntityKind::Object, "badges__award"),
+        owned(EntityKind::Role, "badges__awarder"),
+        owned(EntityKind::Token, "badges__first"),
+        owned(EntityKind::MailTemplate, "badges__welcome"),
+    ]
+}
+
+fn badges_world() -> World {
+    let mut changes = badges_entities();
+    changes.push(record_at("badges", "1.0.0", badges_owns()));
+    must(&notes_world(), "owner", 7_000, change(changes))
+}
+
+fn add_extra_field() -> SchemaChange {
+    SchemaChange::DefineField {
+        object: object("badges__award"),
+        field: field_def("extra", FieldType::Str, false),
+    }
+}
+
+// Verifies: INT-1582
+#[test]
+fn a_schema_editor_may_not_change_an_entity_a_product_owns() {
+    let world = badges_world();
+    for who in ["owner", "editor"] {
+        let error = step(&world, who, 8_000, change(vec![add_extra_field()])).expect_err("refused");
+        assert_eq!(error.kind, ErrorKind::InvalidSchema);
+        assert_eq!(
+            error.message,
+            "the object badges__award is owned by the product badges; it changes only through that product's upgrade or removal"
+        );
+    }
+    // The role, the token and the template are as guarded as the record type.
+    for (change_of, kind, id) in [
+        (
+            SchemaChange::DefineRolePermissions {
+                role: role("badges__awarder"),
+                permissions: Vec::new(),
+            },
+            "role",
+            "badges__awarder",
+        ),
+        (
+            SchemaChange::RemoveToken("badges__first".into()),
+            "token",
+            "badges__first",
+        ),
+        (
+            catalogue(Edit::DefineMailTemplate(mail("badges__welcome"))),
+            "mail-template",
+            "badges__welcome",
+        ),
+    ] {
+        let error = refused(&world, vec![change_of]);
+        assert!(
+            error
+                .message
+                .starts_with(&format!("the {kind} {id} is owned by the product badges")),
+            "{}",
+            error.message
+        );
+    }
+    // What no product owns is not guarded.
+    must(
+        &world,
+        "editor",
+        8_001,
+        change(vec![SchemaChange::DefineField {
+            object: object("note"),
+            field: field_def("extra", FieldType::Str, false),
+        }]),
+    );
+}
+
+// Verifies: INT-1582
+#[test]
+fn a_product_upgrade_changes_what_it_owns_and_nothing_else_does() {
+    let world = badges_world();
+    // The upgrade path: the record of the product at another version, in the same change.
+    let upgraded = must(
+        &world,
+        "owner",
+        8_000,
+        change(vec![
+            add_extra_field(),
+            record_at("badges", "1.1.0", badges_owns()),
+        ]),
+    );
+    let after = schema(&upgraded);
+    assert_eq!(
+        products::get(&after, &ProductId::new("badges").unwrap())
+            .unwrap()
+            .version,
+        "1.1.0"
+    );
+    assert!(after.objects[&object("badges__award")]
+        .fields
+        .contains_key(&field("extra")));
+
+    // A record at the version already installed is no upgrade.
+    let error = refused(
+        &world,
+        vec![
+            add_extra_field(),
+            record_at("badges", "1.0.0", badges_owns()),
+        ],
+    );
+    assert!(
+        error.message.contains("is already installed"),
+        "{}",
+        error.message
+    );
+
+    // The upgrade of another product does not license the change.
+    let both = must(
+        &world,
+        "owner",
+        8_000,
+        change(vec![record_at("other", "1.0.0", Vec::new())]),
+    );
+    let error = refused(
+        &both,
+        vec![add_extra_field(), record_at("other", "1.1.0", Vec::new())],
+    );
+    assert!(
+        error
+            .message
+            .starts_with("the object badges__award is owned by the product badges"),
+        "{}",
+        error.message
+    );
+}
+
+// Verifies: INT-1582
+#[test]
+fn a_schema_editor_cannot_forge_the_upgrade_of_a_product() {
+    let world = badges_world();
+    // The editor manages the schema but does not hold bundle-install, so a product record in its
+    // change is refused before the entity is looked at.
+    let error = step(
+        &world,
+        "editor",
+        8_000,
+        change(vec![
+            add_extra_field(),
+            record_at("badges", "9.9.9", badges_owns()),
+        ]),
+    )
+    .expect_err("refused");
+    assert_eq!(error.kind, ErrorKind::Unauthorized);
+    assert_eq!(
+        error.message,
+        "the change needs the capability bundle-install"
+    );
+    let error = step(
+        &world,
+        "editor",
+        8_001,
+        change(vec![SchemaChange::RemoveProduct(
+            ProductId::new("badges").unwrap(),
+        )]),
+    )
+    .expect_err("refused");
+    assert_eq!(error.kind, ErrorKind::Unauthorized);
+}
+
+// Verifies: INT-1582
+#[test]
+fn the_removal_of_a_product_removes_every_entity_it_owns() {
+    let world = badges_world();
+    let removed = must(
+        &world,
+        "owner",
+        8_000,
+        change(vec![
+            SchemaChange::RemoveMailTemplate(TemplateId("badges__welcome".into())),
+            SchemaChange::RemoveToken("badges__first".into()),
+            SchemaChange::RemoveRole(role("badges__awarder")),
+            SchemaChange::RemoveObject {
+                id: object("badges__award"),
+                delete_records: false,
+            },
+            SchemaChange::RemoveProduct(ProductId::new("badges").unwrap()),
+        ]),
+    );
+    assert_eq!(hash(&removed), hash(&notes_world()));
+}
+
+// Verifies: INT-1582
+#[test]
+fn every_kind_of_entity_a_product_can_own_is_guarded() {
+    let pool = || LedgerPoolName::new("badges__entity").unwrap();
+    let unit = || LedgerUnit::new("badges__entity").unwrap();
+    // One removal for each kind except the segment, which the schema does not hold.
+    let by_kind: Vec<(EntityKind, String, SchemaChange)> = vec![
+        (
+            EntityKind::Object,
+            "badges__entity".into(),
+            SchemaChange::RemoveObject {
+                id: object("badges__entity"),
+                delete_records: false,
+            },
+        ),
+        (
+            EntityKind::Role,
+            "badges__entity".into(),
+            SchemaChange::RemoveRole(role("badges__entity")),
+        ),
+        (
+            EntityKind::Capability,
+            "badges__entity".into(),
+            SchemaChange::RemoveCapability(CapabilityName("badges__entity".into())),
+        ),
+        (
+            EntityKind::Policy,
+            "badges__entity".into(),
+            SchemaChange::RemovePolicy(PolicyId::new("badges__entity").unwrap()),
+        ),
+        (
+            EntityKind::Workflow,
+            "badges__entity".into(),
+            SchemaChange::RemoveWorkflow(WorkflowId::new("badges__entity").unwrap()),
+        ),
+        (
+            EntityKind::Query,
+            "badges__entity".into(),
+            SchemaChange::RemoveQuery(QueryId::new("badges__entity").unwrap()),
+        ),
+        (
+            EntityKind::View,
+            "badges__entity".into(),
+            SchemaChange::RemoveView(ViewId::new("badges__entity").unwrap()),
+        ),
+        (
+            EntityKind::Setting,
+            "badges__entity".into(),
+            SchemaChange::RemoveSetting(SettingId::new("badges__entity").unwrap()),
+        ),
+        (
+            EntityKind::LedgerUnit,
+            "badges__entity".into(),
+            SchemaChange::RemoveLedgerDefinition(LedgerDefinitionRef::Unit { unit: unit() }),
+        ),
+        (
+            EntityKind::LedgerPool,
+            "badges__entity".into(),
+            SchemaChange::RemoveLedgerDefinition(LedgerDefinitionRef::Pool { pool: pool() }),
+        ),
+        (
+            EntityKind::LedgerLimit,
+            products::ledger_limit_id(&unit(), &None, &None),
+            SchemaChange::RemoveLedgerDefinition(LedgerDefinitionRef::Limit {
+                unit: unit(),
+                owner: None,
+                scope: None,
+            }),
+        ),
+        (
+            EntityKind::MailTemplate,
+            "badges__entity".into(),
+            SchemaChange::RemoveMailTemplate(TemplateId("badges__entity".into())),
+        ),
+        (
+            EntityKind::NoticeTemplate,
+            "badges__entity".into(),
+            SchemaChange::RemoveNoticeTemplate(TemplateId("badges__entity".into())),
+        ),
+        (
+            EntityKind::Token,
+            "badges__entity".into(),
+            SchemaChange::RemoveToken("badges__entity".into()),
+        ),
+        (
+            EntityKind::Trigger,
+            "badges__entity".into(),
+            SchemaChange::RemoveTrigger(TriggerId::new("badges__entity").unwrap()),
+        ),
+        (
+            EntityKind::Automation,
+            "badges__entity".into(),
+            SchemaChange::RemoveAutomation(WorkflowId::new("badges__entity").unwrap()),
+        ),
+        (
+            EntityKind::Operation,
+            "badges__entity".into(),
+            SchemaChange::RemoveOperation(TenantOperationId::new("badges__entity").unwrap()),
+        ),
+    ];
+    let product = || ProductId::new("badges").unwrap();
+    let schema = TenantSchema {
+        products: Some(BTreeMap::from([(
+            product(),
+            InstalledProduct {
+                product: product(),
+                version: "1.0.0".into(),
+                platform: None,
+                owns: by_kind
+                    .iter()
+                    .map(|(kind, id, _)| owned(*kind, id))
+                    .collect(),
+                schema_version: None,
+            },
+        )])),
+        ..schema(&notes_world())
+    };
+    // Every kind the specification lists but the segment is in the table.
+    assert_eq!(by_kind.len(), 17);
+    for (kind, id, change_of) in by_kind {
+        assert_eq!(
+            products::touched(&change_of),
+            vec![owned(kind, &id)],
+            "{kind:?}"
+        );
+        let message = products::foreign_change(&schema, std::slice::from_ref(&change_of))
+            .unwrap_or_else(|| panic!("{kind:?} is not guarded"));
+        assert_eq!(
+            message,
+            format!(
+                "the {} {id} is owned by the product badges; it changes only through that product's upgrade or removal",
+                kind.as_str()
+            )
+        );
+        // The product's removal and its upgrade let the change through; another product's do not.
+        assert!(
+            products::foreign_change(
+                &schema,
+                &[change_of.clone(), SchemaChange::RemoveProduct(product())]
+            )
+            .is_none(),
+            "{kind:?}"
+        );
+        assert!(
+            products::foreign_change(
+                &schema,
+                &[change_of.clone(), record_at("badges", "2.0.0", Vec::new())]
+            )
+            .is_none(),
+            "{kind:?}"
+        );
+        assert!(
+            products::foreign_change(
+                &schema,
+                &[change_of, record_at("other", "2.0.0", Vec::new())]
+            )
+            .is_some(),
+            "{kind:?}"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
 // Removing a role.
 // ---------------------------------------------------------------------------------------------
 

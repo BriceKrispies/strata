@@ -100,7 +100,10 @@
 //!      as: both results without those effects, transitions, definers and times
 //!      (`without_kernel_only`). The suspension is guarded: the corpus's automation acts with no
 //!      run-as role, so it is never suspended, and `assert_no_input_of_a_known_difference` fails
-//!      on one that has a role. No principal of the corpus starts with `automation:`.
+//!      on one that has a role. No principal of the corpus starts with `automation:`. A trigger of
+//!      the event ledger-posted starts a run for the entry a ledger posting writes, with the
+//!      parameters owner, unit, amount, balance, balance_before, entry_sequence and reason; the
+//!      generated `event-params` does not, and the generator declares no ledger unit.
 //!  11. Not exercised, and not mirrored: the automation principal (`strata_kernel::automation`,
 //!      WFL-1527). The hand-written `roles_of` gives a principal `automation:<id>` exactly the
 //!      run-as roles of its automation, and `refuse_reserved_principals` refuses the prefix for
@@ -124,9 +127,13 @@
 //!      `object_meta::problems`, `templates::problems` and `products::problems` (retention from a
 //!      timestamp field, the states of a publication, the type of a language field, the one-line
 //!      subject of a template, the expression of a token, the owner of an entity), and the
-//!      removal of an object type with the deletion of its records. The generated
-//!      `schema-problems` does not state them. The generator draws no such declaration, template,
-//!      token or product record.
+//!      removal of an object type with the deletion of its records. Also the blocks of a template
+//!      body (`blocks::analyse`: the block schema, the tokens and typed values it places, the
+//!      allowed link schemes and the nesting bound, D-7900) and the refusal of a schema change
+//!      from outside a product to an entity it owns (`products::foreign_change`, with the
+//!      capability bundle-install of a change that carries a product record, D-6582, INT-1582):
+//!      the generated `schema-problems` and `change-schema` do not state them. The generator
+//!      draws no such declaration, template, token or product record.
 //!  15. Not exercised, and not mirrored: planned named queries (`strata_kernel::query_plan`,
 //!      KRN-2520 to KRN-2524). The hand-written kernel serves a query whose filter has an
 //!      indexable condition from `Need::IndexPage` candidates, pages them with a
