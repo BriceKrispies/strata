@@ -28,7 +28,6 @@
       "items": [
         "health-check",
         "deliver-view",
-        "subscribe-events",
         "show-sign-in-page",
         "show-authoring-view",
         "run-scenario",
@@ -47,21 +46,7 @@
     }
   ],
   "env": [],
-  "bffRoutes": [
-    {
-      "reason": "Lab, diagnostics, development and socket routes of the BFF with no contract that names them in bffRoute (WG-5052).",
-      "items": [
-        "GET /api/lab/overview",
-        "POST /api/lab/run",
-        "GET /api/lab/runs/:id",
-        "POST /api/lab/replay",
-        "POST /api/lab/verify",
-        "GET /api/diagnostics",
-        "POST /api/dev/:action",
-        "GET /ws"
-      ]
-    }
-  ],
+  "bffRoutes": [],
   "paths": [
     {
       "reason": "Path of a document entity of the specification, imported before the Markdown file was folded into spec.jsonc and removed (WG-5053).",
