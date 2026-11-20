@@ -365,6 +365,7 @@ fn owner_changes(store: &MemoryStore, now: i64, changes: Vec<SchemaChange>) {
         correlation: "t-metadata".into(),
         verified_address: None,
         idempotency_key: None,
+        language: None,
     };
     let intent = Intent::ChangeSchema {
         changes,
@@ -2582,6 +2583,7 @@ async fn a_change_of_roles_ends_the_sessions_of_the_person_it_changes() {
         correlation: "t-promote".into(),
         verified_address: None,
         idempotency_key: None,
+        language: None,
     };
     let promote = Intent::AssignRole {
         principal: PrincipalId::new("user:mirela").unwrap(),

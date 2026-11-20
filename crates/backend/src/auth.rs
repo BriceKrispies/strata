@@ -71,6 +71,7 @@ impl Identity {
             correlation: self.correlation.clone(),
             verified_address: self.verified_address.clone(),
             idempotency_key: None,
+            language: None,
         }
     }
 }

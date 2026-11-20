@@ -73,6 +73,7 @@ pub const RETRY_GET_ACCOUNT: RetryPolicy = RetryPolicy {
         cap: Some(std::time::Duration::from_secs(2)),
     },
     idempotency_key: None,
+    language: None,
     timeout: Some(std::time::Duration::from_millis(500)),
 };
 

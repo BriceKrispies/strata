@@ -285,6 +285,10 @@ fn texts_for(state: &State, intent: &Intent) -> IntentTexts {
     let mut texts = IntentTexts {
         defaults: BTreeMap::new(),
         constraints: BTreeMap::new(),
+        retention: None,
+        publication: None,
+        language_field: None,
+        translation_group: None,
         conditions: BTreeMap::new(),
         blank_name: false,
     };

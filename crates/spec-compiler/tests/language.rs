@@ -569,6 +569,7 @@ fn objects(t: &Json) -> BTreeMap<ObjectTypeId, ObjectTypeDef> {
                     unique: false,
                     default: None,
                     read: None,
+                    personal: None,
                 },
             );
         }
@@ -579,6 +580,10 @@ fn objects(t: &Json) -> BTreeMap<ObjectTypeId, ObjectTypeDef> {
                 label: String::new(),
                 fields,
                 constraints: BTreeMap::new(),
+                retention: None,
+                publication: None,
+                language_field: None,
+                translation_group: None,
             },
         );
     }

@@ -466,6 +466,7 @@ fn field_def(id: &str, ty: FieldType, default: Option<Expr>) -> FieldDef {
         unique: false,
         default,
         read: None,
+        personal: None,
     }
 }
 
@@ -749,6 +750,7 @@ fn samples() -> Vec<(&'static str, Json)> {
         correlation: "c-1".into(),
         verified_address: None,
         idempotency_key: None,
+        language: None,
     };
     s.push(("context", json(&context)));
     s.push(("context", json(&ctx("alpha", Principal::Anonymous, 5))));

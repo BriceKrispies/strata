@@ -163,6 +163,7 @@ fn field_def(n: u64, required: bool) -> FieldDef {
         unique: false,
         default: None,
         read: None,
+        personal: None,
     }
 }
 
@@ -187,6 +188,7 @@ fn initial_world() -> World {
                 correlation: "fixture".into(),
                 verified_address: None,
                 idempotency_key: None,
+                language: None,
             };
             world
                 .step(&intent, &ctx)
@@ -395,6 +397,7 @@ pub fn kernel_output(scenarios: &str) -> String {
                     correlation: "fixture".into(),
                     verified_address: None,
                     idempotency_key: None,
+                    language: None,
                 };
                 let intent = match rest {
                     ["create", fields @ ..] => Intent::CreateRecord {

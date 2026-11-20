@@ -63,6 +63,7 @@ fn ctx(principal: Principal) -> Context {
         correlation: "t".into(),
         verified_address: None,
         idempotency_key: None,
+        language: None,
     }
 }
 

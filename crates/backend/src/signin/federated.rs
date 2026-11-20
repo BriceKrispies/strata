@@ -159,6 +159,7 @@ fn grant_default_role(
         correlation: caller.correlation.clone(),
         verified_address: None,
         idempotency_key: None,
+        language: None,
     };
     crate::ops::run_intent(
         app,
