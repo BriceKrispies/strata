@@ -1,0 +1,205 @@
+{
+  // "Redeem a promotion" as a product on the Strata platform (WG-5032): eligibility by segment, a
+  // per-person limit and a pool limit kept in the ledger, a time window and one redemption record,
+  // all in one tenant operation that a member may invoke without ledger-post or content-write
+  // (D-6546 to D-6551, OPR-1540 to OPR-1554). Only platform primitives are used.
+  //
+  // What this file assumes that the platform format does not have yet:
+  // - records with "scope": "tenant-object" are tenant object types installed as metadata, and a
+  //   contract with "realisation": "tenant-operation" is an operation interpreted from tenant
+  //   metadata, whose "operation" member is a tenant-operation-def (WG-5011 adds both to the
+  //   format; until then Exegra reads these records as platform tables and refuses the contracts);
+  // - the ledger unit promo_stock with a floor of 0, the unit promo_redemptions and the pool
+  //   promotions are declared by the bundle when it is installed (bundle sections for units, pools
+  //   and limits are WG-5034's); a product file has no section for them;
+  // - balance, in_segment, text, concat and arithmetic are in the tenant rule language (D-6543:
+  //   they enter the language once Exegra's and specc's primitive catalogues hold them).
+  // specc's loader accepts the file (tests/layers.rs); Exegra's acceptance waits on WG-5011.
+  "product": {
+    "id": "promotions",
+    "name": "Promotions",
+    "description": "Time-boxed promotions that members redeem, with an eligible segment, a stock and a limit per person.",
+    "imports": {
+      "spec": "../../../../../specifications/spec.jsonc",
+      "entities": ["tenant-operation-invoke", "tenant-operation-result", "record-id", "principal-id", "product-module"]
+    }
+  },
+  "records": [
+    {
+      "id": "promotions-promotion",
+      "name": "Promotion",
+      "scope": "tenant-object",
+      "description": "A promotion: when it may be redeemed, by whom and how often. Its stock is the balance of the account (pool promotions, unit promo_stock, scope its id) and is never a field (D-5000, D-6559).",
+      "key": ["id"],
+      "fields": [
+        { "name": "id", "type": "record-id" },
+        { "name": "title", "type": "string" },
+        { "name": "starts_at", "type": "timestamp" },
+        { "name": "ends_at", "type": "timestamp" },
+        { "name": "per_person_limit", "type": "i64", "description": "How many times one person may redeem it." },
+        { "name": "segment", "type": "string", "description": "The name of the segment whose members may redeem it." }
+      ]
+    },
+    {
+      "id": "promotions-redemption",
+      "name": "Redemption",
+      "scope": "tenant-object",
+      "description": "One redemption of a promotion by a person, created by the redeem operation in the transaction of its postings.",
+      "key": ["id"],
+      "fields": [
+        { "name": "id", "type": "record-id" },
+        { "name": "promotion", "type": "record-id", "refersTo": "promotions-promotion", "onDelete": "restrict" },
+        { "name": "person", "type": "principal-id" },
+        { "name": "redeemed_at", "type": "timestamp" }
+      ]
+    }
+  ],
+  "roles": [
+    {
+      "id": "promotions-manager",
+      "name": "Promotions manager",
+      "description": "A member of the tenant who creates promotions and funds their stock through the create operation.",
+      "level": "tenant",
+      "holders": ["person", "team"],
+      "capabilities": ["tenant-operation-invoke"]
+    }
+  ],
+  "contracts": [
+    {
+      "id": "promotions-create",
+      "name": "Create a promotion and fund its stock",
+      "realisation": "tenant-operation",
+      "auth": {
+        "scheme": "session",
+        "requires": ["tenant-operation-invoke"],
+        "invokers": { "signed-in": false, "roles": ["promotions-manager"] },
+        "description": "A holder of promotions-manager"
+      },
+      "idempotent": true,
+      "inputs": [
+        { "name": "title", "type": "string" },
+        { "name": "starts_at", "type": "timestamp" },
+        { "name": "ends_at", "type": "timestamp" },
+        { "name": "per_person_limit", "type": "i64" },
+        { "name": "segment", "type": "string" },
+        { "name": "stock", "type": "i64" }
+      ],
+      "outputs": [{ "name": "result", "type": "tenant-operation-result" }],
+      "errors": [
+        { "name": "bad-window", "condition": "The promotion ends before it starts." },
+        { "name": "bad-stock", "condition": "The stock or the limit per person is not positive." }
+      ],
+      "operation": {
+        "conditions": [
+          { "id": "window", "expr": "param.ends_at > param.starts_at", "error": "bad-window", "message": "A promotion ends after it starts." },
+          { "id": "stock", "expr": "param.stock > 0 and param.per_person_limit > 0", "error": "bad-stock", "message": "The stock and the limit per person are positive." }
+        ],
+        "steps": [
+          {
+            "create-record": {
+              "id": "promotion",
+              "object": "promotions-promotion",
+              "fields": {
+                "title": "param.title",
+                "starts_at": "param.starts_at",
+                "ends_at": "param.ends_at",
+                "per_person_limit": "param.per_person_limit",
+                "segment": "param.segment"
+              }
+            }
+          },
+          {
+            // The id of the record the step "promotion" created is read as param.promotion (D-6548).
+            "post-ledger": {
+              "id": "fund",
+              "owner": { "pool": { "pool": "promotions" } },
+              "unit": "promo_stock",
+              "scope": "text(param.promotion)",
+              "amount": "param.stock",
+              "reason": "stock"
+            }
+          }
+        ]
+      },
+      "exposure": "public"
+    },
+    {
+      "id": "promotions-redeem",
+      "name": "Redeem a promotion",
+      "realisation": "tenant-operation",
+      "auth": {
+        "scheme": "session",
+        "requires": ["tenant-operation-invoke"],
+        "invokers": { "signed-in": true, "roles": [] },
+        "description": "Any signed-in member of the tenant; no ledger-post and no content-write (OPR-1546)"
+      },
+      "idempotent": true,
+      "inputs": [{ "name": "promotion", "type": "record-id" }],
+      "outputs": [{ "name": "result", "type": "tenant-operation-result" }],
+      "errors": [
+        { "name": "not-eligible", "condition": "The member is not in the segment of the promotion." },
+        { "name": "outside-window", "condition": "The time of the decision is before the start or at or after the end of the promotion." },
+        { "name": "limit-reached", "condition": "The member has redeemed the promotion as often as it allows." },
+        { "name": "below-floor", "condition": "The stock of the promotion is used up: the debit of the pool would pass its floor of 0 (LDG-013)." }
+      ],
+      "operation": {
+        // The promotion named by the input is the record scope of the conditions and steps.
+        "subject": { "object": "promotions-promotion", "input": "promotion" },
+        "conditions": [
+          { "id": "eligible", "expr": "in_segment(record.segment)", "error": "not-eligible", "message": "This promotion is for another audience." },
+          { "id": "window", "expr": "now >= record.starts_at and now < record.ends_at", "error": "outside-window", "message": "This promotion is not running." },
+          {
+            // Read on the snapshot; the commit is guarded by the revision of this balance record, so
+            // two redemptions at once cannot both pass the limit (CMS-1552).
+            "id": "per-person",
+            "expr": "balance('promo_redemptions', text(record.$id)) < record.per_person_limit",
+            "error": "limit-reached",
+            "message": "You have already redeemed this promotion."
+          }
+        ],
+        "steps": [
+          {
+            // The pool limit: the unit's floor of 0 refuses the debit when the stock is gone, and the
+            // refusal refuses the whole invocation (OPR-1542).
+            "post-ledger": {
+              "id": "take-stock",
+              "owner": { "pool": { "pool": "promotions" } },
+              "unit": "promo_stock",
+              "scope": "text(record.$id)",
+              "amount": "-1",
+              "reason": "redemption"
+            }
+          },
+          {
+            "post-ledger": {
+              "id": "count",
+              "owner": "invoker",
+              "unit": "promo_redemptions",
+              "scope": "text(record.$id)",
+              "amount": "1",
+              "reason": "redemption"
+            }
+          },
+          {
+            "create-record": {
+              "id": "redemption",
+              "object": "promotions-redemption",
+              "fields": { "promotion": "record.$id", "person": "principal", "redeemed_at": "now" }
+            }
+          }
+        ]
+      },
+      "exposure": "public"
+    }
+  ],
+  "claims": [
+    {
+      "id": "promotions-redeem-is-one-operation",
+      "kind": "structural",
+      "statement": "Redeeming a promotion is one tenant operation that checks the segment, the window and the limit per person, debits the stock of the promotion, counts the redemption for the member and creates the redemption record in one transaction, or changes nothing.",
+      "subjects": ["product-module"],
+      "rationale": "OPR-1541 and OPR-1542 make the invocation atomic; the ledger's floor and the guarded balance read make both limits hold under concurrent requests (LDG-017, CMS-1552).",
+      "evaluate": { "method": "external-evidence" }
+    }
+  ]
+}
