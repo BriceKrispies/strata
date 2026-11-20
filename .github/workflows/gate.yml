@@ -1,0 +1,66 @@
+# Runs the specification gate (scripts/spec-gate.mjs) on every push and pull request: the generated
+# files are current, cargo test, lake build, the web and script tests, the type check, cargo fmt,
+# cargo clippy, cargo audit, npm audit, Exegra, Concordance, and the three browser suites.
+# --require-all makes a tool that is missing a failure, never a silent pass.
+#
+# One job, one build. What it assumes, none of which this repository provides:
+#
+#   secret EXEGRA_CHECKOUT_TOKEN   a token that can read the Exegra repository (BriceKrispies/exegra).
+#                                  The gate validates the specification with Exegra.
+#   an Exegra project "strata"     registered in that checkout and linked to specifications/spec.jsonc.
+#                                  Exegra keeps project registrations as local data, so the registration
+#                                  is NOT created here; a step has to create it before the gate runs
+#                                  (the gate's failure message names what is missing). Until it exists
+#                                  this job fails at the Exegra checks, which is the honest result.
+#   concordance                    installed from its public repository (BriceKrispies/concordance).
+#   elan and Lean                  installed below; lake reads lean/lean-toolchain.
+#   cargo-audit and Chromium       installed below. npm audit and cargo audit need network access.
+name: gate
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    env:
+      CARGO_TERM_COLOR: never
+      EXEGRA_HOME: ${{ github.workspace }}/exegra
+      EXEGRA_PROJECT: strata
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/checkout@v4
+        with:
+          repository: BriceKrispies/exegra
+          token: ${{ secrets.EXEGRA_CHECKOUT_TOKEN }}
+          path: exegra
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Rust toolchain from rust-toolchain.toml
+        run: rustup show
+
+      - name: Tools the gate runs
+        run: |
+          cargo install cargo-audit --locked
+          cargo install --git https://github.com/BriceKrispies/concordance --locked
+          curl -sSf https://elan.lean-lang.org/elan-init.sh | sh -s -- -y --default-toolchain none
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+
+      - name: Dependencies
+        run: |
+          npm ci
+          npm ci --prefix exegra
+          npx playwright install --with-deps chromium
+
+      - name: Gate
+        run: node scripts/spec-gate.mjs --browser --require-all

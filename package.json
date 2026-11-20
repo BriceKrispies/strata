@@ -8,10 +8,12 @@
     "build": "vite build web",
     "check": "tsc -p web/jsconfig.json",
     "test:web": "node --test web/test/kernel.test.js web/test/client.test.js",
+    "test:scripts": "node --test scripts/generated-share.test.mjs",
     "e2e": "playwright test -c tests/e2e/playwright.config.js",
     "e2e:generated": "playwright test -c tests/e2e/generated/playwright.generated.config.js",
     "e2e:steps": "playwright test -c tests/e2e/step-fixtures/playwright.config.js",
-    "spec": "node scripts/spec-gate.mjs"
+    "spec": "node scripts/spec-gate.mjs",
+    "spec:browser": "node scripts/spec-gate.mjs --browser"
   },
   "devDependencies": {
     "@axe-core/playwright": "4.14.0",

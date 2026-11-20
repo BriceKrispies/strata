@@ -15,7 +15,9 @@
 //   5. The step fixtures: tests/e2e/step-checks, from tests/e2e/step-fixtures/spec.jsonc.
 //   6. The capability catalogue: specifications/catalogue.md, from the same specification.
 //
-// The headers carry the specification's semantic hash, which Exegra reports (see spec-hash.mjs).
+// The headers of crates/model, crates/model-core, web/src/generated and specifications/catalogue.md carry
+// the specification's semantic hash, which Exegra reports (see spec-hash.mjs). The journeys and step
+// fixtures (steps 4 and 5) carry no hash; the gate's byte comparison catches their drift.
 //
 // Product specifications in specifications/products (WG-4989) are passed to steps 2 to 4 with
 // --product: specc checks them against the platform and refuses a bad one, and generates nothing
@@ -25,7 +27,7 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
-import { productArgs, semanticHash } from './spec-hash.mjs';
+import { productArgs, semanticHashDetail } from './spec-hash.mjs';
 
 const root = resolve(import.meta.dirname, '..');
 const libs = [join(root, 'crates', 'model', 'src', 'lib.rs'), join(root, 'crates', 'model-core', 'src', 'lib.rs')];
@@ -33,9 +35,9 @@ const libs = [join(root, 'crates', 'model', 'src', 'lib.rs'), join(root, 'crates
 // default strata). Every generated file's header records it, so a file made from another version
 // of the specification is visibly stale and the gate fails on it.
 const exegraHome = resolve(root, process.env.EXEGRA_HOME ?? '../exegra');
-const specHash = semanticHash(exegraHome, process.env.EXEGRA_PROJECT ?? 'strata');
+const { hash: specHash, reason } = semanticHashDetail(exegraHome, process.env.EXEGRA_PROJECT ?? 'strata');
 if (!specHash) {
-  console.error('regenerate: Exegra gave no semantic hash (set EXEGRA_HOME and EXEGRA_PROJECT); the headers need it');
+  console.error(`regenerate: Exegra gave no semantic hash, and the headers need it: ${reason}`);
   process.exit(1);
 }
 console.log(`specification semantic hash ${specHash}`);
@@ -49,7 +51,6 @@ function specc(name, specArgs) {
     cwd: root,
     env,
     stdio: 'inherit',
-    shell: process.platform === 'win32',
   });
   if (done.error) {
     console.error(`\nregenerate: ${name} did not start: ${done.error.message}`);

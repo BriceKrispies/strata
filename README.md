@@ -61,9 +61,10 @@ Development logins (defined in `tenants/fieldnotes/accounts.dev.json`, installed
 cargo test --workspace     # kernel, substrate, storage, simulation, verification, backend, BFF
 npm run test:web           # the frontend kernel, as plain functions
 npm run check              # type-check the JavaScript through its JSDoc
-npm run build && npm run e2e   # real browser: 26 tests on two stacks with their own ports
+npm run e2e                # real browser, on two stacks with their own ports; builds what it runs against
 cd lean && lake build && lake env lean Audit.lean   # the proofs and the axioms they use
-npm run spec               # the specification gate: the tests above except e2e, then Exegra and Concordance
+npm run spec               # the specification gate: the tests above except e2e, lints and audits, then Exegra and Concordance
+npm run spec:browser       # the same, and the browser suites
 ```
 
 After changing the specification, regenerate the model crate and the web modules (the gate fails while either is out of date):
