@@ -565,6 +565,34 @@ async fn members(
     .await
 }
 
+/// Erase one principal from the tenant, with a receipt (contract erase-subject).
+///
+/// Implements: CT-213
+async fn erasure_erase(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Json(request): Json<Json_>,
+) -> Result<Json<Json_>, ApiError> {
+    as_caller_at(&app, &headers, move |app, caller, identity| {
+        crate::erasure::erase(app, caller, identity, &request)
+    })
+    .await
+}
+
+/// The erasure receipts of the tenant, readable by an owner (contract list-erasure-receipts).
+///
+/// Implements: CT-1495
+async fn erasure_receipts(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Json(request): Json<Json_>,
+) -> Result<Json<Json_>, ApiError> {
+    as_caller(&app, &headers, move |app, identity| {
+        crate::erasure::receipts(app, identity, &request)
+    })
+    .await
+}
+
 /// Operations for people who may change the schema: the Impact Lab and diagnostics.
 fn require_schema_manager(app: &App, identity: &Identity) -> Result<(), ApiError> {
     let tenant = ops::header(app, identity)?;
@@ -1043,6 +1071,8 @@ pub fn router(app: Shared) -> Router {
         .route("/internal/view", post(view))
         .route("/internal/mutate", post(mutate))
         .route("/internal/members", post(members))
+        .route("/internal/erasure/erase", post(erasure_erase))
+        .route("/internal/erasure/receipts", post(erasure_receipts))
         .route("/internal/diagnostics", post(diagnostics))
         .route("/internal/platform/diagnostics", post(platform_diagnostics))
         .route("/internal/platform/tenants", post(platform_create_tenant))

@@ -20,6 +20,12 @@ pub use strata_model_core::types::{
     ViewSection, WorkflowDef, WorkflowId, WorkflowTransition,
 };
 
+/// What a field declares of its personal data and what a record type declares of its retention
+/// (D-6584): the erasure of a subject reads them ([`crate::erasure`]).
+pub use strata_model_core::types::{
+    DataSubject, PersonalDeclaration, PersonalKind, RetentionRule, RetentionStart,
+};
+
 /// The operator of checked arithmetic and the unit of a duration in the rule language (D-6540,
 /// D-6541).
 pub use strata_model_core::types::{ArithOp, DurationUnit};

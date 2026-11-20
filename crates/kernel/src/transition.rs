@@ -116,6 +116,17 @@ pub fn transition(
             id,
             expected_version,
         } => delete_record(&mut draft, lookup, object, *id, *expected_version)?,
+        Intent::EraseSubject {
+            subject,
+            resume_object,
+            resume_after,
+        } => erase_subject(
+            &mut draft,
+            lookup,
+            subject,
+            resume_object.as_ref(),
+            *resume_after,
+        )?,
     };
     Ok(draft.finish(output))
 }
@@ -201,6 +212,7 @@ pub fn needs(schema: Option<&TenantSchema>, intent: &Intent) -> Vec<Need> {
                 });
             }
         }
+        Intent::EraseSubject { .. } => out.extend(crate::erasure::needs(schema, intent)),
         Intent::ChangeSchema { changes, .. } => {
             // Re-validation looks up every reference of every record of a touched type, in the
             // schema as it will be. Load each such type whole: one need per object type, however
@@ -922,6 +934,22 @@ fn delete_record(
         object: object.clone(),
         id,
     })
+}
+
+/// Erase one data subject, one batch of it (the module [`crate::erasure`]).
+fn erase_subject(
+    draft: &mut Draft<'_>,
+    lookup: Lookup<'_>,
+    subject: &PrincipalId,
+    resume_object: Option<&ObjectTypeId>,
+    resume_after: Option<RecordId>,
+) -> Result<Output, DomainError> {
+    let done = crate::erasure::decide(lookup, draft.ctx, subject, resume_object, resume_after)?;
+    draft.ops.extend(done.ops);
+    draft.events.extend(done.events);
+    draft.effects.extend(done.effects);
+    draft.evidence.extend(done.evidence);
+    Ok(done.output)
 }
 
 fn change_member(

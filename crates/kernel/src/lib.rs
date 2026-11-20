@@ -19,6 +19,7 @@
 
 pub mod canon;
 pub mod definitions;
+pub mod erasure;
 pub mod expr;
 pub mod intent;
 pub mod limits;

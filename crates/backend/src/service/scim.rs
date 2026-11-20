@@ -30,9 +30,9 @@ use strata_storage_api::{Account, FederatedIdentity, ThrottleVerdict};
 
 /// Deactivated people, by principal.
 pub const DISABLED: &str = "disabled";
-const USER: &str = "scim-user";
+pub(crate) const USER: &str = "scim-user";
 const GROUP_ROLE: &str = "group-role";
-const GROUP_MEMBERS: &str = "group-members";
+pub(crate) const GROUP_MEMBERS: &str = "group-members";
 const TOKEN: &str = "prov-token";
 /// The name of the provider that the identities made here are tied under.
 const PROVIDER: &str = "scim";

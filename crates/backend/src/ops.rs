@@ -40,7 +40,11 @@ pub fn run_intent(
     // A change of someone's roles ends their sessions in the commit itself. The ones that are
     // live now are noted first, to be announced and to have their sockets closed.
     let affected = match intent {
-        Intent::AssignRole { principal, .. } | Intent::RevokeRole { principal, .. } => app
+        Intent::AssignRole { principal, .. }
+        | Intent::RevokeRole { principal, .. }
+        | Intent::EraseSubject {
+            subject: principal, ..
+        } => app
             .store
             .live_sessions_of(&ctx.tenant, Some(principal), ctx.now)?,
         _ => Vec::new(),
