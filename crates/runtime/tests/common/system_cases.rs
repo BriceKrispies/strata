@@ -1022,6 +1022,36 @@ pub async fn purges_dead_letters_past_retention<S: MachineStore>(open: impl Fn()
     assert!(host.dead_letters().await.unwrap().is_empty());
 }
 
+/// A write that sets a dead letter aside deletes, in its own transaction, the dead letters older
+/// than the retention bound (ninety days): the older one is gone after that write, the younger one
+/// and the new one are kept, with no call of the purge.
+#[allow(dead_code)]
+pub async fn a_write_deletes_the_dead_letters_past_the_bound<S: MachineStore>(
+    open: impl Fn() -> Arc<S>,
+) {
+    let bound = i64::try_from(strata_runtime::RETENTION.as_millis()).unwrap();
+    let clock = TestClock::at(Time(0));
+    let host = life_system(open(), &clock, Arc::new(Outside::default()));
+    let refuse = |k: &'static str| json!({"event": "both", "payload": {"key": k}});
+    // Two dead letters, set aside at 0 and at half the bound.
+    for (at, k) in [(0, "old"), (bound / 2, "young")] {
+        clock.set(Time(at));
+        host.submit(refuse(k)).await.unwrap();
+        assert!(host.step().await.unwrap().unwrap().failed.is_some());
+    }
+    assert_eq!(host.dead_letters().await.unwrap().len(), 2);
+    // The next dead letter is written just past the bound of the first and not of the second.
+    clock.set(Time(bound + 1_000));
+    host.submit(refuse("new")).await.unwrap();
+    assert!(host.step().await.unwrap().unwrap().failed.is_some());
+    let kept = host.dead_letters().await.unwrap();
+    let events: Vec<&str> = kept.iter().map(|d| d.entry.event.as_str()).collect();
+    assert_eq!(events.len(), 2, "{events:?}");
+    assert!(!events.iter().any(|e| e.contains("\"old\"")), "{events:?}");
+    assert!(events.iter().any(|e| e.contains("\"young\"")), "{events:?}");
+    assert!(events.iter().any(|e| e.contains("\"new\"")), "{events:?}");
+}
+
 /// The purge removes the record of a finished instance once its retention has passed, and keeps
 /// an instance that is not finished, a finished one that is younger, and the singleton.
 ///

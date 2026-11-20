@@ -253,6 +253,7 @@ impl Tx for MemoryTx<'_> {
             error: error.to_string(),
             at,
         });
+        self.purge_dead_letters(crate::store::dead_letter_bound(at))?;
         Ok(())
     }
 }

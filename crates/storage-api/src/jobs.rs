@@ -25,8 +25,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use strata_kernel::triggers::{AutomationDecline, AutomationStart};
 use strata_kernel::{
-    canon, Effect, PrincipalId, SchemaVersion, StepName, TenantId, Timestamp, Transition,
-    TriggerId, Value, WorkflowId,
+    canon, AutomationDef, Effect, PrincipalId, SchemaVersion, StepName, TenantId, Timestamp,
+    Transition, TriggerId, Value, WorkflowId,
 };
 
 /// The attempts of a policy when the definition names none (D-6529).
@@ -449,6 +449,15 @@ pub struct RunRecord {
     /// the store.
     #[serde(default)]
     pub seq: u64,
+    /// The schema version the run started under (workflow-version-flow).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub definition_version: Option<SchemaVersion>,
+    /// The definition the run started under, kept with the run so that every step of it, its
+    /// approvals and its compensations read that one and not a newer one activated since
+    /// (workflow-version-flow). `None` for a run recorded before the copy was kept: it reads the
+    /// definition in force.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub definition: Option<AutomationDef>,
 }
 
 /// Where one step of a run is (spec type `step-run-state`, without `compensated`).

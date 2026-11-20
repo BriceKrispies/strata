@@ -122,6 +122,14 @@ pub(super) fn step_job(
     }
 }
 
+/// The definition a run reads for its steps, approvals and compensations: the copy kept with the
+/// run when it started, so that activating a newer version does not change a run in flight
+/// (workflow-version-flow). A run recorded before the copy was kept reads the definition in
+/// force.
+pub(super) fn pinned(run: &RunRecord, current: &AutomationDef) -> AutomationDef {
+    run.definition.clone().unwrap_or_else(|| current.clone())
+}
+
 /// The automation of a schema.
 pub(super) fn automation_of<'a>(
     schema: &'a TenantSchema,
@@ -500,6 +508,9 @@ fn start_run(
         ended_at: None,
         error: None,
         seq: 0,
+        // The run finishes under the definition that started it (workflow-version-flow).
+        definition_version: Some(schema.version),
+        definition: Some(def.clone()),
     };
     Outcome::done(WorkerWrites {
         runs: vec![run],
@@ -649,6 +660,8 @@ fn run_step(
             ..WorkerWrites::default()
         });
     }
+    let pinned_def = pinned(&run, def);
+    let def = &pinned_def;
     if let Some(outcome) = super::approvals::begin(
         app,
         tenant,

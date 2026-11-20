@@ -868,6 +868,7 @@ impl Tx for ApiTx<'_> {
             fields,
         );
         self.put(None, record);
+        self.purge_dead_letters(strata_runtime::store::dead_letter_bound(at))?;
         Ok(())
     }
 }

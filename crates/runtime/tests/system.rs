@@ -197,6 +197,18 @@ async fn sqlite_purges_dead_letters_past_retention() {
 
 /// Verifies: OPS-2442
 #[tokio::test]
+async fn memory_a_write_deletes_the_dead_letters_past_the_bound() {
+    a_write_deletes_the_dead_letters_past_the_bound(memory()).await;
+}
+
+/// Verifies: OPS-2442
+#[tokio::test]
+async fn sqlite_a_write_deletes_the_dead_letters_past_the_bound() {
+    a_write_deletes_the_dead_letters_past_the_bound(sqlite("write-purge")).await;
+}
+
+/// Verifies: OPS-2442
+#[tokio::test]
 async fn memory_purges_finished_records_past_retention() {
     purges_finished_records_past_retention(memory()).await;
 }

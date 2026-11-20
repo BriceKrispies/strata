@@ -111,6 +111,11 @@ fn award() -> AutomationDef {
 
 /// `drip`: waits a minute, then makes a note.
 fn drip() -> AutomationDef {
+    drip_titled("Later")
+}
+
+/// `drip` whose note is titled `title`.
+fn drip_titled(title: &str) -> AutomationDef {
     automation(
         "drip",
         "writer",
@@ -125,7 +130,7 @@ fn drip() -> AutomationDef {
                     Some("mark"),
                 ),
             ),
-            ("mark", step(make_note("Later"), Some("done"))),
+            ("mark", step(make_note(title), Some("done"))),
             ("done", step(AutomationStep::End, None)),
         ],
     )
@@ -625,4 +630,143 @@ fn the_owner_lists_runs_and_their_steps() {
     assert!(routes::list_steps(&app, &owner, &json!({ "run": "nope" })).is_err());
     assert!(routes::list_runs(&app, &owner, &json!({ "tenant": "beta" })).is_err());
     assert!(routes::list_runs(&app, &signed_in("alpha", "writer1"), &json!({})).is_err());
+}
+
+// Verifies: SCH-015
+#[test]
+fn an_effect_with_a_key_is_applied_once_when_its_job_is_attempted_three_times() {
+    let app = app();
+    install(&app, "alpha");
+    let alpha = tenant_id("alpha");
+    let job = start(&app, "alpha", "award", 7, T0);
+    let first = app
+        .store
+        .job_lease(&alpha, "w1", Timestamp(T0))
+        .unwrap()
+        .unwrap();
+    leases::run_leased(&app, &alpha, &first, &at(T0)).unwrap();
+    // Attempt one: w1 makes the note and stops before it reports.
+    let one = app
+        .store
+        .job_lease(&alpha, "w1", Timestamp(T0))
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        steps::run_job(&app, &alpha, &one, Timestamp(T0)).report,
+        JobReport::Succeeded
+    );
+    assert_eq!(notes(&app, "alpha").len(), 1);
+    // Attempt two, after the lease expired: the same key, no second note; w2 stops too.
+    let second_at = T0 + 60_001;
+    let two = app
+        .store
+        .job_lease(&alpha, "w2", Timestamp(second_at))
+        .unwrap()
+        .expect("the lease expired");
+    assert!(two.token > one.token);
+    assert_eq!(
+        steps::run_job(&app, &alpha, &two, Timestamp(second_at)).report,
+        JobReport::Succeeded
+    );
+    assert_eq!(notes(&app, "alpha").len(), 1);
+    // Attempt three reports: still one note, and the step records the three attempts.
+    let third_at = second_at + 60_001;
+    let three = app
+        .store
+        .job_lease(&alpha, "w3", Timestamp(third_at))
+        .unwrap()
+        .expect("the lease expired again");
+    assert!(three.token > two.token);
+    assert_eq!(three.job.attempt, 3);
+    leases::run_leased(&app, &alpha, &three, &at(third_at)).unwrap();
+    assert_eq!(notes(&app, "alpha").len(), 1);
+    worker::tick(&app, "w3", &config(), &at(third_at));
+    assert_eq!(run_of(&app, "alpha", &job).state, RunState::Completed);
+    assert_eq!(notes(&app, "alpha").len(), 1);
+    let made = &app.store.automation_steps(&alpha, &job, None, 10).unwrap()[0];
+    assert_eq!(made.attempts, 3);
+}
+
+// Verifies: MIG-562
+#[test]
+fn a_run_finishes_under_the_definition_version_that_started_it() {
+    let app = app();
+    install(&app, "alpha");
+    let alpha = tenant_id("alpha");
+    let before = app
+        .store
+        .load_complete(&alpha)
+        .unwrap()
+        .tenant
+        .unwrap()
+        .schema
+        .version;
+    // The first run starts and waits a minute before its note.
+    let old = start(&app, "alpha", "drip", 7, T0);
+    worker::tick(&app, "w1", &config(), &at(T0));
+    let waiting = run_of(&app, "alpha", &old);
+    assert_eq!(waiting.state, RunState::Waiting);
+    assert_eq!(waiting.definition_version, Some(before));
+    // The owner redefines the automation while the run waits: a newer version is in force.
+    let owner = Principal::User(principal_id("alpha:owner"));
+    execute(
+        app.store.as_ref(),
+        &Intent::ChangeSchema {
+            changes: vec![SchemaChange::DefineAutomation(drip_titled("Newer"))],
+            expected_version: None,
+            existing: ExistingData::Reject,
+        },
+        &ctx("alpha", owner, 1_000),
+    )
+    .expect("the redefinition");
+    let after = app
+        .store
+        .load_complete(&alpha)
+        .unwrap()
+        .tenant
+        .unwrap()
+        .schema
+        .version;
+    assert_ne!(after, before);
+    // A run started now reads the new definition; the one in flight finishes under its own.
+    let new = start(&app, "alpha", "drip", 8, T0 + 1);
+    worker::tick(&app, "w1", &config(), &at(T0 + 1));
+    assert_eq!(run_of(&app, "alpha", &new).definition_version, Some(after));
+    worker::tick(&app, "w1", &config(), &at(T0 + 60_001));
+    assert_eq!(run_of(&app, "alpha", &old).state, RunState::Completed);
+    assert_eq!(run_of(&app, "alpha", &new).state, RunState::Completed);
+    let titled = |slug: &str| {
+        notes(&app, "alpha")
+            .into_iter()
+            .find(|note| note.get(&field("slug")) == &text(slug))
+            .map(|note| note.get(&field("title")).clone())
+    };
+    assert_eq!(
+        titled("7"),
+        Some(text("Later")),
+        "the run in flight kept its definition"
+    );
+    assert_eq!(
+        titled("8"),
+        Some(text("Newer")),
+        "a run started later reads the new one"
+    );
+}
+
+// A definition that names a step kind or a trigger event outside the published catalogue (INT-153)
+// is not a definition: the catalogue is the typed unions, so such a definition does not decode
+// and so can reach neither define-automation nor activate-workflow, which re-defines a draft
+// that is already in the schema.
+// Verifies: INT-153
+#[test]
+fn a_step_outside_the_catalogue_does_not_decode_into_a_definition() {
+    let known = step(make_note("Silver"), Some("done"));
+    let wire = serde_json::to_value(&known).expect("a step encodes");
+    assert_eq!(
+        serde_json::from_value::<AutomationStepDef>(wire.clone()).expect("a catalogue step"),
+        known
+    );
+    let mut outside = wire;
+    outside["action"] = json!({ "run-script": { "source": "1 + 1" } });
+    assert!(serde_json::from_value::<AutomationStepDef>(outside).is_err());
 }

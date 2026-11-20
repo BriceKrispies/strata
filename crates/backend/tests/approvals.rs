@@ -1283,3 +1283,80 @@ fn an_automation_cannot_invoke_an_operation_beyond_what_its_run_as_and_the_opera
     }
     assert!(held.contains_key(&WorkflowId::new("allowed").unwrap()));
 }
+
+// Verifies: WFL-2680, SCH-1524
+#[test]
+fn a_request_approval_step_attempted_again_after_a_crash_waits_once() {
+    let app = app();
+    install(&app, "alpha");
+    let alpha = tenant_id("alpha");
+    let run = start_job(&app, "gated", "1", T0);
+    // The start job runs and reports; then w1 leases the approval step, does it (the wait and its
+    // deadline are written) and stops before it reports.
+    let first = app
+        .store
+        .job_lease(&alpha, "w1", Timestamp(T0))
+        .unwrap()
+        .unwrap();
+    leases::run_leased(&app, &alpha, &first, &at(T0)).unwrap();
+    let held = app
+        .store
+        .job_lease(&alpha, "w1", Timestamp(T0))
+        .unwrap()
+        .unwrap();
+    let outcome = steps::run_job(&app, &alpha, &held, Timestamp(T0));
+    assert_eq!(outcome.report, JobReport::Succeeded);
+    app.store
+        .automation_write(&alpha, &outcome.writes, Timestamp(T0))
+        .unwrap();
+    let deadlines = |app: &App| {
+        app.store
+            .jobs_list(&alpha, None, 50)
+            .unwrap()
+            .into_iter()
+            .filter(|job| matches!(job.work, JobWork::ApprovalTimeout { .. }))
+            .count()
+    };
+    assert_eq!(run_of(&app, &run).state, RunState::AwaitingApproval);
+    assert_eq!(deadlines(&app), 1);
+    // The lease expires and another worker attempts the step again: the step keeps its one wait,
+    // as first requested, and no second deadline is made.
+    let later = T0 + 60_001;
+    worker::tick(&app, "w2", &config(), &at(later));
+    assert_eq!(run_of(&app, &run).state, RunState::AwaitingApproval);
+    let records = steps_of(&app, &run);
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].state, StepState::Waiting);
+    let approval = records[0].approval.clone().expect("the approval");
+    assert_eq!(approval.requested_at, Timestamp(T0));
+    assert_eq!(approval.deadline, Timestamp(T0 + HOUR as i64));
+    assert_eq!(approval.decision, None);
+    assert_eq!(deadlines(&app), 1);
+    // The first worker's late report is refused by its token and changes nothing.
+    let late = app
+        .store
+        .job_report(
+            &alpha,
+            &held.job.id,
+            held.token,
+            &outcome.report,
+            &outcome.writes,
+            Timestamp(later + 1),
+        )
+        .unwrap();
+    assert!(matches!(late, Reported::Refused(_)), "{late:?}");
+    assert_eq!(steps_of(&app, &run).len(), 1);
+    assert_eq!(deadlines(&app), 1);
+    // The one wait is decided once, and the run ends.
+    decide(&app, "editor", &run, true, later + 2).expect("approved");
+    worker::tick(&app, "w2", &config(), &at(later + 2));
+    assert_eq!(run_of(&app, &run).state, RunState::Completed);
+    let gate = steps_of(&app, &run).remove(0);
+    assert_eq!(gate.state, StepState::Completed);
+    assert_eq!(
+        gate.approval
+            .and_then(|approval| approval.decision)
+            .map(|d| d.approved),
+        Some(true)
+    );
+}

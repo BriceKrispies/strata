@@ -513,6 +513,112 @@ fn a_segment_of_350_people_is_evaluated_across_batches_with_no_one_twice_or_miss
     assert!(fx.jobs().iter().all(|job| job.state == JobState::Completed));
 }
 
+// Verifies: SEG-022, SEG-024, CT-297
+#[test]
+fn a_changed_predicate_over_260_people_leaves_membership_equal_to_a_fresh_evaluation() {
+    let fx = Fx::new("rechange", vec![]);
+    let tiers = ["gold", "silver", "bronze"];
+    for n in 0..260 {
+        fx.create_member(T0 + n, &format!("m{n:03}"), tiers[(n % 3) as usize], None);
+    }
+    fx.define(T0 + 1_000, &gold_definition());
+    fx.drain(T0 + 2_000);
+    assert_eq!(fx.members(gold_id()).len(), 87);
+    // The predicate changes: the same segment now holds the silver tier. The change leaves one
+    // all-scope continuation, and nothing is re-evaluated until the worker runs it.
+    let mut silver = gold_definition();
+    silver.predicate = expr::parse("record.tier == 'silver'").unwrap();
+    fx.define(T0 + 3_000, &silver);
+    assert_eq!(fx.app.store.segment_batches(&fx.tenant()).unwrap().len(), 1);
+    fx.drain(T0 + 4_000);
+    // The members now equal a fresh evaluation of the new predicate over every record, and no
+    // continuation is left.
+    let state = fx.app.store.load_complete(&fx.tenant()).unwrap();
+    let fresh: BTreeSet<String> = state
+        .tenant
+        .unwrap()
+        .records_of(&object("member"))
+        .filter(|r| r.get(&field("tier")) == &text("silver"))
+        .filter_map(|r| match r.get(&field("principal")) {
+            Value::Str(person) => Some(person.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(fresh.len(), 87);
+    let members = fx.members(gold_id());
+    assert_eq!(members.len(), fresh.len(), "no person is a member twice");
+    assert_eq!(members.into_iter().collect::<BTreeSet<_>>(), fresh);
+    assert!(fx
+        .app
+        .store
+        .segment_batches(&fx.tenant())
+        .unwrap()
+        .is_empty());
+    // The gold members left and the silver ones entered, each once.
+    let events = fx.events();
+    let exited = events
+        .iter()
+        .filter(|(_, e)| e.event.direction == SegmentDirection::Exited)
+        .count();
+    assert_eq!(exited, 87);
+    assert_eq!(events.len(), 87 + 87 + 87);
+}
+
+// Verifies: SEG-036, SEG-037, SEG-038, PRV-353
+#[test]
+fn an_erasure_through_the_real_path_ends_the_memberships_sealed_and_a_later_change_does_not_re_enter(
+) {
+    let fx = Fx::new("erased", extras());
+    // The person is known to the tenant by a role, so that the erasure finds them.
+    fx.assign(T0, "m1", "greeter");
+    let m1 = fx.create_member(T0 + 1, "m1", "gold", None);
+    fx.create_member(T0 + 2, "m2", "gold", None);
+    fx.define(T0 + 3, &gold_definition());
+    fx.drain(T0 + 4);
+    assert_eq!(fx.members(gold_id()), [fx.person("m1"), fx.person("m2")]);
+    let person = principal_id(&fx.person("m1"));
+
+    let receipt = strata_backend::erasure::erase_subject(&fx.app, &fx.ctx(T0 + 10), &person)
+        .expect("the erasure runs");
+    assert_eq!(receipt.principal, fx.person("m1"));
+
+    // The membership of the person is gone and the other person's is not.
+    assert_eq!(fx.members(gold_id()), [fx.person("m2")]);
+    // The exit names the person sealed, with the reason erasure, and never by their own id.
+    let exits: Vec<_> = fx
+        .events()
+        .into_iter()
+        .map(|(_, logged)| logged.event)
+        .filter(|event| event.direction == SegmentDirection::Exited)
+        .collect();
+    assert_eq!(exits.len(), 1);
+    assert_eq!(exits[0].reason, seg::SegmentReason::Erasure);
+    assert!(
+        exits[0].person.as_str().starts_with("sealed:"),
+        "{:?}",
+        exits[0]
+    );
+    assert!(fx
+        .events()
+        .iter()
+        .skip(2)
+        .all(|(_, logged)| logged.event.person.as_str() != fx.person("m1")));
+
+    // A later change that would make the person a member again does not: the person is marked.
+    fx.set_tier(T0 + 20, m1, "silver");
+    fx.set_tier(T0 + 21, m1, "gold");
+    fx.drain(T0 + 30);
+    assert_eq!(fx.members(gold_id()), [fx.person("m2")]);
+    assert_eq!(
+        fx.events()
+            .iter()
+            .filter(|(_, logged)| logged.event.direction == SegmentDirection::Entered)
+            .count(),
+        2,
+        "no entry after the two first"
+    );
+}
+
 // Verifies: SEG-018, SEG-1545
 #[test]
 fn a_time_dependent_segments_member_leaves_at_the_first_refresh_after_the_wake_time() {
