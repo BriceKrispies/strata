@@ -371,16 +371,6 @@ pub enum DomainError {
     },
 }
 
-/// Unit
-///
-/// Specification type `unit`: a union, externally tagged.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-
-pub enum Unit {
-    /// The variant `Unit`.
-    Unit,
-}
-
 /// Grant
 ///
 /// strata_kernel::Grant: Object(ObjectTypeId, ObjectAction) is a tuple variant.

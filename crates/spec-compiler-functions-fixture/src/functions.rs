@@ -13,7 +13,11 @@
     clippy::redundant_clone,
     clippy::single_match,
     clippy::unnecessary_fold,
-    clippy::float_cmp
+    clippy::float_cmp,
+    clippy::unit_arg,
+    clippy::unit_cmp,
+    clippy::let_unit_value,
+    clippy::unused_unit
 )]
 
 use crate::types;
@@ -255,10 +259,7 @@ pub fn authorize(
 /// transition.rs check_version: an expected version other than the stored one is a version conflict.
 ///
 /// Specification function `check-version`; fails with `domain-error`.
-pub fn check_version(
-    version: u64,
-    expected: Option<u64>,
-) -> Result<types::Unit, types::DomainError> {
+pub fn check_version(version: u64, expected: Option<u64>) -> Result<(), types::DomainError> {
     Ok(match expected {
         Some(v) => {
             if v != version {
@@ -266,10 +267,10 @@ pub fn check_version(
                     message: format!("record is at version {version}, expected {v}"),
                 });
             } else {
-                types::Unit::Unit
+                ()
             }
         }
-        None => types::Unit::Unit,
+        None => {}
     })
 }
 
@@ -570,6 +571,13 @@ pub fn mentions_field(e: &types::Expr) -> bool {
             otherwise,
         } => mentions_field(&(**cond)) || mentions_field(&(**t)) || mentions_field(&(**otherwise)),
     }
+}
+
+/// print of the rule language (WG-4966): an expression in its authoring syntax, the generated printer, which is the kernel's Display of Expr.
+///
+/// Specification function `print-condition`.
+pub fn print_condition(c: &types::Expr) -> String {
+    std::string::ToString::to_string(c)
 }
 
 /// eval of the rule language with a lookup, its fourth argument (Exegra WG-4968, WG-5132): a hop through a reference reads the lookup; a target the lookup covers but does not hold is null, a field it does not cover is an evaluation error, written here as an error string.
@@ -3258,12 +3266,12 @@ mod tests {
         );
     }
 
-    /// Example 3 of `check-version`.
+    /// The built-in unit (WG-4966): () is the value, null in an example.
     #[test]
     fn check_version_example_3() {
         let version: u64 = 2;
         let expected: Option<u64> = Some(2);
-        let want_: types::Unit = types::Unit::Unit;
+        let want_: () = ();
         assert_eq!(check_version(version, expected), Ok(want_));
     }
 
@@ -3272,7 +3280,7 @@ mod tests {
     fn check_version_example_4() {
         let version: u64 = 2;
         let expected: Option<u64> = None;
-        let want_: types::Unit = types::Unit::Unit;
+        let want_: () = ();
         assert_eq!(check_version(version, expected), Ok(want_));
     }
 
@@ -3747,6 +3755,41 @@ mod tests {
             types::Expr::Not(Box::new(types::Expr::Lit(types::Value::Bool(true)))),
         ]);
         assert!(!mentions_field(&e));
+    }
+
+    /// A comparison prints in parentheses, a string literal single-quoted.
+    #[test]
+    fn print_condition_example_1() {
+        let c: types::Expr = types::Expr::Cmp {
+            op: types::CmpOp::Eq,
+            left: Box::new(types::Expr::Var {
+                scope: types::Scope::Record,
+                name: "status".to_string(),
+            }),
+            right: Box::new(types::Expr::Lit(types::Value::Str("published".to_string()))),
+        };
+        let want_: String = "(record.status == 'published')".to_string();
+        assert_eq!(print_condition(&c), want_);
+    }
+
+    /// A read through a reference prints the scope, the field and the target.
+    #[test]
+    fn print_condition_example_2() {
+        let c: types::Expr = types::Expr::Through {
+            scope: types::Scope::New,
+            field: "author".to_string(),
+            target: "name".to_string(),
+        };
+        let want_: String = "new.author.name".to_string();
+        assert_eq!(print_condition(&c), want_);
+    }
+
+    /// An empty and is printed as its identity.
+    #[test]
+    fn print_condition_example_3() {
+        let c: types::Expr = types::Expr::And(Vec::new());
+        let want_: String = "true".to_string();
+        assert_eq!(print_condition(&c), want_);
     }
 
     /// The target is in the lookup: its attribute.

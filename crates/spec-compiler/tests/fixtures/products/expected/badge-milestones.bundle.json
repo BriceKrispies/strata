@@ -202,6 +202,51 @@
       {
         "conditions": [
           {
+            "error": "no-badge",
+            "expr": "len(param.badge) > 0",
+            "id": "named",
+            "message": "A badge is named."
+          }
+        ],
+        "id": "badge_milestones__award_by_hand",
+        "inputs": [
+          {
+            "label": "The principal to award",
+            "name": "person",
+            "required": true,
+            "ty": "Str"
+          },
+          {
+            "label": "The badge",
+            "name": "badge",
+            "required": true,
+            "ty": "Str"
+          }
+        ],
+        "invokers": {
+          "roles": [
+            "badge_milestones__awarder"
+          ],
+          "signed-in": false
+        },
+        "label": "Award a badge by hand",
+        "steps": [
+          {
+            "CreateRecord": {
+              "fields": {
+                "awarded_at": "now",
+                "badge": "param.badge",
+                "person": "param.person"
+              },
+              "id": "award",
+              "object": "badge_milestones__award"
+            }
+          }
+        ]
+      },
+      {
+        "conditions": [
+          {
             "error": "no-points",
             "expr": "param.points > 0",
             "id": "positive",
@@ -246,51 +291,6 @@
               },
               "id": "define",
               "object": "badge_milestones__badge"
-            }
-          }
-        ]
-      },
-      {
-        "conditions": [
-          {
-            "error": "no-badge",
-            "expr": "len(param.badge) > 0",
-            "id": "named",
-            "message": "A badge is named."
-          }
-        ],
-        "id": "badge_milestones__award_by_hand",
-        "inputs": [
-          {
-            "label": "The principal to award",
-            "name": "person",
-            "required": true,
-            "ty": "Str"
-          },
-          {
-            "label": "The badge",
-            "name": "badge",
-            "required": true,
-            "ty": "Str"
-          }
-        ],
-        "invokers": {
-          "roles": [
-            "badge_milestones__awarder"
-          ],
-          "signed-in": false
-        },
-        "label": "Award a badge by hand",
-        "steps": [
-          {
-            "CreateRecord": {
-              "fields": {
-                "awarded_at": "now",
-                "badge": "param.badge",
-                "person": "param.person"
-              },
-              "id": "award",
-              "object": "badge_milestones__award"
             }
           }
         ]

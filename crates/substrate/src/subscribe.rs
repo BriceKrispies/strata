@@ -930,6 +930,7 @@ mod tests {
                 reason: seg::SegmentReason::Change,
                 version: 1,
                 revision: strata_kernel::StateRevision(0),
+                hop: 0,
             },
         };
         (segment, logged)

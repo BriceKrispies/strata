@@ -13,7 +13,11 @@
     clippy::redundant_clone,
     clippy::single_match,
     clippy::unnecessary_fold,
-    clippy::float_cmp
+    clippy::float_cmp,
+    clippy::unit_arg,
+    clippy::unit_cmp,
+    clippy::let_unit_value,
+    clippy::unused_unit
 )]
 
 use crate::types;
