@@ -40,6 +40,7 @@ pub fn run_intent(
 ) -> Result<Executed, ApiError> {
     // A write past the tenant's stored-bytes allowance is refused, naming the quota (BIL-151).
     crate::quota::check_write(app, ctx, intent)?;
+    crate::files::attach::check_intent(app, ctx, intent)?;
     // A change of someone's roles ends their sessions in the commit itself. The ones that are
     // live now are noted first, to be announced and to have their sockets closed.
     let affected = match intent {

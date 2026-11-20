@@ -119,6 +119,7 @@ pub fn invoke(
 
     if request.dry_run {
         let transition = decide(app, &ctx, &intent).map_err(explain)?;
+        crate::files::attach::check_events(app, &ctx, &transition)?;
         let result = result_of(&transition.output, transition.delta.new_revision, false)
             .ok_or_else(unexpected)?;
         return Ok(OperationReply {
@@ -174,7 +175,7 @@ fn explain(mut error: ApiError) -> ApiError {
 
 /// Decide an intent against what it needs, loading as `execute_by` loads, and commit nothing: a
 /// dry run (OPR-1552).
-fn decide(app: &App, ctx: &Context, intent: &Intent) -> Result<Transition, ApiError> {
+pub(crate) fn decide(app: &App, ctx: &Context, intent: &Intent) -> Result<Transition, ApiError> {
     let store = app.store.as_ref();
     let head = store.load(&ctx.tenant, &[])?;
     let mut wanted: BTreeSet<Need> = strata_kernel::needs(
