@@ -1,74 +1,29 @@
 {
-  "handlers": [],
+  "handlers": [
+    {
+      "reason": "Handled by code the check cannot find: no Implements mark, no mounted bffRoute, no route at the contract path (WG-5048).",
+      "items": [
+        "health-check",
+        "deliver-view",
+        "show-sign-in-page",
+        "show-authoring-view",
+        "run-scenario",
+        "project-change",
+        "install-bundle",
+        "parse-bundle"
+      ]
+    }
+  ],
   "tables": [
     {
       "reason": "The table name is built at run time (CREATE TABLE IF NOT EXISTS {ledger}); the two ledgers it creates are described by tbl-control-migrations and tbl-tenant-migrations. Not a gap.",
       "items": [
         "{ledger}"
       ]
-    },
-    {
-      "reason": "Created by crates/runtime/src/sqlite.rs; no shipped record names them (WG-5049).",
-      "items": [
-        "runtime_records",
-        "runtime_outbox",
-        "runtime_timers",
-        "runtime_queue",
-        "runtime_dead_letters",
-        "runtime_tenant"
-      ]
     }
   ],
-  "env": [
-    {
-      "reason": "Read by the backend; RUN-1387 does not list them and nothing else in the specification names them (WG-5050).",
-      "items": [
-        "STRATA_ARGON2_PER_TENANT",
-        "STRATA_BLOCKING_PER_TENANT",
-        "STRATA_BLOCKING_QUEUE",
-        "STRATA_MAX_CONNECTIONS_PER_SOURCE"
-      ]
-    }
-  ],
-  "bffRoutes": [
-    {
-      "reason": "Identity routes of the BFF with no contract that names them in bffRoute (WG-5051).",
-      "items": [
-        "GET /api/sign-in/providers",
-        "POST /api/passkeys/register/start",
-        "POST /api/passkeys/register/finish",
-        "POST /api/session/step-up",
-        "GET /api/factors",
-        "POST /api/factors/totp/start",
-        "POST /api/factors/totp/confirm",
-        "POST /api/factors/totp/remove",
-        "POST /api/factors/recovery-codes",
-        "POST /api/recovery/request",
-        "POST /api/recovery/complete",
-        "POST /api/recovery/cancel",
-        "POST /api/sessions/revoke-others",
-        "GET /api/identity/*action",
-        "POST /api/identity/*action",
-        "GET /federation/saml/metadata/:provider",
-        "POST /introspect",
-        "GET /.well-known/jwks.json",
-        "ANY /scim/v2/*rest"
-      ]
-    },
-    {
-      "reason": "Lab, diagnostics, development and socket routes of the BFF with no contract that names them in bffRoute (WG-5052).",
-      "items": [
-        "GET /api/lab/overview",
-        "POST /api/lab/run",
-        "GET /api/lab/runs/:id",
-        "POST /api/lab/replay",
-        "POST /api/lab/verify",
-        "GET /api/diagnostics",
-        "POST /api/dev/:action",
-        "GET /ws"
-      ]
-    }
-  ],
+  "env": [],
+  "bffRoutes": [],
   "paths": [
     {
       "reason": "Cited by the vocabulary description of the term kind (entityKinds.term.doc); the glossary it names is folded into the specification as doc-glossary, and vocabulary descriptions cannot be edited by operations (WG-5053).",
