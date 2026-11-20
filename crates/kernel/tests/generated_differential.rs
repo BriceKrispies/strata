@@ -97,13 +97,24 @@
 //!      with `operation:decided_by_the_kernel` and the generated `needs` plans nothing for it,
 //!      because the function language does not state the decision yet. The operation generator
 //!      draws no invocation, and `compare_transition` fails on one.
-//!  13. Not mirrored: the tenant ledger (`strata_kernel::ledger`, WG-5083). The generated
-//!      `intent-decision` refuses `PostLedger`, `apply-change` refuses the ledger schema changes,
-//!      `needs` plans no ledger need, `apply-delta` leaves a ledger operation out and
-//!      `schema-problems` does not check ledger declarations; the functions that rebuild a tenant
-//!      schema or state carry its `ledger` member unchanged. The generator draws no ledger intent
-//!      or change: `assert_no_input_of_a_known_difference` fails on a snapshot that holds a
-//!      ledger, and `compare_transition` on a posting.
+//!  13. Not mirrored: the posting of the tenant ledger (`strata_kernel::ledger::post`, the
+//!      `PostLedger` intent, a transfer as two postings committed together; WG-5083) and
+//!      everything that reads an account. An account is named by a UUID derived from the
+//!      SHA-256 of its tenant, owner, unit and scope (`account_id`), and the function language
+//!      has neither a hash nor a way to build a uuid; and an example argument or result of a
+//!      generated function may not contain a uuid, which every account header and entry holds,
+//!      so no example of a decision over a snapshot with accounts can be written. The generated
+//!      `intent-decision` refuses `PostLedger` (`ledger:decided_by_the_ledger_module`),
+//!      `apply-delta` leaves a ledger operation out, the plan of a posting (`refine_needs`) is not
+//!      stated, and the branch of `ledger-removal-check` that finds an account naming a unit or a
+//!      pool has no example. Mirrored: the declarations (`declare-ledger-unit`, `-pool`,
+//!      `set-ledger-limit`, `remove-ledger-definition` in `apply-change`), their problems
+//!      (`ledger-problems`), the capability `ledger-configure`, the needs of a removal, the
+//!      references of a trigger, an automation step and an operation step to a unit, and, compared
+//!      directly (`the_ledger_periods_and_limits_agree_with_the_generated_functions`), the
+//!      calendar periods and the limits of an account (`ledger-period-start`, `ledger-limits-of`).
+//!      Guarded: `assert_no_input_of_a_known_difference` fails on a snapshot whose state holds a
+//!      ledger (an account or an entry), and `compare_transition` on a posting.
 //!  14. Not exercised, and not mirrored: the checks of the declarations of an object type, of the
 //!      templates, tokens and product records of the tenant schema that the hand-written `schema.problems` makes through
 //!      `object_meta::problems`, `templates::problems` and `products::problems` (retention from a
@@ -148,7 +159,9 @@
 //! and product capabilities (the write of an override, the resolution, the effects of a change of
 //! definitions, the checks of definitions and of the grants of declared capabilities:
 //! `write-setting`, `resolve-setting`, `setting-change-effects`, `setting-problems`,
-//! `capability-problems`, `capability-grant-problem`; WG-5140), the size limits of `limits.rs` (the bytes of a record, the
+//! `capability-problems`, `capability-grant-problem`; WG-5140), the declarations of the tenant
+//! ledger (units, pools and limits: `apply-change`, `ledger-problems`, `ledger-removal-check`,
+//! `ledger-change-needs`, the capability `ledger-configure`; WG-5170), the size limits of `limits.rs` (the bytes of a record, the
 //! length of a string or a list, the encoded size of a value of a unique field: `record-limit-check`,
 //! `limit-step`; WG-5092), the field-level read conditions (`redact`, in `kernel-read` and
 //! `named-read`; WG-5093), the deletion of a record that two fields of one record refer to (one
@@ -333,6 +346,10 @@ enum SchemaOp {
     DefineCapability,
     DefineBadCapability,
     GrantProductCapability(bool),
+    /// One of the changes of the ledger declarations `ledger_change` lists, and a trigger on a
+    /// posting of the unit `credits`.
+    Ledger(u8),
+    DefineLedgerTrigger,
 }
 
 const MEMBERS: [&str; 5] = ["owner", "editor", "writer1", "writer2", "stranger"];
@@ -369,6 +386,8 @@ fn op_strategy() -> impl Strategy<Value = Op> {
         1 => Just(SchemaOp::DefineCapability),
         1 => Just(SchemaOp::DefineBadCapability),
         1 => any::<bool>().prop_map(SchemaOp::GrantProductCapability),
+        5 => (0u8..13).prop_map(SchemaOp::Ledger),
+        1 => Just(SchemaOp::DefineLedgerTrigger),
     ];
     let big = prop_oneof![
         Just(BigShape::LongTitle),
@@ -662,6 +681,18 @@ fn intent_of(op: &Op) -> Intent {
                         .into(),
                     )],
                 },
+                SchemaOp::Ledger(kind) => ledger_change(*kind),
+                SchemaOp::DefineLedgerTrigger => SchemaChange::DefineTrigger(TriggerDef {
+                    id: TriggerId::new("on_post").unwrap(),
+                    on: TriggerEvent::LedgerPosted {
+                        unit: LedgerUnit::new("credits").unwrap(),
+                    },
+                    condition: None,
+                    automation: WorkflowId::new("award").unwrap(),
+                    paused: None,
+                    defined_by: None,
+                    defined_at: None,
+                }),
                 // Placeholder: `ManyFields` is a hundred changes, built below.
                 SchemaOp::ManyFields => SchemaChange::RemoveField {
                     object: object("nothing"),
@@ -908,6 +939,93 @@ fn redeem() -> TenantOperationDef {
                 fields: BTreeMap::from([(field("rank"), Expr::Lit(Value::Int(1)))]),
             },
         ],
+    }
+}
+
+/// A limit of a ledger unit (no owner) or of one account of it.
+fn ledger_limit(
+    unit: &str,
+    owner: Option<&str>,
+    scope: Option<&str>,
+    amounts: (Option<i64>, Option<i64>),
+    period: Option<(u64, LedgerPeriod)>,
+) -> LedgerLimit {
+    LedgerLimit {
+        unit: LedgerUnit::new(unit).unwrap(),
+        owner: owner.map(|principal| LedgerOwner::Principal {
+            principal: principal_id(principal),
+        }),
+        floor: amounts.0.map(LedgerAmount),
+        cap: amounts.1.map(LedgerAmount),
+        period_cap: period.map(|(cap, _)| cap),
+        period: period.map(|(_, period)| period),
+        scope: scope.map(|text| LedgerScope(text.to_string())),
+    }
+}
+
+/// A change of the ledger declarations: 0 and 1 the units `credits` and `points`, 2 the pool
+/// `promo`, 3 a limit of `credits` (a floor, a cap and a cap per day), 4 the limit of one account
+/// of `credits` in a scope, 5 to 7 limits that are problems (a unit that is not declared, a floor
+/// above the cap, a limit that sets nothing), 8 to 10 the removal of the unit, the pool and the
+/// limit of `credits`, 11 a period without its cap, 12 a limit of a unit that names a scope.
+fn ledger_change(kind: u8) -> SchemaChange {
+    let credits = || LedgerUnit::new("credits").unwrap();
+    match kind {
+        0 | 1 => {
+            let unit = if kind == 0 { "credits" } else { "points" };
+            SchemaChange::DeclareLedgerUnit(LedgerUnitDecl {
+                unit: LedgerUnit::new(unit).unwrap(),
+                description: format!("The unit {unit}"),
+            })
+        }
+        2 => SchemaChange::DeclareLedgerPool(LedgerPoolDecl {
+            pool: LedgerPoolName::new("promo").unwrap(),
+            description: "A promotion budget".into(),
+        }),
+        3 => SchemaChange::SetLedgerLimit(ledger_limit(
+            "credits",
+            None,
+            None,
+            (Some(0), Some(100)),
+            Some((10, LedgerPeriod::Day)),
+        )),
+        4 => SchemaChange::SetLedgerLimit(ledger_limit(
+            "credits",
+            Some("alpha:editor"),
+            Some("promo"),
+            (None, Some(5)),
+            None,
+        )),
+        5 => SchemaChange::SetLedgerLimit(ledger_limit("ghost", None, None, (None, Some(1)), None)),
+        6 => SchemaChange::SetLedgerLimit(ledger_limit(
+            "credits",
+            None,
+            None,
+            (Some(5), Some(2)),
+            None,
+        )),
+        7 => SchemaChange::SetLedgerLimit(ledger_limit("credits", None, None, (None, None), None)),
+        8 => SchemaChange::RemoveLedgerDefinition(LedgerDefinitionRef::Unit { unit: credits() }),
+        9 => SchemaChange::RemoveLedgerDefinition(LedgerDefinitionRef::Pool {
+            pool: LedgerPoolName::new("promo").unwrap(),
+        }),
+        10 => SchemaChange::RemoveLedgerDefinition(LedgerDefinitionRef::Limit {
+            unit: credits(),
+            owner: None,
+            scope: None,
+        }),
+        11 => {
+            let mut limit = ledger_limit("credits", None, None, (None, Some(9)), None);
+            limit.period = Some(LedgerPeriod::Week);
+            SchemaChange::SetLedgerLimit(limit)
+        }
+        _ => SchemaChange::SetLedgerLimit(ledger_limit(
+            "credits",
+            None,
+            Some("promo"),
+            (None, Some(3)),
+            None,
+        )),
     }
 }
 
@@ -1190,8 +1308,8 @@ fn assert_no_input_of_a_known_difference(state: &State) {
         );
     }
     assert!(
-        tenant.ledger.is_none() && tenant.schema.ledger.is_none(),
-        "{} holds a ledger; the generated functions do not mirror it (difference 13)",
+        tenant.ledger.is_none(),
+        "{} holds ledger accounts or entries; the generated functions do not mirror them (difference 13)",
         tenant.id
     );
     assert!(
@@ -1590,6 +1708,112 @@ fn the_hand_written_kernel_agrees_with_the_generated_functions() {
         tally.needs,
         tally.evaluation_failed_details
     );
+}
+
+/// The calendar periods and the limits of an account (`ledger::period_start`, `ledger::limits_of`)
+/// against the generated `ledger-period-start` and `ledger-limits-of`, on fixed inputs: the
+/// posting that uses them is not mirrored (difference 13), these two are.
+#[test]
+fn the_ledger_periods_and_limits_agree_with_the_generated_functions() {
+    let mut instants: Vec<i64> = vec![
+        0,
+        5_000,
+        3_599_999,
+        3_600_000,
+        86_399_999,
+        86_400_000,
+        1_000_000_000_000,
+        1_735_689_599_999,
+        1_735_689_600_000,
+        1_709_164_800_000,
+        -1,
+        -3_600_001,
+        -86_400_001,
+        -604_800_000,
+        -2_678_400_000,
+    ];
+    instants.extend((-40..40).map(|i| i * 123_456_789_123));
+    for period in [
+        LedgerPeriod::Hour,
+        LedgerPeriod::Day,
+        LedgerPeriod::Week,
+        LedgerPeriod::Month,
+    ] {
+        for at in &instants {
+            let hand = strata_kernel::ledger::period_start(period, Timestamp(*at)).0;
+            let generated = spec::ledger_period_start(&period, *at)
+                .unwrap_or_else(|fault| panic!("ledger-period-start faulted: {fault}"));
+            assert_eq!(
+                hand, generated,
+                "the {period:?} that holds {at} starts differently"
+            );
+        }
+    }
+    let day = Some((10, LedgerPeriod::Day));
+    let week = Some((3, LedgerPeriod::Week));
+    let unit = ledger_limit("credits", None, None, (Some(0), Some(100)), day);
+    let account = ledger_limit(
+        "credits",
+        Some("alpha:editor"),
+        Some("promo"),
+        (None, Some(5)),
+        None,
+    );
+    let account_floor = ledger_limit(
+        "credits",
+        Some("alpha:editor"),
+        None,
+        (Some(-3), None),
+        week,
+    );
+    let account_period = ledger_limit("credits", Some("alpha:editor"), None, (None, None), week);
+    let mut half_period = ledger_limit("credits", Some("alpha:editor"), None, (None, None), None);
+    half_period.period = Some(LedgerPeriod::Week);
+    let other_unit = ledger_limit("points", None, None, (Some(1), None), None);
+    let sets: Vec<Vec<LedgerLimit>> = vec![
+        vec![],
+        vec![unit.clone()],
+        vec![unit.clone(), account.clone()],
+        vec![account.clone()],
+        vec![unit.clone(), account_floor.clone(), account.clone()],
+        vec![unit.clone(), account_period],
+        vec![unit.clone(), half_period],
+        vec![other_unit, unit],
+    ];
+    for limits in sets {
+        let mut schema = TenantSchema::genesis();
+        if !limits.is_empty() {
+            schema.ledger = Some(LedgerDeclarations {
+                units: BTreeMap::from([(
+                    LedgerUnit::new("credits").unwrap(),
+                    LedgerUnitDecl {
+                        unit: LedgerUnit::new("credits").unwrap(),
+                        description: "Store credit".into(),
+                    },
+                )]),
+                pools: BTreeMap::new(),
+                limits: limits.clone(),
+            });
+        }
+        for owner in ["alpha:editor", "alpha:owner"] {
+            for scope in ["", "promo", "other"] {
+                let owner = LedgerOwner::Principal {
+                    principal: principal_id(owner),
+                };
+                let credits = LedgerUnit::new("credits").unwrap();
+                let hand = strata_kernel::ledger::limits_of(&schema, &owner, &credits, scope);
+                let generated =
+                    spec::ledger_limits_of(&schema, &owner, &credits, &scope.to_string());
+                assert_eq!(hand.floor, generated.floor.map(|amount| amount.0));
+                assert_eq!(hand.cap, generated.cap.map(|amount| amount.0));
+                assert_eq!(
+                    hand.period_cap,
+                    generated.period_cap.map(|cap| (cap.cap, cap.period)),
+                    "the limits of {owner:?} in {scope:?} differ under {limits:?}"
+                );
+            }
+        }
+    }
 }
 
 /// The comparison can fail: the same inputs with a hand-written answer that has been altered are
