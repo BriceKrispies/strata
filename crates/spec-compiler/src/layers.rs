@@ -25,7 +25,10 @@
 //! - `layer.import-unknown`: an imported id the platform does not declare;
 //! - `layer.import-missing`: a platform type named in a type text (`type`, `repr`) or a platform
 //!   capability in a `capabilities` or `requires` list that is not imported;
-//! - `layer.redefines-entity`: an id the platform, or another product file, already declares.
+//! - `layer.redefines-entity`: an id the platform, or another product file, already declares;
+//! - `layer.outside-catalogue`: a trigger whose event, or an automation whose step action, is not a
+//!   variant of the platform's published catalogue, the unions `trigger-event` and
+//!   `automation-step` (INT-153, INT-1522, D-6536).
 //!
 //! References between entities are typed by Exegra's meta-model, which specc does not have; Exegra
 //! checks them (`layer.import-missing` for a reference, `layer.reference-unknown`,
@@ -62,7 +65,20 @@ pub const PRODUCT_SECTIONS: &[(&str, &str)] = &[
     ("uiScenarios", "journeys about its own entities"),
     ("claims", "claims about its own entities"),
     ("evidence", "evidence of its claims"),
+    (
+        "triggers",
+        "triggers (values of the platform type trigger-def)",
+    ),
+    (
+        "automations",
+        "automations (values of the platform type automation-def)",
+    ),
 ];
+
+/// The platform union whose variants are the step kinds an automation may name (D-6522).
+pub const STEP_CATALOGUE: &str = "automation-step";
+/// The platform union whose variants are the events a trigger may subscribe to (D-6522).
+pub const EVENT_CATALOGUE: &str = "trigger-event";
 
 /// The header is absent, or the file is not a JSON object.
 pub const HEADER_MISSING: &str = "layer.header-missing";
@@ -80,6 +96,8 @@ pub const IMPORT_UNKNOWN: &str = "layer.import-unknown";
 pub const IMPORT_MISSING: &str = "layer.import-missing";
 /// An id the platform or another product file already declares.
 pub const REDEFINES_ENTITY: &str = "layer.redefines-entity";
+/// A trigger event or a step action outside the platform's published catalogue.
+pub const OUTSIDE_CATALOGUE: &str = "layer.outside-catalogue";
 /// The code of a product file that is not JSONC.
 pub const SYNTAX: &str = "layer.syntax";
 
@@ -206,10 +224,10 @@ pub fn load_layered(
 ) -> Result<Layered, Vec<Diagnostic>> {
     let loaded = load::load(platform_path, platform_text);
     let mut diagnostics = Vec::new();
-    let platform_ids = match jsonc::parse(platform_text) {
-        Ok(value) => declared_ids(&value),
+    let (platform_ids, catalogue) = match jsonc::parse(platform_text) {
+        Ok(value) => (declared_ids(&value), Catalogue::of(&value)),
         // load::load has reported the syntax error.
-        Err(_) => BTreeMap::new(),
+        Err(_) => (BTreeMap::new(), Catalogue::default()),
     };
     let mut layers = Vec::new();
     // Ids the products declare, with the file that declares each, to find a second declaration.
@@ -218,6 +236,7 @@ pub fn load_layered(
         if let Some(layer) = check_product(
             product,
             &platform_ids,
+            &catalogue,
             platform_file,
             &mut product_ids,
             &mut diagnostics,
@@ -276,6 +295,7 @@ fn collect_ids(section: &str, item: &Value, ids: &mut BTreeMap<String, String>) 
 fn check_product(
     product: &ProductFile,
     platform_ids: &BTreeMap<String, String>,
+    catalogue: &Catalogue,
     platform_file: Option<&Path>,
     product_ids: &mut BTreeMap<String, String>,
     out: &mut Vec<Diagnostic>,
@@ -403,6 +423,7 @@ fn check_product(
             });
             if parsed.is_some() {
                 named_uses(&file, id, item, platform_ids, &imports, &own, out);
+                catalogue_uses(&file, id, section, item, catalogue, out);
             }
         }
     }
@@ -523,6 +544,147 @@ fn check_header(
         return None;
     }
     Some((id?.to_string(), name?.to_string(), ids))
+}
+
+/// The platform's published catalogue (INT-153, INT-1522): the tags of the variants of the unions
+/// [`STEP_CATALOGUE`] and [`EVENT_CATALOGUE`], as a value of each is written (its
+/// `encoding.variantCase`). `None` when the platform declares no such union.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Catalogue {
+    /// The tags of the step kinds an automation may name.
+    pub steps: Option<BTreeSet<String>>,
+    /// The tags of the events a trigger may subscribe to.
+    pub events: Option<BTreeSet<String>>,
+}
+
+impl Catalogue {
+    /// Reads the catalogue from the parsed platform specification.
+    pub fn of(platform: &Value) -> Self {
+        Catalogue {
+            steps: union_tags(platform, STEP_CATALOGUE),
+            events: union_tags(platform, EVENT_CATALOGUE),
+        }
+    }
+}
+
+/// The tags of the variants of the union type `id`, or `None` when the platform declares none.
+fn union_tags(platform: &Value, id: &str) -> Option<BTreeSet<String>> {
+    let ty = platform
+        .get("types")?
+        .as_array()?
+        .iter()
+        .find(|t| t.get("id").and_then(Value::as_str) == Some(id))?;
+    let case = ty
+        .get("encoding")
+        .and_then(|e| e.get("variantCase"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let variants = ty.get("variants")?.as_array()?;
+    Some(
+        variants
+            .iter()
+            .filter_map(|v| v.get("name").and_then(Value::as_str))
+            .map(|name| variant_tag(name, case))
+            .collect(),
+    )
+}
+
+/// How a variant name is written as the tag of a value, under the union's `variantCase`.
+fn variant_tag(name: &str, case: &str) -> String {
+    match case {
+        "PascalCase" => name
+            .split(|c: char| c == '-' || c == '_')
+            .map(|word| {
+                let mut chars = word.chars();
+                match chars.next() {
+                    Some(first) => first.to_ascii_uppercase().to_string() + chars.as_str(),
+                    None => String::new(),
+                }
+            })
+            .collect(),
+        "snake_case" => name.replace('-', "_"),
+        _ => name.to_string(),
+    }
+}
+
+/// Refuses a trigger whose `on`, or an automation whose step `action`, is not a variant of the
+/// platform's catalogue (`layer.outside-catalogue`).
+fn catalogue_uses(
+    file: &str,
+    entity: &str,
+    section: &str,
+    item: &Value,
+    catalogue: &Catalogue,
+    out: &mut Vec<Diagnostic>,
+) {
+    match section {
+        "triggers" => check_tag(
+            file,
+            entity,
+            "on",
+            item.get("on"),
+            catalogue.events.as_ref(),
+            EVENT_CATALOGUE,
+            out,
+        ),
+        "automations" => {
+            let Some(steps) = item.get("steps").and_then(Value::as_object) else {
+                return;
+            };
+            for (name, step) in steps {
+                check_tag(
+                    file,
+                    entity,
+                    &format!("steps.{name}.action"),
+                    step.get("action"),
+                    catalogue.steps.as_ref(),
+                    STEP_CATALOGUE,
+                    out,
+                );
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Refuses `value` unless it is one variant of the union `union`: an object with one key that is
+/// a published tag, or, for a variant without fields, the tag as a string.
+fn check_tag(
+    file: &str,
+    entity: &str,
+    at: &str,
+    value: Option<&Value>,
+    published: Option<&BTreeSet<String>>,
+    union: &str,
+    out: &mut Vec<Diagnostic>,
+) {
+    let Some(published) = published else {
+        out.push(Diagnostic::new(
+            OUTSIDE_CATALOGUE,
+            entity,
+            format!("\"{entity}\" in {file} declares {at}, but the platform specification publishes no catalogue for it: it declares no union \"{union}\". Remove the entity, or layer the product on a platform that publishes \"{union}\"."),
+        ));
+        return;
+    };
+    let tag = match value {
+        Some(Value::String(tag)) => Some(tag.as_str()),
+        Some(Value::Object(map)) if map.len() == 1 => map.keys().next().map(String::as_str),
+        _ => None,
+    };
+    let variants = published.iter().cloned().collect::<Vec<_>>().join(", ");
+    match tag {
+        Some(tag) if published.contains(tag) => {}
+        Some(tag) => out.push(Diagnostic::new(
+            OUTSIDE_CATALOGUE,
+            entity,
+            format!("\"{entity}\" in {file} names \"{tag}\" at {at}, which is outside the published catalogue (INT-153): the platform's union \"{union}\" has the variants {variants}. Use one of them; a kind the catalogue lacks belongs in the platform specification, not in a product."),
+        )),
+        None => out.push(Diagnostic::new(
+            OUTSIDE_CATALOGUE,
+            entity,
+            format!("{at} of \"{entity}\" in {file} must be one variant of the platform's union \"{union}\", written {{\"<Variant>\": {{ ... }}}}, or \"<Variant>\" for a variant without fields; the variants are {variants}."),
+        )),
+    }
 }
 
 /// Refuses the platform types (named in `type` and `repr` texts) and capabilities (in
@@ -707,6 +869,32 @@ mod tests {
         );
         assert_eq!(type_names("map<a>"), vec!["map<a>"]);
         assert_eq!(type_names("item-id[]"), vec!["item-id[]"]);
+    }
+
+    #[test]
+    fn variant_tags_follow_the_encoding_of_the_union() {
+        assert_eq!(variant_tag("create-record", "PascalCase"), "CreateRecord");
+        assert_eq!(variant_tag("end", "PascalCase"), "End");
+        assert_eq!(variant_tag("create-record", "snake_case"), "create_record");
+        assert_eq!(variant_tag("create-record", ""), "create-record");
+    }
+
+    #[test]
+    fn the_catalogue_is_read_from_the_platform_unions() {
+        let platform: Value = serde_json::json!({ "types": [
+            { "id": "automation-step", "kind": "union", "encoding": { "variantCase": "PascalCase" },
+              "variants": [ { "name": "wait-for" }, { "name": "end" } ] }
+        ] });
+        let catalogue = Catalogue::of(&platform);
+        assert_eq!(
+            catalogue.steps,
+            Some(
+                ["End".to_string(), "WaitFor".to_string()]
+                    .into_iter()
+                    .collect()
+            )
+        );
+        assert_eq!(catalogue.events, None);
     }
 
     #[test]

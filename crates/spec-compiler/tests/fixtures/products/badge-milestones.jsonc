@@ -1,0 +1,102 @@
+{
+  // A product that reacts to the ledger with an automation (WG-5031): "when a person's points balance
+  // crosses 500, award the Silver badge once, notify them in-app and by mail, and after 7 days send a
+  // follow-up if they have not viewed it". It uses only the platform's catalogue: the trigger event
+  // is a variant of trigger-event, every step action a variant of automation-step (D-6522), and the
+  // automation acts as its automation principal with the roles of its run-as (D-6525).
+  // tests/layers.rs loads it with specc's loader; refused/step-outside-catalogue.jsonc is its
+  // negative. Exegra does not read the triggers and automations sections yet (D-6536).
+  //
+  // Values are written as the platform types are written in a tenant bundle: unions externally
+  // tagged in PascalCase, durations in milliseconds, expressions as tenant rule language text over
+  // the parameters D-6523 states (param.balance_before is the balance before the posting).
+  //
+  // What this file names but cannot declare, because a product file has no section for it yet:
+  // the object type milestones_award (fields person, badge, awarded_at, viewed_at, with a policy
+  // that lets a person set viewed_at on their own award), the ledger unit points, and the mail
+  // templates milestones_silver_notice, milestones_silver_mail and milestones_silver_follow_up.
+  "product": {
+    "id": "badge-milestones",
+    "name": "Badge milestones",
+    "description": "Awards the Silver badge once when a person's points balance crosses 500, tells the person in the inbox and by mail, and follows up by mail after seven days if the award has not been viewed.",
+    "imports": {
+      "spec": "../../../../../specifications/spec.jsonc",
+      "entities": ["content-read", "content-write", "product-module", "trigger-def", "trigger-event", "automation-def", "automation-step", "ledger-entry-posted"]
+    }
+  },
+  "roles": [
+    {
+      "id": "milestones_awarder",
+      "name": "Milestone awarder",
+      "description": "The role the automation principal of milestones_silver holds (its run-as): it creates and reads badge awards. An owner may confer it under ADM-152.",
+      "level": "tenant",
+      "holders": ["service"],
+      "capabilities": ["content-read", "content-write"]
+    }
+  ],
+  "triggers": [
+    {
+      "id": "milestones_silver_on_points",
+      "on": { "LedgerPosted": { "unit": "points" } },
+      "condition": "param.owner != null and param.balance_before < 500 and param.balance >= 500",
+      "automation": "milestones_silver"
+    }
+  ],
+  "automations": [
+    {
+      "id": "milestones_silver",
+      "label": "Award the Silver badge at 500 points",
+      "run-as": { "roles": ["milestones_awarder"] },
+      // Once per person, for as long as the automation exists (SCH-1536).
+      "run-key": "param.owner",
+      "start": "award",
+      "steps": {
+        "award": {
+          "action": { "CreateRecord": { "object": "milestones_award", "fields": { "person": "param.owner", "badge": "\"silver\"", "awarded_at": "param.at" } } },
+          "next": "notify",
+          "retry": { "attempts": 5 }
+        },
+        "notify": {
+          "action": { "CreateNotice": { "template": "milestones_silver_notice", "to": "param.owner", "record": "param.award_record" } },
+          "next": "mail"
+        },
+        "mail": {
+          "action": { "SendMail": { "template": "milestones_silver_mail", "to": "param.owner", "category": "transactional" } },
+          "next": "wait",
+          "retry": { "attempts": 8, "first-delay": 60000, "max-delay": 3600000 },
+          "timeout": 30000
+        },
+        "wait": {
+          "action": { "WaitFor": { "duration": 604800000 } },
+          "next": "viewed"
+        },
+        "viewed": {
+          "action": { "Branch": { "condition": "is_null(record.viewed_at)", "object": "milestones_award", "record": "param.award_record", "then": "follow_up", "else": "done" } }
+        },
+        "follow_up": {
+          "action": { "SendMail": { "template": "milestones_silver_follow_up", "to": "param.owner", "category": "transactional" } },
+          "next": "done"
+        },
+        "done": { "action": "End" }
+      }
+    }
+  ],
+  "claims": [
+    {
+      "id": "milestones-silver-once",
+      "kind": "requirement",
+      "statement": "A person whose points balance crosses 500 SHALL receive one Silver badge award, one inbox notice and one mail, however often the balance crosses 500 again and however many times a step is attempted.",
+      "subjects": ["product-module"],
+      "rationale": "The run key of milestones_silver is the person (SCH-1536) and every step carries its derived key (SCH-1524).",
+      "evaluate": { "method": "scenario" }
+    },
+    {
+      "id": "milestones-follow-up-unviewed",
+      "kind": "requirement",
+      "statement": "Seven days after the award, a follow-up mail SHALL be sent to the person when the award's viewed_at is empty, and no follow-up SHALL be sent when it is set.",
+      "subjects": ["product-module"],
+      "rationale": "The wait step resumes the run after 604800000 ms (WFL-1537) and the branch reads the award as it is then.",
+      "evaluate": { "method": "scenario" }
+    }
+  ]
+}
