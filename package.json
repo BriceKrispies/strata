@@ -7,7 +7,7 @@
     "generate": "node scripts/regenerate.mjs",
     "build": "vite build web",
     "check": "tsc -p web/jsconfig.json",
-    "test:web": "node --test web/test/kernel.test.js web/test/client.test.js",
+    "test:web": "node --test web/test/kernel.test.js web/test/client.test.js web/test/trusted-urls.test.js",
     "test:scripts": "node --test scripts/generated-share.test.mjs scripts/gate-bff-routes.test.mjs scripts/gate-cited-paths.test.mjs scripts/gate-env.test.mjs scripts/gate-exemptions.test.mjs scripts/gate-handlers.test.mjs scripts/gate-tables.test.mjs scripts/gate-audit-checks.test.mjs",
     "e2e": "playwright test -c tests/e2e/playwright.config.js",
     "e2e:generated": "playwright test -c tests/e2e/generated/playwright.generated.config.js",

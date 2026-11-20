@@ -19,5 +19,7 @@ export default defineConfig({
     allowedHosts: ['localhost', 'tidewater.localhost'],
   },
   worker: { format: 'es' },
-  build: { outDir: 'dist', emptyOutDir: true, target: 'es2022', sourcemap: false },
+  // The module-preload polyfill is left out: es2022 browsers preload natively, and the page's
+  // Trusted Types policy leaves no room for a helper script the build injects.
+  build: { outDir: 'dist', emptyOutDir: true, target: 'es2022', sourcemap: false, modulePreload: { polyfill: false } },
 });

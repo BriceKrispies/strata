@@ -10,9 +10,13 @@ import { holdValues, render } from './components/dom.js';
 import { isPageAddress } from './address.js';
 import { passkeysSupported, runPasskey } from './passkey.js';
 import { shell } from './views/shell.js';
+import { workerScriptUrl } from './trusted-urls.js';
+// The bundled worker's address (Vite's `?worker&url`), so it can pass through the Trusted Types policy.
+// @ts-ignore: a Vite import suffix, not a file.
+import kernelWorkerUrl from './worker/main.js?worker&url';
 
 const app = /** @type {HTMLElement} */ (document.getElementById('app'));
-const worker = new Worker(new URL('./worker/main.js', import.meta.url), { type: 'module', name: 'strata-kernel' });
+const worker = new Worker(workerScriptUrl(kernelWorkerUrl), { type: 'module', name: 'strata-kernel' });
 const darkQuery = window.matchMedia('(prefers-color-scheme: dark)');
 let lastFocus = 0;
 // Inputs sent, and the latest the worker has said it applied. Renders made before it caught up
