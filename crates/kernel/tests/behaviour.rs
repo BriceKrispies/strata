@@ -2557,6 +2557,7 @@ fn a_type_with_a_personal_field_must_declare_retention() {
                 publication: None,
                 language_field: None,
                 translation_group: None,
+                unique: None,
             },
         );
         schema

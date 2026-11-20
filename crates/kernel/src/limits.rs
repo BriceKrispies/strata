@@ -31,6 +31,31 @@ pub const DEFAULT_PAGE_SIZE: u32 = 50;
 pub const MAX_PAGE_SIZE: u32 = 200;
 /// The most records a named query that is not bounded by its order may examine.
 pub const MAX_SCAN_RECORDS: u32 = 10_000;
+/// The most triggers a schema may define (CT-790).
+pub const MAX_TRIGGERS: usize = 100;
+/// The most steps one automation may declare (automation-def, CT-792).
+pub const MAX_AUTOMATION_STEPS: usize = 50;
+/// The most attempts the retry policy of one automation step may name (D-6529).
+pub const MAX_STEP_ATTEMPTS: u32 = 10;
+/// The longest delay between two attempts of an automation step, in milliseconds: one day (D-6529).
+pub const MAX_STEP_DELAY_MS: u64 = 86_400_000;
+/// The longest time one attempt of an automation step may take, in milliseconds: fifteen
+/// minutes (D-6529).
+pub const MAX_STEP_TIMEOUT_MS: u64 = 900_000;
+/// The longest wait of an automation step, in milliseconds: 366 days (D-6535, WFL-1537).
+pub const MAX_WAIT_MS: u64 = 366 * 86_400_000;
+/// The most members one batch of a fan-out step handles (D-6535, WFL-1538).
+pub const MAX_FAN_OUT_BATCH: u32 = 100;
+/// The most steps one tenant operation may declare (D-6548, OPR-1549).
+pub const MAX_OPERATION_STEPS: usize = 16;
+/// The most posting steps one tenant operation may declare (D-6548, OPR-1549).
+pub const MAX_OPERATION_POSTINGS: usize = 8;
+/// The most nodes one condition of a tenant operation may have (D-6548, OPR-1549).
+pub const MAX_CONDITION_NODES: usize = 200;
+/// The fewest fields of one composite unique constraint (D-6558, CMS-1556).
+pub const MIN_UNIQUE_FIELDS: usize = 2;
+/// The most fields of one composite unique constraint (D-6558, CMS-1556).
+pub const MAX_UNIQUE_FIELDS: usize = 4;
 
 /// The first limit a value breaks, as a description, or `None`.
 pub fn value_problem(value: &Value) -> Option<String> {

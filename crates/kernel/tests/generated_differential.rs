@@ -41,11 +41,13 @@
 //!      does not order a list element by element, as `Value`'s derived order does.
 //!      The corpus has no list-valued field.
 //!   4. Not exercised: the intents of teams and invitations, and schema changes other than
-//!      `DefineField` and `DefineConstraint`: the operation generator of `properties.rs` draws
-//!      only seven intents. `texts_for` therefore reads defaults and constraints only from those
-//!      two kinds of change. The functions of those intents are mirrored all the same (the
-//!      conferral of a role, the owner that remains, the reserved `team:` prefix, the rewrite of
-//!      records by a schema change), each with examples in the specification.
+//!      `DefineField`, `DefineConstraint`, `RemoveField` and the definitions of triggers,
+//!      automations, tenant operations and composite unique constraints (and their removals),
+//!      which the generator below adds to the seven intents of `properties.rs`. `texts_for`
+//!      reads defaults and constraints only from `DefineField` and `DefineConstraint`; the
+//!      definitions print no expression. The functions of the other intents are mirrored all
+//!      the same (the conferral of a role, the owner that remains, the reserved `team:` prefix,
+//!      the rewrite of records by a schema change), each with examples in the specification.
 //!   5. Not exercised, and not mirrored: size limits (`limits.rs`: the bytes of a record, the
 //!      length of a string or a list, the encoded size of a value of a unique field). The
 //!      generated `validate-record` has no such check, because the function language cannot
@@ -61,17 +63,24 @@
 //!   8. Not exercised, and not mirrored: the problems of a schema the generated `schema-problems`
 //!      does not state: the counts of objects, policies and queries, a query limit outside 1 to
 //!      200, a field read condition that is not a truth value, the permissions of roles, teams
-//!      and invitations. The corpus changes the schema only by a field, a constraint or an
-//!      unknown object type.
-//!   9. Not exercised, and not mirrored: conditions that follow a reference are
+//!      and invitations. The corpus changes the schema only by a field, a constraint, an
+//!      unknown object type and the definitions of difference 4.
+//!   9. Not exercised, and not mirrored: the bounds the kernel checks on a definition that the
+//!      function language cannot state, because it compiles neither durations nor recursion:
+//!      retry delays, attempt timeouts and waits of an automation step, and the two hundred
+//!      nodes of an operation condition. The generator draws no definition that breaks one, nor
+//!      a hundred and one triggers. Its automation acts with no run-as role, so the conferral of
+//!      a run-as role is compared only through the specification's examples.
+//!  10. Not exercised, and not mirrored: conditions that follow a reference are
 //!      `InsufficientState` in the hand-written kernel when the snapshot lacks the record
 //!      (difference 2 states the rest).
 //!
-//! Differences 5 to 8 are guarded: `assert_no_input_of_a_known_difference` runs on every
-//! snapshot the test decides or reads, and fails when a snapshot has a field read condition or
-//! an object with two reference fields to one object type, so that a corpus that grows into
-//! them is told to mirror the rule or to count the difference here. The others are guarded by
-//! the operation generator drawing nothing that reaches them.
+//! Differences 5 to 9 are guarded: `assert_no_input_of_a_known_difference` runs on every
+//! snapshot the test decides or reads, and fails when a snapshot has a field read condition, an
+//! object with two reference fields to one object type, or an automation step with a retry, a
+//! timeout or a wait, so that a corpus that grows into them is told to mirror the rule or to
+//! count the difference here. The others are guarded by the operation generator drawing
+//! nothing that reaches them.
 //!
 //! Mirrored in this pass, so no longer differences: authorisation before the lookup of an object
 //! type or a record (`object-def`, `stored`), the conferral of a role counting policies
@@ -86,7 +95,7 @@
 use proptest::prelude::*;
 use proptest::strategy::ValueTree;
 use proptest::test_runner::TestRunner;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use strata_kernel::testkit::*;
 use strata_kernel::*;
 use strata_model_core::functions::{self as spec, Failure};
@@ -156,6 +165,15 @@ enum SchemaOp {
     RequireRank,
     TightenTitle(i64),
     Nonsense,
+    DefineAutomation,
+    BrokenAutomation,
+    RemoveAutomation,
+    DefineTrigger,
+    RemoveTrigger,
+    DefineOperation,
+    RemoveOperation,
+    DefineUnique,
+    RemoveUnique,
 }
 
 const MEMBERS: [&str; 5] = ["owner", "editor", "writer1", "writer2", "stranger"];
@@ -167,6 +185,15 @@ fn op_strategy() -> impl Strategy<Value = Op> {
         3 => Just(SchemaOp::RequireRank),
         3 => (3i64..30).prop_map(SchemaOp::TightenTitle),
         1 => Just(SchemaOp::Nonsense),
+        2 => Just(SchemaOp::DefineAutomation),
+        1 => Just(SchemaOp::BrokenAutomation),
+        1 => Just(SchemaOp::RemoveAutomation),
+        2 => Just(SchemaOp::DefineTrigger),
+        1 => Just(SchemaOp::RemoveTrigger),
+        2 => Just(SchemaOp::DefineOperation),
+        1 => Just(SchemaOp::RemoveOperation),
+        2 => Just(SchemaOp::DefineUnique),
+        1 => Just(SchemaOp::RemoveUnique),
     ];
     let kind = prop_oneof![
         1 => ("[a-z ]{0,4}", 0usize..2).prop_map(|(name, owner)| OpKind::CreateTenant { name, owner }),
@@ -274,6 +301,31 @@ fn intent_of(op: &Op) -> Intent {
                     object: object("nothing"),
                     field: field("nothing"),
                 },
+                SchemaOp::DefineAutomation => SchemaChange::DefineAutomation(award(false)),
+                SchemaOp::BrokenAutomation => SchemaChange::DefineAutomation(award(true)),
+                SchemaOp::RemoveAutomation => {
+                    SchemaChange::RemoveAutomation(WorkflowId::new("award").unwrap())
+                }
+                SchemaOp::DefineTrigger => SchemaChange::DefineTrigger(on_publish()),
+                SchemaOp::RemoveTrigger => {
+                    SchemaChange::RemoveTrigger(TriggerId::new("on_publish").unwrap())
+                }
+                SchemaOp::DefineOperation => SchemaChange::DefineOperation(redeem()),
+                SchemaOp::RemoveOperation => {
+                    SchemaChange::RemoveOperation(TenantOperationId::new("redeem").unwrap())
+                }
+                SchemaOp::DefineUnique => SchemaChange::DefineUnique {
+                    object: object("note"),
+                    unique: UniqueDef {
+                        id: ConstraintId::new("title_rank").unwrap(),
+                        fields: vec![field("title"), field("rank")],
+                        message: "One note per title and rank".into(),
+                    },
+                },
+                SchemaOp::RemoveUnique => SchemaChange::RemoveUnique {
+                    object: object("note"),
+                    unique: ConstraintId::new("title_rank").unwrap(),
+                },
             };
             Intent::ChangeSchema {
                 changes: vec![change],
@@ -293,6 +345,135 @@ fn intent_of(op: &Op) -> Intent {
             principal: principal_id(&format!("{}:{}", WORLD_TENANTS[op.tenant], MEMBERS[*who])),
             role: role(ROLES[*r]),
         },
+    }
+}
+
+/// An automation that creates a note, looks at it and ends; `broken`, it names a step it does
+/// not declare and leaves one unreachable. It acts with no role, so the comparison is of the
+/// definitions and not of the conferral of a run-as role (difference 9).
+fn award(broken: bool) -> AutomationDef {
+    let name = |n: &str| StepName::new(n).unwrap();
+    let step = |action: AutomationStep, next: Option<&str>| AutomationStepDef {
+        action,
+        next: next.map(|n| StepName::new(n).unwrap()),
+        retry: None,
+        timeout: None,
+        compensate: None,
+    };
+    let mut steps = BTreeMap::from([
+        (
+            name("make"),
+            step(
+                AutomationStep::CreateRecord {
+                    object: object("note"),
+                    fields: BTreeMap::from([
+                        (field("title"), Expr::Lit(text("Silver"))),
+                        (field("slug"), Expr::Param("owner".into())),
+                    ]),
+                },
+                Some("check"),
+            ),
+        ),
+        (
+            name("check"),
+            step(
+                AutomationStep::Branch {
+                    condition: Expr::Cmp(
+                        CmpOp::Eq,
+                        Box::new(var(Scope::Record, "status")),
+                        Box::new(Expr::Lit(text("draft"))),
+                    ),
+                    object: Some(object("note")),
+                    record: Some(Expr::Param("make_record".into())),
+                    then: name("done"),
+                    r#else: name("done"),
+                },
+                None,
+            ),
+        ),
+        (name("done"), step(AutomationStep::End, None)),
+    ]);
+    if broken {
+        steps.insert(name("lost"), step(AutomationStep::End, Some("gone")));
+    }
+    AutomationDef {
+        id: WorkflowId::new("award").unwrap(),
+        label: "Award".into(),
+        run_as: RunAs {
+            roles: BTreeSet::new(),
+        },
+        run_key: Some(Expr::Param("owner".into())),
+        start: name("make"),
+        steps,
+    }
+}
+
+/// A trigger on the publish transition of a note that starts `award`.
+fn on_publish() -> TriggerDef {
+    TriggerDef {
+        id: TriggerId::new("on_publish").unwrap(),
+        on: TriggerEvent::RecordUpdated {
+            object: object("note"),
+            transition: Some("publish".into()),
+        },
+        condition: Some(Expr::Cmp(
+            CmpOp::Eq,
+            Box::new(var(Scope::New, "status")),
+            Box::new(Expr::Lit(text("published"))),
+        )),
+        automation: WorkflowId::new("award").unwrap(),
+        paused: None,
+    }
+}
+
+/// A tenant operation that copies a draft note and ranks the copy.
+fn redeem() -> TenantOperationDef {
+    TenantOperationDef {
+        id: TenantOperationId::new("redeem").unwrap(),
+        label: "Redeem".into(),
+        inputs: vec![TenantOperationInput {
+            name: "note".into(),
+            ty: FieldType::Ref {
+                target: object("note"),
+                on_delete: OnDelete::Restrict,
+            },
+            required: true,
+            label: None,
+        }],
+        invokers: TenantOperationInvokers {
+            signed_in: true,
+            roles: BTreeSet::new(),
+        },
+        subject: Some(TenantOperationSubject {
+            object: object("note"),
+            input: "note".into(),
+        }),
+        conditions: vec![TenantOperationCondition {
+            id: "drafted".into(),
+            expr: Expr::Cmp(
+                CmpOp::Eq,
+                Box::new(var(Scope::Record, "status")),
+                Box::new(Expr::Lit(text("draft"))),
+            ),
+            error: "not-draft".into(),
+            message: "Only a draft is redeemed.".into(),
+        }],
+        steps: vec![
+            TenantOperationStep::CreateRecord {
+                id: "copy".into(),
+                object: object("note"),
+                fields: BTreeMap::from([
+                    (field("title"), var(Scope::Record, "title")),
+                    (field("slug"), Expr::Lit(text("copy"))),
+                ]),
+            },
+            TenantOperationStep::UpdateRecord {
+                id: "touch".into(),
+                object: object("note"),
+                record: Expr::Param("copy".into()),
+                fields: BTreeMap::from([(field("rank"), Expr::Lit(Value::Int(1)))]),
+            },
+        ],
     }
 }
 
@@ -444,6 +625,20 @@ fn assert_no_input_of_a_known_difference(state: &State) {
             distinct.len(),
             "{object_id} has two reference fields to one object type; the generated delete-record clears one per rewrite (difference 7)"
         );
+    }
+    for automation in tenant.schema.automations.iter().flat_map(BTreeMap::values) {
+        for (name, step) in &automation.steps {
+            assert!(
+                step.retry.is_none()
+                    && step.timeout.is_none()
+                    && !matches!(
+                        step.action,
+                        AutomationStep::WaitFor { .. } | AutomationStep::RequestApproval { .. }
+                    ),
+                "{}.{name} has a retry, a timeout or a wait; the generated functions do not bound durations (difference 9)",
+                automation.id
+            );
+        }
     }
 }
 

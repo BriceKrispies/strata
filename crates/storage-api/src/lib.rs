@@ -1157,6 +1157,14 @@ pub fn partial_state(tenant: &TenantState, needs: &[Need]) -> State {
                 .records_of(object)
                 .filter(|record| field_matches(record, field, value))
                 .collect(),
+            Need::ByFields { object, fields } => tenant
+                .records_of(object)
+                .filter(|record| {
+                    fields
+                        .iter()
+                        .all(|(field, value)| field_matches(record, field, value))
+                })
+                .collect(),
         };
         for record in found {
             thin.records

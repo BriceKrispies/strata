@@ -584,6 +584,56 @@ fn all_of(tx: &Connection, object: &ObjectTypeId) -> StoreResult<Vec<String>> {
     )
 }
 
+/// The records of `object` whose every field in `fields` holds its value: the lookup of a
+/// composite unique constraint (D-6558, CMS-1557). Answered from the record index, driven by the
+/// first field and narrowed by the others, when every value fits the index; otherwise by reading
+/// the records of the type and keeping the matching ones.
+fn by_fields(
+    tx: &Connection,
+    object: &ObjectTypeId,
+    fields: &BTreeMap<strata_kernel::FieldId, Value>,
+) -> StoreResult<Vec<String>> {
+    let keys: Vec<(&str, String)> = fields
+        .iter()
+        .map(|(field, value)| (field.as_str(), encode(value)))
+        .collect();
+    if keys.is_empty() || keys.iter().any(|(_, key)| key.len() > MAX_INDEXED) {
+        let mut matching = Vec::new();
+        for data in all_of(tx, object)? {
+            let record: Record = decode(&data, "record")?;
+            if fields
+                .iter()
+                .all(|(field, value)| field_matches(&record, field, value))
+            {
+                matching.push(data);
+            }
+        }
+        return Ok(matching);
+    }
+    let mut sql = String::from(
+        "SELECT r.data FROM record_index i0
+         JOIN records r ON r.object = i0.object AND r.id = i0.id
+         WHERE i0.object = ?1 AND i0.field = ?2 AND i0.value = ?3",
+    );
+    for n in 1..keys.len() {
+        let (f, v) = (2 * n + 2, 2 * n + 3);
+        sql.push_str(&format!(
+            " AND EXISTS (SELECT 1 FROM record_index i WHERE i.object = i0.object AND i.id = i0.id AND i.field = ?{f} AND i.value = ?{v})"
+        ));
+    }
+    sql.push_str(" ORDER BY r.id");
+    let mut owned: Vec<String> = vec![object.as_str().to_string()];
+    for (field, key) in keys {
+        owned.push(field.to_string());
+        owned.push(key);
+    }
+    let args: Vec<&dyn rusqlite::ToSql> = owned
+        .iter()
+        .map(|text| text as &dyn rusqlite::ToSql)
+        .collect();
+    select_strings(tx, &sql, &args)
+}
+
 fn complete(conn: &Connection, tenant: &TenantId) -> StoreResult<Option<TenantState>> {
     let Some(mut state) = header(conn, tenant)? else {
         return Ok(None);
@@ -1707,6 +1757,7 @@ impl Store for SqliteStore {
                             matching
                         }
                     }
+                    Need::ByFields { object, fields } => by_fields(tx, object, fields)?,
                 };
                 put_records(&mut state, rows)?;
             }

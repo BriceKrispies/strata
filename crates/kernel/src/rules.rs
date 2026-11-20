@@ -88,6 +88,31 @@ impl<'a> Lookup<'a> {
             .collect())
     }
 
+    /// Records of `object` whose every field in `fields` equals its value: the lookup of a
+    /// composite unique constraint (D-6558), one need however many fields it names.
+    pub fn by_fields(
+        &self,
+        object: &ObjectTypeId,
+        fields: &BTreeMap<FieldId, Value>,
+    ) -> Result<Vec<&'a Arc<Record>>, DomainError> {
+        let need = Need::ByFields {
+            object: object.clone(),
+            fields: fields.clone(),
+        };
+        if !self.coverage.covers(&need) {
+            return Err(insufficient(need));
+        }
+        Ok(self
+            .tenant
+            .records_of(object)
+            .filter(|record| {
+                fields
+                    .iter()
+                    .all(|(field, value)| record.get(field) == value)
+            })
+            .collect())
+    }
+
     /// At most `limit` records of `object` with an id above `after`, in id order.
     pub fn page_of(
         &self,
@@ -228,6 +253,19 @@ fn holds_policy_power(
             && resource_covers(&policy.resource, resource)
             && (policy.condition.is_none() || policy.condition == *condition)
     })
+}
+
+/// Whether `principal` holds `action` on `resource` without a condition: the owner does, a role
+/// permission on the object type gives it, and so does a policy of one of its roles that names the
+/// action, reaches the resource and has no condition. What a tenant operation's steps use must be
+/// held this way by its definer (D-6547).
+pub fn holds_power(
+    tenant: &TenantState,
+    principal: &Principal,
+    action: Action,
+    resource: &Resource,
+) -> bool {
+    holds_policy_power(tenant, principal, action, resource, &None)
 }
 
 /// The powers the policies of `role` confer, as `(count, the ones `principal` does not hold)`,
@@ -634,6 +672,46 @@ pub fn validate_record(
                     );
                 }
             }
+        }
+    }
+
+    // D-6558, CMS-1554, CMS-1555: a composite unique constraint holds over the records whose
+    // every field of it has a value; one lookup per constraint (CMS-1557).
+    for unique in crate::definitions::uniques(object) {
+        let wanted: Option<BTreeMap<FieldId, Value>> = unique
+            .fields
+            .iter()
+            .map(|field| {
+                let value = candidate.get(field);
+                (!value.is_null()).then(|| (field.clone(), value.clone()))
+            })
+            .collect();
+        let Some(wanted) = wanted else {
+            continue;
+        };
+        let rule = format!("unique:{name}.{}", unique.id);
+        let clash = lookup
+            .by_fields(name, &wanted)?
+            .into_iter()
+            .find(|other| other.id != candidate.id);
+        match clash {
+            Some(other) if crate::read::visible(lookup.tenant, principal, other, now) => out.fail(
+                ErrorKind::UniqueViolated,
+                rule,
+                format!(
+                    "{}: record {} already has these values",
+                    unique.message, other.id
+                ),
+            ),
+            Some(_) => out.fail(
+                ErrorKind::UniqueViolated,
+                rule,
+                format!(
+                    "{}: another record already has these values",
+                    unique.message
+                ),
+            ),
+            None => out.pass(rule, "no other record has these values"),
         }
     }
 
