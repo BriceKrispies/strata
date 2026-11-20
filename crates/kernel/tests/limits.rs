@@ -269,6 +269,55 @@ fn a_page_size_above_the_maximum_or_of_zero_is_refused() {
 
 // Verifies: KRN-1285
 #[test]
+fn a_records_read_names_at_most_the_stated_number_of_ids() {
+    let world = notes_world();
+    let state = world.state(&tenant_id("alpha"));
+    let ids = |n: usize| (1..=n as u64).map(RecordId).collect::<Vec<_>>();
+    let read_ids = |n| {
+        read(
+            &state,
+            &ReadRequest::Records {
+                object: object("note"),
+                ids: ids(n),
+            },
+            &ctx("alpha", owner(), 7_000),
+        )
+    };
+    assert!(read_ids(limits::MAX_READ_IDS).is_ok());
+    let refused = read_ids(limits::MAX_READ_IDS + 1).unwrap_err();
+    assert_eq!(refused.kind, ErrorKind::LimitExceeded);
+}
+
+// Verifies: KRN-2522
+#[test]
+fn one_record_the_filter_fails_on_is_left_out_and_the_query_answers_for_the_others() {
+    // `rank * 10^14` overflows the integers a rule may compute (2^53 - 1) from a rank of 91 on.
+    let filter = expr::parse("record.rank * 100000000000000 > 0").unwrap();
+    let world = with_queries(vec![query("computed", vec![], Some(filter), Some(80))]);
+    let full = crowded(&world, 120);
+    // One record in the middle has a rank the filter overflows on.
+    let mut tenant = TenantState::clone(full.tenant.as_ref().unwrap());
+    let notes = tenant.records.get_mut(&object("note")).unwrap();
+    let mut broken = Record::clone(notes.get(&RecordId(1_005)).unwrap());
+    broken.fields.insert(field("rank"), Value::Int(5_000));
+    notes.insert(RecordId(1_005), Arc::new(broken));
+    let state = State {
+        tenant_id: full.tenant_id.clone(),
+        tenant: Some(Arc::new(tenant)),
+        coverage: Coverage::Complete,
+    };
+    let page = read(
+        &state,
+        &named("computed", None, None),
+        &ctx("alpha", owner(), 7_000),
+    )
+    .expect("one record that fails the filter does not fail the query");
+    let expected: Vec<u64> = (1_001..=1_081).filter(|id| *id != 1_005).collect();
+    assert_eq!(ids(&page), expected);
+}
+
+// Verifies: KRN-1285
+#[test]
 fn a_cursor_of_the_other_kind_is_refused() {
     let world = with_queries(vec![
         query("all_notes", vec![], None, None),
