@@ -669,3 +669,105 @@ fn a_snapshot_restores_state_without_reusing_event_sequence_numbers() {
         "the note after the restore survives a reopen"
     );
 }
+
+/// The variable that makes [`a_killed_writer_child`] write; unset, that test does nothing.
+const KILL_CHILD: &str = "STRATA_KILL_CHILD_DB";
+
+/// The child half of [`a_process_killed_while_committing_leaves_only_whole_commits`]: open the
+/// store the parent made and commit notes until the parent kills the process, telling the parent
+/// each commit it has been answered for.
+#[test]
+fn a_killed_writer_child() {
+    use std::io::Write;
+    let Ok(path) = std::env::var(KILL_CHILD) else {
+        return;
+    };
+    let store = SqliteStore::open(Path::new(&path), Timestamp(2)).unwrap();
+    for i in 0.. {
+        add_note(&store, "alpha", "Child", &format!("child-{i}"), 1_000 + i);
+        let mut out = std::io::stdout().lock();
+        writeln!(out, "committed {i}").unwrap();
+        out.flush().unwrap();
+    }
+}
+
+/// Verifies: TEN-007
+///
+/// A process killed while it is committing, with no chance to clean up, leaves only whole
+/// commits: this test starts itself as a child that commits notes in a loop, kills the child
+/// once a number of commits have been acknowledged, and opens the file again. The file passes its
+/// integrity check, holds every acknowledged commit and at most one more, loads, and takes a
+/// further commit.
+#[test]
+fn a_process_killed_while_committing_leaves_only_whole_commits() {
+    use std::io::{BufRead, BufReader};
+    use std::process::{Command, Stdio};
+    if std::env::var(KILL_CHILD).is_ok() {
+        return;
+    }
+    let path = fresh_path("kill");
+    {
+        let store = SqliteStore::open(&path, Timestamp(1)).unwrap();
+        tenant_with_a_note(&store, "alpha", 10);
+    }
+    let mut child = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "a_killed_writer_child",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env(KILL_CHILD, &path)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut acknowledged = 0u32;
+    for line in BufReader::new(child.stdout.take().unwrap()).lines() {
+        let line = line.unwrap();
+        if line.starts_with("committed ") {
+            acknowledged += 1;
+            if acknowledged >= 25 {
+                break;
+            }
+        }
+    }
+    child.kill().unwrap();
+    child.wait().unwrap();
+    assert!(
+        acknowledged >= 25,
+        "the child committed only {acknowledged} times"
+    );
+
+    let store = SqliteStore::open(&path, Timestamp(3)).unwrap();
+    let alpha = tenant_id("alpha");
+    let file = store.tenant_file(&alpha).unwrap().unwrap();
+    let check = Connection::open(&file).unwrap();
+    let verdict: String = check
+        .query_row("PRAGMA integrity_check", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(verdict, "ok");
+    // The first note, the acknowledged commits, and possibly the one being written at the kill.
+    let notes = count(&file, "SELECT COUNT(*) FROM records");
+    assert!(
+        notes == i64::from(acknowledged) + 1 || notes == i64::from(acknowledged) + 2,
+        "{notes} records after {acknowledged} acknowledged commits"
+    );
+    // A commit is whole: the header's revision is the last journal entry, and every event stands
+    // on a journal entry.
+    assert_eq!(
+        count(&file, "SELECT revision FROM tenant"),
+        count(&file, "SELECT MAX(revision) FROM journal"),
+    );
+    assert_eq!(
+        count(
+            &file,
+            "SELECT COUNT(*) FROM events WHERE revision NOT IN (SELECT revision FROM journal)"
+        ),
+        0,
+        "an event of a commit that did not stand"
+    );
+    assert!(store.load_complete(&alpha).unwrap().tenant.is_some());
+    add_note(&store, "alpha", "After", "after-the-kill", 5_000);
+    assert_eq!(count(&file, "SELECT COUNT(*) FROM records"), notes + 1);
+}
