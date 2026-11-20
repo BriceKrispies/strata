@@ -243,6 +243,52 @@ fn limits() -> Result<Limits, String> {
     })
 }
 
+/// The SQLite store named by `STRATA_DB` and `STRATA_TENANT_FILES`.
+fn sqlite_store() -> Result<SqliteStore, String> {
+    let path = PathBuf::from(var("STRATA_DB", "var/strata.db"));
+    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+    }
+    let tenant_files = match var("STRATA_TENANT_FILES", "").as_str() {
+        "" => default_tenants_dir(&path),
+        dir => PathBuf::from(dir),
+    };
+    SqliteStore::open_with(&path, &tenant_files, Timestamp(now_ms())).map_err(|e| e.to_string())
+}
+
+/// `strata-backend migrate-fleet [--max-failure-percent N]`: bring every tenant file up to this
+/// binary's layout, print each tenant's status, and stop once failures pass `N` percent of the
+/// fleet (default 0: at the first). A failed or unattempted tenant is a failed command.
+fn migrate_fleet(args: &[String]) -> Result<(), String> {
+    let mut percent: u8 = 0;
+    let mut rest = args.iter();
+    while let Some(arg) = rest.next() {
+        match arg.as_str() {
+            "--max-failure-percent" => {
+                percent = rest
+                    .next()
+                    .and_then(|v| v.parse::<u8>().ok())
+                    .filter(|v| *v <= 100)
+                    .ok_or("--max-failure-percent needs a whole number from 0 to 100")?;
+            }
+            other => return Err(format!("migrate-fleet: unknown argument {other:?}")),
+        }
+    }
+    let report = sqlite_store()?
+        .migrate_fleet(percent)
+        .map_err(|e| e.to_string())?;
+    print!("{}", report.render());
+    if report.complete() {
+        Ok(())
+    } else {
+        Err(format!(
+            "{} of {} tenants are not migrated",
+            report.tenants.len() - report.ready(),
+            report.tenants.len()
+        ))
+    }
+}
+
 fn start() -> Result<(Config, Arc<dyn Store>), String> {
     let addr: SocketAddr = var("STRATA_BACKEND_ADDR", "127.0.0.1:4101")
         .parse()
@@ -256,21 +302,7 @@ fn start() -> Result<(Config, Arc<dyn Store>), String> {
     }
     let store: Arc<dyn Store> = match var("STRATA_STORE", "sqlite").as_str() {
         "memory" => Arc::new(MemoryStore::new()),
-        "sqlite" => {
-            let path = PathBuf::from(var("STRATA_DB", "var/strata.db"));
-            if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
-                std::fs::create_dir_all(parent)
-                    .map_err(|e| format!("{}: {e}", parent.display()))?;
-            }
-            let tenant_files = match var("STRATA_TENANT_FILES", "").as_str() {
-                "" => default_tenants_dir(&path),
-                dir => PathBuf::from(dir),
-            };
-            Arc::new(
-                SqliteStore::open_with(&path, &tenant_files, Timestamp(now_ms()))
-                    .map_err(|e| e.to_string())?,
-            )
-        }
+        "sqlite" => Arc::new(sqlite_store()?),
         other => return Err(format!("STRATA_STORE: unknown adapter {other:?}")),
     };
     let dev = development()?;
@@ -302,6 +334,11 @@ fn start() -> Result<(Config, Arc<dyn Store>), String> {
 
 #[tokio::main]
 async fn main() {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().map(String::as_str) == Some("migrate-fleet") {
+        server::exit_on_error("strata-backend", migrate_fleet(&args[1..]));
+        return;
+    }
     let result = async {
         let (cfg, store) = start()?;
         let listener = server::bind(cfg.addr).await?;
