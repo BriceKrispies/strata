@@ -478,7 +478,10 @@ pub(crate) fn apply(
 }
 
 /// Refuse to restore a snapshot older than an entry: entries are never removed (LDG-022).
-pub(crate) fn check_restorable(t: &mut Transaction<'_>, revision: StateRevision) -> StoreResult<()> {
+pub(crate) fn check_restorable(
+    t: &mut Transaction<'_>,
+    revision: StateRevision,
+) -> StoreResult<()> {
     let revision: i64 = revision.0 as i64;
     let row = t
         .query_one(

@@ -123,10 +123,7 @@ pub(crate) fn insert_rows(t: &mut Transaction<'_>, record: &Record) -> StoreResu
 /// Rebuild every index row from the records when step 16 marked the schema.
 pub(crate) fn rebuild_if_marked(t: &mut Transaction<'_>) -> StoreResult<()> {
     let row = t
-        .query_one(
-            "SELECT EXISTS (SELECT 1 FROM record_index_rebuild)",
-            &[],
-        )
+        .query_one("SELECT EXISTS (SELECT 1 FROM record_index_rebuild)", &[])
         .map_err(db)?;
     let marked: bool = crate::get(&row, 0)?;
     if !marked {

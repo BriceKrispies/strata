@@ -111,8 +111,11 @@ pub(crate) struct Scope {
 
 impl Scope {
     fn enter(&self, t: &mut Transaction<'_>) -> StoreResult<()> {
-        t.batch_execute(&format!("SET LOCAL search_path TO {}", quoted(&self.schema)?))
-            .map_err(db)
+        t.batch_execute(&format!(
+            "SET LOCAL search_path TO {}",
+            quoted(&self.schema)?
+        ))
+        .map_err(db)
     }
 
     /// The key of the transaction-level advisory lock that serialises the writers of the schema.

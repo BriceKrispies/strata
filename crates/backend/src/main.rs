@@ -5,7 +5,8 @@
 //! | `STRATA_BACKEND_ADDR` | `127.0.0.1:4101` | Listen address. Must be loopback. |
 //! | `STRATA_SERVICE_TOKEN` | none, required | Shared secret the BFF presents. |
 //! | `STRATA_OPERATOR_TOKEN` | unset | Secret the platform operator presents in `x-strata-operator` to read the platform diagnostics; at least 24 characters and not the service token. Unset: those diagnostics answer "not found" outside development. |
-//! | `STRATA_STORE` | `sqlite` | `sqlite` or `memory`. |
+//! | `STRATA_STORE` | `sqlite` | `sqlite`, `postgres` or `memory`. |
+//! | `STRATA_PG_URL` | none, required with `postgres` | The PostgreSQL control database (`postgres://user:password@host:5432/strata`); each tenant is a schema in it. |
 //! | `STRATA_DB` | `var/strata.db` | SQLite control database (the tenant directory). |
 //! | `STRATA_TENANT_FILES` | `<STRATA_DB stem>-tenants` beside it | Directory of the per-tenant SQLite files. |
 //! | `STRATA_FILES` | `var/strata-files` | Directory of the bytes of uploaded files, one directory per tenant. Never inside the served frontend. |
@@ -57,6 +58,7 @@ use strata_kernel::{TenantId, Timestamp};
 use strata_protocol::log::now_ms;
 use strata_storage_api::memory::MemoryStore;
 use strata_storage_api::Store;
+use strata_storage_postgres::PostgresStore;
 use strata_storage_sqlite::{default_tenants_dir, SqliteStore};
 
 use strata_runtime::server::{self, env_number as number, env_var as var};
@@ -273,6 +275,19 @@ fn sqlite_store() -> Result<SqliteStore, String> {
     SqliteStore::open_with(&path, &tenant_files, Timestamp(now_ms())).map_err(|e| e.to_string())
 }
 
+/// The PostgreSQL store named by `STRATA_PG_URL`. The client keeps a runtime of its own, which
+/// cannot start inside this process's, so the connection is made on a plain thread.
+fn postgres_store() -> Result<PostgresStore, String> {
+    let url = var("STRATA_PG_URL", "");
+    if url.is_empty() {
+        return Err("STRATA_STORE=postgres needs STRATA_PG_URL".into());
+    }
+    std::thread::spawn(move || PostgresStore::connect(&url, Timestamp(now_ms())))
+        .join()
+        .map_err(|_| "the PostgreSQL connection thread panicked".to_string())?
+        .map_err(|e| e.to_string())
+}
+
 /// `strata-backend migrate-fleet [--max-failure-percent N]`: bring every tenant file up to this
 /// binary's layout, print each tenant's status, and stop once failures pass `N` percent of the
 /// fleet (default 0: at the first). A failed or unattempted tenant is a failed command.
@@ -320,6 +335,7 @@ fn start() -> Result<(Config, Arc<dyn Store>), String> {
     let store: Arc<dyn Store> = match var("STRATA_STORE", "sqlite").as_str() {
         "memory" => Arc::new(MemoryStore::new()),
         "sqlite" => Arc::new(sqlite_store()?),
+        "postgres" => Arc::new(postgres_store()?),
         other => return Err(format!("STRATA_STORE: unknown adapter {other:?}")),
     };
     let dev = development()?;

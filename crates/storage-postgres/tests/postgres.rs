@@ -80,7 +80,8 @@ fn clear_old_databases(url: &str) {
             .bytes()
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
         {
-            if let Err(error) = client.batch_execute(&format!("DROP DATABASE IF EXISTS \"{name}\"")) {
+            if let Err(error) = client.batch_execute(&format!("DROP DATABASE IF EXISTS \"{name}\""))
+            {
                 eprintln!("could not drop {name}: {error}");
             }
         }
@@ -91,7 +92,9 @@ fn clear_old_databases(url: &str) {
 fn fresh_store() -> PostgresStore {
     let url = server_url();
     let name = {
-        let _turn = ADMIN.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _turn = ADMIN
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         CLEARED.get_or_init(|| clear_old_databases(&url));
         let name = format!(
             "strata_conf_{}_{}",

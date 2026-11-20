@@ -243,7 +243,9 @@ pub(crate) fn all_of(t: &mut Transaction<'_>, object: &ObjectTypeId) -> StoreRes
 /// password) is left out.
 fn redact(url: &str) -> String {
     match (url.find("://"), url.rfind('@')) {
-        (Some(scheme), Some(at)) if at > scheme => format!("{}{}", &url[..scheme + 3], &url[at + 1..]),
+        (Some(scheme), Some(at)) if at > scheme => {
+            format!("{}{}", &url[..scheme + 3], &url[at + 1..])
+        }
         (None, _) => "a key=value connection string".to_string(),
         _ => url.to_string(),
     }
@@ -1198,8 +1200,12 @@ impl PostgresStore {
         })?;
         let durable = pool.with(|client| {
             let fsync: String = get(&client.query_one("SHOW fsync", &[]).map_err(db)?, 0)?;
-            let commit: String =
-                get(&client.query_one("SHOW synchronous_commit", &[]).map_err(db)?, 0)?;
+            let commit: String = get(
+                &client
+                    .query_one("SHOW synchronous_commit", &[])
+                    .map_err(db)?,
+                0,
+            )?;
             Ok(fsync == "on" && commit != "off")
         })?;
         let mut pools = BTreeMap::new();
@@ -1507,9 +1513,7 @@ impl PostgresStore {
             "id" => "SELECT tenant FROM session_directory WHERE id = $1",
             _ => "SELECT tenant FROM session_directory WHERE token_hash = $1",
         };
-        let found = self
-            .control
-            .read(|t| select_strings(t, sql, &[&value]))?;
+        let found = self.control.read(|t| select_strings(t, sql, &[&value]))?;
         found
             .into_iter()
             .next()
@@ -3149,10 +3153,8 @@ impl Store for PostgresStore {
             PasskeyCeremony::SignIn => "sign-in",
         };
         let session: Option<String> = challenge.session.as_ref().map(|s| s.as_str().to_string());
-        let principal: Option<String> = challenge
-            .principal
-            .as_ref()
-            .map(|p| p.as_str().to_string());
+        let principal: Option<String> =
+            challenge.principal.as_ref().map(|p| p.as_str().to_string());
         self.on_existing(&challenge.tenant, |t| {
             t.execute(
                 "INSERT INTO passkey_challenges (id_hash, ceremony, session, principal, origin, state, expires_at)
@@ -3200,7 +3202,9 @@ impl Store for PostgresStore {
             let origin: String = get(&row, 3)?;
             let state: String = get(&row, 4)?;
             let expires_at: i64 = get(&row, 5)?;
-            Ok(Some((ceremony, session, principal, origin, state, expires_at)))
+            Ok(Some((
+                ceremony, session, principal, origin, state, expires_at,
+            )))
         })?;
         let Some((ceremony, session, principal, origin, state, expires_at)) = found.flatten()
         else {
@@ -3768,7 +3772,9 @@ impl Store for PostgresStore {
         let found = self.peek(tenant, |t| {
             match t
                 .query_opt(
-                    &*format!("SELECT {RECOVERY_COLUMNS} FROM recovery_requests WHERE id_hash = $1"),
+                    &*format!(
+                        "SELECT {RECOVERY_COLUMNS} FROM recovery_requests WHERE id_hash = $1"
+                    ),
                     &[&id_hash],
                 )
                 .map_err(db)?
@@ -3939,9 +3945,8 @@ impl Store for PostgresStore {
         Ok(self
             .on_tenant(tenant, |t| {
                 let who = principal.as_str();
-                let mut gone = |sql: &str| -> StoreResult<u64> {
-                    t.execute(sql, &[&who]).map_err(db)
-                };
+                let mut gone =
+                    |sql: &str| -> StoreResult<u64> { t.execute(sql, &[&who]).map_err(db) };
                 Ok(PrincipalRemoval {
                     accounts: gone("DELETE FROM accounts WHERE principal = $1")?,
                     passkeys: gone("DELETE FROM passkeys WHERE principal = $1")?,
@@ -3955,9 +3960,7 @@ impl Store for PostgresStore {
                     recovery_codes: gone("DELETE FROM recovery_codes WHERE principal = $1")?,
                     pending_sign_ins: gone("DELETE FROM pending_sign_ins WHERE principal = $1")?,
                     sign_in_links: gone("DELETE FROM sign_in_links WHERE principal = $1")?,
-                    recovery_requests: gone(
-                        "DELETE FROM recovery_requests WHERE principal = $1",
-                    )?,
+                    recovery_requests: gone("DELETE FROM recovery_requests WHERE principal = $1")?,
                 })
             })?
             .unwrap_or_default())
@@ -4270,9 +4273,9 @@ impl Store for PostgresStore {
     }
 
     fn reset(&self) -> StoreResult<()> {
-        let all = self.control.read(|t| {
-            select_strings(t, "SELECT id FROM tenant_directory ORDER BY id", &[])
-        })?;
+        let all = self
+            .control
+            .read(|t| select_strings(t, "SELECT id FROM tenant_directory ORDER BY id", &[]))?;
         for id in all {
             self.remove_tenant(&TenantId::new(id).map_err(corrupt_id)?)?;
         }
@@ -4430,8 +4433,10 @@ impl Store for PostgresStore {
         check_jobs(&writes.jobs)?;
         self.existing(tenant)?;
         let earliest = earliest_due(writes);
-        self.on_jobs(tenant, earliest, |t| write_automation(t, tenant, writes, now))?
-            .ok_or_else(|| StoreError::NotFound(format!("tenant {tenant}")))
+        self.on_jobs(tenant, earliest, |t| {
+            write_automation(t, tenant, writes, now)
+        })?
+        .ok_or_else(|| StoreError::NotFound(format!("tenant {tenant}")))
     }
 
     fn automation_run(&self, tenant: &TenantId, run: &str) -> StoreResult<Option<RunRecord>> {

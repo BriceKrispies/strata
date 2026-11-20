@@ -64,7 +64,11 @@ pub(crate) fn migrate(
         )
         .map_err(db)?;
     let applied: i64 = crate::get(&row, 0)?;
-    let known = steps.iter().map(|m| i64::from(m.version)).max().unwrap_or(0);
+    let known = steps
+        .iter()
+        .map(|m| i64::from(m.version))
+        .max()
+        .unwrap_or(0);
     if applied > known {
         return Err(StoreError::Unavailable(format!(
             "the ledger {ledger} records step {applied}, and this binary knows steps up to {known}"

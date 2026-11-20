@@ -120,10 +120,7 @@ pub(crate) fn rebuild_all(t: &mut Transaction<'_>) -> StoreResult<()> {
 /// Rebuild the entries when the step that added them marked the schema.
 pub(crate) fn rebuild_if_marked(t: &mut Transaction<'_>) -> StoreResult<()> {
     let row = t
-        .query_one(
-            "SELECT EXISTS (SELECT 1 FROM search_entries_rebuild)",
-            &[],
-        )
+        .query_one("SELECT EXISTS (SELECT 1 FROM search_entries_rebuild)", &[])
         .map_err(db)?;
     let marked: bool = get(&row, 0)?;
     if !marked {

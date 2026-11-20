@@ -138,7 +138,11 @@ pub(crate) fn write_rows(t: &mut Transaction<'_>, record: &Record) -> StoreResul
 }
 
 /// Remove the pair rows of a record.
-pub(crate) fn delete_rows(t: &mut Transaction<'_>, object: &ObjectTypeId, id: u64) -> StoreResult<()> {
+pub(crate) fn delete_rows(
+    t: &mut Transaction<'_>,
+    object: &ObjectTypeId,
+    id: u64,
+) -> StoreResult<()> {
     let id: i64 = id as i64;
     t.execute(
         "DELETE FROM record_pair_index WHERE object = $1 AND id = $2",
