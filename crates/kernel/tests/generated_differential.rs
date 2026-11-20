@@ -74,8 +74,16 @@
 //!  10. Not exercised, and not mirrored: conditions that follow a reference are
 //!      `InsufficientState` in the hand-written kernel when the snapshot lacks the record
 //!      (difference 2 states the rest).
+//!  11. Not exercised, and not mirrored: the checks of the declarations of an object type, of the
+//!      templates, tokens and product records of the tenant schema that the hand-written `schema.problems` makes through
+//!      `object_meta::problems`, `templates::problems` and `products::problems` (retention from a
+//!      timestamp field, the states of a publication, the type of a language field, the one-line
+//!      subject of a template, the expression of a token, the owner of an entity), and the
+//!      removal of an object type with the deletion of its records. The generated
+//!      `schema-problems` does not state them. The generator draws no such declaration, template,
+//!      token or product record.
 //!
-//! Differences 5 to 9 are guarded: `assert_no_input_of_a_known_difference` runs on every
+//! Differences 5 to 9 and 11 are guarded: `assert_no_input_of_a_known_difference` runs on every
 //! snapshot the test decides or reads, and fails when a snapshot has a field read condition, an
 //! object with two reference fields to one object type, or an automation step with a retry, a
 //! timeout or a wait, so that a corpus that grows into them is told to mirror the rule or to
@@ -624,6 +632,22 @@ fn assert_no_input_of_a_known_difference(state: &State) {
             targets.len(),
             distinct.len(),
             "{object_id} has two reference fields to one object type; the generated delete-record clears one per rewrite (difference 7)"
+        );
+    }
+    assert!(
+        tenant.schema.mail_templates.is_none()
+            && tenant.schema.notice_templates.is_none()
+            && tenant.schema.tokens.is_none()
+            && tenant.schema.products.is_none(),
+        "the schema holds a template, a token or a product record; the generated functions do not state their checks (difference 11)"
+    );
+    for (object_id, def) in &tenant.schema.objects {
+        assert!(
+            def.retention.is_none()
+                && def.publication.is_none()
+                && def.language_field.is_none()
+                && def.translation_group.is_none(),
+            "{object_id} declares retention, publication, a language field or a translation group; the generated functions do not state their checks (difference 11)"
         );
     }
     for automation in tenant.schema.automations.iter().flat_map(BTreeMap::values) {

@@ -22,10 +22,13 @@ pub mod definitions;
 pub mod expr;
 pub mod intent;
 pub mod limits;
+pub mod object_meta;
+pub mod products;
 pub mod read;
 pub mod rules;
 pub mod schema;
 pub mod state;
+pub mod templates;
 #[cfg(any(test, feature = "testkit"))]
 pub mod testkit;
 pub mod transition;

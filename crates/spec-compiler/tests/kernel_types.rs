@@ -659,6 +659,86 @@ fn schema_changes() -> Vec<SchemaChange> {
             object: object("note"),
             unique: ConstraintId::new("title_rank").unwrap(),
         },
+        SchemaChange::SetRetention {
+            object: object("note"),
+            retention: RetentionRule {
+                days: 30,
+                from: RetentionStart::Field {
+                    field: field("published_at"),
+                },
+            },
+        },
+        SchemaChange::ClearRetention {
+            object: object("note"),
+        },
+        SchemaChange::SetPublication {
+            object: object("note"),
+            publication: PublicationDef {
+                state_field: field("status"),
+                draft: "draft".into(),
+                published: "published".into(),
+                withdrawn: "withdrawn".into(),
+                in_review: Some("in_review".into()),
+                approved: Some("approved".into()),
+                time_field: Some(field("published_at")),
+                review_workflow: Some(WorkflowId::new("review").unwrap()),
+                review_run_field: Some(field("review_run")),
+            },
+        },
+        SchemaChange::ClearPublication {
+            object: object("note"),
+        },
+        SchemaChange::SetLanguageField {
+            object: object("note"),
+            field: field("lang"),
+        },
+        SchemaChange::ClearLanguageField {
+            object: object("note"),
+        },
+        SchemaChange::SetTranslationGroup {
+            object: object("note"),
+            field: field("group"),
+        },
+        SchemaChange::ClearTranslationGroup {
+            object: object("note"),
+        },
+        SchemaChange::RemoveObject {
+            id: object("note"),
+            delete_records: true,
+        },
+        SchemaChange::RemoveRole(role("guest")),
+        SchemaChange::DefineMailTemplate(MailTemplateDecl {
+            template: TemplateId("welcome".into()),
+            subject: "Welcome".into(),
+            body: StructuredBlocks("[]".into()),
+        }),
+        SchemaChange::RemoveMailTemplate(TemplateId("welcome".into())),
+        SchemaChange::DefineNoticeTemplate(NoticeTemplateDecl {
+            template: TemplateId("greeting".into()),
+            title: "Hello".into(),
+            body: StructuredBlocks("[]".into()),
+        }),
+        SchemaChange::RemoveNoticeTemplate(TemplateId("greeting".into())),
+        SchemaChange::DefineToken(TokenDecl {
+            name: "first_name".into(),
+            expression: Expression("record.title".into()),
+            fallback: "friend".into(),
+        }),
+        SchemaChange::RemoveToken("first_name".into()),
+        SchemaChange::RecordProduct(InstalledProduct {
+            product: ProductId::new("badges").unwrap(),
+            version: "1.0.0".into(),
+            platform: Some(PlatformCompat {
+                min: "0.2".into(),
+                below: None,
+            }),
+            owns: vec![EntityRef {
+                kind: EntityKind::Object,
+                id: "badges__award".into(),
+            }],
+            schema_version: Some(SchemaVersion(3)),
+        }),
+        SchemaChange::RemoveProduct(ProductId::new("badges").unwrap()),
     ]
 }
 

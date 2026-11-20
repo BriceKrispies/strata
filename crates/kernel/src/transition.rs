@@ -222,6 +222,7 @@ pub fn needs(schema: Option<&TenantSchema>, intent: &Intent) -> Vec<Need> {
                 }
                 out.insert(Need::AllOf(object));
             }
+            crate::object_meta::removal_needs(changes, &mut out);
         }
     }
     out.into_iter().collect()
@@ -1619,6 +1620,25 @@ fn apply_change(schema: &mut TenantSchema, change: &SchemaChange) -> Result<Stri
                 .ok_or_else(|| format!("no unique constraint {id}.{unique}"))?;
             format!("remove unique constraint {id}.{unique}")
         }
+        SchemaChange::SetRetention { .. }
+        | SchemaChange::ClearRetention { .. }
+        | SchemaChange::SetPublication { .. }
+        | SchemaChange::ClearPublication { .. }
+        | SchemaChange::SetLanguageField { .. }
+        | SchemaChange::ClearLanguageField { .. }
+        | SchemaChange::SetTranslationGroup { .. }
+        | SchemaChange::ClearTranslationGroup { .. }
+        | SchemaChange::RemoveObject { .. }
+        | SchemaChange::RemoveRole(_) => crate::object_meta::apply(schema, change)?,
+        SchemaChange::DefineMailTemplate(_)
+        | SchemaChange::RemoveMailTemplate(_)
+        | SchemaChange::DefineNoticeTemplate(_)
+        | SchemaChange::RemoveNoticeTemplate(_)
+        | SchemaChange::DefineToken(_)
+        | SchemaChange::RemoveToken(_) => crate::templates::apply(schema, change)?,
+        SchemaChange::RecordProduct(_) | SchemaChange::RemoveProduct(_) => {
+            crate::products::apply(schema, change)?
+        }
     })
 }
 
@@ -1870,6 +1890,16 @@ fn change_schema(
         ));
     }
 
+    // The records of the object types the changes remove (D-6581): refused unless the change says
+    // they are deleted, and then deleted in this commit.
+    let removed = match crate::object_meta::deleted_records(lookup, changes)? {
+        Ok(records) => records,
+        Err(message) => return Err(draft.reject(ErrorKind::MigrationRejected, message)),
+    };
+    if let Some(message) = crate::object_meta::held_roles(lookup.tenant, changes) {
+        return Err(draft.reject(ErrorKind::InvalidSchema, message));
+    }
+
     let version = migration.schema.version;
     draft
         .ops
@@ -1884,6 +1914,13 @@ fn change_schema(
         draft
             .events
             .push(EventBody::RecordUpdated { before, after });
+    }
+    for before in removed {
+        draft.ops.push(DeltaOp::DeleteRecord {
+            object: before.object.clone(),
+            id: before.id,
+        });
+        draft.events.push(EventBody::RecordDeleted { before });
     }
     Ok(Output::Schema { version })
 }

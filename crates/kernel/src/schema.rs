@@ -156,6 +156,10 @@ impl TenantSchemaExt for TenantSchema {
             triggers: None,
             automations: None,
             operations: None,
+            mail_templates: None,
+            notice_templates: None,
+            tokens: None,
+            products: None,
         }
     }
 
@@ -557,6 +561,9 @@ impl TenantSchemaExt for TenantSchema {
         crate::definitions::trigger_problems(self, &roles, &mut problems);
         crate::definitions::automation_problems(self, &roles, &mut problems);
         crate::definitions::operation_problems(self, &roles, &mut problems);
+        crate::object_meta::problems(self, &mut problems);
+        crate::templates::problems(self, &mut problems);
+        crate::products::problems(self, &mut problems);
         problems
     }
 }
