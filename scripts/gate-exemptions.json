@@ -1,19 +1,5 @@
 {
-  "handlers": [
-    {
-      "reason": "Handled by code the check cannot find: no Implements mark, no mounted bffRoute, no route at the contract path (WG-5048).",
-      "items": [
-        "health-check",
-        "deliver-view",
-        "show-sign-in-page",
-        "show-authoring-view",
-        "run-scenario",
-        "project-change",
-        "install-bundle",
-        "parse-bundle"
-      ]
-    }
-  ],
+  "handlers": [],
   "tables": [
     {
       "reason": "The table name is built at run time (CREATE TABLE IF NOT EXISTS {ledger}); the two ledgers it creates are described by tbl-control-migrations and tbl-tenant-migrations. Not a gap.",
