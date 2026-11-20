@@ -1,0 +1,34 @@
+{
+  // Refused: an operation that keeps a mutable balance in a record instead of the ledger
+  // (layer.balance-outside-ledger, WG-4998). The step writes "points" from record.points; the second
+  // step writes a field from a parameter, which is no balance and is not refused.
+  "product": { "id": "member-tiers", "name": "Member tiers", "imports": { "spec": "../../../../../../specifications/spec.jsonc", "entities": [] } },
+  "objects": [
+    {
+      "id": "member_tiers__member",
+      "label": "Member",
+      "fields": {
+        "name": { "id": "name", "label": "Name", "ty": "Str", "required": true, "unique": false },
+        "points": { "id": "points", "label": "Points", "ty": "Int", "required": true, "unique": false }
+      },
+      "constraints": {}
+    }
+  ],
+  "operations": [
+    {
+      "id": "member_tiers__grant",
+      "label": "Grant a point",
+      "inputs": [
+        { "name": "member", "ty": { "Ref": { "target": "member_tiers__member", "on-delete": "Restrict" } }, "required": true },
+        { "name": "name", "ty": "Str", "required": true }
+      ],
+      "invokers": { "signed-in": true, "roles": [] },
+      "subject": { "object": "member_tiers__member", "input": "member" },
+      "conditions": [],
+      "steps": [
+        { "UpdateRecord": { "id": "rename", "object": "member_tiers__member", "record": "param.member", "fields": { "name": "param.name" } } },
+        { "UpdateRecord": { "id": "bump", "object": "member_tiers__member", "record": "param.member", "fields": { "points": "record.points + 1" } } }
+      ]
+    }
+  ]
+}
