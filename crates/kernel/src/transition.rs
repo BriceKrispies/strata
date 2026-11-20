@@ -100,6 +100,7 @@ pub fn transition(
             roles,
         } => create_invitation(&mut draft, invitation, address, roles)?,
         Intent::RedeemInvitation { invitation } => redeem_invitation(&mut draft, invitation)?,
+        Intent::RevokeInvitation { invitation } => revoke_invitation(&mut draft, invitation)?,
         Intent::CreateRecord { object, fields } => {
             create_record(&mut draft, lookup, object, fields)?
         }
@@ -174,7 +175,8 @@ pub fn needs(schema: Option<&TenantSchema>, intent: &Intent) -> Vec<Need> {
         | Intent::AddTeamMember { .. }
         | Intent::RemoveTeamMember { .. }
         | Intent::CreateInvitation { .. }
-        | Intent::RedeemInvitation { .. } => {}
+        | Intent::RedeemInvitation { .. }
+        | Intent::RevokeInvitation { .. } => {}
         Intent::CreateRecord { object, fields } => field_needs(schema, &mut out, object, fields),
         Intent::UpdateRecord {
             object, id, fields, ..
@@ -484,16 +486,27 @@ fn create_tenant(
     })
 }
 
+/// The definition of `object`, for an intent that does `action` on it. A caller whom no policy
+/// could allow that action on the type gets the refusal for lack of permission whether or not
+/// the type exists, so a refusal never tells anyone which types exist; only a caller who could
+/// act on a type learns that it is missing.
 fn object_def<'a>(
-    draft: &Draft<'a>,
+    draft: &mut Draft<'a>,
     object: &ObjectTypeId,
+    action: Action,
 ) -> Result<&'a ObjectTypeDef, DomainError> {
-    draft
-        .tenant
-        .schema
-        .objects
-        .get(object)
-        .ok_or_else(|| draft.reject(ErrorKind::UnknownObject, format!("no object type {object}")))
+    let tenant: &'a TenantState = draft.tenant;
+    match tenant.schema.objects.get(object) {
+        Some(def) => Ok(def),
+        None => {
+            draft.require(
+                action,
+                &Resource::Object(object.clone()),
+                Subject::default(),
+            )?;
+            Err(draft.reject(ErrorKind::UnknownObject, format!("no object type {object}")))
+        }
+    }
 }
 
 fn check_version(
@@ -519,7 +532,7 @@ fn create_record(
     object: &ObjectTypeId,
     fields: &BTreeMap<FieldId, Value>,
 ) -> Result<Output, DomainError> {
-    let def = object_def(draft, object)?;
+    let def = object_def(draft, object, Action::Create)?;
     let ctx = draft.ctx;
     let roles = roles_of(draft.tenant, &ctx.principal);
     let no_params = BTreeMap::new();
@@ -627,15 +640,28 @@ fn create_record(
     })
 }
 
+/// The stored record, for an intent that does `action` on it. When there is none, the caller is
+/// asked for the permission first, with no record to test a condition against: one who could not
+/// act on it gets the refusal for lack of permission, the same as for a record that exists, and
+/// only one who could learns that it is missing.
 fn stored<'a>(
-    draft: &Draft<'_>,
+    draft: &mut Draft<'_>,
     lookup: Lookup<'a>,
     object: &ObjectTypeId,
     id: RecordId,
+    action: Action,
 ) -> Result<&'a Arc<Record>, DomainError> {
-    lookup
-        .record(object, id)?
-        .ok_or_else(|| draft.reject(ErrorKind::UnknownRecord, format!("no {object} {id}")))
+    match lookup.record(object, id)? {
+        Some(record) => Ok(record),
+        None => {
+            draft.require(
+                action,
+                &Resource::Object(object.clone()),
+                Subject::default(),
+            )?;
+            Err(draft.reject(ErrorKind::UnknownRecord, format!("no {object} {id}")))
+        }
+    }
 }
 
 fn update_record(
@@ -646,9 +672,9 @@ fn update_record(
     fields: &BTreeMap<FieldId, Value>,
     expected_version: Option<u64>,
 ) -> Result<Output, DomainError> {
-    let def = object_def(draft, object)?;
+    let def = object_def(draft, object, Action::Update)?;
     let ctx = draft.ctx;
-    let old = stored(draft, lookup, object, id)?;
+    let old = stored(draft, lookup, object, id, Action::Update)?;
 
     let mut candidate = Record::clone(old);
     for (field, value) in fields {
@@ -801,9 +827,9 @@ fn delete_record(
     id: RecordId,
     expected_version: Option<u64>,
 ) -> Result<Output, DomainError> {
-    object_def(draft, object)?;
+    object_def(draft, object, Action::Delete)?;
     let ctx = draft.ctx;
-    let old = stored(draft, lookup, object, id)?;
+    let old = stored(draft, lookup, object, id, Action::Delete)?;
     draft.require(
         Action::Delete,
         &Resource::Object(object.clone()),
@@ -891,9 +917,8 @@ fn change_member(
     if *role == public_role() {
         return Err(draft.reject(ErrorKind::InvalidIntent, "everyone already holds public"));
     }
-    if grant {
-        require_conferrable(draft, [role])?;
-    }
+    // ADM-152, ADM-1080: taking a role away asks as much of the actor as handing it out.
+    require_conferrable(draft, [role])?;
     let mut roles = draft
         .tenant
         .members
@@ -904,18 +929,9 @@ fn change_member(
         roles.insert(role.clone());
     } else {
         roles.remove(role);
-        let owners = draft
-            .tenant
-            .members
-            .iter()
-            .filter(|(p, r)| *p != principal && r.contains(&owner_role()))
-            .count();
-        if *role == owner_role() && owners == 0 {
-            return Err(draft.reject(
-                ErrorKind::InvalidIntent,
-                "a tenant keeps at least one owner",
-            ));
-        }
+        let mut members = draft.tenant.members.clone();
+        members.insert(principal.clone(), roles.clone());
+        require_an_owner_remains(draft, &members, &draft.tenant.schema)?;
     }
     let through_teams = assigned_roles(&BTreeMap::new(), &draft.tenant.schema, principal);
     if roles.is_empty() && through_teams.is_empty() {
@@ -952,6 +968,41 @@ fn require_conferrable<'r>(
                 format!("may not confer role {role}: {detail}"),
             ));
         }
+    }
+    Ok(())
+}
+
+/// The principals who hold `owner` in effect, directly or through a team.
+fn effective_owners(
+    members: &BTreeMap<PrincipalId, BTreeSet<RoleId>>,
+    schema: &TenantSchema,
+) -> BTreeSet<PrincipalId> {
+    let mut candidates: BTreeSet<&PrincipalId> = members.keys().collect();
+    for team in schema.all_teams() {
+        candidates.extend(team.members.iter());
+    }
+    candidates
+        .into_iter()
+        .filter(|p| assigned_roles(members, schema, p).contains(&owner_role()))
+        .cloned()
+        .collect()
+}
+
+/// ADM-1081: a change that takes a role away from someone, a team or a team's membership must
+/// leave the tenant an owner. `members` and `schema` are the state after the change; counting
+/// goes through teams as well as direct assignments. A tenant that has no owner before the
+/// change is not made worse by it, so it is not held to this.
+fn require_an_owner_remains(
+    draft: &Draft<'_>,
+    members: &BTreeMap<PrincipalId, BTreeSet<RoleId>>,
+    schema: &TenantSchema,
+) -> Result<(), DomainError> {
+    let before = effective_owners(&draft.tenant.members, &draft.tenant.schema).len();
+    if before > 0 && effective_owners(members, schema).is_empty() {
+        return Err(draft.reject(
+            ErrorKind::InvalidIntent,
+            "a tenant keeps at least one owner",
+        ));
     }
     Ok(())
 }
@@ -1020,8 +1071,8 @@ fn team_role(
     if *role == public_role() {
         return Err(draft.reject(ErrorKind::InvalidIntent, "everyone already holds public"));
     }
+    require_conferrable(draft, [role])?;
     if grant {
-        require_conferrable(draft, [role])?;
         def.roles.insert(role.clone());
     } else {
         def.roles.remove(role);
@@ -1029,6 +1080,9 @@ fn team_role(
     let schema = TenantSchema::clone(&draft.tenant.schema);
     let mut after = schema.clone();
     after.put_team(def.clone());
+    if !grant {
+        require_an_owner_remains(draft, &draft.tenant.members, &after)?;
+    }
     let lost: Vec<PrincipalId> = if grant {
         Vec::new()
     } else {
@@ -1060,8 +1114,8 @@ fn team_member(
 ) -> Result<Output, DomainError> {
     draft.require(Action::Manage, &Resource::Members, Subject::default())?;
     let mut def = team_of(draft, team)?.clone();
+    require_conferrable(draft, def.roles.iter())?;
     if add {
-        require_conferrable(draft, def.roles.iter())?;
         def.members.insert(principal.clone());
     } else {
         def.members.remove(principal);
@@ -1070,6 +1124,9 @@ fn team_member(
     // The member is no longer in `def.members` after a removal, so it gets its own event here.
     let mut after = schema.clone();
     after.put_team(def.clone());
+    if !add {
+        require_an_owner_remains(draft, &draft.tenant.members, &after)?;
+    }
     let roles = assigned_roles(&draft.tenant.members, &after, principal);
     if !add {
         draft.events.push(EventBody::MemberChanged {
@@ -1126,7 +1183,53 @@ fn create_invitation(
         roles: roles.clone(),
         created_by: creator.clone(),
         redeemed_by: None,
+        expires_at: Some(Timestamp(ctx.now.0.saturating_add(INVITATION_LIFETIME_MS))),
+        revoked_by: None,
     });
+    draft.ops.push(DeltaOp::PutSchema(Arc::new(schema)));
+    Ok(Output::Member)
+}
+
+/// How long an invitation stays redeemable after it is issued, in milliseconds: fourteen days
+/// (ADM-1082).
+const INVITATION_LIFETIME_MS: i64 = 14 * 24 * 60 * 60 * 1000;
+
+/// ADM-1083: withdraw an invitation that was not redeemed. Authorised as Manage on
+/// Members, and the acting principal must be one who could confer every role the invitation
+/// offers; the invitation stays in the schema, marked with who revoked it, and is never
+/// redeemable again.
+fn revoke_invitation(
+    draft: &mut Draft<'_>,
+    invitation: &InvitationId,
+) -> Result<Output, DomainError> {
+    draft.require(Action::Manage, &Resource::Members, Subject::default())?;
+    let (ctx, tenant) = (draft.ctx, draft.tenant);
+    let Principal::User(actor) = &ctx.principal else {
+        return Err(draft.reject(ErrorKind::InvalidIntent, "a person revokes an invitation"));
+    };
+    let Some(offer) = tenant.schema.invitation(invitation) else {
+        return Err(draft.reject(
+            ErrorKind::InvalidIntent,
+            format!("no invitation {invitation}"),
+        ));
+    };
+    if offer.redeemed_by.is_some() {
+        return Err(draft.reject(
+            ErrorKind::InvalidIntent,
+            "the invitation was already redeemed",
+        ));
+    }
+    if offer.revoked_by.is_some() {
+        return Err(draft.reject(
+            ErrorKind::InvalidIntent,
+            "the invitation was already revoked",
+        ));
+    }
+    require_conferrable(draft, offer.roles.iter())?;
+    let mut schema = TenantSchema::clone(&tenant.schema);
+    if let Some(stored) = schema.invitation_mut(invitation) {
+        stored.revoked_by = Some(actor.clone());
+    }
     draft.ops.push(DeltaOp::PutSchema(Arc::new(schema)));
     Ok(Output::Member)
 }
@@ -1194,6 +1297,71 @@ fn redeem_invitation(
     draft.evidence.push(Check::pass(
         "invitation:redeemed_once",
         "not redeemed before",
+    ));
+    if let Some(by) = &offer.revoked_by {
+        draft.evidence.push(Check::fail(
+            "invitation:not_revoked",
+            format!("revoked by {by}"),
+        ));
+        return Err(draft.reject(ErrorKind::InvalidIntent, "the invitation was revoked"));
+    }
+    draft
+        .evidence
+        .push(Check::pass("invitation:not_revoked", "not revoked"));
+    // An invitation that records no expiry (one issued before expiry existed) does not expire
+    // by date and so is never redeemable: it must be issued again.
+    match offer.expires_at {
+        Some(at) if ctx.now < at => draft
+            .evidence
+            .push(Check::pass("invitation:not_expired", "not expired")),
+        _ => {
+            draft.evidence.push(Check::fail(
+                "invitation:not_expired",
+                "the invitation has expired",
+            ));
+            return Err(draft.reject(ErrorKind::InvalidIntent, "the invitation has expired"));
+        }
+    }
+    // ADM-1084: the issuer's authority is what the invitation stands on, so it is asked again
+    // now: the issuer must still be allowed to manage members and to confer every role offered.
+    let issuer = Principal::User(offer.created_by.clone());
+    let (may_manage, _) = authorize(
+        tenant,
+        &tenant.schema,
+        &issuer,
+        ctx.now,
+        Action::Manage,
+        &Resource::Members,
+        Subject::default(),
+        None,
+    );
+    if !may_manage {
+        draft.evidence.push(Check::fail(
+            "invitation:issuer_authority",
+            "the issuer may no longer manage members",
+        ));
+        return Err(draft.reject(
+            ErrorKind::Unauthorized,
+            "the invitation's issuer no longer holds the authority to issue it",
+        ));
+    }
+    for role in &offer.roles {
+        let check = may_confer(tenant, &issuer, role);
+        if !check.passed {
+            draft.evidence.push(check);
+            draft.evidence.push(Check::fail(
+                "invitation:issuer_authority",
+                format!("the issuer may no longer confer {role}"),
+            ));
+            return Err(draft.reject(
+                ErrorKind::Unauthorized,
+                "the invitation's issuer no longer holds the authority to issue it",
+            ));
+        }
+    }
+    draft.evidence.push(Check::pass(
+        "invitation:issuer_authority",
+        "the issuer still holds the authority to issue it",
     ));
     let mut roles = tenant.members.get(redeemer).cloned().unwrap_or_default();
     roles.extend(offer.roles.iter().cloned());

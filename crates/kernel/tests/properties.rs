@@ -299,7 +299,8 @@ fn some_policy_could_authorise(
         | Intent::RevokeTeamRole { .. }
         | Intent::AddTeamMember { .. }
         | Intent::RemoveTeamMember { .. }
-        | Intent::CreateInvitation { .. } => (Action::Manage, Resource::Members),
+        | Intent::CreateInvitation { .. }
+        | Intent::RevokeInvitation { .. } => (Action::Manage, Resource::Members),
         // Redeeming needs no policy: any signed-in person may try.
         Intent::RedeemInvitation { .. } => return matches!(principal, Principal::User(_)),
     };
