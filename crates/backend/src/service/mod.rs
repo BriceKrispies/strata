@@ -133,6 +133,7 @@ pub(crate) fn owner_context(
         now: app.now(),
         correlation: correlation.to_string(),
         verified_address: None,
+        idempotency_key: None,
     })
 }
 

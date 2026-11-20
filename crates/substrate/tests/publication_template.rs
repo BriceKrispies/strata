@@ -62,6 +62,7 @@ fn ctx(principal: Principal) -> Context {
         now: Timestamp(1_800_000_000_000),
         correlation: "t".into(),
         verified_address: None,
+        idempotency_key: None,
     }
 }
 

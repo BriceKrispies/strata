@@ -14,7 +14,7 @@ use std::convert::Infallible;
 use std::future::Future;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::net::TcpListener;
 use tokio::sync::{watch, Semaphore};
 use tower::ServiceExt;
@@ -193,9 +193,9 @@ pub async fn serve_with(
                     let (mut parts, body) = request.into_parts();
                     parts.extensions.insert(ConnectInfo(peer));
                     let request = Request::from_parts(parts, Body::new(body));
-                    match tokio::time::timeout(limits.request_timeout, router.oneshot(request))
-                        .await
-                    {
+                    let deadline = Instant::now() + limits.request_timeout;
+                    let answered = REQUEST_DEADLINE.scope(deadline, router.oneshot(request));
+                    match tokio::time::timeout(limits.request_timeout, answered).await {
                         Ok(Ok(response)) => Ok::<_, Infallible>(response),
                         Ok(Err(never)) => match never {},
                         Err(_) => {
@@ -256,14 +256,43 @@ impl std::fmt::Display for WorkerFailed {
 
 impl std::error::Error for WorkerFailed {}
 
+tokio::task_local! {
+    /// When the request being served is answered `408`.
+    static REQUEST_DEADLINE: Instant;
+}
+
+thread_local! {
+    static WORK_DEADLINE: std::cell::Cell<Option<Instant>> = const { std::cell::Cell::new(None) };
+}
+
+/// The deadline of the request whose [`blocking`] work is running on this thread: when the
+/// request is answered `408`. Work that would change the store checks it before the change and
+/// does nothing once it has passed (a timeout cancels nothing by itself, since the worker thread
+/// cannot be stopped). `None` outside a request.
+pub fn work_deadline() -> Option<Instant> {
+    WORK_DEADLINE.with(std::cell::Cell::get)
+}
+
 /// Run `work` on a blocking worker thread, off the async executor, and wait for it. Storage
-/// calls, which are synchronous, go through here.
+/// calls, which are synchronous, go through here. The request's deadline is available to `work`
+/// as [`work_deadline`].
 pub async fn blocking<T, F>(work: F) -> Result<T, WorkerFailed>
 where
     T: Send + 'static,
     F: FnOnce() -> T + Send + 'static,
 {
-    tokio::task::spawn_blocking(work)
-        .await
-        .map_err(|e| WorkerFailed(e.to_string()))
+    let deadline = REQUEST_DEADLINE.try_with(|at| *at).ok();
+    tokio::task::spawn_blocking(move || {
+        struct Reset;
+        impl Drop for Reset {
+            fn drop(&mut self) {
+                WORK_DEADLINE.with(|cell| cell.set(None));
+            }
+        }
+        WORK_DEADLINE.with(|cell| cell.set(deadline));
+        let _reset = Reset;
+        work()
+    })
+    .await
+    .map_err(|e| WorkerFailed(e.to_string()))
 }

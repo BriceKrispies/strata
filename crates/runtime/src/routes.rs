@@ -36,6 +36,13 @@
 //! recorded, nor is any other runtime failure; the reservation is released so the next call with
 //! the key runs the handler. (A handler that panics is such a failure: `internal`.)
 //!
+//! This table is the replay of the HTTP layer: it lives in memory, is bounded by bytes and is lost
+//! when the process ends. It does not make a retried write to a tenant database safe. That is
+//! the store's idempotency key (`strata_kernel::Context::idempotency_key`, journaled in the
+//! tenant database with the commit and kept for `IDEMPOTENCY_RETENTION_MS`), which holds across a
+//! restart and is what a handler that writes through a `Store` relies on; a deadline for the
+//! write is available to it as [`crate::server::work_deadline`].
+//!
 //! The recorded answers are bounded by bytes, not by number: [`Routes::with_replay_bytes`] (8 MiB
 //! by default). The oldest answers are forgotten first; an answer larger than the bound is not
 //! recorded, and a repeated call then runs the handler again.

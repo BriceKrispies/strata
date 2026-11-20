@@ -70,6 +70,7 @@ impl Identity {
             now: app.now(),
             correlation: self.correlation.clone(),
             verified_address: self.verified_address.clone(),
+            idempotency_key: None,
         }
     }
 }

@@ -224,6 +224,7 @@ fn context(tenant: &TenantId, now: Time) -> Context {
         now: Timestamp(now.0),
         correlation: "runtime".into(),
         verified_address: None,
+        idempotency_key: None,
     }
 }
 
@@ -324,6 +325,7 @@ impl<'a> ApiTx<'a> {
             delta,
             events,
             revoke_sessions: Vec::new(),
+            idempotency: None,
         };
         match store.commit(&commit) {
             // Another writer created it first: the caller loads it again.
@@ -623,6 +625,7 @@ impl<'a> ApiTx<'a> {
             delta,
             events,
             revoke_sessions: Vec::new(),
+            idempotency: None,
         };
         self.store.commit(&commit).map_err(storage)?;
         Ok(())

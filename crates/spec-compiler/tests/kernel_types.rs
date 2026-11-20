@@ -739,6 +739,7 @@ fn samples() -> Vec<(&'static str, Json)> {
         now: Timestamp(9),
         correlation: "c-1".into(),
         verified_address: None,
+        idempotency_key: None,
     };
     s.push(("context", json(&context)));
     s.push(("context", json(&ctx("alpha", Principal::Anonymous, 5))));
