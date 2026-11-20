@@ -7,6 +7,26 @@
 
 use serde::Serialize;
 
+/// The most bytes of one Markdown source that are read; the rest is dropped.
+pub const MAX_SOURCE_BYTES: usize = 200_000;
+/// The most quotes inside quotes. A deeper `>` run is kept as text of a paragraph.
+pub const MAX_QUOTE_DEPTH: usize = 8;
+/// The most inline elements inside inline elements (a link or emphasis in a link, and so on).
+/// Markup nested deeper is kept as text.
+pub const MAX_INLINE_DEPTH: usize = 8;
+
+/// The source cut to [`MAX_SOURCE_BYTES`], at a character boundary.
+fn bounded(source: &str) -> &str {
+    if source.len() <= MAX_SOURCE_BYTES {
+        return source;
+    }
+    let mut end = MAX_SOURCE_BYTES;
+    while !source.is_char_boundary(end) {
+        end -= 1;
+    }
+    &source[..end]
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Inline {
@@ -81,11 +101,22 @@ fn find_close(chars: &[char], from: usize, delimiter: &[char]) -> Option<usize> 
 
 /// Parse inline markup: `code`, `**strong**`, `*em*`, `_em_`, `[text](href)` and `\` escapes.
 pub fn parse_inlines(source: &str) -> Vec<Inline> {
-    let chars: Vec<char> = source.chars().collect();
-    inlines(&chars)
+    let chars: Vec<char> = bounded(source).chars().collect();
+    inlines(&chars, 0)
 }
 
-fn inlines(chars: &[char]) -> Vec<Inline> {
+fn inlines(chars: &[char], depth: usize) -> Vec<Inline> {
+    if depth >= MAX_INLINE_DEPTH {
+        return if chars.is_empty() {
+            Vec::new()
+        } else {
+            vec![Inline::Text {
+                text: chars.iter().collect(),
+            }]
+        };
+    }
+    // Once a `[` has found no complete link after it, no later `[` can: the scan is done once.
+    let mut no_more_links = false;
     let mut out = Vec::new();
     let mut text = String::new();
     let mut i = 0;
@@ -114,7 +145,7 @@ fn inlines(chars: &[char]) -> Vec<Inline> {
                 Some(end) if end > i + 2 => {
                     push_text(&mut out, &mut text);
                     out.push(Inline::Strong {
-                        children: inlines(&chars[i + 2..end]),
+                        children: inlines(&chars[i + 2..end], depth + 1),
                     });
                     i = end + 2;
                 }
@@ -130,7 +161,7 @@ fn inlines(chars: &[char]) -> Vec<Inline> {
                 Some(end) if end > i + 1 && !inside_word && !chars[i + 1].is_whitespace() => {
                     push_text(&mut out, &mut text);
                     out.push(Inline::Em {
-                        children: inlines(&chars[i + 1..end]),
+                        children: inlines(&chars[i + 1..end], depth + 1),
                     });
                     i = end + 1;
                 }
@@ -140,15 +171,22 @@ fn inlines(chars: &[char]) -> Vec<Inline> {
                 }
             }
         } else if c == '[' {
-            let link = find_close(chars, i + 1, &[']', '(']).and_then(|mid| {
-                let end = chars[mid + 2..].iter().position(|c| *c == ')')? + mid + 2;
-                Some((mid, end))
-            });
+            let link = if no_more_links {
+                None
+            } else {
+                find_close(chars, i + 1, &[']', '(']).and_then(|mid| {
+                    let end = chars[mid + 2..].iter().position(|c| *c == ')')? + mid + 2;
+                    Some((mid, end))
+                })
+            };
+            if link.is_none() {
+                no_more_links = true;
+            }
             match link {
                 Some((mid, end)) => {
                     let href: String = chars[mid + 2..end].iter().collect();
                     let href = href.trim().to_string();
-                    let children = inlines(&chars[i + 1..mid]);
+                    let children = inlines(&chars[i + 1..mid], depth + 1);
                     push_text(&mut out, &mut text);
                     if safe_href(&href) {
                         out.push(Inline::Link { href, children });
@@ -206,8 +244,16 @@ fn figure(line: &str) -> Option<Block> {
 
 /// Parse constrained Markdown into blocks.
 ///
+/// At most [`MAX_SOURCE_BYTES`] of the source are read, quotes nest at most [`MAX_QUOTE_DEPTH`]
+/// deep and inline markup at most [`MAX_INLINE_DEPTH`], so no source can exhaust the stack or
+/// take more than linear time per level.
+///
 /// Implements: H-009
 pub fn parse(source: &str) -> Vec<Block> {
+    parse_at(bounded(source), 0)
+}
+
+fn parse_at(source: &str, quote_depth: usize) -> Vec<Block> {
     let normalised = source.replace("\r\n", "\n");
     let lines: Vec<&str> = normalised.lines().collect();
     let mut blocks = Vec::new();
@@ -256,9 +302,17 @@ pub fn parse(source: &str) -> Vec<Block> {
                 inner.push(content.to_string());
                 i += 1;
             }
-            blocks.push(Block::Quote {
-                blocks: parse(&inner.join("\n")),
-            });
+            if quote_depth >= MAX_QUOTE_DEPTH {
+                // Too deep to nest further: what is left is a paragraph of text.
+                let text = inner.join(" ");
+                blocks.push(Block::Paragraph {
+                    inlines: parse_inlines(&text),
+                });
+            } else {
+                blocks.push(Block::Quote {
+                    blocks: parse_at(&inner.join("\n"), quote_depth + 1),
+                });
+            }
         } else if bullet_item(trimmed).is_some() || ordered_item(trimmed).is_some() {
             let ordered = bullet_item(trimmed).is_none();
             let mut items: Vec<String> = Vec::new();
@@ -485,5 +539,103 @@ mod tests {
     #[test]
     fn counts_words() {
         assert_eq!(word_count(&parse("One two **three**.\n\n- four five")), 5);
+    }
+
+    fn quote_depth(blocks: &[Block]) -> usize {
+        blocks
+            .iter()
+            .map(|block| match block {
+                Block::Quote { blocks } => 1 + quote_depth(blocks),
+                _ => 0,
+            })
+            .max()
+            .unwrap_or(0)
+    }
+
+    fn inline_depth(inlines: &[Inline]) -> usize {
+        inlines
+            .iter()
+            .map(|inline| match inline {
+                Inline::Em { children }
+                | Inline::Strong { children }
+                | Inline::Link { children, .. } => 1 + inline_depth(children),
+                _ => 0,
+            })
+            .max()
+            .unwrap_or(0)
+    }
+
+    /// Run on a thread with a small stack, so a recursion that follows the input depth overflows
+    /// here instead of passing on the generous stack of the test runner.
+    fn on_small_stack<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -> T {
+        std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(work)
+            .unwrap()
+            .join()
+            .unwrap()
+    }
+
+    /// Verifies: CMS-1020
+    #[test]
+    fn two_hundred_thousand_quote_markers_stop_at_the_depth_cap() {
+        let blocks = on_small_stack(|| parse(&">".repeat(200_000)));
+        assert_eq!(quote_depth(&blocks), MAX_QUOTE_DEPTH);
+        let spaced = on_small_stack(|| parse(&"> ".repeat(100_000)));
+        assert_eq!(quote_depth(&spaced), MAX_QUOTE_DEPTH);
+        let lines = on_small_stack(|| parse(&">".repeat(10_000).replace('>', ">\n")));
+        assert!(quote_depth(&lines) <= MAX_QUOTE_DEPTH);
+    }
+
+    /// Verifies: CMS-1020
+    #[test]
+    fn two_hundred_thousand_brackets_parse_in_bounded_time() {
+        let started = std::time::Instant::now();
+        let inlines = on_small_stack(|| parse_inlines(&"[".repeat(200_000)));
+        assert_eq!(inline_depth(&inlines), 0);
+        // Many openers before one complete link, and many unfinished links.
+        let nested = on_small_stack(|| {
+            parse_inlines(&format!("{}x](https://example.com)", "[".repeat(100_000)))
+        });
+        assert!(inline_depth(&nested) <= MAX_INLINE_DEPTH);
+        on_small_stack(|| parse_inlines(&"[a](".repeat(50_000)));
+        on_small_stack(|| parse_inlines(&"[a]".repeat(66_000)));
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(10),
+            "took {:?}",
+            started.elapsed()
+        );
+    }
+
+    /// Verifies: CMS-1020
+    #[test]
+    fn a_document_at_the_maximum_depth_counts_and_serialises() {
+        let source = format!(
+            "{}{}x](/a)",
+            "> ".repeat(MAX_QUOTE_DEPTH + 5),
+            "[".repeat(MAX_INLINE_DEPTH + 5)
+        );
+        let (depth, words, json) = on_small_stack(move || {
+            let blocks = parse(&source);
+            (
+                quote_depth(&blocks),
+                word_count(&blocks),
+                serde_json::to_string(&blocks).unwrap(),
+            )
+        });
+        assert_eq!(depth, MAX_QUOTE_DEPTH);
+        assert!(words >= 1);
+        assert!(json.contains("\"quote\""));
+    }
+
+    /// Verifies: CMS-1020
+    #[test]
+    fn a_source_is_read_only_up_to_the_maximum_length() {
+        let words = word_count(&parse(&"word ".repeat(100_000)));
+        assert_eq!(words, MAX_SOURCE_BYTES / 5);
+        // A cut inside a multi-byte character falls back to the character's start.
+        let wide = "€".repeat(MAX_SOURCE_BYTES);
+        assert_eq!(bounded(&wide).len(), 199_998);
+        assert!(!parse_inlines(&wide).is_empty());
     }
 }

@@ -1,6 +1,9 @@
 //! The end-to-end output: a golden fixture (`tests/fixtures/e2e/expected`, rewritten by
-//! `SPECC_BLESS=1`) over a specification that uses every step kind, a syntax check of every
-//! generated file with `node --check`, and the refusals.
+//! `SPECC_BLESS=1`), a syntax check of every generated file with `node --check`, and the
+//! refusals. Then the two committed outputs: Strata's own journeys (`tests/e2e/generated`) and the
+//! step fixtures (`tests/e2e/step-checks`, from `tests/e2e/step-fixtures/spec.jsonc`), which hold a
+//! journey that passes and one that must fail for every step kind; Playwright runs those against
+//! the fixture pages of `tests/e2e/step-fixtures/server.mjs`.
 
 use std::fs;
 use std::path::PathBuf;
@@ -64,6 +67,7 @@ fn every_file_has_the_header_and_generation_is_repeatable() {
     assert_eq!(
         paths,
         [
+            "journey.js",
             "playwright.generated.config.js",
             "read-an-essay.spec.js",
             "readers-see-it-live.spec.js",
@@ -165,12 +169,14 @@ fn a_requirement_without_a_ref_is_refused() {
 fn an_expect_log_becomes_a_poll_of_the_service_log() {
     let files = fixture_files();
     let text = contents(&files, "sign-in-offline.spec.js");
-    assert!(text.contains("const LOG_FILES = [\"var/logs/backend.jsonl\"];"));
-    assert!(text.contains("  logFrom = logSizes();\n"));
+    assert!(text.contains("{ logs: true }"));
     assert!(text.contains(
-        "await expectLogLine(\"var/logs/backend.jsonl\", \"backend\", \"record.updated\", {\"tenant\":\"fieldnotes\",\"transition\":\"publish\"}, 8000);"
+        "await j.expectLog(\"backend\", \"record.updated\", { level: \"info\", fields: {\"tenant\":\"fieldnotes\",\"transition\":\"publish\"}, members: [\"tenant\",\"object\",\"transition\"], timeout: 8000 });"
     ));
-    assert!(!contents(&files, "read-an-essay.spec.js").contains("expectLogLine"));
+    assert!(contents(&files, "journey.js")
+        .contains("const LOG_FILES = {\"backend\":\"var/logs/backend.jsonl\"};"));
+    assert!(!contents(&files, "read-an-essay.spec.js").contains("expectLog"));
+    assert!(contents(&files, "read-an-essay.spec.js").contains("{ logs: true }"));
 }
 
 #[test]
@@ -201,4 +207,133 @@ fn an_expect_log_of_a_member_the_line_does_not_hold_is_refused() {
         )
     });
     assert_eq!(codes, [e2e::LOG_EVENT]);
+}
+
+fn repo_root() -> PathBuf {
+    manifest_dir().join("../..")
+}
+
+/// The files `specc e2e` writes from a specification of the repository, with its options.
+fn generated(spec: &str, options: &e2e::Options) -> Vec<GeneratedFile> {
+    let text = fs::read_to_string(repo_root().join(spec)).unwrap();
+    e2e::generate_with(spec, &text, options)
+        .unwrap_or_else(|d| panic!("specc e2e refuses {spec}: {d:#?}"))
+        .files
+}
+
+fn strata_options() -> e2e::Options {
+    e2e::Options {
+        origin: Some("http://127.0.0.1:4200".into()),
+        expect_fail_prefix: None,
+    }
+}
+
+fn step_options() -> e2e::Options {
+    e2e::Options {
+        origin: None,
+        expect_fail_prefix: Some("violates-".into()),
+    }
+}
+
+const STEP_SPEC: &str = "tests/e2e/step-fixtures/spec.jsonc";
+
+#[test]
+fn strata_journeys_generate_and_are_committed() {
+    let files = generated("specifications/spec.jsonc", &strata_options());
+    let differences = output::compare(&repo_root().join("tests/e2e/generated"), &files).unwrap();
+    assert!(
+        differences.is_empty(),
+        "tests/e2e/generated is not what specc e2e generates: {differences:?}; run npm run generate"
+    );
+}
+
+#[test]
+fn the_full_journey_checks_the_backend_log_after_each_step() {
+    let files = generated("specifications/spec.jsonc", &strata_options());
+    let text = contents(&files, "ui-author-writes-publishes-live.spec.js");
+    let events: Vec<&str> = text
+        .lines()
+        .filter_map(|l| l.trim().strip_prefix("await j.expectLog(\"backend\", \""))
+        .map(|rest| rest.split('"').next().unwrap())
+        .collect();
+    assert_eq!(
+        events,
+        [
+            "session.started",
+            "record.created",
+            "record.updated",
+            "record.updated",
+            "record.deleted",
+            "session.ended"
+        ]
+    );
+    assert!(text.contains("\"transition\":\"publish\""));
+    assert!(text.contains("\"transition\":\"unpublish\""));
+    assert!(text.contains("await j.waitFor(["));
+    assert!(text.contains(
+        "await j.logScan([j.re(\"${authorSession}\"), j.re(\"${authorCsrf}\"), j.re(\"strata-dev-\")]);"
+    ));
+    // The runtime links each line to a request the journey's browsers sent and to the BFF's line.
+    let runtime = contents(&files, "journey.js");
+    assert!(runtime.contains("this.correlations.has(line.correlation)"));
+    assert!(
+        runtime.contains("l.json.service !== service && l.json.correlation === line.correlation")
+    );
+    assert!(runtime.contains("spawnSync('podman', ['logs', name]"));
+    assert!(runtime.contains("const WRITTEN_ORIGIN = \"http://127.0.0.1:4200\";"));
+}
+
+#[test]
+fn the_security_journeys_expect_what_the_backend_now_answers() {
+    let files = generated("specifications/spec.jsonc", &strata_options());
+    let others = contents(&files, "ui-author-cannot-edit-others.spec.js");
+    assert!(others.contains("\"id\":15"));
+    assert!(others.contains("\"expectJson\":{\"code\":\"not_found\"},\"expectStatus\":404"));
+    assert!(others.contains(
+        "\"expectJson\":{\"failed.0.rule\":\"policy:authors_own_posts\"},\"expectStatus\":403"
+    ));
+    let ends = contents(&files, "ui-session-ends.spec.js");
+    assert!(ends.contains("fill(\"admin\")"));
+    assert!(!ends.contains("tomasz"));
+}
+
+#[test]
+fn step_fixtures_are_committed() {
+    let files = generated(STEP_SPEC, &step_options());
+    let differences = output::compare(&repo_root().join("tests/e2e/step-checks"), &files).unwrap();
+    assert!(
+        differences.is_empty(),
+        "tests/e2e/step-checks is not what specc e2e generates: {differences:?}; run npm run generate"
+    );
+}
+
+/// Every step kind has a fixture journey that passes and one that must fail, and the step a
+/// failing journey ends with is the kind it is named for (or, for a step that asserts nothing,
+/// the assertion that shows its effect).
+#[test]
+fn every_step_kind_has_a_passing_and_a_failing_fixture() {
+    let text = fs::read_to_string(repo_root().join(STEP_SPEC)).unwrap();
+    let plan = e2e::load(&text).unwrap();
+    for (kind, _) in e2e::STEP_KINDS {
+        let uses = |prefix: &str| {
+            plan.scenarios.iter().any(|s| {
+                s.id.starts_with(prefix)
+                    && s.steps
+                        .iter()
+                        .any(|st| st.as_object().is_some_and(|o| o.contains_key(*kind)))
+            })
+        };
+        assert!(uses("pass-"), "no passing fixture uses {kind}");
+        assert!(uses("violates-"), "no failing fixture uses {kind}");
+    }
+    let files = generated(STEP_SPEC, &step_options());
+    for s in &plan.scenarios {
+        let body = contents(&files, &format!("{}.spec.js", s.id));
+        assert_eq!(
+            body.contains("test.fail();"),
+            s.id.starts_with("violates-"),
+            "{}",
+            s.id
+        );
+    }
 }

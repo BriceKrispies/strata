@@ -1,0 +1,42 @@
+{
+  // A product specification in its own file (WG-4989): the badges feature as tenant metadata on the
+  // Strata platform (d-103, ARC-113). It imports the platform entities it uses by id and declares
+  // only kinds a product may declare. tests/layers.rs loads it with specc's loader and validates it
+  // with Exegra beside specifications/spec.jsonc; refused/ holds one product per refusal.
+  "product": {
+    "id": "badges",
+    "name": "Badges",
+    "description": "Badges a tenant awards to its members, installed as tenant metadata through the platform's install-bundle contract.",
+    "imports": {
+      "spec": "../../../../../specifications/spec.jsonc",
+      "entities": ["content-read", "content-write", "product-module"]
+    }
+  },
+  "types": [
+    { "id": "badges__tier", "name": "Badge tier", "kind": "enum", "values": ["bronze", "silver", "gold"], "description": "How rare a badge is." }
+  ],
+  "roles": [
+    {
+      "id": "badges__curator",
+      "name": "Badge curator",
+      "description": "A member of a tenant who defines and awards the tenant's badges.",
+      "level": "tenant",
+      "holders": ["person"],
+      "capabilities": ["content-read", "content-write", "badges__grant"]
+    }
+  ],
+  "claims": [
+    {
+      "id": "badges__installed-as-metadata",
+      "kind": "structural",
+      "statement": "The badges product is installed into a tenant as a bundle through the platform's install-bundle contract, with no change to the kernel.",
+      "subjects": ["product-module"],
+      "rationale": "Its types and roles are tenant data that install-bundle writes through kernel intents (ARC-112, ARC-113).",
+      "evaluate": { "method": "external-evidence" }
+    }
+  ],
+  // A product may declare capabilities: names that tenant roles grant, in the namespace of the product (D-6590).
+  "capabilities": [
+    { "id": "badges__grant", "name": "Grant badges", "description": "Award a badge to a member of the tenant." }
+  ]
+}

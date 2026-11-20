@@ -1,0 +1,8 @@
+{
+  // Refused beside the badges product: a role that lists a capability another product declares
+  // (layer.cross-product-reference; alone it is layer.reference-unknown).
+  "product": { "id": "tiers", "name": "Tiers", "imports": { "spec": "../../../../../../specifications/spec.jsonc", "entities": [] } },
+  "roles": [
+    { "id": "tiers__granter", "name": "Tier granter", "level": "tenant", "holders": ["person"], "capabilities": ["badges__grant"] }
+  ]
+}

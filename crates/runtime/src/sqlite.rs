@@ -17,6 +17,7 @@ use crate::store::{
     DeadLetter, NewEntry, NewMessage, NewTimer, OutboxEntry, OutboxStore, QueueEntry, QueueStore,
     RecordStore, StorageError, StoredRecord, TimerEntry, TimerStore, Tx,
 };
+use crate::TenantId;
 use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
 use std::fmt;
 use std::path::Path;
@@ -32,6 +33,19 @@ pub enum DbError {
     Poisoned,
     /// A migration ledger name that is not a plain identifier.
     BadLedger(String),
+    /// The ledger holds a step this binary does not know: the file was migrated by a newer
+    /// version, and running against its layout is not safe.
+    LedgerAhead {
+        /// The ledger table.
+        ledger: String,
+        /// The highest step recorded in the file.
+        recorded: u32,
+        /// The highest step this binary knows.
+        known: u32,
+    },
+    /// The journal mode of a database file is not the WAL, so the durability this module promises
+    /// does not hold.
+    NotWal(String),
 }
 
 impl fmt::Display for DbError {
@@ -40,6 +54,18 @@ impl fmt::Display for DbError {
             DbError::Sql(error) => error.fmt(f),
             DbError::Poisoned => f.write_str("a writer panicked"),
             DbError::BadLedger(name) => write!(f, "bad migration ledger name {name:?}"),
+            DbError::LedgerAhead {
+                ledger,
+                recorded,
+                known,
+            } => write!(
+                f,
+                "the migration ledger {ledger} records step {recorded}, but this version knows                  steps only up to {known}: the file was migrated by a newer version, and is not                  opened"
+            ),
+            DbError::NotWal(mode) => write!(
+                f,
+                "the database file did not enter write-ahead logging (journal mode is {mode})"
+            ),
         }
     }
 }
@@ -60,7 +86,9 @@ impl From<DbError> for StorageError {
             {
                 StorageError::Invalid(error.to_string())
             }
-            DbError::BadLedger(_) => StorageError::Invalid(error.to_string()),
+            DbError::BadLedger(_) | DbError::LedgerAhead { .. } => {
+                StorageError::Invalid(error.to_string())
+            }
             _ => StorageError::Unavailable(error.to_string()),
         }
     }
@@ -107,7 +135,10 @@ impl Database {
 
     fn prepare(conn: Connection, location: String) -> Result<Self, DbError> {
         conn.busy_timeout(Duration::from_secs(5))?;
-        conn.pragma_update(None, "journal_mode", "WAL")?;
+        let mode: String = conn.query_row("PRAGMA journal_mode=WAL", [], |r| r.get(0))?;
+        if location != ":memory:" && !mode.eq_ignore_ascii_case("wal") {
+            return Err(DbError::NotWal(mode));
+        }
         conn.pragma_update(None, "synchronous", "FULL")?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
         Ok(Database {
@@ -126,9 +157,14 @@ impl Database {
         &*self.location != ":memory:"
     }
 
-    /// The connection, exclusively.
+    /// The connection, exclusively. A thread that panicked while holding it does not disable the
+    /// database: an open transaction is rolled back when its guard unwinds, so the connection is
+    /// in a usable state and the next caller takes it.
     pub fn lock(&self) -> Result<MutexGuard<'_, Connection>, DbError> {
-        self.conn.lock().map_err(|_| DbError::Poisoned)
+        Ok(self
+            .conn
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()))
     }
 
     /// Apply the steps of `migrations` whose version is above the highest one recorded in the
@@ -154,6 +190,14 @@ impl Database {
             [],
             |r| r.get(0),
         )?;
+        let known = migrations.iter().map(|m| m.version).max().unwrap_or(0);
+        if applied > known {
+            return Err(DbError::LedgerAhead {
+                ledger: ledger.to_string(),
+                recorded: applied,
+                known,
+            });
+        }
         for step in migrations.iter().filter(|m| m.version > applied) {
             tx.execute_batch(step.sql)?;
             tx.execute(
@@ -271,6 +315,25 @@ const MIGRATIONS: &[Migration] = &[
     CREATE INDEX runtime_outbox_not_before ON runtime_outbox(source, not_before, id);
     ",
     },
+    Migration {
+        version: 4,
+        name: "the tenant that owns the machine tables",
+        sql: "
+    CREATE TABLE runtime_tenant (
+        only_row INTEGER PRIMARY KEY CHECK (only_row = 1),
+        tenant   TEXT NOT NULL
+    );
+    ",
+    },
+    Migration {
+        version: 5,
+        name: "when a machine record was last saved, for the retention of finished records",
+        sql: "
+    ALTER TABLE runtime_records ADD COLUMN updated_at INTEGER;
+    CREATE INDEX runtime_records_updated ON runtime_records(collection, updated_at);
+    CREATE INDEX runtime_dead_letters_at ON runtime_dead_letters(at);
+    ",
+    },
 ];
 
 const QUEUE_COLUMNS: &str =
@@ -300,6 +363,7 @@ pub const LEDGER: &str = "runtime_migrations";
 #[derive(Clone, Debug)]
 pub struct SqliteMachineStore {
     db: Database,
+    tenant: TenantId,
 }
 
 fn sql(error: rusqlite::Error) -> StorageError {
@@ -307,11 +371,45 @@ fn sql(error: rusqlite::Error) -> StorageError {
 }
 
 impl SqliteMachineStore {
-    /// The machine store on `db`, bringing its tables up to date. `now` is recorded in the
-    /// ledger for any migration applied.
-    pub fn open(db: Database, now: Time) -> Result<Self, StorageError> {
+    /// The machine store of `tenant` on `db`, bringing its tables up to date. `now` is recorded
+    /// in the ledger for any migration applied.
+    ///
+    /// The database belongs to one tenant: the first open records `tenant` in `runtime_tenant`,
+    /// and opening it for another tenant is refused with [`StorageError::Invalid`], so two
+    /// tenants cannot share the machine tables of one file. Give each tenant its own database.
+    pub fn open(tenant: TenantId, db: Database, now: Time) -> Result<Self, StorageError> {
         db.migrate(LEDGER, MIGRATIONS, now.0)?;
-        Ok(SqliteMachineStore { db })
+        db.write(StorageError::from, |tx| {
+            let held: Option<String> = tx
+                .query_row("SELECT tenant FROM runtime_tenant", [], |r| r.get(0))
+                .optional()
+                .map_err(sql)?;
+            match held {
+                None => {
+                    tx.execute(
+                        "INSERT INTO runtime_tenant (only_row, tenant) VALUES (1, ?1)",
+                        params![tenant.as_str()],
+                    )
+                    .map_err(sql)?;
+                    Ok(())
+                }
+                Some(held) if held == tenant.as_str() => Ok(()),
+                Some(held) => Err(StorageError::Invalid(format!(
+                    "the machine tables of {} belong to tenant {held}, not {tenant}",
+                    db.location()
+                ))),
+            }
+        })?;
+        // A record saved before the save time was kept is aged from the first open that sees it.
+        db.write(StorageError::from, |tx| {
+            tx.execute(
+                "UPDATE runtime_records SET updated_at = ?1 WHERE updated_at IS NULL",
+                params![now.0],
+            )
+            .map_err(sql)?;
+            Ok(())
+        })?;
+        Ok(SqliteMachineStore { db, tenant })
     }
 
     /// The database underneath.
@@ -322,6 +420,34 @@ impl SqliteMachineStore {
 
 struct SqliteTx<'a, 'c> {
     tx: &'a Transaction<'c>,
+}
+
+impl SqliteTx<'_, '_> {
+    /// Save a record; `at` is when, or `None` when the save has no time.
+    fn put(
+        &mut self,
+        collection: &str,
+        key: &str,
+        data: &str,
+        expected: Option<u64>,
+        at: Option<Time>,
+    ) -> Result<u64, StorageError> {
+        let found = self.load(collection, key)?.map(|r| r.version);
+        if found != expected {
+            return Err(StorageError::Conflict(format!(
+                "{collection} {key}: expected version {expected:?}, found {found:?}"
+            )));
+        }
+        let version = found.unwrap_or(0) + 1;
+        self.tx
+            .execute(
+                "INSERT INTO runtime_records (collection, key, version, data, updated_at) VALUES (?1, ?2, ?3, ?4, ?5)
+                 ON CONFLICT (collection, key) DO UPDATE SET version = excluded.version, data = excluded.data, updated_at = excluded.updated_at",
+                params![collection, key, version as i64, data, at.map(|t| t.0)],
+            )
+            .map_err(sql)?;
+        Ok(version)
+    }
 }
 
 impl Tx for SqliteTx<'_, '_> {
@@ -348,21 +474,85 @@ impl Tx for SqliteTx<'_, '_> {
         data: &str,
         expected: Option<u64>,
     ) -> Result<u64, StorageError> {
-        let found = self.load(collection, key)?.map(|r| r.version);
-        if found != expected {
-            return Err(StorageError::Conflict(format!(
-                "{collection} {key}: expected version {expected:?}, found {found:?}"
-            )));
-        }
-        let version = found.unwrap_or(0) + 1;
-        self.tx
-            .execute(
-                "INSERT INTO runtime_records (collection, key, version, data) VALUES (?1, ?2, ?3, ?4)
-                 ON CONFLICT (collection, key) DO UPDATE SET version = excluded.version, data = excluded.data",
-                params![collection, key, version as i64, data],
+        self.put(collection, key, data, expected, None)
+    }
+
+    fn save_stamped(
+        &mut self,
+        collection: &str,
+        key: &str,
+        data: &str,
+        expected: Option<u64>,
+        at: Time,
+    ) -> Result<u64, StorageError> {
+        self.put(collection, key, data, expected, Some(at))
+    }
+
+    fn stale_keys(&mut self, collection: &str, before: Time) -> Result<Vec<String>, StorageError> {
+        let mut statement = self
+            .tx
+            .prepare_cached(
+                "SELECT key FROM runtime_records
+                 WHERE collection = ?1 AND updated_at IS NOT NULL AND updated_at < ?2 ORDER BY rowid",
             )
             .map_err(sql)?;
-        Ok(version)
+        let rows = statement
+            .query_map(params![collection, before.0], |row| row.get(0))
+            .map_err(sql)?;
+        rows.collect::<Result<Vec<String>, _>>().map_err(sql)
+    }
+
+    fn delete_record(&mut self, collection: &str, key: &str) -> Result<bool, StorageError> {
+        let removed = self
+            .tx
+            .execute(
+                "DELETE FROM runtime_records WHERE collection = ?1 AND key = ?2",
+                params![collection, key],
+            )
+            .map_err(sql)?;
+        Ok(removed > 0)
+    }
+
+    fn take_message(&mut self, id: u64) -> Result<Option<OutboxEntry>, StorageError> {
+        let found = self
+            .tx
+            .query_row(
+                &format!("SELECT {OUTBOX_COLUMNS} FROM runtime_outbox WHERE id = ?1"),
+                params![id as i64],
+                outbox_entry,
+            )
+            .optional()
+            .map_err(sql)?;
+        if found.is_some() {
+            self.tx
+                .execute(
+                    "DELETE FROM runtime_outbox WHERE id = ?1",
+                    params![id as i64],
+                )
+                .map_err(sql)?;
+        }
+        Ok(found)
+    }
+
+    fn purge_dead_letters(&mut self, before: Time) -> Result<u64, StorageError> {
+        let removed = self
+            .tx
+            .execute(
+                "DELETE FROM runtime_dead_letters WHERE at < ?1",
+                params![before.0],
+            )
+            .map_err(sql)?;
+        Ok(removed as u64)
+    }
+
+    fn count_dead_letters(&mut self) -> Result<u64, StorageError> {
+        let count: i64 = self
+            .tx
+            .query_row("SELECT COUNT(*) FROM runtime_dead_letters", [], |r| {
+                r.get(0)
+            })
+            .map_err(sql)?;
+        Ok(count as u64)
     }
 
     fn enqueue(&mut self, message: &NewMessage) -> Result<u64, StorageError> {
@@ -502,6 +692,8 @@ impl Tx for SqliteTx<'_, '_> {
                 ],
             )
             .map_err(sql)?;
+        // The letters past their retention go in the same transaction as this write (WG-5074).
+        self.purge_dead_letters(crate::store::dead_letter_bound(at))?;
         Ok(())
     }
 }
@@ -545,6 +737,10 @@ impl QueueStore for SqliteMachineStore {
 }
 
 impl RecordStore for SqliteMachineStore {
+    fn tenant(&self) -> &TenantId {
+        &self.tenant
+    }
+
     fn supports(&self, _: Isolation) -> bool {
         true
     }
@@ -563,6 +759,8 @@ impl RecordStore for SqliteMachineStore {
         )
     }
 }
+
+const OUTBOX_COLUMNS: &str = "id, source, key, receiver, event, created_at, attempts, next_attempt_at, last_error, delivery, not_before";
 
 fn outbox_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<OutboxEntry> {
     Ok(OutboxEntry {

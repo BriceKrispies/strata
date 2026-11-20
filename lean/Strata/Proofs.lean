@@ -115,6 +115,23 @@ theorem unauthorized_cannot_delete (w : World) (c : Ctx) (t : Tenant) (id : Reco
     step w (.delete id) c = .error .unauthorized := by
   simp [step, ht, stepTenant, hl, hno]
 
+/-- The refusal does not reveal whether a record exists: a principal who could act on no record
+    it did not create (neither the owner nor an editor) is refused an update of a record that does
+    not exist with `unauthorized`, the refusal it gets for an existing record it may not edit, so
+    it cannot probe which ids exist (the kernel's KRN-1080). -/
+theorem missing_record_hidden_on_update (w : World) (c : Ctx) (t : Tenant) (id : RecordId)
+    (fs : Fields)
+    (ht : w c.tenant = some t) (hl : t.records.lookup id = none)
+    (hno : canEditAny t c.principal = false) :
+    step w (.update id fs) c = .error .unauthorized := by
+  simp [step, ht, stepTenant, hl, missingRecord, hno]
+
+theorem missing_record_hidden_on_delete (w : World) (c : Ctx) (t : Tenant) (id : RecordId)
+    (ht : w c.tenant = some t) (hl : t.records.lookup id = none)
+    (hno : canEditAny t c.principal = false) :
+    step w (.delete id) c = .error .unauthorized := by
+  simp [step, ht, stepTenant, hl, missingRecord, hno]
+
 /-- Stated in terms of the outcome: an unauthorized principal's intent is never accepted.
 
     Verifies: KRN-015 -/

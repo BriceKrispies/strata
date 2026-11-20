@@ -19,26 +19,54 @@
 //!   Adapters may serialise all writers; they may not expose a partially applied commit.
 //! - **Tenant scope.** Every read and write names a tenant. Data of one tenant is never
 //!   returned for, or changed through, another.
-//! - **Ordering.** Events have a per-tenant sequence that continues without gaps, and a global
-//!   outbox position that follows commit order.
+//! - **Ordering.** Events have a per-tenant sequence that continues without gaps, and an outbox
+//!   position of their tenant that follows that tenant's commit order. The outboxes of different
+//!   tenants are not ordered against each other: each tenant may live in a database of its own.
+//! - **Publish after commit.** An event is in the outbox only once the commit that wrote it is
+//!   applied, and stays there until it is marked published for its tenant.
 //! - **Durability.** What [`Capabilities::durable`] says. A durable adapter keeps every
 //!   acknowledged commit across a process restart.
+//! - **Idempotency.** A commit that carries an [`IdempotencyEntry`] records it in the same
+//!   atomic step as the state it describes, under the scope tenant, principal and key.
+//!   [`Store::idempotent_result`] returns the first result for a scope, for
+//!   the retention of the entry ([`IdempotencyEntry::retention_ms`], [`idempotency_retention`]:
+//!   [`IDEMPOTENCY_RETENTION_MS`] unless the request states another) after the commit that
+//!   recorded it; a record older than that is gone, and the key is new again. A commit that
+//!   names a scope already recorded and not past its retention changes nothing and fails.
 //!
 //! What adapters may differ in is stated by [`Capabilities`], not hidden.
 
+pub mod admission;
+pub mod audit_chain;
+pub mod covering;
+pub mod jobs;
 pub mod memory;
+pub mod schedules;
+pub mod sealed;
+pub mod search;
+pub mod segment_jobs;
+pub mod segment_pump;
+pub mod segments;
 
 #[cfg(feature = "conformance")]
 pub mod conformance;
+
+use jobs::{
+    ExceptionKind, ExceptionRecord, Job, JobChange, JobReport, Lease, NewJob, Reported, RunRecord,
+    RunState, Settled, StepRecord, WorkerWrites,
+};
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::fmt;
 use std::sync::Arc;
+use std::time::Instant;
+use strata_kernel::ext::*;
+use strata_kernel::segments as seg;
 use strata_kernel::{
-    canon, Context, Coverage, DomainError, DomainEvent, Effect, ErrorKind, Intent, Need,
-    PrincipalId, ReadRequest, ReadResult, Record, SessionId, State, StateDelta, StateRevision,
-    TenantId, TenantState, Timestamp, Transition, Value,
+    canon, Context, Coverage, DomainError, DomainEvent, Effect, ErrorKind, EventBody, Intent, Need,
+    Principal, PrincipalId, ReadRequest, ReadResult, Record, SessionId, SettingId, State,
+    StateDelta, StateRevision, TenantId, TenantState, Timestamp, Transition, Value, WorkflowId,
 };
 
 /// What an adapter actually provides. Reported in diagnostics and checked by the conformance
@@ -108,6 +136,86 @@ pub struct JournalEntry {
     pub events_hash: String,
 }
 
+/// How long a store keeps the result recorded under an idempotency key, counted from the commit
+/// that recorded it: 24 hours. A repeat inside the period receives the first result; a repeat
+/// after it is a new request.
+pub const IDEMPOTENCY_RETENTION_MS: i64 = 24 * 60 * 60 * 1000;
+
+/// How long the run record of an accepted invocation of a tenant operation is kept: seven days
+/// (D-6548, rec-tenant-operation-run, OPR-1544).
+pub const OPERATION_RETENTION_MS: i64 = 7 * 24 * 60 * 60 * 1000;
+
+/// How long the key of an automation step's record change is kept: the longest a step can still
+/// retry, and then the retention of the run record, so that a retry that finds its run still
+/// finds the key (D-6528, SCH-1524, WG-5164). The longest retry span is D-6529's: at most ten
+/// attempts, a delay of at most one day before each attempt after the first, and an attempt of at
+/// most fifteen minutes; the run record is kept ninety days after the run ends
+/// ([`schedules::RUN_RETENTION_MS`]).
+pub const AUTOMATION_STEP_RETENTION_MS: i64 =
+    9 * 24 * 60 * 60 * 1000 + 10 * 15 * 60 * 1000 + schedules::RUN_RETENTION_MS;
+
+/// How long an idempotency entry is kept, from what the request is: an invocation of a tenant
+/// operation seven days ([`OPERATION_RETENTION_MS`]); a change made by an automation principal as
+/// one of its steps ([`AUTOMATION_STEP_RETENTION_MS`]); every other request twenty-four hours
+/// ([`IDEMPOTENCY_RETENTION_MS`]). The caller states how long by what it asks for, and the entry
+/// holds the answer.
+pub fn idempotency_retention(intent: &Intent, context: &Context) -> i64 {
+    if matches!(intent, Intent::InvokeOperation { .. }) {
+        return OPERATION_RETENTION_MS;
+    }
+    match &context.principal {
+        Principal::User(id)
+            if id
+                .as_str()
+                .starts_with(strata_kernel::automation::AUTOMATION_PREFIX) =>
+        {
+            AUTOMATION_STEP_RETENTION_MS
+        }
+        _ => IDEMPOTENCY_RETENTION_MS,
+    }
+}
+
+fn default_retention_ms() -> i64 {
+    IDEMPOTENCY_RETENTION_MS
+}
+
+/// The longest idempotency key a caller may choose, in bytes.
+pub const MAX_IDEMPOTENCY_KEY_LEN: usize = 255;
+
+/// Whether `key` is acceptable as an idempotency key: 1 to [`MAX_IDEMPOTENCY_KEY_LEN`] visible
+/// ASCII characters.
+pub fn valid_idempotency_key(key: &str) -> bool {
+    !key.is_empty()
+        && key.len() <= MAX_IDEMPOTENCY_KEY_LEN
+        && key.bytes().all(|b| (0x21..=0x7e).contains(&b))
+}
+
+/// What a commit records under an idempotency key, in the same atomic step as its state.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IdempotencyEntry {
+    /// The principal that chose the key, as canonical JSON. The tenant is the commit's tenant.
+    pub principal: String,
+    pub key: String,
+    /// Canonical hash of the intent the key was first used with.
+    pub request_hash: String,
+    /// When the key was recorded: the commit's `now`. Retention counts from here.
+    pub recorded_at: Timestamp,
+    /// How long the entry is kept from `recorded_at`, as the request stated ([`idempotency_retention`]).
+    #[serde(default = "default_retention_ms")]
+    pub retention_ms: i64,
+    /// The first result, kept without the delta's operations, the events and the effects: what
+    /// a caller reads back (output, evidence, new revision and sequence), not what was written.
+    pub result: Transition,
+}
+
+/// What [`Store::idempotent_result`] returns: the first result of a scope.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IdempotentResult {
+    pub request_hash: String,
+    pub result: Transition,
+    pub receipt: Receipt,
+}
+
 /// Everything one accepted transition writes, applied atomically.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Commit {
@@ -116,12 +224,58 @@ pub struct Commit {
     pub journal: JournalEntry,
     /// Principals whose sessions end with this commit.
     pub revoke_sessions: Vec<PrincipalId>,
+    /// The idempotency key of the request, when it had one.
+    #[serde(default)]
+    pub idempotency: Option<IdempotencyEntry>,
+    /// The jobs the commit creates, in its own transaction (SCH-004, EML-005). A job whose key
+    /// the tenant holds already is not created again.
+    #[serde(default)]
+    pub jobs: Vec<NewJob>,
+    /// The exception records the decision writes, in its own transaction (SCH-1532). A record
+    /// whose id the tenant holds already is not written again.
+    #[serde(default)]
+    pub exceptions: Vec<ExceptionRecord>,
+}
+
+/// The scope of an idempotency key within a tenant: the principal, as canonical JSON.
+pub fn idempotency_scope(principal: &Principal) -> String {
+    canon::canonical_json(principal)
+}
+
+/// The object types of the records a delta writes or deletes, which an adapter that keeps a change
+/// counter per object type raises in the commit of the delta ([`Store::object_revisions`]).
+pub fn changed_objects(delta: &StateDelta) -> BTreeSet<strata_kernel::ObjectTypeId> {
+    delta
+        .ops
+        .iter()
+        .filter_map(|op| match op {
+            strata_kernel::DeltaOp::PutRecord(record) => Some(record.object.clone()),
+            strata_kernel::DeltaOp::DeleteRecord { object, .. } => Some(object.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The scope an intent's key is recorded under: the principal, and for an invocation of a tenant
+/// operation also the operation, so that one person's key is a different key for another
+/// operation (D-6548, rec-tenant-operation-run).
+pub fn idempotency_scope_for(intent: &Intent, context: &Context) -> String {
+    let scope = idempotency_scope(&context.principal);
+    match intent {
+        Intent::InvokeOperation { operation, .. } => format!("{scope}|op:{operation}"),
+        _ => scope,
+    }
 }
 
 impl Commit {
     /// The commit for an accepted transition.
+    /// Implements: CT-262
     pub fn of(intent: &Intent, context: &Context, transition: &Transition) -> Commit {
+        let (jobs, exceptions) =
+            jobs::trigger_intake(&transition.delta.tenant, transition, context.now);
         Commit {
+            jobs,
+            exceptions,
             delta: transition.delta.clone(),
             events: transition.events.clone(),
             journal: JournalEntry {
@@ -130,17 +284,59 @@ impl Commit {
                 revision: transition.delta.new_revision,
                 kernel_version: strata_kernel::KERNEL_VERSION.to_string(),
                 intent: intent.clone(),
-                context: context.clone(),
+                // The journal is kept for good and is read for replay and the Impact Lab. The
+                // verified address of the person is personal data the shell filled in for this one
+                // decision; it is not written to the journal.
+                context: Context {
+                    verified_address: None,
+                    ..context.clone()
+                },
                 delta_hash: canon::hash_of(&transition.delta),
                 events_hash: canon::hash_of(&transition.events),
             },
+            // A principal whose roles changed in any way starts again from a new sign-in (IDN-012):
+            // a session issued under the old roles is not carried over to the new ones. The
+            // kernel's own effect, for a principal left with no role, is included.
+            idempotency: context
+                .idempotency_key
+                .as_ref()
+                .map(|key| IdempotencyEntry {
+                    principal: idempotency_scope_for(intent, context),
+                    key: key.clone(),
+                    request_hash: canon::hash_of(intent),
+                    recorded_at: context.now,
+                    retention_ms: idempotency_retention(intent, context),
+                    result: Transition {
+                        delta: StateDelta {
+                            ops: Vec::new(),
+                            ..transition.delta.clone()
+                        },
+                        events: Vec::new(),
+                        effects: Vec::new(),
+                        evidence: transition.evidence.clone(),
+                        output: transition.output.clone(),
+                    },
+                }),
             revoke_sessions: transition
                 .effects
                 .iter()
                 .filter_map(|effect| match effect {
                     Effect::RevokeSessions { principal } => Some(principal.clone()),
-                    Effect::Publish { .. } => None,
+                    Effect::Publish { .. }
+                    | Effect::StartAutomation(_)
+                    | Effect::DeclineAutomation(_) => None,
                 })
+                .chain(
+                    transition
+                        .events
+                        .iter()
+                        .filter_map(|event| match &event.body {
+                            EventBody::MemberChanged { principal, .. } => Some(principal.clone()),
+                            _ => None,
+                        }),
+                )
+                .collect::<BTreeSet<_>>()
+                .into_iter()
                 .collect(),
         }
     }
@@ -149,14 +345,15 @@ impl Commit {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Receipt {
     pub revision: StateRevision,
-    /// Outbox position of the last event written, if the commit had events.
+    /// Outbox position, in the tenant's own outbox, of the last event written, if the commit had
+    /// events.
     pub last_position: Option<u64>,
 }
 
 /// An event waiting to be handed to subscribers.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OutboxEntry {
-    /// Global, increasing in commit order.
+    /// Position in the outbox of the event's tenant, increasing in that tenant's commit order.
     pub position: u64,
     pub event: DomainEvent,
 }
@@ -186,6 +383,14 @@ pub struct SessionRecord {
     /// Absolute end of the session.
     pub expires_at: Timestamp,
     pub revoked_at: Option<Timestamp>,
+    /// When the person last proved who they are for this session: at sign-in, and again at each
+    /// step-up. A sensitive operation needs this to be recent (IDN-019).
+    pub authenticated_at: Timestamp,
+    /// A keyed hash of the network context that authenticated the session, and never the address
+    /// itself (D-704, PRV-364). A session that appears from another context is a new arrival
+    /// (IDN-260).
+    #[serde(default)]
+    pub network: Option<String>,
 }
 
 /// A locally managed login. Authentication lives in the shell; the kernel only knows principals.
@@ -197,6 +402,341 @@ pub struct Account {
     pub display_name: String,
     /// An Argon2id PHC string.
     pub password_hash: String,
+    /// The e-mail address of the person, once the identity service has verified that the person
+    /// controls it. `None` until then: an account with none redeems no invitation (ADM-153).
+    pub verified_email: Option<String>,
+}
+
+/// What `Store::remove_principal` removed, by kind of row.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PrincipalRemoval {
+    /// Logins of the principal.
+    pub accounts: u64,
+    pub passkeys: u64,
+    /// Passkey challenges issued to the principal.
+    pub passkey_challenges: u64,
+    /// Identity-provider and SAML sign-ins started to link the principal's account.
+    pub provider_flows: u64,
+    pub identities: u64,
+    pub totp_factors: u64,
+    pub recovery_codes: u64,
+    /// Sign-ins that waited for the principal's second factor.
+    pub pending_sign_ins: u64,
+    pub sign_in_links: u64,
+    pub recovery_requests: u64,
+}
+
+impl PrincipalRemoval {
+    /// Whether nothing of the principal was held.
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+/// How one counter of failed attempts limits what follows it.
+///
+/// Attempts are counted when they are reserved, before the credential is checked, and given
+/// back (or cleared) when it turns out to be right. So `max` attempts may be in flight at once,
+/// and no more, however they interleave.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ThrottleRule {
+    /// What is counted, such as one account, one source or one realm. Scoped by tenant.
+    pub key: String,
+    /// The attempt that reaches this count is the last one let through before the lock.
+    pub max: u32,
+    /// Failures older than this are forgotten.
+    pub window_ms: i64,
+    /// How long attempts are refused once `max` is reached.
+    pub lock_ms: i64,
+    /// Whether the count starts again when a lock ends (an account) or goes on until the window
+    /// ends (a source, a realm).
+    pub lock_resets: bool,
+}
+
+/// What a counter holds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ThrottleRow {
+    pub failures: u32,
+    pub window_start: i64,
+    /// Attempts are refused until this time; 0 when there is no lock.
+    pub locked_until: i64,
+    /// When the row means nothing any more and may be purged.
+    pub expires_at: i64,
+}
+
+/// The answer to a reservation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ThrottleVerdict {
+    /// Every counter had room, and each now holds this attempt.
+    Allowed,
+    /// A counter is locked; nothing was counted.
+    Refused { until: Timestamp },
+}
+
+/// What becomes of a reserved attempt once its credential has been checked and found right.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ThrottleSettle {
+    /// Forget the counter.
+    Clear,
+    /// Give the slot back and keep the other failures.
+    Refund,
+}
+
+/// Count one more attempt on a counter, or refuse it. Shared by the adapters, so that they cannot
+/// disagree on what a limit means.
+pub fn throttle_step(
+    row: Option<ThrottleRow>,
+    rule: &ThrottleRule,
+    now: i64,
+) -> Result<ThrottleRow, i64> {
+    let fresh = ThrottleRow {
+        failures: 0,
+        window_start: now,
+        locked_until: 0,
+        expires_at: 0,
+    };
+    let mut row = row.unwrap_or(fresh);
+    // A live lock is checked before the window: a lock may outlast the window it was set in.
+    if row.locked_until > now {
+        return Err(row.locked_until);
+    }
+    if now - row.window_start >= rule.window_ms
+        || (rule.lock_resets && row.locked_until != 0 && now >= row.locked_until)
+    {
+        row = fresh;
+    }
+    row.failures = row.failures.saturating_add(1);
+    if row.failures >= rule.max {
+        row.locked_until = now + rule.lock_ms;
+    }
+    row.expires_at = (row.window_start + rule.window_ms).max(row.locked_until);
+    Ok(row)
+}
+
+/// The row after a reserved attempt is given back.
+pub fn throttle_refund(mut row: ThrottleRow, max: u32) -> ThrottleRow {
+    row.failures = row.failures.saturating_sub(1);
+    if row.failures < max {
+        row.locked_until = 0;
+    }
+    row
+}
+
+/// A passkey a person registered: the relying party's record of one WebAuthn credential. The
+/// credential itself (public key, signature counter, flags) is the WebAuthn library's own
+/// serialisation, kept as it is.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PasskeyRecord {
+    pub tenant: TenantId,
+    pub principal: PrincipalId,
+    /// The credential id, base64url without padding. Unique within the tenant.
+    pub id: String,
+    /// The relying party the credential was made for: the host of the tenant's address. It is
+    /// used at that address only.
+    pub rp_id: String,
+    /// What the person calls it.
+    pub label: String,
+    /// The library's serialised credential.
+    pub credential: String,
+    pub created_at: Timestamp,
+    pub last_used_at: Option<Timestamp>,
+}
+
+/// What kind of ceremony a challenge was issued for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PasskeyCeremony {
+    Register,
+    SignIn,
+}
+
+/// A challenge the server issued and has not yet seen answered. It is held server-side, bound to
+/// the address it was requested at (and for a registration to the session that asked), is
+/// answered once, and lapses.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PasskeyChallenge {
+    pub tenant: TenantId,
+    /// A hash of the identifier the browser holds, so that the store holds no usable one.
+    pub id_hash: String,
+    pub ceremony: PasskeyCeremony,
+    /// The session that asked for a registration.
+    pub session: Option<SessionId>,
+    pub principal: Option<PrincipalId>,
+    /// The origin the ceremony was requested at, such as `https://tidewater.example`.
+    pub origin: String,
+    /// The library's serialised ceremony state.
+    pub state: String,
+    pub expires_at: Timestamp,
+}
+
+/// An emailed sign-in link that has been sent and not yet used. The row holds the principal and
+/// no email address (PRV-365), the hash of the token and the hash of the binding nonce of the
+/// browser that asked, so the store holds nothing that opens the link.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SignInLink {
+    pub tenant: TenantId,
+    /// A hash of the challenge identifier the link carries.
+    pub id_hash: String,
+    pub principal: PrincipalId,
+    /// A hash of the single-use token the link carries.
+    pub token_hash: String,
+    /// A hash of the nonce kept in the requesting browser's cookie.
+    pub binding_hash: String,
+    /// The origin the link was requested at and points to.
+    pub origin: String,
+    /// The link is accepted through this time.
+    pub expires_at: Timestamp,
+}
+
+/// A sign-in at an external identity provider that has been started and not yet answered. The
+/// row is held server-side, found by the hash of the `state` value the browser returns with, is
+/// answered once, and lapses. It holds what the callback must check: the nonce the identity token
+/// must carry, the proof-key verifier the code is redeemed with, the hash of the nonce kept in
+/// the starting browser's cookie, and the address the sign-in started at.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OidcFlow {
+    pub tenant: TenantId,
+    /// A hash of the `state` value.
+    pub id_hash: String,
+    /// The identifier of the provider in the tenant's configuration.
+    pub provider: String,
+    /// The nonce the identity token must carry.
+    pub nonce: String,
+    /// The proof-key verifier the authorisation code is redeemed with.
+    pub verifier: String,
+    /// A hash of the nonce kept in the cookie of the browser that started the sign-in.
+    pub binding_hash: String,
+    /// The origin the sign-in started at, and the one its callback must come back to.
+    pub origin: String,
+    /// The principal that was signed in when it started, when the sign-in is to link the
+    /// identity to that principal's account (FED-012).
+    pub principal: Option<PrincipalId>,
+    pub expires_at: Timestamp,
+}
+
+/// A sign-in at a SAML identity provider that has been started and not yet answered. The row is
+/// held server-side, found by the hash of the `RelayState` value the response returns with, is
+/// answered once, and lapses. It holds what the response must be checked against: the identifier
+/// of the authentication request it must answer, the hash of the nonce kept in the starting
+/// browser's cookie, and the address the sign-in started at.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SamlRequest {
+    pub tenant: TenantId,
+    /// A hash of the `RelayState` value.
+    pub id_hash: String,
+    /// The identifier of the provider in the tenant's configuration.
+    pub provider: String,
+    /// The `ID` of the authentication request, which the response's `InResponseTo` must name.
+    pub request_id: String,
+    /// A hash of the nonce kept in the cookie of the browser that started the sign-in.
+    pub binding_hash: String,
+    /// The origin the sign-in started at, and the one its assertion consumer address is at.
+    pub origin: String,
+    /// The principal that was signed in when it started, when the sign-in is to link the
+    /// identity to that principal's account (FED-012).
+    pub principal: Option<PrincipalId>,
+    pub expires_at: Timestamp,
+}
+
+/// A person at an external identity provider, tied to the principal they sign in as. Keyed by
+/// the tenant, the provider of its configuration and the provider's subject identifier, so that
+/// one provider's subject is never another provider's (FED-256).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FederatedIdentity {
+    pub tenant: TenantId,
+    pub provider: String,
+    pub subject: String,
+    pub principal: PrincipalId,
+    pub created_at: Timestamp,
+}
+
+/// A time-based one-time password factor of one person (RFC 6238). The secret has to be read back
+/// to check a code, so it cannot be hashed; it is sealed with an authenticated cipher under a key
+/// the store never sees, and bound to the tenant and the person.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TotpRecord {
+    pub tenant: TenantId,
+    pub principal: PrincipalId,
+    /// The sealed secret, as the backend wrote it. Opaque to the store.
+    pub secret: String,
+    /// Whether the person has proved they hold the secret with a code. An unconfirmed
+    /// enrolment is no factor yet.
+    pub confirmed: bool,
+    /// The time step of the last code accepted, so that a code is accepted once; `-1` when none.
+    pub last_step: i64,
+    pub created_at: Timestamp,
+}
+
+/// A sign-in whose first factor was right and which waits for the second. It is held server-side,
+/// found by the hash of the identifier the browser holds, and it lapses. It is the only thing a
+/// first factor alone yields (IDN-018).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PendingSignIn {
+    pub tenant: TenantId,
+    /// A hash of the identifier the browser holds.
+    pub id_hash: String,
+    pub principal: PrincipalId,
+    /// The method that proved the first factor.
+    pub method: String,
+    /// How many factors that method proved.
+    pub factors: u8,
+    /// How many presentations of a second factor have been counted against this sign-in.
+    pub attempts: u32,
+    pub expires_at: Timestamp,
+}
+
+/// An account recovery that has been asked for and not yet completed. It holds the hashes of two
+/// tokens: the one that completes it once the delay has passed, and the one that cancels it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RecoveryRequest {
+    pub tenant: TenantId,
+    /// A hash of the identifier the links carry.
+    pub id_hash: String,
+    pub principal: PrincipalId,
+    /// The login whose password the recovery sets: the one the recovery was asked for.
+    pub login: String,
+    pub token_hash: String,
+    pub cancel_hash: String,
+    pub requested_at: Timestamp,
+    /// The recovery may complete from this time (D-700: twenty-four hours after the request).
+    pub completes_at: Timestamp,
+    pub expires_at: Timestamp,
+}
+
+/// One line of a tenant's security audit trail: an authentication decision or an audit event.
+/// `data` is JSON text the store does not read.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AuditEntry {
+    /// When it happened, in milliseconds.
+    pub at: i64,
+    /// `decision` for an authentication decision, `audit` for any other security event.
+    pub kind: String,
+    /// The event name, such as `auth.decision` or `signing_key.compromised`.
+    pub event: String,
+    pub correlation: String,
+    pub data: String,
+}
+
+/// The platform level of one setting, as the control plane holds it (CT-303, SET-030). It is
+/// kept by the setting's name and belongs to no tenant. `value` is absent once the level has been
+/// removed; the row stays so that the revision, which rises at every change, is never reused
+/// (SET-051).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlatformSetting {
+    pub setting: SettingId,
+    pub value: Option<Value>,
+    pub revision: u64,
+}
+
+/// What a write of the platform level of a setting did.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PlatformWrite {
+    /// The level was written; `previous` is the value it held before, if any.
+    Written {
+        now: PlatformSetting,
+        previous: Option<Value>,
+    },
+    /// The level was not at the revision the writer named; nothing changed (SET-025).
+    Conflict { current: u64 },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -226,14 +766,73 @@ pub struct Health {
     pub outbox_pending: u64,
 }
 
+/// An outbox problem the store skipped past instead of failing the scan: a tenant whose file
+/// would not open, or an event that would not decode and was parked.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OutboxFault {
+    pub tenant: TenantId,
+    /// The outbox position of the parked event, or `None` when the whole tenant was skipped.
+    pub position: Option<u64>,
+    pub reason: String,
+}
+
 /// The persistence contract. See the crate documentation for the guarantees.
 pub trait Store: Send + Sync {
+    /// Implements: CT-008
     fn capabilities(&self) -> Capabilities;
+    /// The full integrity check: every tenant is opened and checked. Expensive, and for the
+    /// operator only; neither a tenant nor an unauthenticated caller may reach it. A tenant that
+    /// cannot be checked makes the answer `ok: false`; it does not make the call fail.
+    /// Implements: CT-009
     fn health(&self) -> StoreResult<Health>;
+    /// Cheap liveness: the store answers. Opens no tenant file.
+    fn liveness(&self) -> StoreResult<()>;
     /// The adapter's storage layout history.
+    /// Implements: CT-010
     fn migrations(&self) -> StoreResult<Vec<StorageMigration>>;
 
+    /// Every tenant. A tenant that cannot be read is left out.
+    /// Implements: CT-011
     fn tenants(&self) -> StoreResult<Vec<TenantSummary>>;
+
+    /// One tenant's summary, or `None` when it does not exist. Reads that tenant only.
+    fn tenant_summary(&self, tenant: &TenantId) -> StoreResult<Option<TenantSummary>>;
+
+    /// The change counter of each of `objects` in one tenant: a number that rises in the commit
+    /// that writes or deletes a record of the object type, and when a snapshot is restored, and
+    /// never falls or repeats for a different state of the records of the type. A stored result
+    /// computed from the records of some object types is found again only while the counters of
+    /// those types are the ones it was stored under (D-5064).
+    ///
+    /// The default answers the tenant's revision for every type: it rises with every commit, so it
+    /// is sound, and it only makes a result expire on a commit to another object type. An adapter
+    /// keeps a counter per object type to do better.
+    fn object_revisions(
+        &self,
+        tenant: &TenantId,
+        objects: &[strata_kernel::ObjectTypeId],
+    ) -> StoreResult<std::collections::BTreeMap<strata_kernel::ObjectTypeId, u64>> {
+        let revision = self.tenant_summary(tenant)?.map_or(0, |s| s.revision.0);
+        Ok(objects.iter().map(|o| (o.clone(), revision)).collect())
+    }
+
+    /// The plan a tenant holds, from the control database's directory row (BIL-150): `None` when
+    /// the tenant does not exist. A tenant created without a choice holds `standard`. An adapter
+    /// that keeps no plans answers `None` and every tenant is then on the default plan.
+    fn tenant_plan(&self, _tenant: &TenantId) -> StoreResult<Option<String>> {
+        Ok(None)
+    }
+
+    /// Record the plan a tenant holds. A tenant that does not exist is `NotFound`.
+    fn set_tenant_plan(&self, _tenant: &TenantId, _plan: &str) -> StoreResult<()> {
+        Ok(())
+    }
+
+    /// The bytes a tenant's data takes in the store: the size of its database. An adapter that
+    /// cannot measure answers 0, which no storage allowance refuses.
+    fn stored_bytes(&self, _tenant: &TenantId) -> StoreResult<u64> {
+        Ok(0)
+    }
 
     /// A snapshot of one tenant holding at least the records that answer `needs`, with partial
     /// coverage stating exactly `needs`. The tenant's schema, members and counters are always
@@ -241,13 +840,28 @@ pub trait Store: Send + Sync {
     fn load(&self, tenant: &TenantId, needs: &[Need]) -> StoreResult<State>;
 
     /// A complete snapshot of one tenant.
+    /// Implements: CT-013
     fn load_complete(&self, tenant: &TenantId) -> StoreResult<State>;
 
     /// Apply a commit atomically, guarded by the base revision. The commit's events must
     /// continue the tenant's event sequence without a gap.
+    /// Implements: CT-014
     fn commit(&self, commit: &Commit) -> StoreResult<Receipt>;
 
+    /// The first result recorded under an idempotency key for this tenant and principal scope
+    /// (see [`idempotency_scope`]), when the record is younger than its own retention
+    /// ([`IdempotencyEntry::retention_ms`]) at `now`. `None` for an unknown key, a record past its
+    /// retention, or an absent tenant.
+    fn idempotent_result(
+        &self,
+        tenant: &TenantId,
+        principal: &str,
+        key: &str,
+        now: Timestamp,
+    ) -> StoreResult<Option<IdempotentResult>>;
+
     /// Events of a tenant with a sequence number above `after`, oldest first.
+    /// Implements: CT-015
     fn events_after(
         &self,
         tenant: &TenantId,
@@ -255,13 +869,30 @@ pub trait Store: Send + Sync {
         limit: usize,
     ) -> StoreResult<Vec<DomainEvent>>;
 
-    /// Events not yet marked published, in commit order across all tenants.
+    /// At most `limit` events not yet marked published, from every tenant's outbox: each tenant's
+    /// in its commit order, the tenants in no promised order against each other. The batch is
+    /// shared between the tenants, so a tenant with a long backlog does not hold back another. A
+    /// tenant that cannot be read, or an event that cannot be decoded, does not fail the scan: the
+    /// tenant is skipped, the event is parked (never offered again), and either is reported by
+    /// [`Store::outbox_faults`].
+    /// Implements: CT-016
     fn outbox(&self, limit: usize) -> StoreResult<Vec<OutboxEntry>>;
 
-    /// Mark every outbox entry up to and including `position` as published.
-    fn mark_published(&self, position: u64) -> StoreResult<()>;
+    /// The outbox problems skipped since the store opened, most recent last. Bounded.
+    fn outbox_faults(&self) -> Vec<OutboxFault> {
+        Vec::new()
+    }
+
+    /// How many events of one tenant are waiting in its outbox. Reads that tenant only.
+    fn outbox_pending_of(&self, tenant: &TenantId) -> StoreResult<u64>;
+
+    /// Mark every outbox entry of `tenant` up to and including `position` as published. Other
+    /// tenants' outboxes are untouched.
+    /// Implements: CT-017
+    fn mark_published(&self, tenant: &TenantId, position: u64) -> StoreResult<()>;
 
     /// Journal entries of a tenant with a revision above `after`, oldest first.
+    /// Implements: CT-018
     fn journal_after(
         &self,
         tenant: &TenantId,
@@ -269,18 +900,344 @@ pub trait Store: Send + Sync {
         limit: usize,
     ) -> StoreResult<Vec<JournalEntry>>;
 
+    /// How many journal entries a tenant has, without reading them. An absent tenant has none.
+    fn journal_count(&self, tenant: &TenantId) -> StoreResult<u64>;
+
     fn put_session(&self, session: &SessionRecord) -> StoreResult<()>;
+    /// Move a session's last-seen time to `at`. Touches nothing else, so it can never undo a
+    /// revocation that landed after the caller read the session. An absent session is ignored.
+    fn session_seen(&self, id: &SessionId, at: Timestamp) -> StoreResult<()>;
+    /// Record a fresh authentication of a session: `authenticated_at` and `network` change, and
+    /// nothing else does, so a revocation that landed after the caller read the session stays.
+    /// An absent session is ignored.
+    fn session_authenticated(
+        &self,
+        id: &SessionId,
+        at: Timestamp,
+        network: Option<&str>,
+    ) -> StoreResult<()>;
+    /// Implements: CT-020
     fn session_by_token(&self, token_hash: &str) -> StoreResult<Option<SessionRecord>>;
+    /// Implements: CT-021
     fn session(&self, id: &SessionId) -> StoreResult<Option<SessionRecord>>;
-    /// Every session that is neither revoked nor past its end at `now`.
+    /// Every session that is neither revoked nor past its end at `now`, of every tenant. A scan
+    /// of the whole platform: no request path may call it. A tenant that cannot be read is
+    /// skipped.
+    /// Implements: CT-022
     fn live_sessions(&self, now: Timestamp) -> StoreResult<Vec<SessionRecord>>;
+    /// The live sessions of one tenant, or of one principal of it, by session id. Reads that
+    /// tenant only; a tenant that does not exist has none.
+    fn live_sessions_of(
+        &self,
+        tenant: &TenantId,
+        principal: Option<&PrincipalId>,
+        now: Timestamp,
+    ) -> StoreResult<Vec<SessionRecord>>;
     /// Remove sessions that ended before `before`. Returns how many were removed.
+    /// Implements: CT-023
     fn purge_sessions(&self, before: Timestamp) -> StoreResult<u64>;
 
+    /// Reserve one attempt on every counter named, all or none, as one atomic step. When a counter
+    /// is locked the attempt is refused and nothing is counted. The counters outlive the process
+    /// and are shared by everything that uses the store.
+    fn throttle_reserve(
+        &self,
+        tenant: &TenantId,
+        rules: &[ThrottleRule],
+        now: Timestamp,
+    ) -> StoreResult<ThrottleVerdict>;
+    /// Settle a reserved attempt on one counter whose credential turned out to be right. `max` is
+    /// the counter's limit, to know whether giving the slot back lifts a lock.
+    fn throttle_settle(
+        &self,
+        tenant: &TenantId,
+        key: &str,
+        max: u32,
+        how: ThrottleSettle,
+    ) -> StoreResult<()>;
+    /// Remove counters that mean nothing any more at `now`. Returns how many were removed.
+    fn purge_throttle(&self, now: Timestamp) -> StoreResult<u64>;
+
+    /// Keep a login, replacing whatever is there. For seeding and recovery, which mean to
+    /// overwrite; a path that must not overwrite uses `create_account` or `update_account`.
     fn put_account(&self, account: &Account) -> StoreResult<()>;
+    /// Keep a new login. Returns `false`, and changes nothing, when the tenant already holds
+    /// that login, so that two creations of one login yield one account and one refusal.
+    fn create_account(&self, account: &Account) -> StoreResult<bool>;
+    /// Replace a login with `replacement` only if it still is `expected` (compare and set).
+    /// Returns `false`, and changes nothing, when the login is gone or has changed meanwhile.
+    /// The login and tenant of the two must be the same.
+    fn update_account(&self, expected: &Account, replacement: &Account) -> StoreResult<bool>;
+    /// Implements: CT-025
     fn account(&self, tenant: &TenantId, login: &str) -> StoreResult<Option<Account>>;
     /// Remove a login. Returns whether it was there.
     fn remove_account(&self, tenant: &TenantId, login: &str) -> StoreResult<bool>;
+    /// Remove everything that signs a principal in or is waiting for them, in one step: every
+    /// login of the principal, their passkeys and pending passkey challenges, the identities that
+    /// tie them to identity providers, their authenticator factor, recovery codes, waiting
+    /// second-factor sign-ins, emailed sign-in links, account recoveries, and the identity-provider
+    /// and SAML sign-ins started to link their account. It ends no session and removes no record
+    /// of the tenant: sessions and roles are the caller's to end. A principal the tenant holds
+    /// nothing for, and a tenant that does not exist, give an empty `PrincipalRemoval`.
+    fn remove_principal(
+        &self,
+        tenant: &TenantId,
+        principal: &PrincipalId,
+    ) -> StoreResult<PrincipalRemoval>;
+    /// Clear `principal` from the tenant ledger: the owner of the accounts it owns and `caused_by`
+    /// of the entries it caused, keeping every amount, key, reason, number, time and balance
+    /// (LDG-027, LDG-028). Called by the erasure of a principal; it is not a commit and moves no
+    /// revision. A tenant that does not exist has nothing to clear.
+    fn anonymise_ledger_principal(
+        &self,
+        tenant: &TenantId,
+        principal: &PrincipalId,
+    ) -> StoreResult<strata_kernel::ledger::Anonymised>;
+    /// The login of a principal, for a sign-in method that identifies the person by something
+    /// other than a login.
+    fn account_of(
+        &self,
+        tenant: &TenantId,
+        principal: &PrincipalId,
+    ) -> StoreResult<Option<Account>>;
+
+    /// Keep a registered passkey. Returns `false`, and keeps nothing, when the tenant already
+    /// holds a credential with that id.
+    fn put_passkey(&self, passkey: &PasskeyRecord) -> StoreResult<bool>;
+    /// One credential of a tenant, by its id.
+    fn passkey(&self, tenant: &TenantId, id: &str) -> StoreResult<Option<PasskeyRecord>>;
+    /// The passkeys of one principal, oldest first.
+    fn passkeys(
+        &self,
+        tenant: &TenantId,
+        principal: &PrincipalId,
+    ) -> StoreResult<Vec<PasskeyRecord>>;
+    /// Replace the stored credential after a sign-in moved its counter, and note when it was
+    /// used. Returns whether the credential was there.
+    fn update_passkey(
+        &self,
+        tenant: &TenantId,
+        id: &str,
+        credential: &str,
+        used_at: Timestamp,
+    ) -> StoreResult<bool>;
+    /// Remove one of a principal's passkeys. Returns whether it was there.
+    fn remove_passkey(
+        &self,
+        tenant: &TenantId,
+        principal: &PrincipalId,
+        id: &str,
+    ) -> StoreResult<bool>;
+    /// Keep an issued challenge.
+    fn put_passkey_challenge(&self, challenge: &PasskeyChallenge) -> StoreResult<()>;
+    /// Take a challenge, removing it in the same step, so that it answers once whatever the
+    /// timing. A challenge that has lapsed at `now` is removed and not returned.
+    fn take_passkey_challenge(
+        &self,
+        tenant: &TenantId,
+        id_hash: &str,
+        now: Timestamp,
+    ) -> StoreResult<Option<PasskeyChallenge>>;
+    /// Remove challenges that have lapsed at `now`. Returns how many were removed.
+    fn purge_passkey_challenges(&self, now: Timestamp) -> StoreResult<u64>;
+
+    /// Keep a sent sign-in link.
+    fn put_sign_in_link(&self, link: &SignInLink) -> StoreResult<()>;
+    /// Take a link, removing it in the same step, so that it is answered once whatever the
+    /// timing. The row is returned whether or not it has lapsed: the caller compares the time.
+    fn take_sign_in_link(
+        &self,
+        tenant: &TenantId,
+        id_hash: &str,
+    ) -> StoreResult<Option<SignInLink>>;
+    /// Remove links that have lapsed before `now`. Returns how many were removed.
+    fn purge_sign_in_links(&self, now: Timestamp) -> StoreResult<u64>;
+
+    /// Keep a started identity-provider sign-in.
+    fn put_oidc_flow(&self, flow: &OidcFlow) -> StoreResult<()>;
+    /// Take a started sign-in, removing it in the same step, so that a callback answers it once
+    /// whatever the timing. The row is returned whether or not it has lapsed: the caller compares
+    /// the time.
+    fn take_oidc_flow(&self, tenant: &TenantId, id_hash: &str) -> StoreResult<Option<OidcFlow>>;
+    /// Remove started sign-ins that have lapsed before `now`. Returns how many were removed.
+    fn purge_oidc_flows(&self, now: Timestamp) -> StoreResult<u64>;
+
+    /// Keep a started SAML sign-in.
+    fn put_saml_request(&self, request: &SamlRequest) -> StoreResult<()>;
+    /// Take a started SAML sign-in, removing it in the same step, so that a response answers it
+    /// once whatever the timing. The row is returned whether or not it has lapsed: the caller
+    /// compares the time.
+    fn take_saml_request(
+        &self,
+        tenant: &TenantId,
+        id_hash: &str,
+    ) -> StoreResult<Option<SamlRequest>>;
+    /// Remove started SAML sign-ins that have lapsed before `now`. Returns how many were removed.
+    fn purge_saml_requests(&self, now: Timestamp) -> StoreResult<u64>;
+
+    /// Remember that an assertion was accepted, by the hash of its identifier, until `expires_at`.
+    /// Returns `false`, and changes nothing, when the tenant already remembers an assertion of
+    /// that provider with that identifier: in one step, so that two presentations at once are one.
+    fn put_saml_assertion(
+        &self,
+        tenant: &TenantId,
+        provider: &str,
+        id_hash: &str,
+        expires_at: Timestamp,
+    ) -> StoreResult<bool>;
+    /// Forget assertions that would no longer be accepted at `now` whatever is remembered.
+    /// Returns how many were forgotten.
+    fn purge_saml_assertions(&self, now: Timestamp) -> StoreResult<u64>;
+
+    /// Tie a provider's subject to a principal. Returns `false`, and keeps nothing, when the
+    /// tenant already ties that provider's subject to a principal.
+    fn put_identity(&self, identity: &FederatedIdentity) -> StoreResult<bool>;
+    /// The principal a provider's subject is tied to.
+    fn identity(
+        &self,
+        tenant: &TenantId,
+        provider: &str,
+        subject: &str,
+    ) -> StoreResult<Option<FederatedIdentity>>;
+
+    /// Keep a TOTP enrolment that is not confirmed. Returns `false`, and keeps nothing, when the
+    /// person already holds a confirmed one: a confirmed factor is removed before it is replaced.
+    fn put_totp(&self, totp: &TotpRecord) -> StoreResult<bool>;
+    /// The person's TOTP factor, confirmed or not.
+    fn totp(&self, tenant: &TenantId, principal: &PrincipalId) -> StoreResult<Option<TotpRecord>>;
+    /// Confirm an enrolment with the time step of the code that proved it. Returns whether an
+    /// unconfirmed enrolment was there.
+    fn confirm_totp(
+        &self,
+        tenant: &TenantId,
+        principal: &PrincipalId,
+        step: i64,
+    ) -> StoreResult<bool>;
+    /// Accept a code of this time step, once: returns `true` and remembers the step only when it
+    /// is later than every step accepted before, in one atomic step, so that a code that was
+    /// used is refused whatever the timing (replay).
+    fn use_totp_step(
+        &self,
+        tenant: &TenantId,
+        principal: &PrincipalId,
+        step: i64,
+    ) -> StoreResult<bool>;
+    /// Remove the person's TOTP factor. Returns whether it was there.
+    fn remove_totp(&self, tenant: &TenantId, principal: &PrincipalId) -> StoreResult<bool>;
+
+    /// Replace the person's recovery codes with these hashes, in one step.
+    fn replace_recovery_codes(
+        &self,
+        tenant: &TenantId,
+        principal: &PrincipalId,
+        hashes: &[String],
+        at: Timestamp,
+    ) -> StoreResult<()>;
+    /// Spend one recovery code: removes it and returns `true` only for the call that removed it,
+    /// so a code answers once whatever the timing.
+    fn spend_recovery_code(
+        &self,
+        tenant: &TenantId,
+        principal: &PrincipalId,
+        hash: &str,
+    ) -> StoreResult<bool>;
+    /// How many recovery codes the person has left.
+    fn recovery_codes_left(&self, tenant: &TenantId, principal: &PrincipalId) -> StoreResult<u32>;
+
+    /// Keep a sign-in that waits for its second factor.
+    fn put_pending(&self, pending: &PendingSignIn) -> StoreResult<()>;
+    /// Count one presentation against a waiting sign-in and return it, in one atomic step. A
+    /// sign-in that has lapsed, or that has already had `max` presentations counted, is removed
+    /// and not returned.
+    fn attempt_pending(
+        &self,
+        tenant: &TenantId,
+        id_hash: &str,
+        now: Timestamp,
+        max: u32,
+    ) -> StoreResult<Option<PendingSignIn>>;
+    /// Take a waiting sign-in, removing it in the same step, so that it yields one session
+    /// whatever the timing. A lapsed one is removed and not returned.
+    fn take_pending(
+        &self,
+        tenant: &TenantId,
+        id_hash: &str,
+        now: Timestamp,
+    ) -> StoreResult<Option<PendingSignIn>>;
+
+    /// Keep an account recovery that was asked for. It replaces an earlier one of the same person.
+    fn put_recovery(&self, request: &RecoveryRequest) -> StoreResult<()>;
+    /// An account recovery, left in place.
+    fn recovery(&self, tenant: &TenantId, id_hash: &str) -> StoreResult<Option<RecoveryRequest>>;
+    /// Take an account recovery, removing it in the same step.
+    fn take_recovery(
+        &self,
+        tenant: &TenantId,
+        id_hash: &str,
+    ) -> StoreResult<Option<RecoveryRequest>>;
+    /// Cancel a recovery whose cancel token hashes to `cancel_hash`. Returns whether it was there.
+    fn cancel_recovery(
+        &self,
+        tenant: &TenantId,
+        id_hash: &str,
+        cancel_hash: &str,
+    ) -> StoreResult<bool>;
+    /// Remove waiting sign-ins and recoveries that have lapsed at `now`. Returns how many.
+    fn purge_factor_challenges(&self, now: Timestamp) -> StoreResult<u64>;
+
+    /// Keep a small document of the identity service under a kind and a key of one tenant: a
+    /// client, a signing key, a grant, a provisioning token. `value` is JSON text the store does
+    /// not read. With `create_only` the document is kept only when the key is free, in one step,
+    /// and `false` says it was not; otherwise an existing document is replaced and the answer is
+    /// `true`.
+    fn doc_put(
+        &self,
+        tenant: &TenantId,
+        kind: &str,
+        key: &str,
+        value: &str,
+        create_only: bool,
+    ) -> StoreResult<bool>;
+    /// One document of a tenant.
+    fn doc_get(&self, tenant: &TenantId, kind: &str, key: &str) -> StoreResult<Option<String>>;
+    /// Every document of one kind of a tenant, by key.
+    fn doc_list(&self, tenant: &TenantId, kind: &str) -> StoreResult<Vec<(String, String)>>;
+    /// Remove one document. Returns whether it was there.
+    fn doc_remove(&self, tenant: &TenantId, kind: &str, key: &str) -> StoreResult<bool>;
+
+    /// Append one line to the tenant's audit trail. Durable when it returns. A tenant that does
+    /// not exist is refused as not found.
+    fn audit_append(&self, tenant: &TenantId, entry: &AuditEntry) -> StoreResult<()>;
+    /// The newest `limit` lines of the tenant's audit trail, oldest first. `kind` limits the
+    /// lines to one kind. A tenant with none has an empty list.
+    fn audit_list(
+        &self,
+        tenant: &TenantId,
+        kind: Option<&str>,
+        limit: usize,
+    ) -> StoreResult<Vec<AuditEntry>>;
+    /// At most `limit` lines of the tenant's audit trail with a sequence number above `after`,
+    /// oldest first, each as stored (its sealed members sealed) with its sequence number and the
+    /// chain value stored with it ([`audit_chain`], PRV-359, PRV-360). A tenant with none has an
+    /// empty list. An adapter that keeps no chain says so.
+    fn audit_chain(
+        &self,
+        _tenant: &TenantId,
+        _after: u64,
+        _limit: usize,
+    ) -> StoreResult<Vec<audit_chain::ChainedAuditEntry>> {
+        Err(StoreError::Unavailable(
+            "this store keeps no audit chain".into(),
+        ))
+    }
+
+    /// The verified e-mail address of the account of `principal` in `tenant`, if it has an
+    /// account and the account has one.
+    fn verified_address(
+        &self,
+        tenant: &TenantId,
+        principal: &PrincipalId,
+    ) -> StoreResult<Option<String>>;
 
     /// Keep a copy of the tenant's complete state as it is now.
     fn create_snapshot(
@@ -289,6 +1246,7 @@ pub trait Store: Send + Sync {
         label: &str,
         at: Timestamp,
     ) -> StoreResult<SnapshotInfo>;
+    /// Implements: CT-027
     fn snapshots(&self, tenant: &TenantId) -> StoreResult<Vec<SnapshotInfo>>;
     fn load_snapshot(&self, tenant: &TenantId, id: u64) -> StoreResult<TenantState>;
     /// Put the tenant back exactly as the snapshot holds it, discarding events and journal
@@ -296,11 +1254,386 @@ pub trait Store: Send + Sync {
     fn restore_snapshot(&self, tenant: &TenantId, id: u64) -> StoreResult<()>;
 
     /// Remove everything. For development fixtures.
+    /// Implements: CT-030
     fn reset(&self) -> StoreResult<()>;
 
     /// Remove one tenant and everything that belongs to it: its state, events, journal,
     /// sessions, logins and snapshots. Other tenants are untouched. For development fixtures.
     fn reset_tenant(&self, tenant: &TenantId) -> StoreResult<()>;
+
+    // ---- Jobs of the automation worker (crate::jobs, SCH-001 to SCH-015) ----
+
+    /// Create jobs of a tenant outside a commit, each once for its key: a key the tenant holds
+    /// already creates nothing (SCH-004). Returns the id of each, in order. A malformed job
+    /// refuses the whole call and creates nothing; a tenant that does not exist is `NotFound`.
+    fn jobs_create(
+        &self,
+        tenant: &TenantId,
+        jobs: &[NewJob],
+        now: Timestamp,
+    ) -> StoreResult<Vec<String>>;
+
+    /// One job of a tenant.
+    fn job(&self, tenant: &TenantId, id: &str) -> StoreResult<Option<Job>>;
+
+    /// At most `limit` jobs of a tenant, newest first, created before the job of sequence number
+    /// `before` when one is given.
+    fn jobs_list(
+        &self,
+        tenant: &TenantId,
+        before: Option<u64>,
+        limit: usize,
+    ) -> StoreResult<Vec<Job>>;
+
+    /// Lease the job of a tenant that has been due longest at `now` (earliest `due_at`, then the
+    /// oldest), to `worker`: a waiting job that is due (never one that is not, SCH-001) or a
+    /// leased one whose lease expired (SCH-010). The lease raises the job's fencing token
+    /// ([`jobs::apply_lease`]). `None` when nothing is due.
+    fn job_lease(
+        &self,
+        tenant: &TenantId,
+        worker: &str,
+        now: Timestamp,
+    ) -> StoreResult<Option<Lease>>;
+
+    /// Record the outcome of the attempt that holds lease `token` ([`jobs::apply_report`]) and,
+    /// in the same transaction, `writes`. A refused report writes nothing (SCH-011, SCH-012).
+    fn job_report(
+        &self,
+        tenant: &TenantId,
+        id: &str,
+        token: u64,
+        report: &JobReport,
+        writes: &WorkerWrites,
+        now: Timestamp,
+    ) -> StoreResult<Reported>;
+
+    /// Cancel a job: no later attempt happens, and a report for the attempt in progress is
+    /// refused (SCH-006).
+    fn job_cancel(
+        &self,
+        tenant: &TenantId,
+        id: &str,
+        reason: &str,
+        now: Timestamp,
+    ) -> StoreResult<JobChange>;
+
+    /// Give a failed job one more attempt, due now ([`jobs::apply_retry`]).
+    fn job_retry(&self, tenant: &TenantId, id: &str, now: Timestamp) -> StoreResult<JobChange>;
+
+    /// The tenants that have a job due at `now`, the longest due first, at most `limit`. Found
+    /// without reading the database of a tenant that has none (SCH-007): an adapter keeps a wake
+    /// index of a tenant id and a due time per tenant and nothing of a job (SCH-008).
+    fn jobs_due(&self, now: Timestamp, limit: usize) -> StoreResult<Vec<TenantId>>;
+
+    /// Write run, step and exception records and jobs of a tenant in one transaction, outside a
+    /// report: a run record is replaced, a step record is replaced, an exception record and a job
+    /// whose id or key exists already are not written again.
+    fn automation_write(
+        &self,
+        tenant: &TenantId,
+        writes: &WorkerWrites,
+        now: Timestamp,
+    ) -> StoreResult<()>;
+
+    /// One run of a tenant.
+    fn automation_run(&self, tenant: &TenantId, run: &str) -> StoreResult<Option<RunRecord>>;
+
+    /// At most `limit` runs of a tenant, newest first, of one automation and in one state when
+    /// those are given, first written before the run of sequence number `before` when one is.
+    fn automation_runs(
+        &self,
+        tenant: &TenantId,
+        automation: Option<&WorkflowId>,
+        state: Option<RunState>,
+        before: Option<u64>,
+        limit: usize,
+    ) -> StoreResult<Vec<RunRecord>>;
+
+    /// At most `limit` steps of one run, in their order, after position `after` when one is
+    /// given.
+    fn automation_steps(
+        &self,
+        tenant: &TenantId,
+        run: &str,
+        after: Option<u64>,
+        limit: usize,
+    ) -> StoreResult<Vec<StepRecord>>;
+
+    /// At most `limit` exception records of a tenant, newest first, of one kind when one is
+    /// given, only those not settled with `unsettled`, written before the record of sequence
+    /// number `before` when one is.
+    fn automation_exceptions(
+        &self,
+        tenant: &TenantId,
+        kind: Option<ExceptionKind>,
+        unsettled: bool,
+        before: Option<u64>,
+        limit: usize,
+    ) -> StoreResult<Vec<ExceptionRecord>>;
+
+    /// Settle a parked or dead-lettered exception record: mark it settled and, when `release`,
+    /// give its job one more attempt with the same work and so the same step key (SCH-1524,
+    /// AGT-418), in one transaction.
+    fn automation_exception_settle(
+        &self,
+        tenant: &TenantId,
+        id: &str,
+        release: bool,
+        now: Timestamp,
+    ) -> StoreResult<Settled>;
+
+    // ---- Schedules, run keys and the retention of the worker's records (crate::schedules) ----
+
+    /// Define a schedule of a tenant: create it, change its rule, pause it or resume it
+    /// ([`schedules::apply_set`]), and in the same transaction create the job it asks for and
+    /// cancel the open job of a replaced rule (SCH-003, SCH-005). Returns the schedule as it is now.
+    /// A tenant that does not exist is `NotFound`.
+    fn schedule_set(
+        &self,
+        tenant: &TenantId,
+        set: &schedules::ScheduleSet,
+        now: Timestamp,
+    ) -> StoreResult<schedules::Schedule>;
+
+    /// One schedule of a tenant.
+    fn schedule(&self, tenant: &TenantId, id: &str) -> StoreResult<Option<schedules::Schedule>>;
+
+    /// Every schedule of a tenant, by identifier.
+    fn schedules(&self, tenant: &TenantId) -> StoreResult<Vec<schedules::Schedule>>;
+
+    /// The run that started for a run key of an automation, when one did (rec-automation-run-key,
+    /// D-6534). `key` is the hash of the value the automation's expression gave.
+    fn run_key_holder(
+        &self,
+        tenant: &TenantId,
+        automation: &WorkflowId,
+        key: &str,
+    ) -> StoreResult<Option<String>>;
+
+    /// The start jobs of one automation with one run key that have not ended, in no particular
+    /// order: what a run of that key has to wait for (SCH-1534).
+    fn open_run_key_starts(
+        &self,
+        tenant: &TenantId,
+        automation: &WorkflowId,
+        key: &str,
+    ) -> StoreResult<Vec<Job>>;
+
+    /// Remove the records of the automation worker that are past their retention at `now`: ended
+    /// jobs, ended runs with their steps, and declined, held and settled exception records. A
+    /// parked or dead-lettered record that is not settled is never removed (OPS-348). Reads every
+    /// tenant's file once; for the janitor only.
+    fn purge_automation(
+        &self,
+        now: Timestamp,
+        retention: &schedules::AutomationRetention,
+    ) -> StoreResult<schedules::AutomationPurged>;
+    /// Every setting that has a platform level, in the order of the setting names, with the
+    /// removed ones (a revision and no value). The platform level is held by the control plane
+    /// beside the tenant directory, never in a tenant's data (CT-303).
+    fn platform_settings(&self) -> StoreResult<Vec<PlatformSetting>>;
+
+    /// Set (`Some`) or remove (`None`) the platform level of a setting, when it is at
+    /// `expected_revision` (zero for a setting that has none), and raise its revision by one.
+    fn platform_setting_write(
+        &self,
+        setting: &SettingId,
+        value: Option<&Value>,
+        expected_revision: u64,
+        at: Timestamp,
+    ) -> StoreResult<PlatformWrite>;
+
+    /// Mark a tenant as being installed: the directory lists it as `provisioning`, which no
+    /// request reaches, until [`Store::finish_provisioning`]. Called after the install's first
+    /// commit. An adapter whose state cannot outlive the process has nothing to mark.
+    fn begin_provisioning(&self, _tenant: &TenantId) -> StoreResult<()> {
+        Ok(())
+    }
+
+    /// Mark the install of a tenant as complete: the directory lists it as `active` again.
+    fn finish_provisioning(&self, _tenant: &TenantId) -> StoreResult<()> {
+        Ok(())
+    }
+
+    /// Remove every tenant the directory still lists as `provisioning`, which are installs a
+    /// previous process did not finish, and return their ids. Called on start, before seeding.
+    fn rollback_provisioning(&self) -> StoreResult<Vec<TenantId>> {
+        Ok(Vec::new())
+    }
+
+    // Segments (SEG-001 to SEG-038): the storage block of segment, membership, wake, batch,
+    // erased and event rows beside the tenant state ([`segments`]). An adapter without the block
+    // holds no segment: the reads answer with nothing and every segment write is refused.
+
+    /// The segments of a tenant, in id order: at most one hundred (SEG-029).
+    fn segment_catalog(&self, _tenant: &TenantId) -> StoreResult<Vec<seg::Segment>> {
+        Ok(Vec::new())
+    }
+
+    /// The membership and wake rows of `pairs`, and which of their persons are erased.
+    fn segment_rows(
+        &self,
+        _tenant: &TenantId,
+        pairs: &[(seg::SegmentId, PrincipalId)],
+    ) -> StoreResult<seg::Rows> {
+        Ok(seg::Rows {
+            covered: pairs.iter().cloned().collect(),
+            ..seg::Rows::default()
+        })
+    }
+
+    /// At most `limit` memberships of a segment after the person `after`, in principal order.
+    fn segment_members(
+        &self,
+        _tenant: &TenantId,
+        _segment: seg::SegmentId,
+        _after: Option<&PrincipalId>,
+        _limit: usize,
+    ) -> StoreResult<Vec<seg::Membership>> {
+        Ok(Vec::new())
+    }
+
+    /// Every membership of one person.
+    fn segment_memberships_of(
+        &self,
+        _tenant: &TenantId,
+        _person: &PrincipalId,
+    ) -> StoreResult<Vec<seg::Membership>> {
+        Ok(Vec::new())
+    }
+
+    /// Every wake row of one person.
+    fn segment_wakes_of(
+        &self,
+        _tenant: &TenantId,
+        _person: &PrincipalId,
+    ) -> StoreResult<Vec<seg::Wake>> {
+        Ok(Vec::new())
+    }
+
+    /// At most `limit` wake rows of a segment due at `at`, earliest first (SEG-1545).
+    fn segment_due(
+        &self,
+        _tenant: &TenantId,
+        _segment: seg::SegmentId,
+        _at: Timestamp,
+        _limit: usize,
+    ) -> StoreResult<Vec<seg::Wake>> {
+        Ok(Vec::new())
+    }
+
+    /// The pending continuations of a tenant (record `rec-segment-batch`).
+    fn segment_batches(&self, _tenant: &TenantId) -> StoreResult<Vec<seg::Batch>> {
+        Ok(Vec::new())
+    }
+
+    /// At most `limit` records of `object` after `after` whose `field` holds `record`, in record
+    /// id order: the record index, bounded, for the referrers a change must evaluate (SEG-028).
+    fn segment_referencing(
+        &self,
+        tenant: &TenantId,
+        object: &strata_kernel::ObjectTypeId,
+        field: &strata_kernel::FieldId,
+        record: strata_kernel::RecordId,
+        after: Option<strata_kernel::RecordId>,
+        limit: usize,
+    ) -> StoreResult<Vec<Arc<Record>>> {
+        let need = Need::ByField {
+            object: object.clone(),
+            field: field.clone(),
+            value: Value::Ref(record),
+        };
+        let state = self.load(tenant, &[need])?;
+        Ok(state
+            .tenant
+            .as_deref()
+            .map(|t| {
+                t.records_of(object)
+                    .filter(|r| field_matches(r, field, &Value::Ref(record)))
+                    .filter(|r| after.is_none_or(|a| r.id > a))
+                    .take(limit)
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default())
+    }
+
+    /// How many records of an object type a tenant holds: the persons a changed predicate
+    /// evaluates (SEG-023).
+    fn segment_subject_count(
+        &self,
+        tenant: &TenantId,
+        object: &strata_kernel::ObjectTypeId,
+    ) -> StoreResult<u64> {
+        let state = self.load(tenant, &[Need::AllOf(object.clone())])?;
+        Ok(state
+            .tenant
+            .as_deref()
+            .map_or(0, |t| t.records_of(object).count() as u64))
+    }
+
+    /// At most `limit` entry and exit events of a tenant after position `after`, with their
+    /// positions: the outbox the job worker reads (D-5023).
+    fn segment_events_after(
+        &self,
+        _tenant: &TenantId,
+        _after: u64,
+        _limit: usize,
+    ) -> StoreResult<Vec<(u64, seg::SegmentEvent)>> {
+        Ok(Vec::new())
+    }
+
+    /// The position of the segment event log handed on to the job worker (D-7280): the events at
+    /// or before it have been matched against the triggers; 0 before any.
+    fn segment_cursor(&self, _tenant: &TenantId) -> StoreResult<u64> {
+        Ok(0)
+    }
+
+    /// Commit an accepted transition together with the segment write its change decided, in one
+    /// atomic step: both, or neither (SEG-008, SEG-012). The write is refused, and nothing is
+    /// changed, with [`StoreError::Conflict`] when a segment or membership row it rests on moved.
+    fn commit_with_segments(
+        &self,
+        commit: &Commit,
+        write: &seg::SegmentWrite,
+    ) -> StoreResult<Receipt> {
+        if write.is_empty() {
+            self.commit(commit)
+        } else {
+            Err(StoreError::Unavailable(
+                "this store holds no segments".into(),
+            ))
+        }
+    }
+
+    /// Apply a segment write that no transition carries (a definition, a removal, a batch, a
+    /// refresh, an erasure), atomically, while the tenant is at the revision the decision was
+    /// made at. The revision does not advance: no record changed. Refused with
+    /// [`StoreError::Conflict`] when the tenant moved on or a row the write rests on changed.
+    fn commit_segments(&self, _commit: &segments::SegmentCommit) -> StoreResult<Receipt> {
+        Err(StoreError::Unavailable(
+            "this store holds no segments".into(),
+        ))
+    }
+
+    // Search (SRH-150 to SRH-152, SRH-1590): the entries of a tenant's search index, written in the
+    // commit of the record they are made from ([`search`]). An adapter without an index answers no
+    // probe.
+
+    /// The candidates of one probe of the tenant's search index: records of one object type with
+    /// an id above the probe's `after`, in ascending id order, at most `limit`, each with the
+    /// fields in which every query token is the start of a token. The index authorizes nothing:
+    /// the kernel decides each candidate for its reader. A tenant that does not exist has none.
+    fn search_candidates(
+        &self,
+        _tenant: &TenantId,
+        _probe: &strata_kernel::search::Probe,
+    ) -> StoreResult<Vec<strata_kernel::search::Candidate>> {
+        Err(StoreError::Unavailable(
+            "this store holds no search index".into(),
+        ))
+    }
 }
 
 /// Check that a commit's events continue a tenant's sequence. Shared by adapters.
@@ -333,6 +1666,8 @@ pub fn check_event_sequence(commit: &Commit, stored_event_seq: u64) -> StoreResu
 pub fn field_matches(record: &Record, field: &strata_kernel::FieldId, value: &Value) -> bool {
     match record.get(field) {
         Value::List(items) => items.contains(value),
+        // A sealed value answers the blind hash of its plain value (D-6585, [`sealed`]).
+        Value::Str(stored) if sealed::is_blind(value) => sealed::blind_matches(stored, value),
         other => other == value,
     }
 }
@@ -341,12 +1676,22 @@ pub fn field_matches(record: &Record, field: &strata_kernel::FieldId, value: &Va
 pub fn partial_state(tenant: &TenantState, needs: &[Need]) -> State {
     let mut thin = TenantState {
         records: Default::default(),
+        ledger: None,
         ..tenant.clone()
     };
     for need in needs {
         let found: Vec<&Arc<Record>> = match need {
             Need::Record { object, id } => tenant.record(object, *id).into_iter().collect(),
             Need::AllOf(object) => tenant.records_of(object).collect(),
+            Need::PageOf {
+                object,
+                after,
+                limit,
+            } => tenant
+                .records_of(object)
+                .filter(|record| after.is_none_or(|a| record.id > a))
+                .take(*limit as usize)
+                .collect(),
             Need::ByField {
                 object,
                 field,
@@ -355,6 +1700,57 @@ pub fn partial_state(tenant: &TenantState, needs: &[Need]) -> State {
                 .records_of(object)
                 .filter(|record| field_matches(record, field, value))
                 .collect(),
+            Need::ByFields { object, fields } => tenant
+                .records_of(object)
+                .filter(|record| {
+                    fields
+                        .iter()
+                        .all(|(field, value)| field_matches(record, field, value))
+                })
+                .collect(),
+            Need::Ledger(want) => {
+                if let Some(full) = tenant.ledger.as_ref() {
+                    let into = thin
+                        .ledger
+                        .get_or_insert_with(strata_kernel::ledger::empty_state);
+                    strata_kernel::ledger::partial(full, want, into);
+                }
+                Vec::new()
+            }
+            Need::IndexPage {
+                object,
+                field,
+                lower,
+                upper,
+                descending,
+                after,
+                limit,
+            } => strata_kernel::query_plan::index_page(
+                tenant.records_of(object),
+                field,
+                lower,
+                upper,
+                *descending,
+                after.as_ref(),
+                *limit,
+            ),
+            Need::PairPage {
+                object,
+                field,
+                value,
+                order,
+                descending,
+                after,
+                limit,
+            } => strata_kernel::query_plan::pair_page(
+                tenant.records_of(object),
+                field,
+                value,
+                order,
+                *descending,
+                after.as_ref(),
+                *limit,
+            ),
         };
         for record in found {
             thin.records
@@ -363,6 +1759,7 @@ pub fn partial_state(tenant: &TenantState, needs: &[Need]) -> State {
                 .insert(record.id, record.clone());
         }
     }
+    strata_kernel::ledger::tidy_state(&mut thin.ledger);
     State {
         tenant_id: tenant.id.clone(),
         tenant: Some(Arc::new(thin)),
@@ -381,7 +1778,7 @@ pub enum ExecuteError {
 impl fmt::Display for ExecuteError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ExecuteError::Domain(e) => write!(f, "{e}"),
+            ExecuteError::Domain(e) => f.write_str(&e.describe()),
             ExecuteError::Store(e) => write!(f, "{e}"),
         }
     }
@@ -393,8 +1790,10 @@ impl From<StoreError> for ExecuteError {
     }
 }
 
-/// How often a commit is retried after losing a race, and how many extra needs a single
-/// decision may ask for.
+/// How often a commit is retried after losing a race, and how many rounds a single decision
+/// may spend loading state the kernel found missing. Each round adds every need the kernel can
+/// name at once, so the number of loads does not grow with the number of references a record
+/// holds.
 const MAX_CONFLICT_RETRIES: usize = 8;
 const MAX_NEED_ROUNDS: usize = 32;
 
@@ -405,6 +1804,10 @@ pub struct Executed {
     pub receipt: Receipt,
     /// Commits that lost a race and were decided again.
     pub conflicts: usize,
+    /// The result is the first result recorded under the request's idempotency key: nothing was
+    /// committed by this call. `transition` then holds the output, evidence and sequence of the
+    /// first call, and no delta operations, events or effects.
+    pub replayed: bool,
 }
 
 /// Decide an intent with the kernel against a snapshot loaded from the store, and commit it.
@@ -417,42 +1820,224 @@ pub fn execute(
     intent: &Intent,
     ctx: &Context,
 ) -> Result<Executed, ExecuteError> {
+    execute_by(store, intent, ctx, None)
+}
+
+/// [`execute`] with a deadline. When the deadline has passed before a commit is attempted, the
+/// intent is not committed and the call fails with [`StoreError::Unavailable`]: a caller that
+/// was already told the request timed out never finds the change made afterwards. A caller that
+/// retries with the same idempotency key learns the outcome of a commit that did go through.
+///
+/// With an idempotency key in `ctx` the store is asked first: a key already recorded for this
+/// tenant and principal returns the first result without deciding or committing again
+/// ([`Executed::replayed`]), and the same key with another intent is refused with
+/// [`ErrorKind::IdempotencyMismatch`] (D-6548). The key is looked up again after every lost race, so two
+/// concurrent first requests commit once.
+pub fn execute_by(
+    store: &dyn Store,
+    intent: &Intent,
+    ctx: &Context,
+    deadline: Option<Instant>,
+) -> Result<Executed, ExecuteError> {
+    execute_guarded(store, intent, ctx, deadline, None, None)
+}
+
+/// [`execute_by`] with the jobs the commit creates held to the tenant's allowance by `admission`
+/// (D-6533): the commit is never refused for them, only their due times move.
+pub fn execute_admitting(
+    store: &dyn Store,
+    intent: &Intent,
+    ctx: &Context,
+    deadline: Option<Instant>,
+    admission: Option<&dyn admission::JobAdmission>,
+) -> Result<Executed, ExecuteError> {
+    execute_guarded(store, intent, ctx, deadline, None, admission)
+}
+
+/// [`execute_by`] for a change decided on the tenant as it was at revision `at`, such as one an
+/// operator was shown a projection of: it is committed only if the tenant is still at `at`.
+/// A tenant at another revision, whether before the decision or when the commit is made, fails
+/// with [`StoreError::Conflict`] naming the revision found, and nothing is committed. A lost race
+/// is not decided again on the newer state, as [`execute_by`] does: the caller was shown another
+/// state than the one it would change.
+pub fn execute_at(
+    store: &dyn Store,
+    intent: &Intent,
+    ctx: &Context,
+    deadline: Option<Instant>,
+    at: StateRevision,
+) -> Result<Executed, ExecuteError> {
+    execute_guarded(store, intent, ctx, deadline, Some(at), None)
+}
+
+/// The body of [`execute_by`] and [`execute_at`]: with `at`, the decision and the commit are for
+/// that revision only and a conflict is never retried; with `admission`, the jobs the commit
+/// creates are held to the tenant's allowance (D-6533).
+fn execute_guarded(
+    store: &dyn Store,
+    intent: &Intent,
+    ctx: &Context,
+    deadline: Option<Instant>,
+    at: Option<StateRevision>,
+    admission: Option<&dyn admission::JobAdmission>,
+) -> Result<Executed, ExecuteError> {
+    let expired = || {
+        deadline.is_some_and(|at| Instant::now() >= at).then(|| {
+            ExecuteError::Store(StoreError::Unavailable(
+                "the request's deadline passed before the change was committed; nothing was committed"
+                    .into(),
+            ))
+        })
+    };
+    if let Some(key) = &ctx.idempotency_key {
+        if !valid_idempotency_key(key) {
+            return Err(ExecuteError::Domain(DomainError::new(
+                ErrorKind::InvalidIntent,
+                format!(
+                    "an idempotency key is 1 to {MAX_IDEMPOTENCY_KEY_LEN} visible ASCII characters"
+                ),
+            )));
+        }
+    }
     let mut conflicts = 0;
     loop {
+        if let Some(key) = &ctx.idempotency_key {
+            let scope = idempotency_scope_for(intent, ctx);
+            if let Some(first) = store.idempotent_result(&ctx.tenant, &scope, key, ctx.now)? {
+                if first.request_hash != canon::hash_of(intent) {
+                    return Err(ExecuteError::Domain(DomainError::new(
+                        ErrorKind::IdempotencyMismatch,
+                        "the idempotency key was used with another request".to_string(),
+                    )));
+                }
+                return Ok(Executed {
+                    transition: first.result,
+                    receipt: first.receipt,
+                    conflicts,
+                    replayed: true,
+                });
+            }
+        }
+        if let Some(error) = expired() {
+            return Err(error);
+        }
         let header = store.load(&ctx.tenant, &[])?;
-        let mut needs =
-            strata_kernel::needs(header.tenant.as_deref().map(|t| t.schema.as_ref()), intent);
+        if let Some(at) = at {
+            let found = header.tenant.as_deref().map(|t| t.revision);
+            if found != Some(at) {
+                return Err(ExecuteError::Store(StoreError::Conflict {
+                    expected: Some(at),
+                    found,
+                }));
+            }
+        }
+        let mut wanted: BTreeSet<Need> =
+            strata_kernel::needs(header.tenant.as_deref().map(|t| t.schema.as_ref()), intent)
+                .into_iter()
+                .collect();
         let mut rounds = 0;
-        let transition = loop {
-            let state = store.load(&ctx.tenant, &needs)?;
+        let mut transition = loop {
+            let list: Vec<Need> = wanted.iter().cloned().collect();
+            let state = store.load(&ctx.tenant, &list)?;
+            // What the loaded state itself says is still needed (the references and unique
+            // values of a stored record), asked for in one reload.
+            let more: Vec<Need> = strata_kernel::refine_needs(&state, intent)
+                .into_iter()
+                .filter(|need| !wanted.contains(need))
+                .collect();
+            if !more.is_empty() && rounds < MAX_NEED_ROUNDS {
+                wanted.extend(more);
+                rounds += 1;
+                continue;
+            }
             match strata_kernel::transition(&state, intent, ctx) {
                 Err(DomainError {
                     kind: ErrorKind::InsufficientState,
                     missing: Some(need),
                     ..
-                }) if rounds < MAX_NEED_ROUNDS && !needs.contains(&need) => {
-                    needs.push(need);
+                }) if rounds < MAX_NEED_ROUNDS && !wanted.contains(&need) => {
+                    wanted.insert(need);
                     rounds += 1;
                 }
                 Err(error) => return Err(ExecuteError::Domain(error)),
                 Ok(transition) => break transition,
             }
         };
-        match store.commit(&Commit::of(intent, ctx, &transition)) {
+        // The state the decision was made on is the one the caller named, or the commit says so.
+        if let Some(at) = at {
+            if transition.delta.base_revision != Some(at) {
+                return Err(ExecuteError::Store(StoreError::Conflict {
+                    expected: Some(at),
+                    found: transition.delta.base_revision,
+                }));
+            }
+        }
+        // The memberships the change moves, decided for the same commit (SEG-008, D-5022).
+        // A change an automation causes carries the hops of its chain (SEG-031, SEG-032).
+        let hop = u64::from(ctx.hop.unwrap_or(0));
+        let decided = match segments::decide_change(store, &transition, ctx, hop) {
+            Ok(decided) => decided,
+            Err(ExecuteError::Store(StoreError::Conflict { .. }))
+                if at.is_none() && conflicts < MAX_CONFLICT_RETRIES =>
+            {
+                conflicts += 1;
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
+        transition.evidence.extend(decided.failures);
+        // The last look at the clock before the write: past this point the change is made.
+        if let Some(error) = expired() {
+            return Err(error);
+        }
+        let mut commit = Commit::of(intent, ctx, &transition);
+        // The continuations and events the change leaves are jobs of the same commit (WG-5165).
+        commit.jobs.extend(segment_jobs::of_write(
+            &decided.write,
+            &format!("rev{}", transition.delta.new_revision.0),
+            ctx.now,
+        ));
+        let placements = match admission {
+            Some(admission) => admission.admit(
+                &ctx.tenant,
+                &mut commit.jobs,
+                &mut commit.exceptions,
+                ctx.now,
+            ),
+            None => Vec::new(),
+        };
+        match store.commit_with_segments(&commit, &decided.write) {
             Ok(receipt) => {
+                if let Some(admission) = admission {
+                    admission.committed(&ctx.tenant, &placements);
+                }
                 return Ok(Executed {
                     transition,
                     receipt,
                     conflicts,
-                })
+                    replayed: false,
+                });
             }
-            Err(StoreError::Conflict { .. }) if conflicts < MAX_CONFLICT_RETRIES => conflicts += 1,
+            Err(StoreError::Conflict { .. })
+                if at.is_none() && conflicts < MAX_CONFLICT_RETRIES =>
+            {
+                conflicts += 1;
+                // Pause before reloading, longer on each retry (at most 8 retries: 5 ms to 40 ms
+                // per pause, 180 ms in all), so that the commit which won can finish.
+                let pause_ms = 5 * (conflicts as u64);
+                std::thread::sleep(std::time::Duration::from_millis(pause_ms));
+            }
             Err(error) => return Err(error.into()),
         }
     }
 }
 
 /// Answer a read with the kernel against a snapshot loaded from the store.
+///
+/// A rule that follows a reference reaches a record per row; when the snapshot lacks some, the
+/// kernel names every record the examined rows refer to at once
+/// ([`strata_kernel::query_plan::read_missing`]), and exactly those are loaded in the next
+/// round, never their whole object type (KRN-2922, WG-5180).
 pub fn query(
     store: &dyn Store,
     request: &ReadRequest,
@@ -462,7 +2047,37 @@ pub fn query(
     let Some(tenant) = header.tenant.as_deref() else {
         return strata_kernel::read(&header, request, ctx).map_err(ExecuteError::Domain);
     };
-    let needs = strata_kernel::read_needs(&tenant.schema, request);
-    let state = store.load(&ctx.tenant, &needs)?;
-    strata_kernel::read(&state, request, ctx).map_err(ExecuteError::Domain)
+    let initial = strata_kernel::read_needs(&tenant.schema, request);
+    let covered = covering::load_covering(store, &ctx.tenant, initial, |state, asked| {
+        covering::read_asking(state, request, ctx, asked)
+    })?;
+    covered.outcome.map_err(ExecuteError::Domain)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A counter whose lock (5000 ms) outlasts its window (1000 ms): the lock holds for its full
+    /// length, and the window does not cut it short.
+    #[test]
+    fn a_lock_longer_than_the_window_lasts_its_full_length() {
+        let rule = ThrottleRule {
+            key: "source:password:1.2.3.4".into(),
+            max: 2,
+            window_ms: 1000,
+            lock_ms: 5000,
+            lock_resets: false,
+        };
+        let first = throttle_step(None, &rule, 0).unwrap();
+        let locked = throttle_step(Some(first), &rule, 0).unwrap();
+        assert_eq!(locked.locked_until, 5000);
+        // Past the window, still inside the lock: refused until the lock ends.
+        assert_eq!(throttle_step(Some(locked), &rule, 1500), Err(5000));
+        assert_eq!(throttle_step(Some(locked), &rule, 4999), Err(5000));
+        // Once the lock ends, the counter starts again.
+        let after = throttle_step(Some(locked), &rule, 5000).unwrap();
+        assert_eq!(after.failures, 1);
+        assert_eq!(after.locked_until, 0);
+    }
 }

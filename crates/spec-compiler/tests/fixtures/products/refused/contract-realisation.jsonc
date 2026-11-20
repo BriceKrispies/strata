@@ -1,0 +1,5 @@
+{
+  // Refused: a product contract with realisation "hand", which puts code behind it (layer.platform-power).
+  "product": { "id": "badges", "name": "Badges", "imports": { "spec": "../../../../../../specifications/spec.jsonc", "entities": [] } },
+  "contracts": [ { "id": "badges__award", "name": "Award a badge", "realisation": "hand" } ]
+}

@@ -40,12 +40,19 @@
 //! # Faults
 //!
 //! Exegra applies the scenario's faults when it runs the trace, so the trace's deliveries are
-//! already what the runtime would see: a `delay-event` shows up as the same event delivered
-//! later, a `drop-event` as a step that delivers nothing (the test notes it in a comment), and an
-//! `inject-event` as an extra delivery. Those three kinds are supported. A fault that changes the
-//! model rather than the input (`enable-transition`, `disable-transition`, and kinds with no
-//! counterpart in a generated machine) cannot be expressed against generated code and is refused
-//! with [`FAULT_UNSUPPORTED`].
+//! already what the runtime would see: a `delay-event` or `retry-event` shows up as the same
+//! event delivered later, a `drop-event` or `lose-event` as a step that delivers nothing (the test
+//! notes it in a comment), and an `inject-event` or `duplicate-event` as an extra delivery. Those
+//! six kinds are supported. A fault that changes the model rather than the input
+//! (`enable-transition`, `disable-transition`, and kinds with no counterpart in a generated
+//! machine) cannot be expressed against generated code and is refused with [`FAULT_UNSUPPORTED`].
+//!
+//! A fault is replayed only where the runtime can produce it ([`unrealisable`], Exegra's rule
+//! `fault.unrealisable`): never on a timer firing, which the runtime delivers exactly once at its
+//! deadline; on an `at-least-once` event a duplicate, a retry, or a delay by a sum of retry backoff
+//! waits, never a drop; on an `at-most-once` event a drop or a loss, never a delay, retry or
+//! duplicate; on an event that declares no delivery (sent from outside the runtime) anything but a
+//! loss or a retry. Any other is refused with [`FAULT_UNREALISABLE`].
 //!
 //! # Linking tests to requirements
 //!
@@ -80,6 +87,18 @@ pub const EXEGRA_FAILED: &str = "specc.scenarios-exegra-failed";
 pub const TIME_UNIT: &str = "specc.scenarios-time-unit";
 /// Code of a fault that cannot be expressed against generated machines.
 pub const FAULT_UNSUPPORTED: &str = "specc.scenarios-fault-unsupported";
+/// Code of a fault the runtime cannot produce ([`unrealisable`]).
+pub const FAULT_UNREALISABLE: &str = "specc.scenarios-fault-unrealisable";
+
+/// The fault kinds a scenario test replays from the trace.
+pub const REPLAYED_FAULTS: &[&str] = &[
+    "drop-event",
+    "delay-event",
+    "inject-event",
+    "duplicate-event",
+    "lose-event",
+    "retry-event",
+];
 /// Code of a machine with several instances.
 pub const INSTANCES: &str = "specc.scenarios-instances-unsupported";
 /// Code of a machine that does not create its records.
@@ -168,7 +187,11 @@ pub fn generate(
             "no scenario runs only implementation-level machines, so there is nothing to generate.",
         ));
     }
+    let mut names = crate::codetext::Claims::new(FILE, &[]);
     for sc in &plan.scenarios {
+        if let Err(clash) = names.claim_unique(&sc.id, &test_name(&sc.id)) {
+            d.push(clash);
+        }
         d.extend(check_scenario(&plan, sc));
     }
     if !d.is_empty() {
@@ -200,8 +223,9 @@ pub fn generate(
     }
     let body = file_text(&plan, crate_name, &tests);
     let text = format!(
-        "{} from {spec_path}. Do not edit; change the specification and regenerate.\n{body}",
-        HEADER_MARKERS[0]
+        "{} from {}. Do not edit; change the specification and regenerate.\n{body}",
+        HEADER_MARKERS[0],
+        crate::codetext::line_text(&spec_path)
     );
     let contents = match rustfmt(&text) {
         Ok(formatted) => formatted,
@@ -230,6 +254,180 @@ pub fn generate(
     })
 }
 
+// ---- faults the runtime can produce -------------------------------------------------------
+
+/// Nanoseconds per unit of a duration or a scenario clock.
+fn unit_ns(unit: &str) -> Option<u128> {
+    Some(match unit {
+        "ns" => 1,
+        "us" => 1_000,
+        "ms" => 1_000_000,
+        "s" => 1_000_000_000,
+        "min" => 60_000_000_000,
+        "h" => 3_600_000_000_000,
+        _ => return None,
+    })
+}
+
+/// A duration in whole base units of `unit`: a bare non-negative integer is already in them, a
+/// string is `"<decimal> <unit>"`. `None` when it is neither or not a whole number of `unit`.
+fn duration_in(v: &Value, unit: &str) -> Option<u128> {
+    let base = unit_ns(unit)?;
+    let ns = match v {
+        Value::Number(n) => return n.as_u64().map(u128::from),
+        Value::String(s) => {
+            let s = s.trim();
+            let split = s.find(|c: char| !(c.is_ascii_digit() || c == '.'))?;
+            let (num, u) = (&s[..split], s[split..].trim());
+            let (int, frac) = num.split_once('.').unwrap_or((num, ""));
+            if int.is_empty() || !frac.bytes().all(|b| b.is_ascii_digit()) {
+                return None;
+            }
+            let digits: u128 = format!("{int}{frac}").parse().ok()?;
+            let scale = 10u128.checked_pow(u32::try_from(frac.len()).ok()?)?;
+            let total = digits.checked_mul(unit_ns(u)?)?;
+            if total % scale != 0 {
+                return None;
+            }
+            total / scale
+        }
+        _ => return None,
+    };
+    (ns % base == 0).then_some(ns / base)
+}
+
+/// The runtime's retry policy in base units of `unit`: `system.generation.retry` over the
+/// runtime's default (1 s, factor 2, at most 300 s), as `RetryPolicy`.
+fn retry_policy(top: &Map<String, Value>, unit: &str) -> Option<(u128, u128, u128)> {
+    let r = top
+        .get("system")
+        .and_then(|s| s.get("generation"))
+        .and_then(|g| g.get("retry"));
+    let first = r
+        .and_then(|r| r.get("first"))
+        .cloned()
+        .unwrap_or(json!("1 s"));
+    let max = r
+        .and_then(|r| r.get("max"))
+        .cloned()
+        .unwrap_or(json!("300 s"));
+    let factor = r
+        .and_then(|r| r.get("factor"))
+        .and_then(Value::as_u64)
+        .filter(|f| *f >= 1)
+        .unwrap_or(2);
+    Some((
+        duration_in(&first, unit)?,
+        u128::from(factor),
+        duration_in(&max, unit)?,
+    ))
+}
+
+/// Whether `by` is the delay after some number of failed dispatches: the sum of the waits
+/// `min(first * factor^(k-1), max)` for `k` from 1.
+fn is_backoff_sum(by: u128, (first, factor, max): (u128, u128, u128)) -> bool {
+    if first == 0 {
+        return by == 0;
+    }
+    let (mut wait, mut total) = (first.min(max), 0u128);
+    while total < by {
+        total += wait;
+        wait = (wait.saturating_mul(factor)).min(max);
+    }
+    total == by
+}
+
+/// Why the generated runtime cannot produce fault `fault` in scenario `scenario` of the
+/// specification `top`, or `None` when it can (Exegra's `fault.unrealisable`, docs/semantics.md,
+/// "Faults the runtime can produce"). Only a scenario that runs an implementation-level machine is
+/// held to it.
+pub fn unrealisable(
+    top: &Map<String, Value>,
+    scenario: &Map<String, Value>,
+    fault: &Map<String, Value>,
+) -> Option<String> {
+    let behaviors = items(top, "behaviors");
+    let ids: Vec<&str> = scenario
+        .get("behaviors")
+        .and_then(Value::as_array)
+        .map(|a| a.iter().filter_map(Value::as_str).collect())
+        .unwrap_or_default();
+    let ran: Vec<&Map<String, Value>> = behaviors
+        .iter()
+        .filter(|b| string(b, "id").is_some_and(|id| ids.contains(&id)))
+        .copied()
+        .collect();
+    let implementation = |b: &Map<String, Value>| string(b, "level") == Some("implementation");
+    if !ran.iter().any(|b| implementation(b)) {
+        return None;
+    }
+    let kind = string(fault, "kind").unwrap_or_default();
+    if kind == "enable-transition" || kind == "disable-transition" {
+        let t = string(fault, "transition")?;
+        let owner = behaviors.iter().find(|b| {
+            items(b, "transitions")
+                .iter()
+                .any(|x| string(x, "id") == Some(t))
+        })?;
+        return implementation(owner).then(|| {
+            format!(
+                "{kind} changes implementation-level machine \"{}\"; generated code has no switch that turns transition \"{t}\" on or off",
+                string(owner, "id").unwrap_or_default()
+            )
+        });
+    }
+    if !REPLAYED_FAULTS.contains(&kind) {
+        return None;
+    }
+    let event_id = string(fault, "event")?;
+    let event = items(top, "events")
+        .into_iter()
+        .find(|e| string(e, "id") == Some(event_id))?;
+    let timer = event.get("elapsed") == Some(&json!(true))
+        || ran.iter().any(|b| {
+            items(b, "transitions").iter().any(|t| {
+                t.get("effects")
+                    .and_then(Value::as_array)
+                    .is_some_and(|fx| {
+                        fx.iter().any(|e| {
+                            e.get("timer").is_some()
+                                && e.get("emit").and_then(Value::as_str) == Some(event_id)
+                        })
+                    })
+            })
+        });
+    if timer {
+        return Some(format!(
+            "\"{event_id}\" is fired by a timer, which the runtime delivers exactly once at its deadline; it is never dropped, delayed, repeated or sent from outside"
+        ));
+    }
+    let delivery = string(event, "delivery");
+    let what = match delivery {
+        Some(d) => format!("\"{event_id}\" is {d}"),
+        None => {
+            format!("\"{event_id}\" declares no delivery, so it comes from outside the runtime")
+        }
+    };
+    let refuse = |why: &str| Some(format!("{what}: {why}"));
+    match (kind, delivery) {
+        ("drop-event", Some("at-least-once")) => refuse("its sender's outbox keeps it until a dispatch succeeds, so it is never dropped (a failed dispatch is a retry-event)"),
+        ("lose-event", d) if d != Some("at-most-once") => refuse("only an at-most-once message is lost between commit and dispatch"),
+        ("retry-event", d) if d != Some("at-least-once") => refuse("only an at-least-once message is retried"),
+        ("duplicate-event", Some("at-most-once")) => refuse("it is claimed before its one dispatch, so it is never dispatched twice"),
+        ("delay-event", Some("at-most-once")) => refuse("it is dispatched once, when due, and never deferred"),
+        ("delay-event", Some("at-least-once")) => {
+            let unit = string(scenario, "timeUnit").unwrap_or("us");
+            let by = fault.get("by").and_then(|v| duration_in(v, unit));
+            let policy = retry_policy(top, unit);
+            match (by, policy) {
+                (Some(by), Some(policy)) if is_backoff_sum(by, policy) => None,
+                _ => refuse("the runtime delays it only by its retry backoff, a sum of the waits after failed dispatches (retry-event)"),
+            }
+        }
+        _ => None,
+    }
+}
+
 // ---- loading ------------------------------------------------------------------------------
 
 /// One machine of a scenario.
@@ -249,6 +447,8 @@ struct ScenarioPlan {
     name: String,
     machines: Vec<MachineInfo>,
     faults: Vec<String>,
+    /// The scenario as written, for the realisability of its faults.
+    raw: Map<String, Value>,
     verifies: Vec<String>,
     /// Diagnostics found while reading it (names, claims).
     problems: Vec<Diagnostic>,
@@ -260,6 +460,8 @@ struct Plan {
     events: Vec<(String, Option<String>, bool)>,
     /// Every fault: id to kind.
     fault_kinds: Vec<(String, String)>,
+    /// The specification as written.
+    root: Map<String, Value>,
     /// Behaviors that run as several instances or that do not create their records.
     unsupported: Vec<(String, &'static str, &'static str)>,
     /// The typed specification, when it loads: payloads and variables are written in the wire
@@ -301,7 +503,7 @@ fn items<'a>(top: &'a Map<String, Value>, key: &str) -> Vec<&'a Map<String, Valu
 fn load(text: &str) -> Result<Plan, Vec<Diagnostic>> {
     let value = jsonc::parse(text).map_err(|e| {
         vec![Diagnostic::new(
-            SYNTAX,
+            e.code(SYNTAX),
             SPEC_ENTITY,
             format!("the specification is not valid JSONC: {e}"),
         )]
@@ -467,6 +669,7 @@ fn load(text: &str) -> Result<Plan, Vec<Diagnostic>> {
             name: string(sc, "name").unwrap_or(id).to_string(),
             machines,
             faults,
+            raw: sc.clone(),
             verifies,
             problems,
         });
@@ -475,6 +678,7 @@ fn load(text: &str) -> Result<Plan, Vec<Diagnostic>> {
         scenarios,
         events,
         fault_kinds,
+        root: top.clone(),
         unsupported,
         spec: None,
         cases: std::collections::BTreeMap::new(),
@@ -501,14 +705,26 @@ fn check_scenario(plan: &Plan, sc: &ScenarioPlan) -> Vec<Diagnostic> {
             .iter()
             .find(|(id, _)| id == fault)
             .map(|(_, k)| k.as_str());
-        if !matches!(kind, Some("drop-event" | "delay-event" | "inject-event")) {
+        if !kind.is_some_and(|k| REPLAYED_FAULTS.contains(&k)) {
             d.push(Diagnostic::new(
                 FAULT_UNSUPPORTED,
                 &sc.id,
                 format!(
-                    "fault \"{fault}\" is of kind {}: a generated machine receives events and sends none back, so only drop-event, delay-event and inject-event can be replayed against it (enable-transition and disable-transition change the model, not the input).",
-                    kind.unwrap_or("unknown")
+                    "fault \"{fault}\" is of kind {}: a generated machine receives events and sends none back, so only {} can be replayed against it (enable-transition and disable-transition change the model, not the input).",
+                    kind.unwrap_or("unknown"),
+                    REPLAYED_FAULTS.join(", ")
                 ),
+            ));
+            continue;
+        }
+        let declared = items(&plan.root, "faults")
+            .into_iter()
+            .find(|f| string(f, "id") == Some(fault.as_str()));
+        if let Some(why) = declared.and_then(|f| unrealisable(&plan.root, &sc.raw, f)) {
+            d.push(Diagnostic::new(
+                FAULT_UNREALISABLE,
+                &sc.id,
+                format!("fault \"{fault}\" is not something the runtime can do, so a test of the generated machines cannot replay it: {why}."),
             ));
         }
     }
@@ -521,15 +737,14 @@ fn mismatch(sc: &ScenarioPlan, message: String) -> Vec<Diagnostic> {
     vec![Diagnostic::new(TRACE_MISMATCH, &sc.id, message)]
 }
 
+/// A `json!` call building `value`: strings are Rust literals, so no control character of the
+/// value makes invalid Rust (see [`crate::codetext::rust::json`]).
 fn lit(value: &Value) -> String {
-    format!(
-        "json!({})",
-        serde_json::to_string(value).unwrap_or_default()
-    )
+    format!("json!({})", crate::codetext::rust::json(value))
 }
 
 fn str_lit(text: &str) -> String {
-    format!("{text:?}")
+    crate::codetext::rust::string(text)
 }
 
 fn test_of(plan: &Plan, sc: &ScenarioPlan, trace: &Value) -> Result<String, Vec<Diagnostic>> {
@@ -556,14 +771,18 @@ fn test_of(plan: &Plan, sc: &ScenarioPlan, trace: &Value) -> Result<String, Vec<
     let Some(steps) = trace["steps"].as_array() else {
         return Err(mismatch(sc, "the trace has no steps".to_string()));
     };
-    let mut out = format!("/// Scenario `{}`: {}\n", sc.id, sc.name.replace('\n', " "));
+    let mut out =
+        crate::codetext::rust::doc_comment("", &format!("Scenario `{}`: {}", sc.id, sc.name));
     if !sc.verifies.is_empty() {
         out.push_str("///\n");
     }
     for line in &sc.verifies {
-        out.push_str(&format!("/// Verifies: {line}\n"));
+        out.push_str(&crate::codetext::rust::doc_comment(
+            "",
+            &format!("Verifies: {line}"),
+        ));
     }
-    out.push_str(&format!("#[test]\nfn scenario_{}() {{\n", sanitize(&sc.id)));
+    out.push_str(&format!("#[test]\nfn {}() {{\n", test_name(&sc.id)));
     for m in &sc.machines {
         let Some(initial) = trace["initial"]["machines"].get(&m.id) else {
             return Err(mismatch(
@@ -825,10 +1044,11 @@ fn var(m: &MachineInfo) -> String {
     format!("run_{}", m.module)
 }
 
-fn sanitize(id: &str) -> String {
-    id.chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
-        .collect()
+/// The name of the test function of a scenario. Ids that differ only in characters that are not
+/// letters or digits (`a-b`, `a_b`, `a.b`) give one name: [`generate`] refuses them with
+/// [`crate::codetext::IDENTIFIER_COLLISION`].
+fn test_name(id: &str) -> String {
+    crate::codetext::rust::fn_name("scenario", id)
 }
 
 // ---- the file -----------------------------------------------------------------------------

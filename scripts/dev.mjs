@@ -2,20 +2,23 @@
 //
 //   node scripts/dev.mjs                 development, with hot module replacement on :5173
 //   node scripts/dev.mjs --no-vite       the BFF serves the built frontend from web/dist
-//   node scripts/dev.mjs --fresh         delete the development database first
-//   node scripts/dev.mjs --no-vite --lan let other devices on the local network reach the BFF
+//   node scripts/dev.mjs --fresh         delete the development databases first
+//   node scripts/dev.mjs --no-vite --lan --confirm-lan   let other devices on the local network reach the BFF
+//                                        (it exposes the development logins; --lan alone is refused)
 //
-// Options: --backend-port N, --bff-port N, --vite-port N, --db PATH, --store sqlite|memory,
-// --no-build (use the binaries already in target/debug), --quiet (no request log on screen).
+// Options: --backend-port N, --bff-port N, --vite-port N, --db PATH, --tenant-files DIR,
+// --store sqlite|memory, --web-dir DIR (the frontend Vite serves, default web), --no-build (use the binaries and the frontend bundle already built; it
+// refuses to start when they are older than their sources), --quiet (no request log on screen).
+// --fresh deletes the databases, and only under the repository's var/ directory.
 //
 // A fresh service token is generated on every start and handed to both services through their
 // environment; it is never written to disk. Ctrl+C stops everything.
 
 import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { createWriteStream, existsSync, mkdirSync, rmSync } from 'node:fs';
+import { createWriteStream, existsSync, mkdirSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { networkInterfaces } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, extname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -32,7 +35,16 @@ const ports = {
   vite: Number(option('vite-port', 5173)),
 };
 const withVite = !flag('no-vite');
+// The directory Vite serves, relative to the repository (the hot-reload test serves a copy).
+const webDir = option('web-dir', 'web');
+if (flag('lan') && !flag('confirm-lan')) {
+  console.error('--lan exposes the development logins (published passwords) to every device on the network. Pass --confirm-lan as well if that is intended.');
+  process.exit(1);
+}
+// --db names the control database (the tenant directory); each tenant's database file goes in
+// --tenant-files, by default <stem>-tenants beside it (var/strata-tenants/<tenant>.db).
 const db = resolve(root, option('db', 'var/strata.db'));
+const tenantFiles = resolve(root, option('tenant-files', join(dirname(db), `${basename(db, extname(db))}-tenants`)));
 const exe = process.platform === 'win32' ? '.exe' : '';
 const children = [];
 let stopping = false;
@@ -120,18 +132,60 @@ async function waitFor(url, what) {
   stop(1);
 }
 
+// The newest modification time of any file under the given files and directories, with its path.
+function newestSource(paths) {
+  let newest = { time: 0, file: '' };
+  const visit = (path) => {
+    if (!existsSync(path)) return;
+    if (statSync(path).isDirectory()) {
+      for (const entry of readdirSync(path)) if (!['target', 'node_modules', 'dist', '.git'].includes(entry)) visit(join(path, entry));
+    } else if (statSync(path).mtimeMs > newest.time) {
+      newest = { time: statSync(path).mtimeMs, file: relative(root, path) };
+    }
+  };
+  paths.forEach(visit);
+  return newest;
+}
+
+// With --no-build the program runs what exists, so it must not be older than what it is built from.
+function requireFresh(output, sources, what) {
+  const built = existsSync(output) ? statSync(output).mtimeMs : 0;
+  const newest = newestSource(sources);
+  if (built === 0 || newest.time > built) {
+    say(`${what} ${built === 0 ? 'has not been built' : `is older than ${newest.file}`}: ${relative(root, output)}. Run without --no-build.`);
+    process.exit(1);
+  }
+}
+
 if (!flag('no-build')) {
   say('Building the backend and the BFF…');
-  const built = spawnSync('cargo', ['build', '-p', 'strata-backend', '-p', 'strata-bff'], { cwd: root, stdio: 'inherit' });
+  const built = spawnSync('cargo', ['build', '-p', 'strata-backend', '-p', 'strata-bff', '--features', 'strata-backend/development'], { cwd: root, stdio: 'inherit' });
   if (built.status !== 0) process.exit(built.status ?? 1);
+} else {
+  const crateSources = [join(root, 'crates'), join(root, 'Cargo.toml'), join(root, 'Cargo.lock')];
+  requireFresh(join(root, 'target', 'debug', `strata-backend${exe}`), crateSources, 'The backend binary');
+  requireFresh(join(root, 'target', 'debug', `strata-bff${exe}`), crateSources, 'The BFF binary');
 }
-if (!withVite && !existsSync(join(root, 'web', 'dist', 'index.html'))) {
+if (!withVite && flag('no-build')) {
+  requireFresh(join(root, 'web', 'dist', 'index.html'), [join(root, 'web', 'src'), join(root, 'web', 'public'), join(root, 'web', 'index.html'), join(root, 'web', 'vite.config.js'), join(root, 'package-lock.json')], 'The frontend bundle');
+}
+if (!withVite && !flag('no-build')) {
   say('Building the frontend…');
   const built = spawnSync(process.execPath, [join(root, 'node_modules', 'vite', 'bin', 'vite.js'), 'build', 'web'], { cwd: root, stdio: 'inherit' });
   if (built.status !== 0) process.exit(built.status ?? 1);
 }
 if (flag('fresh')) {
+  // Only what lives under var/ may be deleted: --tenant-files . or ../tenants would otherwise erase source.
+  const inside = (path) => {
+    const rel = relative(join(root, 'var'), path);
+    return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel);
+  };
+  if (!inside(tenantFiles) || !inside(db)) {
+    say(`--fresh refuses to delete outside ${join(root, 'var')}: --db ${db}, --tenant-files ${tenantFiles}`);
+    process.exit(1);
+  }
   for (const suffix of ['', '-wal', '-shm']) rmSync(`${db}${suffix}`, { force: true });
+  rmSync(tenantFiles, { recursive: true, force: true });
 }
 
 const token = randomBytes(32).toString('hex');
@@ -150,6 +204,7 @@ start('backend', join(root, 'target', 'debug', `strata-backend${exe}`), [], {
   STRATA_SERVICE_TOKEN: token,
   STRATA_STORE: option('store', 'sqlite'),
   STRATA_DB: db,
+  STRATA_TENANT_FILES: tenantFiles,
   STRATA_TENANTS: join(root, 'tenants'),
   STRATA_LEAN_DIR: join(root, 'lean'),
   STRATA_DEV: '1',
@@ -164,11 +219,14 @@ start('bff', join(root, 'target', 'debug', `strata-bff${exe}`), [], {
   STRATA_ORIGINS: origins,
   STRATA_WEB_DIST: join(root, 'web', 'dist'),
   STRATA_DEV: '1',
+  // A throwaway tenant made while this runs (POST /api/dev/provision-tenant) is served at once: the
+  // BFF asks the backend for the hosts it does not know after a second, not after five.
+  STRATA_HOSTS_MISS_INTERVAL_SECS: '1',
 });
 await waitFor(`http://127.0.0.1:${ports.bff}/api/session`, 'The BFF');
 
 if (withVite) {
-  start('vite', process.execPath, [join(root, 'node_modules', 'vite', 'bin', 'vite.js'), 'web', '--port', String(ports.vite)], {
+  start('vite', process.execPath, [join(root, 'node_modules', 'vite', 'bin', 'vite.js'), webDir, '--port', String(ports.vite)], {
     STRATA_BFF_URL: `http://127.0.0.1:${ports.bff}`,
     STRATA_VITE_PORT: String(ports.vite),
   });
@@ -183,6 +241,8 @@ Strata is running.
   Writing desk        http://127.0.0.1:${front}/desk
   Impact Lab          http://127.0.0.1:${front}/lab            (sign in as admin)
   Second tenant       http://tidewater.localhost:${front}/
+  Throwaway tenant    POST /api/dev/provision-tenant (as admin) makes one under a name beginning "throwaway", with a
+                      welcome message in the development mail outbox, served at the origin it is given
   ${withVite ? `BFF (built assets)  http://127.0.0.1:${ports.bff}/\n  ` : ''}Backend             127.0.0.1:${ports.backend}  (loopback only, service token required)
 
   Development logins, defined in tenants/fieldnotes/accounts.dev.json:
@@ -191,7 +251,7 @@ Strata is running.
     tomasz / strata-dev-tomasz    author
     mirela / strata-dev-mirela    author
 
-  Database  ${option('store', 'sqlite') === 'memory' ? 'in memory' : db}
+  Database  ${option('store', 'sqlite') === 'memory' ? 'in memory' : `${db} (tenant files in ${tenantFiles})`}
   Logs      var/logs/*.jsonl
 ${lanAddresses.length ? `
   From another device on this network:

@@ -10,22 +10,85 @@
 
 use crate::app::{App, LOG};
 use crate::auth::{is_password, put_dev_account};
-use crate::ops::run_intent;
+use crate::ops::run_intent_unaudited;
 use serde_json::json;
-use strata_kernel::{PrincipalId, TenantId};
-use strata_protocol::tenants::{load_all, LoadedTenant};
-use strata_substrate::bundle::install;
+use strata_kernel::{Intent, PrincipalId, TenantId};
+use strata_protocol::tenants::{load_all, load_each, LoadedTenant};
+use strata_substrate::bundle::{install, Bundle};
 
 /// Install every bundle whose tenant does not exist yet, and install or withdraw the development
 /// logins as the mode says. Returns the tenants it created.
+///
+/// An install a previous process left unfinished (its directory row is `provisioning`) is rolled
+/// back first, so its bundle is installed again from nothing below. One bundle that cannot be
+/// loaded or installed is logged and skipped: the other tenants still start.
 pub fn seed(app: &App) -> Result<Vec<String>, String> {
+    for tenant in app
+        .store
+        .rollback_provisioning()
+        .map_err(|e| e.to_string())?
+    {
+        LOG.warn(
+            "seed.rolled_back",
+            "",
+            json!({ "tenant": tenant.as_str(), "reason": "install was not finished" }),
+        );
+    }
     let mut created = Vec::new();
-    for loaded in load_all(&app.cfg.tenants_dir)? {
-        if install_one(app, &loaded)? {
-            created.push(loaded.bundle.id.as_str().to_string());
+    for (dir, loaded) in load_each(&app.cfg.tenants_dir)? {
+        let outcome = loaded.and_then(|loaded| {
+            let made = install_one(app, &loaded)?;
+            Ok((loaded.bundle.id.as_str().to_string(), made))
+        });
+        match outcome {
+            Ok((id, true)) => created.push(id),
+            Ok((_, false)) => {}
+            Err(error) => LOG.error(
+                "seed.tenant_failed",
+                "",
+                json!({ "bundle": dir.display().to_string(), "error": error }),
+            ),
         }
     }
     Ok(created)
+}
+
+/// Install a bundle into a store that has no such tenant, through the same `execute` path as any
+/// request. The directory marks the tenant `provisioning` from the first commit (creating it)
+/// until the last, so a crash in between leaves a state that the next start rolls back. A step
+/// that fails removes what was installed, so a tenant is either whole or absent. Returns the
+/// number of intents issued.
+pub fn install_bundle(app: &App, bundle: &Bundle) -> Result<usize, String> {
+    let tenant = bundle.id.clone();
+    let mut begun = false;
+    let result = install::<String>(bundle, &mut |ctx, intent| {
+        let creates = matches!(intent, Intent::CreateTenant { .. });
+        let output = run_intent_unaudited(app, &ctx, &intent, false)
+            .map(|done| done.transition.output)
+            .map_err(|e| e.describe())?;
+        if creates {
+            begun = true;
+            app.store
+                .begin_provisioning(&ctx.tenant)
+                .map_err(|e| e.to_string())?;
+        }
+        Ok(output)
+    });
+    match result {
+        Ok(steps) => {
+            app.store
+                .finish_provisioning(&tenant)
+                .map_err(|e| e.to_string())?;
+            Ok(steps)
+        }
+        Err(error) => {
+            // Only a tenant this call created is removed; a refused first step touches nothing.
+            if begun {
+                let _ = app.store.reset_tenant(&tenant);
+            }
+            Err(format!("installing {tenant}: {error}"))
+        }
+    }
 }
 
 /// Install one tenant's bundle if the tenant does not exist, then its development logins.
@@ -39,12 +102,7 @@ fn install_one(app: &App, loaded: &LoadedTenant) -> Result<bool, String> {
         .tenant
         .is_some();
     if !exists {
-        let steps = install(&loaded.bundle, &mut |ctx, intent| {
-            run_intent(app, &ctx, &intent, false)
-                .map(|done| done.transition.output)
-                .map_err(|e| e.describe())
-        })
-        .map_err(|e| format!("installing {tenant}: {e}"))?;
+        let steps = install_bundle(app, &loaded.bundle)?;
         LOG.info(
             "seed.installed",
             "",
@@ -63,13 +121,14 @@ fn install_dev_accounts(app: &App, tenant: &TenantId, loaded: &LoadedTenant) -> 
     for account in &loaded.dev_accounts {
         let known = app
             .store
-            .account(tenant, &account.login.to_lowercase())
+            .account(tenant, &crate::signin::normalise_login(&account.login))
             .map_err(|e| e.to_string())?
             .is_some();
         if known {
             continue;
         }
         let principal = PrincipalId::new(account.principal.clone()).map_err(|e| e.to_string())?;
+        crate::auth::refuse_reserved(&principal).map_err(|e| e.describe())?;
         put_dev_account(
             app,
             tenant,
@@ -77,6 +136,7 @@ fn install_dev_accounts(app: &App, tenant: &TenantId, loaded: &LoadedTenant) -> 
             &account.password,
             principal,
             &account.display_name,
+            account.email.as_deref(),
         )
         .map_err(|e| e.describe())?;
         LOG.info(
@@ -97,7 +157,7 @@ fn withdraw_dev_accounts(
     loaded: &LoadedTenant,
 ) -> Result<(), String> {
     for account in &loaded.dev_accounts {
-        let login = account.login.to_lowercase();
+        let login = crate::signin::normalise_login(&account.login);
         let Some(stored) = app
             .store
             .account(tenant, &login)
@@ -111,12 +171,25 @@ fn withdraw_dev_accounts(
         app.store
             .remove_account(tenant, &login)
             .map_err(|e| e.to_string())?;
+        // A person left with no login at all keeps no credential either.
+        if app
+            .store
+            .account_of(tenant, &stored.principal)
+            .map_err(|e| e.to_string())?
+            .is_none()
+        {
+            app.store
+                .remove_principal(tenant, &stored.principal)
+                .map_err(|e| e.to_string())?;
+        }
         let now = app.now();
-        for mut session in app.store.live_sessions(now).map_err(|e| e.to_string())? {
-            if session.tenant == *tenant && session.principal == stored.principal {
-                session.revoked_at = Some(now);
-                app.store.put_session(&session).map_err(|e| e.to_string())?;
-            }
+        for mut session in app
+            .store
+            .live_sessions_of(tenant, Some(&stored.principal), now)
+            .map_err(|e| e.to_string())?
+        {
+            session.revoked_at = Some(now);
+            app.store.put_session(&session).map_err(|e| e.to_string())?;
         }
         LOG.warn(
             "seed.dev_account_withdrawn",
@@ -135,5 +208,7 @@ pub fn reset_tenant(app: &App, tenant: &TenantId) -> Result<bool, String> {
         .find(|loaded| loaded.bundle.id == *tenant)
         .ok_or_else(|| format!("no bundle for {tenant}"))?;
     app.store.reset_tenant(tenant).map_err(|e| e.to_string())?;
+    // The tenant starts a new history, whose change counters may repeat those of the old one.
+    app.aggregate_copies.forget(tenant);
     install_one(app, &loaded)
 }

@@ -115,6 +115,230 @@ fn wiring_golden_output_matches_its_fixture_crate() {
     );
 }
 
+const CORE_SPEC: &str = "crates/spec-compiler/tests/fixtures/core/spec.jsonc";
+const CORE_CRATE: &str = "strata-spec-compiler-core-fixture";
+
+fn core_text() -> String {
+    fs::read_to_string(manifest_dir().join("tests/fixtures/core/spec.jsonc")).unwrap()
+}
+
+/// The pure crate of unions, maps and constraints: `crates/spec-compiler-core-fixture`, whose
+/// own tests pin the JSON each form serialises to.
+#[test]
+fn core_golden_output_matches_its_fixture_crate() {
+    let dir = manifest_dir().join("../spec-compiler-core-fixture");
+    let files = match strata_spec_compiler::generate_core(CORE_SPEC, &core_text(), CORE_CRATE) {
+        Ok(files) => files,
+        Err(diagnostics) => panic!(
+            "the core fixture was refused:\n{}",
+            diagnostics
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("\n")
+        ),
+    };
+    if std::env::var("SPECC_BLESS").as_deref() == Ok("1") {
+        output::write(&dir, &files).unwrap();
+        return;
+    }
+    let differences = output::compare(&dir, &files).unwrap();
+    assert!(
+        differences.is_empty(),
+        "crates/spec-compiler-core-fixture is not what specc generates from the core fixture: {differences:?}. Run the test with SPECC_BLESS=1 to rewrite it, and review the change."
+    );
+}
+
+const FUNCTIONS_SPEC: &str = "crates/spec-compiler/tests/fixtures/functions/spec.jsonc";
+const FUNCTIONS_CRATE: &str = "strata-spec-compiler-functions-fixture";
+
+/// The pure crate of the functions fixture (WG-4934): `crates/spec-compiler-functions-fixture`,
+/// whose module `functions` holds the generated functions and, as its tests, their examples.
+/// It lives here rather than in `tests/functions.rs`, which uses the generated crate and so
+/// cannot compile before the crate is blessed.
+#[test]
+fn functions_golden_output_matches_its_fixture_crate() {
+    let dir = manifest_dir().join("../spec-compiler-functions-fixture");
+    let text =
+        fs::read_to_string(manifest_dir().join("tests/fixtures/functions/spec.jsonc")).unwrap();
+    let files = match strata_spec_compiler::generate_core(FUNCTIONS_SPEC, &text, FUNCTIONS_CRATE) {
+        Ok(files) => files,
+        Err(diagnostics) => panic!(
+            "the functions fixture was refused:\n{}",
+            diagnostics
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("\n")
+        ),
+    };
+    let functions = file_text(&files, "src/functions.rs");
+    for f in [
+        "pub fn set_of(",
+        "pub fn roles_of(",
+        "pub fn policy_applies(",
+        "pub fn may_attempt(",
+        "pub fn authorize(",
+        "pub fn check_version(",
+        "pub fn next_version(",
+        "fn check_version_example_1()",
+        // WG-4966: timestamps, sets and tuple variants.
+        "pub fn expires_at(",
+        "now: crate::prelude::Timestamp,",
+        "pub fn role_set(",
+        "roles: &std::collections::BTreeSet<String>,",
+        "types::Grant::Object(object, action) =>",
+        "fn grants_of_example_1()",
+        // WG-4966: shared and boxed values, f64, the string operations.
+        "pub fn with_top(",
+        "pub fn double_negation(",
+        "pub fn num_text(",
+        "pub fn millis(",
+        "fn parse_time(",
+        // WG-4966: checked conversions.
+        "pub fn narrow(",
+        "pub fn role_map(",
+        "pub fn key_order(",
+        // WG-5133: structural recursion is ordinary recursive Rust.
+        "pub fn mentions_field(",
+        // WG-5132: eval with a lookup, and durations.
+        "pub fn follow_reference(",
+        "fn eval_lookup_rule_language_rule_env(",
+        "the lookup does not cover {field}",
+        "pub fn later(",
+    ] {
+        assert!(functions.contains(f), "no {f} in src/functions.rs");
+    }
+    assert!(file_text(&files, "src/lib.rs").contains("pub mod functions;"));
+    let manifest = file_text(&files, "Cargo.toml");
+    for forbidden in ["strata-runtime", "uuid", "tokio", "[dev-dependencies]"] {
+        assert!(!manifest.contains(forbidden), "{forbidden} in {manifest}");
+    }
+    if std::env::var("SPECC_BLESS").as_deref() == Ok("1") {
+        output::write(&dir, &files).unwrap();
+        return;
+    }
+    let differences = output::compare(&dir, &files).unwrap();
+    assert!(
+        differences.is_empty(),
+        "crates/spec-compiler-functions-fixture is not what specc generates from the functions fixture: {differences:?}. Run the test with SPECC_BLESS=1 to rewrite it, and review the change."
+    );
+}
+
+/// A function specc cannot compile is refused with its code, and nothing is generated.
+#[test]
+fn a_function_specc_cannot_compile_is_refused() {
+    let text =
+        fs::read_to_string(manifest_dir().join("tests/fixtures/functions/spec.jsonc")).unwrap();
+    let refused =
+        |t: &str| match strata_spec_compiler::generate_core(FUNCTIONS_SPEC, t, FUNCTIONS_CRATE) {
+            Ok(_) => Vec::new(),
+            Err(d) => d.iter().map(ToString::to_string).collect::<Vec<_>>(),
+        };
+    assert_eq!(refused(&text), Vec::<String>::new());
+    // A parameter of a type functions do not compute with.
+    let bytes = text.replacen(
+        "{\"name\":\"version\",\"type\":\"u64\"}",
+        "{\"name\":\"version\",\"type\":\"bytes\"}",
+        1,
+    );
+    assert_ne!(bytes, text);
+    assert!(
+        refused(&bytes)
+            .iter()
+            .any(|d| d.contains("specc.function-unsupported") && d.contains("check-version")),
+        "{:?}",
+        refused(&bytes)
+    );
+    // A body that does not type.
+    let mistyped = text.replacen("a == action", "a == resource", 1);
+    assert_ne!(mistyped, text);
+    assert!(
+        refused(&mistyped)
+            .iter()
+            .any(|d| d.contains("specc.function-invalid") && d.contains("policy-applies")),
+        "{:?}",
+        refused(&mistyped)
+    );
+    // A call of itself on the parameter itself, not a strict sub-value of it: it would not end,
+    // and Exegra refuses it too (function.recursion).
+    let runaway = text.replacen(
+        "Not(a) => call mentions-field(a)",
+        "Not(a) => call mentions-field(e)",
+        1,
+    );
+    assert_ne!(runaway, text);
+    assert!(
+        refused(&runaway)
+            .iter()
+            .any(|d| d.contains("specc.function-invalid")
+                && d.contains("mentions-field")
+                && d.contains("strict sub-value")),
+        "{:?}",
+        refused(&runaway)
+    );
+    // A lookup of the wrong type: the environment where the lookup map goes.
+    let wrong_lookup = text.replacen(
+        "eval(rule-language, c, env, lookup)",
+        "eval(rule-language, c, env, env)",
+        1,
+    );
+    assert_ne!(wrong_lookup, text);
+    assert!(
+        refused(&wrong_lookup)
+            .iter()
+            .any(|d| d.contains("specc.function-invalid")
+                && d.contains("follow-reference")
+                && d.contains("the lookup of eval")),
+        "{:?}",
+        refused(&wrong_lookup)
+    );
+}
+
+/// Split into two crates, the pure crate holds every declared type, uuid ids included (through the
+/// uuid crate with its serde feature only, no v4), and the model crate depends on it and
+/// re-exports them and its representation types.
+#[test]
+fn a_split_generation_puts_every_type_in_the_pure_crate() {
+    let options = Options {
+        crate_name: "fixture-model".to_string(),
+        runtime: RuntimeDependency::Workspace,
+    };
+    let core = strata_spec_compiler::model_core::CoreDependency {
+        crate_name: "fixture-model-core".to_string(),
+        path: "../model-core".to_string(),
+    };
+    let (model, pure) =
+        strata_spec_compiler::generate_with_core(CORE_SPEC, &core_text(), &options, &core).unwrap();
+    let model_types = file_text(&model, "src/types.rs");
+    let pure_types = file_text(&pure, "src/types.rs");
+    assert!(model_types.contains("pub use fixture_model_core::types::*;"));
+    assert!(!model_types.contains("pub struct AccountId"));
+    assert!(!model_types.contains("pub struct Owner {"));
+    assert!(!model_types.contains("pub enum Expr"));
+    assert!(pure_types.contains("pub enum Expr"));
+    assert!(pure_types.contains("pub struct AccountId(pub uuid::Uuid);"));
+    assert!(pure_types.contains("pub struct Owner {"));
+    assert!(file_text(&model, "src/prelude.rs").contains("pub use fixture_model_core::prelude::"));
+    assert!(file_text(&model, "Cargo.toml")
+        .contains("fixture-model-core = { path = \"../model-core\" }"));
+    let pure_manifest = file_text(&pure, "Cargo.toml");
+    for forbidden in ["strata-runtime", "tokio", "v4"] {
+        assert!(
+            !pure_manifest.contains(forbidden),
+            "{forbidden} in {pure_manifest}"
+        );
+    }
+    assert!(
+        pure_manifest.contains("default-features = false, features = [\"serde\"]"),
+        "uuid with the serde feature only: {pure_manifest}"
+    );
+    // The pure crate alone is the same pure crate.
+    let alone =
+        strata_spec_compiler::generate_core(CORE_SPEC, &core_text(), "fixture-model-core").unwrap();
+    assert_eq!(alone, pure);
+}
+
 #[test]
 fn only_a_specification_with_machines_gets_a_machines_module() {
     let full = fixture_files();
@@ -391,6 +615,69 @@ fn the_command_generates_checks_and_refuses() {
 }
 
 #[test]
+fn the_spec_hash_is_in_the_headers_and_a_stale_one_fails_the_check() {
+    let dir = scratch_dir("spec-hash");
+    let out = dir.join("generated-crate");
+    let spec = manifest_dir().join("tests/fixtures/full/spec.jsonc");
+    let (spec_arg, out_arg) = (path_arg(&spec), path_arg(&out));
+
+    let generated = specc(&[
+        "generate",
+        "--spec",
+        &spec_arg,
+        "--out",
+        &out_arg,
+        "--spec-hash",
+        "aaaa1111",
+    ]);
+    assert!(generated.status.success(), "{generated:?}");
+    let lib = fs::read_to_string(out.join("src/lib.rs")).unwrap();
+    let header = lib.lines().next().unwrap();
+    assert!(header.contains("(semantic hash aaaa1111)"), "{header}");
+    let manifest = fs::read_to_string(out.join("Cargo.toml")).unwrap();
+    assert!(manifest
+        .lines()
+        .next()
+        .unwrap()
+        .contains("(semantic hash aaaa1111)"));
+
+    let same = specc(&[
+        "check",
+        "--spec",
+        &spec_arg,
+        "--out",
+        &out_arg,
+        "--spec-hash",
+        "aaaa1111",
+    ]);
+    assert_eq!(same.status.code(), Some(0), "{same:?}");
+    let stale = specc(&[
+        "check",
+        "--spec",
+        &spec_arg,
+        "--out",
+        &out_arg,
+        "--spec-hash",
+        "bbbb2222",
+    ]);
+    assert_eq!(stale.status.code(), Some(1), "{stale:?}");
+    let without = specc(&["check", "--spec", &spec_arg, "--out", &out_arg]);
+    assert_eq!(without.status.code(), Some(1), "{without:?}");
+    let bad = specc(&[
+        "check",
+        "--spec",
+        &spec_arg,
+        "--out",
+        &out_arg,
+        "--spec-hash",
+        "a b",
+    ]);
+    assert_eq!(bad.status.code(), Some(2));
+
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
 fn the_wiring_reaches_the_generated_crate() {
     let files = wiring_files();
     let routes = file_text(&files, "src/routes.rs");
@@ -398,7 +685,11 @@ fn the_wiring_reaches_the_generated_crate() {
     assert!(routes.contains("path: \"/scheduler/cancel-job\","));
     assert!(routes.contains("pub fn scheduler_routes<A, S, H>("));
     assert!(routes.contains("pub struct SchedulerClient<K: strata_runtime::Credentials = strata_runtime::NoCredentials>"));
-    assert!(routes.contains("impl GatewayHooks for () {}"));
+    assert!(routes.contains("pub trait PingHandler: Send + Sync + 'static {"));
+    assert!(routes.contains("pub fn serve_make_report<A, S, H>("));
+    assert!(routes.contains("pub trait SchedulerHooks: SubmitJobHooks + CancelJobHooks {}"));
+    assert!(routes.contains("type Body = ErrorBody;"));
+    assert!(routes.contains("impl<E> strata_runtime::FailureBody<E> for ErrorBody"));
     assert!(routes.contains("fn append_job_submitted_audit("));
 
     let deps = file_text(&files, "src/deps.rs");
@@ -424,4 +715,160 @@ fn a_machine_logs_the_emitted_events_the_specification_logs() {
     assert!(machines.contains("if let Emitted::LeaseGranted(payload) = emitted {"));
     assert!(machines.contains("holder: payload.holder.as_str(),"));
     assert_eq!(machines.matches("fn log_emitted(").count(), 1);
+}
+
+const DERIVED_SPEC: &str = "crates/spec-compiler/tests/fixtures/derived/spec.jsonc";
+const DERIVED_CRATE: &str = "strata-spec-compiler-derived-fixture";
+
+/// The model crate of the derived fixture (WG-4935): `crates/spec-compiler-derived-fixture`,
+/// whose module `derived` implements the derived contracts from the functions and from the
+/// load and commit contracts' trait. The facade `edit-counter` has types but no trait method and
+/// no route. `tests/derived.rs` runs the generated loops; it uses the generated crate and so
+/// cannot compile before the crate is blessed.
+#[test]
+fn derived_golden_output_matches_its_fixture_crate() {
+    let dir = manifest_dir().join("../spec-compiler-derived-fixture");
+    let text =
+        fs::read_to_string(manifest_dir().join("tests/fixtures/derived/spec.jsonc")).unwrap();
+    let files = generated(DERIVED_SPEC, &text, DERIVED_CRATE);
+    let derived = file_text(&files, "src/derived.rs");
+    for item in [
+        "pub fn pick_larger(",
+        "pub async fn read_counter<",
+        "pub async fn copy_counter<",
+        "pub async fn copy_counter_once<",
+        "S0: contracts::Store + Sync",
+        "crate::functions::decide_copy(",
+        "break (loaded, decided)",
+        "if rounds < 4 && !needs.contains(&need)",
+        "if conflicts < 3 => conflicts += 1",
+    ] {
+        assert!(
+            derived.contains(item),
+            "no {item} in src/derived.rs:\n{derived}"
+        );
+    }
+    // A bound of zero is no loop at all.
+    let once = &derived[derived.find("pub async fn copy_counter_once<").unwrap()..];
+    assert!(!once.contains("loop"), "{once}");
+    assert!(file_text(&files, "src/lib.rs").contains("pub mod derived;"));
+    let contracts = file_text(&files, "src/contracts.rs");
+    assert!(contracts.contains("pub struct EditCounterRequest"));
+    assert!(contracts.contains("realisation: Realisation::Facade,"));
+    assert!(contracts.contains("realisation: Realisation::Derived,"));
+    for method in ["fn load_counters(", "fn commit_bump(", "fn mutate_counter("] {
+        assert!(contracts.contains(method), "no {method} in the Store trait");
+    }
+    assert!(
+        !contracts.contains("fn edit_counter("),
+        "the facade is in a trait"
+    );
+    let routes = file_text(&files, "src/routes.rs");
+    assert!(
+        !routes.contains("EditCounter"),
+        "the facade is served:\n{routes}"
+    );
+    assert!(routes.contains("LoadCounters"));
+    if std::env::var("SPECC_BLESS").as_deref() == Ok("1") {
+        output::write(&dir, &files).unwrap();
+        return;
+    }
+    let differences = output::compare(&dir, &files).unwrap();
+    assert!(
+        differences.is_empty(),
+        "crates/spec-compiler-derived-fixture is not what specc generates from the derived fixture: {differences:?}. Run the test with SPECC_BLESS=1 to rewrite it, and review the change."
+    );
+}
+
+/// A derivation specc cannot emit is refused with its code, and nothing is generated.
+#[test]
+fn a_derivation_specc_cannot_emit_is_refused() {
+    let text =
+        fs::read_to_string(manifest_dir().join("tests/fixtures/derived/spec.jsonc")).unwrap();
+    let options = Options {
+        crate_name: DERIVED_CRATE.to_string(),
+        runtime: RuntimeDependency::Workspace,
+    };
+    let refused = |t: &str| match generate(DERIVED_SPEC, t, &options) {
+        Ok(_) => Vec::new(),
+        Err(d) => d.iter().map(ToString::to_string).collect::<Vec<_>>(),
+    };
+    assert_eq!(refused(&text), Vec::<String>::new());
+    // A load contract nothing serves has no trait to call it through.
+    let unserved = text.replacen(
+        "\"realisation\": \"generated\", \"implementedBy\": \"store\",\n      \"inputs\": [{ \"name\": \"needs\"",
+        "\"realisation\": \"generated\",\n      \"inputs\": [{ \"name\": \"needs\"",
+        1,
+    );
+    assert_ne!(unserved, text);
+    assert!(
+        refused(&unserved)
+            .iter()
+            .any(|d| d.contains("specc.derived-unsupported") && d.contains("read-counter")),
+        "{:?}",
+        refused(&unserved)
+    );
+    // A conflict error the commit contract does not have.
+    let clash = text.replacen(
+        "\"conflict\": \"conflict\", \"insufficient\": \"Missing\", \"needRounds\": 4",
+        "\"conflict\": \"clash\", \"insufficient\": \"Missing\", \"needRounds\": 4",
+        1,
+    );
+    assert_ne!(clash, text);
+    assert!(
+        refused(&clash)
+            .iter()
+            .any(|d| d.contains("specc.derived-invalid") && d.contains("copy-counter")),
+        "{:?}",
+        refused(&clash)
+    );
+}
+
+/// A specification the Rust backends refuse is refused by every command, with their diagnostic,
+/// and nothing is written.
+#[test]
+fn every_command_runs_the_readiness_check_before_it_emits() {
+    let dir = scratch_dir("every-command-ready");
+    let unready = dir.join("unready.jsonc");
+    fs::write(
+        &unready,
+        r#"{ "system": { "id": "s", "name": "S" },
+            "records": [ { "id": "r", "name": "R", "owner": "c", "key": ["a"], "fields": [ { "name": "a", "type": "nope" } ] } ] }"#,
+    )
+    .unwrap();
+    let spec_arg = path_arg(&unready);
+    for command in [
+        "generate",
+        "check",
+        "deploy",
+        "check-deploy",
+        "e2e",
+        "check-e2e",
+        "scenarios",
+        "check-scenarios",
+        "web",
+        "check-web",
+        "catalogue",
+        "check-catalogue",
+        "conformance",
+        "check-conformance",
+        "bundle",
+    ] {
+        let out = dir.join(format!("out-{command}")).join("generated");
+        let out_arg = path_arg(&out);
+        let mut args = vec![command, "--spec", &spec_arg, "--out", &out_arg];
+        let product = path_arg(&unready);
+        if command == "bundle" {
+            args.extend(["--product", &product]);
+        }
+        let refused = specc(&args);
+        let stderr = String::from_utf8_lossy(&refused.stderr);
+        assert_eq!(refused.status.code(), Some(1), "{command}: {stderr}");
+        assert!(
+            stderr.contains("ready.field-type-undeclared"),
+            "{command} did not run the readiness check: {stderr}"
+        );
+        assert!(!out.exists(), "{command} wrote before it refused");
+    }
+    fs::remove_dir_all(&dir).unwrap();
 }

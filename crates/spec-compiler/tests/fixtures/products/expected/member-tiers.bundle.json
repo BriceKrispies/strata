@@ -1,0 +1,46 @@
+{
+  "content": {
+    "capabilities": [
+      {
+        "description": "Promote a member to a higher tier.",
+        "id": "member_tiers__promote",
+        "name": "Promote members"
+      }
+    ],
+    "ledger-units": [
+      {
+        "description": "Points a member earns.",
+        "unit": "member_tiers__points"
+      }
+    ],
+    "mail-templates": [
+      {
+        "body": "[{\"type\":\"paragraph\",\"inlines\":[{\"type\":\"text\",\"text\":\"You are now in a higher tier.\"}]}]",
+        "subject": "You moved up a tier",
+        "template": "member_tiers__promoted"
+      }
+    ],
+    "role-permissions": {
+      "member_tiers__editor": [
+        {
+          "Capability": "member_tiers__promote"
+        },
+        {
+          "Capability": "content-read"
+        }
+      ]
+    },
+    "roles": {
+      "member_tiers__editor": {
+        "id": "member_tiers__editor",
+        "label": "Tier editor"
+      }
+    }
+  },
+  "name": "Member tiers",
+  "platform": {
+    "min": "0.2"
+  },
+  "product": "member-tiers",
+  "version": "1.0.0"
+}

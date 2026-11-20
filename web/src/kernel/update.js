@@ -12,7 +12,15 @@ import * as refusals from '../generated/errors.js';
 import * as forms from '../generated/forms.js';
 import * as live from '../generated/live.js';
 import { matchRoute, route as routeOf } from '../generated/routes.js';
+import { enterSections, rowAction as rowButton, rowActionAsked as rowButtonAsked } from '../generated/screens.js';
+import { factorsEnter, factorsInit, factorsInput, factorsRequireStepUp, factorsUpdate, factorsWaiting, isStepUp } from './factors.js';
+import { invitesInit, invitesInput, invitesOpened, invitesUpdate } from './invites.js';
 import { labEnter, labInit, labUpdate } from './lab.js';
+import { linksInit, linksInput, linksLand, linksOpened, linksUpdate } from './links.js';
+import { oidcEnter, oidcInit, oidcLand, oidcOpened, oidcUpdate } from './oidc.js';
+import { passkeysEnter, passkeysInit, passkeysUpdate } from './passkeys.js';
+import { checkRecord, disagreement, draftOf } from './record-rules.js';
+import { sessionsEnter, sessionsInit, sessionsUpdate } from './sessions.js';
 import {
   busy,
   liveInit,
@@ -33,6 +41,26 @@ const THEME_MODES = ['auto', 'light', 'dark'];
 const LAB_SCREEN = 'screen-lab';
 const SIGN_IN = 'form-sign-in';
 const SETTINGS = 'form-settings';
+// The object type the editor writes: what the server tells the page of it rides in the editor's view.
+const EDITOR_OBJECT = 'post';
+
+// Reads whose reply is applied only when it answers the latest request of its kind, as `view`
+// is: an older reply that arrives late must not overwrite a newer one (or a newer sign-in).
+const LATEST_ONLY = ['session', 'sessions.list', 'passkeys.list', 'factors.summary', 'lab.overview'];
+// Requests made on behalf of the person signed in. A reply to one that was made before the
+// user-scoped state was cleared (sign-out, session end, account switch) belongs to someone else.
+const USER_KIND_PREFIXES = ['sessions.', 'lab.', 'editor.', 'post.', 'settings.'];
+const USER_KINDS = [
+  'passkeys.list', 'passkeys.register_start', 'passkeys.register_finish', 'passkeys.remove',
+  'factors.summary', 'factors.enrol_start', 'factors.enrol_finish', 'factors.remove_totp', 'factors.new_codes', 'factors.stepup',
+];
+/** Refusals of the socket upgrade (the server reachable, the connection refused) after which live updates stop. */
+const WS_REFUSAL_LIMIT = 5;
+
+/** @param {string} kind */
+function isUserKind(kind) {
+  return USER_KINDS.includes(kind) || USER_KIND_PREFIXES.some((prefix) => kind.startsWith(prefix));
+}
 
 export function initialState() {
   return {
@@ -43,7 +71,9 @@ export function initialState() {
     sessionFlow: sessionInit(),
     site: { name: '', tagline: '' },
     theme: { mode: 'auto', systemDark: false, accent: 'moss', paper: 'linen' },
-    view: { status: 'loading', model: null, error: null, request: 0 },
+    // `next` holds, for each list section with more rows, the cursor of its next page; `more` is the
+    // id of the request that loads one (0 when none is).
+    view: { status: 'loading', model: null, error: null, request: 0, next: {}, more: 0 },
     ws: liveInit(),
     forms: {
       login: { values: forms.initialValues(SIGN_IN, {}), busy: false, error: '', flow: submitInit() },
@@ -53,12 +83,25 @@ export function initialState() {
     optimistic: {},
     confirmDelete: null,
     lab: labInit(),
+    sessions: sessionsInit(),
+    passkeys: passkeysInit(),
+    factors: factorsInit(),
+    links: linksInit(),
+    invites: invitesInit(),
+    oidc: oidcInit(),
     /** @type {{ id: number, kind: string, text: string }[]} */
     toasts: [],
     announce: '',
     menuOpen: false,
     nextId: 1,
     pending: {},
+    /** The id of the latest request of each kind, for the kinds that apply only their latest reply. */
+    latest: /** @type {Record<string, number>} */ ({}),
+    /** Counts the clearings of user-scoped state; a request remembers the one it was made in. */
+    generation: 0,
+    /** Refusals of the socket upgrade counted since the socket last opened, and whether live updates gave up. */
+    wsRefusals: 0,
+    wsStopped: false,
     focus: { target: '', token: 0 },
   };
 }
@@ -93,7 +136,7 @@ export const slugify = forms.slug;
 /**
  * Register a request and return the state and its effect.
  * @param {any} state @param {string} kind
- * @param {{ method?: 'GET' | 'POST', path: string, body?: any, write?: boolean, meta?: any }} spec
+ * @param {{ method?: 'GET' | 'POST', path: string, body?: any, write?: boolean, idempotencyKey?: string, meta?: any }} spec
  * @param {Message} msg
  * @returns {[any, Effect]}
  */
@@ -103,7 +146,8 @@ export function request(state, kind, spec, msg) {
   const next = {
     ...state,
     nextId: id + 1,
-    pending: { ...state.pending, [id]: { kind, correlation, ...(spec.meta ?? {}) } },
+    pending: { ...state.pending, [id]: { kind, correlation, generation: state.generation ?? 0, ...(spec.meta ?? {}) } },
+    latest: { ...(state.latest ?? {}), [kind]: id },
   };
   return [
     next,
@@ -115,9 +159,20 @@ export function request(state, kind, spec, msg) {
       body: spec.body,
       write: spec.write ?? false,
       csrf: spec.write ? state.session?.csrf_token : undefined,
+      idempotencyKey: spec.idempotencyKey,
       correlation,
     },
   ];
+}
+
+/**
+ * A key for one user action that creates something, made once and sent with every attempt of
+ * that action, so that a retry after a lost reply creates one record (D-6595). Time and chance
+ * arrive on the message, as everywhere in the kernel.
+ * @param {any} state @param {Message} msg
+ */
+function newKey(state, msg) {
+  return `k-${state.nextId}-${Math.floor(msg.rand * 0xffffffff).toString(16).padStart(8, '0')}-${Math.floor(msg.at).toString(36)}`;
 }
 
 /**
@@ -128,7 +183,13 @@ export function request(state, kind, spec, msg) {
  */
 function call(state, kind, contract, inputs, msg, meta = {}) {
   const req = contracts.request(contract, inputs, state.route.path);
-  return request(state, kind, { ...req, meta: { contract, inputs, ...meta } }, msg);
+  // A create carries a key. A retry of the same create (`meta.retryKey`, the key of an attempt
+  // whose outcome was not learned) reuses it when the request is the same; any other request has
+  // another key, since a key with other input is refused.
+  const body = req.write && req.body?.op === 'create' ? JSON.stringify(req.body) : null;
+  const key = body === null ? undefined : meta.retryKey?.body === body ? meta.retryKey.key : newKey(state, msg);
+  const sent = key === undefined ? {} : { sent: { key, body } };
+  return request(state, kind, { ...req, idempotencyKey: key, meta: { contract, inputs, ...meta, ...sent } }, msg);
 }
 
 function toast(state, kind, text) {
@@ -147,10 +208,10 @@ function screenOf(state) {
 }
 
 /** The principal as the generated policy checks read it. */
-function principalOf(session) {
+export function principalOf(session) {
   if (!session?.authenticated) return null;
   const roles = session.roles ?? [];
-  return { id: session.principal, tenant: session.tenant, kind: 'member', roles, role: roles.find((r) => r !== 'public') ?? 'public' };
+  return { id: session.principal, tenant: session.tenant, kind: 'member', roles };
 }
 
 /** The scope the generated expressions read on the current screen. */
@@ -172,9 +233,11 @@ function fetchView(state, msg, quiet) {
   const route = state.route;
   const screen = screenOf(state);
   const viewModel = screen ? routeOf(screen.screen)?.viewModel : null;
-  const [next, effect] = viewModel
+  const [next, asked] = viewModel
     ? call(state, 'view', viewModel, { ...screen?.params, ...screen?.query }, msg, { href: hrefOf(route) })
     : request(state, 'view', { path: `/api/view?path=${encodeURIComponent(route.path)}`, meta: { href: hrefOf(route) } }, msg);
+  // The editor asks what the kernel will check on an article, so it can refuse a draft first.
+  const effect = screen && routeOf(screen.screen)?.kind === 'desk.editor' && asked.type === 'http' ? { ...asked, path: `${asked.path}&rules=${EDITOR_OBJECT}` } : asked;
   const view = quiet
     ? { ...state.view, request: effect.type === 'http' ? effect.id : 0 }
     : { status: 'loading', model: state.view.model, error: null, request: effect.type === 'http' ? effect.id : 0 };
@@ -182,8 +245,40 @@ function fetchView(state, msg, quiet) {
 }
 
 /** Ask for the session again. */
-function readSession(state, msg) {
-  return call(state, 'session', 'read-session-view', {}, msg);
+function readSession(state, msg, meta = {}) {
+  return call(state, 'session', 'read-session-view', {}, msg, meta);
+}
+
+/** True when the screen the address opens needs a signed-in person. */
+function guardedScreen(state) {
+  return routeOf(screenOf(state)?.screen ?? '')?.auth === 'session';
+}
+
+/**
+ * Forget everything that belongs to the person who was signed in: recovery codes, the enrolment
+ * secret, the lists of sessions and passkeys, the Lab's overview and results, the editor and
+ * settings forms with their drafts, and (on a guarded page) that person's view model. Replies to
+ * requests made before this are dropped when they arrive. The caller reads the view again, since
+ * a guarded page's model is gone.
+ * @param {any} state
+ */
+function clearUserState(state) {
+  const latest = { ...(state.latest ?? {}) };
+  for (const kind of LATEST_ONLY) latest[kind] = 0;
+  const login = state.forms.login;
+  return {
+    ...state,
+    generation: (state.generation ?? 0) + 1,
+    latest,
+    sessions: sessionsInit(),
+    passkeys: { ...passkeysInit(), supported: state.passkeys.supported },
+    factors: factorsInit(),
+    lab: { ...labInit(), timer: state.lab.timer + 1 },
+    forms: { ...state.forms, login: { ...login, values: { ...login.values, password: '' } }, editor: null, settings: null },
+    optimistic: {},
+    confirmDelete: null,
+    view: guardedScreen(state) ? { status: 'loading', model: null, error: null, request: 0 } : state.view,
+  };
 }
 
 /** The form whose fields the editor shows: the new article's, or an existing one's. */
@@ -246,12 +341,14 @@ function decodeView(state, body) {
 }
 
 /** Take a view model in: page data, site chrome, theme, and the forms that edit it. */
-function acceptView(state, model) {
+function acceptView(state, model, cursors = {}) {
   const site = model.data.site?.fields;
   let next = {
     ...state,
     ready: true,
-    view: { status: 'ready', model, error: null, request: 0 },
+    view: { status: 'ready', model, error: null, request: 0, next: cursors ?? {}, more: 0 },
+    // A confirmation belongs to the view it was asked on; a view that replaces it disarms it.
+    confirmDelete: null,
     site: site ? { name: site.name ?? '', tagline: site.tagline ?? '' } : state.site,
     theme: { ...state.theme, accent: model.theme?.accent ?? 'moss', paper: model.theme?.paper ?? 'linen' },
     optimistic: {},
@@ -281,16 +378,55 @@ function editorSubmission(editor, status) {
   return editor.status === 'published' ? 'form-edit-article-save-changes' : 'form-edit-article-save-draft';
 }
 
+/**
+ * What the page can tell of the article it is about to send, from what the server said the kernel
+ * will check (the view's `record_rules`): the kernel's failed checks, and the ones it left to the
+ * server. Null when the view carried nothing, which leaves everything to the server.
+ * @param {any} state @param {any} editor @param {string} contract @param {Record<string, any>} inputs @param {number} now
+ */
+function localVerdict(state, editor, contract, inputs, now) {
+  const rules = state.view.model?.record_rules?.[EDITOR_OBJECT];
+  if (!rules) return null;
+  const body = contracts.request(contract, inputs, state.route.path).body;
+  const stored = editor.id == null ? null : (state.view.model.data.post?.fields ?? null);
+  const session = state.session;
+  return checkRecord(rules, draftOf(body, stored), {
+    old: stored,
+    principal: session?.authenticated ? (session.principal ?? null) : null,
+    roles: session?.roles ?? [],
+    now,
+  });
+}
+
 /** Save the editor's article, optionally moving it to a new status in the same request. */
 /** @returns {Result} */
 function saveEditor(state, msg, status) {
   const editor = state.forms.editor;
   if (!editor) return { state, effects: [] };
-  const stepped = submitStep(editor.flow, 'ui-form-submitted', { complete: 1 }, msg.at);
-  if (!stepped?.sends) return { state, effects: [] };
   const form = editorSubmission(editor, status);
   const contract = forms.FORMS[form].contract;
-  const [next, effect] = call(state, 'editor.save', contract, forms.inputs(form, editor.values, scopeOf(state)), msg, { form, status });
+  const inputs = forms.inputs(form, editor.values, scopeOf(state));
+  const verdict = localVerdict(state, editor, contract, inputs, msg.at);
+  const refused = verdict?.failed.length ? verdict.failed : null;
+  const stepped = submitStep(editor.flow, 'ui-form-submitted', { complete: refused ? 0 : 1 }, msg.at);
+  if (!stepped) return { state, effects: [] };
+  if (refused) {
+    // The page refuses what the kernel would refuse, in the kernel's words, before any request;
+    // the fields show it as they show the server's refusal, and the first one takes focus.
+    const { errors, formError, announce } = refusals.refusal(form, { failed: refused });
+    const first = fieldNames(form).find((name) => errors[name]);
+    return {
+      state: {
+        ...state,
+        announce,
+        forms: { ...state.forms, editor: { ...editor, flow: stepped.flow, busy: busy(stepped.flow), errors, formError } },
+        focus: first ? { target: `editor-${first}`, token: (state.focus.token | 0) + 1 } : state.focus,
+      },
+      effects: [],
+    };
+  }
+  if (!stepped.sends) return { state, effects: [] };
+  const [next, effect] = call(state, 'editor.save', contract, inputs, msg, { form, status, retryKey: editor.createKey, page: verdict });
   return {
     state: { ...next, forms: { ...next.forms, editor: { ...editor, flow: stepped.flow, busy: true, errors: {}, formError: '' } } },
     effects: [effect],
@@ -331,27 +467,43 @@ function refreshAfter(stepped, msg) {
 /** @returns {Result} */
 function onSocket(state, frame, msg) {
   switch (frame.type) {
-    case 'welcome':
-      return liveStep(state, 'ui-live-welcome', { head: frame.head, 'heartbeat-ms': frame.heartbeat_ms }, msg) ?? { state, effects: [] };
+    case 'welcome': {
+      // With nothing seen on this machine the subscription starts at the server's head, so what
+      // changed since the page was read is never replayed: read the view again.
+      const first = state.ws.lastSeq === null;
+      const stepped = liveStep(state, 'ui-live-welcome', { head: frame.head, 'heartbeat-ms': frame.heartbeat_ms }, msg);
+      if (!stepped) return { state, effects: [] };
+      return first ? refreshAfter(stepped, msg) : stepped;
+    }
     case 'event': {
       const stepped = liveStep(state, 'ui-live-frame', { n: frame.n, seq: frame.seq }, msg);
       if (!stepped) return { state, effects: [] };
       // A frame went missing on this connection: the machine starts over rather than carry on stale.
-      if (stepped.effects.some((e) => e.type === 'ws_close')) return stepped;
+      // What it missed is not replayed, so the view is read again now and once more when the
+      // connection comes back from scratch.
+      if (stepped.effects.some((e) => e.type === 'ws_close')) return refreshAfter(stepped, msg);
       const notice = frame.notice;
+      // Whether the view is read again is the generated live binding's decision, for every kind
+      // of notice; a change of membership also changes what the session may do, so it is read too.
+      const relevant = state.view.status === 'ready'
+        && live.refreshes(screenOf(state)?.screen ?? '', 'ui-notice-received', { kind: notice.kind, object: notice.object }, state.view.model);
+      let current = { state: stepped.state, effects: stepped.effects };
       if (notice.kind === 'membership') {
         const [withRequest, effect] = readSession(stepped.state, msg);
-        return refreshAfter({ state: withRequest, effects: [...stepped.effects, effect] }, msg);
+        current = { state: withRequest, effects: [...stepped.effects, effect] };
       }
-      const relevant = live.refreshes(screenOf(state)?.screen ?? '', 'ui-notice-received', { kind: notice.kind, object: notice.object }, state.view.model);
-      return relevant && state.view.status === 'ready' ? refreshAfter(stepped, msg) : stepped;
+      return relevant ? refreshAfter(current, msg) : current;
     }
     case 'resync':
       // Too far behind to replay: carry on from the server's head, with the view read again.
       return refreshAfter(liveStep(state, 'ui-live-resync', { head: frame.head }, msg) ?? { state, effects: [] }, msg);
-    case 'pong':
-      // Everything visible up to `head` has already arrived on this ordered connection.
-      return liveStep(state, 'ui-live-pong', { head: frame.head }, msg) ?? { state, effects: [] };
+    case 'pong': {
+      // A head beyond what this connection delivered means changes arrived that no frame told of.
+      const behind = frame.head > (state.ws.lastSeq ?? 0);
+      const stepped = liveStep(state, 'ui-live-pong', { head: frame.head }, msg);
+      if (!stepped) return { state, effects: [] };
+      return behind ? refreshAfter(stepped, msg) : stepped;
+    }
     case 'session': {
       if (frame.state === 'active') return { state, effects: [] };
       // Our own sign-out ends the session too; its reply will say so, once.
@@ -359,7 +511,7 @@ function onSocket(state, frame, msg) {
       const ended = sessionStep(state, 'ui-session-ended', {}, msg.at);
       if (!ended) return { state, effects: [] };
       const text = frame.state === 'expired' ? 'Your session has expired. Sign in again to keep writing.' : 'You have been signed out.';
-      let next = toast(ended.state, 'warn', text);
+      let next = clearUserState(toast(ended.state, 'warn', text));
       /** @type {Effect[]} */
       const effects = [];
       if (ended.readSession) {
@@ -368,7 +520,8 @@ function onSocket(state, frame, msg) {
         effects.push(effect);
       }
       next = { ...next, session: { ...state.session, authenticated: false, csrf_token: undefined, roles: ['public'], may: {}, may_manage_schema: false } };
-      const refresh = live.refreshes(screenOf(state)?.screen ?? '', 'ui-session-ended', {}, state.view.model);
+      // A guarded page's model was cleared with the person's state, so it is always read again.
+      const refresh = guardedScreen(state) || live.refreshes(screenOf(state)?.screen ?? '', 'ui-session-ended', {}, state.view.model);
       return refresh ? refreshAfter({ state: next, effects }, msg) : { state: next, effects };
     }
     case 'run':
@@ -378,44 +531,196 @@ function onSocket(state, frame, msg) {
   }
 }
 
+/**
+ * The hooks a screen's `onEnter` names: what each section asks for when its screen is shown.
+ * `afterSession` hooks also run when the session reply arrives after the page.
+ * @type {Map<string, { enter: (state: any, msg: any, io: { request: typeof request }) => Result, afterSession: boolean }>}
+ */
+const ENTER_HOOKS = new Map([
+  ['sessions', { enter: sessionsEnter, afterSession: false }],
+  ['passkeys', { enter: passkeysEnter, afterSession: false }],
+  ['factors', { enter: factorsEnter, afterSession: false }],
+  ['lab', { enter: labEnter, afterSession: true }],
+]);
+
+/**
+ * Register the hook of a section name a screen's `onEnter` may use, so a product asks for what its
+ * screen shows without editing this file.
+ * @param {string} name
+ * @param {(state: any, msg: any, io: { request: typeof request }) => Result} enter
+ * @param {{ afterSession?: boolean }} [options]
+ */
+export function registerEnterHook(name, enter, options = {}) {
+  ENTER_HOOKS.set(name, { enter, afterSession: options.afterSession === true });
+}
+
+/** The names of the registered entry hooks, sorted: for a test that every `onEnter` name has one. */
+export function enterHookNames() {
+  return [...ENTER_HOOKS.keys()].sort();
+}
+
+/**
+ * What a view's screen asks for when it is shown: its `onEnter` sections, in order, each hook
+ * seeing the state the one before left.
+ * @param {any} state @param {any} msg @param {string | null | undefined} view
+ * @param {{ afterSession?: boolean }} [options]
+ * @returns {Result}
+ */
+function enterScreen(state, msg, view, options = {}) {
+  /** @type {Effect[]} */
+  const effects = [];
+  let next = state;
+  for (const name of enterSections(view)) {
+    const hook = ENTER_HOOKS.get(name);
+    if (!hook || (options.afterSession && !hook.afterSession)) continue;
+    const entered = hook.enter(next, msg, { request });
+    next = entered.state;
+    effects.push(...entered.effects);
+  }
+  return { state: next, effects };
+}
+
+/** A passkey was accepted: the same as a password being accepted, from the session on. @returns {Result} */
+function passkeySignedIn(state, msg) {
+  // A first factor that is not enough: no session yet, and the page asks for the second.
+  if (msg.body?.second_factor) return { state: factorsWaiting(state, msg.body), effects: [] };
+  const outputs = contracts.decode('sign-in-at-site', msg.body, {});
+  const outcome = forms.succeeded(SIGN_IN, scopeOf(state, { form: {}, response: outputs }));
+  let signedIn = { ...state, session: outputs.session };
+  signedIn = sessionStep(signedIn, 'ui-signed-in', {}, msg.at)?.state ?? signedIn;
+  signedIn = clearUserState(signedIn);
+  if (outcome.toast) signedIn = toast(signedIn, 'ok', outcome.toast);
+  const reset = resetLive(signedIn, msg);
+  const moved = navigate(reset.state, outcome.navigate ?? '/', false, msg);
+  return { state: moved.state, effects: [...reset.effects, ...moved.effects] };
+}
+
+/** An emailed link was accepted: the same as a passkey being accepted, from the session on. @returns {Result} */
+const linkSignedIn = passkeySignedIn;
+
+/** An identity provider's answer was accepted: the same, from the session on. @returns {Result} */
+const oidcSignedIn = passkeySignedIn;
+const invitesHelpers = { call, scopeOf, toast, navigate };
+
+/** Ask a refused action again, now that the person has authenticated. @returns {Result} */
+function redispatch(state, retry, msg) {
+  return onAction(state, { type: 'action', name: retry.name, arg: retry.arg, at: msg.at, rand: msg.rand });
+}
+
+/**
+ * Whether a refused or failed request may have been carried out all the same: no answer came, or
+ * the server failed. Only then is a key kept for the retry.
+ * @param {{ ok: boolean, status: number }} msg
+ */
+function unknownOutcome(msg) {
+  return !msg.ok && (msg.status === 0 || msg.status >= 500);
+}
+
+/**
+ * Ask for the next page of a list section of the view, with the cursor the last answer gave.
+ * @param {any} state @param {Message} msg @param {string} section
+ * @returns {Result}
+ */
+function loadMore(state, msg, section) {
+  const cursor = state.view.next?.[section];
+  if (typeof cursor !== 'string' || state.view.more || state.view.status !== 'ready') return { state, effects: [] };
+  const query = new URLSearchParams({ path: state.route.path, cursor });
+  for (const [name, value] of Object.entries(state.route.query)) {
+    // The view's own parameters; the delivery interface's names are not a page's to set.
+    if (!['path', 'cursor', 'fields', 'limit'].includes(name)) query.set(name, String(value));
+  }
+  const [next, effect] = request(state, 'view.more', { path: `/api/view?${query}`, meta: { section } }, msg);
+  return { state: { ...next, view: { ...next.view, more: effect.type === 'http' ? effect.id : 0 } }, effects: [effect] };
+}
+
 /** @returns {Result} */
 function onHttp(state, msg) {
   const pending = state.pending[msg.id];
   if (!pending) return { state, effects: [] };
   const { [msg.id]: _done, ...rest } = state.pending;
   state = { ...state, pending: rest };
+  // A reply that is not the latest of its kind, or that answers a request made for a person who
+  // has since signed out, is dropped.
+  if (LATEST_ONLY.includes(pending.kind) && state.latest?.[pending.kind] !== msg.id) return { state, effects: [] };
+  if (isUserKind(pending.kind) && (pending.generation ?? 0) !== (state.generation ?? 0)) return { state, effects: [] };
   const error = msg.ok ? null : msg.body && typeof msg.body === 'object' ? msg.body : { code: 'unavailable', message: 'The site could not be reached.' };
-  const outputs = msg.ok && pending.contract ? contracts.decode(pending.contract, msg.body, pending.inputs) : null;
+  const waiting = msg.ok && msg.body?.second_factor ? msg.body : null;
+  const outputs = msg.ok && pending.contract && !waiting ? contracts.decode(pending.contract, msg.body, pending.inputs) : null;
+
+  // An operation that needs a fresh authentication is asked again once the person has given one.
+  if (isStepUp({ ...msg, error }) && pending.retry) {
+    return { state: factorsRequireStepUp(state, pending.retry), effects: [] };
+  }
+  if (pending.kind.startsWith('factors.')) {
+    return factorsUpdate(state, { ...msg, pending, error }, { request, toast, signedIn: passkeySignedIn, redispatch }) ?? { state, effects: [] };
+  }
 
   if (pending.kind.startsWith('lab.')) {
     return labUpdate(state, { ...msg, pending, error }, { request, toast }) ?? { state, effects: [] };
+  }
+  if (pending.kind.startsWith('sessions.')) {
+    return sessionsUpdate(state, { ...msg, pending, error }, { request, toast }) ?? { state, effects: [] };
+  }
+  if (pending.kind.startsWith('passkeys.')) {
+    return passkeysUpdate(state, { ...msg, pending, error }, { request, toast, signedIn: passkeySignedIn }) ?? { state, effects: [] };
+  }
+  if (pending.kind.startsWith('links.')) {
+    return linksUpdate(state, { ...msg, pending, error }, { request, signedIn: linkSignedIn }) ?? { state, effects: [] };
+  }
+  if (pending.kind.startsWith('invites.')) {
+    return invitesUpdate(state, { ...msg, pending, error, outputs }, invitesHelpers) ?? { state, effects: [] };
+  }
+  if (pending.kind.startsWith('oidc.')) {
+    return oidcUpdate(state, { ...msg, pending, error }, { request, signedIn: oidcSignedIn }) ?? { state, effects: [] };
   }
 
   switch (pending.kind) {
     case 'session': {
       if (!msg.ok) return { state, effects: [] };
-      const known = sessionRead({ ...state, session: outputs.session }, outputs.session.authenticated === true, msg.at);
+      let known = sessionRead({ ...state, session: outputs.session }, outputs.session.authenticated === true, msg.at);
+      // The session was read because the socket upgrade was refused and the server answered: that
+      // is a refusal, not an outage. After enough of them live updates stop, visibly.
+      if (pending.refusal) {
+        const refusals = (known.wsRefusals ?? 0) + 1;
+        known = { ...known, wsRefusals: refusals, wsStopped: refusals >= WS_REFUSAL_LIMIT };
+      }
       // A cold start could not open the socket before it knew the request token the gateway
       // issued, so it opens it now.
       /** @type {Effect[]} */
       const open = state.session ? [] : [{ type: 'ws_connect', csrf: outputs.session.csrf_token }];
-      if (state.view.model?.view === 'lab') {
-        const entered = labEnter(known, msg, { request });
-        return { state: entered.state, effects: [...open, ...entered.effects] };
-      }
-      return { state: known, effects: open };
+      // A link the page was opened with waits for the request token that this reply brings.
+      const linked = linksLand(known, msg, { request });
+      const landed = oidcLand(linked.state, msg, { request });
+      const entered = enterScreen(landed.state, msg, state.view.model?.view, { afterSession: true });
+      return { state: entered.state, effects: [...open, ...linked.effects, ...landed.effects, ...entered.effects] };
     }
     case 'view': {
       if (state.view.request !== msg.id) return { state, effects: [] };
       if (msg.ok) {
-        const accepted = acceptView(state, decodeView(state, msg.body));
-        return msg.body.view === 'lab' ? labEnter(accepted, msg, { request }) : { state: accepted, effects: [] };
+        const accepted = acceptView(state, decodeView(state, msg.body), msg.body?.next);
+        return enterScreen(accepted, msg, msg.body.view);
       }
       const status = msg.status === 404 ? 'missing' : 'error';
       return {
         state: { ...state, ready: true, view: { status, model: null, error, request: 0 }, forms: { ...state.forms, editor: null, settings: null } },
         effects: [],
       };
+    }
+    case 'view.more': {
+      // A reply for a page that was left, or that a fresh reading of the view replaced, is dropped.
+      if (state.view.more !== msg.id || !state.view.model) return { state, effects: [] };
+      const { section } = pending;
+      const idle = { ...state, view: { ...state.view, more: 0 } };
+      const rows = msg.body?.data?.[section];
+      if (!msg.ok || !Array.isArray(rows) || !Array.isArray(state.view.model.data[section])) {
+        return { state: toast(idle, 'warn', 'More could not be loaded.'), effects: [] };
+      }
+      // The next page continues the rows held, with none repeated.
+      const held = new Set(state.view.model.data[section].map((/** @type {any} */ row) => row.id));
+      const model = { ...state.view.model, data: { ...state.view.model.data, [section]: [...state.view.model.data[section], ...rows.filter((row) => !held.has(row.id))] } };
+      const { [section]: _read, ...others } = state.view.next ?? {};
+      const next = msg.body.next?.[section] ? { ...others, [section]: msg.body.next[section] } : others;
+      return { state: { ...idle, view: { ...idle.view, model, next } }, effects: [] };
     }
     case 'login': {
       const login = state.forms.login;
@@ -428,9 +733,15 @@ function onHttp(state, msg) {
         };
       }
       const flow = submitStep(login.flow, 'ui-form-accepted', {}, msg.at)?.flow ?? login.flow;
+      if (waiting) {
+        const cleared = { ...state, forms: { ...state.forms, login: { ...login, flow, busy: busy(flow), error: '', values: { ...login.values, password: '' } } } };
+        return { state: factorsWaiting(cleared, waiting), effects: [] };
+      }
       const outcome = forms.succeeded(SIGN_IN, scopeOf(state, { form: pending.values, response: outputs }));
       let signedIn = { ...state, session: outputs.session, forms: { ...state.forms, login: { values: forms.initialValues(SIGN_IN, {}), busy: busy(flow), error: '', flow } } };
       signedIn = sessionStep(signedIn, 'ui-signed-in', {}, msg.at)?.state ?? signedIn;
+      // Whoever signs in, nothing of the person before them is kept.
+      signedIn = clearUserState(signedIn);
       if (outcome.toast) signedIn = toast(signedIn, 'ok', outcome.toast);
       // The socket was opened as an anonymous visitor; open it again as this person.
       const reset = resetLive(signedIn, msg);
@@ -441,6 +752,7 @@ function onHttp(state, msg) {
       if (!msg.ok) return { state: toast(state, 'warn', refusals.refusal(pending.action, error).text), effects: [] };
       const outcome = actions.succeeded(pending.action, scopeOf(state, { response: outputs }));
       let out = sessionStep({ ...state, session: outputs.session }, 'ui-signed-out', {}, msg.at)?.state ?? { ...state, session: outputs.session };
+      out = clearUserState(out);
       if (outcome.toast) out = toast(out, 'ok', outcome.toast);
       const reset = resetLive(out, msg);
       // Signing out where the action says nowhere to go reads the same address again.
@@ -455,19 +767,22 @@ function onHttp(state, msg) {
         const { errors, formError, announce } = refusals.refusal(pending.form, error);
         // Focus goes to the first failing field in the order the form shows them.
         const first = fieldNames(pending.form).find((name) => errors[name]);
+        // The server's refusal stands. A draft the page passed and the server refused is drift
+        // between the page's evaluator and the kernel, and is logged so it is seen.
+        const drift = pending.page ? disagreement(pending.page, error) : null;
         return {
           state: {
             ...state,
             announce,
-            forms: { ...state.forms, editor: { ...editor, flow, busy: busy(flow), errors, formError } },
+            forms: { ...state.forms, editor: { ...editor, flow, busy: busy(flow), errors, formError, createKey: unknownOutcome(msg) ? pending.sent ?? editor.createKey ?? null : null } },
             focus: first ? { target: `editor-${first}`, token: msg.id } : state.focus,
           },
-          effects: [],
+          effects: drift ? [{ type: 'log', level: 'warn', event: 'record-rules.disagreement', correlation: pending.correlation, detail: drift }] : [],
         };
       }
       let flow = submitStep(editor.flow, 'ui-form-accepted', {}, msg.at)?.flow ?? editor.flow;
       const response = pending.first ? forms.bothResponses(pending.first, outputs) : outputs;
-      const saved = { ...editor, id: response.article_id, version: response.version, key: response.slug, dirty: false, remoteChanged: false };
+      const saved = { ...editor, id: response.article_id, version: response.version, key: response.slug, dirty: false, remoteChanged: false, createKey: null };
       const scope = scopeOf(state, { form: editor.values, response });
       const second = pending.first ? null : forms.followUp(pending.form, scope);
       if (second) {
@@ -517,15 +832,19 @@ function onHttp(state, msg) {
 function navigate(state, href, replace, msg) {
   const route = parseHref(href);
   const same = hrefOf(route) === hrefOf(state.route);
-  const moved = { ...state, route, menuOpen: false, focus: { target: 'main', token: state.nextId } };
+  const moved = { ...state, route, menuOpen: false, confirmDelete: null, focus: { target: 'main', token: state.nextId } };
   const fetched = fetchView(moved, msg, false);
+  const providers = oidcEnter(fetched.state, msg, { request });
   /** @type {Effect[]} */
   const effects = same && !replace ? [] : [{ type: 'push_url', href: hrefOf(route), replace }];
-  return { state: fetched.state, effects: [...effects, { type: 'scroll_top' }, ...fetched.effects] };
+  return { state: providers.state, effects: [...effects, { type: 'scroll_top' }, ...fetched.effects, ...providers.effects] };
 }
 
 function onInput(state, msg) {
   const f = state.forms;
+  if (msg.form === 'link') return linksInput(state, msg.name, msg.value);
+  if (msg.form === 'invite') return invitesInput(state, msg.name, msg.value);
+  if (msg.form === 'second' || msg.form === 'totpconfirm' || msg.form === 'stepup') return factorsInput(state, msg.name, msg.value);
   if (msg.form === 'login') {
     const { values } = forms.input(SIGN_IN, f.login.values, [], msg.name, msg.value);
     return { ...state, forms: { ...f, login: { ...f.login, values } } };
@@ -556,16 +875,15 @@ function requestPreview(state, msg) {
   return { state: { ...next, forms: { ...next.forms, editor: { ...editor, tab: 'preview', preview } } }, effects: [effect] };
 }
 
-/** The action a desk row's button presses. */
-const ROW_ACTIONS = { 'post.publish': 'act-desk-publish', 'post.unpublish': 'act-desk-unpublish', 'post.delete': 'act-desk-delete' };
-
 /**
- * Press a per-row action of the desk on the row of this article.
+ * Press a per-row action button (generated `ROW_ACTIONS`: its action, the status the row shows at
+ * once, and the output of the row that holds the record id) on the row of this record.
  * @returns {Result}
  */
-function rowAction(state, msg, action, arg, marker) {
+function rowAction(state, msg, button, arg) {
+  const { action, marker, rowKey } = button;
   const model = state.view.model;
-  const item = actions.rows(action, model).find((row) => row.article_id === arg.id) ?? { article_id: arg.id, version: arg.version };
+  const item = actions.rows(action, model).find((row) => row[rowKey] === arg.id) ?? { [rowKey]: arg.id, version: arg.version };
   const scope = scopeOf(state, { item });
   const inputs = actions.args(action, scope);
   if (!actions.visible(action, scope, inputs)) return { state, effects: [] };
@@ -578,7 +896,16 @@ function rowAction(state, msg, action, arg, marker) {
 /** @returns {Result} */
 function onAction(state, msg) {
   const arg = msg.arg;
-  if (state.confirmDelete !== null && msg.name !== 'post.delete') state = { ...state, confirmDelete: null };
+  const pressed = rowButton(msg.name);
+  // A confirmation is armed for one press: any other action disarms it.
+  if (state.confirmDelete !== null && !pressed?.confirm) state = { ...state, confirmDelete: null };
+  const asked = rowButtonAsked(msg.name);
+  // A confirmed row action takes two presses on the same row: the first asks, the second does.
+  if (asked) return { state: { ...state, confirmDelete: arg.id, announce: actions.ACTIONS[asked.action].confirmAnnounce ?? '' }, effects: [] };
+  if (pressed) {
+    if (pressed.confirm && state.confirmDelete !== arg.id) return { state, effects: [] };
+    return rowAction({ ...state, confirmDelete: null }, msg, pressed, arg);
+  }
   switch (msg.name) {
     case 'theme': {
       const mode = THEME_MODES[(THEME_MODES.indexOf(state.theme.mode) + 1) % THEME_MODES.length];
@@ -608,25 +935,20 @@ function onAction(state, msg) {
       const cleared = { ...state, forms: { ...state.forms, editor: null } };
       return fetchView(cleared, msg, true);
     }
-    case 'post.publish':
-      return rowAction(state, msg, ROW_ACTIONS[msg.name], arg, 'published');
-    case 'post.unpublish':
-      return rowAction(state, msg, ROW_ACTIONS[msg.name], arg, 'draft');
-    case 'post.ask_delete':
-      // Deleting takes two presses on the same row; any other action disarms it.
-      return { state: { ...state, confirmDelete: arg.id, announce: actions.ACTIONS[ROW_ACTIONS['post.delete']].confirmAnnounce ?? '' }, effects: [] };
     case 'reload':
       return fetchView(state, msg, false);
-    case 'post.delete': {
-      if (!actions.ACTIONS[ROW_ACTIONS[msg.name]].confirm || state.confirmDelete !== arg.id) return { state, effects: [] };
-      return rowAction({ ...state, confirmDelete: null }, msg, ROW_ACTIONS[msg.name], arg, 'deleted');
-    }
+    case 'view.more':
+      return loadMore(state, msg, String(arg));
     case 'dev.expire': {
       const [next, effect] = request(state, 'dev', { method: 'POST', path: '/api/dev/expire-session', write: true, body: {} }, msg);
       return { state: next, effects: [effect] };
     }
     default:
       if (msg.name.startsWith('lab.')) return labUpdate(state, msg, { request, toast }) ?? { state, effects: [] };
+      if (msg.name.startsWith('sessions.')) return sessionsUpdate(state, msg, { request, toast }) ?? { state, effects: [] };
+      if (msg.name.startsWith('factors.')) return factorsUpdate(state, msg, { request, toast, signedIn: passkeySignedIn, redispatch }) ?? { state, effects: [] };
+      if (msg.name.startsWith('passkeys.')) return passkeysUpdate(state, msg, { request, toast, signedIn: passkeySignedIn }) ?? { state, effects: [] };
+      if (msg.name.startsWith('oidc.')) return oidcUpdate(state, msg, { request, signedIn: oidcSignedIn }) ?? { state, effects: [] };
       return { state, effects: [] };
   }
 }
@@ -634,6 +956,10 @@ function onAction(state, msg) {
 /** @returns {Result} */
 function onSubmit(state, msg) {
   switch (msg.form) {
+    case 'link':
+      return linksUpdate(state, msg, { request, signedIn: linkSignedIn }) ?? { state, effects: [] };
+    case 'invite':
+      return invitesUpdate(state, msg, invitesHelpers) ?? { state, effects: [] };
     case 'login': {
       const login = state.forms.login;
       const values = forms.submitted(SIGN_IN, msg.values);
@@ -650,6 +976,10 @@ function onSubmit(state, msg) {
       const [next, effect] = call(state, 'login', forms.FORMS[SIGN_IN].contract, inputs, msg, { values });
       return { state: { ...next, forms: { ...next.forms, login: { values, flow: stepped.flow, busy: busy(stepped.flow), error: '' } } }, effects: [effect] };
     }
+    case 'second':
+    case 'totpconfirm':
+    case 'stepup':
+      return factorsUpdate(state, msg, { request, toast, signedIn: passkeySignedIn, redispatch }) ?? { state, effects: [] };
     case 'search': {
       // The search form calls the view model of the search page, which opening the page does.
       const form = forms.submitted('form-search', msg.values);
@@ -682,7 +1012,9 @@ export function update(state, msg) {
   if (msg.type === 'timer' && msg.name === 'toast') {
     return { state: { ...state, toasts: state.toasts.filter((t) => t.id !== msg.token) }, effects: [] };
   }
-  const result = step(state, msg);
+  // An announcement is made once: the next message clears it, so the same words said again
+  // (the same failed sign-in twice) change the live region and are read out again.
+  const result = step(state.announce ? { ...state, announce: '' } : state, msg);
   // Every message that appears is given a time to go away again by itself.
   const known = new Set(state.toasts.map((t) => t.id));
   const fresh = result.state.toasts.filter((t) => !known.has(t.id));
@@ -702,7 +1034,7 @@ function step(state, msg) {
     case 'init': {
       const route = parseHref(msg.path + msg.search);
       const mode = THEME_MODES.includes(msg.storedTheme ?? '') ? msg.storedTheme : 'auto';
-      let next = { ...state, route, theme: { ...state.theme, mode, systemDark: msg.systemDark } };
+      let next = { ...state, route, theme: { ...state.theme, mode, systemDark: msg.systemDark }, passkeys: { ...state.passkeys, supported: msg.passkeys === true } };
       /** @type {Effect[]} */
       const effects = [];
       const boot = msg.bootstrap;
@@ -714,17 +1046,32 @@ function step(state, msg) {
         effects.push(effect);
       }
       if (boot?.view && boot.path === route.path) {
-        next = acceptView(next, decodeView(next, boot.view));
-        if (boot.view.view === 'lab') {
-          const entered = labEnter(next, msg, { request });
-          next = entered.state;
-          effects.push(...entered.effects);
-        }
+        next = acceptView(next, decodeView(next, boot.view), boot.view.next);
+        const entered = enterScreen(next, msg, boot.view.view);
+        next = entered.state;
+        effects.push(...entered.effects);
       } else {
         const fetched = fetchView(next, msg, false);
         next = fetched.state;
         effects.push(...fetched.effects);
       }
+      // A link the page was opened with is taken out of the address bar and, once the request
+      // token is known, sent.
+      const opened = linksOpened(next, msg.hash ?? '', hrefOf(route));
+      const landed = linksLand(opened.state, msg, { request });
+      next = landed.state;
+      effects.push(...opened.effects, ...landed.effects);
+      // An owner's invitation is kept the same way, and taken out of the address bar at once.
+      const invited = invitesOpened(next, msg.hash ?? '', hrefOf(route));
+      next = invited.state;
+      effects.push(...invited.effects);
+      // The same for the answer of an identity provider, and the sign-in page asks which
+      // providers the site offers.
+      const returned = oidcOpened(next, msg.hash ?? '', hrefOf(route));
+      const answered = oidcLand(returned.state, msg, { request });
+      const offered = oidcEnter(answered.state, msg, { request });
+      next = offered.state;
+      effects.push(...returned.effects, ...answered.effects, ...offered.effects);
       // The socket needs the request token, which a bootstrapped page already has. A cold start
       // gets it with the session reply and connects then.
       next = liveStep(next, 'ui-live-start', {}, msg)?.state ?? next;
@@ -736,7 +1083,7 @@ function step(state, msg) {
       return navigate(state, msg.href, msg.replace ?? false, msg);
     case 'popstate': {
       const route = parseHref(msg.path + msg.search);
-      return fetchView({ ...state, route, menuOpen: false }, msg, false);
+      return fetchView({ ...state, route, menuOpen: false, confirmDelete: null }, msg, false);
     }
     case 'input':
       if (msg.form.startsWith('lab')) return labUpdate(state, msg, { request, toast }) ?? { state, effects: [] };
@@ -749,18 +1096,35 @@ function step(state, msg) {
       return { state: { ...state, theme: { ...state.theme, systemDark: msg.dark } }, effects: [] };
     case 'http_result':
       return onHttp(state, msg);
+    case 'passkey_result':
+      if (state.factors.ceremony?.id === msg.id) return factorsUpdate(state, msg, { request, toast, signedIn: passkeySignedIn, redispatch }) ?? { state, effects: [] };
+      return passkeysUpdate(state, msg, { request, toast, signedIn: passkeySignedIn }) ?? { state, effects: [] };
     case 'ws_open':
-      return { state, effects: [] };
+      return { state: { ...state, wsRefusals: 0, wsStopped: false }, effects: [] };
     case 'ws_message':
       return onSocket(state, msg.message, msg);
     case 'ws_closed': {
+      // The socket never opened although the network is up: the upgrade was refused, most likely
+      // for an expired request token. Read the session again, so the next attempt carries the
+      // current token; the reply counts the refusal (`wsRefusals`).
+      /** @type {Effect[]} */
+      const lead = [];
+      let base = state;
+      if (msg.refused && !Object.values(state.pending).some((p) => p.kind === 'session')) {
+        const [withRequest, effect] = readSession(state, msg, { refusal: true });
+        base = withRequest;
+        lead.push(effect);
+      }
       // A close while waiting to reconnect is an attempt that failed: it counts as one.
-      const waiting = state.ws.status === 'waiting' ? liveStep(state, 'ui-live-reconnect-due', {}, msg) : null;
-      const from = waiting ? { ...waiting.state, ws: { ...waiting.state.ws, timers: {} } } : state;
-      return liveStep(from, 'ui-live-closed', {}, msg) ?? { state, effects: [] };
+      const waiting = base.ws.status === 'waiting' ? liveStep(base, 'ui-live-reconnect-due', {}, msg) : null;
+      const from = waiting ? { ...waiting.state, ws: { ...waiting.state.ws, timers: {} } } : base;
+      const closed = liveStep(from, 'ui-live-closed', {}, msg) ?? { state: base, effects: [] };
+      return { state: closed.state, effects: [...lead, ...closed.effects] };
     }
     case 'timer': {
       if (msg.name.startsWith('lab.')) return labUpdate(state, msg, { request, toast }) ?? { state, effects: [] };
+      // Live updates gave up after repeated refusals: the attempt that was waiting does not run.
+      if (msg.name === 'reconnect' && state.wsStopped) return { state, effects: [] };
       return liveTimer(state, msg) ?? { state, effects: [] };
     }
     default:

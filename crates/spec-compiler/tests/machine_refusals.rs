@@ -216,6 +216,34 @@ fn storage_must_be_named_and_exist() {
     assert_refused(&text, "ready.storage-mismatch", "instances");
 }
 
+/// A machine is keyed by the whole key of its record (Exegra's rule `storage.key-whole`, WG-4907):
+/// a key naming part of a composite key, or the fields in another order, is refused, and the list
+/// of every key field in order is generated.
+#[test]
+fn the_machine_key_is_the_whole_record_key() {
+    let composite = |key: Value| {
+        with(|s| {
+            s["records"][0]["fields"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!({ "name": "part", "type": "string" }));
+            s["records"][0]["key"] = json!(["part", "id"]);
+            machine(s)["storage"]["key"] = key;
+        })
+    };
+    assert_refused(&composite(json!("id")), m::KEY_WHOLE, "whole key");
+    assert_refused(&composite(json!(["id"])), m::KEY_WHOLE, "whole key");
+    assert_refused(&composite(json!(["id", "part"])), m::KEY_WHOLE, "whole key");
+    let files = generate("spec.jsonc", &composite(json!(["part", "id"])), &options())
+        .unwrap_or_else(|d| panic!("refused: {d:?}"));
+    let code = &files
+        .iter()
+        .find(|f| f.path == "src/machines.rs")
+        .unwrap()
+        .contents;
+    assert!(code.contains("pub type Key = ("), "{code}");
+}
+
 #[test]
 fn variables_need_a_same_named_field_of_their_type() {
     let text = with(|s| {
@@ -330,6 +358,30 @@ fn literals_must_fit_their_type() {
     assert_refused(&text, m::LITERAL, "count");
 }
 
+/// The generated type of an id refuses to decode a value that breaks its pattern, so an initial
+/// value that breaks it would be one the machine writes and cannot read back.
+#[test]
+fn an_initial_value_must_meet_the_constraints_of_its_type() {
+    let constrained = |initial: Value| {
+        with(|s| {
+            s["types"] = json!([
+                { "id": "who", "name": "Who", "kind": "id", "repr": "string",
+                  "constraints": { "pattern": "[a-z]+", "maxLength": 4 } }
+            ]);
+            s["records"][0]["fields"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!({ "name": "owner", "type": "who" }));
+            machine(s)["variables"].as_array_mut().unwrap().push(
+                json!({ "name": "owner", "type": "string", "repr": "who", "initial": initial }),
+            );
+        })
+    };
+    assert_refused(&constrained(json!("")), m::LITERAL, "pattern");
+    assert_refused(&constrained(json!("abcde")), m::LITERAL, "maxLength");
+    assert!(generate("spec.jsonc", &constrained(json!("abc")), &options()).is_ok());
+}
+
 #[test]
 fn payloads_must_match_their_event() {
     let text = with(|s| effects(s)[2]["payload"] = json!({ "n": "count", "m": "count" }));
@@ -438,4 +490,34 @@ fn the_generated_machine_marks_elapsed_events_and_validates_records() {
     assert!(code.contains("fn is_elapsed(event: &Event) -> bool"));
     assert!(code.contains("matches!(event, Event::EvTick(_))"), "{code}");
     assert!(code.contains("record.validate()"));
+}
+
+#[test]
+fn an_unkeyed_creating_machine_has_a_fixed_key_the_runtime_can_fill() {
+    let machines = |text: &str| -> String {
+        generate("spec.jsonc", text, &options())
+            .unwrap()
+            .into_iter()
+            .find(|f| f.path == "src/machines.rs")
+            .unwrap()
+            .contents
+    };
+    // Unkeyed and creating: the runtime creates the one instance, under the machine's id.
+    let text = with(|s| machine(s)["storage"]["creates"] = json!(true));
+    assert!(machines(&text)
+        .contains("const SINGLETON_KEY: Option<&'static str> = Some(\"\\\"m\\\"\");"));
+    // A machine that does not create its records has no singleton.
+    assert!(!machines(&with(|_| {})).contains("SINGLETON_KEY"));
+    // A keyed machine has an instance per key.
+    let text = with(|s| {
+        machine(s)["storage"]["creates"] = json!(true);
+        machine(s)["instances"] = json!({ "key": "id", "storedIn": "m-rec" });
+    });
+    assert!(!machines(&text).contains("SINGLETON_KEY"));
+    // A key of a type with no fixed value is refused.
+    let text = with(|s| {
+        machine(s)["storage"]["creates"] = json!(true);
+        s["records"][0]["fields"][0]["type"] = json!("bytes");
+    });
+    assert_refused(&text, m::SINGLETON_KEY, "no fixed value");
 }

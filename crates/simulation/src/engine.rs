@@ -103,6 +103,9 @@ pub fn summarise(event: &DomainEvent) -> EventSummary {
             Some(before.object.to_string()),
             Some(before.id.0),
         ),
+        EventBody::SettingChanged { .. } => ("setting_changed", None, None),
+        EventBody::AutomationSuspended { .. } => ("automation_suspended", None, None),
+        EventBody::LedgerEntryPosted { .. } => ("ledger_entry_posted", None, None),
     };
     EventSummary {
         tenant: event.tenant.clone(),
@@ -240,6 +243,8 @@ pub type Progress<'a> = &'a mut dyn FnMut(usize, usize) -> bool;
 pub struct Cancelled;
 
 /// Run a scenario. Returns the trace and the final world.
+///
+/// Implements: CT-163
 pub fn run(scenario: &Scenario) -> (Trace, World) {
     run_with(scenario, None, &mut |_, _| true).expect("an uncancellable run completes")
 }

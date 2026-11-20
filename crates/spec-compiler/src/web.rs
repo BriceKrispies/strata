@@ -16,7 +16,11 @@
 //! `afterMs`, which the kernel waits before delivering it; `event` in an emit or timer is the event
 //! id. A timer whose delay is read at run time (`after: {expr, simulate}`) evaluates `expr`, an
 //! unsigned integer over the variables as the effects before it left them and the payload, for
-//! its `afterMs`; `simulate` is for simulations only. Nothing is stored: the machine's state and variables live in the kernel's state, so there
+//! its `afterMs`; `simulate` is what Exegra simulates. One rule for all three tools: the delay a
+//! machine runs with is `expr`. The Rust backend refuses a computed delay (`specc.timer-after`);
+//! the browser uses `expr`; Exegra must find `simulate` equal to `expr` on each scenario's inputs
+//! (or refuse the construct for an implementation machine), so the simulated trace and the
+//! browser agree. The web differential compares each timer's `afterMs` with the trace. Nothing is stored: the machine's state and variables live in the kernel's state, so there
 //! is no `to_record` or `from_record`.
 //!
 //! `step` has the semantics of the Rust backend (`backend/machines.rs`) and of Exegra
@@ -50,6 +54,7 @@ use crate::backend::machines::{
     EVENT_UNKNOWN, EXPRESSION, LITERAL, NO_EVENTS, PAYLOAD_FIELD, RESOURCE_EFFECT, STATE_UNKNOWN,
     TIMER_AFTER, VARIABLE_UNKNOWN,
 };
+use crate::codetext;
 use crate::diagnostic::{dedup, Diagnostic};
 use crate::emit::{rust_header, GeneratedFile};
 use crate::ir::{Behavior, Effect, Event, Spec, Transition, TypeKind};
@@ -67,8 +72,9 @@ pub const NAME: &str = "specc.web-name";
 /// The file shared by every generated machine.
 pub const RUNTIME_FILE: &str = "machine-runtime.js";
 
-/// Generates the JavaScript files of the client machines of a specification and, when it states
-/// screens, the kernel modules of [`crate::web_kernel`] (paths relative to the output directory),
+/// Generates the JavaScript files of the client machines of a specification, the JavaScript module
+/// of each language it declares (`<language id>.js`, [`crate::language::generate_js`]) and, when it
+/// states screens, the kernel modules of [`crate::web_kernel`] (paths relative to the output directory),
 /// or refuses with every diagnostic. A specification with neither gives no files. `spec_path` is
 /// the path written into the headers.
 pub fn generate(spec_path: &str, text: &str) -> Result<Vec<GeneratedFile>, Vec<Diagnostic>> {
@@ -79,6 +85,17 @@ pub fn generate(spec_path: &str, text: &str) -> Result<Vec<GeneratedFile>, Vec<D
         Ok(kernel) => files.extend(kernel),
         Err(d) => diagnostics.extend(d),
     }
+    // The tenant rule language, and any other the specification declares, as a JavaScript module
+    // the page evaluates rules with (`crate::language::generate_js`).
+    match crate::language::generate_js(&spec) {
+        Ok(languages) => files.extend(languages),
+        Err(d) => diagnostics.extend(d),
+    }
+    let language_files: Vec<String> = spec
+        .languages
+        .iter()
+        .map(|l| crate::language::js_file(l).to_lowercase())
+        .collect();
     if machines.is_empty() {
         if !diagnostics.is_empty() {
             return Err(dedup(diagnostics));
@@ -104,7 +121,12 @@ pub fn generate(spec_path: &str, text: &str) -> Result<Vec<GeneratedFile>, Vec<D
             ));
             continue;
         };
-        if format!("{}.js", b.id) == RUNTIME_FILE || !used.insert(pascal.clone()) {
+        let file = format!("{}.js", b.id).to_lowercase();
+        if file == RUNTIME_FILE
+            || crate::web_kernel::KERNEL_FILES.contains(&file.as_str())
+            || language_files.contains(&file)
+            || !used.insert(pascal.clone())
+        {
             diagnostics.push(Diagnostic::new(
                 NAME,
                 &b.id,
@@ -131,6 +153,10 @@ pub fn generate(spec_path: &str, text: &str) -> Result<Vec<GeneratedFile>, Vec<D
         path: RUNTIME_FILE.to_string(),
         contents: format!("{}\n{RUNTIME}", rust_header(&spec.path)),
     });
+    let collisions = crate::output::path_collisions(&files);
+    if !collisions.is_empty() {
+        return Err(collisions);
+    }
     files.sort();
     Ok(files)
 }
@@ -297,24 +323,9 @@ pub(crate) fn is_ident(name: &str) -> bool {
         && chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$')
 }
 
-/// A single-quoted JavaScript string literal.
+/// A single-quoted JavaScript string literal (see [`codetext::js::string`]).
 pub(crate) fn sq(s: &str) -> String {
-    let mut out = String::from("'");
-    for c in s.chars() {
-        match c {
-            '\'' => out.push_str("\\'"),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if (c as u32) < 0x20 || c == '\u{7f}' || c == '\u{2028}' || c == '\u{2029}' => {
-                out.push_str(&format!("\\u{:04x}", c as u32));
-            }
-            c => out.push(c),
-        }
-    }
-    out.push('\'');
-    out
+    codetext::js::string(s)
 }
 
 /// A property name in an object literal or type.
@@ -360,7 +371,12 @@ pub(crate) fn raw_ty(t: &TypeRef) -> Ty {
         TypeRef::Builtin(b) => builtin_ty(*b),
         TypeRef::Declared(id) => Ty::Named(id.clone()),
         TypeRef::Option(inner) => Ty::Option(Box::new(raw_ty(inner))),
-        TypeRef::List(inner) => Ty::List(Box::new(raw_ty(inner))),
+        // A set is a list of distinct items to expressions, as in Exegra (class list).
+        TypeRef::List(inner) | TypeRef::Set(inner) => Ty::List(Box::new(raw_ty(inner))),
+        // A map is opaque to expressions, like json: compared only with == and !=.
+        TypeRef::Map(..) => Ty::Named(t.text()),
+        // A shared value is its inner value everywhere but in Rust.
+        TypeRef::Shared(inner) => raw_ty(inner),
     }
 }
 
@@ -383,7 +399,8 @@ pub(crate) fn expr_ty(spec: &Spec, t: &TypeRef) -> Ty {
                 None => Ty::Named(id.clone()),
             }
         }
-        TypeRef::Option(_) | TypeRef::List(_) => raw_ty(t),
+        TypeRef::Shared(inner) => expr_ty(spec, inner),
+        TypeRef::Option(_) | TypeRef::List(_) | TypeRef::Set(_) | TypeRef::Map(..) => raw_ty(t),
     }
 }
 
@@ -410,10 +427,16 @@ pub(crate) fn js_check(spec: &Spec, cases: &Cases, t: &TypeRef, depth: usize) ->
                 None => "check.any".to_string(),
             },
         },
-        TypeRef::List(inner) => format!("check.list({})", js_check(spec, cases, inner, depth + 1)),
+        // A set's distinct items are checked by the Rust decode, as a map's values are.
+        TypeRef::List(inner) | TypeRef::Set(inner) => {
+            format!("check.list({})", js_check(spec, cases, inner, depth + 1))
+        }
         TypeRef::Option(inner) => {
             format!("check.option({})", js_check(spec, cases, inner, depth + 1))
         }
+        // A map's value is checked by the Rust decode; the browser passes it on as it is.
+        TypeRef::Map(..) => "check.any".to_string(),
+        TypeRef::Shared(inner) => js_check(spec, cases, inner, depth),
         TypeRef::Declared(id) => match spec.type_decl(id).map(|d| &d.kind) {
             Some(TypeKind::Id { repr } | TypeKind::Scalar { repr }) => {
                 match repr.as_deref().and_then(Builtin::parse) {
@@ -439,7 +462,8 @@ pub(crate) fn js_check(spec: &Spec, cases: &Cases, t: &TypeRef, depth: usize) ->
                 );
                 format!("check.struct({members}{omittable})")
             }
-            None => "check.any".to_string(),
+            // A union's value is checked by the Rust decode; the browser passes it on as it is.
+            Some(TypeKind::Union { .. }) | None => "check.any".to_string(),
         },
     }
 }
@@ -493,11 +517,18 @@ pub(crate) fn js_type(
             _ => "number",
         }
         .to_string(),
-        TypeRef::List(inner) => format!("{}[]", js_type(spec, cases, inner, true, depth + 1)),
+        TypeRef::List(inner) | TypeRef::Set(inner) => {
+            format!("{}[]", js_type(spec, cases, inner, true, depth + 1))
+        }
         TypeRef::Option(inner) => wrap(format!(
             "{} | null",
             js_type(spec, cases, inner, false, depth + 1)
         )),
+        TypeRef::Map(_, value) => format!(
+            "Record<string, {}>",
+            js_type(spec, cases, value, false, depth + 1)
+        ),
+        TypeRef::Shared(inner) => js_type(spec, cases, inner, nested, depth + 1),
         TypeRef::Declared(id) => match spec.type_decl(id).map(|d| &d.kind) {
             Some(TypeKind::Id { repr } | TypeKind::Scalar { repr }) => {
                 match repr.as_deref().and_then(Builtin::parse) {
@@ -532,7 +563,7 @@ pub(crate) fn js_type(
                     .collect();
                 object_type(&items)
             }
-            None => "unknown".to_string(),
+            Some(TypeKind::Union { .. }) | None => "unknown".to_string(),
         },
     }
 }
@@ -1088,7 +1119,7 @@ impl<'a> Gen<'a> {
         match (t, value) {
             (TypeRef::Option(_), Value::Null) => Ok("null".to_string()),
             (TypeRef::Option(inner), v) => self.literal(v, inner),
-            (TypeRef::List(inner), Value::Array(items)) => {
+            (TypeRef::List(inner) | TypeRef::Set(inner), Value::Array(items)) => {
                 let items = items
                     .iter()
                     .map(|i| self.literal(i, inner))
@@ -1273,7 +1304,7 @@ impl<'a> Gen<'a> {
     fn body(&mut self, t: &'a Transition, payload_fields: &[Slot]) -> Option<Vec<String>> {
         let b = self.b;
         let mut lines = vec![
-            format!("// {}", t.id),
+            format!("// {}", codetext::js::comment_text(&t.id)),
             "const next = { ...vars };".to_string(),
             format!("/** @type {{{}[]}} */", self.ty_name("Emit")),
             "const emits = [];".to_string(),
@@ -1498,11 +1529,12 @@ impl<'a> Gen<'a> {
         );
         let mut out = String::new();
         out.push_str("// @ts-check\n");
-        out.push_str(&format!("// Machine `{}`: {}.\n", b.id, b.name));
+        out.push_str(&codetext::js::line_comments(
+            "",
+            &format!("Machine `{}`: {}.", b.id, b.name),
+        ));
         if let Some(d) = &b.description {
-            for line in d.lines() {
-                out.push_str(&format!("// {line}\n").replace("// \n", "//\n"));
-            }
+            out.push_str(&codetext::js::line_comments("", d));
         }
         out.push_str(&format!(
             "// Specification behavior `{}`, an implementation-level machine run in the browser.\n",
@@ -1691,5 +1723,8 @@ pub(crate) fn typedef(doc: &str, name: &str, members: &[String]) -> String {
         [only] => only.clone(),
         many => many.join("\n *   | "),
     };
-    format!("/**\n * {doc}\n * @typedef {{{union}}} {name}\n */\n\n")
+    format!(
+        "/**\n * {}\n * @typedef {{{union}}} {name}\n */\n\n",
+        codetext::js::doc_text(doc)
+    )
 }

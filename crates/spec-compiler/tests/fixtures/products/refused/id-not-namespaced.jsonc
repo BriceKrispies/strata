@@ -1,0 +1,9 @@
+{
+  // Refused: entity ids outside the namespace of the product (layer.namespace-missing, D-6582): one
+  // with no namespace at all and one with a single underscore.
+  "product": { "id": "badges", "name": "Badges", "imports": { "spec": "../../../../../../specifications/spec.jsonc", "entities": [] } },
+  "types": [
+    { "id": "badges-tier", "name": "Badge tier", "kind": "enum", "values": ["bronze", "gold"] },
+    { "id": "badges_rank", "name": "Badge rank", "kind": "enum", "values": ["first", "second"] }
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  // Refused: a workflow with a member the platform type workflow-def does not have (layer.value-invalid, D-6700).
+  "product": { "id": "ticket-board", "name": "Ticket board", "imports": { "spec": "../../../../../../specifications/spec.jsonc", "entities": [] } },
+  "objects": [
+    {
+      "id": "ticket_board__ticket",
+      "label": "Ticket",
+      "fields": { "status": { "id": "status", "label": "Status", "ty": "Str", "required": true, "unique": false } },
+      "constraints": {}
+    }
+  ],
+  "workflows": [
+    { "id": "ticket_board__lifecycle", "object": "ticket_board__ticket", "field": "status", "initial": ["open"], "transitions": [], "colour": "gold" }
+  ]
+}

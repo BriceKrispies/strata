@@ -15,7 +15,7 @@
 //! The text is turned into ordinary kernel `SchemaChange` values against the current schema.
 //! It is a convenience for people; the kernel only ever sees the changes.
 
-use crate::syntax;
+use strata_kernel::ext::*;
 use strata_kernel::{
     ConstraintDef, ConstraintId, FieldDef, FieldId, FieldType, ObjectTypeId, SchemaChange,
     TenantSchema,
@@ -90,6 +90,8 @@ fn parse_line(schema: &TenantSchema, line: &str) -> Result<SchemaChange, String>
                     required: false,
                     unique: false,
                     default: None,
+                    read: None,
+                    personal: None,
                 },
             })
         }
@@ -101,7 +103,7 @@ fn parse_line(schema: &TenantSchema, line: &str) -> Result<SchemaChange, String>
                 .split_once("::")
                 .map_or((rule, ""), |(e, m)| (e, m.trim()));
             let (object, _, name) = target(schema, path.trim())?;
-            let expr = syntax::parse(expr.trim())?;
+            let expr = strata_kernel::expr::parse(expr.trim())?;
             Ok(SchemaChange::DefineConstraint {
                 object,
                 constraint: ConstraintDef {

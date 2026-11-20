@@ -8,10 +8,13 @@ use serde_json::{json, Map, Value as Json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use strata_kernel::expr::attribute;
-use strata_kernel::value::refs_in;
+use strata_kernel::ext::*;
+use strata_kernel::refs_in;
+use strata_kernel::types::{AggregateId, AggregateRequest, AggregateResult};
 use strata_kernel::{
-    ArgSource, FieldId, ObjectTypeId, ReadRequest, Record, RecordId, SchemaVersion, StateRevision,
-    TenantSchema, Value, ViewDef, ViewId, ViewSection,
+    ArgSource, FieldId, ObjectTypeId, PageCursor, Principal, ReadRequest, Record, RecordId,
+    SchemaVersion, SettingId, StateRevision, TenantSchema, TenantState, Value, ViewDef, ViewId,
+    ViewSection,
 };
 
 /// Find the view whose route pattern matches a path, with the values of its `:name` segments.
@@ -57,6 +60,13 @@ pub struct SectionData {
     /// Referenced records the principal may read, by referencing field.
     pub included: BTreeMap<FieldId, BTreeMap<RecordId, Arc<Record>>>,
     pub markdown: Vec<FieldId>,
+    /// The cursor that fetches the next page of this section, as [`encode_cursor`] writes it;
+    /// `None` at the end of the list and for a single-row section (CMS-164).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next: Option<String>,
+    /// The result of the aggregate the section names, in place of rows (D-5067, AGG-041).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aggregate: Option<AggregateResult>,
 }
 
 /// The raw result of a view: what the backend hands the BFF.
@@ -70,6 +80,11 @@ pub struct ViewData {
     pub depends_on: BTreeSet<ObjectTypeId>,
     pub revision: StateRevision,
     pub schema_version: SchemaVersion,
+    /// What the kernel will check on a record of each object type the reader asked about (the
+    /// request names them in `rules`), for this reader: see `strata_kernel::editor_rules`. Sent
+    /// in the model as `record_rules`; left out while nothing was asked.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub record_rules: BTreeMap<String, Json>,
 }
 
 /// Section names in evaluation order: sections that feed others come first.
@@ -92,12 +107,53 @@ pub fn section_order(view: &ViewDef) -> Vec<&String> {
 }
 
 /// The read request for one section, given the route and request parameters and the single rows
-/// of the sections already evaluated.
+/// of the sections already evaluated. An argument that comes from a setting is null here: see
+/// [`section_request_with`].
 pub fn section_request(
     section: &ViewSection,
     route: &BTreeMap<String, String>,
     request: &BTreeMap<String, String>,
     done: &BTreeMap<String, Option<Arc<Record>>>,
+) -> ReadRequest {
+    section_request_with(section, route, request, done, &BTreeMap::new())
+}
+
+/// The settings a view reads: the setting of each section argument that comes from one (SET-1540).
+pub fn view_settings(view: &ViewDef) -> BTreeSet<SettingId> {
+    view.sections
+        .values()
+        .flat_map(|section| section.args.values())
+        .filter_map(|source| match source {
+            ArgSource::Setting(setting) => Some(setting.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The value of each setting a view reads, resolved for the reader (SET-1540): what an argument
+/// that comes from a setting is given. A setting the tenant does not define resolves to nothing,
+/// and its argument is null. Pure: the same tenant, reader and view give the same values.
+pub fn resolved_settings(
+    tenant: &TenantState,
+    principal: &Principal,
+    view: &ViewDef,
+) -> BTreeMap<SettingId, Value> {
+    view_settings(view)
+        .into_iter()
+        .filter_map(|setting| {
+            let found = strata_kernel::settings::resolve(tenant, principal, &setting).ok()?;
+            Some((setting, found.value))
+        })
+        .collect()
+}
+
+/// [`section_request`] with the settings the reader resolves, as [`resolved_settings`] gives them.
+pub fn section_request_with(
+    section: &ViewSection,
+    route: &BTreeMap<String, String>,
+    request: &BTreeMap<String, String>,
+    done: &BTreeMap<String, Option<Arc<Record>>>,
+    settings: &BTreeMap<SettingId, Value>,
 ) -> ReadRequest {
     let text = |value: Option<&String>| value.map_or(Value::Null, |s| Value::Str(s.clone()));
     let params = section
@@ -108,6 +164,9 @@ pub fn section_request(
                 ArgSource::Route(key) => text(route.get(key)),
                 ArgSource::Request(key) => text(request.get(key)),
                 ArgSource::Const(value) => value.clone(),
+                ArgSource::Setting(setting) => {
+                    settings.get(setting).cloned().unwrap_or(Value::Null)
+                }
                 ArgSource::Section {
                     section,
                     attribute: name,
@@ -123,7 +182,154 @@ pub fn section_request(
     ReadRequest::Named {
         query: section.query.clone(),
         params,
+        page_size: None,
+        cursor: None,
     }
+}
+
+/// The request of a section for one page: the section's own request with the page size and the
+/// cursor of the delivery request (CMS-164). The read answers with the cursor of the page after.
+pub fn with_page(
+    request: ReadRequest,
+    size: Option<u32>,
+    after: Option<PageCursor>,
+) -> ReadRequest {
+    match request {
+        ReadRequest::Named { query, params, .. } => ReadRequest::Named {
+            query,
+            params,
+            page_size: size,
+            cursor: after,
+        },
+        other => other,
+    }
+}
+
+/// A page cursor as the browser holds it: `a<id>` continues after a record, `o<n>` skips `n`
+/// rows, `t<hex>` continues a query planned on the index of its order field after an index
+/// position, the hex digits of the position's JSON. Opaque to the client.
+pub fn encode_cursor(cursor: &PageCursor) -> String {
+    match cursor {
+        PageCursor::After(id) => format!("a{}", id.0),
+        PageCursor::Offset(rows) => format!("o{rows}"),
+        PageCursor::At(position) => {
+            let text = serde_json::to_string(position).unwrap_or_default();
+            let mut out = String::with_capacity(1 + 2 * text.len());
+            out.push('t');
+            for byte in text.bytes() {
+                out.push_str(&format!("{byte:02x}"));
+            }
+            out
+        }
+    }
+}
+
+/// The longest `t` cursor [`decode_cursor`] reads: an index position holds one indexed value,
+/// whose key is bounded, and a record id.
+const MAX_POSITION_CURSOR: usize = 2 * 1024;
+
+/// The cursor an [`encode_cursor`] text stands for; `None` for any other text.
+pub fn decode_cursor(text: &str) -> Option<PageCursor> {
+    let (kind, rest) = text.split_at_checked(1)?;
+    if kind == "t" {
+        if rest.is_empty() || rest.len() > MAX_POSITION_CURSOR || rest.len() % 2 != 0 {
+            return None;
+        }
+        let bytes = (0..rest.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(rest.get(i..i + 2)?, 16).ok())
+            .collect::<Option<Vec<u8>>>()?;
+        return serde_json::from_slice::<strata_kernel::query_plan::IndexPosition>(&bytes)
+            .ok()
+            .map(PageCursor::At);
+    }
+    let digits = rest;
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    match kind {
+        "a" => digits
+            .parse()
+            .ok()
+            .map(|id| PageCursor::After(RecordId(id))),
+        "o" => digits.parse().ok().map(PageCursor::Offset),
+        _ => None,
+    }
+}
+
+/// The record as a reader who asked for `selected` fields receives it: those fields it holds and
+/// no others. Narrowing happens after the read, so a field the kernel redacted is not there to
+/// keep, and the selection can only take away from what the reader may see.
+pub fn select_fields(record: &Arc<Record>, selected: &BTreeSet<FieldId>) -> Arc<Record> {
+    if record.fields.keys().all(|field| selected.contains(field)) {
+        return record.clone();
+    }
+    let mut narrowed = Record::clone(record);
+    narrowed.fields.retain(|field, _| selected.contains(field));
+    Arc::new(narrowed)
+}
+
+/// The request for the aggregate a section names: the arguments of the section, as
+/// [`section_request`] reads them, and no filter (D-5067).
+pub fn aggregate_request(
+    section: &ViewSection,
+    aggregate: &AggregateId,
+    route: &BTreeMap<String, String>,
+    request: &BTreeMap<String, String>,
+    done: &BTreeMap<String, Option<Arc<Record>>>,
+) -> AggregateRequest {
+    aggregate_request_with(section, aggregate, route, request, done, &BTreeMap::new())
+}
+
+/// [`aggregate_request`] with the settings the reader resolves ([`resolved_settings`]).
+pub fn aggregate_request_with(
+    section: &ViewSection,
+    aggregate: &AggregateId,
+    route: &BTreeMap<String, String>,
+    request: &BTreeMap<String, String>,
+    done: &BTreeMap<String, Option<Arc<Record>>>,
+    settings: &BTreeMap<SettingId, Value>,
+) -> AggregateRequest {
+    let params = match section_request_with(section, route, request, done, settings) {
+        ReadRequest::Named { params, .. } => params,
+        ReadRequest::Records { .. } => BTreeMap::new(),
+    };
+    AggregateRequest {
+        query: section.query.clone(),
+        aggregate: aggregate.clone(),
+        params,
+        filter: BTreeMap::new(),
+    }
+}
+
+/// An aggregate result as the browser's view model holds it: each group with its key (null for
+/// the records that have none), its value and, for a top list, its rows, and the object types the
+/// result depends on (AGG-042).
+pub fn project_aggregate(result: &AggregateResult) -> Json {
+    let groups: Vec<Json> = result
+        .groups
+        .iter()
+        .map(|group| {
+            json!({
+                "key": group.key.as_ref().map(to_plain),
+                "value": group.value.as_ref().map(to_plain),
+                "rows": group
+                    .rows
+                    .iter()
+                    .map(|row| serde_json::from_str::<Json>(row.as_str()).unwrap_or(Json::Null))
+                    .collect::<Vec<_>>(),
+            })
+        })
+        .collect();
+    json!({
+        "query": result.query.as_str(),
+        "aggregate": result.aggregate.as_str(),
+        "scanned": result.scanned,
+        "groups": groups,
+        "depends_on": result.depends_on.iter().map(|o| o.as_str()).collect::<Vec<_>>(),
+        "revision": result.revision.0,
+        "schema_version": result.schema_version.0,
+    })
 }
 
 /// The record ids a section's rows refer to through its included fields, by target object.
@@ -221,7 +427,9 @@ pub fn project(data: &ViewData) -> Json {
         .sections
         .iter()
         .map(|(name, section)| {
-            let value = if section.single {
+            let value = if let Some(aggregate) = &section.aggregate {
+                project_aggregate(aggregate)
+            } else if section.single {
                 section
                     .rows
                     .first()
@@ -238,13 +446,25 @@ pub fn project(data: &ViewData) -> Json {
             (name.clone(), value)
         })
         .collect();
-    json!({
+    let next: Map<String, Json> = data
+        .sections
+        .iter()
+        .filter_map(|(name, section)| Some((name.clone(), json!(section.next.as_ref()?))))
+        .collect();
+    let mut model = json!({
         "view": data.view.as_str(),
         "title": data.title,
         "params": data.params,
         "data": sections,
+        "next": next,
         "depends_on": data.depends_on.iter().map(|o| o.as_str()).collect::<Vec<_>>(),
         "revision": data.revision.0,
         "schema_version": data.schema_version.0,
-    })
+    });
+    // The editor's rules are a member of the model of their own, the output `record-rules` of the
+    // view contract (CT-251), not a section of `data`: a section is a record or a list of them.
+    if !data.record_rules.is_empty() {
+        model["record_rules"] = json!(data.record_rules);
+    }
+    model
 }

@@ -418,6 +418,23 @@ pub trait Machine: Send + Sync + 'static {
     /// key with no record with [`HostError::RecordMissing`](crate::HostError::RecordMissing),
     /// storing, scheduling and emitting nothing.
     const CREATES: bool;
+    /// The most instances a creating machine may have (`instances.max`), or `None` for no bound.
+    /// The hosts refuse an event that would create one instance more with
+    /// [`HostError::InstanceLimit`](crate::HostError::InstanceLimit), as Exegra fails the step that
+    /// would create instance `max + 1`; an event for an existing instance is never refused by it.
+    const MAX_INSTANCES: Option<u64> = None;
+    /// The key, as JSON text, of the one instance of an unkeyed machine that creates its records
+    /// (`storage.creates` with no `instances.key`), or `None` for every other machine.
+    ///
+    /// Exegra starts the single instance of an unkeyed machine at the beginning of a run, but the
+    /// hosts reach an instance only through a record, and an event addressed to every instance
+    /// names no key to create one under. So the system host ([`System::new`](crate::System::new))
+    /// creates this instance, in its initial state, under this key, when it is built and finds no
+    /// record under it; two hosts over one store create it once. The generator derives the key
+    /// from the machine's id: a `string` key is the id with `-` written `_`, a `uuid` key is a
+    /// uuid derived from the id, an integer key is 0. Such an instance is never purged
+    /// ([`System::purge`](crate::System::purge)).
+    const SINGLETON_KEY: Option<&'static str> = None;
 
     /// The machine's control states.
     type State: Clone + Debug + Send + Sync + 'static;
@@ -454,6 +471,13 @@ pub trait Machine: Send + Sync + 'static {
     /// event is fired only by a timer the machine set: the hosts refuse it from outside
     /// ([`Host::handle`](crate::Host::handle), [`System::submit`](crate::System::submit)).
     fn is_elapsed(_event: &Self::Event) -> bool {
+        false
+    }
+
+    /// Whether `state` is terminal: an instance in it has finished and takes no further events.
+    /// The system host removes the record of a finished instance once the retention of finished
+    /// records has passed ([`System::purge`](crate::System::purge)).
+    fn is_terminal(_state: &Self::State) -> bool {
         false
     }
 

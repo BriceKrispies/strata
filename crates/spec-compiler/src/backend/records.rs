@@ -288,7 +288,9 @@ fn constraint_base(spec: &Spec, f: &RecordField) -> Option<(Vec<Step>, Builtin)>
                 steps.push(Step::Option);
                 t = *inner;
             }
-            TypeRef::List(_) => return None,
+            TypeRef::List(_) | TypeRef::Set(_) | TypeRef::Map(..) | TypeRef::Shared(_) => {
+                return None
+            }
             TypeRef::Declared(id) => {
                 let decl = spec.type_decl(&id)?;
                 let (TypeKind::Id { repr } | TypeKind::Scalar { repr }) = &decl.kind else {
@@ -437,7 +439,7 @@ fn check_constraints(spec: &Spec, r: &Record, f: &RecordField, out: &mut Vec<Dia
         }
     }
     if let Some(p) = &c.pattern {
-        if let Err(e) = regex::Regex::new(p) {
+        if let Err(e) = regex::Regex::new(&crate::rules::anchored(p)) {
             let reason = e
                 .to_string()
                 .split_whitespace()
@@ -545,6 +547,7 @@ fn record_items(
             ty: field_type(f, uses),
             optional: f.optional,
             doc: field_doc(f),
+            deserialize_with: None,
         }
         .tokens()
     };
@@ -574,7 +577,7 @@ fn record_items(
         .iter()
         .map(|f| {
             let field = naming::ident(&naming::snake(&f.name).unwrap_or_default());
-            if resolve::is_copy(&TypeRef::parse(&f.type_name)) {
+            if resolve::is_copy(spec, &TypeRef::parse(&f.type_name)) {
                 quote! { #field: self.#field }
             } else {
                 quote! { #field: self.#field.clone() }
@@ -691,11 +694,17 @@ fn field_checks(
     let pattern_static = match &c.pattern {
         Some(p) => {
             let name = format_ident!("{}", pattern_static_name(r, f)?);
-            let doc = format!(" The pattern of field `{}` of record `{}`.", f.name, r.id);
+            // Matched against the whole value, as a validation's pattern is, and as the page
+            // matches it.
+            let anchored = crate::rules::anchored(p);
+            let doc = format!(
+                " The pattern of field `{}` of record `{}`, matched against the whole value.",
+                f.name, r.id
+            );
             statics.push(quote! {
                 #[doc = #doc]
                 static #name: LazyLock<Regex> =
-                    LazyLock::new(|| Regex::new(#p).expect("specc checked that the pattern compiles"));
+                    LazyLock::new(|| Regex::new(#anchored).expect("specc checked that the pattern compiles"));
             });
             Some(name)
         }

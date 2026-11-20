@@ -1,7 +1,7 @@
 # The Strata specification
 
 `spec.jsonc` is the specification. It is one file and it is the authority for what the platform
-is to do. Two tools read it:
+is to do; products are specified beside it (see "Product specifications"). Two tools read it:
 
 - **Exegra** validates it, draws it, runs its behaviour models, and evaluates the claims it can
   decide from the model alone (ids starting `m-`): structure, the data rules for records and
@@ -17,6 +17,34 @@ paths the file names (`specifications/00-vision/whitepaper.md`,
 The specification describes the whole intended platform. The prototype in `crates/` and `lean/`
 answers milestone 1 only. Milestone numbers are in `milestones`; which milestones the gate holds
 the code to is in `[gate] started_milestones` of `concordance.toml`.
+
+## Product specifications
+
+A product feature (badges, profiles, messaging and so on) is specified in a file of its own,
+never merged into `spec.jsonc`: d-103 and ARC-113 make a product module tenant metadata, with no
+change to the kernel. Product files go in `specifications/products/`. Each starts with a header
+that names the platform file and the platform entities it uses:
+
+```jsonc
+{
+  "product": {
+    "id": "badges", "name": "Badges",
+    "imports": { "spec": "../spec.jsonc", "entities": ["content-read", "content-write", "product-module"] }
+  },
+  "types": [ ... ], "roles": [ ... ]
+}
+```
+
+A product may declare `records`, `types`, `screens`, `forms`, `actions`, `liveBindings`,
+`errorMessages`, `behaviors`, `events`, `contracts`, `roles`, `scenarios`, `uiScenarios`,
+`claims` and `evidence`, and nothing that redefines a platform entity. specc checks every file
+in `specifications/products/` when `npm run generate` and the gate run (`--product`), refuses a
+bad one with an `error[layer.*]` line saying what to change, and generates nothing from it, so
+the generated files and their semantic hash stay the platform's. Exegra reads a product file
+when the project's `project.jsonc` lists it (`"products": ["<path>/specifications/products"]`),
+validates it with the platform and reports the platform's hash unchanged. The rules, and an
+accepted and a refused fixture of each, are in `crates/spec-compiler/src/layers.rs` and
+`crates/spec-compiler/tests/fixtures/products`.
 
 ## What the file holds
 

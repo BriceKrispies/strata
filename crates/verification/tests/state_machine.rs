@@ -5,10 +5,10 @@
 //! revoke a role, create, update and delete a record.
 
 use proptest::prelude::*;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use strata_kernel::testkit::*;
 use strata_kernel::*;
-use strata_verification::invariants::check_world;
+use strata_verification::invariants::{check_tenant, check_world};
 
 /// Number of starting worlds `starting_worlds` returns.
 const WORLDS: usize = 5;
@@ -184,7 +184,13 @@ fn intent(tenant: &str, op: &Op) -> Intent {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig { cases: 160, ..ProptestConfig::default() })]
+    // A fixed, recorded seed: a run is the same run every time, and a failure reproduces.
+    // Change `rng_seed` on purpose to explore other inputs.
+    #![proptest_config(ProptestConfig {
+        cases: 160,
+        rng_seed: proptest::test_runner::RngSeed::Fixed(20260102),
+        ..ProptestConfig::default()
+    })]
 
     /// Verifies: KRN-011
     #[test]
@@ -194,9 +200,10 @@ proptest! {
     ) {
         let mut world = starting_worlds().swap_remove(from).1;
         prop_assert!(check_world(&world).iter().all(|i| i.holds));
-        // Set once a grandfathered change has been accepted over records it leaves
-        // non-conforming; the requirement exempts the states from then on.
-        let mut grandfathered = false;
+        // The tenants where a grandfathered change has been accepted over records it leaves
+        // non-conforming. The requirement exempts only those records' conformance, and only in
+        // those tenants, from then on; every other invariant of every tenant is still checked.
+        let mut grandfathered: BTreeSet<TenantId> = BTreeSet::new();
         for (step, (tenant, actor, op)) in ops.iter().enumerate() {
             let tenant = WORLD_TENANTS[*tenant];
             let principal = if *actor == 6 {
@@ -206,12 +213,18 @@ proptest! {
             };
             let context = ctx(tenant, principal, 10_000 + step as i64);
             if let Ok((next, outcome)) = world.step(&intent(tenant, op), &context) {
-                grandfathered |= outcome.events.iter().any(|event| {
-                    matches!(event.body, EventBody::SchemaChanged { grandfathered: n, .. } if n > 0)
-                });
-                if !grandfathered {
-                    for invariant in check_world(&next) {
-                        prop_assert!(invariant.holds, "after step {} ({:?}): {} broken: {:?}", step, op, invariant.id, invariant.violations);
+                for event in &outcome.events {
+                    if matches!(event.body, EventBody::SchemaChanged { grandfathered: n, .. } if n > 0) {
+                        grandfathered.insert(event.tenant.clone());
+                    }
+                }
+                for (id, state) in &next.tenants {
+                    prop_assert_eq!(&state.id, id);
+                    for invariant in check_tenant(state) {
+                        if invariant.id == "records_conform" && grandfathered.contains(id) {
+                            continue;
+                        }
+                        prop_assert!(invariant.holds, "after step {} ({:?}): {} broken in {}: {:?}", step, op, invariant.id, id, invariant.violations);
                     }
                 }
                 world = next;

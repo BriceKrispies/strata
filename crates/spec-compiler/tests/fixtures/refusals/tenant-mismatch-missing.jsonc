@@ -1,0 +1,17 @@
+{
+  "exegra": "0.1",
+  "system": { "id": "sys", "name": "System" },
+  "claims": [ { "id": "ten-1140", "ref": "TEN-1140", "kind": "requirement" } ],
+  "contracts": [
+    {
+      "id": "export-tenant", "name": "Export a tenant", "ref": "CT-038", "exposure": "public",
+      "inputs": [ { "name": "tenant", "type": "tenant-id" } ],
+      "errors": [ { "name": "not-found", "kind": "not_found" } ]
+    },
+    {
+      "id": "guarded-export", "name": "Export a tenant, guarded", "ref": "CT-039", "exposure": "public",
+      "inputs": [ { "name": "tenant", "type": "tenant-id" } ],
+      "errors": [ { "name": "tenant-mismatch", "kind": "forbidden" } ]
+    }
+  ]
+}

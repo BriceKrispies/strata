@@ -10,6 +10,7 @@
 
 use crate::engine::{Rng, Scheduled};
 use std::collections::BTreeMap;
+use strata_kernel::ext::*;
 use strata_kernel::{
     CmpOp, Context, Expr, FieldDef, FieldId, FieldType, Intent, ObjectTypeDef, Principal, Record,
     RecordId, Scope, TenantId, TenantSchema, TenantState, Timestamp, Value, World,
@@ -129,6 +130,8 @@ fn synthesise(
         FieldType::Int => Value::Int(rng.below(100) as i64),
         FieldType::Bool => Value::Bool(rng.below(4) == 0),
         FieldType::Time => Value::Time(now),
+        // The workload writes no files and leaves a language field unset.
+        FieldType::File { .. } | FieldType::Language => return None,
         FieldType::Ref { target, .. } => {
             let ids: Vec<RecordId> = tenant.records_of(target).map(|r| r.id).collect();
             if ids.is_empty() {
@@ -326,6 +329,10 @@ pub fn generate(
             session: None,
             now: Timestamp(now),
             correlation: format!("sim-{seed}-{serial}"),
+            verified_address: None,
+            idempotency_key: None,
+            language: None,
+            hop: None,
         };
         if let Ok((next, _)) = scratch.step(&intent, &context) {
             scratch = next;

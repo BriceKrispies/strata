@@ -26,6 +26,9 @@ pub struct DevAccount {
     pub password: String,
     pub principal: String,
     pub display_name: String,
+    /// The address the account counts as having verified, for the invitations of the fixture.
+    #[serde(default)]
+    pub email: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -51,6 +54,64 @@ fn read_json(path: &Path) -> Result<Json, String> {
     serde_json::from_str(&read(path)?).map_err(|e| format!("{}: {e}", path.display()))
 }
 
+/// A path with its `.` and `..` components folded away, without touching the file system.
+fn lexical(path: &Path) -> PathBuf {
+    use std::path::Component;
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !out.pop() {
+                    out.push(Component::ParentDir);
+                }
+            }
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+/// Whether `path` is inside `base`, or, when `shared_allowed`, inside a directory whose name
+/// starts with `_` directly under the parent of `base` (where templates live). Both paths are
+/// compared as given; the caller makes them comparable.
+fn allowed(path: &Path, base: &Path, shared_allowed: bool) -> bool {
+    if path.starts_with(base) {
+        return true;
+    }
+    shared_allowed
+        && base
+            .parent()
+            .and_then(|root| path.strip_prefix(root).ok())
+            .and_then(|inside| inside.components().next())
+            .is_some_and(|first| first.as_os_str().to_string_lossy().starts_with('_'))
+}
+
+/// The file a bundle names by a relative path, refused when it is outside what the bundle may
+/// read: its own directory, and, for a template only, a shared directory (its name starts with
+/// `_`) directly under the tenants root, which is where templates live. The path is refused by
+/// its text first, before the file system is touched, so a refusal never says whether a file
+/// exists. When the file exists, the resolved path is checked again, which catches symbolic
+/// links that lead out.
+fn confined(dir: &Path, relative: &str, shared_allowed: bool) -> Result<PathBuf, String> {
+    let outside = || {
+        format!(
+            "{relative}: the path is outside the tenant directory {}",
+            dir.display()
+        )
+    };
+    let wanted = dir.join(relative);
+    if !allowed(&lexical(&wanted), &lexical(dir), shared_allowed) {
+        return Err(outside());
+    }
+    let base = fs::canonicalize(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    match fs::canonicalize(&wanted) {
+        Ok(path) if allowed(&path, &base, shared_allowed) => Ok(path),
+        Ok(_) => Err(outside()),
+        Err(e) => Err(format!("{relative}: {e}")),
+    }
+}
+
 /// Load one tenant directory.
 pub fn load_tenant(dir: &Path) -> Result<LoadedTenant, String> {
     let mut doc = read_json(&dir.join("tenant.json"))?;
@@ -58,7 +119,7 @@ pub fn load_tenant(dir: &Path) -> Result<LoadedTenant, String> {
 
     if let Some(template) = root.remove("template") {
         let relative = template.as_str().ok_or("template must be a path")?;
-        let template = read_json(&dir.join(relative))?;
+        let template = read_json(&confined(dir, relative, true)?)?;
         for section in TEMPLATE_SECTIONS {
             if let (Some(value), false) = (template.get(section), root.contains_key(section)) {
                 root.insert(section.to_string(), value.clone());
@@ -79,7 +140,7 @@ pub fn load_tenant(dir: &Path) -> Result<LoadedTenant, String> {
                     .and_then(Json::as_str);
                 if let Some(relative) = file {
                     *value = Json::String(
-                        read(&dir.join(relative))?
+                        read(&confined(dir, relative, false)?)?
                             .replace("\r\n", "\n")
                             .trim()
                             .to_string(),
@@ -104,9 +165,7 @@ pub fn load_tenant(dir: &Path) -> Result<LoadedTenant, String> {
     })
 }
 
-/// Load every tenant directory under `root`, in name order. Directories whose name starts with
-/// `_` hold shared material such as templates and are skipped.
-pub fn load_all(root: &Path) -> Result<Vec<LoadedTenant>, String> {
+fn tenant_dirs(root: &Path) -> Result<Vec<PathBuf>, String> {
     let mut dirs: Vec<PathBuf> = fs::read_dir(root)
         .map_err(|e| format!("{}: {e}", root.display()))?
         .filter_map(Result::ok)
@@ -119,5 +178,27 @@ pub fn load_all(root: &Path) -> Result<Vec<LoadedTenant>, String> {
         })
         .collect();
     dirs.sort();
-    dirs.iter().map(|dir| load_tenant(dir)).collect()
+    Ok(dirs)
+}
+
+/// Load every tenant directory under `root`, in name order, stopping at the first that does not
+/// load. Directories whose name starts with `_` hold shared material such as templates and are
+/// skipped.
+pub fn load_all(root: &Path) -> Result<Vec<LoadedTenant>, String> {
+    tenant_dirs(root)?
+        .iter()
+        .map(|dir| load_tenant(dir))
+        .collect()
+}
+
+/// Load every tenant directory under `root`, in name order, each on its own: a directory that
+/// does not load is returned as its path with the reason, and the others are still loaded.
+pub fn load_each(root: &Path) -> Result<Vec<(PathBuf, Result<LoadedTenant, String>)>, String> {
+    Ok(tenant_dirs(root)?
+        .into_iter()
+        .map(|dir| {
+            let loaded = load_tenant(&dir);
+            (dir, loaded)
+        })
+        .collect())
 }

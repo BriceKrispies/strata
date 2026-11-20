@@ -13,10 +13,13 @@ export default defineConfig({
     // The BFF picks the tenant from the Host header, so the original host is passed on.
     proxy: {
       '/api': { target: bff, changeOrigin: false },
+      '/federation': { target: bff, changeOrigin: false },
       '/ws': { target: bff, changeOrigin: false, ws: true },
     },
     allowedHosts: ['localhost', 'tidewater.localhost'],
   },
   worker: { format: 'es' },
-  build: { outDir: 'dist', emptyOutDir: true, target: 'es2022', sourcemap: true },
+  // The module-preload polyfill is left out: es2022 browsers preload natively, and the page's
+  // Trusted Types policy leaves no room for a helper script the build injects.
+  build: { outDir: 'dist', emptyOutDir: true, target: 'es2022', sourcemap: false, modulePreload: { polyfill: false } },
 });

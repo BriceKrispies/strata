@@ -4,8 +4,16 @@
 //! - generated routes served in-process on an ephemeral port, with in-test implementations of
 //!   the component traits, called through the generated clients and `Deps`: a successful call
 //!   with its audit entry, a validation refusal, policy refusals and a quota refusal;
+//! - one contract served on its own through its handler trait, and every failure answered with
+//!   the specification's error body at the status of its kind, byte for byte (WG-4893);
 //! - the machine handlers bringing contract requests and another machine's emitted event to the
-//!   machines, through the memory store.
+//!   machines, through the memory store;
+//! - exposure and auth (WG-4908): an internal contract has no route through the gateway, only the
+//!   public contract is in `GATEWAY_ROUTES`, and the generated `SpecAuthorizer` refuses a missing
+//!   or wrong credential for every scheme;
+//! - capabilities (WG-4954): the one capability check refuses a capability outside the plan,
+//!   with its flag off, outside the principal's roles or beyond a delegation, the authorizer
+//!   makes it on the call, and the operation catalogue lists every operation marked per principal.
 //!
 //! That an undeclared call does not compile is the `compile_fail` example in
 //! `src/backend/deps.rs`.
@@ -13,33 +21,53 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
-use axum::http::HeaderMap;
+use axum::http::{HeaderMap, HeaderValue};
 use strata_runtime::{
-    Authorizer, CallError, Caller, Client, Contract, DispatchError, Dispatcher, Envelope,
-    FailureCode, Host, MemoryStore, NoCredentials, Refusal, Routes, ServiceToken, TestClock, Time,
+    Access, Authorizer, CallError, Caller, Client, Contract, DispatchError, Dispatcher, Envelope,
+    Exposure, FailureCode, Host, MemoryStore, NoCredentials, Presented, Principal, Refusal, Routes,
+    Scheme, ServiceToken, Site, TenantId, TenantScope, TestClock, Time,
 };
 use strata_spec_compiler_wiring_fixture::contracts::{
     self, CancelJobRequest, CancelJobResponse, MakeReportRequest, MakeReportResponse,
     SubmitJobError, SubmitJobRequest, SubmitJobResponse,
 };
 use strata_spec_compiler_wiring_fixture::{
-    audits, deps, handlers, machines, prelude, quotas, routes,
+    audits, deps, handlers, machines, prelude, quotas, routes, types,
 };
 
 /// The header the test's callers name themselves in: `kind/subject` or `kind/subject/role`.
 const PRINCIPAL: &str = "x-principal";
 
-/// Admits anyone to a contract whose requirement is `none`, and otherwise the principal named in
-/// the `x-principal` header.
+/// Admits anyone to an anonymous contract, and to a session contract the principal named in the
+/// `x-principal` header; refuses a session contract without one, and every other scheme. The
+/// correlation id is the `x-correlation-id` header.
 struct Principals;
 
 impl Authorizer for Principals {
-    async fn authorize(&self, requirement: &str, headers: &HeaderMap) -> Result<Caller, Refusal> {
-        let named = headers.get(PRINCIPAL).and_then(|v| v.to_str().ok());
-        let Some(named) = named else {
-            if requirement == "none" {
-                return Ok(Caller::default());
+    async fn authorize(&self, access: &Access, request: &Presented<'_>) -> Result<Caller, Refusal> {
+        let named = request.header(PRINCIPAL);
+        let correlation = request.header("x-correlation-id").unwrap_or("").to_string();
+        match access.scheme {
+            Scheme::Anonymous => {
+                return Ok(Caller {
+                    correlation,
+                    ..Caller::default()
+                })
             }
+            Scheme::Session => {}
+            Scheme::Service
+            | Scheme::ProvisioningToken
+            | Scheme::Signature
+            | Scheme::SignedAddress
+            | Scheme::Delegation
+            | Scheme::InProcess => {
+                return Err(Refusal {
+                    code: FailureCode::Forbidden,
+                    message: "this test admits sessions only".into(),
+                })
+            }
+        }
+        let Some(named) = named else {
             return Err(Refusal {
                 code: FailureCode::Unauthenticated,
                 message: "name a principal".into(),
@@ -52,7 +80,7 @@ impl Authorizer for Principals {
         }
         Ok(Caller {
             subject: parts.get(1).map(|s| s.to_string()),
-            correlation: String::new(),
+            correlation,
             attributes,
         })
     }
@@ -111,11 +139,13 @@ struct Hooks {
     log: Mutex<Vec<audits::JobSubmittedAuditEntry>>,
 }
 
-impl routes::SchedulerHooks for Hooks {
+impl routes::AuditClock for Hooks {
     fn now(&self) -> prelude::Timestamp {
         prelude::Timestamp(7)
     }
+}
 
+impl routes::QuotaCounter for Hooks {
     async fn count(
         &self,
         quota: &'static quotas::Quota,
@@ -129,7 +159,9 @@ impl routes::SchedulerHooks for Hooks {
         }
         Ok(outcome)
     }
+}
 
+impl routes::SubmitJobHooks for Hooks {
     async fn append_job_submitted_audit(
         &self,
         entry: audits::JobSubmittedAuditEntry,
@@ -140,6 +172,17 @@ impl routes::SchedulerHooks for Hooks {
 }
 
 /// Serves `router` on an ephemeral local port and returns its base address.
+/// A reports component for a scheduler to call. A closed port would not do: Linux refuses the
+/// connection at once, but Windows answers only after its connection retries (about two
+/// seconds), which is longer than submit-job's timeout.
+async fn reports_server() -> String {
+    serve(
+        routes::reports_routes(Routes::new(Principals), Arc::new(Reports), Arc::new(()))
+            .into_router(),
+    )
+    .await
+}
+
 async fn serve(router: axum::Router) -> String {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
@@ -314,7 +357,7 @@ impl Dispatcher<machines::job::Emitted> for ToTracker {
 
 #[tokio::test(flavor = "current_thread")]
 async fn machine_handlers_bring_requests_and_published_events_to_the_machines() {
-    let store = Arc::new(MemoryStore::new());
+    let store = Arc::new(MemoryStore::new(TenantId::new("acme").unwrap()));
     let clock = Arc::new(TestClock::at(Time(1_000)));
     let tracker = Host::new(store.clone(), Arc::new(Nowhere), clock.clone()).unwrap();
     let job = Host::new(
@@ -416,7 +459,1178 @@ fn kebab_named_requests_cross_the_wire_in_their_wire_case_and_back() {
     );
 
     assert_eq!(
-        serde_json::to_value(MakeReportError::NotFound).unwrap(),
-        json!("not_found")
+        serde_json::to_value(MakeReportError::NotFound(types::ApiError {
+            code: types::ErrorCode::NotFound,
+            message: "no job".into(),
+            detail: None,
+            correlation: String::new(),
+        }))
+        .unwrap(),
+        json!({ "not_found": { "code": "not_found", "message": "no job", "correlation": "" } })
+    );
+}
+
+/// Sends one POST of `body` to `base` + `path` with `headers` over a plain connection and
+/// returns the status and the body as sent.
+async fn post(base: &str, path: &str, headers: &[(&str, &str)], body: &str) -> (u16, String) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let address = base.trim_start_matches("http://");
+    let mut stream = tokio::net::TcpStream::connect(address).await.unwrap();
+    let mut request = format!(
+        "POST {path} HTTP/1.1\r\nhost: {address}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n",
+        body.len()
+    );
+    for (name, value) in headers {
+        request.push_str(&format!("{name}: {value}\r\n"));
+    }
+    request.push_str("\r\n");
+    request.push_str(body);
+    stream.write_all(request.as_bytes()).await.unwrap();
+    let mut answer = String::new();
+    stream.read_to_string(&mut answer).await.unwrap();
+    let (head, body) = answer.split_once("\r\n\r\n").unwrap();
+    let status = head.split(' ').nth(1).unwrap().parse().unwrap();
+    (status, body.to_string())
+}
+
+/// Reports nothing: every report is missing.
+struct NoReports;
+
+impl routes::MakeReportHandler for NoReports {
+    async fn handle(
+        &self,
+        request: MakeReportRequest,
+    ) -> Result<MakeReportResponse, contracts::MakeReportError> {
+        Err(contracts::MakeReportError::NotFound(types::ApiError {
+            code: types::ErrorCode::Internal,
+            message: format!("no job {}", request.job),
+            detail: Some("looked everywhere".into()),
+            correlation: "set by the handler".into(),
+        }))
+    }
+}
+
+struct Pong;
+
+impl routes::PingHandler for Pong {
+    async fn handle(
+        &self,
+        _request: contracts::PingRequest,
+    ) -> Result<contracts::PingResponse, contracts::PingError> {
+        Ok(contracts::PingResponse {
+            pong: "pong".into(),
+        })
+    }
+}
+
+/// One contract is served on its own by a type that implements only its handler, and answers
+/// a contract error with its payload as the error body: the status of its kind, the code set to
+/// the kind, the caller's correlation id, and the left-out field absent.
+#[tokio::test(flavor = "current_thread")]
+async fn one_contract_is_served_alone_and_answers_with_the_error_body() {
+    let base = serve(
+        routes::serve_make_report(Routes::new(Principals), Arc::new(NoReports), Arc::new(()))
+            .into_router(),
+    )
+    .await;
+    let (status, body) = post(
+        &base,
+        "/reports/make-report",
+        &[("x-correlation-id", "c-7")],
+        r#"{"job":"j4"}"#,
+    )
+    .await;
+    assert_eq!(status, 404);
+    assert_eq!(
+        body,
+        r#"{"code":"not_found","message":"no job j4","detail":"looked everywhere","correlation":"c-7"}"#
+    );
+
+    // The generated client reads the body back as the contract's error.
+    let client = routes::ReportsClient::new(Client::new(&base, NoCredentials).unwrap());
+    match client
+        .make_report(&MakeReportRequest { job: "j5".into() })
+        .await
+    {
+        Err(CallError::Contract(contracts::MakeReportError::NotFound(reply))) => {
+            assert_eq!(reply.code, types::ErrorCode::NotFound);
+            assert_eq!(reply.message, "no job j5");
+        }
+        other => panic!("expected not_found, got {other:?}"),
+    }
+
+    // A failure of the runtime is a body of its kind: a request that does not decode.
+    let (status, body) = post(&base, "/reports/make-report", &[], r#"{"jobb":1}"#).await;
+    assert_eq!(status, 422);
+    let reply: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(reply["code"], "invalid");
+    assert_eq!(reply["correlation"], "");
+    assert!(reply.get("detail").is_none());
+}
+
+/// Refusals of the runtime and of the specification's checks answer with the error body at the
+/// status of their kind: no principal 401, a policy 403, a quota refusal (kind throttled) 429.
+/// Ping takes a session, so it is refused without a principal.
+#[tokio::test(flavor = "current_thread")]
+async fn refusals_answer_with_the_error_body_at_the_status_of_their_kind() {
+    let reports = reports_server().await;
+    let scheduler = Arc::new(Scheduler {
+        deps: deps::SchedulerDeps::new(routes::ReportsClient::new(
+            Client::new(&reports, NoCredentials).unwrap(),
+        )),
+        submitted: Mutex::new(Vec::new()),
+    });
+    let served = routes::scheduler_routes(
+        Routes::new(Principals),
+        scheduler,
+        Arc::new(Hooks::default()),
+    );
+    let base = serve(routes::serve_ping(served, Arc::new(Pong), Arc::new(())).into_router()).await;
+    let job = r#"{"job":"j1","priority":3}"#;
+
+    let (status, body) = post(
+        &base,
+        "/api/jobs/submit",
+        &[("x-correlation-id", "c-1")],
+        job,
+    )
+    .await;
+    assert_eq!(status, 401);
+    assert_eq!(
+        body,
+        r#"{"code":"unauthenticated","message":"name a principal","correlation":"c-1"}"#
+    );
+    let (status, body) = post(&base, "/api/jobs/submit", &[(PRINCIPAL, "member/mia")], job).await;
+    assert_eq!(status, 403);
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&body).unwrap()["code"],
+        "forbidden"
+    );
+    for expected in [200, 200, 429] {
+        let (status, body) = post(
+            &base,
+            "/api/jobs/submit",
+            &[(PRINCIPAL, "operator/ann")],
+            job,
+        )
+        .await;
+        assert_eq!(status, expected, "{body}");
+        if status == 429 {
+            assert_eq!(
+                body,
+                r#"{"code":"throttled","message":"busy","correlation":""}"#
+            );
+        }
+    }
+
+    let (status, _) = post(&base, "/gateway/ping", &[], "{}").await;
+    assert_eq!(status, 401);
+    let (status, body) = post(&base, "/gateway/ping", &[(PRINCIPAL, "member/mia")], "{}").await;
+    assert_eq!((status, body.as_str()), (200, r#"{"pong":"pong"}"#));
+}
+
+/// The gateway serves public contracts only: submit-job and cancel-job are internal, so through
+/// `Routes::gateway` their paths have no route (404) even for a principal the authorizer admits,
+/// while public ping is served; the same contracts are served on the service network. The
+/// generated gateway table lists ping alone.
+#[tokio::test(flavor = "current_thread")]
+async fn an_internal_contract_is_unreachable_through_the_gateway() {
+    assert_eq!(
+        routes::GATEWAY_ROUTES
+            .iter()
+            .map(|r| (r.path, r.contract, r.component))
+            .collect::<Vec<_>>(),
+        [("/gateway/ping", "CT-3", "gateway")]
+    );
+    assert_eq!(
+        <routes::SubmitJob as Contract>::SPEC.access.exposure,
+        Exposure::Internal
+    );
+    let reports = reports_server().await;
+    let scheduler = || {
+        Arc::new(Scheduler {
+            deps: deps::SchedulerDeps::new(routes::ReportsClient::new(
+                Client::new(&reports, NoCredentials).unwrap(),
+            )),
+            submitted: Mutex::new(Vec::new()),
+        })
+    };
+    let gateway = routes::scheduler_routes(
+        Routes::gateway(Principals),
+        scheduler(),
+        Arc::new(Hooks::default()),
+    );
+    let gateway = routes::serve_ping(gateway, Arc::new(Pong), Arc::new(()));
+    let base = serve(gateway.into_router()).await;
+    let job = r#"{"job":"j1","priority":3}"#;
+    let (status, _) = post(
+        &base,
+        "/api/jobs/submit",
+        &[(PRINCIPAL, "operator/ann")],
+        job,
+    )
+    .await;
+    assert_eq!(status, 404);
+    let (status, _) = post(&base, "/scheduler/cancel-job", &[], r#"{"job":"j1"}"#).await;
+    assert_eq!(status, 404);
+    let (status, _) = post(&base, "/gateway/ping", &[(PRINCIPAL, "member/mia")], "{}").await;
+    assert_eq!(status, 200);
+
+    let service = routes::scheduler_routes(
+        Routes::new(Principals),
+        scheduler(),
+        Arc::new(Hooks::default()),
+    );
+    let base = serve(service.into_router()).await;
+    let (status, body) = post(
+        &base,
+        "/api/jobs/submit",
+        &[(PRINCIPAL, "operator/ann")],
+        job,
+    )
+    .await;
+    assert_eq!(status, 200, "{body}");
+}
+
+/// The deployment's part of the generated authorizer, for the tests: one site `t1.example` of
+/// tenant `t1`, sessions by the `x-session` header, the visitor token `visit`, the service secret
+/// `svc`, provisioning token `prov`, delegation token `deleg`, a signature header naming its
+/// secret, signed addresses ending in `sig=good`, and the development condition `DEV` when `dev`.
+struct Holes {
+    dev: bool,
+}
+
+const NOW: i64 = 10_000_000;
+
+fn person(tenant: &str, authenticated_at_ms: i64) -> Principal {
+    Principal {
+        subject: "ann".into(),
+        kind: "person".into(),
+        tenant: Some(tenant.into()),
+        roles: vec!["author".into()],
+        authenticated_at_ms: Some(authenticated_at_ms),
+        csrf_token: Some("tok".into()),
+    }
+}
+
+impl routes::AuthHoles for Holes {
+    fn site(&self, request: &Presented<'_>) -> Option<Site> {
+        (request.header("host") == Some("t1.example")).then(|| Site {
+            tenant: "t1".into(),
+            origins: vec!["https://t1.example".into()],
+        })
+    }
+
+    async fn session(&self, request: &Presented<'_>) -> Result<Option<Principal>, String> {
+        Ok(match request.header("x-session") {
+            Some("s-good") => Some(person("t1", NOW - 1_000)),
+            Some("s-stale") => Some(person("t1", NOW - 3_600_000)),
+            Some("s-other") => Some(person("t2", NOW - 1_000)),
+            _ => None,
+        })
+    }
+
+    fn visitor_token(&self, site: &Site, token: &str) -> bool {
+        site.tenant == "t1" && token == "visit"
+    }
+
+    fn service_secret(&self) -> Option<String> {
+        Some("svc".into())
+    }
+
+    async fn provisioning(&self, token: &str) -> Result<Option<Principal>, String> {
+        Ok((token == "prov").then(|| Principal {
+            subject: "scim".into(),
+            kind: "provisioner".into(),
+            tenant: Some("t1".into()),
+            ..Principal::default()
+        }))
+    }
+
+    async fn delegation(&self, token: &str) -> Result<Option<Principal>, String> {
+        Ok((token == "deleg").then(|| Principal {
+            subject: "agent".into(),
+            kind: "agent".into(),
+            tenant: Some("t1".into()),
+            ..Principal::default()
+        }))
+    }
+
+    async fn signature(
+        &self,
+        secret: &'static str,
+        request: &Presented<'_>,
+    ) -> Result<Option<Principal>, String> {
+        let expected = format!("{secret}:ok");
+        Ok(
+            (request.header("x-signature") == Some(expected.as_str())).then(|| Principal {
+                subject: "sender".into(),
+                kind: "external".into(),
+                ..Principal::default()
+            }),
+        )
+    }
+
+    fn signed_address(&self, secret: &'static str, request: &Presented<'_>) -> bool {
+        secret == "file-key" && request.target.ends_with("sig=good")
+    }
+
+    fn development(&self, condition: &'static str) -> bool {
+        self.dev && condition == "DEV"
+    }
+
+    fn now_ms(&self) -> i64 {
+        NOW
+    }
+}
+
+/// Asks the generated authorizer about `access` for a request to `target` with `headers`.
+async fn ask(
+    authorizer: &routes::SpecAuthorizer<Holes>,
+    access: Access,
+    target: &str,
+    headers: &[(&'static str, &'static str)],
+) -> Result<Caller, Refusal> {
+    let mut map = HeaderMap::new();
+    for (name, value) in headers {
+        map.insert(*name, HeaderValue::from_static(*value));
+    }
+    let presented = Presented {
+        headers: &map,
+        target,
+        body: b"{}",
+    };
+    authorizer.authorize(&access, &presented).await
+}
+
+/// The code of a refusal, or `None` when the call was admitted.
+fn refused(answer: Result<Caller, Refusal>) -> Option<FailureCode> {
+    answer.err().map(|r| r.code)
+}
+
+/// Every scheme of the generated authorizer refuses a missing credential and a wrong one and
+/// admits the right one; and around the scheme, a local contract, a development fixture outside
+/// development, a missing or foreign origin, a missing or wrong request token, a role not held, a
+/// stale authentication and a principal of another tenant are refused.
+#[tokio::test(flavor = "current_thread")]
+async fn each_scheme_refuses_a_missing_or_wrong_credential() {
+    let authorizer = routes::SpecAuthorizer::new(Holes { dev: false });
+    let public = |scheme| Access {
+        exposure: Exposure::Public,
+        scheme,
+        ..Access::LOCAL
+    };
+    let host = ("host", "t1.example");
+    let unauthenticated = Some(FailureCode::Unauthenticated);
+    let forbidden = Some(FailureCode::Forbidden);
+
+    // Anonymous: nothing to present, so nothing is refused for the lack of it.
+    assert_eq!(
+        refused(ask(&authorizer, public(Scheme::Anonymous), "/", &[]).await),
+        None
+    );
+
+    // Session.
+    let session = public(Scheme::Session);
+    assert_eq!(
+        refused(ask(&authorizer, session, "/", &[]).await),
+        unauthenticated
+    );
+    assert_eq!(
+        refused(ask(&authorizer, session, "/", &[("x-session", "s-forged")]).await),
+        unauthenticated
+    );
+    let caller = ask(&authorizer, session, "/", &[("x-session", "s-good")])
+        .await
+        .unwrap();
+    assert_eq!(caller.subject.as_deref(), Some("ann"));
+    assert_eq!(
+        caller.attributes.get("tenant").map(String::as_str),
+        Some("t1")
+    );
+    assert_eq!(
+        caller.attributes.get("kind").map(String::as_str),
+        Some("person")
+    );
+
+    // Service.
+    let service = Access::SERVICE;
+    assert_eq!(
+        refused(ask(&authorizer, service, "/", &[]).await),
+        unauthenticated
+    );
+    assert_eq!(
+        refused(ask(&authorizer, service, "/", &[("x-service-token", "wrong")]).await),
+        unauthenticated
+    );
+    let caller = ask(&authorizer, service, "/", &[("x-service-token", "svc")])
+        .await
+        .unwrap();
+    assert_eq!(caller.subject.as_deref(), Some("service"));
+
+    // Provisioning token and delegation: the bearer token.
+    for (scheme, token) in [
+        (Scheme::ProvisioningToken, "Bearer prov"),
+        (Scheme::Delegation, "Bearer deleg"),
+    ] {
+        let access = public(scheme);
+        assert_eq!(
+            refused(ask(&authorizer, access, "/", &[]).await),
+            unauthenticated,
+            "{scheme:?}"
+        );
+        assert_eq!(
+            refused(
+                ask(
+                    &authorizer,
+                    access,
+                    "/",
+                    &[("authorization", "Bearer forged")]
+                )
+                .await
+            ),
+            unauthenticated,
+            "{scheme:?}"
+        );
+        assert_eq!(
+            refused(ask(&authorizer, access, "/", &[("authorization", "Basic prov")]).await),
+            unauthenticated,
+            "{scheme:?}"
+        );
+        assert_eq!(
+            refused(ask(&authorizer, access, "/", &[("authorization", token)]).await),
+            None,
+            "{scheme:?}"
+        );
+    }
+
+    // Signature of a named secret.
+    let signed = Access {
+        secret: Some("hook-key"),
+        ..public(Scheme::Signature)
+    };
+    assert_eq!(
+        refused(ask(&authorizer, signed, "/", &[]).await),
+        unauthenticated
+    );
+    assert_eq!(
+        refused(ask(&authorizer, signed, "/", &[("x-signature", "other-key:ok")]).await),
+        unauthenticated
+    );
+    assert_eq!(
+        refused(ask(&authorizer, signed, "/", &[("x-signature", "hook-key:ok")]).await),
+        None
+    );
+    assert_eq!(
+        refused(
+            ask(
+                &authorizer,
+                public(Scheme::Signature),
+                "/",
+                &[("x-signature", "hook-key:ok")]
+            )
+            .await
+        ),
+        forbidden
+    );
+
+    // Signed address.
+    let address = Access {
+        secret: Some("file-key"),
+        ..public(Scheme::SignedAddress)
+    };
+    assert_eq!(
+        refused(ask(&authorizer, address, "/files/a", &[]).await),
+        forbidden
+    );
+    assert_eq!(
+        refused(ask(&authorizer, address, "/files/a?sig=bad", &[]).await),
+        forbidden
+    );
+    assert_eq!(
+        refused(ask(&authorizer, address, "/files/a?sig=good", &[]).await),
+        None
+    );
+
+    // In-process and anything local: never on a route, whatever is presented.
+    assert_eq!(
+        refused(
+            ask(
+                &authorizer,
+                public(Scheme::InProcess),
+                "/",
+                &[("x-service-token", "svc")]
+            )
+            .await
+        ),
+        forbidden
+    );
+    let local_service = Access {
+        scheme: Scheme::Service,
+        ..Access::LOCAL
+    };
+    assert_eq!(
+        refused(
+            ask(
+                &authorizer,
+                local_service,
+                "/",
+                &[("x-service-token", "svc")]
+            )
+            .await
+        ),
+        forbidden
+    );
+
+    // A browser write: origin of the site, then the request token of the session or visit.
+    let write = Access {
+        csrf: true,
+        origin: true,
+        tenant_scope: Some(TenantScope::Request),
+        ..session
+    };
+    let good = [
+        host,
+        ("x-session", "s-good"),
+        ("origin", "https://t1.example"),
+        ("x-csrf-token", "tok"),
+    ];
+    assert_eq!(refused(ask(&authorizer, write, "/", &good).await), None);
+    assert_eq!(
+        refused(
+            ask(
+                &authorizer,
+                write,
+                "/",
+                &[host, ("x-session", "s-good"), ("x-csrf-token", "tok")]
+            )
+            .await
+        ),
+        forbidden
+    );
+    assert_eq!(
+        refused(
+            ask(
+                &authorizer,
+                write,
+                "/",
+                &[
+                    host,
+                    ("x-session", "s-good"),
+                    ("origin", "https://evil.example"),
+                    ("x-csrf-token", "tok")
+                ]
+            )
+            .await
+        ),
+        forbidden
+    );
+    assert_eq!(
+        refused(
+            ask(
+                &authorizer,
+                write,
+                "/",
+                &[
+                    host,
+                    ("x-session", "s-good"),
+                    ("origin", "https://t1.example")
+                ]
+            )
+            .await
+        ),
+        forbidden
+    );
+    assert_eq!(
+        refused(
+            ask(
+                &authorizer,
+                write,
+                "/",
+                &[
+                    host,
+                    ("x-session", "s-good"),
+                    ("origin", "https://t1.example"),
+                    ("x-csrf-token", "visit")
+                ]
+            )
+            .await
+        ),
+        forbidden
+    );
+    // A session of another tenant on this tenant's site.
+    assert_eq!(
+        refused(
+            ask(
+                &authorizer,
+                write,
+                "/",
+                &[
+                    host,
+                    ("x-session", "s-other"),
+                    ("origin", "https://t1.example"),
+                    ("x-csrf-token", "tok")
+                ]
+            )
+            .await
+        ),
+        forbidden
+    );
+    // A visitor's write carries the visitor token.
+    let visit = Access {
+        csrf: true,
+        origin: true,
+        ..public(Scheme::Anonymous)
+    };
+    assert_eq!(
+        refused(
+            ask(
+                &authorizer,
+                visit,
+                "/",
+                &[
+                    host,
+                    ("origin", "https://t1.example"),
+                    ("x-csrf-token", "visit")
+                ]
+            )
+            .await
+        ),
+        None
+    );
+    assert_eq!(
+        refused(
+            ask(
+                &authorizer,
+                visit,
+                "/",
+                &[
+                    host,
+                    ("origin", "https://t1.example"),
+                    ("x-csrf-token", "tok")
+                ]
+            )
+            .await
+        ),
+        forbidden
+    );
+    assert_eq!(
+        refused(
+            ask(
+                &authorizer,
+                visit,
+                "/",
+                &[host, ("origin", "https://t1.example")]
+            )
+            .await
+        ),
+        forbidden
+    );
+
+    // Roles: any one admits; none held is refused.
+    let authors = Access {
+        roles: &["editor", "author"],
+        ..session
+    };
+    let owners = Access {
+        roles: &["owner"],
+        ..session
+    };
+    assert_eq!(
+        refused(ask(&authorizer, authors, "/", &[("x-session", "s-good")]).await),
+        None
+    );
+    assert_eq!(
+        refused(ask(&authorizer, owners, "/", &[("x-session", "s-good")]).await),
+        forbidden
+    );
+
+    // Step-up: an authentication older than the age is refused.
+    let fresh = Access {
+        step_up: Some(std::time::Duration::from_secs(900)),
+        ..session
+    };
+    assert_eq!(
+        refused(ask(&authorizer, fresh, "/", &[("x-session", "s-good")]).await),
+        None
+    );
+    assert_eq!(
+        refused(ask(&authorizer, fresh, "/", &[("x-session", "s-stale")]).await),
+        unauthenticated
+    );
+
+    // A development fixture exists only under its condition.
+    let fixture = Access {
+        development: Some("DEV"),
+        ..owners
+    };
+    assert_eq!(
+        refused(ask(&authorizer, fixture, "/", &[("x-session", "s-good")]).await),
+        forbidden
+    );
+    let developing = routes::SpecAuthorizer::new(Holes { dev: true });
+    let dev_fixture = Access {
+        development: Some("DEV"),
+        ..authors
+    };
+    assert_eq!(
+        refused(ask(&developing, dev_fixture, "/", &[("x-session", "s-good")]).await),
+        None
+    );
+}
+
+/// The deployment of the capability tests (WG-4954): the site `t1.example` of tenant `t1`, the
+/// session `s-good` of person `ann` of `t1`, the delegation token `deleg` of an agent of `t1`,
+/// the tenant's plan and flag setting, and what the principal holds.
+struct Entitled {
+    plan: &'static str,
+    premium_on: bool,
+    holding: routes::Holding,
+}
+
+impl routes::AuthHoles for Entitled {
+    fn site(&self, request: &Presented<'_>) -> Option<Site> {
+        (request.header("host") == Some("t1.example")).then(|| Site {
+            tenant: "t1".into(),
+            origins: vec!["https://t1.example".into()],
+        })
+    }
+
+    async fn session(&self, request: &Presented<'_>) -> Result<Option<Principal>, String> {
+        Ok((request.header("x-session") == Some("s-good")).then(|| person("t1", NOW - 1_000)))
+    }
+
+    async fn delegation(&self, token: &str) -> Result<Option<Principal>, String> {
+        Ok((token == "deleg").then(|| Principal {
+            subject: "agent".into(),
+            kind: "agent".into(),
+            tenant: Some("t1".into()),
+            ..Principal::default()
+        }))
+    }
+
+    async fn entitlement(&self, tenant: &str) -> Result<Option<routes::Entitlement>, String> {
+        Ok((tenant == "t1").then(|| routes::Entitlement {
+            plan: self.plan.into(),
+            flags: vec![("premium-reports".into(), self.premium_on)],
+        }))
+    }
+
+    async fn holding(&self, principal: &Principal) -> Result<routes::Holding, String> {
+        let _ = principal;
+        Ok(self.holding.clone())
+    }
+
+    fn now_ms(&self) -> i64 {
+        NOW
+    }
+}
+
+/// A tenant role as tenant data, granting `capabilities`.
+fn tenant_role(id: &str, capabilities: &[&str]) -> routes::TenantRole {
+    routes::TenantRole {
+        id: id.into(),
+        capabilities: capabilities.iter().map(|c| c.to_string()).collect(),
+    }
+}
+
+/// The refusal of a public call with `scheme` requiring `requires`, presenting the session
+/// `s-good` and the delegation token `deleg` at `t1.example`, or `None` when it is admitted.
+async fn ask_entitled(
+    entitled: Entitled,
+    scheme: Scheme,
+    requires: &'static [&'static str],
+) -> Option<FailureCode> {
+    let authorizer = routes::SpecAuthorizer::new(entitled);
+    let access = Access {
+        exposure: Exposure::Public,
+        scheme,
+        requires,
+        tenant_scope: Some(TenantScope::Request),
+        ..Access::LOCAL
+    };
+    let mut map = HeaderMap::new();
+    map.insert("host", HeaderValue::from_static("t1.example"));
+    map.insert("x-session", HeaderValue::from_static("s-good"));
+    map.insert("authorization", HeaderValue::from_static("Bearer deleg"));
+    let presented = Presented {
+        headers: &map,
+        target: "/",
+        body: b"{}",
+    };
+    authorizer
+        .authorize(&access, &presented)
+        .await
+        .err()
+        .map(|r| r.code)
+}
+
+/// The one capability check, on the fixture's model: reports-premium is entitled only by plan
+/// pro, gated by premium-reports (off by default) and held through the tenant role editor; the
+/// grant support-access confers it to support in one tenant while it lasts; the delegation
+/// report-agent passes on ping alone.
+#[test]
+fn a_capability_outside_the_plan_the_roles_or_a_delegation_is_refused() {
+    use routes::{permitted, ActingFor, Asker, CapabilityRefusal, Entitlement, HeldGrant, Holding};
+    let pro_on = Entitlement {
+        plan: "pro".into(),
+        flags: vec![("premium-reports".into(), true)],
+    };
+    let basic_on = Entitlement {
+        plan: "basic".into(),
+        ..pro_on.clone()
+    };
+    let pro_default = Entitlement {
+        plan: "pro".into(),
+        flags: vec![],
+    };
+    let editor = Holding {
+        tenant_roles: vec![tenant_role("editor", &["ping", "reports-premium"])],
+        ..Holding::default()
+    };
+    let premium: &[&'static str] = &["reports-premium"];
+    let check = |holding: &Holding, entitlement: &Entitlement| {
+        permitted(
+            premium,
+            Asker::Principal(holding),
+            Some("t1"),
+            Some(entitlement),
+            NOW,
+        )
+    };
+
+    // Everything holds: entitled, switched on, held, not delegated.
+    assert_eq!(check(&editor, &pro_on), Ok(()));
+    // Outside the plan, and with no plan known.
+    assert_eq!(
+        check(&editor, &basic_on),
+        Err(CapabilityRefusal::NotEntitled("reports-premium"))
+    );
+    assert_eq!(
+        permitted(premium, Asker::Principal(&editor), Some("t1"), None, NOW),
+        Err(CapabilityRefusal::NotEntitled("reports-premium"))
+    );
+    // The flag at its default, off.
+    assert_eq!(
+        check(&editor, &pro_default),
+        Err(CapabilityRefusal::FlagOff {
+            capability: "reports-premium",
+            flag: "premium-reports"
+        })
+    );
+    // Outside the principal's roles: no role, or a role without it.
+    assert_eq!(
+        check(&Holding::default(), &pro_on),
+        Err(CapabilityRefusal::NotHeld("reports-premium"))
+    );
+    let pinger = Holding {
+        tenant_roles: vec![tenant_role("pinger", &["ping"])],
+        ..Holding::default()
+    };
+    assert_eq!(
+        check(&pinger, &pro_on),
+        Err(CapabilityRefusal::NotHeld("reports-premium"))
+    );
+    // Through a team: the team's roles count as the principal's own.
+    let member = Holding {
+        teams: vec![routes::Team {
+            id: "desk".into(),
+            roles: vec![tenant_role("editor", &["reports-premium"])],
+        }],
+        ..Holding::default()
+    };
+    assert_eq!(check(&member, &pro_on), Ok(()));
+    // A platform role confers what the specification lists: operator does not hold it.
+    let operator = Holding {
+        platform_roles: vec!["operator".into()],
+        ..Holding::default()
+    };
+    assert_eq!(
+        check(&operator, &pro_on),
+        Err(CapabilityRefusal::NotHeld("reports-premium"))
+    );
+    assert_eq!(
+        permitted(
+            &["ping"],
+            Asker::Principal(&operator),
+            Some("t1"),
+            None,
+            NOW
+        ),
+        Ok(())
+    );
+    // A grant: to a holder of its grantee role, in its own tenant, while it lasts.
+    let support = |tenant: &str, expires_ms: i64, role: &str| Holding {
+        platform_roles: vec![role.to_string()],
+        grants: vec![HeldGrant {
+            grant: "support-access".into(),
+            tenant: Some(tenant.into()),
+            expires_ms,
+        }],
+        ..Holding::default()
+    };
+    assert_eq!(check(&support("t1", NOW + 1, "support"), &pro_on), Ok(()));
+    assert_eq!(
+        check(&support("t2", NOW + 1, "support"), &pro_on),
+        Err(CapabilityRefusal::NotHeld("reports-premium"))
+    );
+    assert_eq!(
+        check(&support("t1", NOW, "support"), &pro_on),
+        Err(CapabilityRefusal::NotHeld("reports-premium"))
+    );
+    assert_eq!(
+        check(&support("t1", NOW + 1, "operator"), &pro_on),
+        Err(CapabilityRefusal::NotHeld("reports-premium"))
+    );
+    // Beyond a delegation: report-agent passes on ping only, within the scope reports:read, until
+    // it expires.
+    let delegated = |scopes: &[&str], expires_ms: i64| Holding {
+        acting_for: Some(ActingFor {
+            delegation: "report-agent".into(),
+            scopes: scopes.iter().map(|s| s.to_string()).collect(),
+            expires_ms,
+        }),
+        ..editor.clone()
+    };
+    assert_eq!(
+        check(&delegated(&["reports:read"], NOW + 1), &pro_on),
+        Err(CapabilityRefusal::BeyondDelegation("reports-premium"))
+    );
+    let ping: &[&'static str] = &["ping"];
+    let under =
+        |holding: &Holding| permitted(ping, Asker::Principal(holding), Some("t1"), None, NOW);
+    assert_eq!(under(&delegated(&["reports:read"], NOW + 1)), Ok(()));
+    assert_eq!(
+        under(&delegated(&[], NOW + 1)),
+        Err(CapabilityRefusal::BeyondDelegation("ping"))
+    );
+    assert_eq!(
+        under(&delegated(&["reports:read"], NOW)),
+        Err(CapabilityRefusal::BeyondDelegation("ping"))
+    );
+    // Callers without a principal hold what their platform roles confer.
+    assert_eq!(
+        permitted(&["jobs-cancel"], Asker::Anonymous, None, None, NOW),
+        Ok(())
+    );
+    assert_eq!(
+        permitted(&["jobs-submit"], Asker::Anonymous, None, None, NOW),
+        Err(CapabilityRefusal::NotHeld("jobs-submit"))
+    );
+    assert_eq!(
+        permitted(&["jobs-cancel"], Asker::Service, None, None, NOW),
+        Err(CapabilityRefusal::NotHeld("jobs-cancel"))
+    );
+    // A capability the specification does not declare is never admitted.
+    assert_eq!(
+        permitted(
+            &["undeclared"],
+            Asker::Principal(&editor),
+            Some("t1"),
+            Some(&pro_on),
+            NOW
+        ),
+        Err(CapabilityRefusal::NotEntitled("undeclared"))
+    );
+}
+
+/// The generated authorizer makes the capability check on the call: a session holding the
+/// capability on the right plan with the flag on is admitted, and one outside the plan, with the
+/// flag off, outside its roles, or under a delegation that does not pass it on is refused.
+#[tokio::test(flavor = "current_thread")]
+async fn the_authorizer_refuses_a_capability_outside_the_plan_the_roles_or_a_delegation() {
+    let editor = routes::Holding {
+        tenant_roles: vec![tenant_role("editor", &["ping", "reports-premium"])],
+        ..routes::Holding::default()
+    };
+    let entitled = |plan: &'static str, premium_on: bool, holding: &routes::Holding| Entitled {
+        plan,
+        premium_on,
+        holding: holding.clone(),
+    };
+    let premium: &'static [&'static str] = &["reports-premium"];
+    let ping: &'static [&'static str] = &["ping"];
+    let forbidden = Some(FailureCode::Forbidden);
+    let nobody = routes::Holding::default();
+    assert_eq!(
+        ask_entitled(entitled("pro", true, &editor), Scheme::Session, premium).await,
+        None
+    );
+    assert_eq!(
+        ask_entitled(entitled("basic", true, &editor), Scheme::Session, premium).await,
+        forbidden
+    );
+    assert_eq!(
+        ask_entitled(entitled("pro", false, &editor), Scheme::Session, premium).await,
+        forbidden
+    );
+    assert_eq!(
+        ask_entitled(entitled("pro", true, &nobody), Scheme::Session, premium).await,
+        forbidden
+    );
+    // Under a delegation: without a known delegation, and beyond the one it acts under.
+    assert_eq!(
+        ask_entitled(entitled("pro", true, &editor), Scheme::Delegation, ping).await,
+        forbidden
+    );
+    let delegated = routes::Holding {
+        acting_for: Some(routes::ActingFor {
+            delegation: "report-agent".into(),
+            scopes: vec!["reports:read".into()],
+            expires_ms: NOW + 60_000,
+        }),
+        ..editor.clone()
+    };
+    assert_eq!(
+        ask_entitled(entitled("pro", true, &delegated), Scheme::Delegation, ping).await,
+        None
+    );
+    assert_eq!(
+        ask_entitled(
+            entitled("pro", true, &delegated),
+            Scheme::Delegation,
+            premium
+        )
+        .await,
+        forbidden
+    );
+    // A contract that requires nothing asks for no capability check.
+    assert_eq!(
+        ask_entitled(entitled("basic", false, &nobody), Scheme::Session, &[]).await,
+        None
+    );
+}
+
+/// Verifies: ADM-151
+///
+/// A tenant capability is held only through a tenant role that names it, assigned to the
+/// principal or held by a team it belongs to: not through a role that has the capability's name,
+/// not through a tenant role that shares its id with a platform role, not through a team's role
+/// that names others. The one check and the authorizer agree.
+#[tokio::test(flavor = "current_thread")]
+async fn a_tenant_capability_is_held_only_through_a_role_that_names_it() {
+    use routes::{held, Asker, Holding};
+    let holds = |holding: &Holding, capability: &str| {
+        held(Asker::Principal(holding), Some("t1"), NOW).contains(capability)
+    };
+    let with_roles = |roles: Vec<routes::TenantRole>| Holding {
+        tenant_roles: roles,
+        ..Holding::default()
+    };
+    let with_team = |roles: Vec<routes::TenantRole>| Holding {
+        teams: vec![routes::Team {
+            id: "desk".into(),
+            roles,
+        }],
+        ..Holding::default()
+    };
+
+    // A role that names the capability confers it, directly and through a team.
+    assert!(holds(
+        &with_roles(vec![tenant_role("editor", &["reports-premium"])]),
+        "reports-premium"
+    ));
+    assert!(holds(
+        &with_team(vec![tenant_role("editor", &["reports-premium"])]),
+        "reports-premium"
+    ));
+    // A role called by the capability's name, but naming none, confers nothing; nor does a role
+    // that names another capability, directly or through a team.
+    for holding in [
+        with_roles(vec![tenant_role("reports-premium", &[])]),
+        with_roles(vec![tenant_role("editor", &["ping"])]),
+        with_team(vec![tenant_role("reports-premium", &["ping"])]),
+        with_team(vec![tenant_role("editor", &[])]),
+        Holding::default(),
+    ] {
+        assert!(!holds(&holding, "reports-premium"), "{holding:?}");
+    }
+    // A tenant role that shares its id with a platform role confers what the tenant says it
+    // does, not what the platform role confers: the operator's own capability is not held.
+    let platform_operator_holds = held(
+        Asker::Principal(&Holding {
+            platform_roles: vec!["operator".into()],
+            ..Holding::default()
+        }),
+        Some("t1"),
+        NOW,
+    );
+    assert!(platform_operator_holds.contains("ping"));
+    assert!(!holds(
+        &with_roles(vec![tenant_role("operator", &[])]),
+        "ping"
+    ));
+    assert!(!holds(
+        &with_team(vec![tenant_role("operator", &[])]),
+        "ping"
+    ));
+
+    // The generated authorizer admits a call needing it exactly when a role names it.
+    let premium: &'static [&'static str] = &["reports-premium"];
+    let admitted = |holding: Holding| {
+        ask_entitled(
+            Entitled {
+                plan: "pro",
+                premium_on: true,
+                holding,
+            },
+            Scheme::Session,
+            premium,
+        )
+    };
+    assert_eq!(
+        admitted(with_team(vec![tenant_role("editor", &["reports-premium"])])).await,
+        None
+    );
+    assert_eq!(
+        admitted(with_roles(vec![tenant_role("reports-premium", &[])])).await,
+        Some(FailureCode::Forbidden)
+    );
+}
+
+/// The operation catalogue lists every contract reachable from outside its process with its
+/// description and input schema, and marks each for a principal with whether it may be
+/// attempted, by the same check.
+#[test]
+fn the_operation_catalogue_lists_every_operation_marked_per_principal() {
+    let ids: Vec<&str> = routes::OPERATIONS.iter().map(|o| o.contract).collect();
+    assert_eq!(ids, ["submit-job", "cancel-job", "ping", "make-report"]);
+    let submit = routes::operation("CT-1").unwrap();
+    assert_eq!(submit.contract, "submit-job");
+    assert_eq!(submit.access.requires, ["jobs-submit"]);
+    let schema: serde_json::Value = serde_json::from_str(submit.input_schema).unwrap();
+    assert_eq!(schema["type"], "object");
+    assert_eq!(schema["properties"]["priority"]["type"], "integer");
+    assert_eq!(schema["required"], serde_json::json!(["job", "priority"]));
+
+    let may = |holding: &routes::Holding| -> Vec<(&'static str, bool)> {
+        routes::catalogue(Scheme::Session, holding, Some("t1"), None, NOW)
+            .into_iter()
+            .map(|entry| (entry.operation.contract, entry.may_attempt))
+            .collect()
+    };
+    // submit-job, cancel-job and make-report are internal: no principal attempts them through
+    // the catalogue. ping is public and needs ping, which operator confers.
+    let operator = routes::Holding {
+        platform_roles: vec!["operator".into()],
+        ..routes::Holding::default()
+    };
+    assert_eq!(
+        may(&operator),
+        [
+            ("submit-job", false),
+            ("cancel-job", false),
+            ("ping", true),
+            ("make-report", false)
+        ]
+    );
+    assert_eq!(
+        may(&routes::Holding::default()),
+        [
+            ("submit-job", false),
+            ("cancel-job", false),
+            ("ping", false),
+            ("make-report", false)
+        ]
     );
 }

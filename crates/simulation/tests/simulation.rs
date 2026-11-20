@@ -59,6 +59,8 @@ fn require_excerpt(existing: ExistingData, before_step: usize) -> Proposal {
                 required: true,
                 unique: false,
                 default: None,
+                read: None,
+                personal: None,
             },
         }],
         existing,
@@ -218,6 +220,8 @@ fn neutral_changes(schema: &TenantSchema) -> Vec<(&'static str, Vec<SchemaChange
         params: Default::default(),
         order: vec![],
         limit: Some(5),
+        aggregates: None,
+        declared_fields: None,
     };
     vec![
         ("a query restated", vec![SchemaChange::DefineQuery(query)]),
@@ -261,6 +265,7 @@ fn neutral_changes(schema: &TenantSchema) -> Vec<(&'static str, Vec<SchemaChange
                             include: vec![],
                             markdown: vec![],
                             single: false,
+                            aggregate: None,
                         },
                     )]
                     .into(),
@@ -602,6 +607,10 @@ fn a_journal_of_real_commits_replays_to_the_live_state() {
         session: None,
         now: Timestamp(now),
         correlation: format!("t-{now}"),
+        verified_address: None,
+        idempotency_key: None,
+        language: None,
+        hop: None,
     };
     let role_of = |name: &str| RoleId::new(name).unwrap();
     let mut work: Vec<(Context, Intent)> =
@@ -677,6 +686,9 @@ fn a_journal_of_real_commits_replays_to_the_live_state() {
             "change_schema",
             "assign_role",
             "revoke_role",
+            "define_team",
+            "assign_team_role",
+            "add_team_member",
             "create_record",
             "update_record",
             "delete_record"

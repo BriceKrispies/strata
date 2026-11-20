@@ -1,8 +1,9 @@
 //! The system host against Exegra's simulator, scenario by scenario.
 //!
 //! For every scenario of `specifications/spec.jsonc` that drives implementation-level machines,
-//! this test asks Exegra for the trace (`node $EXEGRA_HOME/cli/exegra.js trace <scenario>`,
-//! through a temporary project link to this checkout's specification) and runs the same scenario
+//! this test asks Exegra for the trace (`scripts/exegra-traces.mjs`, which builds the specification
+//! once per shard in Exegra's own modules and runs `runScenario` for each scenario, as
+//! `node $EXEGRA_HOME/cli/exegra.js trace <scenario>` does for one) and runs the same scenario
 //! on `strata_runtime::System` with the generated machines and routing table
 //! (`strata_model::target_machines::dispatch`, which holds shipped and target machines), on the in-memory store, with a `TestClock`:
 //!
@@ -12,9 +13,13 @@
 //!   record whose other fields hold placeholder values of their types: the one instance of an
 //!   unkeyed machine under a placeholder key, and each key the scenario's inputs route to for a
 //!   keyed one. That stands for the contract that creates the record, which Exegra leaves out.
+//!   The one instance of an unkeyed machine that creates its records is not set up here: the host
+//!   creates it when it is built, under the machine's fixed key (`Machine::SINGLETON_KEY`).
 //! - The external entries (the scenario's steps and injected events: Exegra's initial queue) are
 //!   submitted at their times before the run, in Exegra's order, so they take the lowest sequence
-//!   numbers as in Exegra.
+//!   numbers as in Exegra. An entry a fault will drop, lose or delay is not submitted: the
+//!   dispatcher in front of the host does not have it until its delayed copy is queued, so the
+//!   queue comparison leaves it out of Exegra's queue as well.
 //! - Then, for each step of the trace, the clock is set to the time of the next due entry, which
 //!   must be the step's time, and the host takes one step. After it the test compares: the entry
 //!   delivered (event and payload), the state and variables of every instance Exegra has, and the
@@ -25,15 +30,32 @@
 //! Exegra's time is read as the host's milliseconds, one base unit for one millisecond, from 0;
 //! the generated machines read delays and `time` the same way.
 //!
-//! Skipped, each with its reason in the output: scenarios with a fault other than `inject-event`
-//! (a dropped, delayed or disabled step is Exegra's doing and the host has no faults of its own;
-//! WG-4903 aligns them), scenarios with a behaviour that has no generated Rust machine (a model
-//! behaviour, or a client machine generated as JavaScript), and scenarios whose inputs the
-//! generated types cannot hold (a payload that does not decode as the machine's event, or a key
-//! that does not decode as its key type). The last are gaps in the specification, listed as such.
+//! Faults are produced as the runtime produces them (WG-4903, Exegra's `docs/semantics.md`,
+//! "Faults the runtime can produce"). Inside one system host every entry is delivered exactly
+//! once, so a fault acts on the hop by which an entry reaches the host: an input, sent by the
+//! outside or by another host's outbox through a dispatcher that submits it here. The test is
+//! that dispatcher. An input Exegra drops or loses (`drop-event`, `lose-event`) is never
+//! submitted; one it delays (`delay-event`, `retry-event`) is submitted when Exegra queues the
+//! delayed copy, due when the copy is; one it duplicates (`duplicate-event`) is submitted again
+//! when Exegra queues the copy, after the step that delivered the first one, as a sender's outbox
+//! offers an at-least-once message again after a stop between dispatch and acknowledgement. An
+//! injected event (`inject-event`) is one more input.
+//!
+//! Skipped, each with its reason in the output: scenarios with a fault the runtime cannot produce
+//! (Exegra's `fault.unrealisable`, mirrored by `strata_spec_compiler::scenarios::unrealisable`),
+//! a fault that changes a machine (`enable-transition`, `disable-transition`), or a fault on an
+//! event a scenario machine emits or a timer fires (the host's own queue delivers those exactly
+//! once; the fault needs machines on two hosts); scenarios with a behaviour that has no generated
+//! Rust machine (a model behaviour, or a client machine generated as JavaScript), and scenarios
+//! whose inputs the generated types cannot hold (a payload that does not decode as the machine's
+//! event, or a key that does not decode as its key type). The last are gaps in the specification,
+//! listed as such.
 //!
 //! The test fails when `EXEGRA_HOME` is not an Exegra checkout or `node` cannot run, when a trace
-//! cannot be had, when any covered scenario diverges, and when no scenario is covered.
+//! cannot be had, when any covered scenario diverges, when a scenario the host does not run is missing from the
+//! allow-list `exegra-coverage.json` (or an entry of it no longer applies), and when fewer scenarios
+//! are covered than the floor recorded there. When both sides fail at one step, the failure is
+//! compared too: the host must leave every instance as it was before the step.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path, PathBuf};
@@ -45,17 +67,68 @@ use serde_json::{json, Value};
 // `target-models` feature of `strata-model`, which this crate's manifest enables).
 use strata_model::target_machines::dispatch;
 use strata_runtime::{
-    DispatchError, Dispatcher, Envelope, Member, MemoryStore, Router, System, TestClock, Time,
+    DispatchError, Dispatcher, Envelope, Member, MemoryStore, Router, System, TenantId, TestClock,
+    Time,
 };
-use strata_spec_compiler::ir::{Spec, TypeKind};
+use strata_spec_compiler::ir::{variant_wire_name, Spec, TypeKind, UnionTag};
 use strata_spec_compiler::resolve::{Builtin, TypeRef};
 use strata_spec_compiler::{jsonc, load};
+
+/// The checked-in record of what the host does not run and how many scenarios it must run.
+const ALLOWANCES: &str = "crates/system-differential/tests/exegra-coverage.json";
+
+/// The contents of [`ALLOWANCES`]: the floor on covered scenarios, and, by scenario id with the
+/// reason, the scenarios that cannot be planned for the host and those whose inputs the generated
+/// types cannot hold.
+struct Allowances {
+    floor: usize,
+    skipped: BTreeMap<String, String>,
+    unrepresentable: BTreeMap<String, String>,
+}
+
+impl Allowances {
+    fn read() -> Self {
+        let path = workspace().join(ALLOWANCES);
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("{} cannot be read: {e}", path.display()));
+        let json: Value = serde_json::from_str(&text)
+            .unwrap_or_else(|e| panic!("{} is not JSON: {e}", path.display()));
+        let list = |key: &str| -> BTreeMap<String, String> {
+            json[key]
+                .as_object()
+                .unwrap_or_else(|| panic!("{ALLOWANCES} has no object `{key}`"))
+                .iter()
+                .map(|(id, why)| {
+                    let why = why.as_str().unwrap_or_default().trim();
+                    assert!(!why.is_empty(), "{ALLOWANCES}: {key} {id} has no reason");
+                    (id.clone(), why.to_string())
+                })
+                .collect()
+        };
+        Allowances {
+            floor: json["floor"]
+                .as_u64()
+                .unwrap_or_else(|| panic!("{ALLOWANCES} has no number `floor`"))
+                as usize,
+            skipped: list("skipped"),
+            unrepresentable: list("unrepresentable"),
+        }
+    }
+}
 
 /// The project name of the temporary link.
 const PROJECT: &str = "strata-under-test";
 
-/// The fault kinds the host can be given: an injected event is one more external input.
-const HOST_FAULTS: &[&str] = &["inject-event"];
+/// The fault kinds the host can be given, on its inputs: an injected event is one more input; a
+/// dropped, lost, delayed, retried or duplicated one is what the dispatcher that submits it does.
+const HOST_FAULTS: &[&str] = &[
+    "inject-event",
+    "drop-event",
+    "lose-event",
+    "delay-event",
+    "retry-event",
+    "duplicate-event",
+];
 
 fn workspace() -> PathBuf {
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -91,7 +164,7 @@ fn relative(from: &Path, to: &Path) -> String {
 
 /// The Exegra CLI, or a failure saying how to get one.
 struct Exegra {
-    cli: PathBuf,
+    home: PathBuf,
     specs: PathBuf,
 }
 
@@ -100,7 +173,8 @@ impl Exegra {
         let home = std::env::var_os("EXEGRA_HOME").unwrap_or_else(|| {
             panic!("set EXEGRA_HOME to an Exegra checkout (one with cli/exegra.js): this test compares the system host with Exegra's traces")
         });
-        let cli = PathBuf::from(home).join("cli").join("exegra.js");
+        let home = PathBuf::from(home);
+        let cli = home.join("cli").join("exegra.js");
         assert!(
             cli.is_file(),
             "EXEGRA_HOME has no cli/exegra.js: {}",
@@ -118,31 +192,64 @@ impl Exegra {
         std::fs::create_dir_all(&project).unwrap();
         let link = json!({ "spec": relative(&project, &spec_path()) });
         std::fs::write(project.join("project.jsonc"), link.to_string()).unwrap();
-        Exegra { cli, specs }
+        Exegra { home, specs }
+    }
+
+    /// Every trace in `ids`, written to `self.specs/<id>.trace.json` by `scripts/exegra-traces.mjs`:
+    /// one Exegra process per shard builds the specification once and runs its share of the
+    /// scenarios (one `exegra trace` process per scenario built it once per scenario). The shards
+    /// run side by side, two by default (`STRATA_TRACE_SHARDS`).
+    fn traces(&self, ids: &[String]) {
+        let list = self.specs.join("scenarios.json");
+        std::fs::write(&list, json!(ids).to_string()).unwrap();
+        let shards: usize = std::env::var("STRATA_TRACE_SHARDS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .filter(|n| *n >= 1)
+            .unwrap_or(2);
+        let script = workspace().join("scripts").join("exegra-traces.mjs");
+        let children: Vec<_> = (0..shards)
+            .map(|i| {
+                Command::new("node")
+                    .arg(&script)
+                    .arg("--exegra")
+                    .arg(&self.home)
+                    .arg("--spec")
+                    .arg(spec_path())
+                    .arg("--out")
+                    .arg(&self.specs)
+                    .arg("--ids")
+                    .arg(&list)
+                    .arg("--shard")
+                    .arg(format!("{i}/{shards}"))
+                    .stdout(std::process::Stdio::piped())
+                    .stderr(std::process::Stdio::piped())
+                    .spawn()
+                    .unwrap_or_else(|e| panic!("node could not be run: {e}"))
+            })
+            .collect();
+        for child in children {
+            let output = child
+                .wait_with_output()
+                .unwrap_or_else(|e| panic!("node could not be waited for: {e}"));
+            let envelope: Value = serde_json::from_slice(&output.stdout).unwrap_or_else(|e| {
+                panic!(
+                    "scripts/exegra-traces.mjs did not print JSON ({e}): {}",
+                    String::from_utf8_lossy(&output.stderr)
+                )
+            });
+            assert_eq!(
+                envelope["ok"],
+                json!(true),
+                "scripts/exegra-traces.mjs failed: {envelope}"
+            );
+        }
     }
 
     fn trace(&self, scenario: &str) -> Value {
         let out = self.specs.join(format!("{scenario}.trace.json"));
-        let output = Command::new("node")
-            .arg(&self.cli)
-            .args(["trace", scenario, "--project", PROJECT, "--specs"])
-            .arg(&self.specs)
-            .arg("--out")
-            .arg(&out)
-            .output()
-            .unwrap_or_else(|e| panic!("node could not be run: {e}"));
-        let envelope: Value = serde_json::from_slice(&output.stdout).unwrap_or_else(|e| {
-            panic!(
-                "exegra trace {scenario} did not print JSON ({e}): {}",
-                String::from_utf8_lossy(&output.stderr)
-            )
-        });
-        assert_eq!(
-            envelope["ok"],
-            json!(true),
-            "exegra trace {scenario} failed: {envelope}"
-        );
-        let text = std::fs::read_to_string(&out).unwrap();
+        let text = std::fs::read_to_string(&out)
+            .unwrap_or_else(|e| panic!("no trace of {scenario} at {}: {e}", out.display()));
         serde_json::from_str(&text).unwrap()
     }
 }
@@ -201,8 +308,10 @@ fn placeholder(spec: &Spec, t: &TypeRef) -> Value {
             Builtin::Json => Value::Null,
             _ => json!(0),
         },
-        TypeRef::List(_) => json!([]),
+        TypeRef::List(_) | TypeRef::Set(_) => json!([]),
         TypeRef::Option(_) => Value::Null,
+        TypeRef::Shared(inner) => placeholder(spec, inner),
+        TypeRef::Map(..) => json!({}),
         TypeRef::Declared(id) => match spec.type_decl(id).map(|d| &d.kind) {
             Some(TypeKind::Id { repr } | TypeKind::Scalar { repr }) => {
                 placeholder(spec, &TypeRef::parse(repr.as_deref().unwrap_or("string")))
@@ -220,6 +329,69 @@ fn placeholder(spec: &Spec, t: &TypeRef) -> Value {
                     })
                     .collect(),
             ),
+            // The first variant, written as the union's encoding writes it on the wire.
+            Some(TypeKind::Union { variants, encoding }) => match variants.first() {
+                None => Value::Null,
+                Some(variant) => {
+                    let name = variant_wire_name(&variant.name, encoding.variant_case);
+                    let content = if variant.fields.is_empty() {
+                        None
+                    } else if variant.tuple {
+                        Some(Value::Array(
+                            variant
+                                .fields
+                                .iter()
+                                .map(|f| placeholder(spec, &TypeRef::parse(&f.type_name)))
+                                .collect(),
+                        ))
+                    } else if variant.newtype {
+                        variant
+                            .fields
+                            .first()
+                            .map(|f| placeholder(spec, &TypeRef::parse(&f.type_name)))
+                    } else {
+                        Some(Value::Object(
+                            variant
+                                .fields
+                                .iter()
+                                .filter(|f| !f.optional)
+                                .map(|f| {
+                                    (
+                                        f.name.clone(),
+                                        placeholder(spec, &TypeRef::parse(&f.type_name)),
+                                    )
+                                })
+                                .collect(),
+                        ))
+                    };
+                    match encoding.tag {
+                        UnionTag::External => match content {
+                            None => json!(name),
+                            Some(c) => {
+                                let mut out = serde_json::Map::new();
+                                out.insert(name, c);
+                                Value::Object(out)
+                            }
+                        },
+                        UnionTag::Internal => {
+                            let mut out = match content {
+                                Some(Value::Object(o)) => o,
+                                _ => serde_json::Map::new(),
+                            };
+                            out.insert(encoding.tag_field.clone().unwrap_or_default(), json!(name));
+                            Value::Object(out)
+                        }
+                        UnionTag::Adjacent => {
+                            let mut out = serde_json::Map::new();
+                            out.insert(encoding.tag_field.clone().unwrap_or_default(), json!(name));
+                            if let Some(c) = content {
+                                out.insert(encoding.content_field.clone().unwrap_or_default(), c);
+                            }
+                            Value::Object(out)
+                        }
+                    }
+                }
+            },
             None => Value::Null,
         },
     }
@@ -235,16 +407,51 @@ struct Plan<'s> {
 fn plan<'s>(spec: &'s Spec, all: &Value, scenario: &Value) -> Result<Plan<'s>, String> {
     let id = scenario["id"].as_str().unwrap_or_default().to_string();
     let faults = all["faults"].as_array().cloned().unwrap_or_default();
+    let top = all.as_object().cloned().unwrap_or_default();
+    let raw = scenario.as_object().cloned().unwrap_or_default();
+    // Events a scenario machine emits or a timer of one fires: the host's queue carries them.
+    let mut internal: BTreeSet<String> = BTreeSet::new();
+    for b in all["behaviors"].as_array().into_iter().flatten() {
+        let ran = scenario["behaviors"]
+            .as_array()
+            .is_some_and(|bs| bs.iter().any(|x| *x == b["id"]));
+        if !ran {
+            continue;
+        }
+        for t in b["transitions"].as_array().into_iter().flatten() {
+            for fx in t["effects"].as_array().into_iter().flatten() {
+                if let Some(e) = fx["emit"].as_str() {
+                    internal.insert(e.to_string());
+                }
+            }
+        }
+    }
     for f in scenario["faults"].as_array().into_iter().flatten() {
         let fid = f.as_str().unwrap_or_default();
-        let kind = faults
-            .iter()
-            .find(|x| x["id"] == fid)
+        let declared = faults.iter().find(|x| x["id"] == fid);
+        let kind = declared
             .and_then(|x| x["kind"].as_str())
             .unwrap_or("unknown");
         if !HOST_FAULTS.contains(&kind) {
             return Err(format!(
-                "fault {fid} ({kind}) is Exegra's doing, which the host cannot produce (WG-4903)"
+                "fault {fid} ({kind}) changes a machine, which the runtime cannot do"
+            ));
+        }
+        let declared = declared.and_then(Value::as_object);
+        if let Some(why) =
+            declared.and_then(|d| strata_spec_compiler::scenarios::unrealisable(&top, &raw, d))
+        {
+            return Err(format!(
+                "fault {fid} ({kind}) is one the runtime cannot produce: {why}"
+            ));
+        }
+        let event = declared
+            .and_then(|d| d.get("event"))
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if kind != "inject-event" && internal.contains(event) {
+            return Err(format!(
+                "fault {fid} ({kind}) acts on {event}, which a scenario machine emits: one system host delivers it exactly once, and the fault needs the machines on two hosts"
             ));
         }
     }
@@ -349,14 +556,22 @@ async fn run(spec: &Spec, plan: &Plan<'_>, trace: &Value) -> Result<usize, (bool
     }
 
     let clock = TestClock::at(Time(0));
-    let store = Arc::new(MemoryStore::new());
+    let store = Arc::new(MemoryStore::new(TenantId::new("acme").unwrap()));
     let system = System::new(
         store,
         router.clone(),
         Arc::new(Outside),
         Arc::new(clock.clone()),
     )
-    .map_err(|e| diverged(e.to_string()))?;
+    .map_err(|e| match e {
+        // The host creates the one instance of an unkeyed creating machine when it is built; the
+        // specification's initial values break the record's constraints (WG-4903).
+        strata_runtime::HostError::Constraint(why) => (
+            true,
+            format!("the initial state of a machine cannot be held by its record: {why}"),
+        ),
+        e => diverged(e.to_string()),
+    })?;
 
     // Set up the instances whose records someone else creates.
     let mut singles: BTreeMap<String, String> = BTreeMap::new();
@@ -366,28 +581,53 @@ async fn run(spec: &Spec, plan: &Plan<'_>, trace: &Value) -> Result<usize, (bool
         let record = spec
             .record(member.record)
             .unwrap_or_else(|| panic!("no record {}", member.record));
-        let key_field = storage
+        // The key fields: one, or several for a record with a composite key (a JSON array).
+        let key_fields = storage
             .key
             .clone()
             .or_else(|| b.instances.as_ref().and_then(|i| i.key.clone()))
             .expect("a generated machine has a key");
-        let key_type = record
-            .field(&key_field)
-            .map(|f| TypeRef::parse(&f.type_name))
-            .expect("the key is a record field");
+        let key_types: Vec<TypeRef> = key_fields
+            .iter()
+            .map(|k| {
+                record
+                    .field(k)
+                    .map(|f| TypeRef::parse(&f.type_name))
+                    .expect("the key is a record field")
+            })
+            .collect();
         let keys: Vec<Value> = if b.instances.is_some() {
             keyed
                 .iter()
                 .filter(|(m, _)| m.name == member.name)
                 .map(|(_, v)| v.clone())
                 .collect()
+        } else if member.creates {
+            // The host created the one instance when it was built, under the machine's fixed key.
+            let text = member
+                .singleton_key()
+                .map_err(|e| diverged(e.to_string()))?
+                .ok_or_else(|| {
+                    diverged(format!(
+                        "{} is unkeyed and creates its records, but its machine has no singleton key",
+                        member.name
+                    ))
+                })?;
+            singles.insert(member.name.to_string(), text);
+            continue;
         } else {
-            let key = placeholder(spec, &key_type);
+            let key = if let [one] = key_types.as_slice() {
+                placeholder(spec, one)
+            } else {
+                Value::Array(key_types.iter().map(|t| placeholder(spec, t)).collect())
+            };
             let text = member.key_of(&key).map_err(|e| diverged(e.to_string()))?;
             singles.insert(member.name.to_string(), text);
             vec![key]
         };
-        if member.creates {
+        // A keyed machine that creates its records starts an instance on the first entry routed
+        // to its key, as Exegra does; nothing to set up.
+        if member.creates && b.instances.is_some() {
             continue;
         }
         for key in keys {
@@ -399,7 +639,13 @@ async fn run(spec: &Spec, plan: &Plan<'_>, trace: &Value) -> Result<usize, (bool
                     placeholder(spec, &TypeRef::parse(&f.type_name)),
                 );
             }
-            base.insert(key_field.clone(), key.clone());
+            if let [one] = key_fields.as_slice() {
+                base.insert(one.clone(), key.clone());
+            } else if let Value::Array(parts) = &key {
+                for (field, part) in key_fields.iter().zip(parts) {
+                    base.insert(field.clone(), part.clone());
+                }
+            }
             system
                 .init(member.name, &text, Value::Object(base))
                 .await
@@ -526,8 +772,22 @@ async fn run(spec: &Spec, plan: &Plan<'_>, trace: &Value) -> Result<usize, (bool
         .map_err(diverged)?;
     check("initially", expected, actual).map_err(diverged)?;
 
-    // Exegra's initial queue: the external entries, in its order.
-    for input in &inputs {
+    let steps = trace["steps"].as_array().cloned().unwrap_or_default();
+    // What Exegra does with each entry it takes, by sequence number: the kind of that step. The
+    // dispatcher in front of the host (this test) submits an input only when Exegra delivers it,
+    // or never takes it.
+    let fate: BTreeMap<u64, String> = steps
+        .iter()
+        .filter_map(|s| Some((s["event"]["seq"].as_u64()?, s["kind"].as_str()?.to_string())))
+        .collect();
+    let reaches_host = |entry: &Value| {
+        let taken = entry["seq"].as_u64().and_then(|s| fate.get(&s));
+        taken.is_none_or(|k| k == "deliver")
+    };
+
+    // Exegra's initial queue: the external entries, in its order, but those Exegra drops or
+    // delays before delivering them.
+    for input in inputs.iter().filter(|i| reaches_host(i)) {
         let event = json!({ "event": input["event"], "payload": payload_of(input) });
         system
             .submit_at(event, Time(time_of(&input["time"])))
@@ -535,16 +795,69 @@ async fn run(spec: &Spec, plan: &Plan<'_>, trace: &Value) -> Result<usize, (bool
             .map_err(|e| diverged(e.to_string()))?;
     }
 
-    let steps = trace["steps"].as_array().cloned().unwrap_or_default();
+    // The copies of an input Exegra queued in a step: a delayed, retried or duplicated input,
+    // which the dispatcher submits when Exegra queues it, due when it is.
+    let copies = |before: &[Value], step: &Value| -> Vec<Value> {
+        let head = &step["event"];
+        step["config"]["pending"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|p| !before.iter().any(|b| b["seq"] == p["seq"]))
+            .filter(|p| p["event"] == head["id"] && p["source"] == head["source"])
+            .filter(|p| reaches_host(p))
+            .cloned()
+            .collect()
+    };
+    let mut before: Vec<Value> = inputs.iter().map(|i| (*i).clone()).collect();
+    // The configuration after the previous step: what a failed step leaves, as it commits nothing.
+    let mut committed = trace["initial"].clone();
     for step in &steps {
         let index = &step["index"];
         let time = time_of(&step["time"]);
         let id = step["event"]["id"].as_str().unwrap_or_default();
         let context = format!("step {index} (t={time}, {id})");
-        if step["kind"] != json!("deliver") {
+        let kind = step["kind"].as_str().unwrap_or_default();
+        let sys = &system;
+        let submit = |copies: Vec<Value>| async move {
+            for copy in copies {
+                let event = json!({ "event": copy["event"], "payload": payload_of(&copy) });
+                sys.submit_at(event, Time(time_of(&copy["time"])))
+                    .await
+                    .map_err(|e| e.to_string())?;
+            }
+            Ok::<(), String>(())
+        };
+        if kind == "drop" || kind == "delay" {
+            // Exegra's fault acted on an input on its way to the host: nothing reaches the host
+            // now, and a delayed input is submitted for its later time.
+            let source = step["event"]["source"]["kind"].as_str();
+            if !matches!(source, Some("scenario" | "fault")) {
+                return Err(diverged(format!(
+                    "{context}: Exegra's {kind} acts on an entry the machines queued, which one host delivers exactly once"
+                )));
+            }
+            if kind == "delay" {
+                let delayed = copies(&before, step);
+                if delayed.is_empty() && step["error"].is_null() {
+                    return Err(diverged(format!(
+                        "{context}: Exegra delayed the input, but its trace has no delayed copy"
+                    )));
+                }
+                submit(delayed)
+                    .await
+                    .map_err(|e| diverged(format!("{context}: {e}")))?;
+            }
+            before = step["config"]["pending"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default();
+            committed = step["config"].clone();
+            continue;
+        }
+        if kind != "deliver" {
             return Err(diverged(format!(
-                "{context}: Exegra's step is a {}, which the host does not make",
-                step["kind"]
+                "{context}: Exegra's step is a {kind}, which the host does not make"
             )));
         }
         let due = system
@@ -584,7 +897,34 @@ async fn run(spec: &Spec, plan: &Plan<'_>, trace: &Value) -> Result<usize, (bool
                     "{context}: Exegra's step failed ({why}), the host's did not"
                 )))
             }
-            (Some(_), Some(_)) => return Ok(steps.len()),
+            (Some(host_why), Some(why)) => {
+                // Both fail at this step. Exegra ends its run here, so nothing follows to compare
+                // except what the failure left: neither commits anything, so every instance the
+                // host holds must be as it was after the previous step. Both must also say why.
+                let exegra_why = why["message"].as_str().unwrap_or_default();
+                if host_why.is_empty() || exegra_why.is_empty() {
+                    return Err(diverged(format!(
+                        "{context}: both steps fail, but one gives no reason (Exegra: {why}, host: {host_why:?})"
+                    )));
+                }
+                let expected = instances(&committed).map_err(diverged)?;
+                let actual = host_instances(expected.keys().cloned().collect())
+                    .await
+                    .map_err(diverged)?;
+                check(
+                    &format!("{context}, after the failed step"),
+                    expected,
+                    actual,
+                )
+                .map_err(diverged)?;
+                println!(
+                    "  {}: both fail at {context}
+    Exegra: {exegra_why}
+    host:   {host_why}",
+                    plan.id
+                );
+                return Ok(steps.len());
+            }
             (None, None) => {}
         }
         let expected = instances(&step["config"]).map_err(diverged)?;
@@ -592,10 +932,23 @@ async fn run(spec: &Spec, plan: &Plan<'_>, trace: &Value) -> Result<usize, (bool
             .await
             .map_err(diverged)?;
         check(&context, expected, actual).map_err(diverged)?;
+        // A duplicated input: the sender's outbox offers it again, after this delivery.
+        let duplicated = step["faults"]
+            .as_array()
+            .is_some_and(|f| f.iter().any(|f| f["effect"] == json!("duplicated")));
+        if duplicated {
+            submit(copies(&before, step))
+                .await
+                .map_err(|e| diverged(format!("{context}: {e}")))?;
+        }
+        // The entries the host holds: not those Exegra's fault will drop or delay later (or has
+        // lost), which the dispatcher in front of the host has not submitted yet; a delayed copy
+        // is submitted when Exegra queues it, so it is here.
         let expected: Vec<(i64, String, Value)> = step["config"]["pending"]
             .as_array()
             .into_iter()
             .flatten()
+            .filter(|p| reaches_host(p))
             .map(|p| {
                 (
                     time_of(&p["time"]),
@@ -630,6 +983,11 @@ async fn run(spec: &Spec, plan: &Plan<'_>, trace: &Value) -> Result<usize, (bool
                 queued.iter().map(describe).collect::<Vec<_>>().join(", ")
             )));
         }
+        before = step["config"]["pending"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        committed = step["config"].clone();
     }
     if trace["outcome"] == json!("quiescent") {
         if let Some(due) = system
@@ -671,7 +1029,24 @@ async fn the_system_host_runs_every_scenario_as_exegra_does() {
     let mut skipped = Vec::new();
     let mut unrepresentable = Vec::new();
     let mut diverged = Vec::new();
+    // First every plan, then every trace in one go, then the comparisons.
+    let mut plans = Vec::new();
+    // `scripts/test-module.mjs` names one module's scenarios in a JSON file; only those run, and the
+    // whole-specification allow-list and floor below are not checked then (WG-4991).
+    let only: Option<BTreeSet<String>> =
+        std::env::var_os("STRATA_MODULE_SCENARIOS_FILE").map(|file| {
+            let text = std::fs::read_to_string(&file)
+                .unwrap_or_else(|e| panic!("cannot read {file:?}: {e}"));
+            let ids: Vec<String> = serde_json::from_str(&text)
+                .unwrap_or_else(|e| panic!("{file:?} is not a JSON array of scenario ids: {e}"));
+            ids.into_iter().collect()
+        });
     for scenario in all["scenarios"].as_array().into_iter().flatten() {
+        if let Some(only) = &only {
+            if !scenario["id"].as_str().is_some_and(|id| only.contains(id)) {
+                continue;
+            }
+        }
         let drives = scenario["behaviors"]
             .as_array()
             .into_iter()
@@ -681,15 +1056,17 @@ async fn the_system_host_runs_every_scenario_as_exegra_does() {
         if !drives {
             continue;
         }
-        let plan = match plan(&spec, &all, scenario) {
-            Ok(plan) => plan,
+        match plan(&spec, &all, scenario) {
+            Ok(plan) => plans.push(plan),
             Err(why) => {
                 skipped.push((scenario["id"].as_str().unwrap_or_default().to_string(), why));
-                continue;
             }
-        };
+        }
+    }
+    exegra.traces(&plans.iter().map(|p| p.id.clone()).collect::<Vec<_>>());
+    for plan in &plans {
         let trace = exegra.trace(&plan.id);
-        match run(&spec, &plan, &trace).await {
+        match run(&spec, plan, &trace).await {
             Ok(steps) => covered.push((plan.id.clone(), steps)),
             Err((true, why)) => unrepresentable.push((plan.id.clone(), why)),
             Err((false, why)) => diverged.push((plan.id.clone(), why)),
@@ -717,13 +1094,74 @@ async fn the_system_host_runs_every_scenario_as_exegra_does() {
     }
     assert!(
         diverged.is_empty(),
-        "{} scenario(s) run differently on the system host than in Exegra:\n{}",
+        "{} scenario(s) run differently on the system host than in Exegra:
+{}",
         diverged.len(),
         diverged
             .iter()
             .map(|(id, why)| format!("- {id}: {why}"))
             .collect::<Vec<_>>()
-            .join("\n")
+            .join(
+                "
+"
+            )
     );
-    assert!(!covered.is_empty(), "no scenario ran on the system host");
+
+    if only.is_some() {
+        return;
+    }
+
+    // Every scenario the host does not run is on the checked-in list, with its reason, and every
+    // entry of the list still names a scenario that is not run.
+    let allowances = Allowances::read();
+    let mut problems = Vec::new();
+    for (kind, listed, found) in [
+        ("skipped", &allowances.skipped, &skipped),
+        (
+            "unrepresentable",
+            &allowances.unrepresentable,
+            &unrepresentable,
+        ),
+    ] {
+        for (id, why) in found {
+            if !listed.contains_key(id) {
+                problems.push(format!(
+                    "{kind} scenario {id} is not on the allow-list of {ALLOWANCES}: {why}
+    add: {}: {}",
+                    json!(id),
+                    json!("<reason this scenario cannot run on the host>")
+                ));
+            }
+        }
+        for id in listed.keys() {
+            if !found.iter().any(|(f, _)| f == id) {
+                problems.push(format!(
+                    "{id} is on the {kind} allow-list of {ALLOWANCES} but is not {kind} now: remove it"
+                ));
+            }
+        }
+    }
+    assert!(
+        problems.is_empty(),
+        "{}",
+        problems.join(
+            "
+"
+        )
+    );
+
+    assert!(
+        covered.len() >= allowances.floor,
+        "{} scenario(s) ran on the system host, below the recorded floor of {} in {ALLOWANCES};          if coverage really dropped, fix it, and if more now run, raise the floor to {}",
+        covered.len(),
+        allowances.floor,
+        covered.len()
+    );
+    if covered.len() > allowances.floor {
+        println!(
+            "note: {} scenarios are covered, above the recorded floor of {}; raise `floor` in {ALLOWANCES}",
+            covered.len(),
+            allowances.floor
+        );
+    }
 }

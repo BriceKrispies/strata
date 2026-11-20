@@ -1,8 +1,10 @@
 // The development loop: Vite in front, the BFF behind it, the same worker and WebSocket path.
 import { expect, test } from '@playwright/test';
 import { readFileSync, writeFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
-const web = new URL('../../web/src/', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1');
+// The test edits files, so it edits the throwaway copy that tests/e2e/hmr-stack.mjs serves, never web/src.
+const web = fileURLToPath(new URL('../../var/hmr-web/src/', import.meta.url));
 
 async function ready(page) {
   await page.locator('main[data-page]:not([data-page="loading"])').waitFor();

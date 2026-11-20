@@ -36,6 +36,9 @@ pub struct Constructs {
     pub retries: Vec<Retry>,
     /// The `audits` section.
     pub audits: Vec<Audit>,
+    /// The capability model: capabilities, plans, roles, grants, token scopes, delegations and
+    /// feature flags.
+    pub access: crate::ir::AccessModel,
 }
 
 impl Constructs {

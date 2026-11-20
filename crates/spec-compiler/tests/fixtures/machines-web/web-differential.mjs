@@ -22,7 +22,6 @@ assert.ok(behavior, `no behavior ${machineId} in the specification`);
 const norm = (payload) =>
   Object.fromEntries(Object.entries(payload ?? {}).filter(([, v]) => v !== null && v !== undefined));
 const eventDecl = (id) => spec.events.find((e) => e.id === id);
-const elapsed = (id) => eventDecl(id)?.elapsed === true;
 const prefix = `${machineId}/`;
 
 function checkMachine(context, state, vars, config) {
@@ -92,8 +91,18 @@ for (const step of trace.steps) {
 
   const expectedEmits = [];
   const expectedTimers = [];
-  for (const e of fired.emitted) {
-    if (elapsed(e.event)) {
+  // Exegra lists, in order, what each emit effect and each timer effect of the transition
+  // produced; which one an entry is follows from the effect's kind, not from its event.
+  const firedTransition = behavior.transitions.find((t) => t.id === fired.transition);
+  const producing = (firedTransition.effects ?? []).filter((e) => e.timer || e.emit);
+  assert.equal(
+    producing.length,
+    fired.emitted.length,
+    `${context}: Exegra's emitted entries and the effects of ${fired.transition} that emit or set a timer`,
+  );
+  for (const [i, e] of fired.emitted.entries()) {
+    assert.equal(producing[i].emit, e.event, `${context}: effect ${i} of ${fired.transition} produces ${e.event}`);
+    if (producing[i].timer) {
       expectedTimers.push({ event: e.event, payload: norm(e.payload), afterMs: e.time - time });
     } else {
       expectedEmits.push({ event: e.event, payload: norm(e.payload) });

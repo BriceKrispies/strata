@@ -5,9 +5,15 @@ use serde::{Deserialize, Serialize};
 /// Hold id
 ///
 /// Specification type `hold-id`: an identifier represented as `uuid`.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct HoldId(pub uuid::Uuid);
+
+impl std::fmt::Display for HoldId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.0, f)
+    }
+}
 
 /// Principal
 ///
@@ -16,10 +22,24 @@ pub struct HoldId(pub uuid::Uuid);
 #[serde(transparent)]
 pub struct Principal(pub String);
 
+impl Principal {
+    /// The value as text.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for Principal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 /// Hold status
 ///
 /// Specification type `hold-status`: an enumeration, serialised as the specification's values.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+
 pub enum HoldStatus {
     /// The value `active`.
     #[serde(rename = "active")]

@@ -1,0 +1,37 @@
+{
+  // Refused: a policy condition and an operation condition that read a field the object type does not have,
+  // and a hop that follows a reference to a field the target object type does not have (layer.expr-unknown-field, WG-5060).
+  "product": { "id": "member-tiers", "name": "Member tiers", "imports": { "spec": "../../../../../../specifications/spec.jsonc", "entities": [] } },
+  "objects": [
+    {
+      "id": "member_tiers__tier",
+      "label": "Tier",
+      "fields": {
+        "name": { "id": "name", "label": "Name", "ty": "Str", "required": true, "unique": false },
+        "points": { "id": "points", "label": "Points", "ty": "Int", "required": true, "unique": false },
+        "owner": { "id": "owner", "label": "Owner", "ty": { "Ref": { "target": "member_tiers__member", "on-delete": "Restrict" } }, "required": false, "unique": false }
+      },
+      "constraints": {}
+    },
+    {
+      "id": "member_tiers__member",
+      "label": "Member",
+      "fields": { "email": { "id": "email", "label": "Email", "ty": "Str", "required": true, "unique": false } },
+      "constraints": {}
+    }
+  ],
+  "policies": [
+    { "id": "member_tiers__readers", "role": "member", "resource": { "Object": "member_tiers__tier" }, "actions": ["Read"], "condition": "record.colour == 'gold'" }
+  ],
+  "operations": [
+    {
+      "id": "member_tiers__check",
+      "label": "Operation",
+      "inputs": [ { "name": "tier", "ty": { "Ref": { "target": "member_tiers__tier", "on-delete": "Restrict" } }, "required": true } ],
+      "invokers": { "signed-in": true, "roles": [] },
+      "subject": { "object": "member_tiers__tier", "input": "tier" },
+      "conditions": [ { "id": "check", "expr": "record.owner.phone == null", "error": "refused", "message": "Refused." } ],
+      "steps": []
+    }
+  ]
+}

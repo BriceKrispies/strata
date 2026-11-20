@@ -1,0 +1,14 @@
+{
+  // Refused: an object type whose field lacks its type and that has a member the platform type
+  // object-type-def does not have (layer.value-invalid).
+  "product": { "id": "member-tiers", "name": "Member tiers", "imports": { "spec": "../../../../../../specifications/spec.jsonc", "entities": [] } },
+  "objects": [
+    {
+      "id": "member_tiers__tier",
+      "label": "Tier",
+      "colour": "gold",
+      "fields": { "name": { "id": "name", "label": "Name", "required": true, "unique": false } },
+      "constraints": {}
+    }
+  ]
+}

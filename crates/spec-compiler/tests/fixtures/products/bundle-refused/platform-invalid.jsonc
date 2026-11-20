@@ -1,0 +1,20 @@
+{
+  // Refused by specc bundle: the platform range names no first release (bundle.platform-invalid,
+  // D-6583).
+  "product": {
+    "id": "member-tiers",
+    "name": "Member tiers",
+    "version": "1.0.0",
+    "platform": { "below": "0.3" },
+    "imports": { "spec": "../../../../../../specifications/spec.jsonc", "entities": ["content-read"] }
+  },
+  "roles": [
+    {
+      "id": "member_tiers__editor",
+      "name": "Tier editor",
+      "level": "tenant",
+      "holders": ["person"],
+      "capabilities": ["content-read"]
+    }
+  ]
+}

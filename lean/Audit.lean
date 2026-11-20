@@ -9,6 +9,8 @@ import Strata
 #print axioms Strata.unauthorized_cannot_mutate
 #print axioms Strata.unauthorized_cannot_update
 #print axioms Strata.unauthorized_cannot_delete
+#print axioms Strata.missing_record_hidden_on_update
+#print axioms Strata.missing_record_hidden_on_delete
 #print axioms Strata.step_ok_authorized
 #print axioms Strata.step_isolated
 #print axioms Strata.step_local

@@ -7,15 +7,24 @@ use serde_json::{json, Value as Json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use strata_kernel::editor_rules::record_rules as editor_record_rules;
+use strata_kernel::ext::*;
+use strata_kernel::rules::Lookup;
 use strata_kernel::{
-    read, visible, Check, Context, DomainError, ErrorKind, Intent, Need, ObjectTypeId, Output,
-    Principal, ReadRequest, Record, RecordId, TenantId, TenantState,
+    read, read_needs, visible, Check, Context, DomainError, ErrorKind, FieldId, Intent,
+    InvitationId, Need, ObjectTypeId, Output, PageCursor, Principal, PrincipalId, ReadRequest,
+    ReadResult, Record, RecordId, RoleId, State, StateRevision, TeamId, TenantId, TenantState,
+    ViewSection,
 };
-use strata_protocol::api::{ErrorCode, Mutation, MutationReply, ViewRequest};
-use strata_storage_api::{execute, ExecuteError, Executed};
+use strata_protocol::api::{
+    ErrorCode, MembersReply, MembersRequest, Mutation, MutationReply, ViewRequest, MAX_VIEW_LIMIT,
+};
+use strata_storage_api::{execute_admitting, execute_at, ExecuteError, Executed, StoreError};
 use strata_substrate::plain::coerce_fields;
 use strata_substrate::project::{
-    included_refs, match_route, section_order, section_request, SectionData, ViewData,
+    aggregate_request_with, decode_cursor, encode_cursor, included_refs, match_route,
+    resolved_settings, section_order, section_request_with, select_fields, with_page, SectionData,
+    ViewData,
 };
 
 /// The tenant's schema, members and counters, without records.
@@ -26,6 +35,19 @@ pub fn header(app: &App, identity: &Identity) -> Result<Arc<TenantState>, ApiErr
         .ok_or_else(|| ApiError::new(ErrorCode::NotFound, format!("no site {}", identity.tenant)))
 }
 
+/// The refusal of a change that was decided on a site at one revision when the site has moved
+/// on: a conflict that names the revision the site is at now, and the kind `StaleRevision` that
+/// the Impact Lab's own refusal of a stale projection carries.
+pub fn stale_revision(at: StateRevision, found: Option<StateRevision>) -> ApiError {
+    let now = found.map_or_else(|| "unknown".to_string(), |revision| revision.0.to_string());
+    let mut error = ApiError::new(
+        ErrorCode::Conflict,
+        format!("The site is at revision {now}, not {}: it changed since this projection was taken. Project again.", at.0),
+    );
+    error.0.kind = Some("StaleRevision".to_string());
+    error
+}
+
 /// Decide and commit one intent, with logging and counters around it.
 pub fn run_intent(
     app: &App,
@@ -33,8 +55,78 @@ pub fn run_intent(
     intent: &Intent,
     anonymous: bool,
 ) -> Result<Executed, ApiError> {
+    run_intent_at(app, ctx, intent, anonymous, None)
+}
+
+/// [`run_intent`] for a change decided on the site at revision `at`: committed only while the
+/// site is still at it, and a conflict that names the site's revision otherwise, without deciding
+/// again on the newer state ([`strata_storage_api::execute_at`]).
+///
+/// A change of configuration or of roles is an audit entry with the previous and the new value
+/// ([`crate::change_audit`], OPS-329).
+pub fn run_intent_at(
+    app: &App,
+    ctx: &Context,
+    intent: &Intent,
+    anonymous: bool,
+    at: Option<StateRevision>,
+) -> Result<Executed, ApiError> {
+    let prior = crate::change_audit::before(app, ctx, intent);
+    let done = run_intent_unaudited_at(app, ctx, intent, anonymous, at)?;
+    crate::change_audit::record(app, ctx, intent, prior, &done);
+    Ok(done)
+}
+
+/// [`run_intent`] for the installation of a tenant, which leaves no change audit entries: a tenant
+/// that is being installed has no earlier configuration to change.
+pub fn run_intent_unaudited(
+    app: &App,
+    ctx: &Context,
+    intent: &Intent,
+    anonymous: bool,
+) -> Result<Executed, ApiError> {
+    run_intent_unaudited_at(app, ctx, intent, anonymous, None)
+}
+
+fn run_intent_unaudited_at(
+    app: &App,
+    ctx: &Context,
+    intent: &Intent,
+    anonymous: bool,
+    at: Option<StateRevision>,
+) -> Result<Executed, ApiError> {
+    // A file attached to a record must be one the caller may attach (w5fileref).
+    crate::files::attach::check_intent(app, ctx, intent)?;
+    // A write past the tenant's stored-bytes allowance is refused, naming the quota (BIL-151).
+    crate::quota::check_write(app, ctx, intent)?;
+    // A change of someone's roles ends their sessions in the commit itself. The ones that are
+    // live now are noted first, to be announced and to have their sockets closed.
+    let affected = match intent {
+        Intent::AssignRole { principal, .. }
+        | Intent::RevokeRole { principal, .. }
+        | Intent::EraseSubject {
+            subject: principal, ..
+        } => app
+            .store
+            .live_sessions_of(&ctx.tenant, Some(principal), ctx.now)?,
+        _ => Vec::new(),
+    };
     app.stats.in_flight.fetch_add(1, Ordering::Relaxed);
-    let result = execute(app.store.as_ref(), intent, ctx);
+    // The request's deadline: a change that was not committed by the time the caller was told
+    // "timed out" is not committed afterwards; a retry with the same key learns the outcome.
+    // The jobs the commit creates are held to the tenant's allowance, never refusing the change
+    // (D-6533).
+    let deadline = strata_runtime::server::work_deadline();
+    let result = match at {
+        Some(at) => execute_at(app.store.as_ref(), intent, ctx, deadline, at),
+        None => execute_admitting(
+            app.store.as_ref(),
+            intent,
+            ctx,
+            deadline,
+            Some(&crate::quota::JobAdmitter { app }),
+        ),
+    };
     app.stats.in_flight.fetch_sub(1, Ordering::Relaxed);
     match &result {
         Ok(done) => {
@@ -52,7 +144,8 @@ pub fn run_intent(
                     "conflicts_retried": done.conflicts,
                 }),
             );
-            app.hub.kick.notify_one();
+            app.hub.committed();
+            crate::auth::announce_ended(app, affected, &ctx.correlation);
         }
         Err(ExecuteError::Domain(error)) => {
             app.stats
@@ -82,7 +175,12 @@ pub fn run_intent(
             );
         }
     }
-    result.map_err(|error| ApiError::execute(error, anonymous))
+    result.map_err(|error| match (&error, at) {
+        (ExecuteError::Store(StoreError::Conflict { found, .. }), Some(at)) => {
+            stale_revision(at, *found)
+        }
+        _ => ApiError::execute(error, anonymous),
+    })
 }
 
 fn object_id(name: &str) -> Result<ObjectTypeId, ApiError> {
@@ -91,6 +189,10 @@ fn object_id(name: &str) -> Result<ObjectTypeId, ApiError> {
 }
 
 /// Apply a record mutation given as plain JSON.
+///
+/// The caller's idempotency key, when it sent one, is in the identity and so in the context of
+/// the intent: repeating the request with the same key returns the first reply and changes
+/// nothing.
 pub fn mutate(
     app: &App,
     identity: &Identity,
@@ -143,6 +245,15 @@ pub fn mutate(
             expected_version: *expected_version,
         },
     };
+    // A key is scoped by principal. Every anonymous caller is the same principal, so one of them
+    // could read another's first result under a key they both chose: a key needs a signed-in
+    // caller.
+    if identity.idempotency_key.is_some() && identity.anonymous() {
+        return Err(ApiError::new(
+            ErrorCode::Unauthenticated,
+            "Sign in to use an idempotency key.",
+        ));
+    }
     let ctx = identity.context(app);
     let done = match run_intent(app, &ctx, &intent, identity.anonymous()) {
         Err(error) if error.0.kind.as_deref() == Some("Unauthorized") => {
@@ -171,6 +282,12 @@ pub fn mutate(
         revision: done.receipt.revision.0,
         event_seq: done.transition.delta.event_seq,
         checks_passed: done.transition.evidence.len(),
+        fields: match mutation {
+            Mutation::Create { fields, .. } | Mutation::Update { fields, .. } => {
+                Some(fields.clone())
+            }
+            Mutation::Delete { .. } => None,
+        },
     })
 }
 
@@ -220,14 +337,270 @@ fn without_others_authorship(principal: &Principal, record: &Arc<Record>) -> Arc
     Arc::new(shown)
 }
 
+/// Parse a name the browser sent into a kernel identifier, or refuse the request as invalid.
+fn named<T, E: std::fmt::Display>(what: &str, parsed: Result<T, E>) -> Result<T, ApiError> {
+    parsed.map_err(|problem| ApiError::new(ErrorCode::Invalid, format!("{what}: {problem}")))
+}
+
+/// Change who holds which role: assign or revoke a role, add or remove a team member, invite and
+/// redeem, and revoke an invitation (ADM-150 to ADM-153, ADM-1083). Each is one kernel intent,
+/// decided by the kernel as the signed-in person. The address an invitation is redeemed with is
+/// never read from the request: it is the verified address of the signed-in account, which
+/// `Identity::context` puts in the context.
+///
+/// Implements: ADM-1083
+pub fn members(
+    app: &App,
+    identity: &Identity,
+    request: &MembersRequest,
+) -> Result<MembersReply, ApiError> {
+    let intent = match request {
+        MembersRequest::AssignRole { principal, role } => Intent::AssignRole {
+            principal: named("principal", PrincipalId::new(principal.as_str()))?,
+            role: named("role", RoleId::new(role.as_str()))?,
+        },
+        MembersRequest::RevokeRole { principal, role } => Intent::RevokeRole {
+            principal: named("principal", PrincipalId::new(principal.as_str()))?,
+            role: named("role", RoleId::new(role.as_str()))?,
+        },
+        MembersRequest::AddTeamMember { team, principal } => Intent::AddTeamMember {
+            team: named("team", TeamId::new(team.as_str()))?,
+            principal: named("principal", PrincipalId::new(principal.as_str()))?,
+        },
+        MembersRequest::RemoveTeamMember { team, principal } => Intent::RemoveTeamMember {
+            team: named("team", TeamId::new(team.as_str()))?,
+            principal: named("principal", PrincipalId::new(principal.as_str()))?,
+        },
+        MembersRequest::Invite {
+            invitation,
+            address,
+            roles,
+        } => Intent::CreateInvitation {
+            invitation: named("invitation", InvitationId::new(invitation.as_str()))?,
+            address: address.clone(),
+            roles: roles
+                .iter()
+                .map(|role| named("role", RoleId::new(role.as_str())))
+                .collect::<Result<BTreeSet<_>, _>>()?,
+        },
+        MembersRequest::Redeem { invitation } => Intent::RedeemInvitation {
+            invitation: named("invitation", InvitationId::new(invitation.as_str()))?,
+        },
+        MembersRequest::RevokeInvitation { invitation } => Intent::RevokeInvitation {
+            invitation: named("invitation", InvitationId::new(invitation.as_str()))?,
+        },
+    };
+    let ctx = identity.context(app);
+    let done = run_intent(app, &ctx, &intent, identity.anonymous())?;
+    Ok(MembersReply {
+        revision: done.receipt.revision.0,
+        event_seq: done.transition.delta.event_seq,
+        checks_passed: done.transition.evidence.len(),
+    })
+}
+
+/// The fields a view declares: those of the object of each section's query and of the objects its
+/// included references lead to.
+fn declared_fields(
+    schema: &strata_kernel::TenantSchema,
+    def: &strata_kernel::ViewDef,
+) -> BTreeSet<FieldId> {
+    let mut declared = BTreeSet::new();
+    for section in def.sections.values() {
+        let Some(query) = schema.queries.get(&section.query) else {
+            continue;
+        };
+        let Some(object) = schema.objects.get(&query.object) else {
+            continue;
+        };
+        declared.extend(object.fields.keys().cloned());
+        for field in &section.include {
+            if let Some((target, _, _)) = object.fields.get(field).and_then(|f| f.ty.ref_target()) {
+                if let Some(target) = schema.objects.get(target) {
+                    declared.extend(target.fields.keys().cloned());
+                }
+            }
+        }
+    }
+    declared
+}
+
+/// The field selection of a delivery request, checked against the fields the view declares
+/// (CMS-163): at least one name, each a field of the view. A name the view does not declare is
+/// refused, not ignored, so that a misspelt field is not mistaken for one that is empty.
+fn field_selection(
+    schema: &strata_kernel::TenantSchema,
+    def: &strata_kernel::ViewDef,
+    names: &[String],
+) -> Result<BTreeSet<FieldId>, ApiError> {
+    if names.is_empty() {
+        return Err(ApiError::new(
+            ErrorCode::Invalid,
+            "A field selection names at least one field.",
+        ));
+    }
+    let declared = declared_fields(schema, def);
+    let mut selected = BTreeSet::new();
+    for name in names {
+        let field = named("fields", FieldId::new(name.as_str()))?;
+        if !declared.contains(&field) {
+            return Err(ApiError::new(
+                ErrorCode::Invalid,
+                format!("view {} has no field {name}", def.id.as_str()),
+            ));
+        }
+        selected.insert(field);
+    }
+    Ok(selected)
+}
+
+/// The page of a delivery request: the size, and the section its cursor continues with that
+/// cursor. A cursor is `<section>:<position>`, as [`view`] answered it in `next`.
+fn page_of_request(
+    def: &strata_kernel::ViewDef,
+    request: &ViewRequest,
+) -> Result<(Option<u32>, Option<(String, PageCursor)>), ApiError> {
+    let limit = match request.limit {
+        Some(0) => {
+            return Err(ApiError::new(ErrorCode::Invalid, "A limit is at least 1."));
+        }
+        Some(n) if n > MAX_VIEW_LIMIT => {
+            return Err(ApiError::new(
+                ErrorCode::Invalid,
+                format!("A limit is at most {MAX_VIEW_LIMIT}."),
+            ));
+        }
+        other => other,
+    };
+    let Some(text) = request.cursor.as_deref() else {
+        return Ok((limit, None));
+    };
+    let wrong = || {
+        ApiError::new(
+            ErrorCode::Invalid,
+            "The cursor is not one this view issued.",
+        )
+    };
+    let (section, position) = text.rsplit_once(':').ok_or_else(wrong)?;
+    let listed = def.sections.get(section).is_some_and(|s| !s.single);
+    let cursor = decode_cursor(position)
+        .filter(|_| listed)
+        .ok_or_else(wrong)?;
+    Ok((limit, Some((section.to_string(), cursor))))
+}
+
+/// Answer one read against the snapshot, loading what the read needs when the snapshot does not
+/// cover it and what it reports missing after: a section loads the window of its page, never
+/// every record of its type.
+#[allow(clippy::too_many_arguments)]
+fn read_loaded(
+    app: &App,
+    tenant: &TenantId,
+    schema: &strata_kernel::TenantSchema,
+    state: &mut State,
+    needs: &mut BTreeSet<Need>,
+    request: &ReadRequest,
+    ctx: &Context,
+    anonymous: bool,
+) -> Result<ReadResult, ApiError> {
+    let reload = |state: &mut State, needs: &BTreeSet<Need>| -> Result<(), ApiError> {
+        let wanted: Vec<Need> = needs.iter().cloned().collect();
+        *state = app.store.load(tenant, &wanted)?;
+        Ok(())
+    };
+    // The view's snapshot (`view_load`) normally covers the read already; only a read it does not
+    // cover loads, and then everything this view has had to load so far.
+    let wanted = read_needs(schema, request);
+    if wanted.iter().any(|need| !state.coverage.covers(need)) {
+        needs.extend(wanted);
+        reload(state, needs)?;
+    }
+    // A policy that follows a reference names the record it lacks; it is loaded and the read made
+    // again, a bounded number of times.
+    for _ in 0..32 {
+        let result = read(state, request, ctx);
+        let missing = match &result {
+            Err(error) if error.kind == ErrorKind::InsufficientState => error.missing.clone(),
+            _ => None,
+        };
+        match missing {
+            Some(need) if !needs.contains(&need) => {
+                needs.insert(need);
+                reload(state, needs)?;
+            }
+            _ => return result.map_err(|error| ApiError::domain(error, anonymous)),
+        }
+    }
+    Err(ApiError::new(
+        ErrorCode::Internal,
+        "A read kept asking for more state than it was given.",
+    ))
+}
+
+/// Answer one aggregate against the snapshot, as [`read_loaded`] answers a read: load what the
+/// aggregate needs first and each record it reports missing after (D-5067).
+#[allow(clippy::too_many_arguments)]
+fn aggregate_loaded(
+    app: &App,
+    tenant: &TenantId,
+    schema: &strata_kernel::TenantSchema,
+    state: &mut State,
+    needs: &mut BTreeSet<Need>,
+    request: &strata_kernel::AggregateRequest,
+    ctx: &Context,
+    anonymous: bool,
+) -> Result<strata_kernel::AggregateResult, ApiError> {
+    let reload = |state: &mut State, needs: &BTreeSet<Need>| -> Result<(), ApiError> {
+        let wanted: Vec<Need> = needs.iter().cloned().collect();
+        *state = app.store.load(tenant, &wanted)?;
+        Ok(())
+    };
+    let wanted = strata_kernel::aggregates::needs(schema, request);
+    if wanted.iter().any(|need| !state.coverage.covers(need)) {
+        needs.extend(wanted);
+        reload(state, needs)?;
+    }
+    for _ in 0..32 {
+        let result = strata_kernel::aggregates::run(state, request, ctx);
+        let missing = match &result {
+            Err(error) if error.kind == ErrorKind::InsufficientState => error.missing.clone(),
+            _ => None,
+        };
+        match missing {
+            Some(need) if !needs.contains(&need) => {
+                needs.insert(need);
+                reload(state, needs)?;
+            }
+            _ => return result.map_err(|error| ApiError::domain(error, anonymous)),
+        }
+    }
+    Err(ApiError::new(
+        ErrorCode::Internal,
+        "An aggregate kept asking for more state than it was given.",
+    ))
+}
+
 /// Evaluate the view whose route matches a path. Every section is read from one snapshot, and
 /// every row and every included record passes through the kernel's read authorization.
+///
+/// A section loads and answers one page of its query (the request's `limit`, else the query's own
+/// size), with the cursor of the page after it in `next`; a request `cursor` continues one section.
+/// A field selection narrows each row and included record to the fields it names after the read,
+/// so it can only take away from what the reader may see (CMS-163, CMS-164).
+///
+/// Implements: CT-093
 pub fn view(app: &App, identity: &Identity, request: &ViewRequest) -> Result<ViewData, ApiError> {
     let tenant = header(app, identity)?;
     let schema = &tenant.schema;
     let (def, route) = match_route(schema, &request.path).ok_or_else(|| {
         ApiError::new(ErrorCode::NotFound, format!("nothing at {}", request.path))
     })?;
+    let (limit, continued) = page_of_request(def, request)?;
+    let selected = request
+        .fields
+        .as_ref()
+        .map(|names| field_selection(schema, def, names))
+        .transpose()?;
 
     let mut depends_on = BTreeSet::new();
     for section in def.sections.values() {
@@ -245,52 +618,126 @@ pub fn view(app: &App, identity: &Identity, request: &ViewRequest) -> Result<Vie
             }
         }
     }
-    let needs: Vec<Need> = depends_on.iter().cloned().map(Need::AllOf).collect();
-    let state = app.store.load(&identity.tenant, &needs)?;
+    // Each section loads only the page its query reads (WG-5104, KRN-2526). The snapshot is found
+    // with the very requests the sections below make: the page and cursor of the request included.
+    let page_of = |section: &ViewSection| -> (Option<u32>, Option<PageCursor>) {
+        if section.single {
+            return (None, None);
+        }
+        let cursor = continued
+            .as_ref()
+            .filter(|(name, _)| {
+                def.sections
+                    .get(name)
+                    .is_some_and(|held| std::ptr::eq(held, section))
+            })
+            .map(|(_, cursor)| cursor.clone());
+        (limit, cursor)
+    };
+    // The arguments that come from a setting, resolved for this reader (SET-1540).
+    let settings = resolved_settings(&tenant, &identity.principal, def);
+    let request_of = |section: &ViewSection, done: &BTreeMap<String, Option<Arc<Record>>>| {
+        let (size, cursor) = page_of(section);
+        with_page(
+            section_request_with(section, &route, &request.request, done, &settings),
+            size,
+            cursor,
+        )
+    };
     let ctx = identity.context(app);
+    let mut state = crate::view_load::load_view_state(app, &ctx, def, &depends_on, &request_of)?;
     let anonymous = identity.anonymous();
-    let fail = |error| ApiError::domain(error, anonymous);
+    // A restricted person's personal fields are not shown (PRV-352, subject_rights).
+    let restrictions = crate::subject_rights::Rights::load_restrictions(app, &identity.tenant)?;
+    let shown = |record: &Arc<Record>| {
+        let record = &restrictions.hide(schema, record);
+        let trimmed = without_others_authorship(&identity.principal, record);
+        match &selected {
+            Some(fields) => select_fields(&trimmed, fields),
+            None => trimmed,
+        }
+    };
 
+    let mut needs = BTreeSet::new();
     let mut done = BTreeMap::new();
     let mut sections = BTreeMap::new();
     let mut revision = tenant.revision;
     for name in section_order(def) {
         let section = &def.sections[name];
-        let result = read(
-            &state,
-            &section_request(section, &route, &request.request, &done),
+        // A section that names an aggregate delivers its result in place of rows (D-5067); the
+        // kernel decides it for this reader like any other read of the same snapshot.
+        if let Some(aggregate) = &section.aggregate {
+            let ask = aggregate_request_with(
+                section,
+                aggregate,
+                &route,
+                &request.request,
+                &done,
+                &settings,
+            );
+            let result = aggregate_loaded(
+                app,
+                &identity.tenant,
+                schema,
+                &mut state,
+                &mut needs,
+                &ask,
+                &ctx,
+                anonymous,
+            )?;
+            revision = result.revision;
+            sections.insert(
+                name.clone(),
+                SectionData {
+                    single: false,
+                    rows: Vec::new(),
+                    included: BTreeMap::new(),
+                    markdown: Vec::new(),
+                    next: None,
+                    aggregate: Some(result),
+                },
+            );
+            continue;
+        }
+        let wanted = request_of(section, &done);
+        let result = read_loaded(
+            app,
+            &identity.tenant,
+            schema,
+            &mut state,
+            &mut needs,
+            &wanted,
             &ctx,
-        )
-        .map_err(fail)?;
+            anonymous,
+        )?;
         revision = result.revision;
         let object = &schema.queries[&section.query].object;
         let mut included = BTreeMap::new();
         for (field, (target, ids)) in included_refs(schema, object, section, &result.rows) {
-            let found = read(
-                &state,
+            let found = read_loaded(
+                app,
+                &identity.tenant,
+                schema,
+                &mut state,
+                &mut needs,
                 &ReadRequest::Records {
                     object: target,
                     ids,
                 },
                 &ctx,
-            )
-            .map_err(fail)?;
+                anonymous,
+            )?;
             included.insert(
                 field,
                 found
                     .rows
                     .iter()
-                    .map(|record| {
-                        (
-                            record.id,
-                            without_others_authorship(&identity.principal, record),
-                        )
-                    })
+                    .map(|record| (record.id, shown(record)))
                     .collect(),
             );
         }
-        // Later sections may read this one's row, authorship included; only what is sent is
-        // trimmed.
+        // Later sections may read this one's row, authorship and every field included; only what
+        // is sent is trimmed and narrowed.
         if section.single {
             done.insert(name.clone(), result.rows.first().cloned());
         }
@@ -298,15 +745,58 @@ pub fn view(app: &App, identity: &Identity, request: &ViewRequest) -> Result<Vie
             name.clone(),
             SectionData {
                 single: section.single,
-                rows: result
-                    .rows
-                    .iter()
-                    .map(|record| without_others_authorship(&identity.principal, record))
-                    .collect(),
+                rows: result.rows.iter().map(&shown).collect(),
                 included,
-                markdown: section.markdown.clone(),
+                markdown: section
+                    .markdown
+                    .iter()
+                    .filter(|field| {
+                        selected
+                            .as_ref()
+                            .is_none_or(|fields| fields.contains(*field))
+                    })
+                    .cloned()
+                    .collect(),
+                next: result
+                    .next
+                    .as_ref()
+                    .filter(|_| !section.single)
+                    .map(|cursor| format!("{name}:{}", encode_cursor(cursor))),
+                aggregate: None,
             },
         );
+    }
+    // The record types the reader asked about (`rules=post`): the kernel's own account of what it
+    // will check on them, for this reader and trimmed to what they may read (WG-5143). Asked for
+    // by a signed-in reader; the record being edited is the one a single section holds.
+    let mut record_rules = BTreeMap::new();
+    if let (false, Some(asked), Some(held)) = (
+        anonymous,
+        request.request.get("rules"),
+        state.tenant.as_deref(),
+    ) {
+        let lookup = Lookup {
+            tenant: held,
+            coverage: &state.coverage,
+        };
+        for name in asked.split(',').take(8) {
+            let Ok(id) = object_id(name.trim()) else {
+                continue;
+            };
+            let Some(object) = schema.objects.get(&id) else {
+                continue;
+            };
+            let stored = done
+                .values()
+                .flatten()
+                .find(|row| row.object == id)
+                .and_then(|row| held.record(&id, row.id));
+            if let Some(rules) =
+                editor_record_rules(lookup, &identity.principal, ctx.now, object, stored)
+            {
+                record_rules.insert(id.as_str().to_string(), rules);
+            }
+        }
     }
     Ok(ViewData {
         view: def.id.clone(),
@@ -316,6 +806,7 @@ pub fn view(app: &App, identity: &Identity, request: &ViewRequest) -> Result<Vie
         depends_on,
         revision,
         schema_version: schema.version,
+        record_rules,
     })
 }
 
@@ -338,9 +829,8 @@ pub fn diagnostics(app: &App, tenant: &TenantId) -> Result<Json, ApiError> {
     let name = tenant.as_str();
     let sessions: Vec<Json> = app
         .store
-        .live_sessions(now)?
+        .live_sessions_of(tenant, None, now)?
         .iter()
-        .filter(|s| s.tenant == *tenant)
         .map(session_line)
         .collect();
     let connections = app
@@ -354,13 +844,16 @@ pub fn diagnostics(app: &App, tenant: &TenantId) -> Result<Json, ApiError> {
                 .collect::<BTreeMap<_, _>>())
         })
         .unwrap_or(Json::Null);
-    let health = app.store.health()?;
-    let outbox_pending = app
+    // Liveness and this tenant's own backlog only: the integrity check of every tenant file is
+    // the operator's (platform diagnostics), and it names other tenants.
+    app.store.liveness()?;
+    let outbox_pending = app.store.outbox_pending_of(tenant)?;
+    let outbox_faults: Vec<_> = app
         .store
-        .outbox(100_000)?
-        .iter()
-        .filter(|entry| entry.event.tenant == *tenant)
-        .count();
+        .outbox_faults()
+        .into_iter()
+        .filter(|fault| fault.tenant == *tenant)
+        .collect();
     let counters = app.stats.of(name);
     let mine = |line: &Json| line["tenant"] == name;
     Ok(json!({
@@ -370,13 +863,12 @@ pub fn diagnostics(app: &App, tenant: &TenantId) -> Result<Json, ApiError> {
         "now": now.0,
         "store": {
             "capabilities": app.store.capabilities(),
-            "health": { "ok": health.ok, "detail": health.detail, "outbox_pending": outbox_pending },
+            "health": { "ok": true, "outbox_pending": outbox_pending, "outbox_faults": outbox_faults },
             "migrations": app.store.migrations()?,
         },
-        "tenants": app.store.tenants()?.into_iter().filter(|t| t.id == *tenant).collect::<Vec<_>>(),
+        "tenants": app.store.tenant_summary(tenant)?.into_iter().collect::<Vec<_>>(),
         "sessions": sessions,
         "connections": connections,
-        "pending_operations": app.stats.in_flight.load(Ordering::Relaxed),
         "transitions": counters.transitions,
         "rejections_by_kind": counters.rejections,
         "conflicts_retried": counters.conflicts_retried,
@@ -387,16 +879,17 @@ pub fn diagnostics(app: &App, tenant: &TenantId) -> Result<Json, ApiError> {
 }
 
 /// Everything the platform diagnostics report, every tenant included, with the audit entries.
-/// Served only on the backend's internal route to holders of the service credential; the BFF
-/// never relays it to a browser.
+/// Served only on the backend's internal route, and only in development: no operator identity
+/// exists to hold it to outside it. The BFF never relays it to a browser.
 pub fn platform_diagnostics(app: &App) -> Result<Json, ApiError> {
     let now = app.now();
-    let sessions: Vec<Json> = app
-        .store
-        .live_sessions(now)?
-        .iter()
-        .map(session_line)
-        .collect();
+    // One tenant at a time, so a tenant that cannot be read hides nobody else's sessions.
+    let mut sessions: Vec<Json> = Vec::new();
+    for summary in app.store.tenants()? {
+        if let Ok(found) = app.store.live_sessions_of(&summary.id, None, now) {
+            sessions.extend(found.iter().map(session_line));
+        }
+    }
     let connections = app
         .hub
         .connections
@@ -411,16 +904,19 @@ pub fn platform_diagnostics(app: &App) -> Result<Json, ApiError> {
         "store": {
             "capabilities": app.store.capabilities(),
             "health": app.store.health()?,
+            "outbox_faults": app.store.outbox_faults(),
             "migrations": app.store.migrations()?,
         },
         "tenants": app.store.tenants()?,
         "sessions": sessions,
         "connections": connections,
         "pending_operations": app.stats.in_flight.load(Ordering::Relaxed),
+        "machine_store": app.hub.outbox.get().map(|outbox| outbox.held()),
         "counters": app.stats.counters.lock().map(|c| json!(*c)).unwrap_or(Json::Null),
         "recent_events": app.stats.recent_events.list(),
         "recent_rejections": app.stats.recent_rejections.list(),
         "recent_runs": app.lab.recent(),
         "audit": app.audit.list(),
+        "decisions": app.decisions.list(),
     }))
 }

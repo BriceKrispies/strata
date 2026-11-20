@@ -40,6 +40,12 @@ pub struct Spec {
     pub constructs: crate::constructs::Constructs,
     /// `system.telemetry` and the sensitive types: what the telemetry backend needs.
     pub telemetry: Telemetry,
+    /// The `languages` section: expression languages the specified system's users write.
+    pub languages: Vec<crate::language::Language>,
+    /// The `functions` section: pure functions compiled into the pure crate.
+    pub functions: Vec<crate::function::Function>,
+    /// The `exampleFixtures` section: values the functions' examples share.
+    pub example_fixtures: Vec<crate::function::ExampleFixture>,
 }
 
 /// `system.telemetry` and the types a log line may never hold.
@@ -132,6 +138,63 @@ pub struct System {
     /// `system.generation.wireCase`: how contract payloads name their JSON members; kebab-case
     /// (the names as written) when unstated.
     pub wire_case: crate::wire::WireCase,
+    /// How contract errors travel: `system.generation.errorKinds`, `errorStatus`, `errorKind`
+    /// and `errorBody`.
+    pub error_wire: ErrorWire,
+}
+
+/// What `system.generation` states about contract errors on the wire.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ErrorWire {
+    /// `errorKinds`: each kind of failure with its HTTP status, in declaration order.
+    pub kinds: Vec<(String, u16)>,
+    /// `errorStatus`: the status of an error that states neither status nor kind.
+    pub default_status: Option<u16>,
+    /// `errorKind`: the kind of an error that states neither status nor kind.
+    pub default_kind: Option<String>,
+    /// `errorBody`: the body every failed call is answered with, when the specification states
+    /// one.
+    pub body: Option<ErrorBody>,
+}
+
+impl ErrorWire {
+    /// The status of a kind, when it is declared.
+    pub fn kind_status(&self, kind: &str) -> Option<u16> {
+        self.kinds.iter().find(|(k, _)| k == kind).map(|(_, s)| *s)
+    }
+
+    /// The kind of an error: its own, else the default kind.
+    pub fn kind_of<'a>(&'a self, error: &'a ContractError) -> Option<&'a str> {
+        error.kind.as_deref().or(self.default_kind.as_deref())
+    }
+
+    /// The status of an error: its own, else the status of its kind, else the default kind's,
+    /// else the default status.
+    pub fn status_of(&self, error: &ContractError) -> Option<u16> {
+        if let Some(status) = error.status {
+            return Some(status);
+        }
+        match self.kind_of(error) {
+            Some(kind) => self.kind_status(kind),
+            None => self.default_status,
+        }
+    }
+}
+
+/// `system.generation.errorBody`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ErrorBody {
+    /// The struct type of the body.
+    pub type_name: String,
+    /// The field holding the kind (an enum of the kinds).
+    pub code: String,
+    /// The string field holding the message.
+    pub message: String,
+    /// The string field the route fills with the caller's correlation id, if any.
+    pub correlation: Option<String>,
+    /// The kind of each runtime failure, by its name (`unauthenticated`, `forbidden`,
+    /// `invalid-request`, `timeout`, `unavailable`, `internal`).
+    pub runtime: Vec<(String, String)>,
 }
 
 /// A component; only what the contract and wiring backends name.
@@ -157,9 +220,158 @@ pub struct TypeDecl {
     pub description: Option<String>,
     /// What kind of type it is.
     pub kind: TypeKind,
+    /// `constraints` of an `id` or `scalar`; empty when none are stated.
+    pub constraints: TypeConstraints,
 }
 
-/// The four kinds of declared type.
+/// `constraints` `{pattern?, minLength?, maxLength?}` of an id or scalar type, as written.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TypeConstraints {
+    /// A regular expression the value must match (a `string` representation).
+    pub pattern: Option<String>,
+    /// The least length: characters of a `string`, bytes of `bytes`.
+    pub min_length: Option<Number>,
+    /// The greatest length: characters of a `string`, bytes of `bytes`.
+    pub max_length: Option<Number>,
+}
+
+impl TypeConstraints {
+    /// True when no constraint is stated.
+    pub fn is_empty(&self) -> bool {
+        self.pattern.is_none() && self.min_length.is_none() && self.max_length.is_none()
+    }
+}
+
+/// A variant of a union type.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Variant {
+    /// The variant name, as declared.
+    pub name: String,
+    /// The fields, in declaration order; none for a unit variant.
+    pub fields: Vec<StructField>,
+    /// `newtype: true`: the one field is written without its name.
+    pub newtype: bool,
+    /// `tuple: true`: two or more positional fields, written as a JSON array of their values in
+    /// order (serde's tuple variant); the field names are not written.
+    pub tuple: bool,
+}
+
+/// How a union is tagged on the wire, in serde's forms.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum UnionTag {
+    /// `{"Variant": content}`, a unit variant as the bare string (serde's default).
+    #[default]
+    External,
+    /// `{<tagField>: "Variant", ...fields}`.
+    Internal,
+    /// `{<tagField>: "Variant", <contentField>: content}`.
+    Adjacent,
+}
+
+impl UnionTag {
+    /// Reads the specification's value.
+    pub fn parse(text: &str) -> Option<Self> {
+        match text {
+            "external" => Some(Self::External),
+            "internal" => Some(Self::Internal),
+            "adjacent" => Some(Self::Adjacent),
+            _ => None,
+        }
+    }
+
+    /// The value as the specification writes it.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::External => "external",
+            Self::Internal => "internal",
+            Self::Adjacent => "adjacent",
+        }
+    }
+}
+
+/// How the variant names of a union are written on the wire.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VariantCase {
+    /// `PascalCase`
+    Pascal,
+    /// `snake_case`
+    Snake,
+    /// `kebab-case`
+    Kebab,
+}
+
+impl VariantCase {
+    /// Reads the specification's value.
+    pub fn parse(text: &str) -> Option<Self> {
+        match text {
+            "PascalCase" => Some(Self::Pascal),
+            "snake_case" => Some(Self::Snake),
+            "kebab-case" => Some(Self::Kebab),
+            _ => None,
+        }
+    }
+}
+
+/// `encoding` of a union.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Encoding {
+    /// The tag form; external when unstated.
+    pub tag: UnionTag,
+    /// The member holding the variant name (internal and adjacent).
+    pub tag_field: Option<String>,
+    /// The member holding the content (adjacent).
+    pub content_field: Option<String>,
+    /// The case of the variant names on the wire; as declared when unstated.
+    pub variant_case: Option<VariantCase>,
+}
+
+/// The name a variant has on the wire: its words (split at `-`, `_`, white space and
+/// lower-to-upper changes) written in the case; without a case the name as written. The same
+/// function as Exegra's `variantWireName` (`src/core/type-shapes.js`).
+pub fn variant_wire_name(name: &str, case: Option<VariantCase>) -> String {
+    let Some(case) = case else {
+        return name.to_string();
+    };
+    // Split as the JavaScript does: a space between a lower-case letter or digit and an
+    // upper-case letter, and between an upper-case run and an upper-case letter that starts a
+    // lower-case word; then at runs of white space, `_` and `-`.
+    let chars: Vec<char> = name.chars().collect();
+    let mut spaced = String::new();
+    for (i, &c) in chars.iter().enumerate() {
+        if i > 0 && c.is_ascii_uppercase() {
+            let prev = chars[i - 1];
+            let next = chars.get(i + 1).copied();
+            let lower_to_upper = prev.is_ascii_lowercase() || prev.is_ascii_digit();
+            let acronym_end =
+                prev.is_ascii_uppercase() && next.is_some_and(|n| n.is_ascii_lowercase());
+            if lower_to_upper || acronym_end {
+                spaced.push(' ');
+            }
+        }
+        spaced.push(c);
+    }
+    let words: Vec<String> = spaced
+        .split(|c: char| c.is_whitespace() || c == '_' || c == '-')
+        .filter(|w| !w.is_empty())
+        .map(str::to_lowercase)
+        .collect();
+    match case {
+        VariantCase::Snake => words.join("_"),
+        VariantCase::Kebab => words.join("-"),
+        VariantCase::Pascal => words
+            .iter()
+            .map(|w| {
+                let mut cs = w.chars();
+                match cs.next() {
+                    Some(first) => first.to_uppercase().collect::<String>() + cs.as_str(),
+                    None => String::new(),
+                }
+            })
+            .collect(),
+    }
+}
+
+/// The kinds of declared type.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TypeKind {
     /// An identifier over a built-in representation.
@@ -182,6 +394,13 @@ pub enum TypeKind {
         /// The fields, in declaration order.
         fields: Vec<StructField>,
     },
+    /// A tagged union of variants.
+    Union {
+        /// The variants, in declaration order.
+        variants: Vec<Variant>,
+        /// How a value is written on the wire.
+        encoding: Encoding,
+    },
 }
 
 impl TypeKind {
@@ -192,6 +411,7 @@ impl TypeKind {
             Self::Scalar { .. } => "scalar",
             Self::Enum { .. } => "enum",
             Self::Struct { .. } => "struct",
+            Self::Union { .. } => "union",
         }
     }
 }
@@ -349,8 +569,19 @@ pub struct Contract {
     pub realisation: Option<Realisation>,
     /// The implementing component.
     pub implemented_by: Option<String>,
-    /// Who may call it.
-    pub auth: Option<String>,
+    /// Who may call it, as `{scheme, ...}`: `None` when it states no auth or states it as a
+    /// sentence (`auth_prose`), which generated routes refuse to serve.
+    pub auth: Option<Auth>,
+    /// The auth as a sentence, when the specification states it so.
+    pub auth_prose: Option<String>,
+    /// `exposure`: where it can be reached from.
+    pub exposure: Option<Exposure>,
+    /// `readOnly`: true when a call changes no state.
+    pub read_only: bool,
+    /// `tenantScope`: what tenant data it returns.
+    pub tenant_scope: Option<TenantScope>,
+    /// `development`: the development condition without which it does not exist.
+    pub development: Option<String>,
     /// Whether repeating a call has the effect of one call.
     pub idempotent: Option<bool>,
     /// How long a caller waits, as written.
@@ -365,6 +596,175 @@ pub struct Contract {
     /// `implementedBy` component: the contract describes the enterprise target, so it is served
     /// by no route and has no handler in the shipped code.
     pub target: bool,
+    /// `derivation`, as written: how a derived contract's implementation is built.
+    pub derivation: Option<Derivation>,
+}
+
+impl Contract {
+    /// The component that serves the contract: `implementedBy`, except for a facade, which
+    /// nothing serves (it gets no trait method and no route), and a target contract, which the
+    /// shipped code does not serve.
+    pub fn served_by(&self) -> Option<&str> {
+        if self.target || self.realisation == Some(Realisation::Facade) {
+            None
+        } else {
+            self.implemented_by.as_deref()
+        }
+    }
+}
+
+/// Where a contract can be reached from (`contract.exposure`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Exposure {
+    /// Browsers and the internet, through the gateway.
+    Public,
+    /// The service network only.
+    Internal,
+    /// An in-process call, never a route.
+    Local,
+}
+
+impl Exposure {
+    /// Reads the specification's value.
+    pub fn parse(text: &str) -> Option<Self> {
+        match text {
+            "public" => Some(Self::Public),
+            "internal" => Some(Self::Internal),
+            "local" => Some(Self::Local),
+            _ => None,
+        }
+    }
+}
+
+/// How a caller proves who it is (`contract.auth.scheme`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Scheme {
+    /// Nothing.
+    Anonymous,
+    /// A session established by signing in.
+    Session,
+    /// The credential of a platform component.
+    Service,
+    /// The provisioning token of one realm.
+    ProvisioningToken,
+    /// A request signed with a named secret.
+    Signature,
+    /// An address signed with a named secret.
+    SignedAddress,
+    /// A token an agent holds on behalf of a person.
+    Delegation,
+    /// A local call inside the process.
+    InProcess,
+}
+
+impl Scheme {
+    /// Every scheme, in the order the format lists them.
+    pub const ALL: [Scheme; 8] = [
+        Scheme::Anonymous,
+        Scheme::Session,
+        Scheme::Service,
+        Scheme::ProvisioningToken,
+        Scheme::Signature,
+        Scheme::SignedAddress,
+        Scheme::Delegation,
+        Scheme::InProcess,
+    ];
+
+    /// Reads the specification's value.
+    pub fn parse(text: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|s| s.name() == text)
+    }
+
+    /// The specification's name of the scheme.
+    pub fn name(self) -> &'static str {
+        match self {
+            Scheme::Anonymous => "anonymous",
+            Scheme::Session => "session",
+            Scheme::Service => "service",
+            Scheme::ProvisioningToken => "provisioning-token",
+            Scheme::Signature => "signature",
+            Scheme::SignedAddress => "signed-address",
+            Scheme::Delegation => "delegation",
+            Scheme::InProcess => "in-process",
+        }
+    }
+}
+
+/// What tenant data a contract returns (`contract.tenantScope`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TenantScope {
+    /// Only the tenant the request is made in.
+    Request,
+    /// No tenant's data.
+    None,
+    /// Data across tenants.
+    Platform,
+}
+
+impl TenantScope {
+    /// Reads the specification's value.
+    pub fn parse(text: &str) -> Option<Self> {
+        match text {
+            "request" => Some(Self::Request),
+            "none" => Some(Self::None),
+            "platform" => Some(Self::Platform),
+            _ => None,
+        }
+    }
+}
+
+/// A structured `contract.auth`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Auth {
+    /// How the caller proves who it is.
+    pub scheme: Scheme,
+    /// The roles any one of which admits the caller.
+    pub roles: Vec<String>,
+    /// The policies of the contract that must permit the call.
+    pub policies: Vec<String>,
+    /// Whether the tenant's own policies decide in the handler.
+    pub tenant_policies: bool,
+    /// Whether a browser call carries the request token of its session or visit.
+    pub csrf: bool,
+    /// Whether a browser call comes from an origin of the site it addresses.
+    pub origin: bool,
+    /// `stepUp`, as written: how recently the caller proved who it is.
+    pub step_up: Option<String>,
+    /// The name of the secret a signature or signed address is verified with.
+    pub secret: Option<String>,
+    /// `requires`: the capabilities a call needs, every one.
+    pub requires: Vec<String>,
+    /// Why an anonymous contract is open to anyone.
+    pub justification: Option<String>,
+    /// The auth in words.
+    pub description: Option<String>,
+}
+
+/// `contract.derivation` of a derived contract, as written (Exegra WG-4935).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Derivation {
+    /// `pure`, `read` or `command`, as written.
+    pub kind: Option<String>,
+    /// pure: the function that is the implementation.
+    pub function: Option<String>,
+    /// read, command: the function that gives the needs.
+    pub needs: Option<String>,
+    /// read, command: the contract that loads the needs.
+    pub load: Option<String>,
+    /// read, command: the function that decides.
+    pub decide: Option<String>,
+    /// command: the contract that commits what decide gives.
+    pub commit: Option<String>,
+    /// command: the commit contract's error that means it lost a race.
+    pub conflict: Option<String>,
+    /// command: the variant of decide's errors that asks for one more need.
+    pub insufficient: Option<String>,
+    /// command: how many extra needs one decision may ask for, as written.
+    pub need_rounds: Option<Number>,
+    /// command: how often a commit that lost a race is decided again, as written.
+    pub retries: Option<Number>,
+    /// The contract error an integer overflow or a division by zero in a function becomes.
+    pub fault: Option<String>,
 }
 
 /// An input or output of a contract.
@@ -389,6 +789,10 @@ pub struct ContractError {
     pub condition: Option<String>,
     /// The payload type, when it carries one.
     pub type_name: Option<String>,
+    /// `status`: the HTTP status it is answered with, when it states one.
+    pub status: Option<u16>,
+    /// `kind`: the kind of failure (a key of `system.generation.errorKinds`), when it states one.
+    pub kind: Option<String>,
 }
 
 /// How a contract is realised.
@@ -398,6 +802,10 @@ pub enum Realisation {
     Generated,
     /// A hole: written by hand against the postconditions.
     Hand,
+    /// Generated from its derivation.
+    Derived,
+    /// No server implementation: a client lowers it onto a generic contract.
+    Facade,
 }
 
 impl Realisation {
@@ -406,6 +814,8 @@ impl Realisation {
         match text {
             "generated" => Some(Self::Generated),
             "hand" => Some(Self::Hand),
+            "derived" => Some(Self::Derived),
+            "facade" => Some(Self::Facade),
             _ => None,
         }
     }
@@ -678,8 +1088,9 @@ pub enum Effect {
 pub struct Storage {
     /// The record id.
     pub record: Option<String>,
-    /// The key field.
-    pub key: Option<String>,
+    /// The key fields: the one field written as a string, or the list written for a record with
+    /// a composite key. `None` when no key is written (an empty list is read as none).
+    pub key: Option<Vec<String>>,
     /// `fields`: the record field each listed variable is held in (`None` when not a string),
     /// in the order written. A variable not listed is held in the field of its own name.
     pub fields: Vec<(String, Option<String>)>,
@@ -694,12 +1105,14 @@ pub struct Storage {
 /// `instances`, as written.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Instances {
-    /// The payload field that keys the instances.
-    pub key: Option<String>,
+    /// The payload field that keys the instances (the one key field, as a string).
+    pub key: Option<Vec<String>>,
     /// The record each instance is stored in.
     pub stored_in: Option<String>,
     /// True when the instances are counted (`count`) rather than keyed.
     pub counted: bool,
+    /// `max`: the most instances there may be, when it is a whole number.
+    pub max: Option<u64>,
 }
 
 #[cfg(test)]
@@ -749,4 +1162,123 @@ mod delay_tests {
         assert_eq!(b.delay_ms(&json!("2500 us")), None);
         assert_eq!(b.delay_ms(&json!("soon")), None);
     }
+}
+
+/// The capability model: `capabilities`, `plans`, `roles`, `grants`, `tokenScopes`,
+/// `delegations` and `featureFlags`, each list in declaration order.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AccessModel {
+    /// The `capabilities` section.
+    pub capabilities: Vec<Capability>,
+    /// The `plans` section.
+    pub plans: Vec<Plan>,
+    /// The `roles` section.
+    pub roles: Vec<Role>,
+    /// The `grants` section.
+    pub grants: Vec<Grant>,
+    /// The `tokenScopes` section.
+    pub token_scopes: Vec<TokenScope>,
+    /// The `delegations` section.
+    pub delegations: Vec<Delegation>,
+    /// The `featureFlags` section.
+    pub flags: Vec<FeatureFlag>,
+}
+
+impl AccessModel {
+    /// The capability with this id.
+    pub fn capability(&self, id: &str) -> Option<&Capability> {
+        self.capabilities.iter().find(|c| c.id == id)
+    }
+}
+
+/// A `capability` entity.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Capability {
+    /// The capability id.
+    pub id: String,
+    /// The display name, if any.
+    pub name: Option<String>,
+    /// The description, if any.
+    pub description: Option<String>,
+    /// `core`: every plan entitles it.
+    pub core: bool,
+}
+
+/// A `plan` entity.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Plan {
+    /// The plan id, which a tenant's plan names.
+    pub id: String,
+    /// The capabilities it entitles beyond the core ones.
+    pub capabilities: Vec<String>,
+}
+
+/// The level of a role (`role.level`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RoleLevel {
+    /// Defined by the specification: what it lists is what it confers.
+    Platform,
+    /// A role a tenant starts with, held as tenant data.
+    Tenant,
+}
+
+/// A `role` entity.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Role {
+    /// The role id.
+    pub id: String,
+    /// Platform or tenant.
+    pub level: RoleLevel,
+    /// Who may hold it (`person`, `service`, `agent`, `team`, `anonymous`, `external`).
+    pub holders: Vec<String>,
+    /// The capabilities it confers.
+    pub capabilities: Vec<String>,
+}
+
+/// A `grant` entity.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Grant {
+    /// The grant id.
+    pub id: String,
+    /// The role whose holders issue it.
+    pub issuer: Option<String>,
+    /// The role whose holders receive it.
+    pub grantee: Option<String>,
+    /// The capabilities it confers while it lasts.
+    pub capabilities: Vec<String>,
+    /// Whether each grant confers its capabilities in the one tenant it names.
+    pub per_tenant: bool,
+}
+
+/// A `tokenScope` entity.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TokenScope {
+    /// The scope id.
+    pub id: String,
+    /// The scope as a token carries it (its `name`, else its id).
+    pub name: String,
+    /// The capabilities it allows.
+    pub capabilities: Vec<String>,
+}
+
+/// A `delegation` entity.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Delegation {
+    /// The delegation id.
+    pub id: String,
+    /// What it is issued from.
+    pub from: Option<String>,
+    /// The capabilities it passes on.
+    pub capabilities: Vec<String>,
+}
+
+/// A `featureFlag` entity.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FeatureFlag {
+    /// The flag id, which a tenant's flag settings name.
+    pub id: String,
+    /// The capabilities it gates.
+    pub gates: Vec<String>,
+    /// `default: "on"`: its value for a tenant with no setting of its own (off otherwise).
+    pub default_on: bool,
 }

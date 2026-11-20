@@ -5,6 +5,8 @@
 // selection, scroll position and the browser's own form state across updates.
 // @ts-check
 
+import { sitePath } from '../generated/site-path.js';
+
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const URL_ATTRS = new Set(['href', 'src', 'action']);
 const PROPS = new Set(['value', 'checked', 'selected']);
@@ -49,11 +51,17 @@ export function h(tag, attrs, ...children) {
   return { tag, attrs: rest, children: flat, key: key === null ? null : String(key) };
 }
 
-/** Only addresses that stay on the page's own protocols are ever written to the DOM. */
-function safeUrl(name, value) {
+/**
+ * Only addresses that stay on the page's own protocols are ever written to the DOM. A path is
+ * kept only when the URL parser reads it as a path on this site (the shared check), so a
+ * backslash or a tab cannot turn it into another site.
+ * @param {string} name @param {unknown} value
+ * @returns {string | null}
+ */
+export function safeUrl(name, value) {
   const text = String(value);
-  if (name === 'src') return text.startsWith('/') && !text.startsWith('//') ? text : null;
-  return /^(\/(?!\/)|#|https?:|mailto:)/i.test(text) ? text : null;
+  if (name === 'src' || text.startsWith('/')) return sitePath(text);
+  return /^(#|https?:|mailto:)/i.test(text) ? text : null;
 }
 
 /** @param {Element} el @param {string} name @param {any} value @param {any} previous */

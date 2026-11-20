@@ -9,7 +9,70 @@ use std::fs;
 use std::io::{self, Read};
 use std::path::Path;
 
+use crate::diagnostic::Diagnostic;
 use crate::emit::{GeneratedFile, HEADER_MARKERS};
+
+/// Code of two generated files that one path names, or of a path a Windows or case-insensitive
+/// file system cannot keep apart or cannot hold.
+pub const PATH_COLLISION: &str = "specc.generated-path-collision";
+
+/// Windows device names, which no file may be named, with or without an extension.
+const DEVICE_NAMES: &[&str] = &[
+    "con", "prn", "aux", "nul", "conin$", "conout$", "com1", "com2", "com3", "com4", "com5",
+    "com6", "com7", "com8", "com9", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8",
+    "lpt9",
+];
+
+/// True when `name` (one path component) is a Windows device name, as `con` and `con.spec.js`.
+#[must_use]
+pub fn is_device_name(name: &str) -> bool {
+    let stem = name.split('.').next().unwrap_or(name).trim_end();
+    let stem = stem.to_lowercase();
+    DEVICE_NAMES.contains(&stem.as_str())
+}
+
+/// Every reason the paths of `files` cannot all be written side by side: two files with one
+/// path, two paths that differ only in letter case (one file system keeps them apart, another
+/// does not), and a component that is a Windows device name or ends in a dot or space.
+#[must_use]
+pub fn path_collisions(files: &[GeneratedFile]) -> Vec<Diagnostic> {
+    let mut out = Vec::new();
+    let mut seen: std::collections::BTreeMap<String, &str> = std::collections::BTreeMap::new();
+    for file in files {
+        let folded = file.path.to_lowercase();
+        match seen.get(&folded) {
+            Some(first) if *first == file.path => out.push(Diagnostic::new(
+                PATH_COLLISION,
+                &file.path,
+                format!("Two generated files have the path \"{}\"; one would overwrite the other. Rename the entity that names one of them.", file.path),
+            )),
+            Some(first) => out.push(Diagnostic::new(
+                PATH_COLLISION,
+                &file.path,
+                format!("The generated files \"{first}\" and \"{}\" differ only in letter case, so on a case-insensitive file system one would overwrite the other. Rename one entity.", file.path),
+            )),
+            None => {
+                seen.insert(folded, &file.path);
+            }
+        }
+        for component in file.path.split('/') {
+            if is_device_name(component) {
+                out.push(Diagnostic::new(
+                    PATH_COLLISION,
+                    &file.path,
+                    format!("The generated file \"{}\" would be named \"{component}\", a device name on Windows. Rename the entity that names it.", file.path),
+                ));
+            } else if component.ends_with('.') || component.ends_with(' ') {
+                out.push(Diagnostic::new(
+                    PATH_COLLISION,
+                    &file.path,
+                    format!("The generated file \"{}\" has a name ending in a dot or a space, which Windows drops.", file.path),
+                ));
+            }
+        }
+    }
+    out
+}
 
 /// Directories never searched for generated files.
 const SKIPPED_DIRS: &[&str] = &["target", ".git", "node_modules"];

@@ -8,14 +8,15 @@ use serde::{Deserialize, Serialize};
 
 use crate::{prelude, types};
 
-/// The pattern of field `slug` of record `rec-tenant`.
+/// The pattern of field `slug` of record `rec-tenant`, matched against the whole value.
 static REC_TENANT_SLUG_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new("^[a-z][a-z0-9-]*$").expect("specc checked that the pattern compiles")
+    Regex::new("\\A(?:^[a-z][a-z0-9-]*$)\\z").expect("specc checked that the pattern compiles")
 });
 
-/// The pattern of field `memo` of record `rec-ledger-entry`.
-static REC_LEDGER_ENTRY_MEMO_PATTERN: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new("^\\S.*$").expect("specc checked that the pattern compiles"));
+/// The pattern of field `memo` of record `rec-ledger-entry`, matched against the whole value.
+static REC_LEDGER_ENTRY_MEMO_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new("\\A(?:^\\S.*$)\\z").expect("specc checked that the pattern compiles")
+});
 
 /// Tenant
 ///
@@ -244,7 +245,7 @@ impl RecAccount {
     /// The record's key.
     pub fn key(&self) -> RecAccountKey {
         RecAccountKey {
-            account_id: self.account_id.clone(),
+            account_id: self.account_id,
         }
     }
 
@@ -393,8 +394,8 @@ impl RecLedgerEntry {
     /// The record's key.
     pub fn key(&self) -> RecLedgerEntryKey {
         RecLedgerEntryKey {
-            account_id: self.account_id.clone(),
-            sequence: self.sequence.clone(),
+            account_id: self.account_id,
+            sequence: self.sequence,
         }
     }
 
@@ -505,7 +506,7 @@ impl RecTenantAudit {
     /// The record's key.
     pub fn key(&self) -> RecTenantAuditKey {
         RecTenantAuditKey {
-            entry_id: self.entry_id.clone(),
+            entry_id: self.entry_id,
         }
     }
 
@@ -565,7 +566,7 @@ impl RecCloseAudit {
     /// The record's key.
     pub fn key(&self) -> RecCloseAuditKey {
         RecCloseAuditKey {
-            log_id: self.log_id.clone(),
+            log_id: self.log_id,
         }
     }
 
@@ -622,7 +623,7 @@ impl RecAccessLog {
     /// The record's key.
     pub fn key(&self) -> RecAccessLogKey {
         RecAccessLogKey {
-            log_id: self.log_id.clone(),
+            log_id: self.log_id,
         }
     }
 

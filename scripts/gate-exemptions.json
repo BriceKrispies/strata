@@ -1,0 +1,14 @@
+{
+  "handlers": [],
+  "tables": [
+    {
+      "reason": "The table name is built at run time (CREATE TABLE IF NOT EXISTS {ledger}); the two ledgers it creates are described by tbl-control-migrations and tbl-tenant-migrations. Not a gap.",
+      "items": [
+        "{ledger}"
+      ]
+    }
+  ],
+  "env": [],
+  "bffRoutes": [],
+  "paths": []
+}

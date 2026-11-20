@@ -2,10 +2,10 @@
 //! one of these; it works from per-tenant snapshots loaded through the storage contract.
 
 use crate::canon;
-use crate::ids::TenantId;
 use crate::intent::{Context, DomainError, Intent, ReadRequest, ReadResult, Transition};
-use crate::state::{State, TenantState};
+use crate::state::{State, StateExt, TenantState};
 use crate::transition::{apply_delta, transition};
+use crate::types::TenantId;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::sync::Arc;

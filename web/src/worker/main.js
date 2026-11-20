@@ -50,6 +50,7 @@ async function http(effect) {
     headers['content-type'] = 'application/json';
   }
   if (effect.csrf) headers['x-csrf-token'] = effect.csrf;
+  if (effect.idempotencyKey) headers['idempotency-key'] = effect.idempotencyKey;
   let reply = { ok: false, status: 0, body: null };
   try {
     const response = await fetch(effect.path, {
@@ -80,7 +81,11 @@ function connect(csrf) {
   const scheme = self.location.protocol === 'https:' ? 'wss:' : 'ws:';
   const opened = new WebSocket(`${scheme}//${self.location.host}/ws?csrf=${encodeURIComponent(csrf ?? '')}`);
   socket = opened;
-  opened.onopen = () => dispatch({ type: 'ws_open' });
+  let wasOpen = false;
+  opened.onopen = () => {
+    wasOpen = true;
+    dispatch({ type: 'ws_open' });
+  };
   opened.onmessage = (event) => {
     if (socket !== opened || typeof event.data !== 'string') return;
     try {
@@ -92,7 +97,9 @@ function connect(csrf) {
   opened.onclose = () => {
     if (socket !== opened) return;
     socket = null;
-    dispatch({ type: 'ws_closed' });
+    // A browser does not say why an upgrade failed. A socket that never opened while the network
+    // is up is taken as refused (an expired token, say): the kernel reads the session again.
+    dispatch({ type: 'ws_closed', refused: !wasOpen && self.navigator.onLine !== false });
   };
 }
 
@@ -115,6 +122,7 @@ function execute(effect) {
       setTimeout(() => dispatch({ type: 'timer', name: effect.name, token: effect.token }), effect.ms);
       break;
     case 'log':
+      if (import.meta.env.DEV) console.warn(effect.event, effect.detail);
       diag(effect.level, effect.event, effect.correlation, effect.detail);
       break;
     default:
@@ -123,9 +131,10 @@ function execute(effect) {
   }
 }
 
+// The hook that drops the socket exists in development builds only (or when a test build asks for it).
 self.onmessage = (event) => {
   const message = event.data;
-  if (message?.type === 'debug_drop_socket') {
+  if ((import.meta.env.DEV || import.meta.env.VITE_STRATA_TEST_HOOKS === 'true') && message?.type === 'debug_drop_socket') {
     // Development aid used by the browser tests: lose the connection without telling anyone.
     socket?.close();
     return;

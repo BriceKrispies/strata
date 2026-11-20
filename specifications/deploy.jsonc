@@ -1,0 +1,40 @@
+// Deployment profile for `specc deploy`: what the specification does not say about how the
+// implemented components are started. Keys are component ids; `crates/spec-compiler/src/deploy.rs`
+// documents every field. `${NAME}` and `${NAME:-default}` are read by compose when the stack starts.
+{
+  "containerfile": "deploy/Containerfile",
+  "context": "..",
+  "units": {
+    // crates/backend. It listens on loopback only (it refuses anything else), so the gateway joins
+    // its network namespace instead of reaching it over a network.
+    "runtime": {
+      "port": 4101,
+      "health": "/internal/health",
+      "env": {
+        "STRATA_BACKEND_ADDR": "127.0.0.1:4101",
+        "STRATA_SERVICE_TOKEN": "${STRATA_SERVICE_TOKEN}",
+        "STRATA_STORE": "sqlite",
+        "STRATA_DB": "/var/lib/strata/strata.db",
+        "STRATA_TENANTS": "/opt/strata/tenants",
+        "STRATA_DEV": "${STRATA_DEV:-0}"
+      },
+      "volumes": ["strata-data:/var/lib/strata"]
+    },
+    // crates/bff, serving the built web bundle. The only unit with a port on the host.
+    "gateway": {
+      "port": 4100,
+      "health": "/api/session",
+      "shareNetworkWith": "runtime",
+      "publish": ["127.0.0.1:${STRATA_PORT:-4100}:4100"],
+      "env": {
+        "STRATA_BFF_ADDR": "0.0.0.0:4100",
+        "STRATA_BACKEND_URL": "http://127.0.0.1:4101",
+        "STRATA_SERVICE_TOKEN": "${STRATA_SERVICE_TOKEN}",
+        "STRATA_SITES": "127.0.0.1=fieldnotes,localhost=fieldnotes,tidewater.localhost=tidewater",
+        "STRATA_ORIGINS": "http://127.0.0.1:${STRATA_PORT:-4100},http://localhost:${STRATA_PORT:-4100},http://tidewater.localhost:${STRATA_PORT:-4100}",
+        "STRATA_WEB_DIST": "/opt/strata/web/dist",
+        "STRATA_DEV": "${STRATA_DEV:-0}"
+      }
+    }
+  }
+}

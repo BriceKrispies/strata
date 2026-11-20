@@ -6,6 +6,7 @@
 
 use crate::evidence::Class;
 use serde::{Deserialize, Serialize};
+use strata_kernel::ext::*;
 use strata_kernel::rules::{validate_record, Lookup};
 use strata_kernel::{owner_role, Coverage, ErrorKind, Principal, TenantState, World};
 
@@ -76,7 +77,7 @@ pub fn check_tenant(tenant: &TenantState) -> Vec<InvariantResult> {
             let failures = match outcome {
                 Ok(outcome) => outcome.failed,
                 Err(error) => {
-                    shape.push(format!("{at}: {error}"));
+                    shape.push(format!("{at}: {}", error.describe()));
                     continue;
                 }
             };

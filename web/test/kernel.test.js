@@ -100,7 +100,8 @@ test('on welcome the kernel subscribes and starts the heartbeat', () => {
   const { state, effects } = connected();
   assert.equal(state.ws.status, 'open');
   assert.equal(state.ws.lastSeq, 40);
-  assert.deepEqual(effects.map((e) => e.type), ['ws_send', 'timer']);
+  // The first subscription starts at the server head, so the page that was read before it is read again.
+  assert.deepEqual(effects.map((e) => e.type), ['ws_send', 'timer', 'http']);
   assert.equal(effects[0].message.type, 'subscribe');
   assert.equal('after' in effects[0].message, false, 'nothing to resume on a first connection');
 });
@@ -125,7 +126,8 @@ test('a gap in the connection counter drops the socket instead of carrying on st
   const { state } = connected();
   const skipped = { type: 'event', sub: 'site', n: 2, seq: 42, correlation: '', notice: { kind: 'upsert', object: 'post', id: 7, version: 2 } };
   const result = update(state, { type: 'ws_message', message: skipped, ...stamp });
-  assert.deepEqual(result.effects, [{ type: 'ws_close' }]);
+  assert.deepEqual(result.effects.map((e) => e.type), ['ws_close', 'http'], 'what was missed is read again at once');
+  assert.equal(result.state.view.status, 'ready', 'the page stays on screen while it refreshes');
   assert.equal(result.state.ws.lastSeq, null, 'the next connection starts from scratch');
 });
 
@@ -136,7 +138,10 @@ test('after a disconnect the kernel backs off, reconnects and resumes from the l
   assert.equal(closed.state.ws.status, 'waiting');
   const [timer] = closed.effects;
   assert.equal(timer.type, 'timer');
-  assert.ok(timer.ms >= 250 && timer.ms <= 8000);
+  // The wait is the machine's own, whatever the random stamp: the specification models no jitter.
+  assert.equal(timer.ms, 500);
+  const other = update(seen, { type: 'ws_closed', at: 1_000, rand: 0.01 });
+  assert.equal(other.effects[0].ms, 500);
   const retried = update(closed.state, { type: 'timer', name: 'reconnect', token: timer.token, ...stamp });
   assert.deepEqual(retried.effects, [{ type: 'ws_connect', csrf: 'issued' }]);
   const again = update(retried.state, { type: 'ws_message', message: { type: 'welcome', v: 1, conn: 'd', head: 50, session: 'anonymous', heartbeat_ms: 10000 }, ...stamp });
@@ -151,6 +156,31 @@ test('after a disconnect the kernel backs off, reconnects and resumes from the l
   }
   // A timer from an earlier attempt is ignored.
   assert.deepEqual(update(s, { type: 'timer', name: 'reconnect', token: timer.token, ...stamp }).effects, []);
+});
+
+test('each failed reconnect waits its own delay: 0.5, 1, 2, 4, then 8 seconds, the cap', () => {
+  const { state } = connected();
+  // The first close of an open socket waits 500 ms; a close while waiting to reconnect is a failed
+  // attempt, and each one waits twice as long, to the cap. The stamp's random part changes nothing.
+  const waits = [];
+  let s = state;
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const next = update(s, { type: 'ws_closed', at: 1_000 + attempt, rand: attempt % 2 ? 0.01 : 0.999 });
+    assert.equal(next.state.ws.status, 'waiting');
+    const timer = next.effects.find((e) => e.type === 'timer');
+    waits.push(timer.ms);
+    s = next.state;
+  }
+  assert.deepEqual(waits, [500, 1000, 2000, 4000, 8000, 8000, 8000, 8000]);
+});
+
+test('a delayed emit of the connection machine is performed when its timer fires, and once', () => {
+  const { state } = connected();
+  const waiting = { ...state, ws: { ...state.ws, delayed: { 77: { to: 'x', delivery: 'at-most-once', event: 'ui-live-ping', payload: {}, afterMs: 250 } } } };
+  const fired = update(waiting, { type: 'timer', name: 'emit', token: 77, ...stamp });
+  assert.deepEqual(fired.effects.map((e) => e.message?.type), ['ping']);
+  assert.deepEqual(fired.state.ws.delayed, {});
+  assert.deepEqual(update(fired.state, { type: 'timer', name: 'emit', token: 77, ...stamp }).effects, []);
 });
 
 test('a resync makes the page read again from the server head', () => {

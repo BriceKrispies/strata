@@ -17,13 +17,27 @@ const SESSION_COOKIE: &str = "__Host-strata_sid";
 struct Edge {
     port: u16,
     http: reqwest::Client,
+    /// The backend's internal API, such as `http://127.0.0.1:4101`.
+    backend: String,
+    /// Asks the BFF to stop (as a termination signal does).
+    stop: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    /// The BFF's own task, which ends when its server has drained.
+    served: std::sync::Mutex<Option<tokio::task::JoinHandle<Result<(), String>>>>,
 }
 
 async fn start() -> Edge {
+    start_with(|_| {}, |_| {}).await
+}
+
+/// Start the edge, with the BFF's and the backend's configuration adjusted by the caller.
+async fn start_with(
+    adjust_bff: impl FnOnce(&mut Config),
+    adjust_backend: impl FnOnce(&mut strata_backend::app::Config),
+) -> Edge {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let backend_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let backend_addr = backend_listener.local_addr().unwrap();
-    let backend_cfg = strata_backend::app::Config {
+    let mut backend_cfg = strata_backend::app::Config {
         addr: backend_addr,
         service_token: TOKEN.into(),
         dev: true,
@@ -31,7 +45,15 @@ async fn start() -> Edge {
         lean_dir: root.join("lean"),
         session_ttl_ms: 3_600_000,
         session_idle_ms: 3_600_000,
+        passkey_challenge_ttl_ms: 300_000,
+        link_ttl_ms: 900_000,
+        mail: std::sync::Arc::new(strata_backend::mail::DevSink::memory()),
+        federation: std::sync::Arc::new(strata_backend::signin::oidc::Federation::none()),
+        factors: Default::default(),
+        limits: Default::default(),
+        throttle: Default::default(),
     };
+    adjust_backend(&mut backend_cfg);
     tokio::spawn(strata_backend::run(
         backend_cfg,
         Arc::new(MemoryStore::new()),
@@ -49,7 +71,7 @@ async fn start() -> Edge {
     .unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
-    let cfg = Config {
+    let mut cfg = Config {
         addr: listener.local_addr().unwrap(),
         backend: format!("http://{backend_addr}"),
         service_token: TOKEN.into(),
@@ -58,16 +80,27 @@ async fn start() -> Edge {
             format!("http://127.0.0.1:{port}"),
             format!("http://localhost:{port}"),
         ],
+        hosts: Default::default(),
         dist,
         dev: true,
+        token_secret: None,
+        trusted_proxies: Vec::new(),
+        limits: Default::default(),
     };
-    tokio::spawn(strata_bff::run(cfg, listener, std::future::pending()));
+    adjust_bff(&mut cfg);
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let served = tokio::spawn(strata_bff::run(cfg, listener, async move {
+        let _ = stopped.await;
+    }));
     let edge = Edge {
         port,
         http: reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .unwrap(),
+        backend: format!("http://{backend_addr}"),
+        stop: std::sync::Mutex::new(Some(stop)),
+        served: std::sync::Mutex::new(Some(served)),
     };
     for _ in 0..400 {
         if edge.get("127.0.0.1", "/api/session", None).await.0 == 200 {
@@ -85,6 +118,41 @@ struct Reply {
 }
 
 impl Edge {
+    /// Bind an origin to a tenant at the backend, as the operator's tools do while it runs.
+    async fn bind(&self, tenant: &str, origin: &str) {
+        let response = self
+            .http
+            .post(format!("{}/internal/platform/hosts", self.backend))
+            .header(strata_protocol::api::HEADER_SERVICE, TOKEN)
+            .json(&json!({ "bind": { "tenant": tenant, "origin": origin } }))
+            .send()
+            .await
+            .unwrap();
+        let status = response.status().as_u16();
+        assert_eq!(status, 200, "{}", response.text().await.unwrap());
+    }
+
+    /// A request to the BFF for a host name that is not in its static configuration.
+    fn as_host(&self, host: &str, path: &str) -> reqwest::RequestBuilder {
+        self.http
+            .get(format!("{}{path}", self.origin("127.0.0.1")))
+            .header("host", host)
+    }
+
+    /// Ask the BFF to stop and wait for its server to finish draining; the time it took.
+    async fn stop_and_wait(&self) -> Duration {
+        let started = std::time::Instant::now();
+        let stop = self.stop.lock().unwrap().take().expect("not stopped yet");
+        stop.send(()).unwrap();
+        let served = self.served.lock().unwrap().take().unwrap();
+        tokio::time::timeout(Duration::from_secs(20), served)
+            .await
+            .expect("the BFF ended before the drain deadline")
+            .unwrap()
+            .unwrap();
+        started.elapsed()
+    }
+
     fn origin(&self, host: &str) -> String {
         format!("http://{host}:{}", self.port)
     }
@@ -280,13 +348,24 @@ async fn the_session_cookie_carries_the_host_prefix_and_secure() {
     assert_eq!(body["session"]["authenticated"], false);
 }
 
-/// The `POST` routes of the browser-facing router, read from its definition so that a route
-/// added later is covered without anyone remembering to list it. `:action` stands for the two
-/// development actions.
+/// The `POST` routes of the browser-facing API, read from its definition so that a route added
+/// later is covered without anyone remembering to list it. `:action` stands for the two
+/// development actions. The routes outside `/api` are a provider's own posts, which come from
+/// another site and carry no session of the person's: they are tested on their own.
 fn post_routes() -> Vec<String> {
-    include_str!("../src/routes.rs")
-        .lines()
-        .filter(|line| line.contains(".route(\"") && line.contains("post("))
+    // The routes of the `/api` router only: the routes outside it (the OAuth token and
+    // introspection endpoints, federation callbacks) authenticate a client or a provider, not a
+    // session, so they take no session token.
+    let source = include_str!("../src/routes.rs");
+    let api = source
+        .split("let api = Router::new()")
+        .nth(1)
+        .and_then(|rest| rest.split(".fallback(api_not_found)").next())
+        .expect("the /api router in routes.rs");
+    api.lines()
+        .filter(|line| {
+            line.contains(".route(\"") && line.contains("post(") && !line.contains("\"/federation/")
+        })
         .map(|line| line.split('"').nth(1).expect("a route path").to_string())
         .flat_map(|path| {
             if path.contains(":action") {
@@ -352,15 +431,14 @@ async fn every_request_that_changes_state_needs_our_origin_and_the_sessions_toke
 
     // Every other route that changes state: the lab, the development fixtures, sign-in and
     // sign-out as well. Each is sent from our own origin with the session cookie, without the
-    // token and with a wrong one, and must be refused before anything happens. The one POST that
-    // is exempt changes nothing: the Markdown preview is a pure function of its text.
+    // token and with a wrong one, and must be refused before anything happens.
     let routes = post_routes();
     assert!(
         routes.len() >= 8,
         "the routes were not read from the router: {routes:?}"
     );
     let before = edge.get("127.0.0.1", "/api/view?path=/", None).await.1;
-    for path in routes.iter().filter(|path| path.as_str() != "/api/preview") {
+    for path in &routes {
         let body = match path.as_str() {
             "/api/records" => change.clone(),
             "/api/login" => json!({ "login": "ines", "password": "strata-dev-ines" }),
@@ -393,14 +471,35 @@ async fn every_request_that_changes_state_needs_our_origin_and_the_sessions_toke
         still["session"]["authenticated"], true,
         "the refused sign-out and fixtures ended nothing"
     );
-    let preview = edge
-        .post("127.0.0.1", "/api/preview", json!({ "markdown": "a *b*" }))
-        .header("cookie", &cookie);
-    assert_eq!(
-        edge.send(preview).await.0,
-        200,
-        "the preview changes nothing"
-    );
+}
+
+/// The Markdown preview parses text for whoever asks, so it needs a live session, our origin and
+/// the session's request token, like the routes that change state.
+/// Verifies: CMS-1020
+#[tokio::test]
+async fn the_markdown_preview_is_refused_without_a_session() {
+    let edge = start().await;
+    let body = json!({ "markdown": "a *b*" });
+    // No cookie and no token: refused.
+    let (status, _, _) = edge
+        .send(edge.post("127.0.0.1", "/api/preview", body.clone()))
+        .await;
+    assert!(matches!(status, 401 | 403), "answered {status}");
+    // The request token every visitor is issued, but no session: refused.
+    let anonymous = edge
+        .post("127.0.0.1", "/api/preview", body.clone())
+        .header("x-csrf-token", edge.request_token("127.0.0.1").await);
+    let (status, _, _) = edge.send(anonymous).await;
+    assert!(matches!(status, 401 | 403), "answered {status}");
+    // A session with its own token: answered.
+    let (token, csrf) = edge.login("127.0.0.1", "ines", "strata-dev-ines").await;
+    let signed_in = edge
+        .post("127.0.0.1", "/api/preview", body)
+        .header("cookie", format!("{SESSION_COOKIE}={token}"))
+        .header("x-csrf-token", csrf);
+    let (status, reply, _) = edge.send(signed_in).await;
+    assert_eq!(status, 200, "{reply}");
+    assert!(reply["blocks"].is_array());
 }
 
 /// Verifies: GWY-257
@@ -952,6 +1051,17 @@ async fn connect(
     cookie: Option<&str>,
     csrf: Option<&str>,
 ) -> Upgrade {
+    connect_with(edge, origin, cookie, csrf, &[]).await
+}
+
+/// `connect`, with extra request headers.
+async fn connect_with(
+    edge: &Edge,
+    origin: Option<String>,
+    cookie: Option<&str>,
+    csrf: Option<&str>,
+    extra: &[(&'static str, &str)],
+) -> Upgrade {
     let address = match csrf {
         Some(csrf) => format!("ws://127.0.0.1:{}/ws?csrf={csrf}", edge.port),
         None => format!("ws://127.0.0.1:{}/ws", edge.port),
@@ -967,6 +1077,9 @@ async fn connect(
             "cookie",
             format!("{SESSION_COOKIE}={cookie}").parse().unwrap(),
         );
+    }
+    for (name, value) in extra {
+        request.headers_mut().insert(*name, value.parse().unwrap());
     }
     tokio_tungstenite::connect_async(request).await
 }
@@ -1228,6 +1341,7 @@ async fn an_origin_counts_only_for_its_own_site() {
     assert_eq!(status, 200);
 }
 
+/// Verifies: GWY-1408
 /// The gateway's part of the diagnostics names no other site and no configuration: not the host
 /// map and not the allowed origins.
 #[tokio::test]
@@ -1242,5 +1356,1286 @@ async fn diagnostics_name_no_other_site() {
     for other in ["tidewater", "localhost", "allowed_origins", "\"sites\""] {
         assert!(!text.contains(other), "{other} is in the report: {text}");
     }
-    assert!(report["bff"]["open_sockets"].is_number());
+    assert!(
+        report.get("bff").is_none(),
+        "the gateway's counts span every tenant: {report}"
+    );
+    assert!(report["backend"].is_object());
+}
+
+/// Verifies: GWY-1403
+/// Assets are cached for a year only when they were served; source maps are not served at all.
+#[tokio::test]
+async fn assets_are_cached_only_on_success_and_source_maps_are_not_served() {
+    let edge = start_with(
+        |cfg| {
+            std::fs::write(cfg.dist.join("assets/app-abc.js"), "export {};").unwrap();
+            std::fs::write(cfg.dist.join("assets/app-abc.js.map"), "{}").unwrap();
+        },
+        |_| {},
+    )
+    .await;
+    let (status, _, reply) = edge.get("127.0.0.1", "/assets/app-abc.js", None).await;
+    assert_eq!(status, 200);
+    assert!(reply.headers["cache-control"]
+        .to_str()
+        .unwrap()
+        .contains("immutable"));
+    let (status, _, reply) = edge.get("127.0.0.1", "/assets/missing.js", None).await;
+    assert_eq!(status, 404);
+    assert!(
+        reply
+            .headers
+            .get("cache-control")
+            .map_or(true, |v| !v.to_str().unwrap().contains("immutable")),
+        "a failure is not cached for a year"
+    );
+    let (status, _, _) = edge.get("127.0.0.1", "/assets/app-abc.js.map", None).await;
+    assert_eq!(
+        status, 404,
+        "the map exists on disk and is still not served"
+    );
+}
+
+/// Verifies: GWY-253
+/// Verifies: GWY-252
+/// A page response requires Trusted Types for script sinks and names exactly one policy, the
+/// kernel worker's address; it creates no default policy and keeps the base, object and form
+/// directives on the page's own origin or on none.
+#[tokio::test]
+async fn a_page_requires_trusted_types_and_names_one_policy() {
+    let edge = start().await;
+    for path in ["/", "/login", "/no/such/page"] {
+        let (_, _, reply) = edge.get("127.0.0.1", path, None).await;
+        let csp = reply.headers["content-security-policy"].to_str().unwrap();
+        let directives: Vec<&str> = csp.split(';').map(str::trim).collect();
+        assert!(
+            directives.contains(&"require-trusted-types-for 'script'"),
+            "{path}: {csp}"
+        );
+        assert!(
+            directives.contains(&"trusted-types strata-worker"),
+            "{path}: {csp}"
+        );
+        assert!(
+            !csp.contains("'allow-duplicates'") && !csp.contains("default'"),
+            "{path}: {csp}"
+        );
+        for required in ["base-uri 'none'", "object-src 'none'", "form-action 'self'"] {
+            assert!(
+                directives.contains(&required),
+                "{path}: {required} in {csp}"
+            );
+        }
+    }
+}
+
+/// Verifies: GWY-1404
+/// Transport headers: Strict-Transport-Security and `upgrade-insecure-requests` where the origin
+/// is https, Permissions-Policy everywhere.
+#[tokio::test]
+async fn an_https_origin_gets_strict_transport_security_and_a_plain_one_does_not() {
+    let plain = start().await;
+    let (_, _, reply) = plain.get("127.0.0.1", "/", None).await;
+    assert!(reply.headers.get("strict-transport-security").is_none());
+    assert!(reply.headers.get("permissions-policy").is_some());
+    let secure = start_with(|cfg| cfg.origins.push("https://127.0.0.1".into()), |_| {}).await;
+    let (_, _, reply) = secure.get("127.0.0.1", "/", None).await;
+    assert!(reply.headers["strict-transport-security"]
+        .to_str()
+        .unwrap()
+        .contains("max-age="));
+    assert!(reply.headers["content-security-policy"]
+        .to_str()
+        .unwrap()
+        .contains("upgrade-insecure-requests"));
+    assert!(reply.headers.get("permissions-policy").is_some());
+}
+
+/// Verifies: GWY-1405
+/// Page requests are limited per source at the edge.
+#[tokio::test]
+async fn page_requests_are_limited_per_source() {
+    let edge = start_with(|cfg| cfg.limits.requests_per_minute = 5, |_| {}).await;
+    let mut refused = 0;
+    for _ in 0..12 {
+        if edge.get("127.0.0.1", "/", None).await.0 == 429 {
+            refused += 1;
+        }
+    }
+    assert!(refused >= 1, "a source that keeps asking is slowed");
+    let (status, _, _) = edge.get("127.0.0.1", "/api/session", None).await;
+    assert_eq!(status, 200, "the session read is not a page request");
+}
+
+// Verifies: SRH-2790
+/// A search is answered through the backend for anyone, and is limited per source at the edge as a
+/// page is.
+#[tokio::test]
+async fn searches_are_limited_per_source() {
+    let edge = start_with(|cfg| cfg.limits.requests_per_minute = 5, |_| {}).await;
+    let (status, body, _) = edge.get("127.0.0.1", "/api/search?q=kiln", None).await;
+    assert_eq!(status, 200, "{body}");
+    assert!(body["hits"].as_array().is_some_and(|hits| !hits.is_empty()));
+    let mut refused = 0;
+    for _ in 0..12 {
+        if edge.get("127.0.0.1", "/api/search?q=kiln", None).await.0 == 429 {
+            refused += 1;
+        }
+    }
+    assert!(refused >= 1, "a source that keeps searching is slowed");
+    let (status, _, _) = edge.get("127.0.0.1", "/api/search?q=", None).await;
+    assert!(status == 400 || status == 429, "{status}");
+}
+
+/// One sign-in attempt through the edge, from a browser that says it comes from `claimed`.
+async fn attempt_from(
+    edge: &Edge,
+    claimed: Option<&str>,
+    login: &str,
+    password: &str,
+) -> (u16, Json, Reply) {
+    let mut request = edge
+        .post(
+            "127.0.0.1",
+            "/api/login",
+            json!({ "login": login, "password": password }),
+        )
+        .header("x-csrf-token", edge.request_token("127.0.0.1").await);
+    if let Some(claimed) = claimed {
+        request = request.header("x-strata-source", claimed);
+    }
+    edge.send(request).await
+}
+
+/// Verifies: IDN-012
+#[tokio::test]
+async fn a_person_lists_and_revokes_their_sessions_behind_the_origin_and_token_checks() {
+    let edge = start().await;
+    let (here, here_csrf) = edge.login("127.0.0.1", "ines", "strata-dev-ines").await;
+    let (there, _) = edge.login("127.0.0.1", "ines", "strata-dev-ines").await;
+    let ours = edge.origin("127.0.0.1");
+
+    let (status, listed, _) = edge.get("127.0.0.1", "/api/sessions", Some(&here)).await;
+    assert_eq!(status, 200, "{listed}");
+    let list = listed["sessions"].as_array().unwrap();
+    assert_eq!(list.len(), 2);
+    assert_eq!(list.iter().filter(|s| s["current"] == true).count(), 1);
+    let text = listed.to_string();
+    assert!(!text.contains(&here) && !text.contains(&there) && !text.contains("csrf"));
+    assert_eq!(
+        edge.get("127.0.0.1", "/api/sessions", None).await.0,
+        401,
+        "no session, nothing to list"
+    );
+
+    let (_, there_view, _) = edge.get("127.0.0.1", "/api/session", Some(&there)).await;
+    let there_id = there_view["session"]["session_id"].as_str().unwrap();
+    let revoke = |origin: Option<&str>, csrf: Option<&str>| {
+        let mut request = edge
+            .http
+            .post(format!("{ours}/api/sessions/revoke"))
+            .header("cookie", format!("{SESSION_COOKIE}={here}"))
+            .json(&json!({ "id": there_id }));
+        if let Some(origin) = origin {
+            request = request.header("origin", origin);
+        }
+        if let Some(csrf) = csrf {
+            request = request.header("x-csrf-token", csrf);
+        }
+        request
+    };
+    assert_eq!(
+        edge.send(revoke(Some(&ours), None)).await.0,
+        403,
+        "no token"
+    );
+    assert_eq!(
+        edge.send(revoke(Some(&ours), Some("0000"))).await.0,
+        403,
+        "wrong token"
+    );
+    assert_eq!(
+        edge.send(revoke(Some("http://evil.example"), Some(&here_csrf)))
+            .await
+            .0,
+        403,
+        "foreign origin"
+    );
+    assert_eq!(
+        edge.send(revoke(None, Some(&here_csrf))).await.0,
+        403,
+        "no origin"
+    );
+    let (_, still, _) = edge.get("127.0.0.1", "/api/session", Some(&there)).await;
+    assert_eq!(
+        still["session"]["authenticated"], true,
+        "the refusals ended nothing"
+    );
+
+    assert_eq!(
+        edge.send(revoke(Some(&ours), Some(&here_csrf))).await.0,
+        200
+    );
+    let (_, gone, reply) = edge.get("127.0.0.1", "/api/session", Some(&there)).await;
+    assert_eq!(gone["state"], "revoked");
+    assert!(
+        reply.cookie.unwrap().contains("Max-Age=0"),
+        "its cookie is cleared"
+    );
+
+    // Ending the session that makes the request clears its own cookie in the same answer.
+    let (_, here_view, _) = edge.get("127.0.0.1", "/api/session", Some(&here)).await;
+    let own_id = here_view["session"]["session_id"].as_str().unwrap();
+    let (status, _, reply) = edge
+        .send(
+            edge.post("127.0.0.1", "/api/sessions/revoke", json!({ "id": own_id }))
+                .header("cookie", format!("{SESSION_COOKIE}={here}"))
+                .header("x-csrf-token", &here_csrf),
+        )
+        .await;
+    assert_eq!(status, 200);
+    assert!(reply.cookie.expect("a cookie header").contains("Max-Age=0"));
+
+    // The others, all at once.
+    let (first, first_csrf) = edge.login("127.0.0.1", "ines", "strata-dev-ines").await;
+    let (second, _) = edge.login("127.0.0.1", "ines", "strata-dev-ines").await;
+    let (third, _) = edge.login("127.0.0.1", "ines", "strata-dev-ines").await;
+    let (status, reply, _) = edge
+        .send(
+            edge.post("127.0.0.1", "/api/sessions/revoke-others", json!({}))
+                .header("cookie", format!("{SESSION_COOKIE}={first}"))
+                .header("x-csrf-token", &first_csrf),
+        )
+        .await;
+    assert_eq!((status, &reply["revoked"]), (200, &json!(2)));
+    for gone in [&second, &third] {
+        let (_, view, _) = edge.get("127.0.0.1", "/api/session", Some(gone)).await;
+        assert_eq!(view["session"]["authenticated"], false);
+    }
+    let (_, kept, _) = edge.get("127.0.0.1", "/api/session", Some(&first)).await;
+    assert_eq!(kept["session"]["authenticated"], true);
+}
+
+/// Verifies: IDN-250
+///
+/// The address a sign-in is limited by is the one the connection came from. A browser that
+/// writes another into a header does not get a count of its own for each.
+#[tokio::test]
+async fn the_source_of_a_sign_in_is_the_connection_and_not_what_the_browser_says() {
+    let edge = start_with(
+        |_| {},
+        |backend| {
+            backend.throttle = strata_backend::app::ThrottleLimits {
+                source_max: 3,
+                ..Default::default()
+            }
+        },
+    )
+    .await;
+    for (i, claimed) in ["203.0.113.1", "203.0.113.2", "203.0.113.3"]
+        .iter()
+        .enumerate()
+    {
+        let (status, _, _) = attempt_from(&edge, Some(claimed), &format!("nobody{i}"), "x").await;
+        assert_eq!(status, 401);
+    }
+    let (status, body, reply) =
+        attempt_from(&edge, Some("203.0.113.4"), "tomasz", "strata-dev-tomasz").await;
+    assert_eq!(status, 429, "{body}");
+    assert!(reply.cookie.is_none(), "a refused sign-in sets no cookie");
+}
+
+/// Verifies: IDN-008
+/// Verifies: IDN-255
+#[tokio::test]
+async fn a_throttled_sign_in_is_answered_the_same_for_an_account_that_does_not_exist() {
+    let edge = start().await;
+    let mut wrong = Vec::new();
+    for login in ["tomasz", "nobody-at-all"] {
+        for _ in 0..10 {
+            let (status, body, reply) = attempt_from(&edge, None, login, "wrong").await;
+            assert_eq!(status, 401);
+            assert!(reply.cookie.is_none());
+            wrong.push(body["message"].clone());
+        }
+    }
+    assert!(wrong.windows(2).all(|pair| pair[0] == pair[1]), "{wrong:?}");
+    let mut refused = Vec::new();
+    for login in ["tomasz", "nobody-at-all"] {
+        let (status, body, reply) = attempt_from(&edge, None, login, "strata-dev-tomasz").await;
+        assert_eq!(status, 429, "{login}: {body}");
+        assert!(reply.cookie.is_none(), "a refused sign-in sets no cookie");
+        refused.push((body["code"].clone(), body["message"].clone()));
+    }
+    assert_eq!(
+        refused[0], refused[1],
+        "the refusal does not say which exists"
+    );
+}
+
+/// Verifies: IDN-001
+#[tokio::test]
+async fn sign_in_goes_through_the_method_named_and_passes_on_only_its_own_fields() {
+    let edge = start().await;
+    let token = edge.request_token("127.0.0.1").await;
+    let (status, body, reply) = edge
+        .send(
+            edge.post(
+                "127.0.0.1",
+                "/api/sign-in/password",
+                json!({ "login": "ines", "password": "strata-dev-ines", "tenant": "tidewater", "admin": true }),
+            )
+            .header("x-csrf-token", &token),
+        )
+        .await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(
+        body["session"]["tenant"], "fieldnotes",
+        "the site is the host's"
+    );
+    assert!(reply.cookie.unwrap().starts_with(SESSION_COOKIE));
+    for (path, payload, expected) in [
+        (
+            "/api/sign-in/telepathy",
+            json!({ "login": "ines", "password": "x" }),
+            404,
+        ),
+        ("/api/sign-in/password", json!({ "login": "ines" }), 401),
+        ("/api/sign-in/password", json!({}), 401),
+    ] {
+        let (status, _, reply) = edge
+            .send(
+                edge.post("127.0.0.1", path, payload)
+                    .header("x-csrf-token", &token),
+            )
+            .await;
+        assert_eq!(status, expected, "{path}");
+        assert!(reply.cookie.is_none());
+    }
+}
+
+/// Verifies: FED-005, FED-250
+///
+/// The assertion consumer address takes the provider's post, from another site and without any
+/// cookie of the person's but the return address, and signs no one in: it moves the response and
+/// the relay state into the fragment of the sign-in page, with the return address as a query
+/// that is a path on the site, and clears that cookie. A post that is not a response, or whose
+/// relay state is not one this service makes, sends the page to say so. A site that is not served
+/// is not answered, and the metadata of a provider nobody configured is not found.
+#[tokio::test]
+async fn the_assertion_consumer_address_moves_the_response_to_the_page_and_signs_no_one_in() {
+    let edge = start().await;
+    let relay = "ab".repeat(32);
+    let post = |host: &str, body: String, cookie: Option<&str>| {
+        let mut request = edge
+            .http
+            .post(format!("{}/federation/saml/acs", edge.origin(host)))
+            .header("origin", "https://idp.acme.example")
+            .header("content-type", "application/x-www-form-urlencoded")
+            .body(body);
+        if let Some(cookie) = cookie {
+            request = request.header("cookie", cookie);
+        }
+        request
+    };
+    let sent = edge
+        .send(post(
+            "127.0.0.1",
+            format!("SAMLResponse=PHNhbWw%2BKw%3D%3D&RelayState={relay}&extra=ignored"),
+            Some("__Host-strata-return=%2Fdesk"),
+        ))
+        .await;
+    assert_eq!(sent.0, 303);
+    assert_eq!(
+        sent.2.headers["location"].to_str().unwrap(),
+        format!("/login?next=%2Fdesk#m=saml&r=PHNhbWw%2BKw%3D%3D&t={relay}")
+    );
+    let cookies: Vec<_> = sent
+        .2
+        .headers
+        .get_all("set-cookie")
+        .iter()
+        .map(|value| value.to_str().unwrap().to_string())
+        .collect();
+    assert!(
+        cookies
+            .iter()
+            .all(|cookie| !cookie.starts_with(SESSION_COOKIE)),
+        "the provider's post signs no one in: {cookies:?}"
+    );
+    assert!(
+        cookies
+            .iter()
+            .any(|cookie| cookie.starts_with("__Host-strata-return=;")
+                && cookie.contains("Max-Age=0")),
+        "{cookies:?}"
+    );
+
+    for (why, body, cookie) in [
+        (
+            "a relay state that is not one this service makes",
+            "SAMLResponse=PHNhbWw%2BKw%3D%3D&RelayState=short".to_string(),
+            None,
+        ),
+        ("no response", format!("RelayState={relay}"), None),
+        (
+            "a response that is not base64",
+            format!("SAMLResponse=%3Cscript%3E&RelayState={relay}"),
+            None,
+        ),
+        (
+            "a return address that is not a path on the site",
+            format!("SAMLResponse=PHNhbWw%2BKw%3D%3D&RelayState={relay}"),
+            Some("__Host-strata-return=%2F%2Fevil.example"),
+        ),
+    ] {
+        let sent = edge.send(post("127.0.0.1", body, cookie)).await;
+        assert_eq!(sent.0, 303, "{why}");
+        let location = sent.2.headers["location"].to_str().unwrap().to_string();
+        if why.starts_with("a return address") {
+            assert!(location.starts_with("/login#m=saml&"), "{why}: {location}");
+        } else {
+            assert_eq!(location, "/login#e=1", "{why}");
+        }
+    }
+
+    let (status, _, _) = edge
+        .send(
+            edge.post("127.0.0.1", "/federation/saml/acs", json!({}))
+                .header("host", "not-a-site.example"),
+        )
+        .await;
+    assert_eq!(status, 404, "a host that is not served");
+
+    let (status, _, _) = edge
+        .get("127.0.0.1", "/federation/saml/metadata/nobody", None)
+        .await;
+    assert_eq!(status, 404, "no such provider");
+}
+
+/// A socket opened as an anonymous visitor, with extra request headers.
+async fn anonymous_socket(edge: &Edge, extra: &[(&'static str, &str)]) -> Upgrade {
+    let token = edge.request_token("127.0.0.1").await;
+    connect_with(
+        edge,
+        Some(edge.origin("127.0.0.1")),
+        None,
+        Some(token.as_str()),
+        extra,
+    )
+    .await
+}
+
+fn throttled(upgrade: &Upgrade) -> bool {
+    matches!(
+        upgrade,
+        Err(tokio_tungstenite::tungstenite::Error::Http(response)) if response.status().as_u16() == 429
+    )
+}
+
+/// Sockets are capped per source address at the BFF. A browser cannot change its source by
+/// sending `X-Forwarded-For` or `x-strata-source` itself: no proxy is trusted, so the peer's
+/// address is the source whatever the headers say.
+#[tokio::test]
+async fn forwarded_headers_from_an_untrusted_peer_do_not_change_the_source() {
+    let edge = start_with(
+        |bff| {
+            bff.limits.sockets_per_source = 2;
+            bff.limits.sockets_per_session = 8;
+        },
+        |_| {},
+    )
+    .await;
+    let mut held = Vec::new();
+    for spoofed in ["203.0.113.1", "203.0.113.2"] {
+        held.push(
+            anonymous_socket(
+                &edge,
+                &[("x-forwarded-for", spoofed), ("x-strata-source", spoofed)],
+            )
+            .await
+            .expect("within the cap"),
+        );
+    }
+    let third = anonymous_socket(
+        &edge,
+        &[
+            ("x-forwarded-for", "203.0.113.3"),
+            ("x-strata-source", "203.0.113.3"),
+        ],
+    )
+    .await;
+    assert!(
+        throttled(&third),
+        "a third socket from one peer, however it signs itself: {third:?}"
+    );
+}
+
+/// Behind a trusted proxy the visitor is the rightmost hop of `X-Forwarded-For` that is not a
+/// trusted proxy: two visitors behind it have their own caps, and a client cannot pass as
+/// another by writing the left of the chain.
+#[tokio::test]
+async fn a_trusted_proxy_passes_the_visitor_through_x_forwarded_for() {
+    let edge = start_with(
+        |bff| {
+            bff.trusted_proxies = vec!["127.0.0.1".parse().unwrap()];
+            bff.limits.sockets_per_source = 1;
+        },
+        |_| {},
+    )
+    .await;
+    let first = anonymous_socket(&edge, &[("x-forwarded-for", "203.0.113.1")]).await;
+    assert!(first.is_ok(), "{first:?}");
+    let other = anonymous_socket(&edge, &[("x-forwarded-for", "203.0.113.2")]).await;
+    assert!(
+        other.is_ok(),
+        "another visitor behind the same proxy: {other:?}"
+    );
+    let again = anonymous_socket(&edge, &[("x-forwarded-for", "203.0.113.1")]).await;
+    assert!(
+        throttled(&again),
+        "the first visitor's second socket: {again:?}"
+    );
+    // The left of the chain is whatever the client wrote; the proxy appended the right.
+    let forged = anonymous_socket(
+        &edge,
+        &[("x-forwarded-for", "198.51.100.77, 203.0.113.1, 127.0.0.1")],
+    )
+    .await;
+    assert!(
+        throttled(&forged),
+        "a chain through the proxy resolves to the rightmost untrusted hop: {forged:?}"
+    );
+    let fresh = anonymous_socket(
+        &edge,
+        &[("x-forwarded-for", "198.51.100.77, 203.0.113.9, 127.0.0.1")],
+    )
+    .await;
+    assert!(fresh.is_ok(), "{fresh:?}");
+    // Without the header the proxy itself is the source, and it has no socket of its own yet.
+    let bare = anonymous_socket(&edge, &[]).await;
+    assert!(bare.is_ok(), "{bare:?}");
+    drop((first, other, fresh, bare));
+}
+
+/// One session may hold only so many sockets through the BFF, and the cap is the BFF's own: the
+/// backend's limits are out of the way here.
+#[tokio::test]
+async fn sockets_are_capped_per_session_at_the_bff() {
+    let edge = start_with(
+        |bff| {
+            bff.limits.sockets_per_session = 2;
+            bff.limits.sockets_per_source = 50;
+        },
+        |backend| {
+            backend.limits.sockets_per_session = 50;
+            backend.limits.sockets_per_source = 50;
+        },
+    )
+    .await;
+    let (token, csrf) = edge.login("127.0.0.1", "ines", "strata-dev-ines").await;
+    let mut held = Vec::new();
+    for _ in 0..2 {
+        held.push(
+            connect(
+                &edge,
+                Some(edge.origin("127.0.0.1")),
+                Some(token.as_str()),
+                Some(csrf.as_str()),
+            )
+            .await
+            .expect("within the cap"),
+        );
+    }
+    let third = connect(
+        &edge,
+        Some(edge.origin("127.0.0.1")),
+        Some(token.as_str()),
+        Some(csrf.as_str()),
+    )
+    .await;
+    assert!(throttled(&third), "{third:?}");
+}
+
+/// Verifies: GWY-1680
+/// A tenant bound at the backend while the BFF runs is served on its next request that names the
+/// host, with its origin accepted, and the static configuration is never moved by what the
+/// backend says.
+#[tokio::test]
+async fn a_tenant_bound_at_run_time_is_served_without_a_restart() {
+    let edge = start_with(
+        |cfg| cfg.hosts = strata_bff::hosts::Refresh::new(60_000, 0),
+        |_| {},
+    )
+    .await;
+    let (status, _, _) = edge
+        .send(edge.as_host("tide.example", "/api/session"))
+        .await;
+    assert_eq!(status, 404, "no site is served at an unbound host");
+
+    let tide_origin = format!("http://tide.example:{}", edge.port);
+    edge.bind("tidewater", &tide_origin).await;
+    let (status, view, _) = edge
+        .send(edge.as_host("tide.example", "/api/view?path=/"))
+        .await;
+    assert_eq!(status, 200, "{view}");
+    assert_eq!(view["data"]["site"]["fields"]["name"], "Tidewater Review");
+
+    // Its origin is one of ours for that site and for no other, and a foreign one is still refused.
+    let token = edge
+        .send(edge.as_host("tide.example", "/api/session"))
+        .await
+        .1["session"]["csrf_token"]
+        .as_str()
+        .expect("a request token")
+        .to_string();
+    let sign_in = |origin: &str| {
+        edge.http
+            .post(format!("{}/api/login", edge.origin("127.0.0.1")))
+            .header("host", "tide.example")
+            .header("origin", origin)
+            .header("x-csrf-token", &token)
+            .json(&json!({ "login": "nobody", "password": "not-a-password" }))
+    };
+    let (status, _, _) = edge.send(sign_in(&tide_origin)).await;
+    assert_ne!(status, 403, "the learned origin was refused");
+    let (status, _, _) = edge
+        .send(sign_in(&format!("http://other.example:{}", edge.port)))
+        .await;
+    assert_eq!(status, 403, "an origin nobody named was accepted");
+
+    // The backend binds a host the static configuration already serves to another tenant: the
+    // static entry wins.
+    edge.bind("tidewater", &edge.origin("127.0.0.1")).await;
+    let _ = edge
+        .send(edge.as_host("unknown.example", "/api/session"))
+        .await;
+    let (_, view, _) = edge.get("127.0.0.1", "/api/view?path=/", None).await;
+    assert_eq!(view["data"]["site"]["fields"]["name"], "Fieldnotes");
+}
+
+/// Verifies: GWY-1681
+/// Hosts nobody knows cannot make the BFF ask the backend more than once per interval.
+#[tokio::test]
+async fn unknown_hosts_do_not_make_the_backend_be_asked_again_within_the_interval() {
+    let edge = start_with(
+        |cfg| cfg.hosts = strata_bff::hosts::Refresh::new(60_000, 600_000),
+        |_| {},
+    )
+    .await;
+    edge.bind("tidewater", &format!("http://tide.example:{}", edge.port))
+        .await;
+    for _ in 0..5 {
+        let (status, _, _) = edge
+            .send(edge.as_host("tide.example", "/api/session"))
+            .await;
+        assert_eq!(
+            status, 404,
+            "the backend was asked again inside the interval"
+        );
+    }
+}
+
+/// Verifies: GWY-1682
+/// On a stop, an open socket is sent a Close frame and the server ends before its drain deadline.
+#[tokio::test]
+async fn an_open_socket_is_closed_when_the_server_is_stopped() {
+    let edge = start().await;
+    let anonymous = edge.request_token("127.0.0.1").await;
+    let (mut socket, _) = connect(
+        &edge,
+        Some(edge.origin("127.0.0.1")),
+        None,
+        Some(anonymous.as_str()),
+    )
+    .await
+    .unwrap();
+    // The socket is open and the backend has welcomed it.
+    let welcome = tokio::time::timeout(Duration::from_secs(5), socket.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert!(matches!(welcome, Message::Text(_)), "{welcome:?}");
+
+    let waited = edge.stop_and_wait();
+    let closed = async {
+        loop {
+            match tokio::time::timeout(Duration::from_secs(10), socket.next()).await {
+                Ok(Some(Ok(Message::Close(frame)))) => break frame,
+                Ok(Some(Ok(_))) => continue,
+                other => panic!("the socket ended without a Close frame: {other:?}"),
+            }
+        }
+    };
+    let (took, frame) = tokio::join!(waited, closed);
+    assert_eq!(
+        frame.expect("a close frame with a code").code,
+        tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode::Away
+    );
+    assert!(
+        took < Duration::from_secs(15),
+        "the drain took {took:?}, which is the deadline and not the close"
+    );
+}
+
+/// Verifies: GWY-1683
+/// Outside development, a request with `X-Forwarded-For` and no trusted proxy configured is
+/// refused with the reason named; in development it is served.
+#[tokio::test]
+async fn forwarded_headers_without_trusted_proxies_are_refused_outside_development() {
+    let forwarded = |edge: &Edge| {
+        edge.http
+            .get(format!("{}/api/session", edge.origin("127.0.0.1")))
+            .header("x-forwarded-for", "203.0.113.9")
+    };
+    let production = start_with(|cfg| cfg.dev = false, |_| {}).await;
+    let (status, _, reply) = production.send(forwarded(&production)).await;
+    assert_eq!(status, 400, "{}", reply.text);
+    assert!(
+        reply.text.contains("forwarded_without_trusted_proxies"),
+        "the refusal names its reason: {}",
+        reply.text
+    );
+    assert_eq!(
+        production.get("127.0.0.1", "/api/session", None).await.0,
+        200,
+        "a request without the header is served"
+    );
+
+    let behind = start_with(
+        |cfg| {
+            cfg.dev = false;
+            cfg.trusted_proxies = vec!["127.0.0.1".parse().unwrap()];
+        },
+        |_| {},
+    )
+    .await;
+    assert_eq!(behind.send(forwarded(&behind)).await.0, 200);
+
+    let development = start().await;
+    assert_eq!(development.send(forwarded(&development)).await.0, 200);
+}
+
+/// Verifies: SCH-1575
+///
+/// A subscription that names event kinds is told only about events of those kinds, a selector
+/// that names segments or units is refused rather than matching nothing, and the kinds of the
+/// selector never widen what the person may read.
+#[tokio::test]
+async fn a_socket_selects_events_by_kind_and_refuses_what_nothing_emits() {
+    let edge = start().await;
+    let (token, csrf) = edge.login("127.0.0.1", "ines", "strata-dev-ines").await;
+    let (mut socket, _) = connect(
+        &edge,
+        Some(edge.origin("127.0.0.1")),
+        Some(token.as_str()),
+        Some(csrf.as_str()),
+    )
+    .await
+    .unwrap();
+    async fn next(
+        socket: &mut (impl StreamExt<Item = Result<Message, tokio_tungstenite::tungstenite::Error>>
+                  + Unpin),
+    ) -> Json {
+        loop {
+            let frame = tokio::time::timeout(Duration::from_secs(5), socket.next())
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            if let Message::Text(text) = frame {
+                return serde_json::from_str(&text).unwrap();
+            }
+        }
+    }
+    assert_eq!(next(&mut socket).await["type"], "welcome");
+
+    // Refused: the events of segments and units are not emitted, and a kind that is not one.
+    for (req, member) in [
+        (
+            "seg",
+            json!({ "segments": ["0b1a6a7e-0000-4000-8000-000000000001"] }),
+        ),
+        ("unit", json!({ "units": ["eur"] })),
+        ("kind", json!({ "kinds": ["record-create"] })),
+    ] {
+        let mut frame = json!({ "type": "subscribe", "req": req, "sub": req });
+        frame
+            .as_object_mut()
+            .unwrap()
+            .extend(member.as_object().unwrap().clone());
+        socket.send(Message::Text(frame.to_string())).await.unwrap();
+        let reply = next(&mut socket).await;
+        assert_eq!(
+            (
+                reply["type"].as_str(),
+                reply["code"].as_str(),
+                reply["req"].as_str()
+            ),
+            (Some("error"), Some("invalid"), Some(req)),
+            "{reply}"
+        );
+    }
+
+    // Two subscriptions: one for deletions, one for creations.
+    for (name, kind) in [("deleted", "record-deleted"), ("created", "record-created")] {
+        socket
+            .send(Message::Text(
+                json!({ "type": "subscribe", "req": name, "sub": name, "kinds": [kind] })
+                    .to_string(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(
+            next(&mut socket).await,
+            json!({ "type": "ok", "req": name })
+        );
+    }
+    let as_ines = |body: Json| {
+        edge.post("127.0.0.1", "/api/records", body)
+            .header("cookie", format!("{SESSION_COOKIE}={token}"))
+            .header("x-csrf-token", &csrf)
+    };
+    let (status, created, _) = edge
+        .send(as_ines(json!({ "op": "create", "object": "category", "fields": { "name": "Kinds", "slug": "kinds" } })))
+        .await;
+    assert_eq!(status, 200, "{created}");
+    let told = next(&mut socket).await;
+    assert_eq!(
+        (told["sub"].as_str(), told["notice"]["kind"].as_str()),
+        (Some("created"), Some("upsert")),
+        "the creation reaches the creation subscription only: {told}"
+    );
+    let (status, deleted, _) = edge
+        .send(as_ines(
+            json!({ "op": "delete", "object": "category", "id": created["id"] }),
+        ))
+        .await;
+    assert_eq!(status, 200, "{deleted}");
+    let told = next(&mut socket).await;
+    assert_eq!(
+        (told["sub"].as_str(), told["notice"]["kind"].as_str()),
+        (Some("deleted"), Some("remove")),
+        "the deletion reaches the deletion subscription only: {told}"
+    );
+}
+
+/// Verifies: ADM-1083
+///
+/// The owner withdraws an invitation through `POST /api/members/revoke-invitation`, behind the
+/// origin and request-token checks, and the person it named cannot redeem it afterwards.
+#[tokio::test]
+async fn an_invitation_is_revoked_through_the_gateway_and_cannot_be_redeemed() {
+    let edge = start().await;
+    let (owner, owner_csrf) = edge.login("127.0.0.1", "admin", "strata-dev-admin").await;
+    let ours = edge.origin("127.0.0.1");
+    let as_owner = |op: &str, body: Json| {
+        edge.post("127.0.0.1", &format!("/api/members/{op}"), body)
+            .header("cookie", format!("{SESSION_COOKIE}={owner}"))
+            .header("x-csrf-token", &owner_csrf)
+    };
+    let (status, invited, _) = edge
+        .send(as_owner(
+            "invite",
+            json!({ "invitation": "inv-gateway", "address": "tomasz@fieldnotes.example", "roles": ["editor"] }),
+        ))
+        .await;
+    assert_eq!(status, 200, "{invited}");
+
+    // The write guard comes first: no token, a wrong token and a foreign origin change nothing.
+    let unguarded = |csrf: Option<&str>, origin: &str| {
+        let mut request = edge
+            .http
+            .post(format!("{ours}/api/members/revoke-invitation"))
+            .header("cookie", format!("{SESSION_COOKIE}={owner}"))
+            .header("origin", origin)
+            .json(&json!({ "invitation": "inv-gateway" }));
+        if let Some(csrf) = csrf {
+            request = request.header("x-csrf-token", csrf);
+        }
+        request
+    };
+    assert_eq!(edge.send(unguarded(None, &ours)).await.0, 403, "no token");
+    assert_eq!(
+        edge.send(unguarded(Some("0000"), &ours)).await.0,
+        403,
+        "wrong token"
+    );
+    assert_eq!(
+        edge.send(unguarded(Some(&owner_csrf), "http://evil.example"))
+            .await
+            .0,
+        403,
+        "foreign origin"
+    );
+
+    // A body that does not name the invitation is refused, and so is an unknown operation.
+    let (status, _, _) = edge.send(as_owner("revoke-invitation", json!({}))).await;
+    assert_eq!(status, 422);
+    let (status, _, _) = edge
+        .send(as_owner(
+            "revoke-everything",
+            json!({ "invitation": "inv-gateway" }),
+        ))
+        .await;
+    assert_eq!(status, 404);
+
+    let (status, revoked, _) = edge
+        .send(as_owner(
+            "revoke-invitation",
+            json!({ "invitation": "inv-gateway" }),
+        ))
+        .await;
+    assert_eq!(status, 200, "{revoked}");
+    assert!(revoked["revision"].as_u64().is_some(), "{revoked}");
+    let (status, again, _) = edge
+        .send(as_owner(
+            "revoke-invitation",
+            json!({ "invitation": "inv-gateway" }),
+        ))
+        .await;
+    assert_eq!(status, 422, "a second revocation: {again}");
+
+    // The person the invitation named signs in and cannot redeem it.
+    let (guest, guest_csrf) = edge.login("127.0.0.1", "tomasz", "strata-dev-tomasz").await;
+    let (status, refused, _) = edge
+        .send(
+            edge.post(
+                "127.0.0.1",
+                "/api/members/redeem",
+                json!({ "invitation": "inv-gateway" }),
+            )
+            .header("cookie", format!("{SESSION_COOKIE}={guest}"))
+            .header("x-csrf-token", &guest_csrf),
+        )
+        .await;
+    assert_eq!(status, 422, "{refused}");
+}
+
+/// The ids of the rows of one section of a projected view.
+fn row_ids(view: &Json, section: &str) -> Vec<u64> {
+    view["data"][section]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row["id"].as_u64().unwrap())
+        .collect()
+}
+
+/// Verifies: CMS-164
+///
+/// A list is read a page at a time through the browser's address: the cursor an answer holds
+/// fetches the next page, and the pages together are the list.
+#[tokio::test]
+async fn a_second_page_of_a_view_continues_the_first_with_no_gap_or_repeat() {
+    let edge = start().await;
+    let (status, whole, _) = edge
+        .get("127.0.0.1", "/api/view?path=/&limit=100", None)
+        .await;
+    assert_eq!(status, 200, "{whole}");
+    let every = row_ids(&whole, "recent");
+    assert!(every.len() > 4);
+    assert_eq!(whole["next"], json!({}), "a list that fits has no cursor");
+
+    let mut seen = Vec::new();
+    let mut path = "/api/view?path=/&limit=2".to_string();
+    let mut pages = 0;
+    loop {
+        let (status, page, _) = edge.get("127.0.0.1", &path, None).await;
+        assert_eq!(status, 200, "{page}");
+        let rows = row_ids(&page, "recent");
+        assert!(rows.len() <= 2);
+        seen.extend(rows);
+        pages += 1;
+        match page["next"]["recent"].as_str() {
+            Some(cursor) => {
+                path = format!(
+                    "/api/view?path=/&limit=2&cursor={}",
+                    cursor.replace(':', "%3A")
+                );
+            }
+            None => break,
+        }
+        assert!(pages < 20, "the pages end");
+    }
+    assert!(pages > 1);
+    assert_eq!(seen, every, "no row is missing and none repeats");
+
+    for query in [
+        "limit=0",
+        "limit=101",
+        "limit=many",
+        "cursor=recent%3Azz",
+        "cursor=site%3Ao1",
+    ] {
+        let (status, body, _) = edge
+            .get("127.0.0.1", &format!("/api/view?path=/&{query}"), None)
+            .await;
+        assert_eq!(
+            (status, body["code"].as_str()),
+            (422, Some("invalid")),
+            "{query}: {body}"
+        );
+    }
+}
+
+/// Verifies: CMS-163
+///
+/// A selection of fields narrows what a reader would have received and never adds to it: a field
+/// the kernel withheld from the reader is not there for being named, and a field that was not
+/// named is not there either.
+#[tokio::test]
+async fn a_view_with_a_field_selection_holds_no_unselected_and_no_redacted_field() {
+    let edge = start().await;
+    let keys = |view: &Json, section: &str| -> Vec<Vec<String>> {
+        view["data"][section]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row["fields"].as_object().unwrap().keys().cloned().collect())
+            .collect()
+    };
+    let (status, public, _) = edge
+        .get(
+            "127.0.0.1",
+            "/api/view?path=/authors&fields=name,principal",
+            None,
+        )
+        .await;
+    assert_eq!(status, 200, "{public}");
+    let rows = keys(&public, "authors");
+    assert!(rows.len() > 1);
+    assert!(
+        rows.iter().all(|fields| fields == &["name"]),
+        "the login is the author's own, and the bio and slug were not asked for: {rows:?}"
+    );
+    assert!(public["data"]["authors"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|row| row.get("blocks").is_none()));
+
+    let (token, _) = edge.login("127.0.0.1", "ines", "strata-dev-ines").await;
+    let (_, editor, _) = edge
+        .get(
+            "127.0.0.1",
+            "/api/view?path=/authors&fields=name,principal",
+            Some(&token),
+        )
+        .await;
+    let rows = keys(&editor, "authors");
+    assert!(
+        rows.iter()
+            .any(|fields| fields.contains(&"principal".to_string())),
+        "an editor may read it, so the same selection holds it"
+    );
+    assert!(rows
+        .iter()
+        .all(|fields| fields.iter().all(|f| f == "name" || f == "principal")));
+
+    for query in ["fields=nope", "fields=", "fields=name,,slug"] {
+        let (status, body, _) = edge
+            .get(
+                "127.0.0.1",
+                &format!("/api/view?path=/authors&{query}"),
+                None,
+            )
+            .await;
+        assert_eq!(
+            (status, body["code"].as_str()),
+            (422, Some("invalid")),
+            "{query}: {body}"
+        );
+    }
+}
+
+/// Verifies: OPS-318
+///
+/// A create the browser sends twice with the same key makes one record, through the gateway and
+/// the backend; the same key with another body is refused and a key that cannot be used is
+/// refused before anything is done.
+#[tokio::test]
+async fn a_retried_create_with_the_same_key_makes_one_record_through_the_gateway() {
+    let edge = start().await;
+    let (token, csrf) = edge.login("127.0.0.1", "ines", "strata-dev-ines").await;
+    let cookie = format!("{SESSION_COOKIE}={token}");
+    let create = |slug: &str, key: &str| {
+        edge.post(
+            "127.0.0.1",
+            "/api/records",
+            json!({ "op": "create", "object": "category", "fields": { "name": "Keyed", "slug": slug } }),
+        )
+        .header("cookie", &cookie)
+        .header("x-csrf-token", &csrf)
+        .header("idempotency-key", key)
+    };
+    let (first_status, first, _) = edge.send(create("keyed", "k-0001-aaaa")).await;
+    assert_eq!(first_status, 200, "{first}");
+    let (second_status, second, _) = edge.send(create("keyed", "k-0001-aaaa")).await;
+    assert_eq!(second_status, 200, "{second}");
+    assert_eq!(
+        second["id"], first["id"],
+        "the retry answers the first result"
+    );
+
+    let (_, topics, _) = edge.get("127.0.0.1", "/api/view?path=/topics", None).await;
+    let made = topics["data"]["categories"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|row| row["fields"]["slug"] == "keyed")
+        .count();
+    assert_eq!(made, 1, "one record, not two");
+
+    let (status, other, _) = edge.send(create("keyed-again", "k-0001-aaaa")).await;
+    assert_eq!(
+        (status, other["code"].as_str()),
+        (422, Some("invalid")),
+        "{other}"
+    );
+    let (status, bad, _) = edge.send(create("keyed-long", &"k".repeat(129))).await;
+    assert_eq!(
+        (status, bad["code"].as_str()),
+        (422, Some("invalid")),
+        "{bad}"
+    );
+    let (_, after, _) = edge.get("127.0.0.1", "/api/view?path=/topics", None).await;
+    assert_eq!(
+        after["data"]["categories"].as_array().unwrap().len(),
+        topics["data"]["categories"].as_array().unwrap().len(),
+        "the refused requests made nothing"
+    );
+}
+
+/// Verifies: INT-2346
+///
+/// An owner installs, lists and removes a product through `POST /api/products/<action>` and
+/// `GET /api/products`, behind the origin and request-token checks, and the idempotency key of the
+/// browser reaches the backend: a repeat of the install changes nothing.
+#[tokio::test]
+async fn products_are_installed_listed_and_removed_through_the_gateway() {
+    let edge = start().await;
+    let (owner, csrf) = edge.login("127.0.0.1", "admin", "strata-dev-admin").await;
+    let as_owner = |action: &str, body: Json| {
+        edge.post("127.0.0.1", &format!("/api/products/{action}"), body)
+            .header("cookie", format!("{SESSION_COOKIE}={owner}"))
+            .header("x-csrf-token", &csrf)
+    };
+    let bundle = json!({
+        "name": "Gateway check",
+        "version": "1.0.0",
+        "product": "gateway-check",
+        "content": { "objects": { "gateway_check__thing": {
+            "id": "gateway_check__thing", "label": "Thing",
+            "fields": { "name": { "id": "name", "label": "Name", "ty": "Str", "required": true, "unique": false } },
+            "constraints": {}
+        } } }
+    });
+
+    // Nobody signed in lists nothing; the write guard comes before the action is looked at.
+    assert_eq!(edge.get("127.0.0.1", "/api/products", None).await.0, 401);
+    let (status, _, _) = edge
+        .send(
+            edge.post(
+                "127.0.0.1",
+                "/api/products/install",
+                json!({ "bundle": bundle }),
+            )
+            .header("cookie", format!("{SESSION_COOKIE}={owner}")),
+        )
+        .await;
+    assert_eq!(status, 403, "no request token");
+    let (status, _, _) = edge.send(as_owner("sell", json!({}))).await;
+    assert_eq!(status, 404, "an unknown action");
+    let (status, _, _) = edge.send(as_owner("install", json!({}))).await;
+    assert_eq!(status, 422, "a request that carries no bundle");
+
+    let (_, listed, _) = edge.get("127.0.0.1", "/api/products", Some(&owner)).await;
+    assert_eq!(listed["products"], json!([]));
+    let (status, dry, _) = edge
+        .send(as_owner(
+            "install",
+            json!({ "bundle": bundle, "dry_run": true }),
+        ))
+        .await;
+    assert_eq!(status, 200, "{dry}");
+    assert_eq!(
+        dry["projection"]["created"][0]["id"],
+        "gateway_check__thing"
+    );
+
+    let keyed = |body: Json| as_owner("install", body).header("idempotency-key", "gateway-1");
+    let (status, installed, _) = edge.send(keyed(json!({ "bundle": bundle }))).await;
+    assert_eq!(status, 200, "{installed}");
+    assert_eq!(installed["unchanged"], false);
+    let (status, again, _) = edge.send(keyed(json!({ "bundle": bundle }))).await;
+    assert_eq!(status, 200, "{again}");
+    assert_eq!(again["unchanged"], true);
+    assert_eq!(again["schema_version"], installed["schema_version"]);
+
+    let (_, listed, _) = edge.get("127.0.0.1", "/api/products", Some(&owner)).await;
+    assert_eq!(listed["products"][0]["product"], "gateway-check");
+    let (status, removed, _) = edge
+        .send(as_owner(
+            "remove",
+            json!({ "product": "gateway-check", "delete_records": false }),
+        ))
+        .await;
+    assert_eq!(status, 200, "{removed}");
+    let (_, listed, _) = edge.get("127.0.0.1", "/api/products", Some(&owner)).await;
+    assert_eq!(listed["products"], json!([]));
+}
+
+/// Sign in as a person of the first site, presenting `token` as the request token; the status.
+async fn login_with(edge: &Edge, token: String) -> u16 {
+    edge.send(
+        edge.post(
+            "127.0.0.1",
+            "/api/login",
+            json!({ "login": "ines", "password": "strata-dev-ines" }),
+        )
+        .header("x-csrf-token", token),
+    )
+    .await
+    .0
+}
+
+/// Verifies: GWY-1402
+/// A request token issued by one gateway is good at a second instance configured with the same
+/// secret and at a restart of the first, and worthless at a gateway with another secret.
+#[tokio::test]
+async fn a_request_token_survives_a_restart_and_is_good_at_a_second_instance() {
+    let shared =
+        |cfg: &mut Config| cfg.token_secret = Some("one secret held by every instance".into());
+    let first = start_with(shared, |_| {}).await;
+    let token = first.request_token("127.0.0.1").await;
+    assert_eq!(login_with(&first, token.clone()).await, 200);
+
+    let second = start_with(shared, |_| {}).await;
+    assert_eq!(
+        login_with(&second, token.clone()).await,
+        200,
+        "a second instance accepts it"
+    );
+
+    first.stop_and_wait().await;
+    let restarted = start_with(shared, |_| {}).await;
+    assert_eq!(
+        login_with(&restarted, token.clone()).await,
+        200,
+        "a restart accepts it"
+    );
+
+    let other = start_with(
+        |cfg| cfg.token_secret = Some("a different secret entirely".into()),
+        |_| {},
+    )
+    .await;
+    assert_ne!(
+        login_with(&other, token).await,
+        200,
+        "another secret does not"
+    );
 }

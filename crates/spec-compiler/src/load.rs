@@ -11,10 +11,12 @@ use serde_json::{Map, Number, Value};
 
 use crate::diagnostic::{Diagnostic, SPEC_ENTITY};
 use crate::ir::{
-    Behavior, Component, Constraints, Contract, ContractError, ContractField, Effect, Event, Index,
-    Injection, Instances, LoggedField, Logging, OnDelete, PayloadField, Realisation, Record,
-    RecordField, Route, Spec, State, Storage, StructField, System, Telemetry, TelemetryService,
-    Transition, TypeDecl, TypeKind, Variable,
+    AccessModel, Auth, Behavior, Capability, Component, Constraints, Contract, ContractError,
+    ContractField, Delegation, Derivation, Effect, Encoding, ErrorBody, ErrorWire, Event, Exposure,
+    FeatureFlag, Grant, Index, Injection, Instances, LoggedField, Logging, OnDelete, PayloadField,
+    Plan, Realisation, Record, RecordField, Role, RoleLevel, Route, Scheme, Spec, State, Storage,
+    StructField, System, Telemetry, TelemetryService, TenantScope, TokenScope, Transition,
+    TypeConstraints, TypeDecl, TypeKind, UnionTag, Variable, Variant, VariantCase,
 };
 use crate::jsonc;
 
@@ -22,6 +24,8 @@ use crate::jsonc;
 pub const SYNTAX: &str = "specc.spec-syntax";
 /// The code of a value with the wrong shape.
 pub const SHAPE: &str = "specc.spec-shape";
+/// Two entities of one access-model section share an id.
+pub const DUPLICATE_ID: &str = "specc.duplicate-id";
 
 /// Loads a specification. `path` is the path to print in headers and diagnostics.
 pub fn load(path: &str, text: &str) -> Result<Spec, Vec<Diagnostic>> {
@@ -37,7 +41,7 @@ pub fn load_with_client_machines(
 ) -> Result<(Spec, Vec<Behavior>), Vec<Diagnostic>> {
     let value = jsonc::parse(text).map_err(|e| {
         vec![Diagnostic::new(
-            SYNTAX,
+            e.code(SYNTAX),
             SPEC_ENTITY,
             format!("the specification is not valid JSONC: {e}"),
         )]
@@ -246,8 +250,13 @@ impl Loader {
         }
         let (memory_machines, machines): (Vec<_>, Vec<_>) =
             shipped.into_iter().partition(|b| b.memory);
-        let constructs = self.constructs(top);
+        let mut constructs = self.constructs(top);
+        constructs.access = self.access_model(top);
         let telemetry = self.telemetry(top);
+        self.diagnostics.extend(crate::contract_rules::check(top));
+        let languages = self.languages(top);
+        let functions = self.functions(top);
+        let example_fixtures = self.example_fixtures(top);
         Some(Spec {
             path: path.replace('\\', "/"),
             system: system?,
@@ -261,6 +270,9 @@ impl Loader {
             target_machines,
             constructs,
             telemetry,
+            languages,
+            functions,
+            example_fixtures,
         })
     }
 
@@ -364,6 +376,25 @@ impl Loader {
         out
     }
 
+    /// Like [`Loader::section`], but refuses a second entity with an id the section already
+    /// has, and drops it: a lookup by id would silently take the first.
+    fn unique_section<'a>(&mut self, top: &'a Obj, name: &str) -> Vec<(String, &'a Obj)> {
+        let mut seen = std::collections::BTreeSet::new();
+        let mut out = Vec::new();
+        for (id, obj) in self.section(top, name) {
+            if seen.insert(id.clone()) {
+                out.push((id, obj));
+            } else {
+                self.diagnostics.push(Diagnostic::new(
+                    DUPLICATE_ID,
+                    &id,
+                    format!("Section \"{name}\" has more than one entity with the id \"{id}\"; every id in it must be unique, because a lookup by id would take only the first."),
+                ));
+            }
+        }
+        out
+    }
+
     pub(crate) fn opt_str(&mut self, obj: &Obj, key: &str, entity: &str) -> Option<String> {
         match obj.get(key) {
             None | Some(Value::Null) => None,
@@ -372,6 +403,16 @@ impl Loader {
                 self.shape(entity, format!("\"{key}\" must be a string"));
                 None
             }
+        }
+    }
+
+    /// `storage.key`: one field name, or the list of the key fields of a composite key.
+    fn key_fields(&mut self, obj: &Obj, entity: &str) -> Option<Vec<String>> {
+        match obj.get("key") {
+            Some(Value::Array(_)) => self
+                .opt_str_list(obj, "key", entity)
+                .filter(|k| !k.is_empty()),
+            _ => self.opt_str(obj, "key", entity).map(|k| vec![k]),
         }
     }
 
@@ -451,15 +492,16 @@ impl Loader {
         let id = self.req_str(obj, "id", SPEC_ENTITY);
         let entity = id.clone().unwrap_or_else(|| SPEC_ENTITY.to_string());
         let name = self.req_str(obj, "name", &entity);
-        let (generation_target, wire_case) = match obj.get("generation") {
-            None | Some(Value::Null) => (None, None),
+        let (generation_target, wire_case, error_wire) = match obj.get("generation") {
+            None | Some(Value::Null) => (None, None, ErrorWire::default()),
             Some(Value::Object(g)) => (
                 self.opt_str(g, "target", &entity),
                 self.wire_case(g, "wireCase", &entity),
+                self.error_wire(g, &entity),
             ),
             Some(_) => {
                 self.shape(&entity, "\"generation\" must be an object");
-                (None, None)
+                (None, None, ErrorWire::default())
             }
         };
         Some(System {
@@ -467,7 +509,89 @@ impl Loader {
             name: name?,
             generation_target,
             wire_case: wire_case.unwrap_or_default(),
+            error_wire,
         })
+    }
+
+    /// An HTTP status under `key`, if stated: an integer from 400 to 599.
+    fn status(&mut self, obj: &Obj, key: &str, entity: &str) -> Option<u16> {
+        let n = self.opt_number(obj, key, entity)?;
+        match n.as_u64().filter(|s| (400..=599).contains(s)) {
+            Some(s) => Some(s as u16),
+            None => {
+                self.shape(
+                    entity,
+                    format!("\"{key}\" is {n}; a status is an integer from 400 to 599"),
+                );
+                None
+            }
+        }
+    }
+
+    /// A map of strings under `key`, in declaration order.
+    fn str_map(&mut self, obj: &Obj, key: &str, entity: &str) -> Vec<(String, String)> {
+        let mut out = Vec::new();
+        match obj.get(key) {
+            None | Some(Value::Null) => {}
+            Some(Value::Object(m)) => {
+                for (k, v) in m {
+                    match v.as_str() {
+                        Some(v) => out.push((k.clone(), v.to_string())),
+                        None => self.shape(entity, format!("\"{key}.{k}\" must be a string")),
+                    }
+                }
+            }
+            Some(_) => self.shape(entity, format!("\"{key}\" must be an object")),
+        }
+        out
+    }
+
+    /// The error kinds, default status or kind and error body of `system.generation`.
+    fn error_wire(&mut self, g: &Obj, entity: &str) -> ErrorWire {
+        let mut kinds = Vec::new();
+        match g.get("errorKinds") {
+            None | Some(Value::Null) => {}
+            Some(Value::Object(m)) => {
+                for k in m.keys() {
+                    if let Some(s) = self.status(m, k, entity) {
+                        kinds.push((k.clone(), s));
+                    }
+                }
+            }
+            Some(_) => self.shape(entity, "\"errorKinds\" must be an object"),
+        }
+        let default_status = self.status(g, "errorStatus", entity);
+        let default_kind = self.opt_str(g, "errorKind", entity);
+        let body = match g.get("errorBody") {
+            None | Some(Value::Null) => None,
+            Some(Value::Object(b)) => {
+                let type_name = self.req_str(b, "type", entity);
+                let code = self.req_str(b, "code", entity);
+                let message = self.req_str(b, "message", entity);
+                let correlation = self.opt_str(b, "correlation", entity);
+                let runtime = self.str_map(b, "runtime", entity);
+                match (type_name, code, message) {
+                    (Some(type_name), Some(code), Some(message)) => Some(ErrorBody {
+                        type_name,
+                        code,
+                        message,
+                        correlation,
+                        runtime,
+                    }),
+                    _ => None,
+                }
+            }
+            Some(_) => {
+                self.shape(entity, "\"errorBody\" must be an object");
+                None
+            }
+        };
+        ErrorWire {
+            kinds,
+            default_status,
+            default_kind,
+            body,
+        }
     }
 
     /// A wire case (`snake_case`, `kebab-case` or `camelCase`) under `key`, if stated.
@@ -504,28 +628,55 @@ impl Loader {
             Some("enum") => Some(TypeKind::Enum {
                 values: self.opt_str_list(obj, "values", id).unwrap_or_default(),
             }),
-            Some("struct") => {
-                let mut fields = Vec::new();
-                for f in self.obj_list(obj, "fields", id) {
-                    let name = self.req_str(f, "name", id);
-                    let type_name = self.req_str(f, "type", id);
-                    let optional = self.opt_bool(f, "optional", id).unwrap_or(false);
-                    if let (Some(name), Some(type_name)) = (name, type_name) {
-                        fields.push(StructField {
+            Some("struct") => Some(TypeKind::Struct {
+                fields: self.struct_fields(obj, id),
+            }),
+            Some("union") => {
+                let mut variants = Vec::new();
+                for v in self.obj_list(obj, "variants", id) {
+                    let name = self.req_str(v, "name", id);
+                    let fields = self.struct_fields(v, id);
+                    let newtype = self.opt_bool(v, "newtype", id).unwrap_or(false);
+                    let tuple = self.opt_bool(v, "tuple", id).unwrap_or(false);
+                    if let Some(name) = name {
+                        variants.push(Variant {
                             name,
-                            type_name,
-                            optional,
+                            fields,
+                            newtype,
+                            tuple,
                         });
                     }
                 }
-                Some(TypeKind::Struct { fields })
+                let encoding = match obj.get("encoding") {
+                    None | Some(Value::Null) => Encoding::default(),
+                    Some(Value::Object(e)) => self.encoding(e, id),
+                    Some(_) => {
+                        self.shape(id, "\"encoding\" must be an object");
+                        Encoding::default()
+                    }
+                };
+                Some(TypeKind::Union { variants, encoding })
             }
             Some(other) => {
                 self.shape(
                     id,
-                    format!("\"kind\" is \"{other}\"; it must be id, scalar, enum or struct"),
+                    format!(
+                        "\"kind\" is \"{other}\"; it must be id, scalar, enum, struct or union"
+                    ),
                 );
                 None
+            }
+        };
+        let constraints = match obj.get("constraints") {
+            None | Some(Value::Null) => TypeConstraints::default(),
+            Some(Value::Object(c)) => TypeConstraints {
+                pattern: self.opt_str(c, "pattern", id),
+                min_length: self.opt_number(c, "minLength", id),
+                max_length: self.opt_number(c, "maxLength", id),
+            },
+            Some(_) => {
+                self.shape(id, "\"constraints\" must be an object");
+                TypeConstraints::default()
             }
         };
         Some(TypeDecl {
@@ -533,7 +684,61 @@ impl Loader {
             name: name?,
             description,
             kind: kind?,
+            constraints,
         })
+    }
+
+    /// `fields` `[{name, type, optional?}]` of a struct type or a union variant.
+    fn struct_fields(&mut self, obj: &Obj, id: &str) -> Vec<StructField> {
+        let mut fields = Vec::new();
+        for f in self.obj_list(obj, "fields", id) {
+            let name = self.req_str(f, "name", id);
+            let type_name = self.req_str(f, "type", id);
+            let optional = self.opt_bool(f, "optional", id).unwrap_or(false);
+            if let (Some(name), Some(type_name)) = (name, type_name) {
+                fields.push(StructField {
+                    name,
+                    type_name,
+                    optional,
+                });
+            }
+        }
+        fields
+    }
+
+    /// `encoding` `{tag?, tagField?, contentField?, variantCase?}` of a union.
+    fn encoding(&mut self, e: &Obj, id: &str) -> Encoding {
+        let tag = match self.opt_str(e, "tag", id) {
+            None => UnionTag::External,
+            Some(text) => UnionTag::parse(&text).unwrap_or_else(|| {
+                self.shape(
+                    id,
+                    format!("\"tag\" is \"{text}\"; it must be external, internal or adjacent"),
+                );
+                UnionTag::External
+            }),
+        };
+        let variant_case = match self.opt_str(e, "variantCase", id) {
+            None => None,
+            Some(text) => {
+                let parsed = VariantCase::parse(&text);
+                if parsed.is_none() {
+                    self.shape(
+                        id,
+                        format!(
+                            "\"variantCase\" is \"{text}\"; it must be PascalCase, snake_case or kebab-case"
+                        ),
+                    );
+                }
+                parsed
+            }
+        };
+        Encoding {
+            tag,
+            tag_field: self.opt_str(e, "tagField", id),
+            content_field: self.opt_str(e, "contentField", id),
+            variant_case,
+        }
     }
 
     fn record(&mut self, id: &str, obj: &Obj) -> Option<Record> {
@@ -669,11 +874,15 @@ impl Loader {
             let name = self.req_str(e, "name", id);
             let condition = self.opt_str(e, "condition", id);
             let type_name = self.opt_str(e, "type", id);
+            let status = self.status(e, "status", id);
+            let kind = self.opt_str(e, "kind", id);
             if let Some(name) = name {
                 errors.push(ContractError {
                     name,
                     condition,
                     type_name,
+                    status,
+                    kind,
                 });
             }
         }
@@ -691,7 +900,7 @@ impl Loader {
                 if parsed.is_none() {
                     self.shape(
                         id,
-                        format!("\"realisation\" is \"{text}\"; it must be generated or hand"),
+                        format!("\"realisation\" is \"{text}\"; it must be generated, hand, derived or facade"),
                     );
                 }
                 parsed
@@ -706,7 +915,45 @@ impl Loader {
                 .as_deref()
                 .is_some_and(|c| not_implemented.contains(&c)),
         );
-        let auth = self.opt_str(obj, "auth", id);
+        let (auth, auth_prose) = match obj.get("auth") {
+            None | Some(Value::Null) => (None, None),
+            Some(Value::String(text)) => (None, Some(text.clone())),
+            Some(Value::Object(a)) => (self.auth(a, id), None),
+            Some(_) => {
+                self.shape(id, "\"auth\" must be an object {scheme, ...} or a sentence");
+                (None, None)
+            }
+        };
+        let exposure = match self.opt_str(obj, "exposure", id) {
+            None => None,
+            Some(text) => {
+                let parsed = Exposure::parse(&text);
+                if parsed.is_none() {
+                    self.shape(
+                        id,
+                        format!("\"exposure\" is \"{text}\"; it must be public, internal or local"),
+                    );
+                }
+                parsed
+            }
+        };
+        let read_only = self.opt_bool(obj, "readOnly", id).unwrap_or(false);
+        let tenant_scope = match self.opt_str(obj, "tenantScope", id) {
+            None => None,
+            Some(text) => {
+                let parsed = TenantScope::parse(&text);
+                if parsed.is_none() {
+                    self.shape(
+                        id,
+                        format!(
+                            "\"tenantScope\" is \"{text}\"; it must be request, none or platform"
+                        ),
+                    );
+                }
+                parsed
+            }
+        };
+        let development = self.opt_str(obj, "development", id);
         let idempotent = self.opt_bool(obj, "idempotent", id);
         let timeout_ms = self.opt_number(obj, "timeoutMs", id);
         let (binding_method, binding_path, binding_case) = match obj.get("binding") {
@@ -719,6 +966,26 @@ impl Loader {
             Some(_) => {
                 self.shape(id, "\"binding\" must be an object");
                 (None, None, None)
+            }
+        };
+        let derivation = match obj.get("derivation") {
+            None | Some(Value::Null) => None,
+            Some(Value::Object(d)) => Some(Derivation {
+                kind: self.opt_str(d, "kind", id),
+                function: self.opt_str(d, "function", id),
+                needs: self.opt_str(d, "needs", id),
+                load: self.opt_str(d, "load", id),
+                decide: self.opt_str(d, "decide", id),
+                commit: self.opt_str(d, "commit", id),
+                conflict: self.opt_str(d, "conflict", id),
+                insufficient: self.opt_str(d, "insufficient", id),
+                need_rounds: self.opt_number(d, "needRounds", id),
+                retries: self.opt_number(d, "retries", id),
+                fault: self.opt_str(d, "fault", id),
+            }),
+            Some(_) => {
+                self.shape(id, "\"derivation\" must be an object");
+                None
             }
         };
         Some(Contract {
@@ -734,12 +1001,18 @@ impl Loader {
             realisation,
             implemented_by,
             auth,
+            auth_prose,
+            exposure,
+            read_only,
+            tenant_scope,
+            development,
             idempotent,
             timeout_ms,
             binding_method,
             binding_path,
             binding_case,
             target,
+            derivation,
         })
     }
 
@@ -758,6 +1031,154 @@ impl Loader {
                 default_target
             }
         }
+    }
+
+    /// A structured auth: its scheme and the members the format gives it. An unknown scheme is a
+    /// shape error and no auth; Exegra checks which members apply to which scheme.
+    fn auth(&mut self, a: &Obj, id: &str) -> Option<Auth> {
+        let scheme = match self.req_str(a, "scheme", id) {
+            None => None,
+            Some(text) => {
+                let parsed = Scheme::parse(&text);
+                if parsed.is_none() {
+                    self.shape(
+                        id,
+                        format!("the auth scheme \"{text}\" is not one of anonymous, session, service, provisioning-token, signature, signed-address, delegation, in-process"),
+                    );
+                }
+                parsed
+            }
+        };
+        let roles = self.opt_str_list(a, "roles", id).unwrap_or_default();
+        let policies = self.opt_str_list(a, "policies", id).unwrap_or_default();
+        let tenant_policies = self.opt_bool(a, "tenantPolicies", id).unwrap_or(false);
+        let csrf = self.opt_bool(a, "csrf", id).unwrap_or(false);
+        let origin = self.opt_bool(a, "origin", id).unwrap_or(false);
+        let step_up = self.opt_str(a, "stepUp", id);
+        let secret = self.opt_str(a, "secret", id);
+        let requires = self.opt_str_list(a, "requires", id).unwrap_or_default();
+        let justification = self.opt_str(a, "justification", id);
+        let description = self.opt_str(a, "description", id);
+        Some(Auth {
+            scheme: scheme?,
+            roles,
+            policies,
+            tenant_policies,
+            csrf,
+            origin,
+            step_up,
+            secret,
+            requires,
+            justification,
+            description,
+        })
+    }
+
+    /// The capability model: the `capabilities`, `plans`, `roles`, `grants`, `tokenScopes`,
+    /// `delegations` and `featureFlags` sections. Exegra checks that every name resolves and that
+    /// nothing passes on more than its source holds; only shapes are reported here.
+    fn access_model(&mut self, top: &Obj) -> AccessModel {
+        let mut out = AccessModel::default();
+        for (id, o) in self.unique_section(top, "capabilities") {
+            let name = self.opt_str(o, "name", &id);
+            let description = self.opt_str(o, "description", &id);
+            let core = self.opt_bool(o, "core", &id).unwrap_or(false);
+            out.capabilities.push(Capability {
+                id,
+                name,
+                description,
+                core,
+            });
+        }
+        for (id, o) in self.unique_section(top, "plans") {
+            let capabilities = self
+                .opt_str_list(o, "capabilities", &id)
+                .unwrap_or_default();
+            out.plans.push(Plan { id, capabilities });
+        }
+        for (id, o) in self.unique_section(top, "roles") {
+            let level = match self.opt_str(o, "level", &id).as_deref() {
+                Some("platform") => RoleLevel::Platform,
+                Some("tenant") => RoleLevel::Tenant,
+                other => {
+                    self.shape(
+                        &id,
+                        format!(
+                            "\"level\" is {}; it must be platform or tenant",
+                            other.map_or("missing".to_string(), |t| format!("\"{t}\""))
+                        ),
+                    );
+                    continue;
+                }
+            };
+            let holders = self.opt_str_list(o, "holders", &id).unwrap_or_default();
+            let capabilities = self
+                .opt_str_list(o, "capabilities", &id)
+                .unwrap_or_default();
+            out.roles.push(Role {
+                id,
+                level,
+                holders,
+                capabilities,
+            });
+        }
+        for (id, o) in self.unique_section(top, "grants") {
+            let issuer = self.opt_str(o, "issuer", &id);
+            let grantee = self.opt_str(o, "grantee", &id);
+            let capabilities = self
+                .opt_str_list(o, "capabilities", &id)
+                .unwrap_or_default();
+            let per_tenant = self.opt_bool(o, "perTenant", &id).unwrap_or(false);
+            out.grants.push(Grant {
+                id,
+                issuer,
+                grantee,
+                capabilities,
+                per_tenant,
+            });
+        }
+        for (id, o) in self.unique_section(top, "tokenScopes") {
+            let name = self.opt_str(o, "name", &id).unwrap_or_else(|| id.clone());
+            let capabilities = self
+                .opt_str_list(o, "capabilities", &id)
+                .unwrap_or_default();
+            out.token_scopes.push(TokenScope {
+                id,
+                name,
+                capabilities,
+            });
+        }
+        for (id, o) in self.unique_section(top, "delegations") {
+            let from = self.opt_str(o, "from", &id);
+            let capabilities = self
+                .opt_str_list(o, "capabilities", &id)
+                .unwrap_or_default();
+            out.delegations.push(Delegation {
+                id,
+                from,
+                capabilities,
+            });
+        }
+        for (id, o) in self.unique_section(top, "featureFlags") {
+            let gates = self.opt_str_list(o, "gates", &id).unwrap_or_default();
+            let default_on = match self.opt_str(o, "default", &id).as_deref() {
+                None | Some("off") => false,
+                Some("on") => true,
+                Some(other) => {
+                    self.shape(
+                        &id,
+                        format!("\"default\" is \"{other}\"; it must be off or on"),
+                    );
+                    false
+                }
+            };
+            out.flags.push(FeatureFlag {
+                id,
+                gates,
+                default_on,
+            });
+        }
+        out
     }
 
     fn event(&mut self, id: &str, obj: &Obj) -> Option<Event> {
@@ -874,7 +1295,7 @@ impl Loader {
                 let state_values = string_map(self, "stateValues");
                 Some(Storage {
                     record: self.opt_str(st, "record", id),
-                    key: self.opt_str(st, "key", id),
+                    key: self.key_fields(st, id),
                     fields,
                     state: self.opt_str(st, "state", id),
                     state_values,
@@ -890,9 +1311,10 @@ impl Loader {
             _ if memory => None,
             None | Some(Value::Null) => None,
             Some(Value::Object(i)) => Some(Instances {
-                key: self.opt_str(i, "key", id),
+                key: self.opt_str(i, "key", id).map(|k| vec![k]),
                 stored_in: self.opt_str(i, "storedIn", id),
                 counted: i.contains_key("count"),
+                max: i.get("max").and_then(Value::as_u64),
             }),
             Some(_) => {
                 self.shape(id, "\"instances\" must be an object");

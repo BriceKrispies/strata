@@ -2,7 +2,9 @@
 // @ts-check
 
 import { h } from '../components/dom.js';
-import { date, index, marginNotes, prose } from '../components/parts.js';
+import { hrefFor } from '../generated/routes.js';
+import { SIGN_IN_SCREEN } from '../generated/screens.js';
+import { date, index, loadMore, marginNotes, prose, qrCode } from '../components/parts.js';
 
 function topicList(topics, label) {
   if (!topics.length) return null;
@@ -39,6 +41,7 @@ export function home(page, shell) {
       page.recent.length || lead
         ? index(page.recent)
         : h('p', { class: 'empty' }, 'Nothing has been published yet. When an essay is, it appears here without a reload.'),
+      loadMore(page.more),
     ),
     h(
       'section',
@@ -119,6 +122,7 @@ export function topic(page) {
     h('h1', { class: 'page-title' }, page.topic.name),
     page.topic.description ? h('p', { class: 'standfirst' }, page.topic.description) : null,
     page.posts.length ? index(page.posts, 'h2') : h('p', { class: 'empty' }, 'No essays are filed under this topic yet.'),
+    loadMore(page.more),
     h(
       'section',
       { class: 'section section--quiet', 'aria-labelledby': 'other-topics' },
@@ -158,6 +162,7 @@ export function author(page) {
       { class: 'section', 'aria-labelledby': 'author-essays' },
       h('h2', { class: 'section__title', id: 'author-essays' }, 'Essays'),
       page.posts.length ? index(page.posts) : h('p', { class: 'empty' }, 'Nothing published yet.'),
+      loadMore(page.more),
     ),
   ];
 }
@@ -175,7 +180,7 @@ export function search(page) {
     h('h1', { class: 'page-title' }, 'Search'),
     h(
       'form',
-      { class: 'search-form', role: 'search', 'data-form': 'search', action: '/search' },
+      { class: 'search-form', role: 'search', 'data-form': 'search', action: hrefFor('screen-search') },
       h('label', { for: 'search-page-q' }, 'Search the essays'),
       h(
         'div',
@@ -186,6 +191,7 @@ export function search(page) {
     ),
     h('p', { class: 'search-summary', role: 'status' }, summary),
     count ? index(page.results, 'h2') : null,
+    loadMore(page.more),
   ];
 }
 
@@ -210,17 +216,87 @@ export function about(page) {
   ];
 }
 
+/** The code prompt of a sign-in that is waiting for its second factor. */
+function secondFactor(s) {
+  const recovery = s.factor === 'recovery';
+  return [
+    h('h1', { class: 'page-title' }, 'One more step'),
+    h(
+      'form',
+      { class: 'form form--narrow', 'data-form': 'second', 'data-second-factor': true, novalidate: true },
+      s.enrol
+        ? h(
+            'div',
+            null,
+            h('p', { class: 'standfirst' }, 'This site asks for a second factor. Scan this code with an authenticator application.'),
+            qrCode(s.enrol.qr, 'QR code for your authenticator'),
+            h('p', null, 'Or type this secret: ', h('code', { 'data-totp-secret': true }, s.enrol.secret)),
+          )
+        : h('p', { class: 'standfirst' }, recovery ? 'Enter one of your recovery codes.' : 'Enter the code your authenticator shows.'),
+      s.error ? h('p', { class: 'form__error', role: 'alert', id: 'second-error' }, s.error) : null,
+      h(
+        'div',
+        { class: 'field' },
+        h('label', { for: 'second-code' }, recovery ? 'Recovery code' : 'Code'),
+        h('input', { id: 'second-code', name: 'code', type: 'text', value: s.code, autocomplete: 'one-time-code', autocapitalize: 'none', spellcheck: 'false', required: true }),
+      ),
+      h('button', { class: 'button', type: 'submit', disabled: s.busy }, s.busy ? 'Checking…' : 'Continue'),
+    ),
+    !s.enrol && s.methods.includes('recovery')
+      ? h('p', null, h('button', { class: 'button button--quiet', type: 'button', 'data-action': 'factors.use', 'data-arg': JSON.stringify({ factor: recovery ? 'totp' : 'recovery' }) }, recovery ? 'Use my authenticator' : 'Use a recovery code'))
+      : null,
+    !s.enrol && s.methods.includes('passkey') && s.passkeys
+      ? h('p', null, h('button', { class: 'button button--quiet', type: 'button', disabled: s.busy, 'data-action': 'factors.use_passkey' }, 'Use a passkey'))
+      : null,
+  ];
+}
+
+/** The owner's invitation: choose a password. The link's secrets are never in the page. */
+function invitation(invite) {
+  return [
+    h('h1', { class: 'page-title' }, 'Choose your password'),
+    h('p', { class: 'standfirst' }, 'Your site is ready. Choose a password of at least 10 characters, then sign in with it.'),
+    h(
+      'form',
+      { class: 'form form--narrow', 'data-form': 'invite', novalidate: true },
+      invite.error ? h('p', { class: 'form__error', role: 'alert', id: 'invite-error' }, invite.error) : null,
+      h(
+        'div',
+        { class: 'field' },
+        h('label', { for: 'invite-password' }, 'New password'),
+        h('input', {
+          id: 'invite-password', name: 'password', type: 'password', value: invite.password, autocomplete: 'new-password', required: true,
+          'data-rev': invite.fieldError || invite.error, 'aria-invalid': invite.fieldError ? 'true' : null, 'aria-describedby': invite.fieldError ? 'invite-password-error' : null,
+        }),
+        invite.fieldError ? h('p', { class: 'form__error', role: 'alert', id: 'invite-password-error' }, invite.fieldError) : null,
+      ),
+      h('button', { class: 'button', type: 'submit', disabled: invite.busy }, invite.busy ? 'Setting your password…' : 'Set password'),
+    ),
+  ];
+}
+
 export function login(page) {
+  if (page.second) return secondFactor(page.second);
   if (page.signedIn) {
     return [
       h('h1', { class: 'page-title' }, 'You are signed in'),
       h('p', { class: 'standfirst' }, `Signed in as ${page.name}.`),
-      h('p', null, h('a', { class: 'button', href: '/desk' }, 'Go to the writing desk')),
+      h('p', null, h('a', { class: 'button', href: hrefFor('screen-desk') }, 'Go to the writing desk')),
+    ];
+  }
+  if (page.invite?.open) return invitation(page.invite);
+  if (page.link?.landing === 'working' || page.oidc?.landing === 'working') {
+    return [
+      h('h1', { class: 'page-title' }, 'Signing you in'),
+      h('p', { class: 'standfirst', role: 'status' }, page.oidc?.landing === 'working' ? 'Checking the answer of your identity provider…' : 'Checking your link…'),
     ];
   }
   return [
     h('h1', { class: 'page-title' }, 'Sign in'),
     h('p', { class: 'standfirst' }, 'For the people who write and edit here. Readers do not need an account.'),
+    page.link?.landingError ? h('p', { class: 'form__error', role: 'alert', id: 'link-landing-error' }, page.link.landingError) : null,
+    page.invite?.failed ? h('p', { class: 'form__error', role: 'alert', id: 'invite-failed' }, page.invite.error) : null,
+    page.oidc?.landingError ? h('p', { class: 'form__error', role: 'alert', id: 'oidc-landing-error' }, page.oidc.landingError) : null,
     h(
       'form',
       { class: 'form form--narrow', 'data-form': 'login', novalidate: true },
@@ -242,6 +318,43 @@ export function login(page) {
       ),
       h('button', { class: 'button', type: 'submit', disabled: page.busy }, page.busy ? 'Signing in…' : 'Sign in'),
     ),
+    page.passkeys?.supported
+      ? h(
+          'div',
+          { class: 'form form--narrow', 'data-passkey-signin': true },
+          page.passkeys.error ? h('p', { class: 'form__error', role: 'alert', id: 'passkey-error' }, page.passkeys.error) : null,
+          h('button', { class: 'button button--quiet', type: 'button', disabled: page.passkeys.busy, 'data-action': 'passkeys.sign_in' }, page.passkeys.busy ? 'Waiting for your passkey…' : 'Sign in with a passkey'),
+        )
+      : null,
+    page.oidc?.providers?.length
+      ? h(
+          'section',
+          { class: 'form form--narrow', 'aria-labelledby': 'oidc-title' },
+          h('h2', { class: 'section__title', id: 'oidc-title' }, 'Sign in with your organisation'),
+          page.oidc.error ? h('p', { class: 'form__error', role: 'alert', id: 'oidc-error' }, page.oidc.error) : null,
+          page.oidc.providers.map((p) =>
+            h('button', { key: `${p.protocol}-${p.id}`, class: 'button button--quiet', type: 'button', disabled: page.oidc.busy, 'data-action': 'oidc.start', 'data-arg': JSON.stringify({ provider: p.id, protocol: p.protocol }) }, `Sign in with ${p.label}`),
+          ),
+        )
+      : null,
+    page.link
+      ? h(
+          'form',
+          { class: 'form form--narrow', 'data-form': 'link', novalidate: true },
+          h('h2', { class: 'section__title', id: 'link-title' }, 'Email me a sign-in link'),
+          page.link.error ? h('p', { class: 'form__error', role: 'alert', id: 'link-error' }, page.link.error) : null,
+          page.link.sent
+            ? h('p', { class: 'form__note', role: 'status', id: 'link-sent' }, 'If that address belongs to an account, a sign-in link is on its way. Open it in this browser within fifteen minutes.')
+            : null,
+          h(
+            'div',
+            { class: 'field' },
+            h('label', { for: 'link-email' }, 'Email address'),
+            h('input', { id: 'link-email', name: 'email', type: 'email', value: page.link.email, autocomplete: 'email', autocapitalize: 'none', spellcheck: 'false', required: true }),
+          ),
+          h('button', { class: 'button button--quiet', type: 'submit', disabled: page.link.busy }, page.link.busy ? 'Sending…' : 'Email me a sign-in link'),
+        )
+      : null,
   ];
 }
 
@@ -249,7 +362,7 @@ export function missing(page) {
   return [
     h('h1', { class: 'page-title' }, 'There is nothing at this address'),
     h('p', { class: 'standfirst' }, `No page lives at ${page.path}. It may have been unpublished, or the link may be mistyped.`),
-    h('p', null, h('a', { class: 'button', href: '/' }, 'Read the latest essays')),
+    h('p', null, h('a', { class: 'button', href: hrefFor('screen-front-page') }, 'Read the latest essays')),
   ];
 }
 
@@ -265,7 +378,7 @@ export function signinRequired(page) {
   return [
     h('h1', { class: 'page-title' }, 'Sign in to continue'),
     h('p', { class: 'standfirst' }, 'This part of the site is for the people who write and edit here.'),
-    h('p', null, h('a', { class: 'button', href: `/login?next=${encodeURIComponent(page.next)}` }, 'Sign in')),
+    SIGN_IN_SCREEN === null ? null : h('p', null, h('a', { class: 'button', href: hrefFor(SIGN_IN_SCREEN, { next: page.next }) }, 'Sign in')),
   ];
 }
 
@@ -273,7 +386,7 @@ export function forbidden() {
   return [
     h('h1', { class: 'page-title' }, 'Your account cannot open this page'),
     h('p', { class: 'standfirst' }, 'It needs a role you do not hold. An editor or the site owner can change that.'),
-    h('p', null, h('a', { class: 'button', href: '/desk' }, 'Back to the writing desk')),
+    h('p', null, h('a', { class: 'button', href: hrefFor('screen-desk') }, 'Back to the writing desk')),
   ];
 }
 

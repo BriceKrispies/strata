@@ -1,0 +1,5 @@
+{
+  // Refused: a second file with product id "badges", which badges.jsonc already has (layer.product-id-duplicate).
+  "product": { "id": "badges", "name": "Badges", "imports": { "spec": "../../../../../../specifications/spec.jsonc", "entities": [] } },
+  "types": [ { "id": "badges__other-tier", "name": "Other tier", "kind": "enum", "values": ["bronze"] } ]
+}

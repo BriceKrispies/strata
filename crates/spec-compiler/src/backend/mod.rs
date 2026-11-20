@@ -15,9 +15,11 @@ use crate::ir::Spec;
 /// its `target-models` feature.
 pub const TARGET_MODULE: &str = "target_machines";
 
+pub mod access_model;
 pub mod audits;
 pub mod contracts;
 pub mod deps;
+pub mod derived;
 pub mod handlers;
 pub mod machines;
 pub mod policies;
@@ -70,5 +72,6 @@ pub const BACKENDS: &[&dyn Backend] = &[
     &routes::RoutesBackend,
     &deps::DepsBackend,
     &handlers::HandlersBackend,
+    &derived::DerivedBackend,
     &telemetry::TelemetryBackend,
 ];

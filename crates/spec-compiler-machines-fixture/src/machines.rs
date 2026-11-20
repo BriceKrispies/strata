@@ -160,6 +160,8 @@ pub mod lease {
 
         const CREATES: bool = true;
 
+        const SINGLETON_KEY: Option<&'static str> = Some("\"lease\"");
+
         type State = State;
 
         type Vars = Vars;
@@ -524,6 +526,10 @@ pub mod job {
             record.validate().map_err(|violation| violation.to_string())
         }
 
+        fn is_terminal(state: &State) -> bool {
+            matches!(state, State::Failed | State::Done)
+        }
+
         fn step(
             state: &State,
             vars: &Vars,
@@ -742,7 +748,7 @@ pub mod hold {
                 ));
             };
             Ok(records::RecHold {
-                hold_id: key.clone(),
+                hold_id: *key,
                 status: match state {
                     State::HActive => types::HoldStatus::Active,
                     State::HReleased => types::HoldStatus::Released,
@@ -761,6 +767,10 @@ pub mod hold {
 
         fn validate_record(record: &records::RecHold) -> Result<(), String> {
             record.validate().map_err(|violation| violation.to_string())
+        }
+
+        fn is_terminal(state: &State) -> bool {
+            matches!(state, State::HReleased)
         }
 
         fn step(

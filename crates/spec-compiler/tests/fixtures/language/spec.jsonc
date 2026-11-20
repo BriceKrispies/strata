@@ -1,0 +1,123 @@
+// Golden fixture for specc's language generation (WG-4931): the Strata kernel's tenant rule language
+// as it is today (crates/kernel/src/expr.rs, crates/substrate/src/syntax.rs), copied from Exegra's
+// language fixture (tests/fixtures/language/fixtures.js, WG-4929) into a minimal specification. The
+// expected output is the pure crate crates/spec-compiler-language-fixture, whose module
+// rule_language holds the generated parser, printer, checker and evaluator. Its own tests port the
+// substrate syntax tests and the kernel's evaluation tests; crates/spec-compiler/tests/language.rs
+// compares it with the kernel on the publication template's expressions.
+//
+// The AST differs from the kernel's Expr in form only: the format has no tuple variants yet
+// (WG-4956), so Var, Through, Cmp, In, Contains, StartsWith and If are struct-like here, and
+// HasRole holds a string rather than a RoleId. Arith, MsBetween, Duration, Concat and Text are the checked
+// arithmetic, time arithmetic and text of D-6540 to D-6543 (WG-5064).
+{
+  "exegra": "0.1",
+  "system": { "id": "language-fixture", "name": "Language fixture", "generation": { "target": "rust" } },
+  "types": [
+    { "id": "cmp-op", "name": "Comparison", "kind": "enum", "values": ["Eq", "Ne", "Lt", "Le", "Gt", "Ge"] },
+    { "id": "scope", "name": "Scope", "kind": "enum", "values": ["Record", "Old", "New"] },
+    { "id": "arith-op", "name": "Arithmetic", "kind": "enum", "values": ["Add", "Sub", "Mul"] },
+    { "id": "duration-unit", "name": "Duration unit", "kind": "enum", "values": ["Days", "Hours", "Minutes"] },
+    { "id": "value", "name": "Value", "kind": "union", "variants": [
+      { "name": "Null" },
+      { "name": "Bool", "newtype": true, "fields": [{ "name": "value", "type": "bool" }] },
+      { "name": "Int", "newtype": true, "fields": [{ "name": "value", "type": "i64" }] },
+      { "name": "Str", "newtype": true, "fields": [{ "name": "value", "type": "string" }] },
+      { "name": "Time", "newtype": true, "fields": [{ "name": "value", "type": "i64" }] },
+      { "name": "Ref", "newtype": true, "fields": [{ "name": "value", "type": "u64" }] },
+      { "name": "List", "newtype": true, "fields": [{ "name": "value", "type": "list<value>" }] }
+    ] },
+    { "id": "expr", "name": "Expression", "kind": "union", "variants": [
+      { "name": "Lit", "newtype": true, "fields": [{ "name": "value", "type": "value" }] },
+      { "name": "Var", "fields": [{ "name": "scope", "type": "scope" }, { "name": "name", "type": "string" }] },
+      { "name": "Through", "fields": [{ "name": "scope", "type": "scope" }, { "name": "field", "type": "string" }, { "name": "target", "type": "string" }] },
+      { "name": "Param", "newtype": true, "fields": [{ "name": "name", "type": "string" }] },
+      { "name": "Now" },
+      { "name": "Principal" },
+      { "name": "HasRole", "newtype": true, "fields": [{ "name": "role", "type": "string" }] },
+      { "name": "Not", "newtype": true, "fields": [{ "name": "inner", "type": "expr" }] },
+      { "name": "And", "newtype": true, "fields": [{ "name": "items", "type": "list<expr>" }] },
+      { "name": "Or", "newtype": true, "fields": [{ "name": "items", "type": "list<expr>" }] },
+      { "name": "Cmp", "fields": [{ "name": "op", "type": "cmp-op" }, { "name": "left", "type": "expr" }, { "name": "right", "type": "expr" }] },
+      { "name": "In", "fields": [{ "name": "item", "type": "expr" }, { "name": "list", "type": "expr" }] },
+      { "name": "IsNull", "newtype": true, "fields": [{ "name": "inner", "type": "expr" }] },
+      { "name": "Len", "newtype": true, "fields": [{ "name": "inner", "type": "expr" }] },
+      { "name": "Lower", "newtype": true, "fields": [{ "name": "inner", "type": "expr" }] },
+      { "name": "Contains", "fields": [{ "name": "haystack", "type": "expr" }, { "name": "needle", "type": "expr" }] },
+      { "name": "StartsWith", "fields": [{ "name": "text", "type": "expr" }, { "name": "prefix", "type": "expr" }] },
+      { "name": "IsSlug", "newtype": true, "fields": [{ "name": "inner", "type": "expr" }] },
+      { "name": "If", "fields": [{ "name": "cond", "type": "expr" }, { "name": "then", "type": "expr" }, { "name": "otherwise", "type": "expr" }] },
+      { "name": "Arith", "fields": [{ "name": "op", "type": "arith-op" }, { "name": "left", "type": "expr" }, { "name": "right", "type": "expr" }] },
+      { "name": "MsBetween", "fields": [{ "name": "from", "type": "expr" }, { "name": "to", "type": "expr" }] },
+      { "name": "Duration", "fields": [{ "name": "unit", "type": "duration-unit" }, { "name": "amount", "type": "expr" }] },
+      { "name": "Concat", "fields": [{ "name": "left", "type": "expr" }, { "name": "right", "type": "expr" }] },
+      { "name": "Text", "newtype": true, "fields": [{ "name": "inner", "type": "expr" }] }
+    ] }
+  ],
+  "languages": [
+    {
+      "id": "rule-language",
+      "name": "Tenant rule language",
+      "ast": "expr",
+      "values": "value",
+      "shapes": ["bool", "int", "str", "time", "ref", "list", "any"],
+      "anyShape": "any",
+      "scopes": [
+        { "name": "record", "kind": "record-scope", "value": "Record", "attributes": [
+          { "name": "$id", "shape": "ref" }, { "name": "$version", "shape": "int" }, { "name": "$created_by", "shape": "str" },
+          { "name": "$created_at", "shape": "time" }, { "name": "$updated_at", "shape": "time" } ] },
+        { "name": "old", "kind": "record-scope", "value": "Old", "attributes": [
+          { "name": "$id", "shape": "ref" }, { "name": "$version", "shape": "int" }, { "name": "$created_by", "shape": "str" },
+          { "name": "$created_at", "shape": "time" }, { "name": "$updated_at", "shape": "time" } ] },
+        { "name": "new", "kind": "record-scope", "value": "New", "attributes": [
+          { "name": "$id", "shape": "ref" }, { "name": "$version", "shape": "int" }, { "name": "$created_by", "shape": "str" },
+          { "name": "$created_at", "shape": "time" }, { "name": "$updated_at", "shape": "time" } ] },
+        { "name": "param", "kind": "param" },
+        { "name": "now", "kind": "constant" },
+        { "name": "principal", "kind": "constant" },
+        { "name": "has_role", "kind": "role-test" }
+      ],
+      "operators": [
+        { "name": "lit-null", "variant": "Lit", "case": { "field": "value", "value": "Null" }, "syntax": { "form": "literal", "token": "null" }, "operands": [], "result": "any", "nulls": "total", "primitive": "literal" },
+        { "name": "lit-bool", "variant": "Lit", "case": { "field": "value", "value": "Bool" }, "syntax": { "form": "literal", "token": "bool" }, "operands": [], "result": "bool", "nulls": "total", "primitive": "literal" },
+        { "name": "lit-int", "variant": "Lit", "case": { "field": "value", "value": "Int" }, "syntax": { "form": "literal", "token": "int" }, "operands": [], "result": "int", "nulls": "total", "primitive": "literal" },
+        { "name": "lit-str", "variant": "Lit", "case": { "field": "value", "value": "Str" }, "syntax": { "form": "literal", "token": "string" }, "operands": [], "result": "str", "nulls": "total", "primitive": "literal" },
+        { "name": "lit-time", "variant": "Lit", "case": { "field": "value", "value": "Time" }, "syntax": { "form": "literal", "token": "time" }, "operands": [], "result": "time", "nulls": "total", "primitive": "literal" },
+        { "name": "lit-ref", "variant": "Lit", "case": { "field": "value", "value": "Ref" }, "syntax": { "form": "literal", "token": "ref" }, "operands": [], "result": "ref", "nulls": "total", "primitive": "literal" },
+        { "name": "lit-list", "variant": "Lit", "case": { "field": "value", "value": "List" }, "syntax": { "form": "literal", "token": "list" }, "operands": [], "result": "list", "nulls": "total", "primitive": "list-literal" },
+        { "name": "var", "variant": "Var", "syntax": { "form": "scope" }, "operands": [], "nulls": "total", "primitive": "var" },
+        { "name": "through", "variant": "Through", "syntax": { "form": "scope" }, "operands": [], "nulls": "total", "primitive": "through" },
+        { "name": "param", "variant": "Param", "syntax": { "form": "scope", "token": "param" }, "operands": [], "result": "any", "nulls": "total", "primitive": "param" },
+        { "name": "now", "variant": "Now", "syntax": { "form": "scope", "token": "now" }, "operands": [], "result": "time", "nulls": "total", "primitive": "now" },
+        { "name": "principal", "variant": "Principal", "syntax": { "form": "scope", "token": "principal" }, "operands": [], "result": "str", "nulls": "total", "primitive": "principal" },
+        { "name": "has-role", "variant": "HasRole", "syntax": { "form": "scope", "token": "has_role" }, "operands": [], "result": "bool", "nulls": "total", "primitive": "has-role" },
+        { "name": "or", "variant": "Or", "syntax": { "form": "keyword-infix", "token": "or", "precedence": 1, "assoc": "n-ary" }, "operands": ["bool"], "result": "bool", "nulls": "kleene-or", "primitive": "or3" },
+        { "name": "and", "variant": "And", "syntax": { "form": "keyword-infix", "token": "and", "precedence": 2, "assoc": "n-ary" }, "operands": ["bool"], "result": "bool", "nulls": "kleene-and", "primitive": "and3" },
+        { "name": "not", "variant": "Not", "syntax": { "form": "prefix-word", "token": "not", "precedence": 3 }, "operands": ["bool"], "result": "bool", "nulls": "kleene-not", "primitive": "not3" },
+        { "name": "eq", "variant": "Cmp", "case": { "field": "op", "value": "Eq" }, "syntax": { "form": "infix", "token": "==", "precedence": 4, "assoc": "none" }, "operands": ["any", "any"], "result": "bool", "nulls": "propagate", "primitive": "eq" },
+        { "name": "ne", "variant": "Cmp", "case": { "field": "op", "value": "Ne" }, "syntax": { "form": "infix", "token": "!=", "precedence": 4, "assoc": "none" }, "operands": ["any", "any"], "result": "bool", "nulls": "propagate", "primitive": "ne" },
+        { "name": "lt", "variant": "Cmp", "case": { "field": "op", "value": "Lt" }, "syntax": { "form": "infix", "token": "<", "precedence": 4, "assoc": "none" }, "operands": [["int", "time", "str"], ["int", "time", "str"]], "result": "bool", "nulls": "propagate", "primitive": "lt" },
+        { "name": "le", "variant": "Cmp", "case": { "field": "op", "value": "Le" }, "syntax": { "form": "infix", "token": "<=", "precedence": 4, "assoc": "none" }, "operands": [["int", "time", "str"], ["int", "time", "str"]], "result": "bool", "nulls": "propagate", "primitive": "le" },
+        { "name": "gt", "variant": "Cmp", "case": { "field": "op", "value": "Gt" }, "syntax": { "form": "infix", "token": ">", "precedence": 4, "assoc": "none" }, "operands": [["int", "time", "str"], ["int", "time", "str"]], "result": "bool", "nulls": "propagate", "primitive": "gt" },
+        { "name": "ge", "variant": "Cmp", "case": { "field": "op", "value": "Ge" }, "syntax": { "form": "infix", "token": ">=", "precedence": 4, "assoc": "none" }, "operands": [["int", "time", "str"], ["int", "time", "str"]], "result": "bool", "nulls": "propagate", "primitive": "ge" },
+        { "name": "in", "variant": "In", "syntax": { "form": "keyword-infix", "token": "in", "precedence": 4, "assoc": "none" }, "operands": ["any", "list"], "result": "bool", "nulls": "propagate", "primitive": "in-list" },
+        { "name": "is-null", "variant": "IsNull", "syntax": { "form": "call", "token": "is_null" }, "operands": ["any"], "result": "bool", "nulls": "total", "primitive": "is-null" },
+        { "name": "len", "variant": "Len", "syntax": { "form": "call", "token": "len" }, "operands": [["str", "list"]], "result": "int", "nulls": "propagate", "primitive": "len" },
+        { "name": "lower", "variant": "Lower", "syntax": { "form": "call", "token": "lower" }, "operands": ["str"], "result": "str", "nulls": "propagate", "primitive": "lower" },
+        { "name": "contains", "variant": "Contains", "syntax": { "form": "call", "token": "contains" }, "operands": [["str", "list"], "any"], "result": "bool", "nulls": "propagate", "primitive": "contains" },
+        { "name": "starts-with", "variant": "StartsWith", "syntax": { "form": "call", "token": "starts_with" }, "operands": ["str", "str"], "result": "bool", "nulls": "propagate", "primitive": "starts-with" },
+        { "name": "is-slug", "variant": "IsSlug", "syntax": { "form": "call", "token": "is_slug" }, "operands": ["str"], "result": "bool", "nulls": "propagate", "primitive": "is-slug" },
+        { "name": "if", "variant": "If", "syntax": { "form": "call", "token": "if" }, "operands": ["bool", "any", "any"], "result": "operand:2", "nulls": "null-is-false", "primitive": "if" },
+        { "name": "add", "variant": "Arith", "case": { "field": "op", "value": "Add" }, "syntax": { "form": "infix", "token": "+", "precedence": 5, "assoc": "left" }, "operands": [["int", "time"], "int"], "result": "operand:1", "nulls": "propagate", "primitive": "add-checked" },
+        { "name": "sub", "variant": "Arith", "case": { "field": "op", "value": "Sub" }, "syntax": { "form": "infix", "token": "-", "precedence": 5, "assoc": "left" }, "operands": [["int", "time"], "int"], "result": "operand:1", "nulls": "propagate", "primitive": "sub-checked" },
+        { "name": "mul", "variant": "Arith", "case": { "field": "op", "value": "Mul" }, "syntax": { "form": "infix", "token": "*", "precedence": 6, "assoc": "left" }, "operands": ["int", "int"], "result": "int", "nulls": "propagate", "primitive": "mul-checked" },
+        { "name": "ms-between", "variant": "MsBetween", "syntax": { "form": "call", "token": "ms_between" }, "operands": ["time", "time"], "result": "int", "nulls": "propagate", "primitive": "time-difference" },
+        { "name": "days", "variant": "Duration", "case": { "field": "unit", "value": "Days" }, "syntax": { "form": "call", "token": "days" }, "operands": ["int"], "result": "int", "nulls": "propagate", "primitive": "days-ms" },
+        { "name": "hours", "variant": "Duration", "case": { "field": "unit", "value": "Hours" }, "syntax": { "form": "call", "token": "hours" }, "operands": ["int"], "result": "int", "nulls": "propagate", "primitive": "hours-ms" },
+        { "name": "minutes", "variant": "Duration", "case": { "field": "unit", "value": "Minutes" }, "syntax": { "form": "call", "token": "minutes" }, "operands": ["int"], "result": "int", "nulls": "propagate", "primitive": "minutes-ms" },
+        { "name": "concat", "variant": "Concat", "syntax": { "form": "call", "token": "concat" }, "operands": ["str", "str"], "result": "str", "nulls": "propagate", "primitive": "concat-checked" },
+        { "name": "text", "variant": "Text", "syntax": { "form": "call", "token": "text" }, "operands": [["int", "time", "ref", "bool", "str"]], "result": "str", "nulls": "propagate", "primitive": "to-text" }
+      ]
+    }
+  ]
+}

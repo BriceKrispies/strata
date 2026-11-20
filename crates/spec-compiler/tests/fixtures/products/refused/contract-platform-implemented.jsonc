@@ -1,0 +1,5 @@
+{
+  // Refused: a product contract implemented by the platform component "kernel" (layer.platform-power).
+  "product": { "id": "badges", "name": "Badges", "imports": { "spec": "../../../../../../specifications/spec.jsonc", "entities": ["kernel"] } },
+  "contracts": [ { "id": "badges__award", "name": "Award a badge", "implementedBy": "kernel" } ]
+}

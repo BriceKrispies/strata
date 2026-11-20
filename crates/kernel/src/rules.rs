@@ -2,11 +2,19 @@
 //! transition and read is built from.
 
 use crate::expr::{self, Env};
-use crate::ids::{owner_role, public_role, FieldId, ObjectTypeId, RecordId, RoleId, Timestamp};
-use crate::intent::{Check, DomainError, ErrorKind};
-use crate::schema::{Action, ObjectTypeDef, Resource, TenantSchema};
-use crate::state::{Coverage, Need, Principal, Record, TenantState};
-use crate::value::{refs_in, Value};
+use crate::intent::{Check, CheckExt, DomainError, DomainErrorExt, ErrorKind};
+use crate::limits;
+use crate::schema::{
+    Action, Grant, ObjectAction, ObjectActionExt, ObjectTypeDef, Resource, TenantSchema,
+    TenantSchemaExt, WorkflowDefExt,
+};
+use crate::state::{
+    Coverage, CoverageExt, Need, Principal, Record, RecordExt, TenantState, TenantStateExt,
+};
+use crate::types::{
+    owner_role, public_role, refs_in, FieldId, FieldTypeExt, ObjectTypeId, PrincipalId, RecordId,
+    RoleId, Timestamp, Value, ValueExt,
+};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
@@ -20,7 +28,7 @@ pub struct Lookup<'a> {
     pub coverage: &'a Coverage,
 }
 
-fn insufficient(need: Need) -> DomainError {
+pub(crate) fn insufficient(need: Need) -> DomainError {
     let mut error = DomainError::new(
         ErrorKind::InsufficientState,
         format!("the snapshot does not cover {need:?}"),
@@ -30,6 +38,13 @@ fn insufficient(need: Need) -> DomainError {
         .push(Check::fail("coverage", format!("{need:?}")));
     error.missing = Some(need);
     error
+}
+
+/// `InsufficientState` naming the record a failed evaluation of `expr` could not follow a
+/// reference into because the snapshot does not cover it, or `None` when every reference the
+/// expression follows is covered and the evaluation failed for another reason.
+pub(crate) fn missing_error(rule: &expr::Expr, env: &Env<'_>) -> Option<DomainError> {
+    expr::missing(rule, env).map(insufficient)
 }
 
 impl<'a> Lookup<'a> {
@@ -73,6 +88,54 @@ impl<'a> Lookup<'a> {
             .collect())
     }
 
+    /// Records of `object` whose every field in `fields` equals its value: the lookup of a
+    /// composite unique constraint (D-6558), one need however many fields it names.
+    pub fn by_fields(
+        &self,
+        object: &ObjectTypeId,
+        fields: &BTreeMap<FieldId, Value>,
+    ) -> Result<Vec<&'a Arc<Record>>, DomainError> {
+        let need = Need::ByFields {
+            object: object.clone(),
+            fields: fields.clone(),
+        };
+        if !self.coverage.covers(&need) {
+            return Err(insufficient(need));
+        }
+        Ok(self
+            .tenant
+            .records_of(object)
+            .filter(|record| {
+                fields
+                    .iter()
+                    .all(|(field, value)| record.get(field) == value)
+            })
+            .collect())
+    }
+
+    /// At most `limit` records of `object` with an id above `after`, in id order.
+    pub fn page_of(
+        &self,
+        object: &ObjectTypeId,
+        after: Option<RecordId>,
+        limit: u32,
+    ) -> Result<Vec<&'a Arc<Record>>, DomainError> {
+        let need = Need::PageOf {
+            object: object.clone(),
+            after,
+            limit,
+        };
+        if !self.coverage.covers(&need) {
+            return Err(insufficient(need));
+        }
+        Ok(self
+            .tenant
+            .records_of(object)
+            .filter(|record| after.is_none_or(|a| record.id > a))
+            .take(limit as usize)
+            .collect())
+    }
+
     pub fn all_of(&self, object: &ObjectTypeId) -> Result<Vec<&'a Arc<Record>>, DomainError> {
         let need = Need::AllOf(object.clone());
         if !self.coverage.covers(&need) {
@@ -82,17 +145,228 @@ impl<'a> Lookup<'a> {
     }
 }
 
-/// The roles a principal holds in a tenant. Everyone but the system holds `public`.
+/// The roles a person holds through the table of members and the teams of a schema: the roles
+/// assigned to it directly and the roles of each team it belongs to, and no other.
+pub fn assigned_roles(
+    members: &BTreeMap<PrincipalId, BTreeSet<RoleId>>,
+    schema: &TenantSchema,
+    id: &PrincipalId,
+) -> BTreeSet<RoleId> {
+    let mut roles = members.get(id).cloned().unwrap_or_default();
+    for team in schema.all_teams() {
+        if team.members.contains(id) {
+            roles.extend(team.roles.iter().cloned());
+        }
+    }
+    roles
+}
+
+/// The roles a principal holds in a tenant, directly or through a team. Everyone but the
+/// system holds `public`, except an automation principal, which holds the run-as roles of its
+/// automation and no other ([`crate::automation`]).
 pub fn roles_of(tenant: &TenantState, principal: &Principal) -> BTreeSet<RoleId> {
     match principal {
         Principal::System => BTreeSet::new(),
         Principal::Anonymous => BTreeSet::from([public_role()]),
         Principal::User(id) => {
-            let mut roles = tenant.members.get(id).cloned().unwrap_or_default();
+            // An automation principal holds its run-as roles and nothing else (WFL-1527).
+            if let Some(roles) = crate::automation::automation_roles(&tenant.schema, id) {
+                return roles;
+            }
+            let mut roles = assigned_roles(&tenant.members, &tenant.schema, id);
             roles.insert(public_role());
             roles
         }
     }
+}
+
+/// The permissions a principal holds (ADM-151): exactly the union of the permissions of every
+/// role in [`roles_of`], that is of each role assigned to it directly and of each role of each
+/// team it belongs to. The `owner` role is built in and also holds every permission; that is
+/// decided by [`holds_any`], not listed here.
+pub fn effective_permissions(tenant: &TenantState, principal: &Principal) -> BTreeSet<Grant> {
+    roles_of(tenant, principal)
+        .iter()
+        .flat_map(|role| tenant.schema.grants_of(role))
+        .collect()
+}
+
+/// Whether the principal holds at least one of `wanted`. The owner holds all of them.
+pub fn holds_any(tenant: &TenantState, principal: &Principal, wanted: &BTreeSet<Grant>) -> bool {
+    roles_of(tenant, principal).contains(&owner_role())
+        || !effective_permissions(tenant, principal).is_disjoint(wanted)
+}
+
+/// The grants of `wanted` the principal does not hold. The owner holds every one, so for the
+/// owner this is empty.
+pub fn missing_grants(
+    tenant: &TenantState,
+    principal: &Principal,
+    wanted: &BTreeSet<Grant>,
+) -> BTreeSet<Grant> {
+    if roles_of(tenant, principal).contains(&owner_role()) {
+        return BTreeSet::new();
+    }
+    let held = effective_permissions(tenant, principal);
+    wanted.difference(&held).cloned().collect()
+}
+
+/// A grant as a sentence fragment: `capability <name>` or `<object>:<verb>`.
+fn describe_grant(grant: &Grant) -> String {
+    match grant {
+        Grant::Capability(name) => format!("capability {name}"),
+        Grant::Object(object, verb) => {
+            let verb = format!("{verb:?}").to_lowercase();
+            format!("{object}:{verb}")
+        }
+    }
+}
+
+/// Whether a policy resource `held` reaches `wanted`: the same resource, or `AnyObject` over an
+/// object type or over `AnyObject`.
+fn resource_covers(held: &Resource, wanted: &Resource) -> bool {
+    match (held, wanted) {
+        (Resource::AnyObject, Resource::Object(_) | Resource::AnyObject) => true,
+        (a, b) => a == b,
+    }
+}
+
+/// Whether `principal` holds the power one policy of a role confers: `action` on `resource` under
+/// `condition`. The owner holds every power. Otherwise the principal holds it through a role
+/// permission on the object type, or through a policy of one of its roles that names the action,
+/// reaches the resource and is either unconditional or carries the very same condition (two
+/// different conditions cannot be compared, so the wider one is not assumed to include the other).
+fn holds_policy_power(
+    tenant: &TenantState,
+    principal: &Principal,
+    action: Action,
+    resource: &Resource,
+    condition: &Option<crate::types::Expr>,
+) -> bool {
+    let roles = roles_of(tenant, principal);
+    if roles.contains(&owner_role()) {
+        return true;
+    }
+    if let (Resource::Object(object), Some(verb)) = (resource, ObjectAction::of(action)) {
+        if effective_permissions(tenant, principal).contains(&Grant::Object(object.clone(), verb)) {
+            return true;
+        }
+    }
+    tenant.schema.policies.values().any(|policy| {
+        roles.contains(&policy.role)
+            && policy.actions.contains(&action)
+            && resource_covers(&policy.resource, resource)
+            && (policy.condition.is_none() || policy.condition == *condition)
+    })
+}
+
+/// Whether `principal` holds `action` on `resource` without a condition: the owner does, a role
+/// permission on the object type gives it, and so does a policy of one of its roles that names the
+/// action, reaches the resource and has no condition. What a tenant operation's steps use must be
+/// held this way by its definer (D-6547).
+pub fn holds_power(
+    tenant: &TenantState,
+    principal: &Principal,
+    action: Action,
+    resource: &Resource,
+) -> bool {
+    holds_policy_power(tenant, principal, action, resource, &None)
+}
+
+/// The powers the policies of `role` confer, as `(count, the ones `principal` does not hold)`,
+/// each described as a sentence fragment. `authorize` grants through `schema.policies` as well as
+/// through role permissions, so a role is as strong as both together (ADM-152).
+fn missing_policy_powers(
+    tenant: &TenantState,
+    principal: &Principal,
+    role: &RoleId,
+) -> (usize, Vec<String>) {
+    let mut total = 0;
+    let mut missing = Vec::new();
+    for policy in tenant.schema.policies.values().filter(|p| p.role == *role) {
+        for action in &policy.actions {
+            total += 1;
+            if !holds_policy_power(
+                tenant,
+                principal,
+                *action,
+                &policy.resource,
+                &policy.condition,
+            ) {
+                missing.push(format!(
+                    "policy {}: {action:?} on {:?}",
+                    policy.id, policy.resource
+                ));
+            }
+        }
+    }
+    (total, missing)
+}
+
+/// ADM-152: whether `principal` may confer `role`, which it may only when it holds **every**
+/// permission and capability the role grants (a strict superset, not an overlap), whether the role
+/// grants it through its permissions or through a policy of the schema. A role that grants
+/// nothing has nothing to over-grant, except the built-in `owner`, which only an owner confers.
+/// The check names the rule and the role; a refusal names what the principal lacks. Taking a role
+/// away asks the same (ADM-1080).
+pub fn may_confer(tenant: &TenantState, principal: &Principal, role: &RoleId) -> Check {
+    let rule = format!("permission:confer:{role}");
+    if *role == owner_role() {
+        return if roles_of(tenant, principal).contains(&owner_role()) {
+            Check::pass(rule, "an owner confers owner")
+        } else {
+            Check::fail(rule, "only an owner confers the owner role")
+        };
+    }
+    let grants = tenant.schema.grants_of(role);
+    let (policy_total, policy_missing) = missing_policy_powers(tenant, principal, role);
+    if grants.is_empty() && policy_total == 0 {
+        return Check::pass(rule, format!("role {role} grants no permission"));
+    }
+    let missing = missing_grants(tenant, principal, &grants);
+    if missing.is_empty() && policy_missing.is_empty() {
+        Check::pass(
+            rule,
+            format!("holds every permission that role {role} grants"),
+        )
+    } else {
+        let mut lacking: Vec<String> = missing.iter().map(describe_grant).collect();
+        lacking.extend(policy_missing.iter().cloned());
+        Check::fail(
+            rule,
+            format!(
+                "lacks {} of the {} permissions that role {role} grants: {}",
+                lacking.len(),
+                grants.len() + policy_total,
+                lacking.join(", ")
+            ),
+        )
+    }
+}
+
+/// The capabilities a role names among its permissions: its capability strings, and nothing of
+/// its object-type permissions.
+pub fn role_capabilities(schema: &TenantSchema, role: &RoleId) -> BTreeSet<String> {
+    schema
+        .grants_of(role)
+        .into_iter()
+        .filter_map(|grant| match grant {
+            Grant::Capability(name) => Some(name),
+            Grant::Object(..) => None,
+        })
+        .collect()
+}
+
+/// The tenant capabilities a principal holds (ADM-151): those named by a role assigned to it
+/// directly or by a role of a team it belongs to, and no other. This is what the generated
+/// authorizer's `AuthHoles::holding` fills a principal's tenant roles and teams from; a
+/// capability is never held because of a role's name, only because a role names it. The owner
+/// holds what its own role names, like any role.
+pub fn held_capabilities(tenant: &TenantState, principal: &Principal) -> BTreeSet<String> {
+    roles_of(tenant, principal)
+        .iter()
+        .flat_map(|role| role_capabilities(&tenant.schema, role))
+        .collect()
 }
 
 /// The records a policy condition may read.
@@ -131,10 +405,36 @@ pub fn authorize(
     subject: Subject<'_>,
     lookup: Option<Lookup<'_>>,
 ) -> (bool, Vec<Check>) {
+    let (allowed, checks, _) = authorize_needing(
+        tenant, schema, principal, now, action, resource, subject, lookup,
+    );
+    (allowed, checks)
+}
+
+/// [`authorize`], also naming the first record a condition that failed to evaluate could not
+/// follow a reference into because the snapshot does not cover it. A caller that is refused
+/// and gets a need answers `InsufficientState` for it, so a decision never rests on a record
+/// that was merely not loaded.
+pub(crate) fn authorize_needing(
+    tenant: &TenantState,
+    schema: &TenantSchema,
+    principal: &Principal,
+    now: Timestamp,
+    action: Action,
+    resource: &Resource,
+    subject: Subject<'_>,
+    lookup: Option<Lookup<'_>>,
+) -> (bool, Vec<Check>, Option<Need>) {
     let roles = roles_of(tenant, principal);
     let what = format!("{action:?} on {resource:?}");
     if roles.contains(&owner_role()) {
-        return (true, vec![Check::pass("policy:builtin_owner", what)]);
+        return (true, vec![Check::pass("policy:builtin_owner", what)], None);
+    }
+    if let (Resource::Object(object), Some(verb)) = (resource, ObjectAction::of(action)) {
+        let grant = Grant::Object(object.clone(), verb);
+        if effective_permissions(tenant, principal).contains(&grant) {
+            return (true, vec![Check::pass("permission:role", what)], None);
+        }
     }
     let no_params = BTreeMap::new();
     let env = Env {
@@ -148,6 +448,7 @@ pub fn authorize(
         lookup,
     };
     let mut checks = Vec::new();
+    let mut needed = None;
     for policy in schema.policies.values() {
         let applies = roles.contains(&policy.role)
             && policy.actions.contains(&action)
@@ -160,22 +461,29 @@ pub fn authorize(
         }
         let rule = format!("policy:{}", policy.id);
         match &policy.condition {
-            None => return (true, vec![Check::pass(rule, what)]),
+            None => return (true, vec![Check::pass(rule, what)], None),
             Some(condition) => match expr::eval(condition, &env) {
                 Ok(Value::Bool(true)) => {
                     return (
                         true,
                         vec![Check::pass(rule, format!("{what} where {condition}"))],
+                        None,
                     )
                 }
                 Ok(other) => checks.push(Check::fail(
                     rule,
                     format!(
-                        "{condition} is {}",
+                        "{} is {}",
+                        condition,
                         if other.is_null() { "null" } else { "false" }
                     ),
                 )),
-                Err(e) => checks.push(Check::fail(rule, format!("{condition}: {e}"))),
+                Err(e) => {
+                    if needed.is_none() {
+                        needed = expr::missing(condition, &env);
+                    }
+                    checks.push(Check::fail(rule, format!("{condition}: {e}")));
+                }
             },
         }
     }
@@ -185,7 +493,7 @@ pub fn authorize(
             format!("no policy grants {what}"),
         ));
     }
-    (false, checks)
+    (false, checks, needed)
 }
 
 /// Whether some policy could grant the action, ignoring conditions. For user interfaces that
@@ -197,7 +505,14 @@ pub fn may_attempt(
     resource: &Resource,
 ) -> bool {
     let roles = roles_of(tenant, principal);
+    let granted = match (resource, ObjectAction::of(action)) {
+        (Resource::Object(object), Some(verb)) => {
+            effective_permissions(tenant, principal).contains(&Grant::Object(object.clone(), verb))
+        }
+        _ => false,
+    };
     roles.contains(&owner_role())
+        || granted
         || tenant.schema.policies.values().any(|policy| {
             roles.contains(&policy.role)
                 && policy.actions.contains(&action)
@@ -264,6 +579,18 @@ pub fn validate_record(
     let mut out = Validation::default();
     let name = &object.id;
 
+    let record_bytes = serde_json::to_vec(candidate).map_or(usize::MAX, |bytes| bytes.len());
+    if record_bytes > limits::MAX_RECORD_BYTES {
+        out.fail(
+            ErrorKind::LimitExceeded,
+            format!("limit:record:{name}"),
+            format!(
+                "a record of {record_bytes} bytes is larger than the maximum of {}",
+                limits::MAX_RECORD_BYTES
+            ),
+        );
+    }
+
     for field in candidate.fields.keys() {
         if !object.fields.contains_key(field) {
             out.fail(
@@ -289,6 +616,21 @@ pub fn validate_record(
         }
         if field.required {
             out.pass(format!("required:{at}"), "present");
+        }
+        if let Some(problem) = limits::value_problem(value) {
+            out.fail(ErrorKind::LimitExceeded, format!("limit:{at}"), problem);
+            continue;
+        }
+        if field.unique && limits::encoded_len(value) > limits::MAX_UNIQUE_BYTES {
+            out.fail(
+                ErrorKind::LimitExceeded,
+                format!("limit:unique:{at}"),
+                format!(
+                    "a value in a unique field is at most {} bytes encoded",
+                    limits::MAX_UNIQUE_BYTES
+                ),
+            );
+            continue;
         }
         if !field.ty.admits(value) {
             out.fail(
@@ -338,6 +680,46 @@ pub fn validate_record(
         }
     }
 
+    // D-6558, CMS-1554, CMS-1555: a composite unique constraint holds over the records whose
+    // every field of it has a value; one lookup per constraint (CMS-1557).
+    for unique in crate::definitions::uniques(object) {
+        let wanted: Option<BTreeMap<FieldId, Value>> = unique
+            .fields
+            .iter()
+            .map(|field| {
+                let value = candidate.get(field);
+                (!value.is_null()).then(|| (field.clone(), value.clone()))
+            })
+            .collect();
+        let Some(wanted) = wanted else {
+            continue;
+        };
+        let rule = format!("unique:{name}.{}", unique.id);
+        let clash = lookup
+            .by_fields(name, &wanted)?
+            .into_iter()
+            .find(|other| other.id != candidate.id);
+        match clash {
+            Some(other) if crate::read::visible(lookup.tenant, principal, other, now) => out.fail(
+                ErrorKind::UniqueViolated,
+                rule,
+                format!(
+                    "{}: record {} already has these values",
+                    unique.message, other.id
+                ),
+            ),
+            Some(_) => out.fail(
+                ErrorKind::UniqueViolated,
+                rule,
+                format!(
+                    "{}: another record already has these values",
+                    unique.message
+                ),
+            ),
+            None => out.pass(rule, "no other record has these values"),
+        }
+    }
+
     for workflow in schema.workflows_of(name) {
         if let Value::Str(state) = candidate.get(&workflow.field) {
             let rule = format!("workflow_state:{}", workflow.id);
@@ -370,7 +752,13 @@ pub fn validate_record(
         };
         for constraint in object.constraints.values() {
             let rule = format!("constraint:{name}.{}", constraint.id);
-            match expr::eval(&constraint.expr, &env) {
+            let outcome = expr::eval(&constraint.expr, &env);
+            if outcome.is_err() {
+                if let Some(missing) = missing_error(&constraint.expr, &env) {
+                    return Err(missing);
+                }
+            }
+            match outcome {
                 Ok(Value::Bool(false)) => out.fail(
                     ErrorKind::ConstraintViolated,
                     rule,

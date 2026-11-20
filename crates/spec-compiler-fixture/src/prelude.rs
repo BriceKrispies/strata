@@ -160,6 +160,12 @@ pub enum Realisation {
     Generated,
     /// A hole: the code is written by hand against the contract's postconditions.
     Hand,
+    /// The code is generated from the contract's derivation: functions, and the
+    /// contracts it loads and commits through (module `derived`).
+    Derived,
+    /// No server implementation: a client lowers the contract onto the generic
+    /// contract its route names. It has no trait method and no route.
+    Facade,
 }
 
 /// What the specification states about a contract beyond its data.
@@ -175,7 +181,7 @@ pub struct ContractMeta {
     pub realisation: Realisation,
     /// The id of the implementing component.
     pub implemented_by: Option<&'static str>,
-    /// Who may call it, in the specification's words.
+    /// How a caller proves who it is: the scheme of its auth, such as `session`.
     pub auth: Option<&'static str>,
     /// Whether repeating a call has the effect of making it once.
     pub idempotent: Option<bool>,

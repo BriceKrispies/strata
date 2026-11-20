@@ -1,0 +1,5 @@
+{
+  // Refused: a product event that is a domain event (layer.platform-power).
+  "product": { "id": "badges", "name": "Badges", "imports": { "spec": "../../../../../../specifications/spec.jsonc", "entities": [] } },
+  "events": [ { "id": "badges__awarded", "name": "Badge awarded", "domain": true } ]
+}

@@ -41,6 +41,7 @@
  * @property {string} path
  * @property {Record<string, string>} params
  * @property {Record<string, any>} data
+ * @property {Record<string, string>} [next]  For each list section with more rows, the cursor of its next page.
  * @property {string[]} depends_on
  * @property {number} revision
  * @property {{ accent: string, paper: string }} theme
@@ -55,7 +56,7 @@
  * @typedef {{ at: number, rand: number }} Stamp
  *
  * @typedef {(
- *   | { type: 'init', path: string, search: string, bootstrap: any, systemDark: boolean, storedTheme: string | null }
+ *   | { type: 'init', path: string, search: string, bootstrap: any, systemDark: boolean, storedTheme: string | null, passkeys?: boolean, hash?: string }
  *   | { type: 'navigate', href: string, replace?: boolean }
  *   | { type: 'popstate', path: string, search: string }
  *   | { type: 'input', seq?: number, form: string, name: string, value: string | boolean }
@@ -67,6 +68,7 @@
  *   | { type: 'ws_message', message: any }
  *   | { type: 'ws_closed' }
  *   | { type: 'timer', name: string, token: number }
+ *   | { type: 'passkey_result', id: number, ok: boolean, credential?: any, cancelled?: boolean }
  * ) & Stamp} Message
  */
 
@@ -74,7 +76,7 @@
  * Effects out of the kernel. Descriptions only; the driver performs them.
  *
  * @typedef {(
- *   | { type: 'http', id: number, method: 'GET' | 'POST', path: string, body?: any, csrf?: string, write?: boolean, correlation: string }
+ *   | { type: 'http', id: number, method: 'GET' | 'POST', path: string, body?: any, csrf?: string, write?: boolean, idempotencyKey?: string, correlation: string }
  *   | { type: 'ws_connect', csrf?: string }
  *   | { type: 'ws_send', message: any }
  *   | { type: 'ws_close' }
@@ -82,6 +84,7 @@
  *   | { type: 'push_url', href: string, replace: boolean }
  *   | { type: 'store', key: string, value: string }
  *   | { type: 'scroll_top' }
+ *   | { type: 'passkey', op: 'create' | 'get', id: number, options: any }
  *   | { type: 'log', level: string, event: string, correlation: string, detail: string }
  * )} Effect
  */

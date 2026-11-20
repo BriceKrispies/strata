@@ -10,6 +10,7 @@ use crate::engine::{
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
+use strata_kernel::ext::*;
 use strata_kernel::rules::Lookup;
 use strata_kernel::{
     plan_migration, Check, Context, Coverage, ErrorKind, ExistingData, Intent, Principal,
@@ -267,10 +268,16 @@ fn diff_queries(
                 session: None,
                 now: at,
                 correlation: "compare".into(),
+                verified_address: None,
+                idempotency_key: None,
+                language: None,
+                hop: None,
             };
             let request = ReadRequest::Named {
                 query: query.id.clone(),
                 params: BTreeMap::new(),
+                page_size: None,
+                cursor: None,
             };
             let ids = |world: &World| -> Vec<u64> {
                 world
@@ -456,6 +463,10 @@ fn injection(scenario: &Scenario, proposal: &Proposal) -> Injection {
                 session: None,
                 now: Timestamp(at),
                 correlation: "sim-proposal".into(),
+                verified_address: None,
+                idempotency_key: None,
+                language: None,
+                hop: None,
             },
             intent: Intent::ChangeSchema {
                 changes: proposal.changes.clone(),
@@ -650,6 +661,10 @@ fn findings(projection: &Projection) -> Vec<Finding> {
 }
 
 /// Run the baseline and the branch and compare them.
+///
+/// The scenario's initial world is whatever the caller builds: the Lab builds it from the
+/// tenant's recorded history at the revision a request names (AGT-422).
+/// Implements: CT-164
 ///
 /// `progress` receives `(phase, done, total)` with phase 0 for the baseline, 1 for the branch
 /// and 2 for minimisation; returning `false` cancels.

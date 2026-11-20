@@ -1,0 +1,15 @@
+{
+  // Refused: an operation step that is not a variant of the platform union tenant-operation-step
+  // (layer.outside-catalogue): a tenant operation cannot send mail.
+  "product": { "id": "member-tiers", "name": "Member tiers", "imports": { "spec": "../../../../../../specifications/spec.jsonc", "entities": [] } },
+  "operations": [
+    {
+      "id": "member_tiers__promote",
+      "label": "Promote",
+      "inputs": [],
+      "invokers": { "signed-in": true, "roles": [] },
+      "conditions": [],
+      "steps": [ { "SendMail": { "template": "member_tiers__mail", "to": "principal" } } ]
+    }
+  ]
+}

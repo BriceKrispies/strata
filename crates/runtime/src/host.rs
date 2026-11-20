@@ -104,6 +104,11 @@ pub struct RetryPolicy {
     pub factor: u32,
     /// The delay never grows beyond this.
     pub max: Duration,
+    /// The most dispatches of one message, the first included. The dispatch that fails for the
+    /// `max_attempts`th time moves the message to the dead letters with the error of that
+    /// attempt ([`QueueStore::dead_letters`](crate::QueueStore::dead_letters)), and it is not
+    /// dispatched again. With the defaults the waits between the ten attempts add up to 511 s.
+    pub max_attempts: u32,
 }
 
 impl Default for RetryPolicy {
@@ -112,6 +117,7 @@ impl Default for RetryPolicy {
             first: Duration::from_secs(1),
             factor: 2,
             max: Duration::from_secs(300),
+            max_attempts: 10,
         }
     }
 }
@@ -146,6 +152,14 @@ pub enum HostError {
         machine: &'static str,
         /// The key (JSON text).
         key: String,
+    },
+    /// The event would create an instance beyond the machine's `instances.max`
+    /// ([`Machine::MAX_INSTANCES`]): it is refused and nothing was stored, scheduled or emitted.
+    InstanceLimit {
+        /// The machine.
+        machine: &'static str,
+        /// Its bound.
+        max: u64,
     },
     /// A key, record or event could not be encoded or decoded.
     Codec(String),
@@ -183,6 +197,10 @@ impl fmt::Display for HostError {
                     "{machine} has no record for key {key} and does not create records"
                 )
             }
+            HostError::InstanceLimit { machine, max } => write!(
+                f,
+                "{machine} already has {max} instances, its instances.max, and creates no more"
+            ),
             HostError::Codec(why) => write!(f, "encoding: {why}"),
             HostError::Unsupported { machine, isolation } => {
                 write!(
@@ -242,6 +260,36 @@ pub(crate) fn event_name<T: Serialize>(event: &T) -> String {
         .to_string()
 }
 
+/// Refuse to start a new instance of a creating machine that already has
+/// [`Machine::MAX_INSTANCES`] instances: the records of its collection that hold one of its
+/// instances (a record another machine of a shared collection holds is not counted). Called for
+/// an event to a key with no record, before the step, as Exegra fails the step whose route would
+/// create instance `max + 1` whether or not a transition fires.
+pub(crate) fn admit_new_instance<M: Machine>(tx: &mut dyn Tx) -> Result<(), HostError> {
+    let Some(max) = M::MAX_INSTANCES else {
+        return Ok(());
+    };
+    let mut count = 0u64;
+    for key in tx.keys(M::RECORD)? {
+        let Some(stored) = tx.load(M::RECORD, &key)? else {
+            continue;
+        };
+        let held = decode::<M::Record>(&stored.data)
+            .ok()
+            .is_some_and(|record| M::from_record(&record).is_ok());
+        if held {
+            count += 1;
+        }
+    }
+    if count >= max {
+        return Err(HostError::InstanceLimit {
+            machine: M::NAME,
+            max,
+        });
+    }
+    Ok(())
+}
+
 /// How many times a step is tried when a concurrent writer wins the commit.
 pub(crate) const CONFLICT_RETRIES: usize = 3;
 
@@ -287,6 +335,8 @@ pub struct DispatchReport {
     pub deferred: usize,
     /// `at-most-once` dispatches that failed and are gone.
     pub dropped: usize,
+    /// `at-least-once` messages whose last allowed attempt failed: moved to the dead letters.
+    pub dead: usize,
 }
 
 impl DispatchReport {
@@ -294,7 +344,41 @@ impl DispatchReport {
         self.delivered += other.delivered;
         self.deferred += other.deferred;
         self.dropped += other.dropped;
+        self.dead += other.dead;
     }
+}
+
+/// Move the outbox message `id` to the dead letters in one transaction, after its dispatch failed
+/// `attempts` times, the last with `last_error`. False when the message is gone (another host
+/// delivered, claimed or dead-lettered it).
+pub(crate) fn dead_letter_message<S: MachineStore>(
+    store: &S,
+    isolation: Isolation,
+    id: u64,
+    attempts: u32,
+    last_error: &str,
+    now: Time,
+) -> Result<bool, HostError> {
+    store.transact(isolation, |tx| -> Result<bool, HostError> {
+        let Some(message) = tx.take_message(id)? else {
+            return Ok(false);
+        };
+        let entry = QueueEntry {
+            seq: message.id,
+            due: message.not_before,
+            event: message.event.clone(),
+            target: None,
+            timer: None,
+            source: message.source.clone(),
+            source_key: message.key.clone(),
+        };
+        let why = format!(
+            "the message to {} was not delivered in {attempts} attempts; the last error was: {last_error}",
+            message.receiver
+        );
+        tx.dead_letter(&entry, &why, now)?;
+        Ok(true)
+    })
 }
 
 /// The result of [`Host::handle`].
@@ -368,7 +452,10 @@ fn transition<M: Machine>(
     let previous: Option<M::Record> = stored.as_ref().map(|s| decode(&s.data)).transpose()?;
     let (state, vars) = match &previous {
         Some(record) => M::from_record(record)?,
-        None if M::CREATES => M::initial(key),
+        None if M::CREATES => {
+            admit_new_instance::<M>(tx)?;
+            M::initial(key)
+        }
         None => {
             return Err(HostError::RecordMissing {
                 machine: M::NAME,
@@ -391,11 +478,12 @@ fn transition<M: Machine>(
     }
     let record = M::to_record(key, &outcome.state, &outcome.vars, previous.as_ref())?;
     M::validate_record(&record).map_err(HostError::Constraint)?;
-    let version = tx.save(
+    let version = tx.save_stamped(
         M::RECORD,
         &key_text,
         &encode(&record)?,
         stored.map(|s| s.version),
+        now,
     )?;
     for command in &outcome.timers {
         match command {
@@ -499,7 +587,12 @@ impl<M: Machine, S: MachineStore, D: Dispatcher<M::Emitted>> Host<M, S, D> {
         self
     }
 
-    /// The store this host writes to.
+    /// The tenant of this host's store, which is the tenant of every instance it holds.
+    pub fn tenant(&self) -> &crate::TenantId {
+        self.store.tenant()
+    }
+
+    /// The store the host runs on.
     pub fn store(&self) -> &Arc<S> {
         &self.store
     }
@@ -628,6 +721,38 @@ impl<M: Machine, S: MachineStore, D: Dispatcher<M::Emitted>> Host<M, S, D> {
                     ..DispatchReport::default()
                 }
             }
+            (Some(id), Err(error)) if attempts + 1 >= self.retry.max_attempts => {
+                let attempts = attempts + 1;
+                let why = error.0.clone();
+                self.telemetry.event(
+                    Level::Error,
+                    "outbox.dead_lettered",
+                    &[
+                        ("machine", M::NAME.into()),
+                        ("receiver", receiver.into()),
+                        ("id", id.into()),
+                        ("attempts", attempts.into()),
+                        ("error", why.as_str().into()),
+                    ],
+                );
+                let now = self.clock.now();
+                let moved = self
+                    .on_store(move |store| {
+                        dead_letter_message(store, M::ISOLATION, id, attempts, &why, now)
+                    })
+                    .await;
+                match moved {
+                    Ok(Ok(_)) => DispatchReport {
+                        dead: 1,
+                        ..DispatchReport::default()
+                    },
+                    // The message could not be moved: it stays, and the next drain tries again.
+                    _ => DispatchReport {
+                        deferred: 1,
+                        ..DispatchReport::default()
+                    },
+                }
+            }
             (Some(id), Err(error)) => {
                 let attempts = attempts + 1;
                 let next = self.clock.now().after(self.retry.delay(attempts));
@@ -693,6 +818,19 @@ impl<M: Machine, S: MachineStore, D: Dispatcher<M::Emitted>> Host<M, S, D> {
                         "outbox.unreadable",
                         &[("id", id.into()), ("error", why.as_str().into())],
                     );
+                    if attempts >= self.retry.max_attempts {
+                        let moved = self
+                            .on_store(move |store| {
+                                dead_letter_message(store, M::ISOLATION, id, attempts, &why, now)
+                            })
+                            .await;
+                        if matches!(moved, Ok(Ok(_))) {
+                            report.dead += 1;
+                            continue;
+                        }
+                        report.deferred += 1;
+                        continue;
+                    }
                     let _ = self
                         .on_store(move |store| store.defer(id, attempts, next, &why))
                         .await;

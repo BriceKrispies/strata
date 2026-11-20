@@ -4,6 +4,7 @@
 //! system, network, clock, randomness, environment, process, threads), interior mutability,
 //! global state or `unsafe`, or gains a dependency outside its allowance.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 const FORBIDDEN: &[(&str, &str)] = &[
@@ -168,21 +169,54 @@ fn violations(crate_dir: &str) -> Vec<String> {
     found
 }
 
-fn dependencies(crate_dir: &str) -> Vec<String> {
+/// Every dependency table of a crate's manifest, by its header: `dependencies`,
+/// `dev-dependencies`, `build-dependencies` and any target-specific one
+/// (`target.'cfg(unix)'.dependencies` and the like), each with the names it lists. A
+/// `[dependencies.name]` header lists `name` in `dependencies`.
+fn dependency_tables(crate_dir: &str) -> BTreeMap<String, Vec<String>> {
     let manifest = std::fs::read_to_string(root().join(crate_dir).join("Cargo.toml")).unwrap();
-    let section = manifest
-        .split("[dependencies]")
-        .nth(1)
-        .unwrap_or("")
-        .split("\n[")
-        .next()
-        .unwrap_or("");
-    section
-        .lines()
-        .filter_map(|line| line.split(['.', '=', ' ']).next())
-        .filter(|name| !name.is_empty())
-        .map(str::to_string)
-        .collect()
+    dependency_tables_of(&manifest)
+}
+
+fn dependency_tables_of(manifest: &str) -> BTreeMap<String, Vec<String>> {
+    let mut tables: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut current: Option<String> = None;
+    for line in manifest.lines().map(str::trim) {
+        if line.starts_with('#') || line.is_empty() {
+            continue;
+        }
+        if let Some(header) = line.strip_prefix('[') {
+            let header = header.trim_end_matches(']').trim_start_matches('[').trim();
+            current = None;
+            if header.ends_with("dependencies") {
+                tables.entry(header.to_string()).or_default();
+                current = Some(header.to_string());
+            } else if let Some((table, name)) = header.rsplit_once(".dependencies.") {
+                // `[dependencies.name]`, `[target.x.dependencies.name]`.
+                let table = format!("{table}.dependencies");
+                tables.entry(table).or_default().push(name.to_string());
+            } else if let Some((table, name)) = header
+                .split_once('.')
+                .filter(|(table, _)| table.ends_with("dependencies"))
+            {
+                tables
+                    .entry(table.to_string())
+                    .or_default()
+                    .push(name.to_string());
+            }
+        } else if let Some(table) = &current {
+            if let Some(name) = line.split(['.', '=', ' ']).next().filter(|n| !n.is_empty()) {
+                tables.get_mut(table).unwrap().push(name.to_string());
+            }
+        }
+    }
+    tables
+}
+
+fn dependencies(crate_dir: &str) -> Vec<String> {
+    dependency_tables(crate_dir)
+        .remove("dependencies")
+        .unwrap_or_default()
 }
 
 /// Verifies: KRN-012
@@ -208,12 +242,61 @@ fn the_substrate_names_no_ambient_capability() {
 }
 
 #[test]
-fn the_kernel_depends_only_on_serialisation_and_hashing() {
-    assert_eq!(dependencies("kernel"), ["serde", "serde_json", "sha2"]);
+fn the_kernel_depends_only_on_serialisation_hashing_and_its_generated_types() {
+    // strata-model-core holds the kernel's data types, generated from the specification; its
+    // own dependency test (crates/model-core/tests/dependencies.rs) keeps it pure.
+    assert_eq!(
+        dependencies("kernel"),
+        ["serde", "serde_json", "sha2", "strata-model-core"]
+    );
     assert_eq!(
         dependencies("substrate"),
         ["strata-kernel", "serde", "serde_json"]
     );
+}
+
+/// Build, dev and target-specific dependency tables are scanned as well: a build script or a
+/// platform-specific dependency is as much a dependency as an ordinary one. The only other table
+/// either crate has is its dev-dependencies.
+#[test]
+fn no_other_dependency_table_widens_the_allowance() {
+    let names = |list: &[&str]| list.iter().map(|n| n.to_string()).collect::<Vec<_>>();
+    let other = |dir: &str| {
+        let mut tables = dependency_tables(dir);
+        tables.remove("dependencies");
+        tables
+    };
+    assert_eq!(
+        other("kernel"),
+        BTreeMap::from([(
+            "dev-dependencies".to_string(),
+            names(&["proptest", "strata-kernel"])
+        )])
+    );
+    assert_eq!(
+        other("substrate"),
+        BTreeMap::from([("dev-dependencies".to_string(), names(&["strata-kernel"]))])
+    );
+}
+
+#[test]
+fn the_manifest_scan_sees_build_and_target_tables() {
+    let manifest = "[dependencies]
+serde.workspace = true
+
+[build-dependencies]
+cc = \"1\"
+
+[target.'cfg(unix)'.dependencies]
+libc = \"0.2\"
+
+[dependencies.rand]
+version = \"0.8\"
+";
+    let tables = dependency_tables_of(manifest);
+    assert_eq!(tables["dependencies"], ["serde", "rand"]);
+    assert_eq!(tables["build-dependencies"], ["cc"]);
+    assert_eq!(tables["target.'cfg(unix)'.dependencies"], ["libc"]);
 }
 
 #[test]
@@ -267,5 +350,40 @@ fn the_scan_would_catch_a_violation() {
     assert!(code_of("const HOME: &str = env!(\"HOME\");").contains("env!"));
     assert!(
         code_of("let s = std::collections::hash_map::RandomState::new();").contains("RandomState")
+    );
+}
+
+/// Every workspace member, the generated crates and the specification compiler's fixture crates
+/// included, inherits the workspace lints (`unsafe_code = "forbid"` among them). The generated
+/// crates' manifests are written by specc, so the line is emitted there.
+#[test]
+fn every_workspace_member_inherits_the_workspace_lints() {
+    let workspace = std::fs::read_to_string(root().join("..").join("Cargo.toml")).unwrap();
+    let members: Vec<&str> = workspace
+        .split("members = [")
+        .nth(1)
+        .and_then(|rest| rest.split(']').next())
+        .expect("the workspace lists its members")
+        .split('"')
+        .skip(1)
+        .step_by(2)
+        .collect();
+    assert!(members.len() > 20, "{members:?}");
+    let mut without = Vec::new();
+    for member in members {
+        let manifest =
+            std::fs::read_to_string(root().join("..").join(member).join("Cargo.toml")).unwrap();
+        let inherits = manifest
+            .split("[lints]")
+            .nth(1)
+            .and_then(|rest| rest.lines().find(|l| !l.trim().is_empty()))
+            .is_some_and(|line| line.replace(' ', "") == "workspace=true");
+        if !inherits {
+            without.push(member);
+        }
+    }
+    assert!(
+        without.is_empty(),
+        "these members do not inherit the workspace lints ([lints] workspace = true): {without:?}"
     );
 }

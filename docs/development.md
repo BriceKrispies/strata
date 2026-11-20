@@ -13,15 +13,23 @@ logins, and stops all three on Ctrl+C.
 
 | Flag | Effect |
 |---|---|
-| `--fresh` | Delete the development database first |
+| `--fresh` | Delete the development databases first (the control database and its tenant files) |
 | `--no-vite` | No Vite: the BFF serves `web/dist` (builds it if missing) |
 | `--no-build` | Use the binaries already in `target/debug` |
 | `--store memory` | Keep everything in memory |
-| `--db PATH` | Another database file |
+| `--db PATH` | Another control database; its tenant files go in `<stem>-tenants/` beside it |
+| `--tenant-files DIR` | Keep the tenant files in another directory |
 | `--backend-port`, `--bff-port`, `--vite-port` | Other ports |
 | `--quiet` | Only warnings and errors on screen; everything still goes to the log files |
 
 The service token is generated on each start and exists only in the two processes' environment.
+
+The SQLite store keeps a control database (`var/strata.db`: the tenant directory and the session
+directory, no tenant content) and one database file per tenant (`var/strata-tenants/<tenant>.db`)
+holding that tenant's records, schema history, events, journal, snapshots, sessions and logins.
+A database from before this layout, with every tenant in one file, is refused on start with a
+message: development data is reseeded, so delete `var/strata.db` (with its `-wal` and `-shm`
+files) or start with `--fresh`.
 
 ## Two kinds of live update
 
@@ -103,12 +111,48 @@ store's own integrity check.
 
 | Command | What runs |
 |---|---|
-| `cargo test --workspace` | 91 Rust tests: kernel behaviour and properties, substrate, storage conformance on both adapters, simulation, verification (with Lean when installed), backend and BFF as running services |
-| `npm run test:web` | 20 tests of the frontend kernel as plain functions |
+| `cargo test --workspace` | The Rust tests: kernel behaviour and properties, substrate, storage conformance on both adapters, simulation, verification (with Lean when installed), backend and BFF as running services |
+| `npm run test:web` | The tests of the frontend kernel and client (`web/test/kernel.test.js`, `web/test/client.test.js`) as plain functions |
+| `npm run test:scripts` | The tests of `scripts/generated-share.mjs` |
 | `npm run check` | `tsc --checkJs` over the JSDoc-typed JavaScript |
-| `npm run build && npm run e2e` | 26 Playwright tests on two private stacks (ports 4200/4201 and 4210/4211/5183) |
+| `npm run e2e` | The Playwright tests (`tests/e2e/site.spec.js`, `hmr.spec.js`) on two private stacks (ports 4200/4201 and 4210/4211/5183). The stacks build the backend, the BFF and the frontend first. The Lean test fails when Lean is missing unless `STRATA_E2E_SKIP_LEAN=1` |
+| `npm run e2e:generated`, `npm run e2e:steps` | The generated journeys, and the step fixtures against their own server |
 | `STRATA_BLESS=1 cargo test -p strata-verification` | Regenerate the Lean correspondence fixtures after an intended change |
-| `npm run spec` | The specification gate: `cargo test --workspace`, `lake build`, the web kernel tests and `npm run check`, then Exegra and Concordance against `specifications/spec.jsonc`. Not the e2e tests. `node scripts/spec-gate.mjs --no-test --allow-recorded` reuses the recorded results. See `specifications/README.md` |
+| `npm run spec` | The specification gate: `cargo test --workspace`, `lake build`, the web and script tests, the type check, `cargo fmt --check`, `cargo clippy -D warnings`, `cargo audit` and `npm audit`, then Exegra and Concordance against `specifications/spec.jsonc`. A tool that is missing is printed as NOT RUN and counted; `--require-all` fails on it. `npm run spec:browser` adds the three browser suites. `node scripts/spec-gate.mjs --no-test --allow-recorded` re-reads the recorded results. See `specifications/README.md` |
+
+### Tiers
+
+A routine check has to be quick enough to run before every change is stacked, so the Rust test binaries
+are in two tiers, listed with their measured times in `scripts/test-tiers.json`:
+
+- **Routine**: the unit tests of every package and the integration tests that run in seconds. The
+  budget is two minutes of test time, compilation excluded, on the development machine; the list holds
+  the budget and the measured total, and the gate fails when the total passes it.
+- **Full**: everything, including the binaries kept out of the routine tier. Each of those is in the
+  list with its measured time and the reason it is out (the whole-specification comparisons with Exegra,
+  the Lean correspondence, the running-service suites). The gate (`npm run spec`) runs the full tier.
+
+The gate also fails when a test binary exists that is in neither tier, or an entry names one that does
+not, so a new test file has to be given a tier in the same change. Run builds with
+`CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=2`: the machine has 16 GB.
+
+| Command | What runs |
+|---|---|
+| `npm run test:routine` | The routine tier: `cargo test --workspace` on the unit tests and the routine binaries (with the backend's `development` feature), then the web tests. Fails when its test time passes the budget |
+| `npm run test:changed` | Only what the change touches: the files `git diff --name-only` names against the base (`--base <ref>`, default `integration`, else `main`) select the packages that own them and every package that depends on those, and their test binaries from both tiers run; the web tests and type check run when `web/` changed, the script tests when `scripts/` changed, Exegra validation and the specc freshness checks when `specifications/` changed. The very slow binaries are skipped unless `--slow`; `--dry-run` prints the plan |
+| `npm run test:module -- <module>` | One module of the specification (a component id such as `kernel` or `mail-dispatcher`; `--list` names them): Exegra evaluates the module's claims in one process, the specc freshness checks run, the system-differential test runs the module's scenarios only (`STRATA_MODULE_SCENARIOS_FILE`), and the generated journeys of the uiScenarios that verify its claims run. Sets `CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=2`, fails when any step fails or is killed or the run passes 120 s (`--budget`), and records the step times and the machine's peak used memory in `var/module-runs/<module>.json`. `--dry-run` prints the plan |
+| `npm run test:tiers` | The tier check alone: every test binary is in a tier. Reads manifests, builds nothing |
+| `node scripts/test-tiers.mjs times <cargo test log> --write` | Records the measured time of every binary in a `cargo test --workspace` log in the tier list, and marks the very slow ones |
+
+The two whole-specification comparisons with Exegra (`crates/system-differential/tests/exegra.rs`
+and `crates/spec-compiler/tests/strata_differential.rs`) get their traces from one Exegra process per
+job (`scripts/exegra-traces.mjs`, `STRATA_TRACE_SHARDS` and `STRATA_DIFFERENTIAL_JOBS`, two by
+default) that loads the specification once; `exegra trace` once per scenario loaded it once per
+scenario.
+
+Dependencies are optimised in dev builds (`[profile.dev.package."*"]` in `Cargo.toml`) because the
+tests run Argon2id, signature checks and SQLite; crates no test calls are listed there at the default
+level to shorten a cold build.
 
 `node scripts/shots.mjs [base-url] [filter]` captures screenshots of a running stack into
 `var/shots/` for visual review; the browser tests also save theirs under
@@ -121,10 +165,35 @@ store's own integrity check.
 | `STRATA_SERVICE_TOKEN` | both | none; required, at least 24 characters |
 | `STRATA_DEV` | both | unset; `1` enables development logins and fixture endpoints |
 | `STRATA_BACKEND_ADDR` | backend | `127.0.0.1:4101` (must be loopback) |
-| `STRATA_STORE`, `STRATA_DB` | backend | `sqlite`, `var/strata.db` |
+| `STRATA_STORE`, `STRATA_DB` | backend | `sqlite`, `var/strata.db` (the control database) |
+| `STRATA_TENANT_FILES` | backend | `var/strata-tenants` (one `<tenant>.db` per tenant) |
 | `STRATA_TENANTS`, `STRATA_LEAN_DIR` | backend | `tenants`, `lean` |
 | `STRATA_SESSION_TTL_MS`, `STRATA_SESSION_IDLE_MS` | backend | 12 hours, 2 hours |
 | `STRATA_BFF_ADDR`, `STRATA_BACKEND_URL` | BFF | `127.0.0.1:4100`, `http://127.0.0.1:4101` |
 | `STRATA_SITES` | BFF | `127.0.0.1=fieldnotes,localhost=fieldnotes,tidewater.localhost=tidewater` |
 | `STRATA_ORIGINS` | BFF | every site host on the BFF port and on 5173 |
 | `STRATA_WEB_DIST` | BFF | `web/dist` |
+
+### Resource limits
+
+Every limit refuses with `429` (or closes the connection) and none of them is a quality knob: a
+deployment sets them from the memory and cores it has.
+
+| Variable | Service | Default |
+|---|---|---|
+| `STRATA_HEADER_TIMEOUT_SECS`, `STRATA_REQUEST_TIMEOUT_SECS` | both | 10, 30 (a request over its time is answered `408`; sockets are not subject to the second) |
+| `STRATA_MAX_CONNECTIONS` | both | 2048 |
+| `STRATA_WRITE_IDLE_TIMEOUT_SECS` | both | 30 (a connection whose client has not read for this long while there are bytes to send is dropped) |
+| `STRATA_HOSTS_MAX_AGE_SECS`, `STRATA_HOSTS_MISS_INTERVAL_SECS` | gateway | 60, 5 (how old the tenant hosts learned from the backend may be; the least time between two calls for them) |
+| `STRATA_TRUSTED_PROXIES` | BFF | none. Comma-separated proxy addresses; only their `X-Forwarded-For` is believed, the rightmost hop that is not itself a trusted proxy is the visitor, and from any other peer the header is ignored. Without it every visitor behind a reverse proxy shares the proxy's address |
+| `STRATA_BFF_SOCKETS_PER_SESSION`, `STRATA_BFF_SOCKETS_PER_SOURCE` | BFF | 8, 32 |
+| `STRATA_SOCKETS_PER_SESSION`, `STRATA_SOCKETS_PER_SOURCE` | backend | 8, 32 |
+| `STRATA_DIAG_PER_SOCKET`, `STRATA_DIAG_PER_SOURCE` | backend | 50 per socket, 200 per source per minute |
+| `STRATA_LOGINS_PER_SOURCE` | backend | 30 per source per minute |
+| `STRATA_ARGON2_MEMORY_MIB`, `STRATA_ARGON2_WAIT_MS` | backend | 64 (three 19 MiB verifications at once), 3000 |
+| `STRATA_LAB_WORKERS`, `STRATA_LAB_QUEUE`, `STRATA_LAB_RUNS_PER_TENANT` | backend | 2, 4, 2 |
+| `STRATA_VERIFY_INTERVAL_MS` | backend | 60000 (and one Lean build at a time on the whole backend) |
+
+The BFF states the visitor's source to the backend in `x-strata-source`, replacing anything a
+browser sent under that name. A backend call without it (an operator's tool) is not limited per
+source.

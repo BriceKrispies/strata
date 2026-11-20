@@ -1,0 +1,9 @@
+{
+  "product": {
+    "id": "dup",
+    "name": "Dup",
+    "imports": { "spec": "spec.jsonc", "entities": [] }
+  },
+  "roles": [],
+  "roles": []
+}

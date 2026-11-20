@@ -1,103 +1,85 @@
 //! Tenant structure as data: object types, fields, relationships, constraints, roles, policies,
-//! workflows, named queries and view definitions, under one schema version.
+//! workflows, named queries, view definitions, and the triggers, automations, tenant operations
+//! and composite unique constraints of [`crate::definitions`], under one schema version.
+//!
+//! The types are generated ([`crate::types`]); this module holds what the kernel does with them:
+//! the genesis schema, the consistency check, and the reading of a role's permissions and of the
+//! teams and invitations a schema holds.
 
 use crate::expr::{self, Expr, TypeEnv};
-use crate::ids::{
-    owner_role, public_role, ConstraintId, FieldId, ObjectTypeId, PolicyId, QueryId, RoleId,
-    SchemaVersion, ViewId, WorkflowId,
+use crate::limits;
+use crate::types::{
+    owner_role, public_role, FieldTypeExt, InvitationId, ObjectTypeId, RoleId, SchemaVersion,
+    TeamId,
 };
-use crate::value::{FieldType, Value};
-use serde::{Deserialize, Serialize};
+pub use crate::types::{
+    Action, ArgSource, ConstraintDef, FieldDef, FieldType, Grant, InvitationDef, ObjectAction,
+    ObjectTypeDef, OrderKey, Permission, PolicyDef, QueryDef, Resource, RoleDef, TeamDef,
+    TenantSchema, ViewDef, ViewSection, WorkflowDef, WorkflowTransition,
+};
 use std::collections::{BTreeMap, BTreeSet};
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct FieldDef {
-    pub id: FieldId,
-    pub label: String,
-    pub ty: FieldType,
-    /// A required field may not be `null`.
-    pub required: bool,
-    /// No two records of the object type may share a non-null value.
-    pub unique: bool,
-    /// Evaluated on create when the intent leaves the field out.
-    pub default: Option<Expr>,
+/// What the kernel asks of an [`ObjectAction`], one of the four actions on an object type that a
+/// role's permission can name.
+pub trait ObjectActionExt: Sized {
+    /// The policy action it is.
+    fn action(self) -> Action;
+    /// The object action of a policy action; `None` for `Manage`.
+    fn of(action: Action) -> Option<Self>;
 }
 
-/// A rule every record of the object type must satisfy. Violated only when it evaluates to
-/// `false`.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ConstraintDef {
-    pub id: ConstraintId,
-    pub expr: Expr,
-    pub message: String,
+impl ObjectActionExt for ObjectAction {
+    fn action(self) -> Action {
+        match self {
+            ObjectAction::Read => Action::Read,
+            ObjectAction::Create => Action::Create,
+            ObjectAction::Update => Action::Update,
+            ObjectAction::Delete => Action::Delete,
+        }
+    }
+
+    fn of(action: Action) -> Option<Self> {
+        match action {
+            Action::Read => Some(ObjectAction::Read),
+            Action::Create => Some(ObjectAction::Create),
+            Action::Update => Some(ObjectAction::Update),
+            Action::Delete => Some(ObjectAction::Delete),
+            Action::Manage => None,
+        }
+    }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ObjectTypeDef {
-    pub id: ObjectTypeId,
-    pub label: String,
-    pub fields: BTreeMap<FieldId, FieldDef>,
-    pub constraints: BTreeMap<ConstraintId, ConstraintDef>,
+/// What the kernel asks of a [`Permission`]: the indivisible grants it stands for.
+pub trait PermissionExt {
+    /// One [`Grant`] for a capability, or one per action on the object type.
+    fn grants(&self) -> Vec<Grant>;
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct RoleDef {
-    pub id: RoleId,
-    pub label: String,
+impl PermissionExt for Permission {
+    fn grants(&self) -> Vec<Grant> {
+        match self {
+            Permission::Capability(name) => vec![Grant::Capability(name.clone())],
+            Permission::Object { object, actions } => actions
+                .iter()
+                .map(|verb| Grant::Object(object.clone(), *verb))
+                .collect(),
+        }
+    }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub enum Action {
-    Read,
-    Create,
-    Update,
-    Delete,
-    /// Change the schema or the membership.
-    Manage,
+/// The form in which an address is compared.
+pub fn normalise_address(address: &str) -> String {
+    address.trim().to_ascii_lowercase()
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub enum Resource {
-    Object(ObjectTypeId),
-    AnyObject,
-    Schema,
-    Members,
+/// What the kernel asks of a [`WorkflowDef`].
+pub trait WorkflowDefExt {
+    /// Every state the workflow names: its initial states and both ends of its transitions.
+    fn states(&self) -> BTreeSet<&str>;
 }
 
-/// An allow rule. Nothing is permitted without one, except to the `owner` role.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PolicyDef {
-    pub id: PolicyId,
-    pub role: RoleId,
-    pub resource: Resource,
-    pub actions: BTreeSet<Action>,
-    /// When present, the rule applies only where this evaluates to `true`.
-    pub condition: Option<Expr>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct WorkflowTransition {
-    pub name: String,
-    pub from: String,
-    pub to: String,
-    pub guard: Option<Expr>,
-    /// Field assignments applied when this transition fires.
-    pub set: BTreeMap<FieldId, Expr>,
-}
-
-/// A state machine over one string field of an object type.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct WorkflowDef {
-    pub id: WorkflowId,
-    pub object: ObjectTypeId,
-    pub field: FieldId,
-    /// The states a new record may start in.
-    pub initial: BTreeSet<String>,
-    pub transitions: Vec<WorkflowTransition>,
-}
-
-impl WorkflowDef {
-    pub fn states(&self) -> BTreeSet<&str> {
+impl WorkflowDefExt for WorkflowDef {
+    fn states(&self) -> BTreeSet<&str> {
         self.initial
             .iter()
             .map(String::as_str)
@@ -110,74 +92,44 @@ impl WorkflowDef {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct OrderKey {
-    /// A field id or a system attribute such as `$created_at`.
-    pub field: String,
-    pub descending: bool,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct QueryDef {
-    pub id: QueryId,
-    pub object: ObjectTypeId,
-    pub filter: Option<Expr>,
-    pub params: BTreeSet<String>,
-    pub order: Vec<OrderKey>,
-    pub limit: Option<u32>,
-}
-
-/// Where a view section's query argument comes from.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ArgSource {
-    /// A named segment of the view's route, such as `slug` in `/posts/:slug`.
-    Route(String),
-    /// A named request parameter, such as a search term.
-    Request(String),
-    Const(Value),
-    /// An attribute of the single row of another section of the same view.
-    Section {
-        section: String,
-        attribute: String,
-    },
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ViewSection {
-    pub query: QueryId,
-    pub args: BTreeMap<String, ArgSource>,
-    /// Reference fields whose targets are delivered alongside the rows.
-    pub include: Vec<FieldId>,
-    /// String fields holding constrained Markdown, delivered as structured blocks.
-    pub markdown: Vec<FieldId>,
-    /// The section yields at most one row.
-    pub single: bool,
-}
-
-/// A named bundle of queries that together make one page of data.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ViewDef {
-    pub id: ViewId,
-    /// An address pattern such as `/posts/:slug`. Opaque to the kernel apart from uniqueness.
-    pub route: String,
-    pub title: String,
-    pub sections: BTreeMap<String, ViewSection>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TenantSchema {
-    pub version: SchemaVersion,
-    pub objects: BTreeMap<ObjectTypeId, ObjectTypeDef>,
-    pub roles: BTreeMap<RoleId, RoleDef>,
-    pub policies: BTreeMap<PolicyId, PolicyDef>,
-    pub workflows: BTreeMap<WorkflowId, WorkflowDef>,
-    pub queries: BTreeMap<QueryId, QueryDef>,
-    pub views: BTreeMap<ViewId, ViewDef>,
-}
-
-impl TenantSchema {
+/// What the kernel asks of a [`TenantSchema`].
+pub trait TenantSchemaExt {
     /// The schema of a freshly created tenant: the two built-in roles and nothing else.
-    pub fn genesis() -> Self {
+    fn genesis() -> Self;
+    /// The workflows over one object type.
+    fn workflows_of<'a>(
+        &'a self,
+        object: &'a ObjectTypeId,
+    ) -> impl Iterator<Item = &'a WorkflowDef>;
+    /// Fields anywhere in the schema that refer to `target`: `(object, field, is_list)`.
+    fn referrers(&self, target: &ObjectTypeId) -> Vec<(&ObjectTypeDef, &FieldDef, bool)>;
+    /// Check that the schema is internally consistent. Returns every problem found, in a
+    /// deterministic order.
+    fn problems(&self) -> Vec<String>;
+    /// Every grant of a role. A role without permissions grants none.
+    fn grants_of(&self, role: &RoleId) -> BTreeSet<Grant>;
+    /// Replace the permissions a role grants; none removes the role's entry. A schema whose
+    /// roles grant nothing holds no table of permissions at all, as the genesis schema does.
+    fn set_role_permissions(&mut self, role: &RoleId, permissions: Vec<Permission>);
+    /// One team, by its id.
+    fn team(&self, id: &TeamId) -> Option<&TeamDef>;
+    /// Every team, in id order.
+    fn all_teams(&self) -> impl Iterator<Item = &TeamDef>;
+    /// Define or replace a team. A team's membership changes through its own intents, not
+    /// through `ChangeSchema`, and does not raise the schema version.
+    fn put_team(&mut self, team: TeamDef);
+    /// One invitation, by its id.
+    fn invitation(&self, id: &InvitationId) -> Option<&InvitationDef>;
+    /// The invitation, to change it.
+    fn invitation_mut(&mut self, id: &InvitationId) -> Option<&mut InvitationDef>;
+    /// Every invitation, redeemed or not, in id order.
+    fn all_invitations(&self) -> impl Iterator<Item = &InvitationDef>;
+    /// Record an invitation.
+    fn put_invitation(&mut self, invitation: InvitationDef);
+}
+
+impl TenantSchemaExt for TenantSchema {
+    fn genesis() -> Self {
         let roles = [(public_role(), "Everyone"), (owner_role(), "Owner")]
             .into_iter()
             .map(|(id, label)| {
@@ -194,22 +146,90 @@ impl TenantSchema {
             version: SchemaVersion(1),
             objects: BTreeMap::new(),
             roles,
+            role_permissions: None,
+            teams: None,
+            invitations: None,
             policies: BTreeMap::new(),
             workflows: BTreeMap::new(),
             queries: BTreeMap::new(),
             views: BTreeMap::new(),
+            triggers: None,
+            automations: None,
+            operations: None,
+            settings: None,
+            capabilities: None,
+            ledger: None,
+            mail_templates: None,
+            notice_templates: None,
+            tokens: None,
+            products: None,
         }
     }
 
-    pub fn workflows_of<'a>(
+    fn grants_of(&self, role: &RoleId) -> BTreeSet<Grant> {
+        self.role_permissions
+            .as_ref()
+            .and_then(|table| table.get(role))
+            .into_iter()
+            .flatten()
+            .flat_map(PermissionExt::grants)
+            .collect()
+    }
+
+    fn set_role_permissions(&mut self, role: &RoleId, permissions: Vec<Permission>) {
+        let mut table = self.role_permissions.take().unwrap_or_default();
+        if permissions.is_empty() {
+            table.remove(role);
+        } else {
+            table.insert(role.clone(), permissions);
+        }
+        self.role_permissions = (!table.is_empty()).then_some(table);
+    }
+
+    fn team(&self, id: &TeamId) -> Option<&TeamDef> {
+        self.teams.as_ref().and_then(|teams| teams.get(id))
+    }
+
+    fn all_teams(&self) -> impl Iterator<Item = &TeamDef> {
+        self.teams.iter().flat_map(BTreeMap::values)
+    }
+
+    fn put_team(&mut self, team: TeamDef) {
+        self.teams
+            .get_or_insert_with(BTreeMap::new)
+            .insert(team.id.clone(), team);
+    }
+
+    fn invitation(&self, id: &InvitationId) -> Option<&InvitationDef> {
+        self.invitations
+            .as_ref()
+            .and_then(|invitations| invitations.get(id))
+    }
+
+    fn invitation_mut(&mut self, id: &InvitationId) -> Option<&mut InvitationDef> {
+        self.invitations
+            .as_mut()
+            .and_then(|invitations| invitations.get_mut(id))
+    }
+
+    fn all_invitations(&self) -> impl Iterator<Item = &InvitationDef> {
+        self.invitations.iter().flat_map(BTreeMap::values)
+    }
+
+    fn put_invitation(&mut self, invitation: InvitationDef) {
+        self.invitations
+            .get_or_insert_with(BTreeMap::new)
+            .insert(invitation.id.clone(), invitation);
+    }
+
+    fn workflows_of<'a>(
         &'a self,
         object: &'a ObjectTypeId,
     ) -> impl Iterator<Item = &'a WorkflowDef> {
         self.workflows.values().filter(move |w| &w.object == object)
     }
 
-    /// Fields anywhere in the schema that refer to `target`: `(object, field, is_list)`.
-    pub fn referrers(&self, target: &ObjectTypeId) -> Vec<(&ObjectTypeDef, &FieldDef, bool)> {
+    fn referrers(&self, target: &ObjectTypeId) -> Vec<(&ObjectTypeDef, &FieldDef, bool)> {
         let mut found = Vec::new();
         for object in self.objects.values() {
             for field in object.fields.values() {
@@ -223,15 +243,45 @@ impl TenantSchema {
         found
     }
 
-    /// Check that the schema is internally consistent. Returns every problem found, in a
-    /// deterministic order.
-    pub fn problems(&self) -> Vec<String> {
+    fn problems(&self) -> Vec<String> {
         let mut problems = Vec::new();
         let roles: BTreeSet<RoleId> = self.roles.keys().cloned().collect();
         let no_params = BTreeSet::new();
         let no_fields = BTreeMap::new();
 
+        for (what, count, max) in [
+            ("object types", self.objects.len(), limits::MAX_OBJECTS),
+            ("policies", self.policies.len(), limits::MAX_POLICIES),
+            ("queries", self.queries.len(), limits::MAX_QUERIES),
+        ] {
+            if count > max {
+                problems.push(format!(
+                    "limit: {count} {what} is more than the maximum of {max}"
+                ));
+            }
+        }
+        for query in self.queries.values() {
+            if query
+                .limit
+                .is_some_and(|n| n == 0 || n > limits::MAX_PAGE_SIZE)
+            {
+                problems.push(format!(
+                    "limit: query {} declares a limit outside 1 to {}",
+                    query.id,
+                    limits::MAX_PAGE_SIZE
+                ));
+            }
+        }
+
         for object in self.objects.values() {
+            if object.fields.len() > limits::MAX_FIELDS_PER_OBJECT {
+                problems.push(format!(
+                    "limit: {} has {} fields, more than the maximum of {}",
+                    object.id,
+                    object.fields.len(),
+                    limits::MAX_FIELDS_PER_OBJECT
+                ));
+            }
             let env = TypeEnv {
                 fields: &object.fields,
                 params: &no_params,
@@ -265,6 +315,15 @@ impl TenantSchema {
                         problems.push(format!("{at}: default: {e}"));
                     }
                 }
+                if let Some(read) = &field.read {
+                    match expr::check(read, &env) {
+                        Ok(expr::Shape::Bool | expr::Shape::Any) => {}
+                        Ok(shape) => {
+                            problems.push(format!("{at}: read is {shape:?}, not a truth value"))
+                        }
+                        Err(e) => problems.push(format!("{at}: read: {e}")),
+                    }
+                }
             }
             for constraint in object.constraints.values() {
                 match expr::check(&constraint.expr, &env) {
@@ -274,6 +333,67 @@ impl TenantSchema {
                         object.id, constraint.id
                     )),
                     Err(e) => problems.push(format!("{}.{}: {e}", object.id, constraint.id)),
+                }
+            }
+            // A type with a personal field says how long its records are kept (D-6584).
+            if object.retention.is_none() && object.fields.values().any(|f| f.personal.is_some()) {
+                problems.push(format!(
+                    "{}: a type with a personal field must declare retention (D-6584)",
+                    object.id
+                ));
+            }
+        }
+
+        for (role, permissions) in self.role_permissions.iter().flatten() {
+            let at = format!("role {role}");
+            if !roles.contains(role) {
+                problems.push(format!("{at}: permissions of an unknown role"));
+            }
+            if *role == owner_role() {
+                problems.push(format!("{at}: the owner role holds every permission"));
+            }
+            for permission in permissions {
+                match permission {
+                    Permission::Capability(name) if name.trim().is_empty() => {
+                        problems.push(format!("{at}: a capability needs a name"))
+                    }
+                    Permission::Capability(name) => {
+                        if let Some(problem) = crate::capabilities::grant_problem(self, role, name)
+                        {
+                            problems.push(format!("{at}: {problem}"));
+                        }
+                    }
+                    Permission::Object { object, actions } => {
+                        if !self.objects.contains_key(object) {
+                            problems
+                                .push(format!("{at}: permission on unknown object type {object}"));
+                        }
+                        if actions.is_empty() {
+                            problems.push(format!("{at}: permission on {object} names no action"));
+                        }
+                    }
+                }
+            }
+        }
+        for team in self.all_teams() {
+            let at = format!("team {}", team.id);
+            for role in &team.roles {
+                if !roles.contains(role) {
+                    problems.push(format!("{at}: unknown role {role}"));
+                }
+                if *role == public_role() {
+                    problems.push(format!("{at}: everyone already holds public"));
+                }
+            }
+        }
+        for invitation in self.all_invitations() {
+            let at = format!("invitation {}", invitation.id);
+            if invitation.address.is_empty() {
+                problems.push(format!("{at}: names no address"));
+            }
+            for role in &invitation.roles {
+                if !roles.contains(role) {
+                    problems.push(format!("{at}: unknown role {role}"));
                 }
             }
         }
@@ -294,8 +414,11 @@ impl TenantSchema {
                         None
                     }
                 },
+                // D-6550: a policy over the ledger reads the fields of an account and an entry.
+                Resource::Ledger { .. } => Some(crate::ledger_policy::fields()),
                 _ => None,
             };
+            crate::ledger_policy::policy_problems(self, policy, &at, &mut problems);
             let manage = matches!(policy.resource, Resource::Schema | Resource::Members);
             for action in &policy.actions {
                 if manage != (*action == Action::Manage) {
@@ -400,6 +523,12 @@ impl TenantSchema {
                     if !query.params.contains(arg) {
                         problems.push(format!("{at}.{name}: query has no parameter {arg}"));
                     }
+                    if let ArgSource::Setting(setting) = source {
+                        if let Some(problem) = crate::settings::view_argument_problem(self, setting)
+                        {
+                            problems.push(format!("{at}.{name}: {problem}"));
+                        }
+                    }
                     if let ArgSource::Section { section: other, .. } = source {
                         match view.sections.get(other) {
                             Some(dep) if !dep.single => {
@@ -442,6 +571,21 @@ impl TenantSchema {
                 }
             }
         }
+
+        for object in self.objects.values() {
+            crate::definitions::unique_problems(object, &mut problems);
+        }
+        crate::definitions::trigger_problems(self, &roles, &mut problems);
+        crate::definitions::automation_problems(self, &roles, &mut problems);
+        crate::definitions::operation_problems(self, &roles, &mut problems);
+        crate::aggregates::problems(self, &mut problems);
+        crate::settings::definition_problems(self, &mut problems);
+        crate::capabilities::declaration_problems(self, &mut problems);
+        crate::ledger::declaration_problems(self, &mut problems);
+        crate::object_meta::problems(self, &mut problems);
+        crate::search::problems(self, &mut problems);
+        crate::templates::problems(self, &mut problems);
+        crate::products::problems(self, &mut problems);
         problems
     }
 }
@@ -451,13 +595,21 @@ fn mentions_field(expr: &Expr) -> bool {
         Expr::Var(_, name) => !name.starts_with('$'),
         Expr::Through(..) => true,
         Expr::Lit(_) | Expr::Param(_) | Expr::Now | Expr::Principal | Expr::HasRole(_) => false,
-        Expr::Not(a) | Expr::IsNull(a) | Expr::Len(a) | Expr::Lower(a) | Expr::IsSlug(a) => {
-            mentions_field(a)
-        }
+        Expr::Not(a)
+        | Expr::IsNull(a)
+        | Expr::Len(a)
+        | Expr::Lower(a)
+        | Expr::IsSlug(a)
+        | Expr::Duration(_, a)
+        | Expr::Text(a) => mentions_field(a),
         Expr::And(items) | Expr::Or(items) => items.iter().any(mentions_field),
-        Expr::Cmp(_, a, b) | Expr::In(a, b) | Expr::Contains(a, b) | Expr::StartsWith(a, b) => {
-            mentions_field(a) || mentions_field(b)
-        }
+        Expr::Cmp(_, a, b)
+        | Expr::In(a, b)
+        | Expr::Contains(a, b)
+        | Expr::StartsWith(a, b)
+        | Expr::Arith(_, a, b)
+        | Expr::MsBetween(a, b)
+        | Expr::Concat(a, b) => mentions_field(a) || mentions_field(b),
         Expr::If(a, b, c) => mentions_field(a) || mentions_field(b) || mentions_field(c),
     }
 }

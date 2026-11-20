@@ -8,13 +8,65 @@ use quote::quote;
 /// The module name.
 pub const MODULE: &str = "prelude";
 
-/// The module's source.
-pub fn emit() -> TokenStream {
+/// The names [`representation`] declares, which a model crate with a pure crate beside it
+/// re-exports from there instead.
+const REPRESENTATION_NAMES: &[&str] = &[
+    "SAFE_INTEGER",
+    "safe_u64",
+    "safe_i64",
+    "safe_opt_u64",
+    "safe_opt_i64",
+    "Timestamp",
+    "DurationMs",
+];
+
+/// The module's source. With `core_crate` (the pure crate's Rust name), the representation types
+/// are re-exported from that crate's prelude, so both crates name the same types.
+pub fn emit_with(core_crate: Option<&str>) -> TokenStream {
+    let representation = match core_crate {
+        None => representation(),
+        Some(krate) => {
+            let krate = proc_macro2::Ident::new(krate, proc_macro2::Span::call_site());
+            let names: Vec<proc_macro2::Ident> = REPRESENTATION_NAMES
+                .iter()
+                .map(|n| proc_macro2::Ident::new(n, proc_macro2::Span::call_site()))
+                .collect();
+            quote! {
+                #[doc = " The representation types, from the pure crate."]
+                pub use #krate::prelude::{#(#names),*};
+            }
+        }
+    };
+    let descriptions = descriptions();
     quote! {
         #![doc = " Shared representation types and descriptions used by the other generated modules."]
 
         use std::fmt;
 
+        #representation
+
+        #descriptions
+    }
+}
+
+/// The module's source, declaring every type itself.
+pub fn emit() -> TokenStream {
+    emit_with(None)
+}
+
+/// The prelude of the pure crate: the representation types only.
+pub fn emit_core() -> TokenStream {
+    let representation = representation();
+    quote! {
+        #![doc = " Shared representation types used by the declared types."]
+
+        #representation
+    }
+}
+
+/// The representation types: safe-integer decoding, `Timestamp` and `DurationMs`.
+fn representation() -> TokenStream {
+    quote! {
         use serde::{Deserialize, Serialize};
 
         /// The largest integer a double holds exactly together with every smaller one, `2^53 - 1`:
@@ -71,7 +123,12 @@ pub fn emit() -> TokenStream {
         #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
         #[serde(transparent)]
         pub struct DurationMs(pub u64);
+    }
+}
 
+/// The descriptions later backends read: references, indexes, constraints, contract metadata.
+fn descriptions() -> TokenStream {
+    quote! {
         /// What deleting a referred record does to a record that refers to it.
         #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
         pub enum OnDelete {
@@ -171,6 +228,12 @@ pub fn emit() -> TokenStream {
             Generated,
             /// A hole: the code is written by hand against the contract's postconditions.
             Hand,
+            /// The code is generated from the contract's derivation: functions, and the
+            /// contracts it loads and commits through (module `derived`).
+            Derived,
+            /// No server implementation: a client lowers the contract onto the generic
+            /// contract its route names. It has no trait method and no route.
+            Facade,
         }
 
         /// What the specification states about a contract beyond its data.
@@ -186,7 +249,7 @@ pub fn emit() -> TokenStream {
             pub realisation: Realisation,
             /// The id of the implementing component.
             pub implemented_by: Option<&'static str>,
-            /// Who may call it, in the specification's words.
+            /// How a caller proves who it is: the scheme of its auth, such as `session`.
             pub auth: Option<&'static str>,
             /// Whether repeating a call has the effect of making it once.
             pub idempotent: Option<bool>,

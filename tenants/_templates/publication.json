@@ -1,7 +1,57 @@
 {
   "roles": [
-    { "id": "author", "label": "Author" },
-    { "id": "editor", "label": "Editor" }
+    {
+      "id": "author",
+      "label": "Author",
+      "permissions": [
+        "content-read",
+        "content-draft-read",
+        "content-write",
+        "media-sign",
+        "events-subscribe",
+        "catalogue-read",
+        "operation-invoke",
+        "change-propose",
+        "change-undo",
+        "records-read",
+        "change-project",
+        "assistant-converse"
+      ]
+    },
+    {
+      "id": "editor",
+      "label": "Editor",
+      "permissions": [
+        { "object": "post", "actions": ["read", "create", "update", "delete"] },
+        { "object": "category", "actions": ["create", "update", "delete"] },
+        { "object": "author", "actions": ["create", "update"] },
+        { "object": "publication", "actions": ["update"] },
+        "content-read",
+        "content-draft-read",
+        "content-write",
+        "media-sign",
+        "events-subscribe",
+        "catalogue-read",
+        "operation-invoke",
+        "change-propose",
+        "change-undo",
+        "records-read",
+        "change-project",
+        "assistant-converse",
+        "content-delete",
+        "content-restore",
+        "site-configure",
+        "change-approve",
+        "workflow-approve",
+        "jobs-read",
+        "mail-read"
+      ]
+    },
+    {
+      "id": "moderator",
+      "label": "Moderator",
+      "permissions": ["members-manage"]
+    }
   ],
   "objects": [
     {
@@ -32,7 +82,7 @@
         { "id": "slug", "label": "Slug", "type": "string", "required": true, "unique": true },
         { "id": "title", "label": "Role", "type": "string" },
         { "id": "bio", "label": "Biography", "type": "string" },
-        { "id": "principal", "label": "Login identity", "type": "string", "unique": true }
+        { "id": "principal", "label": "Login identity", "type": "string", "unique": true, "read": "has_role(editor) or has_role(owner) or record.principal == principal" }
       ],
       "constraints": [
         { "id": "slug_format", "check": "is_slug(new.slug)", "message": "A slug uses lower-case letters, digits and single hyphens" }
@@ -53,6 +103,7 @@
     {
       "id": "post",
       "label": "Post",
+      "searchable": ["title", "excerpt", "body"],
       "fields": [
         { "id": "title", "label": "Title", "type": "string", "required": true },
         { "id": "slug", "label": "Slug", "type": "string", "required": true, "unique": true },
@@ -99,6 +150,12 @@
     }
   ],
   "policies": [
+    {
+      "id": "moderators_manage_members",
+      "role": "moderator",
+      "on": "$members",
+      "actions": ["manage"]
+    },
     { "id": "public_reads_settings", "role": "public", "on": "publication", "actions": ["read"] },
     { "id": "public_reads_authors", "role": "public", "on": "author", "actions": ["read"] },
     { "id": "public_reads_categories", "role": "public", "on": "category", "actions": ["read"] },
@@ -113,7 +170,14 @@
   "queries": [
     { "id": "publication", "object": "publication", "limit": 1 },
     { "id": "featured_post", "object": "post", "where": "record.status == 'published' and record.featured == true", "order": ["-published_at"], "limit": 1 },
-    { "id": "recent_posts", "object": "post", "where": "record.status == 'published'", "order": ["-published_at"], "limit": 24 },
+    {
+      "id": "recent_posts", "object": "post", "where": "record.status == 'published'", "order": ["-published_at"], "limit": 24,
+      "declared_fields": ["category", "published_at"],
+      "aggregates": [
+        { "id": "posts_by_category", "kind": "count", "group_by": "category", "scan_bound": 10000 },
+        { "id": "latest_published", "kind": "top", "field": "published_at", "n": 5, "descending": true, "scan_bound": 10000 }
+      ]
+    },
     { "id": "post_by_slug", "object": "post", "where": "record.slug == param.slug", "params": ["slug"], "limit": 1 },
     { "id": "posts_in_category", "object": "post", "where": "record.status == 'published' and record.category == param.category", "params": ["category"], "order": ["-published_at"] },
     { "id": "posts_by_author", "object": "post", "where": "record.status == 'published' and record.author == param.author", "params": ["author"], "order": ["-published_at"] },

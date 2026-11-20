@@ -4,6 +4,8 @@
 
 import { h } from '../components/dom.js';
 import { date } from '../components/parts.js';
+import { ruleDisagreement } from '../kernel/rules.js';
+import { stepUpPrompt } from './desk.js';
 
 const TABS = [
   ['projection', 'Projection'],
@@ -22,6 +24,12 @@ const CLASS_LABEL = {
 
 function badge(cls) {
   return h('span', { class: `evidence evidence--${cls}` }, CLASS_LABEL[cls] ?? cls);
+}
+
+/** A note under a rule the page does not read as the server printed it; nothing when it does. */
+function ruleNote(rule) {
+  const reason = ruleDisagreement(rule);
+  return reason === null ? null : h('span', { class: 'lab-note', role: 'status' }, ` This page does not read the rule as the server printed it: ${reason}.`);
 }
 
 function arg(value) {
@@ -68,13 +76,17 @@ function checks(list) {
 function form(page) {
   const f = page.form;
   const running = page.run?.status === 'running' || page.run?.status === 'starting';
-  const radio = (name, val, label, hint) =>
-    h(
+  // The choice is named by its label alone; the hint describes it, so a screen reader reads the
+  // name first and the hint after it.
+  const radio = (name, val, label, hint) => {
+    const hintId = `lab-${name}-${val}-hint`;
+    return h(
       'label',
       { class: 'choice' },
-      h('input', { type: 'radio', name, value: val, checked: f[name] === val }),
-      h('span', null, h('strong', null, label), h('span', { class: 'choice__hint' }, hint)),
+      h('input', { type: 'radio', name, value: val, checked: f[name] === val, 'aria-describedby': hintId }),
+      h('span', null, h('strong', null, label), h('span', { class: 'choice__hint', id: hintId, 'aria-hidden': 'true' }, hint)),
     );
+  };
   return h(
     'form',
     { class: 'form lab-form', 'data-form': 'lab', novalidate: true },
@@ -171,6 +183,30 @@ function timeline(result) {
   );
 }
 
+/**
+ * The action that makes the change this projection showed. It is offered for a projection of the
+ * revision the page saw the site at; for an older one it says why it is not.
+ */
+function applyControl(page, r) {
+  if (r.change_outcome.result !== 'accepted') return null;
+  if (page.applied) {
+    return h('p', { class: 'lab-note', role: 'status' }, `Applied: the schema is at version ${page.applied.version}, the site at revision ${page.applied.revision}.`);
+  }
+  const current = page.overview?.tenant?.revision;
+  return h(
+    'div',
+    { class: 'lab-apply' },
+    page.applyError ? h('p', { class: 'field__error', id: 'lab-apply-error', role: 'alert' }, page.applyError) : null,
+    page.factors?.stepUp ? stepUpPrompt(page.factors) : null,
+    h('p', { class: 'toolbar' },
+      h('button', { class: 'button', type: 'button', disabled: !page.canApply, 'aria-describedby': page.applyError ? 'lab-apply-error' : null, 'data-action': 'lab.apply' }, page.applying ? 'Applying…' : 'Apply this change'),
+    ),
+    r.snapshot.revision === current
+      ? h('p', { class: 'lab-note' }, `Applying changes the live site, which is at revision ${current}, as this projection was taken. It needs the owner and a fresh sign-in.`)
+      : h('p', { class: 'lab-note', role: 'status' }, `This projection was taken at revision ${r.snapshot.revision} and the site is at revision ${current}. Project again to apply.`),
+  );
+}
+
 function result(page) {
   const r = page.result;
   if (!r) return null;
@@ -192,6 +228,7 @@ function result(page) {
         : `The kernel refuses the change: ${r.change_outcome.message}.`,
     ),
     !accepted ? checks(r.change_outcome.failed?.slice(0, 8)) : null,
+    applyControl(page, r),
 
     h('h3', null, 'Findings, by the kind of evidence behind them'),
     h(
@@ -343,7 +380,7 @@ function result(page) {
       'dl',
       { class: 'facts' },
       h('div', null, h('dt', null, 'Kernel'), h('dd', null, r.kernel_version)),
-      h('div', null, h('dt', null, 'Snapshot'), h('dd', null, `revision ${r.snapshot.revision}, schema version ${r.snapshot.schema_version}, `, short(r.snapshot.state_hash))),
+      h('div', null, h('dt', null, 'Snapshot'), h('dd', null, `revision ${r.revision ?? r.snapshot.revision}${r.current_revision !== undefined && r.current_revision !== (r.revision ?? r.snapshot.revision) ? ` (the site is now at revision ${r.current_revision})` : ''}, schema version ${r.snapshot.schema_version}, `, short(r.snapshot.state_hash))),
       h('div', null, h('dt', null, 'Schedule'), h('dd', null, `${r.request.source}, ${r.request.steps} operations, seed ${r.request.seed}, change applied before step ${r.request.apply_at + 1}`)),
       h('div', null, h('dt', null, 'Baseline trace'), h('dd', null, short(r.baseline.trace_hash), ` ${r.baseline.accepted} accepted, ${r.baseline.rejected} rejected`)),
       h('div', null, h('dt', null, 'Branch trace'), h('dd', null, short(r.branch.trace_hash), ` ${r.branch.accepted} accepted, ${r.branch.rejected} rejected`)),
@@ -365,6 +402,9 @@ function projection(page) {
       short(t.state_hash),
       '. A projection works on a copy; the live publication is never changed from this page.',
     ),
+    page.overview.runs_kept
+      ? h('p', { class: 'lab-note' }, `${page.overview.runs_kept.note}${page.overview.runs_kept.dropped_since_start ? ` ${page.overview.runs_kept.dropped_since_start} earlier ${page.overview.runs_kept.dropped_since_start === 1 ? 'run was' : 'runs were'} dropped since it started.` : ''}`)
+      : null,
     form(page),
     progress(page.run),
     page.run?.status === 'cancelled' ? h('p', { class: 'lab-note', role: 'status' }, 'The last projection was cancelled before it finished.') : null,
@@ -389,7 +429,7 @@ function metadata(page) {
           ),
         ),
         object.constraints.length
-          ? h('ul', { class: 'checks' }, object.constraints.map((c) => h('li', { key: c.id }, h('code', null, `${c.id}: ${c.rule}`), ` ${c.message}`)))
+          ? h('ul', { class: 'checks' }, object.constraints.map((c) => h('li', { key: c.id }, h('code', null, `${c.id}: ${c.rule}`), ` ${c.message}`, ruleNote(c.rule))))
           : null,
       ),
     ),
@@ -402,7 +442,7 @@ function metadata(page) {
           'div',
           { key: w.id },
           h('p', null, h('code', null, `${w.object}.${w.field}`), ` starts in ${w.initial.join(' or ')}.`),
-          h('ul', { class: 'checks' }, w.transitions.map((t) => h('li', { key: t.name }, h('code', null, t.name), ` ${t.from} to ${t.to}`, t.guard ? ` when ${t.guard}` : '', t.sets.length ? `, setting ${t.sets.join('; ')}` : ''))),
+          h('ul', { class: 'checks' }, w.transitions.map((t) => h('li', { key: t.name }, h('code', null, t.name), ` ${t.from} to ${t.to}`, t.guard ? ` when ${t.guard}` : '', ruleNote(t.guard), t.sets.length ? `, setting ${t.sets.join('; ')}` : ''))),
         ),
       ),
     ),
@@ -542,10 +582,10 @@ function diagnostics(page) {
       'dl',
       { class: 'facts' },
       h('div', null, h('dt', null, 'Kernel'), h('dd', null, b.kernel_version)),
-      h('div', null, h('dt', null, 'Store'), h('dd', null, `${b.store.capabilities.adapter}, ${b.store.capabilities.durable ? 'durable' : 'not durable'}, ${b.store.health.detail}`)),
+      h('div', null, h('dt', null, 'Store'), h('dd', null, `${b.store.capabilities.adapter}, ${b.store.capabilities.durable ? 'durable' : 'not durable'}, ${b.store.health.ok ? 'sound' : 'failing a check'}`)),
       h('div', null, h('dt', null, 'Isolation'), h('dd', null, b.store.capabilities.isolation)),
       h('div', null, h('dt', null, 'Outbox'), h('dd', null, `${b.store.health.outbox_pending} event(s) waiting to be published`)),
-      h('div', null, h('dt', null, 'In flight'), h('dd', null, `${b.pending_operations} backend operation(s), ${d.bff.pending_requests} BFF request(s)`)),
+      h('div', null, h('dt', null, 'In flight'), h('dd', null, `${d.bff.pending_requests} BFF request(s)`)),
       h('div', null, h('dt', null, 'Sockets'), h('dd', null, `${d.bff.open_sockets} browser connection(s) through the BFF`)),
       h('div', null, h('dt', null, 'Commit races retried'), h('dd', null, String(b.conflicts_retried))),
     ),

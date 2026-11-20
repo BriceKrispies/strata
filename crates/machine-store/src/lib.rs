@@ -14,7 +14,7 @@
 //!   state delta with its events and journal entry. When the work returns `Err` nothing is
 //!   committed. A transaction that wrote nothing commits nothing.
 //! - **A machine record** is a store record of the object type named after its collection
-//!   (`rec-content` becomes `rec_content`), with two fields: `key`, the instance key's JSON text,
+//!   (`rec-published-page` becomes `rec_published_page`), with two fields: `key`, the instance key's JSON text,
 //!   and `data`, the record's JSON text. It is found by a `ByField` need on `key`. The store
 //!   assigns the numeric record id; the runtime's key maps to it through the `key` field.
 //! - **The record version** is the store record's own `version`: 1 on the first save, one more
@@ -47,6 +47,7 @@
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
+use strata_kernel::ext::*;
 use strata_kernel::{
     canon, Context, DeltaOp, DomainEvent, EventBody, FieldId, Intent, Need, ObjectTypeId,
     Principal, PrincipalId, Record, RecordId, StateDelta, StateRevision, TenantId, TenantSchema,
@@ -222,6 +223,10 @@ fn context(tenant: &TenantId, now: Time) -> Context {
         session: None,
         now: Timestamp(now.0),
         correlation: "runtime".into(),
+        verified_address: None,
+        idempotency_key: None,
+        language: None,
+        hop: None,
     }
 }
 
@@ -322,6 +327,9 @@ impl<'a> ApiTx<'a> {
             delta,
             events,
             revoke_sessions: Vec::new(),
+            idempotency: None,
+            jobs: Vec::new(),
+            exceptions: Vec::new(),
         };
         match store.commit(&commit) {
             // Another writer created it first: the caller loads it again.
@@ -553,6 +561,7 @@ impl<'a> ApiTx<'a> {
                         EventBody::RecordUpdated {
                             before: before.clone(),
                             after: after.clone(),
+                            transitions: None,
                         },
                         Intent::UpdateRecord {
                             object: after.object.clone(),
@@ -621,6 +630,9 @@ impl<'a> ApiTx<'a> {
             delta,
             events,
             revoke_sessions: Vec::new(),
+            idempotency: None,
+            jobs: Vec::new(),
+            exceptions: Vec::new(),
         };
         self.store.commit(&commit).map_err(storage)?;
         Ok(())
@@ -671,6 +683,54 @@ impl Tx for ApiTx<'_> {
         );
         self.put(existing, after);
         Ok(version)
+    }
+
+    /// A record's save time is its `updated_at`, which the store's own clock stamps on every save:
+    /// the time given by the host is not kept.
+    fn stale_keys(&mut self, collection: &str, before: Time) -> Result<Vec<String>, StorageError> {
+        let object = collection_object(collection)?;
+        let mut keys = Vec::new();
+        for record in self.all(&object)? {
+            if record.updated_at.0 < before.0 {
+                keys.push(text(&record, "key")?);
+            }
+        }
+        Ok(keys)
+    }
+
+    fn delete_record(&mut self, collection: &str, key: &str) -> Result<bool, StorageError> {
+        let object = collection_object(collection)?;
+        match self.find(&object, "key", key)? {
+            Some(found) => {
+                self.remove(&found);
+                Ok(true)
+            }
+            None => Ok(false),
+        }
+    }
+
+    fn take_message(&mut self, id: u64) -> Result<Option<OutboxEntry>, StorageError> {
+        let Some(found) = self.get(&object_type(OUTBOX)?, RecordId(id))? else {
+            return Ok(None);
+        };
+        let entry = outbox_entry(&found)?;
+        self.remove(&found);
+        Ok(Some(entry))
+    }
+
+    fn purge_dead_letters(&mut self, before: Time) -> Result<u64, StorageError> {
+        let mut removed = 0;
+        for record in self.all(&object_type(DEAD_LETTERS)?)? {
+            if int(&record, "at")? < before.0 {
+                self.remove(&record);
+                removed += 1;
+            }
+        }
+        Ok(removed)
+    }
+
+    fn count_dead_letters(&mut self) -> Result<u64, StorageError> {
+        Ok(self.all(&object_type(DEAD_LETTERS)?)?.len() as u64)
     }
 
     fn enqueue(&mut self, message: &NewMessage) -> Result<u64, StorageError> {
@@ -808,6 +868,7 @@ impl Tx for ApiTx<'_> {
             fields,
         );
         self.put(None, record);
+        self.purge_dead_letters(strata_runtime::store::dead_letter_bound(at))?;
         Ok(())
     }
 }
@@ -816,6 +877,8 @@ impl Tx for ApiTx<'_> {
 pub struct StorageApiMachineStore {
     store: Arc<dyn Store>,
     tenant: TenantId,
+    /// The same tenant under the runtime's own name type.
+    owner: strata_runtime::TenantId,
     clock: Arc<dyn Clock>,
     gate: Mutex<()>,
 }
@@ -825,9 +888,14 @@ impl StorageApiMachineStore {
     /// is created on first use. `clock` stamps what the store records (creation and update
     /// times, event times); the host's own clock still decides what is due.
     pub fn new(store: Arc<dyn Store>, tenant: TenantId, clock: Arc<dyn Clock>) -> Self {
+        // The kernel's tenant id and the runtime's tenant name have one rule, so a kernel id is
+        // always a runtime name.
+        let owner = strata_runtime::TenantId::new(tenant.as_str())
+            .expect("a kernel tenant id is a runtime tenant name");
         StorageApiMachineStore {
             store,
             tenant,
+            owner,
             clock,
             gate: Mutex::new(()),
         }
@@ -881,6 +949,10 @@ impl std::fmt::Debug for StorageApiMachineStore {
 }
 
 impl RecordStore for StorageApiMachineStore {
+    fn tenant(&self) -> &strata_runtime::TenantId {
+        &self.owner
+    }
+
     /// Every commit is guarded by the tenant's revision and every read in a transaction must see
     /// that revision, so each transaction is serializable.
     fn supports(&self, _: Isolation) -> bool {

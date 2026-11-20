@@ -148,6 +148,34 @@ fn comparisons_use_strict_equality() {
 }
 
 #[test]
+fn equality_of_options_lists_and_bytes_is_structural_as_in_rust() {
+    // Rust's `==` compares these by value; `===` would compare two equal arrays by reference.
+    let e = scope(&[
+        ("xs", Ty::Option(Box::new(Ty::List(Box::new(Ty::U32))))),
+        ("ys", Ty::Option(Box::new(Ty::List(Box::new(Ty::U32))))),
+        ("m", Ty::Option(Box::new(Ty::Named("order".to_string())))),
+        ("k", Ty::Option(Box::new(Ty::Named("order".to_string())))),
+        ("raw", Ty::Bytes),
+        ("more", Ty::Bytes),
+        ("o", Ty::Option(Box::new(Ty::U32))),
+        ("o2", Ty::Option(Box::new(Ty::U32))),
+    ]);
+    for (src, a, b) in [
+        ("xs == ys", "xs", "ys"),
+        ("m == k", "m", "k"),
+        ("raw == more", "raw", "more"),
+    ] {
+        let out = js(src, &e);
+        assert!(out.ends_with(&format!(")({a}, {b})")), "{src}: {out}");
+        assert!(out.contains("hasOwnProperty"), "{src}: {out}");
+    }
+    assert!(js("xs != ys", &e).starts_with('!'));
+    // An option of a scalar and a comparison with null stay strict.
+    assert_eq!(js("o == o2", &e), "o === o2");
+    assert_eq!(js("xs == null", &e), "xs === null");
+}
+
+#[test]
 fn logic_short_circuits_and_implies_is_not_or() {
     let e = env();
     assert_eq!(js("p && q || p", &e), "p && q || p");

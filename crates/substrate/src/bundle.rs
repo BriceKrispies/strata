@@ -4,13 +4,19 @@
 //! members and seed records of a tenant, with expressions in the authoring syntax. `install`
 //! turns it into ordinary kernel intents and hands them to the caller to execute, so a seeded
 //! tenant has gone through exactly the same transition function as everything after it.
+//!
+//! The bundle of a product, the `tenant-bundle` that `specc bundle` writes from a product file, is
+//! read, installed, upgraded and removed by [`crate::product`]; its names are re-exported here.
 
 use crate::plain::{coerce_fields, parse_time};
-use crate::syntax::parse;
 use serde::Deserialize;
 use serde_json::Value as Json;
 use std::collections::{BTreeMap, BTreeSet};
+use strata_kernel::expr::parse;
 use strata_kernel::*;
+
+use crate::product::read_definitions;
+pub use crate::product::*;
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -21,7 +27,7 @@ pub struct Bundle {
     /// When the tenant is created. Later steps follow one millisecond apart.
     pub created_at: String,
     #[serde(default)]
-    pub roles: Vec<RoleDef>,
+    pub roles: Vec<RoleSpec>,
     #[serde(default)]
     pub objects: Vec<ObjectSpec>,
     #[serde(default)]
@@ -35,7 +41,56 @@ pub struct Bundle {
     #[serde(default)]
     pub members: Vec<MemberSpec>,
     #[serde(default)]
+    pub teams: Vec<TeamSpec>,
+    #[serde(default)]
     pub records: Vec<RecordSpec>,
+    /// The automations of the tenant (`automation-def`, D-6521), as JSON with expressions in the
+    /// authoring syntax, in the shape the product bundle gives them.
+    #[serde(default)]
+    pub automations: Vec<Json>,
+    /// The triggers of the tenant (`trigger-def`, D-6520).
+    #[serde(default)]
+    pub triggers: Vec<Json>,
+    /// The tenant operations of the tenant (`tenant-operation-def`, D-6546).
+    #[serde(default)]
+    pub operations: Vec<Json>,
+}
+
+/// A role: a name and the permissions it grants, each a capability name or actions on an object
+/// type.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RoleSpec {
+    pub id: RoleId,
+    pub label: String,
+    #[serde(default)]
+    pub permissions: Vec<PermissionSpec>,
+}
+
+/// One permission of a role, as a bundle writes it: a capability name as a bare string, or an
+/// object type with the actions on it (`{"object": "post", "actions": ["create"]}`). It becomes
+/// the kernel's [`Permission`].
+#[derive(Clone, Debug, Deserialize)]
+#[serde(untagged)]
+pub enum PermissionSpec {
+    Capability(String),
+    Object {
+        object: ObjectTypeId,
+        actions: BTreeSet<ObjectAction>,
+    },
+}
+
+impl PermissionSpec {
+    /// The kernel's permission.
+    pub fn permission(&self) -> Permission {
+        match self {
+            PermissionSpec::Capability(name) => Permission::Capability(name.clone()),
+            PermissionSpec::Object { object, actions } => Permission::Object {
+                object: object.clone(),
+                actions: actions.clone(),
+            },
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -46,6 +101,34 @@ pub struct ObjectSpec {
     pub fields: Vec<FieldSpec>,
     #[serde(default)]
     pub constraints: Vec<ConstraintSpec>,
+    /// Composite unique constraints: two to four fields whose values no two records share
+    /// (D-6558).
+    #[serde(default)]
+    pub unique: Vec<UniqueSpec>,
+    /// How long records are kept; required while a field is personal (D-6584).
+    #[serde(default)]
+    pub retention: Option<RetentionRule>,
+    /// The publication state and time of a content type (D-6592).
+    #[serde(default)]
+    pub publication: Option<PublicationDef>,
+    /// The field that holds the language of each record (D-6593).
+    #[serde(default)]
+    pub language_field: Option<FieldId>,
+    /// The field whose equal values group the translations of one record (D-6593).
+    #[serde(default)]
+    pub translation_group: Option<FieldId>,
+    /// The text fields the search index holds (D-7780); each is a field of the type.
+    #[serde(default)]
+    pub searchable: Vec<FieldId>,
+}
+
+/// A composite unique constraint of an object type, as a bundle writes it.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UniqueSpec {
+    pub id: ConstraintId,
+    pub fields: Vec<FieldId>,
+    pub message: String,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -62,9 +145,17 @@ pub struct FieldSpec {
     pub unique: bool,
     #[serde(default)]
     pub default: Option<String>,
+    /// A condition over `record`, the principal and its roles: who may read the field's value.
+    /// Left out, everyone who can read the record reads the field.
+    #[serde(default)]
+    pub read: Option<String>,
     /// For references: `restrict` (the default) or `set_null`.
     #[serde(default)]
     pub on_delete: Option<String>,
+    /// The personal data the field holds, whose subject it is and whether the index may hold it
+    /// (D-6584); a type with such a field declares its retention.
+    #[serde(default)]
+    pub personal: Option<PersonalDeclaration>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -102,7 +193,7 @@ pub struct TransitionSpec {
 pub struct PolicySpec {
     pub id: PolicyId,
     pub role: RoleId,
-    /// An object type id, `*` for every object type, `$schema` or `$members`.
+    /// An object type id, `*` for every object type, `$schema`, `$members`, `$ledger` or `$ledger:<unit>`.
     pub on: String,
     pub actions: Vec<String>,
     #[serde(default)]
@@ -123,6 +214,50 @@ pub struct QuerySpec {
     pub order: Vec<String>,
     #[serde(default)]
     pub limit: Option<u32>,
+    /// The aggregates of the query (AGG-001).
+    #[serde(default)]
+    pub aggregates: Vec<AggregateSpec>,
+    /// The fields that a request filter or an aggregate may name (D-5060).
+    #[serde(default)]
+    pub declared_fields: Vec<FieldId>,
+}
+
+/// An aggregate of a query: what it computes over which field, grouped by which, and how many
+/// records it may examine (`aggregate-def`, D-5062). The kernel refuses one that names a field the
+/// query does not declare when the bundle is installed.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AggregateSpec {
+    pub id: AggregateId,
+    /// `count`, `sum`, `minimum`, `maximum` or `top`.
+    pub kind: AggregateKind,
+    /// The field a sum, minimum, maximum or top list reads.
+    #[serde(default)]
+    pub field: Option<FieldId>,
+    #[serde(default)]
+    pub group_by: Option<FieldId>,
+    /// The length of a top list.
+    #[serde(default)]
+    pub n: Option<u32>,
+    /// Whether a top list puts the greatest value first.
+    #[serde(default)]
+    pub descending: bool,
+    pub scan_bound: u32,
+}
+
+impl AggregateSpec {
+    /// The kernel's definition.
+    pub fn def(&self) -> AggregateDef {
+        AggregateDef {
+            id: self.id.clone(),
+            kind: self.kind,
+            field: self.field.clone(),
+            group_by: self.group_by.clone(),
+            n: self.n,
+            descending: self.descending,
+            scan_bound: self.scan_bound,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -148,6 +283,9 @@ pub struct SectionSpec {
     pub markdown: Vec<FieldId>,
     #[serde(default)]
     pub single: bool,
+    /// The aggregate of the query that the section shows in place of its rows (AGG-041).
+    #[serde(default)]
+    pub aggregate: Option<AggregateId>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -155,6 +293,18 @@ pub struct SectionSpec {
 pub struct MemberSpec {
     pub principal: PrincipalId,
     pub roles: Vec<RoleId>,
+}
+
+/// A team: a named set of principals that holds roles together.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TeamSpec {
+    pub id: TeamId,
+    pub label: String,
+    #[serde(default)]
+    pub roles: Vec<RoleId>,
+    #[serde(default)]
+    pub members: Vec<PrincipalId>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -223,6 +373,10 @@ fn parse_arg(text: &str) -> Result<ArgSource, String> {
         Ok(ArgSource::Route(name.to_string()))
     } else if let Some(name) = text.strip_prefix("request:") {
         Ok(ArgSource::Request(name.to_string()))
+    } else if let Some(name) = text.strip_prefix("setting:") {
+        SettingId::new(name)
+            .map(ArgSource::Setting)
+            .map_err(|e| format!("setting:<id>, got {text:?}: {e}"))
     } else if let Some(path) = text.strip_prefix("section:") {
         let (section, attribute) = path
             .split_once('.')
@@ -242,6 +396,9 @@ fn parse_arg(text: &str) -> Result<ArgSource, String> {
 }
 
 impl Bundle {
+    /// Parse a bundle document; a document that is not a bundle is refused.
+    ///
+    /// Implements: CT-237
     pub fn from_json(text: &str) -> Result<Bundle, String> {
         serde_json::from_str(text).map_err(|e| format!("tenant bundle: {e}"))
     }
@@ -250,7 +407,20 @@ impl Bundle {
     pub fn schema_changes(&self) -> Result<Vec<SchemaChange>, String> {
         let mut changes = Vec::new();
         for role in &self.roles {
-            changes.push(SchemaChange::DefineRole(role.clone()));
+            changes.push(SchemaChange::DefineRole(RoleDef {
+                id: role.id.clone(),
+                label: role.label.clone(),
+            }));
+            if !role.permissions.is_empty() {
+                changes.push(SchemaChange::DefineRolePermissions {
+                    role: role.id.clone(),
+                    permissions: role
+                        .permissions
+                        .iter()
+                        .map(PermissionSpec::permission)
+                        .collect(),
+                });
+            }
         }
         for object in &self.objects {
             changes.push(SchemaChange::DefineObject {
@@ -275,6 +445,8 @@ impl Bundle {
                         required: field.required,
                         unique: field.unique,
                         default: optional(&field.default).map_err(|e| format!("{at}: {e}"))?,
+                        read: optional(&field.read).map_err(|e| format!("{at}: {e}"))?,
+                        personal: field.personal.clone(),
                     },
                 });
             }
@@ -287,6 +459,46 @@ impl Bundle {
                             .map_err(|e| format!("{}.{}: {e}", object.id, constraint.id))?,
                         message: constraint.message.clone(),
                     },
+                });
+            }
+            for unique in &object.unique {
+                changes.push(SchemaChange::DefineUnique {
+                    object: object.id.clone(),
+                    unique: UniqueDef {
+                        id: unique.id.clone(),
+                        fields: unique.fields.clone(),
+                        message: unique.message.clone(),
+                    },
+                });
+            }
+            if let Some(retention) = &object.retention {
+                changes.push(SchemaChange::SetRetention {
+                    object: object.id.clone(),
+                    retention: retention.clone(),
+                });
+            }
+            if let Some(publication) = &object.publication {
+                changes.push(SchemaChange::SetPublication {
+                    object: object.id.clone(),
+                    publication: publication.clone(),
+                });
+            }
+            if let Some(field) = &object.language_field {
+                changes.push(SchemaChange::SetLanguageField {
+                    object: object.id.clone(),
+                    field: field.clone(),
+                });
+            }
+            if let Some(field) = &object.translation_group {
+                changes.push(SchemaChange::SetTranslationGroup {
+                    object: object.id.clone(),
+                    field: field.clone(),
+                });
+            }
+            if !object.searchable.is_empty() {
+                changes.push(SchemaChange::SetSearchable {
+                    object: object.id.clone(),
+                    fields: object.searchable.clone(),
                 });
             }
         }
@@ -323,6 +535,14 @@ impl Bundle {
                 "*" => Resource::AnyObject,
                 "$schema" => Resource::Schema,
                 "$members" => Resource::Members,
+                // D-6550: `$ledger` is the ledger of every unit, `$ledger:<unit>` that of one.
+                "$ledger" => Resource::Ledger { unit: None },
+                unit if unit.starts_with("$ledger:") => Resource::Ledger {
+                    unit: Some(
+                        strata_kernel::LedgerUnit::new(&unit["$ledger:".len()..])
+                            .map_err(|e| format!("{at}: {e}"))?,
+                    ),
+                },
                 object => {
                     Resource::Object(ObjectTypeId::new(object).map_err(|e| format!("{at}: {e}"))?)
                 }
@@ -361,6 +581,10 @@ impl Bundle {
                     })
                     .collect(),
                 limit: query.limit,
+                aggregates: (!query.aggregates.is_empty())
+                    .then(|| query.aggregates.iter().map(AggregateSpec::def).collect()),
+                declared_fields: (!query.declared_fields.is_empty())
+                    .then(|| query.declared_fields.clone()),
             }));
         }
         for view in &self.views {
@@ -381,6 +605,7 @@ impl Bundle {
                         include: section.include.clone(),
                         markdown: section.markdown.clone(),
                         single: section.single,
+                        aggregate: section.aggregate.clone(),
                     },
                 );
             }
@@ -391,6 +616,20 @@ impl Bundle {
                 sections,
             }));
         }
+        // Automations are defined before the triggers that name them.
+        let mut sections = serde_json::Map::new();
+        sections.insert("automations".into(), Json::Array(self.automations.clone()));
+        sections.insert("triggers".into(), Json::Array(self.triggers.clone()));
+        sections.insert("operations".into(), Json::Array(self.operations.clone()));
+        let (triggers, automations, operations) =
+            read_definitions(&mut sections).map_err(|e| e.message)?;
+        changes.extend(
+            automations
+                .into_values()
+                .map(SchemaChange::DefineAutomation),
+        );
+        changes.extend(triggers.into_values().map(SchemaChange::DefineTrigger));
+        changes.extend(operations.into_values().map(SchemaChange::DefineOperation));
         Ok(changes)
     }
 }
@@ -432,6 +671,10 @@ pub fn install<E>(
             session: None,
             now: Timestamp(at),
             correlation: format!("install:{}:{steps}", bundle.id),
+            verified_address: None,
+            idempotency_key: None,
+            language: None,
+            hop: None,
         };
         execute(ctx, intent).map_err(|error| InstallError::Step { step, error })
     };
@@ -471,6 +714,43 @@ pub fn install<E>(
         }
     }
 
+    for team in &bundle.teams {
+        at += 1;
+        run(
+            owner.clone(),
+            at,
+            format!("define team {}", team.id),
+            Intent::DefineTeam {
+                team: team.id.clone(),
+                label: team.label.clone(),
+            },
+        )?;
+        for role in &team.roles {
+            at += 1;
+            run(
+                owner.clone(),
+                at,
+                format!("assign {role} to team {}", team.id),
+                Intent::AssignTeamRole {
+                    team: team.id.clone(),
+                    role: role.clone(),
+                },
+            )?;
+        }
+        for principal in &team.members {
+            at += 1;
+            run(
+                owner.clone(),
+                at,
+                format!("add {principal} to team {}", team.id),
+                Intent::AddTeamMember {
+                    team: team.id.clone(),
+                    principal: principal.clone(),
+                },
+            )?;
+        }
+    }
+
     // Field types come from the bundle's own object specs, parsed once more for coercion.
     let mut objects: BTreeMap<ObjectTypeId, ObjectTypeDef> = BTreeMap::new();
     for change in &changes {
@@ -483,6 +763,12 @@ pub fn install<E>(
                         label: label.clone(),
                         fields: BTreeMap::new(),
                         constraints: BTreeMap::new(),
+                        retention: None,
+                        publication: None,
+                        language_field: None,
+                        translation_group: None,
+                        unique: None,
+                        searchable: None,
                     },
                 );
             }

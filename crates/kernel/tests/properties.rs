@@ -237,6 +237,16 @@ fn partial(tenant: &Arc<TenantState>, wanted: &BTreeSet<Need>) -> State {
                 tenant.record(object, *id).into_iter().cloned().collect()
             }
             Need::AllOf(object) => tenant.records_of(object).cloned().collect(),
+            Need::PageOf {
+                object,
+                after,
+                limit,
+            } => tenant
+                .records_of(object)
+                .filter(|r| after.is_none_or(|a| r.id > a))
+                .take(*limit as usize)
+                .cloned()
+                .collect(),
             Need::ByField {
                 object,
                 field,
@@ -249,6 +259,53 @@ fn partial(tenant: &Arc<TenantState>, wanted: &BTreeSet<Need>) -> State {
                 })
                 .cloned()
                 .collect(),
+            Need::ByFields { object, fields } => tenant
+                .records_of(object)
+                .filter(|r| fields.iter().all(|(field, value)| r.get(field) == value))
+                .cloned()
+                .collect(),
+            // The clone keeps the whole ledger; the generator draws no posting.
+            Need::Ledger(_) => Vec::new(),
+            Need::IndexPage {
+                object,
+                field,
+                lower,
+                upper,
+                descending,
+                after,
+                limit,
+            } => strata_kernel::query_plan::index_page(
+                tenant.records_of(object),
+                field,
+                lower,
+                upper,
+                *descending,
+                after.as_ref(),
+                *limit,
+            )
+            .into_iter()
+            .cloned()
+            .collect(),
+            Need::PairPage {
+                object,
+                field,
+                value,
+                order,
+                descending,
+                after,
+                limit,
+            } => strata_kernel::query_plan::pair_page(
+                tenant.records_of(object),
+                field,
+                value,
+                order,
+                *descending,
+                after.as_ref(),
+                *limit,
+            )
+            .into_iter()
+            .cloned()
+            .collect(),
         };
         for record in matching {
             thin.records
@@ -292,9 +349,26 @@ fn some_policy_could_authorise(
         Intent::UpdateRecord { object, .. } => (Action::Update, Resource::Object(object.clone())),
         Intent::DeleteRecord { object, .. } => (Action::Delete, Resource::Object(object.clone())),
         Intent::ChangeSchema { .. } => (Action::Manage, Resource::Schema),
-        Intent::AssignRole { .. } | Intent::RevokeRole { .. } => {
-            (Action::Manage, Resource::Members)
-        }
+        Intent::AssignRole { .. }
+        | Intent::RevokeRole { .. }
+        | Intent::DefineTeam { .. }
+        | Intent::AssignTeamRole { .. }
+        | Intent::RevokeTeamRole { .. }
+        | Intent::AddTeamMember { .. }
+        | Intent::RemoveTeamMember { .. }
+        | Intent::CreateInvitation { .. }
+        | Intent::RevokeInvitation { .. }
+        | Intent::EraseSubject { .. }
+        | Intent::ExpireRecords { .. } => (Action::Manage, Resource::Members),
+        // Redeeming needs no policy: any signed-in person may try.
+        Intent::RedeemInvitation { .. } => return matches!(principal, Principal::User(_)),
+        // An invocation is authorised by the operation's invokers, not by a policy (D-6547).
+        Intent::InvokeOperation { .. } => return matches!(principal, Principal::User(_)),
+        // A posting is authorised by a capability, not a policy; the generator draws none.
+        Intent::PostLedger { .. } | Intent::ExpireLedger { .. } => return false,
+        // A setting write is authorised by the setting's write rule, not a policy; the generator
+        // draws none.
+        Intent::WriteSetting { .. } => return false,
     };
     let roles = roles_held(state, principal);
     roles.contains(&role("owner"))
@@ -323,7 +397,13 @@ fn may_read(roles: &BTreeSet<RoleId>, record: &Record) -> bool {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig { cases: 160, ..ProptestConfig::default() })]
+    // A fixed, recorded seed: a run is the same run every time, and a failure reproduces.
+    // Change `rng_seed` on purpose to explore other inputs.
+    #![proptest_config(ProptestConfig {
+        cases: 160,
+        rng_seed: proptest::test_runner::RngSeed::Fixed(20260101),
+        ..ProptestConfig::default()
+    })]
 
     /// The same state, intent and context always give the same result, whether the state is
     /// the world's, a copy of it rebuilt from its canonical form, or a partial snapshot, and
@@ -455,7 +535,23 @@ proptest! {
                         prop_assert_eq!(error.kind, ErrorKind::Unauthorized);
                     }
                 }
-                Err(_) => {}
+                Err(error) => {
+                    // Authorisable, yet refused: a policy condition or a validation can still say
+                    // no, but never the owner, and never as `Unauthorized` without a failed
+                    // policy check to show for it.
+                    if error.kind == ErrorKind::Unauthorized {
+                        if let Some(state) = &state {
+                            prop_assert!(
+                                !roles_held(state, &context.principal).contains(&role("owner")),
+                                "the owner was refused as unauthorised: {:?}", op
+                            );
+                        }
+                        prop_assert!(
+                            error.evidence.iter().any(|c| !c.passed && c.rule.starts_with("policy:")),
+                            "refused as unauthorised with no failed policy check: {:?}", error.evidence
+                        );
+                    }
+                }
             }
         }
     }
@@ -483,7 +579,7 @@ proptest! {
         } else {
             principals(WORLD_TENANTS[reader_tenant])[reader].clone()
         };
-        let by_rank = ReadRequest::Named { query: QueryId::new("notes_by_rank").unwrap(), params: BTreeMap::new() };
+        let by_rank = ReadRequest::Named { query: QueryId::new("notes_by_rank").unwrap(), params: BTreeMap::new(), page_size: None, cursor: None };
         let ids: Vec<RecordId> = (1..9).map(RecordId).collect();
         for tenant in WORLD_TENANTS {
             let context = ctx(tenant, principal.clone(), 99_000);
@@ -664,7 +760,7 @@ proptest! {
                         EventBody::RecordCreated { record } if record.object == object("note") => {
                             prop_assert_eq!(record.get(&status), &text("draft"));
                         }
-                        EventBody::RecordUpdated { before, after } if before.object == object("note") => {
+                        EventBody::RecordUpdated { before, after, .. } if before.object == object("note") => {
                             let (a, b) = (before.get(&status).as_str(), after.get(&status).as_str());
                             if a != b {
                                 prop_assert!(

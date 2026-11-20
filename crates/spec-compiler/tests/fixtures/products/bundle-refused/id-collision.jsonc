@@ -1,0 +1,19 @@
+{
+  // Refused: a mail template and a notice template with one id, which are one template-id of the
+  // bundle (bundle.id-collision, D-6582). The layer checks refuse a second declaration of an id first
+  // (layer.redefines-entity), so the bundle rule is the second line of defence, tested on the values
+  // (tests/bundle.rs).
+  "product": {
+    "id": "member-tiers",
+    "name": "Member tiers",
+    "version": "1.0.0",
+    "platform": { "min": "0.2" },
+    "imports": { "spec": "../../../../../../specifications/spec.jsonc", "entities": [] }
+  },
+  "mailTemplates": [
+    { "id": "member_tiers__welcome", "subject": "Welcome", "body": "[{\"type\":\"paragraph\",\"inlines\":[{\"type\":\"text\",\"text\":\"Welcome.\"}]}]" }
+  ],
+  "noticeTemplates": [
+    { "id": "member_tiers__welcome", "title": "Welcome", "body": "[{\"type\":\"paragraph\",\"inlines\":[{\"type\":\"text\",\"text\":\"Welcome.\"}]}]" }
+  ]
+}

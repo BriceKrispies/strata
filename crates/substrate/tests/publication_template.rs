@@ -22,6 +22,9 @@ fn bundle() -> Bundle {
             { "principal": "user:ann", "roles": ["author"] },
             { "principal": "user:bob", "roles": ["author"] }
         ],
+        "teams": [
+            { "id": "newsdesk", "label": "News desk", "roles": ["editor"], "members": ["user:cy"] }
+        ],
         "records": [
             { "object": "publication", "as": "user:admin", "at": "2026-01-02", "fields": { "key": "main", "name": "Gazette" } },
             { "object": "author", "key": "ann", "as": "user:ed", "at": "2026-01-02", "fields": { "name": "Ann", "slug": "ann", "principal": "user:ann" } },
@@ -58,6 +61,10 @@ fn ctx(principal: Principal) -> Context {
         session: None,
         now: Timestamp(1_800_000_000_000),
         correlation: "t".into(),
+        verified_address: None,
+        idempotency_key: None,
+        language: None,
+        hop: None,
     }
 }
 
@@ -252,6 +259,8 @@ fn readers_see_published_posts_and_authors_also_see_their_own_drafts() {
                 let request = ReadRequest::Named {
                     query: query.id.clone(),
                     params,
+                    page_size: None,
+                    cursor: None,
                 };
                 let Ok(result) = world.read(&request, &ctx(principal.clone())) else {
                     continue;
@@ -659,4 +668,214 @@ fn an_author_publishes_only_her_own_post_and_the_time_is_stamped_not_chosen() {
     assert!(published.step(&back, &ctx(user("ann"))).is_ok());
     // An editor publishes anyone's.
     assert!(world.step(&publish(&[]), &ctx(user("ed"))).is_ok());
+}
+
+/// The author's `principal` is the login identity. It is readable by the author it names, by
+/// editors and by owners, and left out of every read for anyone else: direct reads, every named
+/// query, and the included authors of a post. Notices carry no record contents at all.
+#[test]
+fn an_authors_login_identity_is_read_only_by_that_author_and_editors() {
+    let world = world();
+    let principal = FieldId::new("principal").unwrap();
+    let gazette = TenantId::new("gazette").unwrap();
+    let schema = &world.tenants[&gazette].schema;
+    let author = ObjectTypeId::new("author").unwrap();
+
+    let all_authors = ReadRequest::Named {
+        query: QueryId::new("authors").unwrap(),
+        params: BTreeMap::new(),
+        page_size: None,
+        cursor: None,
+    };
+    let principals_seen_by = |who: Principal| -> Vec<Option<String>> {
+        world
+            .read(&all_authors, &ctx(who))
+            .unwrap()
+            .rows
+            .iter()
+            .map(|row| {
+                row.fields
+                    .get(&principal)
+                    .and_then(|v| v.as_str())
+                    .map(String::from)
+            })
+            .collect()
+    };
+    for who in [Principal::Anonymous, user("nobody-at-all")] {
+        assert_eq!(principals_seen_by(who.clone()), [None, None], "{who:?}");
+    }
+    // Bob is an author: he reads his own and not Ann's. Rows are ordered by name: Ann, Bob.
+    assert_eq!(
+        principals_seen_by(user("bob")),
+        [None, Some("user:bob".to_string())]
+    );
+    assert_eq!(
+        principals_seen_by(user("ann")),
+        [Some("user:ann".to_string()), None]
+    );
+    assert_eq!(
+        principals_seen_by(user("ed")),
+        [Some("user:ann".to_string()), Some("user:bob".to_string())]
+    );
+    assert_eq!(
+        principals_seen_by(user("admin")),
+        [Some("user:ann".to_string()), Some("user:bob".to_string())]
+    );
+
+    // A direct read by id says the same.
+    let direct = ReadRequest::Records {
+        object: author.clone(),
+        ids: world.tenants[&gazette].records[&author]
+            .keys()
+            .copied()
+            .collect(),
+    };
+    let rows = world
+        .read(&direct, &ctx(Principal::Anonymous))
+        .unwrap()
+        .rows;
+    assert_eq!(rows.len(), 2);
+    assert!(rows.iter().all(|r| !r.fields.contains_key(&principal)));
+
+    // Every public view, every section: no login name in any row.
+    for path in ["/", "/authors", "/authors/ann", "/topics/craft", "/search"] {
+        let (view, route) = match_route(schema, path).expect("route matches");
+        let mut done = BTreeMap::new();
+        for name in section_order(view) {
+            let request = section_request(&view.sections[name], &route, &BTreeMap::new(), &done);
+            let rows = world
+                .read(&request, &ctx(Principal::Anonymous))
+                .unwrap()
+                .rows;
+            for row in &rows {
+                // Authorship (`created_by`) is trimmed by the backend; the fields are the kernel's.
+                let fields = format!("{:?}", row.fields);
+                assert!(!fields.contains("user:"), "{path}: {fields}");
+            }
+            if view.sections[name].single {
+                done.insert(name.clone(), rows.first().cloned());
+            }
+        }
+    }
+
+    // The policy that matches a post's author to the writer still holds: it reads the whole
+    // record on the server.
+    assert!(world
+        .step(&new_post("by-ann", ANN_AUTHOR, &[]), &ctx(user("ann")))
+        .is_ok());
+    assert!(world
+        .step(&new_post("as-ann", ANN_AUTHOR, &[]), &ctx(user("bob")))
+        .is_err());
+}
+
+/// Verifies: ADM-150
+///
+/// The template's roles state their permissions, as data, and what they state about object types
+/// is what the template's own policies already let the role do without a condition: no object
+/// permission without a policy and no unconditional policy without one, so that behaviour is
+/// unchanged. The capabilities a role names are the platform capabilities it confers.
+#[test]
+fn the_templates_roles_state_the_permissions_their_policies_grant() {
+    let world = world();
+    let tenant = &world.tenants[&TenantId::new("gazette").unwrap()];
+    let schema = &tenant.schema;
+    let bundle = bundle();
+    assert!(bundle.roles.iter().all(|r| !r.permissions.is_empty()));
+    for role in &bundle.roles {
+        let stated: BTreeSet<Grant> = schema
+            .grants_of(&role.id)
+            .into_iter()
+            .filter(|grant| matches!(grant, Grant::Object(..)))
+            .collect();
+        let by_policy: BTreeSet<Grant> = schema
+            .policies
+            .values()
+            .filter(|p| p.role == role.id && p.condition.is_none())
+            .flat_map(|p| match &p.resource {
+                Resource::Object(object) => p
+                    .actions
+                    .iter()
+                    .filter_map(|a| ObjectAction::of(*a))
+                    .map(|verb| Grant::Object(object.clone(), verb))
+                    .collect::<Vec<_>>(),
+                _ => Vec::new(),
+            })
+            .collect();
+        assert_eq!(stated, by_policy, "permissions of {}", role.id);
+    }
+    let object_grants = |who: &str| -> BTreeSet<Grant> {
+        strata_kernel::rules::effective_permissions(tenant, &user(who))
+            .into_iter()
+            .filter(|grant| matches!(grant, Grant::Object(..)))
+            .collect()
+    };
+    // An author creates a post only under her own byline (`authors_write_posts` has a
+    // condition), so her role states no permission on posts: one would let her create any.
+    assert!(object_grants("ann").is_empty());
+    let read_posts = Grant::Object(ObjectTypeId::new("post").unwrap(), ObjectAction::Read);
+    assert!(object_grants("ed").contains(&read_posts));
+}
+
+/// Verifies: ADM-150
+/// Verifies: ADM-151
+///
+/// The template's roles name the capabilities they confer, as data: an editor holds every
+/// capability an author does and more, the moderator holds only the one that lets it manage
+/// members, and a person holds a capability only through a role (or a team's role) that names it.
+#[test]
+fn the_templates_roles_name_their_capabilities() {
+    let world = world();
+    let tenant = &world.tenants[&TenantId::new("gazette").unwrap()];
+    let schema = &tenant.schema;
+    let capabilities =
+        |role: &str| strata_kernel::rules::role_capabilities(schema, &RoleId::new(role).unwrap());
+    let author = capabilities("author");
+    let editor = capabilities("editor");
+    assert!(author.contains("content-write") && !author.contains("content-delete"));
+    assert!(author.is_subset(&editor) && editor.len() > author.len());
+    assert_eq!(
+        capabilities("moderator"),
+        BTreeSet::from(["members-manage".to_string()])
+    );
+    let held = |who: &str| strata_kernel::rules::held_capabilities(tenant, &user(who));
+    assert_eq!(held("ann"), author);
+    assert_eq!(held("ed"), editor);
+    // A member of the news desk team holds the editor's capabilities through the team alone.
+    assert_eq!(held("cy"), editor);
+    assert!(held("dee").is_empty());
+}
+
+/// Verifies: ADM-151
+///
+/// A person in a team that holds the editor role does what an editor does, and a person in no
+/// team and with no role does not.
+#[test]
+fn a_member_of_a_team_holding_editor_edits_like_an_editor() {
+    let world = world();
+    let category = |slug: &str| Intent::CreateRecord {
+        object: ObjectTypeId::new("category").unwrap(),
+        fields: BTreeMap::from([
+            (FieldId::new("name").unwrap(), Value::Str(slug.into())),
+            (FieldId::new("slug").unwrap(), Value::Str(slug.into())),
+        ]),
+    };
+    world
+        .step(&category("by-team"), &ctx(user("cy")))
+        .unwrap_or_else(|e| {
+            panic!(
+                "a team member could not create a category: {}",
+                strata_kernel::ext::DomainErrorExt::describe(&e)
+            )
+        });
+    let refused = world
+        .step(&category("by-nobody"), &ctx(user("dee")))
+        .expect_err("a person with no role creates no category");
+    assert_eq!(refused.kind, ErrorKind::Unauthorized);
+    let tenant = &world.tenants[&TenantId::new("gazette").unwrap()];
+    assert!(strata_kernel::rules::roles_of(tenant, &user("cy"))
+        .contains(&RoleId::new("editor").unwrap()));
+    assert!(tenant
+        .members
+        .get(&PrincipalId::new("user:cy").unwrap())
+        .is_none());
 }

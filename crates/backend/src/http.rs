@@ -1,10 +1,14 @@
 //! The internal HTTP API: routes, the service-token gate and request logging.
 
 use crate::app::{ApiError, App, Shared, LOG};
-use crate::auth::{self, has_service_token, Identity};
-use crate::{lab, ops, seed, ws};
+use crate::auth::{self, has_service_token, Caller, Identity};
+use crate::service::{self, clients, keys, scim, tokens};
+use crate::signin::{
+    link, oidc, passkey, recover, recovery_codes, saml, second, stepup, totp, SignInOutcome,
+};
+use crate::{lab, ops, provision, ws};
 use axum::extract::ws::WebSocketUpgrade;
-use axum::extract::{Request, State};
+use axum::extract::{Extension, Path, Request, State};
 use axum::http::HeaderMap;
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
@@ -13,23 +17,26 @@ use axum::{Json, Router};
 use serde::Serialize;
 use serde_json::{json, Value as Json_};
 use std::time::Instant;
-use strata_kernel::owner_role;
-use strata_kernel::rules::roles_of;
 use strata_protocol::api::{
-    Empty, ErrorCode, IdRequest, LoginRequest, Mutation, SessionReply, ViewRequest,
-    HEADER_CORRELATION,
+    AggregateRunRequest, Empty, ErrorCode, IdRequest, MembersRequest, Mutation, SessionReply,
+    ViewRequest, HEADER_CORRELATION, HEADER_OPERATOR,
 };
-use strata_protocol::ws::{SessionState, MAX_FRAME};
+use strata_protocol::ws::MAX_FRAME;
 
 /// Run blocking work as the identified caller and wrap the result as JSON.
-async fn as_caller<T, F>(app: &Shared, headers: &HeaderMap, work: F) -> Result<Json<T>, ApiError>
+pub(crate) async fn as_caller<T, F>(
+    app: &Shared,
+    headers: &HeaderMap,
+    work: F,
+) -> Result<Json<T>, ApiError>
 where
     T: Serialize + Send + 'static,
     F: FnOnce(&App, &Identity) -> Result<T, ApiError> + Send + 'static,
 {
     let caller = auth::caller(headers)?;
     let correlation = caller.correlation.clone();
-    app.blocking(move |app| {
+    let tenant = caller.site.as_str().to_string();
+    app.blocking_for(&tenant, move |app| {
         let identity = auth::identify(app, &caller)?;
         work(app, &identity)
     })
@@ -38,13 +45,65 @@ where
     .map_err(|error| error.with_correlation(&correlation))
 }
 
+/// Run blocking work as the identified caller, with what the caller asserted as well.
+pub(crate) async fn as_caller_at<T, F>(
+    app: &Shared,
+    headers: &HeaderMap,
+    work: F,
+) -> Result<Json<T>, ApiError>
+where
+    T: Serialize + Send + 'static,
+    F: FnOnce(&App, &Caller, &Identity) -> Result<T, ApiError> + Send + 'static,
+{
+    as_caller_at_hashing(app, headers, false, work).await
+}
+
+/// [`as_caller_at`] for work that may verify a secret with Argon2 (`hashes`): the request is
+/// counted against the per-source sign-in rate and holds a place to hash for the work.
+async fn as_caller_at_hashing<T, F>(
+    app: &Shared,
+    headers: &HeaderMap,
+    hashes: bool,
+    work: F,
+) -> Result<Json<T>, ApiError>
+where
+    T: Serialize + Send + 'static,
+    F: FnOnce(&App, &Caller, &Identity) -> Result<T, ApiError> + Send + 'static,
+{
+    let caller = auth::caller(headers)?;
+    let correlation = caller.correlation.clone();
+    let place = if hashes {
+        Some(hashing_place(app, &caller).await?)
+    } else {
+        None
+    };
+    let tenant = caller.site.as_str().to_string();
+    app.blocking_for(&tenant, move |app| {
+        let _place = place;
+        let identity = auth::identify(app, &caller)?;
+        work(app, &caller, &identity)
+    })
+    .await?
+    .map(Json)
+    .map_err(|error| error.with_correlation(&correlation))
+}
+
+/// Implements: CT-050
 async fn health(State(app): State<Shared>) -> Result<Json<Json_>, ApiError> {
-    let health = app.blocking(|app| app.store.health()).await??;
+    // Liveness only: it opens no tenant file. The integrity check is in the platform
+    // diagnostics, behind the service credential.
+    app.blocking(|app| app.store.liveness()).await??;
+    // The publisher moves committed events to the sockets; if its task has stopped, nothing is
+    // published, so the backend is not well. Before it is started there is nothing to report.
+    let publisher = app.hub.outbox.get().map(|outbox| outbox.status());
+    let publisher_ok = publisher
+        .as_ref()
+        .is_none_or(|status| status["running"] == true);
     Ok(Json(json!({
-        "ok": health.ok,
+        "ok": publisher_ok,
         "service": "backend",
         "kernel_version": strata_kernel::KERNEL_VERSION,
-        "store": health,
+        "publisher": publisher,
     })))
 }
 
@@ -62,14 +121,350 @@ async fn session(
     .await
 }
 
-async fn login(
-    State(app): State<Shared>,
+/// The per-source sign-in rate, then a place to hash for the caller's tenant. The refusal carries
+/// the caller's correlation id.
+async fn hashing_place(
+    app: &Shared,
+    caller: &Caller,
+) -> Result<crate::limits::HashingPlace, ApiError> {
+    let refuse = |error: ApiError| error.with_correlation(&caller.correlation);
+    app.admission
+        .login_attempt(caller.visitor_source(), strata_protocol::log::now_ms())
+        .map_err(refuse)?;
+    app.admission
+        .hashing(caller.site.as_str())
+        .await
+        .map_err(refuse)
+}
+
+/// Sign in with the named method. The request is the method's own: the backend does not look
+/// inside it.
+async fn sign_in(
+    app: Shared,
     headers: HeaderMap,
-    Json(request): Json<LoginRequest>,
+    method: String,
+    request: Json_,
 ) -> Result<impl IntoResponse, ApiError> {
     let caller = auth::caller(&headers)?;
     let correlation = caller.correlation.clone();
-    app.blocking(move |app| auth::login(app, &caller, &request))
+    // The per-source limit comes first and costs nothing. Only the password method hashes, so
+    // only it takes a place to hash; the methods that call an identity provider hold no place
+    // while they wait on the network. The limits on failed attempts in `signin::sign_in` sit
+    // behind both.
+    let place = if method == "password" {
+        Some(hashing_place(&app, &caller).await?)
+    } else {
+        app.admission
+            .login_attempt(caller.visitor_source(), strata_protocol::log::now_ms())
+            .map_err(|error| error.with_correlation(&correlation))?;
+        None
+    };
+    let tenant = caller.site.as_str().to_string();
+    app.blocking_for(&tenant, move |app| {
+        let _place = place;
+        auth::login(app, &caller, &method, &request)
+    })
+    .await?
+    .map(Json)
+    .map_err(|error| error.with_correlation(&correlation))
+}
+
+async fn login(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Json(request): Json<Json_>,
+) -> Result<impl IntoResponse, ApiError> {
+    sign_in(app, headers, "password".into(), request).await
+}
+
+async fn login_with(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Path(method): Path<String>,
+    Json(request): Json<Json_>,
+) -> Result<impl IntoResponse, ApiError> {
+    sign_in(app, headers, method, request).await
+}
+
+/// A challenge for signing in with a passkey at the address the caller is at.
+async fn passkey_challenge(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+) -> Result<Json<Json_>, ApiError> {
+    let caller = auth::caller(&headers)?;
+    let correlation = caller.correlation.clone();
+    app.blocking(move |app| passkey::sign_in_challenge(app, &caller))
+        .await?
+        .map(Json)
+        .map_err(|error| error.with_correlation(&correlation))
+}
+
+/// Ask for an emailed sign-in link. The answer is the same whether or not the address has an
+/// account.
+async fn link_request(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<Json_>,
+) -> Result<Json<Json_>, ApiError> {
+    let caller = auth::caller(&headers)?;
+    let correlation = caller.correlation.clone();
+    app.blocking(move |app| link::request(app, &caller, &body))
+        .await?
+        .map(Json)
+        .map_err(|error| error.with_correlation(&correlation))
+}
+
+/// The providers the sign-in page offers at the address it is served at.
+async fn oidc_providers(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+) -> Result<Json<Json_>, ApiError> {
+    let caller = auth::caller(&headers)?;
+    let correlation = caller.correlation.clone();
+    app.blocking(move |app| oidc::providers(app, &caller))
+        .await?
+        .map(Json)
+        .map_err(|error| error.with_correlation(&correlation))
+}
+
+/// Begin a sign-in at an identity provider. Anyone may; to link a provider to the caller's own
+/// account the caller is signed in.
+async fn oidc_start(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<Json_>,
+) -> Result<Json<Json_>, ApiError> {
+    as_caller_at(&app, &headers, move |app, caller, identity| {
+        oidc::start(app, caller, identity, &body)
+    })
+    .await
+}
+
+/// The SAML providers the sign-in page offers at the address it is served at.
+async fn saml_providers(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+) -> Result<Json<Json_>, ApiError> {
+    let caller = auth::caller(&headers)?;
+    let correlation = caller.correlation.clone();
+    app.blocking(move |app| saml::providers(app, &caller))
+        .await?
+        .map(Json)
+        .map_err(|error| error.with_correlation(&correlation))
+}
+
+/// Begin a sign-in at a SAML provider. Anyone may; to link a provider to the caller's own account
+/// the caller is signed in.
+async fn saml_start(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<Json_>,
+) -> Result<Json<Json_>, ApiError> {
+    as_caller_at(&app, &headers, move |app, caller, identity| {
+        saml::start(app, caller, identity, &body)
+    })
+    .await
+}
+
+/// This service's SAML metadata for a provider. Anyone may ask.
+async fn saml_metadata(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<Json_>,
+) -> Result<Json<Json_>, ApiError> {
+    let caller = auth::caller(&headers)?;
+    let correlation = caller.correlation.clone();
+    app.blocking(move |app| saml::metadata(app, &caller, &body))
+        .await?
+        .map(Json)
+        .map_err(|error| error.with_correlation(&correlation))
+}
+
+async fn passkey_register_start(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+) -> Result<Json<Json_>, ApiError> {
+    as_caller_at(&app, &headers, |app, caller, identity| {
+        passkey::register_start(app, caller, identity)
+    })
+    .await
+}
+
+async fn passkey_register_finish(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Json(request): Json<Json_>,
+) -> Result<Json<Json_>, ApiError> {
+    as_caller_at(&app, &headers, move |app, caller, identity| {
+        passkey::register_finish(app, caller, identity, &request)
+    })
+    .await
+}
+
+/// The caller's own passkeys.
+async fn passkeys(State(app): State<Shared>, headers: HeaderMap) -> Result<Json<Json_>, ApiError> {
+    as_caller_at(&app, &headers, |app, caller, identity| {
+        passkey::list(app, caller, identity)
+    })
+    .await
+}
+
+async fn passkey_remove(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Json(request): Json<IdRequest>,
+) -> Result<Json<Json_>, ApiError> {
+    as_caller_at(&app, &headers, move |app, caller, identity| {
+        passkey::remove(app, caller, identity, &request.id)
+    })
+    .await
+}
+
+/// The caller's own live sessions.
+async fn sessions(State(app): State<Shared>, headers: HeaderMap) -> Result<Json<Json_>, ApiError> {
+    as_caller(&app, &headers, |app, identity| {
+        Ok(json!({ "sessions": auth::list_sessions(app, identity)? }))
+    })
+    .await
+}
+
+async fn session_revoke(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Json(request): Json<IdRequest>,
+) -> Result<Json<Json_>, ApiError> {
+    as_caller(&app, &headers, move |app, identity| {
+        auth::revoke_own_session(app, identity, &request.id)?;
+        Ok(json!({}))
+    })
+    .await
+}
+
+/// End every other session of the caller. A sensitive operation (IDN-019).
+async fn sessions_revoke_others(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+) -> Result<Json<Json_>, ApiError> {
+    as_caller_at(&app, &headers, |app, caller, identity| {
+        if identity.session.is_some() {
+            stepup::require_fresh(app, caller, identity)?;
+        }
+        Ok(json!({ "revoked": auth::revoke_other_sessions(app, identity)? }))
+    })
+    .await
+}
+
+/// Give the second factor of a waiting sign-in, and have the session.
+async fn second_factor(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Json(request): Json<Json_>,
+) -> Result<Json<SignInOutcome>, ApiError> {
+    let caller = auth::caller(&headers)?;
+    let correlation = caller.correlation.clone();
+    app.blocking(move |app| second::verify(app, &caller, &request))
+        .await?
+        .map(Json)
+        .map_err(|error| error.with_correlation(&correlation))
+}
+
+/// The caller's own factors: what is set up, for the desk.
+async fn factors(State(app): State<Shared>, headers: HeaderMap) -> Result<Json<Json_>, ApiError> {
+    as_caller_at(&app, &headers, |app, caller, identity| {
+        second::summary(app, caller, identity)
+    })
+    .await
+}
+
+async fn totp_start(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+) -> Result<Json<Json_>, ApiError> {
+    as_caller_at(&app, &headers, |app, caller, identity| {
+        totp::enrol_start(app, caller, identity)
+    })
+    .await
+}
+
+async fn totp_confirm(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Json(request): Json<Json_>,
+) -> Result<Json<Json_>, ApiError> {
+    as_caller_at(&app, &headers, move |app, caller, identity| {
+        totp::enrol_finish(app, caller, identity, &request)
+    })
+    .await
+}
+
+async fn totp_remove(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+) -> Result<Json<Json_>, ApiError> {
+    as_caller_at(&app, &headers, |app, caller, identity| {
+        totp::remove(app, caller, identity)
+    })
+    .await
+}
+
+async fn recovery_codes_new(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+) -> Result<Json<Json_>, ApiError> {
+    as_caller_at(&app, &headers, |app, caller, identity| {
+        recovery_codes::regenerate(app, caller, identity)
+    })
+    .await
+}
+
+/// Give a fresh factor to the session, before a sensitive operation.
+async fn step_up(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Json(request): Json<Json_>,
+) -> Result<Json<Json_>, ApiError> {
+    // A password factor is checked with Argon2.
+    let hashes = request.get("password").is_some();
+    as_caller_at_hashing(&app, &headers, hashes, move |app, caller, identity| {
+        stepup::confirm(app, caller, identity, &request)
+    })
+    .await
+}
+
+async fn recovery_request(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Json(request): Json<Json_>,
+) -> Result<Json<Json_>, ApiError> {
+    let caller = auth::caller(&headers)?;
+    let correlation = caller.correlation.clone();
+    app.blocking(move |app| recover::request(app, &caller, &request))
+        .await?
+        .map(Json)
+        .map_err(|error| error.with_correlation(&correlation))
+}
+
+async fn recovery_complete(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Json(request): Json<Json_>,
+) -> Result<Json<Json_>, ApiError> {
+    let caller = auth::caller(&headers)?;
+    let correlation = caller.correlation.clone();
+    app.blocking(move |app| recover::complete(app, &caller, &request))
+        .await?
+        .map(Json)
+        .map_err(|error| error.with_correlation(&correlation))
+}
+
+async fn recovery_cancel(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Json(request): Json<Json_>,
+) -> Result<Json<Json_>, ApiError> {
+    let caller = auth::caller(&headers)?;
+    let correlation = caller.correlation.clone();
+    app.blocking(move |app| recover::cancel(app, &caller, &request))
         .await?
         .map(Json)
         .map_err(|error| error.with_correlation(&correlation))
@@ -90,8 +485,56 @@ async fn view(
     headers: HeaderMap,
     Json(request): Json<ViewRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
+    // Published content needs no session (IDN-301): when sessions cannot be looked up, a reader
+    // is served as a reader with none, and what that reader may not see is refused with the
+    // outage named (IDN-300).
+    let caller = auth::caller(&headers)?;
+    let correlation = caller.correlation.clone();
+    app.blocking(move |app| {
+        let (identity, outage) = match auth::identify(app, &caller) {
+            Err(error) if auth::is_identity_outage(&error) => {
+                let anonymous = Caller {
+                    token: None,
+                    ..caller.clone()
+                };
+                (auth::identify(app, &anonymous)?, true)
+            }
+            other => (other?, false),
+        };
+        match ops::view(app, &identity, &request) {
+            Err(error) if outage && matches!(error.0.code, ErrorCode::Unauthenticated) => {
+                Err(auth::identity_outage())
+            }
+            other => other,
+        }
+    })
+    .await?
+    .map(Json)
+    .map_err(|error| error.with_correlation(&correlation))
+}
+
+/// Run one aggregate of a named query as the caller: the public audience class when there is no
+/// session (contract aggregate-run).
+async fn aggregate(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Json(request): Json<AggregateRunRequest>,
+) -> Result<impl IntoResponse, ApiError> {
     as_caller(&app, &headers, move |app, identity| {
-        ops::view(app, identity, &request)
+        crate::aggregates::run(app, identity, &request)
+    })
+    .await
+}
+
+/// Search the tenant as the caller: what the caller may read, whatever the audience (contract
+/// search).
+async fn search(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Json(request): Json<strata_protocol::api::SearchRunRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    as_caller(&app, &headers, move |app, identity| {
+        crate::search::run(app, identity, &request)
     })
     .await
 }
@@ -103,6 +546,57 @@ async fn mutate(
 ) -> Result<impl IntoResponse, ApiError> {
     as_caller(&app, &headers, move |app, identity| {
         ops::mutate(app, identity, &mutation)
+    })
+    .await
+}
+
+async fn members(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Json(request): Json<MembersRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    as_caller_at(&app, &headers, move |app, caller, identity| {
+        // Giving someone a role, the owner's included, is a sensitive operation (IDN-019); so is
+        // offering roles in an invitation and withdrawing the offer (contracts invite-person and
+        // revoke-invitation).
+        if matches!(
+            request,
+            MembersRequest::AssignRole { .. }
+                | MembersRequest::Invite { .. }
+                | MembersRequest::RevokeInvitation { .. }
+        ) && identity.session.is_some()
+        {
+            stepup::require_fresh(app, caller, identity)?;
+        }
+        ops::members(app, identity, &request)
+    })
+    .await
+}
+
+/// Erase one principal from the tenant, with a receipt (contract erase-subject).
+///
+/// Implements: CT-213
+async fn erasure_erase(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Json(request): Json<Json_>,
+) -> Result<Json<Json_>, ApiError> {
+    as_caller_at(&app, &headers, move |app, caller, identity| {
+        crate::erasure::erase(app, caller, identity, &request)
+    })
+    .await
+}
+
+/// The erasure receipts of the tenant, readable by an owner (contract list-erasure-receipts).
+///
+/// Implements: CT-1495
+async fn erasure_receipts(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Json(request): Json<Json_>,
+) -> Result<Json<Json_>, ApiError> {
+    as_caller(&app, &headers, move |app, identity| {
+        crate::erasure::receipts(app, identity, &request)
     })
     .await
 }
@@ -136,11 +630,58 @@ async fn diagnostics(
     .await
 }
 
-/// Every tenant's diagnostics and the audit entries. The service credential is the only
-/// requirement, so this is for the operator's tools on the backend's own network; the BFF has no
-/// route to it.
-async fn platform_diagnostics(State(app): State<Shared>) -> Result<Json<Json_>, ApiError> {
+/// Every tenant's diagnostics and the audit entries, for the platform operator. The service
+/// credential is shared with the gateway, so it is not an operator identity: the caller must
+/// present the operator credential (`STRATA_OPERATOR_TOKEN`) in `x-strata-operator`. With none
+/// configured the answer is "not found", except in development, where the service credential
+/// stands for the operator. Each call, refused or served, is an audit entry.
+async fn platform_diagnostics(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+) -> Result<Json<Json_>, ApiError> {
+    let correlation = headers
+        .get(HEADER_CORRELATION)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("");
+    let presented = headers
+        .get(HEADER_OPERATOR)
+        .and_then(|value| value.to_str().ok());
+    match (&app.operator_token, presented) {
+        (Some(expected), Some(given)) if auth::same_secret(given, expected) => {}
+        (Some(_), _) => {
+            app.audit(
+                "platform.diagnostics_refused",
+                correlation,
+                json!({ "scope": "every tenant" }),
+            );
+            return Err(ApiError::new(
+                ErrorCode::Unauthenticated,
+                "operator credential required",
+            ));
+        }
+        (None, _) if app.cfg.dev => {}
+        (None, _) => return Err(ApiError::new(ErrorCode::NotFound, "not available")),
+    }
+    app.audit(
+        "platform.diagnostics_read",
+        correlation,
+        json!({ "scope": "every tenant" }),
+    );
     app.blocking(ops::platform_diagnostics).await?.map(Json)
+}
+
+/// Create a tenant while the process runs: install its bundle and give its owner a first login.
+/// The service credential is the only requirement, as for the platform diagnostics, so this is for
+/// the operator's tools on the backend's own network; the BFF has no route to it.
+async fn platform_create_tenant(
+    State(app): State<Shared>,
+    Json(request): Json<provision::CreateTenant>,
+) -> Result<Json<Json_>, ApiError> {
+    let reply = app
+        .blocking(move |app| provision::create_tenant(app, request))
+        .await??;
+    app.hub.committed();
+    Ok(Json(reply))
 }
 
 async fn lab_overview(
@@ -167,6 +708,23 @@ async fn lab_run(
     .await
 }
 
+/// Apply the change a finished projection showed, if the site is still at the revision it was
+/// taken at. An owner, with a fresh authentication.
+///
+/// Implements: AGT-2940
+async fn lab_apply(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<Json_>,
+) -> Result<impl IntoResponse, ApiError> {
+    as_caller_at(&app, &headers, move |app, caller, identity| {
+        service::require_owner(app, identity)?;
+        stepup::require_fresh(app, caller, identity)?;
+        crate::lab_apply::apply(app, caller, identity, &body)
+    })
+    .await
+}
+
 async fn lab_result(
     State(app): State<Shared>,
     headers: HeaderMap,
@@ -176,7 +734,7 @@ async fn lab_result(
         require_schema_manager(app, identity)?;
         app.lab
             .result(&request.id, identity)
-            .ok_or_else(|| ApiError::new(ErrorCode::NotFound, "no such run"))
+            .ok_or_else(|| ApiError::new(ErrorCode::NotFound, "No such run. Results are held in this backend process only: a restart loses them, and a site keeps its last 12 runs."))
     })
     .await
 }
@@ -192,10 +750,15 @@ async fn lab_replay(
     .await
 }
 
+/// Runs `lake` on the machine, so it exists only in development: a production backend never starts
+/// a build tool.
 async fn lab_verify(
     State(app): State<Shared>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, ApiError> {
+    if !app.cfg.dev {
+        return Err(ApiError::new(ErrorCode::NotFound, "not available"));
+    }
     let shared = app.clone();
     as_caller(&app, &headers, move |app, identity| {
         require_schema_manager(app, identity)?;
@@ -204,63 +767,235 @@ async fn lab_verify(
     .await
 }
 
-/// Development fixtures are for the tenant's owner, signed in, on a backend in development mode.
-/// Outside development mode they do not exist.
-fn require_dev_owner(app: &App, identity: &Identity) -> Result<(), ApiError> {
-    if !app.cfg.dev {
-        return Err(ApiError::new(ErrorCode::NotFound, "not available"));
-    }
-    if identity.anonymous() {
-        return Err(ApiError::new(
-            ErrorCode::Unauthenticated,
-            "Sign in as the site's owner to use this.",
-        ));
-    }
-    let tenant = ops::header(app, identity)?;
-    if roles_of(&tenant, &identity.principal).contains(&owner_role()) {
-        Ok(())
-    } else {
-        Err(ApiError::new(
-            ErrorCode::Forbidden,
-            "Only the site's owner may use this.",
-        ))
-    }
+/// Run blocking work for a request that is not a person's: nothing is looked up about who sent
+/// it, and the work checks the credentials the request itself carries.
+async fn as_public<T, F>(app: &Shared, headers: &HeaderMap, work: F) -> Result<Json<T>, ApiError>
+where
+    T: Serialize + Send + 'static,
+    F: FnOnce(&App, &Caller) -> Result<T, ApiError> + Send + 'static,
+{
+    let caller = auth::caller(headers)?;
+    let correlation = caller.correlation.clone();
+    let tenant = caller.site.as_str().to_string();
+    app.blocking_for(&tenant, move |app| work(app, &caller))
+        .await?
+        .map(Json)
+        .map_err(|error| error.with_correlation(&correlation))
 }
 
-/// Development only: remove the caller's tenant and install its bundle again. Other tenants are
-/// not touched.
-async fn dev_reset(State(app): State<Shared>, headers: HeaderMap) -> Result<Json<Json_>, ApiError> {
-    let reply = as_caller(&app, &headers, |app, identity| {
-        require_dev_owner(app, identity)?;
-        let session = identity.session.as_ref().map(|s| s.id.as_str().to_string());
-        app.audit(
-            "dev.reset",
-            &identity.correlation,
-            json!({ "tenant": identity.tenant.as_str(), "session": session }),
-        );
-        seed::reset_tenant(app, &identity.tenant)
-            .map_err(|problem| ApiError::hidden(ErrorCode::Internal, problem))?;
-        Ok(json!({ "reset": true, "tenant": identity.tenant.as_str() }))
+/// The token endpoint: client credentials, or the exchange of a delegation. Both check the
+/// client's secret with Argon2, so the request takes the per-source rate and a place to hash.
+async fn token(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<Json_>,
+) -> Result<Json<Json_>, ApiError> {
+    let caller = auth::caller(&headers)?;
+    let correlation = caller.correlation.clone();
+    let place = hashing_place(&app, &caller).await?;
+    let tenant = caller.site.as_str().to_string();
+    app.blocking_for(&tenant, move |app| {
+        let _place = place;
+        tokens::issue(app, &caller, &body)
     })
-    .await?;
-    app.hub.kick.notify_one();
-    Ok(reply)
+    .await?
+    .map(Json)
+    .map_err(|error| error.with_correlation(&correlation))
 }
 
-/// Development only: end the caller's own session as if its time had run out.
-async fn dev_expire(
+async fn token_verify(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<Json_>,
+) -> Result<Json<Json_>, ApiError> {
+    as_public(&app, &headers, move |app, caller| {
+        tokens::verify_for_resource(app, caller, &body)
+    })
+    .await
+}
+
+async fn token_introspect(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<Json_>,
+) -> Result<Json<Json_>, ApiError> {
+    // With client credentials the call checks a secret with Argon2.
+    let hashes = body.get("client_id").is_some();
+    as_caller_at_hashing(&app, &headers, hashes, move |app, caller, identity| {
+        tokens::introspect(app, caller, identity, &body)
+    })
+    .await
+}
+
+/// The public keys the tenant's tokens verify with.
+async fn keys_published(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+) -> Result<Json<Json_>, ApiError> {
+    as_public(&app, &headers, |app, caller| {
+        keys::published(app, &caller.site)
+    })
+    .await
+}
+
+async fn keys_rotate(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+) -> Result<Json<Json_>, ApiError> {
+    as_caller_at(&app, &headers, |app, caller, identity| {
+        service::require_owner(app, identity)?;
+        stepup::require_fresh(app, caller, identity)?;
+        keys::rotate(app, &identity.tenant, &identity.correlation)
+    })
+    .await
+}
+
+async fn keys_compromise(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<Json_>,
+) -> Result<Json<Json_>, ApiError> {
+    as_caller_at(&app, &headers, move |app, caller, identity| {
+        service::require_owner(app, identity)?;
+        stepup::require_fresh(app, caller, identity)?;
+        let kid = service::text(&body, "kid", 64)?;
+        keys::compromise(app, &identity.tenant, kid, &identity.correlation)
+    })
+    .await
+}
+
+async fn clients_list(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+) -> Result<Json<Json_>, ApiError> {
+    as_caller(&app, &headers, |app, identity| clients::all(app, identity)).await
+}
+
+async fn clients_create(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<Json_>,
+) -> Result<Json<Json_>, ApiError> {
+    as_caller_at(&app, &headers, move |app, caller, identity| {
+        service::require_owner(app, identity)?;
+        stepup::require_fresh(app, caller, identity)?;
+        clients::create(app, identity, &body)
+    })
+    .await
+}
+
+async fn clients_rotate_secret(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<Json_>,
+) -> Result<Json<Json_>, ApiError> {
+    as_caller_at(&app, &headers, move |app, caller, identity| {
+        service::require_owner(app, identity)?;
+        stepup::require_fresh(app, caller, identity)?;
+        clients::rotate_secret(app, identity, &body)
+    })
+    .await
+}
+
+async fn clients_revoke(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<Json_>,
+) -> Result<Json<Json_>, ApiError> {
+    as_caller(&app, &headers, move |app, identity| {
+        clients::revoke(app, identity, &body)
+    })
+    .await
+}
+
+async fn grants_create(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<Json_>,
+) -> Result<Json<Json_>, ApiError> {
+    as_caller(&app, &headers, move |app, identity| {
+        tokens::create_grant(app, identity, &body)
+    })
+    .await
+}
+
+async fn grants_revoke(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<Json_>,
+) -> Result<Json<Json_>, ApiError> {
+    as_caller(&app, &headers, move |app, identity| {
+        tokens::revoke_grant(app, identity, &body)
+    })
+    .await
+}
+
+async fn provisioning_token_create(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<Json_>,
+) -> Result<Json<Json_>, ApiError> {
+    as_caller_at(&app, &headers, move |app, caller, identity| {
+        service::require_owner(app, identity)?;
+        stepup::require_fresh(app, caller, identity)?;
+        scim::create_token(app, identity, &body)
+    })
+    .await
+}
+
+async fn provisioning_token_revoke(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<Json_>,
+) -> Result<Json<Json_>, ApiError> {
+    as_caller(&app, &headers, move |app, identity| {
+        scim::revoke_token(app, identity, &body)
+    })
+    .await
+}
+
+async fn provisioning_groups(
     State(app): State<Shared>,
     headers: HeaderMap,
 ) -> Result<Json<Json_>, ApiError> {
     as_caller(&app, &headers, |app, identity| {
-        require_dev_owner(app, identity)?;
-        let Some(mut session) = identity.session.clone() else {
-            return Ok(json!({ "expired": false }));
-        };
-        session.expires_at = strata_kernel::Timestamp(app.now().0 - 1);
-        app.store.put_session(&session)?;
-        let _ = app.hub.sessions.send((session.id, SessionState::Expired));
-        Ok(json!({ "expired": true }))
+        scim::group_roles(app, identity)
+    })
+    .await
+}
+
+async fn provisioning_group_set(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<Json_>,
+) -> Result<Json<Json_>, ApiError> {
+    as_caller_at(&app, &headers, move |app, caller, identity| {
+        service::require_owner(app, identity)?;
+        stepup::require_fresh(app, caller, identity)?;
+        scim::set_group_role(app, identity, &body)
+    })
+    .await
+}
+
+async fn provisioning_group_remove(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<Json_>,
+) -> Result<Json<Json_>, ApiError> {
+    as_caller(&app, &headers, move |app, identity| {
+        scim::remove_group_role(app, identity, &body)
+    })
+    .await
+}
+
+/// A SCIM request from the gateway, as an envelope: the token it carried is the credential.
+async fn scim_request(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<Json_>,
+) -> Result<Json<Json_>, ApiError> {
+    as_public(&app, &headers, move |app, caller| {
+        scim::handle(app, caller, &body)
     })
     .await
 }
@@ -268,13 +1003,40 @@ async fn dev_expire(
 async fn socket(
     State(app): State<Shared>,
     headers: HeaderMap,
+    stop: Option<Extension<strata_runtime::server::Shutdown>>,
     upgrade: WebSocketUpgrade,
 ) -> Result<Response, ApiError> {
     let caller = auth::caller(&headers)?;
+    let correlation = caller.correlation.clone();
+    let source = caller.visitor_source().map(str::to_string);
     let identity = auth::identify_async(&app, caller).await?;
+    let session = identity.session.as_ref().map(|s| s.id.as_str().to_string());
+    let places = app
+        .admission
+        .socket(session.as_deref(), source.as_deref())
+        .map_err(|error| {
+            app.audit(
+                "socket.refused",
+                &correlation,
+                json!({ "tenant": identity.tenant.as_str(), "session": session, "source": source }),
+            );
+            error.with_correlation(&correlation)
+        })?;
+    // Registered with the server's drain, so that a stop waits for the socket to close.
+    let stop = stop.map(|Extension(stop)| stop);
+    let held = match &stop {
+        Some(stop) => Some(stop.hold().ok_or_else(|| {
+            ApiError::new(ErrorCode::Unavailable, "The service is stopping.")
+                .with_correlation(&correlation)
+        })?),
+        None => None,
+    };
     Ok(upgrade
         .max_message_size(MAX_FRAME)
-        .on_upgrade(move |socket| ws::serve(app, identity, socket)))
+        .on_upgrade(move |socket| async move {
+            ws::serve(app, identity, places, socket, stop).await;
+            drop(held);
+        }))
 }
 
 /// Refuse anything that does not carry the service token. The backend listens on loopback, and
@@ -290,7 +1052,11 @@ async fn gate(State(app): State<Shared>, request: Request, next: Next) -> Respon
         .to_string();
     let open = path == "/internal/health";
     let response = if open || has_service_token(&app, request.headers()) {
-        next.run(request).await
+        // The one enforcement point of the quotas of the specification (EDG-013).
+        match crate::quota::admit(&app, &path, request.headers()).await {
+            Ok(()) => next.run(request).await,
+            Err(refused) => refused,
+        }
     } else {
         ApiError::new(ErrorCode::Unauthenticated, "service token required").into_response()
     };
@@ -305,23 +1071,253 @@ async fn gate(State(app): State<Shared>, request: Request, next: Next) -> Respon
 }
 
 pub fn router(app: Shared) -> Router {
-    Router::new()
+    let router = Router::new()
         .route("/internal/health", get(health))
+        .route("/internal/platform/hosts", post(crate::hosts::route))
+        .route(
+            "/internal/sign-in/invite/accept",
+            post(crate::signin::invite::route),
+        )
         .route("/internal/session", post(session))
         .route("/internal/session/login", post(login))
+        .route("/internal/session/sign-in/:method", post(login_with))
+        .route("/internal/sign-in/link/request", post(link_request))
+        .route("/internal/sign-in/oidc/providers", post(oidc_providers))
+        .route("/internal/sign-in/oidc/start", post(oidc_start))
+        .route("/internal/sign-in/saml/providers", post(saml_providers))
+        .route("/internal/sign-in/saml/start", post(saml_start))
+        .route("/internal/sign-in/saml/metadata", post(saml_metadata))
+        .route("/internal/passkeys", post(passkeys))
+        .route("/internal/passkeys/challenge", post(passkey_challenge))
+        .route(
+            "/internal/passkeys/register/start",
+            post(passkey_register_start),
+        )
+        .route(
+            "/internal/passkeys/register/finish",
+            post(passkey_register_finish),
+        )
+        .route("/internal/passkeys/remove", post(passkey_remove))
+        .route("/internal/sessions", post(sessions))
+        .route("/internal/sessions/revoke", post(session_revoke))
+        .route(
+            "/internal/sessions/revoke-others",
+            post(sessions_revoke_others),
+        )
+        .route("/internal/session/second-factor", post(second_factor))
+        .route("/internal/session/step-up", post(step_up))
+        .route("/internal/factors", post(factors))
+        .route("/internal/factors/totp/start", post(totp_start))
+        .route("/internal/factors/totp/confirm", post(totp_confirm))
+        .route("/internal/factors/totp/remove", post(totp_remove))
+        .route("/internal/factors/recovery-codes", post(recovery_codes_new))
+        .route("/internal/recovery/request", post(recovery_request))
+        .route("/internal/recovery/complete", post(recovery_complete))
+        .route("/internal/recovery/cancel", post(recovery_cancel))
         .route("/internal/session/logout", post(logout))
+        .route("/internal/products", post(crate::products::list))
+        .route("/internal/products/install", post(crate::products::install))
+        .route("/internal/products/upgrade", post(crate::products::upgrade))
+        .route("/internal/products/remove", post(crate::products::remove))
         .route("/internal/view", post(view))
+        .route("/internal/aggregate", post(aggregate))
+        .route("/internal/search", post(search))
         .route("/internal/mutate", post(mutate))
+        .route("/internal/members", post(members))
+        .route("/internal/erasure/erase", post(erasure_erase))
+        .route("/internal/erasure/receipts", post(erasure_receipts))
+        .route("/internal/audit/verify", post(crate::audit_log::route))
+        .route(
+            "/internal/subject-rights/:op",
+            post(crate::subject_rights::route),
+        )
+        .route(
+            "/internal/settings/save-definition",
+            post(crate::settings::save_definition),
+        )
+        .route("/internal/settings/resolve", post(crate::settings::resolve))
+        .route(
+            "/internal/settings/resolve-all",
+            post(crate::settings::resolve_all),
+        )
+        .route(
+            "/internal/settings/set-tenant",
+            post(crate::settings::set_tenant),
+        )
+        .route(
+            "/internal/settings/set-team",
+            post(crate::settings::set_team),
+        )
+        .route(
+            "/internal/settings/set-person",
+            post(crate::settings::set_person),
+        )
+        .route(
+            "/internal/settings/resolve-for",
+            post(crate::settings::resolve_for),
+        )
+        .route(
+            "/internal/operations/invoke",
+            post(crate::operations::route),
+        )
+        .route("/internal/ledger/:op", post(crate::ledger::route))
+        .route(
+            "/internal/platform/quota",
+            post(crate::quota::platform_set_route),
+        )
+        .route("/internal/usage", post(crate::quota::usage_route))
+        .route("/internal/flags", post(crate::quota::flags_route))
+        .route("/internal/flags/set", post(crate::quota::flags_set_route))
+        .route("/internal/inbox/list", post(crate::inbox::list))
+        .route("/internal/inbox/count", post(crate::inbox::count))
+        .route("/internal/inbox/read", post(crate::inbox::set_read))
+        .route("/internal/inbox/remove", post(crate::inbox::remove))
+        .route("/internal/inbox/send", post(crate::inbox::send))
+        .route(
+            "/internal/inbox/preferences",
+            post(crate::inbox::set_preference),
+        )
+        .route(
+            "/internal/inbox/templates",
+            post(crate::inbox::define_template),
+        )
+        .route("/internal/segments/define", post(crate::segments::define))
+        .route("/internal/segments/remove", post(crate::segments::remove))
+        .route("/internal/segments/members", post(crate::segments::members))
+        .route("/internal/segments/test", post(crate::segments::test))
+        .route("/internal/segments/mine", post(crate::segments::mine))
+        .route("/internal/segments/count", post(crate::segments::count))
+        .route("/internal/segments/preview", post(crate::segments::preview))
         .route("/internal/diagnostics", post(diagnostics))
         .route("/internal/platform/diagnostics", post(platform_diagnostics))
+        .route("/internal/platform/tenants", post(platform_create_tenant))
+        .route(
+            "/internal/platform/settings/set",
+            post(crate::settings::set_platform),
+        )
         .route("/internal/lab/overview", post(lab_overview))
         .route("/internal/lab/run", post(lab_run))
         .route("/internal/lab/result", post(lab_result))
+        .route("/internal/lab/apply", post(lab_apply))
         .route("/internal/lab/replay", post(lab_replay))
         .route("/internal/lab/verify", post(lab_verify))
-        .route("/internal/dev/reset", post(dev_reset))
-        .route("/internal/dev/expire-session", post(dev_expire))
+        .route("/internal/token", post(token))
+        .route("/internal/token/verify", post(token_verify))
+        .route("/internal/token/introspect", post(token_introspect))
+        .route("/internal/keys", post(keys_published))
+        .route("/internal/keys/rotate", post(keys_rotate))
+        .route("/internal/keys/compromise", post(keys_compromise))
+        .route("/internal/clients", post(clients_list))
+        .route("/internal/clients/create", post(clients_create))
+        .route(
+            "/internal/clients/rotate-secret",
+            post(clients_rotate_secret),
+        )
+        .route("/internal/clients/revoke", post(clients_revoke))
+        .route("/internal/grants/create", post(grants_create))
+        .route("/internal/grants/revoke", post(grants_revoke))
+        .route(
+            "/internal/provisioning/tokens/create",
+            post(provisioning_token_create),
+        )
+        .route(
+            "/internal/provisioning/tokens/revoke",
+            post(provisioning_token_revoke),
+        )
+        .route("/internal/provisioning/groups", post(provisioning_groups))
+        .route(
+            "/internal/provisioning/groups/set",
+            post(provisioning_group_set),
+        )
+        .route(
+            "/internal/provisioning/groups/remove",
+            post(provisioning_group_remove),
+        )
+        .route("/internal/scim", post(scim_request))
+        .route(
+            "/internal/automation/runs",
+            post(crate::worker::routes::runs_route),
+        )
+        .route(
+            "/internal/automation/steps",
+            post(crate::worker::routes::steps_route),
+        )
+        .route(
+            "/internal/automation/exceptions",
+            post(crate::worker::routes::exceptions_route),
+        )
+        .route(
+            "/internal/automation/exceptions/settle",
+            post(crate::worker::routes::settle_route),
+        )
+        .route(
+            "/internal/mail/send",
+            post(crate::dispatch::routes::send_route),
+        )
+        .route(
+            "/internal/mail/messages",
+            post(crate::dispatch::routes::messages_route),
+        )
+        .route(
+            "/internal/mail/counts",
+            post(crate::dispatch::routes::counts_route),
+        )
+        .route(
+            "/internal/mail/categories",
+            post(crate::dispatch::routes::categories_route),
+        )
+        .route(
+            "/internal/mail/suppressions",
+            post(crate::dispatch::routes::suppressions_route),
+        )
+        .route(
+            "/internal/mail/subscription",
+            post(crate::dispatch::routes::subscription_route),
+        )
+        .route(
+            "/internal/jobs/list",
+            post(crate::worker::routes::jobs_list_route),
+        )
+        .route(
+            "/internal/jobs/schedule",
+            post(crate::worker::routes::jobs_schedule_route),
+        )
+        .route(
+            "/internal/jobs/cancel",
+            post(crate::worker::routes::jobs_cancel_route),
+        )
+        .route(
+            "/internal/jobs/retry",
+            post(crate::worker::routes::jobs_retry_route),
+        )
+        .route(
+            "/internal/schedules/define",
+            post(crate::worker::schedules::define_route),
+        )
+        .route(
+            "/internal/automation/start",
+            post(crate::worker::commands::start_route),
+        )
+        .route(
+            "/internal/automation/approve",
+            post(crate::worker::commands::approve_route),
+        )
+        .route(
+            "/internal/automation/activate",
+            post(crate::worker::commands::activate_route),
+        )
         .route("/internal/ws", get(socket))
+        .merge(crate::outbound::routes::router())
+        .merge(crate::files::routes::router());
+    // The development routes are compiled only with the `development` feature, and mounted only
+    // when the process was started in development mode.
+    #[cfg(feature = "development")]
+    let router = if app.cfg.dev {
+        crate::dev::mount(router)
+    } else {
+        router
+    };
+    router
         .layer(middleware::from_fn_with_state(app.clone(), gate))
         .with_state(app)
 }

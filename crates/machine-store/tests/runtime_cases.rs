@@ -13,6 +13,7 @@ mod system;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
+use strata_kernel::ext::*;
 use strata_kernel::{EventBody, FieldId, ObjectTypeId, TenantId, Value};
 use strata_machine_store::{StorageApiMachineStore, OUTBOX, TIMERS};
 use strata_runtime::store::{NewMessage, NewTimer, OutboxStore, RecordStore, TimerStore};
@@ -418,4 +419,150 @@ async fn api_memory_delayed_two_hosts_dispatch_once() {
 #[tokio::test]
 async fn api_sqlite_delayed_two_hosts_dispatch_once() {
     delayed::two_hosts_dispatch_once(api_sqlite("two-hosts-delayed")).await;
+}
+
+#[tokio::test]
+async fn api_memory_redelivers_at_least_once_after_a_stop_between_dispatch_and_removal() {
+    system::redelivers_at_least_once_after_a_stop_between_dispatch_and_removal(api_memory()).await;
+}
+
+#[tokio::test]
+async fn api_sqlite_redelivers_at_least_once_after_a_stop_between_dispatch_and_removal() {
+    system::redelivers_at_least_once_after_a_stop_between_dispatch_and_removal(api_sqlite(
+        "redeliver",
+    ))
+    .await;
+}
+
+#[tokio::test]
+async fn api_memory_loses_at_most_once_on_a_stop_between_commit_and_dispatch() {
+    system::loses_at_most_once_on_a_stop_between_commit_and_dispatch(api_memory()).await;
+}
+
+#[tokio::test]
+async fn api_sqlite_loses_at_most_once_on_a_stop_between_commit_and_dispatch() {
+    system::loses_at_most_once_on_a_stop_between_commit_and_dispatch(api_sqlite("lose")).await;
+}
+
+#[tokio::test]
+async fn api_memory_retries_at_least_once_with_backoff() {
+    system::retries_at_least_once_with_backoff(api_memory()).await;
+}
+
+#[tokio::test]
+async fn api_sqlite_retries_at_least_once_with_backoff() {
+    system::retries_at_least_once_with_backoff(api_sqlite("retry")).await;
+}
+
+#[tokio::test]
+async fn api_memory_refuses_an_instance_beyond_max() {
+    system::refuses_an_instance_beyond_max(api_memory()).await;
+}
+
+#[tokio::test]
+async fn api_sqlite_refuses_an_instance_beyond_max() {
+    system::refuses_an_instance_beyond_max(api_sqlite("max")).await;
+}
+
+/// Two tenants on one storage-api store, with machines whose record ids are equal: each tenant's
+/// machine store keeps its rows in that tenant, so they hold two instances (WG-4907). The store is
+/// built for a tenant, and a machine store of another tenant over the same store sees none of it.
+fn equal_ids_are_two_instances(api: Arc<dyn Store>) {
+    let for_tenant = |name: &str| {
+        StorageApiMachineStore::new(
+            api.clone(),
+            TenantId::new(name).unwrap(),
+            Arc::new(SystemClock),
+        )
+    };
+    let (acme, globex) = (for_tenant("acme"), for_tenant("globex"));
+    assert_eq!(acme.tenant().as_str(), "acme");
+    let key = "[\"post\",\"p1\"]";
+    let save = |store: &StorageApiMachineStore, data: &str| {
+        store
+            .transact(Isolation::Serializable, |tx| -> Result<_, StorageError> {
+                tx.save("rec-content", key, data, None)
+            })
+            .unwrap();
+    };
+    let load = |store: &StorageApiMachineStore| {
+        store
+            .transact(Isolation::Serializable, |tx| -> Result<_, StorageError> {
+                tx.load("rec-content", key)
+            })
+            .unwrap()
+    };
+    save(&acme, "{\"version\":7}");
+    assert!(load(&globex).is_none(), "the other tenant has no instance");
+    save(&globex, "{\"version\":1}");
+    assert_eq!(load(&acme).unwrap().data, "{\"version\":7}");
+    assert_eq!(load(&globex).unwrap().data, "{\"version\":1}");
+}
+
+#[test]
+fn api_memory_tenants_with_equal_record_ids_share_no_instance_state() {
+    equal_ids_are_two_instances(Arc::new(MemoryStore::new()));
+}
+
+#[test]
+fn api_sqlite_tenants_with_equal_record_ids_share_no_instance_state() {
+    let path = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!(
+        "machine-store-tenants-{}-{}.db",
+        std::process::id(),
+        COUNTER.fetch_add(1, Ordering::SeqCst)
+    ));
+    for suffix in ["", "-wal", "-shm"] {
+        let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
+    }
+    equal_ids_are_two_instances(Arc::new(
+        SqliteStore::open(&path, strata_kernel::Timestamp(0)).unwrap(),
+    ));
+}
+
+/// Verifies: OPS-2440
+#[tokio::test]
+async fn api_memory_a_singleton_takes_its_first_event_without_seeding() {
+    system::a_singleton_takes_its_first_event_without_seeding(api_memory()).await;
+}
+
+/// Verifies: OPS-2440
+#[tokio::test]
+async fn api_sqlite_a_singleton_takes_its_first_event_without_seeding() {
+    system::a_singleton_takes_its_first_event_without_seeding(api_sqlite("singleton")).await;
+}
+
+/// Verifies: OPS-2440
+#[tokio::test]
+async fn api_memory_two_systems_over_one_store_make_one_singleton() {
+    system::two_systems_over_one_store_make_one_singleton(api_memory()).await;
+}
+
+/// Verifies: OPS-2440
+#[tokio::test]
+async fn api_sqlite_two_systems_over_one_store_make_one_singleton() {
+    system::two_systems_over_one_store_make_one_singleton(api_sqlite("two-singletons")).await;
+}
+
+/// Verifies: OPS-2441
+#[tokio::test]
+async fn api_memory_a_message_that_always_fails_is_dead_lettered_after_the_cap() {
+    system::a_message_that_always_fails_is_dead_lettered_after_the_cap(api_memory()).await;
+}
+
+/// Verifies: OPS-2441
+#[tokio::test]
+async fn api_sqlite_a_message_that_always_fails_is_dead_lettered_after_the_cap() {
+    system::a_message_that_always_fails_is_dead_lettered_after_the_cap(api_sqlite("cap")).await;
+}
+
+/// Verifies: OPS-2442
+#[tokio::test]
+async fn api_memory_purges_dead_letters_past_retention() {
+    system::purges_dead_letters_past_retention(api_memory()).await;
+}
+
+/// Verifies: OPS-2442
+#[tokio::test]
+async fn api_sqlite_purges_dead_letters_past_retention() {
+    system::purges_dead_letters_past_retention(api_sqlite("purge-dead")).await;
 }

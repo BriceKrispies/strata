@@ -1,0 +1,4 @@
+{
+  // Refused: no "product" header (layer.header-missing).
+  "types": [ { "id": "badges__tier", "name": "Badge tier", "kind": "enum", "values": ["bronze", "gold"] } ]
+}

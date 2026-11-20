@@ -1,0 +1,59 @@
+{
+  // A small complete product with a query, a view and a workflow, for specc bundle (WG-5081): an object
+  // type of tickets, the open tickets as a named query, a page that shows them at /tickets, and the
+  // states a ticket goes through. The bundle names each as a value of query-def, view-def and
+  // workflow-def (D-6700). The expected bundle is tests/fixtures/products/expected/ticket-board.bundle.json.
+  "product": {
+    "id": "ticket-board",
+    "name": "Ticket board",
+    "version": "1.0.0",
+    "platform": { "min": "0.2" },
+    "imports": {
+      "spec": "../../../../../../specifications/spec.jsonc",
+      "entities": []
+    }
+  },
+  "objects": [
+    {
+      "id": "ticket_board__ticket",
+      "label": "Ticket",
+      "fields": {
+        "title": { "id": "title", "label": "Title", "ty": "Str", "required": true, "unique": false },
+        "status": { "id": "status", "label": "Status", "ty": "Str", "required": true, "unique": false }
+      },
+      "constraints": {}
+    }
+  ],
+  "queries": [
+    {
+      "id": "ticket_board__open",
+      "object": "ticket_board__ticket",
+      "filter": "record.status == 'open'",
+      "params": [],
+      "order": [{ "field": "title", "descending": false }],
+      "limit": 50
+    }
+  ],
+  "views": [
+    {
+      "id": "ticket_board__board",
+      "route": "/tickets",
+      "title": "Tickets",
+      "sections": {
+        "open": { "query": "ticket_board__open", "args": {}, "include": [], "markdown": [], "single": false }
+      }
+    }
+  ],
+  "workflows": [
+    {
+      "id": "ticket_board__lifecycle",
+      "object": "ticket_board__ticket",
+      "field": "status",
+      "initial": ["open"],
+      "transitions": [
+        { "name": "close", "from": "open", "to": "closed", "guard": "old.status == 'open'", "set": {} },
+        { "name": "reopen", "from": "closed", "to": "open", "set": {} }
+      ]
+    }
+  ]
+}

@@ -47,32 +47,92 @@ pub struct GeneratedFile {
 /// The header line of a generated Rust file.
 pub fn rust_header(spec_path: &str) -> String {
     format!(
-        "{} from {spec_path}. Do not edit; change the specification and regenerate.",
-        HEADER_MARKERS[0]
+        "{} from {}. Do not edit; change the specification and regenerate.",
+        HEADER_MARKERS[0],
+        crate::codetext::line_text(spec_path)
     )
 }
 
 /// The header line of the generated `Cargo.toml`.
 pub fn toml_header(spec_path: &str) -> String {
     format!(
-        "{} from {spec_path}. Do not edit; change the specification and regenerate.",
-        HEADER_MARKERS[1]
+        "{} from {}. Do not edit; change the specification and regenerate.",
+        HEADER_MARKERS[1],
+        crate::codetext::line_text(spec_path)
     )
 }
 
 /// Every file of the generated crate, sorted by path. Assumes the readiness checks passed.
 pub fn crate_files(spec: &Spec, options: &Options) -> Result<Vec<GeneratedFile>, Vec<Diagnostic>> {
-    let mut files = vec![GeneratedFile {
+    crate_files_with(spec, options, None)
+}
+
+/// As [`crate_files`]; with `core`, the crate depends on the pure crate it names, re-exports its
+/// representation types and the declared types it holds, and declares only the rest.
+pub fn crate_files_with(
+    spec: &Spec,
+    options: &Options,
+    core: Option<&crate::model_core::CoreDependency>,
+) -> Result<Vec<GeneratedFile>, Vec<Diagnostic>> {
+    let core_ident = core.map(|c| c.crate_name.replace('-', "_"));
+    // The pure crate is a dependency like the others, so it goes inside [dependencies], before
+    // any later table such as [features].
+    let core_line = core.map(|c| {
+        format!(
+            "{} = {{ path = \"{}\" }}\n",
+            c.crate_name,
+            toml_escape(&c.path)
+        )
+    });
+    let toml = cargo_toml(spec, options, core_line.as_deref().unwrap_or(""));
+    let files = vec![GeneratedFile {
         path: "Cargo.toml".to_string(),
-        contents: cargo_toml(spec, options),
+        contents: toml,
     }];
-    let mut errors = Vec::new();
-    let mut modules: Vec<(&str, TokenStream)> = vec![(prelude::MODULE, prelude::emit())];
+    let mut modules: Vec<(&str, TokenStream)> =
+        vec![(prelude::MODULE, prelude::emit_with(core_ident.as_deref()))];
     for backend in BACKENDS.iter().filter(|b| b.wanted(spec)) {
-        modules.push((backend.module(), backend.emit(spec)));
+        let tokens = match &core_ident {
+            Some(krate) if backend.module() == "types" => crate::backend::types::emit(
+                spec,
+                crate::backend::types::Selection::Rest { core_crate: krate },
+            ),
+            Some(krate) if backend.module() == crate::backend::derived::MODULE => {
+                crate::backend::derived::emit_with(spec, Some(krate))
+            }
+            _ => backend.emit(spec),
+        };
+        modules.push((backend.module(), tokens));
+    }
+    // A language lives in the pure crate when there is one; otherwise in this crate.
+    let languages: Vec<String> = if core.is_none() {
+        spec.languages
+            .iter()
+            .map(crate::language::module_name)
+            .collect()
+    } else {
+        Vec::new()
+    };
+    for (lang, module) in spec.languages.iter().zip(&languages) {
+        modules.push((module.as_str(), crate::language::emit(spec, lang)));
+    }
+    // So do the functions, which may call a language.
+    if core.is_none() && crate::function::wanted(spec) {
+        modules.push((crate::function::MODULE, crate::function::emit(spec)));
     }
     let lib = lib_rs(spec, modules.iter().map(|(name, _)| *name));
     modules.push(("lib", lib));
+    rust_files(spec, files, modules)
+}
+
+/// The files of the modules, after `files`, sorted by path; or every diagnostic of a module that
+/// could not be written.
+pub(crate) fn rust_files(
+    spec: &Spec,
+    mut files: Vec<GeneratedFile>,
+    modules: Vec<(&str, TokenStream)>,
+) -> Result<Vec<GeneratedFile>, Vec<Diagnostic>> {
+    let mut errors = Vec::new();
     for (module, tokens) in modules {
         match rust_file(spec, tokens) {
             Ok(contents) => files.push(GeneratedFile {
@@ -102,6 +162,10 @@ pub fn crate_files(spec: &Spec, options: &Options) -> Result<Vec<GeneratedFile>,
     if !errors.is_empty() {
         return Err(errors);
     }
+    let collisions = crate::output::path_collisions(&files);
+    if !collisions.is_empty() {
+        return Err(collisions);
+    }
     files.sort();
     Ok(files)
 }
@@ -117,6 +181,7 @@ pub(crate) enum FileError {
 }
 
 fn rust_file(spec: &Spec, tokens: TokenStream) -> Result<String, FileError> {
+    let tokens = crate::codetext::rust::neutralise_docs(tokens);
     let file: syn::File = syn::parse2(tokens).map_err(FileError::Syntax)?;
     let body = separate_items(&prettyplease::unparse(&file));
     rustfmt(&format!("{}\n{body}", rust_header(&spec.path)))
@@ -211,6 +276,7 @@ fn lib_rs<'a>(spec: &Spec, modules: impl Iterator<Item = &'a str>) -> TokenStrea
             }
         })
         .collect();
+    let registry = crate::backend::machines::registry_macros(spec);
     quote! {
         #![doc = #summary]
         #![doc = ""]
@@ -219,10 +285,12 @@ fn lib_rs<'a>(spec: &Spec, modules: impl Iterator<Item = &'a str>) -> TokenStrea
         #![allow(clippy::enum_variant_names)]
 
         #(#declarations)*
+
+        #registry
     }
 }
 
-fn cargo_toml(spec: &Spec, options: &Options) -> String {
+fn cargo_toml(spec: &Spec, options: &Options, core: &str) -> String {
     let features = if spec.target_machines.is_empty() {
         String::new()
     } else {
@@ -264,15 +332,18 @@ fn cargo_toml(spec: &Spec, options: &Options) -> String {
          serde = {{ version = \"{SERDE_VERSION}\", features = [\"derive\"] }}\n\
          serde_json = \"{SERDE_JSON_VERSION}\"\n\
          {runtime}\
+         {core}\
          {sha2}\
          uuid = {{ version = \"{UUID_VERSION}\", features = [\"serde\"] }}\n\
-         {features}",
+         {features}\n\
+         [lints]\n\
+         workspace = true\n",
         header = toml_header(&spec.path),
     )
 }
 
 /// `text` as the inside of a TOML basic string.
-fn toml_escape(text: &str) -> String {
+pub(crate) fn toml_escape(text: &str) -> String {
     text.replace('\\', "\\\\").replace('"', "\\\"")
 }
 

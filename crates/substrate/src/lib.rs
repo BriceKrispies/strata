@@ -1,10 +1,12 @@
 //! Pure interpreters over kernel data.
 //!
 //! The kernel decides; this crate reads and writes the forms people and programs use around
-//! those decisions. Nothing here performs I/O.
+//! those decisions. Nothing here performs I/O. The text form of kernel expressions is the
+//! generated rule language's: `strata_kernel::expr::parse` reads it and `Display` of an
+//! expression prints it.
 //!
-//! - [`syntax`]: the text form of kernel expressions.
 //! - [`bundle`]: a whole tenant as one document, installed as ordinary kernel intents.
+//! - [`product`]: the bundle of a product, read, installed, upgraded and removed as one schema change.
 //! - [`plain`]: plain JSON to and from kernel values, directed by field types.
 //! - [`project`]: view definitions interpreted into reads and view models.
 //! - [`markdown`]: the constrained rich-text format, parsed to structured blocks.
@@ -15,8 +17,9 @@
 pub mod bundle;
 pub mod markdown;
 pub mod plain;
+pub mod product;
 pub mod project;
 pub mod proposal;
 pub mod subscribe;
-pub mod syntax;
 pub mod theme;
+pub mod view_needs;

@@ -1,0 +1,12 @@
+{
+  // Refused: a trigger that subscribes to an object type of the product that the product does not
+  // declare, and starts an automation it does not declare (layer.reference-unknown).
+  "product": { "id": "member-tiers", "name": "Member tiers", "imports": { "spec": "../../../../../../specifications/spec.jsonc", "entities": [] } },
+  "triggers": [
+    {
+      "id": "member_tiers__on_create",
+      "on": { "RecordCreated": { "object": "member_tiers__ghost" } },
+      "automation": "member_tiers__nothing"
+    }
+  ]
+}

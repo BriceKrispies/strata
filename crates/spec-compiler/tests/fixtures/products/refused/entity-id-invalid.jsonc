@@ -1,0 +1,5 @@
+{
+  // Refused: an entity id that fails the id pattern (layer.entity-id-invalid).
+  "product": { "id": "badges", "name": "Badges", "imports": { "spec": "../../../../../../specifications/spec.jsonc", "entities": [] } },
+  "types": [ { "id": "BadgesTier", "name": "Badge tier", "kind": "enum", "values": ["bronze"] } ]
+}

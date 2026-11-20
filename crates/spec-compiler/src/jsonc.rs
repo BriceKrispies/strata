@@ -14,6 +14,23 @@ pub struct JsoncError {
     pub line: usize,
     /// What is wrong.
     pub message: String,
+    /// True when the text is valid JSON but one object names the same key twice.
+    pub duplicate_key: bool,
+}
+
+/// The rule code of an object that names one key twice.
+pub const DUPLICATE_KEY: &str = "specc.duplicate-key";
+
+impl JsoncError {
+    /// The rule code for this error: [`DUPLICATE_KEY`] for a repeated key, else `syntax`.
+    #[must_use]
+    pub fn code(&self, syntax: &'static str) -> &'static str {
+        if self.duplicate_key {
+            DUPLICATE_KEY
+        } else {
+            syntax
+        }
+    }
 }
 
 impl fmt::Display for JsoncError {
@@ -34,10 +51,141 @@ pub fn strip(text: &str) -> Result<String, JsoncError> {
 /// Parses JSONC into a JSON value.
 pub fn parse(text: &str) -> Result<serde_json::Value, JsoncError> {
     let json = strip(text)?;
-    serde_json::from_str(&json).map_err(|e| JsoncError {
+    let value = serde_json::from_str(&json).map_err(|e| JsoncError {
         line: e.line(),
         message: e.to_string(),
-    })
+        duplicate_key: false,
+    })?;
+    // `serde_json` keeps the last of two equal keys without a word, so a second `"auth"` could
+    // replace the first unseen. The text is valid JSON here, so the scan can be lenient.
+    if let Some((line, key)) = find_duplicate_key(&json) {
+        return Err(JsoncError {
+            line,
+            message: format!(
+                "the object names the key \"{key}\" twice; keep one and merge the other into it"
+            ),
+            duplicate_key: true,
+        });
+    }
+    Ok(value)
+}
+
+/// The line and decoded name of the first key that an object repeats, in a valid JSON text.
+fn find_duplicate_key(json: &str) -> Option<(usize, String)> {
+    let mut scan = KeyScan {
+        chars: json.chars().collect(),
+        at: 0,
+        line: 1,
+    };
+    scan.value()
+}
+
+struct KeyScan {
+    chars: Vec<char>,
+    at: usize,
+    line: usize,
+}
+
+impl KeyScan {
+    fn skip_space(&mut self) {
+        while let Some(&c) = self.chars.get(self.at) {
+            if c == '\n' {
+                self.line += 1;
+            } else if !c.is_whitespace() {
+                break;
+            }
+            self.at += 1;
+        }
+    }
+
+    /// Reads a string literal at the cursor and returns its decoded text.
+    fn string(&mut self) -> String {
+        let start = self.at;
+        self.at += 1;
+        while let Some(&c) = self.chars.get(self.at) {
+            self.at += 1;
+            match c {
+                '\\' => {
+                    if self.chars.get(self.at) == Some(&'\n') {
+                        self.line += 1;
+                    }
+                    self.at += 1;
+                }
+                '"' => break,
+                '\n' => self.line += 1,
+                _ => {}
+            }
+        }
+        let end = self.at.min(self.chars.len());
+        let literal: String = self.chars[start..end].iter().collect();
+        serde_json::from_str::<String>(&literal).unwrap_or(literal)
+    }
+
+    fn value(&mut self) -> Option<(usize, String)> {
+        self.skip_space();
+        match self.chars.get(self.at).copied()? {
+            '{' => {
+                self.at += 1;
+                let mut seen = std::collections::BTreeSet::new();
+                loop {
+                    self.skip_space();
+                    match self.chars.get(self.at).copied()? {
+                        '}' => {
+                            self.at += 1;
+                            return None;
+                        }
+                        ',' => self.at += 1,
+                        '"' => {
+                            let line = self.line;
+                            let key = self.string();
+                            self.skip_space();
+                            // The colon.
+                            self.at += 1;
+                            if !seen.insert(key.clone()) {
+                                return Some((line, key));
+                            }
+                            if let Some(found) = self.value() {
+                                return Some(found);
+                            }
+                        }
+                        _ => return None,
+                    }
+                }
+            }
+            '[' => {
+                self.at += 1;
+                loop {
+                    self.skip_space();
+                    match self.chars.get(self.at).copied()? {
+                        ']' => {
+                            self.at += 1;
+                            return None;
+                        }
+                        ',' => self.at += 1,
+                        _ => {
+                            if let Some(found) = self.value() {
+                                return Some(found);
+                            }
+                        }
+                    }
+                }
+            }
+            '"' => {
+                self.string();
+                None
+            }
+            _ => {
+                // A number, `true`, `false` or `null`.
+                while let Some(&c) = self.chars.get(self.at) {
+                    if matches!(c, ',' | '}' | ']') || c.is_whitespace() {
+                        break;
+                    }
+                    self.at += 1;
+                }
+                None
+            }
+        }
+    }
 }
 
 fn strip_comments(text: &str) -> Result<String, JsoncError> {
@@ -77,6 +225,7 @@ fn strip_comments(text: &str) -> Result<String, JsoncError> {
                 }
                 if !closed {
                     return Err(JsoncError {
+                        duplicate_key: false,
                         line: start_line,
                         message: "unterminated string".to_string(),
                     });
@@ -110,6 +259,7 @@ fn strip_comments(text: &str) -> Result<String, JsoncError> {
                 }
                 if !closed {
                     return Err(JsoncError {
+                        duplicate_key: false,
                         line: start_line,
                         message: "unterminated block comment".to_string(),
                     });
@@ -240,5 +390,30 @@ mod tests {
     fn syntax_errors_report_the_original_line() {
         let err = parse("{\n// c\n\"a\": }").unwrap_err();
         assert_eq!(err.line, 3);
+    }
+
+    #[test]
+    fn a_repeated_key_is_refused_with_its_line() {
+        let err = parse(
+            "{
+  \"roles\": [],
+  // c
+  \"roles\": []
+}",
+        )
+        .unwrap_err();
+        assert!(err.duplicate_key);
+        assert_eq!(err.line, 4);
+        assert_eq!(err.code("x"), DUPLICATE_KEY);
+    }
+
+    #[test]
+    fn a_repeated_key_is_found_in_a_nested_object_and_through_escapes() {
+        let err = parse("{\"a\": [{\"b\": 1, \"\\u0062\": 2}]}").unwrap_err();
+        assert!(err.duplicate_key);
+        assert!(
+            parse("{\"a\": {\"b\": 1}, \"c\": {\"b\": 2}, \"d\": [{\"b\": 1}, {\"b\": 2}]}")
+                .is_ok()
+        );
     }
 }

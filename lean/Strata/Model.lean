@@ -120,6 +120,18 @@ def canCreate (t : Tenant) (p : PrincipalId) : Bool :=
 def canEdit (t : Tenant) (p : PrincipalId) (r : Record) : Bool :=
   p == t.owner || t.editors.contains p || (t.writers.contains p && r.owner == p)
 
+/-- May `p` change or delete a record when there is no record to test the permission against?
+    Only those whose permission does not depend on the record: the owner and the editors. A writer
+    may act only on a record it created, so with no record it may not. -/
+def canEditAny (t : Tenant) (p : PrincipalId) : Bool :=
+  p == t.owner || t.editors.contains p
+
+/-- The refusal for an update or delete of a record that does not exist. The permission is asked
+    first: one who could not act on a record gets `unauthorized`, the same as for a record that
+    exists, and only one who could act on any record learns that this one is missing (KRN-1080). -/
+def missingRecord (t : Tenant) (p : PrincipalId) : Err :=
+  if canEditAny t p then .notFound else .unauthorized
+
 /-- Absent values are not stored. -/
 def normalise (fs : Fields) : Fields :=
   fs.filter (fun fv => fv.2 != .null)
@@ -138,7 +150,7 @@ def stepTenant (t : Tenant) (p : PrincipalId) : Intent → Except Err Tenant
       else .error .invalid
   | .update id fs =>
     match t.records.lookup id with
-    | none => .error .notFound
+    | none => .error (missingRecord t p)
     | some old =>
       if !canEdit t p old then .error .unauthorized
       else
@@ -148,7 +160,7 @@ def stepTenant (t : Tenant) (p : PrincipalId) : Intent → Except Err Tenant
         else .error .invalid
   | .delete id =>
     match t.records.lookup id with
-    | none => .error .notFound
+    | none => .error (missingRecord t p)
     | some old =>
       if !canEdit t p old then .error .unauthorized
       else .ok { t with records := t.records.filter (fun q => q.1 != id) }

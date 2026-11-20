@@ -17,6 +17,7 @@
 
 use crate::clock::Time;
 use crate::machine::{Delivery, Isolation};
+use crate::TenantId;
 use std::fmt;
 
 /// Why a storage operation failed.
@@ -180,12 +181,16 @@ pub struct QueueEntry {
     pub source_key: String,
 }
 
-/// A queue entry whose delivery failed, kept with the reason.
+/// A queue entry whose delivery failed, or an outbox message whose dispatch failed on every
+/// attempt the retry policy allows, kept with the reason.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DeadLetter {
-    /// The entry as it was on the queue.
+    /// The entry as it was on the queue. For an outbox message: `seq` is the message's outbox
+    /// id, `due` its `not_before`, `source` and `source_key` the emitting instance, `event` the
+    /// emitted event, and no target or timer.
     pub entry: QueueEntry,
-    /// Why its step failed.
+    /// Why its step failed. For an outbox message: the receiver, the number of attempts and the
+    /// error of the last one.
     pub error: String,
     /// When it was set aside.
     pub at: Time,
@@ -206,6 +211,39 @@ pub trait Tx {
         data: &str,
         expected: Option<u64>,
     ) -> Result<u64, StorageError>;
+
+    /// Like [`Tx::save`], and records `at`, the time of the step that made the save, as the time
+    /// the record was last saved ([`Tx::stale_keys`]). A store that stamps its records with a
+    /// clock of its own may keep that time instead; the default ignores `at`.
+    fn save_stamped(
+        &mut self,
+        collection: &str,
+        key: &str,
+        data: &str,
+        expected: Option<u64>,
+        at: Time,
+    ) -> Result<u64, StorageError> {
+        let _ = at;
+        self.save(collection, key, data, expected)
+    }
+
+    /// The keys, in creation order, of the records of `collection` whose last save was before
+    /// `before`. A record whose save time is not known (saved by [`Tx::save`] only, or before
+    /// the store recorded times) is never listed.
+    fn stale_keys(&mut self, collection: &str, before: Time) -> Result<Vec<String>, StorageError>;
+
+    /// Remove the record of `key` in `collection`. Returns whether there was one.
+    fn delete_record(&mut self, collection: &str, key: &str) -> Result<bool, StorageError>;
+
+    /// Remove the outbox message `id` and return it, or `None` when it is gone (delivered,
+    /// claimed or dead-lettered by another host).
+    fn take_message(&mut self, id: u64) -> Result<Option<OutboxEntry>, StorageError>;
+
+    /// Remove every dead letter set aside before `before` ([`DeadLetter::at`]). Returns how many.
+    fn purge_dead_letters(&mut self, before: Time) -> Result<u64, StorageError>;
+
+    /// How many dead letters are kept.
+    fn count_dead_letters(&mut self) -> Result<u64, StorageError>;
 
     /// Put an event in the outbox. Returns its id.
     fn enqueue(&mut self, message: &NewMessage) -> Result<u64, StorageError>;
@@ -239,7 +277,10 @@ pub trait Tx {
         name: &str,
     ) -> Result<bool, StorageError>;
 
-    /// Keep `entry`, which has been taken off the queue, as a dead letter with `error`.
+    /// Keep `entry`, which has been taken off the queue, as a dead letter with `error`. In the same
+    /// transaction the store deletes the dead letters set aside before
+    /// [`dead_letter_bound`]`(at)`, ninety days earlier ([`crate::RETENTION`]), so that the table
+    /// holds no letter past its bound after any write that adds one (WG-5074).
     fn dead_letter(
         &mut self,
         entry: &QueueEntry,
@@ -250,6 +291,13 @@ pub trait Tx {
 
 /// Records, read and written in transactions.
 pub trait RecordStore: Send + Sync + 'static {
+    /// The tenant this store belongs to. A machine store is constructed for exactly one tenant,
+    /// and every row in it, a machine's record, an outbox entry or a timer, is in that tenant's
+    /// scope: there is no constructor without a tenant, and no way to give a store a second one,
+    /// so two tenants cannot share instance state by having equal record ids. Hosts take their
+    /// tenant from their store ([`Host::tenant`](crate::Host::tenant)).
+    fn tenant(&self) -> &TenantId;
+
     /// Whether this store can run a transaction at `isolation` or stronger.
     fn supports(&self, isolation: Isolation) -> bool;
 
@@ -320,3 +368,13 @@ pub trait QueueStore: Send + Sync + 'static {
 pub trait MachineStore: RecordStore + OutboxStore + TimerStore + QueueStore {}
 
 impl<S: RecordStore + OutboxStore + TimerStore + QueueStore> MachineStore for S {}
+
+/// The time before which a dead letter has outlived its retention when one is written at `at`:
+/// [`crate::RETENTION`] earlier.
+pub fn dead_letter_bound(at: Time) -> Time {
+    Time(
+        at.0.saturating_sub(
+            i64::try_from(crate::system::RETENTION.as_millis()).unwrap_or(i64::MAX),
+        ),
+    )
+}

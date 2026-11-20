@@ -1,0 +1,57 @@
+{
+  // A product that declares an event kind and reacts to it (SCH-1576, INT-3203, NTF-3200): the
+  // section eventKinds holds values of event-kind-decl, a trigger selects the kind with the trigger
+  // event DeclaredEvent, and its automation sends the digest of a day with the step SendDigest. A
+  // kind begins with app.; the product's own entities are in its namespace order_events__ (D-6582).
+  "product": {
+    "id": "order-events",
+    "name": "Order events",
+    "description": "Declares the event kind app.order-placed and sends one digest of the notices of the category orders when it happens.",
+    "version": "1.0.0",
+    "platform": { "min": "0.2" },
+    "imports": {
+      "spec": "../../../../../specifications/spec.jsonc",
+      "entities": []
+    }
+  },
+  "eventKinds": [
+    {
+      "id": "order_events__placed",
+      "kind": "app.order-placed",
+      "fields": [
+        { "name": "order", "type": "string" },
+        { "name": "total", "type": "number" }
+      ],
+      "readers": []
+    }
+  ],
+  "mailTemplates": [
+    {
+      "id": "order_events__digest_mail",
+      "subject": "Your orders today",
+      "body": "[{\"type\":\"paragraph\",\"inlines\":[{\"type\":\"text\",\"text\":\"Your orders of the day are listed below.\"}]}]"
+    }
+  ],
+  "triggers": [
+    {
+      "id": "order_events__on_placed",
+      "on": { "DeclaredEvent": { "kind": "app.order-placed" } },
+      "automation": "order_events__digest"
+    }
+  ],
+  "automations": [
+    {
+      "id": "order_events__digest",
+      "label": "Send the digest of the orders of a day",
+      "run-as": { "roles": [] },
+      "start": "digest",
+      "steps": {
+        "digest": {
+          "action": { "SendDigest": { "category": "orders", "template": "order_events__digest_mail", "since": 0, "until": 86400000 } },
+          "next": "done"
+        },
+        "done": { "action": "End" }
+      }
+    }
+  ]
+}

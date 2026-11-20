@@ -11,6 +11,7 @@ use crate::store::{
     DeadLetter, NewEntry, NewMessage, NewTimer, OutboxEntry, OutboxStore, QueueEntry, QueueStore,
     RecordStore, StorageError, StoredRecord, TimerEntry, TimerStore, Tx,
 };
+use crate::TenantId;
 use std::collections::BTreeMap;
 use std::sync::{Mutex, MutexGuard};
 
@@ -19,6 +20,9 @@ struct Data {
     records: BTreeMap<(String, String), StoredRecord>,
     /// When each record was created, as a counter: the order of [`Tx::keys`].
     created: BTreeMap<(String, String), u64>,
+    /// When each record was last saved with a time ([`Tx::save_stamped`]); a record saved
+    /// without one has no entry.
+    stamped: BTreeMap<(String, String), Time>,
     outbox: BTreeMap<u64, OutboxEntry>,
     timers: BTreeMap<u64, TimerEntry>,
     queue: BTreeMap<u64, QueueEntry>,
@@ -36,15 +40,23 @@ fn in_queue_order(entries: impl Iterator<Item = QueueEntry>) -> Vec<QueueEntry> 
 }
 
 /// A machine store held in memory. Its contents live as long as the value.
-#[derive(Debug, Default)]
+///
+/// It belongs to one tenant, given at construction; there is no `Default` and no constructor
+/// without a tenant. Rows are in that tenant's scope, and two tenants take two stores, so equal
+/// record ids in two tenants are two instances.
+#[derive(Debug)]
 pub struct MemoryStore {
+    tenant: TenantId,
     data: Mutex<Data>,
 }
 
 impl MemoryStore {
-    /// An empty store.
-    pub fn new() -> Self {
-        Self::default()
+    /// An empty store for `tenant`.
+    pub fn new(tenant: TenantId) -> Self {
+        MemoryStore {
+            tenant,
+            data: Mutex::new(Data::default()),
+        }
     }
 
     fn lock(&self) -> Result<MutexGuard<'_, Data>, StorageError> {
@@ -74,28 +86,58 @@ impl Tx for MemoryTx<'_> {
         data: &str,
         expected: Option<u64>,
     ) -> Result<u64, StorageError> {
+        self.put(collection, key, data, expected, None)
+    }
+
+    fn save_stamped(
+        &mut self,
+        collection: &str,
+        key: &str,
+        data: &str,
+        expected: Option<u64>,
+        at: Time,
+    ) -> Result<u64, StorageError> {
+        self.put(collection, key, data, expected, Some(at))
+    }
+
+    fn stale_keys(&mut self, collection: &str, before: Time) -> Result<Vec<String>, StorageError> {
+        let mut keys: Vec<(u64, String)> = self
+            .data
+            .created
+            .iter()
+            .filter(|((c, k), _)| {
+                c == collection
+                    && self
+                        .data
+                        .stamped
+                        .get(&(c.clone(), k.clone()))
+                        .is_some_and(|at| *at < before)
+            })
+            .map(|((_, k), n)| (*n, k.clone()))
+            .collect();
+        keys.sort();
+        Ok(keys.into_iter().map(|(_, k)| k).collect())
+    }
+
+    fn delete_record(&mut self, collection: &str, key: &str) -> Result<bool, StorageError> {
         let slot = (collection.to_string(), key.to_string());
-        let found = self.data.records.get(&slot).map(|r| r.version);
-        if found != expected {
-            return Err(StorageError::Conflict(format!(
-                "{collection} {key}: expected version {expected:?}, found {found:?}"
-            )));
-        }
-        let version = found.unwrap_or(0) + 1;
-        if found.is_none() {
-            self.data.last_record += 1;
-            self.data
-                .created
-                .insert(slot.clone(), self.data.last_record);
-        }
-        self.data.records.insert(
-            slot,
-            StoredRecord {
-                data: data.to_string(),
-                version,
-            },
-        );
-        Ok(version)
+        self.data.created.remove(&slot);
+        self.data.stamped.remove(&slot);
+        Ok(self.data.records.remove(&slot).is_some())
+    }
+
+    fn take_message(&mut self, id: u64) -> Result<Option<OutboxEntry>, StorageError> {
+        Ok(self.data.outbox.remove(&id))
+    }
+
+    fn purge_dead_letters(&mut self, before: Time) -> Result<u64, StorageError> {
+        let held = self.data.dead.len();
+        self.data.dead.retain(|d| d.at >= before);
+        Ok((held - self.data.dead.len()) as u64)
+    }
+
+    fn count_dead_letters(&mut self) -> Result<u64, StorageError> {
+        Ok(self.data.dead.len() as u64)
     }
 
     fn enqueue(&mut self, message: &NewMessage) -> Result<u64, StorageError> {
@@ -211,7 +253,47 @@ impl Tx for MemoryTx<'_> {
             error: error.to_string(),
             at,
         });
+        self.purge_dead_letters(crate::store::dead_letter_bound(at))?;
         Ok(())
+    }
+}
+
+impl MemoryTx<'_> {
+    /// Save a record; `at` is when, or `None` when the save has no time.
+    fn put(
+        &mut self,
+        collection: &str,
+        key: &str,
+        data: &str,
+        expected: Option<u64>,
+        at: Option<Time>,
+    ) -> Result<u64, StorageError> {
+        let slot = (collection.to_string(), key.to_string());
+        let found = self.data.records.get(&slot).map(|r| r.version);
+        if found != expected {
+            return Err(StorageError::Conflict(format!(
+                "{collection} {key}: expected version {expected:?}, found {found:?}"
+            )));
+        }
+        let version = found.unwrap_or(0) + 1;
+        if found.is_none() {
+            self.data.last_record += 1;
+            self.data
+                .created
+                .insert(slot.clone(), self.data.last_record);
+        }
+        match at {
+            Some(at) => self.data.stamped.insert(slot.clone(), at),
+            None => self.data.stamped.remove(&slot),
+        };
+        self.data.records.insert(
+            slot,
+            StoredRecord {
+                data: data.to_string(),
+                version,
+            },
+        );
+        Ok(version)
     }
 }
 
@@ -234,6 +316,10 @@ impl QueueStore for MemoryStore {
 }
 
 impl RecordStore for MemoryStore {
+    fn tenant(&self) -> &TenantId {
+        &self.tenant
+    }
+
     fn supports(&self, _: Isolation) -> bool {
         true
     }

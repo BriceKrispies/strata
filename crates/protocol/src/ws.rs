@@ -49,6 +49,19 @@ pub enum ClientMessage {
         /// Limit record notices to these object types.
         #[serde(default)]
         objects: Option<Vec<String>>,
+        /// Limit events to these kinds (`record-created`, `record-updated`, ...).
+        #[serde(default)]
+        kinds: Option<Vec<String>>,
+        /// Limit to the entry and exit events of these segments. Refused while no such event is
+        /// emitted.
+        #[serde(default)]
+        segments: Option<Vec<String>>,
+        /// Limit to the ledger events of these units; a posting reaches only who may read its account.
+        #[serde(default)]
+        units: Option<Vec<String>>,
+        /// Limit to record updates that fired one of these named workflow transitions.
+        #[serde(default)]
+        transitions: Option<Vec<String>>,
         /// Replay visible events with a sequence above this.
         #[serde(default)]
         after: Option<u64>,
@@ -130,6 +143,19 @@ pub enum ServerMessage {
         kind: String,
         payload: Json,
     },
+    /// A change of the inbox of the person on this connection (NTF-1569): `kind` is `arrived`,
+    /// `read`, `unread` or `ended`. It names the notice and carries none of its text: the client
+    /// reads the inbox again through the ordinary call. Only the recipient's own connections are
+    /// sent one.
+    Inbox {
+        kind: String,
+        notice: String,
+        topic: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        category: Option<String>,
+        at: i64,
+        unread: u32,
+    },
 }
 
 /// Parse a client frame, refusing oversized or malformed ones.
@@ -144,8 +170,24 @@ pub fn parse_client(frame: &str) -> Result<ClientMessage, String> {
     let short = |s: &str| !s.is_empty() && s.len() <= 64;
     let ok = match &message {
         ClientMessage::Subscribe {
-            req, sub, objects, ..
-        } => short(req) && short(sub) && objects.as_ref().is_none_or(|o| o.len() <= 32),
+            req,
+            sub,
+            objects,
+            kinds,
+            segments,
+            units,
+            transitions,
+            ..
+        } => {
+            let few = |names: &Option<Vec<String>>| names.as_ref().is_none_or(|n| n.len() <= 32);
+            short(req)
+                && short(sub)
+                && few(objects)
+                && few(kinds)
+                && few(segments)
+                && few(units)
+                && few(transitions)
+        }
         ClientMessage::Unsubscribe { req, sub } => short(req) && short(sub),
         ClientMessage::Cancel { req, run } => short(req) && short(run),
         ClientMessage::Diag {
@@ -175,8 +217,28 @@ mod tests {
                 req: "r1".into(),
                 sub: "s1".into(),
                 objects: None,
+                kinds: None,
+                segments: None,
+                units: None,
+                transitions: None,
                 after: Some(7)
             })
+        );
+        let narrowed = parse_client(
+            r#"{"type":"subscribe","req":"r1","sub":"s1","kinds":["record-updated"],"transitions":["publish"]}"#,
+        );
+        assert!(matches!(
+            narrowed,
+            Ok(ClientMessage::Subscribe { kinds: Some(k), transitions: Some(t), .. })
+                if k == ["record-updated"] && t == ["publish"]
+        ));
+        let too_many = format!(
+            r#"{{"type":"subscribe","req":"r1","sub":"s1","kinds":[{}]}}"#,
+            vec!["\"record-created\""; 33].join(",")
+        );
+        assert!(
+            parse_client(&too_many).is_err(),
+            "a selector member holds at most 32 names"
         );
         assert!(parse_client(r#"{"type":"subscribe","req":"","sub":"s1"}"#).is_err());
         assert!(parse_client(r#"{"type":"become_admin"}"#).is_err());

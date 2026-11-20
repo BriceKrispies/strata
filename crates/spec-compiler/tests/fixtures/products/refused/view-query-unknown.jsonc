@@ -1,0 +1,13 @@
+{
+  // Refused: a view whose section shows a query in the namespace of the product that no product file
+  // declares (layer.reference-unknown, D-6700).
+  "product": { "id": "ticket-board", "name": "Ticket board", "imports": { "spec": "../../../../../../specifications/spec.jsonc", "entities": [] } },
+  "views": [
+    {
+      "id": "ticket_board__board",
+      "route": "/tickets",
+      "title": "Tickets",
+      "sections": { "open": { "query": "ticket_board__ghost", "args": {}, "include": [], "markdown": [], "single": false } }
+    }
+  ]
+}

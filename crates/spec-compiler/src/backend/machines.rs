@@ -90,6 +90,8 @@ pub const EFFECT_UNSUPPORTED: &str = "specc.effect-unsupported";
 pub const INSTANCES_COUNTED: &str = "specc.instances-counted";
 /// Code of a machine whose storage record or key is missing or unknown.
 pub const STORAGE: &str = "specc.machine-storage";
+/// Code of a machine key that is not the whole key of its record (Exegra's rule `storage.key-whole`).
+pub const KEY_WHOLE: &str = "storage.key-whole";
 /// Code of a `storage.fields` entry naming a variable the machine lacks or a field the record
 /// lacks, or of a record field asked to hold two of the key, the state and the variables
 /// (Exegra's rule of the same code).
@@ -102,6 +104,10 @@ pub const FIELD_TYPE: &str = "ready.storage-field-type";
 pub const STATE_FIELD: &str = "ready.storage-state-field";
 /// Code of a required record field a creating machine does not fill.
 pub const CREATES_UNFILLED: &str = "ready.storage-creates-unfilled";
+/// Code of an unkeyed machine that creates its records whose key the runtime cannot fill: the one
+/// instance of such a machine is created by the runtime under a fixed key (`Machine::SINGLETON_KEY`),
+/// which is derived for a key of type `string`, `uuid` or an integer, or an id or scalar over one.
+pub const SINGLETON_KEY: &str = "specc.singleton-key";
 /// Code of a reference to an event that is not declared.
 pub const EVENT_UNKNOWN: &str = "specc.event-unknown";
 /// Code of a reference to a state the machine does not declare.
@@ -239,6 +245,60 @@ fn in_declaration_order<'a>(a: &'a [Behavior], b: &'a [Behavior]) -> Vec<&'a Beh
     let mut all: Vec<&Behavior> = a.iter().chain(b.iter()).collect();
     all.sort_by_key(|m| m.declared);
     all
+}
+
+/// The registry macros of the generated `lib.rs`: `for_each_shipped_machine!(callback)` expands
+/// to `callback! { machines::<module>::<Type>, ... }` over every stored shipped machine, and
+/// `for_each_target_machine!(callback)` over every stored target machine. A caller that builds a
+/// registry from them cannot miss a machine the specification declares. Memory machines are not
+/// listed: they have no `strata_runtime::Machine` impl. The target macro is defined only with the
+/// `target-models` feature, the feature that compiles `target_machines`.
+pub fn registry_macros(spec: &Spec) -> TokenStream {
+    let shipped = registry_paths(&spec.machines, "machines");
+    let target = registry_paths(&spec.target_machines, "target_machines");
+    let mut out = TokenStream::new();
+    if !shipped.is_empty() {
+        out.extend(quote! {
+            #[doc = " Calls the macro `$callback` as `$callback! { machines::<module>::<Type>, ... }`, with every shipped stored implementation machine of the specification, in declaration order."]
+            #[macro_export]
+            macro_rules! for_each_shipped_machine {
+                ($callback:ident) => {
+                    $callback! {
+                        #(#shipped,)*
+                    }
+                };
+            }
+        });
+    }
+    if !target.is_empty() {
+        out.extend(quote! {
+            #[cfg(feature = "target-models")]
+            #[doc = " Calls the macro `$callback` as `$callback! { target_machines::<module>::<Type>, ... }`, with every target stored implementation machine of the specification, in declaration order. Expanding it needs the `target-models` feature."]
+            #[macro_export]
+            macro_rules! for_each_target_machine {
+                ($callback:ident) => {
+                    $callback! {
+                        #(#target,)*
+                    }
+                };
+            }
+        });
+    }
+    out
+}
+
+/// The paths `<module>::<machine module>::<machine type>` of the stored machines in `machines`.
+fn registry_paths(machines: &[Behavior], module: &str) -> Vec<TokenStream> {
+    let root = naming::ident(module);
+    machines
+        .iter()
+        .filter(|b| !b.memory)
+        .map(|b| {
+            let file = naming::ident(&naming::snake(&b.id).unwrap_or_default());
+            let ty = naming::ident(&naming::pascal(&b.id).unwrap_or_default());
+            quote! { #root::#file::#ty }
+        })
+        .collect()
 }
 
 /// The module-name and generation checks of the machines of one module.
@@ -513,7 +573,11 @@ fn raw_ty(t: &TypeRef) -> Ty {
         TypeRef::Builtin(b) => builtin_ty(*b),
         TypeRef::Declared(id) => Ty::Named(id.clone()),
         TypeRef::Option(inner) => Ty::Option(Box::new(raw_ty(inner))),
-        TypeRef::List(inner) => Ty::List(Box::new(raw_ty(inner))),
+        TypeRef::List(inner) | TypeRef::Set(inner) => Ty::List(Box::new(raw_ty(inner))),
+        // A map is opaque to expressions, like json: compared only with == and !=.
+        TypeRef::Map(..) => Ty::Named(t.text()),
+        // So is a shared value, whose Rust type is not its inner type.
+        TypeRef::Shared(..) => Ty::Named(t.text()),
     }
 }
 
@@ -559,7 +623,11 @@ fn view(spec: &Spec, t: &TypeRef, uses: &mut Uses) -> View {
                 None => View::plain(Ty::Named(id.clone())),
             }
         }
-        TypeRef::Option(_) | TypeRef::List(_) => View::plain(raw_ty(t)),
+        TypeRef::Option(_)
+        | TypeRef::List(_)
+        | TypeRef::Set(_)
+        | TypeRef::Map(..)
+        | TypeRef::Shared(_) => View::plain(raw_ty(t)),
     }
 }
 
@@ -1120,7 +1188,7 @@ impl<'a> Gen<'a> {
                     "ready.storage-mismatch",
                     format!(
                         "Machine \"{}\" is stored in record \"{}\" by \"{}\" according to storage, but in \"{}\" by \"{}\" according to instances.",
-                        b.id, a.0, a.1, b2.0, b2.1
+                        b.id, a.0, a.1.join(", "), b2.0, b2.1.join(", ")
                     ),
                 );
                 return None;
@@ -1145,22 +1213,52 @@ impl<'a> Gen<'a> {
             );
             return None;
         };
-        let Some(key_field) = record.field(&key) else {
+        // Every key field is a field of the record, and together they are the record's whole key,
+        // in its order: a machine keyed by part of the key would be one instance for every record
+        // that agrees on that part (Exegra's rule `storage.key-whole`, WG-4907).
+        let mut key_fields = Vec::new();
+        for k in &key {
+            let Some(f) = record.field(k) else {
+                self.refuse(
+                    STORAGE,
+                    format!(
+                        "The key \"{k}\" of machine \"{}\" is not a field of record \"{record_id}\".",
+                        b.id
+                    ),
+                );
+                return None;
+            };
+            key_fields.push(f);
+        }
+        let whole = record.key.clone().unwrap_or_default();
+        if key != whole {
             self.refuse(
-                STORAGE,
+                KEY_WHOLE,
                 format!(
-                    "The key \"{key}\" of machine \"{}\" is not a field of record \"{record_id}\".",
+                    "The key {key:?} of machine \"{}\" is not the whole key {whole:?} of record \"{record_id}\"; a machine is keyed by every key field of its record, in order, or records that agree on the named fields would share one instance.",
                     b.id
                 ),
             );
             return None;
-        };
-        let key_ref = TypeRef::parse(&key_field.type_name);
-        let mut key_ty = render::rust_type(spec, &key_ref, TypeScope::Other, &mut self.uses);
-        let key_copy = resolve::is_copy(&key_ref);
-        if key_field.optional {
-            key_ty = quote! { Option<#key_ty> };
         }
+        // The key's Rust type: the field's, or a tuple of the fields' for a composite key.
+        let key_types: Vec<(TokenStream, bool)> = key_fields
+            .iter()
+            .map(|f| {
+                let r = TypeRef::parse(&f.type_name);
+                let mut ty = render::rust_type(spec, &r, TypeScope::Other, &mut self.uses);
+                if f.optional {
+                    ty = quote! { Option<#ty> };
+                }
+                (ty, resolve::is_copy(spec, &r) && !f.optional)
+            })
+            .collect();
+        let key_ty = if let [(ty, _)] = key_types.as_slice() {
+            ty.clone()
+        } else {
+            let tys = key_types.iter().map(|(t, _)| t);
+            quote! { (#(#tys),*) }
+        };
 
         let st = b.storage.clone();
         let explicit: Vec<(String, Option<String>)> =
@@ -1170,7 +1268,10 @@ impl<'a> Gen<'a> {
         let creates = st.as_ref().is_some_and(|s| s.creates);
 
         // What each record field holds: the key, a variable, the state.
-        let mut owned: Vec<(String, String)> = vec![(key.clone(), "the key".to_string())];
+        let mut owned: Vec<(String, String)> = key
+            .iter()
+            .map(|k| (k.clone(), "the key".to_string()))
+            .collect();
         for (v, f) in &explicit {
             if !b.variables.iter().any(|x| x.name == *v) {
                 self.refuse(
@@ -1294,12 +1395,22 @@ impl<'a> Gen<'a> {
         let mut uses_state = false;
         for f in &record.fields {
             let field = naming::ident(&naming::snake(&f.name).unwrap_or_default());
-            let field_copy = resolve::is_copy(&TypeRef::parse(&f.type_name));
-            let value = if f.name == key {
-                if key_copy && !key_field.optional {
-                    quote! { *key }
+            let field_copy = resolve::is_copy(spec, &TypeRef::parse(&f.type_name));
+            let value = if let Some(at) = key.iter().position(|k| *k == f.name) {
+                let copy = key_types[at].1;
+                if key.len() == 1 {
+                    if copy {
+                        quote! { *key }
+                    } else {
+                        quote! { key.clone() }
+                    }
                 } else {
-                    quote! { key.clone() }
+                    let at = proc_macro2::Literal::usize_unsuffixed(at);
+                    if copy {
+                        quote! { key.#at }
+                    } else {
+                        quote! { key.#at.clone() }
+                    }
                 }
             } else if f.name == state_field && !matches!(state_code, StateCode::Unstored) {
                 uses_state = true;
@@ -1338,7 +1449,7 @@ impl<'a> Gen<'a> {
         Some(StorageCode {
             record: record.clone(),
             record_ty: naming::ident(&naming::pascal(&record.id).unwrap_or_default()),
-            key_field: key,
+            key_field: key.join("`, `"),
             key_ty,
             read_state,
             reads_record: !held.is_empty() || !matches!(state_code, StateCode::Unstored),
@@ -1353,7 +1464,7 @@ impl<'a> Gen<'a> {
     /// The value of record field `f` holding the variable of `slot`, in `to_record`.
     fn write_field(&mut self, slot: &Slot, f: &RecordField) -> TokenStream {
         let vf = &slot.field;
-        let value = if resolve::is_copy(&TypeRef::parse(&slot.type_name)) {
+        let value = if resolve::is_copy(self.spec, &TypeRef::parse(&slot.type_name)) {
             quote! { vars.#vf }
         } else {
             quote! { vars.#vf.clone() }
@@ -1377,7 +1488,7 @@ impl<'a> Gen<'a> {
     /// unset optional field gives the variable its initial value.
     fn read_field(&mut self, slot: &Slot, f: &RecordField) -> TokenStream {
         let rf = naming::ident(&naming::snake(&f.name).unwrap_or_default());
-        let copy = resolve::is_copy(&TypeRef::parse(&slot.type_name));
+        let copy = resolve::is_copy(self.spec, &TypeRef::parse(&slot.type_name));
         let (optional, declared) = match fit(self.spec, &slot.type_name, f) {
             Some(Fit::Option) | None => {
                 return if copy {
@@ -1524,6 +1635,13 @@ impl<'a> Gen<'a> {
                 let inner = self.literal(v, inner)?;
                 Ok(quote! { Some(#inner) })
             }
+            (TypeRef::Set(inner), Value::Array(items)) => {
+                let items = items
+                    .iter()
+                    .map(|i| self.literal(i, inner))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(quote! { [#(#items),*].into_iter().collect::<std::collections::BTreeSet<_>>() })
+            }
             (TypeRef::List(inner), Value::Array(items)) => {
                 if items.is_empty() {
                     return Ok(quote! { Vec::new() });
@@ -1556,6 +1674,40 @@ impl<'a> Gen<'a> {
                             .as_deref()
                             .and_then(Builtin::parse)
                             .ok_or_else(|| format!("\"{id}\" has no built-in repr"))?;
+                        // The generated type refuses to decode a value that breaks its
+                        // constraints, so a literal that breaks them would be a value the
+                        // machine writes and cannot read back.
+                        if let Value::String(text) = v {
+                            let c = &decl.constraints;
+                            let length = u64::try_from(text.chars().count()).unwrap_or(u64::MAX);
+                            if let Some(p) = &c.pattern {
+                                if regex::Regex::new(&crate::rules::anchored(p))
+                                    .is_ok_and(|re| !re.is_match(text))
+                                {
+                                    return Err(format!(
+                                        "{v} does not match the pattern \"{p}\" of type \"{id}\", which the generated type would refuse to decode"
+                                    ));
+                                }
+                            }
+                            if c.max_length
+                                .as_ref()
+                                .and_then(serde_json::Number::as_u64)
+                                .is_some_and(|max| length > max)
+                            {
+                                return Err(format!(
+                                    "{v} is longer than the maxLength of type \"{id}\""
+                                ));
+                            }
+                            if c.min_length
+                                .as_ref()
+                                .and_then(serde_json::Number::as_u64)
+                                .is_some_and(|min| length < min)
+                            {
+                                return Err(format!(
+                                    "{v} is shorter than the minLength of type \"{id}\""
+                                ));
+                            }
+                        }
                         let inner = self.literal(v, &TypeRef::Builtin(repr))?;
                         Ok(quote! { #name(#inner) })
                     }
@@ -1975,6 +2127,7 @@ impl<'a> Gen<'a> {
                     ty,
                     optional: false,
                     doc: Doc::new(&format!("Variable `{}`.", v.name)),
+                    deserialize_with: None,
                 }
                 .tokens()
             })
@@ -2043,6 +2196,7 @@ impl<'a> Gen<'a> {
                         ty,
                         optional: f.optional,
                         doc: Doc::new(&format!("Field `{}`.", f.name)),
+                        deserialize_with: None,
                     }
                     .tokens();
                     // A u64 or i64 beyond +-(2^53 - 1) is refused when the payload is decoded,
@@ -2087,6 +2241,47 @@ impl<'a> Gen<'a> {
             &self.emitted,
         );
 
+        // An unkeyed machine that creates its records is one instance that exists from the start
+        // (Exegra starts it at the beginning): the runtime creates it under a fixed key when the
+        // system is built (`Machine::SINGLETON_KEY`).
+        let singleton_key = match storage.as_ref() {
+            Some(s) if s.creates && b.instances.as_ref().and_then(|i| i.key.as_ref()).is_none() => {
+                let json = singleton_key_json(spec, &s.record, &b.id);
+                if json.is_none() {
+                    self.refuse(
+                        SINGLETON_KEY,
+                        format!(
+                            "Machine \"{}\" creates records of \"{}\" and has no instances.key, so the runtime creates its one instance under a fixed key; the key of that record has a type that has no fixed value (only string, uuid, an integer, or an id or scalar over one, in a field that is not optional, has one). Key the machine (instances.key) or change the key type.",
+                            b.id, s.record.id
+                        ),
+                    );
+                }
+                json
+            }
+            _ => None,
+        };
+        let singleton = match &singleton_key {
+            Some(json) => quote! { const SINGLETON_KEY: Option<&'static str> = Some(#json); },
+            None => TokenStream::new(),
+        };
+        // The states that end an instance's life.
+        let terminal_states: Vec<&Ident> = b
+            .states
+            .iter()
+            .zip(states)
+            .filter(|(s, _)| s.terminal)
+            .map(|(_, ident)| ident)
+            .collect();
+        let is_terminal = if terminal_states.is_empty() {
+            TokenStream::new()
+        } else {
+            quote! {
+                fn is_terminal(state: &State) -> bool {
+                    matches!(state, #(State::#terminal_states)|*)
+                }
+            }
+        };
+
         // Storage: a record-stored machine converts to and from its record; a memory machine has
         // no record, key or transaction.
         let storage_code = storage.as_ref().map(|storage| {
@@ -2121,6 +2316,15 @@ impl<'a> Gen<'a> {
             };
             let read_state = &storage.read_state;
             let creates = storage.creates;
+            // `instances.max` of a keyed machine that creates its records: the runtime refuses an
+            // event that would create one instance more (`Machine::MAX_INSTANCES`), as Exegra does.
+            let max_instances = match b.instances.as_ref().and_then(|i| i.max) {
+                Some(max) if creates => quote! { const MAX_INSTANCES: Option<u64> = Some(#max); },
+                _ => quote! {},
+            };
+            // The fixed key of the one instance of an unkeyed machine that creates its records
+            // goes with the instance limit: both are consts of the impl.
+            let max_instances = quote! { #max_instances #singleton };
             let previous_required = if storage.uses_previous && !creates {
                 let message = format!(
                     "machine `{}` does not create records of `{}`, and the key has none",
@@ -2147,6 +2351,7 @@ impl<'a> Gen<'a> {
                 vars_param,
                 previous_param,
                 previous_required,
+                max_instances,
                 to_fields: to_fields.clone(),
                 machine_doc: format!(
                     " Machine `{}`, stored in record `{}` by `{}`.",
@@ -2303,6 +2508,7 @@ impl<'a> Gen<'a> {
                     vars_param,
                     previous_param,
                     previous_required,
+                    max_instances,
                     to_fields,
                     machine_doc,
                 } = st;
@@ -2321,6 +2527,7 @@ impl<'a> Gen<'a> {
                         const RECORD: &'static str = #record_id;
                         const ISOLATION: Isolation = #isolation;
                         const CREATES: bool = #creates;
+                        #max_instances
 
                         type State = State;
                         type Vars = Vars;
@@ -2355,6 +2562,8 @@ impl<'a> Gen<'a> {
                         fn validate_record(record: &records::#record_ty) -> Result<(), String> {
                             record.validate().map_err(|violation| violation.to_string())
                         }
+
+                        #is_terminal
 
                         fn step(state: &State, vars: &Vars, event: &Event, #now: Time) -> Result<Outcome<Self>, StepError> {
                             match (state, event) {
@@ -2511,6 +2720,8 @@ struct StorageTokens {
     vars_param: TokenStream,
     previous_param: TokenStream,
     previous_required: TokenStream,
+    /// `const MAX_INSTANCES` for a keyed machine that creates its records and states `instances.max`.
+    max_instances: TokenStream,
     to_fields: Vec<TokenStream>,
     machine_doc: String,
 }
@@ -2530,6 +2741,79 @@ struct StorageCode {
     uses_previous: bool,
     to_fields: Vec<TokenStream>,
     from_fields: Vec<TokenStream>,
+}
+
+/// The key of the one instance of an unkeyed machine that creates its records, as JSON text, or
+/// `None` when a key field has a type with no fixed value. The runtime creates that instance when
+/// the system is built, under this key (`Machine::SINGLETON_KEY`). A key of type `string` is the
+/// machine's id with `-` written `_` (so two machines in one record have two keys, and a
+/// pattern such as `^[a-z][a-z0-9_]*$` holds); a `uuid` is a version 8 uuid derived from the
+/// machine's id; an integer is 0. A composite key is the array of its parts.
+pub fn singleton_key_json(spec: &Spec, record: &Record, machine: &str) -> Option<String> {
+    let mut parts = Vec::new();
+    for name in record.key.as_ref()? {
+        let field = record.field(name)?;
+        if field_base(field).0 {
+            return None;
+        }
+        parts.push(singleton_value(
+            spec,
+            &TypeRef::parse(&field.type_name),
+            machine,
+        )?);
+    }
+    let value = match parts.len() {
+        0 => return None,
+        1 => parts.remove(0),
+        _ => Value::Array(parts),
+    };
+    serde_json::to_string(&value).ok()
+}
+
+fn singleton_value(spec: &Spec, t: &TypeRef, machine: &str) -> Option<Value> {
+    match t {
+        TypeRef::Builtin(b) => singleton_builtin(*b, machine),
+        TypeRef::Declared(id) => match &spec.type_decl(id)?.kind {
+            TypeKind::Id { repr } | TypeKind::Scalar { repr } => {
+                singleton_builtin(Builtin::parse(repr.as_deref()?)?, machine)
+            }
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn singleton_builtin(b: Builtin, machine: &str) -> Option<Value> {
+    match b {
+        Builtin::String => Some(Value::String(machine.replace('-', "_"))),
+        Builtin::Uuid => Some(Value::String(derived_uuid(machine))),
+        b if b.integer_range().is_some() => Some(Value::from(0)),
+        _ => None,
+    }
+}
+
+/// A version 8 uuid whose bytes are two FNV-1a hashes of `name`: the same name gives the same
+/// uuid, and no randomness or clock is involved.
+fn derived_uuid(name: &str) -> String {
+    let hash = |basis: u64| {
+        name.bytes().fold(basis, |h, byte| {
+            (h ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3)
+        })
+    };
+    let mut bytes = [0u8; 16];
+    bytes[..8].copy_from_slice(&hash(0xcbf2_9ce4_8422_2325).to_be_bytes());
+    bytes[8..].copy_from_slice(&hash(0x8422_2325_cbf2_9ce4).to_be_bytes());
+    bytes[6] = (bytes[6] & 0x0f) | 0x80;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    let hex: Vec<String> = bytes.iter().map(|b| format!("{b:02x}")).collect();
+    format!(
+        "{}-{}-{}-{}-{}",
+        hex[0..4].concat(),
+        hex[4..6].concat(),
+        hex[6..8].concat(),
+        hex[8..10].concat(),
+        hex[10..16].concat()
+    )
 }
 
 /// A record field's type split into whether it may be unset and the type it holds when set: a

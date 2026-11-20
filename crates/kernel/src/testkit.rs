@@ -38,6 +38,10 @@ pub fn ctx(tenant: &str, principal: Principal, now: i64) -> Context {
         session: None,
         now: Timestamp(now),
         correlation: format!("test-{now}"),
+        verified_address: None,
+        idempotency_key: None,
+        language: None,
+        hop: None,
     }
 }
 
@@ -59,6 +63,8 @@ pub fn field_def(id: &str, ty: FieldType, required: bool) -> FieldDef {
         required,
         unique: false,
         default: None,
+        read: None,
+        personal: None,
     }
 }
 
@@ -222,6 +228,8 @@ pub fn notes_schema() -> Vec<SchemaChange> {
                 descending: true,
             }],
             limit: None,
+            aggregates: None,
+            declared_fields: None,
         }),
         SchemaChange::DefineQuery(QueryDef {
             id: QueryId::new("note_by_slug").expect("id"),
@@ -230,6 +238,8 @@ pub fn notes_schema() -> Vec<SchemaChange> {
             params: BTreeSet::from(["slug".to_string()]),
             order: vec![],
             limit: Some(1),
+            aggregates: None,
+            declared_fields: None,
         }),
     ]
 }

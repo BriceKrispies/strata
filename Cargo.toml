@@ -16,9 +16,15 @@ members = [
     "crates/spec-compiler-fixture",
     "crates/spec-compiler-machines-fixture",
     "crates/spec-compiler-wiring-fixture",
+    "crates/spec-compiler-core-fixture",
+    "crates/spec-compiler-language-fixture",
+    "crates/spec-compiler-functions-fixture",
+    "crates/spec-compiler-derived-fixture",
+    "crates/spec-compiler-adversarial-fixture",
     "crates/spec-expr",
     "crates/spec-expr-cases",
     "crates/model",
+    "crates/model-core",
     "crates/system-differential",
 ]
 
@@ -41,10 +47,14 @@ strata-simulation = { path = "crates/simulation" }
 strata-verification = { path = "crates/verification" }
 strata-spec-expr = { path = "crates/spec-expr" }
 strata-model = { path = "crates/model" }
+strata-model-core = { path = "crates/model-core" }
 
 serde = { version = "1.0.228", features = ["derive", "rc"] }
 serde_json = "1.0.146"
 sha2 = "0.10.9"
+# Time zone rules for recurrences (SCH-1573, D-6567): jiff with its bundled IANA database, so that
+# every platform reads the version the release carries.
+jiff = { version = "0.2.46", default-features = false, features = ["std", "tzdb-bundle-always"] }
 proptest = "1.12.0"
 rusqlite = { version = "0.32.1", features = ["bundled"] }
 tokio = { version = "1.52", features = ["rt-multi-thread", "macros", "net", "sync", "time", "signal"] }
@@ -54,13 +64,28 @@ futures-util = "0.3.31"
 reqwest = { version = "0.12", default-features = false, features = ["json"] }
 argon2 = "0.5.3"
 getrandom = "0.2.16"
+unicode-normalization = "0.1.25"
 tower-http = { version = "0.6.8", features = ["fs"] }
+hyper = { version = "1.8.0", features = ["http1", "server"] }
+hyper-util = { version = "0.1.17", features = ["tokio", "server", "service", "http1"] }
+tower = { version = "0.5.3", features = ["util"] }
 proc-macro2 = "1.0.107"
 quote = "1.0.47"
 syn = { version = "2.0.119", features = ["full"] }
 prettyplease = "0.2.37"
 regex = "1.13.1"
 uuid = { version = "1.24.0", features = ["serde"] }
+base64 = "0.22.1"
+lettre = { version = "=0.11.24", default-features = false, features = ["builder", "smtp-transport", "rustls-tls"] }
+jsonwebtoken = "=9.3.1"
+totp-rs = { version = "=5.7.2", default-features = false }
+webauthn-rs = { version = "=0.6.2", features = ["danger-allow-state-serialisation", "conditional-ui"] }
+# SAML: XML signatures are checked by a maintained pure-Rust XML-DSig crate (no libxml2 or xmlsec),
+# the XML is read by its parser (uppsala), and the redirect binding is raw DEFLATE.
+bergshamra-dsig = { version = "=0.11.2", default-features = false, features = ["rustcrypto"] }
+bergshamra-keys = { version = "=0.11.2", default-features = false, features = ["rustcrypto"] }
+uppsala = "=0.12.1"
+flate2 = { version = "=1.1.9", default-features = false, features = ["rust_backend"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
@@ -68,8 +93,78 @@ unsafe_code = "forbid"
 [profile.dev]
 debug = "line-tables-only"
 
+# Dependencies are optimised in dev builds (the line came in with the first kernel commit and gave no
+# reason). The tests need it: they run Argon2id (19 MiB, many logins in the backend tests), the SAML
+# signature checks in pure-Rust bignum code, SQLite (bundled C, built at the dependency's level),
+# serde_json over the 5.6 MB specification and proptest, and at opt-level 0 those are many times
+# slower. What they do not need is optimising code no test ever calls. The XML-signature crates pull in
+# algorithms the SAML tests never run (post-quantum signatures and KEMs, Ed448, Brainpool curves,
+# time-stamp and PKCS#12 readers); they are reached only through bergshamra-keys and kryptering, and
+# they are built at the default level below, which shortens a cold compile.
 [profile.dev.package."*"]
 opt-level = 2
+
+[profile.dev.package.ml-dsa]
+opt-level = 0
+
+[profile.dev.package.ml-kem]
+opt-level = 0
+
+[profile.dev.package.slh-dsa]
+opt-level = 0
+
+[profile.dev.package.module-lattice]
+opt-level = 0
+
+[profile.dev.package.ed448-goldilocks]
+opt-level = 0
+
+[profile.dev.package.ed448]
+opt-level = 0
+
+[profile.dev.package.x448]
+opt-level = 0
+
+[profile.dev.package.bp256]
+opt-level = 0
+
+[profile.dev.package.bp384]
+opt-level = 0
+
+[profile.dev.package.tsp-ltv]
+opt-level = 0
+
+[profile.dev.package.bergshamra-pkcs12]
+opt-level = 0
+
+# Generated crates (specc output): no debug info. Nobody steps through generated code, and the
+# largest of them (strata-model, about 80,000 lines) is the build's peak of memory.
+[profile.dev.package.strata-model]
+debug = false
+
+[profile.dev.package.strata-model-core]
+debug = false
+
+[profile.dev.package.strata-spec-compiler-fixture]
+debug = false
+
+[profile.dev.package.strata-spec-compiler-machines-fixture]
+debug = false
+
+[profile.dev.package.strata-spec-compiler-wiring-fixture]
+debug = false
+
+[profile.dev.package.strata-spec-compiler-core-fixture]
+debug = false
+
+[profile.dev.package.strata-spec-compiler-language-fixture]
+debug = false
+
+[profile.dev.package.strata-spec-compiler-functions-fixture]
+debug = false
+
+[profile.dev.package.strata-spec-compiler-derived-fixture]
+debug = false
 
 [workspace.lints.clippy]
 # A rejection carries the whole evidence trail by design; it is returned rarely and by value.

@@ -1,0 +1,5 @@
+{
+  // Refused: declares a function, which would be kernel code, not tenant metadata (layer.kind-not-allowed).
+  "product": { "id": "badges", "name": "Badges", "imports": { "spec": "../../../../../../specifications/spec.jsonc", "entities": [] } },
+  "functions": [ { "id": "badges__score", "name": "Badge score" } ]
+}

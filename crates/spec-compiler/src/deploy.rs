@@ -14,6 +14,42 @@
 //! image does not exist yet), and units whose `implementation.notes` name the same code (they
 //! would share a binary, but are emitted separately).
 //!
+//! # The profile
+//!
+//! The specification says which components exist, where they sit and what they connect to. It
+//! does not say how a binary is started: its port, its environment, its health path, its
+//! volumes, which ports reach the host. Those facts come from an optional deployment profile, a
+//! JSONC file read next to the specification (`deploy.jsonc` in the specification's directory,
+//! or the file named by `--profile`), keyed by unit id. Nothing in the generator names a
+//! component: a unit without a profile entry is emitted with its image and the default port.
+//!
+//! ```jsonc
+//! {
+//!   "containerfile": "deploy/Containerfile",   // relative to the build context
+//!   "context": "..",                           // build context, relative to the output directory
+//!   "units": {
+//!     "<unit id>": {
+//!       "target": "<build target>",            // default: the unit id
+//!       "port": 4101,                          // what the unit listens on
+//!       "env": { "NAME": "value or ${VAR}" },  // compose interpolates ${VAR}
+//!       "health": "/path",                     // HTTP GET on the unit's own port
+//!       "volumes": ["name:/path"],             // named volumes are declared at the top level
+//!       "publish": ["127.0.0.1:4100:4100"],    // ports that reach the host
+//!       "shareNetworkWith": "<unit id>"        // join that unit's network namespace
+//!     }
+//!   }
+//! }
+//! ```
+//!
+//! # The local stack
+//!
+//! The compose file holds only the units that are implemented, because only those have an
+//! image that can be built; the others are named in a comment. With a Containerfile in the
+//! profile, a unit gets a `build` section. `depends_on` follows the connections (a unit starts
+//! after the units it calls, waiting for health when the callee has a health path); an edge
+//! that would close a cycle is left out. A unit that shares another's network namespace
+//! publishes its ports on that unit, because the namespace is where ports live.
+//!
 //! # Connections
 //!
 //! A relationship of kind `calls`, `reads`, `writes`, `publishes`, `subscribes` or `data-flow`
@@ -28,7 +64,7 @@
 //! Every requirement of kind `requirement` whose `evaluate.method` is `budget` becomes an
 //! alerting rule. See [`crate::budget`] for how statements are read.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 
 use serde_json::{Map, Value};
@@ -48,6 +84,10 @@ pub const NAME_INVALID: &str = "deploy.name-invalid";
 pub const ZONE_MISSING: &str = "deploy.zone-missing";
 /// Code of a relationship that names a component the specification does not declare.
 pub const ENDPOINT_UNKNOWN: &str = "deploy.relationship-endpoint-unknown";
+/// Code of a deployment profile that is not valid JSONC or has the wrong shape.
+pub const PROFILE: &str = "deploy.profile-shape";
+/// Code of a deployment profile that names a unit the specification does not deploy.
+pub const PROFILE_UNIT: &str = "deploy.profile-unit-unknown";
 /// Code of an id used twice.
 pub const DUPLICATE: &str = "deploy.duplicate-id";
 
@@ -80,6 +120,22 @@ pub struct Unit {
     pub implemented: bool,
     /// `implementation.notes`.
     pub notes: Option<String>,
+    /// The build target.
+    pub target: String,
+    /// The port the unit listens on.
+    pub port: u16,
+    /// Environment, values as compose reads them.
+    pub env: BTreeMap<String, String>,
+    /// The HTTP path of the health check, on the unit's own port.
+    pub health: Option<String>,
+    /// Volume mounts, `source:target`.
+    pub volumes: Vec<String>,
+    /// Ports published to the host, in compose syntax.
+    pub publish: Vec<String>,
+    /// The unit whose network namespace this one joins.
+    pub shares_network_with: Option<String>,
+    /// True when the profile has an entry for the unit.
+    pub configured: bool,
 }
 
 /// A budget requirement.
@@ -108,6 +164,12 @@ pub struct Plan {
     pub links: Vec<(String, String)>,
     /// The budget requirements in declaration order.
     pub budgets: Vec<BudgetRequirement>,
+    /// The Containerfile units are built from, relative to the build context.
+    pub containerfile: Option<String>,
+    /// The build context, relative to the output directory.
+    pub context: String,
+    /// True when a profile was given: then only the units it configures are started.
+    pub profiled: bool,
 }
 
 /// The generated files and the warnings that go with them.
@@ -122,8 +184,17 @@ pub struct DeployOutput {
 /// Generates the deployment files from a specification's text, or refuses with every
 /// diagnostic. `spec_path` is the path written into the headers.
 pub fn generate(spec_path: &str, text: &str) -> Result<DeployOutput, Vec<Diagnostic>> {
+    generate_with_profile(spec_path, text, None)
+}
+
+/// Like [`generate`], with the text of a deployment profile (see the module documentation).
+pub fn generate_with_profile(
+    spec_path: &str,
+    text: &str,
+    profile: Option<&str>,
+) -> Result<DeployOutput, Vec<Diagnostic>> {
     let spec_path = spec_path.replace('\\', "/");
-    let plan = load(text)?;
+    let plan = load_with_profile(text, profile)?;
     let mut files = vec![
         file("compose.yaml", &spec_path, compose(&plan)),
         file("kubernetes/namespaces.yaml", &spec_path, namespaces(&plan)),
@@ -147,8 +218,9 @@ fn file(path: &str, spec_path: &str, body: String) -> GeneratedFile {
     GeneratedFile {
         path: path.to_string(),
         contents: format!(
-            "{} from {spec_path}. Do not edit; change the specification and regenerate.\n{body}",
-            HEADER_MARKERS[1]
+            "{} from {}. Do not edit; change the specification and regenerate.\n{body}",
+            HEADER_MARKERS[1],
+            crate::codetext::line_text(spec_path)
         ),
     }
 }
@@ -172,9 +244,14 @@ fn string<'a>(obj: &'a Map<String, Value>, key: &str) -> Option<&'a str> {
 
 /// Reads the plan out of the specification's text.
 pub fn load(text: &str) -> Result<Plan, Vec<Diagnostic>> {
+    load_with_profile(text, None)
+}
+
+/// Reads the plan out of the specification's text and an optional deployment profile.
+pub fn load_with_profile(text: &str, profile: Option<&str>) -> Result<Plan, Vec<Diagnostic>> {
     let value = jsonc::parse(text).map_err(|e| {
         vec![Diagnostic::new(
-            SYNTAX,
+            e.code(SYNTAX),
             SPEC_ENTITY,
             format!("the specification is not valid JSONC: {e}"),
         )]
@@ -257,6 +334,14 @@ pub fn load(text: &str) -> Result<Plan, Vec<Diagnostic>> {
             image: format!("strata/{id}:dev"),
             implemented: status != Some("not-implemented"),
             notes,
+            target: id.to_string(),
+            port: PORT,
+            env: BTreeMap::new(),
+            health: None,
+            volumes: Vec::new(),
+            publish: Vec::new(),
+            shares_network_with: None,
+            configured: false,
         });
     }
     let unit_ids: BTreeSet<&str> = units.iter().map(|u| u.id.as_str()).collect();
@@ -327,6 +412,10 @@ pub fn load(text: &str) -> Result<Plan, Vec<Diagnostic>> {
             budget: budget::parse(statement),
         });
     }
+    let (containerfile, context) = match profile {
+        Some(text) => apply_profile(text, &mut units, &mut diagnostics),
+        None => (None, "..".to_string()),
+    };
     if !diagnostics.is_empty() {
         return Err(crate::diagnostic::dedup(diagnostics));
     }
@@ -335,7 +424,106 @@ pub fn load(text: &str) -> Result<Plan, Vec<Diagnostic>> {
         units,
         links: links.into_iter().collect(),
         budgets,
+        containerfile,
+        context,
+        profiled: profile.is_some(),
     })
+}
+
+/// Reads the profile into the units. Returns the Containerfile and the build context.
+fn apply_profile(
+    text: &str,
+    units: &mut [Unit],
+    diagnostics: &mut Vec<Diagnostic>,
+) -> (Option<String>, String) {
+    let bad = |what: String| Diagnostic::new(PROFILE, "deploy profile", what);
+    let value = match jsonc::parse(text) {
+        Ok(v) => v,
+        Err(e) => {
+            diagnostics.push(bad(format!("the profile is not valid JSONC: {e}")));
+            return (None, "..".to_string());
+        }
+    };
+    let Some(top) = value.as_object() else {
+        diagnostics.push(bad("the profile is not a JSON object".to_string()));
+        return (None, "..".to_string());
+    };
+    let containerfile = string(top, "containerfile").map(str::to_string);
+    let context = string(top, "context").unwrap_or("..").to_string();
+    let Some(entries) = top.get("units").and_then(Value::as_object) else {
+        return (containerfile, context);
+    };
+    let ids: BTreeSet<String> = units.iter().map(|u| u.id.clone()).collect();
+    for (id, entry) in entries {
+        let Some(unit) = units.iter_mut().find(|u| u.id == *id) else {
+            diagnostics.push(Diagnostic::new(
+                PROFILE_UNIT,
+                id,
+                "the profile configures a unit that the specification does not deploy.",
+            ));
+            continue;
+        };
+        let Some(obj) = entry.as_object() else {
+            diagnostics.push(bad(format!("the entry of \"{id}\" is not an object")));
+            continue;
+        };
+        unit.configured = true;
+        if let Some(t) = string(obj, "target") {
+            unit.target = t.to_string();
+        }
+        if let Some(p) = obj.get("port") {
+            match p.as_u64().and_then(|n| u16::try_from(n).ok()) {
+                Some(n) if n > 0 => unit.port = n,
+                _ => diagnostics.push(bad(format!("\"{id}\": port is not a port number"))),
+            }
+        }
+        if let Some(h) = string(obj, "health") {
+            unit.health = Some(h.to_string());
+        }
+        if let Some(env) = obj.get("env") {
+            match env.as_object() {
+                Some(map) => {
+                    for (k, v) in map {
+                        match v.as_str() {
+                            Some(v) => {
+                                unit.env.insert(k.clone(), v.to_string());
+                            }
+                            None => {
+                                diagnostics.push(bad(format!("\"{id}\": env {k} is not a string")))
+                            }
+                        }
+                    }
+                }
+                None => diagnostics.push(bad(format!("\"{id}\": env is not an object"))),
+            }
+        }
+        for (key, slot) in [
+            ("volumes", &mut unit.volumes),
+            ("publish", &mut unit.publish),
+        ] {
+            if let Some(list) = obj.get(key) {
+                let items: Option<Vec<String>> = list
+                    .as_array()
+                    .and_then(|a| a.iter().map(|v| v.as_str().map(str::to_string)).collect());
+                match items {
+                    Some(items) => *slot = items,
+                    None => {
+                        diagnostics.push(bad(format!("\"{id}\": {key} is not a list of strings")))
+                    }
+                }
+            }
+        }
+        if let Some(other) = string(obj, "shareNetworkWith") {
+            if other == id || !ids.contains(other) {
+                diagnostics.push(bad(format!(
+                    "\"{id}\": shareNetworkWith \"{other}\" is not another deployed unit"
+                )));
+            } else {
+                unit.shares_network_with = Some(other.to_string());
+            }
+        }
+    }
+    (containerfile, context)
 }
 
 fn array<'a>(
@@ -417,10 +605,13 @@ fn zone_of<'a>(plan: &'a Plan, id: &str) -> &'a str {
 }
 
 /// The networks a unit joins: the zone network of the target of every connection it takes
-/// part in, as source or target.
-fn networks_of(plan: &Plan, unit: &Unit) -> BTreeSet<String> {
+/// part in between runnable units, as source or target.
+fn networks_of(plan: &Plan, unit: &Unit, runnable_ids: &BTreeSet<&str>) -> BTreeSet<String> {
     let mut out = BTreeSet::new();
     for (from, to) in &plan.links {
+        if !runnable_ids.contains(from.as_str()) || !runnable_ids.contains(to.as_str()) {
+            continue;
+        }
         if *from == unit.id || *to == unit.id {
             out.insert(zone_network(zone_of(plan, to)));
         }
@@ -428,25 +619,174 @@ fn networks_of(plan: &Plan, unit: &Unit) -> BTreeSet<String> {
     out
 }
 
+/// The units the local stack starts: implemented ones, and when there is a profile, only those
+/// it configures (an implemented component without an entry is a library inside another unit).
+fn runnable(plan: &Plan) -> Vec<&Unit> {
+    plan.units
+        .iter()
+        .filter(|u| u.implemented && (!plan.profiled || u.configured))
+        .collect()
+}
+
+/// The units `unit` waits for: the runnable units it connects to, minus any edge that would
+/// close a cycle (compose refuses a cycle). A unit that shares a network namespace always
+/// waits for its owner.
+fn dependencies<'a>(plan: &'a Plan, unit: &Unit, runnable_ids: &BTreeSet<&str>) -> Vec<&'a str> {
+    let mut edges: Vec<(&str, &str)> = Vec::new();
+    for (from, to) in &plan.links {
+        if runnable_ids.contains(from.as_str()) && runnable_ids.contains(to.as_str()) {
+            edges.push((from, to));
+        }
+    }
+    for u in &plan.units {
+        if let Some(owner) = &u.shares_network_with {
+            if runnable_ids.contains(u.id.as_str()) && runnable_ids.contains(owner.as_str()) {
+                edges.push((&u.id, owner));
+            }
+        }
+    }
+    edges.sort_unstable();
+    edges.dedup();
+    let mut kept: Vec<(&str, &str)> = Vec::new();
+    for (from, to) in edges {
+        // Keep the edge unless `to` already waits, directly or not, for `from`.
+        let mut seen = BTreeSet::new();
+        let mut stack = vec![to];
+        let mut cycle = false;
+        while let Some(at) = stack.pop() {
+            if at == from {
+                cycle = true;
+                break;
+            }
+            if seen.insert(at) {
+                stack.extend(kept.iter().filter(|(f, _)| *f == at).map(|(_, t)| *t));
+            }
+        }
+        if !cycle {
+            kept.push((from, to));
+        }
+    }
+    kept.iter()
+        .filter(|(f, _)| *f == unit.id)
+        .map(|(_, t)| *t)
+        .collect()
+}
+
 fn compose(plan: &Plan) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "name: {}", q(&plan.system));
+    let units = runnable(plan);
+    let runnable_ids: BTreeSet<&str> = units.iter().map(|u| u.id.as_str()).collect();
+    let names = |keep: &dyn Fn(&Unit) -> bool| -> Vec<&str> {
+        plan.units
+            .iter()
+            .filter(|u| keep(u))
+            .map(|u| u.id.as_str())
+            .collect()
+    };
+    let unbuilt = names(&|u| !u.implemented);
+    if !unbuilt.is_empty() {
+        let _ = writeln!(
+            out,
+            "# Not in this stack, because they are not implemented and have no image: {}.",
+            unbuilt.join(", ")
+        );
+    }
+    let unstarted = names(&|u| u.implemented && !runnable_ids.contains(u.id.as_str()));
+    if !unstarted.is_empty() {
+        let _ = writeln!(
+            out,
+            "# Not in this stack, because the deployment profile does not say how to start them: {}.",
+            unstarted.join(", ")
+        );
+    }
     out.push_str("services:\n");
     let mut used = BTreeSet::new();
-    for unit in &plan.units {
-        let networks = networks_of(plan, unit);
+    let mut volumes = BTreeSet::new();
+    for unit in &units {
+        let networks = networks_of(plan, unit, &runnable_ids);
+        // Ports published for this unit and for every unit that shares its namespace.
+        let publish: Vec<&String> = plan
+            .units
+            .iter()
+            .filter(|u| {
+                u.id == unit.id || u.shares_network_with.as_deref() == Some(unit.id.as_str())
+            })
+            .flat_map(|u| u.publish.iter())
+            .collect();
         let _ = writeln!(out, "  {}:", unit.id);
         let _ = writeln!(out, "    image: {}", q(&unit.image));
-        let _ = writeln!(out, "    expose:\n      - \"{PORT}\"");
+        let _ = writeln!(
+            out,
+            "    container_name: {}",
+            q(&format!("{}-{}", plan.system, unit.id))
+        );
+        if let Some(containerfile) = &plan.containerfile {
+            let _ = writeln!(out, "    build:");
+            let _ = writeln!(out, "      context: {}", q(&plan.context));
+            let _ = writeln!(out, "      dockerfile: {}", q(containerfile));
+            let _ = writeln!(out, "      target: {}", q(&unit.target));
+        }
+        if unit.shares_network_with.is_none() {
+            let _ = writeln!(out, "    expose:\n      - \"{}\"", unit.port);
+        }
+        if !publish.is_empty() {
+            out.push_str("    ports:\n");
+            for p in &publish {
+                let _ = writeln!(out, "      - {}", q(p));
+            }
+        }
+        if !unit.env.is_empty() {
+            out.push_str("    environment:\n");
+            for (k, v) in &unit.env {
+                let _ = writeln!(out, "      {k}: {}", q(v));
+            }
+        }
+        if !unit.volumes.is_empty() {
+            out.push_str("    volumes:\n");
+            for v in &unit.volumes {
+                let _ = writeln!(out, "      - {}", q(v));
+                let source = v.split(':').next().unwrap_or("");
+                if !source.is_empty() && !source.starts_with(['/', '.', '~']) {
+                    volumes.insert(source.to_string());
+                }
+            }
+        }
+        if let Some(path) = &unit.health {
+            let url = format!("http://127.0.0.1:{}{path}", unit.port);
+            let _ = writeln!(
+                out,
+                "    healthcheck:\n      test: [\"CMD\", \"wget\", \"-q\", \"-O\", \"/dev/null\", {}]",
+                q(&url)
+            );
+            out.push_str(
+                "      interval: 5s\n      timeout: 3s\n      retries: 24\n      start_period: 5s\n",
+            );
+        }
+        let waits = dependencies(plan, unit, &runnable_ids);
+        if !waits.is_empty() {
+            out.push_str("    depends_on:\n");
+            for id in waits {
+                let healthy = plan.units.iter().any(|u| u.id == id && u.health.is_some());
+                let condition = if healthy {
+                    "service_healthy"
+                } else {
+                    "service_started"
+                };
+                let _ = writeln!(out, "      {id}:\n        condition: {condition}");
+            }
+        }
         let _ = writeln!(out, "    labels:");
         let _ = writeln!(out, "      strata.trust-zone: {}", q(&unit.zone));
-        if networks.is_empty() {
-            out.push_str("    network_mode: none\n");
-        } else {
+        if let Some(owner) = &unit.shares_network_with {
+            let _ = writeln!(out, "    network_mode: {}", q(&format!("service:{owner}")));
+        } else if !networks.is_empty() {
             out.push_str("    networks:\n");
             for n in &networks {
                 let _ = writeln!(out, "      - {n}");
             }
+        } else if publish.is_empty() {
+            out.push_str("    network_mode: none\n");
         }
         used.extend(networks);
     }
@@ -456,6 +796,12 @@ fn compose(plan: &Plan) -> String {
         out.push_str("networks:\n");
         for n in &used {
             let _ = writeln!(out, "  {n}: {{}}");
+        }
+    }
+    if !volumes.is_empty() {
+        out.push_str("volumes:\n");
+        for v in &volumes {
+            let _ = writeln!(out, "  {v}: {{}}");
         }
     }
     out
@@ -510,7 +856,11 @@ fn unit_manifests(plan: &Plan, unit: &Unit) -> String {
     let _ = writeln!(out, "    spec:\n      containers:");
     let _ = writeln!(out, "        - name: {}", unit.id);
     let _ = writeln!(out, "          image: {}", q(&unit.image));
-    let _ = writeln!(out, "          ports:\n            - containerPort: {PORT}");
+    let _ = writeln!(
+        out,
+        "          ports:\n            - containerPort: {}",
+        unit.port
+    );
     // Service.
     out.push_str("---\n");
     let _ = writeln!(out, "apiVersion: v1\nkind: Service\nmetadata:");
@@ -519,7 +869,8 @@ fn unit_manifests(plan: &Plan, unit: &Unit) -> String {
     let _ = writeln!(out, "    app.kubernetes.io/name: {}", unit.id);
     let _ = writeln!(
         out,
-        "  ports:\n    - port: {PORT}\n      targetPort: {PORT}"
+        "  ports:\n    - port: {0}\n      targetPort: {0}",
+        unit.port
     );
     // NetworkPolicy.
     out.push_str("---\n");
@@ -554,7 +905,8 @@ fn unit_manifests(plan: &Plan, unit: &Unit) -> String {
             let _ = writeln!(out, "              app.kubernetes.io/name: {from}");
             let _ = writeln!(
                 out,
-                "      ports:\n        - protocol: TCP\n          port: {PORT}"
+                "      ports:\n        - protocol: TCP\n          port: {}",
+                unit.port
             );
         }
     }

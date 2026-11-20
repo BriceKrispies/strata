@@ -1,18 +1,25 @@
 //! `transition`: the one function that decides what an intent does to a tenant's state.
 
+use crate::definitions::{operation_powers, uniques, AUTOMATIONS_DEFINE};
 use crate::expr::{self, Env};
-use crate::ids::{
-    owner_role, public_role, FieldId, ObjectTypeId, RecordId, SchemaVersion, StateRevision,
-    Timestamp,
-};
 use crate::intent::{
-    Check, Context, DeltaOp, DomainError, DomainEvent, Effect, ErrorKind, EventBody, ExistingData,
-    Intent, Output, SchemaChange, StateDelta, Transition,
+    Check, CheckExt, Context, DeltaOp, DomainError, DomainErrorExt, DomainEvent, Effect, ErrorKind,
+    EventBody, ExistingData, Intent, Output, SchemaChange, StateDelta, Transition,
 };
-use crate::rules::{authorize, roles_of, validate_record, Lookup, Subject};
-use crate::schema::{Action, FieldDef, ObjectTypeDef, Resource, TenantSchema};
-use crate::state::{Need, Principal, Record, State, TenantState};
-use crate::value::{refs_in, FieldType, OnDelete, Value};
+use crate::rules::{
+    assigned_roles, authorize, authorize_needing, holds_any, holds_power, insufficient, may_confer,
+    missing_error, missing_grants, roles_of, validate_record, Lookup, Subject,
+};
+use crate::schema::{
+    normalise_address, Action, FieldDef, Grant, InvitationDef, ObjectTypeDef, Resource, TeamDef,
+    TenantSchema, TenantSchemaExt,
+};
+use crate::state::{Need, Principal, Record, RecordExt, State, TenantState, TenantStateExt};
+use crate::types::{
+    owner_role, public_role, refs_in, ConstraintId, FieldId, FieldType, FieldTypeExt, InvitationId,
+    ObjectTypeId, OnDelete, PrincipalId, RecordId, RoleId, SchemaVersion, StateRevision, TeamId,
+    TenantOperationDef, Timestamp, UniqueDef, Value, ValueExt,
+};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
@@ -37,6 +44,7 @@ pub fn transition(
             ),
         ));
     }
+    refuse_reserved_principals(intent, ctx)?;
     let tenant = match (intent, state.tenant.as_deref()) {
         (Intent::CreateTenant { name, owner }, None) => return create_tenant(ctx, name, owner),
         (Intent::CreateTenant { .. }, Some(_)) => {
@@ -78,6 +86,22 @@ pub fn transition(
         Intent::RevokeRole { principal, role } => {
             change_member(&mut draft, principal, role, false)?
         }
+        Intent::DefineTeam { team, label } => define_team(&mut draft, team, label)?,
+        Intent::AssignTeamRole { team, role } => team_role(&mut draft, team, role, true)?,
+        Intent::RevokeTeamRole { team, role } => team_role(&mut draft, team, role, false)?,
+        Intent::AddTeamMember { team, principal } => {
+            team_member(&mut draft, team, principal, true)?
+        }
+        Intent::RemoveTeamMember { team, principal } => {
+            team_member(&mut draft, team, principal, false)?
+        }
+        Intent::CreateInvitation {
+            invitation,
+            address,
+            roles,
+        } => create_invitation(&mut draft, invitation, address, roles)?,
+        Intent::RedeemInvitation { invitation } => redeem_invitation(&mut draft, invitation)?,
+        Intent::RevokeInvitation { invitation } => revoke_invitation(&mut draft, invitation)?,
         Intent::CreateRecord { object, fields } => {
             create_record(&mut draft, lookup, object, fields)?
         }
@@ -92,8 +116,120 @@ pub fn transition(
             id,
             expected_version,
         } => delete_record(&mut draft, lookup, object, *id, *expected_version)?,
+        Intent::EraseSubject {
+            subject,
+            resume_object,
+            resume_after,
+            held_objects,
+            addressed_invitations,
+        } => erase_subject(
+            &mut draft,
+            lookup,
+            subject,
+            resume_object.as_ref(),
+            *resume_after,
+            held_objects,
+            addressed_invitations,
+        )?,
+        Intent::ExpireRecords { object, ids } => {
+            let done = crate::retention::decide(lookup, draft.ctx, object, ids)?;
+            draft.ops.extend(done.ops);
+            draft.events.extend(done.events);
+            draft.evidence.extend(done.evidence);
+            done.output
+        }
+        Intent::WriteSetting {
+            setting,
+            level,
+            team,
+            value,
+            expected_revision,
+        } => {
+            let decision = crate::settings::write_setting(
+                tenant,
+                ctx,
+                setting,
+                *level,
+                team.as_ref(),
+                value.as_ref(),
+                *expected_revision,
+            )?;
+            draft.ops.extend(decision.ops);
+            draft.events.extend(decision.events);
+            draft.evidence.extend(decision.evidence);
+            decision.output
+        }
+        Intent::InvokeOperation {
+            operation,
+            inputs,
+            idempotency_key,
+        } => {
+            // The invocation's events reach the triggers like those of any other decision.
+            return crate::operations::invoke(
+                tenant,
+                &state.coverage,
+                ctx,
+                operation,
+                inputs,
+                idempotency_key,
+            )
+            .and_then(|result| crate::triggers::after_decision(lookup, ctx, result));
+        }
+        Intent::PostLedger { postings } => {
+            let decided = crate::ledger::decide_intent(state, postings, ctx)?;
+            draft.ops.extend(decided.ops);
+            draft.events.extend(decided.events);
+            draft.evidence.extend(decided.evidence);
+            decided.output
+        }
+        Intent::ExpireLedger { unit, cutoff } => {
+            let decided = crate::ledger_expiry::decide(state, unit, *cutoff, ctx)?;
+            draft.ops.extend(decided.ops);
+            draft.events.extend(decided.events);
+            draft.evidence.extend(decided.evidence);
+            decided.output
+        }
     };
-    Ok(draft.finish(output))
+    crate::triggers::after_decision(lookup, ctx, draft.finish(output))
+}
+
+/// The prefix of the principal that stands for a team in events. A person may not hold an id
+/// that starts with it, or a change to a team would reach that person's sessions and notices.
+const TEAM_PREFIX: &str = "team:";
+
+/// Refuse a person whose id starts with the team prefix, as the caller, as the owner of a new
+/// tenant, or as a member being assigned a role or added to a team.
+fn refuse_reserved_principals(intent: &Intent, ctx: &Context) -> Result<(), DomainError> {
+    let named: Option<&PrincipalId> = match intent {
+        Intent::CreateTenant { owner, .. } => Some(owner),
+        Intent::AssignRole { principal, .. } | Intent::AddTeamMember { principal, .. } => {
+            Some(principal)
+        }
+        _ => None,
+    };
+    let caller = match &ctx.principal {
+        Principal::User(id) => Some(id),
+        _ => None,
+    };
+    for id in named.into_iter().chain(caller) {
+        if id.as_str().starts_with(TEAM_PREFIX) {
+            return Err(refuse(
+                ErrorKind::InvalidIntent,
+                "principal:id_is_not_reserved",
+                format!("the principal id {id} starts with the reserved prefix {TEAM_PREFIX}"),
+            ));
+        }
+    }
+    if let Some(problem) =
+        crate::automation::reserved_problem(named, &ctx.principal, ctx.session.is_some())
+    {
+        return Err(refuse(
+            ErrorKind::InvalidIntent,
+            "principal:id_is_not_reserved",
+            problem,
+        ));
+    }
+    Ok(())
 }
 
 /// A rejection made before any rule of the tenant is consulted. It still names the check that
@@ -112,35 +248,25 @@ pub fn needs(schema: Option<&TenantSchema>, intent: &Intent) -> Vec<Need> {
         return Vec::new();
     };
     let mut out = BTreeSet::new();
-    let field_needs =
-        |out: &mut BTreeSet<Need>, object: &ObjectTypeId, fields: &BTreeMap<FieldId, Value>| {
-            let Some(def) = schema.objects.get(object) else {
-                return;
-            };
-            for (id, value) in fields {
-                let Some(field) = def.fields.get(id) else {
-                    continue;
-                };
-                if field.unique && !value.is_null() {
-                    out.insert(Need::ByField {
-                        object: object.clone(),
-                        field: id.clone(),
-                        value: value.clone(),
-                    });
-                }
-                if let Some((target, _, _)) = field.ty.ref_target() {
-                    for id in refs_in(value) {
-                        out.insert(Need::Record {
-                            object: target.clone(),
-                            id,
-                        });
-                    }
-                }
-            }
-        };
     match intent {
-        Intent::CreateTenant { .. } | Intent::AssignRole { .. } | Intent::RevokeRole { .. } => {}
-        Intent::CreateRecord { object, fields } => field_needs(&mut out, object, fields),
+        Intent::CreateTenant { .. }
+        | Intent::AssignRole { .. }
+        | Intent::RevokeRole { .. }
+        | Intent::DefineTeam { .. }
+        | Intent::AssignTeamRole { .. }
+        | Intent::RevokeTeamRole { .. }
+        | Intent::AddTeamMember { .. }
+        | Intent::RemoveTeamMember { .. }
+        | Intent::CreateInvitation { .. }
+        | Intent::RedeemInvitation { .. }
+        | Intent::RevokeInvitation { .. }
+        | Intent::WriteSetting { .. }
+        // The accounts a posting needs are named by `refine_needs`, which knows the tenant.
+        | Intent::PostLedger { .. } => {}
+        Intent::ExpireLedger { unit, cutoff } => {
+            out.extend(crate::ledger_expiry::needs(unit, *cutoff));
+        }
+        Intent::CreateRecord { object, fields } => field_needs(schema, &mut out, object, fields),
         Intent::UpdateRecord {
             object, id, fields, ..
         } => {
@@ -148,7 +274,7 @@ pub fn needs(schema: Option<&TenantSchema>, intent: &Intent) -> Vec<Need> {
                 object: object.clone(),
                 id: *id,
             });
-            field_needs(&mut out, object, fields);
+            field_needs(schema, &mut out, object, fields);
         }
         Intent::DeleteRecord { object, id, .. } => {
             out.insert(Need::Record {
@@ -163,12 +289,131 @@ pub fn needs(schema: Option<&TenantSchema>, intent: &Intent) -> Vec<Need> {
                 });
             }
         }
+        Intent::EraseSubject { .. } => out.extend(crate::erasure::needs(schema, intent)),
+        Intent::ExpireRecords { .. } => out.extend(crate::retention::needs(schema, intent)),
         Intent::ChangeSchema { changes, .. } => {
+            // Re-validation looks up every reference of every record of a touched type, in the
+            // schema as it will be. Load each such type whole: one need per object type, however
+            // many records or references there are.
+            let mut changed = TenantSchema::clone(schema);
+            for change in changes {
+                let _ = apply_change(&mut changed, change);
+            }
             for object in touched_objects(changes) {
+                for def in [schema.objects.get(&object), changed.objects.get(&object)]
+                    .into_iter()
+                    .flatten()
+                {
+                    for field in def.fields.values() {
+                        if let Some((target, _, _)) = field.ty.ref_target() {
+                            out.insert(Need::AllOf(target.clone()));
+                        }
+                    }
+                }
                 out.insert(Need::AllOf(object));
+            }
+            out.extend(crate::ledger::schema_change_needs(changes));
+            crate::object_meta::removal_needs(changes, &mut out);
+        }
+        Intent::InvokeOperation {
+            operation, inputs, ..
+        } => crate::operations::needs(schema, operation, inputs, &mut out),
+    }
+    out.into_iter().collect()
+}
+
+/// The unique-value and reference lookups validating `fields` of an `object` record makes.
+pub(crate) fn field_needs(
+    schema: &TenantSchema,
+    out: &mut BTreeSet<Need>,
+    object: &ObjectTypeId,
+    fields: &BTreeMap<FieldId, Value>,
+) {
+    let Some(def) = schema.objects.get(object) else {
+        return;
+    };
+    for (id, value) in fields {
+        let Some(field) = def.fields.get(id) else {
+            continue;
+        };
+        if field.unique && !value.is_null() {
+            out.insert(Need::ByField {
+                object: object.clone(),
+                field: id.clone(),
+                value: value.clone(),
+            });
+        }
+        if let Some((target, _, _)) = field.ty.ref_target() {
+            for id in refs_in(value) {
+                out.insert(Need::Record {
+                    object: target.clone(),
+                    id,
+                });
             }
         }
     }
+    // A composite unique constraint whose every field has a value: one lookup of the records of
+    // the type with those values (D-6558, CMS-1557).
+    for unique in uniques(def) {
+        let wanted: Option<BTreeMap<FieldId, Value>> = unique
+            .fields
+            .iter()
+            .map(|field| {
+                fields
+                    .get(field)
+                    .filter(|value| !value.is_null())
+                    .map(|value| (field.clone(), value.clone()))
+            })
+            .collect();
+        if let Some(wanted) = wanted {
+            out.insert(Need::ByFields {
+                object: object.clone(),
+                fields: wanted,
+            });
+        }
+    }
+}
+
+/// The state an intent needs that only the state already loaded can say. Validating an update
+/// looks up every reference and unique value of the whole candidate, the stored fields as well as
+/// the supplied ones, and the stored record is not known until it is loaded. Given a snapshot that
+/// holds it, this names all of those lookups at once, so the shell reloads once instead of once
+/// per missing reference. Empty when the snapshot holds nothing more to say.
+pub fn refine_needs(state: &State, intent: &Intent) -> Vec<Need> {
+    let Some(tenant) = state.tenant.as_deref() else {
+        return Vec::new();
+    };
+    if let Intent::InvokeOperation {
+        operation, inputs, ..
+    } = intent
+    {
+        return crate::operations::refine_needs(tenant, operation, inputs);
+    }
+    if let Intent::PostLedger { postings } = intent {
+        return crate::ledger::intent_needs(&tenant.id, postings);
+    }
+    if let Intent::ExpireLedger { unit, cutoff } = intent {
+        return crate::ledger_expiry::needs(unit, *cutoff);
+    }
+    let Intent::UpdateRecord {
+        object, id, fields, ..
+    } = intent
+    else {
+        return Vec::new();
+    };
+    let Some(old) = tenant.record(object, *id) else {
+        return Vec::new();
+    };
+    let mut merged = old.fields.clone();
+    for (field, value) in fields {
+        if value.is_null() {
+            merged.remove(field);
+        } else {
+            merged.insert(field.clone(), value.clone());
+        }
+    }
+    let mut out = BTreeSet::new();
+    field_needs(&tenant.schema, &mut out, object, &merged);
     out.into_iter().collect()
 }
 
@@ -190,7 +435,9 @@ fn touched_objects(changes: &[SchemaChange]) -> BTreeSet<ObjectTypeId> {
             }
             SchemaChange::RemoveField { object, .. }
             | SchemaChange::DefineConstraint { object, .. }
-            | SchemaChange::RemoveConstraint { object, .. } => {
+            | SchemaChange::RemoveConstraint { object, .. }
+            | SchemaChange::DefineUnique { object, .. }
+            | SchemaChange::RemoveUnique { object, .. } => {
                 out.insert(object.clone());
             }
             SchemaChange::DefineWorkflow(workflow) => {
@@ -249,7 +496,7 @@ impl<'a> Draft<'a> {
         resource: &Resource,
         subject: Subject<'_>,
     ) -> Result<(), DomainError> {
-        let (allowed, checks) = authorize(
+        let (allowed, checks, needed) = authorize_needing(
             self.tenant,
             &self.tenant.schema,
             &self.ctx.principal,
@@ -262,6 +509,10 @@ impl<'a> Draft<'a> {
         self.evidence.extend(checks);
         if allowed {
             Ok(())
+        } else if let Some(need) = needed {
+            // A condition followed a reference the snapshot does not hold: ask for it rather
+            // than deny on a record that was merely not loaded.
+            Err(insufficient(need))
         } else {
             Err(self.reject(
                 ErrorKind::Unauthorized,
@@ -312,7 +563,7 @@ impl<'a> Draft<'a> {
 fn create_tenant(
     ctx: &Context,
     name: &str,
-    owner: &crate::ids::PrincipalId,
+    owner: &PrincipalId,
 ) -> Result<Transition, DomainError> {
     if ctx.principal != Principal::System {
         return Err(
@@ -364,16 +615,27 @@ fn create_tenant(
     })
 }
 
+/// The definition of `object`, for an intent that does `action` on it. A caller whom no policy
+/// could allow that action on the type gets the refusal for lack of permission whether or not
+/// the type exists, so a refusal never tells anyone which types exist; only a caller who could
+/// act on a type learns that it is missing.
 fn object_def<'a>(
-    draft: &Draft<'a>,
+    draft: &mut Draft<'a>,
     object: &ObjectTypeId,
+    action: Action,
 ) -> Result<&'a ObjectTypeDef, DomainError> {
-    draft
-        .tenant
-        .schema
-        .objects
-        .get(object)
-        .ok_or_else(|| draft.reject(ErrorKind::UnknownObject, format!("no object type {object}")))
+    let tenant: &'a TenantState = draft.tenant;
+    match tenant.schema.objects.get(object) {
+        Some(def) => Ok(def),
+        None => {
+            draft.require(
+                action,
+                &Resource::Object(object.clone()),
+                Subject::default(),
+            )?;
+            Err(draft.reject(ErrorKind::UnknownObject, format!("no object type {object}")))
+        }
+    }
 }
 
 fn check_version(
@@ -399,7 +661,7 @@ fn create_record(
     object: &ObjectTypeId,
     fields: &BTreeMap<FieldId, Value>,
 ) -> Result<Output, DomainError> {
-    let def = object_def(draft, object)?;
+    let def = object_def(draft, object, Action::Create)?;
     let ctx = draft.ctx;
     let roles = roles_of(draft.tenant, &ctx.principal);
     let no_params = BTreeMap::new();
@@ -507,15 +769,28 @@ fn create_record(
     })
 }
 
+/// The stored record, for an intent that does `action` on it. When there is none, the caller is
+/// asked for the permission first, with no record to test a condition against: one who could not
+/// act on it gets the refusal for lack of permission, the same as for a record that exists, and
+/// only one who could learns that it is missing.
 fn stored<'a>(
-    draft: &Draft<'_>,
+    draft: &mut Draft<'_>,
     lookup: Lookup<'a>,
     object: &ObjectTypeId,
     id: RecordId,
+    action: Action,
 ) -> Result<&'a Arc<Record>, DomainError> {
-    lookup
-        .record(object, id)?
-        .ok_or_else(|| draft.reject(ErrorKind::UnknownRecord, format!("no {object} {id}")))
+    match lookup.record(object, id)? {
+        Some(record) => Ok(record),
+        None => {
+            draft.require(
+                action,
+                &Resource::Object(object.clone()),
+                Subject::default(),
+            )?;
+            Err(draft.reject(ErrorKind::UnknownRecord, format!("no {object} {id}")))
+        }
+    }
 }
 
 fn update_record(
@@ -526,9 +801,9 @@ fn update_record(
     fields: &BTreeMap<FieldId, Value>,
     expected_version: Option<u64>,
 ) -> Result<Output, DomainError> {
-    let def = object_def(draft, object)?;
+    let def = object_def(draft, object, Action::Update)?;
     let ctx = draft.ctx;
-    let old = stored(draft, lookup, object, id)?;
+    let old = stored(draft, lookup, object, id, Action::Update)?;
 
     let mut candidate = Record::clone(old);
     for (field, value) in fields {
@@ -554,6 +829,9 @@ fn update_record(
 
     let roles = roles_of(draft.tenant, &ctx.principal);
     let no_params = BTreeMap::new();
+    let before_workflows = candidate.fields.clone();
+    // D-7203: the transition each workflow fired, named in the event.
+    let mut fired_transitions = BTreeMap::new();
     for workflow in draft.tenant.schema.workflows_of(object) {
         let (from, to) = (
             old.get(&workflow.field),
@@ -583,6 +861,11 @@ fn update_record(
                 None => Ok(true),
                 Some(guard) => expr::holds(guard, &env),
             };
+            if let (Err(_), Some(guard)) = (&open, &step.guard) {
+                if let Some(missing) = missing_error(guard, &env) {
+                    return Err(missing);
+                }
+            }
             match open {
                 Ok(true) => {
                     fired = Some(step);
@@ -604,10 +887,12 @@ fn update_record(
         let mut assigned = Vec::new();
         for (field, value) in &step.set {
             let value = expr::eval(value, &env).map_err(|e| {
-                draft.reject(
-                    ErrorKind::Evaluation,
-                    format!("{}: set {field}: {e}", step.name),
-                )
+                missing_error(value, &env).unwrap_or_else(|| {
+                    draft.reject(
+                        ErrorKind::Evaluation,
+                        format!("{}: set {field}: {e}", step.name),
+                    )
+                })
             })?;
             assigned.push((field.clone(), value));
         }
@@ -622,6 +907,22 @@ fn update_record(
             format!("{rule}:{}", step.name),
             format!("{} -> {}", step.from, step.to),
         ));
+        fired_transitions.insert(workflow.id.clone(), step.name.clone());
+    }
+
+    if candidate.fields != before_workflows {
+        // Workflow assignments changed the candidate after the first decision: the update must
+        // also be allowed as the record it now is, so a step cannot write what the actor could
+        // not write directly. An assignment that leaves the candidate as it was changes nothing
+        // to decide again.
+        draft.require(
+            Action::Update,
+            &Resource::Object(object.clone()),
+            Subject {
+                old: Some(old),
+                new: Some(&candidate),
+            },
+        )?;
     }
 
     validate_record(
@@ -641,6 +942,7 @@ fn update_record(
     draft.events.push(EventBody::RecordUpdated {
         before: old.clone(),
         after,
+        transitions: (!fired_transitions.is_empty()).then_some(fired_transitions),
     });
     Ok(Output::Record {
         object: object.clone(),
@@ -656,9 +958,9 @@ fn delete_record(
     id: RecordId,
     expected_version: Option<u64>,
 ) -> Result<Output, DomainError> {
-    object_def(draft, object)?;
+    object_def(draft, object, Action::Delete)?;
     let ctx = draft.ctx;
-    let old = stored(draft, lookup, object, id)?;
+    let old = stored(draft, lookup, object, id, Action::Delete)?;
     draft.require(
         Action::Delete,
         &Resource::Object(object.clone()),
@@ -667,6 +969,9 @@ fn delete_record(
     check_version(draft, old, expected_version)?;
 
     let target = Value::Ref(id);
+    // Every field of one referrer that points here is cleared in the same rewrite, so a record
+    // that refers twice is written once with both fields cleared.
+    let mut cleared: BTreeMap<(ObjectTypeId, RecordId), (Arc<Record>, Record)> = BTreeMap::new();
     for (from, field, is_list) in draft.tenant.schema.referrers(object) {
         let (_, on_delete, _) = field
             .ty
@@ -688,30 +993,35 @@ fn delete_record(
                     format!("{} {} refers to {object} {id}", from.id, referrer.id),
                 ));
             }
-            let mut cleared = Record::clone(referrer);
-            match cleared.fields.get(&field.id) {
+            let (_, rewrite) = cleared
+                .entry((from.id.clone(), referrer.id))
+                .or_insert_with(|| (referrer.clone(), Record::clone(referrer)));
+            match rewrite.fields.get(&field.id) {
                 Some(Value::List(items)) => {
                     let kept: Vec<Value> =
                         items.iter().filter(|v| **v != target).cloned().collect();
-                    cleared.fields.insert(field.id.clone(), Value::List(kept));
+                    rewrite.fields.insert(field.id.clone(), Value::List(kept));
                 }
                 _ => {
-                    cleared.fields.remove(&field.id);
+                    rewrite.fields.remove(&field.id);
                 }
             }
-            cleared.version += 1;
-            cleared.updated_at = ctx.now;
-            let after = Arc::new(cleared);
             draft.evidence.push(Check::pass(
                 rule,
                 format!("cleared on {} {}", from.id, referrer.id),
             ));
-            draft.ops.push(DeltaOp::PutRecord(after.clone()));
-            draft.events.push(EventBody::RecordUpdated {
-                before: referrer.clone(),
-                after,
-            });
         }
+    }
+    for (before, mut rewrite) in cleared.into_values() {
+        rewrite.version += 1;
+        rewrite.updated_at = ctx.now;
+        let after = Arc::new(rewrite);
+        draft.ops.push(DeltaOp::PutRecord(after.clone()));
+        draft.events.push(EventBody::RecordUpdated {
+            before,
+            after,
+            transitions: None,
+        });
     }
 
     draft.ops.push(DeltaOp::DeleteRecord {
@@ -727,10 +1037,36 @@ fn delete_record(
     })
 }
 
+/// Erase one data subject, one batch of it (the module [`crate::erasure`]).
+fn erase_subject(
+    draft: &mut Draft<'_>,
+    lookup: Lookup<'_>,
+    subject: &PrincipalId,
+    resume_object: Option<&ObjectTypeId>,
+    resume_after: Option<RecordId>,
+    held_objects: &[ObjectTypeId],
+    addressed_invitations: &[InvitationId],
+) -> Result<Output, DomainError> {
+    let done = crate::erasure::decide(
+        lookup,
+        draft.ctx,
+        subject,
+        resume_object,
+        resume_after,
+        held_objects,
+        addressed_invitations,
+    )?;
+    draft.ops.extend(done.ops);
+    draft.events.extend(done.events);
+    draft.effects.extend(done.effects);
+    draft.evidence.extend(done.evidence);
+    Ok(done.output)
+}
+
 fn change_member(
     draft: &mut Draft<'_>,
-    principal: &crate::ids::PrincipalId,
-    role: &crate::ids::RoleId,
+    principal: &PrincipalId,
+    role: &RoleId,
     grant: bool,
 ) -> Result<Output, DomainError> {
     draft.require(Action::Manage, &Resource::Members, Subject::default())?;
@@ -740,6 +1076,8 @@ fn change_member(
     if *role == public_role() {
         return Err(draft.reject(ErrorKind::InvalidIntent, "everyone already holds public"));
     }
+    // ADM-152, ADM-1080: taking a role away asks as much of the actor as handing it out.
+    require_conferrable(draft, [role])?;
     let mut roles = draft
         .tenant
         .members
@@ -750,20 +1088,12 @@ fn change_member(
         roles.insert(role.clone());
     } else {
         roles.remove(role);
-        let owners = draft
-            .tenant
-            .members
-            .iter()
-            .filter(|(p, r)| *p != principal && r.contains(&owner_role()))
-            .count();
-        if *role == owner_role() && owners == 0 {
-            return Err(draft.reject(
-                ErrorKind::InvalidIntent,
-                "a tenant keeps at least one owner",
-            ));
-        }
+        let mut members = draft.tenant.members.clone();
+        members.insert(principal.clone(), roles.clone());
+        require_an_owner_remains(draft, &members, &draft.tenant.schema)?;
     }
-    if roles.is_empty() {
+    let through_teams = assigned_roles(&BTreeMap::new(), &draft.tenant.schema, principal);
+    if roles.is_empty() && through_teams.is_empty() {
         draft.effects.push(Effect::RevokeSessions {
             principal: principal.clone(),
         });
@@ -774,7 +1104,443 @@ fn change_member(
     });
     draft.events.push(EventBody::MemberChanged {
         principal: principal.clone(),
+        roles: roles.union(&through_teams).cloned().collect(),
+    });
+    Ok(Output::Member)
+}
+
+/// ADM-152: every role in `roles` must be one the acting principal may confer, which is to say
+/// the principal holds every permission and capability the role grants. The first role it may
+/// not confer refuses the intent.
+fn require_conferrable<'r>(
+    draft: &mut Draft<'_>,
+    roles: impl IntoIterator<Item = &'r RoleId>,
+) -> Result<(), DomainError> {
+    for role in roles {
+        let check = may_confer(draft.tenant, &draft.ctx.principal, role);
+        let passed = check.passed;
+        let detail = check.detail.clone();
+        draft.evidence.push(check);
+        if !passed {
+            return Err(draft.reject(
+                ErrorKind::Unauthorized,
+                format!("may not confer role {role}: {detail}"),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// The principals who hold `owner` in effect, directly or through a team.
+fn effective_owners(
+    members: &BTreeMap<PrincipalId, BTreeSet<RoleId>>,
+    schema: &TenantSchema,
+) -> BTreeSet<PrincipalId> {
+    let mut candidates: BTreeSet<&PrincipalId> = members.keys().collect();
+    for team in schema.all_teams() {
+        candidates.extend(team.members.iter());
+    }
+    candidates
+        .into_iter()
+        .filter(|p| assigned_roles(members, schema, p).contains(&owner_role()))
+        .cloned()
+        .collect()
+}
+
+/// ADM-1081: a change that takes a role away from someone, a team or a team's membership must
+/// leave the tenant an owner. `members` and `schema` are the state after the change; counting
+/// goes through teams as well as direct assignments. A tenant that has no owner before the
+/// change is not made worse by it, so it is not held to this.
+fn require_an_owner_remains(
+    draft: &Draft<'_>,
+    members: &BTreeMap<PrincipalId, BTreeSet<RoleId>>,
+    schema: &TenantSchema,
+) -> Result<(), DomainError> {
+    let before = effective_owners(&draft.tenant.members, &draft.tenant.schema).len();
+    if before > 0 && effective_owners(members, schema).is_empty() {
+        return Err(draft.reject(
+            ErrorKind::InvalidIntent,
+            "a tenant keeps at least one owner",
+        ));
+    }
+    Ok(())
+}
+
+/// The id under which a team appears in events: a team is assigned roles like a principal.
+fn team_principal(team: &TeamId) -> PrincipalId {
+    PrincipalId::new(format!("team:{team}")).expect("a team id is a valid principal token")
+}
+
+fn team_of<'a>(draft: &Draft<'a>, team: &TeamId) -> Result<&'a TeamDef, DomainError> {
+    let tenant: &'a TenantState = draft.tenant;
+    tenant
+        .schema
+        .team(team)
+        .ok_or_else(|| draft.reject(ErrorKind::InvalidIntent, format!("no team {team}")))
+}
+
+/// Record a changed team: the new schema, an event for the team and one for each member whose
+/// roles it changes.
+fn put_team(draft: &mut Draft<'_>, mut schema: TenantSchema, team: TeamDef) {
+    draft.events.push(EventBody::MemberChanged {
+        principal: team_principal(&team.id),
+        roles: team.roles.clone(),
+    });
+    schema.put_team(team.clone());
+    for member in &team.members {
+        let roles = assigned_roles(&draft.tenant.members, &schema, member);
+        draft.events.push(EventBody::MemberChanged {
+            principal: member.clone(),
+            roles,
+        });
+    }
+    draft.ops.push(DeltaOp::PutSchema(Arc::new(schema)));
+}
+
+fn define_team(draft: &mut Draft<'_>, team: &TeamId, label: &str) -> Result<Output, DomainError> {
+    draft.require(Action::Manage, &Resource::Members, Subject::default())?;
+    if label.trim().is_empty() {
+        return Err(draft.reject(ErrorKind::InvalidIntent, "a team needs a label"));
+    }
+    let schema = TenantSchema::clone(&draft.tenant.schema);
+    let def = TeamDef {
+        label: label.to_string(),
+        ..schema.team(team).cloned().unwrap_or(TeamDef {
+            id: team.clone(),
+            label: String::new(),
+            members: BTreeSet::new(),
+            roles: BTreeSet::new(),
+        })
+    };
+    put_team(draft, schema, def);
+    Ok(Output::Member)
+}
+
+fn team_role(
+    draft: &mut Draft<'_>,
+    team: &TeamId,
+    role: &RoleId,
+    grant: bool,
+) -> Result<Output, DomainError> {
+    draft.require(Action::Manage, &Resource::Members, Subject::default())?;
+    let mut def = team_of(draft, team)?.clone();
+    if !draft.tenant.schema.roles.contains_key(role) {
+        return Err(draft.reject(ErrorKind::UnknownRole, format!("no role {role}")));
+    }
+    if *role == public_role() {
+        return Err(draft.reject(ErrorKind::InvalidIntent, "everyone already holds public"));
+    }
+    require_conferrable(draft, [role])?;
+    if grant {
+        def.roles.insert(role.clone());
+    } else {
+        def.roles.remove(role);
+    }
+    let schema = TenantSchema::clone(&draft.tenant.schema);
+    let mut after = schema.clone();
+    after.put_team(def.clone());
+    if !grant {
+        require_an_owner_remains(draft, &draft.tenant.members, &after)?;
+    }
+    let lost: Vec<PrincipalId> = if grant {
+        Vec::new()
+    } else {
+        def.members
+            .iter()
+            .filter(|member| {
+                draft
+                    .tenant
+                    .members
+                    .get(*member)
+                    .is_none_or(BTreeSet::is_empty)
+                    && assigned_roles(&BTreeMap::new(), &after, member).is_empty()
+            })
+            .cloned()
+            .collect()
+    };
+    for principal in lost {
+        draft.effects.push(Effect::RevokeSessions { principal });
+    }
+    put_team(draft, schema, def);
+    Ok(Output::Member)
+}
+
+fn team_member(
+    draft: &mut Draft<'_>,
+    team: &TeamId,
+    principal: &PrincipalId,
+    add: bool,
+) -> Result<Output, DomainError> {
+    draft.require(Action::Manage, &Resource::Members, Subject::default())?;
+    let mut def = team_of(draft, team)?.clone();
+    require_conferrable(draft, def.roles.iter())?;
+    if add {
+        def.members.insert(principal.clone());
+    } else {
+        def.members.remove(principal);
+    }
+    let schema = TenantSchema::clone(&draft.tenant.schema);
+    // The member is no longer in `def.members` after a removal, so it gets its own event here.
+    let mut after = schema.clone();
+    after.put_team(def.clone());
+    if !add {
+        require_an_owner_remains(draft, &draft.tenant.members, &after)?;
+    }
+    let roles = assigned_roles(&draft.tenant.members, &after, principal);
+    if !add {
+        draft.events.push(EventBody::MemberChanged {
+            principal: principal.clone(),
+            roles: roles.clone(),
+        });
+        if roles.is_empty() {
+            draft.effects.push(Effect::RevokeSessions {
+                principal: principal.clone(),
+            });
+        }
+    }
+    put_team(draft, schema, def);
+    Ok(Output::Member)
+}
+
+fn create_invitation(
+    draft: &mut Draft<'_>,
+    invitation: &InvitationId,
+    address: &str,
+    roles: &BTreeSet<RoleId>,
+) -> Result<Output, DomainError> {
+    draft.require(Action::Manage, &Resource::Members, Subject::default())?;
+    let ctx = draft.ctx;
+    let Principal::User(creator) = &ctx.principal else {
+        return Err(draft.reject(ErrorKind::InvalidIntent, "a person issues an invitation"));
+    };
+    let address = normalise_address(address);
+    if !address.contains('@') {
+        return Err(draft.reject(ErrorKind::InvalidIntent, "an invitation names an address"));
+    }
+    if roles.is_empty() {
+        return Err(draft.reject(ErrorKind::InvalidIntent, "an invitation grants a role"));
+    }
+    if draft.tenant.schema.invitation(invitation).is_some() {
+        return Err(draft.reject(
+            ErrorKind::InvalidIntent,
+            format!("invitation {invitation} already exists"),
+        ));
+    }
+    for role in roles {
+        if !draft.tenant.schema.roles.contains_key(role) {
+            return Err(draft.reject(ErrorKind::UnknownRole, format!("no role {role}")));
+        }
+        if *role == public_role() {
+            return Err(draft.reject(ErrorKind::InvalidIntent, "everyone already holds public"));
+        }
+    }
+    require_conferrable(draft, roles.iter())?;
+    let mut schema = TenantSchema::clone(&draft.tenant.schema);
+    schema.put_invitation(InvitationDef {
+        id: invitation.clone(),
+        address,
+        roles: roles.clone(),
+        created_by: creator.clone(),
+        redeemed_by: None,
+        expires_at: Some(Timestamp(ctx.now.0.saturating_add(INVITATION_LIFETIME_MS))),
+        revoked_by: None,
+    });
+    draft.ops.push(DeltaOp::PutSchema(Arc::new(schema)));
+    Ok(Output::Member)
+}
+
+/// How long an invitation stays redeemable after it is issued, in milliseconds: fourteen days
+/// (ADM-1082).
+const INVITATION_LIFETIME_MS: i64 = 14 * 24 * 60 * 60 * 1000;
+
+/// ADM-1083: withdraw an invitation that was not redeemed. Authorised as Manage on
+/// Members, and the acting principal must be one who could confer every role the invitation
+/// offers; the invitation stays in the schema, marked with who revoked it, and is never
+/// redeemable again.
+fn revoke_invitation(
+    draft: &mut Draft<'_>,
+    invitation: &InvitationId,
+) -> Result<Output, DomainError> {
+    draft.require(Action::Manage, &Resource::Members, Subject::default())?;
+    let (ctx, tenant) = (draft.ctx, draft.tenant);
+    let Principal::User(actor) = &ctx.principal else {
+        return Err(draft.reject(ErrorKind::InvalidIntent, "a person revokes an invitation"));
+    };
+    let Some(offer) = tenant.schema.invitation(invitation) else {
+        return Err(draft.reject(
+            ErrorKind::InvalidIntent,
+            format!("no invitation {invitation}"),
+        ));
+    };
+    if offer.redeemed_by.is_some() {
+        return Err(draft.reject(
+            ErrorKind::InvalidIntent,
+            "the invitation was already redeemed",
+        ));
+    }
+    if offer.revoked_by.is_some() {
+        return Err(draft.reject(
+            ErrorKind::InvalidIntent,
+            "the invitation was already revoked",
+        ));
+    }
+    require_conferrable(draft, offer.roles.iter())?;
+    let mut schema = TenantSchema::clone(&tenant.schema);
+    if let Some(stored) = schema.invitation_mut(invitation) {
+        stored.revoked_by = Some(actor.clone());
+    }
+    draft.ops.push(DeltaOp::PutSchema(Arc::new(schema)));
+    Ok(Output::Member)
+}
+
+/// ADM-153: the roles of an invitation go to the one person who redeems it with the address it
+/// names, once. The address is the one the shell verified for the acting person
+/// (`Context::verified_address`); the intent carries none. The refusal for a wrong address does
+/// not say which address the invitation names.
+fn redeem_invitation(
+    draft: &mut Draft<'_>,
+    invitation: &InvitationId,
+) -> Result<Output, DomainError> {
+    let ctx = draft.ctx;
+    let Principal::User(redeemer) = &ctx.principal else {
+        draft.evidence.push(Check::fail(
+            "invitation:redeemer_is_person",
+            "only a signed-in person redeems an invitation",
+        ));
+        return Err(draft.reject(
+            ErrorKind::Unauthorized,
+            "only a signed-in person redeems an invitation",
+        ));
+    };
+    let tenant = draft.tenant;
+    let Some(offer) = tenant.schema.invitation(invitation) else {
+        return Err(draft.reject(
+            ErrorKind::InvalidIntent,
+            format!("no invitation {invitation}"),
+        ));
+    };
+    let Some(verified_address) = ctx.verified_address.as_deref() else {
+        draft.evidence.push(Check::fail(
+            "invitation:address_matches",
+            "the redeemer has no verified address",
+        ));
+        return Err(draft.reject(
+            ErrorKind::Unauthorized,
+            "the invitation needs a verified address",
+        ));
+    };
+    if normalise_address(verified_address) != offer.address {
+        draft.evidence.push(Check::fail(
+            "invitation:address_matches",
+            "the redeemer's verified address is not the address the invitation names",
+        ));
+        return Err(draft.reject(
+            ErrorKind::Unauthorized,
+            "the invitation names another address",
+        ));
+    }
+    draft.evidence.push(Check::pass(
+        "invitation:address_matches",
+        "the verified address is the one the invitation names",
+    ));
+    if let Some(by) = &offer.redeemed_by {
+        draft.evidence.push(Check::fail(
+            "invitation:redeemed_once",
+            format!("already redeemed by {by}"),
+        ));
+        return Err(draft.reject(
+            ErrorKind::InvalidIntent,
+            "the invitation was already redeemed",
+        ));
+    }
+    draft.evidence.push(Check::pass(
+        "invitation:redeemed_once",
+        "not redeemed before",
+    ));
+    if let Some(by) = &offer.revoked_by {
+        draft.evidence.push(Check::fail(
+            "invitation:not_revoked",
+            format!("revoked by {by}"),
+        ));
+        return Err(draft.reject(ErrorKind::InvalidIntent, "the invitation was revoked"));
+    }
+    draft
+        .evidence
+        .push(Check::pass("invitation:not_revoked", "not revoked"));
+    // An invitation that records no expiry (one issued before expiry existed) does not expire
+    // by date and so is never redeemable: it must be issued again.
+    match offer.expires_at {
+        Some(at) if ctx.now < at => draft
+            .evidence
+            .push(Check::pass("invitation:not_expired", "not expired")),
+        _ => {
+            draft.evidence.push(Check::fail(
+                "invitation:not_expired",
+                "the invitation has expired",
+            ));
+            return Err(draft.reject(ErrorKind::InvalidIntent, "the invitation has expired"));
+        }
+    }
+    // ADM-1084: the issuer's authority is what the invitation stands on, so it is asked again
+    // now: the issuer must still be allowed to manage members and to confer every role offered.
+    let issuer = Principal::User(offer.created_by.clone());
+    let (may_manage, _) = authorize(
+        tenant,
+        &tenant.schema,
+        &issuer,
+        ctx.now,
+        Action::Manage,
+        &Resource::Members,
+        Subject::default(),
+        None,
+    );
+    if !may_manage {
+        draft.evidence.push(Check::fail(
+            "invitation:issuer_authority",
+            "the issuer may no longer manage members",
+        ));
+        return Err(draft.reject(
+            ErrorKind::Unauthorized,
+            "the invitation's issuer no longer holds the authority to issue it",
+        ));
+    }
+    for role in &offer.roles {
+        let check = may_confer(tenant, &issuer, role);
+        if !check.passed {
+            draft.evidence.push(check);
+            draft.evidence.push(Check::fail(
+                "invitation:issuer_authority",
+                format!("the issuer may no longer confer {role}"),
+            ));
+            return Err(draft.reject(
+                ErrorKind::Unauthorized,
+                "the invitation's issuer no longer holds the authority to issue it",
+            ));
+        }
+    }
+    draft.evidence.push(Check::pass(
+        "invitation:issuer_authority",
+        "the issuer still holds the authority to issue it",
+    ));
+    let mut roles = tenant.members.get(redeemer).cloned().unwrap_or_default();
+    roles.extend(offer.roles.iter().cloned());
+    let mut schema = TenantSchema::clone(&tenant.schema);
+    if let Some(stored) = schema.invitation_mut(invitation) {
+        stored.redeemed_by = Some(redeemer.clone());
+    }
+    let effective: BTreeSet<RoleId> = {
+        let mut members = tenant.members.clone();
+        members.insert(redeemer.clone(), roles.clone());
+        assigned_roles(&members, &schema, redeemer)
+    };
+    draft.ops.push(DeltaOp::PutSchema(Arc::new(schema)));
+    draft.ops.push(DeltaOp::PutMember {
+        principal: redeemer.clone(),
         roles,
+    });
+    draft.events.push(EventBody::MemberChanged {
+        principal: redeemer.clone(),
+        roles: effective,
     });
     Ok(Output::Member)
 }
@@ -801,6 +1567,12 @@ fn apply_change(schema: &mut TenantSchema, change: &SchemaChange) -> Result<Stri
                     label: label.clone(),
                     fields: BTreeMap::new(),
                     constraints: BTreeMap::new(),
+                    retention: None,
+                    publication: None,
+                    language_field: None,
+                    translation_group: None,
+                    unique: None,
+                    searchable: None,
                 });
             format!("define object {id}")
         }
@@ -831,6 +1603,8 @@ fn apply_change(schema: &mut TenantSchema, change: &SchemaChange) -> Result<Stri
                 required: *required,
                 unique: false,
                 default: None,
+                read: None,
+                personal: None,
             };
             object(schema, id)?.fields.insert(field.clone(), def);
             format!("define relationship {id}.{field} -> {target}")
@@ -867,6 +1641,13 @@ fn apply_change(schema: &mut TenantSchema, change: &SchemaChange) -> Result<Stri
             }
             schema.roles.insert(role.id.clone(), role.clone());
             format!("define role {}", role.id)
+        }
+        SchemaChange::DefineRolePermissions { role, permissions } => {
+            if !schema.roles.contains_key(role) {
+                return Err(format!("no role {role}"));
+            }
+            schema.set_role_permissions(role, permissions.clone());
+            format!("define permissions of role {role}")
         }
         SchemaChange::DefinePolicy(policy) => {
             schema.policies.insert(policy.id.clone(), policy.clone());
@@ -914,7 +1695,133 @@ fn apply_change(schema: &mut TenantSchema, change: &SchemaChange) -> Result<Stri
                 .ok_or_else(|| format!("no view {id}"))?;
             format!("remove view {id}")
         }
+        SchemaChange::DefineTrigger(trigger) => {
+            schema
+                .triggers
+                .get_or_insert_with(BTreeMap::new)
+                .insert(trigger.id.clone(), trigger.clone());
+            format!("define trigger {}", trigger.id)
+        }
+        SchemaChange::RemoveTrigger(id) => {
+            remove_from(&mut schema.triggers, id).ok_or_else(|| format!("no trigger {id}"))?;
+            format!("remove trigger {id}")
+        }
+        SchemaChange::DefineAutomation(automation) => {
+            schema
+                .automations
+                .get_or_insert_with(BTreeMap::new)
+                .insert(automation.id.clone(), automation.clone());
+            format!("define automation {}", automation.id)
+        }
+        SchemaChange::RemoveAutomation(id) => {
+            let defined = schema
+                .automations
+                .as_ref()
+                .is_some_and(|automations| automations.contains_key(id));
+            if !defined {
+                return Err(format!("no automation {id}"));
+            }
+            // D-6539: an automation cannot be removed while a trigger names it.
+            if let Some(trigger) = schema
+                .triggers
+                .iter()
+                .flat_map(BTreeMap::values)
+                .find(|trigger| &trigger.automation == id)
+            {
+                return Err(format!(
+                    "automation {id} is named by trigger {}",
+                    trigger.id
+                ));
+            }
+            remove_from(&mut schema.automations, id);
+            format!("remove automation {id}")
+        }
+        SchemaChange::DefineOperation(op) => {
+            schema
+                .operations
+                .get_or_insert_with(BTreeMap::new)
+                .insert(op.id.clone(), op.clone());
+            format!("define operation {}", op.id)
+        }
+        SchemaChange::RemoveOperation(id) => {
+            remove_from(&mut schema.operations, id).ok_or_else(|| format!("no operation {id}"))?;
+            format!("remove operation {id}")
+        }
+        SchemaChange::DefineUnique { object: id, unique } => {
+            object(schema, id)?
+                .unique
+                .get_or_insert_with(BTreeMap::new)
+                .insert(unique.id.clone(), unique.clone());
+            format!("define unique constraint {id}.{}", unique.id)
+        }
+        SchemaChange::RemoveUnique { object: id, unique } => {
+            remove_from(&mut object(schema, id)?.unique, unique)
+                .ok_or_else(|| format!("no unique constraint {id}.{unique}"))?;
+            format!("remove unique constraint {id}.{unique}")
+        }
+        SchemaChange::DefineSetting(def) => crate::settings::apply_define(schema, def),
+        SchemaChange::RemoveSetting(id) => crate::settings::apply_remove(schema, id)?,
+        SchemaChange::DefineCapability(def) => crate::capabilities::apply_define(schema, def),
+        SchemaChange::RemoveCapability(id) => crate::capabilities::apply_remove(schema, id)?,
+        SchemaChange::DeclareLedgerUnit(_)
+        | SchemaChange::DeclareLedgerPool(_)
+        | SchemaChange::SetLedgerLimit(_)
+        | SchemaChange::RemoveLedgerDefinition(_) => crate::ledger::apply_change(schema, change)?,
+        SchemaChange::SetRetention { .. }
+        | SchemaChange::ClearRetention { .. }
+        | SchemaChange::SetPublication { .. }
+        | SchemaChange::ClearPublication { .. }
+        | SchemaChange::SetLanguageField { .. }
+        | SchemaChange::ClearLanguageField { .. }
+        | SchemaChange::SetTranslationGroup { .. }
+        | SchemaChange::ClearTranslationGroup { .. }
+        | SchemaChange::RemoveObject { .. }
+        | SchemaChange::RemoveRole(_) => crate::object_meta::apply(schema, change)?,
+        SchemaChange::SetSearchable { .. } | SchemaChange::ClearSearchable { .. } => {
+            crate::search::apply(schema, change)?
+        }
+        SchemaChange::DefineMailTemplate(_)
+        | SchemaChange::RemoveMailTemplate(_)
+        | SchemaChange::DefineNoticeTemplate(_)
+        | SchemaChange::RemoveNoticeTemplate(_)
+        | SchemaChange::DefineToken(_)
+        | SchemaChange::RemoveToken(_) => crate::templates::apply(schema, change)?,
+        SchemaChange::RecordProduct(_) | SchemaChange::RemoveProduct(_) => {
+            crate::products::apply(schema, change)?
+        }
     })
+}
+
+/// Remove `key` from an optional table; a table left empty is no table at all, so a schema
+/// without such definitions reads and hashes as one that never had them.
+fn remove_from<K: Ord, V>(table: &mut Option<BTreeMap<K, V>>, key: &K) -> Option<V> {
+    let map = table.as_mut()?;
+    let removed = map.remove(key);
+    if map.is_empty() {
+        *table = None;
+    }
+    removed
+}
+
+/// Two records of `object`, in id order, with equal values in every field of `unique`, none of
+/// them null (D-6558, CMS-1556): the first such pair, or `None`.
+fn duplicate_pair(
+    lookup: Lookup<'_>,
+    object: &ObjectTypeId,
+    unique: &UniqueDef,
+) -> Result<Option<(RecordId, RecordId)>, DomainError> {
+    let mut seen: BTreeMap<Vec<&Value>, RecordId> = BTreeMap::new();
+    for record in lookup.all_of(object)? {
+        let values: Vec<&Value> = unique.fields.iter().map(|f| record.get(f)).collect();
+        if values.iter().any(|value| value.is_null()) {
+            continue;
+        }
+        if let Some(first) = seen.get(&values) {
+            return Ok(Some((*first, record.id)));
+        }
+        seen.insert(values, record.id);
+    }
+    Ok(None)
 }
 
 /// One existing record that does not conform to a proposed schema.
@@ -931,8 +1838,9 @@ pub struct Violation {
 pub struct Migration {
     pub schema: TenantSchema,
     pub summary: Vec<String>,
-    /// Records rewritten because a field they held was removed.
-    pub rewritten: Vec<Arc<Record>>,
+    /// Records rewritten because a field they held was removed, as (before, after). The rewrite
+    /// carries the next version and the time of the change.
+    pub rewritten: Vec<(Arc<Record>, Arc<Record>)>,
     pub violations: Vec<Violation>,
 }
 
@@ -972,6 +1880,42 @@ pub fn plan_migration(
     }
     schema.version = SchemaVersion(current.version.0 + 1);
 
+    // CMS-1556: a composite unique constraint is not declared over records that already hold a
+    // duplicate, whatever the change does with other records that do not conform. Checked once
+    // per constraint, as the working copy holds it, for object types that already existed.
+    let mut declared: BTreeSet<(ObjectTypeId, ConstraintId)> = BTreeSet::new();
+    for change in changes {
+        let SchemaChange::DefineUnique { object, unique } = change else {
+            continue;
+        };
+        if !current.objects.contains_key(object)
+            || !declared.insert((object.clone(), unique.id.clone()))
+        {
+            continue;
+        }
+        let Some(def) = schema
+            .objects
+            .get(object)
+            .and_then(|o| o.unique.as_ref())
+            .and_then(|u| u.get(&unique.id))
+        else {
+            continue;
+        };
+        if let Some((first, second)) = duplicate_pair(lookup, object, def)? {
+            let rule = format!("unique:{object}.{}", def.id);
+            let fields: Vec<&str> = def.fields.iter().map(|f| f.as_str()).collect();
+            let detail = format!(
+                "records {first} and {second} have the same values in {}",
+                fields.join(", ")
+            );
+            evidence.push(Check::fail(rule.clone(), detail.clone()));
+            return Err(
+                DomainError::new(ErrorKind::UniqueViolated, format!("{rule}: {detail}"))
+                    .with(evidence),
+            );
+        }
+    }
+
     let mut rewritten = Vec::new();
     let mut violations = Vec::new();
     for object in touched_objects(changes) {
@@ -993,9 +1937,11 @@ pub fn plan_migration(
             } else {
                 let rewritten_record = Arc::new(Record {
                     fields: stripped,
+                    version: record.version + 1,
+                    updated_at: now,
                     ..Record::clone(record)
                 });
-                rewritten.push(rewritten_record.clone());
+                rewritten.push((record.clone(), rewritten_record.clone()));
                 rewritten_record
             };
             let outcome = validate_record(
@@ -1031,6 +1977,9 @@ fn change_schema(
     existing: ExistingData,
 ) -> Result<Output, DomainError> {
     draft.require(Action::Manage, &Resource::Schema, Subject::default())?;
+    // D-7204: who defined a trigger or an automation, and when, comes from the context.
+    let stamped = crate::triggers::stamp_definitions(changes, draft.ctx);
+    let changes = stamped.as_slice();
     let current = draft.tenant.schema.version;
     if let Some(expected) = expected_version {
         if expected != current {
@@ -1046,18 +1995,44 @@ fn change_schema(
     if changes.is_empty() {
         return Err(draft.reject(ErrorKind::InvalidIntent, "no changes given"));
     }
+    if changes.len() > crate::limits::MAX_SCHEMA_CHANGES {
+        return Err(draft.reject(
+            ErrorKind::LimitExceeded,
+            format!(
+                "{} changes in one schema change is more than the maximum of {}",
+                changes.len(),
+                crate::limits::MAX_SCHEMA_CHANGES
+            ),
+        ));
+    }
+    require_definition_authority(draft, changes)?;
+    // D-6582, INT-1582: an entity a product owns changes only through that product.
+    if let Some(message) = crate::products::foreign_change(&draft.tenant.schema, changes) {
+        return Err(draft.reject(ErrorKind::InvalidSchema, message));
+    }
+    crate::ledger::check_removals(lookup, changes, &mut draft.evidence)?;
     let migration = plan_migration(lookup, changes, draft.ctx.now).map_err(|mut e| {
         let mut evidence = draft.evidence.clone();
         evidence.append(&mut e.evidence);
         e.evidence = evidence;
         e
     })?;
+    // The overrides and revisions that a change of setting definitions brings with it, or the
+    // refusal of a type that changes under overrides (SET-004).
+    let settings = crate::settings::schema_change_effects(draft.tenant, changes)
+        .map_err(|problem| draft.reject(ErrorKind::InvalidSchema, problem))?;
     draft.evidence.extend(
         migration
             .summary
             .iter()
             .map(|line| Check::pass("schema:change", line.clone())),
     );
+    // KRN-2524: which queries are scans, and why.
+    draft.evidence.extend(crate::query_plan::scan_warnings(
+        &draft.tenant.schema,
+        &migration.schema,
+        changes,
+    ));
 
     let affected: BTreeSet<(ObjectTypeId, RecordId)> = migration
         .violations
@@ -1083,19 +2058,149 @@ fn change_schema(
         ));
     }
 
+    // The records of the object types the changes remove (D-6581): refused unless the change says
+    // they are deleted, and then deleted in this commit.
+    let removed = match crate::object_meta::deleted_records(lookup, changes)? {
+        Ok(records) => records,
+        Err(message) => return Err(draft.reject(ErrorKind::MigrationRejected, message)),
+    };
+    if let Some(message) = crate::object_meta::held_roles(lookup.tenant, changes) {
+        return Err(draft.reject(ErrorKind::InvalidSchema, message));
+    }
+
     let version = migration.schema.version;
     draft
         .ops
         .push(DeltaOp::PutSchema(Arc::new(migration.schema)));
-    draft
-        .ops
-        .extend(migration.rewritten.into_iter().map(DeltaOp::PutRecord));
     draft.events.push(EventBody::SchemaChanged {
         version,
         summary: migration.summary,
         grandfathered: affected.len() as u64,
     });
+    draft.ops.extend(settings.ops);
+    draft.events.extend(settings.events);
+    // The limits of single accounts are written to the ledger's storage, not to the schema.
+    draft.ops.extend(crate::ledger::limit_ops(changes));
+    for (before, after) in migration.rewritten {
+        draft.ops.push(DeltaOp::PutRecord(after.clone()));
+        draft.events.push(EventBody::RecordUpdated {
+            before,
+            after,
+            transitions: None,
+        });
+    }
+    for before in removed {
+        draft.ops.push(DeltaOp::DeleteRecord {
+            object: before.object.clone(),
+            id: before.id,
+        });
+        draft.events.push(EventBody::RecordDeleted { before });
+    }
     Ok(Output::Schema { version })
+}
+
+/// The authority a change of definitions asks of the principal making it, beyond Manage on
+/// Schema: the capability automations-define for any change of a trigger or an automation
+/// (WFL-1520); for an automation, every role of its run-as is one the principal may confer
+/// (ADM-152, WFL-1528); for a tenant operation, every power its steps use (D-6547, OPR-1547).
+/// Checked in the order of the changes, the capability first.
+fn require_definition_authority(
+    draft: &mut Draft<'_>,
+    changes: &[SchemaChange],
+) -> Result<(), DomainError> {
+    let automation = changes.iter().any(|change| {
+        matches!(
+            change,
+            SchemaChange::DefineTrigger(_)
+                | SchemaChange::RemoveTrigger(_)
+                | SchemaChange::DefineAutomation(_)
+                | SchemaChange::RemoveAutomation(_)
+        )
+    });
+    if automation {
+        require_capability(draft, AUTOMATIONS_DEFINE)?;
+    }
+    if changes.iter().any(crate::settings::is_setting_change) {
+        require_capability(draft, crate::settings::SETTING_DEFINE)?;
+    }
+    if changes.iter().any(crate::ledger::is_ledger_change) {
+        require_capability(draft, crate::ledger::LEDGER_CONFIGURE)?;
+    }
+    // A product record is the proof that a change is that product's install, upgrade or removal.
+    if changes.iter().any(crate::products::is_product_change) {
+        require_capability(draft, crate::products::BUNDLE_INSTALL)?;
+    }
+    for change in changes {
+        match change {
+            SchemaChange::DefineAutomation(def) => {
+                require_conferrable(draft, def.run_as.roles.iter())?
+            }
+            SchemaChange::DefineOperation(op) => require_operation_powers(draft, op)?,
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+/// The acting principal holds the capability `name`; the owner holds every capability.
+fn require_capability(draft: &mut Draft<'_>, name: &str) -> Result<(), DomainError> {
+    let rule = format!("permission:capability:{name}");
+    let wanted = BTreeSet::from([Grant::Capability(name.to_string())]);
+    if holds_any(draft.tenant, &draft.ctx.principal, &wanted) {
+        draft
+            .evidence
+            .push(Check::pass(rule, format!("holds {name}")));
+        Ok(())
+    } else {
+        draft
+            .evidence
+            .push(Check::fail(rule, format!("does not hold {name}")));
+        Err(draft.reject(
+            ErrorKind::Unauthorized,
+            format!("the change needs the capability {name}"),
+        ))
+    }
+}
+
+/// D-6547, OPR-1547: a tenant operation grants its invokers no more than its definer holds, so
+/// the definer must hold, unconditionally, each action on an object type its record steps use
+/// and the capability of its posting steps.
+fn require_operation_powers(
+    draft: &mut Draft<'_>,
+    op: &TenantOperationDef,
+) -> Result<(), DomainError> {
+    let (actions, capabilities) = operation_powers(op);
+    let (tenant, ctx) = (draft.tenant, draft.ctx);
+    let principal = &ctx.principal;
+    let mut lacking: Vec<String> = actions
+        .iter()
+        .filter(|(action, resource)| !holds_power(tenant, principal, *action, resource))
+        .map(|(action, resource)| format!("{action:?} on {resource:?}"))
+        .collect();
+    let wanted: BTreeSet<Grant> = capabilities
+        .iter()
+        .map(|name| Grant::Capability(name.clone()))
+        .collect();
+    for grant in missing_grants(tenant, principal, &wanted) {
+        if let Grant::Capability(name) = grant {
+            lacking.push(format!("capability {name}"));
+        }
+    }
+    let rule = format!("operation:{}:definer_powers", op.id);
+    if lacking.is_empty() {
+        draft.evidence.push(Check::pass(
+            rule,
+            "the definer holds every power the steps use",
+        ));
+        Ok(())
+    } else {
+        let detail = lacking.join(", ");
+        draft.evidence.push(Check::fail(rule, detail.clone()));
+        Err(draft.reject(
+            ErrorKind::Unauthorized,
+            format!("may not define operation {}: lacks {detail}", op.id),
+        ))
+    }
 }
 
 /// Apply an accepted delta to the tenant state it was computed against.
@@ -1135,6 +2240,8 @@ pub fn apply_delta(
                 schema: Arc::new(TenantSchema::genesis()),
                 members: BTreeMap::new(),
                 records: BTreeMap::new(),
+                setting_values: None,
+                ledger: None,
             }
         }
         (Some(tenant), Some(base)) if tenant.revision == base && tenant.id == delta.tenant => {
@@ -1167,6 +2274,10 @@ pub fn apply_delta(
                     }
                 }
             }
+            DeltaOp::PutSettingOverride(_)
+            | DeltaOp::DeleteSettingOverride { .. }
+            | DeltaOp::PutSettingRevision { .. } => crate::settings::apply_op(&mut next, op),
+            DeltaOp::Ledger(change) => crate::ledger::apply(&mut next, change),
         }
     }
     next.revision = delta.new_revision;

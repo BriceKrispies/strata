@@ -1,0 +1,71 @@
+// Golden fixture for the capability catalogue (specc catalogue): two public contracts, one
+// public contract without an implementing component, one internal contract that must be left out,
+// a manual and a not-implemented component, domain events beside a machine event, roles that hold
+// capabilities, a quota, a plan, and types of every kind (id, scalar, enum, struct, union) named
+// directly and inside list<...>. The expected output is tests/fixtures/catalogue/expected.
+{
+  "exegra": "0.1",
+  "system": { "id": "catalogue-fixture", "name": "Catalogue fixture" },
+  "components": [
+    { "id": "gateway", "name": "Gateway", "implementation": { "status": "manual", "notes": "crates/gateway" } },
+    { "id": "worker", "name": "Worker", "implementation": { "status": "not-implemented" } }
+  ],
+  "contracts": [
+    {
+      "id": "publish-post", "name": "Publish a post", "implementedBy": "worker", "exposure": "public", "tenantScope": "request", "idempotent": true,
+      "auth": { "scheme": "session", "requires": ["post-write", "post-publish"] },
+      "inputs": [{ "name": "post", "type": "post-id" }, { "name": "tags", "type": "list<tag>", "optional": true }],
+      "outputs": [{ "name": "state", "type": "post-state" }],
+      "errors": [{ "name": "forbidden", "type": "api-error" }, { "name": "not-found", "type": "api-error" }]
+    },
+    {
+      "id": "read-post", "name": "Read a post", "implementedBy": "gateway", "exposure": "public", "tenantScope": "request", "idempotent": true,
+      "auth": { "scheme": "anonymous", "requires": ["post-read"] },
+      "inputs": [{ "name": "post", "type": "post-id" }],
+      "outputs": [{ "name": "post", "type": "post" }],
+      "errors": []
+    },
+    {
+      "id": "archive-post", "name": "Archive a post", "exposure": "public", "tenantScope": "request", "idempotent": false,
+      "auth": { "scheme": "service", "requires": [] },
+      "inputs": [],
+      "outputs": [],
+      "errors": [{ "name": "forbidden", "type": "api-error" }]
+    },
+    {
+      "id": "sweep-posts", "name": "Sweep posts", "implementedBy": "worker", "exposure": "internal", "tenantScope": "none", "idempotent": true,
+      "auth": { "scheme": "in-process", "requires": [] },
+      "inputs": [{ "name": "never-listed", "type": "unlisted" }],
+      "outputs": [],
+      "errors": []
+    }
+  ],
+  "events": [
+    { "id": "post-published", "name": "Post published", "domain": true, "payload": [{ "name": "post", "type": "post-id" }, { "name": "change", "type": "change" }] },
+    { "id": "post-archived", "name": "Post archived", "domain": true },
+    { "id": "sweep-due", "name": "Sweep due", "description": "A machine event, not in the tenant event log.", "payload": [{ "name": "never-listed", "type": "unlisted" }] }
+  ],
+  "types": [
+    { "id": "post-id", "name": "post-id", "kind": "id", "repr": "string" },
+    { "id": "tag", "name": "tag", "kind": "scalar", "repr": "string" },
+    { "id": "post-state", "name": "post-state", "kind": "enum", "values": ["draft", "published", "archived"] },
+    { "id": "post", "name": "Post", "kind": "struct", "fields": [{ "name": "id", "type": "post-id" }, { "name": "state", "type": "post-state" }, { "name": "tags", "type": "list<tag>", "optional": true }] },
+    { "id": "change", "name": "Change", "kind": "union", "variants": [{ "name": "none" }, { "name": "retitle", "newtype": true, "fields": [{ "name": "value", "type": "string" }] }, { "name": "move", "fields": [{ "name": "to", "type": "post-id" }] }] },
+    { "id": "unlisted", "name": "unlisted", "kind": "scalar", "repr": "string" }
+  ],
+  "roles": [
+    { "id": "reader", "name": "Reader", "level": "tenant", "holders": ["person"], "capabilities": ["post-read"] },
+    { "id": "owner", "name": "Owner", "level": "tenant", "holders": ["person"], "capabilities": ["post-write", "post-read"] }
+  ],
+  "capabilities": [
+    { "id": "post-write", "name": "Write posts", "description": "Create and change posts.", "core": true },
+    { "id": "post-read", "name": "Read posts", "description": "Read posts.", "core": true },
+    { "id": "post-publish", "name": "Publish posts", "description": "Make a post visible." }
+  ],
+  "quotas": [
+    { "id": "q-read-post", "description": "Anonymous reads from one address.", "contract": "read-post", "limit": 100, "window": "15 min", "onExceed": "refuse" }
+  ],
+  "plans": [
+    { "id": "enterprise", "name": "Enterprise", "description": "Quotas set by contract.", "capabilities": ["post-publish"] }
+  ]
+}

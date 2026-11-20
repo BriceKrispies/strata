@@ -1,0 +1,134 @@
+// Adversarial fixture for specc's code emission (tests/adversarial.rs): names, descriptions and
+// string literals that would end a comment, close a literal, start a line of code or name a
+// reserved word if they reached the generated Rust or JavaScript unescaped. Every one must come
+// out as inert text, and the generated files must parse (`node --check`, `syn`).
+//
+// - the machine's name and description hold `*/`, U+2028, U+2029, a bare CR and control characters;
+// - contract `class` and form `new` are JavaScript reserved words, `2-step` starts with a digit;
+// - a derivation and an argument hold the text `scope.` inside a string literal (`telescope`);
+// - `exegra validate --specs crates/spec-compiler/tests/fixtures --project adversarial` must
+//   report no error.
+//
+// The negative fixture `collision.spec.jsonc` has two forms that both become one JavaScript name.
+{
+  "exegra": "0.1",
+  "system": { "id": "adversarial-fixture", "name": "Adversarial fixture" },
+  "vocabulary": { "properties": [ { "entity": "contract", "name": "bffRoute", "type": "string", "label": "BFF route" } ] },
+  "components": [
+    { "id": "web-client", "name": "Web client", "category": "client", "purpose": "The browser frontend." },
+    { "id": "api", "name": "API", "category": "external", "purpose": "The backend the web client calls." },
+    { "id": "gateway", "name": "Gateway", "category": "computational", "purpose": "Answers the browser." }
+  ],
+  "records": [
+    { "id": "rec-login-form", "name": "Login form state", "owner": "web-client", "key": ["form-id"], "schemaVersion": 1,
+      "retention": "Held in the memory of one browser tab; gone when the tab closes. It is never sent to the server.",
+      "fields": [
+        { "name": "form-id", "type": "string" },
+        { "name": "form-state", "type": "string" },
+        { "name": "name", "type": "string" },
+        { "name": "attempts", "type": "u32" },
+        { "name": "last-submit", "type": "timestamp" }
+      ] }
+  ],
+  "events": [
+    { "id": "login-typed", "name": "Name typed", "payload": [ { "name": "name", "type": "string" } ] },
+    { "id": "login-submitted", "name": "Login submitted", "payload": [ { "name": "chars", "type": "u32" } ] },
+    { "id": "login-accepted", "name": "Login accepted" },
+    { "id": "login-rejected", "name": "Login rejected", "payload": [ { "name": "reason", "type": "string" }, { "name": "note", "type": "option<string>" } ] },
+    { "id": "login-cancelled", "name": "Login cancelled" },
+    { "id": "login-timeout", "name": "Login timed out", "elapsed": true, "payload": [ { "name": "attempt", "type": "u32" } ] },
+    { "id": "credentials-sent", "name": "Credentials sent", "delivery": "at-least-once", "payload": [ { "name": "name", "type": "string" }, { "name": "attempt", "type": "u32" }, { "name": "hint", "type": "option<string>" } ] },
+    { "id": "login-abandoned", "name": "Login abandoned", "delivery": "at-most-once", "payload": [ { "name": "attempts", "type": "u32" } ] }
+  ],
+  "contracts": [
+    { "id": "class", "name": "Class */ \u2028 \r fn injected() {} // \u202e", "ref": "CT-1", "realisation": "generated", "implementedBy": "gateway", "exposure": "public", "tenantScope": "request", "auth": { "scheme": "session", "csrf": true, "origin": true },
+      "bffRoute": "POST /api/class", "idempotent": true, "timeoutMs": 2000,
+      "inputs": [{ "name": "title", "type": "string" }, { "name": "slug", "type": "string" }],
+      "outputs": [{ "name": "ok", "type": "bool" }] },
+    { "id": "step-2", "name": "Second step \"quoted\" 'single' \\ backslash \u0001", "ref": "CT-2", "realisation": "generated", "implementedBy": "gateway", "exposure": "public", "tenantScope": "request", "auth": { "scheme": "session", "csrf": true, "origin": true },
+      "bffRoute": "POST /api/two", "idempotent": true, "timeoutMs": 2000,
+      "inputs": [{ "name": "value", "type": "string" }],
+      "outputs": [] }
+  ],
+  "screens": [
+    { "id": "screen-home", "name": "Home */ \u2028", "route": "/", "kind": "pages.home", "auth": "none" },
+    { "id": "screen-compose", "name": "Compose", "route": "/compose", "auth": "none" }
+  ],
+  "forms": [
+    { "id": "new", "screen": "screen-compose", "contract": "class",
+      "fields": [
+        { "name": "title", "input": "title", "label": "Title */ \u2028 ' \"", "control": "text" },
+        { "name": "slug", "input": "slug", "label": "Address", "control": "text",
+          "derive": "form.title + ' telescope scope.principal.id'", "until": "edited" }
+      ],
+      "submitLabel": "Save \u2029 */",
+      "onSuccess": { "toast": "Saved */ \u2028 ${form.title}." },
+      "onError": { "show": "inline" } }
+  ],
+  "actions": [
+    { "id": "default", "screen": "screen-compose", "label": "Run */ \u2028 'x'", "contract": "step-2",
+      "arguments": { "value": "'telescope scope.principal.id' + principal.id" },
+      "onSuccess": { "toast": "Done */." },
+      "onError": { "show": "toast" } }
+  ],
+  "behaviors": [
+    {
+      "id": "login-form", "name": "Login */ form \u2028 injected()", "subject": "web-client", "initial": "editing", "level": "implementation",
+      "description": "First line */ not the end\u2028second after U+2028\u2029third after U+2029\rfourth after a bare CR\u0001 control \u202e bidi // fake comment\r\nCRLF line\n/* open @type {evil}",
+      "variables": [
+        { "name": "name", "type": "string", "initial": "", "repr": "string" },
+        { "name": "attempts", "type": "number", "initial": 0, "repr": "u32" },
+        { "name": "lastSubmit", "type": "number", "initial": 0, "repr": "timestamp" }
+      ],
+      "storage": { "record": "rec-login-form", "key": "form-id", "creates": true,
+        "fields": { "lastSubmit": "last-submit" }, "state": "form-state" },
+      "transaction": { "scope": "transition", "isolation": "serializable" },
+      "states": [
+        { "id": "editing", "name": "Editing", "ignores": ["login-accepted", "login-rejected", "login-cancelled", "login-timeout"] },
+        { "id": "sending", "name": "Sending", "ignores": ["login-typed", "login-submitted"] },
+        { "id": "locked", "name": "Locked", "terminal": true },
+        { "id": "signed-in", "name": "Signed in", "terminal": true }
+      ],
+      "transitions": [
+        { "id": "type", "from": "editing", "to": "editing", "on": "login-typed", "otherwise": true,
+          "effects": [ { "set": "name", "to": "event.name" } ] },
+        { "id": "lock", "from": "editing", "to": "locked", "on": "login-submitted", "guard": "attempts >= 3",
+          "effects": [
+            { "emit": "login-abandoned", "to": "api", "payload": { "attempts": "attempts" } }
+          ] },
+        { "id": "submit", "from": "editing", "to": "sending", "on": "login-submitted", "guard": "event.chars > 0",
+          "effects": [
+            { "set": "attempts", "to": "attempts + 1" },
+            { "set": "lastSubmit", "to": "time" },
+            { "emit": "credentials-sent", "to": "api", "payload": { "name": "name", "attempt": "attempts" } },
+            { "timer": "timeout", "after": 5000, "emit": "login-timeout", "payload": { "attempt": "attempts" } }
+          ] },
+        { "id": "submit-empty", "from": "editing", "to": "editing", "on": "login-submitted", "otherwise": true },
+        { "id": "accept", "from": "sending", "to": "signed-in", "on": "login-accepted", "otherwise": true,
+          "effects": [ { "cancel": "timeout" } ] },
+        { "id": "reject", "from": "sending", "to": "editing", "on": "login-rejected", "otherwise": true,
+          "effects": [ { "cancel": "timeout" } ] },
+        { "id": "cancel", "from": "sending", "to": "editing", "on": "login-cancelled", "otherwise": true,
+          "effects": [ { "cancel": "timeout" } ] },
+        { "id": "time-out", "from": "sending", "to": "editing", "on": "login-timeout", "guard": "event.attempt == attempts" },
+        { "id": "stale-timeout", "from": "sending", "to": "sending", "on": "login-timeout", "otherwise": true }
+      ]
+    }
+  ],
+  "scenarios": [
+    // An empty submit, a rejected attempt, an attempt that times out, a cancelled attempt and,
+    // with all three attempts used, a submit that locks the form. Times are milliseconds.
+    { "id": "login-run", "name": "Login run", "behaviors": ["login-form"], "timeUnit": "ms",
+      "steps": [
+        { "at": 0, "event": "login-typed", "payload": { "name": "ada" } },
+        { "at": 10, "event": "login-submitted", "payload": { "chars": 0 } },
+        { "at": 20, "event": "login-submitted", "payload": { "chars": 8 } },
+        { "at": 30, "event": "login-typed", "payload": { "name": "ignored" } },
+        { "at": 40, "event": "login-rejected", "payload": { "reason": "bad password" } },
+        { "at": 50, "event": "login-submitted", "payload": { "chars": 8 } },
+        { "at": 6000, "event": "login-submitted", "payload": { "chars": 8 } },
+        { "at": 6100, "event": "login-cancelled" },
+        { "at": 6200, "event": "login-submitted", "payload": { "chars": 8 } }
+      ] }
+  ]
+}

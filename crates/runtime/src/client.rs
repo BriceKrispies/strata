@@ -1,7 +1,8 @@
 //! Calling another component's contract.
 //!
 //! [`Client::call`] sends a [`Contract`]'s request in the wire format [`Routes`](crate::Routes)
-//! serves and decodes the answer into the contract's response or error. Credentials are added by
+//! serves and decodes the answer into the contract's response or error, reading a failure with
+//! the contract's [`FailureBody`]. Credentials are added by
 //! a [`Credentials`] value, written by hand per deployment.
 //!
 //! Retries: a call to an idempotent contract is sent up to [`CallRetry::attempts`] times
@@ -10,9 +11,14 @@
 //! `unavailable`. The wait between attempts and the time one attempt may take come from the
 //! [`CallRetry`] too; [`Client::call_retrying`] takes one for a single call, such as the policy the
 //! specification states for that contract. A call to a contract that is not idempotent is sent
-//! once.
+//! once. The key is 128 random bits from the operating system ([`random_key`]); when that source
+//! fails the call fails with [`CallError::Key`] and nothing is sent. A retry whose first attempt
+//! timed out waits on the server for that attempt's answer (see the routes module) instead of
+//! running the handler again.
 
-use crate::routes::{Contract, Failure, FailureCode, ServiceToken, CORRELATION, IDEMPOTENCY_KEY};
+use crate::routes::{
+    Contract, Failure, FailureBody, FailureCode, ServiceToken, CORRELATION, IDEMPOTENCY_KEY,
+};
 use std::fmt;
 use std::time::Duration;
 
@@ -54,6 +60,10 @@ pub enum CallError<E> {
     Transport(String),
     /// The answer came back but could not be decoded.
     Codec(String),
+    /// No idempotency key could be made (the operating system's random source failed), so
+    /// nothing was sent. The call is not retried: a key that could repeat would let the server
+    /// replay another call's answer.
+    Key(String),
 }
 
 impl<E: fmt::Debug> fmt::Display for CallError<E> {
@@ -63,6 +73,7 @@ impl<E: fmt::Debug> fmt::Display for CallError<E> {
             CallError::Runtime { code, message } => write!(f, "{code:?}: {message}"),
             CallError::Transport(why) => write!(f, "transport: {why}"),
             CallError::Codec(why) => write!(f, "undecodable answer: {why}"),
+            CallError::Key(why) => write!(f, "no idempotency key: {why}"),
         }
     }
 }
@@ -143,16 +154,18 @@ pub struct Client<K: Credentials> {
     base: String,
     credentials: K,
     retry: CallRetry,
+    keys: KeySource,
 }
 
-fn idempotency_key() -> String {
+/// Makes the idempotency key of a call, or says why it cannot.
+pub type KeySource = fn() -> Result<String, String>;
+
+/// A random 128-bit key from the operating system. It fails rather than make a key that could
+/// repeat: a repeated key makes the server replay the answer of another call.
+pub fn random_key() -> Result<String, String> {
     let mut bytes = [0u8; 16];
-    if getrandom::getrandom(&mut bytes).is_err() {
-        // Without randomness, fall back to the time; keys only need to differ between calls.
-        let now = crate::clock::Clock::now(&crate::SystemClock).0;
-        bytes[..8].copy_from_slice(&now.to_le_bytes());
-    }
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
+    getrandom::getrandom(&mut bytes).map_err(|e| e.to_string())?;
+    Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
 }
 
 impl<K: Credentials> Client<K> {
@@ -165,7 +178,14 @@ impl<K: Credentials> Client<K> {
             base: base.trim_end_matches('/').to_string(),
             credentials,
             retry: CallRetry::default(),
+            keys: random_key,
         })
+    }
+
+    /// Make idempotency keys with `keys` instead of [`random_key`].
+    pub fn with_key_source(mut self, keys: KeySource) -> Self {
+        self.keys = keys;
+        self
     }
 
     /// Send an idempotent call at most `attempts` times (at least once).
@@ -214,7 +234,11 @@ impl<K: Credentials> Client<K> {
         } else {
             1
         };
-        let key = idempotency_key();
+        let key = if C::SPEC.idempotent {
+            (self.keys)().map_err(CallError::Key)?
+        } else {
+            String::new()
+        };
         let mut attempt = 1;
         loop {
             let result = self
@@ -264,10 +288,10 @@ impl<K: Credentials> Client<K> {
         if status.is_success() {
             return serde_json::from_slice(&body).map_err(|e| CallError::Codec(e.to_string()));
         }
-        match serde_json::from_slice::<Failure<C::Error>>(&body) {
-            Ok(Failure::Contract { error }) => Err(CallError::Contract(error)),
-            Ok(Failure::Runtime { code, message }) => Err(CallError::Runtime { code, message }),
-            Err(_) => Err(CallError::Runtime {
+        match <C::Body as FailureBody<C::Error>>::decode(status.as_u16(), &body) {
+            Some(Failure::Contract { error }) => Err(CallError::Contract(error)),
+            Some(Failure::Runtime { code, message }) => Err(CallError::Runtime { code, message }),
+            None => Err(CallError::Runtime {
                 code: if status.as_u16() == 503 {
                     FailureCode::Unavailable
                 } else {

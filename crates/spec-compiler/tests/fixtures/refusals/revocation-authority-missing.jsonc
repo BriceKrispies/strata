@@ -1,0 +1,15 @@
+{
+  "exegra": "0.1",
+  "system": { "id": "sys", "name": "System" },
+  "claims": [ { "id": "adm-1080", "ref": "ADM-1080", "kind": "requirement" } ],
+  "contracts": [
+    {
+      "id": "revoke-role", "name": "Take a role from a person", "ref": "CT-266", "exposure": "public",
+      "errors": [ { "name": "forbidden", "kind": "forbidden", "condition": "The caller may not manage members." } ]
+    },
+    {
+      "id": "remove-team-member", "name": "Take a person out of a team", "ref": "CT-268", "exposure": "public",
+      "errors": [ { "name": "forbidden", "kind": "forbidden", "condition": "The caller may not manage members, or holds less than a role of the team (ADM-152)." } ]
+    }
+  ]
+}

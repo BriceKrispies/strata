@@ -105,13 +105,13 @@ pub struct MakeReportResponse {
 pub enum MakeReportError {
     /// No job has the id.
     #[serde(rename = "not_found")]
-    NotFound,
+    NotFound(types::ApiError),
 }
 
 impl fmt::Display for MakeReportError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::NotFound => f.write_str("not_found"),
+            Self::NotFound(_) => f.write_str("not_found"),
         }
     }
 }
@@ -187,6 +187,8 @@ impl std::error::Error for InspectJobCamelError {}
 pub trait Gateway {
     /// Ping
     ///
+    /// Authorisation: public, scheme session.
+    ///
     /// Not idempotent: a repeated call may take effect again.
     ///
     /// Contract `ping`, reference CT-3.
@@ -200,7 +202,7 @@ pub trait Gateway {
 pub trait Scheduler {
     /// Submit job
     ///
-    /// Authorisation: An operator.
+    /// Authorisation: internal, scheme session. An operator.
     ///
     /// Idempotent: repeating a call has the effect of making it once.
     ///
@@ -213,6 +215,8 @@ pub trait Scheduler {
     ) -> impl std::future::Future<Output = Result<SubmitJobResponse, SubmitJobError>> + Send;
 
     /// Cancel job
+    ///
+    /// Authorisation: internal, scheme anonymous.
     ///
     /// Idempotent: repeating a call has the effect of making it once.
     ///
@@ -228,6 +232,8 @@ pub trait Scheduler {
 /// The contracts component `reports` (Reports) implements.
 pub trait Reports {
     /// Make report
+    ///
+    /// Authorisation: internal, scheme anonymous.
     ///
     /// Idempotent: repeating a call has the effect of making it once.
     ///
@@ -251,7 +257,7 @@ pub mod meta {
         reference: Some("CT-1"),
         realisation: Realisation::Generated,
         implemented_by: Some("scheduler"),
-        auth: Some("An operator."),
+        auth: Some("session"),
         idempotent: Some(true),
         timeout_ms: Some(2000),
     };
@@ -263,7 +269,7 @@ pub mod meta {
         reference: Some("CT-2"),
         realisation: Realisation::Generated,
         implemented_by: Some("scheduler"),
-        auth: None,
+        auth: Some("anonymous"),
         idempotent: Some(true),
         timeout_ms: Some(1000),
     };
@@ -275,7 +281,7 @@ pub mod meta {
         reference: Some("CT-3"),
         realisation: Realisation::Generated,
         implemented_by: Some("gateway"),
-        auth: None,
+        auth: Some("session"),
         idempotent: Some(false),
         timeout_ms: None,
     };
@@ -287,7 +293,7 @@ pub mod meta {
         reference: Some("CT-4"),
         realisation: Realisation::Generated,
         implemented_by: Some("reports"),
-        auth: None,
+        auth: Some("anonymous"),
         idempotent: Some(true),
         timeout_ms: Some(1000),
     };

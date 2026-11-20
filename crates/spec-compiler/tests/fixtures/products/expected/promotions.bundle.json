@@ -1,0 +1,277 @@
+{
+  "content": {
+    "ledger-limits": [
+      {
+        "cap": 1,
+        "unit": "promotions__redemptions"
+      },
+      {
+        "floor": 0,
+        "owner": {
+          "pool": {
+            "pool": "promotions__pool"
+          }
+        },
+        "unit": "promotions__stock"
+      }
+    ],
+    "ledger-pools": [
+      {
+        "description": "The pool that holds the stock of the promotions.",
+        "pool": "promotions__pool"
+      }
+    ],
+    "ledger-units": [
+      {
+        "description": "The redemptions of a person: one account per person and promotion, in the scope of the id of the promotion, credited by each redemption.",
+        "unit": "promotions__redemptions"
+      },
+      {
+        "description": "The stock of each promotion: one account of the pool per promotion, in the scope of its id, debited by each redemption.",
+        "unit": "promotions__stock"
+      }
+    ],
+    "objects": {
+      "promotions__promotion": {
+        "constraints": {
+          "window": {
+            "expr": "new.ends_at > new.starts_at and new.ends_at <= new.starts_at + days(90)",
+            "id": "window",
+            "message": "A promotion ends after it starts and runs at most 90 days."
+          }
+        },
+        "fields": {
+          "ends_at": {
+            "id": "ends_at",
+            "label": "Ends at",
+            "required": true,
+            "ty": "Time",
+            "unique": false
+          },
+          "starts_at": {
+            "id": "starts_at",
+            "label": "Starts at",
+            "required": true,
+            "ty": "Time",
+            "unique": false
+          },
+          "title": {
+            "id": "title",
+            "label": "Title",
+            "required": true,
+            "ty": "Str",
+            "unique": false
+          }
+        },
+        "id": "promotions__promotion",
+        "label": "Promotion"
+      },
+      "promotions__redemption": {
+        "constraints": {},
+        "fields": {
+          "person": {
+            "id": "person",
+            "label": "Person",
+            "personal": {
+              "kind": "identifier",
+              "searchable": false,
+              "subject": "Creator"
+            },
+            "required": true,
+            "ty": "Str",
+            "unique": false
+          },
+          "promotion": {
+            "id": "promotion",
+            "label": "Promotion",
+            "required": true,
+            "ty": {
+              "Ref": {
+                "on-delete": "Restrict",
+                "target": "promotions__promotion"
+              }
+            },
+            "unique": false
+          },
+          "redeemed_at": {
+            "id": "redeemed_at",
+            "label": "Redeemed at",
+            "required": true,
+            "ty": "Time",
+            "unique": false
+          }
+        },
+        "id": "promotions__redemption",
+        "label": "Redemption",
+        "retention": {
+          "days": 730,
+          "from": "Created"
+        }
+      }
+    },
+    "operations": [
+      {
+        "conditions": [
+          {
+            "error": "bad-window",
+            "expr": "param.ends_at > param.starts_at and ms_between(param.starts_at, param.ends_at) <= days(90)",
+            "id": "window",
+            "message": "A promotion ends after it starts and runs at most 90 days."
+          },
+          {
+            "error": "bad-stock",
+            "expr": "param.stock > 0",
+            "id": "stock",
+            "message": "The stock added is positive."
+          }
+        ],
+        "id": "promotions__create",
+        "inputs": [
+          {
+            "name": "title",
+            "required": true,
+            "ty": "Str"
+          },
+          {
+            "name": "starts_at",
+            "required": true,
+            "ty": "Time"
+          },
+          {
+            "name": "ends_at",
+            "required": true,
+            "ty": "Time"
+          },
+          {
+            "label": "Units added to the stock",
+            "name": "stock",
+            "required": true,
+            "ty": "Int"
+          }
+        ],
+        "invokers": {
+          "roles": [
+            "promotions__manager"
+          ],
+          "signed-in": false
+        },
+        "label": "Create a promotion and fund the stock",
+        "steps": [
+          {
+            "CreateRecord": {
+              "fields": {
+                "ends_at": "param.ends_at",
+                "starts_at": "param.starts_at",
+                "title": "param.title"
+              },
+              "id": "promotion",
+              "object": "promotions__promotion"
+            }
+          },
+          {
+            "PostLedger": {
+              "amount": "param.stock",
+              "id": "fund",
+              "owner": {
+                "Pool": {
+                  "pool": "promotions__pool"
+                }
+              },
+              "reason": "stock",
+              "scope": "text(param.promotion)",
+              "unit": "promotions__stock"
+            }
+          }
+        ]
+      },
+      {
+        "conditions": [
+          {
+            "error": "outside-window",
+            "expr": "now >= record.starts_at and now < record.ends_at",
+            "id": "window",
+            "message": "This promotion is not running."
+          }
+        ],
+        "id": "promotions__redeem",
+        "inputs": [
+          {
+            "name": "promotion",
+            "required": true,
+            "ty": {
+              "Ref": {
+                "on-delete": "Restrict",
+                "target": "promotions__promotion"
+              }
+            }
+          }
+        ],
+        "invokers": {
+          "roles": [],
+          "signed-in": true
+        },
+        "label": "Redeem a promotion",
+        "steps": [
+          {
+            "PostLedger": {
+              "amount": "-1",
+              "id": "take_stock",
+              "owner": {
+                "Pool": {
+                  "pool": "promotions__pool"
+                }
+              },
+              "reason": "redemption",
+              "scope": "text(record.$id)",
+              "unit": "promotions__stock"
+            }
+          },
+          {
+            "PostLedger": {
+              "amount": "1",
+              "id": "count",
+              "owner": "Invoker",
+              "reason": "redemption",
+              "scope": "text(record.$id)",
+              "unit": "promotions__redemptions"
+            }
+          },
+          {
+            "CreateRecord": {
+              "fields": {
+                "person": "principal",
+                "promotion": "record.$id",
+                "redeemed_at": "now"
+              },
+              "id": "redemption",
+              "object": "promotions__redemption"
+            }
+          }
+        ],
+        "subject": {
+          "input": "promotion",
+          "object": "promotions__promotion"
+        }
+      }
+    ],
+    "role-permissions": {
+      "promotions__manager": [
+        {
+          "Capability": "tenant-operation-invoke"
+        }
+      ]
+    },
+    "roles": {
+      "promotions__manager": {
+        "id": "promotions__manager",
+        "label": "Promotions manager"
+      }
+    }
+  },
+  "name": "Promotions",
+  "platform": {
+    "min": "0.2"
+  },
+  "product": "promotions",
+  "version": "1.0.0"
+}

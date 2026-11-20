@@ -23,7 +23,7 @@
     "resources": {},
     "routeCounters": {},
     "streams": {},
-    "time": 100,
+    "time": 105,
     "timers": {},
     "workloads": {}
   },
@@ -154,6 +154,7 @@
   "outcome": "quiescent",
   "scenarioId": "lease-run",
   "seed": null,
+  "semanticHash": "01c84e5108b05f",
   "steps": [
     {
       "config": {
@@ -1616,6 +1617,19 @@
         "meters": {},
         "pending": [
           {
+            "event": "lease-requested",
+            "payload": {
+              "holder": "w2"
+            },
+            "scheduledAt": 50,
+            "seq": 4,
+            "source": {
+              "kind": "scenario",
+              "step": 4
+            },
+            "time": 50
+          },
+          {
             "event": "result-accepted",
             "from": {
               "behavior": "lease",
@@ -1626,25 +1640,12 @@
               "token": 2,
               "value": "done"
             },
-            "scheduledAt": 45,
+            "scheduledAt": 50,
             "seq": 13,
             "source": {
               "behavior": "lease",
               "kind": "transition",
               "transition": "accept"
-            },
-            "time": 45
-          },
-          {
-            "event": "lease-requested",
-            "payload": {
-              "holder": "w2"
-            },
-            "scheduledAt": 50,
-            "seq": 4,
-            "source": {
-              "kind": "scenario",
-              "step": 4
             },
             "time": 50
           },
@@ -1709,7 +1710,7 @@
                 "value": "done"
               },
               "seq": 13,
-              "time": 45
+              "time": 50
             }
           ],
           "from": "granted",
@@ -1749,114 +1750,6 @@
         "links": {},
         "machines": {
           "lease": {
-            "state": "idle",
-            "vars": {
-              "accepted": 1,
-              "granted": 30,
-              "holder": "w1",
-              "token": 2
-            }
-          }
-        },
-        "meters": {},
-        "pending": [
-          {
-            "event": "lease-requested",
-            "payload": {
-              "holder": "w2"
-            },
-            "scheduledAt": 50,
-            "seq": 4,
-            "source": {
-              "kind": "scenario",
-              "step": 4
-            },
-            "time": 50
-          },
-          {
-            "event": "lease-requested",
-            "payload": {
-              "holder": "w3"
-            },
-            "scheduledAt": 55,
-            "seq": 5,
-            "source": {
-              "kind": "scenario",
-              "step": 5
-            },
-            "time": 55
-          },
-          {
-            "event": "lease-result",
-            "payload": {
-              "token": 4,
-              "value": "done"
-            },
-            "scheduledAt": 100,
-            "seq": 6,
-            "source": {
-              "kind": "scenario",
-              "step": 6
-            },
-            "time": 100
-          }
-        ],
-        "resources": {},
-        "routeCounters": {},
-        "streams": {},
-        "time": 45,
-        "timers": {},
-        "workloads": {}
-      },
-      "draws": [],
-      "event": {
-        "from": {
-          "behavior": "lease",
-          "incarnation": 0,
-          "instance": 0
-        },
-        "id": "result-accepted",
-        "payload": {
-          "token": 2,
-          "value": "done"
-        },
-        "scheduledAt": 45,
-        "seq": 13,
-        "source": {
-          "behavior": "lease",
-          "kind": "transition",
-          "transition": "accept"
-        }
-      },
-      "faults": [],
-      "fired": [],
-      "ignored": [
-        {
-          "behavior": "lease",
-          "considered": [],
-          "instance": 0,
-          "reason": "no-transition"
-        }
-      ],
-      "index": 9,
-      "kind": "deliver",
-      "links": [],
-      "resources": [],
-      "responsible": [
-        "result-accepted"
-      ],
-      "time": 45
-    },
-    {
-      "config": {
-        "activeFaults": [],
-        "down": [],
-        "incarnations": {
-          "lease": 0
-        },
-        "links": {},
-        "machines": {
-          "lease": {
             "state": "granted",
             "vars": {
               "accepted": 1,
@@ -1868,6 +1761,26 @@
         },
         "meters": {},
         "pending": [
+          {
+            "event": "result-accepted",
+            "from": {
+              "behavior": "lease",
+              "incarnation": 0,
+              "instance": 0
+            },
+            "payload": {
+              "token": 2,
+              "value": "done"
+            },
+            "scheduledAt": 50,
+            "seq": 13,
+            "source": {
+              "behavior": "lease",
+              "kind": "transition",
+              "transition": "accept"
+            },
+            "time": 50
+          },
           {
             "event": "lease-granted",
             "from": {
@@ -2007,7 +1920,7 @@
         }
       ],
       "ignored": [],
-      "index": 10,
+      "index": 9,
       "kind": "deliver",
       "links": [],
       "resources": [],
@@ -2016,6 +1929,144 @@
         "grant",
         "lease",
         "lease-service"
+      ],
+      "time": 50
+    },
+    {
+      "config": {
+        "activeFaults": [],
+        "down": [],
+        "incarnations": {
+          "lease": 0
+        },
+        "links": {},
+        "machines": {
+          "lease": {
+            "state": "granted",
+            "vars": {
+              "accepted": 1,
+              "granted": 50,
+              "holder": "w2",
+              "token": 3
+            }
+          }
+        },
+        "meters": {},
+        "pending": [
+          {
+            "event": "lease-granted",
+            "from": {
+              "behavior": "lease",
+              "incarnation": 0,
+              "instance": 0
+            },
+            "payload": {
+              "holder": "w2",
+              "token": 3
+            },
+            "scheduledAt": 50,
+            "seq": 14,
+            "source": {
+              "behavior": "lease",
+              "kind": "transition",
+              "transition": "grant"
+            },
+            "time": 50
+          },
+          {
+            "event": "lease-requested",
+            "payload": {
+              "holder": "w3"
+            },
+            "scheduledAt": 55,
+            "seq": 5,
+            "source": {
+              "kind": "scenario",
+              "step": 5
+            },
+            "time": 55
+          },
+          {
+            "event": "lease-expired",
+            "payload": {
+              "token": 3
+            },
+            "scheduledAt": 80,
+            "seq": 15,
+            "source": {
+              "behavior": "lease",
+              "instance": 0,
+              "kind": "timer",
+              "timer": "expiry"
+            },
+            "target": {
+              "behavior": "lease",
+              "incarnation": 0,
+              "instance": 0
+            },
+            "time": 80,
+            "timer": "lease/expiry"
+          },
+          {
+            "event": "lease-result",
+            "payload": {
+              "token": 4,
+              "value": "done"
+            },
+            "scheduledAt": 100,
+            "seq": 6,
+            "source": {
+              "kind": "scenario",
+              "step": 6
+            },
+            "time": 100
+          }
+        ],
+        "resources": {},
+        "routeCounters": {},
+        "streams": {},
+        "time": 50,
+        "timers": {
+          "lease/expiry": 15
+        },
+        "workloads": {}
+      },
+      "draws": [],
+      "event": {
+        "from": {
+          "behavior": "lease",
+          "incarnation": 0,
+          "instance": 0
+        },
+        "id": "result-accepted",
+        "payload": {
+          "token": 2,
+          "value": "done"
+        },
+        "scheduledAt": 50,
+        "seq": 13,
+        "source": {
+          "behavior": "lease",
+          "kind": "transition",
+          "transition": "accept"
+        }
+      },
+      "faults": [],
+      "fired": [],
+      "ignored": [
+        {
+          "behavior": "lease",
+          "considered": [],
+          "instance": 0,
+          "reason": "no-transition"
+        }
+      ],
+      "index": 10,
+      "kind": "deliver",
+      "links": [],
+      "resources": [],
+      "responsible": [
+        "result-accepted"
       ],
       "time": 50
     },
@@ -2534,14 +2585,14 @@
               "token": 4,
               "value": "done"
             },
-            "scheduledAt": 100,
+            "scheduledAt": 105,
             "seq": 18,
             "source": {
               "behavior": "lease",
               "kind": "transition",
               "transition": "accept"
             },
-            "time": 100
+            "time": 105
           }
         ],
         "resources": {},
@@ -2577,7 +2628,7 @@
                 "value": "done"
               },
               "seq": 18,
-              "time": 100
+              "time": 105
             }
           ],
           "from": "granted",
@@ -2631,7 +2682,7 @@
         "resources": {},
         "routeCounters": {},
         "streams": {},
-        "time": 100,
+        "time": 105,
         "timers": {},
         "workloads": {}
       },
@@ -2647,7 +2698,7 @@
           "token": 4,
           "value": "done"
         },
-        "scheduledAt": 100,
+        "scheduledAt": 105,
         "seq": 18,
         "source": {
           "behavior": "lease",
@@ -2672,7 +2723,7 @@
       "responsible": [
         "result-accepted"
       ],
-      "time": 100
+      "time": 105
     }
   ],
   "stepsTaken": 17,

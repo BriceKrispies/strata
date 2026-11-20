@@ -1,0 +1,297 @@
+{
+  // A product that reacts to the ledger with an automation (WG-5031): "when a person's points balance
+  // crosses 500, award the Silver badge once, notify them in-app and by mail, and after 7 days send a
+  // follow-up if they have not viewed it". It is complete: it declares everything it names, in its own
+  // namespace badge_milestones__ (D-6582), so a tenant can install it from this file alone (WG-5046).
+  //
+  // Each typed section holds values of a platform type (src/layer_values.rs, src/core/layer-values.js):
+  // objects of object-type-def, policies of policy-def, ledgerUnits of ledger-unit-decl, mailTemplates
+  // of mail-template-decl, noticeTemplates of notice-template-decl, triggers of trigger-def and
+  // automations of automation-def. The trigger event is a variant of trigger-event and every step
+  // action a variant of automation-step (D-6522); the automation acts as its automation principal with
+  // the roles of its run-as (D-6525). Unions are externally tagged in PascalCase, durations are in
+  // milliseconds, and an expression is tenant rule language text (the AST type expr may be written as
+  // text, D-6546); the parameters are those of D-6523 (param.balance_before is the balance before
+  // the posting).
+  //
+  // It is the reference product (WG-5008): record type, policies, roles, a ledger unit for points with a
+  // floor, templates, a trigger on a points posting crossing a threshold, an automation that awards the
+  // badge once (run key), notifies and follows up after a wait, an operation to award by hand, and a
+  // view of a person's badges. It adds no platform mechanism. The trigger reads param.balance_before and
+  // param.balance of the posting (D-6523), so a crossing needs no arithmetic and fires once for each
+  // crossing; the run key makes the award once for the person however often the balance crosses 500.
+  //
+  // What it leaves out, because the platform does not have it yet: nothing it needs. A policy lets a
+  // person update the whole award, not only viewed_at, because a policy is per object type and action
+  // (D-6590); the follow-up branch reads viewed_at, so a person who sets it stops the follow-up. The
+  // steps notify (create-notice) and mail and follow_up (send-mail) are the steps of the notice and mail
+  // services (D-6522); they act as the automation principal, so the awarder role holds the platform
+  // capability messages-send, which both services require of their sender, and the mail steps name the
+  // category "transactional", which the tenant declares (define-message-category). The tenant also
+  // defines the badges it awards: a badge is a record of badge_milestones__badge, defined by a holder of
+  // the awarder role, who also awards by hand. The text of the templates is blocks of the template
+  // schema (D-7900): a paragraph of inline text nodes.
+  "product": {
+    "id": "badge-milestones",
+    "name": "Badge milestones",
+    "description": "Awards the Silver badge once when a person's points balance crosses 500, tells the person in the inbox and by mail, and follows up by mail after seven days if the award has not been viewed.",
+    "version": "1.0.0",
+    "platform": { "min": "0.2" },
+    "imports": {
+      "spec": "../../../../../specifications/spec.jsonc",
+      "entities": ["content-read", "content-write", "messages-send", "product-module"]
+    }
+  },
+  "roles": [
+    {
+      "id": "badge_milestones__awarder",
+      "name": "Milestone awarder",
+      "description": "The role the automation principal of badge_milestones__silver holds (its run-as): it creates and reads badge awards and sends the notice and the mail of an award. A person who holds it defines badges and awards them by hand. An owner may confer it under ADM-152.",
+      "level": "tenant",
+      "holders": ["person", "team", "agent"],
+      "capabilities": ["content-read", "content-write", "messages-send"]
+    }
+  ],
+  "objects": [
+    {
+      // What a badge is: the tenant defines each badge it awards (WG-5008).
+      "id": "badge_milestones__badge",
+      "label": "Badge",
+      "fields": {
+        "name": { "id": "name", "label": "Name", "ty": "Str", "required": true, "unique": true },
+        "label": { "id": "label", "label": "Label", "ty": "Str", "required": true, "unique": false },
+        "points": { "id": "points", "label": "Points to earn it", "ty": "Int", "required": true, "unique": false }
+      },
+      "constraints": {}
+    },
+    {
+      "id": "badge_milestones__award",
+      "label": "Badge award",
+      "fields": {
+        "person": {
+          "id": "person",
+          "label": "Person",
+          "ty": "Str",
+          "required": true,
+          "unique": false,
+          // The principal the badge is awarded to: personal data of that person, sealed under their key (D-6584).
+          "personal": { "kind": "identifier", "subject": { "Field": { "field": "person" } }, "searchable": false }
+        },
+        "badge": { "id": "badge", "label": "Badge", "ty": "Str", "required": true, "unique": false },
+        "awarded_at": { "id": "awarded_at", "label": "Awarded at", "ty": "Time", "required": true, "unique": false },
+        "viewed_at": { "id": "viewed_at", "label": "Viewed at", "ty": "Time", "required": false, "unique": false }
+      },
+      "constraints": {},
+      // A type with a personal field carries a retention rule (D-6584).
+      "retention": { "days": 730, "from": "Created" }
+    }
+  ],
+  "policies": [
+    {
+      "id": "badge_milestones__awarder_badges",
+      "role": "badge_milestones__awarder",
+      "resource": { "Object": "badge_milestones__badge" },
+      "actions": ["Create", "Read", "Update"]
+    },
+    {
+      "id": "badge_milestones__member_read_badges",
+      "role": "member",
+      "resource": { "Object": "badge_milestones__badge" },
+      "actions": ["Read"]
+    },
+    {
+      "id": "badge_milestones__awarder_awards",
+      "role": "badge_milestones__awarder",
+      "resource": { "Object": "badge_milestones__award" },
+      "actions": ["Create", "Read"]
+    },
+    {
+      "id": "badge_milestones__member_own_awards",
+      "role": "member",
+      "resource": { "Object": "badge_milestones__award" },
+      "actions": ["Read", "Update"],
+      "condition": "record.person == principal"
+    }
+  ],
+  "ledgerUnits": [
+    {
+      "id": "badge_milestones__points",
+      "description": "Points a person earns; the Silver badge is awarded when a person's balance reaches 500."
+    }
+  ],
+  "ledgerLimits": [
+    {
+      // Points are earned and spent, and never owed: the floor of 0 refuses a debit that would take a person below it (LDG-013).
+      "id": "badge_milestones__points_floor",
+      "unit": "badge_milestones__points",
+      "floor": 0
+    }
+  ],
+  "mailTemplates": [
+    {
+      "id": "badge_milestones__silver_mail",
+      "subject": "You earned the Silver badge",
+      "body": "[{\"type\":\"paragraph\",\"inlines\":[{\"type\":\"text\",\"text\":\"Your points reached 500 and you earned the Silver badge.\"}]}]"
+    },
+    {
+      "id": "badge_milestones__silver_follow_up",
+      "subject": "Your Silver badge is waiting",
+      "body": "[{\"type\":\"paragraph\",\"inlines\":[{\"type\":\"text\",\"text\":\"You have not yet looked at your Silver badge. Open your inbox to see it.\"}]}]"
+    }
+  ],
+  "noticeTemplates": [
+    {
+      "id": "badge_milestones__silver_notice",
+      "title": "You earned the Silver badge",
+      "body": "[{\"type\":\"paragraph\",\"inlines\":[{\"type\":\"text\",\"text\":\"Your points reached 500.\"}]}]"
+    }
+  ],
+  "queries": [
+    {
+      // Every award the reader may read: a member reads their own only, by the policy badge_milestones__member_own_awards.
+      "id": "badge_milestones__awards",
+      "object": "badge_milestones__award",
+      "params": [],
+      "order": [{ "field": "awarded_at", "descending": true }],
+      "limit": 50
+    }
+  ],
+  "views": [
+    {
+      "id": "badge_milestones__my_badges",
+      "route": "/badges",
+      "title": "My badges",
+      "sections": {
+        "awards": { "query": "badge_milestones__awards", "args": {}, "include": [], "markdown": [], "single": false }
+      }
+    }
+  ],
+  "operations": [
+    {
+      "id": "badge_milestones__define_badge",
+      "label": "Define a badge",
+      "inputs": [
+        { "name": "name", "ty": "Str", "required": true, "label": "The name of the badge" },
+        { "name": "label", "ty": "Str", "required": true, "label": "The label the badge is shown with" },
+        { "name": "points", "ty": "Int", "required": true, "label": "The points that earn it" }
+      ],
+      // Only a holder of the awarder role invokes it, as for the award by hand.
+      "invokers": { "signed-in": false, "roles": ["badge_milestones__awarder"] },
+      "conditions": [
+        { "id": "positive", "expr": "param.points > 0", "error": "no-points", "message": "A badge is earned with a positive number of points." }
+      ],
+      "steps": [
+        {
+          "CreateRecord": {
+            "id": "define",
+            "object": "badge_milestones__badge",
+            "fields": { "name": "param.name", "label": "param.label", "points": "param.points" }
+          }
+        }
+      ]
+    },
+    {
+      "id": "badge_milestones__award_by_hand",
+      "label": "Award a badge by hand",
+      "inputs": [
+        { "name": "person", "ty": "Str", "required": true, "label": "The principal to award" },
+        { "name": "badge", "ty": "Str", "required": true, "label": "The badge" }
+      ],
+      // Only a holder of the awarder role (an owner may confer it, ADM-152) invokes it.
+      "invokers": { "signed-in": false, "roles": ["badge_milestones__awarder"] },
+      "conditions": [
+        { "id": "named", "expr": "len(param.badge) > 0", "error": "no-badge", "message": "A badge is named." }
+      ],
+      "steps": [
+        {
+          "CreateRecord": {
+            "id": "award",
+            "object": "badge_milestones__award",
+            "fields": { "person": "param.person", "badge": "param.badge", "awarded_at": "now" }
+          }
+        }
+      ]
+    }
+  ],
+  "triggers": [
+    {
+      "id": "badge_milestones__silver_on_points",
+      "on": { "LedgerPosted": { "unit": "badge_milestones__points" } },
+      "condition": "param.owner != null and param.balance_before < 500 and param.balance >= 500",
+      "automation": "badge_milestones__silver"
+    }
+  ],
+  "automations": [
+    {
+      "id": "badge_milestones__silver",
+      "label": "Award the Silver badge at 500 points",
+      "run-as": { "roles": ["badge_milestones__awarder"] },
+      // Once per person, for as long as the automation exists (SCH-1536).
+      "run-key": "param.owner",
+      "start": "award",
+      "steps": {
+        "award": {
+          "action": { "CreateRecord": { "object": "badge_milestones__award", "fields": { "person": "param.owner", "badge": "'silver'", "awarded_at": "param.at" } } },
+          "next": "notify",
+          "retry": { "attempts": 5 }
+        },
+        "notify": {
+          "action": { "CreateNotice": { "template": "badge_milestones__silver_notice", "to": "param.owner", "record": "param.award_record" } },
+          "next": "mail"
+        },
+        "mail": {
+          "action": { "SendMail": { "template": "badge_milestones__silver_mail", "to": "param.owner", "category": "transactional" } },
+          "next": "wait",
+          "retry": { "attempts": 8, "first-delay": 60000, "max-delay": 3600000 },
+          "timeout": 30000
+        },
+        "wait": {
+          "action": { "WaitFor": { "duration": 604800000 } },
+          "next": "viewed"
+        },
+        "viewed": {
+          "action": { "Branch": { "condition": "is_null(record.viewed_at)", "object": "badge_milestones__award", "record": "param.award_record", "then": "follow_up", "else": "done" } }
+        },
+        "follow_up": {
+          "action": { "SendMail": { "template": "badge_milestones__silver_follow_up", "to": "param.owner", "category": "transactional" } },
+          "next": "done"
+        },
+        "done": { "action": "End" }
+      }
+    }
+  ],
+  "claims": [
+    {
+      "id": "badge_milestones__define-badge",
+      "kind": "structural",
+      "statement": "A holder of the awarder role SHALL be able to define a badge with one operation, and a person who does not hold the role SHALL NOT.",
+      "subjects": ["product-module"],
+      "rationale": "The invokers of badge_milestones__define_badge are the holders of the awarder role (OPR-1546), and the policy on the badge type gives writing to that role only.",
+      "evaluate": { "method": "external-evidence" }
+    },
+    {
+      "id": "badge_milestones__award-by-hand",
+      "kind": "structural",
+      "statement": "A holder of the awarder role SHALL be able to award a named badge to a person with one operation, and a person who does not hold the role SHALL NOT.",
+      "subjects": ["product-module"],
+      "rationale": "The invokers of badge_milestones__award_by_hand are the holders of the awarder role (OPR-1546).",
+      "evaluate": { "method": "external-evidence" }
+    },
+    {
+      "id": "badge_milestones__silver-once",
+      "kind": "structural",
+      "statement": "A person whose points balance crosses 500 SHALL receive one Silver badge award, one inbox notice and one mail, however often the balance crosses 500 again and however many times a step is attempted.",
+      "subjects": ["product-module"],
+      "rationale": "The run key of badge_milestones__silver is the person (SCH-1536) and every step carries its derived key (SCH-1524).",
+      "evaluate": { "method": "external-evidence" }
+    },
+    {
+      "id": "badge_milestones__follow-up-unviewed",
+      "kind": "structural",
+      "statement": "Seven days after the award, a follow-up mail SHALL be sent to the person when the award's viewed_at is empty, and no follow-up SHALL be sent when it is set.",
+      "subjects": ["product-module"],
+      "rationale": "The wait step resumes the run after 604800000 ms (WFL-1537) and the branch reads the award as it is then.",
+      "evaluate": { "method": "external-evidence" }
+    }
+  ]
+}

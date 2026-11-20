@@ -31,6 +31,7 @@ pub mod client;
 pub mod clock;
 pub mod host;
 pub mod jobs;
+pub mod limits;
 pub mod machine;
 pub mod memory;
 pub mod routes;
@@ -39,8 +40,11 @@ pub mod sqlite;
 pub mod store;
 pub mod system;
 pub mod telemetry;
+pub mod tenant;
 
-pub use client::{CallBackoff, CallError, CallRetry, Client, Credentials, NoCredentials};
+pub use client::{
+    random_key, CallBackoff, CallError, CallRetry, Client, Credentials, KeySource, NoCredentials,
+};
 pub use clock::{Clock, SystemClock, TestClock, Time};
 pub use host::{
     Committed, DispatchError, DispatchReport, Dispatcher, Envelope, Handled, Host, HostError,
@@ -52,8 +56,9 @@ pub use machine::{
 };
 pub use memory::MemoryStore;
 pub use routes::{
-    Authorizer, Caller, Contract, ContractError, ContractSpec, Failure, FailureCode, Refusal,
-    Routes, ServiceToken,
+    Access, Authorizer, Caller, Contract, ContractError, ContractSpec, Exposure, Facing, Failure,
+    FailureBody, FailureCode, GatewayRoute, Presented, Principal, Refusal, Routes, RuntimeBody,
+    Scheme, ServiceToken, Site, TenantScope, CSRF_TOKEN, TENANT,
 };
 pub use sqlite::{Database, SqliteMachineStore};
 pub use store::{
@@ -61,6 +66,8 @@ pub use store::{
     QueueStore, RecordStore, StorageError, StoredRecord, TimerEntry, TimerStore, Tx,
 };
 pub use system::{
-    Delivered, Member, Reached, RouteTable, Router, Routing, StepReport, System, SystemTick,
+    Delivered, Diagnostics, Member, PurgeReport, Reached, Retention, RouteTable, Router, Routing,
+    StepReport, System, SystemTick, RETENTION,
 };
 pub use telemetry::{JsonLines, Level, NoTelemetry, Telemetry};
+pub use tenant::{InvalidTenant, TenantId};
