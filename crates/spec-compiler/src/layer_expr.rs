@@ -27,6 +27,16 @@
 //! not of a text of the language. So the grammar and the static check here follow the generated parser
 //! and checker one to one (`tokenize`, `Parser`, `check` in `tenant_rule_language.rs`), which the same
 //! entity pins, including their messages.
+//!
+//! The grammar, level by level (D-6543): `or` (n-ary), `and` (n-ary), `not`, one comparison or `in`
+//! (non-associative; operands are sums), `+` and `-` (left), `*` (left), then a primary. A `-` before a
+//! digit is the sign of an integer literal only where no operand ends before it (after a name that is
+//! not `or`, `and`, `not` or `in`, an integer, a string, `)` or `]` it is the binary operator).
+//!
+//! Drift between this module and the language is a failing test, not a review item:
+//! `tests/layer_expr_drift.rs` probes every operator the `tenant-rule-language` entity declares
+//! against this parser and checker, and compares both with the generated parser and checker on a
+//! corpus. [`print_text`], [`shape_name`] and [`call_names`] exist for it.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -309,7 +319,7 @@ impl fmt::Display for Shape {
 enum Kind {
     Id(String),
     Int(String),
-    Str,
+    Str(String),
     Sym(&'static str),
 }
 
@@ -319,9 +329,21 @@ struct Token {
     pos: usize,
 }
 
+/// Whether a token ends an operand, so that a `-` after it is the binary operator rather than the sign
+/// of a literal.
+fn ends_operand(token: Option<&Token>) -> bool {
+    const WORD_OPERATORS: [&str; 4] = ["or", "and", "not", "in"];
+    match token.map(|t| &t.kind) {
+        Some(Kind::Int(_) | Kind::Str(_)) => true,
+        Some(Kind::Sym(s)) => *s == ")" || *s == "]",
+        Some(Kind::Id(w)) => !WORD_OPERATORS.contains(&w.as_str()),
+        None => false,
+    }
+}
+
 fn tokenize(source: &str) -> Result<Vec<Token>, Problem> {
-    const SYMBOLS: [&str; 12] = [
-        "==", "!=", "<=", ">=", "<", ">", "(", ")", "[", "]", ",", ".",
+    const SYMBOLS: [&str; 15] = [
+        "==", "!=", "<=", ">=", "<", ">", "+", "-", "*", "(", ")", "[", "]", ",", ".",
     ];
     let chars: Vec<char> = source.chars().collect();
     let mut tokens = Vec::new();
@@ -342,7 +364,9 @@ fn tokenize(source: &str) -> Result<Vec<Token>, Problem> {
                 pos: start,
             });
         } else if c.is_ascii_digit()
-            || (c == '-' && chars.get(i + 1).is_some_and(char::is_ascii_digit))
+            || (c == '-'
+                && chars.get(i + 1).is_some_and(char::is_ascii_digit)
+                && !ends_operand(tokens.last()))
         {
             let start = i;
             i += 1;
@@ -363,6 +387,7 @@ fn tokenize(source: &str) -> Result<Vec<Token>, Problem> {
             });
         } else if c == '\'' {
             let start = i;
+            let mut text = String::new();
             i += 1;
             loop {
                 match chars.get(i) {
@@ -373,7 +398,8 @@ fn tokenize(source: &str) -> Result<Vec<Token>, Problem> {
                     Some('\\') => {
                         i += 1;
                         match chars.get(i) {
-                            Some('n' | '\'' | '\\') => {}
+                            Some('n') => text.push('\n'),
+                            Some(c @ ('\'' | '\\')) => text.push(*c),
                             other => {
                                 return Err(Problem::new(
                                     EXPR_SYNTAX,
@@ -383,13 +409,13 @@ fn tokenize(source: &str) -> Result<Vec<Token>, Problem> {
                             }
                         }
                     }
-                    Some(_) => {}
+                    Some(c) => text.push(*c),
                 }
                 i += 1;
             }
             i += 1;
             tokens.push(Token {
-                kind: Kind::Str,
+                kind: Kind::Str(text),
                 pos: start,
             });
         } else {
@@ -420,16 +446,90 @@ const CALLS: &[(&str, usize)] = &[
     ("starts_with", 2),
     ("is_slug", 1),
     ("if", 3),
+    ("ms_between", 2),
+    ("days", 1),
+    ("hours", 1),
+    ("minutes", 1),
+    ("concat", 2),
+    ("text", 1),
 ];
+
+/// The names of the calls this module parses (the `call` operators of the language it follows).
+pub fn call_names() -> Vec<&'static str> {
+    CALLS.iter().map(|(name, _)| *name).collect()
+}
+
+/// A literal, as the generated AST holds it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Lit {
+    Null,
+    Bool(bool),
+    Int(i64),
+    Str(String),
+    Time(i64),
+    Ref(u64),
+    List(Vec<Lit>),
+}
+
+impl Lit {
+    fn shape(&self) -> Shape {
+        match self {
+            Lit::Null => Shape::Any,
+            Lit::Bool(_) => Shape::Bool,
+            Lit::Int(_) => Shape::Int,
+            Lit::Str(_) => Shape::Str,
+            Lit::Time(_) => Shape::Time,
+            Lit::Ref(_) => Shape::Ref,
+            Lit::List(_) => Shape::List,
+        }
+    }
+}
+
+/// The authoring syntax, as the generated printer writes it.
+impl fmt::Display for Lit {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Lit::Null => f.write_str("null"),
+            Lit::Bool(x) => write!(f, "{x}"),
+            Lit::Int(x) => write!(f, "{x}"),
+            Lit::Str(s) => {
+                f.write_str("'")?;
+                for c in s.chars() {
+                    match c {
+                        '\'' => f.write_str("\\'")?,
+                        '\\' => f.write_str("\\\\")?,
+                        '\n' => f.write_str("\\n")?,
+                        c => write!(f, "{c}")?,
+                    }
+                }
+                f.write_str("'")
+            }
+            Lit::Time(x) => write!(f, "time({x})"),
+            Lit::Ref(x) => write!(f, "ref({x})"),
+            Lit::List(items) => {
+                f.write_str("[")?;
+                for (i, item) in items.iter().enumerate() {
+                    if i > 0 {
+                        f.write_str(", ")?;
+                    }
+                    write!(f, "{item}")?;
+                }
+                f.write_str("]")
+            }
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum NodeKind {
-    Lit(Shape),
+    Lit(Lit),
     Var {
+        scope: &'static str,
         name: String,
         name_pos: usize,
     },
     Through {
+        scope: &'static str,
         field: String,
         field_pos: usize,
         name: String,
@@ -447,8 +547,17 @@ enum NodeKind {
     },
     Not(Box<Node>),
     /// `and` and `or`: every item is a boolean.
-    Junction(Vec<Node>),
+    Junction {
+        word: &'static str,
+        items: Vec<Node>,
+    },
     Cmp {
+        op: &'static str,
+        left: Box<Node>,
+        right: Box<Node>,
+    },
+    /// `+`, `-` or `*`.
+    Arith {
         op: &'static str,
         left: Box<Node>,
         right: Box<Node>,
@@ -479,7 +588,7 @@ impl Parser {
             None => "the end of the text".to_string(),
             Some(Kind::Id(w)) => format!("\"{w}\""),
             Some(Kind::Int(n)) => format!("\"{n}\""),
-            Some(Kind::Str) => "a string".to_string(),
+            Some(Kind::Str(_)) => "a string".to_string(),
             Some(Kind::Sym(s)) => format!("\"{s}\""),
         }
     }
@@ -582,7 +691,7 @@ impl Parser {
         } else {
             Node {
                 pos,
-                kind: NodeKind::Junction(items),
+                kind: NodeKind::Junction { word: "or", items },
             }
         })
     }
@@ -599,7 +708,7 @@ impl Parser {
         } else {
             Node {
                 pos,
-                kind: NodeKind::Junction(items),
+                kind: NodeKind::Junction { word: "and", items },
             }
         })
     }
@@ -620,10 +729,10 @@ impl Parser {
     /// Precedence 4: a comparison or `in`.
     fn level_3(&mut self) -> Result<Node, Problem> {
         let pos = self.here();
-        let left = self.primary()?;
+        let left = self.level_4()?;
         for op in ["==", "!=", "<", "<=", ">", ">="] {
             if self.sym(op) {
-                let right = self.primary()?;
+                let right = self.level_4()?;
                 return Ok(Node {
                     pos,
                     kind: NodeKind::Cmp {
@@ -635,11 +744,53 @@ impl Parser {
             }
         }
         if self.word("in") {
-            let right = self.primary()?;
+            let right = self.level_4()?;
             return Ok(Node {
                 pos,
                 kind: NodeKind::In(Box::new(left), Box::new(right)),
             });
+        }
+        Ok(left)
+    }
+
+    /// Precedence 5: `+` and `-`, left associative.
+    fn level_4(&mut self) -> Result<Node, Problem> {
+        let pos = self.here();
+        let mut left = self.level_5()?;
+        loop {
+            let op = if self.sym("+") {
+                "+"
+            } else if self.sym("-") {
+                "-"
+            } else {
+                return Ok(left);
+            };
+            let right = self.level_5()?;
+            left = Node {
+                pos,
+                kind: NodeKind::Arith {
+                    op,
+                    left: Box::new(left),
+                    right: Box::new(right),
+                },
+            };
+        }
+    }
+
+    /// Precedence 6: `*`, left associative.
+    fn level_5(&mut self) -> Result<Node, Problem> {
+        let pos = self.here();
+        let mut left = self.primary()?;
+        while self.sym("*") {
+            let right = self.primary()?;
+            left = Node {
+                pos,
+                kind: NodeKind::Arith {
+                    op: "*",
+                    left: Box::new(left),
+                    right: Box::new(right),
+                },
+            };
         }
         Ok(left)
     }
@@ -650,37 +801,40 @@ impl Parser {
             return Err(Problem::new(EXPR_SYNTAX, pos, "unexpected end of the text"));
         };
         self.at += 1;
-        let lit = |shape| {
+        let lit = |value: Lit| -> Result<Node, Problem> {
             Ok(Node {
                 pos,
-                kind: NodeKind::Lit(shape),
+                kind: NodeKind::Lit(value),
             })
         };
         match token.kind {
-            Kind::Int(_) => lit(Shape::Int),
-            Kind::Str => lit(Shape::Str),
+            Kind::Int(text) => lit(Lit::Int(int_value(&text, pos)?)),
+            Kind::Str(text) => lit(Lit::Str(text)),
             Kind::Sym("(") => {
                 let inner = self.level_0()?;
                 self.expect(")")?;
                 Ok(inner)
             }
             Kind::Sym("[") => {
-                let mut count = 0;
+                let mut items = Vec::new();
                 while !self.sym("]") {
-                    if count > 0 {
+                    if !items.is_empty() {
                         self.expect(",")?;
                     }
                     let item = self.primary()?;
-                    if !matches!(item.kind, NodeKind::Lit(_)) {
-                        return Err(Problem::new(
-                            EXPR_SYNTAX,
-                            item.pos,
-                            "a list holds literals only",
-                        ));
+                    let at = item.pos;
+                    match item.kind {
+                        NodeKind::Lit(value) => items.push(value),
+                        _ => {
+                            return Err(Problem::new(
+                                EXPR_SYNTAX,
+                                at,
+                                "a list holds literals only",
+                            ));
+                        }
                     }
-                    count += 1;
                 }
-                lit(Shape::List)
+                lit(Lit::List(items))
             }
             Kind::Sym(other) => Err(Problem::new(
                 EXPR_SYNTAX,
@@ -688,8 +842,9 @@ impl Parser {
                 format!("unexpected \"{other}\""),
             )),
             Kind::Id(name) => match name.as_str() {
-                "true" | "false" => lit(Shape::Bool),
-                "null" => lit(Shape::Any),
+                "true" => lit(Lit::Bool(true)),
+                "false" => lit(Lit::Bool(false)),
+                "null" => lit(Lit::Null),
                 "param" => {
                     self.expect(".")?;
                     let (name, name_pos) = self.ident()?;
@@ -716,6 +871,11 @@ impl Parser {
                     })
                 }
                 "record" | "old" | "new" => {
+                    let scope = match name.as_str() {
+                        "record" => "record",
+                        "old" => "old",
+                        _ => "new",
+                    };
                     self.expect(".")?;
                     let (field, field_pos) = self.ident()?;
                     if self.sym(".") {
@@ -723,6 +883,7 @@ impl Parser {
                         Ok(Node {
                             pos,
                             kind: NodeKind::Through {
+                                scope,
                                 field,
                                 field_pos,
                                 name,
@@ -733,6 +894,7 @@ impl Parser {
                         Ok(Node {
                             pos,
                             kind: NodeKind::Var {
+                                scope,
                                 name: field,
                                 name_pos: field_pos,
                             },
@@ -740,8 +902,8 @@ impl Parser {
                     }
                 }
                 "time" => {
-                    self.int_arg()?;
-                    lit(Shape::Time)
+                    let value = self.int_arg()?;
+                    lit(Lit::Time(int_value(&value, pos)?))
                 }
                 "ref" => {
                     let value = self.int_arg()?;
@@ -752,7 +914,10 @@ impl Parser {
                             "a record id is not negative",
                         ));
                     }
-                    lit(Shape::Ref)
+                    let id = value.parse::<u64>().map_err(|_| {
+                        Problem::new(EXPR_SYNTAX, pos, "a record id is not negative")
+                    })?;
+                    lit(Lit::Ref(id))
                 }
                 call => match CALLS.iter().find(|(c, _)| *c == call) {
                     Some((_, count)) => {
@@ -774,6 +939,12 @@ impl Parser {
             },
         }
     }
+}
+
+/// The value of an integer token (the tokenizer has checked its range).
+fn int_value(text: &str, pos: usize) -> Result<i64, Problem> {
+    text.parse::<i64>()
+        .map_err(|_| Problem::new(EXPR_SYNTAX, pos, format!("number out of range: {text}")))
 }
 
 fn parse(source: &str) -> Result<Node, Problem> {
@@ -878,13 +1049,16 @@ fn attribute(fields: Option<&FieldMap>, name: &str, pos: usize) -> Result<Shape,
 
 fn shape_of(node: &Node, env: &Env<'_>) -> Result<Shape, Problem> {
     match &node.kind {
-        NodeKind::Lit(shape) => Ok(*shape),
-        NodeKind::Var { name, name_pos } => attribute(env.scope.fields.as_ref(), name, *name_pos),
+        NodeKind::Lit(value) => Ok(value.shape()),
+        NodeKind::Var { name, name_pos, .. } => {
+            attribute(env.scope.fields.as_ref(), name, *name_pos)
+        }
         NodeKind::Through {
             field,
             field_pos,
             name,
             name_pos,
+            ..
         } => {
             field_id(field, *field_pos)?;
             let target = match &env.scope.fields {
@@ -942,7 +1116,7 @@ fn shape_of(node: &Node, env: &Env<'_>) -> Result<Shape, Problem> {
             expect_shape(shape_of(operand, env)?, &[Shape::Bool], "not", operand.pos)?;
             Ok(Shape::Bool)
         }
-        NodeKind::Junction(items) => {
+        NodeKind::Junction { items, .. } => {
             for item in items {
                 expect_shape(shape_of(item, env)?, &[Shape::Bool], "and/or", item.pos)?;
             }
@@ -968,6 +1142,18 @@ fn shape_of(node: &Node, env: &Env<'_>) -> Result<Shape, Problem> {
             shape_of(left, env)?;
             expect_shape(shape_of(right, env)?, &[Shape::List], "in", right.pos)?;
             Ok(Shape::Bool)
+        }
+        NodeKind::Arith { op, left, right } => {
+            let first = shape_of(left, env)?;
+            if *op == "*" {
+                expect_shape(first, &[Shape::Int], op, left.pos)?;
+                expect_shape(shape_of(right, env)?, &[Shape::Int], op, right.pos)?;
+                Ok(Shape::Int)
+            } else {
+                expect_shape(first, &[Shape::Int, Shape::Time], op, left.pos)?;
+                expect_shape(shape_of(right, env)?, &[Shape::Int], op, right.pos)?;
+                Ok(first)
+            }
         }
         NodeKind::Call(name, args) => call_shape(node.pos, name, args, env),
     }
@@ -1029,6 +1215,31 @@ fn call_shape(pos: usize, name: &str, args: &[Node], env: &Env<'_>) -> Result<Sh
             )?;
             Ok(Shape::Bool)
         }
+        "ms_between" => {
+            for arg in args {
+                expect_shape(shape_of(arg, env)?, &[Shape::Time], "ms_between", arg.pos)?;
+            }
+            Ok(Shape::Int)
+        }
+        "days" | "hours" | "minutes" => {
+            expect_shape(shape_of(&args[0], env)?, &[Shape::Int], name, args[0].pos)?;
+            Ok(Shape::Int)
+        }
+        "concat" => {
+            for arg in args {
+                expect_shape(shape_of(arg, env)?, &[Shape::Str], "concat", arg.pos)?;
+            }
+            Ok(Shape::Str)
+        }
+        "text" => {
+            expect_shape(
+                shape_of(&args[0], env)?,
+                &[Shape::Int, Shape::Time, Shape::Ref, Shape::Bool, Shape::Str],
+                "text",
+                args[0].pos,
+            )?;
+            Ok(Shape::Str)
+        }
         _ => {
             expect_shape(shape_of(&args[0], env)?, &[Shape::Bool], "if", args[0].pos)?;
             let (then, otherwise) = (shape_of(&args[1], env)?, shape_of(&args[2], env)?);
@@ -1041,6 +1252,52 @@ fn call_shape(pos: usize, name: &str, args: &[Node], env: &Env<'_>) -> Result<Sh
             }
             Ok(if then == Shape::Any { otherwise } else { then })
         }
+    }
+}
+
+/// The text as the generated printer (`Display` of the generated AST) prints what it parsed, or the
+/// message of the syntax problem. Parentheses are explicit: `(a + (b * c))`.
+pub fn print_text(source: &str) -> Result<String, String> {
+    parse(source)
+        .map(|tree| print(&tree))
+        .map_err(|problem| problem.message)
+}
+
+/// The shape the static check gives a text (`Bool`, `Int`, ... as the generated checker names them),
+/// or the code and message of the first problem.
+pub fn shape_name(
+    source: &str,
+    scope: &Scope,
+    ctx: &ProductContext,
+) -> Result<String, (&'static str, String)> {
+    let env = Env { scope, ctx };
+    parse(source)
+        .and_then(|tree| shape_of(&tree, &env))
+        .map(|shape| shape.to_string())
+        .map_err(|problem| (problem.code, problem.message))
+}
+
+fn print(node: &Node) -> String {
+    let all = |nodes: &[Node]| nodes.iter().map(print).collect::<Vec<_>>();
+    match &node.kind {
+        NodeKind::Lit(value) => value.to_string(),
+        NodeKind::Var { scope, name, .. } => format!("{scope}.{name}"),
+        NodeKind::Through {
+            scope, field, name, ..
+        } => format!("{scope}.{field}.{name}"),
+        NodeKind::Param { name, .. } => format!("param.{name}"),
+        NodeKind::Now => "now".to_string(),
+        NodeKind::Principal => "principal".to_string(),
+        NodeKind::HasRole { role, .. } => format!("has_role({role})"),
+        NodeKind::Not(operand) => format!("not({})", print(operand)),
+        NodeKind::Junction { word, items } => {
+            format!("({})", all(items).join(&format!(" {word} ")))
+        }
+        NodeKind::Cmp { op, left, right } | NodeKind::Arith { op, left, right } => {
+            format!("({} {op} {})", print(left), print(right))
+        }
+        NodeKind::In(item, list) => format!("({} in {})", print(item), print(list)),
+        NodeKind::Call(name, args) => format!("{name}({})", all(args).join(", ")),
     }
 }
 
@@ -1145,10 +1402,10 @@ mod tests {
             .unwrap()
             .1
             .contains("position 0: unknown name \"balance\""));
-        assert!(problem("record.points + 1")
+        assert!(problem("record.points +")
             .unwrap()
             .1
-            .contains("position 14"));
+            .contains("position 15"));
         assert!(problem("record.name == \"gold\"")
             .unwrap()
             .1
@@ -1177,7 +1434,7 @@ mod tests {
             .unwrap()
             .1
             .contains("position 15"));
-        for text in ["record.points + 1", "(record.points > 1", "[record.points]"] {
+        for text in ["record.points +", "(record.points > 1", "[record.points]"] {
             assert_eq!(code(text).as_deref(), Some(EXPR_SYNTAX), "{text}");
         }
     }
@@ -1231,6 +1488,155 @@ mod tests {
             .unwrap()
             .1
             .contains("cannot compare Str with Int"));
+    }
+
+    #[test]
+    fn checked_arithmetic_time_arithmetic_durations_concat_and_text_are_accepted() {
+        for ok in [
+            "record.points + 1 == 3",
+            "record.points - 1 > 0",
+            "record.points * 2 + 1 == 3",
+            "(record.points + 1) * 2 >= 4",
+            "now + days(1) > now",
+            "now - hours(2) < now",
+            "now + minutes(30) <= time(5)",
+            "ms_between(time(1), now) >= minutes(5)",
+            "ms_between(now, now + days(90)) <= days(90)",
+            "concat('a', text(record.points)) == 'a1'",
+            "concat(lower(record.name), 'x') == 'x'",
+            "len(concat(record.name, 'x')) > 1",
+            "text(now) == 'x'",
+            "text(record.owner) == 'x'",
+            "text(record.$id) == 'x'",
+            "text(true) == 'x'",
+            "text('s') == 's'",
+            "-1 + 2 == 1",
+            "1 in [-1, 2]",
+            "time(-5) < now",
+            "days(-1) < 0",
+        ] {
+            assert_eq!(problem(ok), None, "{ok}");
+        }
+        // A parameter has no shape the check knows (Any): the result follows the other operand.
+        for (text, shape) in [
+            ("param.a + 1", "Any"),
+            ("param.a * 2", "Int"),
+            ("now + param.n", "Time"),
+            ("text(param.x)", "Str"),
+            ("ms_between(param.a, now)", "Int"),
+        ] {
+            assert_eq!(
+                shape_name(text, &Scope::default(), &ProductContext::default()),
+                Ok(shape.to_string()),
+                "{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_minus_is_a_sign_only_where_no_operand_ends() {
+        let printed = |text: &str| print_text(text).unwrap_or_else(|e| panic!("{text}: {e}"));
+        assert_eq!(printed("record.a-1"), "(record.a - 1)");
+        assert_eq!(printed("record.a -1"), "(record.a - 1)");
+        assert_eq!(printed("record.a - -1"), "(record.a - -1)");
+        assert_eq!(printed("1 -1"), "(1 - 1)");
+        assert_eq!(printed("(1) -1"), "(1 - 1)");
+        assert_eq!(printed("[1] in [1]"), "([1] in [1])");
+        assert_eq!(printed("-1"), "-1");
+        assert_eq!(printed("2*-3"), "(2 * -3)");
+        assert_eq!(printed("time(-5)"), "time(-5)");
+        assert_eq!(printed(r"'a\'b'"), r"'a\'b'");
+    }
+
+    #[test]
+    fn a_minus_that_is_not_a_sign_and_has_no_left_operand_is_a_syntax_error() {
+        for text in ["- 1", "--1", "not -1 == 1 -", "[1 -1]", "1 - - 1"] {
+            let (found, _) =
+                shape_name(text, &Scope::default(), &ProductContext::default()).expect_err(text);
+            assert_eq!(found, EXPR_SYNTAX, "{text}");
+        }
+        // After `not` a `-1` is a literal, so `not` gets an integer.
+        assert_eq!(code("not -1").as_deref(), Some(EXPR_TYPE));
+        assert!(problem("[1 -1]").unwrap().1.contains("position 3"));
+    }
+
+    #[test]
+    fn arithmetic_binds_tighter_than_comparison_and_multiplication_tighter_than_addition() {
+        for (text, printed) in [
+            ("1 + 2 * 3", "(1 + (2 * 3))"),
+            ("1 * 2 + 3", "((1 * 2) + 3)"),
+            ("1 - 2 - 3", "((1 - 2) - 3)"),
+            ("1 * 2 * 3", "((1 * 2) * 3)"),
+            ("(1 + 2) * 3", "((1 + 2) * 3)"),
+            ("1 + 2 == 3", "((1 + 2) == 3)"),
+            ("1 == 2 + 3", "(1 == (2 + 3))"),
+            ("1 in 2 + 3", "(1 in (2 + 3))"),
+            ("not 1 < 2", "not((1 < 2))"),
+            (
+                "1 + 2 == 3 and 4 < 5 * 6 or true",
+                "((((1 + 2) == 3) and (4 < (5 * 6))) or true)",
+            ),
+        ] {
+            assert_eq!(print_text(text), Ok(printed.to_string()), "{text}");
+        }
+        // A comparison is not associative.
+        assert!(print_text("1 < 2 < 3")
+            .unwrap_err()
+            .contains("after the expression"));
+        assert!(print_text("1 == 2 in [3]").is_err());
+        assert!(print_text("1 + 2 +").is_err());
+    }
+
+    // Verifies: CMS-1545
+    #[test]
+    fn an_operand_the_new_operators_do_not_accept_is_a_type_error() {
+        for (bad, message) in [
+            ("now + now > now", "+ does not accept a Time operand"),
+            ("'a' + 1 == 1", "+ does not accept a Str operand"),
+            (
+                "record.points + 'a' == 1",
+                "+ does not accept a Str operand",
+            ),
+            ("true - 1 == 1", "- does not accept a Bool operand"),
+            ("now - now > now", "- does not accept a Time operand"),
+            (
+                "record.points * now == 1",
+                "* does not accept a Time operand",
+            ),
+            ("now * 2 == 1", "* does not accept a Time operand"),
+            (
+                "ms_between(1, now) > 0",
+                "ms_between does not accept a Int operand",
+            ),
+            (
+                "ms_between(now, 'a') > 0",
+                "ms_between does not accept a Str operand",
+            ),
+            ("days('a') > 0", "days does not accept a Str operand"),
+            ("hours(now) > 0", "hours does not accept a Time operand"),
+            (
+                "minutes(true) > 0",
+                "minutes does not accept a Bool operand",
+            ),
+            (
+                "concat('a', 1) == 'a'",
+                "concat does not accept a Int operand",
+            ),
+            (
+                "concat(1, 'a') == 'a'",
+                "concat does not accept a Int operand",
+            ),
+            (
+                "text(record.tags) == 'x'",
+                "text does not accept a List operand",
+            ),
+            ("now + 1 > 5", "cannot compare Time with Int"),
+            ("record.points + 1 == 'a'", "cannot compare Int with Str"),
+        ] {
+            let (found, text) = problem(bad).unwrap_or_else(|| panic!("{bad} was accepted"));
+            assert_eq!(found, EXPR_TYPE, "{bad}");
+            assert!(text.contains(message), "{bad}: {text}");
+        }
     }
 
     #[test]
