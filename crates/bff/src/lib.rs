@@ -52,6 +52,9 @@ pub struct Config {
     /// The built frontend: `index.html`, `assets/`, `media/`.
     pub dist: PathBuf,
     pub dev: bool,
+    /// The secret request tokens are keyed with. `None` draws a random one at start, which is for
+    /// development only: such tokens die with the process and are worthless at another instance.
+    pub token_secret: Option<String>,
     /// Proxies in front of this process whose `X-Forwarded-For` is believed (exact addresses).
     /// Empty when browsers connect directly. See [`limits::client_address`].
     pub trusted_proxies: Vec<IpAddr>,
@@ -112,6 +115,7 @@ pub async fn run(
             "frontend_built": index.is_some(),
         }),
     );
+    let cfg_token_secret = cfg.token_secret.clone();
     let bff = Arc::new(Bff {
         admission: limits::Admission::new(&cfg.limits),
         cfg,
@@ -121,7 +125,10 @@ pub async fn run(
         sockets: AtomicI64::new(0),
         in_flight: AtomicI64::new(0),
         index,
-        tokens: token::Issuer::new()?,
+        tokens: match &cfg_token_secret {
+            Some(secret) => token::Issuer::from_secret(secret),
+            None => token::Issuer::new()?,
+        },
     });
     strata_runtime::server::serve(listener, routes::router(bff), shutdown).await
 }

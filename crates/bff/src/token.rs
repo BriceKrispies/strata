@@ -4,8 +4,10 @@
 //! the request comes from one of our pages and not from another site. The gateway hands every
 //! browser a token with its session reply and checks it again when the browser presents it. The
 //! token is bound to the site (the tenant served at the host name) and expires. It is a keyed
-//! hash of those two things under a secret that this process draws at start and never shows, so
-//! no other site can make one, and a token issued for one site is worthless at another.
+//! hash of those two things under a secret that no browser sees, so no other site can make one,
+//! and a token issued for one site is worthless at another. Outside development the secret is
+//! configured (or derived from the shared service token), so a token survives a restart and is
+//! good at every instance; only a development process draws a random one.
 //!
 //! A signed-in browser carries the request token of its session instead (see `routes`).
 
@@ -44,6 +46,17 @@ impl Issuer {
         let mut secret = [0u8; 32];
         getrandom::getrandom(&mut secret).map_err(|e| format!("no randomness for tokens: {e}"))?;
         Ok(Issuer { secret })
+    }
+
+    /// An issuer whose key is derived from `secret`: two issuers built from the same secret issue
+    /// tokens each other accepts, and a token outlives a restart.
+    pub fn from_secret(secret: &str) -> Self {
+        let mut hasher = Sha256::new();
+        hasher.update(b"strata bff request-token key|");
+        hasher.update(secret.as_bytes());
+        Issuer {
+            secret: hasher.finalize().into(),
+        }
     }
 
     fn mac(&self, site: &str, payload: &str) -> String {
@@ -119,5 +132,19 @@ mod tests {
             !Issuer::new().unwrap().check("fieldnotes", &token, 2_000),
             "a token of another process"
         );
+    }
+
+    /// Verifies: GWY-1402
+    #[test]
+    fn issuers_built_from_one_secret_accept_each_others_tokens() {
+        let first = Issuer::from_secret("a shared secret of some length");
+        let second = Issuer::from_secret("a shared secret of some length");
+        let token = first.issue("fieldnotes", 1_000);
+        assert!(
+            second.check("fieldnotes", &token, 2_000),
+            "a restart or a second instance"
+        );
+        assert!(!second.check("tidewater", &token, 2_000));
+        assert!(!Issuer::from_secret("another secret").check("fieldnotes", &token, 2_000));
     }
 }

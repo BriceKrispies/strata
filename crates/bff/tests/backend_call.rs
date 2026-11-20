@@ -21,6 +21,7 @@ fn bff_for(backend_url: String) -> Bff {
             origins: vec![],
             dist: PathBuf::new(),
             dev: true,
+            token_secret: None,
             trusted_proxies: vec![],
             limits: Default::default(),
         },
@@ -31,6 +32,33 @@ fn bff_for(backend_url: String) -> Bff {
         index: None,
         tokens: token::Issuer::new().unwrap(),
     }
+}
+
+/// Verifies: GWY-1409
+/// The address a SAML provider is given is the same whatever order the origins were listed in.
+#[test]
+fn the_published_origin_of_a_site_does_not_depend_on_the_order_of_the_list() {
+    let site = TenantId::new("fieldnotes").unwrap();
+    let mut bff = bff_for("http://127.0.0.1:1".into());
+    let listed = |order: &[&str]| order.iter().map(|o| o.to_string()).collect::<Vec<_>>();
+    bff.cfg.origins = listed(&[
+        "http://127.0.0.1:5173",
+        "https://127.0.0.1",
+        "http://127.0.0.1:4100",
+    ]);
+    let first = strata_bff::routes::primary_origin(&bff, &site);
+    bff.cfg.origins = listed(&[
+        "http://127.0.0.1:4100",
+        "http://127.0.0.1:5173",
+        "https://127.0.0.1",
+    ]);
+    assert_eq!(first, strata_bff::routes::primary_origin(&bff, &site));
+    assert_eq!(first.as_deref(), Some("https://127.0.0.1"), "https first");
+    bff.cfg.origins = listed(&["http://127.0.0.1:5173", "http://127.0.0.1:4100"]);
+    assert_eq!(
+        strata_bff::routes::primary_origin(&bff, &site).as_deref(),
+        Some("http://127.0.0.1:4100")
+    );
 }
 
 fn visit(session: Option<&str>) -> Visit {

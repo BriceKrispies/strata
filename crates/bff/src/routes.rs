@@ -903,13 +903,7 @@ async fn saml_metadata(
             &visit.correlation,
         )
     };
-    let origin = bff
-        .cfg
-        .origins
-        .iter()
-        .find(|origin| origin_site(&bff, origin) == Some(&visit.site))
-        .ok_or_else(unavailable)?
-        .clone();
+    let origin = primary_origin(&bff, &visit.site).ok_or_else(unavailable)?;
     let reply: Json_ = backend(
         &bff,
         &visit,
@@ -1064,19 +1058,48 @@ async fn sessions_revoke_others(
     .await
 }
 
+/// The origin published for a site: among the configured origins that serve it, an `https` one
+/// before any other, and otherwise the first in alphabetical order, whatever order they were
+/// listed in.
+pub fn primary_origin(bff: &Bff, site: &TenantId) -> Option<String> {
+    bff.cfg
+        .origins
+        .iter()
+        .filter(|origin| origin_site(bff, origin) == Some(site))
+        .min_by_key(|origin| (!origin.starts_with("https://"), origin.as_str()))
+        .cloned()
+}
+
 async fn logout(State(bff): State<Shared>, headers: HeaderMap) -> Result<Response, Failure> {
     let visit = visit(&bff, &headers)?;
     // The token is required whether or not there is a session to end: the session's own when
     // there is one, the one this process issued to the browser when there is not.
     let live = guard_request(&bff, &visit, &headers).await?;
+    // The cookie is cleared even when the backend cannot be reached: the browser must be able to
+    // leave, and the session then ends by its own expiry.
+    let cleared = |failure: Failure| {
+        let mut response = failure.into_response();
+        response
+            .headers_mut()
+            .insert(SET_COOKIE, session_cookie("", 0));
+        response
+    };
     if live {
-        let _: Json_ = backend(&bff, &visit, "/internal/session/logout", &json!({})).await?;
+        let ended: Result<Json_, Failure> =
+            backend(&bff, &visit, "/internal/session/logout", &json!({})).await;
+        if let Err(failure) = ended {
+            return Ok(cleared(failure));
+        }
     }
     let anonymous = Visit {
         token: None,
         ..visit
     };
-    let reply: SessionReply = backend(&bff, &anonymous, "/internal/session", &json!({})).await?;
+    let reply: SessionReply = match backend(&bff, &anonymous, "/internal/session", &json!({})).await
+    {
+        Ok(reply) => reply,
+        Err(failure) => return Ok(cleared(failure)),
+    };
     let mut response = Json(json!({
         "session": with_request_token(&bff, &anonymous, reply.session),
         "state": "anonymous",
@@ -1337,14 +1360,9 @@ async fn diagnostics(
 ) -> Result<Json<Json_>, Failure> {
     let visit = visit(&bff, &headers)?;
     let backend_report: Json_ = backend(&bff, &visit, "/internal/diagnostics", &json!({})).await?;
-    Ok(Json(json!({
-        "bff": {
-            "service": "bff",
-            "open_sockets": bff.sockets.load(Ordering::Relaxed),
-            "pending_requests": bff.in_flight.load(Ordering::Relaxed),
-        },
-        "backend": backend_report,
-    })))
+    // The gateway's own socket and in-flight counts span every tenant, so a tenant is not shown
+    // them.
+    Ok(Json(json!({ "backend": backend_report })))
 }
 
 async fn dev(
@@ -1583,6 +1601,39 @@ fn source_of(bff: &Bff, request: &Request) -> Option<String> {
     Some(client_address(peer, forwarded.as_deref(), &bff.cfg.trusted_proxies).to_string())
 }
 
+/// Whether a request is a page or a view read, the two that cost the backend calls and that the
+/// per-source request rate applies to.
+fn is_page_or_view(method: &Method, path: &str) -> bool {
+    if path == "/api/view" {
+        return true;
+    }
+    const OTHER: [&str; 9] = [
+        "/api/",
+        "/assets/",
+        "/media/",
+        "/ws",
+        "/federation/",
+        "/scim/",
+        "/keys",
+        "/.well-known/",
+        "/token",
+    ];
+    *method == Method::GET && !OTHER.iter().any(|prefix| path.starts_with(prefix))
+}
+
+/// Forwarded headers arrive but no proxy is trusted: every visitor behind that proxy shares one
+/// source. Said once per process.
+fn warn_forwarded_without_proxies() {
+    static SAID: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if !SAID.swap(true, Ordering::Relaxed) {
+        LOG.warn(
+            "bff.forwarded_without_trusted_proxies",
+            "",
+            json!({ "hint": "set STRATA_TRUSTED_PROXIES to the addresses of the proxies in front of this process; until then every visitor behind them is one source" }),
+        );
+    }
+}
+
 /// Security headers on everything, and one log line per request. Also the one place that sets the
 /// request's source: whatever a browser sent under that name is dropped first.
 async fn envelope(State(bff): State<Shared>, mut request: Request, next: Next) -> Response {
@@ -1595,21 +1646,58 @@ async fn envelope(State(bff): State<Shared>, mut request: Request, next: Next) -
     }
     let method = request.method().clone();
     let path = request.uri().path().to_string();
+    if request.headers().contains_key("x-forwarded-for") && bff.cfg.trusted_proxies.is_empty() {
+        warn_forwarded_without_proxies();
+    }
+    if is_page_or_view(&method, &path) {
+        if let Some(source) = text(request.headers(), HEADER_SOURCE) {
+            if !bff
+                .admission
+                .request(source, strata_protocol::log::now_ms())
+            {
+                let mut response = (
+                    StatusCode::TOO_MANY_REQUESTS,
+                    "Too many requests from this address. Try again shortly.",
+                )
+                    .into_response();
+                response
+                    .headers_mut()
+                    .insert("retry-after", HeaderValue::from_static("60"));
+                return response;
+            }
+        }
+    }
     let correlation = text(request.headers(), HEADER_CORRELATION)
         .filter(|id| valid_correlation(id))
         .unwrap_or("")
         .to_string();
     bff.in_flight.fetch_add(1, Ordering::Relaxed);
-    let mut response = next.run(request).await;
+    // Source maps are built for development; they are not served.
+    let mut response = if path.starts_with("/assets/") && path.ends_with(".map") {
+        StatusCode::NOT_FOUND.into_response()
+    } else {
+        next.run(request).await
+    };
     bff.in_flight.fetch_sub(1, Ordering::Relaxed);
+    let response_status = response.status();
+    let https = bff.cfg.origins.iter().any(|o| o.starts_with("https://"));
     let headers = response.headers_mut();
+    let mut policy = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'".to_string();
+    if https {
+        // Only where the origin is https: on plain http the directive would break every
+        // subresource of a development page.
+        policy.push_str("; upgrade-insecure-requests");
+        headers.insert(
+            "strict-transport-security",
+            HeaderValue::from_static("max-age=31536000; includeSubDomains"),
+        );
+    }
+    if let Ok(policy) = HeaderValue::from_str(&policy) {
+        headers.insert(CONTENT_SECURITY_POLICY, policy);
+    }
     headers.insert(
-        CONTENT_SECURITY_POLICY,
-        HeaderValue::from_static(
-            "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; \
-             connect-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; \
-             frame-ancestors 'none'",
-        ),
+        "permissions-policy",
+        HeaderValue::from_static("camera=(), microphone=(), geolocation=(), payment=(), usb=()"),
     );
     headers.insert(
         "x-content-type-options",
@@ -1619,7 +1707,9 @@ async fn envelope(State(bff): State<Shared>, mut request: Request, next: Next) -
     headers.insert("x-frame-options", HeaderValue::from_static("DENY"));
     if path.starts_with("/api/") {
         headers.insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
-    } else if path.starts_with("/assets/") {
+    } else if path.starts_with("/assets/")
+        && (response_status.is_success() || response_status == StatusCode::NOT_MODIFIED)
+    {
         headers.insert(
             CACHE_CONTROL,
             HeaderValue::from_static("public, max-age=31536000, immutable"),
