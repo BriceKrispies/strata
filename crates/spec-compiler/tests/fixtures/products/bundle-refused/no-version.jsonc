@@ -1,0 +1,18 @@
+{
+  // Refused by specc bundle: the header states no version (bundle.version-missing, D-6583). The
+  // product is otherwise sound: the layer checks accept it.
+  "product": {
+    "id": "member-tiers",
+    "name": "Member tiers",
+    "imports": { "spec": "../../../../../../specifications/spec.jsonc", "entities": ["content-read"] }
+  },
+  "roles": [
+    {
+      "id": "member_tiers__editor",
+      "name": "Tier editor",
+      "level": "tenant",
+      "holders": ["person"],
+      "capabilities": ["content-read"]
+    }
+  ]
+}
