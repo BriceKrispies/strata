@@ -33,6 +33,12 @@ pub use strata_model_core::types::{
     TenantOperationSubject, TriggerDef, TriggerEvent, TriggerId, UniqueDef,
 };
 
+/// The aggregates of named queries of [`crate::aggregates`] (D-5060).
+pub use strata_model_core::types::{
+    AggregateDef, AggregateGroup, AggregateId, AggregateKind, AggregateRequest, AggregateResult,
+    ValueMap,
+};
+
 /// The result of an accepted transition (specification type `transition-result`).
 pub use strata_model_core::types::TransitionResult as Transition;
 

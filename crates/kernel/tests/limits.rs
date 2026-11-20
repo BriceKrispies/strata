@@ -48,6 +48,8 @@ fn query(id: &str, order: Vec<OrderKey>, filter: Option<Expr>, limit: Option<u32
         params: BTreeSet::new(),
         order,
         limit,
+        aggregates: None,
+        declared_fields: None,
     }
 }
 

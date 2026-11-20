@@ -461,6 +461,8 @@ impl Bundle {
                     })
                     .collect(),
                 limit: query.limit,
+                aggregates: None,
+                declared_fields: None,
             }));
         }
         for view in &self.views {
@@ -481,6 +483,7 @@ impl Bundle {
                         include: section.include.clone(),
                         markdown: section.markdown.clone(),
                         single: section.single,
+                        aggregate: None,
                     },
                 );
             }

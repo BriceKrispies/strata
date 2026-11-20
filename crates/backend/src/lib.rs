@@ -4,6 +4,7 @@
 //! nothing about the domain: every command is `load -> kernel -> commit`, every read is
 //! `load -> kernel`, and every delivered event has been through the kernel's read decision.
 
+pub mod aggregates;
 pub mod app;
 pub mod auth;
 #[cfg(feature = "development")]

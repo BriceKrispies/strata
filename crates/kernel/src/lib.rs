@@ -17,6 +17,7 @@
 //! ([`RecordExt`], [`TenantSchemaExt`], [`DomainErrorExt`] and the others), which
 //! `use strata_kernel::*` brings into scope.
 
+pub mod aggregates;
 pub mod canon;
 pub mod definitions;
 pub mod expr;

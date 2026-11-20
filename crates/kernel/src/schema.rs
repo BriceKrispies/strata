@@ -557,6 +557,7 @@ impl TenantSchemaExt for TenantSchema {
         crate::definitions::trigger_problems(self, &roles, &mut problems);
         crate::definitions::automation_problems(self, &roles, &mut problems);
         crate::definitions::operation_problems(self, &roles, &mut problems);
+        crate::aggregates::problems(self, &mut problems);
         problems
     }
 }

@@ -18,8 +18,8 @@ use serde::Serialize;
 use serde_json::{json, Value as Json_};
 use std::time::Instant;
 use strata_protocol::api::{
-    Empty, ErrorCode, IdRequest, MembersRequest, Mutation, SessionReply, ViewRequest,
-    HEADER_CORRELATION,
+    AggregateRunRequest, Empty, ErrorCode, IdRequest, MembersRequest, Mutation, SessionReply,
+    ViewRequest, HEADER_CORRELATION,
 };
 use strata_protocol::ws::MAX_FRAME;
 
@@ -511,6 +511,19 @@ async fn view(
     .await?
     .map(Json)
     .map_err(|error| error.with_correlation(&correlation))
+}
+
+/// Run one aggregate of a named query as the caller: the public audience class when there is no
+/// session (contract aggregate-run).
+async fn aggregate(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Json(request): Json<AggregateRunRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    as_caller(&app, &headers, move |app, identity| {
+        crate::aggregates::run(app, identity, &request)
+    })
+    .await
 }
 
 async fn mutate(
@@ -1023,6 +1036,7 @@ pub fn router(app: Shared) -> Router {
         .route("/internal/recovery/cancel", post(recovery_cancel))
         .route("/internal/session/logout", post(logout))
         .route("/internal/view", post(view))
+        .route("/internal/aggregate", post(aggregate))
         .route("/internal/mutate", post(mutate))
         .route("/internal/members", post(members))
         .route("/internal/diagnostics", post(diagnostics))

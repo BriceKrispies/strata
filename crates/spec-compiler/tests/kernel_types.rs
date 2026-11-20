@@ -516,6 +516,8 @@ fn schema_changes() -> Vec<SchemaChange> {
             descending: true,
         }],
         limit: Some(10),
+        aggregates: None,
+        declared_fields: None,
     };
     let view = ViewDef {
         id: ViewId::new("home").unwrap(),
@@ -542,6 +544,7 @@ fn schema_changes() -> Vec<SchemaChange> {
                 include: vec![field("title")],
                 markdown: vec![],
                 single: false,
+                aggregate: None,
             },
         )]
         .into_iter()

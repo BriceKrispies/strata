@@ -74,6 +74,11 @@
 //!  10. Not exercised, and not mirrored: conditions that follow a reference are
 //!      `InsufficientState` in the hand-written kernel when the snapshot lacks the record
 //!      (difference 2 states the rest).
+//!  11. Not mirrored: the problems of the aggregates a named query declares, of its declared
+//!      fields and of a view section that names an aggregate (`strata_kernel::aggregates`,
+//!      AGG-001 to AGG-023): the generated `schema-problems` states none of them, and the
+//!      aggregate itself is not a read of the generated `kernel-read`. The corpus defines no
+//!      query with an aggregate.
 //!
 //! Differences 5 to 9 are guarded: `assert_no_input_of_a_known_difference` runs on every
 //! snapshot the test decides or reads, and fails when a snapshot has a field read condition, an
@@ -624,6 +629,20 @@ fn assert_no_input_of_a_known_difference(state: &State) {
             targets.len(),
             distinct.len(),
             "{object_id} has two reference fields to one object type; the generated delete-record clears one per rewrite (difference 7)"
+        );
+    }
+    for query in tenant.schema.queries.values() {
+        assert!(
+            query.aggregates.is_none() && query.declared_fields.is_none(),
+            "{} declares aggregates or fields; the generated schema-problems does not check them (difference 11)",
+            query.id
+        );
+    }
+    for view in tenant.schema.views.values() {
+        assert!(
+            view.sections.values().all(|section| section.aggregate.is_none()),
+            "{} has a section that names an aggregate; the generated schema-problems does not check it (difference 11)",
+            view.id
         );
     }
     for automation in tenant.schema.automations.iter().flat_map(BTreeMap::values) {

@@ -157,6 +157,16 @@ pub struct ViewRequest {
     pub limit: Option<u32>,
 }
 
+/// A request for one aggregate of a named query (contract aggregate-run).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AggregateRunRequest {
+    pub query: String,
+    pub aggregate: String,
+    /// The fields the result is narrowed by, as plain JSON: each field to a value it has.
+    #[serde(default)]
+    pub filter: serde_json::Map<String, Json>,
+}
+
 /// A record mutation with plain JSON field values; the backend coerces them by field type.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]

@@ -52,6 +52,12 @@ pub const MAX_OPERATION_STEPS: usize = 16;
 pub const MAX_OPERATION_POSTINGS: usize = 8;
 /// The most nodes one condition of a tenant operation may have (D-6548, OPR-1549).
 pub const MAX_CONDITION_NODES: usize = 200;
+/// The most aggregates one named query may declare (D-7320, AGG-2320).
+pub const MAX_AGGREGATES_PER_QUERY: usize = 20;
+/// The most records a top aggregate may list (D-5060, AGG-2322).
+pub const MAX_TOP_LEN: u32 = 100;
+/// The most groups an aggregate may answer with (D-7320, AGG-2323).
+pub const MAX_AGGREGATE_GROUPS: usize = 1_000;
 /// The fewest fields of one composite unique constraint (D-6558, CMS-1556).
 pub const MIN_UNIQUE_FIELDS: usize = 2;
 /// The most fields of one composite unique constraint (D-6558, CMS-1556).

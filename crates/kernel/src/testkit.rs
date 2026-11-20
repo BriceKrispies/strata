@@ -227,6 +227,8 @@ pub fn notes_schema() -> Vec<SchemaChange> {
                 descending: true,
             }],
             limit: None,
+            aggregates: None,
+            declared_fields: None,
         }),
         SchemaChange::DefineQuery(QueryDef {
             id: QueryId::new("note_by_slug").expect("id"),
@@ -235,6 +237,8 @@ pub fn notes_schema() -> Vec<SchemaChange> {
             params: BTreeSet::from(["slug".to_string()]),
             order: vec![],
             limit: Some(1),
+            aggregates: None,
+            declared_fields: None,
         }),
     ]
 }

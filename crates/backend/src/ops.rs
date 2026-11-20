@@ -19,8 +19,8 @@ use strata_protocol::api::{
 use strata_storage_api::{execute_by, ExecuteError, Executed};
 use strata_substrate::plain::coerce_fields;
 use strata_substrate::project::{
-    decode_cursor, encode_cursor, included_refs, match_route, section_order, section_request,
-    select_fields, with_page, SectionData, ViewData,
+    aggregate_request, decode_cursor, encode_cursor, included_refs, match_route, section_order,
+    section_request, select_fields, with_page, SectionData, ViewData,
 };
 
 /// The tenant's schema, members and counters, without records.
@@ -457,6 +457,49 @@ fn read_loaded(
     ))
 }
 
+/// Answer one aggregate against the snapshot, as [`read_loaded`] answers a read: load what the
+/// aggregate needs first and each record it reports missing after (D-5067).
+#[allow(clippy::too_many_arguments)]
+fn aggregate_loaded(
+    app: &App,
+    tenant: &TenantId,
+    schema: &strata_kernel::TenantSchema,
+    state: &mut State,
+    needs: &mut BTreeSet<Need>,
+    request: &strata_kernel::AggregateRequest,
+    ctx: &Context,
+    anonymous: bool,
+) -> Result<strata_kernel::AggregateResult, ApiError> {
+    let reload = |state: &mut State, needs: &BTreeSet<Need>| -> Result<(), ApiError> {
+        let wanted: Vec<Need> = needs.iter().cloned().collect();
+        *state = app.store.load(tenant, &wanted)?;
+        Ok(())
+    };
+    let before = needs.len();
+    needs.extend(strata_kernel::aggregates::needs(schema, request));
+    if needs.len() != before {
+        reload(state, needs)?;
+    }
+    for _ in 0..32 {
+        let result = strata_kernel::aggregates::run(state, request, ctx);
+        let missing = match &result {
+            Err(error) if error.kind == ErrorKind::InsufficientState => error.missing.clone(),
+            _ => None,
+        };
+        match missing {
+            Some(need) if !needs.contains(&need) => {
+                needs.insert(need);
+                reload(state, needs)?;
+            }
+            _ => return result.map_err(|error| ApiError::domain(error, anonymous)),
+        }
+    }
+    Err(ApiError::new(
+        ErrorCode::Internal,
+        "An aggregate kept asking for more state than it was given.",
+    ))
+}
+
 /// Evaluate the view whose route matches a path. Every section is read from one snapshot, and
 /// every row and every included record passes through the kernel's read authorization.
 ///
@@ -514,6 +557,34 @@ pub fn view(app: &App, identity: &Identity, request: &ViewRequest) -> Result<Vie
     let mut revision = tenant.revision;
     for name in section_order(def) {
         let section = &def.sections[name];
+        // A section that names an aggregate delivers its result in place of rows (D-5067); the
+        // kernel decides it for this reader like any other read of the same snapshot.
+        if let Some(aggregate) = &section.aggregate {
+            let ask = aggregate_request(section, aggregate, &route, &request.request, &done);
+            let result = aggregate_loaded(
+                app,
+                &identity.tenant,
+                schema,
+                &mut state,
+                &mut needs,
+                &ask,
+                &ctx,
+                anonymous,
+            )?;
+            revision = result.revision;
+            sections.insert(
+                name.clone(),
+                SectionData {
+                    single: false,
+                    rows: Vec::new(),
+                    included: BTreeMap::new(),
+                    markdown: Vec::new(),
+                    next: None,
+                    aggregate: Some(result),
+                },
+            );
+            continue;
+        }
         let (size, cursor) = if section.single {
             (None, None)
         } else {
@@ -592,6 +663,7 @@ pub fn view(app: &App, identity: &Identity, request: &ViewRequest) -> Result<Vie
                     .as_ref()
                     .filter(|_| !section.single)
                     .map(|cursor| format!("{name}:{}", encode_cursor(cursor))),
+                aggregate: None,
             },
         );
     }
