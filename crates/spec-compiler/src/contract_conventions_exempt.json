@@ -1,9 +1,3 @@
 {
-  "exemptions": [
-    {
-      "contract": "invoke-tenant-operation",
-      "rule": "idempotency",
-      "reason": "The contract declares idempotency-mismatch, and its idempotency-key is a required field of the tenant-operation-invocation input, which decide-tenant-operation (CT-806) also takes; moving the key to a contract input of its own splits that type and changes the kernel contract, so it needs the owner's decision (WG-5043, follow-up filed)."
-    }
-  ]
+  "exemptions": []
 }

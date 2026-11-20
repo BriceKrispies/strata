@@ -226,6 +226,31 @@ pub struct MembersReply {
     pub checks_passed: usize,
 }
 
+/// A request to invoke a tenant operation (contract invoke-tenant-operation, CT-805), with plain
+/// JSON input values the backend coerces by the operation's input types. The idempotency key,
+/// which the contract requires, travels in [`HEADER_IDEMPOTENCY`].
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OperationRequest {
+    /// The operation's id within the tenant.
+    pub operation: String,
+    #[serde(default)]
+    pub inputs: serde_json::Map<String, Json>,
+    /// Decide and answer without committing anything (OPR-1552).
+    #[serde(default)]
+    pub dry_run: bool,
+}
+
+/// What an invocation reports: the operation's result, the event sequence a client has seen once
+/// it has seen its own change, and whether it was only a dry run.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OperationReply {
+    pub result: strata_kernel::operations::TenantOperationResult,
+    pub event_seq: u64,
+    pub checks_passed: usize,
+    pub dry_run: bool,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct IdRequest {
     pub id: String,

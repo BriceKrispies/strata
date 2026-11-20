@@ -14,6 +14,7 @@ pub mod hub;
 pub mod lab;
 pub mod limits;
 pub mod mail;
+pub mod operations;
 pub mod ops;
 pub mod outbox;
 pub mod provision;

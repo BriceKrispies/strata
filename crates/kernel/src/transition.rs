@@ -116,6 +116,20 @@ pub fn transition(
             id,
             expected_version,
         } => delete_record(&mut draft, lookup, object, *id, *expected_version)?,
+        Intent::InvokeOperation {
+            operation,
+            inputs,
+            idempotency_key,
+        } => {
+            return crate::operations::invoke(
+                tenant,
+                &state.coverage,
+                ctx,
+                operation,
+                inputs,
+                idempotency_key,
+            )
+        }
     };
     Ok(draft.finish(output))
 }
@@ -223,12 +237,15 @@ pub fn needs(schema: Option<&TenantSchema>, intent: &Intent) -> Vec<Need> {
                 out.insert(Need::AllOf(object));
             }
         }
+        Intent::InvokeOperation {
+            operation, inputs, ..
+        } => crate::operations::needs(schema, operation, inputs, &mut out),
     }
     out.into_iter().collect()
 }
 
 /// The unique-value and reference lookups validating `fields` of an `object` record makes.
-fn field_needs(
+pub(crate) fn field_needs(
     schema: &TenantSchema,
     out: &mut BTreeSet<Need>,
     object: &ObjectTypeId,
@@ -288,6 +305,12 @@ pub fn refine_needs(state: &State, intent: &Intent) -> Vec<Need> {
     let Some(tenant) = state.tenant.as_deref() else {
         return Vec::new();
     };
+    if let Intent::InvokeOperation {
+        operation, inputs, ..
+    } = intent
+    {
+        return crate::operations::refine_needs(tenant, operation, inputs);
+    }
     let Intent::UpdateRecord {
         object, id, fields, ..
     } = intent

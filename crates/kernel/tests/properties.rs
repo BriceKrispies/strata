@@ -318,6 +318,8 @@ fn some_policy_could_authorise(
         | Intent::RevokeInvitation { .. } => (Action::Manage, Resource::Members),
         // Redeeming needs no policy: any signed-in person may try.
         Intent::RedeemInvitation { .. } => return matches!(principal, Principal::User(_)),
+        // An invocation is authorised by the operation's invokers, not by a policy (D-6547).
+        Intent::InvokeOperation { .. } => return matches!(principal, Principal::User(_)),
     };
     let roles = roles_held(state, principal);
     roles.contains(&role("owner"))

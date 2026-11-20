@@ -74,6 +74,11 @@
 //!  10. Not exercised, and not mirrored: conditions that follow a reference are
 //!      `InsufficientState` in the hand-written kernel when the snapshot lacks the record
 //!      (difference 2 states the rest).
+//!  11. Not exercised, and not mirrored: the invocation of a tenant operation (`InvokeOperation`,
+//!      `crates/kernel/src/operations.rs`, WG-5100). The generated `intent-decision` refuses it
+//!      with `operation:decided_by_the_kernel` and the generated `needs` plans nothing for it,
+//!      because the function language does not state the decision yet. The operation generator
+//!      draws no invocation, and `compare_transition` fails on one.
 //!
 //! Differences 5 to 9 are guarded: `assert_no_input_of_a_known_difference` runs on every
 //! snapshot the test decides or reads, and fails when a snapshot has a field read condition, an
@@ -662,6 +667,10 @@ fn compare_transition(state: &State, intent: &Intent, context: &Context, tally: 
         state.tenant_id
     );
     assert_no_input_of_a_known_difference(state);
+    assert!(
+        !matches!(intent, Intent::InvokeOperation { .. }),
+        "{label}: the generated functions do not decide a tenant operation (difference 11)"
+    );
     let hand = transition(state, intent, context);
     let texts = texts_for(state, intent);
     let mut generated = match spec::kernel_transition(state, intent, context, &texts) {
