@@ -143,6 +143,19 @@ pub enum ServerMessage {
         kind: String,
         payload: Json,
     },
+    /// A change of the inbox of the person on this connection (NTF-1569): `kind` is `arrived`,
+    /// `read`, `unread` or `ended`. It names the notice and carries none of its text: the client
+    /// reads the inbox again through the ordinary call. Only the recipient's own connections are
+    /// sent one.
+    Inbox {
+        kind: String,
+        notice: String,
+        topic: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        category: Option<String>,
+        at: i64,
+        unread: u32,
+    },
 }
 
 /// Parse a client frame, refusing oversized or malformed ones.

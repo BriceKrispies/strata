@@ -13,6 +13,7 @@ pub mod erasure;
 pub mod hosts;
 pub mod http;
 pub mod hub;
+pub mod inbox;
 pub mod lab;
 pub mod ledger;
 pub mod limits;

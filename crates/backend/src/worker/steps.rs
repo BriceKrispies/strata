@@ -14,7 +14,8 @@
 //!
 //! Built: create, update and delete a record, post to the ledger (decided by the kernel's ledger
 //! module through the intent post-ledger, keyed by the step key), branch on a condition (on a record read through the
-//! kernel as the automation principal), wait for a duration or until a time (the next step's job
+//! kernel as the automation principal), create a notice in an inbox (`crate::inbox`, keyed by the
+//! step key), wait for a duration or until a time (the next step's job
 //! is created due then: nothing sleeps, D-6535), and end. Every other kind of the catalogue fails
 //! its step with the error "step kind ... is not built", recorded on the step and the run; it is
 //! never skipped.
@@ -185,6 +186,43 @@ pub fn run_job(app: &App, tenant: &TenantId, lease: &Lease, now: Timestamp) -> O
             step,
             sequence,
         } => run_step(app, tenant, lease, run, automation, step, *sequence, now),
+        JobWork::NoticeBatch {
+            key,
+            sender,
+            segment,
+            after,
+            notice,
+            number,
+        } => {
+            let ran = if lease.exhausted {
+                Err(lease.job.errors.last().cloned().unwrap_or_default())
+            } else {
+                crate::inbox::run_batch(
+                    app,
+                    tenant,
+                    key,
+                    sender,
+                    *segment,
+                    after.as_ref(),
+                    notice,
+                    *number,
+                    now,
+                )
+            };
+            match ran {
+                Ok(next) => Outcome::done(WorkerWrites {
+                    jobs: next.into_iter().collect(),
+                    ..WorkerWrites::default()
+                }),
+                Err(error) => Outcome {
+                    report: JobReport::Failed {
+                        error,
+                        retry: !lease.exhausted,
+                    },
+                    writes: WorkerWrites::default(),
+                },
+            }
+        }
     }
 }
 
@@ -855,6 +893,57 @@ fn act(
                 },
                 other => Err(StepError::fatal(format!("unexpected output {other:?}"))),
             }
+        }
+        AutomationStep::CreateNotice {
+            template,
+            to,
+            record,
+        } => {
+            // A notice is made by the inbox module as the automation principal, once for the step
+            // key, so an attempt made again after a crash makes none (SCH-015, CT-183).
+            let recipient = match eval("to", to)? {
+                Value::Str(text) => text,
+                other => {
+                    return Err(StepError::fatal(format!(
+                        "to: {other:?} is not a principal id"
+                    )))
+                }
+            };
+            let record = match record {
+                None => None,
+                Some(expression) => match eval("record", expression)? {
+                    Value::Ref(id) => Some(id.0),
+                    Value::Int(n) if n > 0 => Some(n as u64),
+                    other => {
+                        return Err(StepError::fatal(format!(
+                            "record: {other:?} does not name a record"
+                        )))
+                    }
+                },
+            };
+            let delivery = crate::inbox::automation_notice(
+                app,
+                tenant,
+                &automation_principal(&def.id),
+                key,
+                template.as_str(),
+                &recipient,
+                record,
+                now,
+            )
+            .map_err(|error| match error.0.code {
+                strata_protocol::api::ErrorCode::Invalid
+                | strata_protocol::api::ErrorCode::NotFound
+                | strata_protocol::api::ErrorCode::Forbidden => StepError::fatal(error.describe()),
+                _ => StepError::retry(error.describe()),
+            })?;
+            let item = serde_json::from_value(serde_json::Value::String(delivery.item.clone()))
+                .map_err(|error| StepError::fatal(format!("item {}: {error}", delivery.item)))?;
+            Ok(Done {
+                result: AutomationStepResult::CreateNotice { item },
+                outputs: vec![("item", Value::Str(delivery.item))],
+                next: then(),
+            })
         }
         AutomationStep::End => Ok(Done {
             result: AutomationStepResult::End,

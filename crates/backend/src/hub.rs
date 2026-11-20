@@ -88,6 +88,8 @@ impl<T: Clone> Fanout<T> {
 pub struct Hub {
     pub events: Fanout<Arc<Published>>,
     pub runs: broadcast::Sender<RunMessage>,
+    /// Changes of an inbox, for the sockets of its recipient (`crate::inbox`).
+    pub notices: Fanout<crate::inbox::Push>,
     pub sessions: broadcast::Sender<(SessionId, SessionState)>,
     /// The outbox publisher, set once the backend has started.
     pub outbox: OnceLock<Outbox>,
@@ -99,6 +101,7 @@ impl Hub {
         Hub {
             events: Fanout::new(1024),
             runs: broadcast::channel(256).0,
+            notices: Fanout::new(256),
             sessions: broadcast::channel(64).0,
             outbox: OnceLock::new(),
             connections: Mutex::new(BTreeMap::new()),
