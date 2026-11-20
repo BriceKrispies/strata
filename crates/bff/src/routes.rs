@@ -1061,6 +1061,54 @@ async fn passkey_remove(
     .map(Json)
 }
 
+/// Erase one principal from the tenant: `POST /api/subject-rights/erase` with `principal` (and
+/// `tenant`, which must be the site's own). The backend checks that the caller owns the tenant,
+/// asks for a fresh authentication and answers with the receipt. This route adds nothing.
+///
+/// Implements: CT-213
+async fn subject_erase(
+    State(bff): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<Json_>,
+) -> Result<Json<Json_>, Failure> {
+    let visit = visit(&bff, &headers)?;
+    guard_write(&bff, &visit, &headers).await?;
+    let Some(principal) = body.get("principal").and_then(Json_::as_str) else {
+        return Err(Failure::new(
+            ErrorCode::Invalid,
+            "Say which person.",
+            &visit.correlation,
+        ));
+    };
+    let mut request = json!({ "principal": principal });
+    if let Some(tenant) = body.get("tenant") {
+        request["tenant"] = tenant.clone();
+    }
+    backend(&bff, &visit, "/internal/erasure/erase", &request)
+        .await
+        .map(Json)
+}
+
+/// The erasure receipts of the tenant: `POST /api/subject-rights/erasure-receipts`, with an
+/// optional `principal`.
+///
+/// Implements: CT-1495
+async fn subject_erasure_receipts(
+    State(bff): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<Json_>,
+) -> Result<Json<Json_>, Failure> {
+    let visit = visit(&bff, &headers)?;
+    guard_write(&bff, &visit, &headers).await?;
+    let mut request = json!({});
+    if let Some(principal) = body.get("principal").and_then(Json_::as_str) {
+        request["principal"] = json!(principal);
+    }
+    backend(&bff, &visit, "/internal/erasure/receipts", &request)
+        .await
+        .map(Json)
+}
+
 /// The signed-in person's own live sessions.
 async fn sessions(State(bff): State<Shared>, headers: HeaderMap) -> Result<Json<Json_>, Failure> {
     let visit = visit(&bff, &headers)?;
@@ -2209,6 +2257,11 @@ pub fn router(bff: Shared) -> Router {
         .route("/aggregate", get(aggregate_run))
         .route("/records", post(records))
         .route("/members/:op", post(members))
+        .route("/subject-rights/erase", post(subject_erase))
+        .route(
+            "/subject-rights/erasure-receipts",
+            post(subject_erasure_receipts),
+        )
         .route("/preview", post(preview))
         .route("/lab/overview", get(lab_overview))
         .route("/lab/run", post(lab_run))

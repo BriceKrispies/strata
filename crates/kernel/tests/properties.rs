@@ -315,7 +315,8 @@ fn some_policy_could_authorise(
         | Intent::AddTeamMember { .. }
         | Intent::RemoveTeamMember { .. }
         | Intent::CreateInvitation { .. }
-        | Intent::RevokeInvitation { .. } => (Action::Manage, Resource::Members),
+        | Intent::RevokeInvitation { .. }
+        | Intent::EraseSubject { .. } => (Action::Manage, Resource::Members),
         // Redeeming needs no policy: any signed-in person may try.
         Intent::RedeemInvitation { .. } => return matches!(principal, Principal::User(_)),
     };

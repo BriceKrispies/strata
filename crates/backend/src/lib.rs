@@ -9,6 +9,7 @@ pub mod app;
 pub mod auth;
 #[cfg(feature = "development")]
 pub mod dev;
+pub mod erasure;
 pub mod hosts;
 pub mod http;
 pub mod hub;
