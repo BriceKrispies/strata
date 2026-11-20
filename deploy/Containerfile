@@ -24,13 +24,16 @@ COPY crates crates
 RUN cargo chef prepare --recipe-path recipe.json
 
 FROM chef AS rust-build
+# CARGO_FEATURES adds cargo features to both binaries: a local stack with development logins
+# (STRATA_DEV=1) is built with strata-backend/development. A deployable image never is.
+ARG CARGO_FEATURES=
 COPY --from=planner /src/recipe.json recipe.json
-RUN cargo chef cook --release --locked --recipe-path recipe.json -p strata-backend -p strata-bff
+RUN cargo chef cook --release --locked --recipe-path recipe.json -p strata-backend -p strata-bff ${CARGO_FEATURES:+--features $CARGO_FEATURES}
 COPY Cargo.toml Cargo.lock ./
 COPY crates crates
 # The gateway compiles in the screens table the generator writes for the web app (crates/bff/src/routes.rs).
 COPY web/src/generated/screens.rs web/src/generated/screens.rs
-RUN cargo build --release --locked -p strata-backend -p strata-bff
+RUN cargo build --release --locked -p strata-backend -p strata-bff ${CARGO_FEATURES:+--features $CARGO_FEATURES}
 
 # ---- Web: the bundle the gateway serves ---------------------------------------------------
 FROM node:24.15.0-alpine3.23 AS web-build

@@ -68,7 +68,9 @@ const IMAGES = { runtime: 'strata/runtime:dev', gateway: 'strata/gateway:dev' };
 
 function build() {
   for (const [target, tag] of Object.entries(IMAGES)) {
-    const status = run('podman', ['build', '--format', 'docker', '-f', 'deploy/Containerfile', '--target', target, '-t', tag, '.']);
+    // A stack with development logins needs a backend built with the development feature.
+    const features = process.env.STRATA_DEV === '1' ? ['--build-arg', 'CARGO_FEATURES=strata-backend/development'] : [];
+    const status = run('podman', ['build', '--format', 'docker', '-f', 'deploy/Containerfile', '--target', target, ...features, '-t', tag, '.']);
     if (status !== 0) process.exit(status);
   }
 }
