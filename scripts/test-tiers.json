@@ -30,15 +30,24 @@
     },
     {
       "package": "strata-backend",
-      "target": "erasure",
-      "tier": "routine",
+      "target": "badge_milestones",
+      "tier": "full",
       "seconds": null,
-      "unmeasured": true
+      "unmeasured": true,
+      "reason": "The reference product end to end on real sockets: install, ledger postings, the worker and reads as members; not yet measured"
     },
     {
       "package": "strata-backend",
-      "target": "files",
+      "target": "dispatch",
       "tier": "full",
+      "seconds": null,
+      "unmeasured": true,
+      "reason": "The mail dispatcher through the worker on the in-memory store: a segment of 150 members and every send of each test run through worker passes"
+    },
+    {
+      "package": "strata-backend",
+      "target": "erasure",
+      "tier": "routine",
       "seconds": null,
       "unmeasured": true
     },
@@ -47,6 +56,13 @@
       "target": "factors",
       "tier": "routine",
       "seconds": 3.93
+    },
+    {
+      "package": "strata-backend",
+      "target": "files",
+      "tier": "full",
+      "seconds": null,
+      "unmeasured": true
     },
     {
       "package": "strata-backend",
@@ -100,6 +116,13 @@
     },
     {
       "package": "strata-backend",
+      "target": "outbound",
+      "tier": "full",
+      "seconds": null,
+      "unmeasured": true
+    },
+    {
+      "package": "strata-backend",
       "target": "production",
       "tier": "routine",
       "seconds": 0.77
@@ -127,9 +150,24 @@
     },
     {
       "package": "strata-backend",
+      "target": "schedules",
+      "tier": "routine",
+      "seconds": null,
+      "unmeasured": true
+    },
+    {
+      "package": "strata-backend",
       "target": "scim",
       "tier": "routine",
       "seconds": 1.65
+    },
+    {
+      "package": "strata-backend",
+      "target": "sealing",
+      "tier": "full",
+      "seconds": null,
+      "unmeasured": true,
+      "reason": "The sealed store through the backend: sealing, erasure, restore, replay and the audit chain on SQLite, with key derivation in every seal"
     },
     {
       "package": "strata-backend",
@@ -137,6 +175,14 @@
       "tier": "full",
       "seconds": null,
       "unmeasured": true
+    },
+    {
+      "package": "strata-backend",
+      "target": "segment_jobs",
+      "tier": "full",
+      "seconds": null,
+      "unmeasured": true,
+      "reason": "Runs the worker over a segment of 350 people, its refresh, its event log, a fan-out and a bundle install, on the in-memory store"
     },
     {
       "package": "strata-backend",
@@ -187,13 +233,6 @@
       "unmeasured": true
     },
     {
-      "package": "strata-backend",
-      "target": "outbound",
-      "tier": "full",
-      "seconds": null,
-      "unmeasured": true
-    },
-    {
       "package": "strata-bff",
       "target": "backend_call",
       "tier": "routine",
@@ -223,14 +262,6 @@
     },
     {
       "package": "strata-kernel",
-      "target": "audience",
-      "tier": "full",
-      "seconds": null,
-      "unmeasured": true,
-      "reason": "Audience classes with a fixed-seed property over random schemas, roles and records; scoped runs include it when the kernel's audience or aggregates modules changed"
-    },
-    {
-      "package": "strata-kernel",
       "target": "aggregates",
       "tier": "routine",
       "seconds": null,
@@ -242,6 +273,14 @@
       "tier": "routine",
       "seconds": null,
       "unmeasured": true
+    },
+    {
+      "package": "strata-kernel",
+      "target": "audience",
+      "tier": "full",
+      "seconds": null,
+      "unmeasured": true,
+      "reason": "Audience classes with a fixed-seed property over random schemas, roles and records; scoped runs include it when the kernel's audience or aggregates modules changed"
     },
     {
       "package": "strata-kernel",
@@ -259,6 +298,13 @@
     {
       "package": "strata-kernel",
       "target": "definitions",
+      "tier": "routine",
+      "seconds": null,
+      "unmeasured": true
+    },
+    {
+      "package": "strata-kernel",
+      "target": "editor_rules",
       "tier": "routine",
       "seconds": null,
       "unmeasured": true
@@ -440,6 +486,43 @@
       "reason": "Determinism and minimisation over the Fieldnotes bundle; scoped runs include it when the simulation crate or a tenant bundle changed"
     },
     {
+      "package": "strata-spec-compiler-core-fixture",
+      "target": "roundtrip",
+      "tier": "routine",
+      "seconds": 0.01
+    },
+    {
+      "package": "strata-spec-compiler-functions-fixture",
+      "target": "dependencies",
+      "tier": "routine",
+      "seconds": 0.64
+    },
+    {
+      "package": "strata-spec-compiler-language-fixture",
+      "target": "dependencies",
+      "tier": "routine",
+      "seconds": 0.64
+    },
+    {
+      "package": "strata-spec-compiler-language-fixture",
+      "target": "evaluation",
+      "tier": "routine",
+      "seconds": 0
+    },
+    {
+      "package": "strata-spec-compiler-language-fixture",
+      "target": "kernel_cases",
+      "tier": "routine",
+      "seconds": null,
+      "unmeasured": true
+    },
+    {
+      "package": "strata-spec-compiler-language-fixture",
+      "target": "syntax",
+      "tier": "routine",
+      "seconds": 0
+    },
+    {
       "package": "strata-spec-compiler",
       "target": "adversarial",
       "tier": "routine",
@@ -604,39 +687,14 @@
       "seconds": 0.1
     },
     {
-      "package": "strata-spec-compiler-core-fixture",
-      "target": "roundtrip",
+      "package": "strata-spec-expr-cases",
+      "target": "js_cases",
       "tier": "routine",
-      "seconds": 0.01
+      "seconds": 0.08
     },
     {
-      "package": "strata-spec-compiler-functions-fixture",
-      "target": "dependencies",
-      "tier": "routine",
-      "seconds": 0.64
-    },
-    {
-      "package": "strata-spec-compiler-language-fixture",
-      "target": "dependencies",
-      "tier": "routine",
-      "seconds": 0.64
-    },
-    {
-      "package": "strata-spec-compiler-language-fixture",
-      "target": "evaluation",
-      "tier": "routine",
-      "seconds": 0
-    },
-    {
-      "package": "strata-spec-compiler-language-fixture",
-      "target": "kernel_cases",
-      "tier": "routine",
-      "seconds": null,
-      "unmeasured": true
-    },
-    {
-      "package": "strata-spec-compiler-language-fixture",
-      "target": "syntax",
+      "package": "strata-spec-expr-cases",
+      "target": "rust_cases",
       "tier": "routine",
       "seconds": 0
     },
@@ -683,18 +741,6 @@
       "seconds": 0
     },
     {
-      "package": "strata-spec-expr-cases",
-      "target": "js_cases",
-      "tier": "routine",
-      "seconds": 0.08
-    },
-    {
-      "package": "strata-spec-expr-cases",
-      "target": "rust_cases",
-      "tier": "routine",
-      "seconds": 0
-    },
-    {
       "package": "strata-storage-api",
       "target": "memory",
       "tier": "routine",
@@ -705,6 +751,14 @@
       "target": "needs",
       "tier": "routine",
       "seconds": 0.02
+    },
+    {
+      "package": "strata-storage-api",
+      "target": "sealed",
+      "tier": "full",
+      "seconds": null,
+      "unmeasured": true,
+      "reason": "The sealed store over the memory adapter: the whole conformance suite run through it"
     },
     {
       "package": "strata-storage-sqlite",
@@ -733,6 +787,14 @@
       "target": "recorded_data",
       "tier": "routine",
       "seconds": 0.16
+    },
+    {
+      "package": "strata-storage-sqlite",
+      "target": "sealed_index",
+      "tier": "full",
+      "seconds": null,
+      "unmeasured": true,
+      "reason": "SQLite files on disk, opened by a second connection to read the record index and the schema history"
     },
     {
       "package": "strata-storage-sqlite",
