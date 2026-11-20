@@ -6,6 +6,7 @@
 //! In `fieldnotes` `admin` owns the tenant, `ines` is an editor, `tomasz` and `mirela` are authors,
 //! and `dana` belongs to the team `newsdesk`.
 
+use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value as Json};
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -16,6 +17,8 @@ use strata_kernel::{SettingDef, SettingId, SettingLevel, SettingType, TenantId, 
 use strata_protocol::api::{HEADER_CORRELATION, HEADER_SERVICE, HEADER_SESSION, HEADER_SITE};
 use strata_storage_api::memory::MemoryStore;
 use strata_storage_api::Store;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tokio_tungstenite::tungstenite::Message;
 
 const TOKEN: &str = "test-service-token-0123456789abcdef";
 const SITE: &str = "fieldnotes";
@@ -677,4 +680,100 @@ async fn the_platform_operator_writes_the_platform_level_and_a_tenant_without_an
     assert_eq!(entries[0]["previous"], Json::Null);
     assert_eq!(entries[1]["previous"], json!(50));
     assert_eq!(entries[1]["value"], Json::Null);
+}
+
+type Socket =
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+
+/// The next text frame of a socket.
+async fn frame(socket: &mut Socket) -> Json {
+    loop {
+        let next = tokio::time::timeout(Duration::from_secs(5), socket.next())
+            .await
+            .expect("a frame in time");
+        if let Message::Text(text) = next.expect("socket open").expect("frame") {
+            return serde_json::from_str(&text).unwrap();
+        }
+    }
+}
+
+/// Whether nothing arrives on the socket for a while.
+async fn silent(socket: &mut Socket) -> bool {
+    tokio::time::timeout(Duration::from_millis(500), socket.next())
+        .await
+        .is_err()
+}
+
+impl Backend {
+    /// An open page: a socket of `session` that has subscribed to everything it may hear.
+    async fn open_page(&self, session: &str) -> Socket {
+        let mut request = format!("{}/internal/ws", self.base.replace("http", "ws"))
+            .into_client_request()
+            .unwrap();
+        let headers = request.headers_mut();
+        headers.insert(HEADER_SERVICE, TOKEN.parse().unwrap());
+        headers.insert(HEADER_SITE, SITE.parse().unwrap());
+        headers.insert(HEADER_SESSION, session.parse().unwrap());
+        let mut socket = tokio_tungstenite::connect_async(request).await.unwrap().0;
+        assert_eq!(frame(&mut socket).await["type"], "welcome");
+        socket
+            .send(Message::Text(
+                json!({ "type": "subscribe", "req": "r1", "sub": "all" }).to_string(),
+            ))
+            .await
+            .unwrap();
+        frame(&mut socket).await;
+        socket
+    }
+}
+
+/// SET-041, SET-043, D-5048: a change to a layered setting is a domain event that reaches the open
+/// pages it concerns over the live connection, by name and level and without a value: a tenant
+/// level change reaches every open page, a person level change only that person's.
+#[tokio::test]
+async fn a_change_to_a_setting_reaches_the_open_pages_it_concerns_over_the_socket() {
+    let backend = start().await;
+    backend.define(&page_size()).await;
+    let tomasz = backend.session_of("tomasz").await;
+    let mirela = backend.session_of("mirela").await;
+    let admin = backend.session_of("admin").await;
+    let mut tomasz_page = backend.open_page(&tomasz).await;
+    let mut mirela_page = backend.open_page(&mirela).await;
+
+    // The person level: the person's own page hears of it, another person's page does not.
+    let (status, wrote) = backend
+        .call(
+            Some(&tomasz),
+            "/internal/settings/set-person",
+            json!({ "setting": "page_size", "value": 7, "expected_version": 0 }),
+        )
+        .await;
+    assert_eq!(status, 200, "{wrote}");
+    let heard = frame(&mut tomasz_page).await;
+    assert_eq!(heard["type"], "event", "{heard}");
+    assert_eq!(
+        heard["notice"],
+        json!({ "kind": "setting", "setting": "page_size", "level": "person" })
+    );
+    assert!(
+        silent(&mut mirela_page).await,
+        "another person's page hears nothing of a person level change"
+    );
+
+    // The tenant level: every open page hears of it, and the notice carries no value.
+    let (status, wrote) = backend
+        .call(
+            Some(&admin),
+            "/internal/settings/set-tenant",
+            json!({ "setting": "page_size", "value": 31, "expected_version": 0 }),
+        )
+        .await;
+    assert_eq!(status, 200, "{wrote}");
+    for page in [&mut tomasz_page, &mut mirela_page] {
+        let heard = frame(page).await;
+        assert_eq!(
+            heard["notice"],
+            json!({ "kind": "setting", "setting": "page_size", "level": "tenant" })
+        );
+    }
 }
