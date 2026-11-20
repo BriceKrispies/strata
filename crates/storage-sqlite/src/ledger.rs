@@ -328,7 +328,7 @@ pub(crate) fn load(tx: &Connection, state: &mut TenantState, need: &LedgerNeed) 
                 "SELECT data FROM ledger_accounts
                  WHERE unit = ?1 AND oldest_bucket IS NOT NULL AND oldest_bucket <= ?2
                  ORDER BY oldest_bucket, account_id LIMIT ?3",
-                &[&unit.as_str(), &cutoff.0, &i64::from(*limit)],
+                &[&unit.as_str(), cutoff, &i64::from(*limit)],
             )? {
                 put_account(state, &data)?;
             }

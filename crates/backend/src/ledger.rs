@@ -518,7 +518,7 @@ fn first_due(
         tenant,
         &[Need::Ledger(LedgerNeed::Expiring {
             unit: unit.clone(),
-            cutoff,
+            cutoff: cutoff.0,
             limit: 1,
         })],
     )?;

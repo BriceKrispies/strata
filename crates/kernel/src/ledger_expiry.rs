@@ -183,7 +183,7 @@ pub fn due_accounts<'a>(
 pub fn needs(unit: &LedgerUnit, cutoff: Timestamp) -> Vec<Need> {
     vec![Need::Ledger(LedgerNeed::Expiring {
         unit: unit.clone(),
-        cutoff,
+        cutoff: cutoff.0,
         limit: EXPIRY_BATCH,
     })]
 }
@@ -256,7 +256,7 @@ pub fn decide(
     }
     let need = LedgerNeed::Expiring {
         unit: unit.clone(),
-        cutoff: cutoff_at,
+        cutoff: cutoff_at.0,
         limit: EXPIRY_BATCH,
     };
     if !state.coverage.covers(&Need::Ledger(need.clone())) {
