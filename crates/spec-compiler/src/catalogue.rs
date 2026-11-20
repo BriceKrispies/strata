@@ -13,8 +13,8 @@
 //! - every capability with the roles that hold it, every quota and every plan;
 //! - the named types the listed contracts and domain events use, each with a one-line shape.
 //!
-//! The specification does not declare workflow step kinds or trigger kinds as data, so the file
-//! has no section for them.
+//! - the step and trigger catalogue (INT-153, D-6522): one line for each variant of the unions
+//!   `automation-step` and `trigger-event`, written only when the specification declares them.
 //!
 //! The text depends only on the specification and the path it is named by; every list is sorted
 //! by id with a plain string comparison, and no map is iterated in its own order.
@@ -302,6 +302,38 @@ fn render(top: &Map<String, Value>) -> String {
             line_text(text(e, "id").unwrap_or("?")),
             or_dash(fields(e, "payload"))
         );
+    }
+
+    // The published catalogue of step kinds and trigger events, when the specification has one.
+    let catalogue: Vec<&Value> = [
+        crate::layers::STEP_CATALOGUE,
+        crate::layers::EVENT_CATALOGUE,
+    ]
+    .iter()
+    .filter_map(|id| {
+        items(top, "types")
+            .iter()
+            .find(|t| text(t, "id") == Some(*id))
+    })
+    .collect();
+    if !catalogue.is_empty() {
+        let _ = writeln!(out, "\n## Step and trigger catalogue\n");
+        let _ = writeln!(
+            out,
+            "The kinds of step an automation may name and the events a trigger may subscribe to (INT-153); a definition naming anything else is refused.\n"
+        );
+        for t in catalogue {
+            let id = text(t, "id").unwrap_or("?");
+            for v in t
+                .get("variants")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+            {
+                note_field_types(v, "fields", &declared, &mut used);
+                let _ = writeln!(out, "- {} {}", line_text(id), variant(v));
+            }
+        }
     }
 
     // Capabilities and the roles that hold them.

@@ -275,6 +275,82 @@ fn each_refused_product_is_refused_by_specc_with_its_rule() {
     }
 }
 
+// Verifies: INT-1522
+#[test]
+fn an_automation_product_is_accepted_beside_the_platform() {
+    let layered = match load_with(&[product("badge-milestones.jsonc")]) {
+        Ok(layered) => layered,
+        Err(diagnostics) => panic!(
+            "the automation product was refused:\n{}",
+            diagnostics
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("\n")
+        ),
+    };
+    let milestones = &layered.products[0];
+    assert_eq!(milestones.id, "badge-milestones");
+    let declared: Vec<(&str, &str)> = milestones
+        .entities
+        .iter()
+        .map(|e| (e.section.as_str(), e.id.as_str()))
+        .collect();
+    assert!(
+        declared.contains(&("triggers", "milestones_silver_on_points")),
+        "{declared:?}"
+    );
+    assert!(
+        declared.contains(&("automations", "milestones_silver")),
+        "{declared:?}"
+    );
+}
+
+/// The step catalogue refusal is specc's alone for now: Exegra does not read the triggers and
+/// automations sections yet (D-6536), so this fixture is not in [`REFUSED`].
+// Verifies: INT-1522
+#[test]
+fn a_step_or_trigger_outside_the_catalogue_is_refused() {
+    let diagnostics = match load_with(&[product("refused/step-outside-catalogue.jsonc")]) {
+        Ok(_) => panic!("refused/step-outside-catalogue.jsonc was accepted"),
+        Err(diagnostics) => diagnostics,
+    };
+    let outside: Vec<&strata_spec_compiler::Diagnostic> = diagnostics
+        .iter()
+        .filter(|d| d.code == layers::OUTSIDE_CATALOGUE)
+        .collect();
+    let step = outside
+        .iter()
+        .find(|d| d.message.contains("\"RunScript\""))
+        .unwrap_or_else(|| panic!("the unknown step was not refused: {diagnostics:?}"));
+    for word in [
+        "steps.run.action",
+        "outside the published catalogue",
+        "\"automation-step\"",
+        "CreateRecord",
+    ] {
+        assert!(
+            step.message.contains(word),
+            "the step refusal does not say {word:?}: {}",
+            step.message
+        );
+    }
+    let event = outside
+        .iter()
+        .find(|d| d.message.contains("\"EmailOpened\""))
+        .unwrap_or_else(|| panic!("the unknown trigger event was not refused: {diagnostics:?}"));
+    assert!(
+        event.message.contains("\"trigger-event\"") && event.message.contains("LedgerPosted"),
+        "{}",
+        event.message
+    );
+    assert_eq!(outside.len(), 2, "{diagnostics:?}");
+    assert!(
+        diagnostics.iter().all(|d| d.code.starts_with("layer.")),
+        "other refusals too: {diagnostics:?}"
+    );
+}
+
 #[test]
 fn import_missing_names_the_capability_too() {
     let diagnostics = load_with(&[product("refused/import-missing.jsonc")]).unwrap_err();
