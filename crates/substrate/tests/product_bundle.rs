@@ -502,26 +502,29 @@ fn an_id_outside_the_namespace_of_the_product_is_refused() {
 fn a_section_the_kernel_cannot_take_yet_is_refused_by_name_and_never_dropped() {
     let mut doc = tiers();
     doc["content"]["segments"] = json!({ "tiers__gold": { "name": "Gold", "subject-type": "tiers__member", "predicate": "record.points >= 100" } });
-    doc["content"]["ledger-units"] =
-        json!([{ "unit": "tiers__points" }, { "unit": "tiers__stamps" }]);
+    doc["content"]["ledger-units"] = json!([
+        { "unit": "tiers__points", "description": "Points" },
+        { "unit": "tiers__stamps", "description": "Stamps" }
+    ]);
     doc["content"]["settings"] = json!([]);
     let bundle = read(&doc).unwrap();
-    // An empty section is not a filled one.
+    // Segments are the one section that is no schema change; the ledger declarations are read.
     let names: Vec<(&str, usize)> = bundle
         .unbuilt
         .iter()
         .map(|u| (u.section.as_str(), u.entries))
         .collect();
-    assert_eq!(names, vec![("ledger-units", 2), ("segments", 1)]);
+    assert_eq!(names, vec![("segments", 1)]);
+    assert_eq!(bundle.ledger_units.len(), 2);
     let mut world = world();
     let before = world.hash();
     let (result, calls) = install(&mut world, &bundle, None, "0.2");
     let error = refusal(result);
     assert_eq!(error.kind, BundleErrorKind::InvalidBundle);
-    for section in ["\"segments\"", "\"ledger-units\""] {
-        assert!(error.message.contains(section), "{}", error.message);
+    assert!(error.message.contains("\"segments\""), "{}", error.message);
+    for section in ["\"settings\"", "\"ledger-units\""] {
+        assert!(!error.message.contains(section), "{}", error.message);
     }
-    assert!(!error.message.contains("\"settings\""), "{}", error.message);
     assert_eq!(calls, 0, "nothing of a refused bundle is installed");
     assert_eq!(world.hash(), before);
 }
@@ -587,16 +590,18 @@ fn the_bundles_specc_writes_are_read_and_their_unbuilt_sections_are_named() {
             Permission::Capability("content-read".into())
         ]
     );
-    let sections: Vec<&str> = tiers.unbuilt.iter().map(|u| u.section.as_str()).collect();
-    assert_eq!(sections, vec!["capabilities", "ledger-units"]);
+    // The capabilities and the ledger units are schema changes: read, not refused.
+    assert!(tiers.unbuilt.is_empty());
+    assert_eq!(tiers.capabilities.len(), 1);
+    assert_eq!(tiers.ledger_units.len(), 1);
     assert_eq!(tiers.mail_templates.len(), 1);
 
     let badges = ProductBundle::from_json(BADGE_MILESTONES).unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(badges.objects.len(), 1);
     assert_eq!(badges.policies.len(), 2);
-    // The ledger is the one section of this product the kernel cannot take yet.
-    let sections: Vec<&str> = badges.unbuilt.iter().map(|u| u.section.as_str()).collect();
-    assert_eq!(sections, vec!["ledger-units"]);
+    // The ledger unit its trigger names is declared by the product.
+    assert!(badges.unbuilt.is_empty());
+    assert_eq!(badges.ledger_units.len(), 1);
     assert_eq!(badges.mail_templates.len(), 2);
     assert_eq!(badges.notice_templates.len(), 1);
     assert_eq!(badges.triggers.len(), 1);
@@ -607,21 +612,29 @@ fn the_bundles_specc_writes_are_read_and_their_unbuilt_sections_are_named() {
     assert!(award.fields[&FieldId::new("person").unwrap()]
         .personal
         .is_some());
-    let error = badges.check_installable().unwrap_err();
-    assert_eq!(error.kind, BundleErrorKind::InvalidBundle);
+    badges.check_installable().unwrap_or_else(|e| panic!("{e}"));
 
     let promotions = ProductBundle::from_json(PROMOTIONS).unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(promotions.objects.len(), 2);
     assert_eq!(promotions.operations.len(), 2);
-    let sections: Vec<&str> = promotions
-        .unbuilt
+    assert!(promotions.unbuilt.is_empty());
+    assert_eq!(promotions.ledger_units.len(), 2);
+    assert_eq!(promotions.ledger_pools.len(), 1);
+    assert_eq!(promotions.ledger_limits.len(), 1);
+    // The changes that install it declare the ledger before the operations that post to it.
+    let changes = promotions.schema_changes();
+    let first_ledger = changes
         .iter()
-        .map(|u| u.section.as_str())
-        .collect();
-    assert_eq!(
-        sections,
-        vec!["ledger-limits", "ledger-pools", "ledger-units"]
-    );
+        .position(|c| matches!(c, SchemaChange::DeclareLedgerUnit(_)))
+        .unwrap();
+    let first_operation = changes
+        .iter()
+        .position(|c| matches!(c, SchemaChange::DefineOperation(_)))
+        .unwrap();
+    assert!(first_ledger < first_operation);
+    assert!(changes
+        .iter()
+        .any(|c| matches!(c, SchemaChange::SetLedgerLimit(_))));
 }
 
 // ---- what a product holds beyond its record types (WG-5076, WG-5084, WG-5103) ----------------------

@@ -7,6 +7,20 @@
   "tests": [
     {
       "package": "strata-backend",
+      "target": "aggregates",
+      "tier": "routine",
+      "seconds": null,
+      "unmeasured": true
+    },
+    {
+      "package": "strata-backend",
+      "target": "erasure",
+      "tier": "routine",
+      "seconds": null,
+      "unmeasured": true
+    },
+    {
+      "package": "strata-backend",
       "target": "factors",
       "tier": "routine",
       "seconds": 3.93
@@ -20,15 +34,43 @@
     },
     {
       "package": "strata-backend",
+      "target": "lab_revision",
+      "tier": "routine",
+      "seconds": null,
+      "unmeasured": true
+    },
+    {
+      "package": "strata-backend",
+      "target": "ledger",
+      "tier": "routine",
+      "seconds": null,
+      "unmeasured": true
+    },
+    {
+      "package": "strata-backend",
       "target": "oidc",
       "tier": "routine",
       "seconds": 3.94
     },
     {
       "package": "strata-backend",
+      "target": "operations",
+      "tier": "routine",
+      "seconds": null,
+      "unmeasured": true
+    },
+    {
+      "package": "strata-backend",
       "target": "production",
       "tier": "routine",
       "seconds": 0.77
+    },
+    {
+      "package": "strata-backend",
+      "target": "products",
+      "tier": "routine",
+      "seconds": null,
+      "unmeasured": true
     },
     {
       "package": "strata-backend",
@@ -44,10 +86,24 @@
     },
     {
       "package": "strata-backend",
+      "target": "segments",
+      "tier": "routine",
+      "seconds": null,
+      "unmeasured": true
+    },
+    {
+      "package": "strata-backend",
       "target": "service",
       "tier": "full",
       "seconds": 16.68,
       "reason": "The backend as a running service on real sockets (60 tests); scoped runs include it when the backend or anything under it changed"
+    },
+    {
+      "package": "strata-backend",
+      "target": "settings",
+      "tier": "routine",
+      "seconds": null,
+      "unmeasured": true
     },
     {
       "package": "strata-backend",
@@ -62,6 +118,13 @@
       "seconds": 3.08
     },
     {
+      "package": "strata-backend",
+      "target": "worker",
+      "tier": "routine",
+      "seconds": null,
+      "unmeasured": true
+    },
+    {
       "package": "strata-bff",
       "target": "backend_call",
       "tier": "routine",
@@ -72,6 +135,20 @@
       "target": "edge",
       "tier": "routine",
       "seconds": 5.28
+    },
+    {
+      "package": "strata-kernel",
+      "target": "aggregates",
+      "tier": "routine",
+      "seconds": null,
+      "unmeasured": true
+    },
+    {
+      "package": "strata-kernel",
+      "target": "automation_principal",
+      "tier": "routine",
+      "seconds": null,
+      "unmeasured": true
     },
     {
       "package": "strata-kernel",
@@ -88,9 +165,23 @@
     },
     {
       "package": "strata-kernel",
+      "target": "erasure",
+      "tier": "routine",
+      "seconds": null,
+      "unmeasured": true
+    },
+    {
+      "package": "strata-kernel",
       "target": "generated_differential",
       "tier": "routine",
       "seconds": 0.03
+    },
+    {
+      "package": "strata-kernel",
+      "target": "ledger",
+      "tier": "routine",
+      "seconds": null,
+      "unmeasured": true
     },
     {
       "package": "strata-kernel",
@@ -100,13 +191,55 @@
     },
     {
       "package": "strata-kernel",
+      "target": "object_meta",
+      "tier": "routine",
+      "seconds": null,
+      "unmeasured": true
+    },
+    {
+      "package": "strata-kernel",
+      "target": "operations",
+      "tier": "routine",
+      "seconds": null,
+      "unmeasured": true
+    },
+    {
+      "package": "strata-kernel",
       "target": "properties",
       "tier": "routine",
       "seconds": 4.65
     },
     {
       "package": "strata-kernel",
+      "target": "query_plan",
+      "tier": "routine",
+      "seconds": null,
+      "unmeasured": true
+    },
+    {
+      "package": "strata-kernel",
       "target": "rule_arithmetic",
+      "tier": "routine",
+      "seconds": null,
+      "unmeasured": true
+    },
+    {
+      "package": "strata-kernel",
+      "target": "segments",
+      "tier": "routine",
+      "seconds": null,
+      "unmeasured": true
+    },
+    {
+      "package": "strata-kernel",
+      "target": "settings",
+      "tier": "routine",
+      "seconds": null,
+      "unmeasured": true
+    },
+    {
+      "package": "strata-kernel",
+      "target": "triggers",
       "tier": "routine",
       "seconds": null,
       "unmeasured": true
@@ -265,6 +398,20 @@
       "target": "language",
       "tier": "routine",
       "seconds": 0.24
+    },
+    {
+      "package": "strata-spec-compiler",
+      "target": "language_js",
+      "tier": "routine",
+      "seconds": null,
+      "unmeasured": true
+    },
+    {
+      "package": "strata-spec-compiler",
+      "target": "layer_expr_drift",
+      "tier": "routine",
+      "seconds": null,
+      "unmeasured": true
     },
     {
       "package": "strata-spec-compiler",
@@ -442,6 +589,13 @@
       "tier": "full",
       "seconds": 9.19,
       "reason": "SQLite crash, upgrade and many-tenant cases; scoped runs include it when a storage crate changed"
+    },
+    {
+      "package": "strata-storage-sqlite",
+      "target": "query_plan",
+      "tier": "routine",
+      "seconds": null,
+      "unmeasured": true
     },
     {
       "package": "strata-storage-sqlite",

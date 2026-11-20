@@ -128,6 +128,7 @@ fn install_dev_accounts(app: &App, tenant: &TenantId, loaded: &LoadedTenant) -> 
             continue;
         }
         let principal = PrincipalId::new(account.principal.clone()).map_err(|e| e.to_string())?;
+        crate::auth::refuse_reserved(&principal).map_err(|e| e.describe())?;
         put_dev_account(
             app,
             tenant,

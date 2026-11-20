@@ -86,6 +86,7 @@ pub fn issue_for(
     origin: &str,
     ttl_ms: i64,
 ) -> Result<String, ApiError> {
+    crate::auth::refuse_reserved(principal)?;
     let origin = site_origin(origin).ok_or_else(|| {
         ApiError::new(ErrorCode::Invalid, "The origin must be like https://host.")
     })?;
@@ -175,6 +176,7 @@ pub fn accept(app: &App, caller: &Caller, body: &Json) -> Result<Json, ApiError>
     }
     let principal = PrincipalId::new(invite.principal.clone())
         .map_err(|e| ApiError::hidden(ErrorCode::Internal, format!("invitation: {e}")))?;
+    crate::auth::refuse_reserved(&principal)?;
     let Some(account) = app.store.account_of(&caller.site, &principal)? else {
         return Err(not_accepted());
     };

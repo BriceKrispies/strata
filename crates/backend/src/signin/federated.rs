@@ -209,6 +209,7 @@ fn create(
     );
     let principal = PrincipalId::new(format!("user:{protocol}-{}", &digest[..24]))
         .map_err(|e| ApiError::hidden(ErrorCode::Internal, format!("principal: {e}")))?;
+    crate::auth::refuse_reserved(&principal)?;
     let display_name = who
         .name
         .as_deref()

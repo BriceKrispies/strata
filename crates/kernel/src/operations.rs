@@ -32,9 +32,8 @@
 //! committed (OPR-1552).
 //!
 //! Posting steps call the ledger engine through [`Run::post_to_ledger`], the one place this
-//! module touches it. Until `crate::ledger::post` exists (slice w3ledger) an operation with a
-//! posting step is refused there with a "not built" refusal; the wiring is described on that
-//! function.
+//! module touches it: each posting is decided by `crate::ledger::post_after` on the state the
+//! steps before it leave.
 
 use crate::definitions::operation_powers;
 use crate::expr::{self, Env};
@@ -46,7 +45,9 @@ use crate::limits;
 use crate::read::visible_in;
 use crate::rules::{missing_error, roles_of, validate_record, Lookup};
 use crate::schema::{Action, Resource, TenantSchema, TenantSchemaExt};
-use crate::state::{Coverage, Need, Principal, Record, RecordExt, TenantState, TenantStateExt};
+use crate::state::{
+    Coverage, Need, Principal, Record, RecordExt, State, TenantState, TenantStateExt,
+};
 use crate::transition::field_needs;
 use crate::types::{
     Expr, FieldId, FieldTypeExt, ObjectTypeId, OnDelete, PrincipalId, RecordId, RoleId,
@@ -932,31 +933,28 @@ impl Run<'_> {
             corrects: None,
             scope,
         };
-        self.post_to_ledger(step, request)
+        self.post_to_ledger(request)
     }
 
-    /// The one call into the ledger engine (`crate::ledger`, built in slice w3ledger against
-    /// contract decide-ledger-posting CT-280 and type ledger-posting-request).
-    ///
-    /// The wiring, once `crate::ledger::post` exists: decide `request` against the working copy
-    /// (`State { tenant_id: self.work.id.clone(), tenant: Some(Arc::new(self.work.clone())),
-    /// coverage: self.coverage.clone() }`), the context `self.ctx` and the time `self.ctx.now`,
-    /// as `crate::ledger::post(&state, &request, self.ctx, self.ctx.now)`; on acceptance append
-    /// its delta operations to `self.ops` and apply them to `self.work` (so that a later step
-    /// sees the balance this one left), append its events to `self.events`, and push its
-    /// `LedgerPostingResult::entry` to `self.entries`; a refusal (below-floor, above-cap,
-    /// above-period-cap, unknown-unit, ...) is returned as it is and refuses the invocation. The
-    /// method then takes `&mut self`. Its needs (the account, its balance and limits, the entry
-    /// of the key) join `plan` below.
-    fn post_to_ledger(&self, step: &str, request: LedgerPostingRequest) -> Result<(), DomainError> {
-        Err(self.fail(
-            ErrorKind::InvalidIntent,
-            format!("operation:{}:ledger", self.operation),
-            format!(
-                "step {step} posts to the ledger (key {}), and the ledger engine that decides a posting is not built yet; nothing is changed",
-                request.idempotency_key
-            ),
-        ))
+    /// The one call into the ledger engine (contract decide-ledger-posting CT-280): the posting
+    /// is decided against the working copy after the operations of the steps before it
+    /// ([`crate::ledger::post_after`]), so it sees the headers and entries an earlier posting step
+    /// of this invocation wrote (D-6548). On acceptance its delta operations and events join the
+    /// invocation's and its entry the result; a refusal (an undeclared unit or owner, a floor, a
+    /// cap, a key used with another request) refuses the invocation, and a snapshot that lacks the
+    /// account's header or the entry of the key is `InsufficientState` naming it.
+    fn post_to_ledger(&mut self, request: LedgerPostingRequest) -> Result<(), DomainError> {
+        let state = State {
+            tenant_id: self.work.id.clone(),
+            tenant: Some(Arc::new(self.work.clone())),
+            coverage: self.coverage.clone(),
+        };
+        let posted = crate::ledger::post_after(&state, &self.ops, &request, self.ctx)?;
+        self.evidence.extend(posted.evidence);
+        self.ops.extend(posted.ops);
+        self.events.extend(posted.events);
+        self.entries.push(posted.result.entry);
+        Ok(())
     }
 
     /// The accepted invocation: one delta with every change, the events of every change in step
@@ -1138,7 +1136,43 @@ fn plan(
                     }
                 }
             }
-            TenantOperationStep::PostLedger { .. } => {}
+            TenantOperationStep::PostLedger {
+                owner, unit, scope, ..
+            } => {
+                // The account's header, when its owner and scope are known before the run; the
+                // entry of the posting's key (which names the invoker and the invocation's key)
+                // and an owner the invoker is are asked for by the decision, one need at a time.
+                let Some(tenant) = loaded else {
+                    continue;
+                };
+                let owner = match owner {
+                    TenantOperationPostingOwner::Pool { pool } => {
+                        Some(LedgerOwner::Pool { pool: pool.clone() })
+                    }
+                    TenantOperationPostingOwner::Principal { principal } => {
+                        match known(principal, subject, inputs) {
+                            Some(Value::Str(text)) => PrincipalId::new(text)
+                                .ok()
+                                .map(|principal| LedgerOwner::Principal { principal }),
+                            _ => None,
+                        }
+                    }
+                    TenantOperationPostingOwner::Invoker => None,
+                };
+                let scope = match scope {
+                    None => Some(String::new()),
+                    Some(e) => match known(e, subject, inputs) {
+                        Some(Value::Str(text)) => Some(text),
+                        Some(Value::Null) => Some(String::new()),
+                        _ => None,
+                    },
+                };
+                if let (Some(owner), Some(scope)) = (owner, scope) {
+                    out.insert(Need::Ledger(crate::types::LedgerNeed::Account {
+                        account: crate::ledger::account_id(&tenant.id, &owner, unit, &scope),
+                    }));
+                }
+            }
         }
     }
 }

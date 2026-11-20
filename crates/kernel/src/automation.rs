@@ -16,6 +16,20 @@ use std::collections::BTreeSet;
 /// The prefix of the principal an automation acts as.
 pub const AUTOMATION_PREFIX: &str = "automation:";
 
+/// The prefixes no person's principal id may start with: `team:` stands for a team in events, and
+/// `automation:` for an automation (WFL-1527). Every place a person's id enters the tenant refuses
+/// them: the kernel for the owner of a new tenant, a role assignment, a team membership and a caller
+/// with a session ([`reserved_problem`]), and the backend for a session, a SCIM user, an identity
+/// from a provider and an invitation ([`reserved_prefix`]).
+pub const RESERVED_PREFIXES: [&str; 2] = ["team:", AUTOMATION_PREFIX];
+
+/// The reserved prefix a principal id starts with, if any.
+pub fn reserved_prefix(id: &PrincipalId) -> Option<&'static str> {
+    RESERVED_PREFIXES
+        .into_iter()
+        .find(|prefix| id.as_str().starts_with(prefix))
+}
+
 /// The principal an automation acts as: `automation:<workflow-id>`.
 pub fn automation_principal(automation: &WorkflowId) -> PrincipalId {
     PrincipalId::new(format!("{AUTOMATION_PREFIX}{automation}"))

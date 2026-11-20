@@ -7,14 +7,14 @@
 //! ([`crate::schema::TenantSchemaExt::problems`]), so a definition that names something that does
 //! not exist is refused when it is defined, and a change that removes something a definition
 //! names is refused while the definition names it. What the kernel does not hold is not checked
-//! here: segments, ledger units and pools, schedules, templates and webhook
-//! subscriptions live in the tenant catalogue beside the schema (D-6581), whose checks belong to
-//! the change that installs them. Settings and capabilities are held in the schema
-//! ([`crate::settings`], [`crate::capabilities`]), so a definition that names one is checked
-//! here. Each kind of reference that is not held yet has one function that answers
-//! [`ReferenceCheck::NotChecked`] and is called wherever a definition names the kind
+//! here: segments live in the segment store beside the tenant state, and schedules and webhook
+//! subscriptions are not built. Settings, capabilities, the ledger declarations and the mail and
+//! notice templates are held in the schema ([`crate::settings`], [`crate::capabilities`],
+//! [`crate::ledger`], [`crate::templates`]), so a definition that names one is checked here. Each
+//! kind of reference has one function called wherever a definition names the kind
 //! ([`segment_reference`], [`ledger_unit_reference`], [`template_reference`],
-//! [`schedule_reference`]); the engine that comes to hold the kind fills its function in.
+//! [`schedule_reference`]); the two kinds the schema does not hold answer
+//! [`ReferenceCheck::NotChecked`].
 //!
 //! The authority checks that depend on the defining principal (the run-as roles of an automation
 //! under ADM-152, the powers the steps of an operation use under D-6547) are made by
@@ -25,8 +25,8 @@ use crate::limits;
 use crate::schema::{Action, FieldDef, FieldType, ObjectTypeDef, Resource, TenantSchema};
 use crate::types::{
     public_role, AutomationDef, AutomationStep, AutomationStepDef, FieldId, FieldTypeExt,
-    ObjectTypeId, RoleId, SettingId, StepName, TenantOperationDef, TenantOperationPostingOwner,
-    TenantOperationStep, TriggerDef, TriggerEvent, UniqueDef,
+    LedgerUnit, ObjectTypeId, RoleId, SettingId, StepName, TemplateId, TenantOperationDef,
+    TenantOperationPostingOwner, TenantOperationStep, TriggerDef, TriggerEvent, UniqueDef,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -55,7 +55,9 @@ fn report(check: ReferenceCheck, at: &str, problems: &mut Vec<String>) {
 }
 
 /// The check of a segment a definition names (a trigger on entering or leaving a segment, a
-/// fan-out step). Not checked: segments are not held by the kernel yet.
+/// fan-out step). Not checked: segments live in the segment store beside the tenant state
+/// (`crate::segments`, D-5030), not in the schema, so a check of the schema alone cannot see
+/// them; the segment engine refuses a reference to a segment it does not hold when it runs.
 pub fn segment_reference<T: std::fmt::Debug>(
     _schema: &TenantSchema,
     _segment: &T,
@@ -64,21 +66,33 @@ pub fn segment_reference<T: std::fmt::Debug>(
 }
 
 /// The check of a ledger unit a definition names (a trigger on a posting, a posting step of an
-/// automation or an operation). Not checked: ledger units are not held by the kernel yet.
-pub fn ledger_unit_reference<T: std::fmt::Debug>(
-    _schema: &TenantSchema,
-    _unit: &T,
-) -> ReferenceCheck {
-    ReferenceCheck::NotChecked
+/// automation or an operation): the unit is declared in the ledger declarations of the schema
+/// (`crate::ledger`, D-5000).
+pub fn ledger_unit_reference(schema: &TenantSchema, unit: &LedgerUnit) -> ReferenceCheck {
+    let declared = schema
+        .ledger
+        .as_ref()
+        .is_some_and(|ledger| ledger.units.contains_key(unit));
+    ReferenceCheck::Checked(
+        (!declared).then(|| format!("names ledger unit {unit}, which the tenant does not declare")),
+    )
 }
 
-/// The check of a mail or notice template a definition names (a send-mail or create-notice step).
-/// Not checked: templates are not held by the kernel yet.
-pub fn template_reference<T: std::fmt::Debug>(
-    _schema: &TenantSchema,
-    _template: &T,
-) -> ReferenceCheck {
-    ReferenceCheck::NotChecked
+/// The check of a mail or notice template a definition names (a send-mail or create-notice
+/// step): the schema holds a template of that id (`crate::templates`, D-7341). Which table it is
+/// in is checked by `templates::problems`, which names a template of the wrong kind.
+pub fn template_reference(schema: &TenantSchema, template: &TemplateId) -> ReferenceCheck {
+    let held = schema
+        .mail_templates
+        .as_ref()
+        .is_some_and(|all| all.contains_key(template))
+        || schema
+            .notice_templates
+            .as_ref()
+            .is_some_and(|all| all.contains_key(template));
+    ReferenceCheck::Checked(
+        (!held).then(|| format!("names template {template}, which the tenant does not define")),
+    )
 }
 
 /// The check of a schedule a definition names (a trigger on a schedule falling due). Not checked:

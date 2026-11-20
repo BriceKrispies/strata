@@ -67,4 +67,7 @@ pub mod ext {
 
 /// Identifies the transition semantics. Recorded in every trace and journal entry, so a replay
 /// knows which kernel produced what it is replaying.
-pub const KERNEL_VERSION: &str = "strata-kernel/0.1.0";
+///
+/// 0.2.0: a `record-updated` event names the workflow transitions the update fired
+/// (`transitions`, D-7203), and the triggers of a decision add their effects at commit (D-7200).
+pub const KERNEL_VERSION: &str = "strata-kernel/0.2.0";

@@ -187,6 +187,14 @@ fn redeem() -> TenantOperationDef {
     }
 }
 
+/// The declaration of the ledger unit `points` that `on_points` and `posting` name.
+fn points() -> SchemaChange {
+    SchemaChange::DeclareLedgerUnit(LedgerUnitDecl {
+        unit: LedgerUnit::new("points").unwrap(),
+        description: "Points".into(),
+    })
+}
+
 fn posting(id: &str) -> TenantOperationStep {
     TenantOperationStep::PostLedger {
         id: id.into(),
@@ -228,6 +236,7 @@ fn definers(capability: bool) -> World {
     let mut changes = vec![
         manage("writers_manage_schema", "writer"),
         manage("editors_manage_schema", "editor"),
+        points(),
     ];
     if capability {
         for role_name in ["writer", "editor"] {
@@ -434,6 +443,7 @@ fn a_trigger_condition_reads_only_what_its_event_binds() {
         &notes_world(),
         "owner",
         vec![
+            points(),
             SchemaChange::DefineAutomation(award(&["writer"])),
             SchemaChange::DefineTrigger(trigger),
         ],
@@ -454,6 +464,7 @@ fn a_trigger_condition_is_a_truth_value() {
         "owner",
         6_000,
         change(vec![
+            points(),
             SchemaChange::DefineAutomation(award(&["writer"])),
             SchemaChange::DefineTrigger(trigger.clone()),
         ]),
@@ -463,6 +474,7 @@ fn a_trigger_condition_is_a_truth_value() {
         &notes_world(),
         "owner",
         vec![
+            points(),
             SchemaChange::DefineAutomation(award(&["writer"])),
             SchemaChange::DefineTrigger(trigger),
         ],
@@ -475,7 +487,7 @@ fn a_trigger_condition_is_a_truth_value() {
 
 #[test]
 fn a_tenant_holds_at_most_one_hundred_triggers() {
-    let mut changes = vec![SchemaChange::DefineAutomation(award(&["writer"]))];
+    let mut changes = vec![points(), SchemaChange::DefineAutomation(award(&["writer"]))];
     for n in 0..100 {
         changes.push(SchemaChange::DefineTrigger(on_points(&format!("t{n}"))));
     }
@@ -872,6 +884,64 @@ fn a_tenant_operation_is_refused_when_its_definer_lacks_a_power_its_steps_use() 
     );
 }
 
+#[test]
+fn a_definition_naming_an_undeclared_ledger_unit_or_an_undefined_template_is_refused() {
+    let error = refused(
+        &notes_world(),
+        "owner",
+        vec![
+            SchemaChange::DefineAutomation(award(&["writer"])),
+            SchemaChange::DefineTrigger(on_points("on_points")),
+        ],
+    );
+    assert_eq!(
+        error.message,
+        "trigger on_points: names ledger unit points, which the tenant does not declare"
+    );
+    let mut op = redeem();
+    op.steps.push(posting("count"));
+    let error = refused(
+        &notes_world(),
+        "owner",
+        vec![SchemaChange::DefineOperation(op)],
+    );
+    assert!(
+        error
+            .message
+            .contains("names ledger unit points, which the tenant does not declare"),
+        "{}",
+        error.message
+    );
+    let mut mailer = award(&["writer"]);
+    mailer.start = name("send");
+    mailer.steps = BTreeMap::from([(
+        name("send"),
+        AutomationStepDef {
+            action: AutomationStep::SendMail {
+                template: TemplateId("welcome".into()),
+                to: lit("person@example.org"),
+                category: None,
+            },
+            next: None,
+            retry: None,
+            timeout: None,
+            compensate: None,
+        },
+    )]);
+    let error = refused(
+        &notes_world(),
+        "owner",
+        vec![SchemaChange::DefineAutomation(mailer)],
+    );
+    assert!(
+        error
+            .message
+            .contains("names template welcome, which the tenant does not define"),
+        "{}",
+        error.message
+    );
+}
+
 // Verifies: OPR-1549
 #[test]
 fn the_bounds_and_names_of_a_tenant_operation_are_checked_when_it_is_defined() {
@@ -879,7 +949,7 @@ fn the_bounds_and_names_of_a_tenant_operation_are_checked_when_it_is_defined() {
         refused(
             &notes_world(),
             "owner",
-            vec![SchemaChange::DefineOperation(op)],
+            vec![points(), SchemaChange::DefineOperation(op)],
         )
         .message
     };

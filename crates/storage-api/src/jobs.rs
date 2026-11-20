@@ -23,8 +23,10 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use strata_kernel::triggers::{AutomationDecline, AutomationStart};
 use strata_kernel::{
-    canon, PrincipalId, StepName, TenantId, Timestamp, Transition, TriggerId, Value, WorkflowId,
+    canon, Effect, PrincipalId, SchemaVersion, StepName, TenantId, Timestamp, Transition,
+    TriggerId, Value, WorkflowId,
 };
 
 /// The attempts of a policy when the definition names none (D-6529).
@@ -138,6 +140,18 @@ pub enum JobWork {
         /// The parameters the event binds (D-6523).
         #[serde(default)]
         params: BTreeMap<String, Value>,
+        /// Who caused the event the trigger matched (`automation-start.caused-by`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        caused_by: Option<PrincipalId>,
+        /// The person the automation acts for: its definer (D-7204).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        on_behalf_of: Option<PrincipalId>,
+        /// The schema version the trigger was decided under.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        definition_version: Option<SchemaVersion>,
+        /// The run key the automation's expression gave (WFL-1522): one run per key.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        run_key: Option<String>,
     },
     /// Run one step of a run: one job per step, retried as attempts of the job (D-526).
     Step {
@@ -681,25 +695,14 @@ pub fn settle_problem(record: &ExceptionRecord, release: bool) -> Option<String>
 }
 
 /// The jobs and exception records a decided transition asks for: the hand-off from the kernel's
-/// trigger decision (SCH-004, D-6524). This is the one place that reads it.
+/// trigger decision (SCH-004, D-6524, D-7200). This is the one place that reads it.
 ///
-/// The kernel states each trigger that fires for an event of the transition as an [`Effect`]
-/// (`strata_kernel::Effect`), and each trigger it declines with a reason (the hop limit, a
-/// condition that could not be evaluated) as another. The effects are read through their
-/// encoding, so this compiles whether or not the variants exist yet:
-///
-/// - a start: the variant `StartRun` (also read: `StartAutomation`, `CreateJob`, `TriggerJob`)
-///   with the fields `trigger` (a trigger id), `automation` (a workflow id; also read: `workflow`),
-///   `event_seq` (also read: `seq`), `hop`, optionally `params` (a map of values) and `due_at`
-///   (milliseconds; a job held by the job quota is due at the next quota day, SCH-1535);
-/// - a decline: the variant `TriggerDeclined` (also read: `DeclineTrigger`) with `trigger`,
-///   `automation`, `reason` (a value of `automation-exception-reason`), `event_seq` or `seq`,
-///   `hop` and optionally `detail`.
-///
-/// A start becomes one job, keyed by its trigger and event, due at `due_at` or at `now`; a
-/// decline becomes one declined exception record.
-///
-/// [`Effect`]: strata_kernel::Effect
+/// Each trigger that starts a run for an event of the transition is an
+/// [`Effect::StartAutomation`]: it becomes one job, keyed by its run key when the automation has
+/// one (one run per key, WFL-1522) and else by its trigger and event, due now. Each trigger the
+/// kernel declined (the hop limit, a condition that could not be evaluated, a suspended or
+/// removed automation) is an [`Effect::DeclineAutomation`]: it becomes one declined exception
+/// record. [`crate::Commit::of`] writes both in the transaction of the transition.
 pub fn trigger_intake(
     tenant: &TenantId,
     transition: &Transition,
@@ -708,106 +711,78 @@ pub fn trigger_intake(
     let mut jobs = Vec::new();
     let mut exceptions = Vec::new();
     for effect in &transition.effects {
-        let Ok(serde_json::Value::Object(encoded)) = serde_json::to_value(effect) else {
-            continue;
-        };
-        for (tag, body) in &encoded {
-            match tag.as_str() {
-                "StartRun" | "StartAutomation" | "CreateJob" | "TriggerJob" => {
-                    if let Some(job) = start_job(body, now) {
-                        jobs.push(job);
-                    }
-                }
-                "TriggerDeclined" | "DeclineTrigger" => {
-                    if let Some(record) = declined_record(tenant, body, now) {
-                        exceptions.push(record);
-                    }
-                }
-                _ => {}
+        match effect {
+            Effect::StartAutomation(start) => jobs.push(start_job(start, now)),
+            Effect::DeclineAutomation(decline) => {
+                exceptions.push(declined_record(tenant, decline, now))
             }
+            Effect::Publish { .. } | Effect::RevokeSessions { .. } => {}
         }
     }
     (jobs, exceptions)
 }
 
-fn text_of<'a>(body: &'a serde_json::Value, names: &[&str]) -> Option<&'a str> {
-    names.iter().find_map(|name| body.get(*name)?.as_str())
-}
-
-fn number_of(body: &serde_json::Value, names: &[&str]) -> Option<u64> {
-    names.iter().find_map(|name| body.get(*name)?.as_u64())
-}
-
-fn start_job(body: &serde_json::Value, now: Timestamp) -> Option<NewJob> {
-    let automation = WorkflowId::new(text_of(body, &["automation", "workflow"])?).ok()?;
-    let trigger = text_of(body, &["trigger"]).and_then(|t| TriggerId::new(t).ok());
-    let event_seq = number_of(body, &["event_seq", "seq"]);
-    let hop = number_of(body, &["hop"]).unwrap_or(0);
-    let params: BTreeMap<String, Value> = body
-        .get("params")
-        .and_then(|p| serde_json::from_value(p.clone()).ok())
-        .unwrap_or_default();
-    let due_at = body
-        .get("due_at")
-        .and_then(serde_json::Value::as_i64)
-        .map_or(now, Timestamp);
-    let key = format!(
-        "start:{}:{}:{}",
-        trigger.as_ref().map_or("-", TriggerId::as_str),
-        automation,
-        event_seq.map_or_else(|| "-".to_string(), |s| s.to_string())
-    );
-    Some(NewJob {
+/// The job that starts the run a trigger asked for.
+fn start_job(start: &AutomationStart, now: Timestamp) -> NewJob {
+    let key = match &start.run_key {
+        Some(run_key) => format!("start:{}:key:{run_key}", start.automation),
+        None => format!(
+            "start:{}:{}:{}",
+            start.trigger, start.automation, start.event_seq
+        ),
+    };
+    NewJob {
         key,
         work: JobWork::StartRun {
-            trigger,
-            automation,
-            event_seq,
-            hop,
-            params,
+            trigger: Some(start.trigger.clone()),
+            automation: start.automation.clone(),
+            event_seq: Some(start.event_seq),
+            hop: u64::from(start.hop),
+            params: start.params.clone(),
+            caused_by: Some(start.caused_by.clone()),
+            on_behalf_of: start.on_behalf_of.clone(),
+            definition_version: Some(start.definition_version),
+            run_key: start.run_key.clone(),
         },
-        due_at,
+        due_at: now,
         policy: RetryPolicy::default(),
-    })
+    }
 }
 
+/// The declined exception record of a trigger the kernel declined; the id is derived from the
+/// tenant, the trigger, the event and the reason, so a decision made again writes it once.
 fn declined_record(
     tenant: &TenantId,
-    body: &serde_json::Value,
+    decline: &AutomationDecline,
     now: Timestamp,
-) -> Option<ExceptionRecord> {
-    let reason = text_of(body, &["reason"])?.to_string();
-    let trigger = text_of(body, &["trigger"]).and_then(|t| TriggerId::new(t).ok());
-    let automation =
-        text_of(body, &["automation", "workflow"]).and_then(|a| WorkflowId::new(a).ok());
-    let event_seq = number_of(body, &["event_seq", "seq"]);
+) -> ExceptionRecord {
+    let reason = decline.reason.as_str();
     let id = derived_uuid(&format!(
         "strata/automation-exception/v1\0{tenant}\0declined\0{}\0{}\0{reason}",
-        trigger.as_ref().map_or("", TriggerId::as_str),
-        event_seq.unwrap_or(0)
+        decline.trigger, decline.event_seq
     ));
-    let mut detail = text_of(body, &["detail"]).unwrap_or("").to_string();
+    let mut detail = decline.detail.clone();
     let cut = (0..=detail.len().min(256))
         .rev()
         .find(|i| detail.is_char_boundary(*i))
         .unwrap_or(0);
     detail.truncate(cut);
-    Some(ExceptionRecord {
+    ExceptionRecord {
         id,
         kind: ExceptionKind::Declined,
-        reason,
-        trigger,
-        automation,
+        reason: reason.to_string(),
+        trigger: Some(decline.trigger.clone()),
+        automation: Some(decline.automation.clone()),
         run: None,
         step: None,
-        event_seq,
+        event_seq: Some(decline.event_seq),
         job: None,
-        hop: number_of(body, &["hop"]),
+        hop: Some(u64::from(decline.hop)),
         at: now,
         detail,
         settled: true,
         seq: 0,
-    })
+    }
 }
 
 #[cfg(test)]
@@ -816,6 +791,79 @@ mod tests {
 
     fn tenant() -> TenantId {
         TenantId::new("alpha").unwrap()
+    }
+
+    /// Verifies the hand-off of D-7200: a start becomes one job carrying every field of the
+    /// trigger's effect, keyed by the run key; a decline becomes one settled declined record.
+    #[test]
+    fn the_trigger_effects_become_a_job_and_a_declined_record() {
+        use strata_kernel::triggers::AutomationExceptionReason;
+        use strata_kernel::{Output, SchemaVersion, StateDelta, StateRevision};
+        let principal = |text: &str| PrincipalId::new(text).unwrap();
+        let start = AutomationStart {
+            trigger: TriggerId::new("on_publish").unwrap(),
+            automation: WorkflowId::new("award").unwrap(),
+            event_seq: 7,
+            hop: 2,
+            caused_by: principal("alpha:writer1"),
+            on_behalf_of: Some(principal("alpha:owner")),
+            definition_version: SchemaVersion(4),
+            run_key: Some("abc".into()),
+            params: BTreeMap::from([("seq".to_string(), Value::Int(7))]),
+        };
+        let decline = AutomationDecline {
+            trigger: TriggerId::new("on_publish").unwrap(),
+            automation: WorkflowId::new("award").unwrap(),
+            event_seq: 8,
+            hop: 9,
+            reason: AutomationExceptionReason::HopLimit,
+            detail: "hop 9 is past the hop limit of 8".into(),
+        };
+        let transition = Transition {
+            delta: StateDelta {
+                tenant: tenant(),
+                base_revision: Some(StateRevision(1)),
+                new_revision: StateRevision(2),
+                next_record: 1,
+                event_seq: 8,
+                ops: Vec::new(),
+            },
+            events: Vec::new(),
+            effects: vec![
+                Effect::Publish { seq: 7 },
+                Effect::StartAutomation(start),
+                Effect::DeclineAutomation(decline),
+            ],
+            evidence: Vec::new(),
+            output: Output::Member,
+        };
+        let (jobs, exceptions) = trigger_intake(&tenant(), &transition, Timestamp(50));
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(jobs[0].key, "start:award:key:abc");
+        assert_eq!(jobs[0].due_at, Timestamp(50));
+        let JobWork::StartRun {
+            hop,
+            caused_by,
+            on_behalf_of,
+            definition_version,
+            run_key,
+            params,
+            ..
+        } = &jobs[0].work
+        else {
+            panic!("{:?}", jobs[0].work);
+        };
+        assert_eq!(*hop, 2);
+        assert_eq!(caused_by.as_ref(), Some(&principal("alpha:writer1")));
+        assert_eq!(on_behalf_of.as_ref(), Some(&principal("alpha:owner")));
+        assert_eq!(*definition_version, Some(SchemaVersion(4)));
+        assert_eq!(run_key.as_deref(), Some("abc"));
+        assert_eq!(params.get("seq"), Some(&Value::Int(7)));
+        assert_eq!(exceptions.len(), 1);
+        assert_eq!(exceptions[0].kind, ExceptionKind::Declined);
+        assert_eq!(exceptions[0].reason, "hop-limit");
+        assert_eq!(exceptions[0].hop, Some(9));
+        assert!(exceptions[0].settled);
     }
 
     fn job(attempts: u32) -> Job {

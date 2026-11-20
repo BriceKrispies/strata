@@ -16,7 +16,10 @@
 //! bundle.
 
 use crate::schema::TenantSchema;
-use crate::types::{EntityKind, EntityRef, InstalledProduct, ProductId, SchemaChange};
+use crate::types::{
+    EntityKind, EntityRef, InstalledProduct, LedgerDefinitionRef, LedgerOwner, LedgerPoolName,
+    LedgerScope, LedgerUnit, PrincipalId, ProductId, SchemaChange,
+};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Apply [`SchemaChange::RecordProduct`] or [`SchemaChange::RemoveProduct`] to a working copy and
@@ -72,8 +75,8 @@ pub fn owner_of<'a>(schema: &'a TenantSchema, kind: EntityKind, id: &str) -> Opt
         .map(|product| &product.product)
 }
 
-/// Whether the entity exists in the schema; `None` for a kind the kernel does not hold (a
-/// capability, a segment, a setting, a ledger unit, pool or limit), which is not checked.
+/// Whether the entity exists in the schema; `None` for a segment, which the schema does not hold
+/// and which is not checked.
 pub fn exists(schema: &TenantSchema, entity: &EntityRef) -> Option<bool> {
     let id = entity.id.as_str();
     Some(match entity.kind {
@@ -109,13 +112,82 @@ pub fn exists(schema: &TenantSchema, entity: &EntityRef) -> Option<bool> {
             .flatten()
             .any(|(k, _)| k.to_string() == id),
         EntityKind::Token => schema.tokens.as_ref().is_some_and(|t| t.contains_key(id)),
-        EntityKind::Capability
-        | EntityKind::Segment
-        | EntityKind::Setting
-        | EntityKind::LedgerUnit
-        | EntityKind::LedgerPool
-        | EntityKind::LedgerLimit => return None,
+        EntityKind::Capability => schema
+            .capabilities
+            .iter()
+            .flatten()
+            .any(|(k, _)| k.to_string() == id),
+        EntityKind::Setting => schema
+            .settings
+            .iter()
+            .flatten()
+            .any(|(k, _)| k.to_string() == id),
+        EntityKind::LedgerUnit => schema
+            .ledger
+            .as_ref()
+            .is_some_and(|ledger| ledger.units.keys().any(|k| k.to_string() == id)),
+        EntityKind::LedgerPool => schema
+            .ledger
+            .as_ref()
+            .is_some_and(|ledger| ledger.pools.keys().any(|k| k.to_string() == id)),
+        EntityKind::LedgerLimit => {
+            let Some(LedgerDefinitionRef::Limit { unit, owner, scope }) = ledger_limit_ref(id)
+            else {
+                return Some(false);
+            };
+            let scope = scope.as_ref().map_or("", |s| s.as_str());
+            schema.ledger.as_ref().is_some_and(|ledger| {
+                ledger.limits.iter().any(|l| {
+                    l.unit == unit
+                        && l.owner == owner
+                        && l.scope.as_ref().map_or("", |s| s.as_str()) == scope
+                })
+            })
+        }
+        // Segments live in the segment store beside the tenant state, not in the schema.
+        EntityKind::Segment => return None,
     })
+}
+
+/// The id an ownership record gives a ledger limit, which has none of its own: its unit, then `#`
+/// and its owner (`principal:<id>`, `pool:<name>`, or nothing for the limit of every account),
+/// then `#` and its scope. It begins with the unit, so it is in the namespace of the product that
+/// declares the unit (D-6582).
+pub fn ledger_limit_id(
+    unit: &LedgerUnit,
+    owner: &Option<LedgerOwner>,
+    scope: &Option<LedgerScope>,
+) -> String {
+    let owner = match owner {
+        None => String::new(),
+        Some(LedgerOwner::Principal { principal }) => format!("principal:{principal}"),
+        Some(LedgerOwner::Pool { pool }) => format!("pool:{pool}"),
+    };
+    let scope = scope.as_ref().map_or("", |s| s.as_str());
+    format!("{unit}#{owner}#{scope}")
+}
+
+/// The limit a [`ledger_limit_id`] names, or `None` for a text it did not write.
+pub fn ledger_limit_ref(id: &str) -> Option<LedgerDefinitionRef> {
+    let mut parts = id.splitn(3, '#');
+    let unit = LedgerUnit::new(parts.next()?).ok()?;
+    let owner = match parts.next()? {
+        "" => None,
+        text => match text.split_once(':')? {
+            ("principal", principal) => Some(LedgerOwner::Principal {
+                principal: PrincipalId::new(principal).ok()?,
+            }),
+            ("pool", pool) => Some(LedgerOwner::Pool {
+                pool: LedgerPoolName::new(pool).ok()?,
+            }),
+            _ => return None,
+        },
+    };
+    let scope = match parts.next()? {
+        "" => None,
+        text => Some(LedgerScope::new(text).ok()?),
+    };
+    Some(LedgerDefinitionRef::Limit { unit, owner, scope })
 }
 
 /// The problems of the product records of a schema (D-6582): each is stored under its own product

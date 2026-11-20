@@ -213,6 +213,13 @@ fn install(app: &App, tenant: &str) {
         },
     );
     let mut changes = notes_schema();
+    // The template the mailer names: a definition naming a template the tenant does not define
+    // is refused.
+    changes.push(SchemaChange::DefineMailTemplate(MailTemplateDecl {
+        template: TemplateId("welcome".into()),
+        subject: "Welcome".into(),
+        body: StructuredBlocks("[]".into()),
+    }));
     for def in [
         award(),
         drip(),
@@ -250,6 +257,10 @@ fn start(app: &App, tenant: &str, automation: &str, seq: i64, due: i64) -> Strin
             event_seq: Some(seq as u64),
             hop: 0,
             params: BTreeMap::from([("seq".to_string(), Value::Int(seq))]),
+            caused_by: None,
+            on_behalf_of: None,
+            definition_version: None,
+            run_key: None,
         },
         due_at: Timestamp(due),
         policy: RetryPolicy::default(),

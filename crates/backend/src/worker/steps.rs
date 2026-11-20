@@ -12,7 +12,8 @@
 //! created, which is the same on every attempt: a retried step asks the kernel for exactly the
 //! same intent, so the idempotency record answers it.
 //!
-//! Built: create, update and delete a record, branch on a condition (on a record read through the
+//! Built: create, update and delete a record, post to the ledger (decided by the kernel's ledger
+//! module through the intent post-ledger, keyed by the step key), branch on a condition (on a record read through the
 //! kernel as the automation principal), wait for a duration or until a time (the next step's job
 //! is created due then: nothing sleeps, D-6535), and end. Every other kind of the catalogue fails
 //! its step with the error "step kind ... is not built", recorded on the step and the run; it is
@@ -160,6 +161,9 @@ pub fn run_job(app: &App, tenant: &TenantId, lease: &Lease, now: Timestamp) -> O
             event_seq,
             hop,
             params,
+            caused_by,
+            on_behalf_of,
+            ..
         } => start_run(
             app,
             tenant,
@@ -170,6 +174,8 @@ pub fn run_job(app: &App, tenant: &TenantId, lease: &Lease, now: Timestamp) -> O
                 event_seq: *event_seq,
                 hop: *hop,
                 params,
+                caused_by: caused_by.clone(),
+                on_behalf_of: on_behalf_of.clone(),
             },
             now,
         ),
@@ -189,6 +195,11 @@ struct StartOf<'a> {
     event_seq: Option<u64>,
     hop: u64,
     params: &'a BTreeMap<String, Value>,
+    /// Who caused the event (the trigger's `caused-by`); the automation principal when the job
+    /// does not say.
+    caused_by: Option<strata_kernel::PrincipalId>,
+    /// The person the automation acts for: its definer (D-7204).
+    on_behalf_of: Option<strata_kernel::PrincipalId>,
 }
 
 /// A failure of a job that is not a step of a run: retried while its policy allows, then failed
@@ -272,6 +283,27 @@ fn start_run(
             ..WorkerWrites::default()
         });
     };
+    if let Some(role) = &def.suspended_for {
+        // Suspended after its trigger fired: the definer lost a run-as role (WFL-1529), and no
+        // run starts until the automation is defined again.
+        return Outcome::done(WorkerWrites {
+            exceptions: vec![exception(
+                tenant,
+                ExceptionKind::Declined,
+                "run-as-suspended",
+                start.automation,
+                None,
+                None,
+                &lease.job,
+                format!(
+                    "automation {} is suspended: its definer may not confer role {role}",
+                    start.automation
+                ),
+                now,
+            )],
+            ..WorkerWrites::default()
+        });
+    }
     let Some(first) = def.steps.get(&def.start) else {
         return job_failure(
             tenant,
@@ -293,8 +325,10 @@ fn start_run(
         step: Some(def.start.clone()),
         steps: 0,
         hop: start.hop,
-        caused_by: automation_principal(start.automation),
-        on_behalf_of: None,
+        caused_by: start
+            .caused_by
+            .unwrap_or_else(|| automation_principal(start.automation)),
+        on_behalf_of: start.on_behalf_of,
         params: start.params.clone(),
         started_at: now,
         ended_at: None,
@@ -418,6 +452,34 @@ fn run_step(
             jobs: Vec::new(),
         });
     };
+    if let Some(role) = &def.suspended_for {
+        // Suspended while the run was open (WFL-1529): the step is not run, and the run ends
+        // with the reason recorded; defining the automation again starts new runs, not this one.
+        let why =
+            format!("automation {automation} is suspended: its definer may not confer role {role}");
+        record.state = StepState::Cancelled;
+        record.ended_at = Some(now);
+        run.state = RunState::Cancelled;
+        run.ended_at = Some(now);
+        run.error = Some(why.clone());
+        let suspended = exception(
+            tenant,
+            ExceptionKind::Declined,
+            "run-as-suspended",
+            automation,
+            Some(&run),
+            Some(step),
+            job,
+            why,
+            now,
+        );
+        return Outcome::done(WorkerWrites {
+            runs: vec![run],
+            steps: vec![record],
+            exceptions: vec![suspended],
+            jobs: Vec::new(),
+        });
+    }
     let attempt = match def.steps.get(step) {
         _ if lease.exhausted => Err(StepError::fatal(
             job.errors
@@ -526,11 +588,12 @@ fn run_step(
 }
 
 /// The context a step is decided in: the automation principal, no session, the run as the
-/// correlation, and the step key when the step changes the tenant.
+/// correlation, the step key when the step changes the tenant, and one hop more than the event
+/// that started the run, so that the triggers its events match count the chain (D-6531, D-7202).
 fn step_context(
     tenant: &TenantId,
     automation: &WorkflowId,
-    run: &str,
+    run: &RunRecord,
     key: Option<&str>,
     now: Timestamp,
 ) -> Context {
@@ -539,11 +602,11 @@ fn step_context(
         principal: Principal::User(automation_principal(automation)),
         session: None,
         now,
-        correlation: format!("run:{run}"),
+        correlation: format!("run:{}", run.run),
         verified_address: None,
         idempotency_key: key.map(str::to_string),
         language: None,
-        hop: None,
+        hop: Some(u32::try_from(run.hop.saturating_add(1)).unwrap_or(u32::MAX)),
     }
 }
 
@@ -620,7 +683,7 @@ fn act(
         None => Next::End,
     };
     let decide = |intent: Intent| -> Result<Output, StepError> {
-        let context = step_context(tenant, &def.id, &run.run, Some(key), app.now());
+        let context = step_context(tenant, &def.id, run, Some(key), app.now());
         crate::ops::run_intent(app, &context, &intent, false)
             .map(|done| done.transition.output)
             .map_err(|error| StepError::retry(error.describe()))
@@ -735,6 +798,64 @@ fn act(
                 },
             })
         }
+        AutomationStep::PostLedger {
+            owner,
+            unit,
+            amount,
+            reason,
+        } => {
+            // A posting is decided by the kernel's ledger module as the automation principal,
+            // which needs the capability ledger-post through a run-as role; the step key is the
+            // posting's idempotency key, so a retried attempt answers the first entry (LDG-006).
+            let owner = match eval("owner", owner)? {
+                Value::Str(text) => strata_kernel::PrincipalId::new(text.as_str())
+                    .map(|principal| strata_kernel::LedgerOwner::Principal { principal })
+                    .map_err(|_| {
+                        StepError::fatal(format!("owner: {text} is not a principal id"))
+                    })?,
+                other => {
+                    return Err(StepError::fatal(format!(
+                        "owner: {other:?} is not a principal id"
+                    )))
+                }
+            };
+            let amount = match eval("amount", amount)? {
+                Value::Int(n) => strata_kernel::LedgerAmount(n),
+                other => {
+                    return Err(StepError::fatal(format!(
+                        "amount: {other:?} is not a whole number"
+                    )))
+                }
+            };
+            let intent = Intent::PostLedger {
+                postings: vec![strata_kernel::LedgerPostingRequest {
+                    owner,
+                    unit: unit.clone(),
+                    amount,
+                    idempotency_key: key.to_string(),
+                    reason: reason.clone(),
+                    corrects: None,
+                    scope: None,
+                }],
+            };
+            match decide(intent)? {
+                Output::LedgerPosted { results } => match results.first() {
+                    Some(posted) => Ok(Done {
+                        result: AutomationStepResult::PostLedger {
+                            entry_sequence: posted.entry.sequence,
+                            balance: posted.balance.balance,
+                        },
+                        outputs: vec![
+                            ("entry_sequence", Value::Int(posted.entry.sequence as i64)),
+                            ("balance", Value::Int(posted.balance.balance.0)),
+                        ],
+                        next: then(),
+                    }),
+                    None => Err(StepError::fatal("the posting answered no entry")),
+                },
+                other => Err(StepError::fatal(format!("unexpected output {other:?}"))),
+            }
+        }
         AutomationStep::End => Ok(Done {
             result: AutomationStepResult::End,
             outputs: Vec::new(),
@@ -771,7 +892,7 @@ fn read_record(
     object: &ObjectTypeId,
     id: RecordId,
 ) -> Result<strata_kernel::Record, StepError> {
-    let context = step_context(tenant, &def.id, &run.run, None, app.now());
+    let context = step_context(tenant, &def.id, run, None, app.now());
     let found = strata_storage_api::query(
         app.store.as_ref(),
         &ReadRequest::Records {

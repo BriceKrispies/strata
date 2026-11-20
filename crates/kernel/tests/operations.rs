@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use strata_kernel::operations::{posting_key, result_of};
 use strata_kernel::testkit::*;
 use strata_kernel::*;
-use strata_model_core::types::LedgerUnit;
+use strata_model_core::types::{LedgerAmount, LedgerUnit, LedgerUnitDecl};
 
 // ---------------------------------------------------------------------------------------------
 // Fixtures.
@@ -201,6 +201,10 @@ fn world() -> World {
                 SchemaChange::DefineOperation(feature_failing_late()),
                 SchemaChange::DefineOperation(editors_feature()),
                 SchemaChange::DefineOperation(discard()),
+                SchemaChange::DeclareLedgerUnit(LedgerUnitDecl {
+                    unit: LedgerUnit::new("points").unwrap(),
+                    description: "Points".into(),
+                }),
                 SchemaChange::DefineOperation(count()),
             ],
             expected_version: None,
@@ -582,17 +586,35 @@ fn a_subject_the_invoker_may_not_read_is_refused_as_one_that_does_not_exist() {
     assert_eq!(failed_rules(&hidden), failed_rules(&missing));
 }
 
+// Verifies: OPR-1545
 #[test]
-fn a_posting_step_is_refused_until_the_ledger_engine_is_built() {
-    let error = refused(&world(), as_user("stranger"), &invoke("count", &[], "k-1"));
-    assert_eq!(error.kind, ErrorKind::InvalidIntent);
-    assert!(
-        error.message.starts_with("step take: "),
-        "{}",
-        error.message
+fn a_posting_step_posts_to_the_ledger_under_the_key_of_the_invocation() {
+    let world = world();
+    let (_, transition) = run(
+        &world,
+        as_user("stranger"),
+        9_000,
+        &invoke("count", &[], "k-1"),
+    )
+    .expect("accepted");
+    let Output::Operation { entries, .. } = &transition.output else {
+        panic!("{:?}", transition.output);
+    };
+    assert_eq!(entries.len(), 1);
+    assert_eq!(
+        entries[0].idempotency_key,
+        posting_key(
+            &op_id("count"),
+            &principal_id("alpha:stranger"),
+            "k-1",
+            "take"
+        )
     );
-    assert!(error.message.contains("ledger engine"), "{}", error.message);
-    assert!(failed_rules(&error).contains(&"operation:count:step:take"));
+    assert_eq!(entries[0].amount, LedgerAmount(1));
+    assert!(transition
+        .events
+        .iter()
+        .any(|event| matches!(event.body, EventBody::LedgerEntryPosted { .. })));
 }
 
 // Verifies: OPR-1545

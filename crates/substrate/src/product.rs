@@ -24,10 +24,11 @@
 //!
 //! A section the kernel cannot take is not dropped: reading the bundle records it
 //! ([`ProductBundle::unbuilt`]) and installing a bundle that fills one is refused as an invalid
-//! bundle that names it (`install-bundle`, error `invalid-bundle`). The sections are refused each
-//! by one named function ([`refuse_capabilities`], [`refuse_segments`], [`refuse_settings`],
-//! [`refuse_ledger_units`], [`refuse_ledger_pools`], [`refuse_ledger_limits`]), whose docs say
-//! what taking the section needs.
+//! bundle that names it (`install-bundle`, error `invalid-bundle`). The one such section is
+//! `segments` ([`refuse_segments`]): a segment is not a schema change. The capabilities, settings
+//! and ledger declarations of a bundle are schema changes (`define-capability`, `define-setting`,
+//! `declare-ledger-unit`, `declare-ledger-pool`, `set-ledger-limit`), owned by the product like
+//! every other entity.
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value as Json};
@@ -55,18 +56,18 @@ const BUILT_SECTIONS: &[&str] = &[
     "triggers",
     "automations",
     "operations",
-];
-
-/// The sections of `bundle-sections` that the kernel has no schema change for yet. Each has its
-/// own `refuse_` function below, called in [`ProductBundle::from_json`].
-const UNBUILT_SECTIONS: &[&str] = &[
     "capabilities",
-    "segments",
     "settings",
     "ledger-units",
     "ledger-pools",
     "ledger-limits",
 ];
+
+/// The sections of `bundle-sections` that the kernel takes through no schema change: segments
+/// live in the segment store beside the tenant state (`strata_kernel::segments`), so installing
+/// one is not a change of the schema. Refused by [`refuse_segments`], called in
+/// [`ProductBundle::from_json`].
+const UNBUILT_SECTIONS: &[&str] = &["segments"];
 
 /// The kind of document in the store's small-document table (`Store::doc_put`) that held the
 /// [`InstalledRecord`] of a product before the record moved into the tenant schema. Nothing writes
@@ -178,6 +179,12 @@ pub struct ProductBundle {
     pub triggers: BTreeMap<TriggerId, TriggerDef>,
     pub automations: BTreeMap<WorkflowId, AutomationDef>,
     pub operations: BTreeMap<TenantOperationId, TenantOperationDef>,
+    pub capabilities: BTreeMap<CapabilityName, CapabilityDef>,
+    pub settings: BTreeMap<SettingId, SettingDef>,
+    pub ledger_units: BTreeMap<LedgerUnit, LedgerUnitDecl>,
+    pub ledger_pools: BTreeMap<LedgerPoolName, LedgerPoolDecl>,
+    /// The ledger limits by the id [`strata_kernel::products::ledger_limit_id`] gives each.
+    pub ledger_limits: BTreeMap<String, LedgerLimit>,
     /// What the bundle fills that the kernel cannot install yet, by section name.
     pub unbuilt: Vec<Unbuilt>,
 }
@@ -712,19 +719,6 @@ fn refuse_section(
     Ok(())
 }
 
-/// The section `capabilities` (D-6590): refused until the kernel holds the capabilities of a
-/// product. Taking it needs: in the kernel, an arm for `define-capability` and `remove-capability`
-/// in `strata_kernel::templates::apply` (and the table of capabilities in `is_empty` and `tidy`);
-/// here, one call of a reader that fills a `capabilities` map of [`ProductBundle`] in place of
-/// this call in [`ProductBundle::from_json`], and the kind `capability` in
-/// [`ProductBundle::entities`].
-fn refuse_capabilities(
-    content: &mut Map<String, Json>,
-    unbuilt: &mut Vec<Unbuilt>,
-) -> Result<(), BundleError> {
-    refuse_section(content, "capabilities", false, unbuilt)
-}
-
 /// The section `segments`: refused until the kernel holds segments (`kernel/src/segments.rs`).
 /// Taking it needs the kernel arms for `define-segment` and `remove-segment` in
 /// `strata_kernel::templates::apply`, and a reader in place of this call (the segment id of an
@@ -736,44 +730,57 @@ fn refuse_segments(
     refuse_section(content, "segments", true, unbuilt)
 }
 
-/// The section `settings`: refused until the kernel holds setting definitions
-/// (`kernel/src/settings.rs`). Taking it needs the kernel arms for `define-setting` and
-/// `remove-setting` in `strata_kernel::templates::apply`, and a reader in place of this call.
-fn refuse_settings(
-    content: &mut Map<String, Json>,
-    unbuilt: &mut Vec<Unbuilt>,
-) -> Result<(), BundleError> {
-    refuse_section(content, "settings", false, unbuilt)
-}
+/// The declarations of a bundle the kernel takes as one schema change apiece: the sections
+/// `capabilities`, `settings`, `ledger-units`, `ledger-pools` and `ledger-limits` (D-6590,
+/// D-5046, D-5000), each a list. The sections are taken out of `content`.
+type Declarations = (
+    BTreeMap<CapabilityName, CapabilityDef>,
+    BTreeMap<SettingId, SettingDef>,
+    BTreeMap<LedgerUnit, LedgerUnitDecl>,
+    BTreeMap<LedgerPoolName, LedgerPoolDecl>,
+    BTreeMap<String, LedgerLimit>,
+);
 
-/// The section `ledger-units`: refused until the kernel holds the declarations of the ledger
-/// (`kernel/src/ledger.rs`). Taking it needs the kernel arm for `declare-ledger-unit` in
-/// `strata_kernel::templates::apply`, and a reader in place of this call.
-fn refuse_ledger_units(
-    content: &mut Map<String, Json>,
-    unbuilt: &mut Vec<Unbuilt>,
-) -> Result<(), BundleError> {
-    refuse_section(content, "ledger-units", false, unbuilt)
-}
-
-/// The section `ledger-pools`: refused until the kernel holds the declarations of the ledger.
-/// Taking it needs the kernel arm for `declare-ledger-pool` in `strata_kernel::templates::apply`,
-/// and a reader in place of this call.
-fn refuse_ledger_pools(
-    content: &mut Map<String, Json>,
-    unbuilt: &mut Vec<Unbuilt>,
-) -> Result<(), BundleError> {
-    refuse_section(content, "ledger-pools", false, unbuilt)
-}
-
-/// The section `ledger-limits`: refused until the kernel holds the declarations of the ledger.
-/// Taking it needs the kernel arms for `set-ledger-limit` and `remove-ledger-limit` in
-/// `strata_kernel::templates::apply`, and a reader in place of this call.
-fn refuse_ledger_limits(
-    content: &mut Map<String, Json>,
-    unbuilt: &mut Vec<Unbuilt>,
-) -> Result<(), BundleError> {
-    refuse_section(content, "ledger-limits", false, unbuilt)
+fn read_declarations(content: &mut Map<String, Json>) -> Result<Declarations, BundleError> {
+    let none = |_: &mut Json, _: &str| -> Result<(), String> { Ok(()) };
+    let capabilities = parse_list(
+        content,
+        "capabilities",
+        "id",
+        &none,
+        &|c: &CapabilityDef| c.id.clone(),
+    )?;
+    let settings = parse_list(content, "settings", "id", &none, &|d: &SettingDef| {
+        d.id.clone()
+    })?;
+    let ledger_units = parse_list(
+        content,
+        "ledger-units",
+        "unit",
+        &none,
+        &|u: &LedgerUnitDecl| u.unit.clone(),
+    )?;
+    let ledger_pools = parse_list(
+        content,
+        "ledger-pools",
+        "pool",
+        &none,
+        &|p: &LedgerPoolDecl| p.pool.clone(),
+    )?;
+    let ledger_limits = parse_list(
+        content,
+        "ledger-limits",
+        "unit",
+        &none,
+        &|l: &LedgerLimit| strata_kernel::products::ledger_limit_id(&l.unit, &l.owner, &l.scope),
+    )?;
+    Ok((
+        capabilities,
+        settings,
+        ledger_units,
+        ledger_pools,
+        ledger_limits,
+    ))
 }
 
 impl ProductBundle {
@@ -872,13 +879,10 @@ impl ProductBundle {
                 )));
             }
         }
+        let (capabilities, settings, ledger_units, ledger_pools, ledger_limits) =
+            read_declarations(&mut content)?;
         let mut unbuilt = Vec::new();
-        refuse_capabilities(&mut content, &mut unbuilt)?;
         refuse_segments(&mut content, &mut unbuilt)?;
-        refuse_settings(&mut content, &mut unbuilt)?;
-        refuse_ledger_units(&mut content, &mut unbuilt)?;
-        refuse_ledger_pools(&mut content, &mut unbuilt)?;
-        refuse_ledger_limits(&mut content, &mut unbuilt)?;
         unbuilt.sort_by(|a, b| a.section.cmp(&b.section));
         Ok(ProductBundle {
             name,
@@ -898,6 +902,11 @@ impl ProductBundle {
             triggers,
             automations,
             operations,
+            capabilities,
+            settings,
+            ledger_units,
+            ledger_pools,
+            ledger_limits,
             unbuilt,
         })
     }
@@ -910,11 +919,37 @@ impl ProductBundle {
             .map(|product| format!("{}__", product.replace('-', "_")))
     }
 
-    /// Every entity the bundle installs, in install order: roles, object types, policies,
+    /// Every entity the bundle installs, in install order: capabilities, settings, ledger units,
+    /// pools and limits (which roles, triggers and steps name), roles, object types, policies,
     /// workflows, queries, views, mail templates, notice templates, tokens, triggers, automations
     /// and operations, each by id.
     pub fn entities(&self) -> Vec<OwnedEntity> {
         let mut out = Vec::new();
+        out.extend(
+            self.capabilities
+                .keys()
+                .map(|id| OwnedEntity::of("capability", id)),
+        );
+        out.extend(
+            self.settings
+                .keys()
+                .map(|id| OwnedEntity::of("setting", id)),
+        );
+        out.extend(
+            self.ledger_units
+                .keys()
+                .map(|id| OwnedEntity::of("ledger-unit", id)),
+        );
+        out.extend(
+            self.ledger_pools
+                .keys()
+                .map(|id| OwnedEntity::of("ledger-pool", id)),
+        );
+        out.extend(
+            self.ledger_limits
+                .keys()
+                .map(|id| OwnedEntity::of("ledger-limit", id)),
+        );
         out.extend(self.roles.keys().map(|id| OwnedEntity::of("role", id)));
         out.extend(self.objects.keys().map(|id| OwnedEntity::of("object", id)));
         out.extend(self.policies.keys().map(|id| OwnedEntity::of("policy", id)));
@@ -1086,6 +1121,36 @@ impl ProductBundle {
                     .filter(|(k, _)| k.to_string() == id)
                     .map(|(_, v)| SchemaChange::DefineOperation(v.clone())),
             ),
+            "capability" => changes.extend(
+                self.capabilities
+                    .iter()
+                    .filter(|(k, _)| k.to_string() == id)
+                    .map(|(_, v)| SchemaChange::DefineCapability(v.clone())),
+            ),
+            "setting" => changes.extend(
+                self.settings
+                    .iter()
+                    .filter(|(k, _)| k.to_string() == id)
+                    .map(|(_, v)| SchemaChange::DefineSetting(v.clone())),
+            ),
+            "ledger-unit" => changes.extend(
+                self.ledger_units
+                    .iter()
+                    .filter(|(k, _)| k.to_string() == id)
+                    .map(|(_, v)| SchemaChange::DeclareLedgerUnit(v.clone())),
+            ),
+            "ledger-pool" => changes.extend(
+                self.ledger_pools
+                    .iter()
+                    .filter(|(k, _)| k.to_string() == id)
+                    .map(|(_, v)| SchemaChange::DeclareLedgerPool(v.clone())),
+            ),
+            "ledger-limit" => changes.extend(
+                self.ledger_limits
+                    .iter()
+                    .filter(|(k, _)| k.as_str() == id)
+                    .map(|(_, v)| SchemaChange::SetLedgerLimit(v.clone())),
+            ),
             _ => {}
         }
         changes
@@ -1182,6 +1247,46 @@ impl ProductBundle {
                 .and_then(|(key, def)| {
                     same(schema.operations.as_ref().and_then(|t| t.get(key)), def)
                 }),
+            "capability" => self
+                .capabilities
+                .iter()
+                .find(|(k, _)| k.to_string() == id)
+                .and_then(|(key, def)| {
+                    same(schema.capabilities.as_ref().and_then(|t| t.get(key)), def)
+                }),
+            "setting" => self
+                .settings
+                .iter()
+                .find(|(k, _)| k.to_string() == id)
+                .and_then(|(key, def)| {
+                    same(schema.settings.as_ref().and_then(|t| t.get(key)), def)
+                }),
+            "ledger-unit" => self
+                .ledger_units
+                .iter()
+                .find(|(k, _)| k.to_string() == id)
+                .and_then(|(key, def)| {
+                    same(schema.ledger.as_ref().and_then(|l| l.units.get(key)), def)
+                }),
+            "ledger-pool" => self
+                .ledger_pools
+                .iter()
+                .find(|(k, _)| k.to_string() == id)
+                .and_then(|(key, def)| {
+                    same(schema.ledger.as_ref().and_then(|l| l.pools.get(key)), def)
+                }),
+            "ledger-limit" => self.ledger_limits.get(id).and_then(|def| {
+                let held = schema.ledger.as_ref().and_then(|l| {
+                    l.limits.iter().find(|held| {
+                        strata_kernel::products::ledger_limit_id(
+                            &held.unit,
+                            &held.owner,
+                            &held.scope,
+                        ) == id
+                    })
+                });
+                same(held, def)
+            }),
             _ => None,
         }
     }
@@ -1502,10 +1607,12 @@ fn removal_rank(kind: &str) -> u8 {
         "query" => 4,
         "workflow" => 5,
         "policy" => 6,
-        "mail-template" | "notice-template" | "token" => 7,
-        "object" => 8,
+        "mail-template" | "notice-template" | "token" | "ledger-limit" => 7,
+        "object" | "setting" | "ledger-unit" | "ledger-pool" => 8,
         "role" => 9,
-        _ => 10,
+        // Roles grant capabilities, so a capability goes after them.
+        "capability" => 10,
+        _ => 11,
     }
 }
 
@@ -1513,6 +1620,7 @@ fn removal_rank(kind: &str) -> u8 {
 fn removal_change(entity: &OwnedEntity, delete_records: bool) -> Result<SchemaChange, String> {
     let id = entity.id.as_str();
     let at = |e: strata_kernel::IdError| format!("the {} \"{id}\": {e}", entity.kind);
+    let bad = |e: String| format!("the {} \"{id}\": {e}", entity.kind);
     Ok(match entity.kind.as_str() {
         "object" => SchemaChange::RemoveObject {
             id: ObjectTypeId::new(id).map_err(at)?,
@@ -1529,6 +1637,22 @@ fn removal_change(entity: &OwnedEntity, delete_records: bool) -> Result<SchemaCh
         "mail-template" => SchemaChange::RemoveMailTemplate(TemplateId(id.to_string())),
         "notice-template" => SchemaChange::RemoveNoticeTemplate(TemplateId(id.to_string())),
         "token" => SchemaChange::RemoveToken(id.to_string()),
+        "capability" => {
+            SchemaChange::RemoveCapability(CapabilityName::new(id).map_err(|e| bad(e.to_string()))?)
+        }
+        "setting" => {
+            SchemaChange::RemoveSetting(SettingId::new(id).map_err(|e| bad(e.to_string()))?)
+        }
+        "ledger-unit" => SchemaChange::RemoveLedgerDefinition(LedgerDefinitionRef::Unit {
+            unit: LedgerUnit::new(id).map_err(|e| bad(e.to_string()))?,
+        }),
+        "ledger-pool" => SchemaChange::RemoveLedgerDefinition(LedgerDefinitionRef::Pool {
+            pool: LedgerPoolName::new(id).map_err(|e| bad(e.to_string()))?,
+        }),
+        "ledger-limit" => SchemaChange::RemoveLedgerDefinition(
+            strata_kernel::products::ledger_limit_ref(id)
+                .ok_or_else(|| format!("the ledger-limit \"{id}\" is not the id of a limit"))?,
+        ),
         other => return Err(format!("this release cannot remove a {other} (\"{id}\")")),
     })
 }

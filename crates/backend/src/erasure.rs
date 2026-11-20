@@ -19,7 +19,11 @@
 //!   roles; the rows are purged by the janitor a day after they end, which is their erasure point;
 //! - identity documents (`tbl-identity-docs`): the SCIM user document, the deactivation flag and
 //!   the place in each provisioned group are removed, and delegations to agents are revoked and
-//!   lose their purpose text.
+//!   lose their purpose text;
+//! - the ledger (`Store::anonymise_ledger_principal`): the principal is cleared from the accounts
+//!   and entries, every amount and balance kept;
+//! - segments (`strata_storage_api::segments::erase`): memberships end with a sealed exit event,
+//!   wake rows go, and the person is marked erased.
 //!
 //! What is not reached is named in the receipt, each with the task that closes it: events,
 //! journal, snapshots, backups, exports, the audit log and the schema history keep copies of what
@@ -254,6 +258,19 @@ fn erase_documents(app: &App, ctx: &Context, subject: &PrincipalId) -> Result<Do
     Ok(done)
 }
 
+/// The form a segment exit event names an erased person in: `sealed:` and the start of a hash of
+/// the tenant and the person, so the event says that someone left without saying who (SEG-038).
+fn sealed_principal(
+    tenant: &strata_kernel::TenantId,
+    subject: &PrincipalId,
+) -> Result<PrincipalId, ApiError> {
+    let hash = strata_kernel::canon::hash_bytes(
+        format!("strata/sealed-principal/v1\0{tenant}\0{subject}").as_bytes(),
+    );
+    PrincipalId::new(format!("sealed:{}", &hash[..16]))
+        .map_err(|e| ApiError::hidden(ErrorCode::Internal, e.to_string()))
+}
+
 /// The copies the erasure does not reach today, each with why and the task that closes it.
 fn not_reached(unbuilt: Vec<String>) -> Vec<String> {
     let mut out = vec![
@@ -347,6 +364,15 @@ pub fn erase_subject(app: &App, ctx: &Context, subject: &PrincipalId) -> Result<
     let removed: PrincipalRemoval = app.store.remove_principal(tenant, subject)?;
     scim::end_sessions(app, tenant, subject, &ctx.correlation)?;
     let documents = erase_documents(app, ctx, subject)?;
+    // The ledger keeps every amount, key and balance, and loses the person (LDG-027, LDG-028).
+    let ledger = app.store.anonymise_ledger_principal(tenant, subject)?;
+    // The segments: every membership ends with an exit event that names the person sealed, the
+    // wake rows go, and the person is marked so that no later decision enters them (SEG-036 to
+    // SEG-038).
+    let sealed = sealed_principal(tenant, subject)?;
+    let segment_exits =
+        strata_storage_api::segments::erase(app.store.as_ref(), ctx, subject, &sealed)
+            .map_err(|error| ApiError::execute(error, false))?;
 
     let mut fields: BTreeSet<String> = BTreeSet::new();
     for record in &changed {
@@ -388,6 +414,13 @@ pub fn erase_subject(app: &App, ctx: &Context, subject: &PrincipalId) -> Result<
             documents.deactivation_flag,
             documents.group_places,
             documents.delegations,
+        ),
+        format!(
+            "ledger (tbl-ledger-accounts, tbl-ledger-entries): the principal cleared from {} accounts it owns and {} entries it caused, every amount, key, reason, number, time and balance kept; erasure point: Store::anonymise_ledger_principal",
+            ledger.accounts, ledger.entries,
+        ),
+        format!(
+            "segments (tbl-segment-memberships, tbl-segment-wakes, tbl-segment-erased): {segment_exits} memberships ended with an exit event naming the person sealed, the wake rows removed, and the person marked so that no later decision enters them; erasure point: the segment write"
         ),
     ];
     let receipt = Receipt {

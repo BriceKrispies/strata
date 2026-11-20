@@ -360,7 +360,21 @@ pub fn network_hash(app: &App, caller: &Caller) -> Option<String> {
     })
 }
 
-/// Start the session of an account that a sign-in method has accepted.
+/// Refuse a principal id that starts with a reserved prefix (`team:`, `automation:`) where a
+/// person's id enters the tenant: no person holds one, so no session, account, provisioned user,
+/// identity from a provider or invitation is made for one (WFL-1527).
+pub(crate) fn refuse_reserved(principal: &PrincipalId) -> Result<(), ApiError> {
+    match strata_kernel::automation::reserved_prefix(principal) {
+        Some(prefix) => Err(ApiError::new(
+            ErrorCode::Forbidden,
+            format!("A person's id may not start with {prefix}."),
+        )),
+        None => Ok(()),
+    }
+}
+
+/// Start the session of an account that a sign-in method has accepted. An account whose principal
+/// id starts with a reserved prefix gets no session, whatever method accepted it.
 pub(crate) fn start_session(
     app: &App,
     caller: &Caller,
@@ -368,6 +382,7 @@ pub(crate) fn start_session(
     account: Account,
     method: &str,
 ) -> Result<LoginReply, ApiError> {
+    refuse_reserved(&account.principal)?;
     let now = app.now();
     if let Some(previous) = &caller.token {
         end_session(app, previous, &caller.correlation)?;

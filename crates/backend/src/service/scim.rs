@@ -471,6 +471,7 @@ fn create_user(app: &App, caller: &Caller, body: &Json) -> Result<Answer, ApiErr
     }
     let principal = PrincipalId::new(format!("user:scim-{}", random_hex(12)?))
         .map_err(|e| ApiError::hidden(ErrorCode::Internal, e.to_string()))?;
+    crate::auth::refuse_reserved(&principal)?;
     let display_name: String = body
         .get("displayName")
         .and_then(clean_name)

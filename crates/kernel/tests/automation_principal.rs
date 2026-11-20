@@ -171,3 +171,17 @@ fn a_signed_in_caller_may_not_act_under_the_automation_prefix() {
         .expect_err("an automation acts without a session");
     assert_eq!(refused.kind, ErrorKind::InvalidIntent);
 }
+
+/// The one rule for reserved principal ids that the backend's entry points (sessions, SCIM users,
+/// identities from a provider, invitations) apply, beside the kernel's own refusals.
+#[test]
+fn every_reserved_prefix_is_named_and_a_person_id_is_not() {
+    use strata_kernel::automation::reserved_prefix;
+    let id = |text: &str| PrincipalId::new(text).unwrap();
+    assert_eq!(
+        reserved_prefix(&id("automation:award")),
+        Some("automation:")
+    );
+    assert_eq!(reserved_prefix(&id("team:editors")), Some("team:"));
+    assert_eq!(reserved_prefix(&id("alpha:ada")), None);
+}

@@ -231,15 +231,10 @@ fn give_the_tenant_a_member_role(backend: &Backend) {
     .unwrap_or_else(|e| panic!("the owner's change was refused: {e}"));
 }
 
-/// The bundle of `badge-milestones` as far as the kernel takes it: the ledger declarations are the
-/// one section it cannot take yet.
+/// The bundle of `badge-milestones` as specc writes it: its ledger unit is declared by the product,
+/// in the same schema change as the trigger that names it.
 fn badge_milestones() -> Json {
-    let mut bundle: Json = serde_json::from_str(BADGE_MILESTONES).unwrap();
-    bundle["content"]
-        .as_object_mut()
-        .unwrap()
-        .remove("ledger-units");
-    bundle
+    serde_json::from_str(BADGE_MILESTONES).unwrap()
 }
 
 /// Version 1.1.0: the retention is a year, and an inbox notice more.
@@ -512,7 +507,7 @@ async fn only_the_owner_installs_and_a_session_that_authenticated_long_ago_needs
         .await;
     assert_eq!(status, 422, "{bad}");
     let (status, bad) = backend
-        .install(&owner, &badge_milestones_with_the_ledger(), json!({}), None)
+        .install(&owner, &badge_milestones_with_a_segment(), json!({}), None)
         .await;
     assert_eq!(
         (status, bad["kind"].as_str()),
@@ -520,10 +515,7 @@ async fn only_the_owner_installs_and_a_session_that_authenticated_long_ago_needs
         "{bad}"
     );
     assert!(
-        bad["message"]
-            .as_str()
-            .unwrap()
-            .contains("\"ledger-units\""),
+        bad["message"].as_str().unwrap().contains("\"segments\""),
         "{bad}"
     );
     let mut future = badge_milestones();
@@ -537,7 +529,15 @@ async fn only_the_owner_installs_and_a_session_that_authenticated_long_ago_needs
     assert!(backend.schema().products.is_none());
 }
 
-/// The bundle as specc writes it, with the ledger declarations the kernel cannot take yet.
-fn badge_milestones_with_the_ledger() -> Json {
-    serde_json::from_str(BADGE_MILESTONES).unwrap()
+/// The bundle with a segment, the one section that is no schema change and is refused.
+fn badge_milestones_with_a_segment() -> Json {
+    let mut bundle = badge_milestones();
+    bundle["content"]["segments"] = json!({
+        "badge_milestones__earners": {
+            "name": "Earners",
+            "subject-type": "badge_milestones__award",
+            "predicate": "record.badge == 'silver'"
+        }
+    });
+    bundle
 }
