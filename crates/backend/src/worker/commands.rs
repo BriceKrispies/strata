@@ -365,6 +365,8 @@ pub fn approve_step_at(
         .as_ref()
         .and_then(|all| all.get(&run.automation))
         .ok_or_else(|| ApiError::new(ErrorCode::Conflict, "The automation was removed."))?;
+    let pinned_def = super::steps::pinned(&run, def);
+    let def = &pinned_def;
     let sequence = record.sequence;
     let decision = ApprovalDecision {
         approved,

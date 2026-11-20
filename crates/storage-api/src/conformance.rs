@@ -1947,6 +1947,8 @@ pub fn jobs_conform(store: &dyn Store) {
         ended_at: None,
         error: None,
         seq: 0,
+        definition_version: None,
+        definition: None,
     };
     let step = StepRecord {
         run: "run-1".into(),
@@ -2870,6 +2872,8 @@ pub fn automation_purge_conforms(store: &dyn Store) {
         ended_at: ended.map(Timestamp),
         error: None,
         seq: 0,
+        definition_version: None,
+        definition: None,
     };
     let step = |run: &str| StepRecord {
         approval: None,

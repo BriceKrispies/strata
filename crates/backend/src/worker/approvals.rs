@@ -253,6 +253,8 @@ pub(super) fn timeout(
             ..WorkerWrites::default()
         });
     };
+    let pinned_def = super::steps::pinned(&run, def);
+    let def = &pinned_def;
     let decision = ApprovalDecision {
         approved: false,
         by: None,

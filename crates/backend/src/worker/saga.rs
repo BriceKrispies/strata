@@ -177,6 +177,8 @@ pub(super) fn compensate(
             },
         };
     };
+    let pinned_def = super::steps::pinned(&run, def);
+    let def = &pinned_def;
     let attempt: Result<(), StepError> = if undone.state == StepState::Compensated {
         // Done already: an attempt made again after the report was lost.
         Ok(())

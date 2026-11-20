@@ -247,6 +247,8 @@ pub(super) fn run_batch(
             },
         };
     };
+    let pinned_def = steps::pinned(&run, def);
+    let def = &pinned_def;
     let attempt = (|| -> Result<(Vec<PrincipalId>, bool), StepError> {
         let (action, each_def) = definition(def, step)?;
         let AutomationStep::FanOut {
