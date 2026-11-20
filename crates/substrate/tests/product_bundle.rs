@@ -7,9 +7,9 @@ use serde_json::{json, Value as Json};
 use strata_kernel::expr::parse;
 use strata_kernel::*;
 use strata_substrate::bundle::{
-    install_into, install_product, plan_remove, plan_upgrade, remove_product, upgrade_product,
-    Bundle, BundleError, BundleErrorKind, InstalledRecord, Planned, PlatformRange, ProductBundle,
-    ProductInstall, ProductInstallError, ProductTarget,
+    install_into, install_product, plan_install, plan_remove, plan_upgrade, remove_product,
+    upgrade_product, Bundle, BundleError, BundleErrorKind, InstalledRecord, Planned, PlatformRange,
+    ProductBundle, ProductInstall, ProductInstallError, ProductTarget,
 };
 
 fn tenant() -> TenantId {
@@ -497,36 +497,154 @@ fn an_id_outside_the_namespace_of_the_product_is_refused() {
     assert_eq!(world.hash(), before);
 }
 
+/// The bundle of `tiers` with one segment declared in its namespace (WG-5166).
+fn tiers_with_segment() -> Json {
+    let mut doc = tiers();
+    doc["content"]["segments"] = json!({
+        "tiers__gold": {
+            "name": "Gold",
+            "subject-type": "tiers__member",
+            "predicate": "record.points >= 100",
+            "principal-field": "name",
+            "visible-to-members": true
+        }
+    });
+    doc
+}
+
+fn gold_key() -> strata_kernel::segments::SegmentKey {
+    strata_kernel::segments::SegmentKey::new("tiers__gold").unwrap()
+}
+
 // Verifies: INT-155
 #[test]
-fn a_section_the_kernel_cannot_take_yet_is_refused_by_name_and_never_dropped() {
-    let mut doc = tiers();
-    doc["content"]["segments"] = json!({ "tiers__gold": { "name": "Gold", "subject-type": "tiers__member", "predicate": "record.points >= 100" } });
-    doc["content"]["ledger-units"] = json!([
-        { "unit": "tiers__points", "description": "Points" },
-        { "unit": "tiers__stamps", "description": "Stamps" }
-    ]);
-    doc["content"]["settings"] = json!([]);
+fn a_segments_section_is_read_planned_and_owned_but_is_no_schema_change() {
+    let doc = tiers_with_segment();
     let bundle = read(&doc).unwrap();
-    // Segments are the one section that is no schema change; the ledger declarations are read.
-    let names: Vec<(&str, usize)> = bundle
-        .unbuilt
-        .iter()
-        .map(|u| (u.section.as_str(), u.entries))
-        .collect();
-    assert_eq!(names, vec![("segments", 1)]);
-    assert_eq!(bundle.ledger_units.len(), 2);
+    assert!(bundle.unbuilt.is_empty(), "no section is refused any more");
+    assert_eq!(bundle.segments.len(), 1);
+    // The predicate is read with the rule language: a bundle whose predicate does not parse is
+    // refused when it is read.
+    let mut broken = tiers_with_segment();
+    broken["content"]["segments"]["tiers__gold"]["predicate"] = json!("record.points >=");
+    assert_eq!(refused(&broken).kind, BundleErrorKind::InvalidBundle);
+
     let mut world = world();
-    let before = world.hash();
+    let schema = world.tenants[&tenant()].schema.clone();
+    let owner = tenant();
+    let target = target_of(&owner, &schema, "0.2");
+    let Planned::Change(plan) = plan_install(&bundle, &target).unwrap() else {
+        panic!("the install is a change")
+    };
+    // The segment is defined through the segment store, with the id derived from the tenant and
+    // the key (D-6582); the schema change carries none of it.
+    assert_eq!(plan.segments.define.len(), 1);
+    assert!(plan.segments.remove.is_empty());
+    let defs = plan.segments.definitions(&tenant()).unwrap();
+    assert_eq!(
+        defs[0].id,
+        strata_kernel::segments::derive_segment_id(&tenant(), &gold_key())
+    );
+    assert_eq!(defs[0].name, "Gold");
+    assert!(defs[0].visible_to_members);
+    assert_eq!(defs[0].principal_field, FieldId::new("name").unwrap());
+    assert!(plan
+        .created
+        .iter()
+        .any(|e| e.kind == "segment" && e.id == "tiers__gold"));
+    // The ownership record the one schema change writes lists it.
+    let record = plan.record.clone().expect("a product leaves a record");
+    assert!(record
+        .owns
+        .iter()
+        .any(|e| e.kind == "segment" && e.id == "tiers__gold"));
+
     let (result, calls) = install(&mut world, &bundle, None, "0.2");
-    let error = refusal(result);
-    assert_eq!(error.kind, BundleErrorKind::InvalidBundle);
-    assert!(error.message.contains("\"segments\""), "{}", error.message);
-    for section in ["\"settings\"", "\"ledger-units\""] {
-        assert!(!error.message.contains(section), "{}", error.message);
-    }
-    assert_eq!(calls, 0, "nothing of a refused bundle is installed");
-    assert_eq!(world.hash(), before);
+    result.unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(calls, 1, "one schema change for the whole bundle");
+    let held = InstalledRecord::of(&world.tenants[&tenant()].schema, "tiers").unwrap();
+    assert!(held
+        .owns
+        .iter()
+        .any(|e| e.kind == "segment" && e.id == "tiers__gold"));
+    // The same bundle again is the same install: nothing runs.
+    let (again, calls) = install(&mut world, &bundle, None, "0.2");
+    assert!(matches!(again, Ok(ProductInstall::Unchanged { .. })));
+    assert_eq!(calls, 0);
+}
+
+// Verifies: INT-1582
+#[test]
+fn a_segment_key_outside_the_namespace_of_the_product_is_refused() {
+    let mut doc = tiers_with_segment();
+    let decl = doc["content"]["segments"]["tiers__gold"].clone();
+    doc["content"]["segments"] = json!({ "gold": decl });
+    let bundle = read(&doc).unwrap();
+    let error = bundle.check_installable().unwrap_err();
+    assert_eq!(error.kind, BundleErrorKind::Invalid);
+    assert!(error.message.contains("\"gold\""), "{}", error.message);
+}
+
+#[test]
+fn an_upgrade_defines_the_segments_it_declares_and_removes_those_it_drops() {
+    let mut world = world();
+    installed(&mut world, &tiers_with_segment());
+    let mut newer = tiers_with_segment();
+    newer["version"] = json!("1.1.0");
+    let decl = newer["content"]["segments"]["tiers__gold"].clone();
+    newer["content"]["segments"] = json!({ "tiers__silver": decl });
+    let bundle = read(&newer).unwrap();
+    let schema = world.tenants[&tenant()].schema.clone();
+    let owner = tenant();
+    let target = target_of(&owner, &schema, "0.2");
+    let Planned::Change(plan) = plan_upgrade(&bundle, &target).unwrap() else {
+        panic!("the upgrade is a change")
+    };
+    let defined: Vec<&str> = plan
+        .segments
+        .define
+        .iter()
+        .map(|(key, _)| key.0.as_str())
+        .collect();
+    assert_eq!(defined, vec!["tiers__silver"]);
+    assert_eq!(plan.segments.remove, vec![gold_key()]);
+    assert!(plan
+        .removed
+        .iter()
+        .any(|e| e.kind == "segment" && e.id == "tiers__gold"));
+    assert!(plan
+        .created
+        .iter()
+        .any(|e| e.kind == "segment" && e.id == "tiers__silver"));
+    let record = plan.record.unwrap();
+    assert!(record.owns.iter().any(|e| e.id == "tiers__silver"));
+    assert!(!record.owns.iter().any(|e| e.id == "tiers__gold"));
+}
+
+#[test]
+fn a_removal_names_every_segment_the_product_owns() {
+    let mut world = world();
+    installed(&mut world, &tiers_with_segment());
+    let schema = world.tenants[&tenant()].schema.clone();
+    let owner = tenant();
+    let target = target_of(&owner, &schema, "0.2");
+    let Planned::Change(plan) = plan_remove("tiers", false, &target).unwrap() else {
+        panic!("the removal is a change")
+    };
+    assert_eq!(plan.segments.remove, vec![gold_key()]);
+    assert!(plan.segments.define.is_empty());
+    assert_eq!(
+        plan.segments.removals(&tenant()),
+        vec![strata_kernel::segments::derive_segment_id(
+            &tenant(),
+            &gold_key()
+        )]
+    );
+    // No schema change removes a segment: the schema edits are the other entities and the record.
+    assert!(plan
+        .removed
+        .iter()
+        .any(|e| e.kind == "segment" && e.id == "tiers__gold"));
 }
 
 /// Every section of `bundle-sections` that the kernel has no intent for is refused when filled,
@@ -538,7 +656,6 @@ fn each_section_without_a_kernel_intent_is_refused_naming_it() {
             "capabilities",
             json!([{ "id": "tiers__promote", "name": "Promote", "description": "d" }]),
         ),
-        ("segments", json!({ "tiers__gold": {} })),
         ("settings", json!([{ "id": "tiers__limit" }])),
         (
             "ledger-units",

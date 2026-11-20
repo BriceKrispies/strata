@@ -208,6 +208,7 @@ fn change(
                 "dry_run": true,
             }),
             Planned::Change(change) => {
+                crate::product_segments::precheck(app, identity, change, expected_version)?;
                 let (lines, deleted) = simulate(app, identity, change, expected_version)?;
                 json!({
                     "schema_version": tenant.schema.version.0,
@@ -228,10 +229,44 @@ fn change(
         committed = lines_of(&done.transition.events);
         Ok(done.transition.output.clone())
     };
-    let result = run_planned(planned.clone(), &target, &mut run).map_err(|error| match error {
-        ProductInstallError::Refused(error) => bundle_error(error),
-        ProductInstallError::Step { error, .. } => error,
-    })?;
+    // The segments of the product are defined through the segment store around the schema change:
+    // decided first, so that nothing is touched when the change or a segment would be refused;
+    // removed before the change when it removes them; defined after it (WG-5166).
+    let taken = match &planned {
+        Planned::Change(change) => {
+            crate::product_segments::precheck(app, identity, change, expected_version)?;
+            crate::product_segments::take(app, identity, change)?
+        }
+        Planned::Unchanged { .. } => Default::default(),
+    };
+    let result = match run_planned(planned.clone(), &target, &mut run) {
+        Ok(result) => result,
+        Err(error) => {
+            crate::product_segments::put_back(app, identity, &taken);
+            return Err(match error {
+                ProductInstallError::Refused(error) => bundle_error(error),
+                ProductInstallError::Step { error, .. } => error,
+            });
+        }
+    };
+    match &planned {
+        Planned::Change(change) => {
+            if let Err(error) = crate::product_segments::define_all(app, identity, change) {
+                // An install undoes itself: the product goes with the segments that were not
+                // defined. An upgrade cannot be undone; the bundle installed again defines them.
+                if operation == Operation::Install {
+                    undo_install(app, identity, change, &mut run);
+                }
+                return Err(error);
+            }
+        }
+        Planned::Unchanged { .. } if operation == Operation::Install => {
+            // The same version again: a segment that is missing (an install that stopped between
+            // its schema change and its segments) is defined now.
+            crate::product_segments::ensure(app, identity, &bundle_of(body)?)?;
+        }
+        Planned::Unchanged { .. } => {}
+    }
     Ok(match (result, planned) {
         (ProductInstall::Unchanged { schema_version }, _) => json!({
             "schema_version": schema_version,
@@ -247,6 +282,35 @@ fn change(
             "unchanged": true,
         }),
     })
+}
+
+/// Take the product an install just committed out again, with its record, because a segment of it
+/// could not be defined (see [`crate::product_segments`]).
+fn undo_install(
+    app: &App,
+    identity: &Identity,
+    change: &ProductChange,
+    run: &mut dyn FnMut(Context, Intent) -> Result<Output, ApiError>,
+) {
+    let Some(product) = change.record.as_ref().map(|record| record.product.clone()) else {
+        return;
+    };
+    let Ok(tenant) = ops::header(app, identity) else {
+        return;
+    };
+    let target = ProductTarget {
+        tenant: &identity.tenant,
+        principal: identity.principal.clone(),
+        now: app.now().0,
+        release: PLATFORM_RELEASE,
+        schema: &tenant.schema,
+        installed: None,
+        expected_version: None,
+        idempotency_key: None,
+    };
+    if let Ok(planned @ Planned::Change(_)) = plan_remove(&product, false, &target) {
+        let _ = run_planned(planned, &target, run);
+    }
 }
 
 /// A change of a product: the owner, with a session that has authenticated recently. A dry run

@@ -24,16 +24,23 @@
 //!
 //! A section the kernel cannot take is not dropped: reading the bundle records it
 //! ([`ProductBundle::unbuilt`]) and installing a bundle that fills one is refused as an invalid
-//! bundle that names it (`install-bundle`, error `invalid-bundle`). The one such section is
-//! `segments` ([`refuse_segments`]): a segment is not a schema change. The capabilities, settings
-//! and ledger declarations of a bundle are schema changes (`define-capability`, `define-setting`,
-//! `declare-ledger-unit`, `declare-ledger-pool`, `set-ledger-limit`), owned by the product like
-//! every other entity.
+//! bundle that names it (`install-bundle`, error `invalid-bundle`). No section is in that state
+//! now. The capabilities, settings and ledger declarations of a bundle are schema changes
+//! (`define-capability`, `define-setting`, `declare-ledger-unit`, `declare-ledger-pool`,
+//! `set-ledger-limit`), owned by the product like every other entity.
+//!
+//! **Segments** are the section that is no schema change (WG-5166): they live in the segment store
+//! beside the tenant state, so a plan names them in [`ProductChange::segments`] and the caller
+//! that holds the store defines and removes them ([`SegmentChanges`]). The ownership record of the
+//! product still lists them (`segment`, by the namespaced key of the bundle), in the same schema
+//! change as every other entity, and the id of an installed segment is derived from the tenant
+//! and that key (D-6582), so an install gives the same id every time.
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value as Json};
 use std::collections::{BTreeMap, BTreeSet};
 use strata_kernel::expr::parse;
+use strata_kernel::segments::{derive_segment_id, SegmentDecl, SegmentId, SegmentKey};
 use strata_kernel::*;
 
 // ---- the sections of a bundle ---------------------------------------------------------------
@@ -61,13 +68,8 @@ const BUILT_SECTIONS: &[&str] = &[
     "ledger-units",
     "ledger-pools",
     "ledger-limits",
+    "segments",
 ];
-
-/// The sections of `bundle-sections` that the kernel takes through no schema change: segments
-/// live in the segment store beside the tenant state (`strata_kernel::segments`), so installing
-/// one is not a change of the schema. Refused by [`refuse_segments`], called in
-/// [`ProductBundle::from_json`].
-const UNBUILT_SECTIONS: &[&str] = &["segments"];
 
 /// The kind of document in the store's small-document table (`Store::doc_put`) that held the
 /// [`InstalledRecord`] of a product before the record moved into the tenant schema. Nothing writes
@@ -185,6 +187,9 @@ pub struct ProductBundle {
     pub ledger_pools: BTreeMap<LedgerPoolName, LedgerPoolDecl>,
     /// The ledger limits by the id [`strata_kernel::products::ledger_limit_id`] gives each.
     pub ledger_limits: BTreeMap<String, LedgerLimit>,
+    /// The segments of the bundle by their keys, which are in the namespace of the product like
+    /// every other id (D-6582). They are installed through the segment store, not the schema.
+    pub segments: BTreeMap<SegmentKey, SegmentDecl>,
     /// What the bundle fills that the kernel cannot install yet, by section name.
     pub unbuilt: Vec<Unbuilt>,
 }
@@ -691,45 +696,6 @@ fn parse_role_permissions(
     Ok(out)
 }
 
-/// A section the kernel cannot take: it is counted, not read. A list section holds a list, a map
-/// section a map; a filled one is pushed to `unbuilt`.
-fn refuse_section(
-    content: &mut Map<String, Json>,
-    section: &str,
-    is_map: bool,
-    unbuilt: &mut Vec<Unbuilt>,
-) -> Result<(), BundleError> {
-    let entries = match content.remove(section) {
-        None | Some(Json::Null) => 0,
-        Some(Json::Array(items)) if !is_map => items.len(),
-        Some(Json::Object(entries)) if is_map => entries.len(),
-        Some(_) => {
-            return Err(BundleError::invalid_bundle(format!(
-                "tenant bundle: {section} must be a {}",
-                if is_map { "map" } else { "list" }
-            )))
-        }
-    };
-    if entries > 0 {
-        unbuilt.push(Unbuilt {
-            section: section.to_string(),
-            entries,
-        });
-    }
-    Ok(())
-}
-
-/// The section `segments`: refused until the kernel holds segments (`kernel/src/segments.rs`).
-/// Taking it needs the kernel arms for `define-segment` and `remove-segment` in
-/// `strata_kernel::templates::apply`, and a reader in place of this call (the segment id of an
-/// installed segment is derived from the tenant and the namespaced key, D-6582).
-fn refuse_segments(
-    content: &mut Map<String, Json>,
-    unbuilt: &mut Vec<Unbuilt>,
-) -> Result<(), BundleError> {
-    refuse_section(content, "segments", true, unbuilt)
-}
-
 /// The declarations of a bundle the kernel takes as one schema change apiece: the sections
 /// `capabilities`, `settings`, `ledger-units`, `ledger-pools` and `ledger-limits` (D-6590,
 /// D-5046, D-5000), each a list. The sections are taken out of `content`.
@@ -831,8 +797,7 @@ impl ProductBundle {
             return Err(bad("content must be an object of sections".to_string()));
         };
         for key in content.keys() {
-            let known =
-                BUILT_SECTIONS.contains(&key.as_str()) || UNBUILT_SECTIONS.contains(&key.as_str());
+            let known = BUILT_SECTIONS.contains(&key.as_str());
             if !known {
                 return Err(bad(format!(
                     "content has the section {key:?}, which is not a section of a bundle"
@@ -881,9 +846,17 @@ impl ProductBundle {
         }
         let (capabilities, settings, ledger_units, ledger_pools, ledger_limits) =
             read_declarations(&mut content)?;
-        let mut unbuilt = Vec::new();
-        refuse_segments(&mut content, &mut unbuilt)?;
-        unbuilt.sort_by(|a, b| a.section.cmp(&b.section));
+        let segments: BTreeMap<SegmentKey, SegmentDecl> =
+            parse_map(&mut content, "segments", &|def, _| {
+                // The predicate is text of the tenant rule language: a bundle whose predicate does
+                // not parse is refused when it is read (SEG-003).
+                match def.get("predicate").and_then(Json::as_str) {
+                    Some(text) => parse(text)
+                        .map(|_| ())
+                        .map_err(|e| format!("predicate: {e}")),
+                    None => Ok(()),
+                }
+            })?;
         Ok(ProductBundle {
             name,
             version,
@@ -907,7 +880,8 @@ impl ProductBundle {
             ledger_units,
             ledger_pools,
             ledger_limits,
-            unbuilt,
+            segments,
+            unbuilt: Vec::new(),
         })
     }
 
@@ -985,6 +959,11 @@ impl ProductBundle {
             self.operations
                 .keys()
                 .map(|id| OwnedEntity::of("operation", id)),
+        );
+        out.extend(
+            self.segments
+                .keys()
+                .map(|key| OwnedEntity::of("segment", &key.0)),
         );
         out
     }
@@ -1429,6 +1408,54 @@ pub struct ProductTarget<'a> {
     pub idempotency_key: Option<String>,
 }
 
+/// The segments a product change defines and removes (WG-5166). A segment is no schema change: the
+/// caller that holds the segment store carries these out, around the schema change.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SegmentChanges {
+    /// The segments the bundle declares, in key order: defined, or defined again, which changes
+    /// nothing when the predicate and the options are as they were.
+    pub define: Vec<(SegmentKey, SegmentDecl)>,
+    /// The segments the product owns and the change takes out: those a later version no longer
+    /// declares, or every one of them when the product is removed.
+    pub remove: Vec<SegmentKey>,
+}
+
+impl SegmentChanges {
+    /// Whether the change touches no segment.
+    pub fn is_empty(&self) -> bool {
+        self.define.is_empty() && self.remove.is_empty()
+    }
+
+    /// The definitions of the segments to define, with the ids derived from the tenant and the
+    /// key (D-6582), or the first declaration that cannot be one.
+    pub fn definitions(
+        &self,
+        tenant: &TenantId,
+    ) -> Result<Vec<strata_kernel::segments::Definition>, BundleError> {
+        self.define
+            .iter()
+            .map(|(key, decl)| {
+                strata_kernel::segments::from_decl(
+                    tenant,
+                    key,
+                    decl,
+                    decl.principal_field.clone(),
+                    decl.visible_to_members.unwrap_or(false),
+                )
+                .map_err(|e| BundleError::invalid_bundle(format!("the segment \"{}\": {e}", key.0)))
+            })
+            .collect()
+    }
+
+    /// The ids of the segments to remove.
+    pub fn removals(&self, tenant: &TenantId) -> Vec<SegmentId> {
+        self.remove
+            .iter()
+            .map(|key| derive_segment_id(tenant, key))
+            .collect()
+    }
+}
+
 /// What a product change does, before it runs: the edits it makes and the entities it creates,
 /// changes and removes (the projection a dry run returns, INT-154).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1442,6 +1469,8 @@ pub struct ProductChange {
     pub created: Vec<OwnedEntity>,
     pub changed: Vec<OwnedEntity>,
     pub removed: Vec<OwnedEntity>,
+    /// The segments it defines and removes, through the segment store (WG-5166).
+    pub segments: SegmentChanges,
     /// The ownership record the change leaves in the catalogue; `None` for a removal and for a
     /// bundle that names no product.
     pub record: Option<InstalledRecord>,
@@ -1591,6 +1620,14 @@ pub fn plan_install(
         created: entities,
         changed: Vec::new(),
         removed: Vec::new(),
+        segments: SegmentChanges {
+            define: bundle
+                .segments
+                .iter()
+                .map(|(key, decl)| (key.clone(), decl.clone()))
+                .collect(),
+            remove: Vec::new(),
+        },
         record,
     }))
 }
@@ -1762,6 +1799,14 @@ pub fn plan_upgrade(
     let mut residue = Vec::new();
     for entity in &declared {
         let known = owned.contains(&entity.key());
+        if entity.kind == "segment" {
+            // A segment is defined through the segment store, which a define that changes nothing
+            // leaves as it is: only one the product did not own is new.
+            if !known {
+                created.push(entity.clone());
+            }
+            continue;
+        }
         if !known && entity.exists_in(schema) {
             return Err(BundleError::conflict(format!(
                 "the {} \"{}\" exists in the tenant and is not owned by the product \"{product}\"; an upgrade does not take over an entity",
@@ -1814,9 +1859,14 @@ pub fn plan_upgrade(
         .cloned()
         .collect();
     changes.extend(removals(&dropped, schema, false)?);
+    let dropped_segments: Vec<SegmentKey> = dropped
+        .iter()
+        .filter(|e| e.kind == "segment")
+        .map(|e| SegmentKey(e.id.clone()))
+        .collect();
     let removed: Vec<OwnedEntity> = dropped
         .into_iter()
-        .filter(|e| e.exists_in(schema))
+        .filter(|e| e.exists_in(schema) || e.kind == "segment")
         .collect();
     let record = record_of(bundle, schema);
     if let Some(record) = &record {
@@ -1831,6 +1881,14 @@ pub fn plan_upgrade(
         created,
         changed,
         removed,
+        segments: SegmentChanges {
+            define: bundle
+                .segments
+                .iter()
+                .map(|(key, decl)| (key.clone(), decl.clone()))
+                .collect(),
+            remove: dropped_segments,
+        },
         record,
     }))
 }
@@ -1857,9 +1915,18 @@ pub fn plan_remove(
     let removed = installed
         .owns
         .iter()
-        .filter(|e| e.exists_in(target.schema))
+        .filter(|e| e.exists_in(target.schema) || e.kind == "segment")
         .cloned()
         .collect();
+    let segments = SegmentChanges {
+        define: Vec::new(),
+        remove: installed
+            .owns
+            .iter()
+            .filter(|e| e.kind == "segment")
+            .map(|e| SegmentKey(e.id.clone()))
+            .collect(),
+    };
     Ok(Planned::Change(ProductChange {
         step: format!("remove {product}"),
         version: installed.version.clone(),
@@ -1867,6 +1934,7 @@ pub fn plan_remove(
         created: Vec::new(),
         changed: Vec::new(),
         removed,
+        segments,
         record: None,
     }))
 }
