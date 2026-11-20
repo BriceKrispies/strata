@@ -6,13 +6,14 @@ use crate::intent::{
     EventBody, ExistingData, Intent, Output, SchemaChange, StateDelta, Transition,
 };
 use crate::rules::{
-    assigned_roles, authorize, may_confer, roles_of, validate_record, Lookup, Subject,
+    assigned_roles, authorize, may_confer, missing_error, roles_of, validate_record, Lookup,
+    Subject,
 };
 use crate::schema::{
     normalise_address, Action, FieldDef, InvitationDef, ObjectTypeDef, Resource, TeamDef,
     TenantSchema, TenantSchemaExt,
 };
-use crate::state::{Need, Principal, Record, RecordExt, State, TenantState};
+use crate::state::{Need, Principal, Record, RecordExt, State, TenantState, TenantStateExt};
 use crate::types::{
     owner_role, public_role, refs_in, FieldId, FieldType, FieldTypeExt, InvitationId, ObjectTypeId,
     OnDelete, PrincipalId, RecordId, RoleId, SchemaVersion, StateRevision, TeamId, Timestamp,
@@ -42,6 +43,7 @@ pub fn transition(
             ),
         ));
     }
+    refuse_reserved_principals(intent, ctx)?;
     let tenant = match (intent, state.tenant.as_deref()) {
         (Intent::CreateTenant { name, owner }, None) => return create_tenant(ctx, name, owner),
         (Intent::CreateTenant { .. }, Some(_)) => {
@@ -116,6 +118,36 @@ pub fn transition(
     Ok(draft.finish(output))
 }
 
+/// The prefix of the principal that stands for a team in events. A person may not hold an id
+/// that starts with it, or a change to a team would reach that person's sessions and notices.
+const TEAM_PREFIX: &str = "team:";
+
+/// Refuse a person whose id starts with the team prefix, as the caller, as the owner of a new
+/// tenant, or as a member being assigned a role or added to a team.
+fn refuse_reserved_principals(intent: &Intent, ctx: &Context) -> Result<(), DomainError> {
+    let named: Option<&PrincipalId> = match intent {
+        Intent::CreateTenant { owner, .. } => Some(owner),
+        Intent::AssignRole { principal, .. } | Intent::AddTeamMember { principal, .. } => {
+            Some(principal)
+        }
+        _ => None,
+    };
+    let caller = match &ctx.principal {
+        Principal::User(id) => Some(id),
+        _ => None,
+    };
+    for id in named.into_iter().chain(caller) {
+        if id.as_str().starts_with(TEAM_PREFIX) {
+            return Err(refuse(
+                ErrorKind::InvalidIntent,
+                "principal:id_is_not_reserved",
+                format!("the principal id {id} starts with the reserved prefix {TEAM_PREFIX}"),
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// A rejection made before any rule of the tenant is consulted. It still names the check that
 /// failed, so that every refused transition says why.
 fn refuse(kind: ErrorKind, rule: &str, message: impl Into<String>) -> DomainError {
@@ -132,32 +164,6 @@ pub fn needs(schema: Option<&TenantSchema>, intent: &Intent) -> Vec<Need> {
         return Vec::new();
     };
     let mut out = BTreeSet::new();
-    let field_needs =
-        |out: &mut BTreeSet<Need>, object: &ObjectTypeId, fields: &BTreeMap<FieldId, Value>| {
-            let Some(def) = schema.objects.get(object) else {
-                return;
-            };
-            for (id, value) in fields {
-                let Some(field) = def.fields.get(id) else {
-                    continue;
-                };
-                if field.unique && !value.is_null() {
-                    out.insert(Need::ByField {
-                        object: object.clone(),
-                        field: id.clone(),
-                        value: value.clone(),
-                    });
-                }
-                if let Some((target, _, _)) = field.ty.ref_target() {
-                    for id in refs_in(value) {
-                        out.insert(Need::Record {
-                            object: target.clone(),
-                            id,
-                        });
-                    }
-                }
-            }
-        };
     match intent {
         Intent::CreateTenant { .. }
         | Intent::AssignRole { .. }
@@ -169,7 +175,7 @@ pub fn needs(schema: Option<&TenantSchema>, intent: &Intent) -> Vec<Need> {
         | Intent::RemoveTeamMember { .. }
         | Intent::CreateInvitation { .. }
         | Intent::RedeemInvitation { .. } => {}
-        Intent::CreateRecord { object, fields } => field_needs(&mut out, object, fields),
+        Intent::CreateRecord { object, fields } => field_needs(schema, &mut out, object, fields),
         Intent::UpdateRecord {
             object, id, fields, ..
         } => {
@@ -177,7 +183,7 @@ pub fn needs(schema: Option<&TenantSchema>, intent: &Intent) -> Vec<Need> {
                 object: object.clone(),
                 id: *id,
             });
-            field_needs(&mut out, object, fields);
+            field_needs(schema, &mut out, object, fields);
         }
         Intent::DeleteRecord { object, id, .. } => {
             out.insert(Need::Record {
@@ -193,11 +199,91 @@ pub fn needs(schema: Option<&TenantSchema>, intent: &Intent) -> Vec<Need> {
             }
         }
         Intent::ChangeSchema { changes, .. } => {
+            // Re-validation looks up every reference of every record of a touched type, in the
+            // schema as it will be. Load each such type whole: one need per object type, however
+            // many records or references there are.
+            let mut changed = TenantSchema::clone(schema);
+            for change in changes {
+                let _ = apply_change(&mut changed, change);
+            }
             for object in touched_objects(changes) {
+                for def in [schema.objects.get(&object), changed.objects.get(&object)]
+                    .into_iter()
+                    .flatten()
+                {
+                    for field in def.fields.values() {
+                        if let Some((target, _, _)) = field.ty.ref_target() {
+                            out.insert(Need::AllOf(target.clone()));
+                        }
+                    }
+                }
                 out.insert(Need::AllOf(object));
             }
         }
     }
+    out.into_iter().collect()
+}
+
+/// The unique-value and reference lookups validating `fields` of an `object` record makes.
+fn field_needs(
+    schema: &TenantSchema,
+    out: &mut BTreeSet<Need>,
+    object: &ObjectTypeId,
+    fields: &BTreeMap<FieldId, Value>,
+) {
+    let Some(def) = schema.objects.get(object) else {
+        return;
+    };
+    for (id, value) in fields {
+        let Some(field) = def.fields.get(id) else {
+            continue;
+        };
+        if field.unique && !value.is_null() {
+            out.insert(Need::ByField {
+                object: object.clone(),
+                field: id.clone(),
+                value: value.clone(),
+            });
+        }
+        if let Some((target, _, _)) = field.ty.ref_target() {
+            for id in refs_in(value) {
+                out.insert(Need::Record {
+                    object: target.clone(),
+                    id,
+                });
+            }
+        }
+    }
+}
+
+/// The state an intent needs that only the state already loaded can say. Validating an update
+/// looks up every reference and unique value of the whole candidate, the stored fields as well as
+/// the supplied ones, and the stored record is not known until it is loaded. Given a snapshot that
+/// holds it, this names all of those lookups at once, so the shell reloads once instead of once
+/// per missing reference. Empty when the snapshot holds nothing more to say.
+pub fn refine_needs(state: &State, intent: &Intent) -> Vec<Need> {
+    let Some(tenant) = state.tenant.as_deref() else {
+        return Vec::new();
+    };
+    let Intent::UpdateRecord {
+        object, id, fields, ..
+    } = intent
+    else {
+        return Vec::new();
+    };
+    let Some(old) = tenant.record(object, *id) else {
+        return Vec::new();
+    };
+    let mut merged = old.fields.clone();
+    for (field, value) in fields {
+        if value.is_null() {
+            merged.remove(field);
+        } else {
+            merged.insert(field.clone(), value.clone());
+        }
+    }
+    let mut out = BTreeSet::new();
+    field_needs(&tenant.schema, &mut out, object, &merged);
     out.into_iter().collect()
 }
 
@@ -278,6 +364,7 @@ impl<'a> Draft<'a> {
         resource: &Resource,
         subject: Subject<'_>,
     ) -> Result<(), DomainError> {
+        expr::clear_missing();
         let (allowed, checks) = authorize(
             self.tenant,
             &self.tenant.schema,
@@ -291,6 +378,10 @@ impl<'a> Draft<'a> {
         self.evidence.extend(checks);
         if allowed {
             Ok(())
+        } else if let Some(missing) = missing_error() {
+            // A condition followed a reference the snapshot does not hold: ask for it rather
+            // than deny on a record that was merely not loaded.
+            Err(missing)
         } else {
             Err(self.reject(
                 ErrorKind::Unauthorized,
@@ -583,6 +674,7 @@ fn update_record(
 
     let roles = roles_of(draft.tenant, &ctx.principal);
     let no_params = BTreeMap::new();
+    let mut assigned_any = false;
     for workflow in draft.tenant.schema.workflows_of(object) {
         let (from, to) = (
             old.get(&workflow.field),
@@ -608,10 +700,16 @@ fn update_record(
             if Some(step.from.as_str()) != from.as_str() || Some(step.to.as_str()) != to.as_str() {
                 continue;
             }
+            expr::clear_missing();
             let open = match &step.guard {
                 None => Ok(true),
                 Some(guard) => expr::holds(guard, &env),
             };
+            if open.is_err() {
+                if let Some(missing) = missing_error() {
+                    return Err(missing);
+                }
+            }
             match open {
                 Ok(true) => {
                     fired = Some(step);
@@ -632,14 +730,18 @@ fn update_record(
         };
         let mut assigned = Vec::new();
         for (field, value) in &step.set {
+            expr::clear_missing();
             let value = expr::eval(value, &env).map_err(|e| {
-                draft.reject(
-                    ErrorKind::Evaluation,
-                    format!("{}: set {field}: {e}", step.name),
-                )
+                missing_error().unwrap_or_else(|| {
+                    draft.reject(
+                        ErrorKind::Evaluation,
+                        format!("{}: set {field}: {e}", step.name),
+                    )
+                })
             })?;
             assigned.push((field.clone(), value));
         }
+        assigned_any |= !assigned.is_empty();
         for (field, value) in assigned {
             if value.is_null() {
                 candidate.fields.remove(&field);
@@ -651,6 +753,20 @@ fn update_record(
             format!("{rule}:{}", step.name),
             format!("{} -> {}", step.from, step.to),
         ));
+    }
+
+    if assigned_any {
+        // Workflow assignments changed the candidate after the first decision: the update must
+        // also be allowed as the record it now is, so a step cannot write what the actor could
+        // not write directly.
+        draft.require(
+            Action::Update,
+            &Resource::Object(object.clone()),
+            Subject {
+                old: Some(old),
+                new: Some(&candidate),
+            },
+        )?;
     }
 
     validate_record(
@@ -696,6 +812,9 @@ fn delete_record(
     check_version(draft, old, expected_version)?;
 
     let target = Value::Ref(id);
+    // Every field of one referrer that points here is cleared in the same rewrite, so a record
+    // that refers twice is written once with both fields cleared.
+    let mut cleared: BTreeMap<(ObjectTypeId, RecordId), (Arc<Record>, Record)> = BTreeMap::new();
     for (from, field, is_list) in draft.tenant.schema.referrers(object) {
         let (_, on_delete, _) = field
             .ty
@@ -717,30 +836,33 @@ fn delete_record(
                     format!("{} {} refers to {object} {id}", from.id, referrer.id),
                 ));
             }
-            let mut cleared = Record::clone(referrer);
-            match cleared.fields.get(&field.id) {
+            let (_, rewrite) = cleared
+                .entry((from.id.clone(), referrer.id))
+                .or_insert_with(|| (referrer.clone(), Record::clone(referrer)));
+            match rewrite.fields.get(&field.id) {
                 Some(Value::List(items)) => {
                     let kept: Vec<Value> =
                         items.iter().filter(|v| **v != target).cloned().collect();
-                    cleared.fields.insert(field.id.clone(), Value::List(kept));
+                    rewrite.fields.insert(field.id.clone(), Value::List(kept));
                 }
                 _ => {
-                    cleared.fields.remove(&field.id);
+                    rewrite.fields.remove(&field.id);
                 }
             }
-            cleared.version += 1;
-            cleared.updated_at = ctx.now;
-            let after = Arc::new(cleared);
             draft.evidence.push(Check::pass(
                 rule,
                 format!("cleared on {} {}", from.id, referrer.id),
             ));
-            draft.ops.push(DeltaOp::PutRecord(after.clone()));
-            draft.events.push(EventBody::RecordUpdated {
-                before: referrer.clone(),
-                after,
-            });
         }
+    }
+    for (before, mut rewrite) in cleared.into_values() {
+        rewrite.version += 1;
+        rewrite.updated_at = ctx.now;
+        let after = Arc::new(rewrite);
+        draft.ops.push(DeltaOp::PutRecord(after.clone()));
+        draft
+            .events
+            .push(EventBody::RecordUpdated { before, after });
     }
 
     draft.ops.push(DeltaOp::DeleteRecord {
@@ -1256,8 +1378,9 @@ pub struct Violation {
 pub struct Migration {
     pub schema: TenantSchema,
     pub summary: Vec<String>,
-    /// Records rewritten because a field they held was removed.
-    pub rewritten: Vec<Arc<Record>>,
+    /// Records rewritten because a field they held was removed, as (before, after). The rewrite
+    /// carries the next version and the time of the change.
+    pub rewritten: Vec<(Arc<Record>, Arc<Record>)>,
     pub violations: Vec<Violation>,
 }
 
@@ -1318,9 +1441,11 @@ pub fn plan_migration(
             } else {
                 let rewritten_record = Arc::new(Record {
                     fields: stripped,
+                    version: record.version + 1,
+                    updated_at: now,
                     ..Record::clone(record)
                 });
-                rewritten.push(rewritten_record.clone());
+                rewritten.push((record.clone(), rewritten_record.clone()));
                 rewritten_record
             };
             let outcome = validate_record(
@@ -1412,14 +1537,17 @@ fn change_schema(
     draft
         .ops
         .push(DeltaOp::PutSchema(Arc::new(migration.schema)));
-    draft
-        .ops
-        .extend(migration.rewritten.into_iter().map(DeltaOp::PutRecord));
     draft.events.push(EventBody::SchemaChanged {
         version,
         summary: migration.summary,
         grandfathered: affected.len() as u64,
     });
+    for (before, after) in migration.rewritten {
+        draft.ops.push(DeltaOp::PutRecord(after.clone()));
+        draft
+            .events
+            .push(EventBody::RecordUpdated { before, after });
+    }
     Ok(Output::Schema { version })
 }
 

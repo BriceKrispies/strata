@@ -16,15 +16,43 @@
 
 use crate::rules::Lookup;
 use crate::schema::{FieldDef, ObjectTypeDef};
-use crate::state::{Principal, Record, RecordExt};
+use crate::state::{Need, Principal, Record, RecordExt};
 pub use crate::types::{CmpOp, Expr, Scope};
 use crate::types::{
     FieldId, FieldType, FieldTypeExt, ObjectTypeId, RecordId, RoleId, Timestamp, Value,
 };
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use strata_model_core::tenant_rule_language as language;
 
 pub use language::{check, parse, EvalError, Shape};
+
+thread_local! {
+    /// The first state a reference lookup found missing since the last [`clear_missing`]. The
+    /// generated evaluator reports a failed lookup as a bare message, so the need is parked here
+    /// for the caller to turn into `InsufficientState` and have the shell load it. Per thread,
+    /// cleared before each evaluation that cares, and never read by a decision.
+    static MISSING: RefCell<Option<Need>> = const { RefCell::new(None) };
+}
+
+/// Forget any missing need noted so far on this thread.
+pub fn clear_missing() {
+    MISSING.with(|slot| *slot.borrow_mut() = None);
+}
+
+/// Take the missing need noted by the evaluations since [`clear_missing`], if any.
+pub fn take_missing() -> Option<Need> {
+    MISSING.with(|slot| slot.borrow_mut().take())
+}
+
+fn note_missing(need: Need) {
+    MISSING.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        if slot.is_none() {
+            *slot = Some(need);
+        }
+    });
+}
 
 /// Everything an expression may observe.
 pub struct Env<'a> {
@@ -140,9 +168,12 @@ impl language::Env for Scopes<'_, '_> {
         let Some((object, _, false)) = reference else {
             return Err(EvalError(format!("{field} is not a reference")));
         };
-        let found = lookup
-            .record(object, *target)
-            .map_err(|e| EvalError(e.message))?;
+        let found = lookup.record(object, *target).map_err(|e| {
+            if let Some(need) = e.missing.clone() {
+                note_missing(need);
+            }
+            EvalError(e.message)
+        })?;
         Ok(found.map(|found| Box::new(Row(found.as_ref())) as Box<dyn language::Record + '_>))
     }
 
