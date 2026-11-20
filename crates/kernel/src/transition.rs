@@ -1,23 +1,24 @@
 //! `transition`: the one function that decides what an intent does to a tenant's state.
 
+use crate::definitions::{operation_powers, uniques, AUTOMATIONS_DEFINE};
 use crate::expr::{self, Env};
 use crate::intent::{
     Check, CheckExt, Context, DeltaOp, DomainError, DomainErrorExt, DomainEvent, Effect, ErrorKind,
     EventBody, ExistingData, Intent, Output, SchemaChange, StateDelta, Transition,
 };
 use crate::rules::{
-    assigned_roles, authorize, may_confer, missing_error, roles_of, validate_record, Lookup,
-    Subject,
+    assigned_roles, authorize, holds_any, holds_power, may_confer, missing_error, missing_grants,
+    roles_of, validate_record, Lookup, Subject,
 };
 use crate::schema::{
-    normalise_address, Action, FieldDef, InvitationDef, ObjectTypeDef, Resource, TeamDef,
+    normalise_address, Action, FieldDef, Grant, InvitationDef, ObjectTypeDef, Resource, TeamDef,
     TenantSchema, TenantSchemaExt,
 };
 use crate::state::{Need, Principal, Record, RecordExt, State, TenantState, TenantStateExt};
 use crate::types::{
-    owner_role, public_role, refs_in, FieldId, FieldType, FieldTypeExt, InvitationId, ObjectTypeId,
-    OnDelete, PrincipalId, RecordId, RoleId, SchemaVersion, StateRevision, TeamId, Timestamp,
-    Value, ValueExt,
+    owner_role, public_role, refs_in, ConstraintId, FieldId, FieldType, FieldTypeExt, InvitationId,
+    ObjectTypeId, OnDelete, PrincipalId, RecordId, RoleId, SchemaVersion, StateRevision, TeamId,
+    TenantOperationDef, Timestamp, UniqueDef, Value, ValueExt,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -256,6 +257,26 @@ fn field_needs(
             }
         }
     }
+    // A composite unique constraint whose every field has a value: one lookup of the records of
+    // the type with those values (D-6558, CMS-1557).
+    for unique in uniques(def) {
+        let wanted: Option<BTreeMap<FieldId, Value>> = unique
+            .fields
+            .iter()
+            .map(|field| {
+                fields
+                    .get(field)
+                    .filter(|value| !value.is_null())
+                    .map(|value| (field.clone(), value.clone()))
+            })
+            .collect();
+        if let Some(wanted) = wanted {
+            out.insert(Need::ByFields {
+                object: object.clone(),
+                fields: wanted,
+            });
+        }
+    }
 }
 
 /// The state an intent needs that only the state already loaded can say. Validating an update
@@ -307,7 +328,9 @@ fn touched_objects(changes: &[SchemaChange]) -> BTreeSet<ObjectTypeId> {
             }
             SchemaChange::RemoveField { object, .. }
             | SchemaChange::DefineConstraint { object, .. }
-            | SchemaChange::RemoveConstraint { object, .. } => {
+            | SchemaChange::RemoveConstraint { object, .. }
+            | SchemaChange::DefineUnique { object, .. }
+            | SchemaChange::RemoveUnique { object, .. } => {
                 out.insert(object.clone());
             }
             SchemaChange::DefineWorkflow(workflow) => {
@@ -1412,6 +1435,7 @@ fn apply_change(schema: &mut TenantSchema, change: &SchemaChange) -> Result<Stri
                     publication: None,
                     language_field: None,
                     translation_group: None,
+                    unique: None,
                 });
             format!("define object {id}")
         }
@@ -1534,7 +1558,103 @@ fn apply_change(schema: &mut TenantSchema, change: &SchemaChange) -> Result<Stri
                 .ok_or_else(|| format!("no view {id}"))?;
             format!("remove view {id}")
         }
+        SchemaChange::DefineTrigger(trigger) => {
+            schema
+                .triggers
+                .get_or_insert_with(BTreeMap::new)
+                .insert(trigger.id.clone(), trigger.clone());
+            format!("define trigger {}", trigger.id)
+        }
+        SchemaChange::RemoveTrigger(id) => {
+            remove_from(&mut schema.triggers, id).ok_or_else(|| format!("no trigger {id}"))?;
+            format!("remove trigger {id}")
+        }
+        SchemaChange::DefineAutomation(automation) => {
+            schema
+                .automations
+                .get_or_insert_with(BTreeMap::new)
+                .insert(automation.id.clone(), automation.clone());
+            format!("define automation {}", automation.id)
+        }
+        SchemaChange::RemoveAutomation(id) => {
+            let defined = schema
+                .automations
+                .as_ref()
+                .is_some_and(|automations| automations.contains_key(id));
+            if !defined {
+                return Err(format!("no automation {id}"));
+            }
+            // D-6539: an automation cannot be removed while a trigger names it.
+            if let Some(trigger) = schema
+                .triggers
+                .iter()
+                .flat_map(BTreeMap::values)
+                .find(|trigger| &trigger.automation == id)
+            {
+                return Err(format!(
+                    "automation {id} is named by trigger {}",
+                    trigger.id
+                ));
+            }
+            remove_from(&mut schema.automations, id);
+            format!("remove automation {id}")
+        }
+        SchemaChange::DefineOperation(op) => {
+            schema
+                .operations
+                .get_or_insert_with(BTreeMap::new)
+                .insert(op.id.clone(), op.clone());
+            format!("define operation {}", op.id)
+        }
+        SchemaChange::RemoveOperation(id) => {
+            remove_from(&mut schema.operations, id).ok_or_else(|| format!("no operation {id}"))?;
+            format!("remove operation {id}")
+        }
+        SchemaChange::DefineUnique { object: id, unique } => {
+            object(schema, id)?
+                .unique
+                .get_or_insert_with(BTreeMap::new)
+                .insert(unique.id.clone(), unique.clone());
+            format!("define unique constraint {id}.{}", unique.id)
+        }
+        SchemaChange::RemoveUnique { object: id, unique } => {
+            remove_from(&mut object(schema, id)?.unique, unique)
+                .ok_or_else(|| format!("no unique constraint {id}.{unique}"))?;
+            format!("remove unique constraint {id}.{unique}")
+        }
     })
+}
+
+/// Remove `key` from an optional table; a table left empty is no table at all, so a schema
+/// without such definitions reads and hashes as one that never had them.
+fn remove_from<K: Ord, V>(table: &mut Option<BTreeMap<K, V>>, key: &K) -> Option<V> {
+    let map = table.as_mut()?;
+    let removed = map.remove(key);
+    if map.is_empty() {
+        *table = None;
+    }
+    removed
+}
+
+/// Two records of `object`, in id order, with equal values in every field of `unique`, none of
+/// them null (D-6558, CMS-1556): the first such pair, or `None`.
+fn duplicate_pair(
+    lookup: Lookup<'_>,
+    object: &ObjectTypeId,
+    unique: &UniqueDef,
+) -> Result<Option<(RecordId, RecordId)>, DomainError> {
+    let mut seen: BTreeMap<Vec<&Value>, RecordId> = BTreeMap::new();
+    for record in lookup.all_of(object)? {
+        let values: Vec<&Value> = unique.fields.iter().map(|f| record.get(f)).collect();
+        if values.iter().any(|value| value.is_null()) {
+            continue;
+        }
+        if let Some(first) = seen.get(&values) {
+            return Ok(Some((*first, record.id)));
+        }
+        seen.insert(values, record.id);
+    }
+    Ok(None)
 }
 
 /// One existing record that does not conform to a proposed schema.
@@ -1592,6 +1712,42 @@ pub fn plan_migration(
         return Err(DomainError::new(ErrorKind::InvalidSchema, message).with(evidence));
     }
     schema.version = SchemaVersion(current.version.0 + 1);
+
+    // CMS-1556: a composite unique constraint is not declared over records that already hold a
+    // duplicate, whatever the change does with other records that do not conform. Checked once
+    // per constraint, as the working copy holds it, for object types that already existed.
+    let mut declared: BTreeSet<(ObjectTypeId, ConstraintId)> = BTreeSet::new();
+    for change in changes {
+        let SchemaChange::DefineUnique { object, unique } = change else {
+            continue;
+        };
+        if !current.objects.contains_key(object)
+            || !declared.insert((object.clone(), unique.id.clone()))
+        {
+            continue;
+        }
+        let Some(def) = schema
+            .objects
+            .get(object)
+            .and_then(|o| o.unique.as_ref())
+            .and_then(|u| u.get(&unique.id))
+        else {
+            continue;
+        };
+        if let Some((first, second)) = duplicate_pair(lookup, object, def)? {
+            let rule = format!("unique:{object}.{}", def.id);
+            let fields: Vec<&str> = def.fields.iter().map(|f| f.as_str()).collect();
+            let detail = format!(
+                "records {first} and {second} have the same values in {}",
+                fields.join(", ")
+            );
+            evidence.push(Check::fail(rule.clone(), detail.clone()));
+            return Err(
+                DomainError::new(ErrorKind::UniqueViolated, format!("{rule}: {detail}"))
+                    .with(evidence),
+            );
+        }
+    }
 
     let mut rewritten = Vec::new();
     let mut violations = Vec::new();
@@ -1679,6 +1835,7 @@ fn change_schema(
             ),
         ));
     }
+    require_definition_authority(draft, changes)?;
     let migration = plan_migration(lookup, changes, draft.ctx.now).map_err(|mut e| {
         let mut evidence = draft.evidence.clone();
         evidence.append(&mut e.evidence);
@@ -1732,6 +1889,100 @@ fn change_schema(
             .push(EventBody::RecordUpdated { before, after });
     }
     Ok(Output::Schema { version })
+}
+
+/// The authority a change of definitions asks of the principal making it, beyond Manage on
+/// Schema: the capability automations-define for any change of a trigger or an automation
+/// (WFL-1520); for an automation, every role of its run-as is one the principal may confer
+/// (ADM-152, WFL-1528); for a tenant operation, every power its steps use (D-6547, OPR-1547).
+/// Checked in the order of the changes, the capability first.
+fn require_definition_authority(
+    draft: &mut Draft<'_>,
+    changes: &[SchemaChange],
+) -> Result<(), DomainError> {
+    let automation = changes.iter().any(|change| {
+        matches!(
+            change,
+            SchemaChange::DefineTrigger(_)
+                | SchemaChange::RemoveTrigger(_)
+                | SchemaChange::DefineAutomation(_)
+                | SchemaChange::RemoveAutomation(_)
+        )
+    });
+    if automation {
+        require_capability(draft, AUTOMATIONS_DEFINE)?;
+    }
+    for change in changes {
+        match change {
+            SchemaChange::DefineAutomation(def) => {
+                require_conferrable(draft, def.run_as.roles.iter())?
+            }
+            SchemaChange::DefineOperation(op) => require_operation_powers(draft, op)?,
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+/// The acting principal holds the capability `name`; the owner holds every capability.
+fn require_capability(draft: &mut Draft<'_>, name: &str) -> Result<(), DomainError> {
+    let rule = format!("permission:capability:{name}");
+    let wanted = BTreeSet::from([Grant::Capability(name.to_string())]);
+    if holds_any(draft.tenant, &draft.ctx.principal, &wanted) {
+        draft
+            .evidence
+            .push(Check::pass(rule, format!("holds {name}")));
+        Ok(())
+    } else {
+        draft
+            .evidence
+            .push(Check::fail(rule, format!("does not hold {name}")));
+        Err(draft.reject(
+            ErrorKind::Unauthorized,
+            format!("the change needs the capability {name}"),
+        ))
+    }
+}
+
+/// D-6547, OPR-1547: a tenant operation grants its invokers no more than its definer holds, so
+/// the definer must hold, unconditionally, each action on an object type its record steps use
+/// and the capability of its posting steps.
+fn require_operation_powers(
+    draft: &mut Draft<'_>,
+    op: &TenantOperationDef,
+) -> Result<(), DomainError> {
+    let (actions, capabilities) = operation_powers(op);
+    let (tenant, ctx) = (draft.tenant, draft.ctx);
+    let principal = &ctx.principal;
+    let mut lacking: Vec<String> = actions
+        .iter()
+        .filter(|(action, resource)| !holds_power(tenant, principal, *action, resource))
+        .map(|(action, resource)| format!("{action:?} on {resource:?}"))
+        .collect();
+    let wanted: BTreeSet<Grant> = capabilities
+        .iter()
+        .map(|name| Grant::Capability(name.clone()))
+        .collect();
+    for grant in missing_grants(tenant, principal, &wanted) {
+        if let Grant::Capability(name) = grant {
+            lacking.push(format!("capability {name}"));
+        }
+    }
+    let rule = format!("operation:{}:definer_powers", op.id);
+    if lacking.is_empty() {
+        draft.evidence.push(Check::pass(
+            rule,
+            "the definer holds every power the steps use",
+        ));
+        Ok(())
+    } else {
+        let detail = lacking.join(", ");
+        draft.evidence.push(Check::fail(rule, detail.clone()));
+        Err(draft.reject(
+            ErrorKind::Unauthorized,
+            format!("may not define operation {}: lacks {detail}", op.id),
+        ))
+    }
 }
 
 /// Apply an accepted delta to the tenant state it was computed against.

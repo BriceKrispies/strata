@@ -41,14 +41,23 @@
 //!      does not order a list element by element, as `Value`'s derived order does.
 //!      The corpus has no list-valued field.
 //!   4. Not exercised: the intents of teams and invitations, and schema changes other than
-//!      `DefineField` and `DefineConstraint`: the operation generator of `properties.rs` draws
-//!      only seven intents. `texts_for` therefore reads defaults and constraints only from those
-//!      two kinds of change.
+//!      `DefineField`, `DefineConstraint`, `RemoveField` and the definitions of triggers,
+//!      automations, tenant operations and composite unique constraints (and their removals),
+//!      which the generator below adds to the seven intents of `properties.rs`. `texts_for`
+//!      reads defaults and constraints only from `DefineField` and `DefineConstraint`; the
+//!      definitions print no expression.
+//!   5. Not exercised: the bounds the kernel checks on a definition that the function language
+//!      cannot state, because it compiles neither durations nor recursion: retry delays, attempt
+//!      timeouts and waits of an automation step, and the two hundred nodes of an operation
+//!      condition. The generator draws no definition that breaks one. Nor does it draw a hundred
+//!      and one triggers, or a run-as role that a role policy of the definer's could confer
+//!      (the generated `may-confer` reads role permissions only); only the owner manages the
+//!      corpus schema.
 
 use proptest::prelude::*;
 use proptest::strategy::ValueTree;
 use proptest::test_runner::TestRunner;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use strata_kernel::testkit::*;
 use strata_kernel::*;
 use strata_model_core::functions::{self as spec, Failure};
@@ -118,6 +127,15 @@ enum SchemaOp {
     RequireRank,
     TightenTitle(i64),
     Nonsense,
+    DefineAutomation,
+    BrokenAutomation,
+    RemoveAutomation,
+    DefineTrigger,
+    RemoveTrigger,
+    DefineOperation,
+    RemoveOperation,
+    DefineUnique,
+    RemoveUnique,
 }
 
 const MEMBERS: [&str; 5] = ["owner", "editor", "writer1", "writer2", "stranger"];
@@ -129,6 +147,15 @@ fn op_strategy() -> impl Strategy<Value = Op> {
         3 => Just(SchemaOp::RequireRank),
         3 => (3i64..30).prop_map(SchemaOp::TightenTitle),
         1 => Just(SchemaOp::Nonsense),
+        2 => Just(SchemaOp::DefineAutomation),
+        1 => Just(SchemaOp::BrokenAutomation),
+        1 => Just(SchemaOp::RemoveAutomation),
+        2 => Just(SchemaOp::DefineTrigger),
+        1 => Just(SchemaOp::RemoveTrigger),
+        2 => Just(SchemaOp::DefineOperation),
+        1 => Just(SchemaOp::RemoveOperation),
+        2 => Just(SchemaOp::DefineUnique),
+        1 => Just(SchemaOp::RemoveUnique),
     ];
     let kind = prop_oneof![
         1 => ("[a-z ]{0,4}", 0usize..2).prop_map(|(name, owner)| OpKind::CreateTenant { name, owner }),
@@ -236,6 +263,31 @@ fn intent_of(op: &Op) -> Intent {
                     object: object("nothing"),
                     field: field("nothing"),
                 },
+                SchemaOp::DefineAutomation => SchemaChange::DefineAutomation(award(false)),
+                SchemaOp::BrokenAutomation => SchemaChange::DefineAutomation(award(true)),
+                SchemaOp::RemoveAutomation => {
+                    SchemaChange::RemoveAutomation(WorkflowId::new("award").unwrap())
+                }
+                SchemaOp::DefineTrigger => SchemaChange::DefineTrigger(on_publish()),
+                SchemaOp::RemoveTrigger => {
+                    SchemaChange::RemoveTrigger(TriggerId::new("on_publish").unwrap())
+                }
+                SchemaOp::DefineOperation => SchemaChange::DefineOperation(redeem()),
+                SchemaOp::RemoveOperation => {
+                    SchemaChange::RemoveOperation(TenantOperationId::new("redeem").unwrap())
+                }
+                SchemaOp::DefineUnique => SchemaChange::DefineUnique {
+                    object: object("note"),
+                    unique: UniqueDef {
+                        id: ConstraintId::new("title_rank").unwrap(),
+                        fields: vec![field("title"), field("rank")],
+                        message: "One note per title and rank".into(),
+                    },
+                },
+                SchemaOp::RemoveUnique => SchemaChange::RemoveUnique {
+                    object: object("note"),
+                    unique: ConstraintId::new("title_rank").unwrap(),
+                },
             };
             Intent::ChangeSchema {
                 changes: vec![change],
@@ -255,6 +307,136 @@ fn intent_of(op: &Op) -> Intent {
             principal: principal_id(&format!("{}:{}", WORLD_TENANTS[op.tenant], MEMBERS[*who])),
             role: role(ROLES[*r]),
         },
+    }
+}
+
+/// An automation that creates a note, looks at it and ends; `broken`, it names a step it does
+/// not declare and leaves one unreachable. It acts with no role: the generated `may-confer` does
+/// not yet count the policies of a role, as rules.rs may_confer does, so a run-as role would
+/// compare a known difference of conferral rather than the definitions.
+fn award(broken: bool) -> AutomationDef {
+    let name = |n: &str| StepName::new(n).unwrap();
+    let step = |action: AutomationStep, next: Option<&str>| AutomationStepDef {
+        action,
+        next: next.map(|n| StepName::new(n).unwrap()),
+        retry: None,
+        timeout: None,
+        compensate: None,
+    };
+    let mut steps = BTreeMap::from([
+        (
+            name("make"),
+            step(
+                AutomationStep::CreateRecord {
+                    object: object("note"),
+                    fields: BTreeMap::from([
+                        (field("title"), Expr::Lit(text("Silver"))),
+                        (field("slug"), Expr::Param("owner".into())),
+                    ]),
+                },
+                Some("check"),
+            ),
+        ),
+        (
+            name("check"),
+            step(
+                AutomationStep::Branch {
+                    condition: Expr::Cmp(
+                        CmpOp::Eq,
+                        Box::new(var(Scope::Record, "status")),
+                        Box::new(Expr::Lit(text("draft"))),
+                    ),
+                    object: Some(object("note")),
+                    record: Some(Expr::Param("make_record".into())),
+                    then: name("done"),
+                    r#else: name("done"),
+                },
+                None,
+            ),
+        ),
+        (name("done"), step(AutomationStep::End, None)),
+    ]);
+    if broken {
+        steps.insert(name("lost"), step(AutomationStep::End, Some("gone")));
+    }
+    AutomationDef {
+        id: WorkflowId::new("award").unwrap(),
+        label: "Award".into(),
+        run_as: RunAs {
+            roles: BTreeSet::new(),
+        },
+        run_key: Some(Expr::Param("owner".into())),
+        start: name("make"),
+        steps,
+    }
+}
+
+/// A trigger on the publish transition of a note that starts `award`.
+fn on_publish() -> TriggerDef {
+    TriggerDef {
+        id: TriggerId::new("on_publish").unwrap(),
+        on: TriggerEvent::RecordUpdated {
+            object: object("note"),
+            transition: Some("publish".into()),
+        },
+        condition: Some(Expr::Cmp(
+            CmpOp::Eq,
+            Box::new(var(Scope::New, "status")),
+            Box::new(Expr::Lit(text("published"))),
+        )),
+        automation: WorkflowId::new("award").unwrap(),
+        paused: None,
+    }
+}
+
+/// A tenant operation that copies a draft note and ranks the copy.
+fn redeem() -> TenantOperationDef {
+    TenantOperationDef {
+        id: TenantOperationId::new("redeem").unwrap(),
+        label: "Redeem".into(),
+        inputs: vec![TenantOperationInput {
+            name: "note".into(),
+            ty: FieldType::Ref {
+                target: object("note"),
+                on_delete: OnDelete::Restrict,
+            },
+            required: true,
+            label: None,
+        }],
+        invokers: TenantOperationInvokers {
+            signed_in: true,
+            roles: BTreeSet::new(),
+        },
+        subject: Some(TenantOperationSubject {
+            object: object("note"),
+            input: "note".into(),
+        }),
+        conditions: vec![TenantOperationCondition {
+            id: "drafted".into(),
+            expr: Expr::Cmp(
+                CmpOp::Eq,
+                Box::new(var(Scope::Record, "status")),
+                Box::new(Expr::Lit(text("draft"))),
+            ),
+            error: "not-draft".into(),
+            message: "Only a draft is redeemed.".into(),
+        }],
+        steps: vec![
+            TenantOperationStep::CreateRecord {
+                id: "copy".into(),
+                object: object("note"),
+                fields: BTreeMap::from([
+                    (field("title"), var(Scope::Record, "title")),
+                    (field("slug"), Expr::Lit(text("copy"))),
+                ]),
+            },
+            TenantOperationStep::UpdateRecord {
+                id: "touch".into(),
+                object: object("note"),
+                record: Expr::Param("copy".into()),
+                fields: BTreeMap::from([(field("rank"), Expr::Lit(Value::Int(1)))]),
+            },
+        ],
     }
 }
 

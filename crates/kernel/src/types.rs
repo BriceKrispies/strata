@@ -20,6 +20,15 @@ pub use strata_model_core::types::{
     ViewSection, WorkflowDef, WorkflowId, WorkflowTransition,
 };
 
+/// The definitions of [`crate::definitions`]: triggers, automations, tenant operations and
+/// composite unique constraints, held in the tenant schema.
+pub use strata_model_core::types::{
+    AutomationDef, AutomationStep, AutomationStepDef, RunAs, StepName, StepRetry,
+    TenantOperationCondition, TenantOperationDef, TenantOperationId, TenantOperationInput,
+    TenantOperationInvokers, TenantOperationPostingOwner, TenantOperationStep,
+    TenantOperationSubject, TriggerDef, TriggerEvent, TriggerId, UniqueDef,
+};
+
 /// The result of an accepted transition (specification type `transition-result`).
 pub use strata_model_core::types::TransitionResult as Transition;
 

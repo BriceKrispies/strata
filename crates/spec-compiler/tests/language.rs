@@ -584,6 +584,7 @@ fn objects(t: &Json) -> BTreeMap<ObjectTypeId, ObjectTypeDef> {
                 publication: None,
                 language_field: None,
                 translation_group: None,
+                unique: None,
             },
         );
     }

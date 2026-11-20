@@ -259,6 +259,11 @@ fn partial(tenant: &Arc<TenantState>, wanted: &BTreeSet<Need>) -> State {
                 })
                 .cloned()
                 .collect(),
+            Need::ByFields { object, fields } => tenant
+                .records_of(object)
+                .filter(|r| fields.iter().all(|(field, value)| r.get(field) == value))
+                .cloned()
+                .collect(),
         };
         for record in matching {
             thin.records

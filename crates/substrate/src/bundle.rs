@@ -85,6 +85,19 @@ pub struct ObjectSpec {
     pub fields: Vec<FieldSpec>,
     #[serde(default)]
     pub constraints: Vec<ConstraintSpec>,
+    /// Composite unique constraints: two to four fields whose values no two records share
+    /// (D-6558).
+    #[serde(default)]
+    pub unique: Vec<UniqueSpec>,
+}
+
+/// A composite unique constraint of an object type, as a bundle writes it.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UniqueSpec {
+    pub id: ConstraintId,
+    pub fields: Vec<FieldId>,
+    pub message: String,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -359,6 +372,16 @@ impl Bundle {
                     },
                 });
             }
+            for unique in &object.unique {
+                changes.push(SchemaChange::DefineUnique {
+                    object: object.id.clone(),
+                    unique: UniqueDef {
+                        id: unique.id.clone(),
+                        fields: unique.fields.clone(),
+                        message: unique.message.clone(),
+                    },
+                });
+            }
         }
         for workflow in &self.workflows {
             let mut transitions = Vec::new();
@@ -597,6 +620,7 @@ pub fn install<E>(
                         publication: None,
                         language_field: None,
                         translation_group: None,
+                        unique: None,
                     },
                 );
             }

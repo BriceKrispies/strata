@@ -18,6 +18,7 @@
 //! `use strata_kernel::*` brings into scope.
 
 pub mod canon;
+pub mod definitions;
 pub mod expr;
 pub mod intent;
 pub mod limits;

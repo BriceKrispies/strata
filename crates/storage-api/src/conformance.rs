@@ -376,6 +376,14 @@ fn partial_loads_hold_what_the_needs_name(store: &dyn Store) {
         }]),
         vec![]
     );
+    // CMS-1557: the lookup of a composite unique constraint holds the records whose every named
+    // field holds its value, and no other.
+    let both = |title: &str, slug: &str| Need::ByFields {
+        object: object("note"),
+        fields: BTreeMap::from([(field("title"), text(title)), (field("slug"), text(slug))]),
+    };
+    assert_eq!(ids(&[both("First", "first")]), vec![first]);
+    assert_eq!(ids(&[both("First", "second")]), vec![]);
 }
 
 fn list_fields_answer_field_lookups_by_containment(store: &dyn Store) {

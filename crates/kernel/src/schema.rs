@@ -1,5 +1,6 @@
 //! Tenant structure as data: object types, fields, relationships, constraints, roles, policies,
-//! workflows, named queries and view definitions, under one schema version.
+//! workflows, named queries, view definitions, and the triggers, automations, tenant operations
+//! and composite unique constraints of [`crate::definitions`], under one schema version.
 //!
 //! The types are generated ([`crate::types`]); this module holds what the kernel does with them:
 //! the genesis schema, the consistency check, and the reading of a role's permissions and of the
@@ -152,6 +153,9 @@ impl TenantSchemaExt for TenantSchema {
             workflows: BTreeMap::new(),
             queries: BTreeMap::new(),
             views: BTreeMap::new(),
+            triggers: None,
+            automations: None,
+            operations: None,
         }
     }
 
@@ -539,6 +543,13 @@ impl TenantSchemaExt for TenantSchema {
                 }
             }
         }
+
+        for object in self.objects.values() {
+            crate::definitions::unique_problems(object, &mut problems);
+        }
+        crate::definitions::trigger_problems(self, &roles, &mut problems);
+        crate::definitions::automation_problems(self, &roles, &mut problems);
+        crate::definitions::operation_problems(self, &roles, &mut problems);
         problems
     }
 }

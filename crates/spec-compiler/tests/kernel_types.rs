@@ -578,6 +578,77 @@ fn schema_changes() -> Vec<SchemaChange> {
         SchemaChange::RemoveQuery(QueryId::new("recent").unwrap()),
         SchemaChange::DefineView(view),
         SchemaChange::RemoveView(ViewId::new("home").unwrap()),
+        SchemaChange::DefineTrigger(TriggerDef {
+            id: TriggerId::new("on_new").unwrap(),
+            on: TriggerEvent::RecordUpdated {
+                object: object("note"),
+                transition: Some("publish".into()),
+            },
+            condition: Some(Expr::Param("seq".into())),
+            automation: WorkflowId::new("award").unwrap(),
+            paused: Some(false),
+        }),
+        SchemaChange::RemoveTrigger(TriggerId::new("on_new").unwrap()),
+        SchemaChange::DefineAutomation(AutomationDef {
+            id: WorkflowId::new("award").unwrap(),
+            label: "Award".into(),
+            run_as: RunAs {
+                roles: [role("editor")].into_iter().collect(),
+            },
+            run_key: None,
+            start: StepName::new("done").unwrap(),
+            steps: [(
+                StepName::new("done").unwrap(),
+                AutomationStepDef {
+                    action: AutomationStep::End,
+                    next: None,
+                    retry: Some(StepRetry {
+                        attempts: 3,
+                        first_delay: None,
+                        max_delay: None,
+                    }),
+                    timeout: None,
+                    compensate: None,
+                },
+            )]
+            .into_iter()
+            .collect(),
+        }),
+        SchemaChange::RemoveAutomation(WorkflowId::new("award").unwrap()),
+        SchemaChange::DefineOperation(TenantOperationDef {
+            id: TenantOperationId::new("redeem").unwrap(),
+            label: "Redeem".into(),
+            inputs: vec![TenantOperationInput {
+                name: "note".into(),
+                ty: FieldType::Int,
+                required: true,
+                label: None,
+            }],
+            invokers: TenantOperationInvokers {
+                signed_in: true,
+                roles: BTreeSet::new(),
+            },
+            subject: None,
+            conditions: vec![],
+            steps: vec![TenantOperationStep::DeleteRecord {
+                id: "drop".into(),
+                object: object("note"),
+                record: Expr::Param("note".into()),
+            }],
+        }),
+        SchemaChange::RemoveOperation(TenantOperationId::new("redeem").unwrap()),
+        SchemaChange::DefineUnique {
+            object: object("note"),
+            unique: UniqueDef {
+                id: ConstraintId::new("title_rank").unwrap(),
+                fields: vec![field("title"), field("rank")],
+                message: "One note per title and rank".into(),
+            },
+        },
+        SchemaChange::RemoveUnique {
+            object: object("note"),
+            unique: ConstraintId::new("title_rank").unwrap(),
+        },
     ]
 }
 
@@ -643,6 +714,15 @@ fn needs() -> Vec<Need> {
             object: object("note"),
             after: Some(RecordId(1)),
             limit: 50,
+        },
+        Need::ByFields {
+            object: object("note"),
+            fields: [
+                (field("title"), Value::Str("a".into())),
+                (field("rank"), Value::Int(1)),
+            ]
+            .into_iter()
+            .collect(),
         },
     ]
 }
