@@ -11,6 +11,7 @@ pub mod auth;
 pub mod dev;
 pub mod dispatch;
 pub mod erasure;
+pub mod files;
 pub mod hosts;
 pub mod http;
 pub mod hub;
@@ -143,6 +144,7 @@ fn purge(app: &App) {
             app.store
                 .purge_sessions(strata_kernel::Timestamp(now.0 - 86_400_000)),
         ),
+        ("files", files::purge(app, now)),
     ];
     for (what, result) in results {
         match result {

@@ -293,6 +293,8 @@ pub struct App {
     pub aggregate_copies: crate::aggregates::Copies,
     /// The outbound gate, set on first use or by a test (`crate::outbound::gate`).
     pub outbound: std::sync::OnceLock<Arc<crate::outbound::Gate>>,
+    /// Where the bytes of uploaded files live and the scanner that checks them.
+    pub files: crate::files::FileService,
 }
 
 pub type Shared = Arc<App>;
@@ -314,6 +316,7 @@ impl App {
             identity_outage: AtomicBool::new(false),
             aggregate_copies: Default::default(),
             outbound: std::sync::OnceLock::new(),
+            files: crate::files::FileService::new(),
         })
     }
 

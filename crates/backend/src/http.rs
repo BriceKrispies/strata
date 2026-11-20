@@ -1263,6 +1263,8 @@ pub fn router(app: Shared) -> Router {
         )
         .route("/internal/ws", get(socket))
         .merge(crate::outbound::routes::router());
+        .route("/internal/ws", get(socket))
+        .merge(crate::files::routes::router());
     // The development routes are compiled only with the `development` feature, and mounted only
     // when the process was started in development mode.
     #[cfg(feature = "development")]

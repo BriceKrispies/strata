@@ -310,6 +310,7 @@ pub fn erase_subject(app: &App, ctx: &Context, subject: &PrincipalId) -> Result<
     if !is_known(app, ctx, subject, &first)? {
         return Err(not_found());
     }
+    let _files = crate::files::erasure::erase_subject_files(app, ctx, subject)?;
     let sessions_before = app
         .store
         .live_sessions_of(tenant, Some(subject), ctx.now)?

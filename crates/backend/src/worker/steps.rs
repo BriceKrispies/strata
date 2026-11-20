@@ -267,6 +267,12 @@ pub fn run_job(app: &App, tenant: &TenantId, lease: &Lease, now: Timestamp) -> O
                 },
             }
         }
+        JobWork::ScanFile { file } => {
+            crate::files::scan::run_scan_job(app, tenant, file, lease.exhausted, now)
+        }
+        JobWork::Rendition { file, rendition } => {
+            crate::files::scan::run_rendition_job(tenant, file, rendition)
+        }
     }
 }
 

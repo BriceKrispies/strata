@@ -17,6 +17,7 @@
 //!   from the browser are validated against protocol v1, and both directions go through bounded
 //!   queues.
 
+pub mod files;
 pub mod hosts;
 pub mod limits;
 pub mod relay;
