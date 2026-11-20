@@ -181,12 +181,15 @@ pub struct QueueEntry {
     pub source_key: String,
 }
 
-/// A queue entry whose delivery failed, kept with the reason.
+/// A queue entry whose delivery failed, or an outbox message whose dispatch failed on every
+/// attempt the retry policy allows, kept with the reason.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DeadLetter {
-    /// The entry as it was on the queue.
-    pub entry: QueueEntry,
-    /// Why its step failed.
+    /// The entry as it was on the queue. For an outbox message: `seq` is the message's outbox
+    /// id, `due` its `not_before`, `source` and `source_key` the emitting instance, `event` the
+    /// emitted event, and no target or timer.
+    /// Why its step failed. For an outbox message: the receiver, the number of attempts and the
+    /// error of the last one.
     pub error: String,
     /// When it was set aside.
     pub at: Time,
@@ -207,6 +210,39 @@ pub trait Tx {
         data: &str,
         expected: Option<u64>,
     ) -> Result<u64, StorageError>;
+
+    /// Like [`Tx::save`], and records `at`, the time of the step that made the save, as the time
+    /// the record was last saved ([`Tx::stale_keys`]). A store that stamps its records with a
+    /// clock of its own may keep that time instead; the default ignores `at`.
+    fn save_stamped(
+        &mut self,
+        collection: &str,
+        key: &str,
+        data: &str,
+        expected: Option<u64>,
+        at: Time,
+    ) -> Result<u64, StorageError> {
+        let _ = at;
+        self.save(collection, key, data, expected)
+    }
+
+    /// The keys, in creation order, of the records of `collection` whose last save was before
+    /// `before`. A record whose save time is not known (saved by [`Tx::save`] only, or before
+    /// the store recorded times) is never listed.
+    fn stale_keys(&mut self, collection: &str, before: Time) -> Result<Vec<String>, StorageError>;
+
+    /// Remove the record of `key` in `collection`. Returns whether there was one.
+    fn delete_record(&mut self, collection: &str, key: &str) -> Result<bool, StorageError>;
+
+    /// Remove the outbox message `id` and return it, or `None` when it is gone (delivered,
+    /// claimed or dead-lettered by another host).
+    fn take_message(&mut self, id: u64) -> Result<Option<OutboxEntry>, StorageError>;
+
+    /// Remove every dead letter set aside before `before` ([`DeadLetter::at`]). Returns how many.
+    fn purge_dead_letters(&mut self, before: Time) -> Result<u64, StorageError>;
+
+    /// How many dead letters are kept.
+    fn count_dead_letters(&mut self) -> Result<u64, StorageError>;
 
     /// Put an event in the outbox. Returns its id.
     fn enqueue(&mut self, message: &NewMessage) -> Result<u64, StorageError>;

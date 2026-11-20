@@ -74,6 +74,9 @@ pub async fn run(
                 Ok(()) => {}
                 Err(error) => LOG.error("janitor.failed", "", json!({ "error": error.describe() })),
             }
+            if let Some(outbox) = janitor.hub.outbox.get() {
+                outbox.purge().await;
+            }
         })
         .await
     });

@@ -522,6 +522,7 @@ pub fn platform_diagnostics(app: &App) -> Result<Json, ApiError> {
         "sessions": sessions,
         "connections": connections,
         "pending_operations": app.stats.in_flight.load(Ordering::Relaxed),
+        "machine_store": app.hub.outbox.get().map(|outbox| outbox.held()),
         "counters": app.stats.counters.lock().map(|c| json!(*c)).unwrap_or(Json::Null),
         "recent_events": app.stats.recent_events.list(),
         "recent_rejections": app.stats.recent_rejections.list(),

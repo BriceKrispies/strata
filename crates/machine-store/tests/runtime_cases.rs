@@ -518,3 +518,51 @@ fn api_sqlite_tenants_with_equal_record_ids_share_no_instance_state() {
         SqliteStore::open(&path, strata_kernel::Timestamp(0)).unwrap(),
     ));
 }
+
+/// Verifies: OPS-2440
+#[tokio::test]
+async fn api_memory_a_singleton_takes_its_first_event_without_seeding() {
+    system::a_singleton_takes_its_first_event_without_seeding(api_memory()).await;
+}
+
+/// Verifies: OPS-2440
+#[tokio::test]
+async fn api_sqlite_a_singleton_takes_its_first_event_without_seeding() {
+    system::a_singleton_takes_its_first_event_without_seeding(api_sqlite("singleton")).await;
+}
+
+/// Verifies: OPS-2440
+#[tokio::test]
+async fn api_memory_two_systems_over_one_store_make_one_singleton() {
+    system::two_systems_over_one_store_make_one_singleton(api_memory()).await;
+}
+
+/// Verifies: OPS-2440
+#[tokio::test]
+async fn api_sqlite_two_systems_over_one_store_make_one_singleton() {
+    system::two_systems_over_one_store_make_one_singleton(api_sqlite("two-singletons")).await;
+}
+
+/// Verifies: OPS-2441
+#[tokio::test]
+async fn api_memory_a_message_that_always_fails_is_dead_lettered_after_the_cap() {
+    system::a_message_that_always_fails_is_dead_lettered_after_the_cap(api_memory()).await;
+}
+
+/// Verifies: OPS-2441
+#[tokio::test]
+async fn api_sqlite_a_message_that_always_fails_is_dead_lettered_after_the_cap() {
+    system::a_message_that_always_fails_is_dead_lettered_after_the_cap(api_sqlite("cap")).await;
+}
+
+/// Verifies: OPS-2442
+#[tokio::test]
+async fn api_memory_purges_dead_letters_past_retention() {
+    system::purges_dead_letters_past_retention(api_memory()).await;
+}
+
+/// Verifies: OPS-2442
+#[tokio::test]
+async fn api_sqlite_purges_dead_letters_past_retention() {
+    system::purges_dead_letters_past_retention(api_sqlite("purge-dead")).await;
+}

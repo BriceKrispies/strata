@@ -104,6 +104,11 @@ pub struct RetryPolicy {
     pub factor: u32,
     /// The delay never grows beyond this.
     pub max: Duration,
+    /// The most dispatches of one message, the first included. The dispatch that fails for the
+    /// `max_attempts`th time moves the message to the dead letters with the error of that
+    /// attempt ([`QueueStore::dead_letters`](crate::QueueStore::dead_letters)), and it is not
+    /// dispatched again. With the defaults the waits between the ten attempts add up to 511 s.
+    pub max_attempts: u32,
 }
 
 impl Default for RetryPolicy {
@@ -112,6 +117,7 @@ impl Default for RetryPolicy {
             first: Duration::from_secs(1),
             factor: 2,
             max: Duration::from_secs(300),
+            max_attempts: 10,
         }
     }
 }
@@ -329,6 +335,8 @@ pub struct DispatchReport {
     pub deferred: usize,
     /// `at-most-once` dispatches that failed and are gone.
     pub dropped: usize,
+    /// `at-least-once` messages whose last allowed attempt failed: moved to the dead letters.
+    pub dead: usize,
 }
 
 impl DispatchReport {
@@ -336,7 +344,41 @@ impl DispatchReport {
         self.delivered += other.delivered;
         self.deferred += other.deferred;
         self.dropped += other.dropped;
+        self.dead += other.dead;
     }
+}
+
+/// Move the outbox message `id` to the dead letters in one transaction, after its dispatch failed
+/// `attempts` times, the last with `last_error`. False when the message is gone (another host
+/// delivered, claimed or dead-lettered it).
+pub(crate) fn dead_letter_message<S: MachineStore>(
+    store: &S,
+    isolation: Isolation,
+    id: u64,
+    attempts: u32,
+    last_error: &str,
+    now: Time,
+) -> Result<bool, HostError> {
+    store.transact(isolation, |tx| -> Result<bool, HostError> {
+        let Some(message) = tx.take_message(id)? else {
+            return Ok(false);
+        };
+        let entry = QueueEntry {
+            seq: message.id,
+            due: message.not_before,
+            event: message.event.clone(),
+            target: None,
+            timer: None,
+            source: message.source.clone(),
+            source_key: message.key.clone(),
+        };
+        let why = format!(
+            "the message to {} was not delivered in {attempts} attempts; the last error was: {last_error}",
+            message.receiver
+        );
+        tx.dead_letter(&entry, &why, now)?;
+        Ok(true)
+    })
 }
 
 /// The result of [`Host::handle`].
@@ -436,11 +478,12 @@ fn transition<M: Machine>(
     }
     let record = M::to_record(key, &outcome.state, &outcome.vars, previous.as_ref())?;
     M::validate_record(&record).map_err(HostError::Constraint)?;
-    let version = tx.save(
+    let version = tx.save_stamped(
         M::RECORD,
         &key_text,
         &encode(&record)?,
         stored.map(|s| s.version),
+        now,
     )?;
     for command in &outcome.timers {
         match command {
@@ -678,6 +721,38 @@ impl<M: Machine, S: MachineStore, D: Dispatcher<M::Emitted>> Host<M, S, D> {
                     ..DispatchReport::default()
                 }
             }
+            (Some(id), Err(error)) if attempts + 1 >= self.retry.max_attempts => {
+                let attempts = attempts + 1;
+                let why = error.0.clone();
+                self.telemetry.event(
+                    Level::Error,
+                    "outbox.dead_lettered",
+                    &[
+                        ("machine", M::NAME.into()),
+                        ("receiver", receiver.into()),
+                        ("id", id.into()),
+                        ("attempts", attempts.into()),
+                        ("error", why.as_str().into()),
+                    ],
+                );
+                let now = self.clock.now();
+                let moved = self
+                    .on_store(move |store| {
+                        dead_letter_message(store, M::ISOLATION, id, attempts, &why, now)
+                    })
+                    .await;
+                match moved {
+                    Ok(Ok(_)) => DispatchReport {
+                        dead: 1,
+                        ..DispatchReport::default()
+                    },
+                    // The message could not be moved: it stays, and the next drain tries again.
+                    _ => DispatchReport {
+                        deferred: 1,
+                        ..DispatchReport::default()
+                    },
+                }
+            }
             (Some(id), Err(error)) => {
                 let attempts = attempts + 1;
                 let next = self.clock.now().after(self.retry.delay(attempts));
@@ -743,6 +818,19 @@ impl<M: Machine, S: MachineStore, D: Dispatcher<M::Emitted>> Host<M, S, D> {
                         "outbox.unreadable",
                         &[("id", id.into()), ("error", why.as_str().into())],
                     );
+                    if attempts >= self.retry.max_attempts {
+                        let moved = self
+                            .on_store(move |store| {
+                                dead_letter_message(store, M::ISOLATION, id, attempts, &why, now)
+                            })
+                            .await;
+                        if matches!(moved, Ok(Ok(_))) {
+                            report.dead += 1;
+                            continue;
+                        }
+                        report.deferred += 1;
+                        continue;
+                    }
                     let _ = self
                         .on_store(move |store| store.defer(id, attempts, next, &why))
                         .await;

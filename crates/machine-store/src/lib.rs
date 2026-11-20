@@ -679,6 +679,54 @@ impl Tx for ApiTx<'_> {
         Ok(version)
     }
 
+    /// A record's save time is its `updated_at`, which the store's own clock stamps on every save:
+    /// the time given by the host is not kept.
+    fn stale_keys(&mut self, collection: &str, before: Time) -> Result<Vec<String>, StorageError> {
+        let object = collection_object(collection)?;
+        let mut keys = Vec::new();
+        for record in self.all(&object)? {
+            if record.updated_at.0 < before.0 {
+                keys.push(text(&record, "key")?);
+            }
+        }
+        Ok(keys)
+    }
+
+    fn delete_record(&mut self, collection: &str, key: &str) -> Result<bool, StorageError> {
+        let object = collection_object(collection)?;
+        match self.find(&object, "key", key)? {
+            Some(found) => {
+                self.remove(&found);
+                Ok(true)
+            }
+            None => Ok(false),
+        }
+    }
+
+    fn take_message(&mut self, id: u64) -> Result<Option<OutboxEntry>, StorageError> {
+        let Some(found) = self.get(&object_type(OUTBOX)?, RecordId(id))? else {
+            return Ok(None);
+        };
+        let entry = outbox_entry(&found)?;
+        self.remove(&found);
+        Ok(Some(entry))
+    }
+
+    fn purge_dead_letters(&mut self, before: Time) -> Result<u64, StorageError> {
+        let mut removed = 0;
+        for record in self.all(&object_type(DEAD_LETTERS)?)? {
+            if int(&record, "at")? < before.0 {
+                self.remove(&record);
+                removed += 1;
+            }
+        }
+        Ok(removed)
+    }
+
+    fn count_dead_letters(&mut self) -> Result<u64, StorageError> {
+        Ok(self.all(&object_type(DEAD_LETTERS)?)?.len() as u64)
+    }
+
     fn enqueue(&mut self, message: &NewMessage) -> Result<u64, StorageError> {
         let id = self.alloc();
         let mut fields = strings(&[

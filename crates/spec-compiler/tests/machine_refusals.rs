@@ -491,3 +491,33 @@ fn the_generated_machine_marks_elapsed_events_and_validates_records() {
     assert!(code.contains("matches!(event, Event::EvTick(_))"), "{code}");
     assert!(code.contains("record.validate()"));
 }
+
+#[test]
+fn an_unkeyed_creating_machine_has_a_fixed_key_the_runtime_can_fill() {
+    let machines = |text: &str| -> String {
+        generate("spec.jsonc", text, &options())
+            .unwrap()
+            .into_iter()
+            .find(|f| f.path == "src/machines.rs")
+            .unwrap()
+            .contents
+    };
+    // Unkeyed and creating: the runtime creates the one instance, under the machine's id.
+    let text = with(|s| machine(s)["storage"]["creates"] = json!(true));
+    assert!(machines(&text)
+        .contains("const SINGLETON_KEY: Option<&'static str> = Some(\"\\\"m\\\"\");"));
+    // A machine that does not create its records has no singleton.
+    assert!(!machines(&with(|_| {})).contains("SINGLETON_KEY"));
+    // A keyed machine has an instance per key.
+    let text = with(|s| {
+        machine(s)["storage"]["creates"] = json!(true);
+        machine(s)["instances"] = json!({ "key": "id", "storedIn": "m-rec" });
+    });
+    assert!(!machines(&text).contains("SINGLETON_KEY"));
+    // A key of a type with no fixed value is refused.
+    let text = with(|s| {
+        machine(s)["storage"]["creates"] = json!(true);
+        s["records"][0]["fields"][0]["type"] = json!("bytes");
+    });
+    assert_refused(&text, m::SINGLETON_KEY, "no fixed value");
+}

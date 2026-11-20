@@ -146,3 +146,63 @@ async fn memory_refuses_an_instance_beyond_max() {
 async fn sqlite_refuses_an_instance_beyond_max() {
     refuses_an_instance_beyond_max(sqlite("max")).await;
 }
+
+/// Verifies: OPS-2440
+#[tokio::test]
+async fn memory_a_singleton_takes_its_first_event_without_seeding() {
+    a_singleton_takes_its_first_event_without_seeding(memory()).await;
+}
+
+/// Verifies: OPS-2440
+#[tokio::test]
+async fn sqlite_a_singleton_takes_its_first_event_without_seeding() {
+    a_singleton_takes_its_first_event_without_seeding(sqlite("singleton")).await;
+}
+
+/// Verifies: OPS-2440
+#[tokio::test]
+async fn memory_two_systems_over_one_store_make_one_singleton() {
+    two_systems_over_one_store_make_one_singleton(memory()).await;
+}
+
+/// Verifies: OPS-2440
+#[tokio::test]
+async fn sqlite_two_systems_over_one_store_make_one_singleton() {
+    two_systems_over_one_store_make_one_singleton(sqlite("two-singletons")).await;
+}
+
+/// Verifies: OPS-2441
+#[tokio::test]
+async fn memory_a_message_that_always_fails_is_dead_lettered_after_the_cap() {
+    a_message_that_always_fails_is_dead_lettered_after_the_cap(memory()).await;
+}
+
+/// Verifies: OPS-2441
+#[tokio::test]
+async fn sqlite_a_message_that_always_fails_is_dead_lettered_after_the_cap() {
+    a_message_that_always_fails_is_dead_lettered_after_the_cap(sqlite("cap")).await;
+}
+
+/// Verifies: OPS-2442
+#[tokio::test]
+async fn memory_purges_dead_letters_past_retention() {
+    purges_dead_letters_past_retention(memory()).await;
+}
+
+/// Verifies: OPS-2442
+#[tokio::test]
+async fn sqlite_purges_dead_letters_past_retention() {
+    purges_dead_letters_past_retention(sqlite("purge-dead")).await;
+}
+
+/// Verifies: OPS-2442
+#[tokio::test]
+async fn memory_purges_finished_records_past_retention() {
+    purges_finished_records_past_retention(memory()).await;
+}
+
+/// Verifies: OPS-2442
+#[tokio::test]
+async fn sqlite_purges_finished_records_past_retention() {
+    purges_finished_records_past_retention(sqlite("purge-records")).await;
+}
