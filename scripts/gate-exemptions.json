@@ -46,17 +46,7 @@
       ]
     }
   ],
-  "env": [
-    {
-      "reason": "Read by the backend; RUN-1387 does not list them and nothing else in the specification names them (WG-5050).",
-      "items": [
-        "STRATA_ARGON2_PER_TENANT",
-        "STRATA_BLOCKING_PER_TENANT",
-        "STRATA_BLOCKING_QUEUE",
-        "STRATA_MAX_CONNECTIONS_PER_SOURCE"
-      ]
-    }
-  ],
+  "env": [],
   "bffRoutes": [
     {
       "reason": "Identity routes of the BFF with no contract that names them in bffRoute (WG-5051).",
