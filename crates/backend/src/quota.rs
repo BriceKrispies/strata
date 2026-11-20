@@ -102,6 +102,9 @@ pub const ROUTES: &[(&str, &str)] = &[
     ("/internal/recovery/cancel", "cancel-recovery"),
     ("/internal/aggregate", "aggregate-run"),
     ("/internal/view", "read-view"),
+    ("/internal/lab/run", "run-lab-projection"),
+    ("/internal/lab/verify", "verify-lab-proofs"),
+    ("/internal/token", "issue-access-token"),
 ];
 
 /// The contract a route serves, when it serves one.

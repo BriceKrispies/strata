@@ -4,6 +4,7 @@
 //! |---|---|---|
 //! | `STRATA_BACKEND_ADDR` | `127.0.0.1:4101` | Listen address. Must be loopback. |
 //! | `STRATA_SERVICE_TOKEN` | none, required | Shared secret the BFF presents. |
+//! | `STRATA_OPERATOR_TOKEN` | unset | Secret the platform operator presents in `x-strata-operator` to read the platform diagnostics; at least 24 characters and not the service token. Unset: those diagnostics answer "not found" outside development. |
 //! | `STRATA_STORE` | `sqlite` | `sqlite` or `memory`. |
 //! | `STRATA_DB` | `var/strata.db` | SQLite control database (the tenant directory). |
 //! | `STRATA_TENANT_FILES` | `<STRATA_DB stem>-tenants` beside it | Directory of the per-tenant SQLite files. |
@@ -347,6 +348,21 @@ mod tests {
         assert!(run(false, "short", "").is_err());
         assert!(run(true, "", "").is_ok());
         assert!(run(false, KEY, "").is_ok());
+    }
+
+    #[test]
+    fn an_operator_credential_must_be_long_and_must_not_be_the_service_token() {
+        std::env::remove_var("STRATA_OPERATOR_TOKEN");
+        assert!(operator_token(TOKEN).is_ok(), "none configured is allowed");
+        std::env::set_var("STRATA_OPERATOR_TOKEN", "short");
+        let short = operator_token(TOKEN).unwrap_err();
+        assert!(short.contains("STRATA_OPERATOR_TOKEN"), "{short}");
+        std::env::set_var("STRATA_OPERATOR_TOKEN", TOKEN);
+        let same = operator_token(TOKEN).unwrap_err();
+        assert!(same.contains("service token"), "{same}");
+        std::env::set_var("STRATA_OPERATOR_TOKEN", KEY);
+        assert!(operator_token(TOKEN).is_ok());
+        std::env::remove_var("STRATA_OPERATOR_TOKEN");
     }
 
     #[test]
