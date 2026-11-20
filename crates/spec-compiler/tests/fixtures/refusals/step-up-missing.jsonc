@@ -1,0 +1,31 @@
+{
+  "exegra": "0.1",
+  "system": { "id": "sys", "name": "System" },
+  "decisions": [
+    {
+      "id": "d-6201",
+      "statement": "The operations that need a fresh authentication: changing a password (CT-062), rotating a client secret (CT-080), exporting a tenant (CT-038) and erasing a principal (CT-213). The key operations (CT-151..155) are in-process and not on the list."
+    }
+  ],
+  "contracts": [
+    {
+      "id": "change-password", "name": "Change a password", "ref": "CT-062", "exposure": "public",
+      "auth": { "scheme": "session", "stepUp": "15 min" },
+      "errors": [ { "name": "step-up-required", "kind": "forbidden" } ]
+    },
+    {
+      "id": "rotate-client-secret", "name": "Rotate a client secret", "ref": "CT-080", "exposure": "public",
+      "auth": { "scheme": "session" },
+      "errors": [ { "name": "step-up-required", "kind": "forbidden" } ]
+    },
+    {
+      "id": "export-tenant", "name": "Export a tenant", "ref": "CT-038", "exposure": "public",
+      "auth": { "scheme": "session", "stepUp": "15 min" },
+      "errors": []
+    },
+    {
+      "id": "key-operation", "name": "A key operation", "ref": "CT-151", "exposure": "local",
+      "auth": { "scheme": "in-process" }
+    }
+  ]
+}

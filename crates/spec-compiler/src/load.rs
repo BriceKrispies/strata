@@ -253,6 +253,7 @@ impl Loader {
         let mut constructs = self.constructs(top);
         constructs.access = self.access_model(top);
         let telemetry = self.telemetry(top);
+        self.diagnostics.extend(crate::contract_rules::check(top));
         let languages = self.languages(top);
         let functions = self.functions(top);
         let example_fixtures = self.example_fixtures(top);
