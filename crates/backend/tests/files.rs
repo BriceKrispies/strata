@@ -4,7 +4,7 @@
 //! tenants and its own file root.
 
 use serde_json::Value as Json;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use strata_backend::app::{ApiError, App, Config};
@@ -20,13 +20,16 @@ use strata_backend::files::{
     UPLOAD_KIND,
 };
 use strata_backend::mail::DevSink;
+use strata_backend::ops;
 use strata_backend::worker::{self, WorkerConfig};
 use strata_kernel::ext::TenantSchemaExt;
 use strata_kernel::{
     Action, Context, DataSubject, DeltaOp, ExistingData, Expr, FieldDef, FieldId, FieldType,
     Intent, ObjectTypeDef, ObjectTypeId, Output, PersonalDeclaration, PersonalKind, PolicyDef,
-    PolicyId, Principal, PrincipalId, RecordId, Resource, RoleDef, RoleId, StateDelta,
-    StateRevision, TenantId, TenantSchema, Timestamp, Transition, Value,
+    PolicyId, Principal, PrincipalId, RecordId, Resource, RoleDef, RoleId, SchemaChange,
+    StateDelta, StateRevision, TenantId, TenantOperationDef, TenantOperationId,
+    TenantOperationInput, TenantOperationInvokers, TenantOperationStep, TenantSchema, Timestamp,
+    Transition, Value,
 };
 use strata_protocol::api::ErrorCode;
 use strata_storage_api::memory::MemoryStore;
@@ -228,6 +231,25 @@ fn found(store: &dyn Store, name: &str) -> TenantId {
         );
         read_policy(&mut schema, name, "photo");
     }
+    // The writer may create and update photos and read none.
+    schema.roles.insert(
+        role("writer"),
+        RoleDef {
+            id: role("writer"),
+            label: "writer".to_string(),
+        },
+    );
+    let writes = PolicyId::new("writer_writes_photo").expect("policy id");
+    schema.policies.insert(
+        writes.clone(),
+        PolicyDef {
+            id: writes,
+            role: role("writer"),
+            resource: Resource::Object(ObjectTypeId::new("photo").expect("object id")),
+            actions: BTreeSet::from([Action::Create, Action::Update]),
+            condition: None,
+        },
+    );
     assert!(schema.problems().is_empty(), "{:?}", schema.problems());
     let delta = StateDelta {
         tenant: site.clone(),
@@ -256,7 +278,7 @@ fn found(store: &dyn Store, name: &str) -> TenantId {
             &transition,
         ))
         .expect("the schema is committed");
-    for name in ["reader", "editor"] {
+    for name in ["reader", "editor", "writer"] {
         assign(store, &site, name, name);
     }
     site
@@ -935,4 +957,221 @@ fn erasure_removes_the_files_only_the_subjects_personal_fields_refer_to() {
         .expect("read")
         .expect("what the erasure removed is kept");
     assert!(noted.contains(&own) && !noted.contains(&shared), "{noted}");
+}
+
+/// The file id of a PNG nobody has uploaded.
+fn unstored_file() -> String {
+    use sha2::{Digest, Sha256};
+    storage::hex(&Sha256::digest(png(8, 8, b"never uploaded")))
+}
+
+fn photo_fields(fields: &[(&str, &str)]) -> BTreeMap<FieldId, Value> {
+    fields
+        .iter()
+        .map(|(k, v)| {
+            (
+                FieldId::new(*k).expect("field id"),
+                Value::Str(v.to_string()),
+            )
+        })
+        .collect()
+}
+
+/// Create a photo through the backend's write path, as `as_ctx`.
+fn create_as(app: &App, as_ctx: &Context, fields: &[(&str, &str)]) -> Result<(), ApiError> {
+    ops::run_intent(
+        app,
+        as_ctx,
+        &Intent::CreateRecord {
+            object: ObjectTypeId::new("photo").expect("object id"),
+            fields: photo_fields(fields),
+        },
+        false,
+    )
+    .map(|_| ())
+}
+
+/// Update a photo through the backend's write path, as `as_ctx`.
+fn update_as(
+    app: &App,
+    as_ctx: &Context,
+    id: RecordId,
+    fields: &[(&str, &str)],
+) -> Result<(), ApiError> {
+    ops::run_intent(
+        app,
+        as_ctx,
+        &Intent::UpdateRecord {
+            object: ObjectTypeId::new("photo").expect("object id"),
+            id,
+            fields: photo_fields(fields),
+            expected_version: None,
+        },
+        false,
+    )
+    .map(|_| ())
+}
+
+// Verifies: CMS-2900
+#[test]
+fn a_record_may_name_only_a_clean_file_the_writer_uploaded_or_may_read() {
+    let app = memory_app("attach");
+    let site = found(app.store.as_ref(), "attach");
+    let writer = as_user(&site, "writer", T0 + 3_000);
+    let owner = as_owner(&site, T0 + 3_000);
+    let mine = upload_png(&app, &site, b"mine");
+    // Still scanning: refused, for the uploader too.
+    assert_eq!(state_of(&app, &site, &mine), Some(FileState::Scanning));
+    assert_eq!(
+        code(create_as(&app, &owner, &[("image", mine.as_str())])),
+        ErrorCode::NotFound
+    );
+    run_jobs(&app, T0 + 1_000);
+    assert_eq!(state_of(&app, &site, &mine), Some(FileState::Clean));
+    // Another principal's unattached upload, a hash nobody stored and a text that is no hash are
+    // refused with one answer.
+    let theirs = create_as(&app, &writer, &[("image", mine.as_str())]).expect_err("refused");
+    let unstored =
+        create_as(&app, &writer, &[("image", unstored_file().as_str())]).expect_err("refused");
+    let no_hash = create_as(&app, &writer, &[("image", "../etc/passwd")]).expect_err("refused");
+    assert_eq!(theirs.0.code, ErrorCode::NotFound);
+    assert_eq!(theirs.0.message, unstored.0.message);
+    assert_eq!(theirs.0.message, no_hash.0.message);
+    assert_eq!(unstored.0.code, ErrorCode::NotFound);
+    assert_eq!(no_hash.0.code, ErrorCode::NotFound);
+    // The uploader may name their own clean file.
+    assert!(create_as(&app, &owner, &[("title", "a"), ("image", mine.as_str())]).is_ok());
+}
+
+// Verifies: CMS-2900
+#[test]
+fn a_rejected_file_and_another_tenants_file_cannot_be_named() {
+    let app = memory_app("attach_other");
+    let site = found(app.store.as_ref(), "attach_other");
+    let elsewhere = found(app.store.as_ref(), "attach_elsewhere");
+    let owner = as_owner(&site, T0 + 3_000);
+    let foreign = upload_png(&app, &elsewhere, b"foreign");
+    let infected = upload_png(&app, &site, &eicar());
+    run_jobs(&app, T0 + 1_000);
+    assert_eq!(state_of(&app, &elsewhere, &foreign), Some(FileState::Clean));
+    assert_eq!(state_of(&app, &site, &infected), Some(FileState::Rejected));
+    // The other tenant's file is not stored here, so even its uploader's namesake is refused.
+    assert_eq!(
+        code(create_as(&app, &owner, &[("image", foreign.as_str())])),
+        ErrorCode::NotFound
+    );
+    assert_eq!(
+        code(create_as(&app, &owner, &[("image", infected.as_str())])),
+        ErrorCode::NotFound
+    );
+}
+
+// Verifies: CMS-2900
+#[test]
+fn an_unchanged_file_field_is_not_checked_again_and_a_changed_one_is() {
+    let app = memory_app("attach_update");
+    let site = found(app.store.as_ref(), "attach_update");
+    let writer = as_user(&site, "writer", T0 + 3_000);
+    let first = upload_png(&app, &site, b"first");
+    let second = upload_png(&app, &site, b"second");
+    run_jobs(&app, T0 + 1_000);
+    let record = create_photo(&app, &site, &[("title", "a"), ("image", first.as_str())]);
+    // The writer reads no photo and uploaded neither file: the value already held is not looked at
+    // again, a new one is refused.
+    assert!(update_as(
+        &app,
+        &writer,
+        record,
+        &[("title", "b"), ("image", first.as_str())]
+    )
+    .is_ok());
+    assert_eq!(
+        code(update_as(
+            &app,
+            &writer,
+            record,
+            &[("image", second.as_str())]
+        )),
+        ErrorCode::NotFound
+    );
+    assert!(update_as(
+        &app,
+        &as_owner(&site, T0 + 3_000),
+        record,
+        &[("image", second.as_str())]
+    )
+    .is_ok());
+}
+
+/// The operation that creates a photo holding the file it is given.
+fn photo_operation() -> TenantOperationDef {
+    TenantOperationDef {
+        id: TenantOperationId::new("add_photo").expect("operation id"),
+        label: "Add photo".into(),
+        inputs: vec![TenantOperationInput {
+            name: "image".into(),
+            ty: file_type(&["image/*"], 2_000_000),
+            required: true,
+            label: None,
+        }],
+        invokers: TenantOperationInvokers {
+            signed_in: true,
+            roles: BTreeSet::new(),
+        },
+        subject: None,
+        conditions: Vec::new(),
+        steps: vec![TenantOperationStep::CreateRecord {
+            id: "made".into(),
+            object: ObjectTypeId::new("photo").expect("object id"),
+            fields: BTreeMap::from([(
+                FieldId::new("image").expect("field id"),
+                Expr::Param("image".into()),
+            )]),
+        }],
+    }
+}
+
+// Verifies: CMS-2900
+#[test]
+fn a_tenant_operation_names_files_under_the_same_rule() {
+    let app = memory_app("attach_operation");
+    let site = found(app.store.as_ref(), "attach_operation");
+    execute(
+        app.store.as_ref(),
+        &Intent::ChangeSchema {
+            changes: vec![SchemaChange::DefineOperation(photo_operation())],
+            expected_version: None,
+            existing: ExistingData::Reject,
+        },
+        &as_owner(&site, T0 + 2_900),
+    )
+    .expect("the operation is defined");
+    let owned = upload_png(&app, &site, b"op");
+    run_jobs(&app, T0 + 1_000);
+    let invoke = |as_ctx: &Context, file: &str, key: &str| {
+        let mut ctx = as_ctx.clone();
+        ctx.idempotency_key = Some(key.to_string());
+        ops::run_intent(
+            &app,
+            &ctx,
+            &Intent::InvokeOperation {
+                operation: TenantOperationId::new("add_photo").expect("operation id"),
+                inputs: BTreeMap::from([("image".to_string(), Value::Str(file.to_string()))]),
+                idempotency_key: key.to_string(),
+            },
+            false,
+        )
+        .map(|_| ())
+    };
+    let writer = as_user(&site, "writer", T0 + 3_000);
+    let owner = as_owner(&site, T0 + 3_000);
+    assert_eq!(
+        code(invoke(&writer, &owned, "k-writer")),
+        ErrorCode::NotFound
+    );
+    assert_eq!(
+        code(invoke(&owner, &unstored_file(), "k-gone")),
+        ErrorCode::NotFound
+    );
+    assert!(invoke(&owner, &owned, "k-owner").is_ok());
 }

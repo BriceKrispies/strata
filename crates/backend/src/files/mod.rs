@@ -34,10 +34,15 @@
 //! refused at intake: CMS-258 allows a markup-capable file only from a file domain under a
 //! sandboxed policy, and this platform has no file domain yet (WG-5224), so none is accepted.
 //!
+//! **Who may name a file in a record** ([`attach`]): a file id in a new or changed file field must
+//! name a clean file of the tenant that the principal uploaded or may already read; every refusal
+//! is `not_found` (CMS-1591).
+//!
 //! Implements: CMS-008, CMS-260, CMS-261, CMS-1591, CMS-1593, EDG-012, EDG-1592
 
 pub mod access;
 pub mod address;
+pub mod attach;
 pub mod deliver;
 pub mod erasure;
 pub mod routes;

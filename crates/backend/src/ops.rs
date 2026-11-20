@@ -38,6 +38,7 @@ pub fn run_intent(
     intent: &Intent,
     anonymous: bool,
 ) -> Result<Executed, ApiError> {
+    crate::files::attach::check_intent(app, ctx, intent)?;
     // A change of someone's roles ends their sessions in the commit itself. The ones that are
     // live now are noted first, to be announced and to have their sockets closed.
     let affected = match intent {
