@@ -870,6 +870,64 @@ fn an_unreferenced_file_is_purged_and_a_referenced_one_kept() {
         .is_empty());
 }
 
+// Verifies: CMS-1591
+#[test]
+fn deleting_the_last_reference_to_a_file_purges_its_bytes_a_day_later() {
+    let app = memory_app("lastref");
+    let site = found(app.store.as_ref(), "lastref");
+    let file = upload_png(&app, &site, b"once attached");
+    let record = create_photo(&app, &site, &[("image", file.as_str())]);
+    let day = 24 * 3_600_000;
+    let seen = T0 + 1_000;
+    // While a record refers to it, no pass removes it, however late; the pass notes when it saw
+    // the reference.
+    assert_eq!(
+        purge_tenant(&app, &site, Timestamp(seen)).expect("purged"),
+        0
+    );
+    assert_eq!(
+        purge_tenant(&app, &site, Timestamp(seen + 30 * day)).expect("purged"),
+        0,
+        "a referenced file is kept"
+    );
+    let noted = storage::get_meta(&app, &site, &file)
+        .expect("metadata")
+        .expect("the file exists");
+    assert!(noted.referenced_at.is_some());
+    // The last reference is deleted: the file is not removed at once, but at the retention point
+    // ret-file-bytes states, 24 hours after the reference was last seen.
+    execute(
+        app.store.as_ref(),
+        &Intent::DeleteRecord {
+            object: ObjectTypeId::new("photo").expect("object id"),
+            id: record,
+            expected_version: None,
+        },
+        &as_owner(&site, seen + 31 * day),
+    )
+    .expect("the record is deleted");
+    let last_seen = noted.referenced_at.expect("seen referred to");
+    assert_eq!(
+        purge_tenant(&app, &site, Timestamp(last_seen + day - 1)).expect("purged"),
+        0
+    );
+    assert!(state_of(&app, &site, &file).is_some());
+    assert!(storage::bytes_path(&app, &site, &file)
+        .expect("path")
+        .exists());
+    assert_eq!(
+        purge_tenant(&app, &site, Timestamp(last_seen + day)).expect("purged"),
+        1
+    );
+    assert!(state_of(&app, &site, &file).is_none());
+    assert!(
+        !storage::bytes_path(&app, &site, &file)
+            .expect("path")
+            .exists(),
+        "the bytes are gone"
+    );
+}
+
 // Verifies: CMS-008
 #[test]
 fn another_tenant_cannot_fetch_by_id_or_by_a_copied_address() {
