@@ -1,0 +1,21 @@
+{
+  // Refused: an object type with a personal field and no retention (layer.retention-missing, D-6584).
+  // The second type has no personal field and needs none.
+  "product": { "id": "member-tiers", "name": "Member tiers", "imports": { "spec": "../../../../../../specifications/spec.jsonc", "entities": [] } },
+  "objects": [
+    {
+      "id": "member_tiers__member",
+      "label": "Member",
+      "fields": {
+        "email": { "id": "email", "label": "Email", "ty": "Str", "required": true, "unique": false, "personal": { "kind": "email-address", "subject": "Creator", "searchable": false } }
+      },
+      "constraints": {}
+    },
+    {
+      "id": "member_tiers__note",
+      "label": "Note",
+      "fields": { "text": { "id": "text", "label": "Text", "ty": "Str", "required": true, "unique": false } },
+      "constraints": {}
+    }
+  ]
+}

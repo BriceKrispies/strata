@@ -2535,3 +2535,45 @@ fn an_unauthorised_caller_cannot_tell_a_missing_record_from_an_existing_one() {
     let error = refused(step(&world, "alpha", "owner", 8_201, update("ghost", 1)));
     assert_eq!(error.kind, ErrorKind::UnknownObject);
 }
+
+#[test]
+fn a_type_with_a_personal_field_must_declare_retention() {
+    let personal = |retention: Option<RetentionRule>| {
+        let mut owner = field_def("owner", FieldType::Str, false);
+        owner.personal = Some(PersonalDeclaration {
+            kind: PersonalKind::Identifier,
+            subject: DataSubject::Creator,
+            searchable: false,
+        });
+        let mut schema = TenantSchema::genesis();
+        schema.objects.insert(
+            object("person_note"),
+            ObjectTypeDef {
+                id: object("person_note"),
+                label: "Person note".into(),
+                fields: BTreeMap::from([(field("owner"), owner)]),
+                constraints: BTreeMap::new(),
+                retention,
+                publication: None,
+                language_field: None,
+                translation_group: None,
+            },
+        );
+        schema
+    };
+    assert_eq!(
+        personal(None).problems(),
+        ["person_note: a type with a personal field must declare retention (D-6584)"]
+    );
+    let kept = RetentionRule {
+        days: 30,
+        from: RetentionStart::Created,
+    };
+    assert!(personal(Some(kept)).problems().is_empty());
+    // A type with no personal field takes the tenant policy's default and needs no rule.
+    let mut plain = personal(None);
+    if let Some(object) = plain.objects.get_mut(&object("person_note")) {
+        object.fields.clear();
+    }
+    assert!(plain.problems().is_empty());
+}

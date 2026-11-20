@@ -324,6 +324,13 @@ impl TenantSchemaExt for TenantSchema {
                     Err(e) => problems.push(format!("{}.{}: {e}", object.id, constraint.id)),
                 }
             }
+            // A type with a personal field says how long its records are kept (D-6584).
+            if object.retention.is_none() && object.fields.values().any(|f| f.personal.is_some()) {
+                problems.push(format!(
+                    "{}: a type with a personal field must declare retention (D-6584)",
+                    object.id
+                ));
+            }
         }
 
         for (role, permissions) in self.role_permissions.iter().flatten() {

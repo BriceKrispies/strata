@@ -24,6 +24,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use serde_json::Value;
+use strata_spec_compiler::layer_expr;
 use strata_spec_compiler::layer_values::{self, Types};
 use strata_spec_compiler::layers::{self, ProductFile};
 use strata_spec_compiler::load;
@@ -258,6 +259,39 @@ const REFUSED: &[(&str, &str, &[&str])] = &[
         ],
     ),
     (
+        "expression-syntax",
+        layer_expr::EXPR_SYNTAX,
+        &["is refused at position", "tenant rule language"],
+    ),
+    (
+        "expression-unknown-field",
+        layer_expr::EXPR_UNKNOWN_FIELD,
+        &["is refused at position", "unknown field"],
+    ),
+    (
+        "expression-unknown-role",
+        layer_expr::EXPR_UNKNOWN_ROLE,
+        &["unknown role member_tiers__ghost", "position 9"],
+    ),
+    (
+        "expression-unknown-param",
+        layer_expr::EXPR_UNKNOWN_PARAM,
+        &["undeclared parameter limit", "the scope binds name"],
+    ),
+    (
+        "expression-type",
+        layer_expr::EXPR_TYPE,
+        &["is refused at position", "tenant rule language"],
+    ),
+    (
+        "retention-missing",
+        layers::RETENTION_MISSING,
+        &[
+            "\"member_tiers__member\"",
+            "personal field \"email\" and no retention (D-6584)",
+        ],
+    ),
+    (
         "step-outside-catalogue",
         layers::OUTSIDE_CATALOGUE,
         &[
@@ -423,6 +457,78 @@ fn a_value_that_does_not_fit_its_platform_type_says_what_is_missing() {
     assert!(messages
         .iter()
         .any(|m| m.contains("\"fields.name\" lacks the required field \"ty\"")));
+}
+
+#[test]
+fn an_expression_that_does_not_parse_or_check_in_its_scope_is_refused_with_one_rule_per_kind() {
+    let found = |name: &str, code: &str| -> Vec<String> {
+        load_with(&[product(&format!("refused/{name}.jsonc"))])
+            .unwrap_err()
+            .into_iter()
+            .filter(|d| d.code == code)
+            .map(|d| d.message)
+            .collect()
+    };
+    let syntax = found("expression-syntax", layer_expr::EXPR_SYNTAX);
+    assert_eq!(syntax.len(), 2, "{syntax:?}");
+    assert!(
+        syntax
+            .iter()
+            .any(|m| m.contains("\"member_tiers__on_post\"")
+                && m.contains("at \"condition\", `balance(param.owner) > 1`")
+                && m.contains("position 0: unknown name \"balance\"")),
+        "a trigger condition that calls what the language lacks: {syntax:?}"
+    );
+    assert!(
+        syntax.iter().any(|m| m.contains("\"member_tiers__grant\"")
+            && m.contains("at \"conditions.0.expr\"")
+            && m.contains("position 14")),
+        "an operation condition with a double-quoted string: {syntax:?}"
+    );
+    let field = found("expression-unknown-field", layer_expr::EXPR_UNKNOWN_FIELD);
+    assert_eq!(field.len(), 2, "{field:?}");
+    assert!(field
+        .iter()
+        .any(|m| m
+            .contains("unknown field colour; the object type has the fields name, owner, points")));
+    assert!(
+        field
+            .iter()
+            .any(|m| m.contains("unknown field phone; the object type has the fields email")),
+        "a hop to a field of the target object type: {field:?}"
+    );
+    let types: Vec<String> = found("expression-type", layer_expr::EXPR_TYPE)
+        .iter()
+        .filter_map(|m| {
+            let rest = m.split("position ").nth(1)?;
+            let problem = rest.split_once(": ")?.1;
+            Some(problem.split(". An expression").next()?.to_string())
+        })
+        .collect();
+    assert_eq!(
+        types,
+        [
+            "cannot compare Str with Int",
+            "len does not accept a Int operand",
+            "name is not a single reference"
+        ]
+    );
+}
+
+#[test]
+fn a_personal_field_without_retention_is_refused_and_the_complete_products_carry_it() {
+    let diagnostics = load_with(&[product("refused/retention-missing.jsonc")]).unwrap_err();
+    assert_eq!(
+        diagnostics.len(),
+        1,
+        "the type without a personal field needs no retention: {diagnostics:?}"
+    );
+    assert_eq!(diagnostics[0].code, layers::RETENTION_MISSING);
+    assert!(load_with(&[
+        product("badge-milestones.jsonc"),
+        product("promotions.jsonc")
+    ])
+    .is_ok());
 }
 
 #[test]

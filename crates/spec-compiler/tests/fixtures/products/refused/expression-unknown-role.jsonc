@@ -1,0 +1,32 @@
+{
+  // Refused: a condition that tests a role neither the platform nor the product declares (layer.expr-unknown-role, WG-5060).
+  "product": { "id": "member-tiers", "name": "Member tiers", "imports": { "spec": "../../../../../../specifications/spec.jsonc", "entities": [] } },
+  "objects": [
+    {
+      "id": "member_tiers__tier",
+      "label": "Tier",
+      "fields": {
+        "name": { "id": "name", "label": "Name", "ty": "Str", "required": true, "unique": false },
+        "points": { "id": "points", "label": "Points", "ty": "Int", "required": true, "unique": false },
+        "owner": { "id": "owner", "label": "Owner", "ty": { "Ref": { "target": "member_tiers__member", "on-delete": "Restrict" } }, "required": false, "unique": false }
+      },
+      "constraints": {}
+    },
+    {
+      "id": "member_tiers__member",
+      "label": "Member",
+      "fields": { "email": { "id": "email", "label": "Email", "ty": "Str", "required": true, "unique": false } },
+      "constraints": {}
+    }
+  ],
+  "operations": [
+    {
+      "id": "member_tiers__check",
+      "label": "Operation",
+      "inputs": [],
+      "invokers": { "signed-in": true, "roles": [] },
+      "conditions": [ { "id": "check", "expr": "has_role(member_tiers__ghost)", "error": "refused", "message": "Refused." } ],
+      "steps": []
+    }
+  ]
+}
