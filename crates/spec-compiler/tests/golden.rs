@@ -199,6 +199,13 @@ fn functions_golden_output_matches_its_fixture_crate() {
         "pub fn narrow(",
         "pub fn role_map(",
         "pub fn key_order(",
+        // WG-5133: structural recursion is ordinary recursive Rust.
+        "pub fn mentions_field(",
+        // WG-5132: eval with a lookup, and durations.
+        "pub fn follow_reference(",
+        "fn eval_lookup_rule_language_rule_env(",
+        "the lookup does not cover {field}",
+        "pub fn later(",
     ] {
         assert!(functions.contains(f), "no {f} in src/functions.rs");
     }
@@ -252,6 +259,39 @@ fn a_function_specc_cannot_compile_is_refused() {
             .any(|d| d.contains("specc.function-invalid") && d.contains("policy-applies")),
         "{:?}",
         refused(&mistyped)
+    );
+    // A call of itself on the parameter itself, not a strict sub-value of it: it would not end,
+    // and Exegra refuses it too (function.recursion).
+    let runaway = text.replacen(
+        "Not(a) => call mentions-field(a)",
+        "Not(a) => call mentions-field(e)",
+        1,
+    );
+    assert_ne!(runaway, text);
+    assert!(
+        refused(&runaway)
+            .iter()
+            .any(|d| d.contains("specc.function-invalid")
+                && d.contains("mentions-field")
+                && d.contains("strict sub-value")),
+        "{:?}",
+        refused(&runaway)
+    );
+    // A lookup of the wrong type: the environment where the lookup map goes.
+    let wrong_lookup = text.replacen(
+        "eval(rule-language, c, env, lookup)",
+        "eval(rule-language, c, env, env)",
+        1,
+    );
+    assert_ne!(wrong_lookup, text);
+    assert!(
+        refused(&wrong_lookup)
+            .iter()
+            .any(|d| d.contains("specc.function-invalid")
+                && d.contains("follow-reference")
+                && d.contains("the lookup of eval")),
+        "{:?}",
+        refused(&wrong_lookup)
     );
 }
 

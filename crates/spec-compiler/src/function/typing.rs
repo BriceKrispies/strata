@@ -2,7 +2,8 @@
 //! restricted to what specc compiles: booleans, strings, the integer types, `f64`, `timestamp`,
 //! ids and scalars over those, enums, structs, unions (tuple variants included), lists, sets,
 //! options, maps, results and `shared<T>` (read as `T`, as Exegra reads it; [`unshared`]).
-//! `duration`, `bytes`, `uuid` and `json` are refused (`specc.function-unsupported`).
+//! `duration` is typed as `timestamp` is, an alias over `u64` ([`Ty::duration`]). `bytes`, `uuid`
+//! and `json` are refused (`specc.function-unsupported`).
 //!
 //! - `timestamp` is a number type in Exegra, held as `prelude::Timestamp(i64)`: it is typed as an
 //!   alias over `i64` ([`Ty::timestamp`]), so it compares, computes and converts as an id over
@@ -58,6 +59,8 @@ pub(crate) enum Ty {
 
 /// The alias id of the built-in `timestamp` (no declared type can take a built-in's name).
 pub(crate) const TIMESTAMP: &str = "timestamp";
+/// The alias id of the built-in `duration`.
+pub(crate) const DURATION: &str = "duration";
 
 impl Ty {
     pub(crate) fn list(of: Ty) -> Ty {
@@ -76,6 +79,17 @@ impl Ty {
     /// True for the built-in `timestamp`.
     pub(crate) fn is_timestamp(&self) -> bool {
         matches!(self, Ty::Alias(id, _) if id == TIMESTAMP)
+    }
+
+    /// The built-in `duration`: milliseconds, `prelude::DurationMs(u64)`.
+    pub(crate) fn duration() -> Ty {
+        Ty::Alias(DURATION.to_string(), Box::new(Ty::Int(Builtin::U64)))
+    }
+
+    /// True for the built-in `timestamp` or `duration`, the prelude's `Copy` newtypes over an
+    /// integer, which Exegra holds as plain numbers.
+    pub(crate) fn is_prelude_number(&self) -> bool {
+        matches!(self, Ty::Alias(id, _) if id == TIMESTAMP || id == DURATION)
     }
 
     pub(crate) fn option(of: Ty) -> Ty {
@@ -366,10 +380,11 @@ fn builtin(b: Builtin) -> Result<Ty, Refusal> {
             Ty::Int(b)
         }
         Builtin::Timestamp => Ty::timestamp(),
+        Builtin::Duration => Ty::duration(),
         Builtin::F64 => Ty::Float,
         other => {
             return Err(unsupported(format!(
-                "the built-in type {} is not compiled in functions yet (bool, string, f64, timestamp and the integer types are)",
+                "the built-in type {} is not compiled in functions yet (bool, string, f64, timestamp, duration and the integer types are)",
                 other.as_str()
             )))
         }
@@ -638,6 +653,15 @@ pub(crate) struct BridgeUse {
     pub language: String,
     pub env: String,
     pub eval: bool,
+    /// An `eval` given a lookup, its fourth argument: following a reference reads it.
+    pub lookup: bool,
+}
+
+/// The type of the lookup of `eval(L, e, env, lookup)` (Exegra WG-4968): for each reference
+/// field it covers, the records that exist, by the decimal text of their id, each as a record
+/// scope holds a record (a map of its fields and system attributes to values of `L`).
+pub(crate) fn lookup_ty(values: &Ty) -> Ty {
+    Ty::map(Ty::Str, Ty::map(Ty::Str, Ty::map(Ty::Str, values.clone())))
 }
 
 type Scope = Vec<(String, Ty)>;
@@ -951,6 +975,11 @@ impl<'a> Checker<'a> {
                     // timestamp as a number, which can give a fraction an i64 cannot hold.
                     return Err(unsupported(
                         "\"/\" divides a timestamp, which Exegra computes as a number that can have a fraction, and the generated Timestamp(i64) cannot hold one",
+                    ));
+                }
+                if op == BinOp::Div && t.is_prelude_number() {
+                    return Err(unsupported(
+                        "\"/\" divides a duration, which Exegra computes as a number that can have a fraction, and the generated DurationMs(u64) cannot hold one",
                     ));
                 }
                 Ok(t)
@@ -1444,7 +1473,11 @@ impl<'a> Checker<'a> {
                 "print (a language's expression as text) is not compiled in functions yet",
             )),
             "eval" | "check" => {
-                arity(3, op)?;
+                // eval takes an optional fourth argument, the lookup a reference is followed
+                // through (Exegra WG-4968); check takes three.
+                if !(name == "eval" && op.args.len() == 4) {
+                    arity(3, op)?;
+                }
                 self.type_language(op, scope)
             }
             "fail" => {
@@ -1588,10 +1621,19 @@ impl<'a> Checker<'a> {
             exact("params", &Ty::list(Ty::Str))?;
             exact("roles", &Ty::list(Ty::Str))?;
         }
+        let lookup = eval && op.args.len() == 4;
+        if lookup {
+            // As Exegra's need: the argument must fit the lookup type (a map whose keys are
+            // strings or ids over strings, converted where the bridge takes it).
+            let want = lookup_ty(&Ty::Union(bridge.values_id().to_string()));
+            let got = self.walk(&mut op.args[3], scope)?;
+            self.need(&got, &want, "the lookup of eval")?;
+        }
         let used = BridgeUse {
             language: lang_id,
             env: env_id,
             eval,
+            lookup,
         };
         if !self.bridges.contains(&used) {
             self.bridges.push(used);
