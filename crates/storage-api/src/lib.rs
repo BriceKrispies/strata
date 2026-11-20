@@ -1040,6 +1040,15 @@ pub fn partial_state(tenant: &TenantState, needs: &[Need]) -> State {
         let found: Vec<&Arc<Record>> = match need {
             Need::Record { object, id } => tenant.record(object, *id).into_iter().collect(),
             Need::AllOf(object) => tenant.records_of(object).collect(),
+            Need::PageOf {
+                object,
+                after,
+                limit,
+            } => tenant
+                .records_of(object)
+                .filter(|record| after.is_none_or(|a| record.id > a))
+                .take(*limit as usize)
+                .collect(),
             Need::ByField {
                 object,
                 field,

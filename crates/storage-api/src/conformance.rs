@@ -334,6 +334,31 @@ fn partial_loads_hold_what_the_needs_name(store: &dyn Store) {
         vec![]
     );
     assert_eq!(ids(&[Need::AllOf(object("note"))]), vec![first, second]);
+    // A page is the records after the cursor in id order, at most `limit` of them.
+    assert_eq!(
+        ids(&[Need::PageOf {
+            object: object("note"),
+            after: None,
+            limit: 1
+        }]),
+        vec![first]
+    );
+    assert_eq!(
+        ids(&[Need::PageOf {
+            object: object("note"),
+            after: Some(first),
+            limit: 5
+        }]),
+        vec![second]
+    );
+    assert_eq!(
+        ids(&[Need::PageOf {
+            object: object("note"),
+            after: Some(second),
+            limit: 5
+        }]),
+        vec![]
+    );
     assert_eq!(
         ids(&[Need::ByField {
             object: object("note"),

@@ -365,6 +365,7 @@ fn exact_for(ty: &str, value: &Json) -> Option<Result<(), String>> {
         "error-kind" => exact::<g::ErrorKind>(value),
         "domain-error" => exact::<g::DomainError>(value),
         "need" => exact::<g::Need>(value),
+        "page-cursor" => exact::<g::PageCursor>(value),
         "coverage" => exact::<g::Coverage>(value),
         "principal" => exact::<g::Principal>(value),
         "action" => exact::<g::Action>(value),
@@ -637,6 +638,11 @@ fn needs() -> Vec<Need> {
             value: Value::Str("a".into()),
         },
         Need::AllOf(object("note")),
+        Need::PageOf {
+            object: object("note"),
+            after: Some(RecordId(1)),
+            limit: 50,
+        },
     ]
 }
 
@@ -671,6 +677,9 @@ fn samples() -> Vec<(&'static str, Json)> {
     }
     for k in error_kinds() {
         s.push(("error-kind", json(&k)));
+    }
+    for c in [PageCursor::After(RecordId(7)), PageCursor::Offset(40)] {
+        s.push(("page-cursor", json(&c)));
     }
     for n in needs() {
         s.push(("need", json(&n)));
@@ -896,6 +905,8 @@ fn samples() -> Vec<(&'static str, Json)> {
             params: [("slug".to_string(), Value::Str("a".into()))]
                 .into_iter()
                 .collect(),
+            page_size: Some(20),
+            cursor: Some(PageCursor::After(RecordId(7))),
         },
         ReadRequest::Records {
             object: object("note"),
@@ -910,6 +921,7 @@ fn samples() -> Vec<(&'static str, Json)> {
             rows: vec![rec],
             revision: StateRevision(5),
             schema_version: SchemaVersion(2),
+            next: Some(PageCursor::Offset(40)),
         }),
     ));
 

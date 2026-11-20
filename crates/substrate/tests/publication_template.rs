@@ -257,6 +257,8 @@ fn readers_see_published_posts_and_authors_also_see_their_own_drafts() {
                 let request = ReadRequest::Named {
                     query: query.id.clone(),
                     params,
+                    page_size: None,
+                    cursor: None,
                 };
                 let Ok(result) = world.read(&request, &ctx(principal.clone())) else {
                     continue;
@@ -680,6 +682,8 @@ fn an_authors_login_identity_is_read_only_by_that_author_and_editors() {
     let all_authors = ReadRequest::Named {
         query: QueryId::new("authors").unwrap(),
         params: BTreeMap::new(),
+        page_size: None,
+        cursor: None,
     };
     let principals_seen_by = |who: Principal| -> Vec<Option<String>> {
         world

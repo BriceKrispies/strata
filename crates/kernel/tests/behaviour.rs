@@ -946,6 +946,8 @@ fn reads_return_only_what_the_principal_may_see_in_the_query_order() {
     let by_rank = ReadRequest::Named {
         query: QueryId::new("notes_by_rank").unwrap(),
         params: BTreeMap::new(),
+        page_size: None,
+        cursor: None,
     };
     let ids = |principal| -> Vec<u64> {
         world

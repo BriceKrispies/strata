@@ -124,6 +124,8 @@ pub fn section_request(
     ReadRequest::Named {
         query: section.query.clone(),
         params,
+        page_size: None,
+        cursor: None,
     }
 }
 
