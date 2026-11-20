@@ -3,7 +3,10 @@
 //! setting for a recipient on behalf of a platform service. Each is one kernel decision, as the
 //! signed-in person; no rule of settings is written here (`strata_kernel::settings`).
 //!
-//! The platform level is written by the control plane (CT-303) and is not served here.
+//! The platform level is the control plane's (CT-303): the operator writes it through
+//! [`set_platform`], the control database keeps it, and every resolution here reads it from
+//! [`PlatformCache`], which is at most [`PLATFORM_CACHE_MAX_AGE`] old because every tenant's
+//! reads pass through it. A tenant's own write at that level is refused by the kernel.
 //!
 //! A value is written to no log: the handlers log nothing of it, an error names the setting and
 //! never the value, and the event of a change carries none (SET-1542, SET-1543).
@@ -17,12 +20,78 @@ use axum::http::HeaderMap;
 use axum::Json;
 use serde_json::{json, Value as Json_};
 use std::fmt::Display;
-use strata_kernel::settings as kernel;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+use strata_kernel::settings::{self as kernel, PlatformLevel, PlatformLevels};
 use strata_kernel::{
     ExistingData, Intent, Output, PrincipalId, SchemaChange, SchemaVersion, SettingDef, SettingId,
     SettingLevel, SettingResolution, TeamId, TenantId, Value,
 };
-use strata_protocol::api::{ErrorCode, HEADER_SESSION};
+use strata_protocol::api::{ErrorCode, HEADER_CORRELATION, HEADER_SESSION};
+use strata_storage_api::{PlatformWrite, Store, StoreResult};
+
+/// How old the platform level a resolution reads may be. Every tenant's every read of a setting
+/// passes through it, so it is read from the control database once in this long, not once per
+/// read; a write through this process drops it at once, and a write by another process is seen
+/// within this time.
+pub const PLATFORM_CACHE_MAX_AGE: Duration = Duration::from_secs(5);
+
+/// The platform level of the settings, kept for at most a bounded age.
+pub struct PlatformCache {
+    max_age: Duration,
+    held: Mutex<Option<(Instant, Arc<PlatformLevels>)>>,
+}
+
+impl Default for PlatformCache {
+    fn default() -> Self {
+        PlatformCache::new(PLATFORM_CACHE_MAX_AGE)
+    }
+}
+
+impl PlatformCache {
+    pub fn new(max_age: Duration) -> Self {
+        PlatformCache {
+            max_age,
+            held: Mutex::new(None),
+        }
+    }
+
+    /// The platform level as of at most the cache's age ago.
+    pub fn levels(&self, store: &dyn Store) -> StoreResult<Arc<PlatformLevels>> {
+        self.levels_at(store, Instant::now())
+    }
+
+    /// [`levels`](Self::levels) at a given instant, so a test can move time.
+    pub fn levels_at(&self, store: &dyn Store, now: Instant) -> StoreResult<Arc<PlatformLevels>> {
+        let mut held = self.held.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((read_at, levels)) = held.as_ref() {
+            if now.saturating_duration_since(*read_at) < self.max_age {
+                return Ok(levels.clone());
+            }
+        }
+        let levels: PlatformLevels = store
+            .platform_settings()?
+            .into_iter()
+            .map(|row| {
+                (
+                    row.setting,
+                    PlatformLevel {
+                        value: row.value,
+                        revision: row.revision,
+                    },
+                )
+            })
+            .collect();
+        let levels = Arc::new(levels);
+        *held = Some((now, levels.clone()));
+        Ok(levels)
+    }
+
+    /// Forget what is held, so the next read is from the store.
+    pub fn invalidate(&self) {
+        *self.held.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    }
+}
 
 fn invalid(message: impl Into<String>) -> ApiError {
     ApiError::new(ErrorCode::Invalid, message)
@@ -151,7 +220,8 @@ pub async fn resolve(
         signed_in(identity)?;
         let setting = setting_of(&body)?;
         let tenant = header(app, identity)?;
-        let resolution = kernel::resolve(&tenant, &identity.principal, &setting)
+        let platform = app.platform_settings.levels(app.store.as_ref())?;
+        let resolution = kernel::resolve_with(&tenant, &identity.principal, &setting, &platform)
             .map_err(|error| ApiError::domain(error, false))?;
         Ok(resolution_json(&resolution))
     })
@@ -168,10 +238,12 @@ pub async fn resolve_all(
     as_caller(&app, &headers, move |app, identity| {
         signed_in(identity)?;
         let tenant = header(app, identity)?;
-        let settings: Vec<Json_> = kernel::resolve_all(&tenant, &identity.principal)
-            .iter()
-            .map(resolution_json)
-            .collect();
+        let platform = app.platform_settings.levels(app.store.as_ref())?;
+        let settings: Vec<Json_> =
+            kernel::resolve_all_with(&tenant, &identity.principal, &platform)
+                .iter()
+                .map(resolution_json)
+                .collect();
         Ok(json!({ "settings": settings }))
     })
     .await
@@ -293,10 +365,152 @@ pub async fn resolve_for(
             .load(&tenant, &[])?
             .tenant
             .ok_or_else(|| ApiError::new(ErrorCode::NotFound, format!("no site {tenant}")))?;
-        kernel::resolve_for(&state, &person, &setting)
+        let platform = app.platform_settings.levels(app.store.as_ref())?;
+        kernel::resolve_for_with(&state, &person, &setting, &platform)
             .map(|resolution| resolution_json(&resolution))
             .map_err(|error| ApiError::domain(error, false))
     })
     .await?
     .map(Json)
+}
+
+/// Set or remove the platform level of a setting (CT-303): `{ "setting": <id>, "value": <flag,
+/// whole number or text; absent to remove>, "expected_version": <revision read, 0 for none> }`.
+///
+/// The backend has no operator identity yet, so the route is guarded exactly as the other
+/// `/internal/platform/*` routes are: by the service credential every internal route needs, and by
+/// nothing else, so it is for the operator's tools on the backend's own network and the BFF has no
+/// route to it. A request that carries a session is refused besides, as a platform service's call
+/// is (see [`resolve_for`]): no tenant principal writes the platform level. The write is an audit
+/// entry of the platform (`platform.setting_set`, in the ring and the log, naming no tenant) that
+/// holds the previous and the new value (SET-040, SET-042), which are the operator's own and are
+/// no person's data.
+///
+/// Refused as `conflict` when the level is not at `expected_version`, naming the current one
+/// (SET-025). The platform ships no definitions of its own (SET-005), so a name is not checked
+/// against any: the value applies to every tenant whose definition of that name opens the
+/// platform level and has a type the value is of.
+///
+/// Implements: CT-303
+pub async fn set_platform(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<Json_>,
+) -> Result<Json<Json_>, ApiError> {
+    if headers.contains_key(HEADER_SESSION) {
+        return Err(ApiError::new(
+            ErrorCode::Forbidden,
+            "The platform level is written by a platform operator, not for a session.",
+        ));
+    }
+    let correlation = headers
+        .get(HEADER_CORRELATION)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    let setting = setting_of(&body)?;
+    let value = match body.get("value") {
+        None | Some(Json_::Null) => None,
+        Some(json) => {
+            let value = value_of(None, json)?;
+            if let Some(problem) = kernel::platform_value_problem(&value) {
+                return Err(invalid(format!("value: {problem}")));
+            }
+            Some(value)
+        }
+    };
+    let expected = expected_of(&body, "expected_version")?;
+    let written = {
+        let setting = setting.clone();
+        let value = value.clone();
+        app.blocking(move |app| {
+            app.store
+                .platform_setting_write(&setting, value.as_ref(), expected, app.now())
+        })
+        .await??
+    };
+    match written {
+        PlatformWrite::Conflict { current } => Err(ApiError::new(
+            ErrorCode::Conflict,
+            format!(
+                "The platform level of {setting} was changed since revision {expected}; it is now at revision {current}."
+            ),
+        )),
+        PlatformWrite::Written { now, previous } => {
+            app.platform_settings.invalidate();
+            app.audit(
+                "platform.setting_set",
+                &correlation,
+                json!({
+                    "setting": setting.as_str(),
+                    "level": "platform",
+                    "previous": previous.as_ref().map(json_of),
+                    "value": now.value.as_ref().map(json_of),
+                    "revision": now.revision,
+                }),
+            );
+            Ok(Json(json!({ "revision": now.revision })))
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use strata_kernel::Timestamp;
+    use strata_storage_api::memory::MemoryStore;
+
+    fn id(name: &str) -> SettingId {
+        SettingId::new(name).unwrap()
+    }
+
+    #[test]
+    fn the_platform_level_is_read_from_the_store_at_most_once_in_its_age_and_dropped_on_demand() {
+        let store = MemoryStore::new();
+        let cache = PlatformCache::new(Duration::from_secs(5));
+        let start = Instant::now();
+        assert!(cache.levels_at(&store, start).unwrap().is_empty());
+
+        store
+            .platform_setting_write(&id("page_size"), Some(&Value::Int(50)), 0, Timestamp(1))
+            .unwrap();
+        // Within the age the write is not seen; past it, it is.
+        let soon = start + Duration::from_secs(4);
+        assert!(cache.levels_at(&store, soon).unwrap().is_empty());
+        let later = start + Duration::from_secs(5);
+        let levels = cache.levels_at(&store, later).unwrap();
+        assert_eq!(levels[&id("page_size")].revision, 1);
+        assert_eq!(levels[&id("page_size")].value, Some(Value::Int(50)));
+
+        // A write made through this process drops it at once.
+        store
+            .platform_setting_write(&id("page_size"), None, 1, Timestamp(2))
+            .unwrap();
+        assert_eq!(
+            cache.levels_at(&store, later).unwrap()[&id("page_size")].revision,
+            1
+        );
+        cache.invalidate();
+        let levels = cache.levels_at(&store, later).unwrap();
+        assert_eq!(levels[&id("page_size")].revision, 2);
+        assert_eq!(levels[&id("page_size")].value, None);
+    }
+
+    #[test]
+    fn a_write_at_a_stale_revision_changes_nothing_and_names_the_current_one() {
+        let store = MemoryStore::new();
+        let name = id("page_size");
+        let first = store
+            .platform_setting_write(&name, Some(&Value::Int(1)), 0, Timestamp(1))
+            .unwrap();
+        assert!(matches!(first, PlatformWrite::Written { .. }));
+        let stale = store
+            .platform_setting_write(&name, Some(&Value::Int(2)), 0, Timestamp(2))
+            .unwrap();
+        assert_eq!(stale, PlatformWrite::Conflict { current: 1 });
+        assert_eq!(
+            store.platform_settings().unwrap()[0].value,
+            Some(Value::Int(1))
+        );
+    }
 }

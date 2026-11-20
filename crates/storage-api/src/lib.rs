@@ -63,8 +63,8 @@ use strata_kernel::ext::*;
 use strata_kernel::segments as seg;
 use strata_kernel::{
     canon, Context, Coverage, DomainError, DomainEvent, Effect, ErrorKind, EventBody, Intent, Need,
-    Principal, PrincipalId, ReadRequest, ReadResult, Record, SessionId, State, StateDelta,
-    StateRevision, TenantId, TenantState, Timestamp, Transition, Value, WorkflowId,
+    Principal, PrincipalId, ReadRequest, ReadResult, Record, SessionId, SettingId, State,
+    StateDelta, StateRevision, TenantId, TenantState, Timestamp, Transition, Value, WorkflowId,
 };
 
 /// What an adapter actually provides. Reported in diagnostics and checked by the conformance
@@ -712,6 +712,29 @@ pub struct AuditEntry {
     pub event: String,
     pub correlation: String,
     pub data: String,
+}
+
+/// The platform level of one setting, as the control plane holds it (CT-303, SET-030). It is
+/// kept by the setting's name and belongs to no tenant. `value` is absent once the level has been
+/// removed; the row stays so that the revision, which rises at every change, is never reused
+/// (SET-051).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlatformSetting {
+    pub setting: SettingId,
+    pub value: Option<Value>,
+    pub revision: u64,
+}
+
+/// What a write of the platform level of a setting did.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PlatformWrite {
+    /// The level was written; `previous` is the value it held before, if any.
+    Written {
+        now: PlatformSetting,
+        previous: Option<Value>,
+    },
+    /// The level was not at the revision the writer named; nothing changed (SET-025).
+    Conflict { current: u64 },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1391,6 +1414,21 @@ pub trait Store: Send + Sync {
         retention: &schedules::AutomationRetention,
     ) -> StoreResult<schedules::AutomationPurged>;
 
+    /// Every setting that has a platform level, in the order of the setting names, with the
+    /// removed ones (a revision and no value). The platform level is held by the control plane
+    /// beside the tenant directory, never in a tenant's data (CT-303).
+    fn platform_settings(&self) -> StoreResult<Vec<PlatformSetting>>;
+
+    /// Set (`Some`) or remove (`None`) the platform level of a setting, when it is at
+    /// `expected_revision` (zero for a setting that has none), and raise its revision by one.
+    fn platform_setting_write(
+        &self,
+        setting: &SettingId,
+        value: Option<&Value>,
+        expected_revision: u64,
+        at: Timestamp,
+    ) -> StoreResult<PlatformWrite>;
+
     /// Mark a tenant as being installed: the directory lists it as `provisioning`, which no
     /// request reaches, until [`Store::finish_provisioning`]. Called after the install's first
     /// commit. An adapter whose state cannot outlive the process has nothing to mark.
@@ -1796,6 +1834,34 @@ pub fn execute_admitting(
     deadline: Option<Instant>,
     admission: Option<&dyn admission::JobAdmission>,
 ) -> Result<Executed, ExecuteError> {
+    execute_guarded(store, intent, ctx, deadline, None)
+}
+
+/// [`execute_by`] for a change decided on the tenant as it was at revision `at`, such as one an
+/// operator was shown a projection of: it is committed only if the tenant is still at `at`.
+/// A tenant at another revision, whether before the decision or when the commit is made, fails
+/// with [`StoreError::Conflict`] naming the revision found, and nothing is committed. A lost race
+/// is not decided again on the newer state, as [`execute_by`] does: the caller was shown another
+/// state than the one it would change.
+pub fn execute_at(
+    store: &dyn Store,
+    intent: &Intent,
+    ctx: &Context,
+    deadline: Option<Instant>,
+    at: StateRevision,
+) -> Result<Executed, ExecuteError> {
+    execute_guarded(store, intent, ctx, deadline, Some(at))
+}
+
+/// The body of [`execute_by`] and [`execute_at`]: with `at`, the decision and the commit are for
+/// that revision only and a conflict is never retried.
+fn execute_guarded(
+    store: &dyn Store,
+    intent: &Intent,
+    ctx: &Context,
+    deadline: Option<Instant>,
+    at: Option<StateRevision>,
+) -> Result<Executed, ExecuteError> {
     let expired = || {
         deadline.is_some_and(|at| Instant::now() >= at).then(|| {
             ExecuteError::Store(StoreError::Unavailable(
@@ -1837,6 +1903,15 @@ pub fn execute_admitting(
             return Err(error);
         }
         let header = store.load(&ctx.tenant, &[])?;
+        if let Some(at) = at {
+            let found = header.tenant.as_deref().map(|t| t.revision);
+            if found != Some(at) {
+                return Err(ExecuteError::Store(StoreError::Conflict {
+                    expected: Some(at),
+                    found,
+                }));
+            }
+        }
         let mut wanted: BTreeSet<Need> =
             strata_kernel::needs(header.tenant.as_deref().map(|t| t.schema.as_ref()), intent)
                 .into_iter()
@@ -1869,13 +1944,22 @@ pub fn execute_admitting(
                 Ok(transition) => break transition,
             }
         };
+        // The state the decision was made on is the one the caller named, or the commit says so.
+        if let Some(at) = at {
+            if transition.delta.base_revision != Some(at) {
+                return Err(ExecuteError::Store(StoreError::Conflict {
+                    expected: Some(at),
+                    found: transition.delta.base_revision,
+                }));
+            }
+        }
         // The memberships the change moves, decided for the same commit (SEG-008, D-5022).
         // A change an automation causes carries the hops of its chain (SEG-031, SEG-032).
         let hop = u64::from(ctx.hop.unwrap_or(0));
         let decided = match segments::decide_change(store, &transition, ctx, hop) {
             Ok(decided) => decided,
             Err(ExecuteError::Store(StoreError::Conflict { .. }))
-                if conflicts < MAX_CONFLICT_RETRIES =>
+                if at.is_none() && conflicts < MAX_CONFLICT_RETRIES =>
             {
                 conflicts += 1;
                 continue;
@@ -1917,7 +2001,9 @@ pub fn execute_admitting(
                     replayed: false,
                 });
             }
-            Err(StoreError::Conflict { .. }) if conflicts < MAX_CONFLICT_RETRIES => {
+            Err(StoreError::Conflict { .. })
+                if at.is_none() && conflicts < MAX_CONFLICT_RETRIES =>
+            {
                 conflicts += 1;
                 // Pause before reloading, longer on each retry (at most 8 retries: 5 ms to 40 ms
                 // per pause, 180 ms in all), so that the commit which won can finish.

@@ -56,7 +56,7 @@ pub enum ClientMessage {
         /// emitted.
         #[serde(default)]
         segments: Option<Vec<String>>,
-        /// Limit to the ledger events of these units. Refused while no such event is emitted.
+        /// Limit to the ledger events of these units; a posting reaches only who may read its account.
         #[serde(default)]
         units: Option<Vec<String>>,
         /// Limit to record updates that fired one of these named workflow transitions.

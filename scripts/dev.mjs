@@ -219,6 +219,9 @@ start('bff', join(root, 'target', 'debug', `strata-bff${exe}`), [], {
   STRATA_ORIGINS: origins,
   STRATA_WEB_DIST: join(root, 'web', 'dist'),
   STRATA_DEV: '1',
+  // A throwaway tenant made while this runs (POST /api/dev/provision-tenant) is served at once: the
+  // BFF asks the backend for the hosts it does not know after a second, not after five.
+  STRATA_HOSTS_MISS_INTERVAL_SECS: '1',
 });
 await waitFor(`http://127.0.0.1:${ports.bff}/api/session`, 'The BFF');
 
@@ -238,6 +241,8 @@ Strata is running.
   Writing desk        http://127.0.0.1:${front}/desk
   Impact Lab          http://127.0.0.1:${front}/lab            (sign in as admin)
   Second tenant       http://tidewater.localhost:${front}/
+  Throwaway tenant    POST /api/dev/provision-tenant (as admin) makes one under a name beginning "throwaway", with a
+                      welcome message in the development mail outbox, served at the origin it is given
   ${withVite ? `BFF (built assets)  http://127.0.0.1:${ports.bff}/\n  ` : ''}Backend             127.0.0.1:${ports.backend}  (loopback only, service token required)
 
   Development logins, defined in tenants/fieldnotes/accounts.dev.json:

@@ -17,6 +17,7 @@ pub mod http;
 pub mod hub;
 pub mod inbox;
 pub mod lab;
+pub mod lab_apply;
 pub mod ledger;
 pub mod limits;
 pub mod mail;

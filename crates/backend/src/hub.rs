@@ -10,9 +10,8 @@ use crate::outbox::Outbox;
 use serde_json::{json, Value as Json};
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, OnceLock};
-use strata_kernel::ext::*;
 use strata_kernel::{
-    DomainEvent, EventBody, PrincipalId, Record, SessionId, TenantId, TenantState, Value,
+    DomainEvent, EventBody, PrincipalId, SessionId, TenantId, TenantState, WorkflowId,
 };
 use strata_model::telemetry;
 use strata_protocol::ws::SessionState;
@@ -184,37 +183,21 @@ fn describe(event: &DomainEvent) -> Json {
     })
 }
 
-/// The workflow transition an update took, when it moved a workflow field of the record's object
-/// type from one state to another along a declared transition (`publish`, `unpublish`).
-fn workflow_transition<'a>(
-    tenant: &'a TenantState,
-    before: &Record,
-    after: &'a Record,
-) -> Option<&'a str> {
-    tenant
-        .schema
-        .workflows_of(&after.object)
-        .find_map(|workflow| {
-            let (Value::Str(from), Value::Str(to)) =
-                (before.get(&workflow.field), after.get(&workflow.field))
-            else {
-                return None;
-            };
-            if from == to {
-                return None;
-            }
-            workflow
-                .transitions
-                .iter()
-                .find(|t| t.from == *from && t.to == *to)
-                .map(|t| t.name.as_str())
-        })
+/// The workflow transition the update event names: the kernel records the transition it fired
+/// for each workflow (`RecordUpdated.transitions`), guards already applied, so nothing is inferred
+/// from the field's values. With several workflows moved by one update the first workflow id's
+/// transition is logged.
+fn fired_transition(transitions: &Option<BTreeMap<WorkflowId, String>>) -> Option<&str> {
+    transitions
+        .as_ref()
+        .and_then(|fired| fired.values().next())
+        .map(String::as_str)
 }
 
 /// Write the log line of a published domain event through the generated telemetry functions
 /// (`strata_model::telemetry`): the tenant and the allowlisted fields the specification states,
 /// never record contents.
-fn log_published(event: &DomainEvent, tenant: &TenantState) {
+fn log_published(event: &DomainEvent) {
     let sink = &telemetry::BACKEND;
     let correlation = event.correlation.as_str();
     let (name, seq, revision) = (event.tenant.as_str(), event.seq, event.revision.0);
@@ -267,7 +250,9 @@ fn log_published(event: &DomainEvent, tenant: &TenantState) {
                 version: record.version,
             },
         ),
-        EventBody::RecordUpdated { before, after, .. } => telemetry::record_updated(
+        EventBody::RecordUpdated {
+            after, transitions, ..
+        } => telemetry::record_updated(
             sink,
             &telemetry::RecordUpdated {
                 correlation,
@@ -277,7 +262,7 @@ fn log_published(event: &DomainEvent, tenant: &TenantState) {
                 object: after.object.as_str(),
                 record: after.id.0,
                 version: after.version,
-                transition: workflow_transition(tenant, before, after),
+                transition: fired_transition(transitions),
             },
         ),
         EventBody::RecordDeleted { before } => telemetry::record_deleted(
@@ -364,7 +349,7 @@ pub fn publish_pending(app: &crate::app::App) -> Result<usize, strata_storage_ap
             continue;
         };
         last.insert(tenant, entry.position);
-        log_published(&entry.event, &header);
+        log_published(&entry.event);
         app.stats.recent_events.push(describe(&entry.event));
         // No receivers is fine: the event stays in the durable log for later replay.
         app.hub.events.send(
@@ -392,6 +377,20 @@ pub fn publish_pending(app: &crate::app::App) -> Result<usize, strata_storage_ap
 mod tests {
     use super::*;
     use tokio::sync::broadcast::error::TryRecvError;
+
+    #[test]
+    fn the_logged_transition_is_the_one_the_event_names() {
+        // Two transitions between the same states, told apart only by their guards: the event
+        // names the one that fired, and a value comparison could not.
+        let mut fired = BTreeMap::new();
+        fired.insert(
+            WorkflowId::new("post-lifecycle").unwrap(),
+            "publish-urgent".to_string(),
+        );
+        assert_eq!(fired_transition(&Some(fired)), Some("publish-urgent"));
+        assert_eq!(fired_transition(&None), None);
+        assert_eq!(fired_transition(&Some(BTreeMap::new())), None);
+    }
 
     #[test]
     fn a_burst_in_one_tenant_lags_nobody_in_another() {

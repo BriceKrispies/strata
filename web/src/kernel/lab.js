@@ -23,8 +23,33 @@ export function labInit() {
     replay: null,
     verification: null,
     diagnostics: null,
+    /** What came of the apply of the projection shown. */
+    applied: null,
+    applyError: '',
     timer: 0,
   };
+}
+
+/** An apply is waiting for the site's answer. */
+export function applying(state) {
+  return Object.values(state.pending).some((p) => p.kind === 'lab.apply');
+}
+
+/**
+ * Whether the projection shown may be applied: it is finished, the kernel accepted the change, and
+ * it was taken at the revision the page last saw the site at, so the site has not moved on to the
+ * page's knowledge. The backend decides again at the commit and refuses a site that has.
+ */
+export function canApply(state) {
+  const lab = state.lab;
+  const shown = lab.overview?.tenant?.revision;
+  return lab.run?.status === 'finished'
+    && Boolean(lab.result)
+    && lab.result.change_outcome?.result === 'accepted'
+    && Number.isInteger(shown)
+    && lab.result.snapshot?.revision === shown
+    && !applying(state)
+    && lab.applied === null;
 }
 
 function withLab(state, patch) {
@@ -100,6 +125,14 @@ export function labUpdate(state, msg, { request, toast }) {
       }
       if (name === 'cancel' && lab.run?.id) {
         return { state, effects: [{ type: 'ws_send', message: { type: 'cancel', req: `r${state.nextId}`, run: lab.run.id } }] };
+      }
+      if (name === 'apply') {
+        if (!canApply(state)) return { state, effects: [] };
+        const [next, effect] = request(
+          withLab(state, { applyError: '' }),
+          'lab.apply', { method: 'POST', path: '/api/lab/apply', body: { run: lab.run.id }, write: true, meta: { retry: { name: msg.name, arg: msg.arg } } }, msg,
+        );
+        return { state: { ...next, announce: 'Applying the change.' }, effects: [effect] };
       }
       if (name === 'replay') {
         const [next, effect] = request(withLab(state, { replay: { pending: true } }), 'lab.replay', { method: 'POST', path: '/api/lab/replay', body: {}, write: true }, msg);
@@ -185,6 +218,21 @@ export function labUpdate(state, msg, { request, toast }) {
           const { state: next, effect } = poll(withLab(state, { run: { ...lab.run, failures } }), wait);
           return { state: next, effects: [effect] };
         }
+        case 'lab.apply': {
+          if (msg.ok) {
+            const done = withLab(state, { applied: { version: msg.body.version, revision: msg.body.revision }, applyError: '' });
+            // The site is at a new revision: the page reads its overview again.
+            const [next, effect] = request(toast(done, 'ok', `The change was applied. The schema is now at version ${msg.body.version}.`), 'lab.overview', { path: '/api/lab/overview' }, msg);
+            return { state: { ...next, announce: 'The change was applied.' }, effects: [effect] };
+          }
+          if (error.code === 'conflict' || msg.status === 409) {
+            // The site moved on after the projection: say so, and read the site again so that the
+            // page shows the revision it is at now.
+            const [next, effect] = request(withLab(state, { applyError: STALE }), 'lab.overview', { path: '/api/lab/overview' }, msg);
+            return { state: { ...next, announce: STALE }, effects: [effect] };
+          }
+          return { state: { ...withLab(state, { applyError: error.message }), announce: error.message }, effects: [] };
+        }
         case 'lab.replay':
           return { state: withLab(state, { replay: msg.ok ? msg.body : { failed: error.message } }), effects: [] };
         case 'lab.verify':
@@ -217,5 +265,11 @@ export function labView(state) {
     replay: lab.replay,
     verification: lab.verification,
     diagnostics: lab.diagnostics,
+    canApply: canApply(state),
+    applying: applying(state),
+    applied: lab.applied,
+    applyError: lab.applyError,
+    // The prompt that asks for a fresh authentication, when the apply was refused for want of one.
+    factors: state.factors,
   };
 }

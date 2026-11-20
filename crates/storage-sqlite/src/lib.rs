@@ -66,9 +66,11 @@ use strata_storage_api::{
     check_event_sequence, field_matches, throttle_refund, throttle_step, Account, AuditEntry,
     Capabilities, Commit, FederatedIdentity, Health, IdempotentResult, JournalEntry, OidcFlow,
     OutboxEntry, OutboxFault, PasskeyCeremony, PasskeyChallenge, PasskeyRecord, PendingSignIn,
-    PrincipalRemoval, Receipt, RecoveryRequest, SamlRequest, SessionRecord, SignInLink,
-    SnapshotInfo, StorageMigration, Store, StoreError, StoreResult, TenantSummary, ThrottleRow,
     ThrottleRule, ThrottleSettle, ThrottleVerdict, TotpRecord,
+    PlatformSetting, PlatformWrite, PrincipalRemoval, Receipt, RecoveryRequest, SamlRequest,
+    SessionRecord, SignInLink, SnapshotInfo, StorageMigration, Store, StoreError, StoreResult,
+    TenantSummary, ThrottleRow, ThrottleRule, ThrottleSettle, ThrottleVerdict, TotpRecord,
+    IDEMPOTENCY_RETENTION_MS,
 };
 
 mod index_page;
@@ -151,6 +153,7 @@ const CONTROL_MIGRATIONS: &[Migration] = &[
         name: TENANT_PLAN_MIGRATION_NAME,
         sql: TENANT_PLAN_MIGRATION_SQL,
     },
+    CONTROL_PLATFORM_SETTINGS,
 ];
 
 /// The plan a tenant holds (BIL-150), on the tenant's row of the directory: a tenant that existed
@@ -158,6 +161,24 @@ const CONTROL_MIGRATIONS: &[Migration] = &[
 const TENANT_PLAN_MIGRATION_NAME: &str = "tenant plan";
 const TENANT_PLAN_MIGRATION_SQL: &str =
     "ALTER TABLE tenant_directory ADD COLUMN plan TEXT NOT NULL DEFAULT 'standard';";
+
+/// The platform level of settings (CT-303, SET-030, SET-051): one row per setting name, holding
+/// the value as JSON text (null once removed) and the revision, which rises at every change and
+/// is never reused. It belongs to the control plane, so it is in the control database and in no
+/// tenant's file. Its version number is the next free one at the time of writing; the coordinator
+/// numbers the control steps of every branch together.
+const CONTROL_PLATFORM_SETTINGS: Migration = Migration {
+    version: 4,
+    name: "platform level of settings",
+    sql: "
+    CREATE TABLE platform_settings (
+        setting    TEXT PRIMARY KEY,
+        value      TEXT,
+        revision   INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+    );
+    ",
+};
 
 /// A tenant file's layout, one step per entry. Steps are only ever appended.
 ///
@@ -5245,6 +5266,79 @@ impl Store for SqliteStore {
             total.exceptions += done.exceptions;
         }
         Ok(total)
+    }
+
+    fn platform_settings(&self) -> StoreResult<Vec<PlatformSetting>> {
+        let rows: Vec<(String, Option<String>, i64)> = {
+            let conn = self.control.lock().map_err(dbe)?;
+            let mut statement = conn
+                .prepare_cached(
+                    "SELECT setting, value, revision FROM platform_settings ORDER BY setting",
+                )
+                .map_err(db)?;
+            let rows = statement
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+                .map_err(db)?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(db)?;
+            rows
+        };
+        rows.into_iter()
+            .map(|(setting, value, revision)| {
+                Ok(PlatformSetting {
+                    setting: SettingId::new(setting).map_err(corrupt_id)?,
+                    value: value
+                        .map(|text| decode::<Value>(&text, "a platform setting value"))
+                        .transpose()?,
+                    revision: revision as u64,
+                })
+            })
+            .collect()
+    }
+
+    fn platform_setting_write(
+        &self,
+        setting: &SettingId,
+        value: Option<&Value>,
+        expected_revision: u64,
+        at: Timestamp,
+    ) -> StoreResult<PlatformWrite> {
+        self.control.write(dbe, |tx| {
+            let held: Option<(Option<String>, i64)> = tx
+                .query_row(
+                    "SELECT value, revision FROM platform_settings WHERE setting = ?1",
+                    params![setting.as_str()],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .optional()
+                .map_err(db)?;
+            let current = held.as_ref().map_or(0, |(_, revision)| *revision as u64);
+            if current != expected_revision {
+                return Ok(PlatformWrite::Conflict { current });
+            }
+            let previous = held
+                .and_then(|(text, _)| text)
+                .map(|text| decode::<Value>(&text, "a platform setting value"))
+                .transpose()?;
+            let revision = current + 1;
+            tx.execute(
+                "INSERT INTO platform_settings (setting, value, revision, updated_at)
+                 VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT(setting) DO UPDATE SET
+                    value = excluded.value, revision = excluded.revision,
+                    updated_at = excluded.updated_at",
+                params![setting.as_str(), value.map(encode), revision as i64, at.0],
+            )
+            .map_err(db)?;
+            Ok(PlatformWrite::Written {
+                now: PlatformSetting {
+                    setting: setting.clone(),
+                    value: value.cloned(),
+                    revision,
+                },
+                previous,
+            })
+        })
     }
 
     fn begin_provisioning(&self, tenant: &TenantId) -> StoreResult<()> {

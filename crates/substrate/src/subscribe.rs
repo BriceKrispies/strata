@@ -1,51 +1,73 @@
 //! Subscriptions as data, and the pure decision of what a subscriber is told about an event.
 
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
-use strata_kernel::ext::*;
 use strata_kernel::rules::Lookup;
 use strata_kernel::segment_flow;
 use strata_kernel::segments::{self as seg, Segment, SegmentDirection, SegmentEvent, SegmentId};
+use std::fmt::Write as _;
+use std::sync::OnceLock;
+use strata_kernel::ledger::may_read_account;
 use strata_kernel::{
     owner_role, visible, DomainEvent, EventBody, LedgerAccountId, LedgerScope, LedgerUnit,
     ObjectTypeId, Principal, RecordId, SettingId, SettingLevel, TeamId, TenantState,
     owner_role, visible, DomainEvent, EventBody, ObjectTypeId, Principal, PrincipalId, RecordId,
     SettingId, SettingLevel, State, TeamId, TenantState,
+    owner_role, visible, DomainEvent, EventBody, LedgerAccountId, LedgerUnit, ObjectTypeId,
+    Principal, RecordId, SettingId, SettingLevel, TeamId, TenantState,
 };
+use strata_model_core::types::EventKind;
 
-/// The kinds of event the kernel emits today, named as the specification names the variants of
-/// `event-body`. A selector may name these and no other kind until another kind is emitted.
 pub const EVENT_KINDS: [&str; 9] = [
-    "tenant-created",
-    "schema-changed",
-    "member-changed",
-    "record-created",
-    "record-updated",
-    "record-deleted",
-    "setting-changed",
-    "automation-suspended",
     "ledger-entry-posted",
-];
+/// What a subscriber wants to hear about: the specification's type `selector` (SCH-1575), as
+/// specc generates it. Every member is optional and an absent member matches everything; members
+/// combine as AND, the values of one member as OR. A selector narrows what a subscriber is told
+/// and never widens it: what remains is still decided by the kernel's read decision for that
+/// subscriber. Build one from a request with [`SelectorExt::new`].
+pub use strata_model_core::types::Selector;
 
-/// The kind of an event: the name of its body's variant in the specification (`event-kind`).
-pub fn kind_of(body: &EventBody) -> &'static str {
-    match body {
-        EventBody::TenantCreated { .. } => "tenant-created",
-        EventBody::SchemaChanged { .. } => "schema-changed",
-        EventBody::MemberChanged { .. } => "member-changed",
-        EventBody::RecordCreated { .. } => "record-created",
-        EventBody::RecordUpdated { .. } => "record-updated",
-        EventBody::RecordDeleted { .. } => "record-deleted",
-        EventBody::SettingChanged { .. } => "setting-changed",
-        EventBody::AutomationSuspended { .. } => "automation-suspended",
-        EventBody::LedgerEntryPosted { .. } => "ledger-entry-posted",
-    }
+/// The names of the variants of the generated `event-body` union, as serde knows them, written the
+/// way the specification writes an event kind (`RecordUpdated` is `record-updated`).
+///
+/// They are read from the generated type itself: deserializing a body under a name no variant has
+/// makes serde list every variant it knows. A variant added to the specification therefore has a
+/// kind here with nothing to remember.
+pub fn emitted_kinds() -> &'static [String] {
+    static KINDS: OnceLock<Vec<String>> = OnceLock::new();
+    KINDS.get_or_init(|| {
+        let refusal = serde_json::from_value::<EventBody>(serde_json::json!({ "?": null }))
+            .err()
+            .map(|e| e.to_string())
+            .unwrap_or_default();
+        // "unknown variant `?`, expected one of `A`, `B`": the names are the odd pieces between
+        // backticks, after the first, which is the one that was asked for.
+        refusal
+            .split('`')
+            .skip(1)
+            .step_by(2)
+            .skip(1)
+            .map(kebab)
+            .collect()
+    })
 }
 
-/// What a subscriber wants to hear about (the specification's type `selector`, SCH-1575). Every
-/// member is optional and an absent member matches everything; members combine as AND, the values
-/// of one member as OR. A selector narrows what a subscriber is told and never widens it: what
-/// remains is still decided by the kernel's read decision for that subscriber.
+/// `RecordUpdated` as `record-updated`.
+fn kebab(ident: &str) -> String {
+    let mut out = String::with_capacity(ident.len() + 4);
+    for (i, c) in ident.chars().enumerate() {
+        if c.is_ascii_uppercase() {
+            if i > 0 {
+                out.push('-');
+            }
+            out.push(c.to_ascii_lowercase());
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// The kind of an event: the name of its body's variant in the specification (`event-kind`).
 ///
 /// `segments` is not a member here: the kernel emits no segment event yet, and [`Selector::new`]
 /// refuses a request that names one rather than match nothing silently.
@@ -55,20 +77,6 @@ pub fn kind_of(body: &EventBody) -> &'static str {
 /// `segments` selects the entry and exit events of segments (SEG-033, D-7280). They are not
 /// events of the kernel's sequence, so a selector that names segments hears only those, which are
 /// told by [`segment_notice`], and a selector that does not name them never hears one.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Selector {
-    /// Limit record changes to these object types. `None` means every object type.
-    #[serde(default)]
-    pub objects: Option<BTreeSet<ObjectTypeId>>,
-    /// Limit events to these kinds (see [`EVENT_KINDS`]). `None` means every kind.
-    #[serde(default)]
-    pub kinds: Option<BTreeSet<String>>,
-    /// Limit to record updates that fired one of these named workflow transitions. `None` means
-    /// every event. The kernel names in the event the transition each workflow fired (D-7203,
-    /// SCH-2202), so two transitions between the same states are told apart by the one whose
-    /// guard let the update through.
-    #[serde(default)]
-    pub transitions: Option<BTreeSet<String>>,
     /// Limit to the ledger events of these units (SCH-1575): a selector that names units hears of
     /// postings to the accounts of those units and of nothing else. `None` means every unit.
     #[serde(default)]
@@ -76,20 +84,67 @@ pub struct Selector {
     /// Limit to the entry and exit events of these segments. `None` selects no segment event.
     #[serde(default)]
     pub segments: Option<BTreeSet<SegmentId>>,
+/// The name is the variant's own, taken from the first thing its derived `Debug` writes, so no
+/// match arm names it and a new variant has a kind at once.
+pub fn kind_of(body: &EventBody) -> String {
+    struct FirstWrite(String);
+    impl std::fmt::Write for FirstWrite {
+        fn write_str(&mut self, s: &str) -> std::fmt::Result {
+            self.0.push_str(s);
+            // Stop: the rest of the body is its contents.
+            Err(std::fmt::Error)
+        }
+    }
+    let mut first = FirstWrite(String::new());
+    let _ = write!(first, "{body:?}");
+    kebab(&first.0)
 }
 
-impl Selector {
+/// Selectors from the members of a subscription request, and the one that matches every event.
+/// An extension trait because the type is generated.
+pub trait SelectorExt {
     /// The selector that matches every event.
-    pub fn all() -> Self {
-        Selector::default()
+    fn all() -> Selector;
+
+    /// A selector from the members of a subscription request, or the reason it is refused: a name
+    /// that is not valid, a kind the kernel does not emit, a member that names nothing, or a
+    /// member (`segments`) whose events the kernel does not emit yet.
+    fn new(
+        objects: Option<Vec<String>>,
+        kinds: Option<Vec<String>>,
+        segments: Option<Vec<String>>,
+        units: Option<Vec<String>>,
+        transitions: Option<Vec<String>>,
+    ) -> Result<Selector, String>;
+
+    /// Whether the selector lets this event through at all, before visibility is asked. Events
+    /// that name no record (schema and membership changes) are not limited by `objects`.
+    fn admits(&self, event: &DomainEvent) -> bool;
+}
+
+/// A member's values, in order and without repeats, so that equal requests give equal selectors.
+fn tidy<T: Ord>(mut values: Vec<T>) -> Vec<T> {
+    values.sort();
+    values.dedup();
+    values
+}
+
+impl SelectorExt for Selector {
+    fn all() -> Selector {
+        Selector {
+            objects: None,
+            kinds: None,
+            segments: None,
+            units: None,
+            transitions: None,
+        }
     }
 
-    /// A selector from the members of a subscription request, or the reason it is refused: a
     /// name that is not valid, a kind the kernel does not emit, or a member (`segments`) whose
     /// events the kernel does not emit yet.
     /// name that is not valid, a kind the kernel does not emit, a segment id that is not one, or
     /// a member (`units`) whose events are not emitted yet.
-    pub fn new(
+    fn new(
         objects: Option<Vec<String>>,
         kinds: Option<Vec<String>>,
         segments: Option<Vec<String>>,
@@ -119,12 +174,26 @@ impl Selector {
                     .collect::<Result<BTreeSet<_>, _>>()
             })
             .transpose()?;
+        let units = units
+            .map(|names| {
+                if names.is_empty() {
+                    return Err("units names no unit, so it would match nothing".to_string());
+                }
+                names
+                    .into_iter()
+                    .map(LedgerUnit::new)
+                    .collect::<Result<Vec<_>, _>>()
+                    .map(tidy)
+                    .map_err(|e| e.to_string())
+            })
+            .transpose()?;
         let objects = objects
             .map(|names| {
                 names
                     .into_iter()
                     .map(ObjectTypeId::new)
-                    .collect::<Result<BTreeSet<_>, _>>()
+                    .collect::<Result<Vec<_>, _>>()
+                    .map(tidy)
                     .map_err(|e| e.to_string())
             })
             .transpose()?;
@@ -133,16 +202,27 @@ impl Selector {
                 names
                     .into_iter()
                     .map(|name| {
-                        if EVENT_KINDS.contains(&name.as_str()) {
-                            Ok(name)
+                        let kind = EventKind::new(name.as_str())
+                            .map_err(|e| format!("{name:?} is not an event kind: {e}"))?;
+                        if name.starts_with("app.") {
+                            // The specification lets a tenant declare kinds under `app.`
+                            // (declare-event-kind, emit-event; SCH-1576); the kernel has neither.
+                            Err(format!(
+                                "the event kind {name:?} is declared by the tenant, and the kernel \
+                                 has no declare-event-kind or emit-event, so no tenant kind is \
+                                 emitted"
+                            ))
+                        } else if emitted_kinds().contains(&name) {
+                            Ok(kind)
                         } else {
                             Err(format!(
                                 "the event kind {name:?} is not emitted; the kinds are {}",
-                                EVENT_KINDS.join(", ")
+                                emitted_kinds().join(", ")
                             ))
                         }
                     })
-                    .collect::<Result<BTreeSet<_>, _>>()
+                    .collect::<Result<Vec<_>, _>>()
+                    .map(tidy)
             })
             .transpose()?;
         let transitions = transitions
@@ -156,27 +236,29 @@ impl Selector {
                             Ok(name)
                         }
                     })
-                    .collect::<Result<BTreeSet<_>, _>>()
+                    .collect::<Result<Vec<_>, _>>()
+                    .map(tidy)
             })
             .transpose()?;
         Ok(Selector {
             objects,
             kinds,
+            segments: None,
+            units,
             transitions,
             units,
             segments,
         })
     }
 
-    /// Whether the selector lets this event through at all, before visibility is asked. Events
-    /// that name no record (schema and membership changes) are not limited by `objects`.
     fn admits(&self, event: &DomainEvent) -> bool {
         // A selector that names segments selects their events and nothing of the kernel's.
         if self.segments.is_some() {
             return false;
         }
         if let Some(kinds) = &self.kinds {
-            if !kinds.contains(kind_of(&event.body)) {
+            let kind = kind_of(&event.body);
+            if !kinds.iter().any(|wanted| wanted.0 == kind) {
                 return false;
             }
         }
@@ -192,6 +274,15 @@ impl Selector {
             }
         }
         if let Some(wanted) = &self.units {
+            let EventBody::LedgerEntryPosted { unit, .. } = &event.body else {
+                return false;
+            };
+            if !wanted.contains(unit) {
+                return false;
+            }
+        }
+        if let Some(wanted) = &self.units {
+            // Only a posting names a unit; a unit selector hears no other kind of event.
             let EventBody::LedgerEntryPosted { unit, .. } = &event.body else {
                 return false;
             };
@@ -293,6 +384,14 @@ pub fn segment_notice(
             direction: event.direction,
             position,
         })
+    /// An entry was posted in an account the subscriber may read: the subscriber reads the
+    /// account again through the ledger's own reads. The notice names neither the owner (who is
+    /// personal) nor the amount.
+    Ledger {
+        account: LedgerAccountId,
+        unit: LedgerUnit,
+        entry_sequence: u64,
+    },
 }
 
 /// Decide what, if anything, a subscriber learns from an event.
@@ -413,6 +512,19 @@ pub fn notice(
             scope: (!scope.as_str().is_empty()).then(|| scope.clone()),
             sequence: *entry_sequence,
         }),
+        // A posting reaches whoever may read the account (a holder of ledger-read, or the person
+        // who owns it), by the ledger's own read decision; the owner is personal and is not named.
+        EventBody::LedgerEntryPosted {
+            account,
+            owner,
+            unit,
+            entry_sequence,
+            ..
+        } => may_read_account(tenant, principal, owner).then(|| Notice::Ledger {
+            account: *account,
+            unit: unit.clone(),
+            entry_sequence: *entry_sequence,
+        }),
     }
 }
 
@@ -483,7 +595,7 @@ mod tests {
 
     fn only_kinds(kinds: &[&str]) -> Selector {
         Selector {
-            kinds: Some(kinds.iter().map(|k| k.to_string()).collect()),
+            kinds: Some(kinds.iter().map(|k| EventKind::new(*k).unwrap()).collect()),
             ..Selector::all()
         }
     }
@@ -557,8 +669,8 @@ mod tests {
         );
         // The members combine as AND: a creation is never an update that fired a transition.
         let both = Selector {
-            kinds: Some(["record-created".to_string()].into()),
-            transitions: Some(["publish".to_string()].into()),
+            kinds: Some(vec![EventKind::new("record-created").unwrap()]),
+            transitions: Some(vec!["publish".to_string()]),
             ..Selector::all()
         };
         assert_eq!(told(&writer, &both), [false, false, false]);
@@ -631,13 +743,12 @@ mod tests {
         let tenant = &world.tenants[&tenant_id("alpha")];
         let everything = Selector {
             objects: Some([object("note")].into()),
-            kinds: Some(
-                ["record-created", "record-updated"]
-                    .map(str::to_string)
-                    .into(),
-            ),
-            transitions: None,
             segments: None,
+            kinds: Some(vec![
+                EventKind::new("record-created").unwrap(),
+                EventKind::new("record-updated").unwrap(),
+            ]),
+            ..Selector::all()
         };
         // The public never reads the draft: no notice of its creation, and the withdrawal is a
         // removal, as without a selector.
@@ -688,8 +799,11 @@ mod tests {
         )
         .unwrap();
         assert_eq!(accepted.objects, Some([object("note")].into()));
-        assert_eq!(accepted.kinds, Some(["record-updated".to_string()].into()));
-        assert_eq!(accepted.transitions, Some(["publish".to_string()].into()));
+        assert_eq!(
+            accepted.kinds,
+            Some(vec![EventKind::new("record-updated").unwrap()])
+        );
+        assert_eq!(accepted.transitions, Some(vec!["publish".to_string()]));
 
         let segments = Selector::new(
             None,
@@ -701,14 +815,139 @@ mod tests {
         .unwrap();
         assert_eq!(segments.segments.map(|set| set.len()), Some(1));
         assert!(Selector::new(None, None, names(&["not-a-uuid"]), None, None).is_err());
-        let units = Selector::new(None, None, None, names(&["eur"]), None);
-        assert!(units.unwrap_err().contains("units"), "units are refused");
+        let units = Selector::new(None, None, None, names(&["eur"]), None).unwrap();
+        assert_eq!(units.units, Some(vec![LedgerUnit::new("eur").unwrap()]));
+        assert!(Selector::new(None, None, None, names(&["Not A Unit"]), None).is_err());
         // Naming nothing is still naming the member: it would match nothing, so it is refused.
         assert!(Selector::new(None, None, Some(vec![]), None, None).is_err());
-        assert!(Selector::new(None, None, None, Some(vec![]), None).is_err());
+        assert!(Selector::new(None, None, None, Some(vec![]), None)
+            .unwrap_err()
+            .contains("names no unit"));
         let unknown = Selector::new(None, names(&["record-create"]), None, None, None);
         assert!(unknown.unwrap_err().contains("not emitted"));
+        // A tenant-declared kind is refused for its own reason: the kernel emits none.
+        let declared = Selector::new(None, names(&["app.survey-closed"]), None, None, None);
+        assert!(declared
+            .unwrap_err()
+            .contains("no declare-event-kind or emit-event"));
+        assert!(Selector::new(None, names(&["Not A Kind"]), None, None, None).is_err());
+        // Every kind the kernel emits is accepted, the ledger's among them.
+        assert!(Selector::new(None, names(&["ledger-entry-posted"]), None, None, None).is_ok());
         assert!(Selector::new(None, None, None, None, names(&[""])).is_err());
         assert!(Selector::new(names(&["Not An Object"]), None, None, None, None).is_err());
+    }
+
+    /// Verifies: SCH-1576
+    ///
+    /// The kinds a selector may name are the generated `event-body`'s variants, written as event
+    /// kinds: each is a valid `event-kind` and none claims the tenant's `app.` prefix, and the
+    /// kind of a real event is one of them.
+    #[test]
+    fn every_variant_of_the_generated_event_body_has_a_kind_name() {
+        let kinds = emitted_kinds();
+        assert!(
+            kinds.len() >= 9,
+            "the variants were not read from the generated type: {kinds:?}"
+        );
+        for kind in kinds {
+            assert!(
+                EventKind::new(kind.as_str()).is_ok() && !kind.starts_with("app."),
+                "{kind:?} is not a platform event kind"
+            );
+        }
+        let mut sorted = kinds.to_vec();
+        sorted.sort();
+        sorted.dedup();
+        assert_eq!(sorted.len(), kinds.len(), "two variants share a kind name");
+        for expected in [
+            "tenant-created",
+            "record-updated",
+            "setting-changed",
+            "automation-suspended",
+            "ledger-entry-posted",
+        ] {
+            assert!(
+                kinds.iter().any(|k| k == expected),
+                "{expected} is not a kind"
+            );
+        }
+        let (_, events) = published_then_withdrawn();
+        for event in &events {
+            let kind = kind_of(&event.body);
+            assert!(kinds.contains(&kind), "{kind} is not among {kinds:?}");
+        }
+        let created = EventBody::TenantCreated {
+            name: "Alpha".into(),
+        };
+        assert_eq!(kind_of(&created), "tenant-created");
+    }
+
+    /// Verifies: SCH-1575
+    ///
+    /// A posting is told to whoever may read the account (a holder of ledger-read, or the person
+    /// who owns it) and to no one else, and a unit selector hears postings of its units only.
+    #[test]
+    fn a_posting_is_told_only_to_who_may_read_the_account() {
+        use strata_kernel::ledger::account_id;
+        use strata_kernel::{LedgerAmount, LedgerOwner, LedgerScope};
+        let (world, events) = published_then_withdrawn();
+        let tenant = &world.tenants[&tenant_id("alpha")];
+        let owner = LedgerOwner::Principal {
+            principal: principal_id("alpha:writer1"),
+        };
+        let unit = LedgerUnit::new("eur").unwrap();
+        let posting = DomainEvent {
+            body: EventBody::LedgerEntryPosted {
+                account: account_id(&tenant.id, &owner, &unit, ""),
+                owner,
+                unit: unit.clone(),
+                scope: LedgerScope(String::new()),
+                amount: LedgerAmount(5),
+                balance: LedgerAmount(5),
+                balance_before: LedgerAmount(0),
+                entry_sequence: 1,
+                reason: "welcome".into(),
+            },
+            ..events[0].clone()
+        };
+        let all = Selector::all();
+        let told = |who: &Principal, selector: &Selector| notice(tenant, who, selector, &posting);
+        let expected = Notice::Ledger {
+            account: account_id(
+                &tenant.id,
+                &LedgerOwner::Principal {
+                    principal: principal_id("alpha:writer1"),
+                },
+                &unit,
+                "",
+            ),
+            unit,
+            entry_sequence: 1,
+        };
+        assert_eq!(told(&user("alpha:owner"), &all), Some(expected.clone()));
+        assert_eq!(told(&user("alpha:writer1"), &all), Some(expected.clone()));
+        assert_eq!(
+            told(&user("alpha:writer2"), &all),
+            None,
+            "another person may not read the account"
+        );
+        assert_eq!(told(&Principal::Anonymous, &all), None);
+        let units = |names: &[&str]| {
+            Selector::new(
+                None,
+                None,
+                None,
+                Some(names.iter().map(|n| n.to_string()).collect()),
+                None,
+            )
+            .unwrap()
+        };
+        assert_eq!(told(&user("alpha:owner"), &units(&["eur"])), Some(expected));
+        assert_eq!(told(&user("alpha:owner"), &units(&["usd"])), None);
+        // A unit selector hears no event that names no unit.
+        assert_eq!(
+            notice(tenant, &user("alpha:owner"), &units(&["eur"]), &events[0]),
+            None
+        );
     }
 }

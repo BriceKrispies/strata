@@ -846,6 +846,13 @@ fn holds(tenant: &TenantState, principal: &Principal, name: &str) -> bool {
     )
 }
 
+/// Whether `principal` may read the account of `owner`: the decision of every ledger read
+/// ([`may_read`]) as a yes or no, for a subscription that tells a person of a posting only when
+/// they could read the account it was made in.
+pub fn may_read_account(tenant: &TenantState, principal: &Principal, owner: &LedgerOwner) -> bool {
+    may_read(tenant, principal, Some(owner)).is_ok()
+}
+
 // ------------------------------------------------------------------------------------------------
 // Applying a delta
 

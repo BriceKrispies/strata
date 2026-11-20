@@ -295,6 +295,8 @@ pub struct App {
     pub outbound: std::sync::OnceLock<Arc<crate::outbound::Gate>>,
     /// Where the bytes of uploaded files live and the scanner that checks them.
     pub files: crate::files::FileService,
+    /// The platform level of the settings, as the control database holds it, for a bounded age.
+    pub platform_settings: crate::settings::PlatformCache,
 }
 
 pub type Shared = Arc<App>;
@@ -317,6 +319,7 @@ impl App {
             aggregate_copies: Default::default(),
             outbound: std::sync::OnceLock::new(),
             files: crate::files::FileService::new(),
+            platform_settings: Default::default(),
         })
     }
 

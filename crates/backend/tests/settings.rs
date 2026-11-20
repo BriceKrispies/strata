@@ -554,3 +554,127 @@ async fn the_event_of_a_change_carries_no_value() {
         .unwrap()
         .contains(secret));
 }
+
+/// CT-303, SET-005, SET-025, SET-030: the platform operator writes the platform level through the
+/// control plane's route, a tenant that has no override of its own reads it with its source named,
+/// a stale write is a conflict naming the current revision, and no tenant session writes it. The
+/// write is an audit entry of the platform.
+#[tokio::test]
+async fn the_platform_operator_writes_the_platform_level_and_a_tenant_without_an_override_reads_it()
+{
+    let backend = start().await;
+    let mut def = page_size();
+    def.levels.insert(SettingLevel::Platform);
+    backend.define(&def).await;
+    let tomasz = backend.session_of("tomasz").await;
+    let admin = backend.session_of("admin").await;
+    let path = "/internal/platform/settings/set";
+
+    let (_, found) = backend.resolve(Some(&tomasz), "page_size").await;
+    assert_eq!(
+        (found["source"].clone(), found["platform_revision"].clone()),
+        (json!("default"), json!(0))
+    );
+
+    // A tenant session, the owner's included, does not write the platform level.
+    for session in [&tomasz, &admin] {
+        let (status, refused) = backend
+            .call(
+                Some(session),
+                path,
+                json!({ "setting": "page_size", "value": 50, "expected_version": 0 }),
+            )
+            .await;
+        assert_eq!(status, 403, "{refused}");
+    }
+    let (_, found) = backend.resolve(Some(&tomasz), "page_size").await;
+    assert_eq!(found["source"], json!("default"), "nothing was written");
+
+    // The operator's tools call it with the service credential and no session.
+    let (status, written) = backend
+        .call_as_service(
+            path,
+            json!({ "setting": "page_size", "value": 50, "expected_version": 0 }),
+        )
+        .await;
+    assert_eq!(status, 200, "{written}");
+    assert_eq!(written["revision"], json!(1));
+    let (_, found) = backend.resolve(Some(&tomasz), "page_size").await;
+    assert_eq!(
+        (
+            found["value"].clone(),
+            found["source"].clone(),
+            found["platform_revision"].clone()
+        ),
+        (json!(50), json!("platform"), json!(1))
+    );
+    let (_, all) = backend
+        .call(Some(&tomasz), "/internal/settings/resolve-all", json!({}))
+        .await;
+    assert_eq!(all["settings"][0]["source"], json!("platform"), "{all}");
+
+    // The tenant's own override is nearer than the platform's.
+    let (status, set) = backend
+        .call(
+            Some(&admin),
+            "/internal/settings/set-tenant",
+            json!({ "setting": "page_size", "value": 35, "expected_version": 0 }),
+        )
+        .await;
+    assert_eq!(status, 200, "{set}");
+    let (_, found) = backend.resolve(Some(&tomasz), "page_size").await;
+    assert_eq!(
+        (found["value"].clone(), found["source"].clone()),
+        (json!(35), json!("tenant"))
+    );
+
+    // A write against a stale revision changes nothing and names the current one.
+    let (status, stale) = backend
+        .call_as_service(
+            path,
+            json!({ "setting": "page_size", "value": 60, "expected_version": 0 }),
+        )
+        .await;
+    assert_eq!(status, 409, "{stale}");
+    assert!(
+        stale.to_string().contains("revision 1"),
+        "the conflict names the current revision: {stale}"
+    );
+    // A value that is not a flag, a whole number or text is refused.
+    let (status, _) = backend
+        .call_as_service(
+            path,
+            json!({ "setting": "page_size", "value": [1], "expected_version": 1 }),
+        )
+        .await;
+    assert_eq!(status, 422);
+
+    // Removing it falls back to the default for a tenant with no override of its own.
+    let (status, removed) = backend
+        .call_as_service(
+            path,
+            json!({ "setting": "page_size", "expected_version": 1 }),
+        )
+        .await;
+    assert_eq!(status, 200, "{removed}");
+    assert_eq!(removed["revision"], json!(2));
+    let (_, found) = backend.resolve(Some(&tomasz), "page_size").await;
+    assert_eq!(found["platform_revision"], json!(2));
+
+    // Both writes are audit entries of the platform, holding the previous and the new value.
+    let (status, diagnostics) = backend
+        .call_as_service("/internal/platform/diagnostics", json!({}))
+        .await;
+    assert_eq!(status, 200, "{diagnostics}");
+    let entries: Vec<&Json> = diagnostics["audit"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|entry| entry["event"] == "platform.setting_set")
+        .collect();
+    assert_eq!(entries.len(), 2, "{diagnostics}");
+    assert_eq!(entries[0]["value"], json!(50));
+    assert_eq!(entries[0]["previous"], Json::Null);
+    assert_eq!(entries[1]["previous"], json!(50));
+    assert_eq!(entries[1]["value"], Json::Null);
+}

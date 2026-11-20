@@ -22,6 +22,7 @@ use strata_protocol::ws::{
     MAX_UNACKED, VERSION,
 };
 use strata_substrate::subscribe::{notice, segment_notice, Selector};
+use strata_substrate::subscribe::{notice, Selector, SelectorExt};
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::mpsc;
 
