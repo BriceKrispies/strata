@@ -61,8 +61,10 @@ fn notify(app: &App, caller: &Caller, account: &Account, subject: &str, text: &s
             to: contact,
             subject: subject.to_string(),
             text: text.to_string(),
+            ..Mail::default()
         };
-        if let Err(error) = app.cfg.mail.send(&mail) {
+        // Through the mail dispatcher as sign-in mail (EML-1563): never held, and logged.
+        if let Err(error) = crate::dispatch::send_sign_in(app, &caller.site, &mail) {
             LOG.error(
                 "recovery.not_sent",
                 &caller.correlation,

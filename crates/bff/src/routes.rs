@@ -2483,6 +2483,115 @@ async fn segments(
     Ok(uncached(reply))
 }
 
+/// The inputs of a mail log listing or count from its query string: the text ones named, and the
+/// whole numbers `limit`, `from` and `until`. Anything else is left out.
+fn mail_query(query: &BTreeMap<String, String>, texts: &[&str]) -> Json_ {
+    let mut body = serde_json::Map::new();
+    for name in texts {
+        if let Some(value) = query.get(*name).filter(|v| !v.is_empty() && v.len() <= 100) {
+            body.insert((*name).to_string(), json!(value));
+        }
+    }
+    for name in ["limit", "from", "until"] {
+        if let Some(number) = query.get(name).and_then(|v| v.parse::<i64>().ok()) {
+            body.insert(name.into(), json!(number));
+        }
+    }
+    Json_::Object(body)
+}
+
+/// `POST /api/mail/send`: send a templated mail (send-message). A write.
+///
+/// Implements: CT-820
+async fn mail_send(
+    State(bff): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<Json_>,
+) -> Result<Json<Json_>, Failure> {
+    guarded(&bff, &headers, "/internal/mail/send", body).await
+}
+
+/// `POST /api/mail/categories`: declare a message category (define-message-category). A write.
+///
+/// Implements: CT-825
+async fn mail_categories(
+    State(bff): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<Json_>,
+) -> Result<Json<Json_>, Failure> {
+    guarded(&bff, &headers, "/internal/mail/categories", body).await
+}
+
+/// `POST /api/mail/suppressions`: add or remove a suppression (manage-suppression-list). A write.
+///
+/// Implements: CT-223
+async fn mail_suppressions(
+    State(bff): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<Json_>,
+) -> Result<Json<Json_>, Failure> {
+    guarded(&bff, &headers, "/internal/mail/suppressions", body).await
+}
+
+/// `GET /api/mail/messages`: the mail log (list-mail-messages).
+///
+/// Implements: CT-222
+async fn mail_messages(
+    State(bff): State<Shared>,
+    headers: HeaderMap,
+    Query(query): Query<BTreeMap<String, String>>,
+) -> Result<Response, Failure> {
+    let visit = visit(&bff, &headers)?;
+    let body = mail_query(
+        &query,
+        &["state", "category", "template", "reference", "cursor"],
+    );
+    let reply: Json_ = backend(&bff, &visit, "/internal/mail/messages", &body).await?;
+    Ok(uncached(reply))
+}
+
+/// `GET /api/mail/counts`: messages by state, grouped (count-mail-messages).
+///
+/// Implements: CT-834
+async fn mail_counts(
+    State(bff): State<Shared>,
+    headers: HeaderMap,
+    Query(query): Query<BTreeMap<String, String>>,
+) -> Result<Response, Failure> {
+    let visit = visit(&bff, &headers)?;
+    let body = mail_query(&query, &["group-by", "category", "template", "reference"]);
+    let reply: Json_ = backend(&bff, &visit, "/internal/mail/counts", &body).await?;
+    Ok(uncached(reply))
+}
+
+/// `POST /api/mail/subscription?r=..&c=..&a=..&s=..`: follow a signed unsubscribe or resubscribe
+/// link (change-subscription-by-link). No sign-in and no request token: the signature of the link
+/// is the authority (EML-020), and a mail client's one-click request (RFC 8058) carries nothing
+/// else. The backend checks the signature.
+///
+/// Implements: CT-827
+async fn mail_subscription(
+    State(bff): State<Shared>,
+    headers: HeaderMap,
+    Query(query): Query<BTreeMap<String, String>>,
+) -> Result<Response, Failure> {
+    let visit = visit(&bff, &headers)?;
+    let mut body = serde_json::Map::new();
+    for name in ["r", "c", "a", "s"] {
+        if let Some(value) = query.get(name).filter(|v| v.len() <= 128) {
+            body.insert(name.to_string(), json!(value));
+        }
+    }
+    let reply: Json_ = backend(
+        &bff,
+        &visit,
+        "/internal/mail/subscription",
+        &Json_::Object(body),
+    )
+    .await?;
+    Ok(uncached(reply))
+}
+
 /// What the desk may change of the products installed in the tenant, and where it is at the
 /// backend: install-bundle, upgrade-bundle and remove-bundle (CT-236, CT-835, CT-836). Each is the
 /// owner's with a fresh factor, and the backend checks that again.
@@ -2605,6 +2714,12 @@ pub fn router(bff: Shared) -> Router {
         .route("/automation/runs/:run/steps", get(automation_steps))
         .route("/automation/exceptions", get(automation_exceptions))
         .route("/automation/exceptions/settle", post(automation_settle))
+        .route("/mail/send", post(mail_send))
+        .route("/mail/categories", post(mail_categories))
+        .route("/mail/suppressions", post(mail_suppressions))
+        .route("/mail/messages", get(mail_messages))
+        .route("/mail/counts", get(mail_counts))
+        .route("/mail/subscription", post(mail_subscription))
         .route("/products", get(products_list))
         .route("/products/:action", post(products_write))
         .fallback(api_not_found);

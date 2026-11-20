@@ -13,16 +13,35 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 
 /// A message to one address.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Mail {
     pub to: String,
     pub subject: String,
     pub text: String,
+    /// The HTML part, when the message has one (EML-016): the mail dispatcher renders every
+    /// templated message into both parts.
+    pub html: Option<String>,
+    /// Further header fields, such as `List-Unsubscribe` (EML-020). A name is ASCII without a
+    /// colon or a space and a value holds no line break; the dispatcher refuses what does not
+    /// hold before a message is made (EML-1566).
+    pub headers: Vec<(String, String)>,
 }
 
 /// Why a message was not delivered to the transport.
 #[derive(Debug)]
 pub struct MailError(pub String);
+
+/// The prefix of the text of an error that a later attempt cannot mend: the transport refused
+/// the message itself (an address it cannot read, a message it cannot build), not the moment.
+pub const PERMANENT: &str = "permanent: ";
+
+impl MailError {
+    /// Whether the transport refused the message for a permanent reason (EML-008); any other
+    /// refusal is temporary and the message is attempted again (EML-007).
+    pub fn permanent(&self) -> bool {
+        self.0.starts_with(PERMANENT)
+    }
+}
 
 /// Something that delivers a message.
 pub trait Mailer: Send + Sync + Debug {
@@ -142,18 +161,31 @@ impl Smtp {
 
 impl Mailer for Smtp {
     fn send(&self, mail: &Mail) -> Result<(), MailError> {
+        use lettre::message::header::{HeaderName, HeaderValue};
         use lettre::Transport;
         let to: lettre::message::Mailbox = mail
             .to
             .parse()
-            .map_err(|e| MailError(format!("recipient: {e}")))?;
-        let message = lettre::Message::builder()
+            .map_err(|e| MailError(format!("{PERMANENT}recipient: {e}")))?;
+        let mut builder = lettre::Message::builder()
             .from(self.from.clone())
             .to(to)
-            .subject(mail.subject.clone())
-            .header(lettre::message::header::ContentType::TEXT_PLAIN)
-            .body(mail.text.clone())
-            .map_err(|e| MailError(e.to_string()))?;
+            .subject(mail.subject.clone());
+        for (name, value) in &mail.headers {
+            let name = HeaderName::new_from_ascii(name.clone())
+                .map_err(|_| MailError(format!("{PERMANENT}header name {name}")))?;
+            builder = builder.raw_header(HeaderValue::new(name, value.clone()));
+        }
+        let message = match &mail.html {
+            Some(html) => builder.multipart(lettre::message::MultiPart::alternative_plain_html(
+                mail.text.clone(),
+                html.clone(),
+            )),
+            None => builder
+                .header(lettre::message::header::ContentType::TEXT_PLAIN)
+                .body(mail.text.clone()),
+        }
+        .map_err(|e| MailError(format!("{PERMANENT}{e}")))?;
         let transport = self.transport.clone();
         self.pool
             .submit(move || {
@@ -180,6 +212,7 @@ mod tests {
             to: "a@x.example\nBcc: b@x.example".into(),
             subject: "Hello".into(),
             text: "Body".into(),
+            ..Mail::default()
         };
         sink.send(&mail).unwrap();
         assert_eq!(sink.outbox(), vec![mail.clone()]);

@@ -161,6 +161,10 @@ pub enum JobWork {
         /// The position of the step in its run, from one.
         sequence: u64,
     },
+    /// Send mail (job kind `mail`): one message, or one batch of a send to a segment, for the
+    /// mail dispatcher (D-451, D-6561, EML-005). `request` is the dispatcher's request
+    /// (`strata_backend::dispatch::MailRequest`) as JSON, kept as given.
+    Mail { request: serde_json::Value },
 }
 
 /// A job to create: its key, what it does, when it is due and how it is retried.

@@ -14,6 +14,14 @@
     },
     {
       "package": "strata-backend",
+      "target": "dispatch",
+      "tier": "full",
+      "seconds": null,
+      "unmeasured": true,
+      "reason": "The mail dispatcher through the worker on the in-memory store: a segment of 150 members and every send of each test run through worker passes"
+    },
+    {
+      "package": "strata-backend",
       "target": "erasure",
       "tier": "routine",
       "seconds": null,
