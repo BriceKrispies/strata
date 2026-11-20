@@ -11,6 +11,7 @@ const CONNECTION = {
   open: 'Live: changes appear as they are published.',
   connecting: 'Connecting for live updates…',
   waiting: 'Offline. Reconnecting; the page will catch up.',
+  stopped: 'Live updates have stopped. Reload the page to reconnect.',
   idle: '',
 };
 

@@ -85,7 +85,9 @@ export function factorsRequireStepUp(state, retry) {
     sessions: { ...state.sessions, busy: false },
     passkeys: { ...state.passkeys, busy: false },
   };
-  return withFactors({ ...state, ...idle }, { busy: false, stepUp: { retry, error: '', busy: false }, fields: { ...state.factors.fields, secret: '' } });
+  // Focus goes to the prompt's field, so keyboard and screen-reader users land in the dialog.
+  const focus = { target: 'stepup-secret', token: state.nextId };
+  return withFactors({ ...state, ...idle, nextId: state.nextId + 1, focus }, { busy: false, stepUp: { retry, error: '', busy: false }, fields: { ...state.factors.fields, secret: '' } });
 }
 
 /** An action carries its own retry, so a refused one can be asked again. */

@@ -39,6 +39,24 @@ const LAB_SCREEN = 'screen-lab';
 const SIGN_IN = 'form-sign-in';
 const SETTINGS = 'form-settings';
 
+// Reads whose reply is applied only when it answers the latest request of its kind, as `view`
+// is: an older reply that arrives late must not overwrite a newer one (or a newer sign-in).
+const LATEST_ONLY = ['session', 'sessions.list', 'passkeys.list', 'factors.summary', 'lab.overview'];
+// Requests made on behalf of the person signed in. A reply to one that was made before the
+// user-scoped state was cleared (sign-out, session end, account switch) belongs to someone else.
+const USER_KIND_PREFIXES = ['sessions.', 'lab.', 'editor.', 'post.', 'settings.'];
+const USER_KINDS = [
+  'passkeys.list', 'passkeys.register_start', 'passkeys.register_finish', 'passkeys.remove',
+  'factors.summary', 'factors.enrol_start', 'factors.enrol_finish', 'factors.remove_totp', 'factors.new_codes', 'factors.stepup',
+];
+/** Refusals of the socket upgrade (the server reachable, the connection refused) after which live updates stop. */
+const WS_REFUSAL_LIMIT = 5;
+
+/** @param {string} kind */
+function isUserKind(kind) {
+  return USER_KINDS.includes(kind) || USER_KIND_PREFIXES.some((prefix) => kind.startsWith(prefix));
+}
+
 export function initialState() {
   return {
     ready: false,
@@ -69,6 +87,13 @@ export function initialState() {
     menuOpen: false,
     nextId: 1,
     pending: {},
+    /** The id of the latest request of each kind, for the kinds that apply only their latest reply. */
+    latest: /** @type {Record<string, number>} */ ({}),
+    /** Counts the clearings of user-scoped state; a request remembers the one it was made in. */
+    generation: 0,
+    /** Refusals of the socket upgrade counted since the socket last opened, and whether live updates gave up. */
+    wsRefusals: 0,
+    wsStopped: false,
     focus: { target: '', token: 0 },
   };
 }
@@ -113,7 +138,8 @@ export function request(state, kind, spec, msg) {
   const next = {
     ...state,
     nextId: id + 1,
-    pending: { ...state.pending, [id]: { kind, correlation, ...(spec.meta ?? {}) } },
+    pending: { ...state.pending, [id]: { kind, correlation, generation: state.generation ?? 0, ...(spec.meta ?? {}) } },
+    latest: { ...(state.latest ?? {}), [kind]: id },
   };
   return [
     next,
@@ -192,8 +218,40 @@ function fetchView(state, msg, quiet) {
 }
 
 /** Ask for the session again. */
-function readSession(state, msg) {
-  return call(state, 'session', 'read-session-view', {}, msg);
+function readSession(state, msg, meta = {}) {
+  return call(state, 'session', 'read-session-view', {}, msg, meta);
+}
+
+/** True when the screen the address opens needs a signed-in person. */
+function guardedScreen(state) {
+  return routeOf(screenOf(state)?.screen ?? '')?.auth === 'session';
+}
+
+/**
+ * Forget everything that belongs to the person who was signed in: recovery codes, the enrolment
+ * secret, the lists of sessions and passkeys, the Lab's overview and results, the editor and
+ * settings forms with their drafts, and (on a guarded page) that person's view model. Replies to
+ * requests made before this are dropped when they arrive. The caller reads the view again, since
+ * a guarded page's model is gone.
+ * @param {any} state
+ */
+function clearUserState(state) {
+  const latest = { ...(state.latest ?? {}) };
+  for (const kind of LATEST_ONLY) latest[kind] = 0;
+  const login = state.forms.login;
+  return {
+    ...state,
+    generation: (state.generation ?? 0) + 1,
+    latest,
+    sessions: sessionsInit(),
+    passkeys: { ...passkeysInit(), supported: state.passkeys.supported },
+    factors: factorsInit(),
+    lab: { ...labInit(), timer: state.lab.timer + 1 },
+    forms: { ...state.forms, login: { ...login, values: { ...login.values, password: '' } }, editor: null, settings: null },
+    optimistic: {},
+    confirmDelete: null,
+    view: guardedScreen(state) ? { status: 'loading', model: null, error: null, request: 0 } : state.view,
+  };
 }
 
 /** The form whose fields the editor shows: the new article's, or an existing one's. */
@@ -343,13 +401,21 @@ function refreshAfter(stepped, msg) {
 /** @returns {Result} */
 function onSocket(state, frame, msg) {
   switch (frame.type) {
-    case 'welcome':
-      return liveStep(state, 'ui-live-welcome', { head: frame.head, 'heartbeat-ms': frame.heartbeat_ms }, msg) ?? { state, effects: [] };
+    case 'welcome': {
+      // With nothing seen on this machine the subscription starts at the server's head, so what
+      // changed since the page was read is never replayed: read the view again.
+      const first = state.ws.lastSeq === null;
+      const stepped = liveStep(state, 'ui-live-welcome', { head: frame.head, 'heartbeat-ms': frame.heartbeat_ms }, msg);
+      if (!stepped) return { state, effects: [] };
+      return first ? refreshAfter(stepped, msg) : stepped;
+    }
     case 'event': {
       const stepped = liveStep(state, 'ui-live-frame', { n: frame.n, seq: frame.seq }, msg);
       if (!stepped) return { state, effects: [] };
       // A frame went missing on this connection: the machine starts over rather than carry on stale.
-      if (stepped.effects.some((e) => e.type === 'ws_close')) return stepped;
+      // What it missed is not replayed, so the view is read again now and once more when the
+      // connection comes back from scratch.
+      if (stepped.effects.some((e) => e.type === 'ws_close')) return refreshAfter(stepped, msg);
       const notice = frame.notice;
       // Whether the view is read again is the generated live binding's decision, for every kind
       // of notice; a change of membership also changes what the session may do, so it is read too.
@@ -365,9 +431,13 @@ function onSocket(state, frame, msg) {
     case 'resync':
       // Too far behind to replay: carry on from the server's head, with the view read again.
       return refreshAfter(liveStep(state, 'ui-live-resync', { head: frame.head }, msg) ?? { state, effects: [] }, msg);
-    case 'pong':
-      // Everything visible up to `head` has already arrived on this ordered connection.
-      return liveStep(state, 'ui-live-pong', { head: frame.head }, msg) ?? { state, effects: [] };
+    case 'pong': {
+      // A head beyond what this connection delivered means changes arrived that no frame told of.
+      const behind = frame.head > (state.ws.lastSeq ?? 0);
+      const stepped = liveStep(state, 'ui-live-pong', { head: frame.head }, msg);
+      if (!stepped) return { state, effects: [] };
+      return behind ? refreshAfter(stepped, msg) : stepped;
+    }
     case 'session': {
       if (frame.state === 'active') return { state, effects: [] };
       // Our own sign-out ends the session too; its reply will say so, once.
@@ -375,7 +445,7 @@ function onSocket(state, frame, msg) {
       const ended = sessionStep(state, 'ui-session-ended', {}, msg.at);
       if (!ended) return { state, effects: [] };
       const text = frame.state === 'expired' ? 'Your session has expired. Sign in again to keep writing.' : 'You have been signed out.';
-      let next = toast(ended.state, 'warn', text);
+      let next = clearUserState(toast(ended.state, 'warn', text));
       /** @type {Effect[]} */
       const effects = [];
       if (ended.readSession) {
@@ -384,7 +454,8 @@ function onSocket(state, frame, msg) {
         effects.push(effect);
       }
       next = { ...next, session: { ...state.session, authenticated: false, csrf_token: undefined, roles: ['public'], may: {}, may_manage_schema: false } };
-      const refresh = live.refreshes(screenOf(state)?.screen ?? '', 'ui-session-ended', {}, state.view.model);
+      // A guarded page's model was cleared with the person's state, so it is always read again.
+      const refresh = guardedScreen(state) || live.refreshes(screenOf(state)?.screen ?? '', 'ui-session-ended', {}, state.view.model);
       return refresh ? refreshAfter({ state: next, effects }, msg) : { state: next, effects };
     }
     case 'run':
@@ -410,6 +481,7 @@ function passkeySignedIn(state, msg) {
   const outcome = forms.succeeded(SIGN_IN, scopeOf(state, { form: {}, response: outputs }));
   let signedIn = { ...state, session: outputs.session };
   signedIn = sessionStep(signedIn, 'ui-signed-in', {}, msg.at)?.state ?? signedIn;
+  signedIn = clearUserState(signedIn);
   if (outcome.toast) signedIn = toast(signedIn, 'ok', outcome.toast);
   const reset = resetLive(signedIn, msg);
   const moved = navigate(reset.state, outcome.navigate ?? '/', false, msg);
@@ -433,6 +505,10 @@ function onHttp(state, msg) {
   if (!pending) return { state, effects: [] };
   const { [msg.id]: _done, ...rest } = state.pending;
   state = { ...state, pending: rest };
+  // A reply that is not the latest of its kind, or that answers a request made for a person who
+  // has since signed out, is dropped.
+  if (LATEST_ONLY.includes(pending.kind) && state.latest?.[pending.kind] !== msg.id) return { state, effects: [] };
+  if (isUserKind(pending.kind) && (pending.generation ?? 0) !== (state.generation ?? 0)) return { state, effects: [] };
   const error = msg.ok ? null : msg.body && typeof msg.body === 'object' ? msg.body : { code: 'unavailable', message: 'The site could not be reached.' };
   const waiting = msg.ok && msg.body?.second_factor ? msg.body : null;
   const outputs = msg.ok && pending.contract && !waiting ? contracts.decode(pending.contract, msg.body, pending.inputs) : null;
@@ -464,7 +540,13 @@ function onHttp(state, msg) {
   switch (pending.kind) {
     case 'session': {
       if (!msg.ok) return { state, effects: [] };
-      const known = sessionRead({ ...state, session: outputs.session }, outputs.session.authenticated === true, msg.at);
+      let known = sessionRead({ ...state, session: outputs.session }, outputs.session.authenticated === true, msg.at);
+      // The session was read because the socket upgrade was refused and the server answered: that
+      // is a refusal, not an outage. After enough of them live updates stop, visibly.
+      if (pending.refusal) {
+        const refusals = (known.wsRefusals ?? 0) + 1;
+        known = { ...known, wsRefusals: refusals, wsStopped: refusals >= WS_REFUSAL_LIMIT };
+      }
       // A cold start could not open the socket before it knew the request token the gateway
       // issued, so it opens it now.
       /** @type {Effect[]} */
@@ -509,6 +591,8 @@ function onHttp(state, msg) {
       const outcome = forms.succeeded(SIGN_IN, scopeOf(state, { form: pending.values, response: outputs }));
       let signedIn = { ...state, session: outputs.session, forms: { ...state.forms, login: { values: forms.initialValues(SIGN_IN, {}), busy: busy(flow), error: '', flow } } };
       signedIn = sessionStep(signedIn, 'ui-signed-in', {}, msg.at)?.state ?? signedIn;
+      // Whoever signs in, nothing of the person before them is kept.
+      signedIn = clearUserState(signedIn);
       if (outcome.toast) signedIn = toast(signedIn, 'ok', outcome.toast);
       // The socket was opened as an anonymous visitor; open it again as this person.
       const reset = resetLive(signedIn, msg);
@@ -519,6 +603,7 @@ function onHttp(state, msg) {
       if (!msg.ok) return { state: toast(state, 'warn', refusals.refusal(pending.action, error).text), effects: [] };
       const outcome = actions.succeeded(pending.action, scopeOf(state, { response: outputs }));
       let out = sessionStep({ ...state, session: outputs.session }, 'ui-signed-out', {}, msg.at)?.state ?? { ...state, session: outputs.session };
+      out = clearUserState(out);
       if (outcome.toast) out = toast(out, 'ok', outcome.toast);
       const reset = resetLive(out, msg);
       // Signing out where the action says nowhere to go reads the same address again.
@@ -773,7 +858,9 @@ export function update(state, msg) {
   if (msg.type === 'timer' && msg.name === 'toast') {
     return { state: { ...state, toasts: state.toasts.filter((t) => t.id !== msg.token) }, effects: [] };
   }
-  const result = step(state, msg);
+  // An announcement is made once: the next message clears it, so the same words said again
+  // (the same failed sign-in twice) change the live region and are read out again.
+  const result = step(state.announce ? { ...state, announce: '' } : state, msg);
   // Every message that appears is given a time to go away again by itself.
   const known = new Set(state.toasts.map((t) => t.id));
   const fresh = result.state.toasts.filter((t) => !known.has(t.id));
@@ -862,17 +949,31 @@ function step(state, msg) {
       if (state.factors.ceremony?.id === msg.id) return factorsUpdate(state, msg, { request, toast, signedIn: passkeySignedIn, redispatch }) ?? { state, effects: [] };
       return passkeysUpdate(state, msg, { request, toast, signedIn: passkeySignedIn }) ?? { state, effects: [] };
     case 'ws_open':
-      return { state, effects: [] };
+      return { state: { ...state, wsRefusals: 0, wsStopped: false }, effects: [] };
     case 'ws_message':
       return onSocket(state, msg.message, msg);
     case 'ws_closed': {
+      // The socket never opened although the network is up: the upgrade was refused, most likely
+      // for an expired request token. Read the session again, so the next attempt carries the
+      // current token; the reply counts the refusal (`wsRefusals`).
+      /** @type {Effect[]} */
+      const lead = [];
+      let base = state;
+      if (msg.refused && !Object.values(state.pending).some((p) => p.kind === 'session')) {
+        const [withRequest, effect] = readSession(state, msg, { refusal: true });
+        base = withRequest;
+        lead.push(effect);
+      }
       // A close while waiting to reconnect is an attempt that failed: it counts as one.
-      const waiting = state.ws.status === 'waiting' ? liveStep(state, 'ui-live-reconnect-due', {}, msg) : null;
-      const from = waiting ? { ...waiting.state, ws: { ...waiting.state.ws, timers: {} } } : state;
-      return liveStep(from, 'ui-live-closed', {}, msg) ?? { state, effects: [] };
+      const waiting = base.ws.status === 'waiting' ? liveStep(base, 'ui-live-reconnect-due', {}, msg) : null;
+      const from = waiting ? { ...waiting.state, ws: { ...waiting.state.ws, timers: {} } } : base;
+      const closed = liveStep(from, 'ui-live-closed', {}, msg) ?? { state: base, effects: [] };
+      return { state: closed.state, effects: [...lead, ...closed.effects] };
     }
     case 'timer': {
       if (msg.name.startsWith('lab.')) return labUpdate(state, msg, { request, toast }) ?? { state, effects: [] };
+      // Live updates gave up after repeated refusals: the attempt that was waiting does not run.
+      if (msg.name === 'reconnect' && state.wsStopped) return { state, effects: [] };
       return liveTimer(state, msg) ?? { state, effects: [] };
     }
     default:

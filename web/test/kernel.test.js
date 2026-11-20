@@ -100,7 +100,8 @@ test('on welcome the kernel subscribes and starts the heartbeat', () => {
   const { state, effects } = connected();
   assert.equal(state.ws.status, 'open');
   assert.equal(state.ws.lastSeq, 40);
-  assert.deepEqual(effects.map((e) => e.type), ['ws_send', 'timer']);
+  // The first subscription starts at the server head, so the page that was read before it is read again.
+  assert.deepEqual(effects.map((e) => e.type), ['ws_send', 'timer', 'http']);
   assert.equal(effects[0].message.type, 'subscribe');
   assert.equal('after' in effects[0].message, false, 'nothing to resume on a first connection');
 });
@@ -125,7 +126,8 @@ test('a gap in the connection counter drops the socket instead of carrying on st
   const { state } = connected();
   const skipped = { type: 'event', sub: 'site', n: 2, seq: 42, correlation: '', notice: { kind: 'upsert', object: 'post', id: 7, version: 2 } };
   const result = update(state, { type: 'ws_message', message: skipped, ...stamp });
-  assert.deepEqual(result.effects, [{ type: 'ws_close' }]);
+  assert.deepEqual(result.effects.map((e) => e.type), ['ws_close', 'http'], 'what was missed is read again at once');
+  assert.equal(result.state.view.status, 'ready', 'the page stays on screen while it refreshes');
   assert.equal(result.state.ws.lastSeq, null, 'the next connection starts from scratch');
 });
 

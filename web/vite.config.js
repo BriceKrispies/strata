@@ -19,5 +19,5 @@ export default defineConfig({
     allowedHosts: ['localhost', 'tidewater.localhost'],
   },
   worker: { format: 'es' },
-  build: { outDir: 'dist', emptyOutDir: true, target: 'es2022', sourcemap: true },
+  build: { outDir: 'dist', emptyOutDir: true, target: 'es2022', sourcemap: false },
 });

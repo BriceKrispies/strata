@@ -2,6 +2,7 @@
 // filter, the generated names, the principal and the addresses it writes into the DOM.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { isPageAddress } from '../src/address.js';
 import { safeUrl } from '../src/components/dom.js';
 import * as actions from '../src/generated/actions.js';
 import { initialState, principalOf, update } from '../src/kernel/update.js';
@@ -99,4 +100,199 @@ test('only a path on this site is written into an address attribute', () => {
   assert.equal(safeUrl('href', 'https://example.org/a'), 'https://example.org/a');
   assert.equal(safeUrl('href', '#top'), '#top');
   assert.equal(safeUrl('src', 'https://example.org/a.png'), null);
+});
+
+// ---------------------------------------------------------------------------------------------
+// State of the person signed in, stale replies, live updates and the click handler.
+
+const other = { ...editor, principal: 'user:omar', display_name: 'Omar', csrf_token: 'tok2' };
+const homeModel = { view: 'home', title: 'Home', path: '/', params: {}, depends_on: ['post'], revision: 3, schema_version: 1, theme, data: { site, featured: null, recent: [], categories: [] } };
+const httpPaths = (effects) => effects.filter((e) => e.type === 'http').map((e) => e.path);
+const isViewRead = (path) => path.startsWith('/api/view');
+const reply = (state, effect, body, ok = true, status = 200) => update(state, { type: 'http_result', id: effect.id, ok, status, body, ...stamp });
+
+/** A signed-in desk holding everything one person can leave behind on a tab. */
+function leftBehind() {
+  const state = boot('/desk', editor, deskModel).state;
+  return {
+    ...state,
+    factors: { ...state.factors, loaded: true, summary: { totp: true, recovery_codes: 3 }, codes: ['aaaa-bbbb'], enrol: { secret: 'JBSWY3DP', uri: 'otpauth://x', qr: [[true]], error: '' }, stepUp: { retry: { name: 'factors.new_codes' }, error: '', busy: false } },
+    sessions: { ...state.sessions, loaded: true, list: [{ id: 'sess-A1' }] },
+    passkeys: { ...state.passkeys, supported: true, loaded: true, list: [{ id: 'pk-A1', name: 'Laptop' }] },
+    lab: { ...state.lab, overview: { presets: [{ id: 'preset-A1' }] }, result: { comparison: { note: 'result-A1' } }, diagnostics: { rows: 1 }, run: { id: 'r1', status: 'finished' } },
+    forms: { ...state.forms, editor: { key: 'x', id: 7, dirty: true, values: { title: 'Private draft' }, errors: {} } },
+  };
+}
+
+function assertNothingOfThePersonBefore(state) {
+  const text = JSON.stringify([state.factors, state.sessions, state.passkeys.list, state.lab, state.forms.editor, state.forms.settings, state.optimistic]);
+  for (const secret of ['aaaa-bbbb', 'JBSWY3DP', 'sess-A1', 'pk-A1', 'Laptop', 'Private draft', 'result-A1', 'preset-A1']) {
+    assert.ok(!text.includes(secret), `${secret} is still in the state`);
+  }
+  assert.equal(state.passkeys.supported, true, 'what the browser can do is not the person\'s');
+}
+
+test('signing out clears the recovery codes, secret, lists, Lab results and drafts of the person', () => {
+  const out = update(leftBehind(), { type: 'action', name: 'logout', ...stamp });
+  const done = reply(out.state, out.effects[0], { session: anonymous });
+  assertNothingOfThePersonBefore(done.state);
+  assert.equal(done.state.view.model, null, 'the rows of the person are not shown while the page loads');
+  assert.ok(httpPaths(done.effects).some(isViewRead), 'the guarded page is read again');
+});
+
+test('the end of a session clears the same, and reads the guarded page again', () => {
+  const ended = update(connected(leftBehind()), { type: 'ws_message', message: { type: 'session', state: 'expired' }, ...stamp });
+  assertNothingOfThePersonBefore(ended.state);
+  assert.equal(ended.state.view.model, null);
+  assert.ok(httpPaths(ended.effects).some(isViewRead));
+});
+
+test('signing in as another person on the same tab keeps nothing of the first', () => {
+  const submitted = update(leftBehind(), { type: 'submit', form: 'login', values: { login: 'omar', password: 'pw' }, ...stamp });
+  const done = reply(submitted.state, submitted.effects[0], { session: other });
+  assertNothingOfThePersonBefore(done.state);
+  assert.equal(done.state.session.principal, 'user:omar');
+  assert.equal(done.state.view.model, null, 'the first person\'s desk is not drawn for the second while it loads');
+  assert.equal(view(done.state).page.kind, 'loading');
+});
+
+test('a reply to a request made before the sign-out is dropped when it arrives', () => {
+  const state = leftBehind();
+  const [listId] = Object.entries(state.pending).find(([, p]) => p.kind === 'sessions.list');
+  const out = update(state, { type: 'action', name: 'logout', ...stamp });
+  const signedOut = reply(out.state, out.effects[0], { session: anonymous }).state;
+  const late = update(signedOut, { type: 'http_result', id: Number(listId), ok: true, status: 200, body: { sessions: [{ id: 'old' }] }, ...stamp });
+  assert.deepEqual(late.state.sessions.list, []);
+  assert.equal(late.state.sessions.loaded, false);
+});
+
+test('only the latest reply of a kind is applied', () => {
+  const start = boot('/desk', editor, deskModel).state;
+  const [firstId] = Object.entries(start.pending).find(([, p]) => p.kind === 'sessions.list');
+  const secondId = 900;
+  const asked = { ...start, pending: { ...start.pending, [secondId]: { kind: 'sessions.list', correlation: 'c-900', generation: 0 } }, latest: { ...start.latest, 'sessions.list': secondId } };
+  const newer = reply(asked, { id: secondId }, { sessions: [{ id: 'new' }] }).state;
+  const older = reply(newer, { id: Number(firstId) }, { sessions: [{ id: 'old' }] }).state;
+  assert.deepEqual(older.sessions.list.map((s) => s.id), ['new']);
+});
+
+test('a late anonymous session read does not overwrite the session of someone who has signed in', () => {
+  const start = update(initialState(), { type: 'init', path: '/', search: '', bootstrap: null, systemDark: false, storedTheme: null, ...stamp });
+  const read = start.effects.find((e) => e.path === '/api/session');
+  const submitted = update(start.state, { type: 'submit', form: 'login', values: { login: 'ines', password: 'pw' }, ...stamp });
+  const signedIn = reply(submitted.state, submitted.effects[0], { session: editor }).state;
+  const late = reply(signedIn, read, { session: anonymous }).state;
+  assert.equal(late.session.principal, 'user:ines');
+  assert.equal(late.session.csrf_token, 'tok');
+});
+
+test('the click handler leaves addresses the routes do not name to the browser, and the routes to the page', () => {
+  for (const path of ['/keys', '/.well-known/jwks.json', '/scim/v2/Users', '/federation/saml/metadata/x', '/api/session', '/media/jig.svg', '/assets/index.js', '/nowhere']) {
+    assert.equal(isPageAddress(path), false, path);
+  }
+  for (const path of ['/', '/posts/slow', '/topics', '/authors/ines', '/search', '/login', '/desk', '/desk/edit/slow', '/lab']) {
+    assert.equal(isPageAddress(path), true, path);
+  }
+});
+
+test('after a frame gap, a first welcome or a pong that shows a higher head, the page is read again', () => {
+  const live = connected(boot('/', anonymous, homeModel).state);
+  const gapFrame = { type: 'event', sub: 'site', n: 3, seq: 43, correlation: '', notice: { kind: 'upsert', object: 'invoice', id: 1, version: 1 } };
+  const gap = update(live, { type: 'ws_message', message: gapFrame, ...stamp });
+  assert.ok(httpPaths(gap.effects).some(isViewRead), 'after a frame gap');
+  const waiting = update(gap.state, { type: 'ws_closed', ...stamp });
+  const due = update(waiting.state, { type: 'timer', name: 'reconnect', token: waiting.effects[0].token, ...stamp });
+  const back = update(due.state, { type: 'ws_message', message: { type: 'welcome', v: 1, conn: 'd', head: 99, session: 'anonymous', heartbeat_ms: 10000 }, ...stamp });
+  assert.ok(httpPaths(back.effects).some(isViewRead), 'a welcome that starts from the head');
+
+  const resumedWaiting = update(back.state, { type: 'ws_closed', ...stamp });
+  const resumedDue = update(resumedWaiting.state, { type: 'timer', name: 'reconnect', token: resumedWaiting.effects[0].token, ...stamp });
+  const again = update(resumedDue.state, { type: 'ws_message', message: { type: 'welcome', v: 1, conn: 'e', head: 120, session: 'anonymous', heartbeat_ms: 10000 }, ...stamp });
+  assert.deepEqual(httpPaths(again.effects), [], 'a welcome that resumes from the last sequence replays what was missed');
+
+  const pong = update(back.state, { type: 'ws_message', message: { type: 'pong', nonce: 1, head: 130 }, ...stamp });
+  assert.ok(httpPaths(pong.effects).some(isViewRead), 'a pong with a higher head');
+  const same = update(back.state, { type: 'ws_message', message: { type: 'pong', nonce: 1, head: 99 }, ...stamp });
+  assert.deepEqual(httpPaths(same.effects), []);
+});
+
+test('a refused socket upgrade reads the session again, backs off and stops visibly after repeated refusals', () => {
+  let state = connected(boot('/', anonymous, homeModel).state);
+  const refusedOnce = () => {
+    const closed = update(state, { type: 'ws_closed', refused: true, ...stamp });
+    const read = closed.effects.find((e) => e.path === '/api/session');
+    assert.ok(read, 'the session is read again');
+    const timer = closed.effects.find((e) => e.type === 'timer' && e.name === 'reconnect');
+    const refreshed = reply(closed.state, read, { session: { ...anonymous, csrf_token: 'fresh' } });
+    const due = update(refreshed.state, { type: 'timer', name: 'reconnect', token: timer.token, ...stamp });
+    return { due, timer };
+  };
+  const first = refusedOnce();
+  assert.equal(first.timer.ms, 500);
+  assert.deepEqual(first.due.effects, [{ type: 'ws_connect', csrf: 'fresh' }], 'the retry carries the refreshed token');
+  state = first.due.state;
+  const waits = [];
+  for (let i = 0; i < 4; i += 1) {
+    const next = refusedOnce();
+    waits.push(next.timer.ms);
+    state = next.due.state;
+  }
+  assert.deepEqual(waits, [1000, 2000, 4000, 8000], 'it backs off');
+  assert.equal(state.wsStopped, true);
+  assert.equal(view(state).shell.connection, 'stopped', 'the footer says so');
+  const closed = update(state, { type: 'ws_closed', refused: true, ...stamp });
+  const timer = closed.effects.find((e) => e.type === 'timer' && e.name === 'reconnect');
+  assert.deepEqual(update(closed.state, { type: 'timer', name: 'reconnect', token: timer.token, ...stamp }).effects, [], 'no further attempt');
+});
+
+test('a close that was not a refusal (the network is down) does not read the session or count', () => {
+  const offline = update(connected(boot('/', anonymous, homeModel).state), { type: 'ws_closed', ...stamp });
+  assert.deepEqual(httpPaths(offline.effects), []);
+  assert.equal(offline.state.wsStopped, false);
+});
+
+test('the Lab result poll stops when not signed in and backs off, with a cap, on other failures', () => {
+  const booted = boot('/desk', editor, deskModel).state;
+  const start = { ...booted, lab: { ...booted.lab, run: { id: 'r1', status: 'running', progress: null } } };
+  const failing = (state, status) => {
+    const asked = update(state, { type: 'timer', name: 'lab.poll', token: state.lab.timer, ...stamp });
+    return reply(asked.state, asked.effects[0], null, false, status);
+  };
+  const stopped = failing(start, 401);
+  assert.equal(stopped.state.lab.run, null);
+  assert.deepEqual(stopped.effects.filter((e) => e.type === 'timer' && e.name === 'lab.poll'), []);
+
+  let state = start;
+  const waits = [];
+  for (let i = 0; i < 12 && state.lab.run; i += 1) {
+    const next = failing(state, 500);
+    const timer = next.effects.find((e) => e.type === 'timer' && e.name === 'lab.poll');
+    if (timer) waits.push(timer.ms);
+    state = next.state;
+  }
+  assert.ok(waits.length >= 2 && waits.every((ms, i) => i === 0 || ms >= waits[i - 1]), 'the waits grow');
+  assert.ok(Math.max(...waits) <= 15000, 'up to a cap');
+  assert.equal(state.lab.run, null, 'and the poll ends');
+});
+
+test('the same message said twice is announced twice, and the sign-in link keeps the query', () => {
+  const start = boot('/nowhere', anonymous, missingModel).state;
+  const asked = update(start, { type: 'action', name: 'logout', ...stamp });
+  const failed = reply(asked.state, asked.effects[0], null, false, 0);
+  assert.ok(failed.state.announce, 'announced');
+  const next = update(failed.state, { type: 'system_theme', dark: true, ...stamp });
+  assert.equal(next.state.announce, '', 'the next message clears the live region, so a repeat changes it again');
+
+  assert.equal(view(start).shell.loginHref, '/login?next=%2Fnowhere');
+  const searching = update(start, { type: 'navigate', href: '/search?q=kiln', ...stamp }).state;
+  assert.equal(view(searching).shell.loginHref, '/login?next=%2Fsearch%3Fq%3Dkiln');
+});
+
+test('a step-up prompt takes the focus', () => {
+  const state = boot('/desk', editor, deskModel).state;
+  const asked = update(state, { type: 'action', name: 'factors.new_codes', ...stamp });
+  const refused = reply(asked.state, asked.effects[0], { kind: 'step_up_required', message: 'Confirm that it is you.' }, false, 403);
+  assert.equal(refused.state.factors.stepUp.retry.name, 'factors.new_codes');
+  assert.equal(refused.state.focus.target, 'stepup-secret');
+  assert.notEqual(refused.state.focus.token, state.focus.token);
 });
