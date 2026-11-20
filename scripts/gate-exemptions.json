@@ -49,30 +49,6 @@
   "env": [],
   "bffRoutes": [
     {
-      "reason": "Identity routes of the BFF with no contract that names them in bffRoute (WG-5051).",
-      "items": [
-        "GET /api/sign-in/providers",
-        "POST /api/passkeys/register/start",
-        "POST /api/passkeys/register/finish",
-        "POST /api/session/step-up",
-        "GET /api/factors",
-        "POST /api/factors/totp/start",
-        "POST /api/factors/totp/confirm",
-        "POST /api/factors/totp/remove",
-        "POST /api/factors/recovery-codes",
-        "POST /api/recovery/request",
-        "POST /api/recovery/complete",
-        "POST /api/recovery/cancel",
-        "POST /api/sessions/revoke-others",
-        "GET /api/identity/*action",
-        "POST /api/identity/*action",
-        "GET /federation/saml/metadata/:provider",
-        "POST /introspect",
-        "GET /.well-known/jwks.json",
-        "ANY /scim/v2/*rest"
-      ]
-    },
-    {
       "reason": "Lab, diagnostics, development and socket routes of the BFF with no contract that names them in bffRoute (WG-5052).",
       "items": [
         "GET /api/lab/overview",
