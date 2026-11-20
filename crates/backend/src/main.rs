@@ -194,8 +194,14 @@ fn start() -> Result<(Config, Arc<dyn Store>), String> {
         dev: var("STRATA_DEV", "") == "1",
         tenants_dir: PathBuf::from(var("STRATA_TENANTS", "tenants")),
         lean_dir: PathBuf::from(var("STRATA_LEAN_DIR", "lean")),
-        session_ttl_ms: number("STRATA_SESSION_TTL_MS", 12 * 3_600_000)?,
-        session_idle_ms: number("STRATA_SESSION_IDLE_MS", 2 * 3_600_000)?,
+        session_ttl_ms: number(
+            "STRATA_SESSION_TTL_MS",
+            strata_backend::app::DEFAULT_SESSION_TTL_MS,
+        )?,
+        session_idle_ms: number(
+            "STRATA_SESSION_IDLE_MS",
+            strata_backend::app::DEFAULT_SESSION_IDLE_MS,
+        )?,
         throttle: Default::default(),
         passkey_challenge_ttl_ms: number("STRATA_PASSKEY_CHALLENGE_TTL_MS", 300_000)?,
         link_ttl_ms: number("STRATA_LINK_TTL_MS", 15 * 60_000)?,
