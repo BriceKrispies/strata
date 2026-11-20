@@ -230,3 +230,138 @@ pub fn problems(schema: &TenantSchema, problems: &mut Vec<String>) {
         }
     }
 }
+
+/// The capability a change needs when it carries a product record (CT-236, CT-836). The owner holds
+/// it; a principal that only manages the schema does not, so such a principal cannot make a change
+/// look like the install, upgrade or removal of a product.
+pub const BUNDLE_INSTALL: &str = "bundle-install";
+
+/// Whether `change` writes or removes the record of a product.
+pub fn is_product_change(change: &SchemaChange) -> bool {
+    matches!(
+        change,
+        SchemaChange::RecordProduct(_) | SchemaChange::RemoveProduct(_)
+    )
+}
+
+fn entity(kind: EntityKind, id: impl ToString) -> Vec<EntityRef> {
+    vec![EntityRef {
+        kind,
+        id: id.to_string(),
+    }]
+}
+
+/// The entity a schema change alters or removes, as an ownership record names it; none for a
+/// change of a product record. A change of a field, a constraint, a unique constraint or a
+/// declaration of an object type alters that object type (INT-1582, D-6582): a product owns its
+/// record type whole, so a tenant does not add a field to it either.
+pub fn touched(change: &SchemaChange) -> Vec<EntityRef> {
+    use SchemaChange as C;
+    match change {
+        C::DefineObject { id, .. } | C::RemoveObject { id, .. } => entity(EntityKind::Object, id),
+        C::DefineField { object, .. }
+        | C::DefineRelationship { object, .. }
+        | C::RemoveField { object, .. }
+        | C::DefineConstraint { object, .. }
+        | C::RemoveConstraint { object, .. }
+        | C::DefineUnique { object, .. }
+        | C::RemoveUnique { object, .. }
+        | C::SetRetention { object, .. }
+        | C::ClearRetention { object }
+        | C::SetPublication { object, .. }
+        | C::ClearPublication { object }
+        | C::SetLanguageField { object, .. }
+        | C::ClearLanguageField { object }
+        | C::SetTranslationGroup { object, .. }
+        | C::ClearTranslationGroup { object } => entity(EntityKind::Object, object),
+        C::DefineRole(def) => entity(EntityKind::Role, &def.id),
+        C::DefineRolePermissions { role, .. } | C::RemoveRole(role) => {
+            entity(EntityKind::Role, role)
+        }
+        C::DefinePolicy(def) => entity(EntityKind::Policy, &def.id),
+        C::RemovePolicy(id) => entity(EntityKind::Policy, id),
+        C::DefineWorkflow(def) => entity(EntityKind::Workflow, &def.id),
+        C::RemoveWorkflow(id) => entity(EntityKind::Workflow, id),
+        C::DefineQuery(def) => entity(EntityKind::Query, &def.id),
+        C::RemoveQuery(id) => entity(EntityKind::Query, id),
+        C::DefineView(def) => entity(EntityKind::View, &def.id),
+        C::RemoveView(id) => entity(EntityKind::View, id),
+        C::DefineTrigger(def) => entity(EntityKind::Trigger, &def.id),
+        C::RemoveTrigger(id) => entity(EntityKind::Trigger, id),
+        C::DefineAutomation(def) => entity(EntityKind::Automation, &def.id),
+        C::RemoveAutomation(id) => entity(EntityKind::Automation, id),
+        C::DefineOperation(def) => entity(EntityKind::Operation, &def.id),
+        C::RemoveOperation(id) => entity(EntityKind::Operation, id),
+        C::DefineSetting(def) => entity(EntityKind::Setting, &def.id),
+        C::RemoveSetting(id) => entity(EntityKind::Setting, id),
+        C::DefineCapability(def) => entity(EntityKind::Capability, &def.id),
+        C::RemoveCapability(name) => entity(EntityKind::Capability, name),
+        C::DeclareLedgerUnit(decl) => entity(EntityKind::LedgerUnit, &decl.unit),
+        C::DeclareLedgerPool(decl) => entity(EntityKind::LedgerPool, &decl.pool),
+        C::SetLedgerLimit(limit) => entity(
+            EntityKind::LedgerLimit,
+            ledger_limit_id(&limit.unit, &limit.owner, &limit.scope),
+        ),
+        C::RemoveLedgerDefinition(LedgerDefinitionRef::Unit { unit }) => {
+            entity(EntityKind::LedgerUnit, unit)
+        }
+        C::RemoveLedgerDefinition(LedgerDefinitionRef::Pool { pool }) => {
+            entity(EntityKind::LedgerPool, pool)
+        }
+        C::RemoveLedgerDefinition(LedgerDefinitionRef::Limit { unit, owner, scope }) => {
+            entity(EntityKind::LedgerLimit, ledger_limit_id(unit, owner, scope))
+        }
+        C::DefineMailTemplate(decl) => entity(EntityKind::MailTemplate, &decl.template),
+        C::RemoveMailTemplate(id) => entity(EntityKind::MailTemplate, id),
+        C::DefineNoticeTemplate(decl) => entity(EntityKind::NoticeTemplate, &decl.template),
+        C::RemoveNoticeTemplate(id) => entity(EntityKind::NoticeTemplate, id),
+        C::DefineToken(decl) => entity(EntityKind::Token, &decl.name),
+        C::RemoveToken(name) => entity(EntityKind::Token, name),
+        C::RecordProduct(_) | C::RemoveProduct(_) => Vec::new(),
+    }
+}
+
+/// The first reason `changes` alter an entity of an installed product from outside it, or `None`
+/// (D-6582, INT-1582). A change comes through a product when it carries, in the same change, the
+/// record of that product at a version other than the installed one (the recorded upgrade path:
+/// the record names the product's id and its new version) or the removal of that product. A
+/// record that repeats the installed version is no upgrade, so it replaces nothing. The change is
+/// judged against the schema before it, so an entity that the change itself creates is not owned
+/// yet.
+pub fn foreign_change(schema: &TenantSchema, changes: &[SchemaChange]) -> Option<String> {
+    let mut passing: BTreeSet<&ProductId> = BTreeSet::new();
+    for change in changes {
+        match change {
+            SchemaChange::RecordProduct(record) => match get(schema, &record.product) {
+                Some(held) if held.version == record.version => {
+                    return Some(format!(
+                        "the record of the product {} at version {} is already installed; only an upgrade to another version replaces it",
+                        record.product, record.version
+                    ));
+                }
+                Some(_) => {
+                    passing.insert(&record.product);
+                }
+                None => {}
+            },
+            SchemaChange::RemoveProduct(id) => {
+                passing.insert(id);
+            }
+            _ => {}
+        }
+    }
+    for change in changes {
+        for entity in touched(change) {
+            if let Some(owner) = owner_of(schema, entity.kind, &entity.id) {
+                if !passing.contains(owner) {
+                    return Some(format!(
+                        "the {} {} is owned by the product {owner}; it changes only through that product's upgrade or removal",
+                        entity.kind.as_str(),
+                        entity.id
+                    ));
+                }
+            }
+        }
+    }
+    None
+}

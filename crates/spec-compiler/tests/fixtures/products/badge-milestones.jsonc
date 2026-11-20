@@ -14,11 +14,22 @@
   // text, D-6546); the parameters are those of D-6523 (param.balance_before is the balance before
   // the posting).
   //
+  // It is the reference product (WG-5008): record type, policies, roles, a ledger unit for points with a
+  // floor, templates, a trigger on a points posting crossing a threshold, an automation that awards the
+  // badge once (run key), notifies and follows up after a wait, an operation to award by hand, and a
+  // view of a person's badges. It adds no platform mechanism. The trigger reads param.balance_before and
+  // param.balance of the posting (D-6523), so a crossing needs no arithmetic and fires once for each
+  // crossing; the run key makes the award once for the person however often the balance crosses 500.
+  //
   // What it leaves out, because the platform does not have it yet: nothing it needs. A policy lets a
   // person update the whole award, not only viewed_at, because a policy is per object type and action
-  // (D-6590); the follow-up branch reads viewed_at, so a person who sets it stops the follow-up.
-  // The block text of the templates is JSON text; the platform specification does not state the block
-  // schema (structured-blocks), so the templates use one paragraph block each.
+  // (D-6590); the follow-up branch reads viewed_at, so a person who sets it stops the follow-up. The
+  // steps notify (create-notice) and mail and follow_up (send-mail) are the steps of the mail and notice
+  // services (D-6522): where a platform has not built a step kind, the worker records on the step and the
+  // run the error "step kind <kind> is not built" and the run ends there, so the award still stands (the
+  // backend test crates/backend/tests/badge_milestones.rs lists each such step and tightens when the kind
+  // is built). The text of the templates is blocks of the template schema (D-7900): a paragraph of
+  // inline text nodes.
   "product": {
     "id": "badge-milestones",
     "name": "Badge milestones",
@@ -84,23 +95,75 @@
       "description": "Points a person earns; the Silver badge is awarded when a person's balance reaches 500."
     }
   ],
+  "ledgerLimits": [
+    {
+      // Points are earned and spent, and never owed: the floor of 0 refuses a debit that would take a person below it (LDG-013).
+      "id": "badge_milestones__points_floor",
+      "unit": "badge_milestones__points",
+      "floor": 0
+    }
+  ],
   "mailTemplates": [
     {
       "id": "badge_milestones__silver_mail",
       "subject": "You earned the Silver badge",
-      "body": "[{\"type\":\"paragraph\",\"text\":\"Your points reached 500 and you earned the Silver badge.\"}]"
+      "body": "[{\"type\":\"paragraph\",\"inlines\":[{\"type\":\"text\",\"text\":\"Your points reached 500 and you earned the Silver badge.\"}]}]"
     },
     {
       "id": "badge_milestones__silver_follow_up",
       "subject": "Your Silver badge is waiting",
-      "body": "[{\"type\":\"paragraph\",\"text\":\"You have not yet looked at your Silver badge. Open your inbox to see it.\"}]"
+      "body": "[{\"type\":\"paragraph\",\"inlines\":[{\"type\":\"text\",\"text\":\"You have not yet looked at your Silver badge. Open your inbox to see it.\"}]}]"
     }
   ],
   "noticeTemplates": [
     {
       "id": "badge_milestones__silver_notice",
       "title": "You earned the Silver badge",
-      "body": "[{\"type\":\"paragraph\",\"text\":\"Your points reached 500.\"}]"
+      "body": "[{\"type\":\"paragraph\",\"inlines\":[{\"type\":\"text\",\"text\":\"Your points reached 500.\"}]}]"
+    }
+  ],
+  "queries": [
+    {
+      // Every award the reader may read: a member reads their own only, by the policy badge_milestones__member_own_awards.
+      "id": "badge_milestones__awards",
+      "object": "badge_milestones__award",
+      "params": [],
+      "order": [{ "field": "awarded_at", "descending": true }],
+      "limit": 50
+    }
+  ],
+  "views": [
+    {
+      "id": "badge_milestones__my_badges",
+      "route": "/badges",
+      "title": "My badges",
+      "sections": {
+        "awards": { "query": "badge_milestones__awards", "args": {}, "include": [], "markdown": [], "single": false }
+      }
+    }
+  ],
+  "operations": [
+    {
+      "id": "badge_milestones__award_by_hand",
+      "label": "Award a badge by hand",
+      "inputs": [
+        { "name": "person", "ty": "Str", "required": true, "label": "The principal to award" },
+        { "name": "badge", "ty": "Str", "required": true, "label": "The badge" }
+      ],
+      // Only a holder of the awarder role (an owner may confer it, ADM-152) invokes it.
+      "invokers": { "signed-in": false, "roles": ["badge_milestones__awarder"] },
+      "conditions": [
+        { "id": "named", "expr": "len(param.badge) > 0", "error": "no-badge", "message": "A badge is named." }
+      ],
+      "steps": [
+        {
+          "CreateRecord": {
+            "id": "award",
+            "object": "badge_milestones__award",
+            "fields": { "person": "param.person", "badge": "param.badge", "awarded_at": "now" }
+          }
+        }
+      ]
     }
   ],
   "triggers": [
@@ -151,6 +214,14 @@
     }
   ],
   "claims": [
+    {
+      "id": "badge_milestones__award-by-hand",
+      "kind": "structural",
+      "statement": "A holder of the awarder role SHALL be able to award a named badge to a person with one operation, and a person who does not hold the role SHALL NOT.",
+      "subjects": ["product-module"],
+      "rationale": "The invokers of badge_milestones__award_by_hand are the holders of the awarder role (OPR-1546).",
+      "evaluate": { "method": "external-evidence" }
+    },
     {
       "id": "badge_milestones__silver-once",
       "kind": "structural",

@@ -373,6 +373,10 @@ fn parse_arg(text: &str) -> Result<ArgSource, String> {
         Ok(ArgSource::Route(name.to_string()))
     } else if let Some(name) = text.strip_prefix("request:") {
         Ok(ArgSource::Request(name.to_string()))
+    } else if let Some(name) = text.strip_prefix("setting:") {
+        SettingId::new(name)
+            .map(ArgSource::Setting)
+            .map_err(|e| format!("setting:<id>, got {text:?}: {e}"))
     } else if let Some(path) = text.strip_prefix("section:") {
         let (section, attribute) = path
             .split_once('.')

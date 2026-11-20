@@ -11,9 +11,9 @@
     "imports": { "spec": "../../../../../../specifications/spec.jsonc", "entities": [] }
   },
   "mailTemplates": [
-    { "id": "member_tiers__welcome", "subject": "Welcome", "body": "[{\"type\":\"paragraph\",\"text\":\"Welcome.\"}]" }
+    { "id": "member_tiers__welcome", "subject": "Welcome", "body": "[{\"type\":\"paragraph\",\"inlines\":[{\"type\":\"text\",\"text\":\"Welcome.\"}]}]" }
   ],
   "noticeTemplates": [
-    { "id": "member_tiers__welcome", "title": "Welcome", "body": "[{\"type\":\"paragraph\",\"text\":\"Welcome.\"}]" }
+    { "id": "member_tiers__welcome", "title": "Welcome", "body": "[{\"type\":\"paragraph\",\"inlines\":[{\"type\":\"text\",\"text\":\"Welcome.\"}]}]" }
   ]
 }

@@ -17,11 +17,15 @@
 //! As with the definitions of [`crate::definitions`], the checks are made on the schema that holds
 //! the definition ([`problems`]): a template id is used by one kind of template only (a mail
 //! template and a notice template share one `template-id` space), a template has a one-line
-//! subject or title and a body that is JSON text (`structured-blocks`), and a token has a name and
-//! an expression that parses in the tenant rule language (CTK-002). The specification states no
-//! schema for the blocks of a template and no syntax for placing a token in one, so neither is
-//! checked: that a template names only tokens that exist waits for that statement.
+//! subject or title and a body that is blocks of the schema of [`crate::blocks`] (D-7900): the
+//! blocks conform, the values a template places are declared and typed, a link carries an allowed
+//! scheme, nesting stays within the bound of the Markdown parser, and every token the body places
+//! is one the schema defines (CTK-005). A token has a name and an expression that parses in the
+//! tenant rule language (CTK-002); the language has no way to name another token, so a token
+//! cannot refer to itself through others (CTK-003). The checks are made on the schema that holds
+//! the template, so removing a token a template places is refused too (CTK-004).
 
+use crate::blocks;
 use crate::expr;
 use crate::limits;
 use crate::schema::TenantSchema;
@@ -123,17 +127,8 @@ fn line_problem(text: &str) -> Option<&'static str> {
     }
 }
 
-/// The first reason the body of a template is not structured blocks (JSON text), or `None`.
-fn blocks_problem(body: &str) -> Option<String> {
-    if body.len() > limits::MAX_STRING_BYTES {
-        return Some(format!("is longer than {} bytes", limits::MAX_STRING_BYTES));
-    }
-    serde_json::from_str::<serde_json::Value>(body)
-        .err()
-        .map(|e| format!("is not JSON text: {e}"))
-}
-
 fn template_problems(
+    schema: &TenantSchema,
     kind: &str,
     key: &TemplateId,
     id: &TemplateId,
@@ -153,8 +148,22 @@ fn template_problems(
     if let Some(reason) = line_problem(head.1) {
         problems.push(format!("{at}: the {} {reason}", head.0));
     }
-    if let Some(reason) = blocks_problem(body) {
+    // The body is blocks of the schema of `crate::blocks` (D-7900): the blocks conform, the values
+    // it places are typed, and every token it places is one the tenant defines (CTK-005).
+    let analysis = blocks::analyse(body);
+    for reason in &analysis.problems {
         problems.push(format!("{at}: the body {reason}"));
+    }
+    for name in &analysis.tokens {
+        if !schema
+            .tokens
+            .as_ref()
+            .is_some_and(|tokens| tokens.contains_key(name))
+        {
+            problems.push(format!(
+                "{at}: the body places the token {name}, which the tenant does not define"
+            ));
+        }
     }
 }
 
@@ -166,6 +175,7 @@ fn template_problems(
 pub fn problems(schema: &TenantSchema, problems: &mut Vec<String>) {
     for (key, decl) in schema.mail_templates.iter().flatten() {
         template_problems(
+            schema,
             "mail",
             key,
             &decl.template,
@@ -185,6 +195,7 @@ pub fn problems(schema: &TenantSchema, problems: &mut Vec<String>) {
     }
     for (key, decl) in schema.notice_templates.iter().flatten() {
         template_problems(
+            schema,
             "notice",
             key,
             &decl.template,

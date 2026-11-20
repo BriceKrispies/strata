@@ -1459,3 +1459,294 @@ fn a_capability_is_not_removed_while_a_role_grants_it_and_a_malformed_id_is_refu
         assert_eq!(refused.kind, ErrorKind::InvalidSchema, "{bad}");
     }
 }
+
+// ---------------------------------------------------------------------------------------------
+// Declared types, and the arguments of a view that come from a setting (D-5046, D-7901, SET-001,
+// SET-050 to SET-053, SET-1540).
+// ---------------------------------------------------------------------------------------------
+
+// Verifies: SET-001
+// Verifies: SET-021
+#[test]
+fn a_setting_of_a_declared_enum_type_holds_only_a_value_of_that_enum() {
+    let world = define(
+        &notes_world(),
+        layered("digest_mode", "notification-mode", text_value("on")),
+    );
+    let world = set_person(&world, "writer1", "digest_mode", text_value("digest"), 0);
+    assert_eq!(
+        value_for(&world, "writer1", "digest_mode"),
+        text_value("digest")
+    );
+    assert_eq!(
+        value_for(&world, "writer2", "digest_mode"),
+        text_value("on")
+    );
+    let attempt = |value: Value| {
+        refusal(write(
+            &world,
+            "writer2",
+            6_300,
+            "digest_mode",
+            SettingLevel::Person,
+            None,
+            Some(value),
+            0,
+        ))
+    };
+    let refused = attempt(text_value("sometimes"));
+    assert_eq!(refused.kind, ErrorKind::TypeMismatch);
+    assert!(
+        refused
+            .message
+            .contains("\"sometimes\" is not a value of the enum type notification-mode"),
+        "{}",
+        refused.message
+    );
+    let refused = attempt(Value::Int(1));
+    assert_eq!(refused.kind, ErrorKind::TypeMismatch);
+    assert!(
+        refused.message.contains("which takes text"),
+        "{}",
+        refused.message
+    );
+    // The default is a value of the type too (SET-002).
+    let bad_default = layered("digest_mode", "notification-mode", text_value("never"));
+    let refused = refusal(step(
+        &notes_world(),
+        "owner",
+        5_000,
+        change(vec![SchemaChange::DefineSetting(bad_default)]),
+    ));
+    assert_eq!(refused.kind, ErrorKind::InvalidSchema);
+    assert!(
+        refused.message.contains("is not a value of the enum type"),
+        "{}",
+        refused.message
+    );
+}
+
+// Verifies: SET-001
+#[test]
+fn a_setting_of_a_declared_id_or_scalar_type_holds_a_value_within_its_constraints() {
+    let world = define(
+        &notes_world(),
+        layered("review_role", "role-id", text_value("editor")),
+    );
+    let world = define(&world, layered("home_page", "url", text_value("/")));
+    // An id is checked by the pattern and the length of its type, and not for existing: removing
+    // what it names later must not leave a value that is not of its type (SET-004).
+    let world = set_tenant(&world, "review_role", text_value("reviewer"), 0);
+    assert_eq!(
+        value_for(&world, "writer1", "review_role"),
+        text_value("reviewer")
+    );
+    let refused = refusal(write(
+        &world,
+        "owner",
+        6_300,
+        "review_role",
+        SettingLevel::Tenant,
+        None,
+        Some(text_value("Not A Role")),
+        settings::tenant_revision(tenant(&world), &sid("review_role")),
+    ));
+    assert_eq!(refused.kind, ErrorKind::TypeMismatch);
+    assert!(
+        refused
+            .message
+            .contains("is not a value of the id type role-id"),
+        "{}",
+        refused.message
+    );
+    // A scalar without constraints takes any text, within the limits of a string.
+    let world = set_tenant(&world, "home_page", text_value("https://example.test"), 0);
+    assert_eq!(
+        value_for(&world, "writer1", "home_page"),
+        text_value("https://example.test")
+    );
+    let refused = refusal(write(
+        &world,
+        "owner",
+        6_400,
+        "home_page",
+        SettingLevel::Tenant,
+        None,
+        Some(Value::Str("x".repeat(limits::MAX_STRING_BYTES + 1))),
+        settings::tenant_revision(tenant(&world), &sid("home_page")),
+    ));
+    assert_eq!(refused.kind, ErrorKind::LimitExceeded);
+}
+
+// Verifies: SET-001
+#[test]
+fn a_type_that_is_no_declared_type_is_refused_with_the_names_that_are() {
+    let refused = refusal(step(
+        &notes_world(),
+        "owner",
+        5_000,
+        change(vec![SchemaChange::DefineSetting(layered(
+            "colour",
+            "colour-name",
+            text_value("red"),
+        ))]),
+    ));
+    assert_eq!(refused.kind, ErrorKind::InvalidSchema);
+    assert!(
+        refused.message.contains("notification-mode") && refused.message.contains("role-id"),
+        "{}",
+        refused.message
+    );
+    // A float stays out: the value algebra has none (D-7901).
+    let refused = refusal(step(
+        &notes_world(),
+        "owner",
+        5_000,
+        change(vec![SchemaChange::DefineSetting(layered(
+            "ratio",
+            "f64",
+            Value::Int(1),
+        ))]),
+    ));
+    assert!(
+        refused.message.contains("holds no float"),
+        "{}",
+        refused.message
+    );
+}
+
+fn home_view(source: ArgSource) -> SchemaChange {
+    SchemaChange::DefineView(ViewDef {
+        id: ViewId::new("home").unwrap(),
+        route: "/home".into(),
+        title: "Home".into(),
+        sections: std::collections::BTreeMap::from([(
+            "main".to_string(),
+            ViewSection {
+                query: QueryId::new("note_by_slug").unwrap(),
+                args: std::collections::BTreeMap::from([("slug".to_string(), source)]),
+                include: vec![],
+                markdown: vec![],
+                single: true,
+                aggregate: None,
+            },
+        )]),
+    })
+}
+
+// Verifies: SET-1540
+#[test]
+fn a_view_argument_takes_a_setting_the_tenant_defines() {
+    let refused = refusal(step(
+        &notes_world(),
+        "owner",
+        5_000,
+        change(vec![home_view(ArgSource::Setting(sid("home_slug")))]),
+    ));
+    assert_eq!(refused.kind, ErrorKind::InvalidSchema);
+    assert!(
+        refused
+            .message
+            .contains("home.main: unknown setting home_slug"),
+        "{}",
+        refused.message
+    );
+    // Defined in the same change, it is accepted.
+    must(
+        &notes_world(),
+        "owner",
+        5_000,
+        change(vec![
+            SchemaChange::DefineSetting(layered("home_slug", "string", text_value("first"))),
+            home_view(ArgSource::Setting(sid("home_slug"))),
+        ]),
+    );
+}
+
+// Verifies: SET-050
+// Verifies: SET-051
+#[test]
+fn the_key_of_a_copy_that_reads_a_setting_holds_its_revisions() {
+    let world = define(
+        &notes_world(),
+        layered("home_slug", "string", text_value("first")),
+    );
+    let wanted = BTreeSet::from([sid("home_slug")]);
+    let key = |world: &World, who: &str| -> Vec<String> {
+        settings::copy_dependencies(tenant(world), &user(&format!("alpha:{who}")), &wanted)
+            .iter()
+            .map(|dependency| dependency.key_part())
+            .collect()
+    };
+    let defined = key(&world, "writer1");
+    assert_eq!(defined, vec!["home_slug@0.1".to_string()]);
+    // A change at the tenant level raises the tenant revision, so a copy has a new key.
+    let changed = set_tenant(&world, "home_slug", text_value("second"), 0);
+    assert_eq!(key(&changed, "writer1"), vec!["home_slug@0.2".to_string()]);
+    assert_ne!(key(&changed, "writer1"), defined);
+    // A setting the tenant does not define adds nothing to the key.
+    let none = settings::copy_dependencies(
+        tenant(&world),
+        &user("alpha:writer1"),
+        &BTreeSet::from([sid("nothing")]),
+    );
+    assert!(none.is_empty());
+}
+
+// Verifies: SET-052
+// Verifies: SET-053
+#[test]
+fn a_value_from_a_person_is_never_shared_and_one_from_a_team_has_the_class_of_the_team() {
+    let world = define(
+        &notes_world(),
+        layered("home_slug", "string", text_value("first")),
+    );
+    let world = with_team(&world, "crew", &["writer1"]);
+    let wanted = BTreeSet::from([sid("home_slug")]);
+    let refinement = |world: &World, who: &str| {
+        let found =
+            settings::copy_dependencies(tenant(world), &user(&format!("alpha:{who}")), &wanted);
+        (found[0].refinement.clone(), settings::shareable(&found))
+    };
+    // From the default: the class as the policies derive it, shared.
+    assert_eq!(
+        refinement(&world, "writer1"),
+        (settings::Refinement::Shared, true)
+    );
+    // From the tenant: the same.
+    let world = set_tenant(&world, "home_slug", text_value("tenant"), 0);
+    assert_eq!(
+        refinement(&world, "writer1"),
+        (settings::Refinement::Shared, true)
+    );
+    // From a team: the class of that team, for its members only.
+    let revision = settings::tenant_revision(tenant(&world), &sid("home_slug"));
+    let world = set_team(&world, "crew", "home_slug", text_value("team"), 0);
+    assert_eq!(
+        refinement(&world, "writer1"),
+        (settings::Refinement::Team(team_id("crew")), true)
+    );
+    assert_eq!(
+        refinement(&world, "writer2"),
+        (settings::Refinement::Shared, true)
+    );
+    assert!(settings::tenant_revision(tenant(&world), &sid("home_slug")) > revision);
+    // From a person: the class of that person alone, and a copy that is not shared.
+    let world = set_person(&world, "writer1", "home_slug", text_value("mine"), 0);
+    assert_eq!(
+        refinement(&world, "writer1"),
+        (
+            settings::Refinement::Person(principal_id("alpha:writer1")),
+            false
+        )
+    );
+    // Another person with no override of their own is not affected.
+    assert_eq!(
+        refinement(&world, "writer2"),
+        (settings::Refinement::Shared, true)
+    );
+    // The classes of two people who each hold an override are not equal, so no copy is shared
+    // between them.
+    let world = set_person(&world, "writer2", "home_slug", text_value("theirs"), 0);
+    assert_ne!(refinement(&world, "writer1"), refinement(&world, "writer2"));
+}

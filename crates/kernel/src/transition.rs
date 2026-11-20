@@ -2006,6 +2006,10 @@ fn change_schema(
         ));
     }
     require_definition_authority(draft, changes)?;
+    // D-6582, INT-1582: an entity a product owns changes only through that product.
+    if let Some(message) = crate::products::foreign_change(&draft.tenant.schema, changes) {
+        return Err(draft.reject(ErrorKind::InvalidSchema, message));
+    }
     crate::ledger::check_removals(lookup, changes, &mut draft.evidence)?;
     let migration = plan_migration(lookup, changes, draft.ctx.now).map_err(|mut e| {
         let mut evidence = draft.evidence.clone();
@@ -2121,6 +2125,10 @@ fn require_definition_authority(
     }
     if changes.iter().any(crate::ledger::is_ledger_change) {
         require_capability(draft, crate::ledger::LEDGER_CONFIGURE)?;
+    }
+    // A product record is the proof that a change is that product's install, upgrade or removal.
+    if changes.iter().any(crate::products::is_product_change) {
+        require_capability(draft, crate::products::BUNDLE_INSTALL)?;
     }
     for change in changes {
         match change {

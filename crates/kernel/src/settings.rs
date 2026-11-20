@@ -91,9 +91,10 @@ pub fn open_levels(def: &SettingDef) -> BTreeSet<SettingLevel> {
 }
 
 /// Why a value is not a value of a setting type, or `None` when it is (D-5046, SET-021). The types
-/// are `bool`, `i64`, `string` and `timestamp`. `f64` is not held: the kernel's value algebra has
-/// no float. The id of a declared type of kind id, scalar or enum is not held either, because the
-/// kernel knows no declared types.
+/// are `bool`, `i64`, `string` and `timestamp`, and the id of a declared type of kind id, scalar or
+/// enum ([`crate::declared_types`]), whose values are text that decodes as the type. `f64` is not
+/// held: the kernel's value algebra has no float, and one could not be added without giving up
+/// the equality, the order and the hash of every value (D-7901).
 ///
 /// The kind of the refusal comes with the text: `TypeMismatch` for a value of another type or a
 /// type that is not held, `LimitExceeded` for a value past the stated maximums.
@@ -104,7 +105,15 @@ pub fn type_problem(ty: &str, value: &Value) -> Option<(ErrorKind, String)> {
         | ("string", Value::Str(_))
         | ("timestamp", Value::Time(_)) => true,
         ("bool" | "i64" | "string" | "timestamp", _) => false,
-        _ => return Some((ErrorKind::TypeMismatch, unknown_type(ty))),
+        _ => match crate::declared_types::lookup(ty) {
+            Some(declared) => {
+                if let Some(problem) = crate::declared_types::value_problem(declared, value) {
+                    return Some((ErrorKind::TypeMismatch, problem));
+                }
+                true
+            }
+            None => return Some((ErrorKind::TypeMismatch, unknown_type(ty))),
+        },
     };
     if !admitted {
         return Some((
@@ -120,7 +129,8 @@ fn unknown_type(ty: &str) -> String {
         "type f64 has no value in the kernel's value algebra, which holds no float".to_string()
     } else {
         format!(
-            "type {ty} is not one the kernel holds: bool, i64, string or timestamp (a declared id, scalar or enum type is not held)"
+            "type {ty} is not one the kernel holds: bool, i64, string, timestamp, or a declared type ({})",
+            crate::declared_types::names()
         )
     }
 }
@@ -272,6 +282,85 @@ pub fn resolve_for(
             .with(vec![Check::fail("setting:recipient_is_a_person", message)]));
     }
     resolve(tenant, &Principal::User(person.clone()), setting)
+}
+
+/// Where the value of a setting comes from, as it refines the audience class of a read that
+/// depends on it (D-5049, SET-053).
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Refinement {
+    /// The value does not come from a team or a person: the class is as the policies derive it.
+    Shared,
+    /// The value comes from the override of a team: the class of that team.
+    Team(TeamId),
+    /// The value comes from the override of the person: a class of that person alone, whose
+    /// copies are never shared.
+    Person(PrincipalId),
+}
+
+/// What a view copy that reads a setting depends on (SET-050, SET-053): the revisions of the
+/// setting at the platform and at the tenant, which are in the key of the copy so that a change
+/// makes a new key, and the refinement of the class of its reader.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct CopyDependency {
+    pub setting: SettingId,
+    pub platform_revision: u64,
+    pub tenant_revision: u64,
+    pub refinement: Refinement,
+}
+
+impl CopyDependency {
+    /// The part of a copy key this dependency makes: the setting and both revisions.
+    pub fn key_part(&self) -> String {
+        format!(
+            "{}@{}.{}",
+            self.setting, self.platform_revision, self.tenant_revision
+        )
+    }
+}
+
+/// The dependencies of a read that uses `settings` for a reader, in setting order (SET-050,
+/// SET-053, D-5049). A setting the tenant does not define is left out: nothing was resolved. The
+/// copy store of a view calls this with the settings the sections of the view name
+/// (`strata_substrate::project::view_settings`).
+pub fn copy_dependencies(
+    tenant: &TenantState,
+    principal: &Principal,
+    settings: &BTreeSet<SettingId>,
+) -> Vec<CopyDependency> {
+    settings
+        .iter()
+        .filter_map(|setting| {
+            let def = definition(&tenant.schema, setting)?;
+            let found = resolve_definition(tenant, def, principal);
+            let refinement = match (found.source, principal, found.team) {
+                (SettingSource::Person, Principal::User(person), _) => {
+                    Refinement::Person(person.clone())
+                }
+                (SettingSource::Team, _, Some(team)) => Refinement::Team(team),
+                _ => Refinement::Shared,
+            };
+            Some(CopyDependency {
+                setting: setting.clone(),
+                platform_revision: found.platform_revision,
+                tenant_revision: found.tenant_revision,
+                refinement,
+            })
+        })
+        .collect()
+}
+
+/// Whether a copy with these dependencies may be shared between readers: it may unless a value
+/// comes from the override of a person (SET-052).
+pub fn shareable(dependencies: &[CopyDependency]) -> bool {
+    dependencies
+        .iter()
+        .all(|dependency| !matches!(dependency.refinement, Refinement::Person(_)))
+}
+
+/// The problem with a setting a view argument names, or `None` when the tenant defines it
+/// (SET-1540).
+pub fn view_argument_problem(schema: &TenantSchema, setting: &SettingId) -> Option<String> {
+    crate::definitions::setting_reference_problem(schema, setting)
 }
 
 fn unknown_setting(setting: &SettingId) -> DomainError {

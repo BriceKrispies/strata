@@ -19,8 +19,9 @@ use strata_protocol::api::{
 use strata_storage_api::{execute_admitting, ExecuteError, Executed};
 use strata_substrate::plain::coerce_fields;
 use strata_substrate::project::{
-    aggregate_request, decode_cursor, encode_cursor, included_refs, match_route, section_order,
-    section_request, select_fields, with_page, SectionData, ViewData,
+    aggregate_request_with, decode_cursor, encode_cursor, included_refs, match_route,
+    resolved_settings, section_order, section_request_with, select_fields, with_page, SectionData,
+    ViewData,
 };
 
 /// The tenant's schema, members and counters, without records.
@@ -567,10 +568,12 @@ pub fn view(app: &App, identity: &Identity, request: &ViewRequest) -> Result<Vie
             .map(|(_, cursor)| cursor.clone());
         (limit, cursor)
     };
+    // The arguments that come from a setting, resolved for this reader (SET-1540).
+    let settings = resolved_settings(&tenant, &identity.principal, def);
     let request_of = |section: &ViewSection, done: &BTreeMap<String, Option<Arc<Record>>>| {
         let (size, cursor) = page_of(section);
         with_page(
-            section_request(section, &route, &request.request, done),
+            section_request_with(section, &route, &request.request, done, &settings),
             size,
             cursor,
         )
@@ -598,7 +601,14 @@ pub fn view(app: &App, identity: &Identity, request: &ViewRequest) -> Result<Vie
         // A section that names an aggregate delivers its result in place of rows (D-5067); the
         // kernel decides it for this reader like any other read of the same snapshot.
         if let Some(aggregate) = &section.aggregate {
-            let ask = aggregate_request(section, aggregate, &route, &request.request, &done);
+            let ask = aggregate_request_with(
+                section,
+                aggregate,
+                &route,
+                &request.request,
+                &done,
+                &settings,
+            );
             let result = aggregate_loaded(
                 app,
                 &identity.tenant,

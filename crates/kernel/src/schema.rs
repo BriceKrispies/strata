@@ -523,6 +523,12 @@ impl TenantSchemaExt for TenantSchema {
                     if !query.params.contains(arg) {
                         problems.push(format!("{at}.{name}: query has no parameter {arg}"));
                     }
+                    if let ArgSource::Setting(setting) = source {
+                        if let Some(problem) = crate::settings::view_argument_problem(self, setting)
+                        {
+                            problems.push(format!("{at}.{name}: {problem}"));
+                        }
+                    }
                     if let ArgSource::Section { section: other, .. } = source {
                         match view.sections.get(other) {
                             Some(dep) if !dep.single => {
