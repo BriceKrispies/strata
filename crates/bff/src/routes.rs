@@ -2094,6 +2094,40 @@ async fn identity_write(
     Ok(uncached(reply))
 }
 
+/// The segment endpoints (CT-290 to CT-293, CT-813 to CT-815), each relayed to the backend, which
+/// decides who may call it. A change (define, remove) and a test are writes and pass the write
+/// guard; the others are reads that carry their inputs as a body.
+const SEGMENT_ROUTES: &[(&str, &str, bool)] = &[
+    ("define", "/internal/segments/define", true),
+    ("remove", "/internal/segments/remove", true),
+    ("test", "/internal/segments/test", true),
+    ("members", "/internal/segments/members", false),
+    ("mine", "/internal/segments/mine", false),
+    ("count", "/internal/segments/count", false),
+    ("preview", "/internal/segments/preview", false),
+];
+
+async fn segments(
+    State(bff): State<Shared>,
+    headers: HeaderMap,
+    Path(action): Path<String>,
+    Json(body): Json<Json_>,
+) -> Result<Response, Failure> {
+    let visit = visit(&bff, &headers)?;
+    let Some((_, path, write)) = SEGMENT_ROUTES.iter().find(|(name, _, _)| *name == action) else {
+        return Err(Failure::new(
+            ErrorCode::NotFound,
+            "No such endpoint.",
+            &visit.correlation,
+        ));
+    };
+    if *write {
+        guard_write(&bff, &visit, &headers).await?;
+    }
+    let reply: Json_ = backend(&bff, &visit, path, &body).await?;
+    Ok(uncached(reply))
+}
+
 pub fn router(bff: Shared) -> Router {
     let api = Router::new()
         .route("/session", get(session))
@@ -2126,6 +2160,7 @@ pub fn router(bff: Shared) -> Router {
         .route("/view", get(view))
         .route("/records", post(records))
         .route("/members/:op", post(members))
+        .route("/segments/:action", post(segments))
         .route("/preview", post(preview))
         .route("/lab/overview", get(lab_overview))
         .route("/lab/run", post(lab_run))

@@ -19,6 +19,7 @@ pub mod outbox;
 pub mod provision;
 pub mod sealing;
 pub mod seed;
+pub mod segments;
 pub mod service;
 pub mod signin;
 pub mod ws;

@@ -25,6 +25,7 @@ pub mod limits;
 pub mod read;
 pub mod rules;
 pub mod schema;
+pub mod segments;
 pub mod state;
 #[cfg(any(test, feature = "testkit"))]
 pub mod testkit;
