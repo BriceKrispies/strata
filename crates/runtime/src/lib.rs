@@ -66,7 +66,8 @@ pub use store::{
     QueueStore, RecordStore, StorageError, StoredRecord, TimerEntry, TimerStore, Tx,
 };
 pub use system::{
-    Delivered, Member, Reached, RouteTable, Router, Routing, StepReport, System, SystemTick,
+    Delivered, Diagnostics, Member, PurgeReport, Reached, Retention, RouteTable, Router, Routing,
+    StepReport, System, SystemTick, RETENTION,
 };
 pub use telemetry::{JsonLines, Level, NoTelemetry, Telemetry};
 pub use tenant::{InvalidTenant, TenantId};

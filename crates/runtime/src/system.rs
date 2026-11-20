@@ -31,6 +31,11 @@
 //!   `queue.dead_lettered` to telemetry at level error, and goes on with the next entry. A storage
 //!   failure (unavailable, conflict) is not a failed step: the entry stays at the head and the
 //!   step is retried.
+//! - **The one instance of an unkeyed machine.** Exegra starts the single instance of an unkeyed
+//!   machine at the beginning. A machine that creates its records and is unkeyed
+//!   ([`Machine::SINGLETON_KEY`]) has that instance created by [`System::new`], in its initial
+//!   state under the machine's fixed key, unless a record is already there: so a route to "every
+//!   instance" reaches it, and two systems over one store share it.
 //! - **Leaving the system.** Every emit is also written, in the step's transaction, to the outbox
 //!   for its `to` (the receiver outside the machines that the specification names), due at the
 //!   same time. [`System::drain_outbox`] hands due messages to the [`Dispatcher`] in due order:
@@ -42,7 +47,12 @@
 //! - A dead-lettered entry ends nothing (Exegra's run ends at a failed step); see above.
 //! - "Every instance" of a machine is every record in its collection that holds one of its
 //!   states: a record the machine cannot read is another machine's and is passed over. Exegra's
-//!   instances are those its routes have created, plus the one instance of an unkeyed behaviour.
+//!   instances are those its routes have created, plus the one instance of an unkeyed behaviour,
+//!   which this host creates when it is built if the machine creates its records.
+//! - A message of the outbox that fails its `max_attempts`th dispatch is dead-lettered with the
+//!   error of that attempt ([`RetryPolicy::max_attempts`]); [`System::purge`] removes the records
+//!   of finished instances and the dead letters that are older than [`Retention`]. Exegra has no
+//!   dispatch attempts and keeps every instance.
 //! - A route to a key with no record steps a new instance only when the machine creates records
 //!   (`storage.creates`); otherwise the step fails with [`HostError::RecordMissing`]. Exegra
 //!   creates the instance in its initial state, which is why Exegra refuses a shipped machine that
@@ -62,8 +72,8 @@
 
 use crate::clock::{Clock, Time};
 use crate::host::{
-    admit_new_instance, decode, encode, is_conflict, DispatchReport, Dispatcher, Envelope,
-    HostError, RetryPolicy, CONFLICT_RETRIES,
+    admit_new_instance, dead_letter_message, decode, encode, is_conflict, DispatchReport,
+    Dispatcher, Envelope, HostError, RetryPolicy, CONFLICT_RETRIES,
 };
 use crate::machine::{Delivery, EffectRef, Isolation, Machine, Receiver, TimerCommand};
 use crate::store::{DeadLetter, MachineStore, NewEntry, NewMessage, OutboxEntry, QueueEntry, Tx};
@@ -117,6 +127,8 @@ type InitFn = fn(&mut dyn Tx, &str, &Value) -> Result<(), HostError>;
 type KeyFn = fn(&Value) -> Result<String, HostError>;
 type AcceptsFn = fn(&Value) -> Result<(), String>;
 type ElapsedFn = fn(&Value) -> bool;
+type SpawnFn = fn(&mut dyn Tx, &str, Time) -> Result<(), HostError>;
+type FinishedFn = fn(&mut dyn Tx, &str) -> Result<bool, HostError>;
 
 /// One machine as the system host drives it: events, keys and records as JSON, with the typed
 /// work done by the machine's own code.
@@ -130,12 +142,17 @@ pub struct Member {
     pub isolation: Isolation,
     /// Whether an event for a key with no record creates the record.
     pub creates: bool,
+    /// The key (JSON text) of the machine's one instance, which [`System::new`] creates, for an
+    /// unkeyed machine that creates its records ([`Machine::SINGLETON_KEY`]).
+    pub singleton: Option<&'static str>,
     deliver: DeliverFn,
     view: ViewFn,
     init: InitFn,
     key: KeyFn,
     accepts: AcceptsFn,
     elapsed: ElapsedFn,
+    spawn: SpawnFn,
+    finished: FinishedFn,
 }
 
 impl std::fmt::Debug for Member {
@@ -160,13 +177,27 @@ impl Member {
             record: M::RECORD,
             isolation: M::ISOLATION,
             creates: M::CREATES,
+            singleton: M::SINGLETON_KEY,
             deliver: deliver::<M>,
             view: view::<M>,
             init: init::<M>,
             key: canonical_key::<M>,
             accepts: accepts::<M>,
             elapsed: is_elapsed::<M>,
+            spawn: spawn::<M>,
+            finished: finished::<M>,
         }
+    }
+
+    /// The storage key (JSON text, in the machine's own encoding) of the machine's singleton
+    /// instance, or `None` when it has none.
+    pub fn singleton_key(&self) -> Result<Option<String>, HostError> {
+        self.singleton
+            .map(|text| {
+                let value: Value = serde_json::from_str(text).map_err(codec)?;
+                self.key_of(&value)
+            })
+            .transpose()
     }
 
     /// The storage key (JSON text) of the instance a key value names, in the machine's own
@@ -204,6 +235,32 @@ fn accepts<M: Machine>(event: &Value) -> Result<(), String> {
 
 fn is_elapsed<M: Machine>(event: &Value) -> bool {
     serde_json::from_value::<M::Event>(event.clone()).is_ok_and(|e| M::is_elapsed(&e))
+}
+
+/// Create the instance under `key_text` in its initial state, unless a record is there already.
+fn spawn<M: Machine>(tx: &mut dyn Tx, key_text: &str, now: Time) -> Result<(), HostError> {
+    let key: M::Key = decode(key_text)?;
+    let key_text = encode(&key)?;
+    if tx.load(M::RECORD, &key_text)?.is_some() {
+        return Ok(());
+    }
+    let (state, vars) = M::initial(&key);
+    let record = M::to_record(&key, &state, &vars, None)?;
+    M::validate_record(&record).map_err(HostError::Constraint)?;
+    tx.save_stamped(M::RECORD, &key_text, &encode(&record)?, None, now)?;
+    Ok(())
+}
+
+/// Whether the record under `key_text` holds an instance of the machine in a terminal state. A
+/// record that is not the machine's (another machine's, in a shared collection) is not finished.
+fn finished<M: Machine>(tx: &mut dyn Tx, key_text: &str) -> Result<bool, HostError> {
+    let Some(stored) = tx.load(M::RECORD, key_text)? else {
+        return Ok(false);
+    };
+    let Ok(record) = decode::<M::Record>(&stored.data) else {
+        return Ok(false);
+    };
+    Ok(M::from_record(&record).is_ok_and(|(state, _)| M::is_terminal(&state)))
 }
 
 /// The state and variables of an instance as stored, or as a creating machine starts it.
@@ -285,7 +342,7 @@ fn deliver<M: Machine>(
     let (previous, version) = previous.unzip();
     let record = M::to_record(&key, &outcome.state, &outcome.vars, previous.as_ref())?;
     M::validate_record(&record).map_err(HostError::Constraint)?;
-    tx.save(M::RECORD, &key_text, &encode(&record)?, version)?;
+    tx.save_stamped(M::RECORD, &key_text, &encode(&record)?, version, now)?;
     for effect in outcome.effects() {
         match effect {
             EffectRef::Emit(i) => {
@@ -330,6 +387,50 @@ fn deliver<M: Machine>(
         }
     }
     Ok(Delivered::Fired)
+}
+
+/// How long the host keeps what it has finished with ([`System::purge`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Retention {
+    /// How long after its last save the record of a finished instance (one in a terminal state,
+    /// [`Machine::is_terminal`]) is kept. An instance that is not finished, and the singleton of
+    /// an unkeyed machine, are never removed.
+    pub finished_records: Duration,
+    /// How long after it was set aside a dead letter is kept.
+    pub dead_letters: Duration,
+}
+
+/// Ninety days: the retention of finished records and dead letters (within the platform's bounds
+/// of thirty days to ten years for a record type).
+pub const RETENTION: Duration = Duration::from_secs(90 * 24 * 60 * 60);
+
+impl Default for Retention {
+    fn default() -> Self {
+        Retention {
+            finished_records: RETENTION,
+            dead_letters: RETENTION,
+        }
+    }
+}
+
+/// What one [`System::purge`] removed.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct PurgeReport {
+    /// Records of finished instances.
+    pub records: u64,
+    /// Dead letters.
+    pub dead_letters: u64,
+}
+
+/// What the machine store holds, for the platform's diagnostics ([`System::diagnostics`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct Diagnostics {
+    /// Records of machine instances, of every machine of the system.
+    pub records: u64,
+    /// Outbox messages not yet delivered, retries included.
+    pub outbox: u64,
+    /// Dead letters: failed queue entries and outbox messages that spent their attempts.
+    pub dead_letters: u64,
 }
 
 /// The machines of a deployment and the routing table between them, as specc generates them.
@@ -458,6 +559,12 @@ fn receivers<'r>(
                 out.push((member, member.key_of(value)?, false));
             }
             None => {
+                // The one instance of an unkeyed machine is its singleton, whatever else the
+                // collection holds (machines that share a record have a key each).
+                if let Some(key) = member.singleton_key()? {
+                    out.push((member, key, false));
+                    continue;
+                }
                 for key in tx.keys(member.record)? {
                     match (member.view)(tx, &key) {
                         Ok(Some(_)) => out.push((member, key, false)),
@@ -535,7 +642,10 @@ impl<S: MachineStore, D: Dispatcher<Value>> Clone for System<S, D> {
 }
 
 impl<S: MachineStore, D: Dispatcher<Value>> System<S, D> {
-    /// A system host. Fails when the store cannot run a member's declared isolation.
+    /// A system host. Fails when the store cannot run a member's declared isolation, or when the
+    /// instance of an unkeyed machine that creates its records cannot be created (its key or
+    /// initial record breaks the record's constraints). Creating that instance is one write to
+    /// the store, made here and made once however many systems are built over the store.
     pub fn new(
         store: Arc<S>,
         router: Router,
@@ -548,6 +658,32 @@ impl<S: MachineStore, D: Dispatcher<Value>> System<S, D> {
                     machine: member.name,
                     isolation: member.isolation,
                 });
+            }
+        }
+        // The one instance of each unkeyed machine that creates its records exists from the start.
+        let singles: Vec<Member> = router
+            .members()
+            .iter()
+            .filter(|m| m.singleton.is_some())
+            .copied()
+            .collect();
+        if !singles.is_empty() {
+            let (now, isolation) = (clock.now(), router.isolation());
+            let mut tries = 0;
+            loop {
+                let made = store.transact(isolation, |tx| -> Result<(), HostError> {
+                    for member in &singles {
+                        if let Some(key) = member.singleton {
+                            (member.spawn)(tx, key, now)?;
+                        }
+                    }
+                    Ok(())
+                });
+                tries += 1;
+                match made {
+                    Err(error) if is_conflict(&error) && tries < CONFLICT_RETRIES => {}
+                    other => break other?,
+                }
             }
         }
         Ok(System {
@@ -777,6 +913,70 @@ impl<S: MachineStore, D: Dispatcher<Value>> System<S, D> {
         }
     }
 
+    /// Remove what has outlived `retention`, in one transaction: the record of each finished
+    /// instance (a machine's `is_terminal` state) last saved longer ago than
+    /// [`Retention::finished_records`], except a singleton, and each dead letter set aside
+    /// longer ago than [`Retention::dead_letters`]. A record whose save time the store does not
+    /// know is kept. Call it periodically; it is cheap when nothing is past retention.
+    pub async fn purge(&self, retention: Retention) -> Result<PurgeReport, HostError> {
+        let now = self.clock.now();
+        let ago = |age: Duration| {
+            Time(
+                now.0
+                    .saturating_sub(i64::try_from(age.as_millis()).unwrap_or(i64::MAX)),
+            )
+        };
+        let (records_before, letters_before) =
+            (ago(retention.finished_records), ago(retention.dead_letters));
+        self.on_store(move |store, router| {
+            store.transact(router.isolation(), |tx| -> Result<PurgeReport, HostError> {
+                let mut report = PurgeReport::default();
+                for member in router.members() {
+                    let singleton = member.singleton_key()?;
+                    for key in tx.stale_keys(member.record, records_before)? {
+                        if singleton.as_deref() == Some(key.as_str()) {
+                            continue;
+                        }
+                        let done = match (member.finished)(tx, &key) {
+                            Ok(done) => done,
+                            Err(error) if fails_step(&error) => false,
+                            Err(error) => return Err(error),
+                        };
+                        if done && tx.delete_record(member.record, &key)? {
+                            report.records += 1;
+                        }
+                    }
+                }
+                report.dead_letters = tx.purge_dead_letters(letters_before)?;
+                Ok(report)
+            })
+        })
+        .await?
+    }
+
+    /// What the store holds: instance records, undelivered outbox messages and dead letters.
+    pub async fn diagnostics(&self) -> Result<Diagnostics, HostError> {
+        self.on_store(|store, router| -> Result<Diagnostics, HostError> {
+            let mut collections: Vec<&str> = router.members().iter().map(|m| m.record).collect();
+            collections.sort_unstable();
+            collections.dedup();
+            let (records, dead_letters) =
+                store.transact(router.isolation(), |tx| -> Result<(u64, u64), HostError> {
+                    let mut records = 0u64;
+                    for collection in &collections {
+                        records += tx.keys(collection)?.len() as u64;
+                    }
+                    Ok((records, tx.count_dead_letters()?))
+                })?;
+            Ok(Diagnostics {
+                records,
+                outbox: store.pending()?,
+                dead_letters,
+            })
+        })
+        .await?
+    }
+
     /// Hand every due outbox message of every member to the dispatcher, in due order.
     pub async fn drain_outbox(&self) -> Result<DispatchReport, HostError> {
         let now = self.clock.now();
@@ -806,6 +1006,26 @@ impl<S: MachineStore, D: Dispatcher<Value>> System<S, D> {
                         "outbox.unreadable",
                         &[("id", id.into()), ("error", why.as_str().into())],
                     );
+                    if attempts >= self.retry.max_attempts {
+                        let moved = self
+                            .on_store(move |store, router| {
+                                dead_letter_message(
+                                    store,
+                                    router.isolation(),
+                                    id,
+                                    attempts,
+                                    &why,
+                                    now,
+                                )
+                            })
+                            .await;
+                        if matches!(moved, Ok(Ok(_))) {
+                            report.dead += 1;
+                            continue;
+                        }
+                        report.deferred += 1;
+                        continue;
+                    }
                     let _ = self
                         .on_store(move |store, _| store.defer(id, attempts, next, &why))
                         .await;
@@ -834,6 +1054,32 @@ impl<S: MachineStore, D: Dispatcher<Value>> System<S, D> {
                     report.delivered += 1;
                     if at_least_once {
                         self.forget(id).await;
+                    }
+                }
+                Err(error) if at_least_once && attempts + 1 >= self.retry.max_attempts => {
+                    let attempts = attempts + 1;
+                    let why = error.0.clone();
+                    self.telemetry.event(
+                        Level::Error,
+                        "outbox.dead_lettered",
+                        &[
+                            ("source", envelope.source.as_str().into()),
+                            ("receiver", envelope.receiver.as_str().into()),
+                            ("id", id.into()),
+                            ("attempts", attempts.into()),
+                            ("error", why.as_str().into()),
+                        ],
+                    );
+                    let now = self.clock.now();
+                    let moved = self
+                        .on_store(move |store, router| {
+                            dead_letter_message(store, router.isolation(), id, attempts, &why, now)
+                        })
+                        .await;
+                    match moved {
+                        Ok(Ok(_)) => report.dead += 1,
+                        // It could not be moved: it stays and the next drain tries again.
+                        _ => report.deferred += 1,
                     }
                 }
                 Err(error) if at_least_once => {

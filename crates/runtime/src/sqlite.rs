@@ -325,6 +325,15 @@ const MIGRATIONS: &[Migration] = &[
     );
     ",
     },
+    Migration {
+        version: 5,
+        name: "when a machine record was last saved, for the retention of finished records",
+        sql: "
+    ALTER TABLE runtime_records ADD COLUMN updated_at INTEGER;
+    CREATE INDEX runtime_records_updated ON runtime_records(collection, updated_at);
+    CREATE INDEX runtime_dead_letters_at ON runtime_dead_letters(at);
+    ",
+    },
 ];
 
 const QUEUE_COLUMNS: &str =
@@ -391,6 +400,15 @@ impl SqliteMachineStore {
                 ))),
             }
         })?;
+        // A record saved before the save time was kept is aged from the first open that sees it.
+        db.write(StorageError::from, |tx| {
+            tx.execute(
+                "UPDATE runtime_records SET updated_at = ?1 WHERE updated_at IS NULL",
+                params![now.0],
+            )
+            .map_err(sql)?;
+            Ok(())
+        })?;
         Ok(SqliteMachineStore { db, tenant })
     }
 
@@ -402,6 +420,34 @@ impl SqliteMachineStore {
 
 struct SqliteTx<'a, 'c> {
     tx: &'a Transaction<'c>,
+}
+
+impl SqliteTx<'_, '_> {
+    /// Save a record; `at` is when, or `None` when the save has no time.
+    fn put(
+        &mut self,
+        collection: &str,
+        key: &str,
+        data: &str,
+        expected: Option<u64>,
+        at: Option<Time>,
+    ) -> Result<u64, StorageError> {
+        let found = self.load(collection, key)?.map(|r| r.version);
+        if found != expected {
+            return Err(StorageError::Conflict(format!(
+                "{collection} {key}: expected version {expected:?}, found {found:?}"
+            )));
+        }
+        let version = found.unwrap_or(0) + 1;
+        self.tx
+            .execute(
+                "INSERT INTO runtime_records (collection, key, version, data, updated_at) VALUES (?1, ?2, ?3, ?4, ?5)
+                 ON CONFLICT (collection, key) DO UPDATE SET version = excluded.version, data = excluded.data, updated_at = excluded.updated_at",
+                params![collection, key, version as i64, data, at.map(|t| t.0)],
+            )
+            .map_err(sql)?;
+        Ok(version)
+    }
 }
 
 impl Tx for SqliteTx<'_, '_> {
@@ -428,21 +474,85 @@ impl Tx for SqliteTx<'_, '_> {
         data: &str,
         expected: Option<u64>,
     ) -> Result<u64, StorageError> {
-        let found = self.load(collection, key)?.map(|r| r.version);
-        if found != expected {
-            return Err(StorageError::Conflict(format!(
-                "{collection} {key}: expected version {expected:?}, found {found:?}"
-            )));
-        }
-        let version = found.unwrap_or(0) + 1;
-        self.tx
-            .execute(
-                "INSERT INTO runtime_records (collection, key, version, data) VALUES (?1, ?2, ?3, ?4)
-                 ON CONFLICT (collection, key) DO UPDATE SET version = excluded.version, data = excluded.data",
-                params![collection, key, version as i64, data],
+        self.put(collection, key, data, expected, None)
+    }
+
+    fn save_stamped(
+        &mut self,
+        collection: &str,
+        key: &str,
+        data: &str,
+        expected: Option<u64>,
+        at: Time,
+    ) -> Result<u64, StorageError> {
+        self.put(collection, key, data, expected, Some(at))
+    }
+
+    fn stale_keys(&mut self, collection: &str, before: Time) -> Result<Vec<String>, StorageError> {
+        let mut statement = self
+            .tx
+            .prepare_cached(
+                "SELECT key FROM runtime_records
+                 WHERE collection = ?1 AND updated_at IS NOT NULL AND updated_at < ?2 ORDER BY rowid",
             )
             .map_err(sql)?;
-        Ok(version)
+        let rows = statement
+            .query_map(params![collection, before.0], |row| row.get(0))
+            .map_err(sql)?;
+        rows.collect::<Result<Vec<String>, _>>().map_err(sql)
+    }
+
+    fn delete_record(&mut self, collection: &str, key: &str) -> Result<bool, StorageError> {
+        let removed = self
+            .tx
+            .execute(
+                "DELETE FROM runtime_records WHERE collection = ?1 AND key = ?2",
+                params![collection, key],
+            )
+            .map_err(sql)?;
+        Ok(removed > 0)
+    }
+
+    fn take_message(&mut self, id: u64) -> Result<Option<OutboxEntry>, StorageError> {
+        let found = self
+            .tx
+            .query_row(
+                &format!("SELECT {OUTBOX_COLUMNS} FROM runtime_outbox WHERE id = ?1"),
+                params![id as i64],
+                outbox_entry,
+            )
+            .optional()
+            .map_err(sql)?;
+        if found.is_some() {
+            self.tx
+                .execute(
+                    "DELETE FROM runtime_outbox WHERE id = ?1",
+                    params![id as i64],
+                )
+                .map_err(sql)?;
+        }
+        Ok(found)
+    }
+
+    fn purge_dead_letters(&mut self, before: Time) -> Result<u64, StorageError> {
+        let removed = self
+            .tx
+            .execute(
+                "DELETE FROM runtime_dead_letters WHERE at < ?1",
+                params![before.0],
+            )
+            .map_err(sql)?;
+        Ok(removed as u64)
+    }
+
+    fn count_dead_letters(&mut self) -> Result<u64, StorageError> {
+        let count: i64 = self
+            .tx
+            .query_row("SELECT COUNT(*) FROM runtime_dead_letters", [], |r| {
+                r.get(0)
+            })
+            .map_err(sql)?;
+        Ok(count as u64)
     }
 
     fn enqueue(&mut self, message: &NewMessage) -> Result<u64, StorageError> {
@@ -647,6 +757,8 @@ impl RecordStore for SqliteMachineStore {
         )
     }
 }
+
+const OUTBOX_COLUMNS: &str = "id, source, key, receiver, event, created_at, attempts, next_attempt_at, last_error, delivery, not_before";
 
 fn outbox_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<OutboxEntry> {
     Ok(OutboxEntry {

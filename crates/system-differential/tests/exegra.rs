@@ -13,9 +13,8 @@
 //!   record whose other fields hold placeholder values of their types: the one instance of an
 //!   unkeyed machine under a placeholder key, and each key the scenario's inputs route to for a
 //!   keyed one. That stands for the contract that creates the record, which Exegra leaves out.
-//!   The one instance of an unkeyed machine that does create its records is set up the same way:
-//!   the host reaches an instance through a record, and a route to every instance names no key to
-//!   create one under (WG-5090).
+//!   The one instance of an unkeyed machine that creates its records is not set up here: the host
+//!   creates it when it is built, under the machine's fixed key (`Machine::SINGLETON_KEY`).
 //! - The external entries (the scenario's steps and injected events: Exegra's initial queue) are
 //!   submitted at their times before the run, in Exegra's order, so they take the lowest sequence
 //!   numbers as in Exegra. An entry a fault will drop, lose or delay is not submitted: the
@@ -564,7 +563,15 @@ async fn run(spec: &Spec, plan: &Plan<'_>, trace: &Value) -> Result<usize, (bool
         Arc::new(Outside),
         Arc::new(clock.clone()),
     )
-    .map_err(|e| diverged(e.to_string()))?;
+    .map_err(|e| match e {
+        // The host creates the one instance of an unkeyed creating machine when it is built; the
+        // specification's initial values break the record's constraints (WG-4903).
+        strata_runtime::HostError::Constraint(why) => (
+            true,
+            format!("the initial state of a machine cannot be held by its record: {why}"),
+        ),
+        e => diverged(e.to_string()),
+    })?;
 
     // Set up the instances whose records someone else creates.
     let mut singles: BTreeMap<String, String> = BTreeMap::new();
@@ -595,6 +602,19 @@ async fn run(spec: &Spec, plan: &Plan<'_>, trace: &Value) -> Result<usize, (bool
                 .filter(|(m, _)| m.name == member.name)
                 .map(|(_, v)| v.clone())
                 .collect()
+        } else if member.creates {
+            // The host created the one instance when it was built, under the machine's fixed key.
+            let text = member
+                .singleton_key()
+                .map_err(|e| diverged(e.to_string()))?
+                .ok_or_else(|| {
+                    diverged(format!(
+                        "{} is unkeyed and creates its records, but its machine has no singleton key",
+                        member.name
+                    ))
+                })?;
+            singles.insert(member.name.to_string(), text);
+            continue;
         } else {
             let key = if let [one] = key_types.as_slice() {
                 placeholder(spec, one)
@@ -606,12 +626,7 @@ async fn run(spec: &Spec, plan: &Plan<'_>, trace: &Value) -> Result<usize, (bool
             vec![key]
         };
         // A keyed machine that creates its records starts an instance on the first entry routed
-        // to its key, as Exegra does. An unkeyed one has its one instance from the start in
-        // Exegra, but the host reaches an instance only through a record, and a route to every
-        // instance (`Routing::every`) names no key to create one under: so the one instance is
-        // set up as for a machine that does not create its records, under the placeholder key.
-        // The host cannot start such an instance by itself: that gap of the specification is
-        // WG-5090, and this branch goes when it is closed.
+        // to its key, as Exegra does; nothing to set up.
         if member.creates && b.instances.is_some() {
             continue;
         }

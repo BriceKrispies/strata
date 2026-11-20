@@ -34,8 +34,8 @@ use strata_machine_store::StorageApiMachineStore;
 use strata_model::machines::arc_outbox_delivery_flow_impl::ArcOutboxDeliveryFlowImpl;
 use strata_runtime::telemetry::{Field, JsonLines, Level, Telemetry};
 use strata_runtime::{
-    DispatchError, Dispatcher, Envelope, HostError, Machine, Member, RouteTable, Router, Routing,
-    System, SystemClock,
+    DispatchError, Dispatcher, Envelope, HostError, Machine, Member, PurgeReport, Retention,
+    RouteTable, Router, Routing, System, SystemClock,
 };
 use strata_storage_api::memory::MemoryStore;
 
@@ -162,6 +162,8 @@ struct Inner {
     beat: Arc<Beat>,
     /// The task that runs the host; finished means the publisher has stopped.
     task: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    /// What the machine store held at the last purge, for the platform diagnostics.
+    held: Mutex<Value>,
 }
 
 /// The outbox publisher: the machine on its host.
@@ -199,6 +201,7 @@ impl Outbox {
                 kick: AtomicBool::new(true),
                 beat,
                 task: Mutex::new(None),
+                held: Mutex::new(Value::Null),
             }),
         })
     }
@@ -230,6 +233,52 @@ impl Outbox {
             "tick_failures": self.inner.beat.errors.load(Ordering::Relaxed),
             "last_failure_at": self.inner.beat.last_error_at.load(Ordering::Relaxed),
         })
+    }
+
+    /// The janitor's one call for the machine store: remove the records of finished instances and
+    /// the dead letters that are past retention ([`Retention::default`]), and note what the store
+    /// holds afterwards ([`Outbox::held`]). A failure is logged and the next pass tries again.
+    pub async fn purge(&self) {
+        let system = &self.inner.system;
+        match system.purge(Retention::default()).await {
+            Ok(report) if report == PurgeReport::default() => {}
+            Ok(report) => LOG.info(
+                "janitor.purged",
+                "",
+                json!({
+                    "what": "machine_store",
+                    "records": report.records,
+                    "dead_letters": report.dead_letters,
+                }),
+            ),
+            Err(error) => LOG.error(
+                "janitor.purge_failed",
+                "",
+                json!({ "what": "machine_store", "error": error.to_string() }),
+            ),
+        }
+        match system.diagnostics().await {
+            Ok(held) => {
+                if let Ok(mut slot) = self.inner.held.lock() {
+                    *slot = json!(held);
+                }
+            }
+            Err(error) => LOG.error(
+                "janitor.diagnostics_failed",
+                "",
+                json!({ "what": "machine_store", "error": error.to_string() }),
+            ),
+        }
+    }
+
+    /// What the machine store held at the last purge: instance records, undelivered outbox
+    /// messages and dead letters; `null` before the first purge.
+    pub fn held(&self) -> Value {
+        self.inner
+            .held
+            .lock()
+            .map(|held| held.clone())
+            .unwrap_or(Value::Null)
     }
 
     /// Whether commits kick the publisher.
