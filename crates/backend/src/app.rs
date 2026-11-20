@@ -318,6 +318,23 @@ impl App {
             .await
             .map_err(|e| ApiError::hidden(ErrorCode::Internal, format!("worker failed: {e}")))
     }
+
+    /// [`blocking`](Self::blocking) for a request of `tenant`: the tenant may have only so many
+    /// calls running or waiting, and all tenants together only so many, so one tenant cannot
+    /// park the whole pool. Over either limit the request is refused with 429. The places are
+    /// held until the work has run, even if the request is abandoned before then.
+    pub async fn blocking_for<T, F>(self: &Arc<Self>, tenant: &str, work: F) -> Result<T, ApiError>
+    where
+        T: Send + 'static,
+        F: FnOnce(&App) -> T + Send + 'static,
+    {
+        let place = self.admission.work(tenant)?;
+        self.blocking(move |app| {
+            let _place = place;
+            work(app)
+        })
+        .await
+    }
 }
 
 /// A failure reply. The correlation id is filled in where the reply is sent.

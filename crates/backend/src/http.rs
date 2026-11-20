@@ -33,7 +33,8 @@ where
 {
     let caller = auth::caller(headers)?;
     let correlation = caller.correlation.clone();
-    app.blocking(move |app| {
+    let tenant = caller.site.as_str().to_string();
+    app.blocking_for(&tenant, move |app| {
         let identity = auth::identify(app, &caller)?;
         work(app, &identity)
     })
@@ -48,9 +49,31 @@ where
     T: Serialize + Send + 'static,
     F: FnOnce(&App, &Caller, &Identity) -> Result<T, ApiError> + Send + 'static,
 {
+    as_caller_at_hashing(app, headers, false, work).await
+}
+
+/// [`as_caller_at`] for work that may verify a secret with Argon2 (`hashes`): the request is
+/// counted against the per-source sign-in rate and holds a place to hash for the work.
+async fn as_caller_at_hashing<T, F>(
+    app: &Shared,
+    headers: &HeaderMap,
+    hashes: bool,
+    work: F,
+) -> Result<Json<T>, ApiError>
+where
+    T: Serialize + Send + 'static,
+    F: FnOnce(&App, &Caller, &Identity) -> Result<T, ApiError> + Send + 'static,
+{
     let caller = auth::caller(headers)?;
     let correlation = caller.correlation.clone();
-    app.blocking(move |app| {
+    let place = if hashes {
+        Some(hashing_place(app, &caller).await?)
+    } else {
+        None
+    };
+    let tenant = caller.site.as_str().to_string();
+    app.blocking_for(&tenant, move |app| {
+        let _place = place;
         let identity = auth::identify(app, &caller)?;
         work(app, &caller, &identity)
     })
@@ -83,6 +106,22 @@ async fn session(
     .await
 }
 
+/// The per-source sign-in rate, then a place to hash for the caller's tenant. The refusal carries
+/// the caller's correlation id.
+async fn hashing_place(
+    app: &Shared,
+    caller: &Caller,
+) -> Result<crate::limits::HashingPlace, ApiError> {
+    let refuse = |error: ApiError| error.with_correlation(&caller.correlation);
+    app.admission
+        .login_attempt(caller.visitor_source(), strata_protocol::log::now_ms())
+        .map_err(refuse)?;
+    app.admission
+        .hashing(caller.site.as_str())
+        .await
+        .map_err(refuse)
+}
+
 /// Sign in with the named method. The request is the method's own: the backend does not look
 /// inside it.
 async fn sign_in(
@@ -93,18 +132,21 @@ async fn sign_in(
 ) -> Result<impl IntoResponse, ApiError> {
     let caller = auth::caller(&headers)?;
     let correlation = caller.correlation.clone();
-    // The per-source limit comes first and costs nothing; then a place to hash, held until the
-    // verification is done. The limits on failed attempts in `signin::sign_in` sit behind both.
-    app.admission
-        .login_attempt(caller.visitor_source(), strata_protocol::log::now_ms())
-        .map_err(|error| error.with_correlation(&correlation))?;
-    let hashing = app
-        .admission
-        .hashing()
-        .await
-        .map_err(|error| error.with_correlation(&correlation))?;
-    app.blocking(move |app| {
-        let _hashing = hashing;
+    // The per-source limit comes first and costs nothing. Only the password method hashes, so
+    // only it takes a place to hash; the methods that call an identity provider hold no place
+    // while they wait on the network. The limits on failed attempts in `signin::sign_in` sit
+    // behind both.
+    let place = if method == "password" {
+        Some(hashing_place(&app, &caller).await?)
+    } else {
+        app.admission
+            .login_attempt(caller.visitor_source(), strata_protocol::log::now_ms())
+            .map_err(|error| error.with_correlation(&correlation))?;
+        None
+    };
+    let tenant = caller.site.as_str().to_string();
+    app.blocking_for(&tenant, move |app| {
+        let _place = place;
         auth::login(app, &caller, &method, &request)
     })
     .await?
@@ -366,7 +408,9 @@ async fn step_up(
     headers: HeaderMap,
     Json(request): Json<Json_>,
 ) -> Result<Json<Json_>, ApiError> {
-    as_caller_at(&app, &headers, move |app, caller, identity| {
+    // A password factor is checked with Argon2.
+    let hashes = request.get("password").is_some();
+    as_caller_at_hashing(&app, &headers, hashes, move |app, caller, identity| {
         stepup::confirm(app, caller, identity, &request)
     })
     .await
@@ -703,22 +747,31 @@ where
 {
     let caller = auth::caller(headers)?;
     let correlation = caller.correlation.clone();
-    app.blocking(move |app| work(app, &caller))
+    let tenant = caller.site.as_str().to_string();
+    app.blocking_for(&tenant, move |app| work(app, &caller))
         .await?
         .map(Json)
         .map_err(|error| error.with_correlation(&correlation))
 }
 
-/// The token endpoint: client credentials, or the exchange of a delegation.
+/// The token endpoint: client credentials, or the exchange of a delegation. Both check the
+/// client's secret with Argon2, so the request takes the per-source rate and a place to hash.
 async fn token(
     State(app): State<Shared>,
     headers: HeaderMap,
     Json(body): Json<Json_>,
 ) -> Result<Json<Json_>, ApiError> {
-    as_public(&app, &headers, move |app, caller| {
-        tokens::issue(app, caller, &body)
+    let caller = auth::caller(&headers)?;
+    let correlation = caller.correlation.clone();
+    let place = hashing_place(&app, &caller).await?;
+    let tenant = caller.site.as_str().to_string();
+    app.blocking_for(&tenant, move |app| {
+        let _place = place;
+        tokens::issue(app, &caller, &body)
     })
-    .await
+    .await?
+    .map(Json)
+    .map_err(|error| error.with_correlation(&correlation))
 }
 
 async fn token_verify(
@@ -737,7 +790,9 @@ async fn token_introspect(
     headers: HeaderMap,
     Json(body): Json<Json_>,
 ) -> Result<Json<Json_>, ApiError> {
-    as_caller_at(&app, &headers, move |app, caller, identity| {
+    // With client credentials the call checks a secret with Argon2.
+    let hashes = body.get("client_id").is_some();
+    as_caller_at_hashing(&app, &headers, hashes, move |app, caller, identity| {
         tokens::introspect(app, caller, identity, &body)
     })
     .await

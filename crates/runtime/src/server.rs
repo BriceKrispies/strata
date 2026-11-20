@@ -1,6 +1,7 @@
 //! Process bootstrap shared by every Strata service: environment configuration, binding,
 //! serving an axum router until shutdown, running blocking work, and the process exit.
 
+use crate::limits::{source_key, Cap};
 use axum::body::Body;
 use axum::extract::ConnectInfo;
 use axum::http::{Request, StatusCode};
@@ -52,11 +53,13 @@ pub async fn interrupted() {
 /// | `STRATA_HEADER_TIMEOUT_SECS` | `10` | A client must finish its request headers within this time. |
 /// | `STRATA_REQUEST_TIMEOUT_SECS` | `30` | A request, body included, is answered `408` after this time. |
 /// | `STRATA_MAX_CONNECTIONS` | `2048` | Open connections; further ones wait in the kernel's backlog. |
+/// | `STRATA_MAX_CONNECTIONS_PER_SOURCE` | `512` | Open connections from one peer address (an IPv6 /64 counts as one); further ones are closed at once. |
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ServeLimits {
     pub header_read_timeout: Duration,
     pub request_timeout: Duration,
     pub max_connections: usize,
+    pub max_connections_per_source: usize,
 }
 
 impl Default for ServeLimits {
@@ -65,6 +68,7 @@ impl Default for ServeLimits {
             header_read_timeout: Duration::from_secs(10),
             request_timeout: Duration::from_secs(30),
             max_connections: 2048,
+            max_connections_per_source: 512,
         }
     }
 }
@@ -91,6 +95,10 @@ impl ServeLimits {
             )?),
             max_connections: positive("STRATA_MAX_CONNECTIONS", defaults.max_connections as u64)?
                 as usize,
+            max_connections_per_source: positive(
+                "STRATA_MAX_CONNECTIONS_PER_SOURCE",
+                defaults.max_connections_per_source as u64,
+            )? as usize,
         })
     }
 }
@@ -109,7 +117,8 @@ pub async fn serve(
 ///
 /// Every request carries the peer's address as `ConnectInfo<SocketAddr>`. A client that does not
 /// finish its headers within `header_read_timeout` is dropped, a request not answered within
-/// `request_timeout` gets `408`, and at most `max_connections` connections are open at once.
+/// `request_timeout` gets `408`, at most `max_connections` connections are open at once, and at
+/// most `max_connections_per_source` of them come from one peer address.
 /// Upgraded connections (WebSockets) are not subject to the request timeout.
 pub async fn serve_with(
     listener: TcpListener,
@@ -118,6 +127,7 @@ pub async fn serve_with(
     limits: ServeLimits,
 ) -> Result<(), String> {
     let slots = Arc::new(Semaphore::new(limits.max_connections));
+    let per_source = Cap::new(limits.max_connections_per_source);
     let (stop_tx, stop_rx) = watch::channel(false);
     tokio::spawn(async move {
         shutdown.await;
@@ -144,11 +154,16 @@ pub async fn serve_with(
             },
             _ = stopping.changed() => break,
         };
+        let Some(place) = per_source.acquire(&source_key(&peer.ip().to_string())) else {
+            // This address already holds as many connections as it may: close this one.
+            continue;
+        };
         let _ = stream.set_nodelay(true);
         let router = router.clone();
         let mut stop = stop_rx.clone();
         connections.spawn(async move {
             let _slot = permit;
+            let _place = place;
             let service = hyper::service::service_fn(move |request: Request<Incoming>| {
                 let router = router.clone();
                 async move {

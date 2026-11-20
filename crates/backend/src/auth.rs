@@ -37,8 +37,8 @@ pub struct Caller {
 
 impl Caller {
     /// The visitor's address as the BFF established it, for the limits on what one source may
-    /// open or attempt; `None` for calls that are not a visitor's, which are not limited per
-    /// source.
+    /// open or attempt; `None` when the BFF stated none, and such calls are limited together as
+    /// one shared source.
     pub fn visitor_source(&self) -> Option<&str> {
         (self.source != "unknown").then_some(self.source.as_str())
     }

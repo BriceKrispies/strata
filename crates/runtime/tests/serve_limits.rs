@@ -32,6 +32,7 @@ fn limits(header: u64, request: u64, connections: usize) -> ServeLimits {
         header_read_timeout: Duration::from_secs(header),
         request_timeout: Duration::from_secs(request),
         max_connections: connections,
+        ..ServeLimits::default()
     }
 }
 
