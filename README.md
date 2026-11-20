@@ -72,7 +72,7 @@ After changing the specification, regenerate the model crate and the web modules
 npm run generate
 ```
 
-This writes a placeholder `crates/model/src/lib.rs` (and `crates/model-core/src/lib.rs`) if it is missing, then runs `specc generate` for `crates/model` and its pure crate `crates/model-core`, and `specc web` for `web/src/generated`.
+This writes a placeholder `crates/model/src/lib.rs` (and `crates/model-core/src/lib.rs`) if it is missing, then runs `specc generate` for `crates/model` and its pure crate `crates/model-core`, and `specc web` for `web/src/generated`, and `specc catalogue` for `specifications/catalogue.md`, the compact capability catalogue (public contracts with their implementation status, domain events, capabilities, quotas, plans and the types they use) that a feature author reads instead of the whole specification.
 
 `specc deploy`, `specc e2e` and `specc scenarios` write the deployment descriptors, Playwright tests and
 scenario tests from the same specification; `crates/spec-compiler` documents each. `docs/runtime.md`
