@@ -58,7 +58,7 @@ pub fn all() -> Vec<Obligation> {
             "A step is accepted only if the acting principal is authorized for it; an update or delete by a principal who may not edit the record is refused with `unauthorized`.",
             &["unauthorized_cannot_mutate", "unauthorized_cannot_update", "unauthorized_cannot_delete", "step_ok_authorized"],
             &[
-                "strata-kernel::properties::outsiders_cannot_mutate",
+                "strata-kernel::properties::what_no_policy_authorises_is_rejected",
                 "strata-kernel::behaviour::writers_edit_only_their_own_notes",
                 "strata-substrate::publication_template::an_author_cannot_touch_another_authors_post",
             ],

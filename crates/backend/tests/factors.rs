@@ -759,10 +759,18 @@ async fn recovery_tells_waits_ends_sessions_and_keeps_the_second_factor() {
     assert_eq!(status, 409, "{early}");
     assert!(backend.is_signed_in(&before).await);
 
-    tokio::time::sleep(Duration::from_millis(1_300)).await;
-    let (status, done) = backend
-        .call(None, "/internal/recovery/complete", complete.clone())
-        .await;
+    // Completing is refused (409, changing nothing) until the delay has passed: retry until it
+    // is not, for at most five seconds.
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let (status, done) = loop {
+        let (status, done) = backend
+            .call(None, "/internal/recovery/complete", complete.clone())
+            .await;
+        if status != 409 || std::time::Instant::now() >= deadline {
+            break (status, done);
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    };
     assert_eq!(status, 200, "{done}");
     assert!(
         !backend.is_signed_in(&before).await,

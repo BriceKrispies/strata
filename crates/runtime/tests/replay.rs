@@ -193,8 +193,16 @@ async fn a_timed_out_call_is_not_run_again_by_its_retry() {
     assert_eq!(status, 504);
     assert_eq!(runs.load(Ordering::SeqCst), 1);
     // Once the handler has finished, the retry gets its recorded answer.
-    tokio::time::sleep(Duration::from_millis(500)).await;
-    let (status, answer) = post(&base, "/slow", "k", "t", "v").await;
+    // A retry that comes too early waits, times out and starts nothing, so retry until the
+    // recorded answer comes, for at most five seconds.
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let (status, answer) = loop {
+        let (status, answer) = post(&base, "/slow", "k", "t", "v").await;
+        if status != 504 || std::time::Instant::now() >= deadline {
+            break (status, answer);
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    };
     assert_eq!((status, answer["runs"].as_u64()), (200, Some(1)));
     assert_eq!(runs.load(Ordering::SeqCst), 1);
 }

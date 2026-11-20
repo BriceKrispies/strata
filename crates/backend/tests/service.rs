@@ -2120,16 +2120,24 @@ async fn a_realm_under_a_spray_is_slowed_whatever_the_source() {
         401,
         "the other site"
     );
-    tokio::time::sleep(Duration::from_millis(1700)).await;
-    let (status, _) = backend
-        .call_from(
-            "198.51.100.77",
-            "fieldnotes",
-            None,
-            "/internal/session/login",
-            right,
-        )
-        .await;
+    // The slowing ends when the realm's interval has passed. A refused attempt changes nothing,
+    // so the same login is retried until it is no longer refused, for at most five seconds.
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let status = loop {
+        let (status, _) = backend
+            .call_from(
+                "198.51.100.77",
+                "fieldnotes",
+                None,
+                "/internal/session/login",
+                right.clone(),
+            )
+            .await;
+        if status != 429 || std::time::Instant::now() >= deadline {
+            break status;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    };
     assert_eq!(status, 200, "slowed, not stopped");
 }
 
@@ -2152,24 +2160,32 @@ async fn an_account_that_does_not_exist_is_answered_and_limited_like_one_that_do
             (status, body, started.elapsed())
         }
     };
-    let (known_status, known_body, mut known_time) = time("tomasz").await;
-    let (unknown_status, unknown_body, mut unknown_time) = time("nobody-at-all").await;
+    let (known_status, known_body, first_known) = time("tomasz").await;
+    let (unknown_status, unknown_body, first_unknown) = time("nobody-at-all").await;
     assert_eq!(known_status, unknown_status);
     assert_eq!(known_body["code"], unknown_body["code"]);
     assert_eq!(known_body["message"], unknown_body["message"]);
-    for _ in 0..2 {
-        known_time += time("tomasz").await.2;
-        unknown_time += time("nobody-at-all").await.2;
+    // What this shows, and what it does not. The structural guarantee is that a miss verifies the
+    // password against a decoy hash (`signin/password.rs`); this is a coarse wall-clock guard
+    // against that work being dropped. It compares the fastest of four attempts on each side, so
+    // a scheduling hiccup on one attempt cannot fail it, and a miss that skipped the hash (far
+    // faster than a real verification) cannot pass it. It cannot show constant time: it allows
+    // a miss to take half as long as a wrong password.
+    let (mut known_fastest, mut unknown_fastest) = (first_known, first_unknown);
+    // Four timed attempts, then six more, are the ten that lock an account.
+    for _ in 0..3 {
+        known_fastest = known_fastest.min(time("tomasz").await.2);
+        unknown_fastest = unknown_fastest.min(time("nobody-at-all").await.2);
     }
     assert!(
-        unknown_time * 3 >= known_time,
-        "a miss takes as long as a wrong password: {unknown_time:?} against {known_time:?}"
+        unknown_fastest * 2 >= known_fastest,
+        "a miss takes as long as a wrong password, fastest of four: {unknown_fastest:?} against {known_fastest:?}"
     );
     // The same limit applies to a login that does not exist.
-    for _ in 0..7 {
+    for _ in 0..6 {
         backend.attempt("fieldnotes", "nobody-at-all", WRONG).await;
     }
-    for _ in 0..7 {
+    for _ in 0..6 {
         backend.attempt("fieldnotes", "tomasz", WRONG).await;
     }
     let (known_status, known_body, _) = time("tomasz").await;

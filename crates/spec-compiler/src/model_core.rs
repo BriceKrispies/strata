@@ -88,7 +88,9 @@ fn cargo_toml(spec: &Spec, crate_name: &str) -> String {
          regex = \"{REGEX_VERSION}\"\n\
          serde = {{ version = \"{SERDE_VERSION}\", features = {serde_features} }}\n\
          serde_json = \"{SERDE_JSON_VERSION}\"\n\
-         {uuid}",
+         {uuid}\n\
+         [lints]\n\
+         workspace = true\n",
         header = emit::toml_header(&spec.path),
     )
 }
