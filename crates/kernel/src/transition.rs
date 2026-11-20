@@ -6,8 +6,8 @@ use crate::intent::{
     EventBody, ExistingData, Intent, Output, SchemaChange, StateDelta, Transition,
 };
 use crate::rules::{
-    assigned_roles, authorize, may_confer, missing_error, roles_of, validate_record, Lookup,
-    Subject,
+    assigned_roles, authorize, authorize_needing, insufficient, may_confer, missing_error,
+    roles_of, validate_record, Lookup, Subject,
 };
 use crate::schema::{
     normalise_address, Action, FieldDef, InvitationDef, ObjectTypeDef, Resource, TeamDef,
@@ -366,8 +366,7 @@ impl<'a> Draft<'a> {
         resource: &Resource,
         subject: Subject<'_>,
     ) -> Result<(), DomainError> {
-        expr::clear_missing();
-        let (allowed, checks) = authorize(
+        let (allowed, checks, needed) = authorize_needing(
             self.tenant,
             &self.tenant.schema,
             &self.ctx.principal,
@@ -380,10 +379,10 @@ impl<'a> Draft<'a> {
         self.evidence.extend(checks);
         if allowed {
             Ok(())
-        } else if let Some(missing) = missing_error() {
+        } else if let Some(need) = needed {
             // A condition followed a reference the snapshot does not hold: ask for it rather
             // than deny on a record that was merely not loaded.
-            Err(missing)
+            Err(insufficient(need))
         } else {
             Err(self.reject(
                 ErrorKind::Unauthorized,
@@ -726,13 +725,12 @@ fn update_record(
             if Some(step.from.as_str()) != from.as_str() || Some(step.to.as_str()) != to.as_str() {
                 continue;
             }
-            expr::clear_missing();
             let open = match &step.guard {
                 None => Ok(true),
                 Some(guard) => expr::holds(guard, &env),
             };
-            if open.is_err() {
-                if let Some(missing) = missing_error() {
+            if let (Err(_), Some(guard)) = (&open, &step.guard) {
+                if let Some(missing) = missing_error(guard, &env) {
                     return Err(missing);
                 }
             }
@@ -756,9 +754,8 @@ fn update_record(
         };
         let mut assigned = Vec::new();
         for (field, value) in &step.set {
-            expr::clear_missing();
             let value = expr::eval(value, &env).map_err(|e| {
-                missing_error().unwrap_or_else(|| {
+                missing_error(value, &env).unwrap_or_else(|| {
                     draft.reject(
                         ErrorKind::Evaluation,
                         format!("{}: set {field}: {e}", step.name),

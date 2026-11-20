@@ -21,37 +21,70 @@ pub use crate::types::{CmpOp, Expr, Scope};
 use crate::types::{
     FieldId, FieldType, FieldTypeExt, ObjectTypeId, RecordId, RoleId, Timestamp, Value,
 };
-use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use strata_model_core::tenant_rule_language as language;
 
 pub use language::{check, parse, EvalError, Shape};
 
-thread_local! {
-    /// The first state a reference lookup found missing since the last [`clear_missing`]. The
-    /// generated evaluator reports a failed lookup as a bare message, so the need is parked here
-    /// for the caller to turn into `InsufficientState` and have the shell load it. Per thread,
-    /// cleared before each evaluation that cares, and never read by a decision.
-    static MISSING: RefCell<Option<Need>> = const { RefCell::new(None) };
+/// The first record a reference in `expr` points at that the snapshot does not cover, in the
+/// order the expression is written, or `None` when every reference it can follow is covered.
+///
+/// The generated evaluator reports a failed lookup as a bare message, so a caller whose
+/// evaluation failed asks this, a pure function of the expression and its environment, whether
+/// the failure was a record that was merely not loaded: it then answers `InsufficientState`
+/// naming the record, and the shell loads it and asks again. A reference is followed exactly as
+/// [`eval`] follows it: from a single reference field of the scope's record, through the
+/// environment's [`Lookup`]. Where [`eval`] could not follow it (no lookup, no record in the
+/// scope, a null or non-reference value, a field that is not a single reference) there is no
+/// need to name.
+pub fn missing(expr: &Expr, env: &Env<'_>) -> Option<Need> {
+    let lookup = env.lookup?;
+    first_missing(expr, env, lookup)
 }
 
-/// Forget any missing need noted so far on this thread.
-pub fn clear_missing() {
-    MISSING.with(|slot| *slot.borrow_mut() = None);
-}
-
-/// Take the missing need noted by the evaluations since [`clear_missing`], if any.
-pub fn take_missing() -> Option<Need> {
-    MISSING.with(|slot| slot.borrow_mut().take())
-}
-
-fn note_missing(need: Need) {
-    MISSING.with(|slot| {
-        let mut slot = slot.borrow_mut();
-        if slot.is_none() {
-            *slot = Some(need);
+fn first_missing(expr: &Expr, env: &Env<'_>, lookup: Lookup<'_>) -> Option<Need> {
+    match expr {
+        Expr::Through(scope, field, _) => {
+            let record = match scope {
+                Scope::Record => env.record,
+                Scope::Old => env.old,
+                Scope::New => env.new,
+            }?;
+            let id = FieldId::new(field).ok()?;
+            let Value::Ref(target) = record.get(&id) else {
+                return None;
+            };
+            let reference = lookup
+                .tenant
+                .schema
+                .objects
+                .get(&record.object)
+                .and_then(|object| object.fields.get(&id))
+                .and_then(|def| def.ty.ref_target());
+            let Some((object, _, false)) = reference else {
+                return None;
+            };
+            lookup.record(object, *target).err().and_then(|e| e.missing)
         }
-    });
+        Expr::Var(..)
+        | Expr::Lit(_)
+        | Expr::Param(_)
+        | Expr::Now
+        | Expr::Principal
+        | Expr::HasRole(_) => None,
+        Expr::Not(a) | Expr::IsNull(a) | Expr::Len(a) | Expr::Lower(a) | Expr::IsSlug(a) => {
+            first_missing(a, env, lookup)
+        }
+        Expr::And(items) | Expr::Or(items) => items
+            .iter()
+            .find_map(|item| first_missing(item, env, lookup)),
+        Expr::Cmp(_, a, b) | Expr::In(a, b) | Expr::Contains(a, b) | Expr::StartsWith(a, b) => {
+            first_missing(a, env, lookup).or_else(|| first_missing(b, env, lookup))
+        }
+        Expr::If(a, b, c) => first_missing(a, env, lookup)
+            .or_else(|| first_missing(b, env, lookup))
+            .or_else(|| first_missing(c, env, lookup)),
+    }
 }
 
 /// Everything an expression may observe.
@@ -168,12 +201,11 @@ impl language::Env for Scopes<'_, '_> {
         let Some((object, _, false)) = reference else {
             return Err(EvalError(format!("{field} is not a reference")));
         };
-        let found = lookup.record(object, *target).map_err(|e| {
-            if let Some(need) = e.missing.clone() {
-                note_missing(need);
-            }
-            EvalError(e.message)
-        })?;
+        // A record the snapshot does not cover is an evaluation error here; the caller learns
+        // which record it was from [`missing`].
+        let found = lookup
+            .record(object, *target)
+            .map_err(|e| EvalError(e.message))?;
         Ok(found.map(|found| Box::new(Row(found.as_ref())) as Box<dyn language::Record + '_>))
     }
 

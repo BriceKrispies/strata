@@ -6,7 +6,9 @@ use crate::intent::{
     Check, CheckExt, Context, DomainError, DomainErrorExt, ErrorKind, ReadRequest, ReadResult,
 };
 use crate::limits;
-use crate::rules::{authorize, missing_error, roles_of, Lookup, Subject};
+use crate::rules::{
+    authorize, authorize_needing, insufficient, missing_error, roles_of, Lookup, Subject,
+};
 use crate::schema::{Action, Resource, TenantSchema};
 use crate::state::{Need, Principal, Record, State, TenantState};
 use crate::types::{PageCursor, QueryDef, RecordId, RoleId, Timestamp, Value};
@@ -50,10 +52,9 @@ fn redact(
         if !record.fields.contains_key(&field.id) {
             continue;
         }
-        expr::clear_missing();
         let shown = expr::holds(rule, &env);
         if shown.is_err() {
-            if let Some(missing) = missing_error() {
+            if let Some(missing) = missing_error(rule, &env) {
                 return Err(missing);
             }
         }
@@ -101,8 +102,7 @@ pub fn visible_in(
     record: &Record,
     now: Timestamp,
 ) -> Result<bool, DomainError> {
-    expr::clear_missing();
-    let (allowed, _) = authorize(
+    let (allowed, _, needed) = authorize_needing(
         lookup.tenant,
         &lookup.tenant.schema,
         principal,
@@ -113,8 +113,8 @@ pub fn visible_in(
         Some(lookup),
     );
     if !allowed {
-        if let Some(missing) = missing_error() {
-            return Err(missing);
+        if let Some(need) = needed {
+            return Err(insufficient(need));
         }
     }
     Ok(allowed)
@@ -342,10 +342,9 @@ pub fn read(
                         roles: &roles,
                         lookup: Some(lookup),
                     };
-                    expr::clear_missing();
                     let outcome = expr::holds(filter, &env);
                     if outcome.is_err() {
-                        if let Some(missing) = missing_error() {
+                        if let Some(missing) = missing_error(filter, &env) {
                             return Err(missing);
                         }
                     }
