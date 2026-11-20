@@ -84,6 +84,42 @@ fn the_fixture_product_is_accepted_beside_the_platform() {
     );
 }
 
+/// The redeem-a-promotion product (WG-5032): two record types and two tenant operations over the
+/// ledger and segments. specc's loader accepts it beside the platform; Exegra's acceptance of
+/// tenant record types and operations waits on WG-5011, so it is not asserted here.
+#[test]
+fn the_promotions_product_is_accepted_beside_the_platform() {
+    let layered = match load_with(&[product("promotions.jsonc")]) {
+        Ok(layered) => layered,
+        Err(diagnostics) => panic!(
+            "the promotions product was refused:\n{}",
+            diagnostics
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("\n")
+        ),
+    };
+    let promotions = &layered.products[0];
+    assert_eq!(promotions.id, "promotions");
+    let ids: Vec<(&str, &str)> = promotions
+        .entities
+        .iter()
+        .map(|e| (e.section.as_str(), e.id.as_str()))
+        .collect();
+    assert_eq!(
+        ids,
+        vec![
+            ("records", "promotions-promotion"),
+            ("records", "promotions-redemption"),
+            ("contracts", "promotions-create"),
+            ("contracts", "promotions-redeem"),
+            ("roles", "promotions-manager"),
+            ("claims", "promotions-redeem-is-one-operation"),
+        ]
+    );
+}
+
 #[test]
 fn the_parsed_platform_is_unchanged_by_layering() {
     let alone = load::load(PLATFORM, &platform_text()).expect("the platform loads");
