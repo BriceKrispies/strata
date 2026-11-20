@@ -230,7 +230,8 @@ pub fn problems(schema: &TenantSchema, problems: &mut Vec<String>) {
     for automation in schema.automations.iter().flat_map(BTreeMap::values) {
         for (name, step) in &automation.steps {
             let (template, wants_mail) = match &step.action {
-                AutomationStep::SendMail { template, .. } => (template, true),
+                AutomationStep::SendMail { template, .. }
+                | AutomationStep::SendDigest { template, .. } => (template, true),
                 AutomationStep::CreateNotice { template, .. } => (template, false),
                 _ => continue,
             };

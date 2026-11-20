@@ -69,6 +69,7 @@ const BUILT_SECTIONS: &[&str] = &[
     "ledger-pools",
     "ledger-limits",
     "segments",
+    "event-kinds",
 ];
 
 /// The kind of document in the store's small-document table (`Store::doc_put`) that held the
@@ -190,6 +191,10 @@ pub struct ProductBundle {
     /// The segments of the bundle by their keys, which are in the namespace of the product like
     /// every other id (D-6582). They are installed through the segment store, not the schema.
     pub segments: BTreeMap<SegmentKey, SegmentDecl>,
+    /// The event kinds the bundle declares (`event-kinds`, SCH-1576, INT-3203), by kind. Each is
+    /// `app.` and a name; the declaration is read and checked here, and installing it is
+    /// [`ProductBundle::unbuilt`] until the kernel holds a tenant's declared kinds.
+    pub event_kinds: BTreeSet<String>,
     /// What the bundle fills that the kernel cannot install yet, by section name.
     pub unbuilt: Vec<Unbuilt>,
 }
@@ -479,7 +484,7 @@ fn expressions_of_action(action: &mut Json, at: &str, operation: bool) -> Result
             "UpdateRecord" => (&["record"], &["fields"]),
             "DeleteRecord" => (&["record"], &[]),
             "PostLedger" => (&["owner", "scope", "amount"], &[]),
-            "SendMail" => (&["to"], &[]),
+            "SendMail" => (&["to", "address"], &[]),
             "CreateNotice" => (&["to", "record"], &[]),
             "CallWebhook" => (&[], &["body"]),
             "WaitUntil" => (&["at"], &[]),
@@ -749,6 +754,43 @@ fn read_declarations(content: &mut Map<String, Json>) -> Result<Declarations, Bu
     ))
 }
 
+/// The prefix of the kind of an event a tenant declares (SCH-1576).
+const DECLARED_KIND_PREFIX: &str = "app.";
+
+/// Reads the section `event-kinds` of `content`: a list of `event-kind-decl` (`kind`, `fields`,
+/// `readers`, SCH-1576, INT-3203). Each kind begins with `app.`, has at most 16 fields and is
+/// declared once. The section is taken out of `content`.
+fn read_event_kinds(content: &mut Map<String, Json>) -> Result<BTreeSet<String>, BundleError> {
+    let bad = |message: String| {
+        BundleError::invalid_bundle(format!("tenant bundle: event-kinds: {message}"))
+    };
+    let items = match content.remove("event-kinds") {
+        None | Some(Json::Null) => return Ok(BTreeSet::new()),
+        Some(Json::Array(items)) => items,
+        Some(_) => return Err(bad("must be a list of event kind declarations".to_string())),
+    };
+    let mut kinds = BTreeSet::new();
+    for (index, item) in items.iter().enumerate() {
+        let kind = item
+            .get("kind")
+            .and_then(Json::as_str)
+            .ok_or_else(|| bad(format!("#{index} has no kind")))?;
+        if !kind.starts_with(DECLARED_KIND_PREFIX) || kind.len() == DECLARED_KIND_PREFIX.len() {
+            return Err(bad(format!(
+                "{kind} must begin with {DECLARED_KIND_PREFIX} and a name"
+            )));
+        }
+        let fields = item.get("fields").and_then(Json::as_array).map_or(0, Vec::len);
+        if fields > 16 {
+            return Err(bad(format!("{kind} has {fields} fields, at most 16")));
+        }
+        if !kinds.insert(kind.to_string()) {
+            return Err(bad(format!("{kind} is declared twice")));
+        }
+    }
+    Ok(kinds)
+}
+
 impl ProductBundle {
     /// Reads a `tenant-bundle` document: its members, and each section the kernel installs as
     /// kernel values (expressions written as text are read with the tenant rule language, and the
@@ -857,6 +899,15 @@ impl ProductBundle {
                     None => Ok(()),
                 }
             })?;
+        let event_kinds = read_event_kinds(&mut content)?;
+        let unbuilt = if event_kinds.is_empty() {
+            Vec::new()
+        } else {
+            vec![Unbuilt {
+                section: "event-kinds".to_string(),
+                entries: event_kinds.len(),
+            }]
+        };
         Ok(ProductBundle {
             name,
             version,
@@ -881,7 +932,8 @@ impl ProductBundle {
             ledger_pools,
             ledger_limits,
             segments,
-            unbuilt: Vec::new(),
+            event_kinds,
+            unbuilt,
         })
     }
 
@@ -1352,7 +1404,8 @@ impl ProductBundle {
         for automation in self.automations.values() {
             for (name, step) in &automation.steps {
                 let (template, mail) = match &step.action {
-                    AutomationStep::SendMail { template, .. } => (template, true),
+                    AutomationStep::SendMail { template, .. }
+                    | AutomationStep::SendDigest { template, .. } => (template, true),
                     AutomationStep::CreateNotice { template, .. } => (template, false),
                     _ => continue,
                 };

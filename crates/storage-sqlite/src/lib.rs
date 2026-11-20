@@ -36,8 +36,10 @@
 //! ([`strata_runtime::sqlite::Database`]); the tables and statements of the tenant store are
 //! here.
 
+mod fleet;
 mod ledger;
 
+pub use fleet::{migrate_in_order, FleetReport, TenantStatus};
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use serde::de::DeserializeOwned;
 use serde::Serialize;

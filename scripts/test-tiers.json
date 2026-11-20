@@ -334,6 +334,13 @@
     },
     {
       "package": "strata-kernel",
+      "target": "final_candidate",
+      "tier": "routine",
+      "seconds": null,
+      "unmeasured": true
+    },
+    {
+      "package": "strata-kernel",
       "target": "generated_differential",
       "tier": "routine",
       "seconds": 0.03
@@ -790,6 +797,14 @@
       "tier": "full",
       "seconds": 9.19,
       "reason": "SQLite crash, upgrade and many-tenant cases; scoped runs include it when a storage crate changed"
+    },
+    {
+      "package": "strata-storage-sqlite",
+      "target": "fleet",
+      "tier": "full",
+      "seconds": null,
+      "unmeasured": true,
+      "reason": "SQLite tenant files on disk, one of them marked as migrated by a newer version, run through the fleet migration"
     },
     {
       "package": "strata-storage-sqlite",

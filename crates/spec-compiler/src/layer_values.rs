@@ -144,6 +144,12 @@ pub const TYPED_SECTIONS: &[TypedSection] = &[
         id_field: Some("id"),
         purpose: "composite operations (values of the platform type tenant-operation-def)",
     },
+    TypedSection {
+        section: "eventKinds",
+        ty: "event-kind-decl",
+        id_field: None,
+        purpose: "event kinds the product declares, which a trigger may select (event-kind-decl, SCH-1576)",
+    },
 ];
 
 /// The typed section called `section`.

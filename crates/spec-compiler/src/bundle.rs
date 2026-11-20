@@ -115,6 +115,7 @@ fn place(section: &str) -> Option<Place> {
         "triggers" => ("triggers", "trigger"),
         "automations" => ("automations", "workflow"),
         "operations" => ("operations", "operation"),
+        "eventKinds" => ("event-kinds", "event-kind"),
         _ => return None,
     };
     Some(Place {

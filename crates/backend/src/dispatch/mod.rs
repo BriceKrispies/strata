@@ -509,6 +509,28 @@ pub fn submit(
     })
 }
 
+/// The recipient a step's `to` or `address` value names: an address (it holds an `@`) or a
+/// principal id.
+pub fn step_recipient(to: &Value) -> Result<Recipient, (String, bool)> {
+    match to {
+        Value::Str(text) if text.contains('@') => Ok(Recipient::Address {
+            address: text.clone(),
+        }),
+        Value::Str(text) => PrincipalId::new(text.as_str())
+            .map(|principal| Recipient::Principal { principal })
+            .map_err(|_| {
+                (
+                    format!("to: {text} is not an address or a principal id"),
+                    false,
+                )
+            }),
+        other => Err((
+            format!("to: {other:?} is not an address or a principal id"),
+            false,
+        )),
+    }
+}
+
 /// The step send-mail of an automation (D-6560, WG-5149): a send as the automation principal,
 /// which must hold messages-send through its run-as roles, keyed by the step key, so an attempt
 /// made again after a crash sends once. `to` is an address (it holds an `@`) or a principal id.
@@ -521,6 +543,36 @@ pub fn step_send(
     template: &TemplateId,
     to: &Value,
     category: Option<&str>,
+    step_key: &str,
+    now: Timestamp,
+) -> Result<String, (String, bool)> {
+    let recipient = step_recipient(to)?;
+    step_send_to(
+        app,
+        tenant,
+        automation,
+        template,
+        recipient,
+        category,
+        BTreeMap::new(),
+        None,
+        step_key,
+        now,
+    )
+}
+
+/// The same send to a recipient already named: a principal, an address or a segment (NTF-3200).
+/// A segment is cut into batches as the route does (EML-1561), and the answer is the send id.
+#[allow(clippy::too_many_arguments)]
+pub fn step_send_to(
+    app: &App,
+    tenant: &TenantId,
+    automation: &strata_kernel::WorkflowId,
+    template: &TemplateId,
+    recipient: Recipient,
+    category: Option<&str>,
+    values: BTreeMap<String, String>,
+    reference: Option<&str>,
     step_key: &str,
     now: Timestamp,
 ) -> Result<String, (String, bool)> {
@@ -539,33 +591,14 @@ pub fn step_send(
             false,
         ));
     }
-    let recipient = match to {
-        Value::Str(text) if text.contains('@') => Recipient::Address {
-            address: text.clone(),
-        },
-        Value::Str(text) => Recipient::Principal {
-            principal: PrincipalId::new(text.as_str()).map_err(|_| {
-                (
-                    format!("to: {text} is not an address or a principal id"),
-                    false,
-                )
-            })?,
-        },
-        other => {
-            return Err((
-                format!("to: {other:?} is not an address or a principal id"),
-                false,
-            ))
-        }
-    };
     let input = SendInput {
         template: template.clone(),
         recipient,
         category: category.map(str::to_string),
         class: None,
         idempotency_key: step_key.to_string(),
-        values: BTreeMap::new(),
-        reference: None,
+        values,
+        reference: reference.map(str::to_string),
     };
     match submit(app, tenant, &input, now) {
         Ok(done) => Ok(done.message.unwrap_or(done.send)),

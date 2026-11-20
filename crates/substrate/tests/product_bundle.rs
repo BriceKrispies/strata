@@ -683,6 +683,10 @@ fn owned(record: &InstalledRecord) -> Vec<(String, String)> {
 /// sections install, and the record of the install owns each of them.
 // Verifies: INT-1921
 #[test]
+        (
+            "event-kinds",
+            json!([{ "kind": "app.order-placed", "fields": [], "readers": [] }]),
+        ),
 fn capabilities_settings_and_the_ledger_sections_install_and_are_owned_by_the_product() {
     let doc = tiers_with_catalogue();
     let bundle = read(&doc).unwrap();
@@ -765,6 +769,55 @@ fn a_removal_takes_out_the_capabilities_settings_and_ledger_declarations_a_produ
         .as_ref()
         .is_none_or(|l| l.units.is_empty() && l.pools.is_empty()));
     assert!(InstalledRecord::of(&schema, "tiers").is_none());
+}
+
+/// The event kinds of a bundle are read (SCH-1576, INT-3203): each begins with `app.` and a name,
+/// has at most sixteen fields and is declared once; a bundle that fills the section is named as
+/// holding something this release does not install.
+// Verifies: INT-3203
+#[test]
+fn the_event_kinds_of_a_bundle_are_read_and_checked() {
+    let mut doc = tiers();
+    doc["content"]["event-kinds"] = json!([
+        { "kind": "app.order-placed", "fields": [{ "name": "order", "type": "string" }], "readers": [] },
+        { "kind": "app.order-shipped", "fields": [], "readers": [] }
+    ]);
+    let bundle = read(&doc).unwrap();
+    assert_eq!(
+        bundle
+            .event_kinds
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        ["app.order-placed", "app.order-shipped"]
+    );
+    assert_eq!(bundle.unbuilt.len(), 1);
+    assert_eq!(bundle.unbuilt[0].section, "event-kinds");
+    assert_eq!(bundle.unbuilt[0].entries, 2);
+
+    for (kinds, wanted) in [
+        (
+            json!([{ "kind": "order-placed", "fields": [], "readers": [] }]),
+            "must begin with app.",
+        ),
+        (
+            json!([{ "kind": "app.", "fields": [], "readers": [] }]),
+            "must begin with app.",
+        ),
+        (
+            json!([
+                { "kind": "app.a", "fields": [], "readers": [] },
+                { "kind": "app.a", "fields": [], "readers": [] }
+            ]),
+            "declared twice",
+        ),
+    ] {
+        let mut doc = tiers();
+        doc["content"]["event-kinds"] = kinds;
+        let error = refused(&doc);
+        assert_eq!(error.kind, BundleErrorKind::InvalidBundle);
+        assert!(error.message.contains(wanted), "{}", error.message);
+    }
 }
 
 // The bundles specc writes from the fixture products (tests/bundle.rs of the spec-compiler).

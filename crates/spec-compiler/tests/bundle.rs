@@ -160,6 +160,37 @@ fn the_bundle(output: &bundle::Output) -> Value {
     serde_json::from_str(&output.files[0].contents).unwrap()
 }
 
+// Verifies: INT-3203
+#[test]
+fn the_event_kinds_of_a_product_are_a_section_of_its_bundle() {
+    let output = bundle_of(&product("event-kinds.jsonc"));
+    assert_eq!(output.files[0].path, "order-events.bundle.json");
+    let bundle = the_bundle(&output);
+    // A list of values of event-kind-decl: the kind and its payload and readers, without the id
+    // the product named the declaration by.
+    assert_eq!(
+        bundle["content"]["event-kinds"],
+        json!([{
+            "kind": "app.order-placed",
+            "fields": [
+                { "name": "order", "type": "string" },
+                { "name": "total", "type": "number" }
+            ],
+            "readers": []
+        }])
+    );
+    // The trigger selects the kind, and the digest step is a step of the automation.
+    assert_eq!(
+        bundle["content"]["triggers"][0]["on"],
+        json!({ "DeclaredEvent": { "kind": "app.order-placed" } })
+    );
+    assert!(
+        bundle["content"]["automations"][0]["steps"]["digest"]["action"]
+            .get("SendDigest")
+            .is_some()
+    );
+}
+
 // Verifies: INT-1580
 #[test]
 fn the_bundle_names_the_product_its_version_and_the_platform_range() {

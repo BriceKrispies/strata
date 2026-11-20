@@ -156,6 +156,9 @@ pub const ENTITY_ID_MISSING: &str = "layer.entity-id-missing";
 pub const PLATFORM_POWER: &str = "layer.platform-power";
 /// An object type with a personal field and no retention rule (D-6584).
 pub const RETENTION_MISSING: &str = "layer.retention-missing";
+/// An event kind a product declares that does not begin with `app.` and a name, or has more than
+/// sixteen fields (SCH-1576, INT-3203).
+pub const EVENT_KIND_INVALID: &str = "layer.event-kind-invalid";
 /// A platform entity that names a product entity.
 pub const PLATFORM_REFERENCES_PRODUCT: &str = "layer.platform-references-product";
 /// An entity that keeps a mutable balance outside the ledger: a step or transition that writes a
@@ -674,6 +677,9 @@ fn check_product(
                         }
                         if matches!(*section, "operations" | "automations" | "workflows") {
                             check_balance(&file, id, item, out);
+                        }
+                        if *section == "eventKinds" {
+                            check_event_kind(&file, id, item, out);
                         }
                     }
                     None => named_uses(&file, id, item, platform_ids, &imports, &own, out, refs),
@@ -1269,6 +1275,32 @@ fn check_configuration(
             "The object type \"{id}\" in {file} holds configuration as records ({reason}). Configuration is a declared setting: add an entry to \"settings\" with a type, a default and the levels that may override it (\"tenant\", \"team\", \"person\"), and read it as the setting, so it is typed, layered, refused when a level may not override it, and announced when it changes (SET-001). Remove the object type, or rename it if its records are not configuration."
         ),
     ));
+}
+
+/// An event kind a product declares: the kind begins with `app.` and a name, which keeps it from
+/// colliding with a kind of the platform, and its payload has at most sixteen fields (SCH-1576).
+fn check_event_kind(file: &str, id: &str, item: &Value, out: &mut Vec<Diagnostic>) {
+    const PREFIX: &str = "app.";
+    const MOST_FIELDS: usize = 16;
+    let kind = item.get("kind").and_then(Value::as_str).unwrap_or_default();
+    if !kind.starts_with(PREFIX) || kind.len() == PREFIX.len() {
+        out.push(Diagnostic::new(
+            EVENT_KIND_INVALID,
+            id,
+            format!("The event kind \"{kind}\" of \"{id}\" in {file} does not begin with \"{PREFIX}\" and a name (SCH-1576). A kind a tenant declares is prefixed so that it cannot be a kind of the platform; write it as \"{PREFIX}<name>\"."),
+        ));
+    }
+    let fields = item
+        .get("fields")
+        .and_then(Value::as_array)
+        .map_or(0, Vec::len);
+    if fields > MOST_FIELDS {
+        out.push(Diagnostic::new(
+            EVENT_KIND_INVALID,
+            id,
+            format!("The event kind \"{kind}\" of \"{id}\" in {file} has {fields} fields, and a declared kind has at most {MOST_FIELDS} (SCH-1576). Remove some, or carry them in a record the event names."),
+        ));
+    }
 }
 
 fn check_power(

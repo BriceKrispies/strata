@@ -833,6 +833,7 @@ fn kind_name(action: &AutomationStep) -> &'static str {
         AutomationStep::PostLedger { .. } => "post-ledger",
         AutomationStep::SendMail { .. } => "send-mail",
         AutomationStep::CreateNotice { .. } => "create-notice",
+        AutomationStep::SendDigest { .. } => "send-digest",
         AutomationStep::CallWebhook { .. } => "call-webhook",
         AutomationStep::WaitFor { .. } => "wait-for",
         AutomationStep::WaitUntil { .. } => "wait-until",
@@ -1107,19 +1108,46 @@ pub(super) fn act(
         AutomationStep::SendMail {
             template,
             to,
+            address,
+            segment,
             category,
         } => {
             // A send as the automation principal, keyed by the step key: an attempt made again
             // after a crash between doing and reporting names the same mail job (EML-1560,
-            // D-6560, WG-5149).
-            let to = eval("to", to)?;
-            let message = crate::dispatch::step_send(
+            // D-6560, WG-5149). The target is a principal (`to`), an address or a segment
+            // (NTF-3200); the kernel's check of the definition holds that exactly one is named.
+            let recipient = match (to, address, segment) {
+                (Some(to), None, None) => crate::dispatch::step_recipient(&eval("to", to)?)
+                    .map_err(|(message, retry)| StepError { message, retry })?,
+                (None, Some(address), None) => match eval("address", address)? {
+                    Value::Str(text) if text.contains('@') => {
+                        crate::dispatch::Recipient::Address { address: text }
+                    }
+                    other => {
+                        return Err(StepError::fatal(format!(
+                            "address: {other:?} is not an address"
+                        )))
+                    }
+                },
+                (None, None, Some(segment)) => crate::dispatch::Recipient::Segment {
+                    segment: *segment,
+                    after: None,
+                },
+                _ => {
+                    return Err(StepError::fatal(
+                        "a mail names exactly one of to, address and segment".to_string(),
+                    ))
+                }
+            };
+            let message = crate::dispatch::step_send_to(
                 app,
                 tenant,
                 &def.id,
                 template,
-                &to,
+                recipient,
                 category.as_deref(),
+                BTreeMap::new(),
+                None,
                 key,
                 now,
             )
@@ -1134,21 +1162,48 @@ pub(super) fn act(
                 next: then(),
             })
         }
+        AutomationStep::SendDigest {
+            category,
+            template,
+            since,
+            until,
+            recipient,
+            reference,
+            idempotency_key,
+        } => {
+            // One message for each person with notices of the category in the window, keyed by the
+            // step key (or the key the step names) and the person (NTF-1572).
+            let digest = crate::digest::Digest {
+                category: category.0.as_str(),
+                template,
+                since: since.0,
+                until: until.0,
+                recipient: recipient.as_ref(),
+                reference: reference.as_ref().map(|r| r.0.as_str()),
+            };
+            let messages = crate::digest::run(
+                app,
+                tenant,
+                &def.id,
+                &digest,
+                idempotency_key.as_deref().unwrap_or(key),
+                now,
+            )
+            .map_err(|(message, retry)| StepError { message, retry })?;
+            Ok(Done {
+                result: AutomationStepResult::SendDigest { messages },
+                outputs: vec![("messages", Value::Int(i64::from(messages)))],
+                next: then(),
+            })
+        }
         AutomationStep::CreateNotice {
             template,
             to,
+            segment,
             record,
         } => {
             // A notice is made by the inbox module as the automation principal, once for the step
             // key, so an attempt made again after a crash makes none (SCH-015, CT-183).
-            let recipient = match eval("to", to)? {
-                Value::Str(text) => text,
-                other => {
-                    return Err(StepError::fatal(format!(
-                        "to: {other:?} is not a principal id"
-                    )))
-                }
-            };
             let record = match record {
                 None => None,
                 Some(expression) => match eval("record", expression)? {
@@ -1161,27 +1216,59 @@ pub(super) fn act(
                     }
                 },
             };
-            let delivery = crate::inbox::automation_notice(
-                app,
-                tenant,
-                &automation_principal(&def.id),
-                key,
-                template.as_str(),
-                &recipient,
-                record,
-                now,
-            )
-            .map_err(|error| match error.0.code {
+            let to_error = |error: crate::app::ApiError| match error.0.code {
                 strata_protocol::api::ErrorCode::Invalid
                 | strata_protocol::api::ErrorCode::NotFound
                 | strata_protocol::api::ErrorCode::Forbidden => StepError::fatal(error.describe()),
                 _ => StepError::retry(error.describe()),
-            })?;
-            let item = serde_json::from_value(serde_json::Value::String(delivery.item.clone()))
-                .map_err(|error| StepError::fatal(format!("item {}: {error}", delivery.item)))?;
+            };
+            // The item of a notice to a person; for a segment, the id of the send, whose batches
+            // make a notice for each member (EML-1561).
+            let item = match (to, segment) {
+                (Some(to), None) => {
+                    let recipient = match eval("to", to)? {
+                        Value::Str(text) => text,
+                        other => {
+                            return Err(StepError::fatal(format!(
+                                "to: {other:?} is not a principal id"
+                            )))
+                        }
+                    };
+                    crate::inbox::automation_notice(
+                        app,
+                        tenant,
+                        &automation_principal(&def.id),
+                        key,
+                        template.as_str(),
+                        &recipient,
+                        record,
+                        now,
+                    )
+                    .map_err(to_error)?
+                    .item
+                }
+                (None, Some(segment)) => crate::inbox::automation_segment_notice(
+                    app,
+                    tenant,
+                    &automation_principal(&def.id),
+                    key,
+                    template.as_str(),
+                    *segment,
+                    record,
+                    now,
+                )
+                .map_err(to_error)?,
+                _ => {
+                    return Err(StepError::fatal(
+                        "a notice names exactly one of to and segment".to_string(),
+                    ))
+                }
+            };
+            let id = serde_json::from_value(serde_json::Value::String(item.clone()))
+                .map_err(|error| StepError::fatal(format!("item {item}: {error}")))?;
             Ok(Done {
-                result: AutomationStepResult::CreateNotice { item },
-                outputs: vec![("item", Value::Str(delivery.item))],
+                result: AutomationStepResult::CreateNotice { item: id },
+                outputs: vec![("item", Value::Str(item))],
                 next: then(),
             })
         }

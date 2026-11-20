@@ -147,6 +147,9 @@ fn event_reference_problems(
         | TriggerEvent::RecordUpdated { .. }
         | TriggerEvent::RecordDeleted { .. }
         | TriggerEvent::InboundWebhook { .. } => {}
+        // A declared kind is held by the tenant's declarations, which the schema does not carry
+        // yet, so the kind is not checked here (SCH-1576).
+        TriggerEvent::DeclaredEvent { .. } => {}
     }
 }
 
@@ -174,6 +177,7 @@ pub fn event_params(event: &TriggerEvent) -> BTreeSet<String> {
         TriggerEvent::SettingChanged { .. } => &["setting", "level", "subject"],
         TriggerEvent::ScheduleDue { .. } => &["schedule", "due_at"],
         TriggerEvent::InboundWebhook { .. } => &["endpoint", "event_id", "body"],
+        TriggerEvent::DeclaredEvent { .. } => &["kind"],
     };
     COMMON_PARAMS
         .iter()
@@ -207,6 +211,7 @@ pub fn any_event_params() -> BTreeSet<String> {
         "endpoint",
         "event_id",
         "body",
+        "kind",
     ]
     .iter()
     .map(|name| name.to_string())
@@ -222,6 +227,7 @@ pub fn step_outputs(action: &AutomationStep) -> &'static [&'static str] {
         AutomationStep::PostLedger { .. } => &["entry_sequence", "balance"],
         AutomationStep::SendMail { .. } => &["message"],
         AutomationStep::CreateNotice { .. } => &["item"],
+        AutomationStep::SendDigest { .. } => &["messages"],
         AutomationStep::CallWebhook { .. } => &["delivery", "status"],
         AutomationStep::WaitFor { .. } | AutomationStep::WaitUntil { .. } => &[],
         AutomationStep::Branch { .. } => &["taken"],
@@ -520,16 +526,51 @@ fn action_problems(
             check_expr(problems, at, "amount", amount, env, false);
             report(ledger_unit_reference(schema, unit), at, problems);
         }
-        AutomationStep::SendMail { to, template, .. } => {
-            check_expr(problems, at, "to", to, env, false);
+        AutomationStep::SendMail {
+            to,
+            address,
+            segment,
+            template,
+            ..
+        } => {
+            // Exactly one target: a principal (`to`), an address or a segment (NTF-3200).
+            let named = [to.is_some(), address.is_some(), segment.is_some()];
+            if named.iter().filter(|set| **set).count() != 1 {
+                problems.push(format!(
+                    "{at}: a mail names exactly one of to, address and segment"
+                ));
+            }
+            for (what, expr) in [("to", to), ("address", address)] {
+                if let Some(expr) = expr {
+                    check_expr(problems, at, what, expr, env, false);
+                }
+            }
+            if let Some(segment) = segment {
+                report(segment_reference(schema, segment), at, problems);
+            }
+            report(template_reference(schema, template), at, problems);
+        }
+        AutomationStep::SendDigest { template, .. } => {
             report(template_reference(schema, template), at, problems);
         }
         AutomationStep::CreateNotice {
             to,
+            segment,
             record,
             template,
         } => {
-            check_expr(problems, at, "to", to, env, false);
+            // An address has no inbox, so a notice names a principal or a segment (NTF-3200).
+            if to.is_some() == segment.is_some() {
+                problems.push(format!(
+                    "{at}: a notice names exactly one of to and segment"
+                ));
+            }
+            if let Some(to) = to {
+                check_expr(problems, at, "to", to, env, false);
+            }
+            if let Some(segment) = segment {
+                report(segment_reference(schema, segment), at, problems);
+            }
             report(template_reference(schema, template), at, problems);
             if let Some(record) = record {
                 check_expr(problems, at, "record", record, env, false);

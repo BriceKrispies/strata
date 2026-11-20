@@ -1,0 +1,8 @@
+{
+  // Refused: an event kind a product declares does not begin with app. (layer.event-kind-invalid,
+  // SCH-1576), so it could be taken for a kind of the platform.
+  "product": { "id": "order-events", "name": "Order events", "imports": { "spec": "../../../../../../specifications/spec.jsonc", "entities": [] } },
+  "eventKinds": [
+    { "id": "order_events__placed", "kind": "order-placed", "fields": [], "readers": [] }
+  ]
+}

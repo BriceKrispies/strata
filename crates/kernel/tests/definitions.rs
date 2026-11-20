@@ -921,7 +921,9 @@ fn a_definition_naming_an_undeclared_ledger_unit_or_an_undefined_template_is_ref
         AutomationStepDef {
             action: AutomationStep::SendMail {
                 template: TemplateId("welcome".into()),
-                to: lit("person@example.org"),
+                to: Some(lit("person@example.org")),
+                address: None,
+                segment: None,
                 category: None,
             },
             next: None,
@@ -1259,5 +1261,120 @@ fn a_snapshot_without_the_lookup_is_asked_for_it() {
             object: object("note"),
             fields: BTreeMap::from([(field("title"), text("A")), (field("rank"), Value::Int(1))]),
         })
+    );
+}
+
+fn one_step_automation(action: AutomationStep) -> AutomationDef {
+    let mut automation = award(&["writer"]);
+    automation.start = name("send");
+    automation.steps = BTreeMap::from([(name("send"), plain(action, None))]);
+    automation
+}
+
+fn definition_message(action: AutomationStep) -> String {
+    refused(
+        &notes_world(),
+        "owner",
+        vec![SchemaChange::DefineAutomation(one_step_automation(action))],
+    )
+    .message
+}
+
+// Verifies: NTF-3200
+#[test]
+fn a_mail_or_a_notice_names_exactly_one_target() {
+    let segment: SegmentId =
+        serde_json::from_str("\"00000000-0000-0000-0000-000000000007\"").unwrap();
+    let mail = |to: Option<Expr>, address: Option<Expr>, segment: Option<SegmentId>| {
+        definition_message(AutomationStep::SendMail {
+            template: TemplateId("welcome".into()),
+            to,
+            address,
+            segment,
+            category: None,
+        })
+    };
+    let notice = |to: Option<Expr>, segment: Option<SegmentId>| {
+        definition_message(AutomationStep::CreateNotice {
+            template: TemplateId("update".into()),
+            to,
+            segment,
+            record: None,
+        })
+    };
+    let one_of_three = "a mail names exactly one of to, address and segment";
+    let one_of_two = "a notice names exactly one of to and segment";
+    // None, or several, are refused.
+    assert!(mail(None, None, None).contains(one_of_three));
+    assert!(mail(Some(lit("a")), Some(lit("b@example.org")), None).contains(one_of_three));
+    assert!(mail(Some(lit("a")), None, Some(segment)).contains(one_of_three));
+    assert!(notice(None, None).contains(one_of_two));
+    assert!(notice(Some(lit("a")), Some(segment)).contains(one_of_two));
+    // Each target alone passes this check; what is left to refuse is the missing template.
+    for message in [
+        mail(Some(lit("alpha:reader")), None, None),
+        mail(None, Some(lit("person@example.org")), None),
+        mail(None, None, Some(segment)),
+        notice(Some(lit("alpha:reader")), None),
+        notice(None, Some(segment)),
+    ] {
+        assert!(
+            !message.contains("exactly one")
+                && message.contains("which the tenant does not define"),
+            "{message}"
+        );
+    }
+}
+
+// Verifies: NTF-3200
+#[test]
+fn a_digest_step_is_a_step_of_the_catalogue_with_one_output() {
+    let digest = AutomationStep::SendDigest {
+        category: strata_model_core::types::MessageCategoryId("orders".into()),
+        template: TemplateId("daily".into()),
+        since: strata_model_core::prelude::Timestamp(0),
+        until: strata_model_core::prelude::Timestamp(86_400_000),
+        recipient: None,
+        reference: None,
+        idempotency_key: None,
+    };
+    assert_eq!(definitions::step_outputs(&digest), ["messages"]);
+    // Its template is a mail template the tenant must define.
+    let message = definition_message(digest);
+    assert!(
+        message.contains("names template daily, which the tenant does not define"),
+        "{message}"
+    );
+}
+
+// Verifies: SCH-3202
+#[test]
+fn a_trigger_selects_a_declared_event_kind_and_binds_its_name() {
+    let on = TriggerEvent::DeclaredEvent {
+        kind: strata_model_core::types::EventKind("app.order-placed".into()),
+    };
+    assert!(definitions::event_params(&on).contains("kind"));
+    // A trigger on a declared kind is held with the automation it starts.
+    let trigger = TriggerDef {
+        id: TriggerId::new("on_order").unwrap(),
+        on,
+        condition: None,
+        automation: WorkflowId::new("award").unwrap(),
+        paused: None,
+        defined_by: None,
+        defined_at: None,
+    };
+    let world = must(
+        &notes_world(),
+        "owner",
+        6_000,
+        change(vec![
+            SchemaChange::DefineAutomation(award(&["writer"])),
+            SchemaChange::DefineTrigger(trigger.clone()),
+        ]),
+    );
+    assert_eq!(
+        schema(&world).triggers.as_ref().unwrap()[&trigger.id].on,
+        trigger.on
     );
 }

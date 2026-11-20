@@ -805,7 +805,9 @@ fn an_automation_does_not_send_a_notice_template_as_mail() {
             StepName::new("send").unwrap(),
             step(AutomationStep::SendMail {
                 template: TemplateId("greeting".into()),
-                to: Expr::Param("owner".into()),
+                to: Some(Expr::Param("owner".into())),
+                address: None,
+                segment: None,
                 category: None,
             }),
         )]),

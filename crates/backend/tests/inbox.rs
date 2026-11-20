@@ -1116,7 +1116,8 @@ fn notifier(id: &str, run_as: &str) -> strata_kernel::AutomationDef {
                 step(
                     strata_kernel::AutomationStep::CreateNotice {
                         template: TemplateId("update".into()),
-                        to: lit("alpha:reader"),
+                        to: Some(lit("alpha:reader")),
+                        segment: None,
                         record: None,
                     },
                     Some("done"),
