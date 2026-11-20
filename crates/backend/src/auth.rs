@@ -166,14 +166,28 @@ pub fn token_hash(token: &str) -> String {
 
 /// Whether a stored session is usable at `now`.
 pub fn session_state(app: &App, session: &SessionRecord, now: i64) -> SessionState {
+    session_state_at(app.cfg.session_idle_ms, session, now)
+}
+
+/// [`session_state`] given the idle lifetime, so that it can be traced against the generated
+/// machine `session-authority-flow-impl` without an `App` (`tests/spec_agreement.rs`).
+pub fn session_state_at(idle_ms: i64, session: &SessionRecord, now: i64) -> SessionState {
     if session.revoked_at.is_some() {
         SessionState::Revoked
-    } else if now >= session.expires_at.0 || now - session.last_seen_at.0 >= app.cfg.session_idle_ms
-    {
+    } else if now >= session.expires_at.0 || now - session.last_seen_at.0 >= idle_ms {
         SessionState::Expired
     } else {
         SessionState::Active
     }
+}
+
+/// Marks a session revoked at `now`; false when it was revoked already (its time is kept).
+pub fn mark_revoked(session: &mut SessionRecord, now: strata_kernel::Timestamp) -> bool {
+    if session.revoked_at.is_some() {
+        return false;
+    }
+    session.revoked_at = Some(now);
+    true
 }
 
 /// The refusal of a request that needs a session while sessions cannot be looked up. It names the
@@ -432,8 +446,7 @@ pub(crate) fn start_session(
 /// End one session: mark it revoked, log it, and tell the connections it has open, which close.
 /// When it had ended already, only the notice is sent again.
 pub fn revoke(app: &App, mut session: SessionRecord, correlation: &str) -> Result<(), ApiError> {
-    if session.revoked_at.is_none() {
-        session.revoked_at = Some(app.now());
+    if mark_revoked(&mut session, app.now()) {
         app.store.put_session(&session)?;
         log_end(&session, correlation);
     }
