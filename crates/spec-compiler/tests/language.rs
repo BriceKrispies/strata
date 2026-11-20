@@ -597,6 +597,7 @@ fn shape_of(ty: &FieldType) -> lang::Shape {
         FieldType::Bool => lang::Shape::Bool,
         FieldType::Time => lang::Shape::Time,
         FieldType::Ref { .. } => lang::Shape::Ref,
+        FieldType::File { .. } | FieldType::Language => lang::Shape::Str,
         FieldType::List(_) => lang::Shape::List,
     }
 }

@@ -344,6 +344,7 @@ impl Bundle {
                         unique: field.unique,
                         default: optional(&field.default).map_err(|e| format!("{at}: {e}"))?,
                         read: optional(&field.read).map_err(|e| format!("{at}: {e}"))?,
+                        personal: None,
                     },
                 });
             }

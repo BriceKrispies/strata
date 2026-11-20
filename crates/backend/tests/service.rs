@@ -3993,7 +3993,7 @@ async fn a_tenant_is_created_while_running_and_its_owner_signs_in_by_link() {
     assert_eq!(status, 200, "{reply}");
     assert_eq!(reply["notified"], true);
     assert_eq!(reply["owner_login"], "new.owner@example.org");
-    let welcome = sink.outbox();
+    let welcome = strata_backend::mail::Mailer::outbox(&*sink);
     assert_eq!(welcome.len(), 1);
     assert_eq!(welcome[0].to, "new.owner@example.org");
     assert!(welcome[0].text.contains("https://newsite.example/login"));

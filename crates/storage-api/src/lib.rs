@@ -201,11 +201,11 @@ impl Commit {
             // A principal whose roles changed in any way starts again from a new sign-in (IDN-012):
             // a session issued under the old roles is not carried over to the new ones. The
             // kernel's own effect, for a principal left with no role, is included.
-            idempotency: ctx.idempotency_key.as_ref().map(|key| IdempotencyEntry {
-                principal: idempotency_scope(&ctx.principal),
+            idempotency: context.idempotency_key.as_ref().map(|key| IdempotencyEntry {
+                principal: idempotency_scope(&context.principal),
                 key: key.clone(),
                 request_hash: canon::hash_of(intent),
-                recorded_at: ctx.now,
+                recorded_at: context.now,
                 result: Transition {
                     delta: StateDelta {
                         ops: Vec::new(),

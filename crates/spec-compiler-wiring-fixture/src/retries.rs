@@ -72,7 +72,6 @@ pub const RETRY_REPORT: RetryPolicy = RetryPolicy {
         base: std::time::Duration::from_millis(10),
     },
     idempotency_key: None,
-    language: None,
     timeout: Some(std::time::Duration::from_secs(1)),
 };
 

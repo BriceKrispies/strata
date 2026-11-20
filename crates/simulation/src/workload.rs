@@ -130,6 +130,8 @@ fn synthesise(
         FieldType::Int => Value::Int(rng.below(100) as i64),
         FieldType::Bool => Value::Bool(rng.below(4) == 0),
         FieldType::Time => Value::Time(now),
+        // The workload writes no files and leaves a language field unset.
+        FieldType::File { .. } | FieldType::Language => return None,
         FieldType::Ref { target, .. } => {
             let ids: Vec<RecordId> = tenant.records_of(target).map(|r| r.id).collect();
             if ids.is_empty() {
