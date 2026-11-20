@@ -19,6 +19,7 @@ fn bff_for(backend_url: String) -> Bff {
             service_token: "service-token-0123456789abcdef".into(),
             sites: Config::parse_sites("127.0.0.1=fieldnotes").unwrap(),
             origins: vec![],
+            hosts: Default::default(),
             dist: PathBuf::new(),
             dev: true,
             token_secret: None,
@@ -31,6 +32,7 @@ fn bff_for(backend_url: String) -> Bff {
         in_flight: AtomicI64::new(0),
         index: None,
         tokens: token::Issuer::new().unwrap(),
+        directory: strata_bff::hosts::Directory::new(Default::default()),
     }
 }
 

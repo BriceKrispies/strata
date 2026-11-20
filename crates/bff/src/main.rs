@@ -17,6 +17,14 @@
 //! | `STRATA_HEADER_TIMEOUT_SECS` | 10 | Time a client has to send its request headers. |
 //! | `STRATA_REQUEST_TIMEOUT_SECS` | 30 | Time a request may take before it is answered `408`. |
 //! | `STRATA_MAX_CONNECTIONS` | 2048 | Open connections. |
+//! | `STRATA_WRITE_IDLE_TIMEOUT_SECS` | 30 | A connection whose client has not read for this long while this process has bytes to send is dropped. |
+//! | `STRATA_HOSTS_MAX_AGE_SECS` | 60 | How old the list of tenant hosts learned from the backend may be before it is fetched again. |
+//! | `STRATA_HOSTS_MISS_INTERVAL_SECS` | 5 | The least time between two calls to the backend for its hosts, however many unknown hosts ask. |
+//!
+//! `STRATA_SITES` and `STRATA_ORIGINS` are a static override: besides them this process learns the
+//! hosts of tenants, and their origins, from the backend (`/internal/platform/hosts`), so a tenant
+//! created while it runs needs no restart. An entry of the static configuration is never moved to
+//! another tenant by what the backend says.
 //!
 //! The development sites (with `STRATA_DEV=1` and no `STRATA_SITES`) are
 //! `127.0.0.1=fieldnotes,localhost=fieldnotes,tidewater.localhost=tidewater`. Outside development
@@ -25,6 +33,7 @@
 
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
+use strata_bff::hosts::Refresh;
 use strata_bff::limits::Limits;
 use strata_bff::Config;
 
@@ -110,6 +119,10 @@ fn config() -> Result<Config, String> {
         service_token: service_token.clone(),
         sites,
         origins,
+        hosts: Refresh::new(
+            limit("STRATA_HOSTS_MAX_AGE_SECS", 60)? as i64 * 1000,
+            limit("STRATA_HOSTS_MISS_INTERVAL_SECS", 5)? as i64 * 1000,
+        ),
         dist: PathBuf::from(var("STRATA_WEB_DIST", "web/dist")),
         dev,
         token_secret: token_secret(dev, &service_token),

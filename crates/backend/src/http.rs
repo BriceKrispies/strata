@@ -8,7 +8,7 @@ use crate::signin::{
 };
 use crate::{lab, ops, provision, ws};
 use axum::extract::ws::WebSocketUpgrade;
-use axum::extract::{Path, Request, State};
+use axum::extract::{Extension, Path, Request, State};
 use axum::http::HeaderMap;
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
@@ -923,6 +923,7 @@ async fn scim_request(
 async fn socket(
     State(app): State<Shared>,
     headers: HeaderMap,
+    stop: Option<Extension<strata_runtime::server::Shutdown>>,
     upgrade: WebSocketUpgrade,
 ) -> Result<Response, ApiError> {
     let caller = auth::caller(&headers)?;
@@ -941,9 +942,21 @@ async fn socket(
             );
             error.with_correlation(&correlation)
         })?;
+    // Registered with the server's drain, so that a stop waits for the socket to close.
+    let stop = stop.map(|Extension(stop)| stop);
+    let held = match &stop {
+        Some(stop) => Some(stop.hold().ok_or_else(|| {
+            ApiError::new(ErrorCode::Unavailable, "The service is stopping.")
+                .with_correlation(&correlation)
+        })?),
+        None => None,
+    };
     Ok(upgrade
         .max_message_size(MAX_FRAME)
-        .on_upgrade(move |socket| ws::serve(app, identity, places, socket)))
+        .on_upgrade(move |socket| async move {
+            ws::serve(app, identity, places, socket, stop).await;
+            drop(held);
+        }))
 }
 
 /// Refuse anything that does not carry the service token. The backend listens on loopback, and
@@ -976,6 +989,11 @@ async fn gate(State(app): State<Shared>, request: Request, next: Next) -> Respon
 pub fn router(app: Shared) -> Router {
     let router = Router::new()
         .route("/internal/health", get(health))
+        .route("/internal/platform/hosts", post(crate::hosts::route))
+        .route(
+            "/internal/sign-in/invite/accept",
+            post(crate::signin::invite::route),
+        )
         .route("/internal/session", post(session))
         .route("/internal/session/login", post(login))
         .route("/internal/session/sign-in/:method", post(login_with))

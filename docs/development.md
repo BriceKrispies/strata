@@ -149,6 +149,8 @@ deployment sets them from the memory and cores it has.
 |---|---|---|
 | `STRATA_HEADER_TIMEOUT_SECS`, `STRATA_REQUEST_TIMEOUT_SECS` | both | 10, 30 (a request over its time is answered `408`; sockets are not subject to the second) |
 | `STRATA_MAX_CONNECTIONS` | both | 2048 |
+| `STRATA_WRITE_IDLE_TIMEOUT_SECS` | both | 30 (a connection whose client has not read for this long while there are bytes to send is dropped) |
+| `STRATA_HOSTS_MAX_AGE_SECS`, `STRATA_HOSTS_MISS_INTERVAL_SECS` | gateway | 60, 5 (how old the tenant hosts learned from the backend may be; the least time between two calls for them) |
 | `STRATA_TRUSTED_PROXIES` | BFF | none. Comma-separated proxy addresses; only their `X-Forwarded-For` is believed, the rightmost hop that is not itself a trusted proxy is the visitor, and from any other peer the header is ignored. Without it every visitor behind a reverse proxy shares the proxy's address |
 | `STRATA_BFF_SOCKETS_PER_SESSION`, `STRATA_BFF_SOCKETS_PER_SOURCE` | BFF | 8, 32 |
 | `STRATA_SOCKETS_PER_SESSION`, `STRATA_SOCKETS_PER_SOURCE` | backend | 8, 32 |

@@ -17,6 +17,7 @@
 //!   from the browser are validated against protocol v1, and both directions go through bounded
 //!   queues.
 
+pub mod hosts;
 pub mod limits;
 pub mod relay;
 pub mod routes;
@@ -45,10 +46,14 @@ pub struct Config {
     /// Base URL of the backend's internal API, such as `http://127.0.0.1:4101`.
     pub backend: String,
     pub service_token: String,
-    /// Host name (without port) to tenant.
+    /// Host name (without port) to tenant. A static override: the backend's list of hosts
+    /// (see [`hosts`]) adds to it and never replaces an entry of it.
     pub sites: BTreeMap<String, TenantId>,
-    /// Origins a browser request may come from, such as `http://127.0.0.1:4100`.
+    /// Origins a browser request may come from, such as `http://127.0.0.1:4100`. The backend's
+    /// list adds to these.
     pub origins: Vec<String>,
+    /// How often the backend is asked for the hosts it serves.
+    pub hosts: hosts::Refresh,
     /// The built frontend: `index.html`, `assets/`, `media/`.
     pub dist: PathBuf,
     pub dev: bool,
@@ -92,6 +97,28 @@ pub struct Bff {
     pub index: Option<String>,
     /// Issues and checks the request tokens of browsers that have no session.
     pub tokens: token::Issuer,
+    /// The hosts and origins learned from the backend, beside `cfg.sites` and `cfg.origins`.
+    pub directory: hosts::Directory,
+}
+
+impl Bff {
+    /// The tenant a host name serves: the static configuration first, then what the backend
+    /// has said.
+    pub fn site_of(&self, host: &str) -> Option<TenantId> {
+        let host = host.to_lowercase();
+        self.cfg
+            .sites
+            .get(&host)
+            .cloned()
+            .or_else(|| self.directory.site(&host))
+    }
+
+    /// Every origin browser requests may come from: configured and learned.
+    pub fn origins(&self) -> Vec<String> {
+        let mut origins = self.cfg.origins.clone();
+        origins.extend(self.directory.origins());
+        origins
+    }
 }
 
 pub type Shared = Arc<Bff>;
@@ -116,6 +143,7 @@ pub async fn run(
         }),
     );
     let cfg_token_secret = cfg.token_secret.clone();
+    let refresh = cfg.hosts.clone();
     let bff = Arc::new(Bff {
         admission: limits::Admission::new(&cfg.limits),
         cfg,
@@ -129,6 +157,10 @@ pub async fn run(
             Some(secret) => token::Issuer::from_secret(secret),
             None => token::Issuer::new()?,
         },
+        directory: hosts::Directory::new(refresh),
     });
+    // The hosts the backend already knows, before the first request; a backend that is not up yet
+    // is asked again when a request names a host nobody knows.
+    hosts::refresh_if_due(&bff, false).await;
     strata_runtime::server::serve(listener, routes::router(bff), shutdown).await
 }

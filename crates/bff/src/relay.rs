@@ -17,6 +17,7 @@ use strata_protocol::api::{
     HEADER_CORRELATION, HEADER_SERVICE, HEADER_SESSION, HEADER_SITE, HEADER_SOURCE,
 };
 use strata_protocol::ws::{parse_client, ServerMessage};
+use strata_runtime::server::Shutdown;
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::Message as UpstreamMessage;
@@ -24,10 +25,17 @@ use tokio_tungstenite::tungstenite::Message as UpstreamMessage;
 const QUEUE: usize = 128;
 
 /// Relay one browser socket until it ends. `places` are its places under the per-session and
-/// per-source caps, held until the end.
-pub async fn relay(bff: Shared, visit: Visit, places: Places, browser: WebSocket) {
+/// per-source caps, held until the end. When `stop` is raised the browser is sent a Close frame
+/// (1001, going away) and the socket ends.
+pub async fn relay(
+    bff: Shared,
+    visit: Visit,
+    places: Places,
+    browser: WebSocket,
+    stop: Option<Shutdown>,
+) {
     bff.sockets.fetch_add(1, Ordering::Relaxed);
-    let reason = pump(&bff, &visit, browser).await;
+    let reason = pump(&bff, &visit, browser, stop).await;
     bff.sockets.fetch_sub(1, Ordering::Relaxed);
     drop(places);
     LOG.info(
@@ -37,7 +45,20 @@ pub async fn relay(bff: Shared, visit: Visit, places: Places, browser: WebSocket
     );
 }
 
-async fn pump(bff: &Shared, visit: &Visit, browser: WebSocket) -> &'static str {
+async fn pump(
+    bff: &Shared,
+    visit: &Visit,
+    browser: WebSocket,
+    stop: Option<Shutdown>,
+) -> &'static str {
+    // A socket that is never told to stop waits on a future that never resolves.
+    let stopped = async move {
+        match stop {
+            Some(mut stop) => stop.stopped().await,
+            None => std::future::pending().await,
+        }
+    };
+    tokio::pin!(stopped);
     let (mut to_browser, mut from_browser) = browser.split();
 
     let url = format!("{}/internal/ws", bff.cfg.backend.replacen("http", "ws", 1));
@@ -101,6 +122,7 @@ async fn pump(bff: &Shared, visit: &Visit, browser: WebSocket) -> &'static str {
 
     let reason = loop {
         tokio::select! {
+            _ = &mut stopped => break "server stopping",
             frame = from_browser.next() => match frame {
                 Some(Ok(BrowserMessage::Text(text))) => match parse_client(&text) {
                     Ok(_) => {
