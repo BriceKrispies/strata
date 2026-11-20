@@ -7,7 +7,9 @@ use serde_json::{json, Value as Json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use strata_kernel::editor_rules::record_rules as editor_record_rules;
 use strata_kernel::ext::*;
+use strata_kernel::rules::Lookup;
 use strata_kernel::{
     read, read_needs, visible, Check, Context, DomainError, ErrorKind, FieldId, Intent,
     InvitationId, Need, ObjectTypeId, Output, PageCursor, Principal, PrincipalId, ReadRequest,
@@ -733,6 +735,38 @@ pub fn view(app: &App, identity: &Identity, request: &ViewRequest) -> Result<Vie
             },
         );
     }
+    // The record types the reader asked about (`rules=post`): the kernel's own account of what it
+    // will check on them, for this reader and trimmed to what they may read (WG-5143). Asked for
+    // by a signed-in reader; the record being edited is the one a single section holds.
+    let mut record_rules = BTreeMap::new();
+    if let (false, Some(asked), Some(held)) = (
+        anonymous,
+        request.request.get("rules"),
+        state.tenant.as_deref(),
+    ) {
+        let lookup = Lookup {
+            tenant: held,
+            coverage: &state.coverage,
+        };
+        for name in asked.split(',').take(8) {
+            let Ok(id) = object_id(name.trim()) else {
+                continue;
+            };
+            let Some(object) = schema.objects.get(&id) else {
+                continue;
+            };
+            let stored = done
+                .values()
+                .flatten()
+                .find(|row| row.object == id)
+                .and_then(|row| held.record(&id, row.id));
+            if let Some(rules) =
+                editor_record_rules(lookup, &identity.principal, ctx.now, object, stored)
+            {
+                record_rules.insert(id.as_str().to_string(), rules);
+            }
+        }
+    }
     Ok(ViewData {
         view: def.id.clone(),
         title: def.title.clone(),
@@ -741,6 +775,7 @@ pub fn view(app: &App, identity: &Identity, request: &ViewRequest) -> Result<Vie
         depends_on,
         revision,
         schema_version: schema.version,
+        record_rules,
     })
 }
 

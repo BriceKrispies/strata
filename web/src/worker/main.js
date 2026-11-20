@@ -122,6 +122,7 @@ function execute(effect) {
       setTimeout(() => dispatch({ type: 'timer', name: effect.name, token: effect.token }), effect.ms);
       break;
     case 'log':
+      if (import.meta.env.DEV) console.warn(effect.event, effect.detail);
       diag(effect.level, effect.event, effect.correlation, effect.detail);
       break;
     default:

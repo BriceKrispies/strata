@@ -19,6 +19,7 @@ import { labEnter, labInit, labUpdate } from './lab.js';
 import { linksInit, linksInput, linksLand, linksOpened, linksUpdate } from './links.js';
 import { oidcEnter, oidcInit, oidcLand, oidcOpened, oidcUpdate } from './oidc.js';
 import { passkeysEnter, passkeysInit, passkeysUpdate } from './passkeys.js';
+import { checkRecord, disagreement, draftOf } from './record-rules.js';
 import { sessionsEnter, sessionsInit, sessionsUpdate } from './sessions.js';
 import {
   busy,
@@ -40,6 +41,8 @@ const THEME_MODES = ['auto', 'light', 'dark'];
 const LAB_SCREEN = 'screen-lab';
 const SIGN_IN = 'form-sign-in';
 const SETTINGS = 'form-settings';
+// The object type the editor writes: what the server tells the page of it rides in the editor's view.
+const EDITOR_OBJECT = 'post';
 
 // Reads whose reply is applied only when it answers the latest request of its kind, as `view`
 // is: an older reply that arrives late must not overwrite a newer one (or a newer sign-in).
@@ -230,9 +233,11 @@ function fetchView(state, msg, quiet) {
   const route = state.route;
   const screen = screenOf(state);
   const viewModel = screen ? routeOf(screen.screen)?.viewModel : null;
-  const [next, effect] = viewModel
+  const [next, asked] = viewModel
     ? call(state, 'view', viewModel, { ...screen?.params, ...screen?.query }, msg, { href: hrefOf(route) })
     : request(state, 'view', { path: `/api/view?path=${encodeURIComponent(route.path)}`, meta: { href: hrefOf(route) } }, msg);
+  // The editor asks what the kernel will check on an article, so it can refuse a draft first.
+  const effect = screen && routeOf(screen.screen)?.kind === 'desk.editor' && asked.type === 'http' ? { ...asked, path: `${asked.path}&rules=${EDITOR_OBJECT}` } : asked;
   const view = quiet
     ? { ...state.view, request: effect.type === 'http' ? effect.id : 0 }
     : { status: 'loading', model: state.view.model, error: null, request: effect.type === 'http' ? effect.id : 0 };
@@ -373,16 +378,55 @@ function editorSubmission(editor, status) {
   return editor.status === 'published' ? 'form-edit-article-save-changes' : 'form-edit-article-save-draft';
 }
 
+/**
+ * What the page can tell of the article it is about to send, from what the server said the kernel
+ * will check (the view's `$record_rules`): the kernel's failed checks, and the ones it left to the
+ * server. Null when the view carried nothing, which leaves everything to the server.
+ * @param {any} state @param {any} editor @param {string} contract @param {Record<string, any>} inputs @param {number} now
+ */
+function localVerdict(state, editor, contract, inputs, now) {
+  const rules = state.view.model?.data?.$record_rules?.[EDITOR_OBJECT];
+  if (!rules) return null;
+  const body = contracts.request(contract, inputs, state.route.path).body;
+  const stored = editor.id == null ? null : (state.view.model.data.post?.fields ?? null);
+  const session = state.session;
+  return checkRecord(rules, draftOf(body, stored), {
+    old: stored,
+    principal: session?.authenticated ? (session.principal ?? null) : null,
+    roles: session?.roles ?? [],
+    now,
+  });
+}
+
 /** Save the editor's article, optionally moving it to a new status in the same request. */
 /** @returns {Result} */
 function saveEditor(state, msg, status) {
   const editor = state.forms.editor;
   if (!editor) return { state, effects: [] };
-  const stepped = submitStep(editor.flow, 'ui-form-submitted', { complete: 1 }, msg.at);
-  if (!stepped?.sends) return { state, effects: [] };
   const form = editorSubmission(editor, status);
   const contract = forms.FORMS[form].contract;
-  const [next, effect] = call(state, 'editor.save', contract, forms.inputs(form, editor.values, scopeOf(state)), msg, { form, status, retryKey: editor.createKey });
+  const inputs = forms.inputs(form, editor.values, scopeOf(state));
+  const verdict = localVerdict(state, editor, contract, inputs, msg.at);
+  const refused = verdict?.failed.length ? verdict.failed : null;
+  const stepped = submitStep(editor.flow, 'ui-form-submitted', { complete: refused ? 0 : 1 }, msg.at);
+  if (!stepped) return { state, effects: [] };
+  if (refused) {
+    // The page refuses what the kernel would refuse, in the kernel's words, before any request;
+    // the fields show it as they show the server's refusal, and the first one takes focus.
+    const { errors, formError, announce } = refusals.refusal(form, { failed: refused });
+    const first = fieldNames(form).find((name) => errors[name]);
+    return {
+      state: {
+        ...state,
+        announce,
+        forms: { ...state.forms, editor: { ...editor, flow: stepped.flow, busy: busy(stepped.flow), errors, formError } },
+        focus: first ? { target: `editor-${first}`, token: (state.focus.token | 0) + 1 } : state.focus,
+      },
+      effects: [],
+    };
+  }
+  if (!stepped.sends) return { state, effects: [] };
+  const [next, effect] = call(state, 'editor.save', contract, inputs, msg, { form, status, retryKey: editor.createKey, page: verdict });
   return {
     state: { ...next, forms: { ...next.forms, editor: { ...editor, flow: stepped.flow, busy: true, errors: {}, formError: '' } } },
     effects: [effect],
@@ -723,6 +767,9 @@ function onHttp(state, msg) {
         const { errors, formError, announce } = refusals.refusal(pending.form, error);
         // Focus goes to the first failing field in the order the form shows them.
         const first = fieldNames(pending.form).find((name) => errors[name]);
+        // The server's refusal stands. A draft the page passed and the server refused is drift
+        // between the page's evaluator and the kernel, and is logged so it is seen.
+        const drift = pending.page ? disagreement(pending.page, error) : null;
         return {
           state: {
             ...state,
@@ -730,7 +777,7 @@ function onHttp(state, msg) {
             forms: { ...state.forms, editor: { ...editor, flow, busy: busy(flow), errors, formError, createKey: unknownOutcome(msg) ? pending.sent ?? editor.createKey ?? null : null } },
             focus: first ? { target: `editor-${first}`, token: msg.id } : state.focus,
           },
-          effects: [],
+          effects: drift ? [{ type: 'log', level: 'warn', event: 'record-rules.disagreement', correlation: pending.correlation, detail: drift }] : [],
         };
       }
       let flow = submitStep(editor.flow, 'ui-form-accepted', {}, msg.at)?.flow ?? editor.flow;
