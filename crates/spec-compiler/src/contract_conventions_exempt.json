@@ -1,0 +1,139 @@
+{
+  "exemptions": [
+    {
+      "contract": "list-jobs",
+      "rule": "pagination",
+      "reason": "Listed in D-6595 as a contract that must change; the specification does not make the change yet (WG-5042)."
+    },
+    {
+      "contract": "deliver-view",
+      "rule": "pagination",
+      "reason": "Listed in D-6595 as a contract that must change; the specification does not make the change yet (WG-5042)."
+    },
+    {
+      "contract": "run-named-query",
+      "rule": "pagination",
+      "reason": "Listed in D-6595 as a contract that must change; the specification does not make the change yet (WG-5042)."
+    },
+    {
+      "contract": "list-operations",
+      "rule": "pagination",
+      "reason": "Listed in D-6595 as a contract that must change; the specification does not make the change yet (WG-5042)."
+    },
+    {
+      "contract": "invoke-operation",
+      "rule": "concurrency",
+      "reason": "Listed in D-6595 as a contract that must change; the specification does not make the change yet (WG-5042)."
+    },
+    {
+      "contract": "query-audit-log",
+      "rule": "pagination",
+      "reason": "Listed in D-6595 as a contract that must change; the specification does not make the change yet (WG-5042)."
+    },
+    {
+      "contract": "save-draft",
+      "rule": "concurrency",
+      "reason": "Listed in D-6595 as a contract that must change; the specification does not make the change yet (WG-5042)."
+    },
+    {
+      "contract": "list-webhook-deliveries",
+      "rule": "pagination",
+      "reason": "Listed in D-6595 as a contract that must change; the specification does not make the change yet (WG-5042)."
+    },
+    {
+      "contract": "save-record-edit",
+      "rule": "concurrency",
+      "reason": "Listed in D-6595 as a contract that must change; the specification does not make the change yet (WG-5042)."
+    },
+    {
+      "contract": "list-mail-messages",
+      "rule": "pagination",
+      "reason": "Listed in D-6595 as a contract that must change; the specification does not make the change yet (WG-5042)."
+    },
+    {
+      "contract": "mutate-record",
+      "rule": "error-kind",
+      "reason": "Listed in D-6595 as a contract that must change; the specification does not make the change yet (WG-5042)."
+    },
+    {
+      "contract": "read-view",
+      "rule": "error-kind",
+      "reason": "Found when the rule was written; D-6595 does not list it (WG-5043)."
+    },
+    {
+      "contract": "post-ledger-entry",
+      "rule": "error-kind",
+      "reason": "Listed in D-6595 as a contract that must change; the specification does not make the change yet (WG-5042)."
+    },
+    {
+      "contract": "list-ledger-entries",
+      "rule": "pagination",
+      "reason": "Listed in D-6595 as a contract that must change; the specification does not make the change yet (WG-5042)."
+    },
+    {
+      "contract": "define-segment",
+      "rule": "error-kind",
+      "reason": "Found when the rule was written; D-6595 does not list it (WG-5043)."
+    },
+    {
+      "contract": "setting-set-tenant",
+      "rule": "concurrency",
+      "reason": "Listed in D-6595 as a contract that must change; the specification does not make the change yet (WG-5042)."
+    },
+    {
+      "contract": "setting-set-team",
+      "rule": "concurrency",
+      "reason": "Listed in D-6595 as a contract that must change; the specification does not make the change yet (WG-5042)."
+    },
+    {
+      "contract": "setting-set-person",
+      "rule": "concurrency",
+      "reason": "Listed in D-6595 as a contract that must change; the specification does not make the change yet (WG-5042)."
+    },
+    {
+      "contract": "define-trigger",
+      "rule": "error-kind",
+      "reason": "Found when the rule was written; D-6595 does not list it (WG-5043)."
+    },
+    {
+      "contract": "list-automation-steps",
+      "rule": "pagination",
+      "reason": "Found when the rule was written; D-6595 does not list it (WG-5043)."
+    },
+    {
+      "contract": "list-automation-exceptions",
+      "rule": "pagination",
+      "reason": "Found when the rule was written; D-6595 does not list it (WG-5043)."
+    },
+    {
+      "contract": "invoke-tenant-operation",
+      "rule": "idempotency",
+      "reason": "Found when the rule was written; D-6595 does not list it (WG-5043)."
+    },
+    {
+      "contract": "invoke-tenant-operation",
+      "rule": "error-kind",
+      "reason": "Found when the rule was written; D-6595 does not list it (WG-5043)."
+    },
+    {
+      "contract": "list-my-ledger-entries",
+      "rule": "pagination",
+      "reason": "Found when the rule was written; D-6595 does not list it (WG-5043)."
+    },
+    {
+      "contract": "preview-segment-predicate",
+      "rule": "pagination",
+      "reason": "Found when the rule was written; D-6595 does not list it (WG-5043)."
+    },
+    {
+      "contract": "define-message-category",
+      "rule": "error-kind",
+      "reason": "Found when the rule was written; D-6595 does not list it (WG-5043)."
+    },
+    {
+      "contract": "declare-event-kind",
+      "rule": "error-kind",
+      "reason": "Found when the rule was written; D-6595 does not list it (WG-5043)."
+    }
+  ]
+}

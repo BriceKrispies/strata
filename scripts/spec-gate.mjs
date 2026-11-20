@@ -22,6 +22,12 @@
 //      specification, evaluate its claims.
 //   3. Concordance: lint (strict), then scan with the recorded results and the Exegra results file.
 //   4. Counts read from the specification itself, compared with the last successful gate record.
+//   4b. The specification and the code agree (scripts/gate-audit-checks.mjs, nothing compiled): every
+//      shipped contract has a handler, every table the SQLite adapters create has a shipped record,
+//      every environment variable the backend and BFF read is declared, every route the BFF mounts
+//      has a contract with a bffRoute, every file path the specification cites exists. Each reports
+//      a count and fails on a miss; the exemptions, a reason per group, are in
+//      scripts/gate-exemptions.json, and an exemption that matches no miss fails too.
 //   5. With --browser: the browser suites (npm run e2e, e2e:generated, e2e:steps), which build the
 //      binaries and the frontend they run against. A skipped browser test fails the check.
 //
@@ -41,6 +47,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
+import { auditChecks } from './gate-audit-checks.mjs';
 import { generatedTests, rustLineShare } from './generated-share.mjs';
 import { envelopeProblems, productArgs, savedTraces, semanticHashDetail, traceFreshness } from './spec-hash.mjs';
 
@@ -350,6 +357,8 @@ const resultHashes = () => Object.fromEntries(testFiles.filter((file) => existsS
 const cargoEnv = { CARGO_BUILD_JOBS: '2', RUST_TEST_THREADS: '2', CARGO_TARGET_DIR: 'target/gate', EXEGRA_HOME: exegraHome };
 const nodeTestFiles = ['web/test/kernel.test.js', 'web/test/client.test.js'];
 const shareTestFile = 'scripts/generated-share.test.mjs';
+// The tests of the scripts: the share tests and the tests of the audit checks (gate-*.test.mjs).
+const scriptTestFiles = [shareTestFile, ...readdirSync(resolve(root, 'scripts')).filter((f) => /^gate-.*\.test\.mjs$/.test(f)).sort().map((f) => `scripts/${f}`)];
 const tscCli = join(root, 'node_modules', 'typescript', 'bin', 'tsc');
 
 if (!noTest) {
@@ -373,11 +382,11 @@ if (!noTest) {
   const webOk = webRead.ok;
   check('web tests: kernel and client (node --test)', webOk, webOk ? `${webRead.passed} passed` : `${exitText(web)}, pass ${webRead.passed}, fail ${webRead.failed}`);
 
-  const share = run(process.execPath, ['--test', shareTestFile]);
+  const share = run(process.execPath, ['--test', ...scriptTestFiles]);
   writeFileSync(join(resultsDir, 'share-test.txt'), share.out);
   const shareRead = readNodeTest(share.out, share.ok);
   const shareOk = shareRead.ok;
-  check('generated share tests (scripts/generated-share.test.mjs)', shareOk, shareOk ? `${shareRead.passed} passed` : `${exitText(share)}, pass ${shareRead.passed}, fail ${shareRead.failed}`);
+  check('script tests (generated share and audit checks, node --test)', shareOk, shareOk ? `${shareRead.passed} passed` : `${exitText(share)}, pass ${shareRead.passed}, fail ${shareRead.failed}`);
 
   const tsc = run(process.execPath, [tscCli, '-p', 'web/jsconfig.json']);
   writeFileSync(join(resultsDir, 'check.txt'), tsc.out);
@@ -618,6 +627,26 @@ if (previous?.counts) {
   }
 } else {
   notes.push('no previous gate record: counts were not compared with an earlier run');
+}
+
+// ---------------------------------------------------------------------------------------------
+// 4b. The specification and the code agree. Nothing is compiled: the checks read the specification
+//     and the source text (scripts/gate-audit-checks.mjs). A miss no exemption covers fails, and so
+//     does an exemption that matches no miss.
+// ---------------------------------------------------------------------------------------------
+{
+  let exemptions = null;
+  try {
+    exemptions = JSON.parse(readFileSync(resolve(root, 'scripts/gate-exemptions.json'), 'utf8'));
+  } catch (error) {
+    check('audit check exemptions (scripts/gate-exemptions.json)', false, `unreadable: ${error.message}`);
+  }
+  if (exemptions) {
+    for (const verdict of auditChecks({ root, spec, exemptions })) {
+      check(verdict.name, verdict.ok, verdict.detail);
+      detail(verdict.lines.slice(0, 40));
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------------------------

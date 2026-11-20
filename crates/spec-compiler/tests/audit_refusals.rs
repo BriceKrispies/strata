@@ -221,3 +221,84 @@ fn a_language_may_not_take_the_name_of_a_backend_module() {
         );
     }
 }
+
+fn codes_of(diagnostics: &[Diagnostic]) -> Vec<(&str, &str)> {
+    diagnostics
+        .iter()
+        .map(|d| (d.code.as_str(), d.entity.as_str()))
+        .collect()
+}
+
+#[test]
+fn a_contract_on_the_step_up_list_without_an_age_and_the_error_is_refused() {
+    use strata_spec_compiler::contract_rules::{STEP_UP_MISSING, STEP_UP_UNKNOWN};
+    let diagnostics = refuse(&fixture("step-up-missing.jsonc"));
+    // Verifies: IDN-1202
+    assert_eq!(
+        codes_of(&diagnostics),
+        [
+            (STEP_UP_MISSING, "rotate-client-secret"),
+            (STEP_UP_MISSING, "export-tenant"),
+            // CT-213 is on the list and the specification has no such contract.
+            (STEP_UP_UNKNOWN, "CT-213"),
+        ]
+    );
+}
+
+#[test]
+fn a_public_tenant_input_without_the_tenant_mismatch_error_is_refused() {
+    use strata_spec_compiler::contract_rules::TENANT_MISMATCH_MISSING;
+    let diagnostics = refuse(&fixture("tenant-mismatch-missing.jsonc"));
+    // Verifies: TEN-1140
+    assert_eq!(
+        codes_of(&diagnostics),
+        [(TENANT_MISMATCH_MISSING, "export-tenant")]
+    );
+}
+
+#[test]
+fn a_public_contract_that_breaks_the_conventions_is_refused() {
+    use strata_spec_compiler::contract_rules::{
+        CONVENTION_CONCURRENCY, CONVENTION_ERROR_KIND, CONVENTION_EXEMPTION_STALE,
+        CONVENTION_IDEMPOTENCY, CONVENTION_PAGINATION,
+    };
+    let diagnostics = refuse(&fixture("convention-breaks.jsonc"));
+    // Verifies: ARC-1599
+    // Every entry of the checked-in exemption list names a contract this fixture lacks, so each is
+    // stale here; the refusals of the fixture's own contracts come first.
+    let own: Vec<(&str, &str)> = codes_of(&diagnostics)
+        .into_iter()
+        .filter(|(code, _)| *code != CONVENTION_EXEMPTION_STALE)
+        .collect();
+    assert_eq!(
+        own,
+        [
+            (CONVENTION_CONCURRENCY, "save-new-draft"),
+            (CONVENTION_PAGINATION, "list-new-things"),
+            (CONVENTION_IDEMPOTENCY, "post-new-thing"),
+            (CONVENTION_ERROR_KIND, "post-new-thing"),
+        ]
+    );
+    assert!(
+        !diagnostics.iter().any(|d| d.entity == "conforming"),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn an_exemption_of_the_conventions_that_matches_nothing_is_refused() {
+    use strata_spec_compiler::contract_rules::{exemptions, CONVENTION_EXEMPTION_STALE};
+    // Verifies: ARC-1599
+    let diagnostics = refuse(&fixture("convention-breaks.jsonc"));
+    let listed = exemptions().unwrap();
+    assert!(!listed.is_empty());
+    for entry in &listed {
+        assert!(
+            diagnostics
+                .iter()
+                .any(|d| d.code == CONVENTION_EXEMPTION_STALE && d.entity == entry.contract),
+            "the stale exemption of {} is not refused",
+            entry.contract
+        );
+    }
+}

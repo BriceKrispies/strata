@@ -26,6 +26,7 @@ pub mod budget;
 pub mod catalogue;
 pub mod codetext;
 pub mod constructs;
+pub mod contract_rules;
 pub mod deploy;
 pub mod diagnostic;
 pub mod e2e;

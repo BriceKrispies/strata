@@ -1,0 +1,29 @@
+{
+  "exegra": "0.1",
+  "system": { "id": "sys", "name": "System" },
+  "claims": [ { "id": "arc-1599", "ref": "ARC-1599", "kind": "requirement" } ],
+  "contracts": [
+    {
+      "id": "save-new-draft", "name": "Save a draft", "exposure": "public",
+      "inputs": [ { "name": "based-on-version", "type": "u64" } ],
+      "errors": []
+    },
+    {
+      "id": "list-new-things", "name": "List things", "exposure": "public",
+      "inputs": [ { "name": "after", "type": "string" }, { "name": "limit", "type": "u32" } ],
+      "outputs": [ { "name": "next", "type": "string" } ],
+      "errors": []
+    },
+    {
+      "id": "post-new-thing", "name": "Post a thing", "exposure": "public",
+      "inputs": [ { "name": "request-id", "type": "string" } ],
+      "errors": [ { "name": "rejected", "kind": "invalid" } ]
+    },
+    {
+      "id": "conforming", "name": "A contract that follows the conventions", "exposure": "public",
+      "inputs": [ { "name": "expected-version", "type": "u64" }, { "name": "cursor", "type": "string" }, { "name": "limit", "type": "u32" }, { "name": "idempotency-key", "type": "string" } ],
+      "outputs": [ { "name": "next", "type": "string" } ],
+      "errors": [ { "name": "invalid", "kind": "invalid" } ]
+    }
+  ]
+}
