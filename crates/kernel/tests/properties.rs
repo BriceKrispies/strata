@@ -338,7 +338,8 @@ fn some_policy_could_authorise(
         | Intent::RemoveTeamMember { .. }
         | Intent::CreateInvitation { .. }
         | Intent::RevokeInvitation { .. }
-        | Intent::EraseSubject { .. } => (Action::Manage, Resource::Members),
+        | Intent::EraseSubject { .. }
+        | Intent::ExpireRecords { .. } => (Action::Manage, Resource::Members),
         // Redeeming needs no policy: any signed-in person may try.
         Intent::RedeemInvitation { .. } => return matches!(principal, Principal::User(_)),
         // An invocation is authorised by the operation's invokers, not by a policy (D-6547).

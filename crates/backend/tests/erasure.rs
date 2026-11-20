@@ -514,8 +514,6 @@ fn the_subject_is_erased_and_the_rest_is_kept(store: Arc<dyn Store>) {
         "audit log",
         "schema history",
         "subject key",
-        "restrictions of processing",
-        "legal holds",
     ] {
         assert!(
             receipt.not_reached.iter().any(|line| line.contains(copy)),
@@ -527,6 +525,17 @@ fn the_subject_is_erased_and_the_rest_is_kept(store: Arc<dyn Store>) {
         .reached
         .iter()
         .any(|line| line.contains("1 logins, 1 passkeys")));
+    // Restrictions and legal holds are built: the receipt says what was in force, none here.
+    for line in [
+        "restriction of processing (PRV-352): none",
+        "legal holds (PRV-355): none",
+    ] {
+        assert!(
+            receipt.reached.iter().any(|reached| reached.contains(line)),
+            "the receipt does not say {line:?}: {:?}",
+            receipt.reached
+        );
+    }
     let kept = store.doc_list(&alpha, RECEIPT_KIND).expect("receipts");
     assert_eq!(kept.len(), 1);
     let again: Receipt = serde_json::from_str(&kept[0].1).expect("a receipt");

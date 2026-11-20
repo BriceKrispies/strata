@@ -1109,6 +1109,50 @@ async fn subject_erasure_receipts(
         .map(Json)
 }
 
+/// The operations of subject rights the backend serves at `/internal/subject-rights/<operation>`
+/// (`strata_backend::subject_rights::OPERATIONS`).
+const SUBJECT_RIGHTS_OPERATIONS: [&str; 8] = [
+    "export",
+    "export-fetch",
+    "restrict",
+    "lift-restriction",
+    "place-hold",
+    "release-hold",
+    "holds",
+    "restrictions",
+];
+
+/// Subject rights: `POST /api/subject-rights/<operation>` with the operation's inputs as the JSON
+/// body: `export` (CT-210), `export-fetch` (CT-1708), `restrict` (CT-212), `lift-restriction`
+/// (CT-1705), `place-hold` (CT-215), `release-hold` (CT-1706) and `holds` (CT-1707). The backend
+/// checks who may ask, asks for a fresh authentication and decides; this route adds nothing.
+///
+/// Implements: CT-210, CT-212, CT-215, CT-1705, CT-1706, CT-1707, CT-1708
+async fn subject_rights(
+    State(bff): State<Shared>,
+    headers: HeaderMap,
+    Path(operation): Path<String>,
+    Json(body): Json<Json_>,
+) -> Result<Json<Json_>, Failure> {
+    let visit = visit(&bff, &headers)?;
+    guard_write(&bff, &visit, &headers).await?;
+    if !SUBJECT_RIGHTS_OPERATIONS.contains(&operation.as_str()) {
+        return Err(Failure::new(
+            ErrorCode::NotFound,
+            "No such endpoint.",
+            &visit.correlation,
+        ));
+    }
+    backend(
+        &bff,
+        &visit,
+        &format!("/internal/subject-rights/{operation}"),
+        &body,
+    )
+    .await
+    .map(Json)
+}
+
 /// The signed-in person's own live sessions.
 async fn sessions(State(bff): State<Shared>, headers: HeaderMap) -> Result<Json<Json_>, Failure> {
     let visit = visit(&bff, &headers)?;
@@ -2583,6 +2627,7 @@ pub fn router(bff: Shared) -> Router {
             "/subject-rights/erasure-receipts",
             post(subject_erasure_receipts),
         )
+        .route("/subject-rights/:op", post(subject_rights))
         .route("/settings", get(settings_resolve_all))
         .route("/settings/save-definition", post(setting_save_definition))
         .route("/settings/set-tenant", post(setting_set_tenant))

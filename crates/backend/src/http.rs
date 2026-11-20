@@ -1074,6 +1074,10 @@ pub fn router(app: Shared) -> Router {
         .route("/internal/erasure/erase", post(erasure_erase))
         .route("/internal/erasure/receipts", post(erasure_receipts))
         .route(
+            "/internal/subject-rights/:op",
+            post(crate::subject_rights::route),
+        )
+        .route(
             "/internal/settings/save-definition",
             post(crate::settings::save_definition),
         )

@@ -37,6 +37,7 @@ use crate::auth::{Caller, Identity};
 use crate::ops;
 use crate::service::scim;
 use crate::signin::stepup;
+use crate::subject_rights::{addressed_invitations, end_with_erasure, Rights};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value as Json};
 use std::collections::BTreeSet;
@@ -283,11 +284,7 @@ fn not_reached(unbuilt: Vec<String>) -> Vec<String> {
         "idempotency keys (tbl-idempotency): rows of the principal's own keys are removed by the first commit of the tenant after their retention of 24 hours".to_string(),
         "sign-in throttle counters (tbl-login-throttle): keyed by a hash of the login, removed by the sweep after their window".to_string(),
         "subject key (key-service, D-350): not built, so no personal field is sealed and no key was destroyed; the fields were cleared in the records instead".to_string(),
-        "invitations addressed to the principal and not redeemed: the kernel holds no address of a person; closes with WG-5117".to_string(),
         "files of personal file fields: the field value was cleared, no stored bytes were removed; closes with WG-5118".to_string(),
-        "records past their retention are not deleted, and subject fields that reference a person record are not resolved; closes with WG-5116".to_string(),
-        "restrictions of processing (PRV-352): not built, so none was consulted; closes with WG-5113".to_string(),
-        "legal holds (PRV-355): not built, so none suspended any record; closes with WG-5114".to_string(),
     ];
     out.extend(unbuilt);
     out
@@ -301,15 +298,23 @@ fn not_reached(unbuilt: Vec<String>) -> Vec<String> {
 /// Implements: CT-213, PRV-353, PRV-1588
 pub fn erase_subject(app: &App, ctx: &Context, subject: &PrincipalId) -> Result<Receipt, ApiError> {
     let tenant = &ctx.tenant;
+    // Legal holds and the invitations addressed to the person (subject_rights): read before any
+    // change, so a held person is refused before a record is touched.
+    let rights = Rights::load(app, tenant)?;
+    let held_objects = rights.held_objects();
+    let addressed = addressed_invitations(app, tenant, subject)?;
     let first_intent = Intent::EraseSubject {
         subject: subject.clone(),
         resume_object: None,
         resume_after: None,
+        held_objects: held_objects.clone(),
+        addressed_invitations: addressed.clone(),
     };
     let first = plan(app, ctx, &first_intent)?;
     if !is_known(app, ctx, subject, &first)? {
         return Err(not_found());
     }
+    rights.refuse_if_held(subject)?;
     let sessions_before = app
         .store
         .live_sessions_of(tenant, Some(subject), ctx.now)?
@@ -336,6 +341,8 @@ pub fn erase_subject(app: &App, ctx: &Context, subject: &PrincipalId) -> Result<
             subject: subject.clone(),
             resume_object: resume.0.clone(),
             resume_after: resume.1,
+            held_objects: held_objects.clone(),
+            addressed_invitations: addressed.clone(),
         };
         let planned = match pending.take() {
             Some(first) => first,
@@ -380,7 +387,7 @@ pub fn erase_subject(app: &App, ctx: &Context, subject: &PrincipalId) -> Result<
             fields.insert(format!("{}.{}", record.object, field));
         }
     }
-    let reached = vec![
+    let mut reached = vec![
         format!(
             "records and their index rows (tbl-records): {} changed, the fields cleared are {:?}; erasure point: the commit of each batch ({commits} commits, at most {BATCH} records each)",
             changed.len(),
@@ -423,6 +430,10 @@ pub fn erase_subject(app: &App, ctx: &Context, subject: &PrincipalId) -> Result<
             "segments (tbl-segment-memberships, tbl-segment-wakes, tbl-segment-erased): {segment_exits} memberships ended with an exit event naming the person sealed, the wake rows removed, and the person marked so that no later decision enters them; erasure point: the segment write"
         ),
     ];
+    // Restrictions and legal holds (PRV-352, PRV-355): what was in force, and the restriction ends
+    // with the erasure.
+    reached.extend(rights.receipt_lines(subject));
+    end_with_erasure(app, tenant, subject)?;
     let receipt = Receipt {
         request: ctx.correlation.clone(),
         principal: subject.as_str().to_string(),

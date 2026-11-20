@@ -70,7 +70,6 @@ fn open_to_writers(schema: &mut TenantSchema, object_name: &str) {
 /// - `profile`: `person` (plain text that names the subject), `name` (required, personal to the
 ///   person), `bio` and `city` (optional, personal to the person) and `plan` (not personal);
 /// - `diary`: `entry` (required) and `mood` (optional), personal to the creator, and `topic`;
-/// - `link`: `target` (a reference, so it cannot name a principal) and `remark`, personal to it;
 /// - `badge`: `who`, a required reference personal to the creator.
 fn personal_world() -> World {
     let mut world = notes_world();
@@ -135,30 +134,6 @@ fn personal_world() -> World {
         ),
     );
     schema.objects.insert(
-        object("link"),
-        record_type(
-            "link",
-            vec![
-                plain(
-                    "target",
-                    FieldType::Ref {
-                        target: object("person"),
-                        on_delete: OnDelete::SetNull,
-                    },
-                ),
-                declared(
-                    "remark",
-                    FieldType::Str,
-                    false,
-                    PersonalKind::FreeText,
-                    DataSubject::Field {
-                        field: field("target"),
-                    },
-                ),
-            ],
-        ),
-    );
-    schema.objects.insert(
         object("badge"),
         record_type(
             "badge",
@@ -174,7 +149,7 @@ fn personal_world() -> World {
             )],
         ),
     );
-    for name in ["profile", "diary", "link", "badge"] {
+    for name in ["profile", "diary", "badge"] {
         open_to_writers(&mut schema, name);
     }
     assert!(schema.problems().is_empty(), "{:?}", schema.problems());
@@ -240,6 +215,8 @@ fn erase_intent(subject: &str) -> Intent {
         subject: principal_id(subject),
         resume_object: None,
         resume_after: None,
+        held_objects: Vec::new(),
+        addressed_invitations: Vec::new(),
     }
 }
 
@@ -262,6 +239,8 @@ fn erase_all(mut world: World, subject: &str, mut now: i64) -> (World, Vec<Trans
             subject: principal_id(subject),
             resume_object: resume.0.clone(),
             resume_after: resume.1,
+            held_objects: Vec::new(),
+            addressed_invitations: Vec::new(),
         };
         let (next, outcome) = at(&world, "owner", now, intent).expect("accepted");
         world = next;
@@ -604,15 +583,327 @@ fn what_cannot_be_erased_is_reported() {
             .any(|note| note.starts_with("held badge.who")),
         "{not_erased:?}"
     );
-    assert!(
-        not_erased
-            .iter()
-            .any(|note| note.starts_with("unresolved link.target")),
-        "{not_erased:?}"
-    );
     // The record that cannot be changed is left as it was.
     assert_eq!(
         stored(&world, "badge", 2).get(&field("who")),
         &Value::Ref(RecordId(1))
     );
+}
+
+// Verifies: PRV-1584
+// Verifies: PRV-2745
+#[test]
+fn a_field_that_names_its_subject_by_a_reference_is_refused_at_declaration() {
+    let mut schema = TenantSchema::clone(&personal_world().tenants[&tenant_id("alpha")].schema);
+    schema.objects.insert(
+        object("link"),
+        record_type(
+            "link",
+            vec![
+                plain(
+                    "target",
+                    FieldType::Ref {
+                        target: object("profile"),
+                        on_delete: OnDelete::SetNull,
+                    },
+                ),
+                declared(
+                    "remark",
+                    FieldType::Str,
+                    false,
+                    PersonalKind::FreeText,
+                    DataSubject::Field {
+                        field: field("target"),
+                    },
+                ),
+            ],
+        ),
+    );
+    let problems = schema.problems();
+    assert!(
+        problems
+            .iter()
+            .any(|p| p.contains("link.remark") && p.contains("principal id held as text")),
+        "{problems:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Subject export, legal holds on record types, invitations addressed to the subject, retention.
+// ---------------------------------------------------------------------------------------------
+
+use strata_kernel::retention;
+use strata_kernel::rules::Lookup;
+use strata_kernel::subject_export::{export_needs, export_page, ExportCursor};
+
+/// The `object.field` names the export of `subject` holds, following its cursor to the end, and
+/// how many records it holds.
+fn exported_fields(world: &World, subject: &str) -> (BTreeSet<String>, usize) {
+    let state = world.state(&tenant_id("alpha"));
+    let tenant = state.tenant.as_ref().expect("the tenant exists");
+    let subject = principal_id(subject);
+    let mut cursor = ExportCursor {
+        phase: 1,
+        object: None,
+        after: None,
+    };
+    let mut names = BTreeSet::new();
+    let mut records = BTreeSet::new();
+    loop {
+        assert!(!export_needs(&tenant.schema, &subject, &cursor).is_empty() || cursor.phase == 2);
+        let lookup = Lookup {
+            tenant,
+            coverage: &state.coverage,
+        };
+        let page = export_page(lookup, &subject, &cursor).expect("a page");
+        for record in &page.records {
+            records.insert((record.object.clone(), record.id));
+            for id in record.fields.keys() {
+                names.insert(format!("{}.{}", record.object, id));
+            }
+        }
+        match page.next {
+            Some(next) => cursor = next,
+            None => return (names, records.len()),
+        }
+    }
+}
+
+// Verifies: PRV-1586
+// Verifies: PRV-2740
+#[test]
+fn the_export_holds_exactly_the_fields_an_erasure_clears() {
+    let world = personal_world();
+    let world = must(
+        &world,
+        "owner",
+        100,
+        profile("alpha:writer1", "Ada Lovelace"),
+    );
+    let world = must(
+        &world,
+        "owner",
+        101,
+        profile("alpha:writer2", "Grace Hopper"),
+    );
+    let world = must(&world, "writer1", 102, diary("my secret day"));
+    let world = must(&world, "writer2", 103, diary("another secret day"));
+    let (names, records) = exported_fields(&world, "alpha:writer1");
+    assert_eq!(records, 2);
+    let (_, outcomes) = erase_all(world.clone(), "alpha:writer1", 200);
+    let mut cleared = BTreeSet::new();
+    for outcome in &outcomes {
+        for record in erased(outcome).0 {
+            for id in &record.fields {
+                cleared.insert(format!("{}.{}", record.object, id));
+            }
+        }
+    }
+    assert!(!cleared.is_empty());
+    assert_eq!(names, cleared, "export and erasure read the same fields");
+    // Nothing of the other person is in it.
+    let state = world.state(&tenant_id("alpha"));
+    let lookup = Lookup {
+        tenant: state.tenant.as_ref().expect("tenant"),
+        coverage: &state.coverage,
+    };
+    let page = export_page(
+        lookup,
+        &principal_id("alpha:writer1"),
+        &ExportCursor {
+            phase: 1,
+            object: None,
+            after: None,
+        },
+    )
+    .expect("a page");
+    let written = format!("{page:?}");
+    assert!(!written.contains("Grace Hopper") && !written.contains("another secret day"));
+}
+
+// Verifies: PRV-355
+#[test]
+fn a_hold_on_a_record_type_leaves_its_records_and_the_rest_is_erased() {
+    let world = personal_world();
+    let world = must(
+        &world,
+        "owner",
+        100,
+        profile("alpha:writer1", "Ada Lovelace"),
+    );
+    let world = must(&world, "writer1", 101, diary("my secret day"));
+    let held_profile = stored(&world, "profile", 1);
+    let mut world = world;
+    let mut notes = Vec::new();
+    let mut resume: (Option<ObjectTypeId>, Option<RecordId>) = (None, None);
+    for now in 200..260 {
+        let intent = Intent::EraseSubject {
+            subject: principal_id("alpha:writer1"),
+            resume_object: resume.0.clone(),
+            resume_after: resume.1,
+            held_objects: vec![object("profile")],
+            addressed_invitations: Vec::new(),
+        };
+        let (next, outcome) = at(&world, "owner", now, intent).expect("accepted");
+        world = next;
+        let Output::Erased {
+            not_erased,
+            more,
+            next_object,
+            next_after,
+            ..
+        } = outcome.output
+        else {
+            panic!("not an erasure");
+        };
+        notes.extend(not_erased);
+        if !more {
+            break;
+        }
+        resume = (next_object, next_after);
+    }
+    assert_eq!(stored(&world, "profile", 1), held_profile);
+    assert_eq!(stored(&world, "diary", 2).get(&field("entry")), &text(""));
+    assert!(
+        notes
+            .iter()
+            .any(|note| note.starts_with("held profile record 1")),
+        "{notes:?}"
+    );
+}
+
+// Verifies: PRV-2460
+// Verifies: PRV-2745
+#[test]
+fn an_invitation_addressed_to_the_subject_is_revoked_and_loses_its_address() {
+    let world = personal_world();
+    let invitation = InvitationId::new("inv-1").expect("invitation id");
+    let world = must(
+        &world,
+        "owner",
+        100,
+        Intent::CreateInvitation {
+            invitation: invitation.clone(),
+            address: "ada@example.org".to_string(),
+            roles: BTreeSet::from([role("writer")]),
+        },
+    );
+    let world = must(&world, "owner", 101, profile("alpha:writer1", "Ada"));
+    let (world, outcome) = at(
+        &world,
+        "owner",
+        200,
+        Intent::EraseSubject {
+            subject: principal_id("alpha:writer1"),
+            resume_object: None,
+            resume_after: None,
+            held_objects: Vec::new(),
+            addressed_invitations: vec![invitation.clone()],
+        },
+    )
+    .expect("accepted");
+    let kept = world.tenants[&tenant_id("alpha")]
+        .schema
+        .invitation(&invitation)
+        .expect("the invitation is kept as a record")
+        .clone();
+    assert!(kept.revoked_by.is_some());
+    assert_eq!(kept.address, "");
+    let Output::Erased { invitations, .. } = &outcome.output else {
+        panic!("not an erasure");
+    };
+    assert!(invitations.contains(&invitation));
+    assert!(!format!("{:?}{:?}", outcome.events, outcome.output).contains("ada@example.org"));
+}
+
+fn expire(object_name: &str, ids: &[u64]) -> Intent {
+    Intent::ExpireRecords {
+        object: object(object_name),
+        ids: ids.iter().map(|id| RecordId(*id)).collect(),
+    }
+}
+
+const DAY: i64 = 86_400_000;
+
+// Verifies: PRV-357
+// Verifies: PRV-2744
+#[test]
+fn only_the_system_deletes_and_only_what_is_past_its_retention() {
+    let world = personal_world();
+    let world = must(
+        &world,
+        "owner",
+        100,
+        profile("alpha:writer1", "Ada Lovelace"),
+    );
+    let world = must(
+        &world,
+        "owner",
+        40 * DAY,
+        profile("alpha:writer2", "Grace Hopper"),
+    );
+    let system = ctx("alpha", Principal::System, 45 * DAY);
+    // An owner may not.
+    let refused = at(&world, "owner", 45 * DAY, expire("profile", &[1])).expect_err("refused");
+    assert_eq!(refused.kind, ErrorKind::Unauthorized);
+    // Record 1 is 45 days old, record 2 is 5 days old: only the first goes.
+    let (after, outcome) = world
+        .step(&expire("profile", &[1, 2]), &system)
+        .expect("accepted");
+    let Output::Expired { deleted, kept, .. } = &outcome.output else {
+        panic!("not an expiry");
+    };
+    assert_eq!(deleted, &vec![RecordId(1)]);
+    assert_eq!(kept.len(), 1, "{kept:?}");
+    assert!(after.tenants[&tenant_id("alpha")]
+        .record(&object("profile"), RecordId(1))
+        .is_none());
+    assert!(after.tenants[&tenant_id("alpha")]
+        .record(&object("profile"), RecordId(2))
+        .is_some());
+    // The event of the deletion carries no personal value; the plain fields stay.
+    let written = format!("{:?}", outcome.events);
+    assert!(!written.contains("Ada Lovelace") && !written.contains("Rue du Secret"));
+    assert!(written.contains("free"), "{written}");
+    // A repeat finds nothing and deletes nothing.
+    let (_, again) = after
+        .step(&expire("profile", &[1]), &system)
+        .expect("accepted");
+    let Output::Expired { deleted, kept, .. } = &again.output else {
+        panic!("not an expiry");
+    };
+    assert!(deleted.is_empty() && kept.is_empty());
+}
+
+// Verifies: PRV-357
+// Verifies: PRV-2744
+#[test]
+fn the_candidates_of_a_sweep_come_in_pages_and_only_the_past_ones_are_due() {
+    let mut world = personal_world();
+    let total = strata_kernel::erasure::BATCH + 20;
+    for i in 0..total {
+        world = must(
+            &world,
+            "owner",
+            100 + i as i64,
+            profile("alpha:writer1", "Ada"),
+        );
+    }
+    // The newest record is young; the others are old.
+    world = must(&world, "owner", 60 * DAY, profile("alpha:writer2", "Grace"));
+    let now = Timestamp(61 * DAY);
+    let state = world.state(&tenant_id("alpha"));
+    let tenant = state.tenant.as_ref().expect("tenant");
+    let def = tenant.schema.objects.get(&object("profile")).expect("type");
+    let lookup = Lookup {
+        tenant,
+        coverage: &state.coverage,
+    };
+    let first = retention::due_page(lookup, def, now, None).expect("page");
+    assert!(first.full);
+    assert_eq!(first.due.len(), strata_kernel::erasure::BATCH);
+    let second = retention::due_page(lookup, def, now, first.last.as_ref()).expect("page");
+    assert_eq!(second.due.len(), 20, "the young record is not due");
+    assert!(retention::ended(def, &first.due[0], now));
+    assert!(!retention::ended(def, &first.due[0], Timestamp(10 * DAY)));
 }
