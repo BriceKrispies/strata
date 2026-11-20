@@ -44,17 +44,6 @@
       "items": [
         "{ledger}"
       ]
-    },
-    {
-      "reason": "Created by crates/runtime/src/sqlite.rs; no shipped record names them (WG-5049).",
-      "items": [
-        "runtime_records",
-        "runtime_outbox",
-        "runtime_timers",
-        "runtime_queue",
-        "runtime_dead_letters",
-        "runtime_tenant"
-      ]
     }
   ],
   "env": [
