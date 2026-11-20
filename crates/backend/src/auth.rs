@@ -212,7 +212,7 @@ pub fn identify(app: &App, caller: &Caller) -> Result<Identity, ApiError> {
     // Sliding idle timeout, written at most once a minute.
     if now - session.last_seen_at.0 > 60_000 {
         session.last_seen_at = app.now();
-        app.store.put_session(&session)?;
+        app.store.session_seen(&session.id, session.last_seen_at)?;
     }
     let verified_address = app
         .store

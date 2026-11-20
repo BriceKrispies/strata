@@ -238,6 +238,26 @@ impl Store for MemoryStore {
         Ok(())
     }
 
+    fn session_seen(&self, id: &SessionId, at: Timestamp) -> StoreResult<()> {
+        if let Some(s) = self.lock()?.sessions.get_mut(id) {
+            s.last_seen_at = at;
+        }
+        Ok(())
+    }
+
+    fn session_authenticated(
+        &self,
+        id: &SessionId,
+        at: Timestamp,
+        network: Option<&str>,
+    ) -> StoreResult<()> {
+        if let Some(s) = self.lock()?.sessions.get_mut(id) {
+            s.authenticated_at = at;
+            s.network = network.map(str::to_string);
+        }
+        Ok(())
+    }
+
     fn session_by_token(&self, token_hash: &str) -> StoreResult<Option<SessionRecord>> {
         Ok(self
             .lock()?

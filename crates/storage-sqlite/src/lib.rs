@@ -1521,6 +1521,45 @@ impl Store for SqliteStore {
         Ok(())
     }
 
+    fn session_seen(&self, id: &SessionId, at: Timestamp) -> StoreResult<()> {
+        let Some(tenant) = self.session_tenant("id", id.as_str())? else {
+            return Ok(());
+        };
+        let Some(file) = self.tenant_db(&tenant)? else {
+            return Ok(());
+        };
+        file.lock()
+            .map_err(dbe)?
+            .execute(
+                "UPDATE sessions SET last_seen_at = ?2 WHERE id = ?1",
+                params![id.as_str(), at.0],
+            )
+            .map_err(db)?;
+        Ok(())
+    }
+
+    fn session_authenticated(
+        &self,
+        id: &SessionId,
+        at: Timestamp,
+        network: Option<&str>,
+    ) -> StoreResult<()> {
+        let Some(tenant) = self.session_tenant("id", id.as_str())? else {
+            return Ok(());
+        };
+        let Some(file) = self.tenant_db(&tenant)? else {
+            return Ok(());
+        };
+        file.lock()
+            .map_err(dbe)?
+            .execute(
+                "UPDATE sessions SET authenticated_at = ?2, network = ?3 WHERE id = ?1",
+                params![id.as_str(), at.0, network],
+            )
+            .map_err(db)?;
+        Ok(())
+    }
+
     fn session_by_token(&self, token_hash: &str) -> StoreResult<Option<SessionRecord>> {
         self.session_where("token_hash", token_hash)
     }
