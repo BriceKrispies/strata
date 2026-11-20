@@ -529,6 +529,22 @@ fn complete(conn: &Connection, tenant: &TenantId) -> StoreResult<Option<TenantSt
 
 fn write_record(tx: &Transaction<'_>, record: &Record) -> StoreResult<()> {
     let (object, id) = (record.object.as_str(), record.id.0 as i64);
+    // A record is created at version 1 and every later write raises its version, so a version 1
+    // write over a stored row would overwrite a record that already exists.
+    if record.version == 1 {
+        let exists: bool = tx
+            .query_row(
+                "SELECT EXISTS (SELECT 1 FROM records WHERE object = ?1 AND id = ?2)",
+                params![object, id],
+                |r| r.get(0),
+            )
+            .map_err(db)?;
+        if exists {
+            return Err(StoreError::Invalid(format!(
+                "create would overwrite an existing record {id} of {object}"
+            )));
+        }
+    }
     tx.execute(
         "INSERT INTO records (object, id, version, data) VALUES (?1, ?2, ?3, ?4)
          ON CONFLICT (object, id) DO UPDATE SET version = excluded.version, data = excluded.data",
@@ -1247,6 +1263,21 @@ impl SqliteStore {
             });
         }
         check_event_sequence(commit, current.as_ref().map_or(0, |h| h.event_seq))?;
+        // Defence in depth: the kernel produces these today, but a bad delta must not reach the
+        // tables. A tenant's revision advances by exactly one, and its record counter never falls.
+        let base = delta.base_revision.map_or(0, |r| r.0);
+        if delta.new_revision.0 != base + 1 {
+            return Err(StoreError::Invalid(
+                "delta does not advance the revision by one".into(),
+            ));
+        }
+        if let Some(stored) = current.as_ref() {
+            if delta.next_record < stored.next_record {
+                return Err(StoreError::Invalid(
+                    "delta moves the record counter backwards".into(),
+                ));
+            }
+        }
 
         let mut members = current
             .as_ref()
