@@ -106,7 +106,9 @@ fn notify() -> AutomationDef {
             AutomationStepDef {
                 action: AutomationStep::SendMail {
                     template: TemplateId("welcome".into()),
-                    to: lit(ADA),
+                    to: Some(lit(ADA)),
+                    address: None,
+                    segment: None,
                     category: Some("receipts".into()),
                 },
                 next: None,

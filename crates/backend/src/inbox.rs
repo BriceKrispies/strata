@@ -903,6 +903,77 @@ pub fn automation_notice(
     )
 }
 
+/// The notice of an automation step `create-notice` to every member of a segment (NTF-3200): the
+/// same capability check as [`automation_notice`], then the batched send of the route (EML-1561),
+/// keyed by the step key, so a step attempted again makes no second job. Answers the send id.
+#[allow(clippy::too_many_arguments)]
+pub fn automation_segment_notice(
+    app: &App,
+    tenant: &TenantId,
+    automation: &PrincipalId,
+    step_key: &str,
+    template: &str,
+    segment: SegmentId,
+    record: Option<u64>,
+    now: Timestamp,
+) -> Result<String, ApiError> {
+    let state = app
+        .store
+        .load(tenant, &[])?
+        .tenant
+        .ok_or_else(|| not_found(format!("no tenant {tenant}")))?;
+    let wanted = BTreeSet::from([Grant::Capability(MESSAGES_SEND.to_string())]);
+    if !holds_any(&state, &Principal::User(automation.clone()), &wanted) {
+        return Err(ApiError::new(
+            ErrorCode::Forbidden,
+            format!("a notice needs the permission {MESSAGES_SEND}, which the automation's run-as roles do not hold"),
+        ));
+    }
+    let notice = Notice {
+        topic: AUTOMATION_TOPIC.to_string(),
+        category: None,
+        template: template.to_string(),
+        values: BTreeMap::new(),
+        reference: None,
+        record,
+        mail: false,
+    };
+    let job = batch_job(tenant, step_key, automation, segment, None, &notice, 1, now)?;
+    if app
+        .store
+        .job(tenant, &strata_storage_api::jobs::job_id(tenant, &job.key))?
+        .is_none()
+    {
+        app.store.jobs_create(tenant, &[job], now)?;
+    }
+    Ok(canon::hash_bytes(
+        format!("strata/notice-send/v1\0{tenant}\0{step_key}").as_bytes(),
+    ))
+}
+
+/// The live notices of `category` that `recipient` holds, created from `since` up to but not
+/// including `until`, oldest first: what a digest of the window lists (NTF-1572).
+pub fn digest_items(
+    app: &App,
+    tenant: &TenantId,
+    recipient: &PrincipalId,
+    category: &str,
+    since: i64,
+    until: i64,
+) -> Result<Vec<Item>, ApiError> {
+    let mut items: Vec<Item> = load_items(app, tenant, recipient)?
+        .into_iter()
+        .filter(|item| {
+            item.live()
+                && item.category.as_deref() == Some(category)
+                && item.created_at >= since
+                && item.created_at < until
+        })
+        .collect();
+    items.reverse();
+    Ok(items)
+}
+
 /// The key of the job of batch `number` of a send, within its tenant.
 fn batch_job_key(tenant: &TenantId, key: &str, number: u64) -> String {
     format!(

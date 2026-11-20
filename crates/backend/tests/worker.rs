@@ -188,7 +188,9 @@ fn mailer() -> AutomationDef {
             step(
                 AutomationStep::SendMail {
                     template: TemplateId("welcome".into()),
-                    to: lit("person@example.org"),
+                    to: Some(lit("person@example.org")),
+                    address: None,
+                    segment: None,
                     category: None,
                 },
                 None,

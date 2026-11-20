@@ -9,6 +9,7 @@ pub mod app;
 pub mod auth;
 #[cfg(feature = "development")]
 pub mod dev;
+pub mod digest;
 pub mod dispatch;
 pub mod erasure;
 pub mod files;

@@ -666,6 +666,10 @@ fn each_section_without_a_kernel_intent_is_refused_naming_it() {
             json!([{ "pool": "tiers__pool", "description": "d" }]),
         ),
         ("ledger-limits", json!([{ "unit": "tiers__points" }])),
+        (
+            "event-kinds",
+            json!([{ "kind": "app.order-placed", "fields": [], "readers": [] }]),
+        ),
     ];
     for (section, value) in filled {
         let mut doc = tiers();
@@ -681,6 +685,55 @@ fn each_section_without_a_kernel_intent_is_refused_naming_it() {
             error.message
         );
         assert_eq!(calls, 0, "{section}");
+    }
+}
+
+/// The event kinds of a bundle are read (SCH-1576, INT-3203): each begins with `app.` and a name,
+/// has at most sixteen fields and is declared once; a bundle that fills the section is named as
+/// holding something this release does not install.
+// Verifies: INT-3203
+#[test]
+fn the_event_kinds_of_a_bundle_are_read_and_checked() {
+    let mut doc = tiers();
+    doc["content"]["event-kinds"] = json!([
+        { "kind": "app.order-placed", "fields": [{ "name": "order", "type": "string" }], "readers": [] },
+        { "kind": "app.order-shipped", "fields": [], "readers": [] }
+    ]);
+    let bundle = read(&doc).unwrap();
+    assert_eq!(
+        bundle
+            .event_kinds
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        ["app.order-placed", "app.order-shipped"]
+    );
+    assert_eq!(bundle.unbuilt.len(), 1);
+    assert_eq!(bundle.unbuilt[0].section, "event-kinds");
+    assert_eq!(bundle.unbuilt[0].entries, 2);
+
+    for (kinds, wanted) in [
+        (
+            json!([{ "kind": "order-placed", "fields": [], "readers": [] }]),
+            "must begin with app.",
+        ),
+        (
+            json!([{ "kind": "app.", "fields": [], "readers": [] }]),
+            "must begin with app.",
+        ),
+        (
+            json!([
+                { "kind": "app.a", "fields": [], "readers": [] },
+                { "kind": "app.a", "fields": [], "readers": [] }
+            ]),
+            "declared twice",
+        ),
+    ] {
+        let mut doc = tiers();
+        doc["content"]["event-kinds"] = kinds;
+        let error = refused(&doc);
+        assert_eq!(error.kind, BundleErrorKind::InvalidBundle);
+        assert!(error.message.contains(wanted), "{}", error.message);
     }
 }
 

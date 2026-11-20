@@ -634,6 +634,48 @@ fn a_personal_field_without_retention_is_refused_and_the_complete_products_carry
     .is_ok());
 }
 
+// Verifies: INT-3203
+#[test]
+fn a_product_declares_an_event_kind_and_a_trigger_selects_it() {
+    let layered = load_with(&[product("event-kinds.jsonc")]).unwrap_or_else(|diagnostics| {
+        panic!(
+            "the event-kinds product was refused:\n{}",
+            diagnostics
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("\n")
+        )
+    });
+    let ids: Vec<(&str, &str)> = layered.products[0]
+        .entities
+        .iter()
+        .map(|e| (e.section.as_str(), e.id.as_str()))
+        .collect();
+    assert!(
+        ids.contains(&("eventKinds", "order_events__placed")),
+        "{ids:?}"
+    );
+    assert!(
+        ids.contains(&("triggers", "order_events__on_placed")),
+        "{ids:?}"
+    );
+}
+
+// Verifies: INT-3203
+#[test]
+fn an_event_kind_without_the_app_prefix_is_refused() {
+    let diagnostics = load_with(&[product("refused/event-kind-prefix.jsonc")]).unwrap_err();
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+    assert_eq!(diagnostics[0].code, layers::EVENT_KIND_INVALID);
+    assert!(
+        diagnostics[0].message.contains("\"order-placed\"")
+            && diagnostics[0].message.contains("\"app.\""),
+        "{}",
+        diagnostics[0].message
+    );
+}
+
 #[test]
 fn a_name_in_a_typed_section_must_be_declared_by_the_product() {
     let diagnostics = load_with(&[product("refused/reference-unknown-object.jsonc")]).unwrap_err();
