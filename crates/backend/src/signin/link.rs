@@ -56,7 +56,7 @@ pub fn same_site_path(next: &str) -> Option<&str> {
 }
 
 /// An origin in the one spelling that is compared and put in links: `http(s)://host[:port]`.
-pub(super) fn site_origin(origin: &str) -> Option<String> {
+pub fn site_origin(origin: &str) -> Option<String> {
     let origin = origin.trim_end_matches('/').to_ascii_lowercase();
     let rest = origin
         .strip_prefix("https://")

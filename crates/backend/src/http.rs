@@ -6,7 +6,7 @@ use crate::service::{self, clients, keys, scim, tokens};
 use crate::signin::{
     link, oidc, passkey, recover, recovery_codes, saml, second, stepup, totp, SignInOutcome,
 };
-use crate::{lab, ops, seed, ws};
+use crate::{lab, ops, provision, seed, ws};
 use axum::extract::ws::WebSocketUpgrade;
 use axum::extract::{Path, Request, State};
 use axum::http::HeaderMap;
@@ -561,6 +561,20 @@ async fn platform_diagnostics(State(app): State<Shared>) -> Result<Json<Json_>, 
     app.blocking(ops::platform_diagnostics).await?.map(Json)
 }
 
+/// Create a tenant while the process runs: install its bundle and give its owner a first login.
+/// The service credential is the only requirement, as for the platform diagnostics, so this is for
+/// the operator's tools on the backend's own network; the BFF has no route to it.
+async fn platform_create_tenant(
+    State(app): State<Shared>,
+    Json(request): Json<provision::CreateTenant>,
+) -> Result<Json<Json_>, ApiError> {
+    let reply = app
+        .blocking(move |app| provision::create_tenant(app, request))
+        .await??;
+    app.hub.committed();
+    Ok(Json(reply))
+}
+
 async fn lab_overview(
     State(app): State<Shared>,
     headers: HeaderMap,
@@ -1105,6 +1119,7 @@ pub fn router(app: Shared) -> Router {
         .route("/internal/members", post(members))
         .route("/internal/diagnostics", post(diagnostics))
         .route("/internal/platform/diagnostics", post(platform_diagnostics))
+        .route("/internal/platform/tenants", post(platform_create_tenant))
         .route("/internal/lab/overview", post(lab_overview))
         .route("/internal/lab/run", post(lab_run))
         .route("/internal/lab/result", post(lab_result))

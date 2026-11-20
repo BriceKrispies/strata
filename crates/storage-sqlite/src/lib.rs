@@ -17,7 +17,9 @@
 //! A tenant file is created by the commit that creates the tenant, and removed by
 //! [`Store::reset_tenant`] and [`Store::reset`]. Removal marks the directory row `deleting`
 //! first, so a tenant whose file could not be removed loads as absent and the next open finishes
-//! the removal.
+//! the removal. An install marks the row `provisioning` after its first commit and `active` after
+//! its last ([`Store::begin_provisioning`], [`Store::finish_provisioning`]); a tenant in that state
+//! loads as absent, and [`Store::rollback_provisioning`] removes it.
 //!
 //! The outbox is per tenant: positions increase in one tenant's commit order and are never
 //! reused within its file. [`Store::outbox`] fans the tenants' outboxes in, and
@@ -61,10 +63,11 @@ const CONTROL_LEDGER: &str = "control_migrations";
 const TENANT_LEDGER: &str = "tenant_migrations";
 
 /// The control database's layout, one step per entry. Steps are only ever appended.
-const CONTROL_MIGRATIONS: &[Migration] = &[Migration {
-    version: 1,
-    name: "tenant directory and session directory",
-    sql: "
+const CONTROL_MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        name: "tenant directory and session directory",
+        sql: "
     CREATE TABLE tenant_directory (
         id         TEXT PRIMARY KEY,
         state      TEXT NOT NULL CHECK (state IN ('active', 'deleting')),
@@ -78,7 +81,38 @@ const CONTROL_MIGRATIONS: &[Migration] = &[Migration {
     );
     CREATE INDEX session_directory_tenant ON session_directory(tenant);
     ",
-}];
+    },
+    Migration {
+        version: 2,
+        name: "directory state provisioning",
+        // The state check cannot be altered, so both tables are rebuilt. The session directory goes
+        // first, and its rows are copied back, so that dropping the old tenant table cascades to
+        // nothing.
+        sql: "
+    DROP INDEX session_directory_tenant;
+    ALTER TABLE session_directory RENAME TO session_directory_old;
+    ALTER TABLE tenant_directory RENAME TO tenant_directory_old;
+    CREATE TABLE tenant_directory (
+        id         TEXT PRIMARY KEY,
+        state      TEXT NOT NULL CHECK (state IN ('active', 'provisioning', 'deleting')),
+        file       TEXT NOT NULL UNIQUE,
+        created_at INTEGER NOT NULL
+    );
+    CREATE TABLE session_directory (
+        id         TEXT PRIMARY KEY,
+        token_hash TEXT NOT NULL UNIQUE,
+        tenant     TEXT NOT NULL REFERENCES tenant_directory(id) ON DELETE CASCADE
+    );
+    INSERT INTO tenant_directory (id, state, file, created_at)
+        SELECT id, state, file, created_at FROM tenant_directory_old;
+    INSERT INTO session_directory (id, token_hash, tenant)
+        SELECT id, token_hash, tenant FROM session_directory_old;
+    DROP TABLE session_directory_old;
+    DROP TABLE tenant_directory_old;
+    CREATE INDEX session_directory_tenant ON session_directory(tenant);
+    ",
+    },
+];
 
 /// A tenant file's layout, one step per entry. Steps are only ever appended.
 ///
@@ -1093,7 +1127,11 @@ impl SqliteStore {
             open.insert(tenant.clone(), found.clone());
             return Ok((found, false));
         }
-        if self.directory_file(tenant, "deleting")?.is_some() {
+        // A `deleting` row is a removal a previous process did not finish, and a `provisioning`
+        // row is an install it did not finish: either way what is there is cleared first.
+        if self.directory_file(tenant, "deleting")?.is_some()
+            || self.directory_file(tenant, "provisioning")?.is_some()
+        {
             drop(open);
             self.remove_tenant(tenant)?;
             open = self.lock_open()?;
@@ -1154,6 +1192,23 @@ impl SqliteStore {
             )
             .map_err(db)
         })?;
+        Ok(())
+    }
+
+    /// Move a tenant's directory row from one state to another. The tenant must be in `from`.
+    fn set_directory_state(&self, tenant: &TenantId, from: &str, to: &str) -> StoreResult<()> {
+        let changed = self.control.write(dbe, |tx| {
+            tx.execute(
+                "UPDATE tenant_directory SET state = ?3 WHERE id = ?1 AND state = ?2",
+                params![tenant.as_str(), from, to],
+            )
+            .map_err(db)
+        })?;
+        if changed == 0 {
+            return Err(StoreError::NotFound(format!(
+                "tenant {tenant} in state {from}"
+            )));
+        }
         Ok(())
     }
 
@@ -3067,5 +3122,28 @@ impl Store for SqliteStore {
 
     fn reset_tenant(&self, tenant: &TenantId) -> StoreResult<()> {
         self.remove_tenant(tenant)
+    }
+
+    fn begin_provisioning(&self, tenant: &TenantId) -> StoreResult<()> {
+        self.set_directory_state(tenant, "active", "provisioning")
+    }
+
+    fn finish_provisioning(&self, tenant: &TenantId) -> StoreResult<()> {
+        self.set_directory_state(tenant, "provisioning", "active")
+    }
+
+    fn rollback_provisioning(&self) -> StoreResult<Vec<TenantId>> {
+        let pending = select_strings(
+            &*self.control.lock().map_err(dbe)?,
+            "SELECT id FROM tenant_directory WHERE state = 'provisioning' ORDER BY id",
+            &[],
+        )?;
+        let mut removed = Vec::new();
+        for id in pending {
+            let tenant = TenantId::new(id).map_err(corrupt_id)?;
+            self.remove_tenant(&tenant)?;
+            removed.push(tenant);
+        }
+        Ok(removed)
     }
 }

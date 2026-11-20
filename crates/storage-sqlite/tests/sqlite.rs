@@ -1247,3 +1247,83 @@ fn open_tenant_files_are_bounded() {
         assert!(store.open_count() <= 2);
     }
 }
+
+/// An install that stopped after its first commit leaves the directory row `provisioning`. No
+/// request reaches such a tenant, and the next start rolls it back, so the install can be made
+/// again from nothing. A finished install is not touched.
+#[test]
+fn an_install_interrupted_after_its_first_commit_is_rolled_back_on_the_next_open() {
+    let path = fresh_path("provisioning");
+    let (half, whole) = (tenant_id("half"), tenant_id("whole"));
+    let create = |store: &SqliteStore, tenant: &TenantId, at: i64| {
+        execute(
+            store,
+            &Intent::CreateTenant {
+                name: tenant.as_str().into(),
+                owner: principal_id("owner"),
+            },
+            &ctx(tenant.as_str(), Principal::System, at),
+        )
+        .unwrap();
+        store.begin_provisioning(tenant).unwrap();
+    };
+    {
+        let store = SqliteStore::open(&path, Timestamp(1)).unwrap();
+        create(&store, &whole, 10);
+        store.finish_provisioning(&whole).unwrap();
+        create(&store, &half, 11);
+        // The process stops here: the second step of `half` is never made.
+    }
+    let store = SqliteStore::open(&path, Timestamp(2)).unwrap();
+    assert!(
+        store.load(&half, &[]).unwrap().tenant.is_none(),
+        "a tenant being installed is not served as an active one"
+    );
+    assert_eq!(
+        store
+            .tenants()
+            .unwrap()
+            .into_iter()
+            .map(|t| t.id)
+            .collect::<Vec<_>>(),
+        vec![whole.clone()]
+    );
+    assert_eq!(store.rollback_provisioning().unwrap(), vec![half.clone()]);
+    assert!(
+        store.rollback_provisioning().unwrap().is_empty(),
+        "a second rollback finds nothing"
+    );
+    assert!(store.load(&whole, &[]).unwrap().tenant.is_some());
+    // The install can be made again from nothing.
+    create(&store, &half, 20);
+    store.finish_provisioning(&half).unwrap();
+    assert!(store.load(&half, &[]).unwrap().tenant.is_some());
+}
+
+/// A `provisioning` row that is met by a new create of the same tenant (an install that stopped
+/// and is made again before anything rolled it back) is cleared, not a collision.
+#[test]
+fn creating_a_tenant_over_a_stale_provisioning_row_starts_from_nothing() {
+    let path = fresh_path("provisioning-stale");
+    let tenant = tenant_id("stale");
+    let make = |store: &SqliteStore| {
+        execute(
+            store,
+            &Intent::CreateTenant {
+                name: "stale".into(),
+                owner: principal_id("owner"),
+            },
+            &ctx("stale", Principal::System, 10),
+        )
+    };
+    {
+        let store = SqliteStore::open(&path, Timestamp(1)).unwrap();
+        make(&store).unwrap();
+        store.begin_provisioning(&tenant).unwrap();
+    }
+    let store = SqliteStore::open(&path, Timestamp(2)).unwrap();
+    make(&store).unwrap();
+    store.begin_provisioning(&tenant).unwrap();
+    store.finish_provisioning(&tenant).unwrap();
+    assert!(store.finish_provisioning(&tenant).is_err());
+}
