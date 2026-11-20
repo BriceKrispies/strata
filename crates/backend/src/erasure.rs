@@ -295,7 +295,6 @@ fn not_reached(unbuilt: Vec<String>, sealing_since: Option<i64>) -> Vec<String> 
         "audit log (tbl-audit-log): lines that name the person only in a member other than principal, actor, subject, by and owner, or that hold a login or an address with no principal named, are not sealed; the log is never rewritten (PRV-359)".to_string(),
         "idempotency keys (tbl-idempotency): a row keeps the hash of the plain request and its result for 24 hours, and is removed by the first commit of the tenant after that".to_string(),
         "sign-in throttle counters (tbl-login-throttle): keyed by a hash of the login, removed by the sweep after their window".to_string(),
-        "files of personal file fields: the field value was cleared, no stored bytes were removed; closes with WG-5118".to_string(),
     ];
     out.extend(unbuilt);
     out
@@ -325,8 +324,9 @@ pub fn erase_subject(app: &App, ctx: &Context, subject: &PrincipalId) -> Result<
     if !is_known(app, ctx, subject, &first)? {
         return Err(not_found());
     }
-    let _files = crate::files::erasure::erase_subject_files(app, ctx, subject)?;
     rights.refuse_if_held(subject)?;
+    // Then the stored files of the person's personal file fields (PRV-1586).
+    let _files = crate::files::erasure::erase_subject_files(app, ctx, subject)?;
     let sessions_before = app
         .store
         .live_sessions_of(tenant, Some(subject), ctx.now)?

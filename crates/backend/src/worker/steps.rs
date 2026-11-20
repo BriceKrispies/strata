@@ -18,12 +18,11 @@
 //! kernel as the automation principal), create a notice in an inbox (`crate::inbox`, keyed by the
 //! step key), wait for a duration or until a time (the next step's job
 //! is created due then: nothing sleeps, D-6535), invoke a tenant operation ([`super::invoke`]), stop
-//! at an approval ([`super::approvals`]), and end. A step that fails for good starts the compensation
-//! of the completed steps ([`super::saga`]). Every other kind of the catalogue fails
-//! is created due then: nothing sleeps, D-6535), send mail (a mail job of the dispatcher created
+//! at an approval ([`super::approvals`]), send mail (a mail job of the dispatcher created
 //! as the automation principal and keyed by the step key, [`crate::dispatch::step_send`]), and
-//! end. Every other kind of the catalogue fails its step with the error "step kind ... is not
-//! built", recorded on the step and the run; it is never skipped.
+//! end. A step that fails for good starts the compensation of the completed steps
+//! ([`super::saga`]). Every other kind of the catalogue fails its step with the error "step kind
+//! ... is not built", recorded on the step and the run; it is never skipped.
 
 use crate::app::App;
 use std::collections::{BTreeMap, BTreeSet};
@@ -769,8 +768,8 @@ fn run_step(
                     runs: vec![run],
                     steps: vec![record],
                     exceptions,
-                    ..WorkerWrites::default()
                     jobs: compensation,
+                    ..WorkerWrites::default()
                 },
             }
         }

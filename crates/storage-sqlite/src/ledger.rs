@@ -78,14 +78,13 @@ pub(crate) const MIGRATION: Migration = Migration {
 };
 
 /// The tenant migration step that moves the limits of single accounts out of the tenant schema
-/// into the ledger's own storage (WG-5172). Its number is not chosen here: the coordinator numbers
-/// the steps of a wave, so this one is added at the end of the list under this name.
+/// into the ledger's own storage (WG-5172): tenant step 19.
 ///
 /// The rows are made from the schema of the tenant (`tenant.schema`, canonical JSON) by SQLite's
 /// JSON functions, and the schema is rewritten without them; the copies in `schema_history` are
 /// history and are left as they were. A limit of a unit (no owner) stays in the schema.
 pub(crate) const ACCOUNT_LIMITS_MIGRATION: Migration = Migration {
-    version: 17,
+    version: 19,
     name: "tenant ledger account limits out of the schema",
     sql: "
     CREATE TABLE ledger_limits (
@@ -118,10 +117,10 @@ pub(crate) const ACCOUNT_LIMITS_MIGRATION: Migration = Migration {
 };
 
 /// The tenant migration step that indexes the accounts by the start of their oldest bucket of
-/// credit (WG-5169). Added at the end of the list under this name; the coordinator numbers it.
+/// credit (WG-5169): tenant step 20.
 /// Accounts that exist already have no bucket, and the column is null for them.
 pub(crate) const EXPIRY_MIGRATION: Migration = Migration {
-    version: 18,
+    version: 20,
     name: "tenant ledger index of the oldest credit bucket",
     sql: "
     ALTER TABLE ledger_accounts ADD COLUMN oldest_bucket INTEGER;

@@ -21,8 +21,7 @@ use strata_protocol::ws::{
     parse_client, ClientMessage, ServerMessage, SessionState, HEARTBEAT_MS, MAX_REPLAY,
     MAX_UNACKED, VERSION,
 };
-use strata_substrate::subscribe::{notice, segment_notice, Selector};
-use strata_substrate::subscribe::{notice, Selector, SelectorExt};
+use strata_substrate::subscribe::{notice, segment_notice, Selector, SelectorExt};
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::mpsc;
 

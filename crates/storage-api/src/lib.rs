@@ -41,11 +41,11 @@ pub mod audit_chain;
 pub mod covering;
 pub mod jobs;
 pub mod memory;
+pub mod schedules;
+pub mod sealed;
 pub mod search;
 pub mod segment_jobs;
 pub mod segment_pump;
-pub mod schedules;
-pub mod sealed;
 pub mod segments;
 
 #[cfg(feature = "conformance")]
@@ -1429,7 +1429,6 @@ pub trait Store: Send + Sync {
         now: Timestamp,
         retention: &schedules::AutomationRetention,
     ) -> StoreResult<schedules::AutomationPurged>;
-
     /// Every setting that has a platform level, in the order of the setting names, with the
     /// removed ones (a revision and no value). The platform level is held by the control plane
     /// beside the tenant directory, never in a tenant's data (CT-303).
@@ -1840,7 +1839,7 @@ pub fn execute_by(
     ctx: &Context,
     deadline: Option<Instant>,
 ) -> Result<Executed, ExecuteError> {
-    execute_admitting(store, intent, ctx, deadline, None)
+    execute_guarded(store, intent, ctx, deadline, None, None)
 }
 
 /// [`execute_by`] with the jobs the commit creates held to the tenant's allowance by `admission`
@@ -1852,7 +1851,7 @@ pub fn execute_admitting(
     deadline: Option<Instant>,
     admission: Option<&dyn admission::JobAdmission>,
 ) -> Result<Executed, ExecuteError> {
-    execute_guarded(store, intent, ctx, deadline, None)
+    execute_guarded(store, intent, ctx, deadline, None, admission)
 }
 
 /// [`execute_by`] for a change decided on the tenant as it was at revision `at`, such as one an
@@ -1868,17 +1867,19 @@ pub fn execute_at(
     deadline: Option<Instant>,
     at: StateRevision,
 ) -> Result<Executed, ExecuteError> {
-    execute_guarded(store, intent, ctx, deadline, Some(at))
+    execute_guarded(store, intent, ctx, deadline, Some(at), None)
 }
 
 /// The body of [`execute_by`] and [`execute_at`]: with `at`, the decision and the commit are for
-/// that revision only and a conflict is never retried.
+/// that revision only and a conflict is never retried; with `admission`, the jobs the commit
+/// creates are held to the tenant's allowance (D-6533).
 fn execute_guarded(
     store: &dyn Store,
     intent: &Intent,
     ctx: &Context,
     deadline: Option<Instant>,
     at: Option<StateRevision>,
+    admission: Option<&dyn admission::JobAdmission>,
 ) -> Result<Executed, ExecuteError> {
     let expired = || {
         deadline.is_some_and(|at| Instant::now() >= at).then(|| {
@@ -1996,8 +1997,6 @@ fn execute_guarded(
             &format!("rev{}", transition.delta.new_revision.0),
             ctx.now,
         ));
-        match store.commit_with_segments(&commit, &decided.write) {
-        let mut commit = Commit::of(intent, ctx, &transition);
         let placements = match admission {
             Some(admission) => admission.admit(
                 &ctx.tenant,

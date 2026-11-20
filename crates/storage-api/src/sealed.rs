@@ -42,13 +42,15 @@ use crate::jobs::{
     ExceptionKind, ExceptionRecord, Job, JobChange, JobReport, Lease, NewJob, Reported, RunRecord,
     RunState, Settled, StepRecord, WorkerWrites,
 };
+use crate::schedules::{AutomationPurged, AutomationRetention, Schedule, ScheduleSet};
 use crate::segments::SegmentCommit;
 use crate::{
     partial_state, Account, AuditEntry, Capabilities, Commit, FederatedIdentity, Health,
     IdempotentResult, JournalEntry, OidcFlow, OutboxEntry, OutboxFault, PasskeyChallenge,
-    PasskeyRecord, PendingSignIn, PrincipalRemoval, Receipt, RecoveryRequest, SamlRequest,
-    SessionRecord, SignInLink, SnapshotInfo, StorageMigration, Store, StoreError, StoreResult,
-    TenantSummary, ThrottleRule, ThrottleSettle, ThrottleVerdict, TotpRecord,
+    PasskeyRecord, PendingSignIn, PlatformSetting, PlatformWrite, PrincipalRemoval, Receipt,
+    RecoveryRequest, SamlRequest, SessionRecord, SignInLink, SnapshotInfo, StorageMigration, Store,
+    StoreError, StoreResult, TenantSummary, ThrottleRule, ThrottleSettle, ThrottleVerdict,
+    TotpRecord,
 };
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
@@ -56,8 +58,8 @@ use std::sync::Arc;
 use strata_kernel::segments as seg;
 use strata_kernel::{
     canon, DataSubject, DeltaOp, DomainEvent, EventBody, FieldId, Intent, Need, ObjectTypeId,
-    PersonalDeclaration, Principal, PrincipalId, Record, RecordId, SessionId, State, StateDelta,
-    TenantId, TenantSchema, TenantState, Timestamp, Value, WorkflowId,
+    PersonalDeclaration, Principal, PrincipalId, Record, RecordId, SessionId, SettingId, State,
+    StateDelta, TenantId, TenantSchema, TenantState, Timestamp, Value, WorkflowId,
 };
 
 /// The start of every sealed value.
@@ -830,6 +832,20 @@ impl SealedStore {
             Need::IndexPage { object, field, .. } => Ok(plan
                 .declaration(object, field)
                 .map(|_| vec![Need::AllOf(object.clone())])),
+            // A pair page over a personal field, or ordered by one, is answered from the opened
+            // records of the type: a token is neither the value that is looked up nor in its order.
+            Need::PairPage {
+                object,
+                field,
+                order,
+                ..
+            } => Ok((plan.declaration(object, field).is_some()
+                || plan.objects.get(object).is_some_and(|fields| {
+                    fields
+                        .keys()
+                        .any(|personal| personal.as_str() == order.as_str())
+                }))
+            .then(|| vec![Need::AllOf(object.clone())])),
             Need::Record { .. } | Need::AllOf(_) | Need::PageOf { .. } | Need::Ledger(_) => {
                 Ok(None)
             }
@@ -960,7 +976,10 @@ impl Store for SealedStore {
         let lookups = needs.iter().any(|need| {
             matches!(
                 need,
-                Need::ByField { .. } | Need::ByFields { .. } | Need::IndexPage { .. }
+                Need::ByField { .. }
+                    | Need::ByFields { .. }
+                    | Need::IndexPage { .. }
+                    | Need::PairPage { .. }
             )
         });
         if !lookups {
@@ -1736,5 +1755,121 @@ impl Store for SealedStore {
 
     fn commit_segments(&self, commit: &SegmentCommit) -> StoreResult<Receipt> {
         self.inner.commit_segments(commit)
+    }
+
+    fn object_revisions(
+        &self,
+        tenant: &TenantId,
+        objects: &[ObjectTypeId],
+    ) -> StoreResult<BTreeMap<ObjectTypeId, u64>> {
+        self.inner.object_revisions(tenant, objects)
+    }
+
+    fn tenant_plan(&self, tenant: &TenantId) -> StoreResult<Option<String>> {
+        self.inner.tenant_plan(tenant)
+    }
+
+    fn set_tenant_plan(&self, tenant: &TenantId, plan: &str) -> StoreResult<()> {
+        self.inner.set_tenant_plan(tenant, plan)
+    }
+
+    fn stored_bytes(&self, tenant: &TenantId) -> StoreResult<u64> {
+        self.inner.stored_bytes(tenant)
+    }
+
+    fn schedule_set(
+        &self,
+        tenant: &TenantId,
+        set: &ScheduleSet,
+        now: Timestamp,
+    ) -> StoreResult<Schedule> {
+        self.inner.schedule_set(tenant, set, now)
+    }
+
+    fn schedule(&self, tenant: &TenantId, id: &str) -> StoreResult<Option<Schedule>> {
+        self.inner.schedule(tenant, id)
+    }
+
+    fn schedules(&self, tenant: &TenantId) -> StoreResult<Vec<Schedule>> {
+        self.inner.schedules(tenant)
+    }
+
+    fn run_key_holder(
+        &self,
+        tenant: &TenantId,
+        automation: &WorkflowId,
+        key: &str,
+    ) -> StoreResult<Option<String>> {
+        self.inner.run_key_holder(tenant, automation, key)
+    }
+
+    fn open_run_key_starts(
+        &self,
+        tenant: &TenantId,
+        automation: &WorkflowId,
+        key: &str,
+    ) -> StoreResult<Vec<Job>> {
+        self.inner.open_run_key_starts(tenant, automation, key)
+    }
+
+    fn purge_automation(
+        &self,
+        now: Timestamp,
+        retention: &AutomationRetention,
+    ) -> StoreResult<AutomationPurged> {
+        self.inner.purge_automation(now, retention)
+    }
+
+    fn platform_settings(&self) -> StoreResult<Vec<PlatformSetting>> {
+        self.inner.platform_settings()
+    }
+
+    fn platform_setting_write(
+        &self,
+        setting: &SettingId,
+        value: Option<&Value>,
+        expected_revision: u64,
+        at: Timestamp,
+    ) -> StoreResult<PlatformWrite> {
+        self.inner
+            .platform_setting_write(setting, value, expected_revision, at)
+    }
+
+    fn segment_cursor(&self, tenant: &TenantId) -> StoreResult<u64> {
+        self.inner.segment_cursor(tenant)
+    }
+
+    /// A probe of a field that holds sealed values cannot use the inner store's index, which holds
+    /// the tokens: it is answered from the opened records of the type, by the kernel's own
+    /// definition of a probe. Any other probe is the inner store's.
+    fn search_candidates(
+        &self,
+        tenant: &TenantId,
+        probe: &strata_kernel::search::Probe,
+    ) -> StoreResult<Vec<strata_kernel::search::Candidate>> {
+        let header = self.inner.load(tenant, &[])?;
+        let Some(head) = header.tenant.as_deref() else {
+            return Ok(Vec::new());
+        };
+        let plan = Plan::of(&head.schema);
+        let sealed = plan
+            .objects
+            .get(&probe.object)
+            .is_some_and(|fields| probe.fields.iter().any(|field| fields.contains_key(field)));
+        if !sealed {
+            return self.inner.search_candidates(tenant, probe);
+        }
+        let state = self.load(tenant, &[Need::AllOf(probe.object.clone())])?;
+        let Some(opened) = state.tenant.as_deref() else {
+            return Ok(Vec::new());
+        };
+        let Some(def) = opened.schema.objects.get(&probe.object) else {
+            return Ok(Vec::new());
+        };
+        Ok(strata_kernel::search::candidates_in(
+            opened.records_of(&probe.object),
+            def,
+            probe,
+        ))
     }
 }

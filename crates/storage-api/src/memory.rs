@@ -12,11 +12,9 @@ use crate::{
     check_event_sequence, partial_state, throttle_refund, throttle_step, Account, AuditEntry,
     Capabilities, Commit, FederatedIdentity, Health, IdempotencyEntry, IdempotentResult,
     JournalEntry, OidcFlow, OutboxEntry, PasskeyChallenge, PasskeyRecord, PendingSignIn,
-    ThrottleRule, ThrottleSettle, ThrottleVerdict, TotpRecord,
     PlatformSetting, PlatformWrite, PrincipalRemoval, Receipt, RecoveryRequest, SamlRequest,
     SessionRecord, SignInLink, SnapshotInfo, StorageMigration, Store, StoreError, StoreResult,
     TenantSummary, ThrottleRow, ThrottleRule, ThrottleSettle, ThrottleVerdict, TotpRecord,
-    IDEMPOTENCY_RETENTION_MS,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};

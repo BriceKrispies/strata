@@ -19,8 +19,8 @@
 
 pub mod activation;
 pub mod aggregates;
-pub mod audience;
 pub mod approvals;
+pub mod audience;
 pub mod automation;
 pub mod blocks;
 pub mod canon;

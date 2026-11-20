@@ -1,29 +1,28 @@
 //! Subscriptions as data, and the pure decision of what a subscriber is told about an event.
 
 use serde::{Deserialize, Serialize};
+use std::fmt::Write as _;
+use std::sync::OnceLock;
 use strata_kernel::rules::Lookup;
 use strata_kernel::segment_flow;
 use strata_kernel::segments::{self as seg, Segment, SegmentDirection, SegmentEvent, SegmentId};
-use std::fmt::Write as _;
-use std::sync::OnceLock;
-use strata_kernel::ledger::may_read_account;
 use strata_kernel::{
     owner_role, visible, DomainEvent, EventBody, LedgerAccountId, LedgerScope, LedgerUnit,
-    ObjectTypeId, Principal, RecordId, SettingId, SettingLevel, TeamId, TenantState,
-    owner_role, visible, DomainEvent, EventBody, ObjectTypeId, Principal, PrincipalId, RecordId,
-    SettingId, SettingLevel, State, TeamId, TenantState,
-    owner_role, visible, DomainEvent, EventBody, LedgerAccountId, LedgerUnit, ObjectTypeId,
-    Principal, RecordId, SettingId, SettingLevel, TeamId, TenantState,
+    ObjectTypeId, Principal, PrincipalId, RecordId, SettingId, SettingLevel, State, TeamId,
+    TenantState,
 };
 use strata_model_core::types::EventKind;
 
-pub const EVENT_KINDS: [&str; 9] = [
-    "ledger-entry-posted",
 /// What a subscriber wants to hear about: the specification's type `selector` (SCH-1575), as
 /// specc generates it. Every member is optional and an absent member matches everything; members
 /// combine as AND, the values of one member as OR. A selector narrows what a subscriber is told
 /// and never widens it: what remains is still decided by the kernel's read decision for that
 /// subscriber. Build one from a request with [`SelectorExt::new`].
+///
+/// `segments` selects the entry and exit events of segments (SEG-033, D-7280). They are not
+/// events of the kernel's sequence, so a selector that names segments hears only those, which are
+/// told by [`segment_notice`], and a selector that does not name them never hears one. `units`
+/// limits the ledger events to postings of those units.
 pub use strata_model_core::types::Selector;
 
 /// The names of the variants of the generated `event-body` union, as serde knows them, written the
@@ -69,21 +68,6 @@ fn kebab(ident: &str) -> String {
 
 /// The kind of an event: the name of its body's variant in the specification (`event-kind`).
 ///
-/// `segments` is not a member here: the kernel emits no segment event yet, and [`Selector::new`]
-/// refuses a request that names one rather than match nothing silently.
-/// `units` is not a member here: no ledger event of a unit is emitted yet, and [`Selector::new`]
-/// refuses a request that names one rather than match nothing silently.
-///
-/// `segments` selects the entry and exit events of segments (SEG-033, D-7280). They are not
-/// events of the kernel's sequence, so a selector that names segments hears only those, which are
-/// told by [`segment_notice`], and a selector that does not name them never hears one.
-    /// Limit to the ledger events of these units (SCH-1575): a selector that names units hears of
-    /// postings to the accounts of those units and of nothing else. `None` means every unit.
-    #[serde(default)]
-    pub units: Option<BTreeSet<LedgerUnit>>,
-    /// Limit to the entry and exit events of these segments. `None` selects no segment event.
-    #[serde(default)]
-    pub segments: Option<BTreeSet<SegmentId>>,
 /// The name is the variant's own, taken from the first thing its derived `Debug` writes, so no
 /// match arm names it and a new variant has a kind at once.
 pub fn kind_of(body: &EventBody) -> String {
@@ -107,8 +91,8 @@ pub trait SelectorExt {
     fn all() -> Selector;
 
     /// A selector from the members of a subscription request, or the reason it is refused: a name
-    /// that is not valid, a kind the kernel does not emit, a member that names nothing, or a
-    /// member (`segments`) whose events the kernel does not emit yet.
+    /// that is not valid, a kind the kernel does not emit, a segment id that is not one, or a
+    /// member that names nothing.
     fn new(
         objects: Option<Vec<String>>,
         kinds: Option<Vec<String>>,
@@ -140,10 +124,6 @@ impl SelectorExt for Selector {
         }
     }
 
-    /// name that is not valid, a kind the kernel does not emit, or a member (`segments`) whose
-    /// events the kernel does not emit yet.
-    /// name that is not valid, a kind the kernel does not emit, a segment id that is not one, or
-    /// a member (`units`) whose events are not emitted yet.
     fn new(
         objects: Option<Vec<String>>,
         kinds: Option<Vec<String>>,
@@ -151,15 +131,6 @@ impl SelectorExt for Selector {
         units: Option<Vec<String>>,
         transitions: Option<Vec<String>>,
     ) -> Result<Selector, String> {
-        let units = units
-            .map(|names| {
-                names
-                    .into_iter()
-                    .map(LedgerUnit::new)
-                    .collect::<Result<BTreeSet<_>, _>>()
-                    .map_err(|e| e.to_string())
-            })
-            .transpose()?;
         let segments = segments
             .map(|names| {
                 if names.is_empty() {
@@ -171,7 +142,8 @@ impl SelectorExt for Selector {
                         serde_json::from_value::<SegmentId>(serde_json::Value::String(name.clone()))
                             .map_err(|_| format!("{name:?} is not a segment id"))
                     })
-                    .collect::<Result<BTreeSet<_>, _>>()
+                    .collect::<Result<Vec<_>, _>>()
+                    .map(tidy)
             })
             .transpose()?;
         let units = units
@@ -243,11 +215,9 @@ impl SelectorExt for Selector {
         Ok(Selector {
             objects,
             kinds,
-            segments: None,
+            segments,
             units,
             transitions,
-            units,
-            segments,
         })
     }
 
@@ -270,14 +240,6 @@ impl SelectorExt for Selector {
                 .iter()
                 .flat_map(|by_workflow| by_workflow.values());
             if !fired.any(|name| wanted.contains(name)) {
-                return false;
-            }
-        }
-        if let Some(wanted) = &self.units {
-            let EventBody::LedgerEntryPosted { unit, .. } = &event.body else {
-                return false;
-            };
-            if !wanted.contains(unit) {
                 return false;
             }
         }
@@ -384,14 +346,6 @@ pub fn segment_notice(
             direction: event.direction,
             position,
         })
-    /// An entry was posted in an account the subscriber may read: the subscriber reads the
-    /// account again through the ledger's own reads. The notice names neither the owner (who is
-    /// personal) nor the amount.
-    Ledger {
-        account: LedgerAccountId,
-        unit: LedgerUnit,
-        entry_sequence: u64,
-    },
 }
 
 /// Decide what, if anything, a subscriber learns from an event.
@@ -511,19 +465,6 @@ pub fn notice(
             unit: unit.clone(),
             scope: (!scope.as_str().is_empty()).then(|| scope.clone()),
             sequence: *entry_sequence,
-        }),
-        // A posting reaches whoever may read the account (a holder of ledger-read, or the person
-        // who owns it), by the ledger's own read decision; the owner is personal and is not named.
-        EventBody::LedgerEntryPosted {
-            account,
-            owner,
-            unit,
-            entry_sequence,
-            ..
-        } => may_read_account(tenant, principal, owner).then(|| Notice::Ledger {
-            account: *account,
-            unit: unit.clone(),
-            entry_sequence: *entry_sequence,
         }),
     }
 }
@@ -743,7 +684,6 @@ mod tests {
         let tenant = &world.tenants[&tenant_id("alpha")];
         let everything = Selector {
             objects: Some([object("note")].into()),
-            segments: None,
             kinds: Some(vec![
                 EventKind::new("record-created").unwrap(),
                 EventKind::new("record-updated").unwrap(),
@@ -922,7 +862,8 @@ mod tests {
                 "",
             ),
             unit,
-            entry_sequence: 1,
+            scope: None,
+            sequence: 1,
         };
         assert_eq!(told(&user("alpha:owner"), &all), Some(expected.clone()));
         assert_eq!(told(&user("alpha:writer1"), &all), Some(expected.clone()));

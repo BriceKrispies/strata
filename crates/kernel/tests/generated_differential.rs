@@ -84,10 +84,6 @@
 //!      AGG-001 to AGG-023): the generated `schema-problems` states none of them, and the
 //!      aggregate itself is not a read of the generated `kernel-read`. The corpus defines no
 //!      query with an aggregate.
-//!      on one that has a role. No principal of the corpus starts with `automation:`. A trigger of
-//!      the event ledger-posted starts a run for the entry a ledger posting writes, with the
-//!      parameters owner, unit, amount, balance, balance_before, entry_sequence and reason; the
-//!      generated `event-params` does not, and the generator declares no ledger unit.
 //!   9. Not mirrored, in the trigger decisions of `strata_kernel::triggers` (the rest of the module
 //!      is mirrored by `after-decision`): (a) the check that a condition or a run key reads nothing
 //!      the automation principal may not read (`unreadable`, which declines with `condition-failed`)
@@ -98,7 +94,11 @@
 //!      `trigger-start` writes the canonical JSON itself (`value-canonical-json`) and the test
 //!      hashes it with `canon::hash_bytes` before comparing, which compares the hash of the same
 //!      text; a run key that is a list holding a list is written one level deep only, and the
-//!      corpus has no such key. Guarded: `assert_no_input_of_a_known_difference` fails on a trigger
+//!      corpus has no such key; (c) the parameters of a run started by a trigger of the event
+//!      ledger-posted, which starts a run for the entry a ledger posting writes, with the
+//!      parameters owner, unit, amount, balance, balance_before, entry_sequence and reason: the
+//!      generated `event-params` does not, and the generator declares no ledger unit and posts
+//!      nothing (difference 11). Guarded: `assert_no_input_of_a_known_difference` fails on a trigger
 //!      condition or an automation run key that follows a reference or reads a field some object
 //!      type protects with a read condition.
 //!  10. Not exercised, and not mirrored: the invocation of a tenant operation (`InvokeOperation`,
@@ -106,14 +106,6 @@
 //!      with `operation:decided_by_the_kernel` and the generated `needs` plans nothing for it,
 //!      because the function language does not state the decision yet. The operation generator
 //!      draws no invocation, and `compare_transition` fails on one.
-//!      ledger, and `compare_transition` on a posting. Also not mirrored, for the same reason
-//!      (WG-5168, WG-5169, WG-5172): a policy over the ledger resource (the generated
-//!      `policy-problems` checks its condition against no fields and has no arm for the fields of
-//!      an account), the buckets of credit of an account header and the expiry of a unit, the
-//!      limits of single accounts that live in the ledger's state and not in the schema, and the
-//!      intent `ExpireLedger`, which the generated `intent-decision` refuses with
-//!      `ledger:decided_by_the_ledger_module`. Guarded by the same assertion, which also fails on
-//!      a policy that names the ledger, and by `compare_transition` on that intent.
 //!  11. Not mirrored: the posting of the tenant ledger (`strata_kernel::ledger::post`, the
 //!      `PostLedger` intent, a transfer as two postings committed together; WG-5083) and
 //!      everything that reads an account. An account is named by a UUID derived from the
@@ -130,20 +122,28 @@
 //!      references of a trigger, an automation step and an operation step to a unit, and, compared
 //!      directly (`the_ledger_periods_and_limits_agree_with_the_generated_functions`), the
 //!      calendar periods and the limits of an account (`ledger-period-start`, `ledger-limits-of`).
-//!      Guarded: `assert_no_input_of_a_known_difference` fails on a snapshot whose state holds a
-//!      ledger (an account or an entry), and `compare_transition` on a posting.
+//!      Also not mirrored, for the same reason (WG-5168, WG-5169, WG-5172): a policy over the
+//!      ledger resource (the generated `policy-problems` checks its condition against no fields
+//!      and has no arm for the fields of an account), the buckets of credit of an account header
+//!      and the expiry of a unit, the limits of single accounts that live in the ledger's state
+//!      and not in the schema, and the intent `ExpireLedger`, which the generated
+//!      `intent-decision` refuses with `ledger:decided_by_the_ledger_module`. Guarded:
+//!      `assert_no_input_of_a_known_difference` fails on a snapshot whose state holds a ledger
+//!      (an account or an entry) and on a policy that names the ledger, and `compare_transition`
+//!      on a posting or an expiry.
 //!  12. Not exercised, and not mirrored: the checks of the declarations of an object type, of the
-//!      templates, tokens and product records of the tenant schema that the hand-written `schema.problems` makes through
-//!      `object_meta::problems`, `templates::problems` and `products::problems` (retention from a
-//!      timestamp field, the states of a publication, the type of a language field, the one-line
-//!      subject of a template, the expression of a token, the owner of an entity), and the
-//!      removal of an object type with the deletion of its records. Also the blocks of a template
-//!      body (`blocks::analyse`: the block schema, the tokens and typed values it places, the
-//!      allowed link schemes and the nesting bound, D-7900) and the refusal of a schema change
-//!      from outside a product to an entity it owns (`products::foreign_change`, with the
-//!      capability bundle-install of a change that carries a product record, D-6582, INT-1582):
-//!      the generated `schema-problems` and `change-schema` do not state them. The generator
-//!      draws no such declaration, template, token or product record.
+//!      templates, tokens and product records of the tenant schema that the hand-written
+//!      `schema.problems` makes through `object_meta::problems`, `templates::problems` and
+//!      `products::problems` (retention from a timestamp field, the states of a publication, the
+//!      type of a language field, the one-line subject of a template, the expression of a token,
+//!      the owner of an entity, the searchable fields of an object type), and the removal of an
+//!      object type with the deletion of its records. Also the blocks of a template body
+//!      (`blocks::analyse`: the block schema, the tokens and typed values it places, the allowed
+//!      link schemes and the nesting bound, D-7900) and the refusal of a schema change from
+//!      outside a product to an entity it owns (`products::foreign_change`, with the capability
+//!      bundle-install of a change that carries a product record, D-6582, INT-1582): the generated
+//!      `schema-problems` and `change-schema` do not state them. The generator draws no such
+//!      declaration, template, token or product record.
 //!  13. Not exercised, and not mirrored: planned named queries (`strata_kernel::query_plan`,
 //!      KRN-2520 to KRN-2524, KRN-2920 to KRN-2923). The hand-written kernel serves a query whose
 //!      filter has an indexable condition from `Need::IndexPage` candidates, and an equality or a
@@ -164,58 +164,59 @@
 //!  14. Not exercised, and not mirrored: the erasure of a data subject (`EraseSubject`,
 //!      `crates/kernel/src/erasure.rs`, D-7460). The generated `intent-decision` refuses it with
 //!      `erasure:decided_by_the_kernel` and the generated `needs` plans nothing for it. The
-//!  17. Not mirrored: the checks of an invoke-operation step (`definitions::invoke_operation_problems`,
-//!      WG-5154): the operation exists, the run-as roles may invoke it, and its inputs are declared,
-//!      present when required and of the shape of their type. The generated
-//!      `automation-step-problems` checks only the expressions of its inputs. Guarded:
-//!      `assert_no_input_of_a_known_difference` fails on an automation that holds such a step.
 //!      operation generator draws no erasure, and `compare_transition` fails on one. The same
 //!      holds for the deletion of records past their retention (`ExpireRecords`,
 //!      `crates/kernel/src/retention.rs`, PRV-357): refused by the generated `intent-decision`
 //!      with `retention:decided_by_the_kernel`, nothing planned by the generated `needs`.
+//!  15. Not mirrored: the checks of an invoke-operation step
+//!      (`definitions::invoke_operation_problems`, WG-5154): the operation exists, the run-as
+//!      roles may invoke it, and its inputs are declared, present when required and of the shape
+//!      of their type. The generated `automation-step-problems` checks only the expressions of its
+//!      inputs. Guarded: `assert_no_input_of_a_known_difference` fails on an automation that holds
+//!      such a step.
 //!
 //! Every difference that is not compared through an adjustment is guarded, so that a corpus that
 //! grows into one is told to mirror the rule or to count the difference here:
 //! `assert_no_input_of_a_known_difference` runs on every snapshot the test decides or reads and
-//! fails on an input of differences 2, 7, 8, 9, 11 or 12; `compare_transition` fails on an
+//! fails on an input of differences 2, 7, 8, 9, 11, 12 or 15; `compare_transition` fails on an
 //! intent of differences 10, 11 or 14 and on a schema change that warns of a scan (difference
-//! 13); `compare_read` fails on a read of a planned query (difference 13). Difference 1 is
-//! compared through an adjustment (the detail's prefix) and the run key of difference 9 through
-//! another (`hash_run_keys`). Differences 3 to 6 are guarded by the operation generator drawing
-//! nothing that reaches them.
+//! 13); `compare_read` fails on a read of a planned query (difference 13); `compare_attributed`
+//! fails on an update that changes a reference (difference 2). Difference 1 is compared through
+//! an adjustment (the detail's prefix) and the run key of difference 9 through another
+//! (`hash_run_keys`). Differences 3 to 6 are guarded by the operation generator drawing nothing
+//! that reaches them.
 //!
-//! Mirrored, so no longer differences: the automation principal (`automation:<id>` holds the
-//! run-as roles of its automation and no other, and the prefix is reserved: `roles-of`,
-//! `reserved-principal`, `automation-roles`; WG-5160), the trigger decisions at commit (the
-//! effects `StartAutomation` and `DeclineAutomation`, the `transitions` of a record-updated event,
-//! the definer and time stamped on a trigger or an automation, the suspension of an automation
-//! whose definer lost authority: `after-decision`, `stamp-definitions`; WG-5136), layered settings
-//! and product capabilities (the write of an override, the resolution, the effects of a change of
-//! definitions, the checks of definitions and of the grants of declared capabilities:
-//! `write-setting`, `resolve-setting`, `setting-change-effects`, `setting-problems`,
-//! `capability-problems`, `capability-grant-problem`; WG-5140), the declarations of the tenant
-//! ledger (units, pools and limits: `apply-change`, `ledger-problems`, `ledger-removal-check`,
-//! `ledger-change-needs`, the capability `ledger-configure`; WG-5170), the size limits of `limits.rs` (the bytes of a record, the
 //! Mirrored, so no longer differences: a policy condition of a transition that follows a
 //! reference, through the lookup the snapshot gives, and the `InsufficientState` naming the record
 //! it needs when the snapshot does not cover it (`authorize-needing`, `require`; WG-5132,
 //! WG-5133), compared by `compare_attributed` on a policy that reads `record.author.name`, over
-//! the complete snapshot and over one that covers only what the intent plans to load; the size
-//! limits of `limits.rs` (the bytes of a record, the length of a string or a list, the encoded
-//! size of a value of a unique field: `record-limit-check`, `limit-step`; WG-5092), the
-//! field-level read conditions (`redact`, in `kernel-read` and
-//! `named-read`; WG-5093), the deletion of a record that two fields of one record refer to (one
-//! rewrite per record; WG-5094), the problems of a schema that `schema-problems` did not state:
-//! counts and limits, field read conditions, the permissions of roles, teams and invitations
-//! (WG-5095, WG-5077); and in an earlier pass: authorisation before the lookup of an object
-//! type or a record (`object-def`, `stored`), the conferral of a role counting policies
-//! (`may-confer`, `holds-policy-power`), a revocation asking for the authority to confer, the
-//! owner that remains counting teams (`owner-lost`), the second authorisation of an update after
-//! workflow assignments, the reserved `team:` prefix (`reserved-principal`), the records a
-//! schema change rewrites (version one higher, an event each), the limit of 200 changes in one
-//! schema change, the permissions of a role granting before any policy (`permission:role`), the
-//! plan of a schema change (`ref-needs`) and a query filter that cannot be evaluated on a record
-//! leaving the record out.
+//! the complete snapshot and over one that covers only what the intent plans to load; the
+//! automation principal (`automation:<id>` holds the run-as roles of its automation and no other,
+//! and the prefix is reserved: `roles-of`, `reserved-principal`, `automation-roles`; WG-5160), the
+//! trigger decisions at commit (the effects `StartAutomation` and `DeclineAutomation`, the
+//! `transitions` of a record-updated event, the definer and time stamped on a trigger or an
+//! automation, the suspension of an automation whose definer lost authority: `after-decision`,
+//! `stamp-definitions`; WG-5136), layered settings and product capabilities (the write of an
+//! override, the resolution, the effects of a change of definitions, the checks of definitions and
+//! of the grants of declared capabilities: `write-setting`, `resolve-setting`,
+//! `setting-change-effects`, `setting-problems`, `capability-problems`,
+//! `capability-grant-problem`; WG-5140), the declarations of the tenant ledger (units, pools and
+//! limits: `apply-change`, `ledger-problems`, `ledger-removal-check`, `ledger-change-needs`, the
+//! capability `ledger-configure`; WG-5170), the size limits of `limits.rs` (the bytes of a record,
+//! the length of a string or a list, the encoded size of a value of a unique field:
+//! `record-limit-check`, `limit-step`; WG-5092), the field-level read conditions (`redact`, in
+//! `kernel-read` and `named-read`; WG-5093), the deletion of a record that two fields of one
+//! record refer to (one rewrite per record; WG-5094), the problems of a schema that
+//! `schema-problems` did not state: counts and limits, field read conditions, the permissions of
+//! roles, teams and invitations (WG-5095, WG-5077); and in an earlier pass: authorisation before
+//! the lookup of an object type or a record (`object-def`, `stored`), the conferral of a role
+//! counting policies (`may-confer`, `holds-policy-power`), a revocation asking for the authority
+//! to confer, the owner that remains counting teams (`owner-lost`), the second authorisation of
+//! an update after workflow assignments, the reserved `team:` prefix (`reserved-principal`), the
+//! records a schema change rewrites (version one higher, an event each), the limit of 200 changes
+//! in one schema change, the permissions of a role granting before any policy (`permission:role`),
+//! the plan of a schema change (`ref-needs`) and a query filter that cannot be evaluated on a
+//! record leaving the record out.
 
 use proptest::prelude::*;
 use proptest::strategy::ValueTree;
@@ -1379,7 +1380,7 @@ fn assert_no_input_of_a_known_difference(state: &State) {
             .policies
             .values()
             .all(|policy| !matches!(policy.resource, Resource::Ledger { .. })),
-        "{} has a policy over the ledger; the generated functions do not mirror it (difference 13)",
+        "{} has a policy over the ledger; the generated functions do not mirror it (difference 11)",
         tenant.id
     );
     assert!(
@@ -1396,8 +1397,7 @@ fn assert_no_input_of_a_known_difference(state: &State) {
                 && def.language_field.is_none()
                 && def.translation_group.is_none()
                 && def.searchable.is_none(),
-            "{object_id} declares retention, publication, a language field, a translation group or searchable fields; the generated functions do not state their checks (difference 14)"
-            "{object_id} declares retention, publication, a language field or a translation group; the generated functions do not state their checks (difference 12)"
+            "{object_id} declares retention, publication, a language field, a translation group or searchable fields; the generated functions do not state their checks (difference 12)"
         );
     }
     let protected: BTreeSet<&str> = tenant
@@ -1437,7 +1437,7 @@ fn assert_no_input_of_a_known_difference(state: &State) {
             );
             assert!(
                 !matches!(step.action, AutomationStep::InvokeOperation { .. }),
-                "{}.{name} invokes an operation; the generated functions do not check the operation, its invokers or its inputs (difference 17)",
+                "{}.{name} invokes an operation; the generated functions do not check the operation, its invokers or its inputs (difference 15)",
                 automation.id
             );
         }
@@ -1609,9 +1609,11 @@ fn compare_transition(state: &State, intent: &Intent, context: &Context, tally: 
         "{label}: the generated functions do not decide a tenant operation (difference 10)"
     );
     assert!(
-        !matches!(intent, Intent::PostLedger { .. } | Intent::ExpireLedger { .. }),
-        "{label}: the generated functions do not decide a posting or an expiry (difference 13)"
-        "{label}: the generated functions do not decide a posting (difference 11)"
+        !matches!(
+            intent,
+            Intent::PostLedger { .. } | Intent::ExpireLedger { .. }
+        ),
+        "{label}: the generated functions do not decide a posting or an expiry (difference 11)"
     );
     assert!(
         !matches!(intent, Intent::EraseSubject { .. }),
@@ -1619,7 +1621,7 @@ fn compare_transition(state: &State, intent: &Intent, context: &Context, tally: 
     );
     assert!(
         !matches!(intent, Intent::ExpireRecords { .. }),
-        "{label}: the generated functions do not decide a retention deletion (difference 16)"
+        "{label}: the generated functions do not decide a retention deletion (difference 14)"
     );
     let mut hand = transition(state, intent, context);
     assert_no_scan_warning(state, intent, &hand);

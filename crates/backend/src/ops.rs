@@ -19,8 +19,7 @@ use strata_kernel::{
 use strata_protocol::api::{
     ErrorCode, MembersReply, MembersRequest, Mutation, MutationReply, ViewRequest, MAX_VIEW_LIMIT,
 };
-use strata_storage_api::{execute_admitting, ExecuteError, Executed};
-use strata_storage_api::{execute_at, execute_by, ExecuteError, Executed, StoreError};
+use strata_storage_api::{execute_admitting, execute_at, ExecuteError, Executed, StoreError};
 use strata_substrate::plain::coerce_fields;
 use strata_substrate::project::{
     aggregate_request_with, decode_cursor, encode_cursor, included_refs, match_route,
@@ -56,9 +55,6 @@ pub fn run_intent(
     intent: &Intent,
     anonymous: bool,
 ) -> Result<Executed, ApiError> {
-    // A write past the tenant's stored-bytes allowance is refused, naming the quota (BIL-151).
-    crate::quota::check_write(app, ctx, intent)?;
-    crate::files::attach::check_intent(app, ctx, intent)?;
     run_intent_at(app, ctx, intent, anonymous, None)
 }
 
@@ -72,6 +68,10 @@ pub fn run_intent_at(
     anonymous: bool,
     at: Option<StateRevision>,
 ) -> Result<Executed, ApiError> {
+    // A file attached to a record must be one the caller may attach (w5fileref).
+    crate::files::attach::check_intent(app, ctx, intent)?;
+    // A write past the tenant's stored-bytes allowance is refused, naming the quota (BIL-151).
+    crate::quota::check_write(app, ctx, intent)?;
     // A change of someone's roles ends their sessions in the commit itself. The ones that are
     // live now are noted first, to be announced and to have their sockets closed.
     let affected = match intent {
@@ -89,12 +89,16 @@ pub fn run_intent_at(
     // "timed out" is not committed afterwards; a retry with the same key learns the outcome.
     // The jobs the commit creates are held to the tenant's allowance, never refusing the change
     // (D-6533).
-    let result = execute_admitting(
-        Some(&crate::quota::JobAdmitter { app }),
     let deadline = strata_runtime::server::work_deadline();
     let result = match at {
         Some(at) => execute_at(app.store.as_ref(), intent, ctx, deadline, at),
-        None => execute_by(app.store.as_ref(), intent, ctx, deadline),
+        None => execute_admitting(
+            app.store.as_ref(),
+            intent,
+            ctx,
+            deadline,
+            Some(&crate::quota::JobAdmitter { app }),
+        ),
     };
     app.stats.in_flight.fetch_sub(1, Ordering::Relaxed);
     match &result {

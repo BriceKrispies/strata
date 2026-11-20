@@ -66,11 +66,9 @@ use strata_storage_api::{
     check_event_sequence, field_matches, throttle_refund, throttle_step, Account, AuditEntry,
     Capabilities, Commit, FederatedIdentity, Health, IdempotentResult, JournalEntry, OidcFlow,
     OutboxEntry, OutboxFault, PasskeyCeremony, PasskeyChallenge, PasskeyRecord, PendingSignIn,
-    ThrottleRule, ThrottleSettle, ThrottleVerdict, TotpRecord,
     PlatformSetting, PlatformWrite, PrincipalRemoval, Receipt, RecoveryRequest, SamlRequest,
     SessionRecord, SignInLink, SnapshotInfo, StorageMigration, Store, StoreError, StoreResult,
     TenantSummary, ThrottleRow, ThrottleRule, ThrottleSettle, ThrottleVerdict, TotpRecord,
-    IDEMPOTENCY_RETENTION_MS,
 };
 
 mod index_page;
@@ -148,7 +146,6 @@ const CONTROL_MIGRATIONS: &[Migration] = &[
     ",
     },
     Migration {
-        // Numbered by the coordinator: appended at the end of the control steps.
         version: 4,
         name: TENANT_PLAN_MIGRATION_NAME,
         sql: TENANT_PLAN_MIGRATION_SQL,
@@ -165,10 +162,9 @@ const TENANT_PLAN_MIGRATION_SQL: &str =
 /// The platform level of settings (CT-303, SET-030, SET-051): one row per setting name, holding
 /// the value as JSON text (null once removed) and the revision, which rises at every change and
 /// is never reused. It belongs to the control plane, so it is in the control database and in no
-/// tenant's file. Its version number is the next free one at the time of writing; the coordinator
-/// numbers the control steps of every branch together.
+/// tenant's file.
 const CONTROL_PLATFORM_SETTINGS: Migration = Migration {
-    version: 4,
+    version: 5,
     name: "platform level of settings",
     sql: "
     CREATE TABLE platform_settings (
@@ -570,13 +566,11 @@ const TENANT_MIGRATIONS: &[Migration] = &[
         name: "pair index of named queries",
         sql: pair_index::PAIR_INDEX_SQL,
     },
-    // The number of this step is the coordinator's to assign.
     Migration {
-        version: 17,
+        version: 18,
         name: "search entries",
         sql: search_index::SEARCH_ENTRIES_SQL,
     },
-    // The steps of the ledger's fourth wave, named; the coordinator numbers them.
     ledger::ACCOUNT_LIMITS_MIGRATION,
     ledger::EXPIRY_MIGRATION,
     OBJECT_REVISIONS_MIGRATION,
@@ -588,7 +582,7 @@ const TENANT_MIGRATIONS: &[Migration] = &[
 /// writes or deletes a record of the type. The row with the empty object is raised when a snapshot
 /// is restored, and counts toward every object type.
 const OBJECT_REVISIONS_MIGRATION: Migration = Migration {
-    version: 17,
+    version: 21,
     name: "change counters of the object types",
     sql: "
     CREATE TABLE object_revisions (
@@ -609,13 +603,12 @@ fn raise_object_revision(tx: &Transaction<'_>, object: &str) -> StoreResult<()> 
     Ok(())
 }
 
-/// The step after the last numbered one (WG-5155, WG-5157, WG-5164): the schedules of the worker
+/// Tenant step 22 (WG-5155, WG-5157, WG-5164): the schedules of the worker
 /// (rec-schedule), the run keys of its automations (rec-automation-run-key), and the retention
 /// of an idempotency entry as a property of the entry (`expires_at`: the time of its recording and
 /// the retention its request stated). The rows that exist get the twenty-four hours they had.
-/// The coordinator numbers this step.
 const SCHEDULES_RUN_KEYS_RETENTION: Migration = Migration {
-    version: 17,
+    version: 22,
     name: "schedules, run keys and per-entry idempotency retention",
     sql: "
     ALTER TABLE idempotency ADD COLUMN expires_at INTEGER;
@@ -634,13 +627,12 @@ const SCHEDULES_RUN_KEYS_RETENTION: Migration = Migration {
     ",
 };
 
-/// The audit chain and the schema history without people (PRV-359, PRV-360, WG-5110, WG-5111):
+/// Tenant step 23: the audit chain and the schema history without people (PRV-359, PRV-360, WG-5110, WG-5111):
 /// each audit line gets a chain value (`strata_storage_api::audit_chain`; a line written before
 /// has none and is counted as before the chain), and the stored history of the schema loses its
-/// teams and invitations, which name people and which nothing reads from the history. The
-/// coordinator gives the step its number at the end of the list.
+/// teams and invitations, which name people and which nothing reads from the history.
 const SEALING_MIGRATION: Migration = Migration {
-    version: 17,
+    version: 23,
     name: "audit chain values, and the schema history without teams and invitations",
     sql: "
     ALTER TABLE audit_log ADD COLUMN chain TEXT;
@@ -2016,7 +2008,9 @@ impl SqliteStore {
         object: &strata_kernel::ObjectTypeId,
         id: strata_kernel::RecordId,
     ) -> StoreResult<Vec<String>> {
-        self.on_existing(tenant, |conn| search_index::stored_entries(conn, object, id))
+        self.on_existing(tenant, |conn| {
+            search_index::stored_entries(conn, object, id)
+        })
     }
 
     /// Run `work` on the file of a tenant that exists, or answer `NotFound`.
