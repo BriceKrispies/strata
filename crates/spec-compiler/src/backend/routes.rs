@@ -129,6 +129,11 @@ pub const AUTH_STRUCTURED: &str = "contract.auth-structured";
 /// Code of a served contract that states no exposure, or whose scheme does not fit it (Exegra's
 /// code).
 pub const EXPOSURE: &str = "contract.exposure";
+/// Code of a public or internal contract that states no `tenantScope`.
+pub const TENANT_SCOPE_MISSING: &str = "contract.tenant-scope-missing";
+/// Code of a contract whose `tenantScope` and auth cannot be enforced together: platform scope
+/// with a credential that carries a tenant or none, or tenant policies outside request scope.
+pub const TENANT_SCOPE_AUTH: &str = "contract.tenant-scope-auth";
 /// Code of an error body that cannot be generated: its type, fields or runtime mapping (Exegra's
 /// `generation.error-body-*` rules, under one code).
 pub const ERROR_BODY_INVALID: &str = "specc.error-body-invalid";
@@ -463,6 +468,42 @@ fn check_access(c: &Contract) -> Vec<Diagnostic> {
                 auth.scheme.name()
             ),
         ));
+    }
+    if exposure != Exposure::Local {
+        match c.tenant_scope {
+            None => out.push(Diagnostic::new(
+                TENANT_SCOPE_MISSING,
+                &c.id,
+                format!(
+                    "Contract \"{}\" is served but states no \"tenantScope\" (request, none or platform), so nothing says whose data it may touch.",
+                    c.id
+                ),
+            )),
+            Some(TenantScope::Platform)
+                if !matches!(auth.scheme, Scheme::Session | Scheme::Service | Scheme::Signature) =>
+            {
+                out.push(Diagnostic::new(
+                    TENANT_SCOPE_AUTH,
+                    &c.id,
+                    format!(
+                        "Contract \"{}\" has the tenant scope platform with the scheme {}; a platform call needs a principal that belongs to no tenant, which only the session, service and signature schemes can establish.",
+                        c.id,
+                        auth.scheme.name()
+                    ),
+                ));
+            }
+            Some(_) => {}
+        }
+        if auth.tenant_policies && c.tenant_scope != Some(TenantScope::Request) {
+            out.push(Diagnostic::new(
+                TENANT_SCOPE_AUTH,
+                &c.id,
+                format!(
+                    "Contract \"{}\" says the tenant's policies decide but its tenant scope is not request; a tenant's policies apply only inside that tenant.",
+                    c.id
+                ),
+            ));
+        }
     }
     if let Some(Err(why)) = step_up_ms(auth) {
         out.push(Diagnostic::new(
@@ -1392,7 +1433,7 @@ fn authorizer_items() -> TokenStream {
             access: &strata_runtime::Access,
             request: &strata_runtime::Presented<'_>,
         ) -> Result<strata_runtime::Caller, strata_runtime::Refusal> {
-            use strata_runtime::{Exposure, FailureCode, Scheme, TenantScope};
+            use strata_runtime::{Exposure, FailureCode, Scheme};
             let refuse = |code: FailureCode, message: &str| strata_runtime::Refusal {
                 code,
                 message: message.to_string(),
@@ -1536,15 +1577,9 @@ fn authorizer_items() -> TokenStream {
                     return Err(unauthenticated("prove who you are again to do this"));
                 }
             }
-            if access.tenant_scope == Some(TenantScope::Request) {
-                let Some(site) = &site else {
-                    return Err(refuse(FailureCode::Forbidden, "the request addresses no site"));
-                };
-                let own = principal.as_ref().and_then(|principal| principal.tenant.as_deref());
-                if own.is_some_and(|tenant| tenant != site.tenant) {
-                    return Err(refuse(FailureCode::Forbidden, "the caller belongs to another tenant"));
-                }
-            }
+            access
+                .check_tenant(principal.as_ref(), site.as_ref())
+                .map_err(|message| refuse(FailureCode::Forbidden, message))?;
             if !access.requires.is_empty() {
                 let tenant = principal
                     .as_ref()
@@ -1594,7 +1629,7 @@ fn authorizer_items() -> TokenStream {
                 .as_ref()
                 .and_then(|principal| principal.tenant.clone())
                 .or_else(|| site.as_ref().map(|site| site.tenant.clone()));
-            if let Some(tenant) = tenant {
+            if let Some(tenant) = tenant.filter(|_| access.carries_tenant()) {
                 attributes.insert("tenant".to_string(), tenant);
             }
             if let Some(role) = role {
@@ -2100,8 +2135,7 @@ mod tests {
 
     /// The contracts with the access every test but the access tests takes for granted: internal,
     /// with the service credential.
-    const SERVICE: &str =
-        r#""implementedBy": "svc", "exposure": "internal", "auth": { "scheme": "service" }"#;
+    const SERVICE: &str = r#""implementedBy": "svc", "exposure": "internal", "tenantScope": "platform", "auth": { "scheme": "service" }"#;
 
     fn spec_with(generation: &str, types: &str, contracts: &str) -> Spec {
         let contracts = if contracts.contains("\"exposure\"") {
@@ -2254,8 +2288,8 @@ mod tests {
             r#"{ "id": "a", "name": "A", "realisation": "generated", "implementedBy": "svc", "auth": { "scheme": "service" } },
                { "id": "b", "name": "B", "realisation": "generated", "implementedBy": "svc", "exposure": "internal", "auth": "Any operator." },
                { "id": "c", "name": "C", "realisation": "generated", "implementedBy": "svc", "exposure": "internal" },
-               { "id": "d", "name": "D", "realisation": "generated", "implementedBy": "svc", "exposure": "internal", "auth": { "scheme": "in-process" } },
-               { "id": "e", "name": "E", "realisation": "generated", "implementedBy": "svc", "exposure": "public", "auth": { "scheme": "signature" } }"#,
+               { "id": "d", "name": "D", "realisation": "generated", "implementedBy": "svc", "exposure": "internal", "tenantScope": "request", "auth": { "scheme": "in-process" } },
+               { "id": "e", "name": "E", "realisation": "generated", "implementedBy": "svc", "exposure": "public", "tenantScope": "request", "auth": { "scheme": "signature" } }"#,
         );
         assert_eq!(
             codes(&s),
@@ -2267,6 +2301,45 @@ mod tests {
                 AUTH_STRUCTURED
             ]
         );
+    }
+
+    /// Negative fixtures of the tenant scope: a served contract with none, platform scope on a
+    /// scheme that carries a tenant or no principal, and tenant policies outside request scope.
+    #[test]
+    fn a_served_contract_must_state_a_tenant_scope_the_authorizer_can_enforce() {
+        let s = spec(
+            r#"{ "id": "a", "name": "A", "realisation": "generated", "implementedBy": "svc", "exposure": "internal", "tenantScope": "platform", "auth": { "scheme": "service" } },
+               { "id": "b", "name": "B", "realisation": "generated", "implementedBy": "svc", "exposure": "public", "tenantScope": "platform", "auth": { "scheme": "anonymous" } },
+               { "id": "c", "name": "C", "realisation": "generated", "implementedBy": "svc", "exposure": "public", "tenantScope": "none", "auth": { "scheme": "session", "tenantPolicies": true } },
+               { "id": "d", "name": "D", "realisation": "generated", "implementedBy": "svc", "exposure": "public", "tenantScope": "request", "auth": { "scheme": "session", "tenantPolicies": true } },
+               { "id": "e", "name": "E", "realisation": "generated", "implementedBy": "svc", "exposure": "internal", "tenantScope": "platform", "auth": { "scheme": "service" } }"#,
+        );
+        let found: Vec<(String, String)> = RoutesBackend
+            .check(&s)
+            .into_iter()
+            .map(|d| (d.code, d.entity))
+            .collect();
+        assert_eq!(
+            found,
+            [
+                (TENANT_SCOPE_MISSING.to_string(), "a".to_string()),
+                (TENANT_SCOPE_AUTH.to_string(), "b".to_string()),
+                (TENANT_SCOPE_AUTH.to_string(), "c".to_string()),
+            ]
+        );
+    }
+
+    /// The authorizer calls the one tenant check of `Access`, and a call outside any tenant
+    /// carries no tenant.
+    #[test]
+    fn the_authorizer_checks_the_tenant_through_the_access() {
+        let s = spec(EXPOSED);
+        let text = squeezed(RoutesBackend.emit(&s));
+        assert!(
+            text.contains("access.check_tenant(principal.as_ref(),site.as_ref())"),
+            "{text}"
+        );
+        assert!(text.contains("access.carries_tenant()"), "{text}");
     }
 
     /// Once the specification states capabilities, a served contract reachable from outside its
@@ -2293,8 +2366,8 @@ mod tests {
             .unwrap()
         };
         let refused = with_model(
-            r#"{ "id": "a", "name": "A", "realisation": "generated", "implementedBy": "svc", "exposure": "internal", "auth": { "scheme": "service" } },
-               { "id": "b", "name": "B", "realisation": "generated", "implementedBy": "svc", "exposure": "internal", "auth": { "scheme": "service", "requires": ["write"] } },
+            r#"{ "id": "a", "name": "A", "realisation": "generated", "implementedBy": "svc", "exposure": "internal", "tenantScope": "platform", "auth": { "scheme": "service" } },
+               { "id": "b", "name": "B", "realisation": "generated", "implementedBy": "svc", "exposure": "internal", "tenantScope": "platform", "auth": { "scheme": "service", "requires": ["write"] } },
                { "id": "c", "name": "C", "realisation": "generated", "implementedBy": "svc", "exposure": "local", "auth": { "scheme": "in-process" } }"#,
         );
         assert_eq!(
@@ -2305,7 +2378,7 @@ mod tests {
             ]
         );
         let ready = with_model(
-            r#"{ "id": "a", "name": "A", "realisation": "generated", "implementedBy": "svc", "exposure": "internal", "auth": { "scheme": "service", "requires": ["read", "premium"] } }"#,
+            r#"{ "id": "a", "name": "A", "realisation": "generated", "implementedBy": "svc", "exposure": "internal", "tenantScope": "platform", "auth": { "scheme": "service", "requires": ["read", "premium"] } }"#,
         );
         assert!(codes(&ready).is_empty(), "{:?}", codes(&ready));
         let text = squeezed(RoutesBackend.emit(&ready));
@@ -2335,7 +2408,7 @@ mod tests {
     }
 
     const EXPOSED: &str = r#"{ "id": "pub", "name": "Pub", "realisation": "generated", "implementedBy": "svc", "exposure": "public", "readOnly": true, "tenantScope": "request", "auth": { "scheme": "anonymous" } },
-        { "id": "int", "name": "Int", "realisation": "generated", "implementedBy": "svc", "exposure": "internal", "auth": { "scheme": "service" } },
+        { "id": "int", "name": "Int", "realisation": "generated", "implementedBy": "svc", "exposure": "internal", "tenantScope": "platform", "auth": { "scheme": "service" } },
         { "id": "loc", "name": "Loc", "realisation": "generated", "implementedBy": "svc", "exposure": "local", "auth": { "scheme": "in-process" } },
         { "id": "own", "name": "Own", "realisation": "generated", "implementedBy": "svc", "exposure": "public", "tenantScope": "request", "development": "DEV",
           "auth": { "scheme": "session", "roles": ["owner"], "csrf": true, "origin": true, "stepUp": "15 min" } }"#;

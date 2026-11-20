@@ -180,6 +180,64 @@ impl Access {
         ..Access::LOCAL
     };
 
+    /// The tenant check of one call: whether `principal` may make it at `site`.
+    ///
+    /// - `request`: the request must address a site; a principal must belong to that site's
+    ///   tenant, so a principal that belongs to no tenant is refused. A call with no principal
+    ///   (an anonymous scheme) is made in the site's tenant.
+    /// - `none`: no tenant's data, so any principal may call and the call carries no tenant.
+    /// - `platform`: data across tenants, so the call needs a principal that belongs to no
+    ///   tenant (an operator or a service); a principal bound to a tenant is refused.
+    /// - Unstated, with `tenant_policies`: as `request`, because the tenant's policies decide
+    ///   only inside the tenant.
+    /// - Unstated, without `tenant_policies`: no check (a local or hand-built access).
+    ///
+    /// The error is the message of the refusal, which is `forbidden`.
+    pub fn check_tenant(
+        &self,
+        principal: Option<&Principal>,
+        site: Option<&Site>,
+    ) -> Result<(), &'static str> {
+        match self.tenant_scope {
+            Some(TenantScope::Request) => self.check_in_site(principal, site),
+            Some(TenantScope::None) => Ok(()),
+            Some(TenantScope::Platform) => match principal {
+                None => Err("a platform call needs a platform principal"),
+                Some(principal) if principal.tenant.is_some() => {
+                    Err("a platform call cannot be made by a principal of a tenant")
+                }
+                Some(_) => Ok(()),
+            },
+            None if self.tenant_policies => self.check_in_site(principal, site),
+            None => Ok(()),
+        }
+    }
+
+    fn check_in_site(
+        &self,
+        principal: Option<&Principal>,
+        site: Option<&Site>,
+    ) -> Result<(), &'static str> {
+        let Some(site) = site else {
+            return Err("the request addresses no site");
+        };
+        match principal.map(|principal| principal.tenant.as_deref()) {
+            None => Ok(()),
+            Some(Some(tenant)) if tenant == site.tenant => Ok(()),
+            Some(Some(_)) => Err("the caller belongs to another tenant"),
+            Some(None) => Err("the caller belongs to no tenant"),
+        }
+    }
+
+    /// Whether the call carries the tenant of the site or principal as its tenant: not for
+    /// `none` and `platform`, which are made outside any one tenant.
+    pub fn carries_tenant(&self) -> bool {
+        !matches!(
+            self.tenant_scope,
+            Some(TenantScope::None | TenantScope::Platform)
+        )
+    }
+
     /// An internal contract anyone on the service network may call, such as a health check.
     pub const INTERNAL_ANONYMOUS: Access = Access {
         exposure: Exposure::Internal,
@@ -1020,6 +1078,90 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn scoped(scope: Option<TenantScope>) -> Access {
+        Access {
+            tenant_scope: scope,
+            ..Access::SERVICE
+        }
+    }
+
+    fn person(tenant: Option<&str>) -> Principal {
+        Principal {
+            subject: "p".into(),
+            kind: "person".into(),
+            tenant: tenant.map(str::to_string),
+            ..Principal::default()
+        }
+    }
+
+    fn site(tenant: &str) -> Site {
+        Site {
+            tenant: tenant.into(),
+            origins: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn request_scope_refuses_a_principal_with_no_tenant() {
+        let access = scoped(Some(TenantScope::Request));
+        assert_eq!(
+            access.check_tenant(Some(&person(None)), Some(&site("a"))),
+            Err("the caller belongs to no tenant")
+        );
+        assert_eq!(
+            access.check_tenant(Some(&person(Some("b"))), Some(&site("a"))),
+            Err("the caller belongs to another tenant")
+        );
+        assert_eq!(
+            access.check_tenant(Some(&person(Some("a"))), Some(&site("a"))),
+            Ok(())
+        );
+        assert_eq!(access.check_tenant(None, Some(&site("a"))), Ok(()));
+        assert_eq!(
+            access.check_tenant(Some(&person(Some("a"))), None),
+            Err("the request addresses no site")
+        );
+    }
+
+    #[test]
+    fn platform_scope_needs_a_principal_with_no_tenant() {
+        let access = scoped(Some(TenantScope::Platform));
+        assert!(access.check_tenant(None, Some(&site("a"))).is_err());
+        assert!(access
+            .check_tenant(Some(&person(Some("a"))), Some(&site("a")))
+            .is_err());
+        assert_eq!(access.check_tenant(Some(&person(None)), None), Ok(()));
+        assert!(!access.carries_tenant());
+    }
+
+    #[test]
+    fn none_scope_makes_no_tenant_demand_and_carries_no_tenant() {
+        let access = scoped(Some(TenantScope::None));
+        assert_eq!(access.check_tenant(None, None), Ok(()));
+        assert_eq!(
+            access.check_tenant(Some(&person(Some("a"))), Some(&site("b"))),
+            Ok(())
+        );
+        assert!(!access.carries_tenant());
+        assert!(scoped(Some(TenantScope::Request)).carries_tenant());
+    }
+
+    #[test]
+    fn tenant_policies_hold_only_inside_the_tenant() {
+        let access = Access {
+            tenant_policies: true,
+            ..scoped(None)
+        };
+        assert!(access
+            .check_tenant(Some(&person(None)), Some(&site("a")))
+            .is_err());
+        assert!(access.check_tenant(Some(&person(Some("a"))), None).is_err());
+        assert_eq!(
+            access.check_tenant(Some(&person(Some("a"))), Some(&site("a"))),
+            Ok(())
+        );
+    }
 
     #[derive(Debug, PartialEq, Serialize, Deserialize)]
     enum Oops {

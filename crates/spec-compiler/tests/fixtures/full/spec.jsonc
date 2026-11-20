@@ -106,7 +106,7 @@
       ] }
   ],
   "contracts": [
-    { "id": "create-tenant", "name": "Create tenant", "ref": "CT-001", "realisation": "generated", "implementedBy": "gateway", "exposure": "internal", "auth": { "scheme": "session", "requires": ["tenants-create"], "roles": ["operator"], "csrf": true, "origin": true, "description": "An operator of the control plane." }, "idempotent": true, "timeoutMs": 2000, "policyDefault": "deny",
+    { "id": "create-tenant", "name": "Create tenant", "ref": "CT-001", "realisation": "generated", "implementedBy": "gateway", "exposure": "internal", "tenantScope": "platform", "auth": { "scheme": "session", "requires": ["tenants-create"], "roles": ["operator"], "csrf": true, "origin": true, "description": "An operator of the control plane." }, "idempotent": true, "timeoutMs": 2000, "policyDefault": "deny",
       "description": "Creates a tenant and reserves its slug.",
       "inputs": [{ "name": "slug", "type": "string" }, { "name": "plan-seats", "type": "u32" }, { "name": "parent", "type": "tenant-id", "optional": true }, { "name": "type", "type": "string", "optional": true, "description": "A free-form tenant category." }],
       "outputs": [{ "name": "tenant-id", "type": "tenant-id" }, { "name": "state", "type": "tenant-state" }],
@@ -121,7 +121,7 @@
       "inputs": [{ "name": "account-id", "type": "account-id" }, { "name": "amount", "type": "money" }, { "name": "deadline", "type": "deadline" }],
       "outputs": [{ "name": "sequence", "type": "sequence" }],
       "postconditions": ["Exactly one ledger entry is appended with the next sequence number.", "The account balance changes by the amount."] },
-    { "id": "close-account", "name": "Close account", "ref": "CT-003", "realisation": "generated", "implementedBy": "identity", "exposure": "internal", "auth": { "scheme": "service", "requires": ["accounts-close"] }, "timeoutMs": 10000,
+    { "id": "close-account", "name": "Close account", "ref": "CT-003", "realisation": "generated", "implementedBy": "identity", "exposure": "internal", "tenantScope": "platform", "auth": { "scheme": "service", "requires": ["accounts-close"] }, "timeoutMs": 10000,
       "inputs": [{ "name": "account-id", "type": "account-id" }, { "name": "grace", "type": "duration" }],
       "outputs": [],
       "errors": [{ "name": "still-funded", "condition": "The balance is not zero.", "type": "money", "status": 409 }, { "name": "location-unknown", "type": "geo-point" }] },
