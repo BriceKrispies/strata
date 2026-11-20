@@ -553,25 +553,6 @@ fn substitute(text: &str, values: &BTreeMap<String, String>) -> String {
     out
 }
 
-/// The text of structured blocks: each string of an array, and the `text` of each block, in order.
-fn block_text(blocks: &Json_, out: &mut Vec<String>) {
-    match blocks {
-        Json_::String(text) => out.push(text.clone()),
-        Json_::Array(items) => items.iter().for_each(|item| block_text(item, out)),
-        Json_::Object(members) => {
-            if let Some(Json_::String(text)) = members.get("text") {
-                out.push(text.clone());
-            }
-            for (name, member) in members {
-                if name != "text" && matches!(member, Json_::Array(_) | Json_::Object(_)) {
-                    block_text(member, out);
-                }
-            }
-        }
-        _ => {}
-    }
-}
-
 /// Text only: control characters other than a line break are dropped, and the text is cut at the
 /// longest a notice holds.
 fn plain(text: &str, limit: usize) -> String {
@@ -590,16 +571,20 @@ fn plain(text: &str, limit: usize) -> String {
 }
 
 /// A template rendered for one recipient as text: its title on one line and its body (NTF-1570).
-/// The values are the sender's; no field of a record is placed here, so nothing of a record the
-/// recipient may not read can reach the text.
-pub fn render(title: &str, blocks: &str, values: &BTreeMap<String, String>) -> (String, String) {
-    let mut lines = Vec::new();
-    if let Ok(parsed) = serde_json::from_str::<Json_>(blocks) {
-        block_text(&parsed, &mut lines);
-    }
+/// The body is rendered by `strata_kernel::blocks::render`, as a mail body is: each value it
+/// places is text, and each token is the text `token` gives. The values are the sender's; no
+/// field of a record is placed here, so nothing of a record the recipient may not read can reach
+/// the text. Why not, when the body does not render.
+pub fn render(
+    title: &str,
+    blocks: &str,
+    values: &BTreeMap<String, String>,
+    token: &dyn Fn(&str) -> Option<String>,
+) -> Result<(String, String), String> {
+    let typed = crate::dispatch::render::typed_values(blocks, values)?;
+    let done = strata_kernel::blocks::render(blocks, &typed, token).map_err(|e| e.to_string())?;
     let title = plain(&substitute(title, values), 998).replace('\n', " ");
-    let body = plain(&substitute(&lines.join("\n"), values), MAX_BODY_BYTES);
-    (title, body)
+    Ok((title, plain(&done.text, MAX_BODY_BYTES)))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -811,7 +796,27 @@ pub fn deliver(
     } else {
         PushState::Sent
     };
-    let (title, body) = render(&template.title, template.body.as_str(), &notice.values);
+    // A token has no reader here yet (CTK-015): it renders as its fallback text.
+    let tokens = |name: &str| {
+        state
+            .schema
+            .tokens
+            .as_ref()
+            .and_then(|all| all.get(name))
+            .map(|token| token.fallback.clone())
+    };
+    let (title, body) = render(
+        &template.title,
+        template.body.as_str(),
+        &notice.values,
+        &tokens,
+    )
+    .map_err(|problem| {
+        invalid(format!(
+            "The template {} does not render: {problem}.",
+            notice.template
+        ))
+    })?;
     let item = Item {
         id: id.clone(),
         recipient: recipient.as_str().to_string(),

@@ -195,7 +195,7 @@ impl Backend {
                 json!({
                     "template": "welcome",
                     "title": "Hello {{name}}",
-                    "body": "[{\"type\":\"paragraph\",\"text\":\"Welcome, {{name}}.\"}]",
+                    "body": "[{\"type\":\"paragraph\",\"inlines\":[{\"type\":\"text\",\"text\":\"Welcome, \"},{\"type\":\"value\",\"name\":\"name\",\"value_type\":\"str\"},{\"type\":\"text\",\"text\":\".\"}]}]",
                     "expected_version": self.schema_version(),
                 }),
             )
@@ -339,20 +339,17 @@ fn a_template_is_rendered_as_text_from_the_values_and_expands_nothing_twice() {
         ("name".to_string(), "Ines <b>{{secret}}</b>".to_string()),
         ("secret".to_string(), "hidden".to_string()),
     ]);
-    let (title, body) = inbox::render(
-        "Hello {{name}}",
-        "[{\"type\":\"paragraph\",\"text\":\"Dear {{ name }}\"},\"Second\"]",
-        &values,
-    );
+    let body = |text: &str| {
+        format!(
+            "[{{\"type\":\"paragraph\",\"inlines\":[{{\"type\":\"text\",\"text\":\"{text}\"}},{{\"type\":\"value\",\"name\":\"name\",\"value_type\":\"str\"}}]}},{{\"type\":\"paragraph\",\"inlines\":[{{\"type\":\"text\",\"text\":\"Second\"}}]}}]"
+        )
+    };
+    let (title, text) =
+        inbox::render("Hello {{name}}", &body("Dear "), &values, &|_| None).expect("rendered");
     assert_eq!(title, "Hello Ines <b>{{secret}}</b>");
-    assert_eq!(body, "Dear Ines <b>{{secret}}</b>\nSecond");
-    // A name with no value is nothing, and a block's type is not text.
-    let (_, body) = inbox::render(
-        "t",
-        "[{\"type\":\"paragraph\",\"text\":\"a{{missing}}b\"}]",
-        &values,
-    );
-    assert_eq!(body, "ab");
+    assert_eq!(text, "Dear Ines <b>{{secret}}</b>\n\nSecond");
+    // A value the body places and the send does not give refuses the notice.
+    assert!(inbox::render("t", &body("a"), &BTreeMap::new(), &|_| None).is_err());
 }
 
 // Verifies: NTF-1569
@@ -1167,7 +1164,9 @@ fn install(app: &App) {
                 SchemaChange::DefineNoticeTemplate(NoticeTemplateDecl {
                     template: TemplateId("update".into()),
                     title: "An update".into(),
-                    body: StructuredBlocks("[{\"text\":\"Something changed.\"}]".into()),
+                    body: StructuredBlocks(
+                        "[{\"type\":\"paragraph\",\"inlines\":[{\"type\":\"text\",\"text\":\"Something changed.\"}]}]".into(),
+                    ),
                 }),
                 SchemaChange::DefineAutomation(notifier("notify", "messenger")),
                 SchemaChange::DefineAutomation(notifier("hush", "bystander")),

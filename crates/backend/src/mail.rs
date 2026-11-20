@@ -35,11 +35,22 @@ pub struct MailError(pub String);
 /// the message itself (an address it cannot read, a message it cannot build), not the moment.
 pub const PERMANENT: &str = "permanent: ";
 
+/// The prefix of the text of an error that is the deployment's, not the message's: the provider
+/// rejects the credential. No message is marked failed for it; the job is attempted again once
+/// the configuration is mended.
+pub const CONFIGURATION: &str = "configuration: ";
+
 impl MailError {
     /// Whether the transport refused the message for a permanent reason (EML-008); any other
     /// refusal is temporary and the message is attempted again (EML-007).
     pub fn permanent(&self) -> bool {
         self.0.starts_with(PERMANENT)
+    }
+
+    /// Whether the provider rejected the credential: a failure of the configuration, which says
+    /// nothing about the message.
+    pub fn configuration(&self) -> bool {
+        self.0.starts_with(CONFIGURATION)
     }
 }
 

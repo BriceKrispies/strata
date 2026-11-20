@@ -432,7 +432,25 @@ fn deliver(
             now,
         );
     };
-    let mut rendered: Rendered = render::render(decl, &request.values);
+    let tokens = |name: &str| {
+        schema
+            .tokens
+            .as_ref()
+            .and_then(|all| all.get(name))
+            .map(|token| token.fallback.clone())
+    };
+    let mut rendered: Rendered = match render::render(decl, &request.values, &tokens) {
+        Ok(rendered) => rendered,
+        Err(problem) => {
+            return fail_for_good(
+                app,
+                tenant,
+                &mut record,
+                format!("invalid: the template does not render: {problem}"),
+                now,
+            )
+        }
+    };
     if let Some(problem) = render::header_problem(&rendered.subject) {
         return fail_for_good(
             app,
@@ -589,6 +607,9 @@ fn deliver(
             save(app, tenant, &record);
             succeeded(WorkerWrites::default())
         }
+        // The credential is rejected: the deployment is misconfigured and the message is not at
+        // fault, so it is not marked failed; the job is attempted again.
+        Err(error) if error.configuration() => try_again(app, tenant, lease, None, error.0, now),
         Err(error) if error.permanent() => fail_for_good(app, tenant, &mut record, error.0, now),
         Err(error) => try_again(app, tenant, lease, Some(&mut record), error.0, now),
     }

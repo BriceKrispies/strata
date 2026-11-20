@@ -80,15 +80,20 @@ impl Mailer for Flaky {
     }
 }
 
+/// The body of `welcome`: "Hello " and the value `name`, placed as text.
+const HELLO: &str = r#"[{"type":"paragraph","inlines":[{"type":"text","text":"Hello "},{"type":"value","name":"name","value_type":"str"}]}]"#;
+/// The body of `plain`, which places no value.
+const PLAIN: &str = r#"[{"type":"paragraph","inlines":[{"type":"text","text":"Hello there"}]}]"#;
+
 fn template(id: &str, subject: &str) -> SchemaChange {
     SchemaChange::DefineMailTemplate(MailTemplateDecl {
         template: TemplateId(id.into()),
         subject: subject.into(),
-        body: StructuredBlocks(r#"[{"type":"paragraph","text":"Hello {{name}}"}]"#.into()),
+        body: StructuredBlocks(if id == "plain" { PLAIN } else { HELLO }.into()),
     })
 }
 
-/// `notify`: sends the template `welcome` to Ada in the category `receipts`, run as a writer,
+/// `notify`: sends the template `plain` to Ada in the category `receipts`, run as a writer,
 /// who holds messages-send.
 fn notify() -> AutomationDef {
     let send = StepName::new("send").unwrap();
@@ -105,7 +110,7 @@ fn notify() -> AutomationDef {
             send,
             AutomationStepDef {
                 action: AutomationStep::SendMail {
-                    template: TemplateId("welcome".into()),
+                    template: TemplateId("plain".into()),
                     to: lit(ADA),
                     category: Some("receipts".into()),
                 },
@@ -158,6 +163,7 @@ fn install(app: &App, tenant: &str, subject: &str) {
             field: field_def("tier", FieldType::Str, false),
         },
         template("welcome", subject),
+        template("plain", "Hello there"),
         SchemaChange::DefineRolePermissions {
             role: role("writer"),
             permissions: vec![Permission::Capability("messages-send".into())],
@@ -840,7 +846,7 @@ fn an_automations_send_mail_step_sends_once() {
         &app,
         &tenant,
         &WorkflowId::new("notify").unwrap(),
-        &TemplateId("welcome".into()),
+        &TemplateId("plain".into()),
         &text(ADA),
         Some("receipts"),
         &key,
@@ -910,5 +916,362 @@ fn another_tenants_templates_suppressions_and_log_are_invisible() {
             .0
             .code,
         ErrorCode::Forbidden
+    );
+}
+
+// ---------------------------------------------------------------------------------------------
+// The mail conformance table, against the local adapter (EML-001)
+// ---------------------------------------------------------------------------------------------
+
+use strata_backend::dispatch::adapter::{LocalAdapter, Refusal, ReportRefusal};
+use strata_storage_api::{Commit, StoreError};
+
+const CREDENTIAL: &str = "local-credential";
+const REPORT_KEY: &[u8] = b"local-report-signing-key";
+
+/// An app that sends through a local adapter with the given size limit, and the adapter.
+fn with_adapter(limit: usize) -> (Shared, Arc<LocalAdapter>) {
+    let adapter = Arc::new(LocalAdapter::new(CREDENTIAL, REPORT_KEY).with_limit(limit));
+    let app = app_with(adapter.clone());
+    install(&app, "alpha", "Hello {{name}}");
+    (app, adapter)
+}
+
+/// A message to Ada that the dispatcher has sent: its id.
+fn sent_message(app: &App) -> String {
+    let done = send(app, "alpha", address(ADA), Some("receipts"), "k-sent").unwrap();
+    drain(app, T0);
+    let id = message_of(&done);
+    assert_eq!(state(app, "alpha", &id), MessageState::Sent);
+    id
+}
+
+fn plain_mail(subject: &str, text: &str) -> Mail {
+    Mail {
+        to: ADA.into(),
+        subject: subject.into(),
+        text: text.into(),
+        ..Mail::default()
+    }
+}
+
+/// The rows of the table `cases-mail-conformance` in the text of the specification, first column.
+fn spec_mail_cases() -> Vec<String> {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../specifications/spec.jsonc");
+    let spec = std::fs::read_to_string(path).expect("the specification file");
+    let line = spec
+        .lines()
+        .find(|line| {
+            line.trim_start()
+                .starts_with("{\"id\":\"cases-mail-conformance\"")
+        })
+        .expect("the specification has a cases-mail-conformance section");
+    let section: serde_json::Value =
+        serde_json::from_str(line.trim().trim_end_matches(',')).expect("the section is JSON");
+    section["body"]
+        .as_str()
+        .expect("the section has a body")
+        .lines()
+        .filter(|row| row.starts_with('|'))
+        .skip(2)
+        .filter_map(|row| row.trim_matches('|').split('|').next())
+        .map(|cell| cell.trim().to_string())
+        .collect()
+}
+
+/// Run one row of the table against a fresh local adapter, directly and through the dispatcher.
+fn mail_case(case: &str) {
+    let tenant = tenant_id("alpha");
+    match case {
+        "accepted" => {
+            let (app, adapter) = with_adapter(4_096);
+            let first = adapter.submit("key-1", &plain_mail("Hi", "text")).unwrap();
+            assert_eq!(first.reference, "local-1");
+            assert!(!first.repeated);
+            // Through the dispatcher the message is sent and the log holds its reference.
+            let id = sent_message(&app);
+            let record = store::message(&app, &tenant, &id).unwrap().unwrap();
+            assert_eq!(
+                record.provider_reference,
+                Some(store::provider_reference(&tenant, &id))
+            );
+            assert_eq!(adapter.caught().len(), 2);
+        }
+        "repeated-key" => {
+            let (app, adapter) = with_adapter(4_096);
+            let first = adapter.submit("key-1", &plain_mail("Hi", "text")).unwrap();
+            let again = adapter.submit("key-1", &plain_mail("Hi", "text")).unwrap();
+            assert_eq!(again.reference, first.reference);
+            assert!(again.repeated);
+            assert_eq!(adapter.caught().len(), 1, "no second delivery");
+            // The same send submitted twice to the dispatcher is one message at the adapter.
+            send(&app, "alpha", address(ADA), Some("receipts"), "k-once").unwrap();
+            send(&app, "alpha", address(ADA), Some("receipts"), "k-once").unwrap();
+            drain(&app, T0);
+            assert_eq!(adapter.caught().len(), 2);
+        }
+        "temporary-refusal" => {
+            let (app, adapter) = with_adapter(4_096);
+            adapter.refuse_next(1, false);
+            assert!(matches!(
+                adapter.submit("probe", &plain_mail("Hi", "text")),
+                Err(Refusal::Temporary(_))
+            ));
+            adapter.refuse_next(1, false);
+            let done = send(&app, "alpha", address(ADA), Some("receipts"), "k-temp").unwrap();
+            drain(&app, T0);
+            // Reported as temporary: the message waits, and the later attempt delivers it.
+            assert_eq!(
+                state(&app, "alpha", &message_of(&done)),
+                MessageState::Submitted
+            );
+            assert!(adapter.caught().is_empty());
+            drain(&app, T0 + 10_000);
+            assert_eq!(state(&app, "alpha", &message_of(&done)), MessageState::Sent);
+            assert_eq!(adapter.caught().len(), 1);
+        }
+        "permanent-refusal" => {
+            let (app, adapter) = with_adapter(4_096);
+            adapter.reject_address(ADA);
+            assert!(matches!(
+                adapter.submit("probe", &plain_mail("Hi", "text")),
+                Err(Refusal::Permanent(_))
+            ));
+            let done = send(&app, "alpha", address(ADA), Some("receipts"), "k-perm").unwrap();
+            drain(&app, T0);
+            let record = store::message(&app, &tenant, &message_of(&done))
+                .unwrap()
+                .unwrap();
+            assert_eq!(record.state, MessageState::Failed);
+            assert!(record
+                .fail_reason
+                .as_deref()
+                .unwrap_or_default()
+                .contains("the mailbox does not exist"));
+            assert!(adapter.caught().is_empty());
+        }
+        "provider-unreachable" => {
+            let (app, adapter) = with_adapter(4_096);
+            // The provider takes the message and its answer is lost: reported as temporary, and
+            // the retry under the same key delivers once.
+            adapter.refuse_next(1, true);
+            let done = send(&app, "alpha", address(ADA), Some("receipts"), "k-dark").unwrap();
+            drain(&app, T0);
+            assert_eq!(
+                state(&app, "alpha", &message_of(&done)),
+                MessageState::Submitted
+            );
+            drain(&app, T0 + 10_000);
+            assert_eq!(state(&app, "alpha", &message_of(&done)), MessageState::Sent);
+            assert_eq!(adapter.caught().len(), 1, "delivered once");
+        }
+        "oversized" => {
+            let (app, adapter) = with_adapter(300);
+            let big = plain_mail("Hi", &"x".repeat(400));
+            assert_eq!(adapter.submit("big", &big), Err(Refusal::Oversized));
+            assert!(
+                adapter.caught().is_empty(),
+                "refused before anything is sent"
+            );
+            // A template message above the limit fails for good and nothing is caught.
+            let mut long = input(address(ADA), Some("receipts"), "k-big");
+            long.values.insert("name".to_string(), "A".repeat(400));
+            let done = dispatch::submit(&app, &tenant, &long, Timestamp(T0)).unwrap();
+            drain(&app, T0);
+            assert_eq!(
+                state(&app, "alpha", &message_of(&done)),
+                MessageState::Failed
+            );
+            assert!(adapter.caught().is_empty());
+        }
+        "header-break" => {
+            let (app, adapter) = with_adapter(4_096);
+            assert!(matches!(
+                adapter.submit("hb", &plain_mail("Hi\r\nBcc: x@y.example", "text")),
+                Err(Refusal::HeaderBreak(_))
+            ));
+            let mut to_break = plain_mail("Hi", "text");
+            to_break.to = "a@x.example\nBcc: b@y.example".into();
+            assert!(matches!(
+                adapter.submit("hb2", &to_break),
+                Err(Refusal::HeaderBreak(_))
+            ));
+            assert!(adapter.caught().is_empty());
+            // The dispatcher refuses the send before a job exists.
+            let mut breaking = input(address(ADA), Some("receipts"), "k-hb");
+            breaking
+                .values
+                .insert("name".to_string(), "Ada\r\nBcc: x@y.example".to_string());
+            assert_eq!(
+                dispatch::submit(&app, &tenant, &breaking, Timestamp(T0))
+                    .unwrap_err()
+                    .0
+                    .code,
+                ErrorCode::Invalid
+            );
+            assert!(adapter.caught().is_empty());
+        }
+        "bounce-report" | "complaint-report" => {
+            let (app, adapter) = with_adapter(4_096);
+            let id = sent_message(&app);
+            let reference = store::provider_reference(&tenant, &id);
+            let (kind, wanted) = if case == "bounce-report" {
+                ("bounce", MessageState::Bounced)
+            } else {
+                ("complaint", MessageState::Complained)
+            };
+            let (body, signature) = adapter.signed_report("ev-1", &reference, kind, T0);
+            let report = adapter.read_report(&body, &signature).unwrap();
+            assert_eq!(report.reference, reference, "the event names the message");
+            assert_eq!(
+                reports::apply(&app, &report, Timestamp(T0)).unwrap(),
+                ReportOutcome::Applied
+            );
+            assert_eq!(state(&app, "alpha", &id), wanted);
+        }
+        "forged-report" => {
+            let (app, adapter) = with_adapter(4_096);
+            let id = sent_message(&app);
+            let reference = store::provider_reference(&tenant, &id);
+            let (body, signature) = adapter.signed_report("ev-1", &reference, "bounce", T0);
+            // A signature of another key, and a body changed after it was signed.
+            let other = LocalAdapter::new(CREDENTIAL, b"another-key");
+            let (_, forged) = other.signed_report("ev-1", &reference, "bounce", T0);
+            assert_eq!(
+                adapter.read_report(&body, &forged),
+                Err(ReportRefusal::BadSignature)
+            );
+            let altered = String::from_utf8(body.clone())
+                .unwrap()
+                .replace("bounce", "delivered");
+            assert_eq!(
+                adapter.read_report(altered.as_bytes(), &signature),
+                Err(ReportRefusal::BadSignature)
+            );
+            // Refused: the message is as it was.
+            assert_eq!(state(&app, "alpha", &id), MessageState::Sent);
+        }
+        "wrong-credential" => {
+            let (app, adapter) = with_adapter(4_096);
+            adapter.present("a-credential-the-provider-rejects");
+            assert!(matches!(
+                adapter.submit("probe", &plain_mail("Hi", "text")),
+                Err(Refusal::Configuration(_))
+            ));
+            let done = send(&app, "alpha", address(ADA), Some("receipts"), "k-cred").unwrap();
+            drain(&app, T0);
+            // A configuration failure: no message is marked failed, and nothing was sent.
+            let held = state(&app, "alpha", &message_of(&done));
+            assert_ne!(held, MessageState::Failed);
+            assert!(!held.is_final());
+            assert!(adapter.caught().is_empty());
+            // Once the configuration is mended the same message is sent.
+            adapter.present(CREDENTIAL);
+            drain(&app, T0 + 10_000);
+            assert_eq!(state(&app, "alpha", &message_of(&done)), MessageState::Sent);
+        }
+        other => panic!("the table has a row, {other}, that this test does not run"),
+    }
+}
+
+// Verifies: EML-001
+#[test]
+fn every_row_of_cases_mail_conformance_passes_against_the_local_adapter() {
+    const RUN: [&str; 11] = [
+        "accepted",
+        "repeated-key",
+        "temporary-refusal",
+        "permanent-refusal",
+        "provider-unreachable",
+        "oversized",
+        "header-break",
+        "bounce-report",
+        "complaint-report",
+        "forged-report",
+        "wrong-credential",
+    ];
+    // A row without a check, or a check without a row, fails.
+    assert_eq!(
+        spec_mail_cases(),
+        RUN.iter().map(|case| case.to_string()).collect::<Vec<_>>()
+    );
+    for case in RUN {
+        mail_case(case);
+    }
+}
+
+// Verifies: EML-005
+#[test]
+fn a_rolled_back_change_sends_nothing() {
+    let app = app();
+    install(&app, "alpha", "Hello {{name}}");
+    let tenant = tenant_id("alpha");
+    let owner = Principal::User(principal_id("alpha:owner"));
+    let loaded = app.store.load_complete(&tenant).unwrap();
+    let intent = new_note("Mail", "mail");
+    let context = ctx("alpha", owner, T0);
+    let transition = strata_kernel::transition(&loaded, &intent, &context).expect("accepted");
+    let job_of = |key: &str, to: &str| {
+        dispatch::mail_job(
+            &app,
+            &tenant,
+            &input(address(to), Some("receipts"), key),
+            Timestamp(T0),
+        )
+        .expect("a valid send")
+        .0
+    };
+    let mut commit = Commit::of(&intent, &context, &transition);
+    commit.jobs.push(job_of("k-commit", ADA));
+    // The same change decided on the same revision, which the first commit moves: it is refused.
+    let mut stale = commit.clone();
+    stale.jobs = vec![job_of("k-rolled-back", "bob@example.org")];
+
+    app.store.commit(&commit).unwrap();
+    assert!(matches!(
+        app.store.commit(&stale),
+        Err(StoreError::Conflict { .. })
+    ));
+
+    let job_exists = |key: &str| {
+        let id =
+            strata_storage_api::jobs::job_id(&tenant, &dispatch::job_key(&dispatch::key_hash(key)));
+        app.store.job(&tenant, &id).unwrap().is_some()
+    };
+    assert!(job_exists("k-commit"), "the commit made its job");
+    assert!(!job_exists("k-rolled-back"), "the refused commit made none");
+    drain(&app, T0);
+    assert_eq!(outbox_to(&app), vec![ADA.to_string()]);
+}
+
+// Verifies: EML-021
+#[test]
+fn a_tenant_past_its_allowance_is_held_while_another_tenants_mail_is_sent() {
+    let app = app();
+    install(&app, "alpha", "Hello {{name}}");
+    install(&app, "beta", "Bonjour {{name}}");
+    store::set_allowance_limit(&app, &tenant_id("alpha"), 1).unwrap();
+    let a1 = address("a1@example.org");
+    let a2 = address("a2@example.org");
+    let first = send(&app, "alpha", a1, Some("receipts"), "k-1").unwrap();
+    let second = send(&app, "alpha", a2, Some("receipts"), "k-2").unwrap();
+    let b1 = address("b1@example.org");
+    let theirs = send(&app, "beta", b1, Some("receipts"), "k-1").unwrap();
+    drain(&app, T0);
+    assert_eq!(
+        state(&app, "alpha", &message_of(&first)),
+        MessageState::Sent
+    );
+    assert_eq!(
+        state(&app, "alpha", &message_of(&second)),
+        MessageState::Held
+    );
+    assert_eq!(
+        state(&app, "beta", &message_of(&theirs)),
+        MessageState::Sent
+    );
+    assert_eq!(
+        outbox_to(&app),
+        vec!["a1@example.org".to_string(), "b1@example.org".to_string()]
     );
 }
