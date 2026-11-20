@@ -677,6 +677,23 @@ async fn lab_run(
     .await
 }
 
+/// Apply the change a finished projection showed, if the site is still at the revision it was
+/// taken at. An owner, with a fresh authentication.
+///
+/// Implements: AGT-2940
+async fn lab_apply(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<Json_>,
+) -> Result<impl IntoResponse, ApiError> {
+    as_caller_at(&app, &headers, move |app, caller, identity| {
+        service::require_owner(app, identity)?;
+        stepup::require_fresh(app, caller, identity)?;
+        crate::lab_apply::apply(app, caller, identity, &body)
+    })
+    .await
+}
+
 async fn lab_result(
     State(app): State<Shared>,
     headers: HeaderMap,
@@ -1120,6 +1137,7 @@ pub fn router(app: Shared) -> Router {
         .route("/internal/lab/overview", post(lab_overview))
         .route("/internal/lab/run", post(lab_run))
         .route("/internal/lab/result", post(lab_result))
+        .route("/internal/lab/apply", post(lab_apply))
         .route("/internal/lab/replay", post(lab_replay))
         .route("/internal/lab/verify", post(lab_verify))
         .route("/internal/token", post(token))

@@ -101,6 +101,11 @@ impl Backend {
 
     /// Start a projection and wait for its result.
     async fn projection(&self, admin: &str, extra: Json) -> Json {
+        self.projection_run(admin, extra).await.1
+    }
+
+    /// Start a projection and wait for it: the run's id and its result.
+    async fn projection_run(&self, admin: &str, extra: Json) -> (String, Json) {
         let mut request = json!({ "change": "require post.excerpt", "existing": "grandfather", "source": "generated", "steps": 20, "seed": 3 });
         for (key, value) in extra.as_object().unwrap() {
             request[key] = value.clone();
@@ -114,7 +119,7 @@ impl Backend {
                 .await;
             if run["status"] == "finished" {
                 assert!(run["retention"].as_str().unwrap().contains("process"));
-                return run["result"].clone();
+                return (id, run["result"].clone());
             }
             assert_eq!(run["status"], "running", "{run}");
             tokio::time::sleep(Duration::from_millis(50)).await;
@@ -250,4 +255,126 @@ async fn the_overview_is_honest_about_the_runs_it_keeps() {
         .await;
     assert_eq!(status, 404);
     assert!(gone["message"].as_str().unwrap().contains("process"));
+}
+
+/// AGT-2940: the change a projection showed is applied by an owner, only while the site is still
+/// at the revision the projection was taken at. A site that moved on is a conflict that names its
+/// revision and changes nothing; at the current revision the change is committed once.
+// Verifies: AGT-2940
+#[tokio::test]
+async fn a_projection_is_applied_only_while_the_site_is_at_its_revision() {
+    let backend = start().await;
+    let admin = backend.login("admin", "strata-dev-admin").await;
+    let author = backend.login("tomasz", "strata-dev-tomasz").await;
+
+    let first = backend.overview(&admin).await;
+    let r0 = first["tenant"]["revision"].as_u64().unwrap();
+    let v0 = first["tenant"]["schema_version"].as_u64().unwrap();
+    let (stale_run, shown) = backend
+        .projection_run(&admin, json!({ "revision": r0, "require_current": true }))
+        .await;
+    assert_eq!(shown["snapshot"]["schema_version"], v0);
+
+    // Only an owner applies.
+    let (status, refused) = backend
+        .call(
+            Some(&author),
+            "/internal/lab/apply",
+            json!({ "run": stale_run }),
+        )
+        .await;
+    assert_eq!(status, 403, "{refused}");
+    let (status, refused) = backend
+        .call(None, "/internal/lab/apply", json!({ "run": stale_run }))
+        .await;
+    assert_eq!(status, 401, "{refused}");
+    // A run that is not there is not applied.
+    let (status, gone) = backend
+        .call(
+            Some(&admin),
+            "/internal/lab/apply",
+            json!({ "run": "run_000000000000" }),
+        )
+        .await;
+    assert_eq!(status, 404, "{gone}");
+    assert_eq!(backend.overview(&admin).await["tenant"], first["tenant"]);
+
+    // A record edit moves the site on without touching the schema version, which is what a
+    // schema-version check alone could not see.
+    let draft = json!({ "op": "create", "object": "post", "fields": { "title": "Moves the site on", "slug": "moves-the-site-on", "body": "Text.", "author": 3 } });
+    let (status, created) = backend.call(Some(&author), "/internal/mutate", draft).await;
+    assert_eq!(status, 200, "{created}");
+    let second = backend.overview(&admin).await;
+    let r1 = second["tenant"]["revision"].as_u64().unwrap();
+    assert!(r1 > r0);
+    assert_eq!(second["tenant"]["schema_version"], v0);
+
+    // The projection of the old revision is refused, naming where the site is, and nothing changes.
+    let (status, stale) = backend
+        .call(
+            Some(&admin),
+            "/internal/lab/apply",
+            json!({ "run": stale_run }),
+        )
+        .await;
+    assert_eq!(status, 409, "{stale}");
+    assert_eq!(stale["code"], "conflict");
+    assert!(
+        stale["message"]
+            .as_str()
+            .unwrap()
+            .contains(&format!("revision {r1}")),
+        "{stale}"
+    );
+    assert_eq!(backend.overview(&admin).await["tenant"], second["tenant"]);
+    // The change named directly, with the revision it was projected at, is refused the same way.
+    let (status, direct) = backend
+        .call(
+            Some(&admin),
+            "/internal/lab/apply",
+            json!({ "change": "require post.excerpt", "existing": "grandfather", "revision": r0 }),
+        )
+        .await;
+    assert_eq!(status, 409, "{direct}");
+
+    // A projection of the current revision is applied, once.
+    let (run, shown) = backend
+        .projection_run(&admin, json!({ "revision": r1, "require_current": true }))
+        .await;
+    assert_eq!(shown["snapshot"]["revision"], r1);
+    let (status, applied) = backend
+        .call(Some(&admin), "/internal/lab/apply", json!({ "run": run }))
+        .await;
+    assert_eq!(status, 200, "{applied}");
+    assert_eq!(applied["version"], v0 + 1);
+    let third = backend.overview(&admin).await;
+    assert_eq!(third["tenant"]["schema_version"], v0 + 1);
+    assert_eq!(third["tenant"]["revision"], applied["revision"]);
+    assert!(third["tenant"]["revision"].as_u64().unwrap() > r1);
+
+    // The same projection again finds the site moved on by the first apply: nothing is applied twice.
+    let (status, again) = backend
+        .call(Some(&admin), "/internal/lab/apply", json!({ "run": run }))
+        .await;
+    assert_eq!(status, 409, "{again}");
+    assert_eq!(
+        backend.overview(&admin).await["tenant"]["schema_version"],
+        v0 + 1
+    );
+
+    // The one apply is an audit entry of the site.
+    let (status, diagnostics) = backend
+        .call(None, "/internal/platform/diagnostics", json!({}))
+        .await;
+    assert_eq!(status, 200, "{diagnostics}");
+    let applied_entries = diagnostics["audit"]
+        .as_array()
+        .map(|entries| {
+            entries
+                .iter()
+                .filter(|entry| entry["event"] == "lab.change_applied")
+                .count()
+        })
+        .unwrap_or(0);
+    assert_eq!(applied_entries, 1, "{diagnostics}");
 }

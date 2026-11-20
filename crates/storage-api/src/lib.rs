@@ -1624,6 +1624,34 @@ pub fn execute_by(
     ctx: &Context,
     deadline: Option<Instant>,
 ) -> Result<Executed, ExecuteError> {
+    execute_guarded(store, intent, ctx, deadline, None)
+}
+
+/// [`execute_by`] for a change decided on the tenant as it was at revision `at`, such as one an
+/// operator was shown a projection of: it is committed only if the tenant is still at `at`.
+/// A tenant at another revision, whether before the decision or when the commit is made, fails
+/// with [`StoreError::Conflict`] naming the revision found, and nothing is committed. A lost race
+/// is not decided again on the newer state, as [`execute_by`] does: the caller was shown another
+/// state than the one it would change.
+pub fn execute_at(
+    store: &dyn Store,
+    intent: &Intent,
+    ctx: &Context,
+    deadline: Option<Instant>,
+    at: StateRevision,
+) -> Result<Executed, ExecuteError> {
+    execute_guarded(store, intent, ctx, deadline, Some(at))
+}
+
+/// The body of [`execute_by`] and [`execute_at`]: with `at`, the decision and the commit are for
+/// that revision only and a conflict is never retried.
+fn execute_guarded(
+    store: &dyn Store,
+    intent: &Intent,
+    ctx: &Context,
+    deadline: Option<Instant>,
+    at: Option<StateRevision>,
+) -> Result<Executed, ExecuteError> {
     let expired = || {
         deadline.is_some_and(|at| Instant::now() >= at).then(|| {
             ExecuteError::Store(StoreError::Unavailable(
@@ -1665,6 +1693,15 @@ pub fn execute_by(
             return Err(error);
         }
         let header = store.load(&ctx.tenant, &[])?;
+        if let Some(at) = at {
+            let found = header.tenant.as_deref().map(|t| t.revision);
+            if found != Some(at) {
+                return Err(ExecuteError::Store(StoreError::Conflict {
+                    expected: Some(at),
+                    found,
+                }));
+            }
+        }
         let mut wanted: BTreeSet<Need> =
             strata_kernel::needs(header.tenant.as_deref().map(|t| t.schema.as_ref()), intent)
                 .into_iter()
@@ -1697,11 +1734,20 @@ pub fn execute_by(
                 Ok(transition) => break transition,
             }
         };
+        // The state the decision was made on is the one the caller named, or the commit says so.
+        if let Some(at) = at {
+            if transition.delta.base_revision != Some(at) {
+                return Err(ExecuteError::Store(StoreError::Conflict {
+                    expected: Some(at),
+                    found: transition.delta.base_revision,
+                }));
+            }
+        }
         // The memberships the change moves, decided for the same commit (SEG-008, D-5022).
         let decided = match segments::decide_change(store, &transition, ctx, 0) {
             Ok(decided) => decided,
             Err(ExecuteError::Store(StoreError::Conflict { .. }))
-                if conflicts < MAX_CONFLICT_RETRIES =>
+                if at.is_none() && conflicts < MAX_CONFLICT_RETRIES =>
             {
                 conflicts += 1;
                 continue;
@@ -1722,7 +1768,9 @@ pub fn execute_by(
                     replayed: false,
                 })
             }
-            Err(StoreError::Conflict { .. }) if conflicts < MAX_CONFLICT_RETRIES => {
+            Err(StoreError::Conflict { .. })
+                if at.is_none() && conflicts < MAX_CONFLICT_RETRIES =>
+            {
                 conflicts += 1;
                 // Pause before reloading, longer on each retry (at most 8 retries: 5 ms to 40 ms
                 // per pause, 180 ms in all), so that the commit which won can finish.

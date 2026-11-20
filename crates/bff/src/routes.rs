@@ -1706,6 +1706,14 @@ async fn lab_run(
     guarded(&bff, &headers, "/internal/lab/run", body).await
 }
 
+async fn lab_apply(
+    State(bff): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<Json_>,
+) -> Result<Json<Json_>, Failure> {
+    guarded(&bff, &headers, "/internal/lab/apply", body).await
+}
+
 async fn lab_result(
     State(bff): State<Shared>,
     headers: HeaderMap,
@@ -2596,6 +2604,7 @@ pub fn router(bff: Shared) -> Router {
         .route("/lab/overview", get(lab_overview))
         .route("/lab/run", post(lab_run))
         .route("/lab/runs/:id", get(lab_result))
+        .route("/lab/apply", post(lab_apply))
         .route("/lab/replay", post(lab_replay))
         .route("/lab/verify", post(lab_verify))
         .route("/diagnostics", get(diagnostics))

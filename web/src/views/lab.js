@@ -5,6 +5,7 @@
 import { h } from '../components/dom.js';
 import { date } from '../components/parts.js';
 import { ruleDisagreement } from '../kernel/rules.js';
+import { stepUpPrompt } from './desk.js';
 
 const TABS = [
   ['projection', 'Projection'],
@@ -182,6 +183,30 @@ function timeline(result) {
   );
 }
 
+/**
+ * The action that makes the change this projection showed. It is offered for a projection of the
+ * revision the page saw the site at; for an older one it says why it is not.
+ */
+function applyControl(page, r) {
+  if (r.change_outcome.result !== 'accepted') return null;
+  if (page.applied) {
+    return h('p', { class: 'lab-note', role: 'status' }, `Applied: the schema is at version ${page.applied.version}, the site at revision ${page.applied.revision}.`);
+  }
+  const current = page.overview?.tenant?.revision;
+  return h(
+    'div',
+    { class: 'lab-apply' },
+    page.applyError ? h('p', { class: 'field__error', id: 'lab-apply-error', role: 'alert' }, page.applyError) : null,
+    page.factors?.stepUp ? stepUpPrompt(page.factors) : null,
+    h('p', { class: 'toolbar' },
+      h('button', { class: 'button', type: 'button', disabled: !page.canApply, 'aria-describedby': page.applyError ? 'lab-apply-error' : null, 'data-action': 'lab.apply' }, page.applying ? 'Applying…' : 'Apply this change'),
+    ),
+    r.snapshot.revision === current
+      ? h('p', { class: 'lab-note' }, `Applying changes the live site, which is at revision ${current}, as this projection was taken. It needs the owner and a fresh sign-in.`)
+      : h('p', { class: 'lab-note', role: 'status' }, `This projection was taken at revision ${r.snapshot.revision} and the site is at revision ${current}. Project again to apply.`),
+  );
+}
+
 function result(page) {
   const r = page.result;
   if (!r) return null;
@@ -203,6 +228,7 @@ function result(page) {
         : `The kernel refuses the change: ${r.change_outcome.message}.`,
     ),
     !accepted ? checks(r.change_outcome.failed?.slice(0, 8)) : null,
+    applyControl(page, r),
 
     h('h3', null, 'Findings, by the kind of evidence behind them'),
     h(

@@ -11,12 +11,13 @@ use strata_kernel::ext::*;
 use strata_kernel::{
     read, read_needs, visible, Check, Context, DomainError, ErrorKind, FieldId, Intent,
     InvitationId, Need, ObjectTypeId, Output, PageCursor, Principal, PrincipalId, ReadRequest,
-    ReadResult, Record, RecordId, RoleId, State, TeamId, TenantId, TenantState, ViewSection,
+    ReadResult, Record, RecordId, RoleId, State, StateRevision, TeamId, TenantId, TenantState,
+    ViewSection,
 };
 use strata_protocol::api::{
     ErrorCode, MembersReply, MembersRequest, Mutation, MutationReply, ViewRequest, MAX_VIEW_LIMIT,
 };
-use strata_storage_api::{execute_by, ExecuteError, Executed};
+use strata_storage_api::{execute_at, execute_by, ExecuteError, Executed, StoreError};
 use strata_substrate::plain::coerce_fields;
 use strata_substrate::project::{
     aggregate_request, decode_cursor, encode_cursor, included_refs, match_route, section_order,
@@ -31,12 +32,38 @@ pub fn header(app: &App, identity: &Identity) -> Result<Arc<TenantState>, ApiErr
         .ok_or_else(|| ApiError::new(ErrorCode::NotFound, format!("no site {}", identity.tenant)))
 }
 
+/// The refusal of a change that was decided on a site at one revision when the site has moved
+/// on: a conflict that names the revision the site is at now, and the kind `StaleRevision` that
+/// the Impact Lab's own refusal of a stale projection carries.
+pub fn stale_revision(at: StateRevision, found: Option<StateRevision>) -> ApiError {
+    let now = found.map_or_else(|| "unknown".to_string(), |revision| revision.0.to_string());
+    let mut error = ApiError::new(
+        ErrorCode::Conflict,
+        format!("The site is at revision {now}, not {}: it changed since this projection was taken. Project again.", at.0),
+    );
+    error.0.kind = Some("StaleRevision".to_string());
+    error
+}
+
 /// Decide and commit one intent, with logging and counters around it.
 pub fn run_intent(
     app: &App,
     ctx: &Context,
     intent: &Intent,
     anonymous: bool,
+) -> Result<Executed, ApiError> {
+    run_intent_at(app, ctx, intent, anonymous, None)
+}
+
+/// [`run_intent`] for a change decided on the site at revision `at`: committed only while the
+/// site is still at it, and a conflict that names the site's revision otherwise, without deciding
+/// again on the newer state ([`strata_storage_api::execute_at`]).
+pub fn run_intent_at(
+    app: &App,
+    ctx: &Context,
+    intent: &Intent,
+    anonymous: bool,
+    at: Option<StateRevision>,
 ) -> Result<Executed, ApiError> {
     // A change of someone's roles ends their sessions in the commit itself. The ones that are
     // live now are noted first, to be announced and to have their sockets closed.
@@ -53,12 +80,11 @@ pub fn run_intent(
     app.stats.in_flight.fetch_add(1, Ordering::Relaxed);
     // The request's deadline: a change that was not committed by the time the caller was told
     // "timed out" is not committed afterwards; a retry with the same key learns the outcome.
-    let result = execute_by(
-        app.store.as_ref(),
-        intent,
-        ctx,
-        strata_runtime::server::work_deadline(),
-    );
+    let deadline = strata_runtime::server::work_deadline();
+    let result = match at {
+        Some(at) => execute_at(app.store.as_ref(), intent, ctx, deadline, at),
+        None => execute_by(app.store.as_ref(), intent, ctx, deadline),
+    };
     app.stats.in_flight.fetch_sub(1, Ordering::Relaxed);
     match &result {
         Ok(done) => {
@@ -107,7 +133,12 @@ pub fn run_intent(
             );
         }
     }
-    result.map_err(|error| ApiError::execute(error, anonymous))
+    result.map_err(|error| match (&error, at) {
+        (ExecuteError::Store(StoreError::Conflict { found, .. }), Some(at)) => {
+            stale_revision(at, *found)
+        }
+        _ => ApiError::execute(error, anonymous),
+    })
 }
 
 fn object_id(name: &str) -> Result<ObjectTypeId, ApiError> {

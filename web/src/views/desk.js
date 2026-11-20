@@ -87,7 +87,7 @@ function passkeysSection(passkeys) {
 }
 
 /** The step-up prompt: an operation was refused for want of a fresh authentication. */
-function stepUpPrompt(f) {
+export function stepUpPrompt(f) {
   const code = f.summary?.totp;
   return h(
     'form',
