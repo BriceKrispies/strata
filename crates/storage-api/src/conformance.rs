@@ -1356,6 +1356,176 @@ fn snapshots_restore_to_the_same_hash(store: &dyn Store) {
     pair.note("alpha", "After", "after");
 }
 
+/// The tenant ledger (LDG-009, LDG-019, LDG-022, LDG-027, LDG-028): postings are stored by the
+/// commit that decided them and read back as the kernel holds them, whole and through each
+/// ledger need; erasure clears the principal and keeps every amount and balance; a snapshot older
+/// than an entry is not restored.
+fn the_ledger_is_kept_with_its_commit_and_never_rewritten(store: &dyn Store) {
+    let mut pair = Pair::new(store);
+    let alpha = tenant_id("alpha");
+    let owner = user("alpha:owner");
+    let unit = LedgerUnit::new("points").unwrap();
+    pair.ok(
+        "alpha",
+        owner.clone(),
+        Intent::ChangeSchema {
+            changes: vec![
+                SchemaChange::DeclareLedgerUnit(LedgerUnitDecl {
+                    unit: unit.clone(),
+                    description: "Points".into(),
+                }),
+                SchemaChange::SetLedgerLimit(LedgerLimit {
+                    unit: unit.clone(),
+                    owner: None,
+                    floor: Some(LedgerAmount(0)),
+                    cap: None,
+                    period_cap: None,
+                    period: None,
+                    scope: None,
+                }),
+            ],
+            expected_version: None,
+            existing: ExistingData::Reject,
+        },
+    );
+    let info = store
+        .create_snapshot(&alpha, "before the ledger", Timestamp(42))
+        .unwrap();
+    let writer = LedgerOwner::Principal {
+        principal: principal_id("alpha:writer1"),
+    };
+    let posting = |amount: i64, key: &str| LedgerPostingRequest {
+        owner: writer.clone(),
+        unit: unit.clone(),
+        amount: LedgerAmount(amount),
+        idempotency_key: key.into(),
+        reason: "conformance".into(),
+        corrects: None,
+        scope: None,
+    };
+    for (amount, key) in [(10, "a"), (5, "b"), (-3, "c")] {
+        pair.ok(
+            "alpha",
+            owner.clone(),
+            Intent::PostLedger {
+                postings: vec![posting(amount, key)],
+            },
+        );
+    }
+    // Below the floor: refused by both, nothing stored.
+    assert!(pair
+        .run(
+            "alpha",
+            owner.clone(),
+            Intent::PostLedger {
+                postings: vec![posting(-100, "d")],
+            },
+        )
+        .is_err());
+
+    let account = ledger::account_id(&alpha, &writer, &unit, "");
+    let key = ledger::account_key(&account);
+    let partial = store
+        .load(
+            &alpha,
+            &[
+                Need::Ledger(LedgerNeed::Account { account }),
+                Need::Ledger(LedgerNeed::EntryByKey {
+                    account,
+                    key: "b".into(),
+                }),
+            ],
+        )
+        .unwrap();
+    let held = partial.tenant.as_ref().unwrap().ledger.as_ref().unwrap();
+    assert_eq!(held.accounts[&key].balance, LedgerAmount(12));
+    assert_eq!(held.accounts[&key].last_sequence, 3);
+    let entries = &held.entries[&key];
+    assert_eq!(entries.len(), 1, "only the entry of the key is loaded");
+    assert_eq!(entries[0].sequence, 2);
+    assert_eq!(entries[0].caused_by, Some(principal_id("alpha:owner")));
+
+    let page = store
+        .load(
+            &alpha,
+            &[Need::Ledger(LedgerNeed::Entries {
+                account,
+                after: Some(1),
+                limit: 5,
+            })],
+        )
+        .unwrap();
+    let numbers: Vec<u64> = page
+        .tenant
+        .as_ref()
+        .unwrap()
+        .ledger
+        .as_ref()
+        .unwrap()
+        .entries[&key]
+        .iter()
+        .map(|e| e.sequence)
+        .collect();
+    assert_eq!(numbers, [2, 3]);
+    assert!(
+        store
+            .load(
+                &tenant_id("beta"),
+                &[Need::Ledger(LedgerNeed::Account { account })]
+            )
+            .unwrap()
+            .tenant
+            .unwrap()
+            .ledger
+            .is_none(),
+        "another tenant holds nothing of the account"
+    );
+
+    // Erasure clears the principal from the entries it caused and keeps the rest (LDG-028).
+    let cleared = store
+        .anonymise_ledger_principal(&alpha, &principal_id("alpha:owner"))
+        .unwrap();
+    assert_eq!(cleared.entries, 3);
+    assert_eq!(cleared.accounts, 0);
+    let cleared = store
+        .anonymise_ledger_principal(&alpha, &principal_id("alpha:writer1"))
+        .unwrap();
+    assert_eq!(cleared.accounts, 1);
+    let whole = store.load_complete(&alpha).unwrap();
+    let ledger_after = whole.tenant.as_ref().unwrap().ledger.as_ref().unwrap();
+    assert_eq!(ledger_after.accounts[&key].owner, None);
+    assert_eq!(ledger_after.accounts[&key].balance, LedgerAmount(12));
+    let amounts: Vec<i64> = ledger_after.entries[&key]
+        .iter()
+        .map(|e| e.amount.0)
+        .collect();
+    assert_eq!(amounts, [10, 5, -3]);
+    assert!(ledger_after.entries[&key]
+        .iter()
+        .all(|e| e.caused_by.is_none()));
+    assert_eq!(
+        ledger::replayed_balance(&ledger_after.entries[&key]),
+        Ok(12),
+        "the balance is the sum of the entries"
+    );
+
+    // Entries are never removed, so a snapshot older than one is not restored.
+    assert!(matches!(
+        store.restore_snapshot(&alpha, info.id),
+        Err(StoreError::Invalid(_))
+    ));
+    assert_eq!(
+        store
+            .load_complete(&alpha)
+            .unwrap()
+            .tenant
+            .unwrap()
+            .ledger
+            .clone(),
+        whole.tenant.unwrap().ledger.clone()
+    );
+}
+
 fn reset_removes_everything(store: &dyn Store) {
     let mut pair = Pair::new(store);
     pair.note("alpha", "Gone", "gone");
@@ -1905,6 +2075,11 @@ pub const CHECKS: &[Check] = &[
         "reset",
         "reset_removes_everything",
         reset_removes_everything,
+    ),
+    (
+        "ledger",
+        "the_ledger_is_kept_with_its_commit_and_never_rewritten",
+        the_ledger_is_kept_with_its_commit_and_never_rewritten,
     ),
 ];
 

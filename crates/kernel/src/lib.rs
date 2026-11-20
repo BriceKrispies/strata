@@ -25,6 +25,7 @@ pub mod definitions;
 pub mod erasure;
 pub mod expr;
 pub mod intent;
+pub mod ledger;
 pub mod limits;
 pub mod operations;
 pub mod read;

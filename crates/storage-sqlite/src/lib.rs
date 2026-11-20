@@ -35,6 +35,8 @@
 //! ([`strata_runtime::sqlite::Database`]); the tables and statements of the tenant store are
 //! here.
 
+mod ledger;
+
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -467,6 +469,7 @@ const TENANT_MIGRATIONS: &[Migration] = &[
     );
     ",
     },
+    ledger::MIGRATION,
 ];
 
 /// The steps of a tenant file's layout, for tests that build a file at an older level.
@@ -627,6 +630,7 @@ fn header(tx: &Connection, tenant: &TenantId) -> StoreResult<Option<TenantState>
         members,
         records: BTreeMap::new(),
         setting_values: setting_values(tx)?,
+        ledger: None,
     }))
 }
 
@@ -790,6 +794,8 @@ fn complete(conn: &Connection, tenant: &TenantId) -> StoreResult<Option<TenantSt
     };
     let rows = select_strings(conn, "SELECT data FROM records ORDER BY object, id", &[])?;
     put_records(&mut state, rows)?;
+    ledger::load_all(conn, &mut state)?;
+    ledger::tidy(&mut state);
     Ok(Some(state))
 }
 
@@ -1845,7 +1851,8 @@ impl SqliteStore {
                 | DeltaOp::DeleteRecord { .. }
                 | DeltaOp::PutSettingOverride(_)
                 | DeltaOp::DeleteSettingOverride { .. }
-                | DeltaOp::PutSettingRevision { .. } => {}
+                | DeltaOp::PutSettingRevision { .. }
+                | DeltaOp::Ledger(_) => {}
             }
         }
         match (current.is_some(), created) {
@@ -1939,6 +1946,7 @@ impl SqliteStore {
                 DeltaOp::PutSettingRevision { setting, revision } => {
                     write_setting_revision(tx, setting, *revision)?
                 }
+                DeltaOp::Ledger(change) => ledger::apply(tx, change, delta.new_revision)?,
                 _ => {}
             }
         }
@@ -2184,9 +2192,14 @@ impl Store for SqliteStore {
                         }
                     }
                     Need::ByFields { object, fields } => by_fields(tx, object, fields)?,
+                    Need::Ledger(want) => {
+                        ledger::load(tx, &mut state, want)?;
+                        Vec::new()
+                    }
                 };
                 put_records(&mut state, rows)?;
             }
+            ledger::tidy(&mut state);
             Ok(State {
                 tenant_id: tenant.clone(),
                 tenant: Some(Arc::new(state)),
@@ -3593,6 +3606,17 @@ impl Store for SqliteStore {
         Ok(removed > 0)
     }
 
+    fn anonymise_ledger_principal(
+        &self,
+        tenant: &TenantId,
+        principal: &PrincipalId,
+    ) -> StoreResult<strata_kernel::ledger::Anonymised> {
+        let Some(file) = self.tenant_db(tenant)? else {
+            return Ok(Default::default());
+        };
+        file.write(dbe, |tx| ledger::anonymise(tx, principal))
+    }
+
     fn remove_principal(
         &self,
         tenant: &TenantId,
@@ -3803,6 +3827,7 @@ impl Store for SqliteStore {
         let state = self.load_snapshot(tenant, id)?;
         let file = self.existing(tenant)?;
         file.write(dbe, |tx| {
+            ledger::check_restorable(tx, state.revision)?;
             tx.execute("DELETE FROM records", []).map_err(db)?;
             tx.execute(
                 "UPDATE tenant SET name = ?1, revision = ?2, next_record = ?3, event_seq = MAX(event_seq, ?4), schema = ?5, members = ?6

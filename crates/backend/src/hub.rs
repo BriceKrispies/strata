@@ -143,6 +143,8 @@ fn describe(event: &DomainEvent) -> Json {
         ),
         EventBody::SettingChanged { .. } => ("setting_changed", None, None),
         EventBody::AutomationSuspended { .. } => ("automation_suspended", None, None),
+        // The owner is personal: the socket line names neither the owner nor the account.
+        EventBody::LedgerEntryPosted { .. } => ("ledger_entry_posted", None, None),
     };
     json!({
         "tenant": event.tenant.as_str(),
@@ -276,6 +278,23 @@ fn log_published(event: &DomainEvent, tenant: &TenantState) {
         ),
         // The specification states no log line for a suspension; the event is in the outbox.
         EventBody::AutomationSuspended { .. } => {}
+        EventBody::LedgerEntryPosted {
+            unit,
+            amount,
+            entry_sequence,
+            ..
+        } => telemetry::ledger_entry_posted(
+            sink,
+            &telemetry::LedgerEntryPosted {
+                correlation,
+                tenant: name,
+                seq,
+                revision,
+                unit: unit.as_str(),
+                amount: amount.0,
+                entry_sequence: *entry_sequence,
+            },
+        ),
     }
 }
 

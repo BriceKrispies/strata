@@ -846,6 +846,15 @@ pub trait Store: Send + Sync {
         tenant: &TenantId,
         principal: &PrincipalId,
     ) -> StoreResult<PrincipalRemoval>;
+    /// Clear `principal` from the tenant ledger: the owner of the accounts it owns and `caused_by`
+    /// of the entries it caused, keeping every amount, key, reason, number, time and balance
+    /// (LDG-027, LDG-028). Called by the erasure of a principal; it is not a commit and moves no
+    /// revision. A tenant that does not exist has nothing to clear.
+    fn anonymise_ledger_principal(
+        &self,
+        tenant: &TenantId,
+        principal: &PrincipalId,
+    ) -> StoreResult<strata_kernel::ledger::Anonymised>;
     /// The login of a principal, for a sign-in method that identifies the person by something
     /// other than a login.
     fn account_of(
@@ -1279,6 +1288,7 @@ pub fn field_matches(record: &Record, field: &strata_kernel::FieldId, value: &Va
 pub fn partial_state(tenant: &TenantState, needs: &[Need]) -> State {
     let mut thin = TenantState {
         records: Default::default(),
+        ledger: None,
         ..tenant.clone()
     };
     for need in needs {
@@ -1310,6 +1320,15 @@ pub fn partial_state(tenant: &TenantState, needs: &[Need]) -> State {
                         .all(|(field, value)| field_matches(record, field, value))
                 })
                 .collect(),
+            Need::Ledger(want) => {
+                if let Some(full) = tenant.ledger.as_ref() {
+                    let into = thin
+                        .ledger
+                        .get_or_insert_with(strata_kernel::ledger::empty_state);
+                    strata_kernel::ledger::partial(full, want, into);
+                }
+                Vec::new()
+            }
         };
         for record in found {
             thin.records
@@ -1318,6 +1337,7 @@ pub fn partial_state(tenant: &TenantState, needs: &[Need]) -> State {
                 .insert(record.id, record.clone());
         }
     }
+    strata_kernel::ledger::tidy_state(&mut thin.ledger);
     State {
         tenant_id: tenant.id.clone(),
         tenant: Some(Arc::new(thin)),

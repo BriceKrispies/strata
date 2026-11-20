@@ -105,6 +105,7 @@ pub fn summarise(event: &DomainEvent) -> EventSummary {
         ),
         EventBody::SettingChanged { .. } => ("setting_changed", None, None),
         EventBody::AutomationSuspended { .. } => ("automation_suspended", None, None),
+        EventBody::LedgerEntryPosted { .. } => ("ledger_entry_posted", None, None),
     };
     EventSummary {
         tenant: event.tenant.clone(),

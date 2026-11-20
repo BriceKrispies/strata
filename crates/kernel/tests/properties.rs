@@ -264,6 +264,8 @@ fn partial(tenant: &Arc<TenantState>, wanted: &BTreeSet<Need>) -> State {
                 .filter(|r| fields.iter().all(|(field, value)| r.get(field) == value))
                 .cloned()
                 .collect(),
+            // The clone keeps the whole ledger; the generator draws no posting.
+            Need::Ledger(_) => Vec::new(),
         };
         for record in matching {
             thin.records
@@ -321,6 +323,8 @@ fn some_policy_could_authorise(
         Intent::RedeemInvitation { .. } => return matches!(principal, Principal::User(_)),
         // An invocation is authorised by the operation's invokers, not by a policy (D-6547).
         Intent::InvokeOperation { .. } => return matches!(principal, Principal::User(_)),
+        // A posting is authorised by a capability, not a policy; the generator draws none.
+        Intent::PostLedger { .. } => return false,
     };
     let roles = roles_held(state, principal);
     roles.contains(&role("owner"))

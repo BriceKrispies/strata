@@ -69,6 +69,24 @@ pub const MAX_SETTING_OVERRIDES: usize = 100_000;
 pub const MIN_UNIQUE_FIELDS: usize = 2;
 /// The most fields of one composite unique constraint (D-6558, CMS-1556).
 pub const MAX_UNIQUE_FIELDS: usize = 4;
+/// The largest magnitude of a ledger amount and of a ledger balance, 2^53 - 1 (D-5004).
+pub const MAX_LEDGER_AMOUNT: i64 = 9_007_199_254_740_991;
+/// The longest idempotency key of a ledger entry, in bytes (rec-ledger-entry).
+pub const MAX_LEDGER_KEY_BYTES: usize = 128;
+/// The longest reason of a ledger entry, in bytes (rec-ledger-entry).
+pub const MAX_LEDGER_REASON_BYTES: usize = 256;
+/// The longest scope of a ledger account, in bytes (D-6551).
+pub const MAX_LEDGER_SCOPE_BYTES: usize = 128;
+/// The most postings one `PostLedger` intent may make (as a tenant operation, D-6548).
+pub const MAX_LEDGER_POSTINGS: usize = 8;
+/// The most ledger units a tenant may declare (D-6554, LDG-1550).
+pub const MAX_LEDGER_UNITS: usize = 64;
+/// The most ledger pools a tenant may declare (D-6554, LDG-1550).
+pub const MAX_LEDGER_POOLS: usize = 64;
+/// The most limits of single ledger accounts a tenant may declare (D-6554, LDG-1550).
+pub const MAX_LEDGER_ACCOUNT_LIMITS: usize = 10_000;
+/// The most accounts one ranked listing may examine (D-6552, LDG-1543).
+pub const MAX_LEDGER_RANK_SCAN: u32 = 10_000;
 
 /// The first limit a value breaks, as a description, or `None`.
 pub fn value_problem(value: &Value) -> Option<String> {

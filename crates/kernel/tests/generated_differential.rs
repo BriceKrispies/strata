@@ -109,6 +109,11 @@
 //!      with `operation:decided_by_the_kernel` and the generated `needs` plans nothing for it,
 //!      because the function language does not state the decision yet. The operation generator
 //!      draws no invocation, and `compare_transition` fails on one.
+//!  13. Not mirrored: the tenant ledger (`strata_kernel::ledger`, WG-5083). The generated
+//!      `intent-decision` refuses `PostLedger`, `apply-change` refuses the ledger schema changes,
+//!      `needs` plans no ledger need, `apply-delta` ignores a ledger operation, `schema-problems`
+//!      does not check ledger declarations, and the functions that rebuild a tenant schema or
+//!      state do not carry its `ledger` member. The generator draws no ledger intent or change.
 //!
 //! Difference 7 is guarded: `assert_no_input_of_a_known_difference` runs on every snapshot the
 //! test decides or reads, and fails when a snapshot has an automation step with a retry, a
@@ -912,6 +917,11 @@ fn assert_no_input_of_a_known_difference(state: &State) {
             && tenant.schema.capabilities.is_none()
             && tenant.setting_values.is_none(),
         "the snapshot holds a setting, a capability or an override; the generated functions do not mirror them (difference 9)"
+    );
+    assert!(
+        tenant.ledger.is_none() && tenant.schema.ledger.is_none(),
+        "{} holds a ledger; the generated functions do not mirror it (difference 13)",
+        tenant.id
     );
     for automation in tenant.schema.automations.iter().flat_map(BTreeMap::values) {
         assert!(

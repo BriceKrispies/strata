@@ -32,6 +32,7 @@ pub fn kind_of(body: &EventBody) -> &'static str {
         EventBody::RecordDeleted { .. } => "record-deleted",
         EventBody::SettingChanged { .. } => "setting-changed",
         EventBody::AutomationSuspended { .. } => "automation-suspended",
+        EventBody::LedgerEntryPosted { .. } => "ledger-entry-posted",
     }
 }
 
@@ -274,6 +275,9 @@ pub fn notice(
         // A suspension changes a definition the tenant's owner manages, not a record anyone
         // reads; it is listed with the automation, not pushed to subscribers.
         EventBody::AutomationSuspended { .. } => None,
+        // A posting names its owner, who is personal; no socket notice carries it until the
+        // ledger has a subscription of its own (units of the selector are refused above).
+        EventBody::LedgerEntryPosted { .. } => None,
     }
 }
 

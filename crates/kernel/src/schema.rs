@@ -158,6 +158,7 @@ impl TenantSchemaExt for TenantSchema {
             operations: None,
             settings: None,
             capabilities: None,
+            ledger: None,
         }
     }
 
@@ -567,6 +568,7 @@ impl TenantSchemaExt for TenantSchema {
         crate::aggregates::problems(self, &mut problems);
         crate::settings::definition_problems(self, &mut problems);
         crate::capabilities::declaration_problems(self, &mut problems);
+        crate::ledger::declaration_problems(self, &mut problems);
         problems
     }
 }
