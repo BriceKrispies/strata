@@ -79,6 +79,9 @@ export function envelopeProblems(envelope) {
  * @returns {{ hash: string | null, reason: string | null }}
  */
 export function semanticHashDetail(exegraHome, project, specs) {
+  // EXEGRA_SPECS names a specs directory outside the Exegra checkout (a project there needs no
+  // registration in Exegra itself).
+  specs ??= process.env.EXEGRA_SPECS || undefined;
   const args = ['validate', '--project', project, ...(specs ? ['--specs', specs] : [])];
   const { envelope, problem } = exegraRun(exegraHome, args);
   const hash = envelope?.semanticHash;

@@ -513,7 +513,7 @@ check('concordance lint (strict)', lint.ok, lint.ok ? lastLine(lint.out) : `${ex
 // first, here, and written where the scan reads them.
 {
   const cli = resolve(exegraHome, 'cli/exegra.js');
-  const verdicts = existsSync(cli) ? run(process.execPath, [cli, 'claims', '--project', exegraProject], { cwd: exegraHome }) : null;
+  const verdicts = existsSync(cli) ? run(process.execPath, [cli, 'claims', '--project', exegraProject, ...(process.env.EXEGRA_SPECS ? ['--specs', process.env.EXEGRA_SPECS] : [])], { cwd: exegraHome }) : null;
   let claims = null;
   try {
     claims = verdicts ? JSON.parse(verdicts.stdout).result : null;
@@ -570,7 +570,7 @@ if (!exegraFound) {
   check('Exegra checkout', false, `no cli/exegra.js under ${exegraHome} (set EXEGRA_HOME)`);
 } else {
   const exegra = (command) => {
-    const r = run(process.execPath, [exegraCli, command, '--project', exegraProject], { cwd: exegraHome });
+    const r = run(process.execPath, [exegraCli, command, '--project', exegraProject, ...(process.env.EXEGRA_SPECS ? ['--specs', process.env.EXEGRA_SPECS] : [])], { cwd: exegraHome });
     let json = null;
     try {
       json = JSON.parse(r.stdout);

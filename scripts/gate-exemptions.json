@@ -20,7 +20,6 @@
     {
       "reason": "Cited by an entity of the specification and missing from the repository (WG-5054).",
       "items": [
-        "docs/agents/verification.md",
         "specifications/21-verification/cases/budget-measurement.md",
         "tests/fixtures/language/kernel-cases.json"
       ]

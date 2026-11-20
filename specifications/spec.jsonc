@@ -1122,27 +1122,27 @@
     "verificationMethods": {
       "conformance": {
         "label": "Conformance",
-        "description": "When: An umbrella whose detail is a case table (see spec-format.md). Proof: One table-driven test through the boundary. It reads the `Cases:` files, runs every row, and fails with every failing row named, never only the first. Adding a row adds a case without touching the test. (docs/agents/verification.md)"
+        "description": "When: An umbrella whose detail is a case table (see spec-format.md). Proof: One table-driven test through the boundary. It reads the `Cases:` files, runs every row, and fails with every failing row named, never only the first. Adding a row adds a case without touching the test. (docs/verification.md)"
       },
       "property": {
         "label": "Property",
-        "description": "When: \"For every\", \"never\", \"always\", and invariants. Proof: A property-based test through the boundary, with generated inputs and shrinking. A fixed seed and case count are recorded in the test. (docs/agents/verification.md)"
+        "description": "When: \"For every\", \"never\", \"always\", and invariants. Proof: A property-based test through the boundary, with generated inputs and shrinking. A fixed seed and case count are recorded in the test. (docs/verification.md)"
       },
       "scenario": {
         "label": "Scenario",
-        "description": "When: A workflow of several steps, or a failure and recovery. Proof: An end-to-end test that drives the boundary as a user would: run the CLI, call the API, read the files. (docs/agents/verification.md)"
+        "description": "When: A workflow of several steps, or a failure and recovery. Proof: An end-to-end test that drives the boundary as a user would: run the CLI, call the API, read the files. (docs/verification.md)"
       },
       "example": {
         "label": "Example",
-        "description": "When: One concrete input decides it. Proof: One case through the boundary: input in, observed output compared with the expected output. Golden files for formats. (docs/agents/verification.md)"
+        "description": "When: One concrete input decides it. Proof: One case through the boundary: input in, observed output compared with the expected output. Golden files for formats. (docs/verification.md)"
       },
       "proof": {
         "label": "Proof",
-        "description": "When: A mathematical property of an algorithm or model (Lean 4). Proof: A Lean `theorem` whose doc comment declares `Verifies: ID`. It must build with no `sorry`. (docs/agents/verification.md)"
+        "description": "When: A mathematical property of an algorithm or model (Lean 4). Proof: A Lean `theorem` whose doc comment declares `Verifies: ID`. It must build with no `sorry`. (docs/verification.md)"
       },
       "budget": {
         "label": "Budget",
-        "description": "When: A time, size, memory or count limit. Proof: A measurement that records the number and fails above the limit, at the measurement point, clock and machine class its row in `specifications/21-verification/cases/budget-measurement.md` names. A protocol timer, retention period or alert deadline is measured on the simulator's virtual clock and needs no machine; a latency or throughput limit is measured in the benchmark harness on the named machine class. (docs/agents/verification.md)"
+        "description": "When: A time, size, memory or count limit. Proof: A measurement that records the number and fails above the limit, at the measurement point, clock and machine class its row in `specifications/21-verification/cases/budget-measurement.md` names. A protocol timer, retention period or alert deadline is measured on the simulator's virtual clock and needs no machine; a latency or throughput limit is measured in the benchmark harness on the named machine class. (docs/verification.md)"
       }
     }
   },
