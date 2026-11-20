@@ -47,8 +47,46 @@ pub struct Connection {
     pub acknowledged: u64,
 }
 
+/// A broadcast channel for each tenant. A subscriber hears only its own tenant's messages, so a
+/// burst in one tenant overflows no other tenant's subscribers.
+pub struct Fanout<T: Clone> {
+    channels: Mutex<BTreeMap<TenantId, broadcast::Sender<T>>>,
+    capacity: usize,
+}
+
+impl<T: Clone> Fanout<T> {
+    pub fn new(capacity: usize) -> Self {
+        Fanout {
+            channels: Mutex::new(BTreeMap::new()),
+            capacity,
+        }
+    }
+
+    /// Listen to `tenant`'s messages.
+    pub fn subscribe(&self, tenant: &TenantId) -> broadcast::Receiver<T> {
+        let mut channels = self.channels.lock().unwrap_or_else(|e| e.into_inner());
+        channels
+            .entry(tenant.clone())
+            .or_insert_with(|| broadcast::channel(self.capacity).0)
+            .subscribe()
+    }
+
+    /// Send to `tenant`'s subscribers. With none, nothing is kept and the channel is dropped.
+    pub fn send(&self, tenant: &TenantId, message: T) {
+        let mut channels = self.channels.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(channel) = channels.get(tenant) else {
+            return;
+        };
+        if channel.receiver_count() == 0 {
+            channels.remove(tenant);
+            return;
+        }
+        let _ = channel.send(message);
+    }
+}
+
 pub struct Hub {
-    pub events: broadcast::Sender<Arc<Published>>,
+    pub events: Fanout<Arc<Published>>,
     pub runs: broadcast::Sender<RunMessage>,
     pub sessions: broadcast::Sender<(SessionId, SessionState)>,
     /// The outbox publisher, set once the backend has started.
@@ -59,7 +97,7 @@ pub struct Hub {
 impl Hub {
     pub fn new() -> Self {
         Hub {
-            events: broadcast::channel(1024).0,
+            events: Fanout::new(1024),
             runs: broadcast::channel(256).0,
             sessions: broadcast::channel(64).0,
             outbox: OnceLock::new(),
@@ -254,13 +292,50 @@ pub fn publish_pending(app: &crate::app::App) -> Result<usize, strata_storage_ap
         log_published(&entry.event, &header);
         app.stats.recent_events.push(describe(&entry.event));
         // No receivers is fine: the event stays in the durable log for later replay.
-        let _ = app.hub.events.send(Arc::new(Published {
-            event: entry.event.clone(),
-            tenant: header,
-        }));
+        app.hub.events.send(
+            &entry.event.tenant,
+            Arc::new(Published {
+                event: entry.event.clone(),
+                tenant: header,
+            }),
+        );
     }
     for (tenant, position) in &last {
         app.store.mark_published(tenant, *position)?;
     }
     Ok(pending.len())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::sync::broadcast::error::TryRecvError;
+
+    #[test]
+    fn a_burst_in_one_tenant_lags_nobody_in_another() {
+        let fanout: Fanout<u32> = Fanout::new(1024);
+        let (loud, quiet) = (
+            TenantId::new("fieldnotes").unwrap(),
+            TenantId::new("tidewater").unwrap(),
+        );
+        let mut loud_rx = fanout.subscribe(&loud);
+        let mut quiet_rx = fanout.subscribe(&quiet);
+        for n in 0..2000 {
+            fanout.send(&loud, n);
+        }
+        fanout.send(&quiet, 7);
+        assert_eq!(quiet_rx.try_recv().unwrap(), 7);
+        assert!(matches!(quiet_rx.try_recv(), Err(TryRecvError::Empty)));
+        // The loud tenant's own slow subscriber is the one that lags.
+        assert!(matches!(loud_rx.try_recv(), Err(TryRecvError::Lagged(_))));
+    }
+
+    #[test]
+    fn a_tenant_without_subscribers_keeps_no_channel() {
+        let fanout: Fanout<u32> = Fanout::new(8);
+        let tenant = TenantId::new("fieldnotes").unwrap();
+        drop(fanout.subscribe(&tenant));
+        fanout.send(&tenant, 1);
+        assert!(fanout.channels.lock().unwrap().is_empty());
+    }
 }
