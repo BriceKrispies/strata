@@ -3,9 +3,10 @@
 // generated assertion it ends with fails on the page that violates it.
 //
 //   npm run e2e:steps
+import { fileURLToPath } from 'node:url';
 import { defineConfig, devices } from '@playwright/test';
 
-const root = new URL('../../..', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1');
+const root = fileURLToPath(new URL('../../..', import.meta.url)).replace(/[\\/]$/, '');
 
 export default defineConfig({
   testDir: '../step-checks',

@@ -11,7 +11,7 @@ prototype until the requirement is met. The ones that differ today:
   (`ten-014`, `tenant-database`).
 - D12 (the event table is the outbox, delivery at least once): the specification requires a failing
   event to be parked with the error of each attempt (`ops-348`).
-- D21 (five failures lock one login for thirty seconds): the specification also requires attempts
+- D21 (repeated failures lock one login for a while): the specification also requires attempts
   from one source to be refused across accounts (`idn-250`) and slowed across a realm (`idn-251`).
 
 **D1. The kernel owns schema types and transition semantics; the substrate owns the forms around
@@ -115,4 +115,5 @@ both on the same generated scenarios, and is labelled evidence, not proof.
 
 **D21. Development logins live beside the tenant, not in it.** `accounts.dev.json` is read only
 when `STRATA_DEV=1`. Passwords are stored as Argon2id hashes; a missing login costs the same time
-as a wrong password; five failures lock a login for thirty seconds.
+as a wrong password; repeated failures lock a login for a while (the limits are `ThrottleLimits` in
+`crates/backend/src/app.rs`).

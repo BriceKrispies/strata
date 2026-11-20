@@ -10,13 +10,15 @@
 // (writes a backend and a BFF log line under var/step-fixtures, with variants that break one
 // property each), /api/json, /api/echo and /api/login (cookies).
 import { createHash } from 'node:crypto';
-import { appendFileSync, mkdirSync } from 'node:fs';
+import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { fileURLToPath } from 'node:url';
 
 const port = Number(process.argv[2] ?? 4300);
 const logs = fileURLToPath(new URL('../../../var/step-fixtures/', import.meta.url));
 mkdirSync(logs, { recursive: true });
+// Each run starts with empty logs, so an absence check cannot match a line an earlier run wrote.
+for (const name of ['backend.jsonl', 'bff.jsonl']) writeFileSync(`${logs}${name}`, '');
 
 function page(name, title, body, script = '', { ready = true, html = '' } = {}) {
   return `<!doctype html>

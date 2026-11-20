@@ -3,9 +3,10 @@ import AxeBuilder from '@axe-core/playwright';
 import { expect, test } from '@playwright/test';
 import { createHmac } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 const BASE = 'http://127.0.0.1:4200';
-const SHOTS = new URL('./screenshots/', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1');
+const SHOTS = fileURLToPath(new URL('./screenshots/', import.meta.url));
 mkdirSync(SHOTS, { recursive: true });
 
 /** Wait until the application has drawn a real page. */
@@ -37,7 +38,72 @@ async function stillTheSameDocument(page) {
   expect(await page.evaluate(() => window.__notReloaded === true)).toBe(true);
 }
 
+// Undo steps for shared fixture state. A test that changes state other tests depend on (a draft, a
+// passkey, a team member, a role) registers the undo right before it changes it; `afterEach` runs
+// the undo steps whether the test passed or failed, so a failure does not leave state behind that
+// makes later tests fail for another reason. An undo step must be safe to run when nothing was changed.
+const undoSteps = [];
+
+function undoAfterTest(step) {
+  undoSteps.push(step);
+}
+
+test.afterEach(async ({ browser }) => {
+  while (undoSteps.length > 0) {
+    const step = undoSteps.pop();
+    try {
+      await step(browser);
+    } catch (error) {
+      console.warn(`cleanup after a test failed: ${error.message}`);
+    }
+  }
+});
+
+/** The ids of the seeded posts and authors by slug, read from an owner's views, so no test hard-codes a numeric id. */
+async function idsBySlug(browser) {
+  const context = await browser.newContext();
+  try {
+    const page = await context.newPage();
+    await signIn(page, 'admin');
+    const posts = (await (await page.request.get('/api/view?path=/desk')).json()).data.posts;
+    const authors = (await (await page.request.get('/api/view?path=/authors')).json()).data.authors;
+    return {
+      post: Object.fromEntries(posts.map((row) => [row.fields.slug, row.id])),
+      author: Object.fromEntries(authors.map((row) => [row.fields.slug, row.id])),
+    };
+  } finally {
+    await context.close();
+  }
+}
+
+/** Deletes every post with this title, as the owner. Nothing to delete is not an error. */
+async function deletePostsTitled(browser, title) {
+  const owner = await person(browser, 'admin');
+  const posts = (await (await owner.page.request.get('/api/view?path=/desk')).json()).data.posts.filter((row) => row.fields.title === title);
+  for (const row of posts) {
+    await owner.page.request.post('/api/records', { data: { op: 'delete', object: 'post', id: row.id, version: row.version }, headers: owner.headers });
+  }
+  await owner.page.context().close();
+}
+
+/** Removes every passkey of Inès, through the desk the passkey tests use. */
+async function removeInesPasskeys(browser) {
+  const context = await browser.newContext();
+  try {
+    const page = await context.newPage();
+    await signInNamed(page, 'ines');
+    const buttons = page.getByRole('region', { name: 'Passkeys' }).getByRole('button', { name: /^Remove/ });
+    for (let left = await buttons.count(); left > 0; left -= 1) {
+      await buttons.first().click();
+      await expect(buttons).toHaveCount(left - 1);
+    }
+  } finally {
+    await context.close();
+  }
+}
+
 async function writeDraft(page, title, body = 'A first paragraph written by a test.\n\n## A heading\n\nAnd a second one.') {
+  undoAfterTest((browser) => deletePostsTitled(browser, title));
   await page.getByRole('link', { name: 'Write a new article' }).click();
   await expect(page.getByRole('heading', { level: 1, name: 'New article' })).toBeVisible();
   await page.getByLabel('Title').fill(title);
@@ -308,7 +374,8 @@ test('a delete confirmation does not survive leaving the desk and coming back', 
   await expect(page.locator('.toast', { hasText: 'Deleted.' })).toBeVisible();
 });
 
-test('an author cannot edit another author’s article; an editor can', async ({ page }) => {
+test('an author cannot edit another author’s article; an editor can', async ({ page, browser }) => {
+  const { post } = await idsBySlug(browser);
   await signIn(page, 'mirela');
   await expect(page.getByRole('row', { name: /The Jig Is the Work/ })).toHaveCount(0);
   await expect(page.getByRole('row', { name: /What the Kiln Decides/ })).toBeVisible();
@@ -323,7 +390,7 @@ test('an author cannot edit another author’s article; an editor can', async ({
       data: { op: 'update', object: 'post', id, fields: { title: 'Taken over' } },
       headers: { origin: BASE, 'x-csrf-token': csrf },
     });
-  const hidden = await forge(15);
+  const hidden = await forge(post['notes-toward-a-workbench']);
   const missing = await forge(9999);
   expect(hidden.status()).toBe(404);
   expect(missing.status()).toBe(404);
@@ -331,18 +398,19 @@ test('an author cannot edit another author’s article; an editor can', async ({
   expect({ ...hiddenBody, message: '', failed: [], correlation: '' }).toEqual({ ...missingBody, message: '', failed: [], correlation: '' });
   expect(hiddenBody.failed.map((c) => c.rule)).toEqual(missingBody.failed.map((c) => c.rule));
   // An article she can read but did not write is refused by the kernel's policy, not by the page.
-  const forged = await forge(14);
+  const forged = await forge(post['the-jig-is-the-work']);
   expect(forged.status()).toBe(403);
   expect((await forged.json()).failed[0].rule).toBe('policy:authors_own_posts');
 });
 
-test('an author cannot write under another byline, feature a post or choose when it was published', async ({ page }) => {
+test('an author cannot write under another byline, feature a post or choose when it was published', async ({ page, browser }) => {
+  const { post, author } = await idsBySlug(browser);
   await signIn(page, 'tomasz');
   const csrf = (await (await page.request.get('/api/session')).json()).session.csrf_token;
   const headers = { origin: BASE, 'x-csrf-token': csrf };
-  const INES = 2; // author records: Inès is the first, Tomasz the second
-  const TOMASZ = 3;
-  const OWN_DRAFT = 15; // "Notes Toward a Workbench", Tomasz's own unpublished draft
+  const INES = author['ines-okafor'];
+  const TOMASZ = author['tomasz-wren'];
+  const OWN_DRAFT = post['notes-toward-a-workbench']; // Tomasz's own unpublished draft
   const farFuture = Date.UTC(2099, 0, 1);
   const rules = async (response) => (await response.json()).failed.map((check) => check.rule);
   const create = (fields) =>
@@ -375,7 +443,8 @@ test('an author cannot write under another byline, feature a post or choose when
   await expect(page.getByRole('row', { name: /Notes Toward a Workbench/ })).toContainText('Draft');
 });
 
-test('a session that ends is noticed at once and the page falls back to signed out', async ({ page }) => {
+test('a session that ends is noticed at once and the page falls back to signed out', async ({ page, browser }) => {
+  const { post } = await idsBySlug(browser);
   // The session-expiry fixture is the owner's.
   await signIn(page, 'admin');
   await expect(page.locator('.colophon__live')).toHaveAttribute('data-connection', 'open');
@@ -386,7 +455,7 @@ test('a session that ends is noticed at once and the page falls back to signed o
   await expect(page.locator('.toast', { hasText: 'Your session has expired. Sign in again to keep writing.' })).toBeVisible();
   await expect(page.getByRole('heading', { level: 1, name: 'Sign in to continue' })).toBeVisible();
   await stillTheSameDocument(page);
-  const write = await page.request.post('/api/records', { data: { op: 'delete', object: 'post', id: 9 }, headers: { origin: BASE, 'x-csrf-token': 'stale' } });
+  const write = await page.request.post('/api/records', { data: { op: 'delete', object: 'post', id: post['a-margin-is-a-promise'] }, headers: { origin: BASE, 'x-csrf-token': 'stale' } });
   expect(write.status()).toBe(401);
 });
 
@@ -653,12 +722,19 @@ test('a second tenant on the same substrate shares nothing with the first', asyn
   page.on('websocket', (socket) => socket.on('framereceived', (frame) => frames.push(String(frame.payload))));
   const viewRequests = [];
   page.on('request', (request) => request.url().includes('/api/view') && viewRequests.push(request.url()));
+  // A Fieldnotes reader is the positive signal: once the change has reached it, the event was sent,
+  // so a Tidewater page that has seen nothing was not sent it.
+  const fieldnotesReader = await (await browser.newContext()).newPage();
+  await open(fieldnotesReader, '/');
+  await expect(fieldnotesReader.locator('.colophon__live')).toHaveAttribute('data-connection', 'open');
+  undoAfterTest((b) => deletePostsTitled(b, 'A Fieldnotes Secret'));
   await ownerPage.getByRole('link', { name: 'Write a new article' }).click();
   await ownerPage.getByLabel('Title').fill('A Fieldnotes Secret');
   await ownerPage.getByLabel('Text', { exact: true }).fill('Only for Fieldnotes.');
   await ownerPage.getByRole('button', { name: 'Publish' }).click();
   await expect(ownerPage.locator('.toast', { hasText: 'Published.' })).toBeVisible();
-  await page.waitForTimeout(1200);
+  await expect(fieldnotesReader.getByRole('heading', { name: 'A Fieldnotes Secret' })).toBeVisible();
+  await fieldnotesReader.context().close();
   expect(viewRequests).toEqual([]);
   expect(frames.filter((frame) => frame.includes('"event"'))).toEqual([]);
   await expect(page.getByText('A Fieldnotes Secret')).toHaveCount(0);
@@ -767,7 +843,11 @@ test('the Lean proofs can be checked from the Lab when Lean is installed', async
   const verdict = page.locator('.lab-block', { hasText: 'Machine-checked proofs' }).locator('.lab-verdict');
   await expect(verdict).toBeVisible({ timeout: 150_000 });
   const text = await verdict.innerText();
-  test.skip(text.includes('could not run lake'), 'Lean is not installed on this machine; the report says so honestly.');
+  if (text.includes('could not run lake')) {
+    // A machine without Lean never checked the proofs, so this fails unless the skip is asked for.
+    test.skip(process.env.STRATA_E2E_SKIP_LEAN === '1', 'Lean is not installed and STRATA_E2E_SKIP_LEAN=1 says that is expected.');
+    expect(text, 'Lean is not installed: install it, or set STRATA_E2E_SKIP_LEAN=1 to skip this test on purpose').not.toContain('could not run lake');
+  }
   expect(text).toMatch(/All \d+ theorems are machine-checked by Lean \(version 4\.\d+\.\d+/);
   await expect(page.getByRole('row', { name: /A tenant-scoped transition cannot modify another tenant/ })).toContainText('step_isolated checked');
   await expect(page.getByText(/print identical results for \d+ operations across 60 generated scenarios/)).toBeVisible();
@@ -780,7 +860,7 @@ test('no log line holds a password, a session token or a CSRF token', async ({ p
   const session = (await (await page.request.get('/api/session')).json()).session;
   const cookie = (await page.context().cookies()).find((c) => c.name === '__Host-strata_sid').value;
   const { readFileSync } = await import('node:fs');
-  const root = new URL('../../var/logs/', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1');
+  const root = fileURLToPath(new URL('../../var/logs/', import.meta.url));
   const logs = ['backend.jsonl', 'bff.jsonl'].map((name) => readFileSync(`${root}${name}`, 'utf8')).join('\n');
   expect(logs.length).toBeGreaterThan(1000);
   for (const secret of [cookie, session.csrf_token, 'strata-dev-ines', 'strata-dev-admin', 'not-the-password']) {
@@ -803,7 +883,7 @@ test('the development fixtures refuse a visitor who holds only the request token
 
 test('sign-in, publish and unpublish are logged as domain events, with their allowlisted fields and correlation', async ({ page }) => {
   const { readFileSync } = await import('node:fs');
-  const root = new URL('../../var/logs/', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1');
+  const root = fileURLToPath(new URL('../../var/logs/', import.meta.url));
   const bytes = (service) => {
     try {
       return readFileSync(`${root}${service}.jsonl`);
@@ -1026,6 +1106,7 @@ test('a site reached by an address that is not a name offers no passkeys', async
 });
 
 test('a person adds a passkey at the desk, signs out, signs in with it and removes it', async ({ page }) => {
+  undoAfterTest(removeInesPasskeys);
   const authenticator = await virtualAuthenticator(page);
   await signInNamed(page, 'ines');
   const section = page.getByRole('region', { name: 'Passkeys' });
@@ -1060,6 +1141,7 @@ test('a person adds a passkey at the desk, signs out, signs in with it and remov
 });
 
 test('an assertion made for one address is refused at another', async ({ page }) => {
+  undoAfterTest(removeInesPasskeys);
   const authenticator = await virtualAuthenticator(page);
   await signInNamed(page, 'ines');
   const section = page.getByRole('region', { name: 'Passkeys' });
@@ -1679,6 +1761,7 @@ async function person(browser, name) {
   const headers = { origin: BASE, 'x-csrf-token': session.csrf_token };
   return {
     page,
+    headers,
     // A change of someone's roles ends their sessions, so their roles are read from a session
     // started now, never from the one this person began with.
     roles: async () => {
@@ -1698,6 +1781,7 @@ async function person(browser, name) {
 // owner holds everything. The kernel decides each assignment, and a refusal names the rule.
 test('assigning a role whose permissions the assigner lacks is refused with the named reason, and an owner may', async ({ browser }) => {
   const moderator = await person(browser, 'moderator');
+  undoAfterTest(async (b) => (await person(b, 'admin')).members('revoke-role', { principal: 'user:mirela', role: 'editor' }));
   const assign = (who, role) => who.members('assign-role', { principal: 'user:mirela', role });
   const refused = await assign(moderator, 'editor');
   expect(refused.status()).toBe(403);
@@ -1728,6 +1812,7 @@ test('a team member is added and removed by someone who holds the team’s roles
   const owner = await person(browser, 'admin');
   const tomasz = await person(browser, 'tomasz');
   const join = { team: 'newsdesk', principal: 'user:tomasz' };
+  undoAfterTest(async (b) => (await person(b, 'admin')).members('remove-team-member', join));
   const refused = await moderator.members('add-team-member', join);
   expect(refused.status()).toBe(403);
   expect((await refused.json()).failed[0].rule).toBe('permission:confer:editor');
@@ -1750,6 +1835,7 @@ test('an invitation grants its roles to the one person whose verified address it
   const dana = await person(browser, 'dana');
   const mirela = await person(browser, 'mirela');
   const invite = { invitation, address: 'Dana@Fieldnotes.example', roles: ['author'] };
+  undoAfterTest(async (b) => (await person(b, 'admin')).members('revoke-role', { principal: 'user:dana', role: 'author' }));
 
   // Inviting is conferring: the moderator may not offer a role it could not assign.
   const overreach = await moderator.members('invite', { ...invite, invitation: `${invitation}-editor`, roles: ['editor'] });

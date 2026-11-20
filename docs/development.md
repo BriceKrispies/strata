@@ -111,12 +111,14 @@ store's own integrity check.
 
 | Command | What runs |
 |---|---|
-| `cargo test --workspace` | 91 Rust tests: kernel behaviour and properties, substrate, storage conformance on both adapters, simulation, verification (with Lean when installed), backend and BFF as running services |
-| `npm run test:web` | 20 tests of the frontend kernel as plain functions |
+| `cargo test --workspace` | The Rust tests: kernel behaviour and properties, substrate, storage conformance on both adapters, simulation, verification (with Lean when installed), backend and BFF as running services |
+| `npm run test:web` | The tests of the frontend kernel and client (`web/test/kernel.test.js`, `web/test/client.test.js`) as plain functions |
+| `npm run test:scripts` | The tests of `scripts/generated-share.mjs` |
 | `npm run check` | `tsc --checkJs` over the JSDoc-typed JavaScript |
-| `npm run build && npm run e2e` | 26 Playwright tests on two private stacks (ports 4200/4201 and 4210/4211/5183) |
+| `npm run e2e` | The Playwright tests (`tests/e2e/site.spec.js`, `hmr.spec.js`) on two private stacks (ports 4200/4201 and 4210/4211/5183). The stacks build the backend, the BFF and the frontend first. The Lean test fails when Lean is missing unless `STRATA_E2E_SKIP_LEAN=1` |
+| `npm run e2e:generated`, `npm run e2e:steps` | The generated journeys, and the step fixtures against their own server |
 | `STRATA_BLESS=1 cargo test -p strata-verification` | Regenerate the Lean correspondence fixtures after an intended change |
-| `npm run spec` | The specification gate: `cargo test --workspace`, `lake build`, the web kernel tests and `npm run check`, then Exegra and Concordance against `specifications/spec.jsonc`. Not the e2e tests. `node scripts/spec-gate.mjs --no-test --allow-recorded` reuses the recorded results. See `specifications/README.md` |
+| `npm run spec` | The specification gate: `cargo test --workspace`, `lake build`, the web and script tests, the type check, `cargo fmt --check`, `cargo clippy -D warnings`, `cargo audit` and `npm audit`, then Exegra and Concordance against `specifications/spec.jsonc`. A tool that is missing is printed as NOT RUN and counted; `--require-all` fails on it. `npm run spec:browser` adds the three browser suites. `node scripts/spec-gate.mjs --no-test --allow-recorded` re-reads the recorded results. See `specifications/README.md` |
 
 `node scripts/shots.mjs [base-url] [filter]` captures screenshots of a running stack into
 `var/shots/` for visual review; the browser tests also save theirs under

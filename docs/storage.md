@@ -38,17 +38,24 @@ Not durable. Used by tests and by `--store memory`.
 IMMEDIATE` write transactions, WAL journal, `synchronous = FULL`, foreign keys on, a five second
 busy timeout.
 
+There are two kinds of database file. The control database holds `tenant_directory` and
+`session_directory`, and its ledger `control_migrations`. Each tenant has a file of its own, with
+the ledger `tenant_migrations`. A tenant file holds, among others:
+
 | Table | Holds |
 |---|---|
-| `tenants` | one row per tenant: revision, counters, schema and members as JSON |
+| `tenant` | the tenant's row: revision, counters, schema and members as JSON |
 | `schema_history` | every schema version with the revision that introduced it |
-| `records` | one row per record: `(tenant, object, id)`, version, the record as canonical JSON |
+| `records` | one row per record: `(object, id)`, version, the record as canonical JSON |
 | `record_index` | one row per scalar field value and per list element, for lookups by value |
 | `events` | the event log; `published = 0` rows are the outbox |
 | `journal` | every accepted transition: intent, context, delta hash, events hash |
-| `sessions`, `accounts` | server-side sessions (token hash only) and development logins |
+| `sessions`, `accounts` | server-side sessions (token hash only) and logins |
 | `snapshots` | complete tenant states with their hash |
-| `storage_migrations` | which steps of the layout history have been applied, and when |
+
+The sign-in methods keep further tables (throttle counters, passkeys, emailed links, identity-provider
+and SAML flows, second factors, recovery codes). The complete layout is the `CONTROL_MIGRATIONS` and
+`TENANT_MIGRATIONS` lists in `storage-sqlite/src/lib.rs`; this table is a summary and the lists win.
 
 Tenant structure is data, so there are no per-tenant tables and no DDL when a tenant changes its
 schema. The layout itself changes only by appending to `MIGRATIONS`.
@@ -66,8 +73,8 @@ schema. The layout itself changes only by appending to `MIGRATIONS`.
    }
    ```
 
-   with `strata-storage-api = { features = ["conformance"] }` in dev-dependencies. The suite has
-   thirteen checks: stored state equals kernel state by hash, stale commits conflict, malformed
+   with `strata-storage-api = { features = ["conformance"] }` in dev-dependencies. The suite
+   (`storage-api/src/conformance.rs`) checks: stored state equals kernel state by hash, stale commits conflict, malformed
    commits are refused whole, partial loads, list containment, isolation, outbox order, journal
    replay, sessions, accounts, snapshots, reset.
 4. Add the adapter to the `match` in `crates/backend/src/main.rs`.

@@ -26,22 +26,71 @@ export function productArgs(root) {
     .flatMap((name) => ['--product', `specifications/products/${name}`]);
 }
 
-/** Runs the Exegra CLI and returns its parsed JSON envelope, or null when it printed none. */
-export function exegraJson(exegraHome, args) {
+/** The longest an Exegra call may run before it is killed and counted as failed. */
+export const EXEGRA_TIMEOUT_MS = Number(process.env.STRATA_EXEGRA_TIMEOUT_MS ?? 180_000);
+
+/**
+ * Runs the Exegra CLI. `envelope` is its parsed JSON output or null when it printed none;
+ * `problem` says why there is none (did not start, timed out, killed, or its own last line).
+ */
+export function exegraRun(exegraHome, args) {
   const cli = resolve(exegraHome, 'cli/exegra.js');
-  const done = spawnSync(process.execPath, [cli, ...args], { cwd: exegraHome, encoding: 'utf8', maxBuffer: 1 << 28 });
+  const done = spawnSync(process.execPath, [cli, ...args], {
+    cwd: exegraHome,
+    encoding: 'utf8',
+    maxBuffer: 1 << 28,
+    timeout: EXEGRA_TIMEOUT_MS,
+  });
+  let problem = null;
+  if (done.error?.code === 'ETIMEDOUT') problem = `timed out after ${EXEGRA_TIMEOUT_MS / 1000}s`;
+  else if (done.error) problem = `did not start: ${done.error.message}`;
+  else if (done.signal) problem = `killed by ${done.signal}`;
+  let envelope = null;
   try {
-    return JSON.parse(done.stdout);
+    envelope = JSON.parse(done.stdout);
   } catch {
-    return null;
+    envelope = null;
+    problem ??= `printed no JSON (exit ${done.status}): ${(done.stderr ?? '').trim().split('\n').pop() ?? ''}`;
   }
+  return { envelope, problem };
+}
+
+/** Runs the Exegra CLI and returns its parsed JSON envelope, or null when it printed none or timed out. */
+export function exegraJson(exegraHome, args) {
+  return exegraRun(exegraHome, args).envelope;
+}
+
+/** Up to five of the validation errors (or the error message) of an Exegra envelope, for a message. */
+export function envelopeProblems(envelope) {
+  const lines = [];
+  if (envelope?.error) lines.push(typeof envelope.error === 'string' ? envelope.error : JSON.stringify(envelope.error));
+  const result = envelope?.result;
+  const errors = Array.isArray(result?.errors) ? result.errors : [];
+  const diagnostics = Array.isArray(result?.diagnostics) ? result.diagnostics.filter((d) => d.severity === 'error') : [];
+  for (const d of (errors.length ? errors : diagnostics).slice(0, 5)) {
+    lines.push(typeof d === 'string' ? d : `${d.code ?? ''} ${d.entityId ?? ''} ${d.message ?? JSON.stringify(d)}`.trim());
+  }
+  return lines;
+}
+
+/**
+ * The semantic hash `exegra validate` reports for a project, and when there is none, why not:
+ * the validation errors Exegra printed, or what went wrong running it.
+ * @returns {{ hash: string | null, reason: string | null }}
+ */
+export function semanticHashDetail(exegraHome, project, specs) {
+  const args = ['validate', '--project', project, ...(specs ? ['--specs', specs] : [])];
+  const { envelope, problem } = exegraRun(exegraHome, args);
+  const hash = envelope?.semanticHash;
+  if (typeof hash === 'string' && hash.length > 0) return { hash, reason: null };
+  const lines = envelopeProblems(envelope);
+  const reason = lines.length ? `Exegra validation failed: ${lines.join('; ')}` : problem ?? 'Exegra reported no semanticHash (set EXEGRA_HOME and EXEGRA_PROJECT)';
+  return { hash: null, reason };
 }
 
 /** The semantic hash `exegra validate` reports for a project, or null. */
 export function semanticHash(exegraHome, project, specs) {
-  const args = ['validate', '--project', project, ...(specs ? ['--specs', specs] : [])];
-  const hash = exegraJson(exegraHome, args)?.semanticHash;
-  return typeof hash === 'string' && hash.length > 0 ? hash : null;
+  return semanticHashDetail(exegraHome, project, specs).hash;
 }
 
 /** Sorts object keys recursively, the form Exegra writes saved traces in. */
