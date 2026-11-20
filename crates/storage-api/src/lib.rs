@@ -178,6 +178,7 @@ pub fn idempotency_scope(principal: &Principal) -> String {
 
 impl Commit {
     /// The commit for an accepted transition.
+    /// Implements: CT-262
     pub fn of(intent: &Intent, context: &Context, transition: &Transition) -> Commit {
         Commit {
             delta: transition.delta.clone(),
@@ -627,17 +628,21 @@ pub struct OutboxFault {
 
 /// The persistence contract. See the crate documentation for the guarantees.
 pub trait Store: Send + Sync {
+    /// Implements: CT-008
     fn capabilities(&self) -> Capabilities;
     /// The full integrity check: every tenant is opened and checked. Expensive, and for the
     /// operator only; neither a tenant nor an unauthenticated caller may reach it. A tenant that
     /// cannot be checked makes the answer `ok: false`; it does not make the call fail.
+    /// Implements: CT-009
     fn health(&self) -> StoreResult<Health>;
     /// Cheap liveness: the store answers. Opens no tenant file.
     fn liveness(&self) -> StoreResult<()>;
     /// The adapter's storage layout history.
+    /// Implements: CT-010
     fn migrations(&self) -> StoreResult<Vec<StorageMigration>>;
 
     /// Every tenant. A tenant that cannot be read is left out.
+    /// Implements: CT-011
     fn tenants(&self) -> StoreResult<Vec<TenantSummary>>;
 
     /// One tenant's summary, or `None` when it does not exist. Reads that tenant only.
@@ -649,10 +654,12 @@ pub trait Store: Send + Sync {
     fn load(&self, tenant: &TenantId, needs: &[Need]) -> StoreResult<State>;
 
     /// A complete snapshot of one tenant.
+    /// Implements: CT-013
     fn load_complete(&self, tenant: &TenantId) -> StoreResult<State>;
 
     /// Apply a commit atomically, guarded by the base revision. The commit's events must
     /// continue the tenant's event sequence without a gap.
+    /// Implements: CT-014
     fn commit(&self, commit: &Commit) -> StoreResult<Receipt>;
 
     /// The first result recorded under an idempotency key for this tenant and principal scope
@@ -667,6 +674,7 @@ pub trait Store: Send + Sync {
     ) -> StoreResult<Option<IdempotentResult>>;
 
     /// Events of a tenant with a sequence number above `after`, oldest first.
+    /// Implements: CT-015
     fn events_after(
         &self,
         tenant: &TenantId,
@@ -680,6 +688,7 @@ pub trait Store: Send + Sync {
     /// tenant that cannot be read, or an event that cannot be decoded, does not fail the scan: the
     /// tenant is skipped, the event is parked (never offered again), and either is reported by
     /// [`Store::outbox_faults`].
+    /// Implements: CT-016
     fn outbox(&self, limit: usize) -> StoreResult<Vec<OutboxEntry>>;
 
     /// The outbox problems skipped since the store opened, most recent last. Bounded.
@@ -692,9 +701,11 @@ pub trait Store: Send + Sync {
 
     /// Mark every outbox entry of `tenant` up to and including `position` as published. Other
     /// tenants' outboxes are untouched.
+    /// Implements: CT-017
     fn mark_published(&self, tenant: &TenantId, position: u64) -> StoreResult<()>;
 
     /// Journal entries of a tenant with a revision above `after`, oldest first.
+    /// Implements: CT-018
     fn journal_after(
         &self,
         tenant: &TenantId,
@@ -715,11 +726,14 @@ pub trait Store: Send + Sync {
         at: Timestamp,
         network: Option<&str>,
     ) -> StoreResult<()>;
+    /// Implements: CT-020
     fn session_by_token(&self, token_hash: &str) -> StoreResult<Option<SessionRecord>>;
+    /// Implements: CT-021
     fn session(&self, id: &SessionId) -> StoreResult<Option<SessionRecord>>;
     /// Every session that is neither revoked nor past its end at `now`, of every tenant. A scan
     /// of the whole platform: no request path may call it. A tenant that cannot be read is
     /// skipped.
+    /// Implements: CT-022
     fn live_sessions(&self, now: Timestamp) -> StoreResult<Vec<SessionRecord>>;
     /// The live sessions of one tenant, or of one principal of it, by session id. Reads that
     /// tenant only; a tenant that does not exist has none.
@@ -730,6 +744,7 @@ pub trait Store: Send + Sync {
         now: Timestamp,
     ) -> StoreResult<Vec<SessionRecord>>;
     /// Remove sessions that ended before `before`. Returns how many were removed.
+    /// Implements: CT-023
     fn purge_sessions(&self, before: Timestamp) -> StoreResult<u64>;
 
     /// Reserve one attempt on every counter named, all or none, as one atomic step. When a counter
@@ -763,6 +778,7 @@ pub trait Store: Send + Sync {
     /// Returns `false`, and changes nothing, when the login is gone or has changed meanwhile.
     /// The login and tenant of the two must be the same.
     fn update_account(&self, expected: &Account, replacement: &Account) -> StoreResult<bool>;
+    /// Implements: CT-025
     fn account(&self, tenant: &TenantId, login: &str) -> StoreResult<Option<Account>>;
     /// Remove a login. Returns whether it was there.
     fn remove_account(&self, tenant: &TenantId, login: &str) -> StoreResult<bool>;
@@ -1005,6 +1021,7 @@ pub trait Store: Send + Sync {
         label: &str,
         at: Timestamp,
     ) -> StoreResult<SnapshotInfo>;
+    /// Implements: CT-027
     fn snapshots(&self, tenant: &TenantId) -> StoreResult<Vec<SnapshotInfo>>;
     fn load_snapshot(&self, tenant: &TenantId, id: u64) -> StoreResult<TenantState>;
     /// Put the tenant back exactly as the snapshot holds it, discarding events and journal
@@ -1012,6 +1029,7 @@ pub trait Store: Send + Sync {
     fn restore_snapshot(&self, tenant: &TenantId, id: u64) -> StoreResult<()>;
 
     /// Remove everything. For development fixtures.
+    /// Implements: CT-030
     fn reset(&self) -> StoreResult<()>;
 
     /// Remove one tenant and everything that belongs to it: its state, events, journal,

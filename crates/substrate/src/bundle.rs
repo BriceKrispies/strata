@@ -297,6 +297,9 @@ fn parse_arg(text: &str) -> Result<ArgSource, String> {
 }
 
 impl Bundle {
+    /// Parse a bundle document; a document that is not a bundle is refused.
+    ///
+    /// Implements: CT-237
     pub fn from_json(text: &str) -> Result<Bundle, String> {
         serde_json::from_str(text).map_err(|e| format!("tenant bundle: {e}"))
     }

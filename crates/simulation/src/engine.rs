@@ -240,6 +240,8 @@ pub type Progress<'a> = &'a mut dyn FnMut(usize, usize) -> bool;
 pub struct Cancelled;
 
 /// Run a scenario. Returns the trace and the final world.
+///
+/// Implements: CT-163
 pub fn run(scenario: &Scenario) -> (Trace, World) {
     run_with(scenario, None, &mut |_, _| true).expect("an uncancellable run completes")
 }

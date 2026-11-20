@@ -1497,6 +1497,10 @@ async fn dev(
     backend(&bff, &visit, path, &json!({})).await.map(Json)
 }
 
+/// The WebSocket upgrade of the signed-in page: it must come from an allowed origin and carry the
+/// session's request token, and the connection delivers only what its principal may read.
+///
+/// Implements: CT-098
 async fn socket(
     State(bff): State<Shared>,
     headers: HeaderMap,
@@ -1600,6 +1604,8 @@ fn escape_html(text: &str) -> String {
 
 /// The page shell with the first view model and session embedded, so the first paint needs no
 /// request. The data block is JSON, not script: `<` is escaped and the CSP allows no inline code.
+///
+/// Implements: CT-137
 async fn page(State(bff): State<Shared>, headers: HeaderMap, request: Request) -> Response {
     let visit = match visit(&bff, &headers) {
         Ok(visit) => visit,
