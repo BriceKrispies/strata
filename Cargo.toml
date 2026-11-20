@@ -76,7 +76,7 @@ prettyplease = "0.2.37"
 regex = "1.13.1"
 uuid = { version = "1.24.0", features = ["serde"] }
 base64 = "0.22.1"
-lettre = { version = "=0.11.24", default-features = false, features = ["builder", "smtp-transport", "native-tls"] }
+lettre = { version = "=0.11.24", default-features = false, features = ["builder", "smtp-transport", "rustls-tls"] }
 jsonwebtoken = "=9.3.1"
 totp-rs = { version = "=5.7.2", default-features = false }
 webauthn-rs = { version = "=0.6.2", features = ["danger-allow-state-serialisation", "conditional-ui"] }
