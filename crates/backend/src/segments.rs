@@ -162,6 +162,7 @@ fn define_now(
     request: &DefineRequest,
 ) -> Result<DefineReply, ApiError> {
     same_tenant(identity, request.tenant.as_deref())?;
+    crate::quota::check_new_segment(app, &identity.tenant, request.segment)?;
     let def = Definition {
         id: request.segment,
         name: request.name.clone(),

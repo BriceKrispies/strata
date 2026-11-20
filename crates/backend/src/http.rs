@@ -1017,7 +1017,11 @@ async fn gate(State(app): State<Shared>, request: Request, next: Next) -> Respon
         .to_string();
     let open = path == "/internal/health";
     let response = if open || has_service_token(&app, request.headers()) {
-        next.run(request).await
+        // The one enforcement point of the quotas of the specification (EDG-013).
+        match crate::quota::admit(&app, &path, request.headers()).await {
+            Ok(()) => next.run(request).await,
+            Err(refused) => refused,
+        }
     } else {
         ApiError::new(ErrorCode::Unauthenticated, "service token required").into_response()
     };
@@ -1117,6 +1121,13 @@ pub fn router(app: Shared) -> Router {
             post(crate::operations::route),
         )
         .route("/internal/ledger/:op", post(crate::ledger::route))
+        .route(
+            "/internal/platform/quota",
+            post(crate::quota::platform_set_route),
+        )
+        .route("/internal/usage", post(crate::quota::usage_route))
+        .route("/internal/flags", post(crate::quota::flags_route))
+        .route("/internal/flags/set", post(crate::quota::flags_set_route))
         .route("/internal/segments/define", post(crate::segments::define))
         .route("/internal/segments/remove", post(crate::segments::remove))
         .route("/internal/segments/members", post(crate::segments::members))

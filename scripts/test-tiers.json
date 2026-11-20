@@ -90,6 +90,14 @@
     },
     {
       "package": "strata-backend",
+      "target": "quota",
+      "tier": "full",
+      "seconds": null,
+      "unmeasured": true,
+      "reason": "Starts running backends on real sockets and logs in with Argon2 (the quotas, plans, flags and the usage route)"
+    },
+    {
+      "package": "strata-backend",
       "target": "saml",
       "tier": "routine",
       "seconds": 4.81

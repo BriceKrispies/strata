@@ -51,6 +51,8 @@ struct Inner {
     pending: BTreeMap<(TenantId, String), PendingSignIn>,
     recoveries: BTreeMap<(TenantId, String), RecoveryRequest>,
     docs: BTreeMap<(TenantId, String, String), String>,
+    /// The plan of each tenant that has had one set; the others hold `standard`.
+    plans: BTreeMap<TenantId, String>,
     audit: BTreeMap<TenantId, Vec<AuditEntry>>,
     snapshots: BTreeMap<(TenantId, u64), (SnapshotInfo, Arc<TenantState>)>,
     /// Results by tenant, principal scope and key, with the receipt of the commit.
@@ -243,6 +245,43 @@ impl Store for MemoryStore {
                 (object.clone(), epoch + counter)
             })
             .collect())
+    }
+
+    fn tenant_plan(&self, tenant: &TenantId) -> StoreResult<Option<String>> {
+        let inner = self.lock()?;
+        Ok(inner.tenants.contains_key(tenant).then(|| {
+            inner
+                .plans
+                .get(tenant)
+                .cloned()
+                .unwrap_or_else(|| "standard".to_string())
+        }))
+    }
+
+    fn set_tenant_plan(&self, tenant: &TenantId, plan: &str) -> StoreResult<()> {
+        let mut inner = self.lock()?;
+        if !inner.tenants.contains_key(tenant) {
+            return Err(StoreError::NotFound(format!("tenant {tenant}")));
+        }
+        inner.plans.insert(tenant.clone(), plan.to_string());
+        Ok(())
+    }
+
+    /// An estimate, since nothing is stored: 512 bytes a record and the size of the documents.
+    /// It is cheap, so that a write is not measured by encoding the whole tenant.
+    fn stored_bytes(&self, tenant: &TenantId) -> StoreResult<u64> {
+        let inner = self.lock()?;
+        let state = inner
+            .tenants
+            .get(tenant)
+            .map_or(0, |held| held.record_count() as u64 * 512);
+        let docs: usize = inner
+            .docs
+            .range((tenant.clone(), String::new(), String::new())..)
+            .take_while(|((owner, _, _), _)| owner == tenant)
+            .map(|((_, kind, key), value)| kind.len() + key.len() + value.len())
+            .sum();
+        Ok(state + docs as u64)
     }
 
     fn load(&self, tenant: &TenantId, needs: &[Need]) -> StoreResult<State> {

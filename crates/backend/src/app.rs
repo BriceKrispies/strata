@@ -275,6 +275,8 @@ pub struct App {
     pub lab: Lab,
     /// Socket, sign-in and hashing limits in force.
     pub admission: Admission,
+    /// The counters of the request quotas of the specification (see [`crate::quota`]).
+    pub quota: crate::quota::Quotas,
     pub started_at: i64,
     /// Recent security-relevant events, newest last: a cache for the development diagnostics.
     /// The record is the tenant's audit trail in the store; this ring is lost on restart.
@@ -298,6 +300,7 @@ impl App {
         Arc::new(App {
             lab: Lab::with_limits(&cfg.limits),
             admission: Admission::new(&cfg.limits),
+            quota: crate::quota::Quotas::new(),
             cfg,
             store,
             hub: Hub::new(),

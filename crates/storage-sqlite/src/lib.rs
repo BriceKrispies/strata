@@ -142,7 +142,19 @@ const CONTROL_MIGRATIONS: &[Migration] = &[
     CREATE INDEX job_wake_due ON job_wake(due_at);
     ",
     },
+    Migration {
+        // Numbered by the coordinator: appended at the end of the control steps.
+        version: 4,
+        name: TENANT_PLAN_MIGRATION_NAME,
+        sql: TENANT_PLAN_MIGRATION_SQL,
+    },
 ];
+
+/// The plan a tenant holds (BIL-150), on the tenant's row of the directory: a tenant that existed
+/// before the column holds `standard`.
+const TENANT_PLAN_MIGRATION_NAME: &str = "tenant plan";
+const TENANT_PLAN_MIGRATION_SQL: &str =
+    "ALTER TABLE tenant_directory ADD COLUMN plan TEXT NOT NULL DEFAULT 'standard';";
 
 /// A tenant file's layout, one step per entry. Steps are only ever appended.
 ///
@@ -2530,6 +2542,47 @@ impl Store for SqliteStore {
             }
         }
         Ok(out)
+    }
+
+    fn tenant_plan(&self, tenant: &TenantId) -> StoreResult<Option<String>> {
+        self.control
+            .lock()
+            .map_err(dbe)?
+            .query_row(
+                "SELECT plan FROM tenant_directory WHERE id = ?1 AND state = 'active'",
+                params![tenant.as_str()],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(db)
+    }
+
+    fn set_tenant_plan(&self, tenant: &TenantId, plan: &str) -> StoreResult<()> {
+        let changed = self.control.write(dbe, |tx| {
+            tx.execute(
+                "UPDATE tenant_directory SET plan = ?2 WHERE id = ?1 AND state = 'active'",
+                params![tenant.as_str(), plan],
+            )
+            .map_err(db)
+        })?;
+        if changed == 0 {
+            return Err(StoreError::NotFound(format!("tenant {tenant}")));
+        }
+        Ok(())
+    }
+
+    fn stored_bytes(&self, tenant: &TenantId) -> StoreResult<u64> {
+        Ok(self
+            .on_tenant(tenant, |conn| {
+                let pages: i64 = conn
+                    .query_row("PRAGMA page_count", [], |r| r.get(0))
+                    .map_err(db)?;
+                let size: i64 = conn
+                    .query_row("PRAGMA page_size", [], |r| r.get(0))
+                    .map_err(db)?;
+                Ok(u64::try_from(pages.saturating_mul(size)).unwrap_or(0))
+            })?
+            .unwrap_or(0))
     }
 
     fn tenant_summary(&self, tenant: &TenantId) -> StoreResult<Option<TenantSummary>> {

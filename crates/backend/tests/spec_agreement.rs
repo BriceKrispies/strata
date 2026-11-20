@@ -119,49 +119,38 @@ fn pairs() -> Vec<Pair> {
             quota: &quotas::Q_START_SAML_SIGN_IN,
         },
         Pair {
-            backend: "ThrottleLimits source limit, request for a sign-in link",
-            backend_limit: source,
-            quota: &quotas::Q_REQUEST_SIGN_IN_LINK,
-        },
-        Pair {
-            backend: "ThrottleLimits source limit, account recovery request",
-            backend_limit: source,
-            quota: &quotas::Q_RECOVER_ACCOUNT,
-        },
-        Pair {
             backend: "Limits::logins_per_source_per_minute",
             backend_limit: (
                 u64::try_from(logins.logins_per_source_per_minute).unwrap_or(u64::MAX),
                 60_000,
             ),
-            quota: &quotas::Q_SIGN_IN_WITH_PASSWORD,
+            quota: &quotas::Q_SIGN_IN_WITH_PASSWORD_BURST,
         },
     ]
 }
 
-/// The pairs whose numbers differ, listed so that they are visible. Neither side is taken as
-/// right: the owner decides which number stands. Each entry names the backend limit and says why
-/// the two are not simply equal.
+/// The pairs whose numbers differ: none. The three that differed are resolved.
 ///
-///   - Request for a sign-in link: the backend counts 100 per 15 minutes per source (the shared
-///     source limit); the quota allows 20 per hour.
-///   - Account recovery request: the same, 100 per 15 minutes against 20 per hour.
-///   - `Limits::logins_per_source_per_minute`: 30 per minute, counted by `Admission::login_attempt`
-///     on every attempt; the quota is 100 per 15 minutes (900 seconds). The backend counts a
-///     different window, so the two are different limits on the same contract, and the stricter
-///     one depends on the pace of the attempts.
+///   - Request for a sign-in link and account recovery request: the backend counted both against
+///     the one budget of failed attempts per source (100 in 15 minutes), which is not the limit
+///     the specification states for them (20 calls an hour of each contract, `q-request-sign-in-link`
+///     and `q-recover-account`). Both are now counted by `strata_backend::quota::admit` from the
+///     generated table, so the number is the specification's by construction; the shared budget
+///     stays as the different limit it is (IDN-250) and is compared above only for the contracts
+///     it measures the same thing for. `the_contract_quotas_are_enforced_from_the_generated_table`
+///     holds that these contracts are routed.
+///   - `Limits::logins_per_source_per_minute`: 30 per minute, counted by
+///     `Admission::login_attempt`, against 100 in 15 minutes: a burst limit is not a budget. The
+///     specification now states the burst as its own quota, `q-sign-in-with-password-burst`, and
+///     the backend's default is that quota's limit.
 ///
 /// Not listed because no quota exists for them: the socket caps, the browser log rate, Argon2
 /// memory, the Impact Lab queue, the verification interval and the second-factor prompts
 /// (D-700 states five an hour, but the specification has no quota for it).
-const KNOWN_MISMATCHES: &[&str] = &[
-    "ThrottleLimits source limit, request for a sign-in link",
-    "ThrottleLimits source limit, account recovery request",
-    "Limits::logins_per_source_per_minute",
-];
+const KNOWN_MISMATCHES: &[&str] = &[];
 
 #[test]
-fn backend_limits_match_the_generated_quotas_except_those_listed() {
+fn backend_limits_match_the_generated_quotas() {
     let mismatched: Vec<&str> = pairs()
         .iter()
         .filter(|pair| pair.backend_limit != quota_ms(pair.quota))
@@ -187,6 +176,31 @@ fn the_source_limit_comes_from_the_generated_quota() {
         u64::from(ThrottleLimits::default().source_max),
         quotas::Q_SIGN_IN_WITH_PASSWORD.limit
     );
+}
+
+/// The contracts whose quotas the backend counts itself are routed to the one enforcement point,
+/// and each routed contract has a quota in the generated table: a number is never restated.
+#[test]
+fn the_contract_quotas_are_enforced_from_the_generated_table() {
+    use strata_backend::quota::{contract_of_route, ROUTES};
+    assert_eq!(
+        contract_of_route("/internal/sign-in/link/request"),
+        Some("request-sign-in-link")
+    );
+    assert_eq!(
+        contract_of_route("/internal/recovery/request"),
+        Some("recover-account")
+    );
+    assert_eq!(
+        contract_of_route("/internal/aggregate"),
+        Some("aggregate-run")
+    );
+    for (route, contract) in ROUTES {
+        assert!(
+            quotas::for_contract(contract).next().is_some(),
+            "{route} serves {contract}, which has no quota"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------------------
