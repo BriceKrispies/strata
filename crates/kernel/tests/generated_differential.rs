@@ -79,7 +79,7 @@
 //!      AGG-001 to AGG-023): the generated `schema-problems` states none of them, and the
 //!      aggregate itself is not a read of the generated `kernel-read`. The corpus defines no
 //!      query with an aggregate.
-//!  10. Not mirrored, in the trigger decisions of `strata_kernel::triggers` (the rest of the module
+//!   9. Not mirrored, in the trigger decisions of `strata_kernel::triggers` (the rest of the module
 //!      is mirrored by `after-decision`): (a) the check that a condition or a run key reads nothing
 //!      the automation principal may not read (`unreadable`, which declines with `condition-failed`)
 //!      and the `InsufficientState` of a record a condition follows to (`expr::missing`): both walk
@@ -92,12 +92,12 @@
 //!      corpus has no such key. Guarded: `assert_no_input_of_a_known_difference` fails on a trigger
 //!      condition or an automation run key that follows a reference or reads a field some object
 //!      type protects with a read condition.
-//!  12. Not exercised, and not mirrored: the invocation of a tenant operation (`InvokeOperation`,
+//!  10. Not exercised, and not mirrored: the invocation of a tenant operation (`InvokeOperation`,
 //!      `crates/kernel/src/operations.rs`, WG-5100). The generated `intent-decision` refuses it
 //!      with `operation:decided_by_the_kernel` and the generated `needs` plans nothing for it,
 //!      because the function language does not state the decision yet. The operation generator
 //!      draws no invocation, and `compare_transition` fails on one.
-//!  13. Not mirrored: the posting of the tenant ledger (`strata_kernel::ledger::post`, the
+//!  11. Not mirrored: the posting of the tenant ledger (`strata_kernel::ledger::post`, the
 //!      `PostLedger` intent, a transfer as two postings committed together; WG-5083) and
 //!      everything that reads an account. An account is named by a UUID derived from the
 //!      SHA-256 of its tenant, owner, unit and scope (`account_id`), and the function language
@@ -115,7 +115,7 @@
 //!      calendar periods and the limits of an account (`ledger-period-start`, `ledger-limits-of`).
 //!      Guarded: `assert_no_input_of_a_known_difference` fails on a snapshot whose state holds a
 //!      ledger (an account or an entry), and `compare_transition` on a posting.
-//!  14. Not exercised, and not mirrored: the checks of the declarations of an object type, of the
+//!  12. Not exercised, and not mirrored: the checks of the declarations of an object type, of the
 //!      templates, tokens and product records of the tenant schema that the hand-written `schema.problems` makes through
 //!      `object_meta::problems`, `templates::problems` and `products::problems` (retention from a
 //!      timestamp field, the states of a publication, the type of a language field, the one-line
@@ -123,7 +123,7 @@
 //!      removal of an object type with the deletion of its records. The generated
 //!      `schema-problems` does not state them. The generator draws no such declaration, template,
 //!      token or product record.
-//!  15. Not exercised, and not mirrored: planned named queries (`strata_kernel::query_plan`,
+//!  13. Not exercised, and not mirrored: planned named queries (`strata_kernel::query_plan`,
 //!      KRN-2520 to KRN-2524). The hand-written kernel serves a query whose filter has an
 //!      indexable condition from `Need::IndexPage` candidates, pages them with a
 //!      `PageCursor::At` or `After` cursor, plans `read_needs` as index pages, evaluates every
@@ -135,7 +135,7 @@
 //!      (`tests/query_plan.rs`), so only the cursor, the needs and the evidence differ. Guarded:
 //!      `compare_read` fails on a read of a query that has an index plan, and
 //!      `compare_transition` fails on a schema change whose evidence would hold a scan warning.
-//!  16. Not exercised, and not mirrored: the erasure of a data subject (`EraseSubject`,
+//!  14. Not exercised, and not mirrored: the erasure of a data subject (`EraseSubject`,
 //!      `crates/kernel/src/erasure.rs`, D-7460). The generated `intent-decision` refuses it with
 //!      `erasure:decided_by_the_kernel` and the generated `needs` plans nothing for it. The
 //!      operation generator draws no erasure, and `compare_transition` fails on one.
@@ -143,10 +143,10 @@
 //! Every difference that is not compared through an adjustment is guarded, so that a corpus that
 //! grows into one is told to mirror the rule or to count the difference here:
 //! `assert_no_input_of_a_known_difference` runs on every snapshot the test decides or reads and
-//! fails on an input of differences 2, 7, 8, 10, 13 or 14; `compare_transition` fails on an
-//! intent of differences 12, 13 or 16 and on a schema change that warns of a scan (difference
-//! 15); `compare_read` fails on a read of a planned query (difference 15). Difference 1 is
-//! compared through an adjustment (the detail's prefix) and the run key of difference 10 through
+//! fails on an input of differences 2, 7, 8, 9, 11 or 12; `compare_transition` fails on an
+//! intent of differences 10, 11 or 14 and on a schema change that warns of a scan (difference
+//! 13); `compare_read` fails on a read of a planned query (difference 13). Difference 1 is
+//! compared through an adjustment (the detail's prefix) and the run key of difference 9 through
 //! another (`hash_run_keys`). Differences 3 to 6 are guarded by the operation generator drawing
 //! nothing that reaches them.
 //!
@@ -829,7 +829,7 @@ fn award(broken: bool) -> AutomationDef {
 }
 
 /// An automation that only ends, run as `writer`, with a run key that is the sequence of the event:
-/// a run it starts carries the hash of that value (difference 10 b). The powers of `writer` are
+/// a run it starts carries the hash of that value (difference 9 b). The powers of `writer` are
 /// given by policies, so defining it checks the conferral of a role whose powers come from
 /// policies (`may-confer`, `holds-policy-power`; WG-5102).
 fn keyed() -> AutomationDef {
@@ -1278,7 +1278,7 @@ fn reads_a_field(expr: &Expr, named: &dyn Fn(&str) -> bool) -> bool {
     }
 }
 
-/// Differences 2, 7, 8, 10, 13 and 14 of the header: fail when a snapshot holds an input of a
+/// Differences 2, 7, 8, 9, 11 and 12 of the header: fail when a snapshot holds an input of a
 /// rule the generated functions do not mirror, so the corpus cannot start to depend on one
 /// silently.
 fn assert_no_input_of_a_known_difference(state: &State) {
@@ -1311,7 +1311,7 @@ fn assert_no_input_of_a_known_difference(state: &State) {
     }
     assert!(
         tenant.ledger.is_none(),
-        "{} holds ledger accounts or entries; the generated functions do not mirror them (difference 13)",
+        "{} holds ledger accounts or entries; the generated functions do not mirror them (difference 11)",
         tenant.id
     );
     assert!(
@@ -1319,7 +1319,7 @@ fn assert_no_input_of_a_known_difference(state: &State) {
             && tenant.schema.notice_templates.is_none()
             && tenant.schema.tokens.is_none()
             && tenant.schema.products.is_none(),
-        "the schema holds a template, a token or a product record; the generated functions do not state their checks (difference 14)"
+        "the schema holds a template, a token or a product record; the generated functions do not state their checks (difference 12)"
     );
     for (object_id, def) in &tenant.schema.objects {
         assert!(
@@ -1327,7 +1327,7 @@ fn assert_no_input_of_a_known_difference(state: &State) {
                 && def.publication.is_none()
                 && def.language_field.is_none()
                 && def.translation_group.is_none(),
-            "{object_id} declares retention, publication, a language field or a translation group; the generated functions do not state their checks (difference 14)"
+            "{object_id} declares retention, publication, a language field or a translation group; the generated functions do not state their checks (difference 12)"
         );
     }
     let protected: BTreeSet<&str> = tenant
@@ -1344,14 +1344,14 @@ fn assert_no_input_of_a_known_difference(state: &State) {
     for trigger in tenant.schema.triggers.iter().flat_map(BTreeMap::values) {
         assert!(
             !trigger.condition.as_ref().is_some_and(unreadable),
-            "trigger {} has a condition that follows a reference or reads a protected field; the generated decide-run does not check what the automation may read (difference 10)",
+            "trigger {} has a condition that follows a reference or reads a protected field; the generated decide-run does not check what the automation may read (difference 9)",
             trigger.id
         );
     }
     for automation in tenant.schema.automations.iter().flat_map(BTreeMap::values) {
         assert!(
             !automation.run_key.as_ref().is_some_and(unreadable),
-            "{} has a run key that follows a reference or reads a protected field; the generated decide-run does not check what the automation may read (difference 10)",
+            "{} has a run key that follows a reference or reads a protected field; the generated decide-run does not check what the automation may read (difference 9)",
             automation.id
         );
         for (name, step) in &automation.steps {
@@ -1369,7 +1369,7 @@ fn assert_no_input_of_a_known_difference(state: &State) {
     }
 }
 
-/// Difference 10 (b) of the header: the generated `trigger-start` writes the canonical JSON of a
+/// Difference 9 (b) of the header: the generated `trigger-start` writes the canonical JSON of a
 /// run key where the kernel writes its SHA-256 in hexadecimal; hash it, so both sides carry the
 /// hash of the same text.
 fn hash_run_keys(result: &mut Result<Transition, DomainError>) {
@@ -1386,7 +1386,7 @@ fn hash_run_keys(result: &mut Result<Transition, DomainError>) {
     }
 }
 
-/// Difference 15 of the header: a read of a query with an index plan is not compared, because the
+/// Difference 13 of the header: a read of a query with an index plan is not compared, because the
 /// generated `kernel-read` scans it and issues another cursor.
 fn assert_not_planned(state: &State, request: &ReadRequest) {
     let (Some(tenant), ReadRequest::Named { query, .. }) = (&state.tenant, request) else {
@@ -1398,12 +1398,12 @@ fn assert_not_planned(state: &State, request: &ReadRequest) {
                 strata_kernel::query_plan::plan_query(&tenant.schema, def),
                 strata_kernel::query_plan::QueryPlan::Index(_)
             ),
-            "query {query} has an index plan; the generated kernel-read scans it (difference 15)"
+            "query {query} has an index plan; the generated kernel-read scans it (difference 13)"
         );
     }
 }
 
-/// Difference 15 of the header: a schema change whose evidence holds a scan warning is not
+/// Difference 13 of the header: a schema change whose evidence holds a scan warning is not
 /// compared, because the generated `change-schema` writes no such warning.
 fn assert_no_scan_warning(state: &State, intent: &Intent, hand: &Result<Transition, DomainError>) {
     let (Intent::ChangeSchema { changes, .. }, Ok(accepted), Some(tenant)) =
@@ -1415,7 +1415,7 @@ fn assert_no_scan_warning(state: &State, intent: &Intent, hand: &Result<Transiti
         if let DeltaOp::PutSchema(after) = op {
             assert!(
                 strata_kernel::query_plan::scan_warnings(&tenant.schema, after, changes).is_empty(),
-                "the schema change warns of a scan; the generated change-schema does not (difference 15)"
+                "the schema change warns of a scan; the generated change-schema does not (difference 13)"
             );
         }
     }
@@ -1444,15 +1444,15 @@ fn compare_transition(state: &State, intent: &Intent, context: &Context, tally: 
     assert_no_input_of_a_known_difference(state);
     assert!(
         !matches!(intent, Intent::InvokeOperation { .. }),
-        "{label}: the generated functions do not decide a tenant operation (difference 12)"
+        "{label}: the generated functions do not decide a tenant operation (difference 10)"
     );
     assert!(
         !matches!(intent, Intent::PostLedger { .. }),
-        "{label}: the generated functions do not decide a posting (difference 13)"
+        "{label}: the generated functions do not decide a posting (difference 11)"
     );
     assert!(
         !matches!(intent, Intent::EraseSubject { .. }),
-        "{label}: the generated functions do not decide an erasure (difference 16)"
+        "{label}: the generated functions do not decide an erasure (difference 14)"
     );
     let mut hand = transition(state, intent, context);
     assert_no_scan_warning(state, intent, &hand);
@@ -1714,7 +1714,7 @@ fn the_hand_written_kernel_agrees_with_the_generated_functions() {
 
 /// The calendar periods and the limits of an account (`ledger::period_start`, `ledger::limits_of`)
 /// against the generated `ledger-period-start` and `ledger-limits-of`, on fixed inputs: the
-/// posting that uses them is not mirrored (difference 13), these two are.
+/// posting that uses them is not mirrored (difference 11), these two are.
 #[test]
 fn the_ledger_periods_and_limits_agree_with_the_generated_functions() {
     let mut instants: Vec<i64> = vec![
