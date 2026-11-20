@@ -1,0 +1,11 @@
+{
+  "exegra": "0.1",
+  "system": { "id": "sys", "name": "System" },
+  "claims": [ { "id": "agt-1209", "ref": "AGT-1209", "kind": "requirement" } ],
+  "contracts": [
+    {
+      "id": "invoke-operation", "name": "Invoke an operation", "ref": "CT-110", "exposure": "public",
+      "errors": [ { "name": "forbidden", "kind": "forbidden", "condition": "The caller lacks a capability that the underlying contract requires (AGT-1209)." } ]
+    }
+  ]
+}

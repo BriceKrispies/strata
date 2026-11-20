@@ -15,9 +15,15 @@
 //! `d-6201`, the claim `TEN-1140`, the claim `ARC-1599`. A specification without it is not
 //! refused, so the rules can land before the operations that add those entities are applied.
 //!
-//! CMS-1020 (a bound on a Markdown source) has no rule here: the specification declares no
-//! Markdown field. A Markdown field is a field of a tenant record type in a product file, and the
-//! bound is the parser's (`strata_substrate::markdown::parse`), so specc has nothing to refuse.
+//! - `contract.markdown-bound-missing`: the claim CMS-1020 states no byte bound on a Markdown
+//!   source, no bound on quote nesting or no bound on inline nesting (WG-5015). The parser's own
+//!   constants are compared with the stated numbers by `tests/audit_refusals.rs`.
+//! - `contract.revocation-authority-missing`: once the claim ADM-1080 says that revoking needs the
+//!   authority to confer, a contract that takes a role away (`revoke-role`, `remove-team-member`,
+//!   `withdraw-invitation`) declares no `forbidden` error whose condition names ADM-152 (WG-5018).
+//! - `contract.catalogue-negative-missing`: the claim AGT-1209 is in the specification, and either
+//!   the contract `invoke-operation` has no `forbidden` error that cites it, or no claim that models
+//!   it declares a negative run (WG-5023).
 
 use serde_json::{Map, Value};
 
@@ -41,6 +47,26 @@ pub const CONVENTION_IDEMPOTENCY: &str = "contract.convention-idempotency";
 pub const CONVENTION_ERROR_KIND: &str = "contract.convention-error-kind";
 /// Code of an exemption that names a contract or rule that no longer breaks the convention.
 pub const CONVENTION_EXEMPTION_STALE: &str = "contract.convention-exemption-stale";
+
+/// Code of a missing bound in the claim that limits a Markdown source.
+pub const MARKDOWN_BOUND_MISSING: &str = "contract.markdown-bound-missing";
+/// Code of a contract that revokes without naming the conferral rule in its refusal.
+pub const REVOCATION_AUTHORITY_MISSING: &str = "contract.revocation-authority-missing";
+/// Code of a catalogue invocation claim with no refusal in the contract or no negative run.
+pub const CATALOGUE_NEGATIVE_MISSING: &str = "contract.catalogue-negative-missing";
+
+/// The claim that bounds a Markdown source and its nesting.
+const MARKDOWN_CLAIM: &str = "CMS-1020";
+/// The claim that says revoking a role needs the authority to confer it.
+const REVOCATION_CLAIM: &str = "ADM-1080";
+/// The rule of conferral that a refusal of a revocation names.
+const CONFERRAL_RULE: &str = "ADM-152";
+/// The contracts that take a role, or an offer of roles, away.
+const REVOCATION_CONTRACTS: &[&str] = &["revoke-role", "remove-team-member", "withdraw-invitation"];
+/// The claim that says a catalogue invocation needs what the underlying contract needs.
+const CATALOGUE_CLAIM: &str = "AGT-1209";
+/// The contract of a catalogue invocation.
+const CATALOGUE_CONTRACT: &str = "invoke-operation";
 
 /// The decision that holds the list of operations that need a fresh authentication.
 const STEP_UP_DECISION: &str = "d-6201";
@@ -181,6 +207,15 @@ pub(crate) fn check_with(top: &Obj, exempt: &[Exemption]) -> Vec<Diagnostic> {
     if has_claim(top, CONVENTIONS_CLAIM) {
         out.extend(conventions(&contracts, exempt));
     }
+    if has_claim(top, MARKDOWN_CLAIM) {
+        out.extend(markdown_bounds_stated(top));
+    }
+    if has_claim(top, REVOCATION_CLAIM) {
+        out.extend(revocation_authority(&contracts));
+    }
+    if has_claim(top, CATALOGUE_CLAIM) {
+        out.extend(catalogue_negative(top, &contracts));
+    }
     out
 }
 
@@ -198,6 +233,132 @@ fn entity<'a>(top: &'a Obj, section: &str, pred: impl Fn(&Obj) -> bool) -> Optio
 
 fn has_claim(top: &Obj, reference: &str) -> bool {
     entity(top, "claims", |o| text(o, "ref") == Some(reference)).is_some()
+}
+
+/// The number that follows `marker` and is followed by `unit`, as in "at most 200000 bytes".
+fn bound_after(statement: &str, marker: &str, unit: &str) -> Option<u64> {
+    let mut from = 0;
+    while let Some(at) = statement[from..].find(marker) {
+        let start = from + at + marker.len();
+        let rest = &statement[start..];
+        let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+        if !digits.is_empty() && rest[digits.len()..].trim_start().starts_with(unit) {
+            return digits.parse().ok().filter(|n| *n > 0);
+        }
+        from = start;
+    }
+    None
+}
+
+/// The bounds a statement of CMS-1020 gives, as (bytes of a source, depth of quotes, depth of
+/// inline markup). A bound the statement does not give is `None`.
+pub fn markdown_bounds(statement: &str) -> (Option<u64>, Option<u64>, Option<u64>) {
+    (
+        bound_after(statement, "at most ", "bytes"),
+        bound_after(statement, "quotes at most ", "deep"),
+        bound_after(statement, "markup at most ", "deep"),
+    )
+}
+
+fn markdown_bounds_stated(top: &Obj) -> Vec<Diagnostic> {
+    let Some(claim) = entity(top, "claims", |o| text(o, "ref") == Some(MARKDOWN_CLAIM)) else {
+        return Vec::new();
+    };
+    let (bytes, quotes, inline) = markdown_bounds(text(claim, "statement").unwrap_or(""));
+    let mut lacking = Vec::new();
+    if bytes.is_none() {
+        lacking.push("number of bytes of a source (\"at most N bytes\")");
+    }
+    if quotes.is_none() {
+        lacking.push("depth of quotes (\"quotes at most N deep\")");
+    }
+    if inline.is_none() {
+        lacking.push("depth of inline markup (\"markup at most N deep\")");
+    }
+    if lacking.is_empty() {
+        return Vec::new();
+    }
+    vec![Diagnostic::new(
+        MARKDOWN_BOUND_MISSING,
+        text(claim, "id").unwrap_or(MARKDOWN_CLAIM),
+        format!(
+            "Claim {MARKDOWN_CLAIM} bounds the Markdown parser and states no {}; a source or a nesting without a stated bound stops the process for every tenant.",
+            lacking.join(", no ")
+        ),
+    )]
+}
+
+/// Refuses a revoking contract whose `forbidden` refusal does not name the conferral rule.
+fn revocation_authority(contracts: &[&Obj]) -> Vec<Diagnostic> {
+    let mut out = Vec::new();
+    for contract in contracts
+        .iter()
+        .filter(|c| REVOCATION_CONTRACTS.contains(&id_of(c)))
+    {
+        let names_rule = errors(contract).iter().any(|e| {
+            text(e, "kind") == Some("forbidden")
+                && text(e, "condition").is_some_and(|c| c.contains(CONFERRAL_RULE))
+        });
+        if names_rule {
+            continue;
+        }
+        out.push(Diagnostic::new(
+            REVOCATION_AUTHORITY_MISSING,
+            id_of(contract),
+            format!(
+                "Contract \"{}\" takes a role away and declares no forbidden error whose condition names {CONFERRAL_RULE}; revoking needs the authority to confer the role ({REVOCATION_CLAIM}).",
+                id_of(contract)
+            ),
+        ));
+    }
+    out
+}
+
+/// Refuses a specification that states AGT-1209 without the refusal in the catalogue contract or
+/// without a claim that models it and declares a negative run.
+fn catalogue_negative(top: &Obj, contracts: &[&Obj]) -> Vec<Diagnostic> {
+    let mut out = Vec::new();
+    let cites = contracts
+        .iter()
+        .filter(|c| id_of(c) == CATALOGUE_CONTRACT)
+        .any(|c| {
+            errors(c).iter().any(|e| {
+                text(e, "kind") == Some("forbidden")
+                    && text(e, "condition").is_some_and(|t| t.contains(CATALOGUE_CLAIM))
+            })
+        });
+    if !cites {
+        out.push(Diagnostic::new(
+            CATALOGUE_NEGATIVE_MISSING,
+            CATALOGUE_CLAIM,
+            format!(
+                "Claim {CATALOGUE_CLAIM} says a catalogue invocation needs what the underlying contract needs, and the contract {CATALOGUE_CONTRACT} declares no forbidden error whose condition cites it."
+            ),
+        ));
+    }
+    let negative = top
+        .get("claims")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_object)
+        .filter(|c| text(c, "models").is_some_and(|m| m.eq_ignore_ascii_case(CATALOGUE_CLAIM)))
+        .any(|c| {
+            c.get("evaluate")
+                .and_then(|e| e.get("negatives"))
+                .and_then(Value::as_array)
+                .is_some_and(|n| !n.is_empty())
+        });
+    if !negative {
+        out.push(Diagnostic::new(
+            CATALOGUE_NEGATIVE_MISSING,
+            CATALOGUE_CLAIM,
+            format!(
+                "Claim {CATALOGUE_CLAIM} has no negative scenario: no claim that models it declares a negative run, in which the refusal is taken away and the invocation then goes through."
+            ),
+        ));
+    }
+    out
 }
 
 /// The names of the `inputs` or `outputs` of a contract.
@@ -647,6 +808,104 @@ mod tests {
             exempt("kinds", "error-kind"),
         ];
         assert!(check_with(&t, &list).is_empty());
+    }
+
+    #[test]
+    fn the_bounds_of_a_markdown_source_are_read_from_the_claim() {
+        let stated = "The parser SHALL read at most 200000 bytes of a source, nest quotes at most 8 deep and inline markup at most 6 deep.";
+        assert_eq!(markdown_bounds(stated), (Some(200_000), Some(8), Some(6)));
+        assert_eq!(
+            markdown_bounds("nest quotes without limit"),
+            (None, None, None)
+        );
+        assert_eq!(
+            markdown_bounds("read at most 0 bytes, quotes at most many deep"),
+            (None, None, None)
+        );
+    }
+
+    #[test]
+    fn a_markdown_claim_without_its_bounds_is_refused() {
+        let claim = |statement: &str| {
+            top(
+                json!({ "claims": [{ "id": "cms-1020", "ref": "CMS-1020", "statement": statement }] }),
+            )
+        };
+        let full = "read at most 200000 bytes, nest quotes at most 8 deep and inline markup at most 8 deep";
+        assert!(check_with(&claim(full), &[]).is_empty());
+        for partial in [
+            "nest quotes at most 8 deep and inline markup at most 8 deep",
+            "read at most 200000 bytes and inline markup at most 8 deep",
+            "read at most 200000 bytes, nest quotes at most 8 deep",
+            "read a source",
+        ] {
+            assert_eq!(
+                codes(&check_with(&claim(partial), &[])),
+                [pair(MARKDOWN_BOUND_MISSING, "cms-1020")],
+                "{partial}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_revoking_contract_must_name_the_conferral_rule() {
+        let forbidden = |condition: &str| json!([{ "name": "forbidden", "kind": "forbidden", "condition": condition }]);
+        let t = top(json!({
+            "claims": [{ "id": "adm-1080", "ref": "ADM-1080" }],
+            "contracts": [
+                { "id": "revoke-role", "errors": forbidden("The caller may not manage members.") },
+                { "id": "remove-team-member", "errors": forbidden("The caller could not confer a role of the team (ADM-152).") },
+                { "id": "withdraw-invitation", "errors": [{ "name": "forbidden", "kind": "invalid", "condition": "ADM-152" }] },
+                { "id": "something-else", "errors": [] }
+            ]
+        }));
+        assert_eq!(
+            codes(&check_with(&t, &[])),
+            [
+                pair(REVOCATION_AUTHORITY_MISSING, "revoke-role"),
+                pair(REVOCATION_AUTHORITY_MISSING, "withdraw-invitation"),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_catalogue_claim_needs_the_refusal_and_a_negative_run() {
+        let contract = |condition: &str| {
+            json!({ "id": "invoke-operation",
+                "errors": [{ "name": "forbidden", "kind": "forbidden", "condition": condition }] })
+        };
+        let model = |negatives: Value| {
+            json!({ "id": "m-catalogue", "models": "agt-1209",
+                "evaluate": { "method": "never", "negatives": negatives } })
+        };
+        let claim = json!({ "id": "agt-1209", "ref": "AGT-1209" });
+        let whole = top(json!({
+            "claims": [claim.clone(), model(json!([{ "scenario": "s", "faults": ["f"] }]))],
+            "contracts": [contract("Lacks a capability of the contract (AGT-1209).")]
+        }));
+        assert!(check_with(&whole, &[]).is_empty());
+        let no_cite = top(json!({
+            "claims": [claim.clone(), model(json!([{ "scenario": "s", "faults": ["f"] }]))],
+            "contracts": [contract("The caller holds no permission.")]
+        }));
+        assert_eq!(
+            codes(&check_with(&no_cite, &[])),
+            [pair(CATALOGUE_NEGATIVE_MISSING, "AGT-1209")]
+        );
+        let empty = top(json!({
+            "claims": [claim.clone(), model(json!([]))],
+            "contracts": [contract("Lacks a capability (AGT-1209).")]
+        }));
+        let none = top(json!({
+            "claims": [claim],
+            "contracts": [contract("Lacks a capability (AGT-1209).")]
+        }));
+        for t in [empty, none] {
+            assert_eq!(
+                codes(&check_with(&t, &[])),
+                [pair(CATALOGUE_NEGATIVE_MISSING, "AGT-1209")]
+            );
+        }
     }
 
     #[test]

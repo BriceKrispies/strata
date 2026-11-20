@@ -1,0 +1,10 @@
+{
+  "exegra": "0.1",
+  "system": { "id": "sys", "name": "System" },
+  "claims": [
+    {
+      "id": "cms-1020", "ref": "CMS-1020", "kind": "requirement",
+      "statement": "The Markdown parser SHALL nest quotes and inline markup as deep as the source asks and read the whole of a source."
+    }
+  ]
+}
