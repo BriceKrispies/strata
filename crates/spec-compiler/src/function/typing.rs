@@ -1469,9 +1469,36 @@ impl<'a> Checker<'a> {
                     Box::new(Ty::Str),
                 ))
             }
-            "print" => Err(unsupported(
-                "print (a language's expression as text) is not compiled in functions yet",
-            )),
+            "print" => {
+                // print(L, e): e in L's authoring syntax, the generated printer (the `Display`
+                // the language module implements for its AST type; WG-4966).
+                arity(2, op)?;
+                let lang_id = match &mut op.args[0].kind {
+                    Kind::Ref(path, res) if path.len() == 1 => {
+                        *res = Res::Language;
+                        path[0].clone()
+                    }
+                    _ => {
+                        return Err(invalid(
+                            "the first argument of print is the id of a language",
+                        ))
+                    }
+                };
+                op.args[0].ty = Some(Ty::Unknown);
+                let spec = self.spec;
+                let Some(lang) = spec.languages.iter().find(|l| l.id == lang_id) else {
+                    return Err(invalid(format!("\"{lang_id}\" is not a declared language")));
+                };
+                let Some(bridge) = crate::language::bridge(spec, lang) else {
+                    return Err(unsupported(format!(
+                        "the language {lang_id} is refused by specc, so its printer is not generated"
+                    )));
+                };
+                let ast = Ty::Union(bridge.ast_id().to_string());
+                let t = self.walk(&mut op.args[1], scope)?;
+                self.need(&t, &ast, "the expression of print")?;
+                Ok(Ty::Str)
+            }
             "eval" | "check" => {
                 // eval takes an optional fourth argument, the lookup a reference is followed
                 // through (Exegra WG-4968); check takes three.

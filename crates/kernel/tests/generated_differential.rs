@@ -16,10 +16,6 @@
 //!
 //! The two sides are given the same types: the kernel re-exports the generated types. The
 //! adapters are small:
-//!   - the generated functions take `texts` (`IntentTexts`), the printed forms of expressions the
-//!     function language cannot print (WG-4957); `texts_for` derives them from the snapshot's
-//!     schema and the intent, with `Expr`'s `Display`, which is what the hand-written kernel
-//!     prints;
 //!   - the generated functions fail with `Failure<Rejection>`; a `Rejection::Rejected` payload is
 //!     the hand-written kernel's `DomainError`, and a `Failure::Fault` (integer overflow,
 //!     division by zero) fails the test, because the hand-written kernel has no such outcome;
@@ -55,9 +51,7 @@
 //!      `DefineQuery`, `DefineRolePermissions`, `RemoveField`, the definitions of triggers,
 //!      automations, tenant operations and composite unique constraints (and their removals), of
 //!      settings and of capabilities, which the generator below adds to the seven intents of
-//!      `properties.rs`, with the writes of settings, `DefineTeam` and `AddTeamMember`. `texts_for` reads defaults and
-//!      constraints only from `DefineField` and `DefineConstraint`; the definitions print no
-//!      expression. The functions of the other intents are mirrored all the same (the conferral
+//!      `properties.rs`, with the writes of settings, `DefineTeam` and `AddTeamMember`. The functions of the other intents are mirrored all the same (the conferral
 //!      of a role, the owner that remains, the reserved `team:` prefix, the rewrite of records
 //!      by a schema change), each with examples in the specification.
 //!   5. Not exercised: a list nested three deep in a stored value. The generated limit and
@@ -225,7 +219,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use strata_kernel::testkit::*;
 use strata_kernel::*;
 use strata_model_core::functions::{self as spec, Failure};
-use strata_model_core::types::{IntentTexts, Rejection};
+use strata_model_core::types::Rejection;
 
 /// How many random operation sequences run from each starting world, and how long each is.
 const SEQUENCES: usize = 24;
@@ -1156,80 +1150,6 @@ fn context_of(op: &Op, now: i64) -> Context {
 // The adapters.
 // ---------------------------------------------------------------------------------------
 
-/// The `texts` the generated functions take, derived as the caller (the shell) would: the
-/// printed defaults, constraints, policy conditions and query filters of the snapshot's schema,
-/// those a `ChangeSchema` intent defines, and whether a `CreateTenant` name is blank.
-fn texts_for(state: &State, intent: &Intent) -> IntentTexts {
-    let mut texts = IntentTexts {
-        defaults: BTreeMap::new(),
-        constraints: BTreeMap::new(),
-        conditions: BTreeMap::new(),
-        blank_name: false,
-    };
-    if let Some(tenant) = &state.tenant {
-        for (object_id, def) in &tenant.schema.objects {
-            for (field_id, field) in &def.fields {
-                if let Some(default) = &field.default {
-                    texts
-                        .defaults
-                        .entry(object_id.clone())
-                        .or_default()
-                        .insert(field_id.clone(), default.to_string());
-                }
-            }
-            for (constraint_id, constraint) in &def.constraints {
-                texts
-                    .constraints
-                    .entry(object_id.clone())
-                    .or_default()
-                    .insert(constraint_id.clone(), constraint.expr.to_string());
-            }
-        }
-        for (policy_id, policy) in &tenant.schema.policies {
-            if let Some(condition) = &policy.condition {
-                texts
-                    .conditions
-                    .insert(format!("policy:{}", policy_id.0), condition.to_string());
-            }
-        }
-        for (query_id, query) in &tenant.schema.queries {
-            if let Some(filter) = &query.filter {
-                texts
-                    .conditions
-                    .insert(format!("query:{}", query_id.0), filter.to_string());
-            }
-        }
-    }
-    match intent {
-        Intent::ChangeSchema { changes, .. } => {
-            for change in changes {
-                match change {
-                    SchemaChange::DefineField { object, field } => {
-                        if let Some(default) = &field.default {
-                            texts
-                                .defaults
-                                .entry(object.clone())
-                                .or_default()
-                                .insert(field.id.clone(), default.to_string());
-                        }
-                    }
-                    SchemaChange::DefineConstraint { object, constraint } => {
-                        texts
-                            .constraints
-                            .entry(object.clone())
-                            .or_default()
-                            .insert(constraint.id.clone(), constraint.expr.to_string());
-                    }
-                    _ => {}
-                }
-            }
-        }
-        Intent::CreateTenant { name, .. } => texts.blank_name = name.trim().is_empty(),
-        _ => {}
-    }
-    texts
-}
-
 /// A generated function's failure as the hand-written kernel's error type. A fault has no
 /// counterpart there, so it is reported as a difference by the caller.
 fn domain_error(failure: Failure<Rejection>) -> Result<DomainError, String> {
@@ -1627,8 +1547,7 @@ fn compare_transition(state: &State, intent: &Intent, context: &Context, tally: 
     );
     let mut hand = transition(state, intent, context);
     assert_no_scan_warning(state, intent, &hand);
-    let texts = texts_for(state, intent);
-    let mut generated = match spec::kernel_transition(state, intent, context, &texts) {
+    let mut generated = match spec::kernel_transition(state, intent, context) {
         Ok(result) => Ok(result),
         Err(failure) => Err(domain_error(failure).unwrap_or_else(|fault| {
             panic!(
@@ -1674,15 +1593,7 @@ fn compare_read(state: &State, request: &ReadRequest, context: &Context, tally: 
     assert_no_input_of_a_known_difference(state);
     assert_not_planned(state, request);
     let hand = read(state, request, context);
-    // Only the query filters are printed by a read; the intent is none.
-    let texts = texts_for(
-        state,
-        &Intent::AssignRole {
-            principal: principal_id("x"),
-            role: role("public"),
-        },
-    );
-    let mut generated = match spec::kernel_read(state, request, context, &texts) {
+    let mut generated = match spec::kernel_read(state, request, context) {
         Ok(result) => Ok(result),
         Err(failure) => Err(domain_error(failure).unwrap_or_else(|fault| {
             panic!("{label}: the generated read failed with {fault}; the hand kernel gave {hand:?}")
@@ -2022,8 +1933,7 @@ fn the_comparison_notices_a_difference() {
     let intent = new_note("A title", "a-slug");
     let state = world.state(&context.tenant);
     let hand = transition(&state, &intent, &context).expect("the owner may create a note");
-    let texts = texts_for(&state, &intent);
-    let mut other = match spec::kernel_transition(&state, &intent, &context, &texts) {
+    let mut other = match spec::kernel_transition(&state, &intent, &context) {
         Ok(result) => result,
         Err(_) => panic!("the generated kernel refused what the hand kernel accepted"),
     };

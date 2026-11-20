@@ -2327,6 +2327,30 @@ impl<'a> Gen<'a> {
                         .exits(e.exits || en.exits),
                 )
             }
+            "print" => {
+                // The language module implements `Display` for its AST type with the printer
+                // of the language's authoring syntax (`language::Plan::printer`).
+                let Kind::Ref(path, _) = &op.args[0].kind else {
+                    return Err(unsupported("print without a language"));
+                };
+                let lang = &path[0];
+                let lang_decl = self
+                    .spec
+                    .languages
+                    .iter()
+                    .find(|l| &l.id == lang)
+                    .ok_or_else(|| unsupported(format!("no language {lang}")))?;
+                let bridge = crate::language::bridge(self.spec, lang_decl)
+                    .ok_or_else(|| unsupported(format!("the language {lang} is refused")))?;
+                let ast = Ty::Union(bridge.ast_id().to_string());
+                let e = self.borrow(&op.args[1], &ast)?;
+                let et = &e.t;
+                Ok(Code::new(
+                    quote! { std::string::ToString::to_string(#et) },
+                    Prec::Postfix,
+                )
+                .exits(e.exits))
+            }
             "fail" => {
                 let v = self.fail_value(op)?;
                 Ok(Code::new(quote! { return #v }, Prec::Block).exits(true))
