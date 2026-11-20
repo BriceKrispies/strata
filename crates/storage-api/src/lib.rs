@@ -37,6 +37,7 @@
 
 pub mod jobs;
 pub mod memory;
+pub mod segments;
 
 #[cfg(feature = "conformance")]
 pub mod conformance;
@@ -52,6 +53,7 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::Instant;
 use strata_kernel::ext::*;
+use strata_kernel::segments as seg;
 use strata_kernel::{
     canon, Context, Coverage, DomainError, DomainEvent, Effect, ErrorKind, EventBody, Intent, Need,
     Principal, PrincipalId, ReadRequest, ReadResult, Record, SessionId, State, StateDelta,
@@ -1248,6 +1250,155 @@ pub trait Store: Send + Sync {
     fn rollback_provisioning(&self) -> StoreResult<Vec<TenantId>> {
         Ok(Vec::new())
     }
+
+    // Segments (SEG-001 to SEG-038): the storage block of segment, membership, wake, batch,
+    // erased and event rows beside the tenant state ([`segments`]). An adapter without the block
+    // holds no segment: the reads answer with nothing and every segment write is refused.
+
+    /// The segments of a tenant, in id order: at most one hundred (SEG-029).
+    fn segment_catalog(&self, _tenant: &TenantId) -> StoreResult<Vec<seg::Segment>> {
+        Ok(Vec::new())
+    }
+
+    /// The membership and wake rows of `pairs`, and which of their persons are erased.
+    fn segment_rows(
+        &self,
+        _tenant: &TenantId,
+        pairs: &[(seg::SegmentId, PrincipalId)],
+    ) -> StoreResult<seg::Rows> {
+        Ok(seg::Rows {
+            covered: pairs.iter().cloned().collect(),
+            ..seg::Rows::default()
+        })
+    }
+
+    /// At most `limit` memberships of a segment after the person `after`, in principal order.
+    fn segment_members(
+        &self,
+        _tenant: &TenantId,
+        _segment: seg::SegmentId,
+        _after: Option<&PrincipalId>,
+        _limit: usize,
+    ) -> StoreResult<Vec<seg::Membership>> {
+        Ok(Vec::new())
+    }
+
+    /// Every membership of one person.
+    fn segment_memberships_of(
+        &self,
+        _tenant: &TenantId,
+        _person: &PrincipalId,
+    ) -> StoreResult<Vec<seg::Membership>> {
+        Ok(Vec::new())
+    }
+
+    /// Every wake row of one person.
+    fn segment_wakes_of(
+        &self,
+        _tenant: &TenantId,
+        _person: &PrincipalId,
+    ) -> StoreResult<Vec<seg::Wake>> {
+        Ok(Vec::new())
+    }
+
+    /// At most `limit` wake rows of a segment due at `at`, earliest first (SEG-1545).
+    fn segment_due(
+        &self,
+        _tenant: &TenantId,
+        _segment: seg::SegmentId,
+        _at: Timestamp,
+        _limit: usize,
+    ) -> StoreResult<Vec<seg::Wake>> {
+        Ok(Vec::new())
+    }
+
+    /// The pending continuations of a tenant (record `rec-segment-batch`).
+    fn segment_batches(&self, _tenant: &TenantId) -> StoreResult<Vec<seg::Batch>> {
+        Ok(Vec::new())
+    }
+
+    /// At most `limit` records of `object` after `after` whose `field` holds `record`, in record
+    /// id order: the record index, bounded, for the referrers a change must evaluate (SEG-028).
+    fn segment_referencing(
+        &self,
+        tenant: &TenantId,
+        object: &strata_kernel::ObjectTypeId,
+        field: &strata_kernel::FieldId,
+        record: strata_kernel::RecordId,
+        after: Option<strata_kernel::RecordId>,
+        limit: usize,
+    ) -> StoreResult<Vec<Arc<Record>>> {
+        let need = Need::ByField {
+            object: object.clone(),
+            field: field.clone(),
+            value: Value::Ref(record),
+        };
+        let state = self.load(tenant, &[need])?;
+        Ok(state
+            .tenant
+            .as_deref()
+            .map(|t| {
+                t.records_of(object)
+                    .filter(|r| field_matches(r, field, &Value::Ref(record)))
+                    .filter(|r| after.is_none_or(|a| r.id > a))
+                    .take(limit)
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default())
+    }
+
+    /// How many records of an object type a tenant holds: the persons a changed predicate
+    /// evaluates (SEG-023).
+    fn segment_subject_count(
+        &self,
+        tenant: &TenantId,
+        object: &strata_kernel::ObjectTypeId,
+    ) -> StoreResult<u64> {
+        let state = self.load(tenant, &[Need::AllOf(object.clone())])?;
+        Ok(state
+            .tenant
+            .as_deref()
+            .map_or(0, |t| t.records_of(object).count() as u64))
+    }
+
+    /// At most `limit` entry and exit events of a tenant after position `after`, with their
+    /// positions: the outbox the job worker reads (D-5023).
+    fn segment_events_after(
+        &self,
+        _tenant: &TenantId,
+        _after: u64,
+        _limit: usize,
+    ) -> StoreResult<Vec<(u64, seg::SegmentEvent)>> {
+        Ok(Vec::new())
+    }
+
+    /// Commit an accepted transition together with the segment write its change decided, in one
+    /// atomic step: both, or neither (SEG-008, SEG-012). The write is refused, and nothing is
+    /// changed, with [`StoreError::Conflict`] when a segment or membership row it rests on moved.
+    fn commit_with_segments(
+        &self,
+        commit: &Commit,
+        write: &seg::SegmentWrite,
+    ) -> StoreResult<Receipt> {
+        if write.is_empty() {
+            self.commit(commit)
+        } else {
+            Err(StoreError::Unavailable(
+                "this store holds no segments".into(),
+            ))
+        }
+    }
+
+    /// Apply a segment write that no transition carries (a definition, a removal, a batch, a
+    /// refresh, an erasure), atomically, while the tenant is at the revision the decision was
+    /// made at. The revision does not advance: no record changed. Refused with
+    /// [`StoreError::Conflict`] when the tenant moved on or a row the write rests on changed.
+    fn commit_segments(&self, _commit: &segments::SegmentCommit) -> StoreResult<Receipt> {
+        Err(StoreError::Unavailable(
+            "this store holds no segments".into(),
+        ))
+    }
 }
 
 /// Check that a commit's events continue a tenant's sequence. Shared by adapters.
@@ -1463,7 +1614,7 @@ pub fn execute_by(
                 .into_iter()
                 .collect();
         let mut rounds = 0;
-        let transition = loop {
+        let mut transition = loop {
             let list: Vec<Need> = wanted.iter().cloned().collect();
             let state = store.load(&ctx.tenant, &list)?;
             // What the loaded state itself says is still needed (the references and unique
@@ -1490,11 +1641,23 @@ pub fn execute_by(
                 Ok(transition) => break transition,
             }
         };
+        // The memberships the change moves, decided for the same commit (SEG-008, D-5022).
+        let decided = match segments::decide_change(store, &transition, ctx, 0) {
+            Ok(decided) => decided,
+            Err(ExecuteError::Store(StoreError::Conflict { .. }))
+                if conflicts < MAX_CONFLICT_RETRIES =>
+            {
+                conflicts += 1;
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
+        transition.evidence.extend(decided.failures);
         // The last look at the clock before the write: past this point the change is made.
         if let Some(error) = expired() {
             return Err(error);
         }
-        match store.commit(&Commit::of(intent, ctx, &transition)) {
+        match store.commit_with_segments(&Commit::of(intent, ctx, &transition), &decided.write) {
             Ok(receipt) => {
                 return Ok(Executed {
                     transition,

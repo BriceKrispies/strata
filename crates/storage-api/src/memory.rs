@@ -19,9 +19,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use strata_kernel::ext::*;
+use strata_kernel::segments as seg;
 use strata_kernel::{
-    apply_delta, canon, DomainEvent, Need, PrincipalId, SessionId, State, TenantId, TenantState,
-    Timestamp, WorkflowId,
+    apply_delta, canon, DomainEvent, FieldId, Need, ObjectTypeId, PrincipalId, Record, RecordId,
+    SessionId, State, TenantId, TenantState, Timestamp, Value, WorkflowId,
 };
 
 #[derive(Default)]
@@ -52,6 +53,8 @@ struct Inner {
     snapshots: BTreeMap<(TenantId, u64), (SnapshotInfo, Arc<TenantState>)>,
     /// Results by tenant, principal scope and key, with the receipt of the commit.
     idempotency: BTreeMap<(TenantId, String, String), (IdempotencyEntry, Receipt)>,
+    /// The segment block of each tenant (SEG-001 to SEG-038).
+    segments: BTreeMap<TenantId, seg::SegmentTables>,
     /// Jobs of the automation worker per tenant, in creation order: a job's `seq` is its index
     /// plus one.
     jobs: BTreeMap<TenantId, Vec<Job>>,
@@ -234,69 +237,179 @@ impl Store for MemoryStore {
 
     fn commit(&self, commit: &Commit) -> StoreResult<Receipt> {
         let mut inner = self.lock()?;
-        let tenant = &commit.delta.tenant;
-        let current = inner.tenants.get(tenant).cloned();
-        let found = current.as_ref().map(|t| t.revision);
-        if found != commit.delta.base_revision {
+        commit_in(&mut inner, commit, None)
+    }
+
+    fn commit_with_segments(
+        &self,
+        commit: &Commit,
+        write: &seg::SegmentWrite,
+    ) -> StoreResult<Receipt> {
+        let mut inner = self.lock()?;
+        commit_in(&mut inner, commit, Some(write))
+    }
+
+    fn commit_segments(&self, commit: &crate::segments::SegmentCommit) -> StoreResult<Receipt> {
+        let mut inner = self.lock()?;
+        let found = inner.tenants.get(&commit.tenant).map(|t| t.revision);
+        if found != Some(commit.revision) {
             return Err(StoreError::Conflict {
-                expected: commit.delta.base_revision,
+                expected: Some(commit.revision),
                 found,
             });
         }
-        check_event_sequence(commit, current.as_ref().map_or(0, |t| t.event_seq))?;
-        let recorded_before = commit.journal.context.now.0 - IDEMPOTENCY_RETENTION_MS;
-        if let Some(entry) = &commit.idempotency {
-            let scope = (tenant.clone(), entry.principal.clone(), entry.key.clone());
-            if inner
-                .idempotency
-                .get(&scope)
-                .is_some_and(|(held, _)| held.recorded_at.0 >= recorded_before)
-            {
-                return Err(StoreError::Invalid(
-                    "the idempotency key is already recorded".into(),
-                ));
-            }
-        }
-        check_jobs(&commit.jobs)?;
-        let next = apply_delta(current.as_deref(), &commit.delta)
-            .map_err(|e| StoreError::Invalid(strata_kernel::ext::DomainErrorExt::describe(&e)))?;
+        let tables = inner.segments.entry(commit.tenant.clone()).or_default();
+        tables
+            .apply(&commit.write)
+            .map_err(|_| crate::segments::write_conflict())?;
+        Ok(Receipt {
+            revision: commit.revision,
+            last_position: None,
+        })
+    }
 
-        // Nothing above changed the store; everything below cannot fail.
-        inner.tenants.insert(tenant.clone(), Arc::new(next));
-        let now = commit.journal.context.now;
-        inner.add_jobs(tenant, &commit.jobs, now);
-        inner.add_exceptions(tenant, &commit.exceptions);
-        let mut last_position = None;
-        for event in &commit.events {
-            let next = inner.positions.entry(tenant.clone()).or_insert(0);
-            *next += 1;
-            let position = *next;
-            inner.events.push((position, event.clone(), false));
-            last_position = Some(position);
-        }
-        inner.journal.push(commit.journal.clone());
-        let receipt = Receipt {
-            revision: commit.delta.new_revision,
-            last_position,
-        };
-        inner
-            .idempotency
-            .retain(|_, (held, _)| held.recorded_at.0 >= recorded_before);
-        if let Some(entry) = &commit.idempotency {
-            inner.idempotency.insert(
-                (tenant.clone(), entry.principal.clone(), entry.key.clone()),
-                (entry.clone(), receipt.clone()),
-            );
-        }
-        for session in inner.sessions.values_mut() {
-            if session.tenant == *tenant
-                && commit.revoke_sessions.contains(&session.principal)
-                && session.revoked_at.is_none()
-            {
-                session.revoked_at = Some(now);
-            }
-        }
-        Ok(receipt)
+    fn segment_catalog(&self, tenant: &TenantId) -> StoreResult<Vec<seg::Segment>> {
+        Ok(self
+            .lock()?
+            .segments
+            .get(tenant)
+            .map(seg::SegmentTables::catalog)
+            .unwrap_or_default())
+    }
+
+    fn segment_rows(
+        &self,
+        tenant: &TenantId,
+        pairs: &[(seg::SegmentId, PrincipalId)],
+    ) -> StoreResult<seg::Rows> {
+        let inner = self.lock()?;
+        Ok(match inner.segments.get(tenant) {
+            Some(tables) => tables.rows(pairs),
+            None => seg::SegmentTables::default().rows(pairs),
+        })
+    }
+
+    fn segment_members(
+        &self,
+        tenant: &TenantId,
+        segment: seg::SegmentId,
+        after: Option<&PrincipalId>,
+        limit: usize,
+    ) -> StoreResult<Vec<seg::Membership>> {
+        Ok(self
+            .lock()?
+            .segments
+            .get(tenant)
+            .map(|tables| tables.members_after(segment, after, limit))
+            .unwrap_or_default())
+    }
+
+    fn segment_memberships_of(
+        &self,
+        tenant: &TenantId,
+        person: &PrincipalId,
+    ) -> StoreResult<Vec<seg::Membership>> {
+        Ok(self
+            .lock()?
+            .segments
+            .get(tenant)
+            .map(|tables| tables.memberships_of(person))
+            .unwrap_or_default())
+    }
+
+    fn segment_wakes_of(
+        &self,
+        tenant: &TenantId,
+        person: &PrincipalId,
+    ) -> StoreResult<Vec<seg::Wake>> {
+        Ok(self
+            .lock()?
+            .segments
+            .get(tenant)
+            .map(|tables| {
+                tables
+                    .wakes
+                    .iter()
+                    .filter(|((_, p), _)| p == person)
+                    .map(|((s, p), at)| seg::Wake {
+                        segment: *s,
+                        person: p.clone(),
+                        at: *at,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default())
+    }
+
+    fn segment_due(
+        &self,
+        tenant: &TenantId,
+        segment: seg::SegmentId,
+        at: Timestamp,
+        limit: usize,
+    ) -> StoreResult<Vec<seg::Wake>> {
+        Ok(self
+            .lock()?
+            .segments
+            .get(tenant)
+            .map(|tables| tables.due(segment, at, limit))
+            .unwrap_or_default())
+    }
+
+    fn segment_batches(&self, tenant: &TenantId) -> StoreResult<Vec<seg::Batch>> {
+        Ok(self
+            .lock()?
+            .segments
+            .get(tenant)
+            .map(|tables| tables.batches.values().cloned().collect())
+            .unwrap_or_default())
+    }
+
+    fn segment_referencing(
+        &self,
+        tenant: &TenantId,
+        object: &ObjectTypeId,
+        field: &FieldId,
+        record: RecordId,
+        after: Option<RecordId>,
+        limit: usize,
+    ) -> StoreResult<Vec<Arc<Record>>> {
+        let inner = self.lock()?;
+        let wanted = Value::Ref(record);
+        Ok(inner
+            .tenants
+            .get(tenant)
+            .map(|t| {
+                t.records_of(object)
+                    .filter(|r| crate::field_matches(r, field, &wanted))
+                    .filter(|r| after.is_none_or(|a| r.id > a))
+                    .take(limit)
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default())
+    }
+
+    fn segment_subject_count(&self, tenant: &TenantId, object: &ObjectTypeId) -> StoreResult<u64> {
+        Ok(self
+            .lock()?
+            .tenants
+            .get(tenant)
+            .map_or(0, |t| t.records_of(object).count() as u64))
+    }
+
+    fn segment_events_after(
+        &self,
+        tenant: &TenantId,
+        after: u64,
+        limit: usize,
+    ) -> StoreResult<Vec<(u64, seg::SegmentEvent)>> {
+        Ok(self
+            .lock()?
+            .segments
+            .get(tenant)
+            .map(|tables| tables.events_after(after, limit))
+            .unwrap_or_default())
     }
 
     fn idempotent_result(
@@ -1335,6 +1448,7 @@ impl Store for MemoryStore {
         inner.runs.remove(tenant);
         inner.steps.retain(|(t, _, _), _| t != tenant);
         inner.exceptions.remove(tenant);
+        inner.segments.remove(tenant);
         Ok(())
     }
 
@@ -1618,4 +1732,92 @@ impl Store for MemoryStore {
         }
         Ok(Settled::Done { job: released })
     }
+}
+
+/// Apply one commit, with the segment write its change decided when it has one, under the lock:
+/// everything or nothing.
+fn commit_in(
+    inner: &mut Inner,
+    commit: &Commit,
+    write: Option<&seg::SegmentWrite>,
+) -> StoreResult<Receipt> {
+    let tenant = &commit.delta.tenant;
+    let current = inner.tenants.get(tenant).cloned();
+    let found = current.as_ref().map(|t| t.revision);
+    if found != commit.delta.base_revision {
+        return Err(StoreError::Conflict {
+            expected: commit.delta.base_revision,
+            found,
+        });
+    }
+    check_event_sequence(commit, current.as_ref().map_or(0, |t| t.event_seq))?;
+    let recorded_before = commit.journal.context.now.0 - IDEMPOTENCY_RETENTION_MS;
+    if let Some(entry) = &commit.idempotency {
+        let scope = (tenant.clone(), entry.principal.clone(), entry.key.clone());
+        if inner
+            .idempotency
+            .get(&scope)
+            .is_some_and(|(held, _)| held.recorded_at.0 >= recorded_before)
+        {
+            return Err(StoreError::Invalid(
+                "the idempotency key is already recorded".into(),
+            ));
+        }
+    }
+    check_jobs(&commit.jobs)?;
+    let next = apply_delta(current.as_deref(), &commit.delta)
+        .map_err(|e| StoreError::Invalid(strata_kernel::ext::DomainErrorExt::describe(&e)))?;
+    if let Some(write) = write {
+        if let Some(tables) = inner.segments.get(tenant) {
+            tables
+                .check(write)
+                .map_err(|_| crate::segments::write_conflict())?;
+        } else if !write.is_empty() {
+            seg::SegmentTables::default()
+                .check(write)
+                .map_err(|_| crate::segments::write_conflict())?;
+        }
+    }
+
+    // Nothing above changed the store; everything below cannot fail.
+    inner.tenants.insert(tenant.clone(), Arc::new(next));
+    if let Some(write) = write.filter(|w| !w.is_empty()) {
+        let tables = inner.segments.entry(tenant.clone()).or_default();
+        // Checked above, under the same lock.
+        let _ = tables.apply(write);
+    }
+    let now = commit.journal.context.now;
+    inner.add_jobs(tenant, &commit.jobs, now);
+    inner.add_exceptions(tenant, &commit.exceptions);
+    let mut last_position = None;
+    for event in &commit.events {
+        let next = inner.positions.entry(tenant.clone()).or_insert(0);
+        *next += 1;
+        let position = *next;
+        inner.events.push((position, event.clone(), false));
+        last_position = Some(position);
+    }
+    inner.journal.push(commit.journal.clone());
+    let receipt = Receipt {
+        revision: commit.delta.new_revision,
+        last_position,
+    };
+    inner
+        .idempotency
+        .retain(|_, (held, _)| held.recorded_at.0 >= recorded_before);
+    if let Some(entry) = &commit.idempotency {
+        inner.idempotency.insert(
+            (tenant.clone(), entry.principal.clone(), entry.key.clone()),
+            (entry.clone(), receipt.clone()),
+        );
+    }
+    for session in inner.sessions.values_mut() {
+        if session.tenant == *tenant
+            && commit.revoke_sessions.contains(&session.principal)
+            && session.revoked_at.is_none()
+        {
+            session.revoked_at = Some(now);
+        }
+    }
+    Ok(receipt)
 }

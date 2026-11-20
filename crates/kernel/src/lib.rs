@@ -31,6 +31,7 @@ pub mod operations;
 pub mod read;
 pub mod rules;
 pub mod schema;
+pub mod segments;
 pub mod settings;
 pub mod state;
 #[cfg(any(test, feature = "testkit"))]

@@ -45,6 +45,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use strata_kernel::ext::*;
+use strata_kernel::segments as seg;
 use strata_kernel::WorkflowId;
 use strata_kernel::{
     canon, Coverage, DeltaOp, DomainEvent, Need, ObjectTypeId, PrincipalId, Record, RoleId,
@@ -56,6 +57,7 @@ use strata_storage_api::jobs::{
     self, ExceptionKind, ExceptionRecord, Job, JobChange, JobReport, Lease, NewJob, Reported,
     RunRecord, RunState, Settled, StepRecord, WorkerWrites,
 };
+use strata_storage_api::segments::{write_conflict, SegmentCommit};
 use strata_storage_api::{
     check_event_sequence, field_matches, throttle_refund, throttle_step, Account, AuditEntry,
     Capabilities, Commit, FederatedIdentity, Health, IdempotentResult, JournalEntry, OidcFlow,
@@ -470,6 +472,53 @@ const TENANT_MIGRATIONS: &[Migration] = &[
     ",
     },
     ledger::MIGRATION,
+    Migration {
+        version: 15,
+        name: "segments: definitions, memberships, wake rows, batches, erased persons and events",
+        // The segment block (SEG-001 to SEG-038), apart from the tenant state: a segment row holds
+        // the definition as canonical JSON with its version and kept member count; a membership
+        // holds the segment, the person, the version and the time of entry and no field of the
+        // person (SEG-034); the rows of a segment go with it (SEG-026).
+        sql: "
+    CREATE TABLE segments (
+        id           TEXT PRIMARY KEY,
+        name         TEXT NOT NULL UNIQUE,
+        version      INTEGER NOT NULL,
+        member_count INTEGER NOT NULL DEFAULT 0,
+        data         TEXT NOT NULL
+    );
+    CREATE TABLE segment_memberships (
+        segment   TEXT NOT NULL REFERENCES segments(id) ON DELETE CASCADE,
+        principal TEXT NOT NULL,
+        version   INTEGER NOT NULL,
+        since     INTEGER NOT NULL,
+        PRIMARY KEY (segment, principal)
+    );
+    CREATE INDEX segment_memberships_principal ON segment_memberships(principal);
+    CREATE TABLE segment_wakes (
+        segment   TEXT NOT NULL REFERENCES segments(id) ON DELETE CASCADE,
+        principal TEXT NOT NULL,
+        wake_at   INTEGER NOT NULL,
+        PRIMARY KEY (segment, principal)
+    );
+    CREATE INDEX segment_wake_due ON segment_wakes(segment, wake_at);
+    CREATE INDEX segment_wakes_principal ON segment_wakes(principal);
+    CREATE TABLE segment_batches (
+        segment TEXT NOT NULL REFERENCES segments(id) ON DELETE CASCADE,
+        scope   TEXT NOT NULL,
+        data    TEXT NOT NULL,
+        PRIMARY KEY (segment, scope)
+    );
+    CREATE TABLE segment_erased (
+        principal TEXT PRIMARY KEY
+    );
+    CREATE TABLE segment_events (
+        position  INTEGER PRIMARY KEY AUTOINCREMENT,
+        data      TEXT NOT NULL,
+        published INTEGER NOT NULL DEFAULT 0
+    );
+    ",
+    },
 ];
 
 /// The steps of a tenant file's layout, for tests that build a file at an older level.
@@ -2002,6 +2051,283 @@ impl SqliteStore {
     }
 }
 
+// ---------------------------------------------------------------------------------------------
+// The segment block (tenant migration 12)
+// ---------------------------------------------------------------------------------------------
+
+fn segment_id(text: &str) -> StoreResult<seg::SegmentId> {
+    serde_json::from_value(serde_json::Value::String(text.to_string()))
+        .map_err(|e| StoreError::Corrupt(format!("segment id {text}: {e}")))
+}
+
+fn principal(text: &str) -> StoreResult<PrincipalId> {
+    PrincipalId::new(text).map_err(corrupt_id)
+}
+
+fn catalog_rows(conn: &Connection) -> StoreResult<Vec<seg::Segment>> {
+    let mut statement = conn
+        .prepare_cached("SELECT data, member_count FROM segments ORDER BY id")
+        .map_err(db)?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })
+        .map_err(db)?;
+    let mut out = Vec::new();
+    for row in rows {
+        let (data, count) = row.map_err(db)?;
+        let mut segment: seg::Segment = decode(&data, "segment")?;
+        segment.member_count = count.max(0) as u64;
+        out.push(segment);
+    }
+    Ok(out)
+}
+
+fn membership_of(
+    conn: &Connection,
+    segment: seg::SegmentId,
+    person: &PrincipalId,
+) -> StoreResult<Option<seg::Membership>> {
+    conn.query_row(
+        "SELECT version, since FROM segment_memberships WHERE segment = ?1 AND principal = ?2",
+        params![segment.to_string(), person.as_str()],
+        |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)),
+    )
+    .optional()
+    .map_err(db)
+    .map(|found| {
+        found.map(|(version, since)| seg::Membership {
+            segment,
+            person: person.clone(),
+            version: version as u64,
+            since: Timestamp(since),
+        })
+    })
+}
+
+fn wake_of(
+    conn: &Connection,
+    segment: seg::SegmentId,
+    person: &PrincipalId,
+) -> StoreResult<Option<Timestamp>> {
+    conn.query_row(
+        "SELECT wake_at FROM segment_wakes WHERE segment = ?1 AND principal = ?2",
+        params![segment.to_string(), person.as_str()],
+        |r| r.get::<_, i64>(0),
+    )
+    .optional()
+    .map_err(db)
+    .map(|found| found.map(Timestamp))
+}
+
+fn memberships_where(
+    conn: &Connection,
+    sql: &str,
+    args: &[&dyn rusqlite::ToSql],
+) -> StoreResult<Vec<seg::Membership>> {
+    let mut statement = conn.prepare_cached(sql).map_err(db)?;
+    let rows = statement
+        .query_map(args, |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, i64>(2)?,
+                r.get::<_, i64>(3)?,
+            ))
+        })
+        .map_err(db)?;
+    let mut out = Vec::new();
+    for row in rows {
+        let (segment, person, version, since) = row.map_err(db)?;
+        out.push(seg::Membership {
+            segment: segment_id(&segment)?,
+            person: principal(&person)?,
+            version: version as u64,
+            since: Timestamp(since),
+        });
+    }
+    Ok(out)
+}
+
+fn wakes_where(
+    conn: &Connection,
+    sql: &str,
+    args: &[&dyn rusqlite::ToSql],
+) -> StoreResult<Vec<seg::Wake>> {
+    let mut statement = conn.prepare_cached(sql).map_err(db)?;
+    let rows = statement
+        .query_map(args, |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, i64>(2)?,
+            ))
+        })
+        .map_err(db)?;
+    let mut out = Vec::new();
+    for row in rows {
+        let (segment, person, at) = row.map_err(db)?;
+        out.push(seg::Wake {
+            segment: segment_id(&segment)?,
+            person: principal(&person)?,
+            at: Timestamp(at),
+        });
+    }
+    Ok(out)
+}
+
+/// Apply a segment write in the transaction `tx`: refused whole, as a conflict, when a segment or
+/// a row it rests on is not what the decision saw (the transaction then rolls back).
+fn apply_segments(tx: &Connection, write: &seg::SegmentWrite) -> StoreResult<()> {
+    for (id, expected) in &write.expect {
+        let found: Option<i64> = tx
+            .query_row(
+                "SELECT version FROM segments WHERE id = ?1",
+                params![id.to_string()],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(db)?;
+        if found.map(|v| v as u64) != *expected {
+            return Err(write_conflict());
+        }
+    }
+    for change in &write.memberships {
+        if membership_of(tx, change.segment, &change.person)? != change.before {
+            return Err(write_conflict());
+        }
+    }
+    for seen in &write.seen {
+        if membership_of(tx, seen.segment, &seen.person)? != seen.membership
+            || wake_of(tx, seen.segment, &seen.person)? != seen.wake
+        {
+            return Err(write_conflict());
+        }
+    }
+    for segment in &write.put_segments {
+        tx.execute(
+            "INSERT INTO segments (id, name, version, member_count, data) VALUES (?1, ?2, ?3, 0, ?4)
+             ON CONFLICT (id) DO UPDATE SET name = excluded.name, version = excluded.version, data = excluded.data",
+            params![
+                segment.id.to_string(),
+                segment.name,
+                segment.version as i64,
+                encode(segment)
+            ],
+        )
+        .map_err(db)?;
+    }
+    for id in &write.remove_segments {
+        tx.execute(
+            "DELETE FROM segments WHERE id = ?1",
+            params![id.to_string()],
+        )
+        .map_err(db)?;
+    }
+    for change in &write.memberships {
+        let (segment, person) = (change.segment.to_string(), change.person.as_str());
+        let delta: i64 = match (&change.before, &change.after) {
+            (None, Some(_)) => 1,
+            (Some(_), None) => -1,
+            _ => 0,
+        };
+        match &change.after {
+            Some(m) => {
+                tx.execute(
+                    "INSERT INTO segment_memberships (segment, principal, version, since) VALUES (?1, ?2, ?3, ?4)
+                     ON CONFLICT (segment, principal) DO UPDATE SET version = excluded.version, since = excluded.since",
+                    params![segment, person, m.version as i64, m.since.0],
+                )
+                .map_err(db)?;
+            }
+            None => {
+                tx.execute(
+                    "DELETE FROM segment_memberships WHERE segment = ?1 AND principal = ?2",
+                    params![segment, person],
+                )
+                .map_err(db)?;
+            }
+        }
+        if delta != 0 {
+            tx.execute(
+                "UPDATE segments SET member_count = MAX(member_count + ?1, 0) WHERE id = ?2",
+                params![delta, segment],
+            )
+            .map_err(db)?;
+        }
+    }
+    for change in &write.wakes {
+        match change {
+            seg::WakeChange::Put(w) => tx.execute(
+                "INSERT INTO segment_wakes (segment, principal, wake_at) VALUES (?1, ?2, ?3)
+                 ON CONFLICT (segment, principal) DO UPDATE SET wake_at = excluded.wake_at",
+                params![w.segment.to_string(), w.person.as_str(), w.at.0],
+            ),
+            seg::WakeChange::Remove { segment, person } => tx.execute(
+                "DELETE FROM segment_wakes WHERE segment = ?1 AND principal = ?2",
+                params![segment.to_string(), person.as_str()],
+            ),
+        }
+        .map_err(db)?;
+    }
+    for id in &write.clear_batches {
+        tx.execute(
+            "DELETE FROM segment_batches WHERE segment = ?1",
+            params![id.to_string()],
+        )
+        .map_err(db)?;
+    }
+    for change in &write.batches {
+        match change {
+            seg::BatchChange::Put(b) => tx.execute(
+                "INSERT INTO segment_batches (segment, scope, data)
+                 SELECT ?1, ?2, ?3 WHERE EXISTS (SELECT 1 FROM segments WHERE id = ?1)
+                 ON CONFLICT (segment, scope) DO UPDATE SET data = excluded.data",
+                params![b.segment.to_string(), b.scope.key(), encode(b)],
+            ),
+            seg::BatchChange::Remove { segment, key } => tx.execute(
+                "DELETE FROM segment_batches WHERE segment = ?1 AND scope = ?2",
+                params![segment.to_string(), key],
+            ),
+        }
+        .map_err(db)?;
+    }
+    for person in &write.erased {
+        tx.execute(
+            "INSERT OR IGNORE INTO segment_erased (principal) VALUES (?1)",
+            params![person.as_str()],
+        )
+        .map_err(db)?;
+    }
+    for (id, at) in &write.refresh_skipped {
+        let data: Option<String> = tx
+            .query_row(
+                "SELECT data FROM segments WHERE id = ?1",
+                params![id.to_string()],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(db)?;
+        if let Some(data) = data {
+            let mut segment: seg::Segment = decode(&data, "segment")?;
+            segment.refresh_skipped_at = Some(*at);
+            tx.execute(
+                "UPDATE segments SET data = ?1 WHERE id = ?2",
+                params![encode(&segment), id.to_string()],
+            )
+            .map_err(db)?;
+        }
+    }
+    for event in &write.events {
+        tx.execute(
+            "INSERT INTO segment_events (data) VALUES (?1)",
+            params![encode(event)],
+        )
+        .map_err(db)?;
+    }
+    Ok(())
+}
+
 impl Store for SqliteStore {
     fn capabilities(&self) -> Capabilities {
         let files = match &self.place {
@@ -2265,6 +2591,264 @@ impl Store for SqliteStore {
             }
         }
         result
+    }
+
+    fn commit_with_segments(
+        &self,
+        commit: &Commit,
+        write: &seg::SegmentWrite,
+    ) -> StoreResult<Receipt> {
+        if write.is_empty() {
+            return self.commit(commit);
+        }
+        // A commit with a segment write is never the one that creates its tenant: a tenant
+        // without a file has no segment.
+        let Some(file) = self.tenant_db(&commit.delta.tenant)? else {
+            return Err(StoreError::Conflict {
+                expected: commit.delta.base_revision,
+                found: None,
+            });
+        };
+        // Jobs the commit creates are woken for before and after it, as in `commit`.
+        let wake = commit.jobs.iter().map(|job| job.due_at.0).min();
+        if let Some(due) = wake {
+            self.wake_at(&commit.delta.tenant, due)?;
+        }
+        let receipt = file.write(dbe, |tx| {
+            let receipt = Self::apply(tx, commit)?;
+            apply_segments(tx, write)?;
+            Ok(receipt)
+        })?;
+        if let Some(due) = wake {
+            let _ = self.wake_at(&commit.delta.tenant, due);
+        }
+        Ok(receipt)
+    }
+
+    fn commit_segments(&self, commit: &SegmentCommit) -> StoreResult<Receipt> {
+        let Some(file) = self.tenant_db(&commit.tenant)? else {
+            return Err(StoreError::Conflict {
+                expected: Some(commit.revision),
+                found: None,
+            });
+        };
+        file.write(dbe, |tx| {
+            let found = header(tx, &commit.tenant)?.map(|h| h.revision);
+            if found != Some(commit.revision) {
+                return Err(StoreError::Conflict {
+                    expected: Some(commit.revision),
+                    found,
+                });
+            }
+            apply_segments(tx, &commit.write)?;
+            Ok(Receipt {
+                revision: commit.revision,
+                last_position: None,
+            })
+        })
+    }
+
+    fn segment_catalog(&self, tenant: &TenantId) -> StoreResult<Vec<seg::Segment>> {
+        Ok(self.on_tenant(tenant, catalog_rows)?.unwrap_or_default())
+    }
+
+    fn segment_rows(
+        &self,
+        tenant: &TenantId,
+        pairs: &[(seg::SegmentId, PrincipalId)],
+    ) -> StoreResult<seg::Rows> {
+        let mut rows = seg::Rows {
+            covered: pairs.iter().cloned().collect(),
+            ..seg::Rows::default()
+        };
+        let Some(file) = self.tenant_db(tenant)? else {
+            return Ok(rows);
+        };
+        file.read(dbe, |tx| {
+            for (segment, person) in pairs {
+                let key = (*segment, person.clone());
+                if let Some(m) = membership_of(tx, *segment, person)? {
+                    rows.memberships.insert(key.clone(), m);
+                }
+                if let Some(at) = wake_of(tx, *segment, person)? {
+                    rows.wakes.insert(key, at);
+                }
+                let erased: bool = tx
+                    .query_row(
+                        "SELECT EXISTS (SELECT 1 FROM segment_erased WHERE principal = ?1)",
+                        params![person.as_str()],
+                        |r| r.get(0),
+                    )
+                    .map_err(db)?;
+                if erased {
+                    rows.erased.insert(person.clone());
+                }
+            }
+            Ok(())
+        })?;
+        Ok(rows)
+    }
+
+    fn segment_members(
+        &self,
+        tenant: &TenantId,
+        segment: seg::SegmentId,
+        after: Option<&PrincipalId>,
+        limit: usize,
+    ) -> StoreResult<Vec<seg::Membership>> {
+        let after = after.map(|p| p.as_str().to_string()).unwrap_or_default();
+        Ok(self
+            .on_tenant(tenant, |conn| {
+                memberships_where(
+                    conn,
+                    "SELECT segment, principal, version, since FROM segment_memberships
+                     WHERE segment = ?1 AND principal > ?2 ORDER BY principal LIMIT ?3",
+                    &[&segment.to_string(), &after, &(limit as i64)],
+                )
+            })?
+            .unwrap_or_default())
+    }
+
+    fn segment_memberships_of(
+        &self,
+        tenant: &TenantId,
+        person: &PrincipalId,
+    ) -> StoreResult<Vec<seg::Membership>> {
+        Ok(self
+            .on_tenant(tenant, |conn| {
+                memberships_where(
+                    conn,
+                    "SELECT segment, principal, version, since FROM segment_memberships
+                     WHERE principal = ?1 ORDER BY segment",
+                    &[&person.as_str()],
+                )
+            })?
+            .unwrap_or_default())
+    }
+
+    fn segment_wakes_of(
+        &self,
+        tenant: &TenantId,
+        person: &PrincipalId,
+    ) -> StoreResult<Vec<seg::Wake>> {
+        Ok(self
+            .on_tenant(tenant, |conn| {
+                wakes_where(
+                    conn,
+                    "SELECT segment, principal, wake_at FROM segment_wakes WHERE principal = ?1 ORDER BY segment",
+                    &[&person.as_str()],
+                )
+            })?
+            .unwrap_or_default())
+    }
+
+    fn segment_due(
+        &self,
+        tenant: &TenantId,
+        segment: seg::SegmentId,
+        at: Timestamp,
+        limit: usize,
+    ) -> StoreResult<Vec<seg::Wake>> {
+        Ok(self
+            .on_tenant(tenant, |conn| {
+                wakes_where(
+                    conn,
+                    "SELECT segment, principal, wake_at FROM segment_wakes
+                     WHERE segment = ?1 AND wake_at <= ?2 ORDER BY wake_at, principal LIMIT ?3",
+                    &[&segment.to_string(), &at.0, &(limit as i64)],
+                )
+            })?
+            .unwrap_or_default())
+    }
+
+    fn segment_batches(&self, tenant: &TenantId) -> StoreResult<Vec<seg::Batch>> {
+        Ok(self
+            .on_tenant(tenant, |conn| {
+                select_strings(
+                    conn,
+                    "SELECT data FROM segment_batches ORDER BY segment, scope",
+                    &[],
+                )?
+                .iter()
+                .map(|data| decode(data, "segment batch"))
+                .collect::<StoreResult<Vec<seg::Batch>>>()
+            })?
+            .unwrap_or_default())
+    }
+
+    fn segment_referencing(
+        &self,
+        tenant: &TenantId,
+        object: &ObjectTypeId,
+        field: &strata_kernel::FieldId,
+        record: strata_kernel::RecordId,
+        after: Option<strata_kernel::RecordId>,
+        limit: usize,
+    ) -> StoreResult<Vec<Arc<Record>>> {
+        let key = encode(&Value::Ref(record));
+        let after = after.map_or(-1_i64, |a| a.0 as i64);
+        let rows = self
+            .on_tenant(tenant, |conn| {
+                select_strings(
+                    conn,
+                    "SELECT r.data FROM record_index i
+                     JOIN records r ON r.object = i.object AND r.id = i.id
+                     WHERE i.object = ?1 AND i.field = ?2 AND i.value = ?3 AND i.id > ?4
+                     ORDER BY i.id LIMIT ?5",
+                    &[
+                        &object.as_str(),
+                        &field.as_str(),
+                        &key,
+                        &after,
+                        &(limit as i64),
+                    ],
+                )
+            })?
+            .unwrap_or_default();
+        rows.iter()
+            .map(|data| decode::<Record>(data, "record").map(Arc::new))
+            .collect()
+    }
+
+    fn segment_subject_count(&self, tenant: &TenantId, object: &ObjectTypeId) -> StoreResult<u64> {
+        Ok(self
+            .on_tenant(tenant, |conn| {
+                conn.query_row(
+                    "SELECT COUNT(*) FROM records WHERE object = ?1",
+                    params![object.as_str()],
+                    |r| r.get::<_, i64>(0),
+                )
+                .map_err(db)
+            })?
+            .map_or(0, |n| n as u64))
+    }
+
+    fn segment_events_after(
+        &self,
+        tenant: &TenantId,
+        after: u64,
+        limit: usize,
+    ) -> StoreResult<Vec<(u64, seg::SegmentEvent)>> {
+        let rows = self
+            .on_tenant(tenant, |conn| {
+                let mut statement = conn
+                    .prepare_cached(
+                        "SELECT position, data FROM segment_events WHERE position > ?1 ORDER BY position LIMIT ?2",
+                    )
+                    .map_err(db)?;
+                let found = statement
+                    .query_map(params![after as i64, limit as i64], |r| {
+                        Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+                    })
+                    .map_err(db)?;
+                found.collect::<Result<Vec<_>, _>>().map_err(db)
+            })?
+            .unwrap_or_default();
+        rows.iter()
+            .map(|(position, data)| {
+                decode::<seg::SegmentEvent>(data, "segment event").map(|e| (*position as u64, e))
+            })
+            .collect()
     }
 
     fn idempotent_result(

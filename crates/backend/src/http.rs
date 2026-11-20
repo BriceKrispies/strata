@@ -1099,6 +1099,13 @@ pub fn router(app: Shared) -> Router {
             post(crate::operations::route),
         )
         .route("/internal/ledger/:op", post(crate::ledger::route))
+        .route("/internal/segments/define", post(crate::segments::define))
+        .route("/internal/segments/remove", post(crate::segments::remove))
+        .route("/internal/segments/members", post(crate::segments::members))
+        .route("/internal/segments/test", post(crate::segments::test))
+        .route("/internal/segments/mine", post(crate::segments::mine))
+        .route("/internal/segments/count", post(crate::segments::count))
+        .route("/internal/segments/preview", post(crate::segments::preview))
         .route("/internal/diagnostics", post(diagnostics))
         .route("/internal/platform/diagnostics", post(platform_diagnostics))
         .route("/internal/platform/tenants", post(platform_create_tenant))
