@@ -161,10 +161,80 @@ fn describe_grant(grant: &Grant) -> String {
     }
 }
 
+/// Whether a policy resource `held` reaches `wanted`: the same resource, or `AnyObject` over an
+/// object type or over `AnyObject`.
+fn resource_covers(held: &Resource, wanted: &Resource) -> bool {
+    match (held, wanted) {
+        (Resource::AnyObject, Resource::Object(_) | Resource::AnyObject) => true,
+        (a, b) => a == b,
+    }
+}
+
+/// Whether `principal` holds the power one policy of a role confers: `action` on `resource` under
+/// `condition`. The owner holds every power. Otherwise the principal holds it through a role
+/// permission on the object type, or through a policy of one of its roles that names the action,
+/// reaches the resource and is either unconditional or carries the very same condition (two
+/// different conditions cannot be compared, so the wider one is not assumed to include the other).
+fn holds_policy_power(
+    tenant: &TenantState,
+    principal: &Principal,
+    action: Action,
+    resource: &Resource,
+    condition: &Option<crate::types::Expr>,
+) -> bool {
+    let roles = roles_of(tenant, principal);
+    if roles.contains(&owner_role()) {
+        return true;
+    }
+    if let (Resource::Object(object), Some(verb)) = (resource, ObjectAction::of(action)) {
+        if effective_permissions(tenant, principal).contains(&Grant::Object(object.clone(), verb)) {
+            return true;
+        }
+    }
+    tenant.schema.policies.values().any(|policy| {
+        roles.contains(&policy.role)
+            && policy.actions.contains(&action)
+            && resource_covers(&policy.resource, resource)
+            && (policy.condition.is_none() || policy.condition == *condition)
+    })
+}
+
+/// The powers the policies of `role` confer, as `(count, the ones `principal` does not hold)`,
+/// each described as a sentence fragment. `authorize` grants through `schema.policies` as well as
+/// through role permissions, so a role is as strong as both together (ADM-152).
+fn missing_policy_powers(
+    tenant: &TenantState,
+    principal: &Principal,
+    role: &RoleId,
+) -> (usize, Vec<String>) {
+    let mut total = 0;
+    let mut missing = Vec::new();
+    for policy in tenant.schema.policies.values().filter(|p| p.role == *role) {
+        for action in &policy.actions {
+            total += 1;
+            if !holds_policy_power(
+                tenant,
+                principal,
+                *action,
+                &policy.resource,
+                &policy.condition,
+            ) {
+                missing.push(format!(
+                    "policy {}: {action:?} on {:?}",
+                    policy.id, policy.resource
+                ));
+            }
+        }
+    }
+    (total, missing)
+}
+
 /// ADM-152: whether `principal` may confer `role`, which it may only when it holds **every**
-/// permission and capability the role grants (a strict superset, not an overlap). A role that
-/// grants nothing has nothing to over-grant, except the built-in `owner`, which only an owner
-/// confers. The check names the rule and the role; a refusal names what the principal lacks.
+/// permission and capability the role grants (a strict superset, not an overlap), whether the role
+/// grants it through its permissions or through a policy of the schema. A role that grants
+/// nothing has nothing to over-grant, except the built-in `owner`, which only an owner confers.
+/// The check names the rule and the role; a refusal names what the principal lacks. Taking a role
+/// away asks the same (ADM-1080).
 pub fn may_confer(tenant: &TenantState, principal: &Principal, role: &RoleId) -> Check {
     let rule = format!("permission:confer:{role}");
     if *role == owner_role() {
@@ -175,23 +245,25 @@ pub fn may_confer(tenant: &TenantState, principal: &Principal, role: &RoleId) ->
         };
     }
     let grants = tenant.schema.grants_of(role);
-    if grants.is_empty() {
+    let (policy_total, policy_missing) = missing_policy_powers(tenant, principal, role);
+    if grants.is_empty() && policy_total == 0 {
         return Check::pass(rule, format!("role {role} grants no permission"));
     }
     let missing = missing_grants(tenant, principal, &grants);
-    if missing.is_empty() {
+    if missing.is_empty() && policy_missing.is_empty() {
         Check::pass(
             rule,
             format!("holds every permission that role {role} grants"),
         )
     } else {
-        let lacking: Vec<String> = missing.iter().map(describe_grant).collect();
+        let mut lacking: Vec<String> = missing.iter().map(describe_grant).collect();
+        lacking.extend(policy_missing.iter().cloned());
         Check::fail(
             rule,
             format!(
                 "lacks {} of the {} permissions that role {role} grants: {}",
-                missing.len(),
-                grants.len(),
+                lacking.len(),
+                grants.len() + policy_total,
                 lacking.join(", ")
             ),
         )

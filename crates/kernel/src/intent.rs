@@ -27,6 +27,7 @@ impl IntentExt for Intent {
             Intent::RemoveTeamMember { .. } => "remove_team_member",
             Intent::CreateInvitation { .. } => "create_invitation",
             Intent::RedeemInvitation { .. } => "redeem_invitation",
+            Intent::RevokeInvitation { .. } => "revoke_invitation",
             Intent::CreateRecord { .. } => "create_record",
             Intent::UpdateRecord { .. } => "update_record",
             Intent::DeleteRecord { .. } => "delete_record",
