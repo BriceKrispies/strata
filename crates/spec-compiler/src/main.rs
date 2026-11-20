@@ -101,8 +101,8 @@ use strata_spec_compiler::{
 const USAGE: &str = "usage:
   specc generate     --spec <file> --out <dir> [--spec-hash <hash>] [--crate-name <name>] [--runtime <dir>] [--core-out <dir> [--core-crate-name <name>]]
   specc check        --spec <file> --out <dir> [--spec-hash <hash>] [--crate-name <name>] [--runtime <dir>] [--core-out <dir> [--core-crate-name <name>]]
-  specc deploy       --spec <file> --out <dir> [--spec-hash <hash>]
-  specc check-deploy --spec <file> --out <dir> [--spec-hash <hash>]
+  specc deploy       --spec <file> --out <dir> [--spec-hash <hash>] [--profile <file>]
+  specc check-deploy --spec <file> --out <dir> [--spec-hash <hash>] [--profile <file>]
   specc e2e          --spec <file> --out <dir> [--spec-hash <hash>] [--origin <url>] [--expect-fail-prefix <id prefix>]
   specc check-e2e    --spec <file> --out <dir> [--spec-hash <hash>] [--origin <url>] [--expect-fail-prefix <id prefix>]
   specc scenarios       --spec <file> --out <dir> [--spec-hash <hash>] [--crate-name <name>] [--exegra-project <id>] [--exegra-specs <dir>]
@@ -154,6 +154,7 @@ struct Args {
     core: Option<(PathBuf, String)>,
     /// The product files layered on the specification (`--product`, in order).
     products: Vec<String>,
+    profile: Option<PathBuf>,
 }
 
 fn parse_args(raw: &[String]) -> Result<Args, String> {
@@ -188,6 +189,7 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
     let mut core_out = None;
     let mut core_crate_name = None;
     let mut products = Vec::new();
+    let mut profile = None;
     let mut iter = rest.iter();
     while let Some(flag) = iter.next() {
         if flag == "--product" {
@@ -209,6 +211,7 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
             "--expect-fail-prefix" => &mut expect_fail_prefix,
             "--core-out" => &mut core_out,
             "--core-crate-name" => &mut core_crate_name,
+            "--profile" => &mut profile,
             other => return Err(format!("unknown argument \"{other}\"")),
         };
         let Some(value) = iter.next() else {
@@ -254,6 +257,9 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
     }
     if !end_to_end && !conforming && expect_fail_prefix.is_some() {
         return Err("--expect-fail-prefix applies only to e2e and conformance".to_string());
+    }
+    if profile.is_some() && !matches!(command, Command::Deploy | Command::CheckDeploy) {
+        return Err("--profile applies only to deploy and check-deploy".to_string());
     }
     let scenario = matches!(command, Command::Scenarios | Command::CheckScenarios);
     if !scenario && (exegra_project.is_some() || exegra_specs.is_some()) {
@@ -319,6 +325,7 @@ fn parse_args(raw: &[String]) -> Result<Args, String> {
         },
         core,
         products,
+        profile: profile.map(PathBuf::from),
     })
 }
 
@@ -636,7 +643,22 @@ fn run_split(
 }
 
 fn run_deploy(args: &Args, text: &str) -> ExitCode {
-    let output = match deploy::generate(&args.header_source(), text) {
+    // The profile is the file named by --profile, else `deploy.jsonc` next to the specification.
+    let profile_path = args.profile.clone().or_else(|| {
+        let next_to_spec = Path::new(&args.spec).with_file_name("deploy.jsonc");
+        next_to_spec.is_file().then_some(next_to_spec)
+    });
+    let profile = match &profile_path {
+        Some(path) => match std::fs::read_to_string(path) {
+            Ok(text) => Some(text),
+            Err(e) => {
+                eprintln!("specc: cannot read {}: {e}", path.display());
+                return ExitCode::from(1);
+            }
+        },
+        None => None,
+    };
+    let output = match deploy::generate_with_profile(&args.header_source(), text, profile.as_deref()) {
         Ok(output) => output,
         Err(diagnostics) => {
             for d in &diagnostics {

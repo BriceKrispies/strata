@@ -5,7 +5,15 @@ import { createHmac } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-const BASE = 'http://127.0.0.1:4200';
+// The stack under test. Without STRATA_E2E_BASE_URL, the config starts one on 4200. With it, the
+// tests run against a stack that is already up (npm run e2e:containers), and the checks that need
+// the host's own files read the containers instead (see the log test below).
+const EXTERNAL = process.env.STRATA_E2E_BASE_URL;
+const BASE = (EXTERNAL ?? 'http://127.0.0.1:4200').replace(/\/$/, '');
+const BASE_PORT = new URL(BASE).port;
+const WS_BASE = BASE.replace(/^http/, 'ws');
+// The backend as the host would reach it. A container stack does not publish it.
+const BACKEND = process.env.STRATA_E2E_BACKEND_URL ?? 'http://127.0.0.1:4201';
 const SHOTS = fileURLToPath(new URL('./screenshots/', import.meta.url));
 mkdirSync(SHOTS, { recursive: true });
 
@@ -226,11 +234,16 @@ test('every application request comes from the worker and goes to the BFF only',
   expect(page.workers().length).toBe(1);
   expect(urls.filter((url) => url.includes('/api/view')).length).toBeGreaterThanOrEqual(2);
   for (const url of [...urls, ...sockets]) {
-    expect(url.startsWith(BASE) || url.startsWith('ws://127.0.0.1:4200/'), url).toBe(true);
+    expect(url.startsWith(BASE) || url.startsWith(`${WS_BASE}/`), url).toBe(true);
   }
   // The backend refuses a browser outright, even one that finds its port.
-  const direct = await page.request.post('http://127.0.0.1:4201/internal/view', { data: { path: '/' }, failOnStatusCode: false });
-  expect(direct.status()).toBe(401);
+  if (EXTERNAL) {
+    // A container stack does not publish the backend at all: nothing on the host answers there.
+    await expect(page.request.post(`${BACKEND}/internal/view`, { data: { path: '/' }, failOnStatusCode: false, timeout: 5_000 })).rejects.toThrow();
+  } else {
+    const direct = await page.request.post(`${BACKEND}/internal/view`, { data: { path: '/' }, failOnStatusCode: false });
+    expect(direct.status()).toBe(401);
+  }
 });
 
 test('signing in with a wrong password explains itself; signing in and out works', async ({ page }) => {
@@ -701,7 +714,7 @@ test('the desk, editor and settings pass automated accessibility checks', async 
 });
 
 test('a second tenant on the same substrate shares nothing with the first', async ({ page, browser }) => {
-  const tide = 'http://tidewater.localhost:4200';
+  const tide = `http://tidewater.localhost:${BASE_PORT}`;
   await page.goto(`${tide}/`);
   await ready(page);
   await expect(page).toHaveTitle('Tidewater Review');
@@ -892,7 +905,19 @@ test('no log line holds a password, a session token or a CSRF token', async ({ p
   const cookie = (await page.context().cookies()).find((c) => c.name === '__Host-strata_sid').value;
   const { readFileSync } = await import('node:fs');
   const root = fileURLToPath(new URL('../../var/logs/', import.meta.url));
-  const logs = ['backend.jsonl', 'bff.jsonl'].map((name) => readFileSync(`${root}${name}`, 'utf8')).join('\n');
+  let logs;
+  if (EXTERNAL) {
+    // The services write their log lines to the container's output: read it back from podman.
+    const { spawnSync } = await import('node:child_process');
+    const names = (process.env.STRATA_E2E_LOG_CONTAINERS ?? 'strata-runtime,strata-gateway').split(',');
+    logs = names.map((name) => {
+      const done = spawnSync('podman', ['logs', name], { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 });
+      if (done.status !== 0) throw new Error(`podman logs ${name} failed: ${done.error?.message ?? done.stderr}`);
+      return done.stdout + done.stderr;
+    }).join('\n');
+  } else {
+    logs = ['backend.jsonl', 'bff.jsonl'].map((name) => readFileSync(`${root}${name}`, 'utf8')).join('\n');
+  }
   expect(logs.length).toBeGreaterThan(1000);
   for (const secret of [cookie, session.csrf_token, 'strata-dev-ines', 'strata-dev-admin', 'not-the-password']) {
     expect(logs.includes(secret), `a secret appears in the logs: ${secret.slice(0, 6)}…`).toBe(false);

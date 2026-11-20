@@ -13,7 +13,7 @@
 //      tests/e2e/generated (the journeys) and tests/e2e/step-checks (the step fixtures). The product
 //      specifications in specifications/products go with --product to every check of the platform
 //      specification, which refuses a product that does not pass (WG-4989).
-//      check-catalogue does the same for specifications/catalogue.md, and check-conformance for the
+//      check-catalogue does the same for specifications/catalogue.md, check-deploy for deploy/, and check-conformance for the
 //      contract conformance suite (crates/bff/tests/conformance/generated) and its fixtures.
 //   0b. The test tiers (scripts/test-tiers.json): a test binary in neither tier fails. Runs with --no-test too.
 //   1. cargo test --workspace, lake build, node --test (web kernel and client tests), the generated
@@ -358,6 +358,13 @@ if (!startedMatch || started.size === 0) check('concordance.toml names started m
   check('every test binary is in a tier and the routine tier fits its budget (scripts/test-tiers.json)', problems.length === 0,
     problems.length ? `${problems.length} problem(s)` : `routine tier ${routineSeconds(tiers).toFixed(1)} s of ${tiers.budgetSeconds} s`);
   detail(problems);
+
+  const deploy = run('cargo', ['run', '--quiet', '-p', 'strata-spec-compiler', '--bin', 'specc', '--',
+    'check-deploy', '--spec', 'specifications/spec.jsonc', '--out', 'deploy'], {
+    env: { CARGO_BUILD_JOBS: '2', CARGO_TARGET_DIR: 'target/gate' },
+  });
+  check('specc check-deploy (deploy/ compose and Kubernetes files are generated from the specification)', deploy.ok,
+    deploy.ok ? 'up to date' : `${exitText(deploy)}: ${lastLine(deploy.out)}; run npm run generate and commit`);
 }
 
 // ---------------------------------------------------------------------------------------------

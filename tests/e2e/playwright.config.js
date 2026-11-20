@@ -17,6 +17,11 @@ import { defineConfig, devices } from '@playwright/test';
 
 const root = fileURLToPath(new URL('../..', import.meta.url)).replace(/[\\/]$/, '');
 
+// STRATA_E2E_BASE_URL runs the site tests against a stack that is already up, such as the
+// container stack (npm run containers:up), instead of starting one: no web servers, and only the
+// site project (the hot-reload test needs a Vite dev server that a deployment does not have).
+const external = process.env.STRATA_E2E_BASE_URL;
+
 export default defineConfig({
   testDir: '.',
   outputDir: './test-results',
@@ -26,12 +31,12 @@ export default defineConfig({
   timeout: 45_000,
   expect: { timeout: 8_000 },
   reporter: [['list']],
-  use: { baseURL: 'http://127.0.0.1:4200', trace: 'retain-on-failure', ...devices['Desktop Chrome'], viewport: { width: 1280, height: 860 } },
+  use: { baseURL: external ?? 'http://127.0.0.1:4200', trace: 'retain-on-failure', ...devices['Desktop Chrome'], viewport: { width: 1280, height: 860 } },
   projects: [
     { name: 'site', testMatch: 'site.spec.js' },
-    { name: 'hmr', testMatch: 'hmr.spec.js', use: { baseURL: 'http://127.0.0.1:5183' } },
+    ...(external ? [] : [{ name: 'hmr', testMatch: 'hmr.spec.js', use: { baseURL: 'http://127.0.0.1:5183' } }]),
   ],
-  webServer: [
+  webServer: external ? [] : [
     // A local OpenID Connect provider, which the site stack is configured to trust for Fieldnotes.
     {
       command: 'node tests/e2e/mock-oidc.mjs 4290',

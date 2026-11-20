@@ -1,0 +1,62 @@
+# Strata container images: one multi-stage Containerfile, one target per deployed unit.
+#
+#   podman build --format docker -f deploy/Containerfile --target runtime -t strata/runtime:dev .
+#   podman build --format docker -f deploy/Containerfile --target gateway -t strata/gateway:dev .
+#
+# The targets are the component ids of the specification (deploy/compose.yaml is generated from it
+# by `specc deploy`): `runtime` is crates/backend, `gateway` is crates/bff plus the web bundle.
+# Build from the repository root.
+
+# ---- Rust: both binaries, built once ------------------------------------------------------
+FROM rust:1.96.0-alpine3.23 AS rust-build
+# SQLite is bundled in rusqlite, so it is compiled here: it needs a C compiler and musl headers.
+RUN apk add --no-cache musl-dev gcc make
+WORKDIR /src
+ENV CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0
+COPY Cargo.toml Cargo.lock ./
+COPY crates crates
+RUN cargo build --release --locked -p strata-backend -p strata-bff
+
+# ---- Web: the bundle the gateway serves ---------------------------------------------------
+FROM node:24.15.0-alpine3.23 AS web-build
+WORKDIR /src
+COPY package.json package-lock.json ./
+RUN npm ci
+COPY web web
+RUN npx vite build web
+
+# ---- Runtime base: Alpine, a user that is not root ----------------------------------------
+FROM alpine:3.23.5 AS base
+RUN addgroup -S -g 10001 strata \
+ && adduser -S -u 10001 -G strata -H -h /opt/strata strata \
+ && mkdir -p /opt/strata /var/lib/strata \
+ && chown strata:strata /var/lib/strata
+WORKDIR /opt/strata
+
+# ---- runtime: the backend -----------------------------------------------------------------
+FROM base AS runtime
+COPY --from=rust-build /src/target/release/strata-backend /usr/local/bin/strata-backend
+# Tenant bundles are read at start-up and installed into the database.
+COPY tenants /opt/strata/tenants
+ENV STRATA_BACKEND_ADDR=127.0.0.1:4101 \
+    STRATA_STORE=sqlite \
+    STRATA_DB=/var/lib/strata/strata.db \
+    STRATA_TENANTS=/opt/strata/tenants
+VOLUME /var/lib/strata
+USER strata
+EXPOSE 4101
+HEALTHCHECK --interval=5s --timeout=3s --start-period=5s --retries=24 \
+  CMD wget -q -O /dev/null http://127.0.0.1:4101/internal/health || exit 1
+ENTRYPOINT ["/usr/local/bin/strata-backend"]
+
+# ---- gateway: the BFF and the built web bundle --------------------------------------------
+FROM base AS gateway
+COPY --from=rust-build /src/target/release/strata-bff /usr/local/bin/strata-bff
+COPY --from=web-build /src/web/dist /opt/strata/web/dist
+ENV STRATA_BFF_ADDR=0.0.0.0:4100 \
+    STRATA_WEB_DIST=/opt/strata/web/dist
+USER strata
+EXPOSE 4100
+HEALTHCHECK --interval=5s --timeout=3s --start-period=5s --retries=24 \
+  CMD wget -q -O /dev/null http://127.0.0.1:4100/api/session || exit 1
+ENTRYPOINT ["/usr/local/bin/strata-bff"]

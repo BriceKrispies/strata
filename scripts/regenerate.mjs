@@ -18,6 +18,8 @@
 //      specification's shipped contracts with a bffRoute (WG-5182).
 //   8. Its fixtures: crates/bff/tests/conformance/fixtures/generated, from
 //      crates/bff/tests/conformance/fixtures/spec.jsonc.
+//   9. The deployment files: deploy/compose.yaml, deploy/kubernetes, deploy/monitoring, from the
+//      specification and specifications/deploy.jsonc.
 //
 // The headers of crates/model, crates/model-core, web/src/generated and specifications/catalogue.md carry
 // the specification's semantic hash, which Exegra reports (see spec-hash.mjs). The journeys, step
@@ -100,6 +102,10 @@ specc('generate the contract conformance suite (crates/bff/tests/conformance/gen
 specc('generate the conformance fixtures (crates/bff/tests/conformance/fixtures/generated)', [
   'conformance', '--spec', 'crates/bff/tests/conformance/fixtures/spec.jsonc', '--out', 'crates/bff/tests/conformance/fixtures/generated',
   '--expect-fail-prefix', 'violates-',
+]);
+
+specc('generate the deployment files (deploy)', [
+  'deploy', '--spec', 'specifications/spec.jsonc', '--out', 'deploy',
 ]);
 
 console.log('\nregenerate: done');
