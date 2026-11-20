@@ -379,6 +379,14 @@
     },
     {
       "package": "strata-kernel",
+      "target": "rule_reads",
+      "tier": "routine",
+      "seconds": null,
+      "unmeasured": true,
+      "reason": "Four tests over the notes world with one schema change and one posting or setting write each; not yet measured"
+    },
+    {
+      "package": "strata-kernel",
       "target": "search",
       "tier": "full",
       "seconds": null,

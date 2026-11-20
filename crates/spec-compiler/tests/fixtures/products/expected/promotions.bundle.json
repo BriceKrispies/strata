@@ -2,6 +2,10 @@
   "content": {
     "ledger-limits": [
       {
+        "cap": 1,
+        "unit": "promotions__redemptions"
+      },
+      {
         "floor": 0,
         "owner": {
           "pool": {
@@ -19,7 +23,7 @@
     ],
     "ledger-units": [
       {
-        "description": "The redemptions of a person: one account per person, credited by each redemption.",
+        "description": "The redemptions of a person: one account per person and promotion, in the scope of the id of the promotion, credited by each redemption.",
         "unit": "promotions__redemptions"
       },
       {
@@ -228,6 +232,7 @@
               "id": "count",
               "owner": "Invoker",
               "reason": "redemption",
+              "scope": "text(record.$id)",
               "unit": "promotions__redemptions"
             }
           },

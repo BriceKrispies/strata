@@ -2,22 +2,26 @@
   // "Redeem a promotion" as a product on the Strata platform (WG-5032): a time window, a stock kept in
   // the ledger and one redemption record, all in one tenant operation that a member may invoke without
   // ledger-post or content-write (D-6546 to D-6551, OPR-1540 to OPR-1554). The file declares everything
-  // it names, in its own namespace promotions__ (D-6582): the object types, the ledger units, the pool
-  // and the floor of the stock, the manager role and the two operations. Only platform primitives are
-  // used, and each typed section holds values of a platform type (src/layer_values.rs): objects of
+  // it names, in its own namespace promotions__ (D-6582): the object types, the ledger units, the pool,
+  // the floor of the stock and the cap per person, the manager role and the two operations. Only
+  // platform primitives are used, and each typed section holds values of a platform type (src/layer_values.rs): objects of
   // object-type-def, ledgerUnits of ledger-unit-decl, ledgerPools of ledger-pool-decl, ledgerLimits of
   // ledger-limit and operations of tenant-operation-def. Expressions are tenant rule language text.
   //
-  // What this file leaves out, because the tenant rule language does not read balances or segments yet
-  // (D-6543 specifies balance and in_segment; WG-5062):
-  // - eligibility by segment (in_segment): there is no segment and no segment field;
-  // - the limit per person (balance of the member's redemptions, compared with a limit on the record):
-  //   a member may redeem as often as the stock of the promotion lasts.
+  // The limit per person is the ledger's: each redemption credits the member's account of
+  // promotions__redemptions in the scope of the promotion, and the cap of 1 on that unit
+  // (promotions__per_person, LDG-013) refuses a second redemption of one promotion by one person, in the
+  // same transaction as the debit of the stock, so it holds under concurrent requests as the stock does
+  // (LDG-017). A limit that differs per promotion would read balance(unit, scope) against a field of the
+  // record (D-6544); a fixed cap needs no read.
+  // What this file leaves out, because the tenant rule language does not read segments yet: eligibility
+  // by segment (in_segment, D-6543, D-6544, CMS-1548). D-6543 lands the read in Exegra's catalogue first,
+  // then in specc, the kernel and the language entity; until then there is no segment here.
   // What it keeps: the window (now against the starts_at and ends_at of the record, and at most 90 days
   // long, through the time arithmetic of D-6541), a stock per promotion (the pool account in the scope
   // text(record.$id), D-6542) with the floor of 0 that refuses a redemption when that stock is gone,
-  // the redemption counted for the member in the ledger, and the redemption record, in one atomic
-  // invocation.
+  // the redemption counted for the member in the ledger under the cap per person, and the redemption
+  // record, in one atomic invocation.
   "product": {
     "id": "promotions",
     "name": "Promotions",
@@ -74,7 +78,7 @@
   ],
   "ledgerUnits": [
     { "id": "promotions__stock", "description": "The stock of each promotion: one account of the pool per promotion, in the scope of its id, debited by each redemption." },
-    { "id": "promotions__redemptions", "description": "The redemptions of a person: one account per person, credited by each redemption." }
+    { "id": "promotions__redemptions", "description": "The redemptions of a person: one account per person and promotion, in the scope of the id of the promotion, credited by each redemption." }
   ],
   "ledgerPools": [
     { "id": "promotions__pool", "description": "The pool that holds the stock of the promotions." }
@@ -86,6 +90,12 @@
       "unit": "promotions__stock",
       "owner": { "pool": { "pool": "promotions__pool" } },
       "floor": 0
+    },
+    {
+      // The cap of 1 on every account of the unit: one redemption of a promotion per person (LDG-012, LDG-013).
+      "id": "promotions__per_person",
+      "unit": "promotions__redemptions",
+      "cap": 1
     }
   ],
   "roles": [
@@ -165,6 +175,8 @@
             "id": "count",
             "owner": "Invoker",
             "unit": "promotions__redemptions",
+            // The member's account for this promotion, which the cap of promotions__per_person limits.
+            "scope": "text(record.$id)",
             "amount": "1",
             "reason": "redemption"
           }
@@ -183,9 +195,9 @@
     {
       "id": "promotions__redeem-is-one-operation",
       "kind": "structural",
-      "statement": "Redeeming a promotion is one tenant operation that checks the window, debits the stock of that promotion, counts the redemption for the member and creates the redemption record in one transaction, or changes nothing.",
+      "statement": "Redeeming a promotion is one tenant operation that checks the window, debits the stock of that promotion, counts the redemption for the member under a cap of one per person and promotion, and creates the redemption record in one transaction, or changes nothing.",
       "subjects": ["product-module"],
-      "rationale": "OPR-1541 and OPR-1542 make the invocation atomic; the floor of the stock unit makes the stock hold under concurrent requests (LDG-017).",
+      "rationale": "OPR-1541 and OPR-1542 make the invocation atomic; the floor of the stock unit and the cap of the redemptions unit make the stock and the limit per person hold under concurrent requests (LDG-017).",
       "evaluate": { "method": "external-evidence" }
     }
   ]

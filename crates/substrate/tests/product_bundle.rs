@@ -737,7 +737,8 @@ fn the_bundles_specc_writes_are_read_and_their_unbuilt_sections_are_named() {
     assert!(promotions.unbuilt.is_empty());
     assert_eq!(promotions.ledger_units.len(), 2);
     assert_eq!(promotions.ledger_pools.len(), 1);
-    assert_eq!(promotions.ledger_limits.len(), 1);
+    // The floor of the stock and the cap of one redemption per person and promotion.
+    assert_eq!(promotions.ledger_limits.len(), 2);
     // The changes that install it declare the ledger before the operations that post to it.
     let changes = promotions.schema_changes();
     let first_ledger = changes
@@ -752,6 +753,99 @@ fn the_bundles_specc_writes_are_read_and_their_unbuilt_sections_are_named() {
     assert!(changes
         .iter()
         .any(|c| matches!(c, SchemaChange::SetLedgerLimit(_))));
+}
+
+/// The redeem operation of the promotions product, installed from the bundle specc writes: one
+/// invocation checks the window, debits the stock of the promotion, counts the redemption for the
+/// person and creates the redemption record. The cap of the redemptions unit is the limit per
+/// person: a second redemption of the same promotion by the same person is refused, and the
+/// refusal leaves the stock and the records as they were (WG-5032, OPR-1542, LDG-013).
+#[test]
+fn the_promotions_redeem_operation_admits_one_redemption_per_person() {
+    let mut world = world();
+    let bundle = ProductBundle::from_json(PROMOTIONS).unwrap_or_else(|e| panic!("{e}"));
+    let (result, _) = install(&mut world, &bundle, None, "0.2");
+    result.unwrap_or_else(|e| panic!("{e}"));
+
+    const DAY: i64 = 86_400_000;
+    let start = 1_800_000_100_000;
+    let step = |world: &World, now: i64, intent: Intent| {
+        world.step(&intent, &context_at(now, "promotions"))
+    };
+    let promotion_type = object_id("promotions__promotion");
+    let (next, _) = step(
+        &world,
+        start,
+        Intent::CreateRecord {
+            object: promotion_type.clone(),
+            fields: std::collections::BTreeMap::from([
+                (FieldId::new("title").unwrap(), Value::Str("Spring".into())),
+                (FieldId::new("starts_at").unwrap(), Value::Time(start)),
+                (
+                    FieldId::new("ends_at").unwrap(),
+                    Value::Time(start + 30 * DAY),
+                ),
+            ]),
+        },
+    )
+    .unwrap_or_else(|e| panic!("the promotion is created: {}", e.message));
+    world = next;
+    let promotion = world.tenants[&tenant()]
+        .records_of(&promotion_type)
+        .next()
+        .expect("the promotion exists")
+        .id;
+    // The stock of this promotion: the pool account in the scope of its id, as text(record.$id) writes it.
+    let stock = |amount: i64, key: &str| LedgerPostingRequest {
+        owner: LedgerOwner::Pool {
+            pool: LedgerPoolName::new("promotions__pool").unwrap(),
+        },
+        unit: LedgerUnit::new("promotions__stock").unwrap(),
+        amount: LedgerAmount(amount),
+        idempotency_key: key.into(),
+        reason: "stock".into(),
+        corrects: None,
+        scope: Some(LedgerScope::new(&promotion.0.to_string()).unwrap()),
+    };
+    let (next, _) = step(
+        &world,
+        start + 1,
+        Intent::PostLedger {
+            postings: vec![stock(10, "fund")],
+        },
+    )
+    .unwrap_or_else(|e| panic!("the stock is funded: {}", e.message));
+    world = next;
+
+    let redeem = |key: &str| Intent::InvokeOperation {
+        operation: TenantOperationId::new("promotions__redeem").unwrap(),
+        inputs: [("promotion".to_string(), Value::Ref(promotion))]
+            .into_iter()
+            .collect(),
+        idempotency_key: key.to_string(),
+    };
+    let redemption_type = object_id("promotions__redemption");
+    let redemptions = |world: &World| {
+        world.tenants[&tenant()]
+            .records_of(&redemption_type)
+            .count()
+    };
+    let (next, _) = step(&world, start + DAY, redeem("first"))
+        .unwrap_or_else(|e| panic!("the first redemption is accepted: {}", e.message));
+    world = next;
+    assert_eq!(redemptions(&world), 1);
+
+    let before = world.hash();
+    let error = step(&world, start + DAY + 1, redeem("second"))
+        .err()
+        .expect("a second redemption by the same person is refused");
+    assert!(
+        error.message.contains("ledger:above-cap"),
+        "{}",
+        error.message
+    );
+    assert_eq!(world.hash(), before);
+    assert_eq!(redemptions(&world), 1);
 }
 
 // ---- what a product holds beyond its record types (WG-5076, WG-5084, WG-5103) ----------------------

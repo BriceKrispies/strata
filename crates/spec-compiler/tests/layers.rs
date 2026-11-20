@@ -93,7 +93,7 @@ fn the_fixture_product_is_accepted_beside_the_platform() {
 }
 
 /// The redeem-a-promotion product (WG-5032): two object types, the ledger units, pool and floor of
-/// its stock and two tenant operations. specc's loader accepts it beside the platform, and so does
+/// its stock, the cap of one redemption per person and promotion, and two tenant operations. specc's loader accepts it beside the platform, and so does
 /// Exegra (`exegra_accepts_the_complete_products`).
 #[test]
 fn the_promotions_product_is_accepted_beside_the_platform() {
@@ -126,6 +126,7 @@ fn the_promotions_product_is_accepted_beside_the_platform() {
             ("ledgerUnits", "promotions__redemptions"),
             ("ledgerPools", "promotions__pool"),
             ("ledgerLimits", "promotions__stock_floor"),
+            ("ledgerLimits", "promotions__per_person"),
             ("operations", "promotions__create"),
             ("operations", "promotions__redeem"),
         ]
