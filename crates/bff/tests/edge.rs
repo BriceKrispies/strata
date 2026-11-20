@@ -17,6 +17,12 @@ const SESSION_COOKIE: &str = "__Host-strata_sid";
 struct Edge {
     port: u16,
     http: reqwest::Client,
+    /// The backend's internal API, such as `http://127.0.0.1:4101`.
+    backend: String,
+    /// Asks the BFF to stop (as a termination signal does).
+    stop: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    /// The BFF's own task, which ends when its server has drained.
+    served: std::sync::Mutex<Option<tokio::task::JoinHandle<Result<(), String>>>>,
 }
 
 async fn start() -> Edge {
@@ -74,6 +80,7 @@ async fn start_with(
             format!("http://127.0.0.1:{port}"),
             format!("http://localhost:{port}"),
         ],
+        hosts: Default::default(),
         dist,
         dev: true,
         token_secret: None,
@@ -81,13 +88,19 @@ async fn start_with(
         limits: Default::default(),
     };
     adjust_bff(&mut cfg);
-    tokio::spawn(strata_bff::run(cfg, listener, std::future::pending()));
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let served = tokio::spawn(strata_bff::run(cfg, listener, async move {
+        let _ = stopped.await;
+    }));
     let edge = Edge {
         port,
         http: reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .unwrap(),
+        backend: format!("http://{backend_addr}"),
+        stop: std::sync::Mutex::new(Some(stop)),
+        served: std::sync::Mutex::new(Some(served)),
     };
     for _ in 0..400 {
         if edge.get("127.0.0.1", "/api/session", None).await.0 == 200 {
@@ -105,6 +118,41 @@ struct Reply {
 }
 
 impl Edge {
+    /// Bind an origin to a tenant at the backend, as the operator's tools do while it runs.
+    async fn bind(&self, tenant: &str, origin: &str) {
+        let response = self
+            .http
+            .post(format!("{}/internal/platform/hosts", self.backend))
+            .header(strata_protocol::api::HEADER_SERVICE, TOKEN)
+            .json(&json!({ "bind": { "tenant": tenant, "origin": origin } }))
+            .send()
+            .await
+            .unwrap();
+        let status = response.status().as_u16();
+        assert_eq!(status, 200, "{}", response.text().await.unwrap());
+    }
+
+    /// A request to the BFF for a host name that is not in its static configuration.
+    fn as_host(&self, host: &str, path: &str) -> reqwest::RequestBuilder {
+        self.http
+            .get(format!("{}{path}", self.origin("127.0.0.1")))
+            .header("host", host)
+    }
+
+    /// Ask the BFF to stop and wait for its server to finish draining; the time it took.
+    async fn stop_and_wait(&self) -> Duration {
+        let started = std::time::Instant::now();
+        let stop = self.stop.lock().unwrap().take().expect("not stopped yet");
+        stop.send(()).unwrap();
+        let served = self.served.lock().unwrap().take().unwrap();
+        tokio::time::timeout(Duration::from_secs(20), served)
+            .await
+            .expect("the BFF ended before the drain deadline")
+            .unwrap()
+            .unwrap();
+        started.elapsed()
+    }
+
     fn origin(&self, host: &str) -> String {
         format!("http://{host}:{}", self.port)
     }
@@ -1855,4 +1903,164 @@ async fn sockets_are_capped_per_session_at_the_bff() {
     )
     .await;
     assert!(throttled(&third), "{third:?}");
+}
+
+/// Verifies: GWY-1680
+/// A tenant bound at the backend while the BFF runs is served on its next request that names the
+/// host, with its origin accepted, and the static configuration is never moved by what the
+/// backend says.
+#[tokio::test]
+async fn a_tenant_bound_at_run_time_is_served_without_a_restart() {
+    let edge = start_with(
+        |cfg| cfg.hosts = strata_bff::hosts::Refresh::new(60_000, 0),
+        |_| {},
+    )
+    .await;
+    let (status, _, _) = edge
+        .send(edge.as_host("tide.example", "/api/session"))
+        .await;
+    assert_eq!(status, 404, "no site is served at an unbound host");
+
+    let tide_origin = format!("http://tide.example:{}", edge.port);
+    edge.bind("tidewater", &tide_origin).await;
+    let (status, view, _) = edge
+        .send(edge.as_host("tide.example", "/api/view?path=/"))
+        .await;
+    assert_eq!(status, 200, "{view}");
+    assert_eq!(view["data"]["site"]["fields"]["name"], "Tidewater Review");
+
+    // Its origin is one of ours for that site and for no other, and a foreign one is still refused.
+    let token = edge
+        .send(edge.as_host("tide.example", "/api/session"))
+        .await
+        .1["session"]["csrf_token"]
+        .as_str()
+        .expect("a request token")
+        .to_string();
+    let sign_in = |origin: &str| {
+        edge.http
+            .post(format!("{}/api/login", edge.origin("127.0.0.1")))
+            .header("host", "tide.example")
+            .header("origin", origin)
+            .header("x-csrf-token", &token)
+            .json(&json!({ "login": "nobody", "password": "not-a-password" }))
+    };
+    let (status, _, _) = edge.send(sign_in(&tide_origin)).await;
+    assert_ne!(status, 403, "the learned origin was refused");
+    let (status, _, _) = edge
+        .send(sign_in(&format!("http://other.example:{}", edge.port)))
+        .await;
+    assert_eq!(status, 403, "an origin nobody named was accepted");
+
+    // The backend binds a host the static configuration already serves to another tenant: the
+    // static entry wins.
+    edge.bind("tidewater", &edge.origin("127.0.0.1")).await;
+    let _ = edge
+        .send(edge.as_host("unknown.example", "/api/session"))
+        .await;
+    let (_, view, _) = edge.get("127.0.0.1", "/api/view?path=/", None).await;
+    assert_eq!(view["data"]["site"]["fields"]["name"], "Fieldnotes");
+}
+
+/// Verifies: GWY-1681
+/// Hosts nobody knows cannot make the BFF ask the backend more than once per interval.
+#[tokio::test]
+async fn unknown_hosts_do_not_make_the_backend_be_asked_again_within_the_interval() {
+    let edge = start_with(
+        |cfg| cfg.hosts = strata_bff::hosts::Refresh::new(60_000, 600_000),
+        |_| {},
+    )
+    .await;
+    edge.bind("tidewater", &format!("http://tide.example:{}", edge.port))
+        .await;
+    for _ in 0..5 {
+        let (status, _, _) = edge
+            .send(edge.as_host("tide.example", "/api/session"))
+            .await;
+        assert_eq!(
+            status, 404,
+            "the backend was asked again inside the interval"
+        );
+    }
+}
+
+/// Verifies: GWY-1682
+/// On a stop, an open socket is sent a Close frame and the server ends before its drain deadline.
+#[tokio::test]
+async fn an_open_socket_is_closed_when_the_server_is_stopped() {
+    let edge = start().await;
+    let anonymous = edge.request_token("127.0.0.1").await;
+    let (mut socket, _) = connect(
+        &edge,
+        Some(edge.origin("127.0.0.1")),
+        None,
+        Some(anonymous.as_str()),
+    )
+    .await
+    .unwrap();
+    // The socket is open and the backend has welcomed it.
+    let welcome = tokio::time::timeout(Duration::from_secs(5), socket.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert!(matches!(welcome, Message::Text(_)), "{welcome:?}");
+
+    let waited = edge.stop_and_wait();
+    let closed = async {
+        loop {
+            match tokio::time::timeout(Duration::from_secs(10), socket.next()).await {
+                Ok(Some(Ok(Message::Close(frame)))) => break frame,
+                Ok(Some(Ok(_))) => continue,
+                other => panic!("the socket ended without a Close frame: {other:?}"),
+            }
+        }
+    };
+    let (took, frame) = tokio::join!(waited, closed);
+    assert_eq!(
+        frame.expect("a close frame with a code").code,
+        tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode::Away
+    );
+    assert!(
+        took < Duration::from_secs(15),
+        "the drain took {took:?}, which is the deadline and not the close"
+    );
+}
+
+/// Verifies: GWY-1683
+/// Outside development, a request with `X-Forwarded-For` and no trusted proxy configured is
+/// refused with the reason named; in development it is served.
+#[tokio::test]
+async fn forwarded_headers_without_trusted_proxies_are_refused_outside_development() {
+    let forwarded = |edge: &Edge| {
+        edge.http
+            .get(format!("{}/api/session", edge.origin("127.0.0.1")))
+            .header("x-forwarded-for", "203.0.113.9")
+    };
+    let production = start_with(|cfg| cfg.dev = false, |_| {}).await;
+    let (status, _, reply) = production.send(forwarded(&production)).await;
+    assert_eq!(status, 400, "{}", reply.text);
+    assert!(
+        reply.text.contains("forwarded_without_trusted_proxies"),
+        "the refusal names its reason: {}",
+        reply.text
+    );
+    assert_eq!(
+        production.get("127.0.0.1", "/api/session", None).await.0,
+        200,
+        "a request without the header is served"
+    );
+
+    let behind = start_with(
+        |cfg| {
+            cfg.dev = false;
+            cfg.trusted_proxies = vec!["127.0.0.1".parse().unwrap()];
+        },
+        |_| {},
+    )
+    .await;
+    assert_eq!(behind.send(forwarded(&behind)).await.0, 200);
+
+    let development = start().await;
+    assert_eq!(development.send(forwarded(&development)).await.0, 200);
 }

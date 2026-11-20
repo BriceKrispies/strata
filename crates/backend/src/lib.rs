@@ -6,6 +6,7 @@
 
 pub mod app;
 pub mod auth;
+pub mod hosts;
 pub mod http;
 pub mod hub;
 pub mod lab;

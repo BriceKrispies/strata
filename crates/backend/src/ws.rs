@@ -312,8 +312,22 @@ impl Conn {
 /// Serve one upgraded connection until it ends.
 ///
 /// `places` are the socket's places under the per-session and per-source caps; they are held
-/// until the connection ends.
-pub async fn serve(app: Shared, identity: Identity, places: SocketPlaces, socket: WebSocket) {
+/// until the connection ends. When `stop` is raised the socket is closed (its writer sends the
+/// Close frame) before the server's drain deadline.
+pub async fn serve(
+    app: Shared,
+    identity: Identity,
+    places: SocketPlaces,
+    socket: WebSocket,
+    stop: Option<strata_runtime::server::Shutdown>,
+) {
+    let stopped = async move {
+        match stop {
+            Some(mut stop) => stop.stopped().await,
+            None => std::future::pending().await,
+        }
+    };
+    tokio::pin!(stopped);
     let (mut sink, mut stream) = socket.split();
     let (out, mut outbound) = mpsc::channel::<ServerMessage>(OUTBOUND_QUEUE);
     let writer = tokio::spawn(async move {
@@ -379,6 +393,10 @@ pub async fn serve(app: Shared, identity: Identity, places: SocketPlaces, socket
     let mut reason = "client closed";
     while alive {
         let step: Result<(), Closed> = tokio::select! {
+            _ = &mut stopped => {
+                reason = "server stopping";
+                Err(Closed)
+            },
             frame = stream.next() => match frame {
                 Some(Ok(Message::Text(text))) => {
                     last_heard = Instant::now();

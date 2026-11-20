@@ -40,6 +40,7 @@
 //! | `STRATA_HEADER_TIMEOUT_SECS` | 10 | Time a client has to send its request headers. |
 //! | `STRATA_REQUEST_TIMEOUT_SECS` | 30 | Time a request may take before it is answered `408`. |
 //! | `STRATA_MAX_CONNECTIONS` | 2048 | Open connections. |
+//! | `STRATA_WRITE_IDLE_TIMEOUT_SECS` | 30 | A connection whose client has not read for this long while there are bytes to send is dropped. |
 //! | `STRATA_MAX_CONNECTIONS_PER_SOURCE` | 512 | Open connections from one peer address. |
 
 use std::net::SocketAddr;

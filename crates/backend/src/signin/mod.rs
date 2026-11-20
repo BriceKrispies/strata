@@ -13,6 +13,7 @@
 //! Implements: IDN-001, IDN-018
 
 pub mod federated;
+pub mod invite;
 pub mod link;
 pub mod oidc;
 pub mod passkey;

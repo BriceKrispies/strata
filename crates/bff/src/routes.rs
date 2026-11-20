@@ -5,7 +5,7 @@ use crate::signin;
 use crate::token::same;
 use crate::{relay, Bff, Shared, COOKIE, LOG};
 use axum::extract::ws::WebSocketUpgrade;
-use axum::extract::{ConnectInfo, Path, Query, Request, State};
+use axum::extract::{ConnectInfo, Extension, Path, Query, Request, State};
 use axum::http::header::{
     CACHE_CONTROL, CONTENT_SECURITY_POLICY, CONTENT_TYPE, COOKIE as COOKIE_HEADER, HOST, LOCATION,
     ORIGIN, SET_COOKIE,
@@ -28,6 +28,7 @@ use strata_protocol::api::{
     HEADER_SITE, HEADER_SOURCE,
 };
 use strata_protocol::ws::SessionState;
+use strata_runtime::server::Shutdown;
 use strata_substrate::project::{project, ViewData};
 use strata_substrate::theme;
 use tower_http::services::ServeDir;
@@ -163,6 +164,15 @@ fn random_id(prefix: &str) -> String {
     )
 }
 
+/// The host name of a request, without its port.
+fn host_name(headers: &HeaderMap) -> &str {
+    let host = text(headers, HOST).unwrap_or("");
+    match host.rsplit_once(':') {
+        Some((name, port)) if !port.is_empty() && port.chars().all(|c| c.is_ascii_digit()) => name,
+        _ => host,
+    }
+}
+
 /// Establish site, session token and correlation id. The site comes from the host name and this
 /// process's configuration only.
 pub fn visit(bff: &Bff, headers: &HeaderMap) -> Result<Visit, Failure> {
@@ -170,23 +180,13 @@ pub fn visit(bff: &Bff, headers: &HeaderMap) -> Result<Visit, Failure> {
         .filter(|id| valid_correlation(id))
         .map(str::to_string)
         .unwrap_or_else(|| random_id("f"));
-    let host = text(headers, HOST).unwrap_or("");
-    let host = match host.rsplit_once(':') {
-        Some((name, port)) if !port.is_empty() && port.chars().all(|c| c.is_ascii_digit()) => name,
-        _ => host,
-    };
-    let site = bff
-        .cfg
-        .sites
-        .get(&host.to_lowercase())
-        .cloned()
-        .ok_or_else(|| {
-            Failure::new(
-                ErrorCode::NotFound,
-                "No site is served at this address.",
-                &correlation,
-            )
-        })?;
+    let site = bff.site_of(host_name(headers)).ok_or_else(|| {
+        Failure::new(
+            ErrorCode::NotFound,
+            "No site is served at this address.",
+            &correlation,
+        )
+    })?;
     let origin = origin_allowed(bff, &site, headers)
         .then(|| text(headers, ORIGIN).map(str::to_string))
         .flatten();
@@ -202,14 +202,14 @@ pub fn visit(bff: &Bff, headers: &HeaderMap) -> Result<Visit, Failure> {
 
 /// The site an origin such as `http://tidewater.localhost:4100` belongs to: the tenant its host
 /// name serves.
-fn origin_site<'a>(bff: &'a Bff, origin: &str) -> Option<&'a TenantId> {
+fn origin_site(bff: &Bff, origin: &str) -> Option<TenantId> {
     let authority = origin.split_once("://")?.1;
     let authority = authority.split('/').next().unwrap_or(authority);
     let host = match authority.rsplit_once(':') {
         Some((name, port)) if !port.is_empty() && port.chars().all(|c| c.is_ascii_digit()) => name,
         _ => authority,
     };
-    bff.cfg.sites.get(&host.to_lowercase())
+    bff.site_of(host)
 }
 
 /// Whether the request's `Origin` is one of ours, and one of the site being served. Browsers send
@@ -218,8 +218,8 @@ fn origin_site<'a>(bff: &'a Bff, origin: &str) -> Option<&'a TenantId> {
 /// site only.
 pub fn origin_allowed(bff: &Bff, site: &TenantId, headers: &HeaderMap) -> bool {
     text(headers, ORIGIN).is_some_and(|origin| {
-        bff.cfg.origins.iter().any(|allowed| allowed == origin)
-            && origin_site(bff, origin) == Some(site)
+        bff.origins().iter().any(|allowed| allowed == origin)
+            && origin_site(bff, origin).as_ref() == Some(site)
     })
 }
 
@@ -575,6 +575,30 @@ async fn recovery_complete(
         &bff,
         &visit,
         "/internal/recovery/complete",
+        &json!({
+            "challenge": body.get("challenge"),
+            "token": body.get("token"),
+            "password": body.get("password"),
+        }),
+    )
+    .await
+    .map(Json)
+}
+
+/// Accept the invitation a new site's owner was sent: choose the first password. The link is not
+/// bound to a browser, so nothing but the origin and the request token is checked here; the
+/// backend checks the invitation itself.
+async fn invite_accept(
+    State(bff): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<Json_>,
+) -> Result<Json<Json_>, Failure> {
+    let visit = visit(&bff, &headers)?;
+    guard_request(&bff, &visit, &headers).await?;
+    backend(
+        &bff,
+        &visit,
+        "/internal/sign-in/invite/accept",
         &json!({
             "challenge": body.get("challenge"),
             "token": body.get("token"),
@@ -1062,12 +1086,10 @@ async fn sessions_revoke_others(
 /// before any other, and otherwise the first in alphabetical order, whatever order they were
 /// listed in.
 pub fn primary_origin(bff: &Bff, site: &TenantId) -> Option<String> {
-    bff.cfg
-        .origins
-        .iter()
-        .filter(|origin| origin_site(bff, origin) == Some(site))
-        .min_by_key(|origin| (!origin.starts_with("https://"), origin.as_str()))
-        .cloned()
+    bff.origins()
+        .into_iter()
+        .filter(|origin| origin_site(bff, origin).as_ref() == Some(site))
+        .min_by_key(|origin| (!origin.starts_with("https://"), origin.clone()))
 }
 
 async fn logout(State(bff): State<Shared>, headers: HeaderMap) -> Result<Response, Failure> {
@@ -1398,6 +1420,7 @@ async fn socket(
     State(bff): State<Shared>,
     headers: HeaderMap,
     Query(query): Query<BTreeMap<String, String>>,
+    stop: Option<Extension<Shutdown>>,
     upgrade: WebSocketUpgrade,
 ) -> Result<Response, Failure> {
     let visit = visit(&bff, &headers)?;
@@ -1437,9 +1460,26 @@ async fn socket(
             );
             Failure::new(ErrorCode::Throttled, message, &visit.correlation)
         })?;
+    // The socket is registered with the server's drain, so that the server waits for it to send
+    // its Close frame when the process is stopped. A server that has finished draining takes no
+    // new sockets.
+    let stop = stop.map(|Extension(stop)| stop);
+    let held = match &stop {
+        Some(stop) => Some(stop.hold().ok_or_else(|| {
+            Failure::new(
+                ErrorCode::Unavailable,
+                "The service is stopping.",
+                &visit.correlation,
+            )
+        })?),
+        None => None,
+    };
     Ok(upgrade
         .max_message_size(strata_protocol::ws::MAX_FRAME)
-        .on_upgrade(move |browser| relay::relay(bff, visit, places, browser)))
+        .on_upgrade(move |browser| async move {
+            relay::relay(bff, visit, places, browser, stop).await;
+            drop(held);
+        }))
 }
 
 /// Decode a query-string value: `+` is a space, `%XX` is a byte.
@@ -1630,6 +1670,23 @@ fn warn_forwarded_without_proxies() {
     }
 }
 
+/// Outside development, a request that carries `X-Forwarded-For` while no trusted proxy is
+/// configured is refused: the header cannot be believed, so every visitor behind the proxy would
+/// be one source, and a visitor that sends it itself would be hiding behind it. The reason is
+/// named so that the operator finds the setting.
+fn refuse_forwarded_without_proxies() -> Response {
+    LOG.error(
+        "bff.forwarded_refused",
+        "",
+        json!({ "reason": FORWARDED_REFUSAL, "hint": "set STRATA_TRUSTED_PROXIES to the addresses of the proxies in front of this process" }),
+    );
+    (StatusCode::BAD_REQUEST, FORWARDED_REFUSAL).into_response()
+}
+
+/// The reason a request with forwarded headers and no trusted proxies is refused.
+pub const FORWARDED_REFUSAL: &str =
+    "forwarded_without_trusted_proxies: this request carries X-Forwarded-For but STRATA_TRUSTED_PROXIES names no proxy";
+
 /// Security headers on everything, and one log line per request. Also the one place that sets the
 /// request's source: whatever a browser sent under that name is dropped first.
 async fn envelope(State(bff): State<Shared>, mut request: Request, next: Next) -> Response {
@@ -1643,8 +1700,15 @@ async fn envelope(State(bff): State<Shared>, mut request: Request, next: Next) -
     let method = request.method().clone();
     let path = request.uri().path().to_string();
     if request.headers().contains_key("x-forwarded-for") && bff.cfg.trusted_proxies.is_empty() {
+        if !bff.cfg.dev {
+            return refuse_forwarded_without_proxies();
+        }
         warn_forwarded_without_proxies();
     }
+    // A host nobody knows may be a tenant created since the list was fetched; a list that has
+    // aged out is fetched again. Both are rate limited (see `hosts`).
+    let known = bff.site_of(host_name(request.headers())).is_some();
+    crate::hosts::refresh_if_due(&bff, !known).await;
     if is_page_or_view(&method, &path) {
         if let Some(source) = text(request.headers(), HEADER_SOURCE) {
             if !bff
@@ -1676,7 +1740,7 @@ async fn envelope(State(bff): State<Shared>, mut request: Request, next: Next) -
     };
     bff.in_flight.fetch_sub(1, Ordering::Relaxed);
     let response_status = response.status();
-    let https = bff.cfg.origins.iter().any(|o| o.starts_with("https://"));
+    let https = bff.origins().iter().any(|o| o.starts_with("https://"));
     let headers = response.headers_mut();
     let mut policy = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'".to_string();
     if https {
@@ -1960,6 +2024,7 @@ pub fn router(bff: Shared) -> Router {
         .route("/factors/recovery-codes", post(recovery_codes))
         .route("/recovery/request", post(recovery_request))
         .route("/recovery/complete", post(recovery_complete))
+        .route("/invite/accept", post(invite_accept))
         .route("/recovery/cancel", post(recovery_cancel))
         .route("/sessions", get(sessions))
         .route("/sessions/revoke", post(session_revoke))
