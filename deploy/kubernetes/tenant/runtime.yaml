@@ -69,3 +69,13 @@ spec:
       ports:
         - protocol: TCP
           port: 4101
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: strata-data
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: sqlite-adapter
+      ports:
+        - protocol: TCP
+          port: 4101

@@ -119,7 +119,7 @@ groups:
           boundary: "b-19"
           severity: warning
         annotations:
-          summary: "A restored tenant SHALL lose at most 5 minutes of committed changes."
+          summary: "A restore inside the restore window SHALL lose at most 5 minutes of committed changes (the recovery point objective, and not the length of the window, which is D-522 and OPS-1213)."
           metric_placeholder: "true"
           threshold: "seconds > 300"
       # PLACEHOLDER metric strata_b_9_gateway_request: derived from the boundary detail, not yet an instrument that exists.
@@ -422,7 +422,7 @@ groups:
           boundary: "b-3"
           severity: warning
         annotations:
-          summary: "A directory entry SHALL be served for at most 15 minutes after the control plane was last reached."
+          summary: "A directory entry of an active tenant SHALL be served for at most 15 minutes after the control plane was last reached, and an entry in any other state for at most 60 seconds (ARC-1229)."
           metric_placeholder: "true"
           threshold: "seconds > 900"
       # PLACEHOLDER metric strata_b_11_agent_state: derived from the boundary detail, not yet an instrument that exists.
@@ -585,3 +585,40 @@ groups:
           summary: "A preview SHALL stop being valid when the revision of the tenant changes, or 15 minutes after it was shown, whichever comes first."
           metric_placeholder: "true"
           threshold: "unparsed"
+      # PLACEHOLDER metric strata_b_3_tenant_restore: derived from the boundary detail, not yet an instrument that exists.
+      - alert: Budget_OPS_1213
+        expr: "strata_b_3_tenant_restore_seconds > 300"
+        for: 5m
+        labels:
+          requirement: "OPS-1213"
+          boundary: "b-3"
+          severity: warning
+        annotations:
+          summary: "The restorable window of a tenant database SHALL be 30 days unless the tenant chooses another and SHALL NOT be shorter than 14 days, and a restore inside the window SHALL lose at most 5 minutes of committed changes."
+          metric_placeholder: "true"
+          threshold: "seconds > 300"
+      # PLACEHOLDER metric strata_b_3_takedown_bound: derived from the boundary detail, not yet an instrument that exists.
+      # The statement's target was not read: this expression has no threshold and never fires.
+      - alert: Budget_ARC_1228
+        expr: "strata_b_3_takedown_bound"
+        for: 5m
+        labels:
+          requirement: "ARC-1228"
+          boundary: "b-3"
+          severity: warning
+        annotations:
+          summary: "After a suspension with a takedown reason, a takedown of a host, or a deletion is recorded in the directory, no gateway SHALL serve published content of that tenant or host later than 60 seconds after the record when it can reach the control plane, and none SHALL serve it later than 15 minutes after it last reached the control plane when it cannot (ARC-500). The control plane SHALL push the change to every gateway and SHALL repeat it until each acknowledges. A takedown requested while the control plane cannot record it SHALL be refused with unavailable and change nothing."
+          metric_placeholder: "true"
+          threshold: "unparsed"
+      # PLACEHOLDER metric strata_b_3_directory_entry: derived from the boundary detail, not yet an instrument that exists.
+      - alert: Budget_ARC_1229
+        expr: "strata_b_3_directory_entry_seconds > 60"
+        for: 5m
+        labels:
+          requirement: "ARC-1229"
+          boundary: "b-3"
+          severity: warning
+        annotations:
+          summary: "A gateway SHALL hold a directory entry whose state is not active, and a host binding marked taken down, for at most 60 seconds before it asks the control plane again. While the control plane cannot be reached it SHALL keep treating such an entry as it was, SHALL NOT serve the tenant or host, and SHALL NOT let its age make it active."
+          metric_placeholder: "true"
+          threshold: "seconds > 60"
