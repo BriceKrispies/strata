@@ -83,10 +83,6 @@ impl Mailer for DevSink {
         if kept.len() >= 200 {
             kept.remove(0);
         }
-        // A development sink does not grow without bound.
-        if kept.len() >= 200 {
-            kept.remove(0);
-        }
         kept.push(mail.clone());
         if let Some(dir) = &self.dir {
             std::fs::create_dir_all(dir).map_err(|e| MailError(e.to_string()))?;
@@ -109,7 +105,16 @@ impl Mailer for DevSink {
 pub struct Smtp {
     transport: lettre::SmtpTransport,
     from: lettre::message::Mailbox,
+    /// A few workers and a bounded queue: a hung mail server holds the workers, not a thread per
+    /// message, and a message that finds the queue full is refused.
+    pool: crate::lab::Pool,
 }
+
+/// Messages sent at the same time, and messages waiting behind them.
+const SMTP_WORKERS: usize = 4;
+const SMTP_QUEUE: usize = 64;
+/// How long one exchange with the mail server may take before it is given up.
+const SMTP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 impl Debug for Smtp {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -124,9 +129,14 @@ impl Smtp {
     pub fn new(url: &str, from: &str) -> Result<Self, String> {
         let transport = lettre::SmtpTransport::from_url(url)
             .map_err(|e| format!("STRATA_SMTP_URL: {e}"))?
+            .timeout(Some(SMTP_TIMEOUT))
             .build();
         let from = from.parse().map_err(|e| format!("STRATA_MAIL_FROM: {e}"))?;
-        Ok(Smtp { transport, from })
+        Ok(Smtp {
+            transport,
+            from,
+            pool: crate::lab::Pool::new("mail", SMTP_WORKERS, SMTP_QUEUE),
+        })
     }
 }
 
@@ -145,16 +155,17 @@ impl Mailer for Smtp {
             .body(mail.text.clone())
             .map_err(|e| MailError(e.to_string()))?;
         let transport = self.transport.clone();
-        std::thread::spawn(move || {
-            if let Err(error) = transport.send(&message) {
-                crate::app::LOG.error(
-                    "mail.failed",
-                    "",
-                    serde_json::json!({ "error": error.to_string() }),
-                );
-            }
-        });
-        Ok(())
+        self.pool
+            .submit(move || {
+                if let Err(error) = transport.send(&message) {
+                    crate::app::LOG.error(
+                        "mail.failed",
+                        "",
+                        serde_json::json!({ "error": error.to_string() }),
+                    );
+                }
+            })
+            .map_err(|_| MailError("the mail queue is full".into()))
     }
 }
 

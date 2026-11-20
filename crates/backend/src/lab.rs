@@ -223,8 +223,24 @@ impl Lab {
             }
             runs.insert(id.to_string(), run);
             order.push(id.to_string());
-            while order.len() > KEPT_RUNS {
-                let oldest = order.remove(0);
+            // Each tenant keeps its own last KEPT_RUNS runs; a run still running is never evicted,
+            // and one tenant's runs never push out another's.
+            let tenant = runs[id].tenant.clone();
+            loop {
+                let kept = order
+                    .iter()
+                    .filter(|kept| runs.get(*kept).is_some_and(|r| r.tenant == tenant))
+                    .count();
+                if kept <= KEPT_RUNS {
+                    break;
+                }
+                let Some(at) = order.iter().position(|kept| {
+                    runs.get(kept)
+                        .is_some_and(|r| r.tenant == tenant && r.status != "running")
+                }) else {
+                    break;
+                };
+                let oldest = order.remove(at);
                 runs.remove(&oldest);
             }
         }
@@ -485,14 +501,9 @@ fn build_scenario(
     };
     match request.source.as_str() {
         "generated" => {
-            // Every tenant is copied into the simulated world, so that the comparison can show
-            // the others are untouched.
+            // The simulated world holds the requesting tenant alone: a run never reads, and the
+            // process never copies into memory for it, another tenant's records.
             let mut world = World::default();
-            for summary in app.store.tenants()? {
-                if let Some(state) = app.store.load_complete(&summary.id)?.tenant {
-                    world.tenants.insert(summary.id, state);
-                }
-            }
             world.tenants.insert(identity.tenant.clone(), live.clone());
             let steps = request.steps.unwrap_or(60).clamp(5, 300);
             let schedule = generate(&world, &identity.tenant, seed, steps, app.now().0, 60_000);
@@ -604,6 +615,40 @@ pub fn start(
         identity.correlation.clone(),
     );
     let job = move || {
+        // A job that panics leaves its run failed, not running for ever.
+        struct Unfinished {
+            shared: Shared,
+            run: String,
+            tenant: TenantId,
+            principal: PrincipalId,
+            summary: Json,
+            armed: bool,
+        }
+        impl Drop for Unfinished {
+            fn drop(&mut self) {
+                if !self.armed {
+                    return;
+                }
+                self.shared
+                    .lab
+                    .finish(&self.run, "failed", self.summary.clone(), None);
+                let _ = self.shared.hub.runs.send(RunMessage {
+                    tenant: self.tenant.clone(),
+                    principal: self.principal.clone(),
+                    run: self.run.clone(),
+                    kind: "failed".to_string(),
+                    payload: json!({}),
+                });
+            }
+        }
+        let mut unfinished = Unfinished {
+            shared: shared.clone(),
+            run: run_id.clone(),
+            tenant: tenant.clone(),
+            principal: principal.clone(),
+            summary: summary.clone(),
+            armed: true,
+        };
         let send = |kind: &str, payload: Json| {
             let _ = shared.hub.runs.send(RunMessage {
                 tenant: tenant.clone(),
@@ -641,6 +686,7 @@ pub fn start(
                 shared
                     .lab
                     .finish(&run_id, "finished", summary.clone(), Some(result));
+                unfinished.armed = false;
                 LOG.info(
                     "lab.finished",
                     &correlation,
@@ -652,6 +698,7 @@ pub fn start(
                 shared
                     .lab
                     .finish(&run_id, "cancelled", summary.clone(), None);
+                unfinished.armed = false;
                 LOG.info("lab.cancelled", &correlation, json!({ "run": run_id }));
                 send("cancelled", json!({}));
             }
@@ -901,5 +948,40 @@ mod tests {
         let flag = running(&lab, "run_b", "fieldnotes", "user:admin");
         assert!(lab.cancel("run_b", &identity("fieldnotes", Some("user:ines")), true));
         assert!(flag.load(Ordering::Relaxed));
+    }
+
+    /// The kept-runs ring is per tenant: one tenant's runs never evict another's, and a run that
+    /// is still running is never evicted.
+    #[test]
+    fn the_kept_runs_ring_is_per_tenant_and_keeps_running_runs() {
+        let lab = Lab::new();
+        let run = |tenant: &str, status: &'static str| Run {
+            tenant: TenantId::new(tenant).unwrap(),
+            principal: PrincipalId::new("user:admin").unwrap(),
+            status,
+            started_at: 0,
+            summary: Json::Null,
+            result: None,
+            cancel: Arc::new(AtomicBool::new(false)),
+        };
+        lab.insert_within("quiet_running", run("tidewater", "running"), 2)
+            .unwrap();
+        lab.insert_within("quiet_done", run("tidewater", "finished"), 2)
+            .unwrap();
+        lab.insert_within("loud_running", run("fieldnotes", "running"), 2)
+            .unwrap();
+        for n in 0..(KEPT_RUNS * 3) {
+            lab.insert_within(&format!("loud_{n}"), run("fieldnotes", "finished"), 2)
+                .unwrap();
+        }
+        let runs = lab.runs.lock().unwrap();
+        assert!(runs.contains_key("quiet_running"));
+        assert!(runs.contains_key("quiet_done"));
+        assert!(runs.contains_key("loud_running"), "a running run is kept");
+        let loud = runs
+            .values()
+            .filter(|r| r.tenant.as_str() == "fieldnotes")
+            .count();
+        assert!(loud <= KEPT_RUNS + 1);
     }
 }
