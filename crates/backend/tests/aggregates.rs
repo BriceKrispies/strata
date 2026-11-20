@@ -17,7 +17,9 @@ use strata_kernel::{
     ObjectTypeId, Principal, PrincipalId, QueryDef, QueryId, ReadRequest, SchemaChange, TenantId,
     Timestamp, ViewDef, ViewId, ViewSection,
 };
-use strata_protocol::api::{HEADER_CORRELATION, HEADER_SERVICE, HEADER_SESSION, HEADER_SITE};
+use strata_protocol::api::{
+    HEADER_CORRELATION, HEADER_SERVICE, HEADER_SESSION, HEADER_SITE, HEADER_SOURCE,
+};
 use strata_storage_api::memory::MemoryStore;
 use strata_storage_api::{execute, Store};
 
@@ -457,4 +459,111 @@ async fn a_view_section_that_names_an_aggregate_delivers_its_result_for_the_read
             .unwrap()
             .contains(&json!("post")));
     }
+}
+
+/// A product bundle in the shape specc writes: one query over the posts that declares two
+/// aggregates and the fields they use, and a view whose section names one of them (WG-5124).
+fn postboard_bundle(declared: &[&str]) -> Json {
+    json!({
+        "name": "Post board",
+        "version": "1.0.0",
+        "product": "postboard",
+        "platform": { "min": "0.2" },
+        "content": {
+            "queries": {
+                "postboard__stats": {
+                    "id": "postboard__stats",
+                    "object": "post",
+                    "params": [],
+                    "order": [],
+                    "declared-fields": declared,
+                    "aggregates": [
+                        { "id": "count_all", "kind": "count", "descending": false, "scan-bound": 1000 },
+                        { "id": "by_status", "kind": "count", "group-by": "status", "descending": false, "scan-bound": 1000 }
+                    ]
+                }
+            },
+            "views": {
+                "postboard__board": {
+                    "id": "postboard__board",
+                    "route": "/postboard",
+                    "title": "Post board",
+                    "sections": {
+                        "counts": {
+                            "query": "postboard__stats", "args": {}, "include": [],
+                            "markdown": [], "single": false, "aggregate": "count_all"
+                        }
+                    }
+                }
+            }
+        }
+    })
+}
+
+impl Backend {
+    /// Installs a product bundle as the owner, through the route.
+    async fn install(&self, owner: &str, bundle: &Json) -> (u16, Json) {
+        let response = self
+            .http
+            .post(format!("{}/internal/products/install", self.base))
+            .header(HEADER_SERVICE, TOKEN)
+            .header(HEADER_SITE, SITE)
+            .header(HEADER_SOURCE, "203.0.113.7")
+            .header(HEADER_CORRELATION, "t-aggregates-install")
+            .header(HEADER_SESSION, owner)
+            .json(&json!({ "bundle": bundle }))
+            .send()
+            .await
+            .unwrap();
+        let status = response.status().as_u16();
+        (status, response.json().await.unwrap_or(Json::Null))
+    }
+}
+
+// Verifies: AGG-001
+// Verifies: AGG-041
+#[tokio::test]
+async fn an_aggregate_a_bundle_declares_answers_through_the_aggregate_route() {
+    let (backend, store) = started().await;
+    let owner = backend.login("admin").await;
+
+    // A bundle whose aggregate names a field its query does not declare is refused, and the
+    // query it would have added does not exist.
+    let (status, refused) = backend
+        .install(&owner, &postboard_bundle(&["published_at"]))
+        .await;
+    assert!(
+        (400..500).contains(&status),
+        "the install is refused: {status} {refused}"
+    );
+    let (status, _) = backend
+        .aggregate(None, "postboard__stats", "count_all", json!({}))
+        .await;
+    assert_eq!(status, 404, "nothing of the refused bundle is installed");
+
+    // The bundle that declares the field installs.
+    let (status, installed) = backend
+        .install(&owner, &postboard_bundle(&["status"]))
+        .await;
+    assert_eq!(status, 200, "{installed}");
+
+    // The aggregate the bundle declares answers, for the public, what the public may count by
+    // hand and what the aggregate declared through a schema change answers.
+    let by_bundle = answer(&backend, None, "postboard__stats", "count_all").await;
+    let by_schema = answer(&backend, None, "post_stats", "count_all").await;
+    assert_eq!(count_of(&by_bundle), count_of(&by_schema));
+    assert_eq!(
+        count_of(&by_bundle),
+        rows_seen_by(&store, Principal::Anonymous) as i64
+    );
+    let groups = groups_of(&backend, None, "postboard__stats", "by_status").await;
+    assert!(!groups.is_empty());
+
+    // The view section the bundle declares delivers the same aggregate.
+    let (status, view) = backend
+        .call(None, "/internal/view", json!({ "path": "/postboard" }))
+        .await;
+    assert_eq!(status, 200, "{view}");
+    let delivered = &view["sections"]["counts"]["aggregate"]["groups"][0]["value"];
+    assert_eq!(delivered["Int"], count_of(&by_bundle), "{view}");
 }
