@@ -19,9 +19,9 @@ use strata_backend::mail::DevSink;
 use strata_backend::worker::{self, leases, steps, WorkerConfig};
 use strata_kernel::testkit::*;
 use strata_kernel::{
-    Context, ExistingData, FieldDef, FieldType, Intent, NoticeTemplateDecl, Permission, Principal,
-    PrincipalId, SchemaChange, SettingDef, SettingId, SettingLevel, SettingType, StructuredBlocks,
-    TemplateId, TenantId, Timestamp, Value,
+    Context, ExistingData, FieldDef, FieldType, Intent, MailTemplateDecl, NoticeTemplateDecl,
+    Permission, Principal, PrincipalId, SchemaChange, SettingDef, SettingId, SettingLevel,
+    SettingType, StructuredBlocks, TemplateId, TenantId, Timestamp, Value,
 };
 use strata_protocol::api::{HEADER_CORRELATION, HEADER_SERVICE, HEADER_SESSION, HEADER_SITE};
 use strata_storage_api::jobs::{JobState, JobWork, NewJob, Reported, RetryPolicy, RunState};
@@ -1521,4 +1521,80 @@ fn an_inbox_item_ends_when_the_record_it_names_is_erased_or_its_person_is() {
     }
     // A send that is repeated after the end makes nothing again (CT-183).
     assert!(!notify_at(&app, "reader", "n-1", T0 + 20, Some(42)).created);
+}
+
+// Verifies: NTF-3104
+#[test]
+fn a_mail_digest_is_one_message_of_the_digest_template_under_a_key_of_its_own() {
+    let app = app();
+    digest_fixture(&app, "on");
+    let tenant = tenant_id("alpha");
+    execute(
+        app.store.as_ref(),
+        &Intent::ChangeSchema {
+            changes: vec![SchemaChange::DefineMailTemplate(MailTemplateDecl {
+                template: TemplateId("digest_mail_news".into()),
+                subject: "Your news".into(),
+                body: StructuredBlocks(
+                    r#"[{"type":"paragraph","inlines":[{"type":"value","name":"items","value_type":"str"}]}]"#
+                        .into(),
+                ),
+            })],
+            expected_version: None,
+            existing: ExistingData::Reject,
+        },
+        &ctx("alpha", Principal::User(person("owner")), 500),
+    )
+    .expect("the owner defines the template");
+    app.store
+        .doc_put(
+            &tenant,
+            strata_backend::dispatch::store::CATEGORIES,
+            "news",
+            &json!({ "category": "news", "purpose": "transactional", "name": "News", "version": 1 })
+                .to_string(),
+            false,
+        )
+        .unwrap();
+    app.store
+        .doc_put(
+            &tenant,
+            "notice-preference",
+            "alpha:reader|news|mail",
+            &json!({ "mode": "digest", "period": "daily" }).to_string(),
+            false,
+        )
+        .unwrap();
+    notify_at(&app, "reader", "n-1", DAY0 + 10 * HOUR, None);
+    notify_at(&app, "reader", "n-2", DAY0 + 11 * HOUR, None);
+    let mail_jobs = || -> Vec<Json> {
+        app.store
+            .jobs_list(&tenant, None, 50)
+            .unwrap()
+            .into_iter()
+            .filter_map(|job| match job.work {
+                JobWork::Mail { request } => Some(request),
+                _ => None,
+            })
+            .collect()
+    };
+    let run = |at: i64| {
+        inbox::digest::run_due(&app, &tenant, Timestamp(at))
+            .unwrap()
+            .digests
+    };
+    assert_eq!(run(DAY0 + 12 * HOUR), 0, "the period has not ended");
+    assert_eq!(run(DAY0 + 34 * HOUR), 1);
+    let sent = mail_jobs();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0]["template"], "digest_mail_news");
+    assert_eq!(
+        sent[0]["values"]["items"],
+        "An update
+An update"
+    );
+    // The same period again, or a retry of the run, makes no second message.
+    assert_eq!(run(DAY0 + 34 * HOUR), 0);
+    assert_eq!(run(DAY0 + 36 * HOUR), 0);
+    assert_eq!(mail_jobs().len(), 1);
 }
