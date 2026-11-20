@@ -1328,9 +1328,42 @@ impl ProductBundle {
         Ok(())
     }
 
-    /// Refuses an automation step that sends a template that neither the bundle nor the tenant
-    /// declares: a mail template for `SendMail`, a notice template for `CreateNotice`.
+    /// Refuses a template whose body is not blocks of the schema or places a token that neither the
+    /// bundle nor the tenant defines, and an automation step that sends a template that neither the
+    /// bundle nor the tenant declares: a mail template for `SendMail`, a notice template for
+    /// `CreateNotice`.
     fn check_templates(&self, schema: &TenantSchema) -> Result<(), BundleError> {
+        // The body of a template is blocks of the schema of `strata_kernel::blocks` (D-7900), and
+        // every token it places is one the bundle or the tenant defines (CTK-005).
+        let bodies = self
+            .mail_templates
+            .iter()
+            .map(|(id, t)| ("mail", id, t.body.as_str()))
+            .chain(
+                self.notice_templates
+                    .iter()
+                    .map(|(id, t)| ("notice", id, t.body.as_str())),
+            );
+        for (kind, id, body) in bodies {
+            let analysis = strata_kernel::blocks::analyse(body);
+            if let Some(problem) = analysis.problems.first() {
+                return Err(BundleError::invalid_bundle(format!(
+                    "the {kind} template \"{id}\": the body {problem}"
+                )));
+            }
+            for name in &analysis.tokens {
+                let defined = self.tokens.contains_key(name)
+                    || schema
+                        .tokens
+                        .as_ref()
+                        .is_some_and(|tokens| tokens.contains_key(name));
+                if !defined {
+                    return Err(BundleError::invalid_bundle(format!(
+                        "the {kind} template \"{id}\" places the token \"{name}\", which neither the bundle nor the tenant defines"
+                    )));
+                }
+            }
+        }
         for automation in self.automations.values() {
             for (name, step) in &automation.steps {
                 let (template, mail) = match &step.action {

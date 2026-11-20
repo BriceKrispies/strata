@@ -604,15 +604,18 @@ fn an_object_type_without_records_is_removed_and_one_that_is_still_named_is_not(
 // Templates and tokens (EML-012, NTF-1570, CTK-001 to CTK-003).
 // ---------------------------------------------------------------------------------------------
 
-fn blocks(text: &str) -> StructuredBlocks {
-    StructuredBlocks(format!("[{{\"type\":\"paragraph\",\"text\":\"{text}\"}}]"))
+/// A body of one paragraph (the blocks of `strata_kernel::blocks`, D-7900).
+fn paragraph_body(text: &str) -> StructuredBlocks {
+    StructuredBlocks(format!(
+        "[{{\"type\":\"paragraph\",\"inlines\":[{{\"type\":\"text\",\"text\":\"{text}\"}}]}}]"
+    ))
 }
 
 fn mail(id: &str) -> MailTemplateDecl {
     MailTemplateDecl {
         template: TemplateId(id.to_string()),
         subject: "Welcome".into(),
-        body: blocks("Hello"),
+        body: paragraph_body("Hello"),
     }
 }
 
@@ -620,7 +623,7 @@ fn notice(id: &str) -> NoticeTemplateDecl {
     NoticeTemplateDecl {
         template: TemplateId(id.to_string()),
         title: "Welcome".into(),
-        body: blocks("Hello"),
+        body: paragraph_body("Hello"),
     }
 }
 
@@ -823,6 +826,331 @@ fn an_automation_does_not_send_a_notice_template_as_mail() {
             .contains("sends the notice template greeting as mail"),
         "{}",
         error.message
+    );
+}
+
+// ---------------------------------------------------------------------------------------------
+// The blocks of a template: the schema, the placement of a token and of a value, the render
+// (EML-012, NTF-1570, CMS-250, CTK-003, CTK-004, CTK-005, CTK-015, D-7900).
+// ---------------------------------------------------------------------------------------------
+
+fn body(json: &str) -> StructuredBlocks {
+    StructuredBlocks(json.to_string())
+}
+
+fn notice_with(body_json: &str) -> SchemaChange {
+    catalogue(Edit::DefineNoticeTemplate(NoticeTemplateDecl {
+        body: body(body_json),
+        ..notice("greeting")
+    }))
+}
+
+fn first_name() -> SchemaChange {
+    catalogue(Edit::DefineToken(TokenDecl {
+        name: "first_name".into(),
+        expression: Expression("record.title".into()),
+        fallback: "friend".into(),
+    }))
+}
+
+// Verifies: CTK-005
+#[test]
+fn a_template_that_places_a_token_the_tenant_does_not_define_is_refused() {
+    let placing = r#"[{"type":"paragraph","inlines":[{"type":"token","name":"first_name"}]}]"#;
+    let error = refused(&notes_world(), vec![notice_with(placing)]);
+    assert_eq!(error.kind, ErrorKind::InvalidSchema);
+    assert_eq!(
+        error.message,
+        "notice template greeting: the body places the token first_name, which the tenant does not define"
+    );
+    // Defined in the same change or before, it is accepted.
+    let world = must(
+        &notes_world(),
+        "owner",
+        7_000,
+        change(vec![first_name(), notice_with(placing)]),
+    );
+    // CTK-004: a token that a template places is not removed.
+    let error = refused(&world, vec![SchemaChange::RemoveToken("first_name".into())]);
+    assert!(
+        error
+            .message
+            .contains("the body places the token first_name, which the tenant does not define"),
+        "{}",
+        error.message
+    );
+}
+
+// Verifies: CTK-003
+#[test]
+fn a_token_expression_cannot_name_another_token() {
+    // The tenant rule language reads record fields and event parameters only, so a token that
+    // names another, itself or a cycle of tokens does not parse.
+    for expression in ["token.first_name", "token.other + token.first_name"] {
+        let error = refused(
+            &notes_world(),
+            vec![catalogue(Edit::DefineToken(TokenDecl {
+                name: "first_name".into(),
+                expression: Expression(expression.into()),
+                fallback: "".into(),
+            }))],
+        );
+        assert!(
+            error.message.starts_with("token first_name: expression:"),
+            "{}",
+            error.message
+        );
+    }
+}
+
+fn bad(world: &World, json: &str) -> String {
+    refused(world, vec![notice_with(json)]).message
+}
+
+// Verifies: EML-012
+#[test]
+fn a_body_of_every_kind_of_block_is_accepted() {
+    let every = r##"[
+        {"type":"heading","level":2,"inlines":[{"type":"text","text":"Hello "},{"type":"token","name":"first_name"}]},
+        {"type":"paragraph","inlines":[
+            {"type":"strong","children":[{"type":"text","text":"Points: "}]},
+            {"type":"value","name":"points","value_type":"int"},
+            {"type":"em","children":[{"type":"code","text":"x"}]},
+            {"type":"link","href":"https://example.test/a","children":[{"type":"text","text":"site"}]},
+            {"type":"link","href":"mailto:a@example.test","children":[]},
+            {"type":"link","href":"/badges","children":[]},
+            {"type":"link","href":"#top","children":[]}
+        ]},
+        {"type":"quote","blocks":[{"type":"paragraph","inlines":[]}]},
+        {"type":"list","ordered":true,"items":[[{"type":"text","text":"one"}],[]]},
+        {"type":"code","lang":"rust","text":"let a = 1;"},
+        {"type":"figure","src":"/media/badge.png","alt":"A badge","caption":"Silver"},
+        {"type":"rule"}
+    ]"##;
+    must(
+        &notes_world(),
+        "owner",
+        7_000,
+        change(vec![first_name(), notice_with(every)]),
+    );
+}
+
+// Verifies: EML-012
+// Verifies: CMS-250
+#[test]
+fn a_body_that_is_not_blocks_of_the_schema_is_refused_with_where() {
+    let world = notes_world();
+    let cases = [
+        ("{}", "the body is not a list of blocks"),
+        (
+            r#"[{"type":"paragraph","text":"Hello"}]"#,
+            "the body at [0]: has the member \"text\", which its type does not",
+        ),
+        (
+            r#"[{"type":"banner"}]"#,
+            "the body at [0]: \"banner\" is not a block type",
+        ),
+        (
+            r#"[{"type":"heading","level":1,"inlines":[]}]"#,
+            "the level of a heading is 2, 3 or 4",
+        ),
+        (
+            r#"[{"type":"paragraph","inlines":[{"type":"blink","text":"x"}]}]"#,
+            "the body at [0].inlines[0]: \"blink\" is not an inline type",
+        ),
+        (
+            r#"[{"type":"paragraph","inlines":[{"type":"link","href":"javascript:alert(1)","children":[]}]}]"#,
+            "a link carries a web (http, https) or mail (mailto) address",
+        ),
+        (
+            r#"[{"type":"paragraph","inlines":[{"type":"link","href":"//evil.test","children":[]}]}]"#,
+            "a link carries a web (http, https) or mail (mailto) address",
+        ),
+        (
+            r#"[{"type":"paragraph","inlines":[{"type":"link","href":"https://a.test/ b","children":[]}]}]"#,
+            "a link carries a web (http, https) or mail (mailto) address",
+        ),
+        (
+            r#"[{"type":"figure","src":"https://a.test/x.png","alt":"","caption":""}]"#,
+            "src is not a path under /media/",
+        ),
+        (
+            r#"[{"type":"paragraph","inlines":[{"type":"token","name":"First Name"}]}]"#,
+            "the name of a token is lower-case letters",
+        ),
+        (
+            r#"[{"type":"paragraph","inlines":[{"type":"value","name":"n","value_type":"float"}]}]"#,
+            "value_type is str, int, bool or time",
+        ),
+        (
+            r#"[{"type":"list","ordered":"yes","items":[]}]"#,
+            "ordered is not true or false",
+        ),
+    ];
+    for (json, want) in cases {
+        let message = bad(&world, json);
+        assert!(message.contains(want), "{json}: {message}");
+    }
+}
+
+// Verifies: EML-012
+#[test]
+fn a_value_is_placed_with_one_declared_type() {
+    let message = bad(
+        &notes_world(),
+        r#"[{"type":"paragraph","inlines":[
+            {"type":"value","name":"points","value_type":"int"},
+            {"type":"value","name":"points","value_type":"str"}]}]"#,
+    );
+    assert!(
+        message.contains("the value points is placed as str here and as int before"),
+        "{message}"
+    );
+}
+
+// Verifies: CMS-004
+#[test]
+fn quotes_and_inline_elements_nest_no_deeper_than_the_markdown_parser_keeps_them() {
+    let world = notes_world();
+    let quotes = |depth: usize| {
+        let mut json = r#"{"type":"paragraph","inlines":[]}"#.to_string();
+        for _ in 0..depth {
+            json = format!(r#"{{"type":"quote","blocks":[{json}]}}"#);
+        }
+        format!("[{json}]")
+    };
+    let emphasis = |depth: usize| {
+        let mut json = r#"{"type":"text","text":"x"}"#.to_string();
+        for _ in 0..depth {
+            json = format!(r#"{{"type":"em","children":[{json}]}}"#);
+        }
+        format!(r#"[{{"type":"paragraph","inlines":[{json}]}}]"#)
+    };
+    must(
+        &world,
+        "owner",
+        7_000,
+        change(vec![notice_with(&quotes(blocks::MAX_QUOTE_DEPTH))]),
+    );
+    assert!(
+        bad(&world, &quotes(blocks::MAX_QUOTE_DEPTH + 1)).contains("quotes nest more than 8 deep")
+    );
+    must(
+        &world,
+        "owner",
+        7_001,
+        change(vec![notice_with(&emphasis(blocks::MAX_INLINE_DEPTH))]),
+    );
+    assert!(bad(&world, &emphasis(blocks::MAX_INLINE_DEPTH + 1))
+        .contains("inline elements nest more than 8 deep"));
+}
+
+fn rendered(json: &str, values: &[(&str, Value)]) -> Result<blocks::Rendered, blocks::RenderError> {
+    let values: BTreeMap<String, Value> = values
+        .iter()
+        .map(|(name, value)| (name.to_string(), value.clone()))
+        .collect();
+    blocks::render(json, &values, &|name| match name {
+        "first_name" => Some("Ada".to_string()),
+        _ => None,
+    })
+}
+
+// Verifies: CTK-015
+// Verifies: NTF-1570
+#[test]
+fn a_body_renders_with_each_token_and_value_as_a_text_node_and_as_plain_text() {
+    let json = r##"[
+        {"type":"heading","level":2,"inlines":[{"type":"text","text":"Hello "},{"type":"token","name":"first_name"}]},
+        {"type":"paragraph","inlines":[
+            {"type":"text","text":"You have "},
+            {"type":"strong","children":[{"type":"value","name":"points","value_type":"int"}]},
+            {"type":"text","text":" points since "},
+            {"type":"value","name":"since","value_type":"time"},
+            {"type":"text","text":" ("},
+            {"type":"value","name":"vip","value_type":"bool"},
+            {"type":"text","text":"). "},
+            {"type":"link","href":"https://example.test/badges","children":[{"type":"text","text":"See them"}]}
+        ]},
+        {"type":"quote","blocks":[{"type":"paragraph","inlines":[{"type":"text","text":"Well done"}]}]},
+        {"type":"list","ordered":false,"items":[[{"type":"text","text":"a"}],[{"type":"text","text":"b"}]]},
+        {"type":"list","ordered":true,"items":[[{"type":"text","text":"a"}],[{"type":"text","text":"b"}]]},
+        {"type":"rule"}
+    ]"##;
+    let out = rendered(
+        json,
+        &[
+            ("points", Value::Int(500)),
+            ("since", Value::Time(1_700_000_000_000)),
+            ("vip", Value::Bool(true)),
+            // A value the body does not place is ignored.
+            ("unused", Value::Str("x".into())),
+        ],
+    )
+    .expect("rendered");
+    assert_eq!(
+        out.text,
+        "Hello Ada\n\nYou have 500 points since 2023-11-14T22:13:20Z (true). See them (https://example.test/badges)\n\n> Well done\n\n- a\n- b\n\n1. a\n2. b\n\n---"
+    );
+    // No token and no value is left in the blocks, and the blocks are blocks of the schema.
+    let again = blocks::analyse(&out.blocks.to_string());
+    assert!(again.problems.is_empty(), "{:?}", again.problems);
+    assert!(again.tokens.is_empty() && again.values.is_empty());
+    assert_eq!(
+        out.blocks[0]["inlines"],
+        serde_json::json!([
+            {"type":"text","text":"Hello "},
+            {"type":"text","text":"Ada"}
+        ])
+    );
+    assert_eq!(
+        out.blocks[1]["inlines"][1]["children"],
+        serde_json::json!([{"type":"text","text":"500"}])
+    );
+    // Equal inputs give equal output (CTK-008).
+    assert_eq!(
+        rendered(
+            json,
+            &[
+                ("points", Value::Int(500)),
+                ("since", Value::Time(1_700_000_000_000)),
+                ("vip", Value::Bool(true))
+            ]
+        )
+        .unwrap(),
+        out
+    );
+}
+
+// Verifies: EML-012
+#[test]
+fn a_body_is_not_rendered_when_a_value_or_a_token_is_missing_or_of_another_type() {
+    let json = r#"[{"type":"paragraph","inlines":[{"type":"value","name":"points","value_type":"int"},{"type":"token","name":"first_name"}]}]"#;
+    assert_eq!(
+        rendered(json, &[]),
+        Err(blocks::RenderError::MissingValue("points".into()))
+    );
+    assert_eq!(
+        rendered(json, &[("points", Value::Str("500".into()))]),
+        Err(blocks::RenderError::WrongType {
+            name: "points".into(),
+            declared: blocks::ValueType::Int
+        })
+    );
+    let unknown = r#"[{"type":"paragraph","inlines":[{"type":"token","name":"nobody"}]}]"#;
+    assert_eq!(
+        rendered(unknown, &[]),
+        Err(blocks::RenderError::UnresolvedToken("nobody".into()))
+    );
+    assert!(matches!(
+        rendered(r#"[{"type":"paragraph"}]"#, &[]),
+        Err(blocks::RenderError::Invalid(_))
+    ));
+    // A body the kernel refused at definition is never rendered either.
+    let message = rendered("not json", &[]).unwrap_err().to_string();
+    assert!(
+        message.starts_with("the body is not blocks: is not JSON text"),
+        "{message}"
     );
 }
 

@@ -97,19 +97,19 @@
     ],
     "mail-templates": [
       {
-        "body": "[{\"type\":\"paragraph\",\"text\":\"You have not yet looked at your Silver badge. Open your inbox to see it.\"}]",
+        "body": "[{\"type\":\"paragraph\",\"inlines\":[{\"type\":\"text\",\"text\":\"You have not yet looked at your Silver badge. Open your inbox to see it.\"}]}]",
         "subject": "Your Silver badge is waiting",
         "template": "badge_milestones__silver_follow_up"
       },
       {
-        "body": "[{\"type\":\"paragraph\",\"text\":\"Your points reached 500 and you earned the Silver badge.\"}]",
+        "body": "[{\"type\":\"paragraph\",\"inlines\":[{\"type\":\"text\",\"text\":\"Your points reached 500 and you earned the Silver badge.\"}]}]",
         "subject": "You earned the Silver badge",
         "template": "badge_milestones__silver_mail"
       }
     ],
     "notice-templates": [
       {
-        "body": "[{\"type\":\"paragraph\",\"text\":\"Your points reached 500.\"}]",
+        "body": "[{\"type\":\"paragraph\",\"inlines\":[{\"type\":\"text\",\"text\":\"Your points reached 500.\"}]}]",
         "template": "badge_milestones__silver_notice",
         "title": "You earned the Silver badge"
       }

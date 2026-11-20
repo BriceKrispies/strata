@@ -1224,3 +1224,107 @@ fn a_tenant_bundle_with_a_trigger_an_automation_and_an_operation_installs_throug
         .personal
         .is_some());
 }
+
+// ---- the blocks of a template (D-7900) --------------------------------------------------------
+
+/// A product with one notice template whose body is `body`, and the tokens it defines.
+fn with_notice(body: &str, tokens: Json) -> Json {
+    let mut doc = tiers();
+    doc["content"]["notice-templates"] = json!([{
+        "template": "tiers__promoted",
+        "title": "Promoted",
+        "body": body
+    }]);
+    if !tokens.is_null() {
+        doc["content"]["tokens"] = tokens;
+    }
+    doc
+}
+
+const PLACES_A_TOKEN: &str =
+    r#"[{"type":"paragraph","inlines":[{"type":"token","name":"tiers__first_name"}]}]"#;
+
+// Verifies: CTK-005
+#[test]
+fn a_bundle_whose_template_places_a_token_nobody_defines_is_refused_at_install() {
+    let mut world = world();
+    let bundle = read(&with_notice(PLACES_A_TOKEN, Json::Null)).unwrap();
+    let (result, calls) = install(&mut world, &bundle, None, "0.2");
+    let error = refusal(result);
+    assert_eq!(error.kind, BundleErrorKind::InvalidBundle);
+    assert_eq!(
+        error.message,
+        "the notice template \"tiers__promoted\" places the token \"tiers__first_name\", which neither the bundle nor the tenant defines"
+    );
+    assert_eq!(calls, 0, "nothing was asked of the kernel");
+    // The bundle that defines the token installs, and the kernel holds both.
+    let token =
+        json!([{ "name": "tiers__first_name", "expression": "record.name", "fallback": "friend" }]);
+    let bundle = read(&with_notice(PLACES_A_TOKEN, token)).unwrap();
+    let (result, _) = install(&mut world, &bundle, None, "0.2");
+    result.unwrap_or_else(|e| panic!("{e:?}"));
+    let schema = schema_of(&world);
+    assert_eq!(strata_kernel::templates::tokens(&schema).len(), 1);
+    assert_eq!(strata_kernel::templates::list(&schema).len(), 1);
+}
+
+// Verifies: EML-012
+// Verifies: CMS-250
+#[test]
+fn a_bundle_whose_template_body_is_not_blocks_is_refused_at_install() {
+    for (body, want) in [
+        (
+            r#"[{"type":"paragraph","text":"Hello"}]"#,
+            "the body at [0]: has the member \"text\"",
+        ),
+        (
+            r#"[{"type":"paragraph","inlines":[{"type":"link","href":"javascript:alert(1)","children":[]}]}]"#,
+            "a link carries a web (http, https) or mail (mailto) address",
+        ),
+        ("not json", "the body is not JSON text"),
+    ] {
+        let mut world = world();
+        let bundle = read(&with_notice(body, Json::Null)).unwrap();
+        let error = refusal(install(&mut world, &bundle, None, "0.2").0);
+        assert_eq!(error.kind, BundleErrorKind::InvalidBundle);
+        assert!(error.message.contains(want), "{body}: {}", error.message);
+    }
+}
+
+// Verifies: CMS-004
+#[test]
+fn what_the_markdown_parser_produces_is_a_valid_template_body() {
+    let source = "# Title\n\nSome *emphasis*, **strong**, `code` and a [link](https://example.test/a) \
+and a [bad one](javascript:alert(1)).\n\n> quoted\n> text\n\n- one\n- two\n\n1. first\n2. second\n\n\
+```rust\nlet a = 1;\n```\n\n![A badge](/media/badge.png \"Silver\")\n\n---\n";
+    let blocks = strata_substrate::markdown::parse(source);
+    assert!(blocks.len() >= 7);
+    let json = serde_json::to_string(&blocks).unwrap();
+    let analysis = strata_kernel::blocks::analyse(&json);
+    assert!(analysis.problems.is_empty(), "{:?}", analysis.problems);
+    // The bounds are the parser's.
+    assert_eq!(
+        strata_kernel::blocks::MAX_QUOTE_DEPTH,
+        strata_substrate::markdown::MAX_QUOTE_DEPTH
+    );
+    assert_eq!(
+        strata_kernel::blocks::MAX_INLINE_DEPTH,
+        strata_substrate::markdown::MAX_INLINE_DEPTH
+    );
+    // A link the parser keeps is a link the schema allows, and the other way round.
+    for href in [
+        "https://a.test",
+        "http://a.test",
+        "mailto:a@b.test",
+        "/path",
+        "#top",
+        "//host",
+        "javascript:x",
+        "data:text/html,x",
+        "ftp://a.test",
+    ] {
+        let parsed = strata_substrate::markdown::parse(&format!("[t]({href})"));
+        let kept = serde_json::to_string(&parsed).unwrap().contains("\"link\"");
+        assert_eq!(kept, strata_kernel::blocks::allowed_href(href), "{href}");
+    }
+}

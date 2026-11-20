@@ -88,19 +88,19 @@
     {
       "id": "badge_milestones__silver_mail",
       "subject": "You earned the Silver badge",
-      "body": "[{\"type\":\"paragraph\",\"text\":\"Your points reached 500 and you earned the Silver badge.\"}]"
+      "body": "[{\"type\":\"paragraph\",\"inlines\":[{\"type\":\"text\",\"text\":\"Your points reached 500 and you earned the Silver badge.\"}]}]"
     },
     {
       "id": "badge_milestones__silver_follow_up",
       "subject": "Your Silver badge is waiting",
-      "body": "[{\"type\":\"paragraph\",\"text\":\"You have not yet looked at your Silver badge. Open your inbox to see it.\"}]"
+      "body": "[{\"type\":\"paragraph\",\"inlines\":[{\"type\":\"text\",\"text\":\"You have not yet looked at your Silver badge. Open your inbox to see it.\"}]}]"
     }
   ],
   "noticeTemplates": [
     {
       "id": "badge_milestones__silver_notice",
       "title": "You earned the Silver badge",
-      "body": "[{\"type\":\"paragraph\",\"text\":\"Your points reached 500.\"}]"
+      "body": "[{\"type\":\"paragraph\",\"inlines\":[{\"type\":\"text\",\"text\":\"Your points reached 500.\"}]}]"
     }
   ],
   "triggers": [

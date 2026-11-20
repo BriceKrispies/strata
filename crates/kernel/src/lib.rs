@@ -19,6 +19,7 @@
 
 pub mod aggregates;
 pub mod automation;
+pub mod blocks;
 pub mod canon;
 pub mod capabilities;
 pub mod definitions;

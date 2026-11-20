@@ -249,7 +249,7 @@ fn badge_milestones_1_1() -> Json {
         .push(json!({
             "template": "badge_milestones__extra_notice",
             "title": "Another notice",
-            "body": "[{\"type\":\"paragraph\",\"text\":\"Another.\"}]"
+            "body": "[{\"type\":\"paragraph\",\"inlines\":[{\"type\":\"text\",\"text\":\"Another.\"}]}]"
         }));
     bundle
 }

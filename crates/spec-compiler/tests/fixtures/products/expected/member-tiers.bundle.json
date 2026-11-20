@@ -15,7 +15,7 @@
     ],
     "mail-templates": [
       {
-        "body": "[{\"type\":\"paragraph\",\"text\":\"You are now in a higher tier.\"}]",
+        "body": "[{\"type\":\"paragraph\",\"inlines\":[{\"type\":\"text\",\"text\":\"You are now in a higher tier.\"}]}]",
         "subject": "You moved up a tier",
         "template": "member_tiers__promoted"
       }
