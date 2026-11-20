@@ -158,6 +158,22 @@ test('after a disconnect the kernel backs off, reconnects and resumes from the l
   assert.deepEqual(update(s, { type: 'timer', name: 'reconnect', token: timer.token, ...stamp }).effects, []);
 });
 
+test('each failed reconnect waits its own delay: 0.5, 1, 2, 4, then 8 seconds, the cap', () => {
+  const { state } = connected();
+  // The first close of an open socket waits 500 ms; a close while waiting to reconnect is a failed
+  // attempt, and each one waits twice as long, to the cap. The stamp's random part changes nothing.
+  const waits = [];
+  let s = state;
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const next = update(s, { type: 'ws_closed', at: 1_000 + attempt, rand: attempt % 2 ? 0.01 : 0.999 });
+    assert.equal(next.state.ws.status, 'waiting');
+    const timer = next.effects.find((e) => e.type === 'timer');
+    waits.push(timer.ms);
+    s = next.state;
+  }
+  assert.deepEqual(waits, [500, 1000, 2000, 4000, 8000, 8000, 8000, 8000]);
+});
+
 test('a delayed emit of the connection machine is performed when its timer fires, and once', () => {
   const { state } = connected();
   const waiting = { ...state, ws: { ...state.ws, delayed: { 77: { to: 'x', delivery: 'at-most-once', event: 'ui-live-ping', payload: {}, afterMs: 250 } } } };
