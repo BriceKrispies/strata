@@ -659,7 +659,73 @@ fn schema_changes() -> Vec<SchemaChange> {
             object: object("note"),
             unique: ConstraintId::new("title_rank").unwrap(),
         },
+        SchemaChange::DeclareLedgerUnit(LedgerUnitDecl {
+            unit: points(),
+            description: "Points".into(),
+        }),
+        SchemaChange::DeclareLedgerPool(LedgerPoolDecl {
+            pool: LedgerPoolName::new("budget").unwrap(),
+            description: "Budget".into(),
+        }),
+        SchemaChange::SetLedgerLimit(LedgerLimit {
+            unit: points(),
+            owner: Some(writer_owner()),
+            floor: Some(LedgerAmount(0)),
+            cap: Some(LedgerAmount(100)),
+            period_cap: Some(10),
+            period: Some(LedgerPeriod::Day),
+            scope: Some(LedgerScope::new("42").unwrap()),
+        }),
+        SchemaChange::RemoveLedgerDefinition(LedgerDefinitionRef::Limit {
+            unit: points(),
+            owner: None,
+            scope: None,
+        }),
     ]
+}
+
+fn points() -> LedgerUnit {
+    LedgerUnit::new("points").unwrap()
+}
+
+fn writer_owner() -> LedgerOwner {
+    LedgerOwner::Principal {
+        principal: principal_id("alpha:writer1"),
+    }
+}
+
+fn sample_account() -> LedgerAccountId {
+    ledger::account_id(&tenant_id("alpha"), &writer_owner(), &points(), "")
+}
+
+fn sample_entry() -> LedgerEntry {
+    LedgerEntry {
+        account: sample_account(),
+        sequence: 1,
+        amount: LedgerAmount(5),
+        idempotency_key: "k-1".into(),
+        reason: "welcome".into(),
+        caused_by: Some(principal_id("alpha:owner")),
+        at: Timestamp(12),
+        corrects: None,
+    }
+}
+
+fn sample_header() -> LedgerAccount {
+    LedgerAccount {
+        account: sample_account(),
+        owner: Some(writer_owner()),
+        unit: points(),
+        scope: LedgerScope::new("").unwrap(),
+        balance: LedgerAmount(5),
+        last_sequence: 1,
+        opened_at: Timestamp(12),
+        periods: vec![LedgerPeriodTotal {
+            period: LedgerPeriod::Day,
+            start: Timestamp(0),
+            credits: 5,
+        }],
+    }
 }
 
 fn record() -> Record {
@@ -734,6 +800,16 @@ fn needs() -> Vec<Need> {
             .into_iter()
             .collect(),
         },
+        Need::Ledger(LedgerNeed::Account {
+            account: sample_account(),
+        }),
+        Need::Ledger(LedgerNeed::Ranked {
+            unit: points(),
+            scope: LedgerScope::new("").unwrap(),
+            order: LedgerOrder::GreatestFirst,
+            offset: 0,
+            limit: 21,
+        }),
     ]
 }
 
@@ -891,6 +967,17 @@ fn samples() -> Vec<(&'static str, Json)> {
             id: RecordId(1),
             expected_version: None,
         },
+        Intent::PostLedger {
+            postings: vec![LedgerPostingRequest {
+                owner: writer_owner(),
+                unit: points(),
+                amount: LedgerAmount(-3),
+                idempotency_key: "k-2".into(),
+                reason: "redeem".into(),
+                corrects: Some(1),
+                scope: None,
+            }],
+        },
     ];
     for i in &intents {
         s.push(("intent", json(i)));
@@ -911,6 +998,8 @@ fn samples() -> Vec<(&'static str, Json)> {
             object: object("note"),
             id: RecordId(5),
         },
+        DeltaOp::Ledger(LedgerDelta::PutAccount(sample_header())),
+        DeltaOp::Ledger(LedgerDelta::AppendEntry(sample_entry())),
     ];
     for o in &delta_ops {
         s.push(("delta-op", json(o)));
@@ -948,6 +1037,17 @@ fn samples() -> Vec<(&'static str, Json)> {
         },
         EventBody::RecordDeleted {
             before: rec.clone(),
+        },
+        EventBody::LedgerEntryPosted {
+            account: sample_account(),
+            owner: writer_owner(),
+            unit: points(),
+            scope: LedgerScope::new("").unwrap(),
+            amount: LedgerAmount(5),
+            balance: LedgerAmount(5),
+            balance_before: LedgerAmount(0),
+            entry_sequence: 1,
+            reason: "welcome".into(),
         },
     ];
     for body in bodies {
@@ -987,6 +1087,19 @@ fn samples() -> Vec<(&'static str, Json)> {
         Output::Deleted {
             object: object("note"),
             id: RecordId(5),
+        },
+        Output::LedgerPosted {
+            results: vec![LedgerPostingResult {
+                entry: sample_entry(),
+                balance: LedgerBalance {
+                    account: sample_account(),
+                    unit: points(),
+                    balance: LedgerAmount(5),
+                    last_sequence: 1,
+                    scope: None,
+                },
+                replayed: false,
+            }],
         },
     ] {
         s.push(("output", json(&o)));

@@ -1043,6 +1043,7 @@ pub fn router(app: Shared) -> Router {
         .route("/internal/view", post(view))
         .route("/internal/mutate", post(mutate))
         .route("/internal/members", post(members))
+        .route("/internal/ledger/:op", post(crate::ledger::route))
         .route("/internal/diagnostics", post(diagnostics))
         .route("/internal/platform/diagnostics", post(platform_diagnostics))
         .route("/internal/platform/tenants", post(platform_create_tenant))

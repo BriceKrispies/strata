@@ -103,6 +103,7 @@ pub fn summarise(event: &DomainEvent) -> EventSummary {
             Some(before.object.to_string()),
             Some(before.id.0),
         ),
+        EventBody::LedgerEntryPosted { .. } => ("ledger_entry_posted", None, None),
     };
     EventSummary {
         tenant: event.tenant.clone(),

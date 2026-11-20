@@ -1368,6 +1368,51 @@ async fn members(
         .map(Json)
 }
 
+/// The operations of the tenant ledger the backend serves at `/internal/ledger/<operation>`
+/// (`strata_backend::ledger::OPERATIONS`).
+const LEDGER_OPERATIONS: [&str; 11] = [
+    "post",
+    "balance",
+    "entries",
+    "declare-unit",
+    "declare-pool",
+    "set-limit",
+    "my-balance",
+    "my-entries",
+    "accounts",
+    "definitions",
+    "remove-definition",
+];
+
+/// The tenant ledger: `POST /api/ledger/<operation>` with the operation's inputs as the JSON body
+/// (contracts CT-281 to CT-286 and CT-807 to CT-811). Every operation, reads included, comes from
+/// one of our pages with the session's request token, as the contracts say; the backend's kernel
+/// decides, and this route adds nothing.
+async fn ledger(
+    State(bff): State<Shared>,
+    headers: HeaderMap,
+    Path(operation): Path<String>,
+    Json(body): Json<Json_>,
+) -> Result<Json<Json_>, Failure> {
+    let visit = visit(&bff, &headers)?;
+    guard_write(&bff, &visit, &headers).await?;
+    if !LEDGER_OPERATIONS.contains(&operation.as_str()) {
+        return Err(Failure::new(
+            ErrorCode::NotFound,
+            "No such endpoint.",
+            &visit.correlation,
+        ));
+    }
+    backend(
+        &bff,
+        &visit,
+        &format!("/internal/ledger/{operation}"),
+        &body,
+    )
+    .await
+    .map(Json)
+}
+
 #[derive(serde::Deserialize)]
 struct PreviewRequest {
     markdown: String,
@@ -2126,6 +2171,7 @@ pub fn router(bff: Shared) -> Router {
         .route("/view", get(view))
         .route("/records", post(records))
         .route("/members/:op", post(members))
+        .route("/ledger/:op", post(ledger))
         .route("/preview", post(preview))
         .route("/lab/overview", get(lab_overview))
         .route("/lab/run", post(lab_run))

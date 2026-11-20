@@ -12,6 +12,7 @@ pub mod hosts;
 pub mod http;
 pub mod hub;
 pub mod lab;
+pub mod ledger;
 pub mod limits;
 pub mod mail;
 pub mod ops;

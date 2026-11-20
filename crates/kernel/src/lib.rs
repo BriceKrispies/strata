@@ -21,6 +21,7 @@ pub mod canon;
 pub mod definitions;
 pub mod expr;
 pub mod intent;
+pub mod ledger;
 pub mod limits;
 pub mod read;
 pub mod rules;

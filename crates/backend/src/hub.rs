@@ -141,6 +141,8 @@ fn describe(event: &DomainEvent) -> Json {
             Some(before.object.as_str()),
             Some(before.id.0),
         ),
+        // The owner is personal: the socket line names neither the owner nor the account.
+        EventBody::LedgerEntryPosted { .. } => ("ledger_entry_posted", None, None),
     };
     json!({
         "tenant": event.tenant.as_str(),
@@ -259,6 +261,23 @@ fn log_published(event: &DomainEvent, tenant: &TenantState) {
                 revision,
                 object: before.object.as_str(),
                 record: before.id.0,
+            },
+        ),
+        EventBody::LedgerEntryPosted {
+            unit,
+            amount,
+            entry_sequence,
+            ..
+        } => telemetry::ledger_entry_posted(
+            sink,
+            &telemetry::LedgerEntryPosted {
+                correlation,
+                tenant: name,
+                seq,
+                revision,
+                unit: unit.as_str(),
+                amount: amount.0,
+                entry_sequence: *entry_sequence,
             },
         ),
     }

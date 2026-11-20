@@ -116,6 +116,13 @@ pub fn transition(
             id,
             expected_version,
         } => delete_record(&mut draft, lookup, object, *id, *expected_version)?,
+        Intent::PostLedger { postings } => {
+            let decided = crate::ledger::decide_intent(state, postings, ctx)?;
+            draft.ops.extend(decided.ops);
+            draft.events.extend(decided.events);
+            draft.evidence.extend(decided.evidence);
+            decided.output
+        }
     };
     Ok(draft.finish(output))
 }
@@ -177,7 +184,9 @@ pub fn needs(schema: Option<&TenantSchema>, intent: &Intent) -> Vec<Need> {
         | Intent::RemoveTeamMember { .. }
         | Intent::CreateInvitation { .. }
         | Intent::RedeemInvitation { .. }
-        | Intent::RevokeInvitation { .. } => {}
+        | Intent::RevokeInvitation { .. }
+        // The accounts a posting needs are named by `refine_needs`, which knows the tenant.
+        | Intent::PostLedger { .. } => {}
         Intent::CreateRecord { object, fields } => field_needs(schema, &mut out, object, fields),
         Intent::UpdateRecord {
             object, id, fields, ..
@@ -222,6 +231,7 @@ pub fn needs(schema: Option<&TenantSchema>, intent: &Intent) -> Vec<Need> {
                 }
                 out.insert(Need::AllOf(object));
             }
+            out.extend(crate::ledger::schema_change_needs(changes));
         }
     }
     out.into_iter().collect()
@@ -288,6 +298,9 @@ pub fn refine_needs(state: &State, intent: &Intent) -> Vec<Need> {
     let Some(tenant) = state.tenant.as_deref() else {
         return Vec::new();
     };
+    if let Intent::PostLedger { postings } = intent {
+        return crate::ledger::intent_needs(&tenant.id, postings);
+    }
     let Intent::UpdateRecord {
         object, id, fields, ..
     } = intent
@@ -1619,6 +1632,10 @@ fn apply_change(schema: &mut TenantSchema, change: &SchemaChange) -> Result<Stri
                 .ok_or_else(|| format!("no unique constraint {id}.{unique}"))?;
             format!("remove unique constraint {id}.{unique}")
         }
+        SchemaChange::DeclareLedgerUnit(_)
+        | SchemaChange::DeclareLedgerPool(_)
+        | SchemaChange::SetLedgerLimit(_)
+        | SchemaChange::RemoveLedgerDefinition(_) => crate::ledger::apply_change(schema, change)?,
     })
 }
 
@@ -1833,6 +1850,7 @@ fn change_schema(
         ));
     }
     require_definition_authority(draft, changes)?;
+    crate::ledger::check_removals(lookup, changes, &mut draft.evidence)?;
     let migration = plan_migration(lookup, changes, draft.ctx.now).map_err(|mut e| {
         let mut evidence = draft.evidence.clone();
         evidence.append(&mut e.evidence);
@@ -1908,6 +1926,9 @@ fn require_definition_authority(
     });
     if automation {
         require_capability(draft, AUTOMATIONS_DEFINE)?;
+    }
+    if changes.iter().any(crate::ledger::is_ledger_change) {
+        require_capability(draft, crate::ledger::LEDGER_CONFIGURE)?;
     }
     for change in changes {
         match change {
@@ -2019,6 +2040,7 @@ pub fn apply_delta(
                 schema: Arc::new(TenantSchema::genesis()),
                 members: BTreeMap::new(),
                 records: BTreeMap::new(),
+                ledger: None,
             }
         }
         (Some(tenant), Some(base)) if tenant.revision == base && tenant.id == delta.tenant => {
@@ -2051,6 +2073,7 @@ pub fn apply_delta(
                     }
                 }
             }
+            DeltaOp::Ledger(change) => crate::ledger::apply(&mut next, change),
         }
     }
     next.revision = delta.new_revision;

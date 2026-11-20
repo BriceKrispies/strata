@@ -28,6 +28,7 @@ pub fn kind_of(body: &EventBody) -> &'static str {
         EventBody::RecordCreated { .. } => "record-created",
         EventBody::RecordUpdated { .. } => "record-updated",
         EventBody::RecordDeleted { .. } => "record-deleted",
+        EventBody::LedgerEntryPosted { .. } => "ledger-entry-posted",
     }
 }
 
@@ -256,6 +257,9 @@ pub fn notice(
                 id: before.id,
             })
         }
+        // A posting names its owner, who is personal; no socket notice carries it until the
+        // ledger has a subscription of its own (units of the selector are refused above).
+        EventBody::LedgerEntryPosted { .. } => None,
     }
 }
 

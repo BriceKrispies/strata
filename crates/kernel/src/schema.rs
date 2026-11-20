@@ -156,6 +156,7 @@ impl TenantSchemaExt for TenantSchema {
             triggers: None,
             automations: None,
             operations: None,
+            ledger: None,
         }
     }
 
@@ -557,6 +558,7 @@ impl TenantSchemaExt for TenantSchema {
         crate::definitions::trigger_problems(self, &roles, &mut problems);
         crate::definitions::automation_problems(self, &roles, &mut problems);
         crate::definitions::operation_problems(self, &roles, &mut problems);
+        crate::ledger::declaration_problems(self, &mut problems);
         problems
     }
 }

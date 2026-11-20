@@ -33,6 +33,16 @@ pub use strata_model_core::types::{
     TenantOperationSubject, TriggerDef, TriggerEvent, TriggerId, UniqueDef,
 };
 
+/// The tenant ledger of [`crate::ledger`]: declarations in the tenant schema, accounts and
+/// entries in the tenant state, its needs, delta operations, requests and answers.
+pub use strata_model_core::types::{
+    LedgerAccount, LedgerAccountId, LedgerAccountRank, LedgerAmount, LedgerBalance,
+    LedgerDeclarations, LedgerDefinitionRef, LedgerDefinitions, LedgerDelta, LedgerEntry,
+    LedgerLimit, LedgerNeed, LedgerOrder, LedgerOwner, LedgerPeriod, LedgerPeriodTotal,
+    LedgerPoolDecl, LedgerPoolName, LedgerPostingRequest, LedgerPostingResult, LedgerScope,
+    LedgerState, LedgerUnit, LedgerUnitDecl,
+};
+
 /// The result of an accepted transition (specification type `transition-result`).
 pub use strata_model_core::types::TransitionResult as Transition;
 

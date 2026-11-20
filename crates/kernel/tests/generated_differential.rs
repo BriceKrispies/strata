@@ -74,8 +74,13 @@
 //!  10. Not exercised, and not mirrored: conditions that follow a reference are
 //!      `InsufficientState` in the hand-written kernel when the snapshot lacks the record
 //!      (difference 2 states the rest).
+//!  11. Not mirrored: the tenant ledger (`strata_kernel::ledger`, WG-5083). The generated
+//!      `intent-decision` refuses `PostLedger`, `apply-change` refuses the ledger schema changes,
+//!      `needs` plans no ledger need, `apply-delta` ignores a ledger operation, `schema-problems`
+//!      does not check ledger declarations, and the functions that rebuild a tenant schema or
+//!      state do not carry its `ledger` member. The generator draws no ledger intent or change.
 //!
-//! Differences 5 to 9 are guarded: `assert_no_input_of_a_known_difference` runs on every
+//! Differences 5 to 9 and 11 are guarded: `assert_no_input_of_a_known_difference` runs on every
 //! snapshot the test decides or reads, and fails when a snapshot has a field read condition, an
 //! object with two reference fields to one object type, or an automation step with a retry, a
 //! timeout or a wait, so that a corpus that grows into them is told to mirror the rule or to
@@ -626,6 +631,11 @@ fn assert_no_input_of_a_known_difference(state: &State) {
             "{object_id} has two reference fields to one object type; the generated delete-record clears one per rewrite (difference 7)"
         );
     }
+    assert!(
+        tenant.ledger.is_none() && tenant.schema.ledger.is_none(),
+        "{} holds a ledger; the generated functions do not mirror it (difference 11)",
+        tenant.id
+    );
     for automation in tenant.schema.automations.iter().flat_map(BTreeMap::values) {
         for (name, step) in &automation.steps {
             assert!(

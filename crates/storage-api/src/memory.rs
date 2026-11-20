@@ -958,6 +958,22 @@ impl Store for MemoryStore {
             .is_some())
     }
 
+    fn anonymise_ledger_principal(
+        &self,
+        tenant: &TenantId,
+        principal: &PrincipalId,
+    ) -> StoreResult<strata_kernel::ledger::Anonymised> {
+        let mut inner = self.lock()?;
+        let Some(state) = inner.tenants.get_mut(tenant) else {
+            return Ok(Default::default());
+        };
+        let state = Arc::make_mut(state);
+        Ok(match state.ledger.as_mut() {
+            Some(ledger) => strata_kernel::ledger::anonymise(ledger, principal),
+            None => Default::default(),
+        })
+    }
+
     fn remove_principal(
         &self,
         tenant: &TenantId,
@@ -1164,6 +1180,19 @@ impl Store for MemoryStore {
             .get(&(tenant.clone(), id))
             .map(|(_, state)| state.clone())
             .ok_or_else(|| StoreError::NotFound(format!("snapshot {id} of {tenant}")))?;
+        // Ledger entries are never removed (LDG-022): a snapshot older than an entry is not
+        // restored.
+        let entries = |t: &TenantState| {
+            t.ledger
+                .as_ref()
+                .map_or(0, |l| l.entries.values().map(Vec::len).sum::<usize>())
+        };
+        if inner.tenants.get(tenant).map_or(0, |t| entries(t)) > entries(&state) {
+            return Err(StoreError::Invalid(
+                "the ledger holds entries posted after the snapshot, and entries are never removed"
+                    .into(),
+            ));
+        }
         // Event sequence numbers are never reused: the events stay and the counter does not go
         // back, so a subscriber that has passed a number still sees every later event.
         let seen = inner.tenants.get(tenant).map_or(0, |t| t.event_seq);
