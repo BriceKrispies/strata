@@ -12,6 +12,9 @@ use std::collections::BTreeMap;
 use strata_kernel::Check;
 
 pub const HEADER_SERVICE: &str = "x-strata-service";
+/// The operator credential, which the operator's own tools present to the backend and the gateway
+/// never holds: the platform diagnostics need it (GWY-1405).
+pub const HEADER_OPERATOR: &str = "x-strata-operator";
 pub const HEADER_SITE: &str = "x-strata-site";
 pub const HEADER_SESSION: &str = "x-strata-session";
 pub const HEADER_CORRELATION: &str = "x-correlation-id";

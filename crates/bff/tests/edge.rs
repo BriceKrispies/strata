@@ -2587,3 +2587,55 @@ async fn products_are_installed_listed_and_removed_through_the_gateway() {
     let (_, listed, _) = edge.get("127.0.0.1", "/api/products", Some(&owner)).await;
     assert_eq!(listed["products"], json!([]));
 }
+
+/// Sign in as a person of the first site, presenting `token` as the request token; the status.
+async fn login_with(edge: &Edge, token: String) -> u16 {
+    edge.send(
+        edge.post(
+            "127.0.0.1",
+            "/api/login",
+            json!({ "login": "ines", "password": "strata-dev-ines" }),
+        )
+        .header("x-csrf-token", token),
+    )
+    .await
+    .0
+}
+
+/// Verifies: GWY-1402
+/// A request token issued by one gateway is good at a second instance configured with the same
+/// secret and at a restart of the first, and worthless at a gateway with another secret.
+#[tokio::test]
+async fn a_request_token_survives_a_restart_and_is_good_at_a_second_instance() {
+    let shared =
+        |cfg: &mut Config| cfg.token_secret = Some("one secret held by every instance".into());
+    let first = start_with(shared, |_| {}).await;
+    let token = first.request_token("127.0.0.1").await;
+    assert_eq!(login_with(&first, token.clone()).await, 200);
+
+    let second = start_with(shared, |_| {}).await;
+    assert_eq!(
+        login_with(&second, token.clone()).await,
+        200,
+        "a second instance accepts it"
+    );
+
+    first.stop_and_wait().await;
+    let restarted = start_with(shared, |_| {}).await;
+    assert_eq!(
+        login_with(&restarted, token.clone()).await,
+        200,
+        "a restart accepts it"
+    );
+
+    let other = start_with(
+        |cfg| cfg.token_secret = Some("a different secret entirely".into()),
+        |_| {},
+    )
+    .await;
+    assert_ne!(
+        login_with(&other, token).await,
+        200,
+        "another secret does not"
+    );
+}

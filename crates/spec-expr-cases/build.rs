@@ -118,7 +118,18 @@ fn main() {
     println!("cargo:rerun-if-changed={}", table_path.display());
     let table: Value =
         serde_json::from_str(&std::fs::read_to_string(&table_path).unwrap()).unwrap();
-    let cases = table["cases"].as_array().expect("cases").clone();
+    let mut cases = table["cases"].as_array().expect("cases").clone();
+    // The cases only the Strata targets run, after the shared ones.
+    let extra_path = dir.join("cases-strata.json");
+    println!("cargo:rerun-if-changed={}", extra_path.display());
+    let extra: Value =
+        serde_json::from_str(&std::fs::read_to_string(&extra_path).unwrap()).unwrap();
+    cases.extend(
+        extra["cases"]
+            .as_array()
+            .expect("cases of the extra table")
+            .clone(),
+    );
 
     let mut rust_items: Vec<TokenStream> = Vec::new();
     let mut arms: Vec<TokenStream> = Vec::new();

@@ -1,0 +1,18 @@
+{
+  "format": "exegra-expr-cases",
+  "version": 1,
+  "description": "Cases the Strata targets run in addition to the shared table in cases.json, which stays a byte-identical copy of Exegra's. They state, for the generated Rust and the generated JavaScript, the outcomes that Rust's == gives on values that a JavaScript === would compare by reference: an option of a list, an option of a struct and a list of lists. The Rust and JavaScript runs must give the outcome stated here.",
+  "cases": [
+    { "name": "equal options of lists", "expr": "a == b", "types": { "a": "option<list<u32>>", "b": "option<list<u32>>" }, "env": { "a": [1, 2], "b": [1, 2] }, "expect": { "value": true } },
+    { "name": "options of lists with another element", "expr": "a == b", "types": { "a": "option<list<u32>>", "b": "option<list<u32>>" }, "env": { "a": [1, 2], "b": [1, 3] }, "expect": { "value": false } },
+    { "name": "options of lists in another order", "expr": "a == b", "types": { "a": "option<list<u32>>", "b": "option<list<u32>>" }, "env": { "a": [1, 2], "b": [2, 1] }, "expect": { "value": false } },
+    { "name": "an option of an empty list is not an absent option", "expr": "a == b", "types": { "a": "option<list<u32>>", "b": "option<list<u32>>" }, "env": { "a": [] }, "expect": { "value": false } },
+    { "name": "an absent option of a list is not a present one", "expr": "a == b", "types": { "a": "option<list<u32>>", "b": "option<list<u32>>" }, "env": { "b": [1] }, "expect": { "value": false } },
+    { "name": "two absent options of lists are equal", "expr": "a == b", "types": { "a": "option<list<u32>>", "b": "option<list<u32>>" }, "env": {}, "expect": { "value": true } },
+    { "name": "unequal options of lists compare unequal", "expr": "a != b", "types": { "a": "option<list<u32>>", "b": "option<list<u32>>" }, "env": { "a": [1, 2], "b": [1, 3] }, "expect": { "value": true } },
+    { "name": "equal options of lists do not compare unequal", "expr": "a != b", "types": { "a": "option<list<u32>>", "b": "option<list<u32>>" }, "env": { "a": [1, 2], "b": [1, 2] }, "expect": { "value": false } },
+    { "name": "equal options of structs", "expr": "a == b", "types": { "a": "option<point>", "b": "option<point>" }, "env": { "a": { "x": 1, "y": 2 }, "b": { "x": 1, "y": 2 } }, "expect": { "value": true } },
+    { "name": "options of structs with another member", "expr": "a == b", "types": { "a": "option<point>", "b": "option<point>" }, "env": { "a": { "x": 1, "y": 2 }, "b": { "x": 1, "y": 3 } }, "expect": { "value": false } },
+    { "name": "equal lists of lists", "expr": "a == b", "types": { "a": "list<list<u32>>", "b": "list<list<u32>>" }, "env": { "a": [[1], [2, 3]], "b": [[1], [2, 3]] }, "expect": { "value": true } }
+  ]
+}

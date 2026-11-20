@@ -202,3 +202,68 @@ fn a_language_that_the_javascript_module_cannot_express_is_refused() {
         lines(&refused)
     );
 }
+
+/// A type with the pattern `[a-z]{3}` refuses `abc!!!` in the page as the server does: the module's
+/// check of the text id is the pattern anchored at both ends, so a value that merely contains a
+/// match is refused. The check the module makes is run under node on both values, and the Rust
+/// regular expression the server uses is asked the same.
+#[test]
+fn a_type_pattern_is_matched_against_the_whole_value_in_the_page() {
+    if !support::node_required("the run of the generated check of a type pattern") {
+        return;
+    }
+    let text = language_text()
+        .replace(
+            "{ \"name\": \"HasRole\", \"newtype\": true, \"fields\": [{ \"name\": \"role\", \"type\": \"string\" }] }",
+            "{ \"name\": \"HasRole\", \"newtype\": true, \"fields\": [{ \"name\": \"role\", \"type\": \"role-code\" }] }",
+        )
+        .replace(
+            "{ \"id\": \"cmp-op\",",
+            "{ \"id\": \"role-code\", \"name\": \"Role code\", \"kind\": \"id\", \"repr\": \"string\", \"constraints\": { \"pattern\": \"[a-z]{3}\" } },\n    { \"id\": \"cmp-op\",",
+        );
+    assert!(text.contains("role-code"));
+    let files = generated(LANGUAGE_SPEC, &text);
+    let js = module(&files, MODULE);
+    let line = js
+        .lines()
+        .find(|line| line.contains("role-code breaks its pattern constraint"))
+        .unwrap_or_else(|| panic!("the module does not check the pattern of role-code:\n{js}"))
+        .trim()
+        .to_string();
+    let name = line
+        .split("String(")
+        .nth(1)
+        .and_then(|rest| rest.split(')').next())
+        .expect("the checked name")
+        .to_string();
+
+    let server = regex::Regex::new(&strata_spec_compiler::rules::anchored("[a-z]{3}")).unwrap();
+    let mut script = String::from(
+        "import assert from 'node:assert/strict';\nclass ParseError extends Error {}\n",
+    );
+    script.push_str(&format!("function refused({name}) {{ try {{ {line} }} catch (e) {{ return e instanceof ParseError; }} return false; }}\n"));
+    for (value, accepted) in [
+        ("abc", true),
+        ("abc!!!", false),
+        ("!!!abc", false),
+        ("ab", false),
+    ] {
+        assert_eq!(server.is_match(value), accepted, "the server on {value}");
+        script.push_str(&format!(
+            "assert.equal(refused({value:?}), {}, 'the page on {value}');\n",
+            !accepted
+        ));
+    }
+    let dir = std::env::temp_dir().join(format!("specc-type-pattern-{}", std::process::id()));
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("package.json"), "{ \"type\": \"module\" }\n").unwrap();
+    let path = dir.join("check.mjs");
+    fs::write(&path, script).unwrap();
+    let run = Command::new("node").arg(&path).output().unwrap();
+    assert!(
+        run.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr)
+    );
+}

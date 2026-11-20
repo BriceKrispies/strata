@@ -18,6 +18,15 @@ struct Backend {
 }
 
 async fn start(store: Arc<MemoryStore>, dev: bool) -> Backend {
+    start_until(store, dev, std::future::pending()).await
+}
+
+/// Start a backend on any store that ends when `stop` resolves.
+async fn start_until(
+    store: Arc<dyn Store>,
+    dev: bool,
+    stop: impl std::future::Future<Output = ()> + Send + 'static,
+) -> Backend {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -37,12 +46,7 @@ async fn start(store: Arc<MemoryStore>, dev: bool) -> Backend {
         factors: Default::default(),
         limits: Default::default(),
     };
-    tokio::spawn(strata_backend::run(
-        cfg,
-        store,
-        listener,
-        std::future::pending(),
-    ));
+    tokio::spawn(strata_backend::run(cfg, store, listener, stop));
     let backend = Backend {
         base: format!("http://{addr}"),
         http: reqwest::Client::new(),
@@ -93,22 +97,94 @@ impl Backend {
     }
 }
 
-/// The platform diagnostics read every tenant and the backend holds no operator identity to hold
-/// a caller to, so outside development the route answers "not found"; in development each call
-/// is an audit entry.
-#[tokio::test]
-async fn platform_diagnostics_exist_only_in_development_and_each_call_is_audited() {
-    let production = start(Arc::new(MemoryStore::new()), false).await;
-    let (status, _) = production
-        .call(
-            "fieldnotes",
-            None,
-            "/internal/platform/diagnostics",
-            json!({}),
-        )
-        .await;
-    assert_eq!(status, 404);
+const OPERATOR: &str = "test-operator-token-0123456789abcdef";
 
+impl Backend {
+    /// The platform diagnostics, with the service credential and the operator credential as given.
+    async fn platform(&self, service: Option<&str>, operator: Option<&str>) -> (u16, Json) {
+        let mut request = self
+            .http
+            .post(format!("{}/internal/platform/diagnostics", self.base))
+            .header(HEADER_SITE, "fieldnotes")
+            .header(HEADER_CORRELATION, "t-corr-1")
+            .json(&json!({}));
+        if let Some(token) = service {
+            request = request.header(HEADER_SERVICE, token);
+        }
+        if let Some(token) = operator {
+            request = request.header(strata_protocol::api::HEADER_OPERATOR, token);
+        }
+        let response = request.send().await.unwrap();
+        let status = response.status().as_u16();
+        (status, response.json().await.unwrap_or(Json::Null))
+    }
+}
+
+/// The integrity check of every tenant file is in the platform diagnostics, and those need the
+/// operator credential, which is not the service credential the gateway holds. A caller with no
+/// credential, with the service credential only, or with a wrong operator credential is refused
+/// and sees no integrity result; liveness answers anyone and carries none; a tenant's own
+/// diagnostics carry none; the operator is answered, and each refusal and each read is an audit
+/// entry. With no operator credential configured outside development the route does not exist.
+#[tokio::test]
+async fn the_platform_diagnostics_need_the_operator_credential_and_each_call_is_audited() {
+    platform_diagnostics_in_development_are_audited().await;
+    let production = start(Arc::new(MemoryStore::new()), false).await;
+    let (status, _) = production.platform(Some(TOKEN), Some(OPERATOR)).await;
+    assert_eq!(status, 404, "no operator credential is configured");
+
+    std::env::set_var("STRATA_OPERATOR_TOKEN", OPERATOR);
+    let store = Arc::new(MemoryStore::new());
+    let operated = start(store.clone(), false).await;
+    std::env::remove_var("STRATA_OPERATOR_TOKEN");
+
+    for (service, operator) in [
+        (None, None),
+        (None, Some(OPERATOR)),
+        (Some(TOKEN), None),
+        (Some(TOKEN), Some(TOKEN)),
+        (Some(TOKEN), Some("not-the-operator-token-at-all-1")),
+    ] {
+        let (status, body) = operated.platform(service, operator).await;
+        assert_eq!(status, 401, "{service:?} {operator:?}: {body}");
+        assert!(!body.to_string().contains("quick_check"), "{body}");
+    }
+    let (status, health) = operated
+        .http
+        .get(format!("{}/internal/health", operated.base))
+        .send()
+        .await
+        .map(|r| (r.status().as_u16(), r))
+        .unwrap();
+    assert_eq!(status, 200);
+    let health = health.text().await.unwrap();
+    assert!(
+        !health.contains("quick_check") && !health.contains("tenants"),
+        "liveness carries no integrity result: {health}"
+    );
+    let (status, report) = operated.platform(Some(TOKEN), Some(OPERATOR)).await;
+    assert_eq!(status, 200, "{report}");
+    assert!(
+        report["store"]["health"].get("detail").is_some(),
+        "{report}"
+    );
+    let (_, report) = operated.platform(Some(TOKEN), Some(OPERATOR)).await;
+    let count = |event: &str| {
+        report["audit"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|entry| entry["event"] == event)
+            .count()
+    };
+    assert_eq!(count("platform.diagnostics_refused"), 3, "{report}");
+    assert_eq!(count("platform.diagnostics_read"), 2, "{report}");
+}
+
+/// In development the service credential stands for the operator and each call is an audit
+/// entry. Run by the test above before it sets the operator credential in the environment, which
+/// every backend started in the process would read.
+async fn platform_diagnostics_in_development_are_audited() {
     let development = start(Arc::new(MemoryStore::new()), true).await;
     for _ in 0..2 {
         let (status, _) = development
@@ -220,4 +296,56 @@ async fn a_tenants_diagnostics_hold_nothing_of_another_tenant() {
         .unwrap()
         .iter()
         .all(|line| !line.data.contains("fieldnotes")));
+}
+
+/// Every authentication decision is written to the audit trail of its tenant in the store, and
+/// stays there across a restart: a sign-in and a refused sign-in are made on a backend over a
+/// SQLite file, the backend is stopped, and a store opened on the same file holds both.
+#[tokio::test]
+async fn authentication_decisions_survive_a_restart_on_sqlite() {
+    use strata_storage_sqlite::{default_tenants_dir, SqliteStore};
+    let path = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("decisions-{}.db", std::process::id()));
+    for suffix in ["", "-wal", "-shm"] {
+        let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
+    }
+    let _ = std::fs::remove_dir_all(default_tenants_dir(&path));
+    let fieldnotes = TenantId::new("fieldnotes").unwrap();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let store = Arc::new(SqliteStore::open(&path, strata_kernel::Timestamp(1)).unwrap());
+    let backend = start_until(store, true, async move {
+        let _ = stopped.await;
+    })
+    .await;
+    backend
+        .login("fieldnotes", "admin", "strata-dev-admin")
+        .await;
+    let (status, _) = backend
+        .call(
+            "fieldnotes",
+            None,
+            "/internal/session/login",
+            json!({ "login": "admin", "password": "not the password" }),
+        )
+        .await;
+    assert_eq!(status, 401);
+    stop.send(()).unwrap();
+    // Let the backend finish and let go of its files.
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+    let reopened = SqliteStore::open(&path, strata_kernel::Timestamp(2)).unwrap();
+    let decisions = reopened
+        .audit_list(&fieldnotes, Some("decision"), 100)
+        .unwrap();
+    let outcomes: Vec<String> = decisions
+        .iter()
+        .filter_map(|line| serde_json::from_str::<Json>(&line.data).ok())
+        .filter_map(|data| data["outcome"].as_str().map(str::to_string))
+        .collect();
+    assert!(
+        outcomes.len() >= 2,
+        "both decisions are in the trail after a restart: {outcomes:?}"
+    );
+    assert!(outcomes.iter().any(|o| o == "accepted"), "{outcomes:?}");
+    assert!(outcomes.iter().any(|o| o == "refused"), "{outcomes:?}");
 }

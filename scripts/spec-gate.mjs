@@ -47,11 +47,11 @@
 // changed after it, when a result file differs from the hash recorded for it, or when re-reading
 // the result files does not show passing tests. A successful full run writes
 // var/test-results/gate-record.json.
-import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import { auditChecks } from './gate-audit-checks.mjs';
+import { runCommand } from './gate-run.mjs';
 import { GENERATED as CONFORMANCE_SUITE, conformanceCoverage, conformanceVerdict } from './gate-conformance.mjs';
 import { readWorkspace } from './test-select.mjs';
 import { readTiers, routineSeconds, tierProblems } from './test-tiers.mjs';
@@ -100,28 +100,12 @@ function detail(lines) {
 // with constant arguments). `ok` is true only when it started, was not killed, did not time out and
 // exited with 0. A timeout kills it and is reported as `timedOut`.
 function run(command, commandArgs, options = {}) {
-  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const done = spawnSync(command, commandArgs, {
+  return runCommand(command, commandArgs, {
     cwd: options.cwd ?? root,
     env: { ...process.env, ...options.env },
-    encoding: 'utf8',
-    maxBuffer: 1 << 28,
-    shell: options.shell === true && process.platform === 'win32',
-    timeout: timeoutMs,
-    killSignal: 'SIGKILL',
+    timeoutMs: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    shell: options.shell === true,
   });
-  const timedOut = done.error?.code === 'ETIMEDOUT';
-  const error = done.error ? (timedOut ? `timed out after ${Math.round(timeoutMs / 1000)}s` : done.error.message) : null;
-  const ok = error === null && done.signal === null && done.status === 0;
-  return {
-    ok,
-    code: done.status,
-    signal: done.signal,
-    error,
-    timedOut,
-    stdout: done.stdout ?? '',
-    out: `${done.stdout ?? ''}${done.stderr ?? ''}`,
-  };
 }
 
 // Whether a tool is installed: its version command starts and exits 0.

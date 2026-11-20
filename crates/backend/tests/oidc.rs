@@ -895,6 +895,44 @@ async fn an_outage_of_the_provider_leaves_the_other_ways_in_usable() {
 
 /// Verifies: FED-013
 ///
+/// A provider that takes a request and never answers it holds only the callbacks that wait on it:
+/// with more of them waiting than there are places to hash a password, password sign-in still
+/// answers, each time, because the wait on the provider holds no hashing place.
+#[tokio::test]
+async fn a_provider_that_hangs_does_not_block_password_sign_in() {
+    let mock = Mock::start().await;
+    let backend = start(federation(vec![provider(&mock, |_| {})], Some(0))).await;
+    let mut rounds = Vec::new();
+    for _ in 0..6 {
+        rounds.push(backend.begin(None, json!({})).await);
+    }
+    mock.hang();
+    let waiting = futures_util::future::join_all(
+        rounds
+            .iter()
+            .map(|round| backend.finish(round, Some(SITE), None)),
+    );
+    let password = async {
+        for _ in 0..5 {
+            assert_eq!(backend.password("ines", "strata-dev-ines").await.0, 200);
+        }
+    };
+    let outcome = tokio::time::timeout(Duration::from_secs(8), async {
+        tokio::select! {
+            () = password => true,
+            _ = waiting => false,
+        }
+    })
+    .await;
+    assert_eq!(
+        outcome,
+        Ok(true),
+        "password sign-in answered while six callbacks waited on a provider that never does"
+    );
+}
+
+/// Verifies: FED-013
+///
 /// A provider that has never answered has no metadata to start from: the start is unavailable,
 /// and nothing else is.
 #[tokio::test]

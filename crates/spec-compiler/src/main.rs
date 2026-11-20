@@ -348,6 +348,23 @@ fn main() -> ExitCode {
         .unwrap_or(ExitCode::FAILURE)
 }
 
+/// The shared readiness check, run before any command emits from the raw specification: the
+/// refusal (exit code 1) when the Rust backends would refuse it, `None` when it is ready.
+fn refuse_unready(args: &Args, text: &str) -> Option<ExitCode> {
+    let Err(diagnostics) = strata_spec_compiler::check_ready(&args.header_source(), text) else {
+        return None;
+    };
+    for d in &diagnostics {
+        eprintln!("{d}");
+    }
+    eprintln!(
+        "specc: refused {} with {} diagnostic(s); nothing was written",
+        args.spec,
+        diagnostics.len()
+    );
+    Some(ExitCode::from(1))
+}
+
 fn run() -> ExitCode {
     let raw: Vec<String> = std::env::args().skip(1).collect();
     let args = match parse_args(&raw) {
@@ -366,6 +383,9 @@ fn run() -> ExitCode {
     };
     if args.command == Command::Bundle {
         // The bundle checks its product itself: the header carries the version of the bundle.
+        if let Some(code) = refuse_unready(&args, &text) {
+            return code;
+        }
         return run_bundle(&args, &text);
     }
     if let Err(code) = check_products(&args, &text) {
@@ -375,6 +395,9 @@ fn run() -> ExitCode {
         args.command,
         Command::Conformance | Command::CheckConformance
     ) {
+        if let Some(code) = refuse_unready(&args, &text) {
+            return code;
+        }
         return run_conformance(&args, &text);
     }
     let raw_json_command = matches!(
@@ -393,16 +416,8 @@ fn run() -> ExitCode {
     if raw_json_command {
         // These commands read the specification's JSON directly; they run the readiness check
         // the Rust generation runs, so none of them emits from a specification it would refuse.
-        if let Err(diagnostics) = strata_spec_compiler::check_ready(&args.header_source(), &text) {
-            for d in &diagnostics {
-                eprintln!("{d}");
-            }
-            eprintln!(
-                "specc: refused {} with {} diagnostic(s); nothing was written",
-                args.spec,
-                diagnostics.len()
-            );
-            return ExitCode::from(1);
+        if let Some(code) = refuse_unready(&args, &text) {
+            return code;
         }
     }
     if matches!(args.command, Command::Deploy | Command::CheckDeploy) {
@@ -914,6 +929,30 @@ mod tests {
 
     fn args(list: &[&str]) -> Vec<String> {
         list.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// Every command writes or compares through `run_generate` and `run_check`, so files that share
+    /// a path are refused for every command, and nothing is written.
+    #[test]
+    fn files_that_share_a_path_are_refused_by_every_command_that_writes_or_checks() {
+        let files: Vec<GeneratedFile> = ["forms.js", "FORMS.js"]
+            .iter()
+            .map(|path| GeneratedFile {
+                path: (*path).to_string(),
+                contents: String::new(),
+            })
+            .collect();
+        let out = std::env::temp_dir().join(format!("specc-collision-{}", std::process::id()));
+        assert!(refuse_path_collisions(&files));
+        assert_eq!(
+            format!("{:?}", run_generate(&out, &files)),
+            format!("{:?}", ExitCode::from(1))
+        );
+        assert_eq!(
+            format!("{:?}", run_check(&out, &files)),
+            format!("{:?}", ExitCode::from(1))
+        );
+        assert!(!out.exists(), "nothing was written");
     }
 
     #[test]

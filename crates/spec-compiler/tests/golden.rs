@@ -823,3 +823,52 @@ fn a_derivation_specc_cannot_emit_is_refused() {
         refused(&clash)
     );
 }
+
+/// A specification the Rust backends refuse is refused by every command, with their diagnostic,
+/// and nothing is written.
+#[test]
+fn every_command_runs_the_readiness_check_before_it_emits() {
+    let dir = scratch_dir("every-command-ready");
+    let unready = dir.join("unready.jsonc");
+    fs::write(
+        &unready,
+        r#"{ "system": { "id": "s", "name": "S" },
+            "records": [ { "id": "r", "name": "R", "owner": "c", "key": ["a"], "fields": [ { "name": "a", "type": "nope" } ] } ] }"#,
+    )
+    .unwrap();
+    let spec_arg = path_arg(&unready);
+    for command in [
+        "generate",
+        "check",
+        "deploy",
+        "check-deploy",
+        "e2e",
+        "check-e2e",
+        "scenarios",
+        "check-scenarios",
+        "web",
+        "check-web",
+        "catalogue",
+        "check-catalogue",
+        "conformance",
+        "check-conformance",
+        "bundle",
+    ] {
+        let out = dir.join(format!("out-{command}")).join("generated");
+        let out_arg = path_arg(&out);
+        let mut args = vec![command, "--spec", &spec_arg, "--out", &out_arg];
+        let product = path_arg(&unready);
+        if command == "bundle" {
+            args.extend(["--product", &product]);
+        }
+        let refused = specc(&args);
+        let stderr = String::from_utf8_lossy(&refused.stderr);
+        assert_eq!(refused.status.code(), Some(1), "{command}: {stderr}");
+        assert!(
+            stderr.contains("ready.field-type-undeclared"),
+            "{command} did not run the readiness check: {stderr}"
+        );
+        assert!(!out.exists(), "{command} wrote before it refused");
+    }
+    fs::remove_dir_all(&dir).unwrap();
+}

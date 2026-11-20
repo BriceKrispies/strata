@@ -507,6 +507,53 @@ fn jobs_past_the_daily_allowance_are_held_and_the_commit_succeeds() {
     );
 }
 
+/// While one tenant's jobs past its daily allowance are held, the worker runs another tenant's
+/// jobs the same day, and runs the held one when its day comes (D-6533, SCH-1535).
+#[test]
+fn a_held_job_waits_for_its_day_while_another_tenants_jobs_run() {
+    use strata_backend::worker::{self, WorkerConfig};
+    use strata_storage_api::jobs::JobState;
+    let app = app_on(Arc::new(MemoryStore::new()));
+    install(&app, "alpha");
+    install(&app, "beta");
+    let alpha = tenant_id("alpha");
+    quota::set_allowance(&app, &alpha, Quantity::JobsPerDay, Some(2), "test", "t-3").unwrap();
+    let today = 10 * DAY_MS;
+    let now = today + 5_000;
+    for slug in ["one", "two", "three"] {
+        create_note(&app, "alpha", slug, now).unwrap();
+        create_note(&app, "beta", slug, now).unwrap();
+    }
+    let waiting = |tenant: &str| {
+        app.store
+            .jobs_list(&tenant_id(tenant), None, 50)
+            .unwrap()
+            .iter()
+            .filter(|job| job.state == JobState::Waiting)
+            .count()
+    };
+    assert_eq!((waiting("alpha"), waiting("beta")), (3, 3));
+
+    let config = WorkerConfig::from_limits(&Default::default());
+    let run_at = |t: i64| {
+        for _ in 0..50 {
+            if worker::tick(&app, "w1", &config, &move || Timestamp(t)).jobs == 0 {
+                return;
+            }
+        }
+        panic!("the worker did not run dry");
+    };
+    run_at(now);
+    assert_eq!(waiting("beta"), 0, "the other tenant's jobs ran");
+    assert_eq!(
+        waiting("alpha"),
+        1,
+        "alpha's job past its allowance is not admitted today"
+    );
+    run_at(today + DAY_MS);
+    assert_eq!(waiting("alpha"), 0, "it runs on its own day");
+}
+
 /// A burst past the rate of a minute is released at the rate, and none is lost.
 #[test]
 fn a_burst_past_the_per_minute_rate_is_released_a_minute_at_a_time() {
@@ -598,6 +645,91 @@ async fn a_write_over_the_storage_allowance_is_refused_while_a_delete_succeeds()
     assert_eq!(again.status, 200, "{}", again.body);
 }
 
+/// A create past the stored-records limit is refused naming the quota, while a delete is served and
+/// makes room, a limit of none lets it through, and the operator cannot set the limit below what
+/// the tenant holds (BIL-151, D-508).
+#[tokio::test]
+async fn a_create_over_the_stored_records_limit_is_refused_while_a_delete_succeeds() {
+    let backend = start().await;
+    let admin = backend.session_of("admin").await;
+    let held = backend
+        .store
+        .tenant_summary(&tenant())
+        .unwrap()
+        .expect("the seeded tenant")
+        .records;
+    assert!(held > 0);
+    let made = backend
+        .call(
+            None,
+            Some(&admin),
+            "/internal/mutate",
+            post_fields("a-record"),
+        )
+        .await;
+    assert_eq!(made.status, 200, "{}", made.body);
+    let id = made.body["id"].as_u64().expect("the record's id");
+
+    let below = backend
+        .platform(
+            "/internal/platform/quota",
+            json!({ "tenant": SITE, "name": "stored-records", "value": "1" }),
+        )
+        .await;
+    assert_eq!(
+        below.status, 409,
+        "the operator cannot go below the holdings: {}",
+        below.body
+    );
+
+    backend.allow("stored-records", &(held + 1).to_string());
+    let refused = backend
+        .call(
+            None,
+            Some(&admin),
+            "/internal/mutate",
+            post_fields("one-too-many"),
+        )
+        .await;
+    assert_eq!(refused.status, 403, "{}", refused.body);
+    assert_eq!(refused.body["kind"], "QuotaExceeded");
+    assert_eq!(refused.body["failed"][0]["rule"], "quota:stored-records");
+
+    let deleted = backend
+        .call(
+            None,
+            Some(&admin),
+            "/internal/mutate",
+            json!({ "op": "delete", "object": "post", "id": id }),
+        )
+        .await;
+    assert_eq!(deleted.status, 200, "a delete is served: {}", deleted.body);
+    let again = backend
+        .call(
+            None,
+            Some(&admin),
+            "/internal/mutate",
+            post_fields("fits-now"),
+        )
+        .await;
+    assert_eq!(
+        again.status, 200,
+        "the room the delete made: {}",
+        again.body
+    );
+
+    backend.allow("stored-records", "unlimited");
+    let unlimited = backend
+        .call(
+            None,
+            Some(&admin),
+            "/internal/mutate",
+            post_fields("no-limit"),
+        )
+        .await;
+    assert_eq!(unlimited.status, 200, "{}", unlimited.body);
+}
+
 // ---------------------------------------------------------------------------------------------
 // Plans: usage, change, entitlements, mail
 // ---------------------------------------------------------------------------------------------
@@ -627,7 +759,8 @@ async fn an_owner_reads_the_plan_and_what_it_has_used() {
             "jobs-per-day",
             "jobs-per-minute",
             "segments",
-            "mail-per-month"
+            "mail-per-month",
+            "stored-records"
         ]
     );
     let stored = &usage.body["quantities"][0];

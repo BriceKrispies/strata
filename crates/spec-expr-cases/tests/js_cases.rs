@@ -4,7 +4,7 @@
 
 use serde_json::Value;
 use std::process::Command;
-use strata_spec_expr_cases::{same_value, JS_SCRIPT, TABLE};
+use strata_spec_expr_cases::{cases, same_value, JS_SCRIPT};
 
 fn node_available() -> bool {
     Command::new("node")
@@ -31,8 +31,7 @@ fn generated_javascript_gives_every_outcome_of_the_shared_table() {
         String::from_utf8_lossy(&output.stderr)
     );
     let got: Vec<Value> = serde_json::from_slice(&output.stdout).unwrap();
-    let table: Value = serde_json::from_str(TABLE).unwrap();
-    let cases = table["cases"].as_array().unwrap();
+    let cases = cases();
     assert_eq!(got.len(), cases.len());
     let mut failures = Vec::new();
     for (c, g) in cases.iter().zip(&got) {
