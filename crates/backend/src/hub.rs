@@ -226,31 +226,46 @@ fn log_published(event: &DomainEvent, tenant: &TenantState) {
     }
 }
 
-/// Move one batch of committed events from the outbox to the hub. Returns how many moved.
+/// Move one batch of committed events from the outbox to the hub. Returns how many were sent.
 ///
 /// Outbox positions are per tenant (each tenant may have a database of its own), so this is the
 /// fan-in: the batch holds the waiting events of every tenant, each tenant's in its commit order,
-/// and each tenant's outbox is marked published up to the last of its events in the batch.
+/// and each tenant's outbox is marked published up to the last of its events that was sent. A
+/// tenant whose state cannot be loaded is left alone, with its events still waiting; it does not
+/// stop the others.
 pub fn publish_pending(app: &crate::app::App) -> Result<usize, strata_storage_api::StoreError> {
     let pending = app.store.outbox(256)?;
     if pending.is_empty() {
         return Ok(0);
     }
     let mut last: BTreeMap<TenantId, u64> = BTreeMap::new();
-    let mut headers: BTreeMap<TenantId, Arc<TenantState>> = BTreeMap::new();
+    // A tenant maps to its header, or to `None` when it could not be loaded this sweep.
+    let mut headers: BTreeMap<TenantId, Option<Arc<TenantState>>> = BTreeMap::new();
+    let mut sent = 0;
     for entry in &pending {
         let tenant = entry.event.tenant.clone();
-        last.insert(tenant.clone(), entry.position);
         let header = match headers.get(&tenant) {
             Some(header) => header.clone(),
             None => {
-                let Some(header) = app.store.load(&tenant, &[])?.tenant else {
-                    continue;
+                let header = match app.store.load(&tenant, &[]) {
+                    Ok(state) => state.tenant,
+                    Err(error) => {
+                        crate::app::LOG.warn(
+                            "hub.publish_skipped",
+                            "",
+                            json!({ "tenant": tenant.as_str(), "error": error.to_string() }),
+                        );
+                        None
+                    }
                 };
-                headers.insert(tenant, header.clone());
+                headers.insert(tenant.clone(), header.clone());
                 header
             }
         };
+        let Some(header) = header else {
+            continue;
+        };
+        last.insert(tenant, entry.position);
         log_published(&entry.event, &header);
         app.stats.recent_events.push(describe(&entry.event));
         // No receivers is fine: the event stays in the durable log for later replay.
@@ -258,9 +273,16 @@ pub fn publish_pending(app: &crate::app::App) -> Result<usize, strata_storage_ap
             event: entry.event.clone(),
             tenant: header,
         }));
+        sent += 1;
     }
     for (tenant, position) in &last {
-        app.store.mark_published(tenant, *position)?;
+        if let Err(error) = app.store.mark_published(tenant, *position) {
+            crate::app::LOG.warn(
+                "hub.mark_published_failed",
+                "",
+                json!({ "tenant": tenant.as_str(), "error": error.to_string() }),
+            );
+        }
     }
-    Ok(pending.len())
+    Ok(sent)
 }

@@ -42,10 +42,7 @@ pub fn run_intent(
     let affected = match intent {
         Intent::AssignRole { principal, .. } | Intent::RevokeRole { principal, .. } => app
             .store
-            .live_sessions(ctx.now)?
-            .into_iter()
-            .filter(|s| s.tenant == ctx.tenant && s.principal == *principal)
-            .collect(),
+            .live_sessions_of(&ctx.tenant, Some(principal), ctx.now)?,
         _ => Vec::new(),
     };
     app.stats.in_flight.fetch_add(1, Ordering::Relaxed);
@@ -416,9 +413,8 @@ pub fn diagnostics(app: &App, tenant: &TenantId) -> Result<Json, ApiError> {
     let name = tenant.as_str();
     let sessions: Vec<Json> = app
         .store
-        .live_sessions(now)?
+        .live_sessions_of(tenant, None, now)?
         .iter()
-        .filter(|s| s.tenant == *tenant)
         .map(session_line)
         .collect();
     let connections = app
@@ -432,13 +428,16 @@ pub fn diagnostics(app: &App, tenant: &TenantId) -> Result<Json, ApiError> {
                 .collect::<BTreeMap<_, _>>())
         })
         .unwrap_or(Json::Null);
-    let health = app.store.health()?;
-    let outbox_pending = app
+    // Liveness and this tenant's own backlog only: the integrity check of every tenant file is
+    // the operator's (platform diagnostics), and it names other tenants.
+    app.store.liveness()?;
+    let outbox_pending = app.store.outbox_pending_of(tenant)?;
+    let outbox_faults: Vec<_> = app
         .store
-        .outbox(100_000)?
-        .iter()
-        .filter(|entry| entry.event.tenant == *tenant)
-        .count();
+        .outbox_faults()
+        .into_iter()
+        .filter(|fault| fault.tenant == *tenant)
+        .collect();
     let counters = app.stats.of(name);
     let mine = |line: &Json| line["tenant"] == name;
     Ok(json!({
@@ -448,10 +447,10 @@ pub fn diagnostics(app: &App, tenant: &TenantId) -> Result<Json, ApiError> {
         "now": now.0,
         "store": {
             "capabilities": app.store.capabilities(),
-            "health": { "ok": health.ok, "detail": health.detail, "outbox_pending": outbox_pending },
+            "health": { "ok": true, "outbox_pending": outbox_pending, "outbox_faults": outbox_faults },
             "migrations": app.store.migrations()?,
         },
-        "tenants": app.store.tenants()?.into_iter().filter(|t| t.id == *tenant).collect::<Vec<_>>(),
+        "tenants": app.store.tenant_summary(tenant)?.into_iter().collect::<Vec<_>>(),
         "sessions": sessions,
         "connections": connections,
         "pending_operations": app.stats.in_flight.load(Ordering::Relaxed),
@@ -469,12 +468,13 @@ pub fn diagnostics(app: &App, tenant: &TenantId) -> Result<Json, ApiError> {
 /// never relays it to a browser.
 pub fn platform_diagnostics(app: &App) -> Result<Json, ApiError> {
     let now = app.now();
-    let sessions: Vec<Json> = app
-        .store
-        .live_sessions(now)?
-        .iter()
-        .map(session_line)
-        .collect();
+    // One tenant at a time, so a tenant that cannot be read hides nobody else's sessions.
+    let mut sessions: Vec<Json> = Vec::new();
+    for summary in app.store.tenants()? {
+        if let Ok(found) = app.store.live_sessions_of(&summary.id, None, now) {
+            sessions.extend(found.iter().map(session_line));
+        }
+    }
     let connections = app
         .hub
         .connections
@@ -489,6 +489,7 @@ pub fn platform_diagnostics(app: &App) -> Result<Json, ApiError> {
         "store": {
             "capabilities": app.store.capabilities(),
             "health": app.store.health()?,
+            "outbox_faults": app.store.outbox_faults(),
             "migrations": app.store.migrations()?,
         },
         "tenants": app.store.tenants()?,

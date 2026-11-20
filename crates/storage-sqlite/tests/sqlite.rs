@@ -1090,3 +1090,190 @@ fn a_team_change_commits_without_a_new_schema_version() {
     assert_eq!(desk.label, "News desk");
     assert!(desk.roles.contains(&role("editor")));
 }
+
+fn live_session(tenant: &str) -> SessionRecord {
+    SessionRecord {
+        id: SessionId::new(format!("s-{tenant}")).unwrap(),
+        token_hash: format!("hash-of-{tenant}"),
+        csrf_token: format!("csrf-{tenant}"),
+        tenant: tenant_id(tenant),
+        principal: principal_id(&format!("{tenant}:owner")),
+        display_name: "Owner".into(),
+        created_at: Timestamp(10),
+        last_seen_at: Timestamp(10),
+        expires_at: Timestamp(1_000_000),
+        revoked_at: None,
+        authenticated_at: Timestamp(10),
+        network: None,
+    }
+}
+
+fn tenants_of(entries: &[strata_storage_api::OutboxEntry], tenant: &str) -> usize {
+    entries
+        .iter()
+        .filter(|e| e.event.tenant.as_str() == tenant)
+        .count()
+}
+
+/// Verifies: TEN-007
+///
+/// A tenant file that cannot be opened does not stop the other tenants: their events are still in
+/// the outbox and their sessions are still listed, the broken tenant is reported, liveness
+/// answers and the integrity check says the store is not well instead of failing.
+#[test]
+fn a_corrupt_tenant_file_does_not_stop_the_others() {
+    let path = fresh_path("corrupt");
+    let (beta_file, alpha_events) = {
+        let store = SqliteStore::open(&path, Timestamp(1)).unwrap();
+        tenant_with_a_note(&store, "alpha", 10);
+        tenant_with_a_note(&store, "beta", 20);
+        store.put_session(&live_session("alpha")).unwrap();
+        store.put_session(&live_session("beta")).unwrap();
+        let alpha_events = tenants_of(&store.outbox(100).unwrap(), "alpha");
+        (
+            store.tenant_file(&tenant_id("beta")).unwrap().unwrap(),
+            alpha_events,
+        )
+    };
+    for suffix in ["-wal", "-shm"] {
+        let _ = std::fs::remove_file(format!("{}{suffix}", beta_file.display()));
+    }
+    std::fs::write(&beta_file, vec![b'x'; 4096]).unwrap();
+
+    let store = SqliteStore::open(&path, Timestamp(2)).unwrap();
+    let out = store.outbox(100).unwrap();
+    assert!(alpha_events >= 3);
+    assert_eq!(
+        tenants_of(&out, "alpha"),
+        alpha_events,
+        "alpha's events are offered"
+    );
+    assert_eq!(tenants_of(&out, "beta"), 0);
+    let faults = store.outbox_faults();
+    assert!(
+        faults
+            .iter()
+            .any(|f| f.tenant == tenant_id("beta") && f.position.is_none()),
+        "the broken tenant is reported: {faults:?}"
+    );
+    let live = store.live_sessions(Timestamp(100)).unwrap();
+    assert_eq!(live.len(), 1);
+    assert_eq!(live[0].tenant, tenant_id("alpha"));
+    assert_eq!(
+        store
+            .live_sessions_of(
+                &tenant_id("alpha"),
+                Some(&principal_id("alpha:owner")),
+                Timestamp(100)
+            )
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(store
+        .live_sessions_of(&tenant_id("beta"), None, Timestamp(100))
+        .is_err());
+    assert_eq!(store.tenants().unwrap().len(), 1);
+    store.liveness().unwrap();
+    assert!(!store.health().unwrap().ok);
+}
+
+/// Verifies: OPS-348
+///
+/// An event row that cannot be decoded is parked and reported, and the events after it in the same
+/// tenant and the events of other tenants are still offered.
+#[test]
+fn an_undecodable_event_is_parked_and_the_rest_is_published() {
+    let path = fresh_path("poison");
+    let store = SqliteStore::open(&path, Timestamp(1)).unwrap();
+    tenant_with_a_note(&store, "alpha", 10);
+    tenant_with_a_note(&store, "beta", 20);
+    let before = store.outbox(100).unwrap();
+    let (alpha_events, beta_events) = (tenants_of(&before, "alpha"), tenants_of(&before, "beta"));
+    let alpha_file = store.tenant_file(&tenant_id("alpha")).unwrap().unwrap();
+    let poisoned = {
+        let conn = rusqlite::Connection::open(&alpha_file).unwrap();
+        let position: i64 = conn
+            .query_row(
+                "SELECT position FROM events WHERE published = 0 ORDER BY position LIMIT 1",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        conn.execute(
+            "UPDATE events SET data = '{not json' WHERE position = ?1",
+            [position],
+        )
+        .unwrap();
+        position as u64
+    };
+    let out = store.outbox(100).unwrap();
+    assert_eq!(
+        tenants_of(&out, "alpha"),
+        alpha_events - 1,
+        "alpha's later events come through"
+    );
+    assert_eq!(tenants_of(&out, "beta"), beta_events);
+    assert!(store
+        .outbox_faults()
+        .iter()
+        .any(|f| f.tenant == tenant_id("alpha") && f.position == Some(poisoned)));
+    for entry in &out {
+        store
+            .mark_published(&entry.event.tenant, entry.position)
+            .unwrap();
+    }
+    assert!(
+        store.outbox(100).unwrap().is_empty(),
+        "the parked event is not offered again"
+    );
+    assert_eq!(store.outbox_pending_of(&tenant_id("alpha")).unwrap(), 0);
+}
+
+/// A tenant with a long backlog does not hold another tenant's events back: a batch smaller than
+/// the backlog still holds events of both.
+#[test]
+fn a_small_batch_is_shared_between_tenants() {
+    let store = SqliteStore::open(&fresh_path("fair"), Timestamp(1)).unwrap();
+    tenant_with_a_note(&store, "alpha", 10);
+    tenant_with_a_note(&store, "beta", 20);
+    let out = store.outbox(2).unwrap();
+    assert_eq!(out.len(), 2);
+    assert_eq!(tenants_of(&out, "alpha"), 1);
+    assert_eq!(tenants_of(&out, "beta"), 1);
+    let all = store.outbox(1_000).unwrap().len();
+    let more = store.outbox(all - 1).unwrap();
+    assert_eq!(
+        more.len(),
+        all - 1,
+        "what one tenant leaves unused goes to the other"
+    );
+}
+
+/// Verifies: STO-006
+///
+/// Open tenant files are bounded: a store that touches more tenants than the bound closes the
+/// least recently used, and every tenant still answers.
+#[test]
+fn open_tenant_files_are_bounded() {
+    let path = fresh_path("bounded");
+    let per_tenant = {
+        let store = SqliteStore::open(&path, Timestamp(1)).unwrap();
+        for (i, name) in ["alpha", "beta", "gamma", "delta"].iter().enumerate() {
+            tenant_with_a_note(&store, name, 10 + 10 * i as i64);
+        }
+        tenants_of(&store.outbox(1_000).unwrap(), "alpha")
+    };
+    let store = SqliteStore::open(&path, Timestamp(2))
+        .unwrap()
+        .with_max_open(2);
+    let out = store.outbox(100).unwrap();
+    for name in ["alpha", "beta", "gamma", "delta"] {
+        assert_eq!(tenants_of(&out, name), per_tenant, "{name} answers");
+    }
+    assert!(store.open_count() <= 2, "{} files open", store.open_count());
+    for name in ["alpha", "delta", "beta"] {
+        assert!(store.load(&tenant_id(name), &[]).unwrap().tenant.is_some());
+        assert!(store.open_count() <= 2);
+    }
+}

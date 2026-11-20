@@ -113,11 +113,13 @@ fn withdraw_dev_accounts(
             .remove_account(tenant, &login)
             .map_err(|e| e.to_string())?;
         let now = app.now();
-        for mut session in app.store.live_sessions(now).map_err(|e| e.to_string())? {
-            if session.tenant == *tenant && session.principal == stored.principal {
-                session.revoked_at = Some(now);
-                app.store.put_session(&session).map_err(|e| e.to_string())?;
-            }
+        for mut session in app
+            .store
+            .live_sessions_of(tenant, Some(&stored.principal), now)
+            .map_err(|e| e.to_string())?
+        {
+            session.revoked_at = Some(now);
+            app.store.put_session(&session).map_err(|e| e.to_string())?;
         }
         LOG.warn(
             "seed.dev_account_withdrawn",

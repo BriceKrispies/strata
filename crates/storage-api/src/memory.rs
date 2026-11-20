@@ -87,6 +87,10 @@ impl Store for MemoryStore {
         })
     }
 
+    fn liveness(&self) -> StoreResult<()> {
+        self.lock().map(|_| ())
+    }
+
     fn migrations(&self) -> StoreResult<Vec<StorageMigration>> {
         Ok(Vec::new())
     }
@@ -105,6 +109,17 @@ impl Store for MemoryStore {
                 records: t.record_count() as u64,
             })
             .collect())
+    }
+
+    fn tenant_summary(&self, tenant: &TenantId) -> StoreResult<Option<TenantSummary>> {
+        Ok(self.lock()?.tenants.get(tenant).map(|t| TenantSummary {
+            id: t.id.clone(),
+            name: t.name.clone(),
+            revision: t.revision,
+            schema_version: t.schema.version.0,
+            event_seq: t.event_seq,
+            records: t.record_count() as u64,
+        }))
     }
 
     fn load(&self, tenant: &TenantId, needs: &[Need]) -> StoreResult<State> {
@@ -179,17 +194,42 @@ impl Store for MemoryStore {
     }
 
     fn outbox(&self, limit: usize) -> StoreResult<Vec<OutboxEntry>> {
+        // Round-robin over the tenants, so a long backlog does not hold back another tenant.
+        let inner = self.lock()?;
+        let mut queues: BTreeMap<&TenantId, std::collections::VecDeque<OutboxEntry>> =
+            BTreeMap::new();
+        for (position, event, published) in inner.events.iter() {
+            if !published {
+                queues
+                    .entry(&event.tenant)
+                    .or_default()
+                    .push_back(OutboxEntry {
+                        position: *position,
+                        event: event.clone(),
+                    });
+            }
+        }
+        let mut out = Vec::new();
+        while out.len() < limit && queues.values().any(|q| !q.is_empty()) {
+            for queue in queues.values_mut() {
+                if out.len() >= limit {
+                    break;
+                }
+                if let Some(entry) = queue.pop_front() {
+                    out.push(entry);
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    fn outbox_pending_of(&self, tenant: &TenantId) -> StoreResult<u64> {
         Ok(self
             .lock()?
             .events
             .iter()
-            .filter(|(_, _, published)| !published)
-            .take(limit)
-            .map(|(position, event, _)| OutboxEntry {
-                position: *position,
-                event: event.clone(),
-            })
-            .collect())
+            .filter(|(_, event, published)| !published && event.tenant == *tenant)
+            .count() as u64)
     }
 
     fn mark_published(&self, tenant: &TenantId, position: u64) -> StoreResult<()> {
@@ -257,6 +297,26 @@ impl Store for MemoryStore {
             .sessions
             .values()
             .filter(|s| s.revoked_at.is_none() && s.expires_at > now)
+            .cloned()
+            .collect())
+    }
+
+    fn live_sessions_of(
+        &self,
+        tenant: &TenantId,
+        principal: Option<&strata_kernel::PrincipalId>,
+        now: Timestamp,
+    ) -> StoreResult<Vec<SessionRecord>> {
+        Ok(self
+            .lock()?
+            .sessions
+            .values()
+            .filter(|s| {
+                s.tenant == *tenant
+                    && principal.is_none_or(|p| s.principal == *p)
+                    && s.revoked_at.is_none()
+                    && s.expires_at > now
+            })
             .cloned()
             .collect())
     }
