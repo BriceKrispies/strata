@@ -442,7 +442,10 @@ fn a_value_in_a_unique_field_over_its_maximum_is_refused() {
             .kind,
         ErrorKind::LimitExceeded
     );
-    let fits = "u".repeat(limits::MAX_UNIQUE_BYTES - 2);
+    // The limit is on the encoded value, which wraps the text in its tag and quotes.
+    let overhead = limits::encoded_len(&text(""));
+    let fits = "u".repeat(limits::MAX_UNIQUE_BYTES - overhead);
+    assert_eq!(limits::encoded_len(&text(&fits)), limits::MAX_UNIQUE_BYTES);
     assert!(create_note(&world, &[("slug", text(&fits))]).is_ok());
 }
 
@@ -552,12 +555,11 @@ fn a_query_that_declares_a_limit_above_the_maximum_page_size_is_refused() {
 #[test]
 fn a_schema_change_with_more_than_the_maximum_changes_is_refused() {
     let world = notes_world();
+    // Queries, not objects: the schema may hold 200 object types, so that many new ones would
+    // trip the object limit before the count of changes is the question.
     let defines = |n: usize| -> Vec<SchemaChange> {
         (0..n)
-            .map(|i| SchemaChange::DefineObject {
-                id: object(&format!("c_{i}")),
-                label: "C".into(),
-            })
+            .map(|i| SchemaChange::DefineQuery(query(&format!("c_{i}"), vec![], None, None)))
             .collect()
     };
     assert!(change(&world, 3_000, defines(limits::MAX_SCHEMA_CHANGES)).is_ok());

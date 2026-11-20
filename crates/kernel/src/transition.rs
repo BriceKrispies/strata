@@ -700,7 +700,7 @@ fn update_record(
 
     let roles = roles_of(draft.tenant, &ctx.principal);
     let no_params = BTreeMap::new();
-    let mut assigned_any = false;
+    let before_workflows = candidate.fields.clone();
     for workflow in draft.tenant.schema.workflows_of(object) {
         let (from, to) = (
             old.get(&workflow.field),
@@ -767,7 +767,6 @@ fn update_record(
             })?;
             assigned.push((field.clone(), value));
         }
-        assigned_any |= !assigned.is_empty();
         for (field, value) in assigned {
             if value.is_null() {
                 candidate.fields.remove(&field);
@@ -781,10 +780,11 @@ fn update_record(
         ));
     }
 
-    if assigned_any {
+    if candidate.fields != before_workflows {
         // Workflow assignments changed the candidate after the first decision: the update must
         // also be allowed as the record it now is, so a step cannot write what the actor could
-        // not write directly.
+        // not write directly. An assignment that leaves the candidate as it was changes nothing
+        // to decide again.
         draft.require(
             Action::Update,
             &Resource::Object(object.clone()),

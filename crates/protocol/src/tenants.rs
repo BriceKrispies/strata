@@ -54,10 +54,45 @@ fn read_json(path: &Path) -> Result<Json, String> {
     serde_json::from_str(&read(path)?).map_err(|e| format!("{}: {e}", path.display()))
 }
 
+/// A path with its `.` and `..` components folded away, without touching the file system.
+fn lexical(path: &Path) -> PathBuf {
+    use std::path::Component;
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !out.pop() {
+                    out.push(Component::ParentDir);
+                }
+            }
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+/// Whether `path` is inside `base`, or, when `shared_allowed`, inside a directory whose name
+/// starts with `_` directly under the parent of `base` (where templates live). Both paths are
+/// compared as given; the caller makes them comparable.
+fn allowed(path: &Path, base: &Path, shared_allowed: bool) -> bool {
+    if path.starts_with(base) {
+        return true;
+    }
+    shared_allowed
+        && base
+            .parent()
+            .and_then(|root| path.strip_prefix(root).ok())
+            .and_then(|inside| inside.components().next())
+            .is_some_and(|first| first.as_os_str().to_string_lossy().starts_with('_'))
+}
+
 /// The file a bundle names by a relative path, refused when it is outside what the bundle may
 /// read: its own directory, and, for a template only, a shared directory (its name starts with
-/// `_`) directly under the tenants root, which is where templates live. Symbolic links and `..`
-/// are resolved before the check.
+/// `_`) directly under the tenants root, which is where templates live. The path is refused by
+/// its text first, before the file system is touched, so a refusal never says whether a file
+/// exists. When the file exists, the resolved path is checked again, which catches symbolic
+/// links that lead out.
 fn confined(dir: &Path, relative: &str, shared_allowed: bool) -> Result<PathBuf, String> {
     let outside = || {
         format!(
@@ -65,24 +100,16 @@ fn confined(dir: &Path, relative: &str, shared_allowed: bool) -> Result<PathBuf,
             dir.display()
         )
     };
+    let wanted = dir.join(relative);
+    if !allowed(&lexical(&wanted), &lexical(dir), shared_allowed) {
+        return Err(outside());
+    }
     let base = fs::canonicalize(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-    let path = fs::canonicalize(dir.join(relative)).map_err(|e| format!("{relative}: {e}"))?;
-    if path.starts_with(&base) {
-        return Ok(path);
+    match fs::canonicalize(&wanted) {
+        Ok(path) if allowed(&path, &base, shared_allowed) => Ok(path),
+        Ok(_) => Err(outside()),
+        Err(e) => Err(format!("{relative}: {e}")),
     }
-    if shared_allowed {
-        if let Some(root) = base.parent() {
-            let shared = path
-                .strip_prefix(root)
-                .ok()
-                .and_then(|inside| inside.components().next())
-                .is_some_and(|first| first.as_os_str().to_string_lossy().starts_with('_'));
-            if shared {
-                return Ok(path);
-            }
-        }
-    }
-    Err(outside())
 }
 
 /// Load one tenant directory.
