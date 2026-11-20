@@ -23,6 +23,7 @@ pub mod outbox;
 pub mod products;
 pub mod provision;
 pub mod sealing;
+pub mod search;
 pub mod seed;
 pub mod segments;
 pub mod service;

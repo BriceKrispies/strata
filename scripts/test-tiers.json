@@ -86,6 +86,13 @@
     },
     {
       "package": "strata-backend",
+      "target": "search",
+      "tier": "full",
+      "seconds": null,
+      "unmeasured": true
+    },
+    {
+      "package": "strata-backend",
       "target": "segments",
       "tier": "routine",
       "seconds": null,
@@ -220,6 +227,13 @@
       "package": "strata-kernel",
       "target": "rule_arithmetic",
       "tier": "routine",
+      "seconds": null,
+      "unmeasured": true
+    },
+    {
+      "package": "strata-kernel",
+      "target": "search",
+      "tier": "full",
       "seconds": null,
       "unmeasured": true
     },
@@ -602,6 +616,13 @@
       "target": "recorded_data",
       "tier": "routine",
       "seconds": 0.16
+    },
+    {
+      "package": "strata-storage-sqlite",
+      "target": "search",
+      "tier": "full",
+      "seconds": null,
+      "unmeasured": true
     },
     {
       "package": "strata-storage-sqlite",

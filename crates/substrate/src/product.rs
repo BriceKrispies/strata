@@ -1059,6 +1059,12 @@ impl ProductBundle {
                             field: field.clone(),
                         });
                     }
+                    if let Some(fields) = &object.searchable {
+                        changes.push(SchemaChange::SetSearchable {
+                            object: key.clone(),
+                            fields: fields.clone(),
+                        });
+                    }
                 }
             }
             "policy" => changes.extend(
@@ -1717,6 +1723,9 @@ fn residue_changes(
     }
     if held.translation_group.is_some() && now.translation_group.is_none() {
         changes.push(SchemaChange::ClearTranslationGroup { object: id.clone() });
+    }
+    if held.searchable.is_some() && now.searchable.is_none() {
+        changes.push(SchemaChange::ClearSearchable { object: id.clone() });
     }
     changes
 }

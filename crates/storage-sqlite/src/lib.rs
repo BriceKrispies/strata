@@ -69,6 +69,7 @@ use strata_storage_api::{
 };
 
 mod index_page;
+mod search_index;
 
 /// The ledger table of the control database's migrations.
 const CONTROL_LEDGER: &str = "control_migrations";
@@ -526,6 +527,12 @@ const TENANT_MIGRATIONS: &[Migration] = &[
         version: 16,
         name: "order keys of the record index",
         sql: index_page::ORDER_KEYS_SQL,
+    },
+    // The number of this step is the coordinator's to assign.
+    Migration {
+        version: 17,
+        name: "search entries",
+        sql: search_index::SEARCH_ENTRIES_SQL,
     },
 ];
 
@@ -1476,6 +1483,7 @@ impl SqliteStore {
         db.migrate(TENANT_LEDGER, TENANT_MIGRATIONS, ran_at)
             .map_err(dbe)?;
         db.write(dbe, index_page::rebuild_if_marked)?;
+        db.write(dbe, search_index::rebuild_if_marked)?;
         Ok(db)
     }
 
@@ -1807,6 +1815,24 @@ impl SqliteStore {
         work(&conn).map(Some)
     }
 
+    /// Write every search entry of a tenant again from its records and schema, in one transaction.
+    /// The entries are kept current by every commit, so this changes nothing unless a file was
+    /// altered outside the store; it states that the index is a function of the records alone.
+    pub fn rebuild_search_index(&self, tenant: &TenantId) -> StoreResult<()> {
+        self.existing(tenant)?.write(dbe, search_index::rebuild_all)
+    }
+
+    /// The search entries stored for one record, as `field:token`, in order: what the commit that
+    /// wrote the record left in the index.
+    pub fn search_entries_of(
+        &self,
+        tenant: &TenantId,
+        object: &strata_kernel::ObjectTypeId,
+        id: strata_kernel::RecordId,
+    ) -> StoreResult<Vec<String>> {
+        self.on_existing(tenant, |conn| search_index::stored_entries(conn, object, id))
+    }
+
     /// Run `work` on the file of a tenant that exists, or answer `NotFound`.
     fn on_existing<T>(
         &self,
@@ -1938,6 +1964,18 @@ impl SqliteStore {
                 ))
             }
         }
+        // The search entries follow the schema that is in force after this commit: the entries of
+        // a type whose searchable fields change are rebuilt before the commit's own records are
+        // written under the new schema.
+        let search_schema: Arc<TenantSchema> = match (&schema, &current) {
+            (Some(next), Some(held)) => {
+                search_index::reconcile(tx, &held.schema, next)?;
+                next.clone()
+            }
+            (Some(next), None) => next.clone(),
+            (None, Some(held)) => held.schema.clone(),
+            (None, None) => Arc::new(TenantSchema::genesis()),
+        };
         if let Some(schema) = &schema {
             // A schema can change without a new version: teams and their roles live in it and do
             // not change the shape of records. The row of a version keeps the revision the
@@ -1954,7 +1992,10 @@ impl SqliteStore {
         }
         for op in &delta.ops {
             match op {
-                DeltaOp::PutRecord(record) => write_record(tx, record)?,
+                DeltaOp::PutRecord(record) => {
+                    write_record(tx, record)?;
+                    search_index::write_entries(tx, &search_schema, record)?;
+                }
                 DeltaOp::DeleteRecord { object, id } => {
                     tx.execute(
                         "DELETE FROM records WHERE object = ?1 AND id = ?2",
@@ -2646,6 +2687,16 @@ impl Store for SqliteStore {
                 last_position: None,
             })
         })
+    }
+
+    fn search_candidates(
+        &self,
+        tenant: &TenantId,
+        probe: &strata_kernel::search::Probe,
+    ) -> StoreResult<Vec<strata_kernel::search::Candidate>> {
+        Ok(self
+            .on_tenant(tenant, |conn| search_index::candidates(conn, probe))?
+            .unwrap_or_default())
     }
 
     fn segment_catalog(&self, tenant: &TenantId) -> StoreResult<Vec<seg::Segment>> {

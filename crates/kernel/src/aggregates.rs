@@ -192,7 +192,7 @@ fn finish(
 }
 
 /// Visit every node of an expression.
-fn walk(expr: &Expr, visit: &mut impl FnMut(&Expr)) {
+pub(crate) fn walk(expr: &Expr, visit: &mut impl FnMut(&Expr)) {
     visit(expr);
     match expr {
         Expr::Lit(_)

@@ -117,6 +117,9 @@ pub struct ObjectSpec {
     /// The field whose equal values group the translations of one record (D-6593).
     #[serde(default)]
     pub translation_group: Option<FieldId>,
+    /// The text fields the search index holds (D-7780); each is a field of the type.
+    #[serde(default)]
+    pub searchable: Vec<FieldId>,
 }
 
 /// A composite unique constraint of an object type, as a bundle writes it.
@@ -441,6 +444,12 @@ impl Bundle {
                     field: field.clone(),
                 });
             }
+            if !object.searchable.is_empty() {
+                changes.push(SchemaChange::SetSearchable {
+                    object: object.id.clone(),
+                    fields: object.searchable.clone(),
+                });
+            }
         }
         for workflow in &self.workflows {
             let mut transitions = Vec::new();
@@ -698,6 +707,7 @@ pub fn install<E>(
                         language_field: None,
                         translation_group: None,
                         unique: None,
+                        searchable: None,
                     },
                 );
             }

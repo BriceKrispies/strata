@@ -103,6 +103,7 @@
     {
       "id": "post",
       "label": "Post",
+      "searchable": ["title", "excerpt", "body"],
       "fields": [
         { "id": "title", "label": "Title", "type": "string", "required": true },
         { "id": "slug", "label": "Slug", "type": "string", "required": true, "unique": true },

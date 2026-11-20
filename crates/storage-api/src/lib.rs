@@ -38,6 +38,7 @@
 pub mod covering;
 pub mod jobs;
 pub mod memory;
+pub mod search;
 pub mod segments;
 
 #[cfg(feature = "conformance")]
@@ -1398,6 +1399,24 @@ pub trait Store: Send + Sync {
     fn commit_segments(&self, _commit: &segments::SegmentCommit) -> StoreResult<Receipt> {
         Err(StoreError::Unavailable(
             "this store holds no segments".into(),
+        ))
+    }
+
+    // Search (SRH-150 to SRH-152, SRH-1590): the entries of a tenant's search index, written in the
+    // commit of the record they are made from ([`search`]). An adapter without an index answers no
+    // probe.
+
+    /// The candidates of one probe of the tenant's search index: records of one object type with
+    /// an id above the probe's `after`, in ascending id order, at most `limit`, each with the
+    /// fields in which every query token is the start of a token. The index authorizes nothing:
+    /// the kernel decides each candidate for its reader. A tenant that does not exist has none.
+    fn search_candidates(
+        &self,
+        _tenant: &TenantId,
+        _probe: &strata_kernel::search::Probe,
+    ) -> StoreResult<Vec<strata_kernel::search::Candidate>> {
+        Err(StoreError::Unavailable(
+            "this store holds no search index".into(),
         ))
     }
 }

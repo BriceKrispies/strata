@@ -34,6 +34,7 @@ pub mod query_plan;
 pub mod read;
 pub mod rules;
 pub mod schema;
+pub mod search;
 pub mod segments;
 pub mod settings;
 pub mod state;
