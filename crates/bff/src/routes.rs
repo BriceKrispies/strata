@@ -1605,7 +1605,7 @@ fn escape_html(text: &str) -> String {
 /// The page shell with the first view model and session embedded, so the first paint needs no
 /// request. The data block is JSON, not script: `<` is escaped and the CSP allows no inline code.
 ///
-/// Implements: CT-137
+/// Implements: CT-136, CT-137
 async fn page(State(bff): State<Shared>, headers: HeaderMap, request: Request) -> Response {
     let visit = match visit(&bff, &headers) {
         Ok(visit) => visit,
@@ -1835,7 +1835,10 @@ async fn envelope(State(bff): State<Shared>, mut request: Request, next: Next) -
     let response_status = response.status();
     let https = bff.origins().iter().any(|o| o.starts_with("https://"));
     let headers = response.headers_mut();
-    let mut policy = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'".to_string();
+    // `trusted-types strata-worker` names the one policy the page creates (web/src/trusted-urls.js, the
+    // kernel worker's address); `require-trusted-types-for 'script'` makes every script sink demand a typed value (GWY-253).
+    // The development server serves its own page and sends none of these headers.
+    let mut policy = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; require-trusted-types-for 'script'; trusted-types strata-worker".to_string();
     if https {
         // Only where the origin is https: on plain http the directive would break every
         // subresource of a development page.

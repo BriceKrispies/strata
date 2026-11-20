@@ -1397,6 +1397,39 @@ async fn assets_are_cached_only_on_success_and_source_maps_are_not_served() {
     );
 }
 
+/// Verifies: GWY-253
+/// Verifies: GWY-252
+/// A page response requires Trusted Types for script sinks and names exactly one policy, the
+/// kernel worker's address; it creates no default policy and keeps the base, object and form
+/// directives on the page's own origin or on none.
+#[tokio::test]
+async fn a_page_requires_trusted_types_and_names_one_policy() {
+    let edge = start().await;
+    for path in ["/", "/login", "/no/such/page"] {
+        let (_, _, reply) = edge.get("127.0.0.1", path, None).await;
+        let csp = reply.headers["content-security-policy"].to_str().unwrap();
+        let directives: Vec<&str> = csp.split(';').map(str::trim).collect();
+        assert!(
+            directives.contains(&"require-trusted-types-for 'script'"),
+            "{path}: {csp}"
+        );
+        assert!(
+            directives.contains(&"trusted-types strata-worker"),
+            "{path}: {csp}"
+        );
+        assert!(
+            !csp.contains("'allow-duplicates'") && !csp.contains("default'"),
+            "{path}: {csp}"
+        );
+        for required in ["base-uri 'none'", "object-src 'none'", "form-action 'self'"] {
+            assert!(
+                directives.contains(&required),
+                "{path}: {required} in {csp}"
+            );
+        }
+    }
+}
+
 /// Verifies: GWY-1404
 /// Transport headers: Strict-Transport-Security and `upgrade-insecure-requests` where the origin
 /// is https, Permissions-Policy everywhere.

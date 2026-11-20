@@ -263,6 +263,37 @@ test('signing in with a wrong password explains itself; signing in and out works
   await expect(page.getByRole('heading', { level: 1, name: 'Sign in to continue' })).toBeVisible();
 });
 
+test('the sign-in page requires Trusted Types and loads, starts its worker and signs in with no violation', async ({ page }) => {
+  const violations = [];
+  const errors = [];
+  await page.addInitScript(() => {
+    window.__violations = [];
+    document.addEventListener('securitypolicyviolation', (event) => {
+      window.__violations.push(`${event.violatedDirective}: ${event.blockedURI} ${event.sample}`);
+    });
+  });
+  page.on('console', (message) => {
+    if (message.type() === 'error') errors.push(message.text());
+  });
+  page.on('pageerror', (error) => errors.push(error.message));
+  const response = await page.goto('/login');
+  const policy = response.headers()['content-security-policy'];
+  expect(policy).toContain("require-trusted-types-for 'script'");
+  expect(policy).toContain('trusted-types strata-worker');
+  // The page is drawn from what the worker sent, so a blocked worker would leave it on "loading".
+  await ready(page);
+  violations.push(...(await page.evaluate(() => window.__violations)));
+  expect(violations).toEqual([]);
+
+  await page.getByLabel('Name').fill('ines');
+  await page.getByLabel('Password').fill('strata-dev-ines');
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+  await expect(page.getByRole('heading', { level: 1, name: 'Writing desk' })).toBeVisible();
+  violations.push(...(await page.evaluate(() => window.__violations)));
+  expect(violations).toEqual([]);
+  expect(errors.filter((text) => /Trusted Type|Content Security Policy/i.test(text))).toEqual([]);
+});
+
 test('requests that skip the page are refused: no session, no CSRF token, foreign origin', async ({ page, request }) => {
   const change = { op: 'create', object: 'category', fields: { name: 'Forged', slug: 'forged' } };
   const anonymous = await request.post('/api/records', { data: change, headers: { origin: BASE } });
