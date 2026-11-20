@@ -5,18 +5,19 @@ use std::collections::BTreeSet;
 use strata_kernel::ext::*;
 use strata_kernel::{
     owner_role, visible, DomainEvent, EventBody, ObjectTypeId, Principal, Record, RecordId,
-    TenantState,
+    SettingId, SettingLevel, TeamId, TenantState,
 };
 
 /// The kinds of event the kernel emits today, named as the specification names the variants of
 /// `event-body`. A selector may name these and no other kind until another kind is emitted.
-pub const EVENT_KINDS: [&str; 6] = [
+pub const EVENT_KINDS: [&str; 7] = [
     "tenant-created",
     "schema-changed",
     "member-changed",
     "record-created",
     "record-updated",
     "record-deleted",
+    "setting-changed",
 ];
 
 /// The kind of an event: the name of its body's variant in the specification (`event-kind`).
@@ -28,6 +29,7 @@ pub fn kind_of(body: &EventBody) -> &'static str {
         EventBody::RecordCreated { .. } => "record-created",
         EventBody::RecordUpdated { .. } => "record-updated",
         EventBody::RecordDeleted { .. } => "record-deleted",
+        EventBody::SettingChanged { .. } => "setting-changed",
     }
 }
 
@@ -188,6 +190,12 @@ pub enum Notice {
     Schema { version: u64 },
     /// The subscriber's own roles changed.
     Membership,
+    /// A setting changed at a level that reaches the subscriber (SET-041, SET-043): the subscriber
+    /// reads it again through the ordinary path. The notice carries no value (SET-1543).
+    Setting {
+        setting: SettingId,
+        level: SettingLevel,
+    },
 }
 
 /// Decide what, if anything, a subscriber learns from an event.
@@ -254,6 +262,32 @@ pub fn notice(
             (wants(&before.object) && sees(before)).then(|| Notice::Remove {
                 object: before.object.clone(),
                 id: before.id,
+            })
+        }
+        EventBody::SettingChanged {
+            setting,
+            level,
+            subject,
+        } => {
+            // A change at the tenant level reaches every open page; a change at the team level
+            // those of the team's members; a change at the person level only those of that
+            // person (SET-043).
+            let reaches = match level {
+                SettingLevel::Platform | SettingLevel::Tenant => true,
+                SettingLevel::Team => match principal {
+                    Principal::User(id) => TeamId::new(subject.as_str())
+                        .ok()
+                        .and_then(|team| tenant.schema.team(&team).map(|t| t.members.contains(id)))
+                        .unwrap_or(false),
+                    _ => false,
+                },
+                SettingLevel::Person => {
+                    matches!(principal, Principal::User(id) if id.as_str() == subject.as_str())
+                }
+            };
+            reaches.then(|| Notice::Setting {
+                setting: setting.clone(),
+                level: *level,
             })
         }
     }

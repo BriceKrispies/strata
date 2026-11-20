@@ -52,6 +52,13 @@ pub const MAX_OPERATION_STEPS: usize = 16;
 pub const MAX_OPERATION_POSTINGS: usize = 8;
 /// The most nodes one condition of a tenant operation may have (D-6548, OPR-1549).
 pub const MAX_CONDITION_NODES: usize = 200;
+/// The most setting definitions a schema may hold (D-5046).
+pub const MAX_SETTINGS: usize = 500;
+/// The most capabilities a schema may declare (D-6590).
+pub const MAX_CAPABILITIES: usize = 200;
+/// The most setting overrides a tenant may hold at every level together. The overrides travel
+/// with the tenant's state, so the number is bounded.
+pub const MAX_SETTING_OVERRIDES: usize = 100_000;
 /// The fewest fields of one composite unique constraint (D-6558, CMS-1556).
 pub const MIN_UNIQUE_FIELDS: usize = 2;
 /// The most fields of one composite unique constraint (D-6558, CMS-1556).

@@ -18,6 +18,7 @@
 //! `use strata_kernel::*` brings into scope.
 
 pub mod canon;
+pub mod capabilities;
 pub mod definitions;
 pub mod expr;
 pub mod intent;
@@ -25,6 +26,7 @@ pub mod limits;
 pub mod read;
 pub mod rules;
 pub mod schema;
+pub mod settings;
 pub mod state;
 #[cfg(any(test, feature = "testkit"))]
 pub mod testkit;

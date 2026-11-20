@@ -74,6 +74,14 @@
 //!  10. Not exercised, and not mirrored: conditions that follow a reference are
 //!      `InsufficientState` in the hand-written kernel when the snapshot lacks the record
 //!      (difference 2 states the rest).
+//!  11. Not exercised, and not mirrored until the generated functions are wired: layered settings
+//!      and product capabilities (`settings.rs`, `capabilities.rs`). The generated `apply-change`,
+//!      `intent-decision`, `needs` and `apply-delta` have no arm for the schema changes
+//!      define-setting, remove-setting, define-capability and remove-capability, the intent
+//!      write-setting and the delta operations on overrides, and the generated `schema-problems`
+//!      has not the checks of setting definitions, of the grants of declared capabilities and of
+//!      the references of a trigger to a setting. The corpus holds no setting, no capability and
+//!      no override; `assert_no_input_of_a_known_difference` fails when a snapshot holds one.
 //!
 //! Differences 5 to 9 are guarded: `assert_no_input_of_a_known_difference` runs on every
 //! snapshot the test decides or reads, and fails when a snapshot has a field read condition, an
@@ -626,6 +634,12 @@ fn assert_no_input_of_a_known_difference(state: &State) {
             "{object_id} has two reference fields to one object type; the generated delete-record clears one per rewrite (difference 7)"
         );
     }
+    assert!(
+        tenant.schema.settings.is_none()
+            && tenant.schema.capabilities.is_none()
+            && tenant.setting_values.is_none(),
+        "the snapshot holds a setting, a capability or an override; the generated functions do not mirror them (difference 11)"
+    );
     for automation in tenant.schema.automations.iter().flat_map(BTreeMap::values) {
         for (name, step) in &automation.steps {
             assert!(

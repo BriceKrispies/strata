@@ -103,6 +103,7 @@ pub fn summarise(event: &DomainEvent) -> EventSummary {
             Some(before.object.to_string()),
             Some(before.id.0),
         ),
+        EventBody::SettingChanged { .. } => ("setting_changed", None, None),
     };
     EventSummary {
         tenant: event.tenant.clone(),
