@@ -20,8 +20,8 @@
 use crate::rules::Lookup;
 use crate::schema::{TenantSchema, TenantSchemaExt, WorkflowDefExt};
 use crate::types::{
-    owner_role, public_role, DataSubject, DomainError, FieldType, Need, ObjectTypeDef,
-    ObjectTypeId, PublicationDef, Record, RetentionStart, SchemaChange, TenantState,
+    owner_role, public_role, DataSubject, DomainError, FieldType, FieldTypeExt, Need,
+    ObjectTypeDef, ObjectTypeId, PublicationDef, Record, RetentionStart, SchemaChange, TenantState,
 };
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -138,7 +138,8 @@ pub fn apply(schema: &mut TenantSchema, change: &SchemaChange) -> Result<String,
 ///
 /// - Retention: at least one day; counted from a field, that field exists and is a timestamp.
 ///   (That a type with a personal field declares retention is checked with the fields, D-6584.)
-/// - A personal field whose subject is another field names a field of the type.
+/// - A personal field whose subject is another field names a field of the type, and that field
+///   holds text or a list of text (a principal id), not a reference.
 /// - Publication (D-6592): the state field is a field of the type and the type has a workflow on
 ///   it, and every state the declaration names (draft, published, withdrawn, and, for a type
 ///   marked for review, in-review and approved) is a state of that workflow; in-review and
@@ -169,11 +170,21 @@ pub fn problems(schema: &TenantSchema, problems: &mut Vec<String>) {
             if let Some(DataSubject::Field { field: subject }) =
                 field.personal.as_ref().map(|p| &p.subject)
             {
-                if !object.fields.contains_key(subject) {
-                    problems.push(format!(
+                match object.fields.get(subject) {
+                    None => problems.push(format!(
                         "{}.{}: the subject of its personal data is unknown field {subject}",
                         object.id, field.id
-                    ));
+                    )),
+                    // Erasure, export and retention match the principal id held as text; the
+                    // platform keeps no mapping from a principal to the record of a person, so a
+                    // field that refers to such a record cannot name a subject (WG-5116).
+                    Some(def) if !subject_holds_text(&def.ty) => problems.push(format!(
+                        "{}.{}: the subject of its personal data is field {subject}, which is a {}; a subject field holds a principal id held as text (or a list of text)",
+                        object.id,
+                        field.id,
+                        def.ty.name()
+                    )),
+                    Some(_) => {}
                 }
             }
         }
@@ -197,6 +208,15 @@ pub fn problems(schema: &TenantSchema, problems: &mut Vec<String>) {
                 problems.push(at("a translation group needs a language field"));
             }
         }
+    }
+}
+
+/// A field that can hold the id of a principal: text, or a list of text.
+fn subject_holds_text(ty: &FieldType) -> bool {
+    match ty {
+        FieldType::Str => true,
+        FieldType::List(inner) => matches!(inner.as_ref(), FieldType::Str),
+        _ => false,
     }
 }
 

@@ -161,6 +161,30 @@ pub enum JobWork {
         /// The position of the step in its run, from one.
         sequence: u64,
     },
+    /// One batch of the retention sweep of a tenant (PRV-357): the records of one type that are
+    /// past their retention, deleted as the system retention principal. The job creates the next
+    /// batch, or the next sweep a day on, in the report that ends it (`WorkerWrites::jobs`), so the
+    /// sweep recurs without a schedule. The cursor is the type being swept and the position after
+    /// which it continues.
+    Retention {
+        /// The number of this batch in the chain of the tenant, from zero.
+        step: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        object: Option<strata_kernel::ObjectTypeId>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        after: Option<strata_kernel::query_plan::IndexPosition>,
+    },
+    /// One batch of the export of the data of a subject (CT-210, PRV-350): the records the cursor
+    /// names are read, kept as a part of the export, and the next batch is created in the report;
+    /// the last one assembles the document and ends the request.
+    SubjectExport {
+        /// The id of the export request.
+        export: String,
+        subject: PrincipalId,
+        /// The number of this batch, from zero: the key of its part.
+        seq: u64,
+        cursor: strata_kernel::subject_export::ExportCursor,
+    },
 }
 
 /// A job to create: its key, what it does, when it is due and how it is retried.

@@ -185,6 +185,8 @@ pub fn run_job(app: &App, tenant: &TenantId, lease: &Lease, now: Timestamp) -> O
             step,
             sequence,
         } => run_step(app, tenant, lease, run, automation, step, *sequence, now),
+        JobWork::Retention { .. } => crate::retention::run(app, tenant, lease, now),
+        JobWork::SubjectExport { .. } => crate::subject_export::run(app, tenant, lease, now),
     }
 }
 
