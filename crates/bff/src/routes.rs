@@ -1508,6 +1508,27 @@ async fn aggregate_run(
         .map(Json)
 }
 
+/// Verify the audit chain of the tenant: `GET /api/audit/verify?tenant=`. The backend decides who
+/// may ask (the capability `audit-read`) and answers whether the chain is intact and, when it is
+/// not, the sequence number of the first line that breaks it. A `tenant` that is not the one of
+/// the host and session is refused by the backend as `tenant-mismatch`.
+///
+/// Implements: CT-128
+async fn audit_verify(
+    State(bff): State<Shared>,
+    headers: HeaderMap,
+    Query(mut query): Query<BTreeMap<String, String>>,
+) -> Result<Json<Json_>, Failure> {
+    let visit = visit(&bff, &headers)?;
+    let mut request = json!({});
+    if let Some(tenant) = query.remove("tenant").filter(|value| value.len() <= 64) {
+        request["tenant"] = json!(tenant);
+    }
+    backend(&bff, &visit, "/internal/audit/verify", &request)
+        .await
+        .map(Json)
+}
+
 /// Search the tenant: `GET /api/search?q=&objects=&cursor=&limit=`, the object types being names
 /// separated by commas. The backend's kernel decides what the reader may find, as the principal of
 /// the session and as the anonymous reader without one. The route is counted against the
@@ -2958,6 +2979,7 @@ pub fn router(bff: Shared) -> Router {
         .route("/logout", post(logout))
         .route("/view", get(view))
         .route("/aggregate", get(aggregate_run))
+        .route("/audit/verify", get(audit_verify))
         .route("/search", get(search_run))
         .route("/records", post(records))
         .route("/members/:op", post(members))

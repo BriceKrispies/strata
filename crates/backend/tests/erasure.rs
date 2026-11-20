@@ -604,7 +604,7 @@ fn many_records_are_erased_in_bounded_batches() {
 }
 
 // Verifies: PRV-353
-// Verifies: PRV-2463
+// Verifies: PRV-3122
 #[test]
 fn the_receipt_names_each_backup_image_and_export_with_its_own_expiry() {
     const DAY: i64 = 86_400_000;

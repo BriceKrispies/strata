@@ -433,6 +433,63 @@ async fn a_write_against_a_stale_revision_is_a_conflict_and_removing_falls_back(
     assert_eq!(status, 409, "{replay}");
 }
 
+/// OPS-329, OPS-3120: a change of a tenant's setting is an audit entry with the setting, the level, the
+/// previous and the new value, the principal and the correlation identifier of the request. A
+/// refused write is not an entry.
+#[tokio::test]
+async fn a_tenant_setting_change_is_an_audit_entry_with_the_previous_and_the_new_value() {
+    let backend = start().await;
+    backend.define(&page_size()).await;
+    let admin = backend.session_of("admin").await;
+    let write = |value: i64, expected: u64| json!({ "setting": "page_size", "value": value, "expected_version": expected });
+    let (status, first) = backend
+        .call(Some(&admin), "/internal/settings/set-tenant", write(30, 0))
+        .await;
+    assert_eq!(status, 200, "{first}");
+    let revision = first["revision"].as_u64().unwrap();
+    let (status, second) = backend
+        .call(
+            Some(&admin),
+            "/internal/settings/set-tenant",
+            write(40, revision),
+        )
+        .await;
+    assert_eq!(status, 200, "{second}");
+    // A stale write is refused and is not an entry.
+    let (status, stale) = backend
+        .call(Some(&admin), "/internal/settings/set-tenant", write(50, 0))
+        .await;
+    assert_eq!(status, 409, "{stale}");
+
+    let lines = backend
+        .store
+        .audit_list(&tenant(), Some("audit"), 1_000)
+        .unwrap();
+    let changes: Vec<(&str, Json)> = lines
+        .iter()
+        .filter(|line| line.event == "setting.changed")
+        .map(|line| {
+            (
+                line.correlation.as_str(),
+                serde_json::from_str(&line.data).unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(changes.len(), 2, "{changes:?}");
+    for ((correlation, data), (before, after)) in changes
+        .iter()
+        .zip([(Json::Null, json!(30)), (json!(30), json!(40))])
+    {
+        assert_eq!(*correlation, "t-settings-1");
+        assert_eq!(data["setting"], "page_size", "{data}");
+        assert_eq!(data["level"], "tenant", "{data}");
+        assert_eq!(data["before"], before, "{data}");
+        assert_eq!(data["after"], after, "{data}");
+        assert_eq!(data["tenant"], SITE, "{data}");
+        assert!(data["actor"].is_string(), "{data}");
+    }
+}
+
 /// SET-1541, SET-1542, CT-816: no tenant principal reads the value of another person, whether it
 /// asks for the list or for one setting; the dispatcher resolves a recipient's setting through the
 /// service call, which takes no session.

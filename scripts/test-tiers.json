@@ -22,6 +22,14 @@
     },
     {
       "package": "strata-backend",
+      "target": "audit_log",
+      "tier": "full",
+      "seconds": null,
+      "unmeasured": true,
+      "reason": "Audit entries of role and configuration changes, and the verify-audit-chain route on a tampered trail, on the in-memory store; not yet measured"
+    },
+    {
+      "package": "strata-backend",
       "target": "approvals",
       "tier": "full",
       "seconds": null,

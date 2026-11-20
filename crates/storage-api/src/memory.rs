@@ -191,6 +191,46 @@ impl MemoryStore {
         self.loads.load(Ordering::Relaxed)
     }
 
+    /// Change one line of a tenant's audit trail in place and leave its chain value as it was: what
+    /// someone with write access to the storage does. For tests of the chain check
+    /// ([`crate::audit_chain`]). `index` counts from 0; the answer is whether the line existed.
+    pub fn tamper_audit_line(
+        &self,
+        tenant: &TenantId,
+        index: usize,
+        change: impl FnOnce(&mut AuditEntry),
+    ) -> bool {
+        let Ok(mut inner) = self.lock() else {
+            return false;
+        };
+        match inner
+            .audit
+            .get_mut(tenant)
+            .and_then(|lines| lines.get_mut(index))
+        {
+            Some((entry, _)) => {
+                change(entry);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Remove one line of a tenant's audit trail and keep the others as they were, for tests of
+    /// the chain check. `index` counts from 0; the answer is whether the line existed.
+    pub fn remove_audit_line(&self, tenant: &TenantId, index: usize) -> bool {
+        let Ok(mut inner) = self.lock() else {
+            return false;
+        };
+        match inner.audit.get_mut(tenant) {
+            Some(lines) if index < lines.len() => {
+                lines.remove(index);
+                true
+            }
+            _ => false,
+        }
+    }
+
     fn lock(&self) -> StoreResult<MutexGuard<'_, Inner>> {
         self.inner
             .lock()
