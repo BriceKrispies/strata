@@ -292,13 +292,14 @@ pub fn throttle_step(
         expires_at: 0,
     };
     let mut row = row.unwrap_or(fresh);
+    // A live lock is checked before the window: a lock may outlast the window it was set in.
+    if row.locked_until > now {
+        return Err(row.locked_until);
+    }
     if now - row.window_start >= rule.window_ms
         || (rule.lock_resets && row.locked_until != 0 && now >= row.locked_until)
     {
         row = fresh;
-    }
-    if row.locked_until > now {
-        return Err(row.locked_until);
     }
     row.failures = row.failures.saturating_add(1);
     if row.failures >= rule.max {
@@ -986,7 +987,13 @@ pub fn execute(
                     conflicts,
                 })
             }
-            Err(StoreError::Conflict { .. }) if conflicts < MAX_CONFLICT_RETRIES => conflicts += 1,
+            Err(StoreError::Conflict { .. }) if conflicts < MAX_CONFLICT_RETRIES => {
+                conflicts += 1;
+                // Pause before reloading, longer on each retry (at most 8 retries: 5 ms to 40 ms
+                // per pause, 180 ms in all), so that the commit which won can finish.
+                let pause_ms = 5 * (conflicts as u64);
+                std::thread::sleep(std::time::Duration::from_millis(pause_ms));
+            }
             Err(error) => return Err(error.into()),
         }
     }
@@ -1005,4 +1012,32 @@ pub fn query(
     let needs = strata_kernel::read_needs(&tenant.schema, request);
     let state = store.load(&ctx.tenant, &needs)?;
     strata_kernel::read(&state, request, ctx).map_err(ExecuteError::Domain)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A counter whose lock (5000 ms) outlasts its window (1000 ms): the lock holds for its full
+    /// length, and the window does not cut it short.
+    #[test]
+    fn a_lock_longer_than_the_window_lasts_its_full_length() {
+        let rule = ThrottleRule {
+            key: "source:password:1.2.3.4".into(),
+            max: 2,
+            window_ms: 1000,
+            lock_ms: 5000,
+            lock_resets: false,
+        };
+        let first = throttle_step(None, &rule, 0).unwrap();
+        let locked = throttle_step(Some(first), &rule, 0).unwrap();
+        assert_eq!(locked.locked_until, 5000);
+        // Past the window, still inside the lock: refused until the lock ends.
+        assert_eq!(throttle_step(Some(locked), &rule, 1500), Err(5000));
+        assert_eq!(throttle_step(Some(locked), &rule, 4999), Err(5000));
+        // Once the lock ends, the counter starts again.
+        let after = throttle_step(Some(locked), &rule, 5000).unwrap();
+        assert_eq!(after.failures, 1);
+        assert_eq!(after.locked_until, 0);
+    }
 }
