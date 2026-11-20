@@ -663,6 +663,13 @@ fn present(
     })
 }
 
+/// The simulated world of a generated run: the requesting tenant alone.
+fn world_of(tenant: &TenantId, state: &Arc<TenantState>) -> World {
+    let mut world = World::default();
+    world.tenants.insert(tenant.clone(), state.clone());
+    world
+}
+
 fn build_scenario(
     app: &App,
     identity: &Identity,
@@ -682,10 +689,7 @@ fn build_scenario(
         "generated" => {
             // The simulated world holds the requesting tenant alone: a run never reads, and the
             // process never copies into memory for it, another tenant's records.
-            let mut world = World::default();
-            world
-                .tenants
-                .insert(identity.tenant.clone(), basis.state.clone());
+            let world = world_of(&identity.tenant, &basis.state);
             let steps = request.steps.unwrap_or(60).clamp(5, 300);
             let schedule = generate(&world, &identity.tenant, seed, steps, app.now().0, 60_000);
             Ok(Scenario {
@@ -1014,6 +1018,20 @@ mod tests {
     use strata_kernel::{SessionId, Timestamp};
     use strata_protocol::ws::SessionState;
     use strata_storage_api::SessionRecord;
+
+    /// A projection is built from the requesting tenant's state alone: its world holds that one
+    /// tenant, and the schedule generated over it addresses that tenant and no other.
+    #[test]
+    fn a_generated_run_reads_only_the_requesting_tenant() {
+        let alpha = TenantId::new("alpha").unwrap();
+        let state = strata_kernel::testkit::notes_world().state(&alpha);
+        let tenant = state.tenant.clone().expect("alpha exists");
+        let world = world_of(&alpha, &tenant);
+        assert_eq!(world.tenants.keys().collect::<Vec<_>>(), vec![&alpha]);
+        let schedule = generate(&world, &alpha, 7, 30, 1_000, 60_000);
+        assert!(!schedule.is_empty());
+        assert!(schedule.iter().all(|step| step.context.tenant == alpha));
+    }
 
     fn identity(tenant: &str, principal: Option<&str>) -> Identity {
         let tenant = TenantId::new(tenant).unwrap();

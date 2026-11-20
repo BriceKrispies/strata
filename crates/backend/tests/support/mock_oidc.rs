@@ -110,6 +110,8 @@ struct Inner {
     /// What discovery says the issuer is, when it is not the real one.
     metadata_issuer: Option<String>,
     down: bool,
+    /// The token endpoint takes the request and never answers it.
+    hung: bool,
     codes: HashMap<String, Pending>,
     authorizations: Vec<HashMap<String, String>>,
     token_requests: Vec<HashMap<String, String>>,
@@ -136,6 +138,7 @@ impl Mock {
             es_published: false,
             metadata_issuer: None,
             down: false,
+            hung: false,
             codes: HashMap::new(),
             authorizations: Vec::new(),
             token_requests: Vec::new(),
@@ -177,6 +180,11 @@ impl Mock {
     /// The provider does not answer: every request is a 503.
     pub fn go_down(&self) {
         self.inner.lock().unwrap().down = true;
+    }
+
+    /// The token endpoint takes a request and never answers it, as a provider that hangs does.
+    pub fn hang(&self) {
+        self.inner.lock().unwrap().hung = true;
     }
 
     pub fn come_back(&self) {
@@ -355,6 +363,10 @@ async fn token(
     State(shared): State<Shared>,
     Form(form): Form<HashMap<String, String>>,
 ) -> Response {
+    let hung = shared.lock().unwrap().hung;
+    if hung {
+        std::future::pending::<()>().await;
+    }
     let mut inner = shared.lock().unwrap();
     if let Some(refusal) = down(&inner) {
         return refusal;
