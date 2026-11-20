@@ -629,6 +629,26 @@ fn a_request_that_names_another_tenant_is_refused_as_a_tenant_mismatch() {
     assert!(matches!(refused.0.code, ErrorCode::Forbidden));
     assert_eq!(refused.0.kind.as_deref(), Some("tenant_mismatch"));
     assert_eq!(site.copies(), CopyStats::default());
+    // The refusal is an audit entry of the tenant the request was made at, with the request's
+    // correlation identifier.
+    let lines = site
+        .store
+        .audit_list(&tenant_id("alpha"), Some("audit"), 10)
+        .expect("the audit trail");
+    let entry = lines
+        .iter()
+        .find(|line| line.event == "aggregate.tenant_mismatch")
+        .expect("the refusal is an audit entry");
+    assert_eq!(entry.correlation, "t-aggregate-copies");
+    let data: Json = serde_json::from_str(&entry.data).expect("the entry data is JSON");
+    assert_eq!(data["tenant"], "alpha");
+    assert!(
+        site.store
+            .audit_list(&tenant_id("beta"), Some("audit"), 10)
+            .expect("the other tenant's trail")
+            .is_empty(),
+        "nothing is written to the tenant that was named"
+    );
     // The tenant of the request, named, is accepted.
     strata_backend::aggregates::run(
         &site.app,
