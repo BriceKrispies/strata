@@ -120,6 +120,39 @@ store's own integrity check.
 | `STRATA_BLESS=1 cargo test -p strata-verification` | Regenerate the Lean correspondence fixtures after an intended change |
 | `npm run spec` | The specification gate: `cargo test --workspace`, `lake build`, the web and script tests, the type check, `cargo fmt --check`, `cargo clippy -D warnings`, `cargo audit` and `npm audit`, then Exegra and Concordance against `specifications/spec.jsonc`. A tool that is missing is printed as NOT RUN and counted; `--require-all` fails on it. `npm run spec:browser` adds the three browser suites. `node scripts/spec-gate.mjs --no-test --allow-recorded` re-reads the recorded results. See `specifications/README.md` |
 
+### Tiers
+
+A routine check has to be quick enough to run before every change is stacked, so the Rust test binaries
+are in two tiers, listed with their measured times in `scripts/test-tiers.json`:
+
+- **Routine**: the unit tests of every package and the integration tests that run in seconds. The
+  budget is two minutes of test time, compilation excluded, on the development machine; the list holds
+  the budget and the measured total, and the gate fails when the total passes it.
+- **Full**: everything, including the binaries kept out of the routine tier. Each of those is in the
+  list with its measured time and the reason it is out (the whole-specification comparisons with Exegra,
+  the Lean correspondence, the running-service suites). The gate (`npm run spec`) runs the full tier.
+
+The gate also fails when a test binary exists that is in neither tier, or an entry names one that does
+not, so a new test file has to be given a tier in the same change. Run builds with
+`CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=2`: the machine has 16 GB.
+
+| Command | What runs |
+|---|---|
+| `npm run test:routine` | The routine tier: `cargo test --workspace` on the unit tests and the routine binaries (with the backend's `development` feature), then the web tests. Fails when its test time passes the budget |
+| `npm run test:changed` | Only what the change touches: the files `git diff --name-only` names against the base (`--base <ref>`, default `integration`, else `main`) select the packages that own them and every package that depends on those, and their test binaries from both tiers run; the web tests and type check run when `web/` changed, the script tests when `scripts/` changed, Exegra validation and the specc freshness checks when `specifications/` changed. The very slow binaries are skipped unless `--slow`; `--dry-run` prints the plan |
+| `npm run test:tiers` | The tier check alone: every test binary is in a tier. Reads manifests, builds nothing |
+| `node scripts/test-tiers.mjs times <cargo test log> --write` | Records the measured time of every binary in a `cargo test --workspace` log in the tier list, and marks the very slow ones |
+
+The two whole-specification comparisons with Exegra (`crates/system-differential/tests/exegra.rs`
+and `crates/spec-compiler/tests/strata_differential.rs`) get their traces from one Exegra process per
+job (`scripts/exegra-traces.mjs`, `STRATA_TRACE_SHARDS` and `STRATA_DIFFERENTIAL_JOBS`, two by
+default) that loads the specification once; `exegra trace` once per scenario loaded it once per
+scenario.
+
+Dependencies are optimised in dev builds (`[profile.dev.package."*"]` in `Cargo.toml`) because the
+tests run Argon2id, signature checks and SQLite; crates no test calls are listed there at the default
+level to shorten a cold build.
+
 `node scripts/shots.mjs [base-url] [filter]` captures screenshots of a running stack into
 `var/shots/` for visual review; the browser tests also save theirs under
 `tests/e2e/screenshots/`. `python scripts/covers.py` redraws the cover plates.

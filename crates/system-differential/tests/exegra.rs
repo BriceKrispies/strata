@@ -1,8 +1,9 @@
 //! The system host against Exegra's simulator, scenario by scenario.
 //!
 //! For every scenario of `specifications/spec.jsonc` that drives implementation-level machines,
-//! this test asks Exegra for the trace (`node $EXEGRA_HOME/cli/exegra.js trace <scenario>`,
-//! through a temporary project link to this checkout's specification) and runs the same scenario
+//! this test asks Exegra for the trace (`scripts/exegra-traces.mjs`, which builds the specification
+//! once per shard in Exegra's own modules and runs `runScenario` for each scenario, as
+//! `node $EXEGRA_HOME/cli/exegra.js trace <scenario>` does for one) and runs the same scenario
 //! on `strata_runtime::System` with the generated machines and routing table
 //! (`strata_model::target_machines::dispatch`, which holds shipped and target machines), on the in-memory store, with a `TestClock`:
 //!
@@ -164,7 +165,7 @@ fn relative(from: &Path, to: &Path) -> String {
 
 /// The Exegra CLI, or a failure saying how to get one.
 struct Exegra {
-    cli: PathBuf,
+    home: PathBuf,
     specs: PathBuf,
 }
 
@@ -173,7 +174,8 @@ impl Exegra {
         let home = std::env::var_os("EXEGRA_HOME").unwrap_or_else(|| {
             panic!("set EXEGRA_HOME to an Exegra checkout (one with cli/exegra.js): this test compares the system host with Exegra's traces")
         });
-        let cli = PathBuf::from(home).join("cli").join("exegra.js");
+        let home = PathBuf::from(home);
+        let cli = home.join("cli").join("exegra.js");
         assert!(
             cli.is_file(),
             "EXEGRA_HOME has no cli/exegra.js: {}",
@@ -191,31 +193,64 @@ impl Exegra {
         std::fs::create_dir_all(&project).unwrap();
         let link = json!({ "spec": relative(&project, &spec_path()) });
         std::fs::write(project.join("project.jsonc"), link.to_string()).unwrap();
-        Exegra { cli, specs }
+        Exegra { home, specs }
+    }
+
+    /// Every trace in `ids`, written to `self.specs/<id>.trace.json` by `scripts/exegra-traces.mjs`:
+    /// one Exegra process per shard builds the specification once and runs its share of the
+    /// scenarios (one `exegra trace` process per scenario built it once per scenario). The shards
+    /// run side by side, two by default (`STRATA_TRACE_SHARDS`).
+    fn traces(&self, ids: &[String]) {
+        let list = self.specs.join("scenarios.json");
+        std::fs::write(&list, json!(ids).to_string()).unwrap();
+        let shards: usize = std::env::var("STRATA_TRACE_SHARDS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .filter(|n| *n >= 1)
+            .unwrap_or(2);
+        let script = workspace().join("scripts").join("exegra-traces.mjs");
+        let children: Vec<_> = (0..shards)
+            .map(|i| {
+                Command::new("node")
+                    .arg(&script)
+                    .arg("--exegra")
+                    .arg(&self.home)
+                    .arg("--spec")
+                    .arg(spec_path())
+                    .arg("--out")
+                    .arg(&self.specs)
+                    .arg("--ids")
+                    .arg(&list)
+                    .arg("--shard")
+                    .arg(format!("{i}/{shards}"))
+                    .stdout(std::process::Stdio::piped())
+                    .stderr(std::process::Stdio::piped())
+                    .spawn()
+                    .unwrap_or_else(|e| panic!("node could not be run: {e}"))
+            })
+            .collect();
+        for child in children {
+            let output = child
+                .wait_with_output()
+                .unwrap_or_else(|e| panic!("node could not be waited for: {e}"));
+            let envelope: Value = serde_json::from_slice(&output.stdout).unwrap_or_else(|e| {
+                panic!(
+                    "scripts/exegra-traces.mjs did not print JSON ({e}): {}",
+                    String::from_utf8_lossy(&output.stderr)
+                )
+            });
+            assert_eq!(
+                envelope["ok"],
+                json!(true),
+                "scripts/exegra-traces.mjs failed: {envelope}"
+            );
+        }
     }
 
     fn trace(&self, scenario: &str) -> Value {
         let out = self.specs.join(format!("{scenario}.trace.json"));
-        let output = Command::new("node")
-            .arg(&self.cli)
-            .args(["trace", scenario, "--project", PROJECT, "--specs"])
-            .arg(&self.specs)
-            .arg("--out")
-            .arg(&out)
-            .output()
-            .unwrap_or_else(|e| panic!("node could not be run: {e}"));
-        let envelope: Value = serde_json::from_slice(&output.stdout).unwrap_or_else(|e| {
-            panic!(
-                "exegra trace {scenario} did not print JSON ({e}): {}",
-                String::from_utf8_lossy(&output.stderr)
-            )
-        });
-        assert_eq!(
-            envelope["ok"],
-            json!(true),
-            "exegra trace {scenario} failed: {envelope}"
-        );
-        let text = std::fs::read_to_string(&out).unwrap();
+        let text = std::fs::read_to_string(&out)
+            .unwrap_or_else(|e| panic!("no trace of {scenario} at {}: {e}", out.display()));
         serde_json::from_str(&text).unwrap()
     }
 }
@@ -979,6 +1014,8 @@ async fn the_system_host_runs_every_scenario_as_exegra_does() {
     let mut skipped = Vec::new();
     let mut unrepresentable = Vec::new();
     let mut diverged = Vec::new();
+    // First every plan, then every trace in one go, then the comparisons.
+    let mut plans = Vec::new();
     for scenario in all["scenarios"].as_array().into_iter().flatten() {
         let drives = scenario["behaviors"]
             .as_array()
@@ -989,15 +1026,17 @@ async fn the_system_host_runs_every_scenario_as_exegra_does() {
         if !drives {
             continue;
         }
-        let plan = match plan(&spec, &all, scenario) {
-            Ok(plan) => plan,
+        match plan(&spec, &all, scenario) {
+            Ok(plan) => plans.push(plan),
             Err(why) => {
                 skipped.push((scenario["id"].as_str().unwrap_or_default().to_string(), why));
-                continue;
             }
-        };
+        }
+    }
+    exegra.traces(&plans.iter().map(|p| p.id.clone()).collect::<Vec<_>>());
+    for plan in &plans {
         let trace = exegra.trace(&plan.id);
-        match run(&spec, &plan, &trace).await {
+        match run(&spec, plan, &trace).await {
             Ok(steps) => covered.push((plan.id.clone(), steps)),
             Err((true, why)) => unrepresentable.push((plan.id.clone(), why)),
             Err((false, why)) => diverged.push((plan.id.clone(), why)),
