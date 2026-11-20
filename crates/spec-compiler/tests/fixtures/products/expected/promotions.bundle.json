@@ -23,7 +23,7 @@
         "unit": "promotions__redemptions"
       },
       {
-        "description": "The stock of the promotions: one account of the pool, debited by each redemption.",
+        "description": "The stock of each promotion: one account of the pool per promotion, in the scope of its id, debited by each redemption.",
         "unit": "promotions__stock"
       }
     ],
@@ -31,9 +31,9 @@
       "promotions__promotion": {
         "constraints": {
           "window": {
-            "expr": "new.ends_at > new.starts_at",
+            "expr": "new.ends_at > new.starts_at and new.ends_at <= new.starts_at + days(90)",
             "id": "window",
-            "message": "A promotion ends after it starts."
+            "message": "A promotion ends after it starts and runs at most 90 days."
           }
         },
         "fields": {
@@ -110,9 +110,9 @@
         "conditions": [
           {
             "error": "bad-window",
-            "expr": "param.ends_at > param.starts_at",
+            "expr": "param.ends_at > param.starts_at and ms_between(param.starts_at, param.ends_at) <= days(90)",
             "id": "window",
-            "message": "A promotion ends after it starts."
+            "message": "A promotion ends after it starts and runs at most 90 days."
           },
           {
             "error": "bad-stock",
@@ -174,6 +174,7 @@
                 }
               },
               "reason": "stock",
+              "scope": "text(param.promotion)",
               "unit": "promotions__stock"
             }
           }
@@ -217,6 +218,7 @@
                 }
               },
               "reason": "redemption",
+              "scope": "text(record.$id)",
               "unit": "promotions__stock"
             }
           },

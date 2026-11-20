@@ -263,6 +263,19 @@ impl ProductContext {
                     .flatten()
                     .filter_map(|i| i.get("name").and_then(Value::as_str))
                     .map(str::to_string)
+                    // A later step reads the id of a record an earlier step created as a parameter
+                    // named by that step (D-6548). The scope is the operation's, so every creating
+                    // step's name is bound here; the kernel refuses a read before the step that
+                    // creates it when the operation is defined.
+                    .chain(
+                        item.get("steps")
+                            .and_then(Value::as_array)
+                            .into_iter()
+                            .flatten()
+                            .filter_map(|step| step.get("CreateRecord"))
+                            .filter_map(|create| create.get("id").and_then(Value::as_str))
+                            .map(str::to_string),
+                    )
                     .collect();
                 let fields = match item
                     .get("subject")

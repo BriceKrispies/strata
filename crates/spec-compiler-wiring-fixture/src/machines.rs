@@ -189,6 +189,10 @@ pub mod job {
             record.validate().map_err(|violation| violation.to_string())
         }
 
+        fn is_terminal(state: &State) -> bool {
+            matches!(state, State::Done)
+        }
+
         fn step(
             state: &State,
             vars: &Vars,
@@ -339,6 +343,8 @@ pub mod tracker {
         const ISOLATION: Isolation = Isolation::Serializable;
 
         const CREATES: bool = true;
+
+        const SINGLETON_KEY: Option<&'static str> = Some("\"tracker\"");
 
         type State = State;
 
