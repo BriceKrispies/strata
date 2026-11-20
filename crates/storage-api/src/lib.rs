@@ -57,8 +57,8 @@ use strata_kernel::ext::*;
 use strata_kernel::segments as seg;
 use strata_kernel::{
     canon, Context, Coverage, DomainError, DomainEvent, Effect, ErrorKind, EventBody, Intent, Need,
-    Principal, PrincipalId, ReadRequest, ReadResult, Record, SessionId, State, StateDelta,
-    StateRevision, TenantId, TenantState, Timestamp, Transition, Value, WorkflowId,
+    Principal, PrincipalId, ReadRequest, ReadResult, Record, SessionId, SettingId, State,
+    StateDelta, StateRevision, TenantId, TenantState, Timestamp, Transition, Value, WorkflowId,
 };
 
 /// What an adapter actually provides. Reported in diagnostics and checked by the conformance
@@ -639,6 +639,29 @@ pub struct AuditEntry {
     pub event: String,
     pub correlation: String,
     pub data: String,
+}
+
+/// The platform level of one setting, as the control plane holds it (CT-303, SET-030). It is
+/// kept by the setting's name and belongs to no tenant. `value` is absent once the level has been
+/// removed; the row stays so that the revision, which rises at every change, is never reused
+/// (SET-051).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlatformSetting {
+    pub setting: SettingId,
+    pub value: Option<Value>,
+    pub revision: u64,
+}
+
+/// What a write of the platform level of a setting did.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PlatformWrite {
+    /// The level was written; `previous` is the value it held before, if any.
+    Written {
+        now: PlatformSetting,
+        previous: Option<Value>,
+    },
+    /// The level was not at the revision the writer named; nothing changed (SET-025).
+    Conflict { current: u64 },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1233,6 +1256,21 @@ pub trait Store: Send + Sync {
         release: bool,
         now: Timestamp,
     ) -> StoreResult<Settled>;
+
+    /// Every setting that has a platform level, in the order of the setting names, with the
+    /// removed ones (a revision and no value). The platform level is held by the control plane
+    /// beside the tenant directory, never in a tenant's data (CT-303).
+    fn platform_settings(&self) -> StoreResult<Vec<PlatformSetting>>;
+
+    /// Set (`Some`) or remove (`None`) the platform level of a setting, when it is at
+    /// `expected_revision` (zero for a setting that has none), and raise its revision by one.
+    fn platform_setting_write(
+        &self,
+        setting: &SettingId,
+        value: Option<&Value>,
+        expected_revision: u64,
+        at: Timestamp,
+    ) -> StoreResult<PlatformWrite>;
 
     /// Mark a tenant as being installed: the directory lists it as `provisioning`, which no
     /// request reaches, until [`Store::finish_provisioning`]. Called after the install's first

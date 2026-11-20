@@ -11,9 +11,10 @@ use crate::{
     check_event_sequence, partial_state, throttle_refund, throttle_step, Account, AuditEntry,
     Capabilities, Commit, FederatedIdentity, Health, IdempotencyEntry, IdempotentResult,
     JournalEntry, OidcFlow, OutboxEntry, PasskeyChallenge, PasskeyRecord, PendingSignIn,
-    PrincipalRemoval, Receipt, RecoveryRequest, SamlRequest, SessionRecord, SignInLink,
-    SnapshotInfo, StorageMigration, Store, StoreError, StoreResult, TenantSummary, ThrottleRow,
-    ThrottleRule, ThrottleSettle, ThrottleVerdict, TotpRecord, IDEMPOTENCY_RETENTION_MS,
+    PlatformSetting, PlatformWrite, PrincipalRemoval, Receipt, RecoveryRequest, SamlRequest,
+    SessionRecord, SignInLink, SnapshotInfo, StorageMigration, Store, StoreError, StoreResult,
+    TenantSummary, ThrottleRow, ThrottleRule, ThrottleSettle, ThrottleVerdict, TotpRecord,
+    IDEMPOTENCY_RETENTION_MS,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -22,7 +23,7 @@ use strata_kernel::ext::*;
 use strata_kernel::segments as seg;
 use strata_kernel::{
     apply_delta, canon, DomainEvent, FieldId, Need, ObjectTypeId, PrincipalId, Record, RecordId,
-    SessionId, State, TenantId, TenantState, Timestamp, Value, WorkflowId,
+    SessionId, SettingId, State, TenantId, TenantState, Timestamp, Value, WorkflowId,
 };
 
 #[derive(Default)]
@@ -64,6 +65,8 @@ struct Inner {
     steps: BTreeMap<(TenantId, String, u64), StepRecord>,
     /// Exception records per tenant, in the order they were written: `seq` is the index plus one.
     exceptions: BTreeMap<TenantId, Vec<ExceptionRecord>>,
+    /// The platform level of the settings that have one (CT-303), by setting name.
+    platform_settings: BTreeMap<SettingId, PlatformSetting>,
 }
 
 impl Inner {
@@ -1413,6 +1416,33 @@ impl Store for MemoryStore {
             .retain(|entry| entry.tenant != *tenant || entry.revision <= state.revision);
         inner.tenants.insert(tenant.clone(), state);
         Ok(())
+    }
+
+    fn platform_settings(&self) -> StoreResult<Vec<PlatformSetting>> {
+        Ok(self.lock()?.platform_settings.values().cloned().collect())
+    }
+
+    fn platform_setting_write(
+        &self,
+        setting: &SettingId,
+        value: Option<&Value>,
+        expected_revision: u64,
+        _at: Timestamp,
+    ) -> StoreResult<PlatformWrite> {
+        let mut inner = self.lock()?;
+        let held = inner.platform_settings.get(setting);
+        let current = held.map_or(0, |row| row.revision);
+        if current != expected_revision {
+            return Ok(PlatformWrite::Conflict { current });
+        }
+        let previous = held.and_then(|row| row.value.clone());
+        let now = PlatformSetting {
+            setting: setting.clone(),
+            value: value.cloned(),
+            revision: current + 1,
+        };
+        inner.platform_settings.insert(setting.clone(), now.clone());
+        Ok(PlatformWrite::Written { now, previous })
     }
 
     fn reset(&self) -> StoreResult<()> {

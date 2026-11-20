@@ -23,11 +23,14 @@
 //! (SET-040, SET-1543): a person's value can be personal data and an event is kept and delivered.
 //!
 //! **The platform level.** The specification keeps the platform level in the control plane
-//! (CT-303, `rec-setting-platform-value`) and the platform's own definitions with a release
-//! (SET-005). The control database holds neither today, so the kernel resolves the platform level
-//! as absent: a setting is answered from the person, the team, the tenant and then its default,
-//! and a write at the platform level is refused here. The step is in [`resolve`] and the refusal
-//! in [`write_setting`], where the control plane's value would enter.
+//! (CT-303, `rec-setting-platform-value`), not in a tenant: a tenant's write at that level is
+//! refused here ([`write_setting`]) and the operator's write is the control plane's. The kernel is
+//! pure, so the control plane's values are handed in: [`resolve_with`], [`resolve_all_with`] and
+//! [`resolve_for_with`] take them as [`PlatformLevels`] and read the platform's value between the
+//! tenant's and the default; [`resolve`], [`resolve_all`] and [`resolve_for`] are the same with
+//! none held. The platform's own definitions come with a release (SET-005) and none ships: a
+//! platform value applies to every tenant whose definition of that name opens the platform level
+//! and has a type the value is of.
 
 use crate::intent::{
     Check, CheckExt, Context, DeltaOp, DomainError, DomainErrorExt, ErrorKind, EventBody, Output,
@@ -63,6 +66,30 @@ pub const SETTING_RESOLVE_FOR: &str = "setting-resolve-for";
 /// one lists it here, and the tenants that already define the name are refused at their next
 /// schema change.
 pub const PLATFORM_SETTINGS: &[&str] = &[];
+
+/// The platform level of one setting as the control plane holds it: the value, absent once
+/// removed, and the revision, which rises at each change and is never reused (SET-051).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PlatformLevel {
+    pub value: Option<Value>,
+    pub revision: u64,
+}
+
+/// The platform level of the settings that have one, by setting.
+pub type PlatformLevels = BTreeMap<SettingId, PlatformLevel>;
+
+/// Why a value may not be the platform level of a setting, or `None`: the platform's value is a
+/// flag, a whole number or text, and within the limits of a value (SET-021). Whether it is of the
+/// type of a tenant's definition is decided where the tenant's definition is read.
+pub fn platform_value_problem(value: &Value) -> Option<String> {
+    match value {
+        Value::Bool(_) | Value::Int(_) | Value::Str(_) => limits::value_problem(value),
+        other => Some(format!(
+            "a {} is not a value of a setting: a flag, a whole number or text is",
+            other.kind()
+        )),
+    }
+}
 
 /// The place of a level from the least to the most specific.
 pub fn rank(level: SettingLevel) -> u8 {
@@ -180,15 +207,28 @@ pub fn resolve(
     principal: &Principal,
     setting: &SettingId,
 ) -> Result<SettingResolution, DomainError> {
-    let def = definition(&tenant.schema, setting).ok_or_else(|| unknown_setting(setting))?;
-    Ok(resolve_definition(tenant, def, principal))
+    resolve_with(tenant, principal, setting, &PlatformLevels::new())
 }
 
-/// [`resolve`] for a definition already found.
+/// [`resolve`] with the platform level the control plane holds: the value of the platform is read
+/// after the tenant's and before the default, when the definition opens the platform level and
+/// the value is of its type, and `platform_revision` of the answer is its revision.
+pub fn resolve_with(
+    tenant: &TenantState,
+    principal: &Principal,
+    setting: &SettingId,
+    platform: &PlatformLevels,
+) -> Result<SettingResolution, DomainError> {
+    let def = definition(&tenant.schema, setting).ok_or_else(|| unknown_setting(setting))?;
+    Ok(resolve_definition(tenant, def, principal, platform))
+}
+
+/// [`resolve_with`] for a definition already found.
 fn resolve_definition(
     tenant: &TenantState,
     def: &SettingDef,
     principal: &Principal,
+    platform: &PlatformLevels,
 ) -> SettingResolution {
     let person = match principal {
         Principal::User(id) => Some(id),
@@ -227,7 +267,20 @@ fn resolve_definition(
             found = Some((SettingSource::Tenant, None, held.value.clone()));
         }
     }
-    // The platform level would be read here, from the control plane's value of the setting.
+    let platform_level = platform.get(&def.id);
+    if found.is_none() && is_open(def, SettingLevel::Platform) {
+        if let Some(value) = platform_level.and_then(|level| level.value.as_ref()) {
+            // A whole number is a timestamp when the setting is of that type, as in a tenant's
+            // own write; a value that is not of the type is not the platform's answer here.
+            let value = match (def.r#type.as_str(), value) {
+                ("timestamp", Value::Int(at)) => Value::Time(*at),
+                _ => value.clone(),
+            };
+            if type_problem(def.r#type.as_str(), &value).is_none() {
+                found = Some((SettingSource::Platform, None, value));
+            }
+        }
+    }
     let (source, team, value) =
         found.unwrap_or_else(|| (SettingSource::Default, None, def.default.clone()));
     SettingResolution {
@@ -235,19 +288,28 @@ fn resolve_definition(
         value,
         source,
         team,
-        platform_revision: 0,
+        platform_revision: platform_level.map_or(0, |level| level.revision),
         tenant_revision: tenant_revision(tenant, &def.id),
     }
 }
 
 /// Every setting of the tenant resolved for a principal, in the order of the setting ids.
 pub fn resolve_all(tenant: &TenantState, principal: &Principal) -> Vec<SettingResolution> {
+    resolve_all_with(tenant, principal, &PlatformLevels::new())
+}
+
+/// [`resolve_all`] with the platform level the control plane holds (see [`resolve_with`]).
+pub fn resolve_all_with(
+    tenant: &TenantState,
+    principal: &Principal,
+    platform: &PlatformLevels,
+) -> Vec<SettingResolution> {
     tenant
         .schema
         .settings
         .iter()
         .flat_map(|defs| defs.values())
-        .map(|def| resolve_definition(tenant, def, principal))
+        .map(|def| resolve_definition(tenant, def, principal, platform))
         .collect()
 }
 
@@ -261,6 +323,16 @@ pub fn resolve_for(
     person: &PrincipalId,
     setting: &SettingId,
 ) -> Result<SettingResolution, DomainError> {
+    resolve_for_with(tenant, person, setting, &PlatformLevels::new())
+}
+
+/// [`resolve_for`] with the platform level the control plane holds (see [`resolve_with`]).
+pub fn resolve_for_with(
+    tenant: &TenantState,
+    person: &PrincipalId,
+    setting: &SettingId,
+    platform: &PlatformLevels,
+) -> Result<SettingResolution, DomainError> {
     let known = tenant.members.contains_key(person)
         || tenant
             .schema
@@ -271,7 +343,7 @@ pub fn resolve_for(
         return Err(DomainError::new(ErrorKind::UnknownObject, message.clone())
             .with(vec![Check::fail("setting:recipient_is_a_person", message)]));
     }
-    resolve(tenant, &Principal::User(person.clone()), setting)
+    resolve_with(tenant, &Principal::User(person.clone()), setting, platform)
 }
 
 fn unknown_setting(setting: &SettingId) -> DomainError {
@@ -285,6 +357,16 @@ fn unknown_setting(setting: &SettingId) -> DomainError {
 /// level; a lock is by the platform or the tenant; the type is one the kernel holds, and the
 /// default is a value of it; the name is not that of a platform definition.
 pub fn definition_problems(schema: &TenantSchema, problems: &mut Vec<String>) {
+    definition_problems_against(schema, PLATFORM_SETTINGS, problems);
+}
+
+/// [`definition_problems`] against the given names of the platform's definitions (SET-003), for a
+/// release that ships some and for a test that names one.
+pub fn definition_problems_against(
+    schema: &TenantSchema,
+    platform_names: &[&str],
+    problems: &mut Vec<String>,
+) {
     let Some(defs) = &schema.settings else {
         return;
     };
@@ -312,7 +394,7 @@ pub fn definition_problems(schema: &TenantSchema, problems: &mut Vec<String>) {
         if def.label.trim().is_empty() {
             problems.push(format!("{at}: a setting needs a label"));
         }
-        if PLATFORM_SETTINGS.contains(&def.id.as_str()) {
+        if platform_names.contains(&def.id.as_str()) {
             problems.push(format!(
                 "{at}: the name is that of a platform setting (SET-003)"
             ));

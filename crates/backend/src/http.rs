@@ -1113,6 +1113,10 @@ pub fn router(app: Shared) -> Router {
         .route("/internal/diagnostics", post(diagnostics))
         .route("/internal/platform/diagnostics", post(platform_diagnostics))
         .route("/internal/platform/tenants", post(platform_create_tenant))
+        .route(
+            "/internal/platform/settings/set",
+            post(crate::settings::set_platform),
+        )
         .route("/internal/lab/overview", post(lab_overview))
         .route("/internal/lab/run", post(lab_run))
         .route("/internal/lab/result", post(lab_result))

@@ -287,6 +287,8 @@ pub struct App {
     pub clock_skew_ms: AtomicI64,
     /// Development only: the identity service is made to answer as if it could not be reached.
     pub identity_outage: AtomicBool,
+    /// The platform level of the settings, as the control database holds it, for a bounded age.
+    pub platform_settings: crate::settings::PlatformCache,
 }
 
 pub type Shared = Arc<App>;
@@ -305,6 +307,7 @@ impl App {
             decisions: Recent::new(1000),
             clock_skew_ms: AtomicI64::new(0),
             identity_outage: AtomicBool::new(false),
+            platform_settings: Default::default(),
         })
     }
 

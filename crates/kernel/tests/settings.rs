@@ -1458,3 +1458,114 @@ fn a_capability_is_not_removed_while_a_role_grants_it_and_a_malformed_id_is_refu
         assert_eq!(refused.kind, ErrorKind::InvalidSchema, "{bad}");
     }
 }
+
+// ---------------------------------------------------------------------------------------------
+// The platform level held by the control plane (CT-303, SET-005, SET-030, SET-051).
+// ---------------------------------------------------------------------------------------------
+
+fn platform_levels(setting: &str, value: Option<Value>, revision: u64) -> settings::PlatformLevels {
+    [(sid(setting), settings::PlatformLevel { value, revision })].into()
+}
+
+fn with_platform_level_open() -> World {
+    let mut def = page_size();
+    def.levels.insert(SettingLevel::Platform);
+    define(&notes_world(), def)
+}
+
+// Verifies: SET-005
+// Verifies: SET-012
+#[test]
+fn the_platform_value_is_read_between_the_tenant_and_the_default() {
+    let world = with_platform_level_open();
+    let platform = platform_levels("page_size", Some(Value::Int(50)), 3);
+    let owner = user("alpha:owner");
+    let read = |world: &World| {
+        settings::resolve_with(tenant(world), &owner, &sid("page_size"), &platform).unwrap()
+    };
+
+    let from_platform = read(&world);
+    assert_eq!(from_platform.source, SettingSource::Platform);
+    assert_eq!(from_platform.value, Value::Int(50));
+    assert_eq!(from_platform.platform_revision, 3);
+
+    // The tenant's own override is nearer than the platform's.
+    let overridden = set_tenant(&world, "page_size", Value::Int(35), 0);
+    let from_tenant = read(&overridden);
+    assert_eq!(from_tenant.source, SettingSource::Tenant);
+    assert_eq!(from_tenant.value, Value::Int(35));
+    assert_eq!(
+        from_tenant.platform_revision, 3,
+        "the revision is named either way"
+    );
+
+    // A removed platform level falls back to the default and keeps its revision.
+    let removed = platform_levels("page_size", None, 4);
+    let after_removal =
+        settings::resolve_with(tenant(&world), &owner, &sid("page_size"), &removed).unwrap();
+    assert_eq!(after_removal.source, SettingSource::Default);
+    assert_eq!(after_removal.platform_revision, 4);
+
+    // With none held the answer is the one the tenant-only functions give.
+    assert_eq!(
+        settings::resolve(tenant(&world), &owner, &sid("page_size"))
+            .unwrap()
+            .source,
+        SettingSource::Default
+    );
+    let all = settings::resolve_all_with(tenant(&world), &owner, &platform);
+    assert_eq!(all[0].source, SettingSource::Platform);
+}
+
+// Verifies: SET-005
+#[test]
+fn a_platform_value_is_ignored_where_the_definition_does_not_open_the_platform_level() {
+    // `page_size` allows the tenant, team and person levels only.
+    let world = with_page_size();
+    let platform = platform_levels("page_size", Some(Value::Int(50)), 1);
+    let found = settings::resolve_with(
+        tenant(&world),
+        &user("alpha:owner"),
+        &sid("page_size"),
+        &platform,
+    )
+    .unwrap();
+    assert_eq!(found.source, SettingSource::Default);
+
+    // A value of another type than the definition's is not its answer either.
+    let world = with_platform_level_open();
+    let wrong = platform_levels("page_size", Some(text_value("many")), 1);
+    let found = settings::resolve_with(
+        tenant(&world),
+        &user("alpha:owner"),
+        &sid("page_size"),
+        &wrong,
+    )
+    .unwrap();
+    assert_eq!(found.source, SettingSource::Default);
+}
+
+// Verifies: SET-021
+#[test]
+fn the_platform_value_is_a_flag_a_whole_number_or_text() {
+    assert_eq!(settings::platform_value_problem(&Value::Bool(true)), None);
+    assert_eq!(settings::platform_value_problem(&Value::Int(3)), None);
+    assert_eq!(settings::platform_value_problem(&text_value("x")), None);
+    assert!(settings::platform_value_problem(&Value::List(vec![])).is_some());
+    assert!(settings::platform_value_problem(&Value::Null).is_some());
+}
+
+// Verifies: SET-003
+#[test]
+fn a_tenant_definition_with_the_name_of_a_platform_definition_is_refused() {
+    let world = with_page_size();
+    let schema = schema_of(&world);
+    let mut problems = Vec::new();
+    settings::definition_problems_against(schema, &["retention_days"], &mut problems);
+    assert!(problems.is_empty(), "{problems:?}");
+    settings::definition_problems_against(schema, &["page_size"], &mut problems);
+    assert!(
+        problems.iter().any(|p| p.contains("SET-003")),
+        "{problems:?}"
+    );
+}
