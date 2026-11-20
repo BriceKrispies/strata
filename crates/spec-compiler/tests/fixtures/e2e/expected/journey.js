@@ -183,6 +183,8 @@ export class Journey {
     this.lastResponse = null;
     this.seq = 0;
     this.calls = 0;
+    // The mail captureMail took, so that a later capture for the same address reads a newer message.
+    this.mailTaken = new Set();
   }
 
   /** A journey over the named browsers (the first is the test's own page). */
@@ -280,6 +282,13 @@ export class Journey {
     return text.replace(CAPTURE_REF, (whole) => encodeURIComponent(this.sub(whole)));
   }
 
+  /** A fragment: captured values stand for their own text, which may hold only what a fragment may. */
+  subFragment(text) {
+    const fragment = this.sub(text);
+    if (!/^[A-Za-z0-9=&_.~%-]+$/.test(fragment)) throw new Error('a captured value put into a fragment holds a character a fragment may not');
+    return fragment;
+  }
+
   subDeep(value) {
     if (typeof value === 'string') return this.sub(value);
     if (Array.isArray(value)) return value.map((v) => this.subDeep(v));
@@ -349,6 +358,11 @@ export class Journey {
       return { path: decodeURIComponent(url.pathname), query: Object.fromEntries(declared.filter((k) => url.searchParams.has(k)).map((k) => [k, url.searchParams.get(k)])) };
     };
     await expect.poll(address, { message: 'the address', timeout }).toEqual({ path: decodeURIComponent(path), query });
+  }
+
+  /** The address the page is at (fragment included) matches a pattern, or no longer does. The address is never printed: it may hold a secret. */
+  async expectUrl(pattern, absent, timeout) {
+    await expect.poll(() => pattern.test(this.page.url()), { message: `the address ${absent ? 'does not match' : 'matches'} ${pattern}`, timeout }).toBe(!absent);
   }
 
   // ---- what the page shows ----
@@ -577,6 +591,41 @@ export class Journey {
     await expect(locator).toBeVisible();
     const value = attribute === 'value' ? await locator.inputValue() : await locator.getAttribute(attribute);
     expect(value, `attribute ${attribute} to capture`).not.toBeNull();
+    this.captures.set(name, value);
+  }
+
+  /**
+   * The latest message to an address in the development mail outbox that no earlier captureMail of
+   * this journey took, bound by a pattern to a name.
+   * Only a stack started for development answers (STRATA_DEV), and only to the site's owner, so the
+   * browser that reads it (`as`, or the current one) is signed in as the owner. The text of the
+   * message is never printed: it holds links that sign people in.
+   */
+  async captureMail({ to, pattern, name, as, timeout = 8_000 }) {
+    const t = as === undefined ? this.current : this.sessions.get(as);
+    const origin = new URL(this.baseURL).origin;
+    const address = this.sub(to).trim().toLowerCase();
+    const re = this.re(pattern);
+    const send = async (method, path, extra = {}) => {
+      const options = { method, headers: { origin, ...extra.headers }, failOnStatusCode: false, maxRedirects: 0, ...(extra.data === undefined ? {} : { data: extra.data }) };
+      return t.context.request.fetch(...(await this.loopback(path, options, t.context)));
+    };
+    const session = await send('GET', '/api/session');
+    expect(session.status(), 'GET /api/session').toBe(200);
+    const csrf = (await session.json()).session?.csrf_token;
+    expect(csrf, 'the request token of the browser that reads the mail outbox').toBeTruthy();
+    let value;
+    const read = async () => {
+      const reply = await send('POST', '/api/dev/mail-outbox', { headers: { 'x-csrf-token': csrf, 'content-type': 'application/json' }, data: {} });
+      expect(reply.status(), 'POST /api/dev/mail-outbox (the stack must run with STRATA_DEV and the browser must be signed in as the site owner)').toBe(200);
+      const mine = ((await reply.json()).messages ?? []).filter((mail) => String(mail.to).trim().toLowerCase() === address && !this.mailTaken.has(String(mail.text)));
+      const text = mine.length ? String(mine[mine.length - 1].text) : '';
+      const hit = mine.length ? re.exec(text) : null;
+      value = hit ? (hit[1] ?? hit[0]) : undefined;
+      if (value !== undefined) this.mailTaken.add(text);
+      return value !== undefined;
+    };
+    await expect.poll(read, { message: `the latest mail to ${address} in the development mail outbox, not taken before, holds what the pattern matches`, timeout }).toBe(true);
     this.captures.set(name, value);
   }
 
