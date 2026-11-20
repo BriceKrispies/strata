@@ -40,10 +40,11 @@ pub(crate) fn insufficient(need: Need) -> DomainError {
     error
 }
 
-/// `InsufficientState` for the need an expression noted as missing since `expr::clear_missing`,
-/// or `None` when the evaluation failed for another reason.
-pub(crate) fn missing_error() -> Option<DomainError> {
-    expr::take_missing().map(insufficient)
+/// `InsufficientState` naming the record a failed evaluation of `expr` could not follow a
+/// reference into because the snapshot does not cover it, or `None` when every reference the
+/// expression follows is covered and the evaluation failed for another reason.
+pub(crate) fn missing_error(rule: &expr::Expr, env: &Env<'_>) -> Option<DomainError> {
+    expr::missing(rule, env).map(insufficient)
 }
 
 impl<'a> Lookup<'a> {
@@ -361,15 +362,35 @@ pub fn authorize(
     subject: Subject<'_>,
     lookup: Option<Lookup<'_>>,
 ) -> (bool, Vec<Check>) {
+    let (allowed, checks, _) = authorize_needing(
+        tenant, schema, principal, now, action, resource, subject, lookup,
+    );
+    (allowed, checks)
+}
+
+/// [`authorize`], also naming the first record a condition that failed to evaluate could not
+/// follow a reference into because the snapshot does not cover it. A caller that is refused
+/// and gets a need answers `InsufficientState` for it, so a decision never rests on a record
+/// that was merely not loaded.
+pub(crate) fn authorize_needing(
+    tenant: &TenantState,
+    schema: &TenantSchema,
+    principal: &Principal,
+    now: Timestamp,
+    action: Action,
+    resource: &Resource,
+    subject: Subject<'_>,
+    lookup: Option<Lookup<'_>>,
+) -> (bool, Vec<Check>, Option<Need>) {
     let roles = roles_of(tenant, principal);
     let what = format!("{action:?} on {resource:?}");
     if roles.contains(&owner_role()) {
-        return (true, vec![Check::pass("policy:builtin_owner", what)]);
+        return (true, vec![Check::pass("policy:builtin_owner", what)], None);
     }
     if let (Resource::Object(object), Some(verb)) = (resource, ObjectAction::of(action)) {
         let grant = Grant::Object(object.clone(), verb);
         if effective_permissions(tenant, principal).contains(&grant) {
-            return (true, vec![Check::pass("permission:role", what)]);
+            return (true, vec![Check::pass("permission:role", what)], None);
         }
     }
     let no_params = BTreeMap::new();
@@ -384,6 +405,7 @@ pub fn authorize(
         lookup,
     };
     let mut checks = Vec::new();
+    let mut needed = None;
     for policy in schema.policies.values() {
         let applies = roles.contains(&policy.role)
             && policy.actions.contains(&action)
@@ -396,12 +418,13 @@ pub fn authorize(
         }
         let rule = format!("policy:{}", policy.id);
         match &policy.condition {
-            None => return (true, vec![Check::pass(rule, what)]),
+            None => return (true, vec![Check::pass(rule, what)], None),
             Some(condition) => match expr::eval(condition, &env) {
                 Ok(Value::Bool(true)) => {
                     return (
                         true,
                         vec![Check::pass(rule, format!("{what} where {condition}"))],
+                        None,
                     )
                 }
                 Ok(other) => checks.push(Check::fail(
@@ -412,7 +435,12 @@ pub fn authorize(
                         if other.is_null() { "null" } else { "false" }
                     ),
                 )),
-                Err(e) => checks.push(Check::fail(rule, format!("{condition}: {e}"))),
+                Err(e) => {
+                    if needed.is_none() {
+                        needed = expr::missing(condition, &env);
+                    }
+                    checks.push(Check::fail(rule, format!("{condition}: {e}")));
+                }
             },
         }
     }
@@ -422,7 +450,7 @@ pub fn authorize(
             format!("no policy grants {what}"),
         ));
     }
-    (false, checks)
+    (false, checks, needed)
 }
 
 /// Whether some policy could grant the action, ignoring conditions. For user interfaces that
@@ -641,10 +669,9 @@ pub fn validate_record(
         };
         for constraint in object.constraints.values() {
             let rule = format!("constraint:{name}.{}", constraint.id);
-            expr::clear_missing();
             let outcome = expr::eval(&constraint.expr, &env);
             if outcome.is_err() {
-                if let Some(missing) = missing_error() {
+                if let Some(missing) = missing_error(&constraint.expr, &env) {
                     return Err(missing);
                 }
             }

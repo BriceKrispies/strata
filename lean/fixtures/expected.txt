@@ -2,20 +2,20 @@ scenario s0
 err invalid
 ok
 err unauthorized
-err not_found
-ok
-err unauthorized
 err unauthorized
 ok
-err not_found
+err unauthorized
+err unauthorized
+ok
+err unauthorized
 err not_found
 err unauthorized
 err unauthorized
-err not_found
+err unauthorized
 ok
 err invalid
 err unauthorized
-err not_found
+err unauthorized
 ok
 ok
 err unauthorized
@@ -34,12 +34,12 @@ scenario s1
 ok
 err unauthorized
 err no_tenant
-err not_found
+err unauthorized
 ok
 err unauthorized
 err invalid
 err unauthorized
-err not_found
+err unauthorized
 ok
 err no_tenant
 ok
@@ -52,23 +52,23 @@ record 2 owner=103 1=s:yew 2=i:27 3=b:1
 tenant 2 next=1 required=1
 end
 scenario s2
-err not_found
-err not_found
+err unauthorized
+err unauthorized
 err invalid
 err no_tenant
-err not_found
+err unauthorized
 ok
 ok
-err not_found
-err not_found
+err unauthorized
+err unauthorized
 err invalid
-err not_found
-err not_found
 err unauthorized
 err not_found
+err unauthorized
+err unauthorized
 err invalid
-err not_found
-err not_found
+err unauthorized
+err unauthorized
 err invalid
 ok
 err not_found
@@ -79,21 +79,21 @@ record 1 owner=102 1=s:fir 3=b:1
 tenant 2 next=1 required=1
 end
 scenario s3
-err not_found
+err unauthorized
 err invalid
 err unauthorized
-err not_found
+err unauthorized
 err unauthorized
 ok
 err unauthorized
 err not_found
 err invalid
-err not_found
+err unauthorized
 ok
 err invalid
 err not_found
 err invalid
-err not_found
+err unauthorized
 err invalid
 state
 tenant 1 next=2 required=1,2
@@ -103,17 +103,17 @@ end
 scenario s4
 ok
 err unauthorized
-err not_found
+err unauthorized
 ok
 ok
 err not_found
-err not_found
+err unauthorized
 ok
 err unauthorized
-err not_found
-err not_found
+err unauthorized
+err unauthorized
 err no_tenant
-err not_found
+err unauthorized
 ok
 err unauthorized
 err invalid
@@ -130,22 +130,22 @@ record 3 owner=103 1=s:ash 3=b:0
 tenant 2 next=1 required=1
 end
 scenario s5
-err not_found
+err unauthorized
 err invalid
 err no_tenant
 err invalid
 ok
 err invalid
-err not_found
+err unauthorized
 err invalid
 ok
 err not_found
 err no_tenant
 ok
-err not_found
+err unauthorized
 err invalid
-err not_found
-err not_found
+err unauthorized
+err unauthorized
 state
 tenant 1 next=3 required=1,3
 record 1 owner=100 1=s:oak 3=b:1
@@ -156,16 +156,16 @@ scenario s6
 ok
 err unauthorized
 ok
-err not_found
+err unauthorized
 err invalid
 ok
-err not_found
-ok
-err not_found
-ok
-err not_found
 err unauthorized
-err not_found
+ok
+err unauthorized
+ok
+err unauthorized
+err unauthorized
+err unauthorized
 ok
 ok
 state
@@ -179,7 +179,7 @@ ok
 err not_found
 ok
 ok
-err not_found
+err unauthorized
 err unauthorized
 err no_tenant
 err unauthorized
@@ -187,7 +187,7 @@ err unauthorized
 err invalid
 err invalid
 ok
-err not_found
+err unauthorized
 ok
 state
 tenant 1 next=4 required=1
@@ -202,17 +202,17 @@ err unauthorized
 err not_found
 ok
 err unauthorized
-err not_found
-err not_found
-err not_found
+err unauthorized
+err unauthorized
+err unauthorized
 ok
-err not_found
-ok
-ok
-err not_found
+err unauthorized
 ok
 ok
-err not_found
+err unauthorized
+ok
+ok
+err unauthorized
 err unauthorized
 state
 tenant 1 next=4 required=1
@@ -224,15 +224,15 @@ record 1 owner=203 1=s:yew 2=i:-4 3=b:1
 record 2 owner=203 1=s:fir
 end
 scenario s9
-err not_found
-err not_found
-err not_found
-err not_found
+err unauthorized
+err unauthorized
+err unauthorized
+err unauthorized
 ok
 err not_found
 err unauthorized
-err not_found
-err not_found
+err unauthorized
+err unauthorized
 ok
 state
 tenant 1 next=1 required=1
@@ -240,17 +240,17 @@ tenant 2 next=2 required=1
 record 1 owner=202 1=s:oak 2=i:34
 end
 scenario s10
-err not_found
-err not_found
-err not_found
+err unauthorized
+err unauthorized
+err unauthorized
 err invalid
 err unauthorized
 err not_found
 err not_found
-err not_found
-err not_found
 err unauthorized
-err not_found
+err unauthorized
+err unauthorized
+err unauthorized
 ok
 state
 tenant 1 next=2 required=1
@@ -260,16 +260,16 @@ end
 scenario s11
 ok
 err unauthorized
-err not_found
+err unauthorized
 err not_found
 err invalid
 err unauthorized
 err no_tenant
 err unauthorized
 err no_tenant
+err unauthorized
 err not_found
-err not_found
-err not_found
+err unauthorized
 ok
 ok
 err invalid
@@ -283,7 +283,7 @@ tenant 2 next=2 required=1
 record 1 owner=201 1=s:oak
 end
 scenario s12
-err not_found
+err unauthorized
 err unauthorized
 err not_found
 ok
@@ -293,7 +293,7 @@ err not_found
 ok
 err invalid
 err not_found
-err not_found
+err unauthorized
 ok
 ok
 err not_found
@@ -310,9 +310,9 @@ tenant 2 next=2 required=1
 record 1 owner=201 1=s:yew
 end
 scenario s13
-err not_found
+err unauthorized
 ok
-err not_found
+err unauthorized
 ok
 ok
 ok
@@ -320,7 +320,7 @@ ok
 ok
 ok
 err invalid
-err not_found
+err unauthorized
 err no_tenant
 err invalid
 err invalid
@@ -341,9 +341,9 @@ end
 scenario s14
 ok
 err invalid
-err not_found
+err unauthorized
 ok
-err not_found
+err unauthorized
 err invalid
 err invalid
 ok
@@ -351,7 +351,7 @@ err no_tenant
 err invalid
 err invalid
 ok
-err not_found
+err unauthorized
 err invalid
 err no_tenant
 state
@@ -360,13 +360,13 @@ record 1 owner=100 1=s:elm 2=i:9 3=b:0
 tenant 2 next=1 required=1,3
 end
 scenario s15
+err unauthorized
 err not_found
-err not_found
-err not_found
-err not_found
+err unauthorized
+err unauthorized
 err invalid
 err no_tenant
-err not_found
+err unauthorized
 ok
 ok
 err invalid
@@ -391,23 +391,23 @@ record 7 owner=103 1=s:elm
 tenant 2 next=1 required=1
 end
 scenario s16
-err not_found
-ok
-err not_found
+err unauthorized
 ok
 err unauthorized
 ok
-err not_found
+err unauthorized
+ok
+err unauthorized
 err unauthorized
 err not_found
 err unauthorized
 err unauthorized
-err not_found
+err unauthorized
 err invalid
 err no_tenant
-err not_found
-err not_found
-err not_found
+err unauthorized
+err unauthorized
+err unauthorized
 err unauthorized
 err unauthorized
 ok
@@ -441,7 +441,7 @@ tenant 2 next=1 required=1
 end
 scenario s18
 err invalid
-err not_found
+err unauthorized
 ok
 ok
 err invalid
@@ -454,14 +454,14 @@ err unauthorized
 ok
 ok
 err invalid
-err not_found
-err not_found
+err unauthorized
+err unauthorized
 ok
 ok
 err no_tenant
 err no_tenant
 ok
-err not_found
+err unauthorized
 err unauthorized
 err invalid
 err unauthorized
@@ -483,9 +483,9 @@ err not_found
 ok
 err invalid
 ok
-err not_found
+err unauthorized
 ok
-err not_found
+err unauthorized
 state
 tenant 1 next=1 required=1,3
 tenant 2 next=4 required=1
@@ -494,17 +494,17 @@ record 2 owner=200 1=s:oak
 record 3 owner=203 1=s:ash 2=i:32
 end
 scenario s20
-err not_found
 err unauthorized
-err not_found
+err unauthorized
+err unauthorized
 ok
-err not_found
+err unauthorized
 ok
 ok
 err no_tenant
 err invalid
 err not_found
-err not_found
+err unauthorized
 ok
 ok
 ok
@@ -517,22 +517,22 @@ record 4 owner=102 1=s:fir 3=b:1
 tenant 2 next=1 required=1
 end
 scenario s21
+err unauthorized
+err unauthorized
 err not_found
-err not_found
-err not_found
-err not_found
+err unauthorized
 ok
-err not_found
+err unauthorized
 err invalid
-err not_found
-err not_found
+err unauthorized
+err unauthorized
 ok
-err not_found
-ok
-ok
+err unauthorized
 ok
 ok
-err not_found
+ok
+ok
+err unauthorized
 ok
 state
 tenant 1 next=3 required=1
@@ -543,13 +543,13 @@ record 1 owner=200 1=s:elm
 record 2 owner=203 1=s:oak 3=b:0
 end
 scenario s22
-err not_found
+err unauthorized
 ok
+err unauthorized
+err unauthorized
 err not_found
-err not_found
-err not_found
-err not_found
-err not_found
+err unauthorized
+err unauthorized
 err unauthorized
 err no_tenant
 err not_found
@@ -561,7 +561,7 @@ ok
 ok
 err invalid
 err invalid
-err not_found
+err unauthorized
 ok
 err no_tenant
 state
@@ -570,7 +570,7 @@ record 1 owner=101 1=s:oak 2=i:26
 tenant 2 next=1 required=1
 end
 scenario s23
-err not_found
+err unauthorized
 err not_found
 ok
 err unauthorized
@@ -583,7 +583,7 @@ err invalid
 ok
 err no_tenant
 ok
-err not_found
+err unauthorized
 ok
 err unauthorized
 state
@@ -598,23 +598,23 @@ scenario s24
 err no_tenant
 ok
 err not_found
-err not_found
-err not_found
-err not_found
-err not_found
-err not_found
-err not_found
+err unauthorized
+err unauthorized
+err unauthorized
+err unauthorized
+err unauthorized
+err unauthorized
 err not_found
 err invalid
-err not_found
+err unauthorized
 err not_found
 err no_tenant
 err invalid
 err not_found
-err not_found
+err unauthorized
 err no_tenant
-err not_found
-err not_found
+err unauthorized
+err unauthorized
 state
 tenant 1 next=1 required=1,2
 tenant 2 next=1 required=1
@@ -622,18 +622,18 @@ end
 scenario s25
 ok
 err invalid
-err not_found
+err unauthorized
 err invalid
 err invalid
 err not_found
-err not_found
+err unauthorized
 err not_found
 ok
 ok
 err not_found
-err not_found
+err unauthorized
 err invalid
-err not_found
+err unauthorized
 ok
 state
 tenant 1 next=2 required=1,3
@@ -642,8 +642,8 @@ tenant 2 next=1 required=1
 end
 scenario s26
 ok
-err not_found
-err not_found
+err unauthorized
+err unauthorized
 err no_tenant
 ok
 ok
@@ -676,8 +676,8 @@ err not_found
 err migration_rejected
 err invalid
 err unauthorized
-err not_found
-err not_found
+err unauthorized
+err unauthorized
 ok
 state
 tenant 1 next=2 required=1,2
@@ -688,25 +688,25 @@ end
 scenario s28
 err invalid
 err invalid
-err not_found
-err not_found
+err unauthorized
+err unauthorized
 err unauthorized
 ok
-err not_found
+err unauthorized
 err invalid
 ok
 err unauthorized
-err not_found
-err not_found
+err unauthorized
+err unauthorized
 err no_tenant
-err not_found
+err unauthorized
 ok
 err invalid
 ok
-err not_found
+err unauthorized
 ok
-err not_found
-err not_found
+err unauthorized
+err unauthorized
 ok
 err unauthorized
 err not_found
@@ -720,11 +720,11 @@ tenant 2 next=2 required=1
 record 1 owner=202 1=s:elm
 end
 scenario s29
-err not_found
+err unauthorized
 ok
 ok
 err invalid
-err not_found
+err unauthorized
 err unauthorized
 err migration_rejected
 ok
@@ -743,11 +743,11 @@ ok
 err no_tenant
 err invalid
 err invalid
-err not_found
-err not_found
-err not_found
+err unauthorized
+err unauthorized
+err unauthorized
 err invalid
-err not_found
+err unauthorized
 err unauthorized
 err not_found
 ok
@@ -756,18 +756,18 @@ tenant 1 next=1 required=1,2,3
 tenant 2 next=1 required=1
 end
 scenario s31
-err not_found
+err unauthorized
 err not_found
 err no_tenant
 ok
-err not_found
+err unauthorized
 err not_found
 ok
 err invalid
-err not_found
-err not_found
+err unauthorized
+err unauthorized
 ok
-err not_found
+err unauthorized
 ok
 ok
 err unauthorized
@@ -789,9 +789,9 @@ ok
 ok
 ok
 err invalid
-err not_found
+err unauthorized
 ok
-err not_found
+err unauthorized
 err invalid
 err not_found
 ok
@@ -819,18 +819,18 @@ tenant 2 next=2 required=1,2,3
 record 1 owner=202 1=s:yew 2=i:20 3=b:0
 end
 scenario s33
-err not_found
-err not_found
-err not_found
+err unauthorized
+err unauthorized
+err unauthorized
 ok
 err unauthorized
-err not_found
+err unauthorized
 err invalid
 err not_found
 ok
 ok
 err unauthorized
-err not_found
+err unauthorized
 state
 tenant 1 next=3 required=1,2
 record 1 owner=103 1=s:ash 2=i:5 3=b:1
@@ -840,13 +840,13 @@ end
 scenario s34
 ok
 err invalid
-err not_found
+err unauthorized
 ok
 ok
 err invalid
 ok
 ok
-err not_found
+err unauthorized
 ok
 state
 tenant 1 next=5 required=1
@@ -857,33 +857,33 @@ record 4 owner=103 1=s:oak 2=i:29
 tenant 2 next=1 required=1
 end
 scenario s35
-err not_found
+err unauthorized
 err no_tenant
 err not_found
 ok
 err unauthorized
 err invalid
 ok
-err not_found
+err unauthorized
 err unauthorized
 err invalid
-err not_found
+err unauthorized
 state
 tenant 1 next=2 required=1
 record 1 owner=102 1=s:elm
 tenant 2 next=1 required=1
 end
 scenario s36
-err not_found
-err not_found
-err not_found
-err not_found
+err unauthorized
+err unauthorized
+err unauthorized
+err unauthorized
 ok
-err not_found
+err unauthorized
 ok
-err not_found
-err not_found
-err not_found
+err unauthorized
+err unauthorized
+err unauthorized
 ok
 err unauthorized
 state
@@ -894,12 +894,12 @@ record 2 owner=203 1=s:fir 2=i:2
 end
 scenario s37
 err unauthorized
-err not_found
-err not_found
 err unauthorized
-err not_found
-err not_found
-err not_found
+err unauthorized
+err unauthorized
+err unauthorized
+err unauthorized
+err unauthorized
 ok
 err no_tenant
 err not_found
@@ -923,19 +923,19 @@ end
 scenario s38
 err invalid
 err unauthorized
-err not_found
-err not_found
-ok
+err unauthorized
 err not_found
 ok
+err not_found
 ok
 ok
 ok
+ok
+err unauthorized
 err not_found
-err not_found
-err not_found
+err unauthorized
 err invalid
-err not_found
+err unauthorized
 ok
 state
 tenant 1 next=5 required=1,3
@@ -947,7 +947,7 @@ tenant 2 next=1 required=1
 end
 scenario s39
 err invalid
-err not_found
+err unauthorized
 err invalid
 ok
 err unauthorized
@@ -981,12 +981,12 @@ ok
 err no_tenant
 err unauthorized
 err invalid
-err not_found
-err not_found
+err unauthorized
+err unauthorized
 ok
 err invalid
-err not_found
-err not_found
+err unauthorized
+err unauthorized
 err invalid
 err unauthorized
 err not_found
@@ -997,17 +997,17 @@ record 1 owner=103 1=s:yew 2=i:29
 tenant 2 next=1 required=1,3
 end
 scenario s41
-err not_found
+err unauthorized
 err no_tenant
-err not_found
+err unauthorized
 ok
 ok
 err unauthorized
 err not_found
 err unauthorized
-err not_found
+err unauthorized
 ok
-err not_found
+err unauthorized
 err not_found
 err migration_rejected
 ok
@@ -1034,7 +1034,7 @@ record 1 owner=200 1=s:ash 2=i:32 3=b:1
 record 2 owner=200 1=s:yew 3=b:1
 end
 scenario s42
-err not_found
+err unauthorized
 err not_found
 err unauthorized
 err unauthorized
@@ -1042,20 +1042,20 @@ err invalid
 ok
 ok
 err not_found
-err not_found
-err not_found
+err unauthorized
+err unauthorized
 err unauthorized
 ok
 err invalid
 ok
 err invalid
-err not_found
+err unauthorized
 err no_tenant
 err not_found
-err not_found
-err not_found
-err not_found
-err not_found
+err unauthorized
+err unauthorized
+err unauthorized
+err unauthorized
 ok
 state
 tenant 1 next=1 required=1,2,3
@@ -1063,7 +1063,7 @@ tenant 2 next=2 required=1
 record 1 owner=203 1=s:ash 2=i:19 3=b:1
 end
 scenario s43
-err not_found
+err unauthorized
 err no_tenant
 err no_tenant
 err unauthorized
@@ -1071,10 +1071,10 @@ ok
 err no_tenant
 err no_tenant
 ok
-err not_found
+err unauthorized
 err migration_rejected
 err not_found
-err not_found
+err unauthorized
 state
 tenant 1 next=2 required=1
 record 1 owner=102 1=s:elm 2=i:-4
@@ -1082,41 +1082,41 @@ tenant 2 next=2 required=1
 record 1 owner=203 1=s:elm 2=i:25
 end
 scenario s44
-err not_found
+err unauthorized
 err unauthorized
 err not_found
 err invalid
-err not_found
+err unauthorized
 err invalid
 err unauthorized
-err not_found
+err unauthorized
 ok
 ok
 err no_tenant
-err not_found
-err not_found
 err unauthorized
-err not_found
+err unauthorized
+err unauthorized
+err unauthorized
 state
 tenant 1 next=2 required=1
 record 1 owner=103 1=s:elm 2=i:28 3=b:1
 tenant 2 next=1 required=1
 end
 scenario s45
-err not_found
+err unauthorized
 err unauthorized
 err no_tenant
 ok
 err invalid
 err not_found
-err not_found
+err unauthorized
 ok
 err not_found
-err not_found
+err unauthorized
 ok
 ok
 ok
-err not_found
+err unauthorized
 err invalid
 ok
 ok
@@ -1129,14 +1129,14 @@ record 5 owner=103 1=s:elm 2=i:-5
 tenant 2 next=1 required=1
 end
 scenario s46
-err not_found
+err unauthorized
 ok
 err unauthorized
-err not_found
+err unauthorized
 ok
 ok
 err invalid
-err not_found
+err unauthorized
 err no_tenant
 ok
 ok
@@ -1162,9 +1162,9 @@ record 1 owner=200 1=s:ash 3=b:0
 end
 scenario s47
 err not_found
-err not_found
-err not_found
-err not_found
+err unauthorized
+err unauthorized
+err unauthorized
 ok
 ok
 ok
@@ -1175,7 +1175,7 @@ err not_found
 ok
 err invalid
 err invalid
-err not_found
+err unauthorized
 ok
 err not_found
 err not_found
@@ -1192,15 +1192,15 @@ scenario s48
 ok
 err invalid
 ok
-err not_found
+err unauthorized
 ok
 err invalid
-err not_found
-err not_found
+err unauthorized
+err unauthorized
 ok
 err unauthorized
-err not_found
-err not_found
+err unauthorized
+err unauthorized
 ok
 err no_tenant
 state
@@ -1218,15 +1218,15 @@ err invalid
 ok
 err not_found
 ok
-err not_found
 err unauthorized
 err unauthorized
-err not_found
+err unauthorized
+err unauthorized
 err no_tenant
 ok
-err not_found
+err unauthorized
 err invalid
-err not_found
+err unauthorized
 ok
 err invalid
 err no_tenant
@@ -1237,21 +1237,21 @@ record 2 owner=102 1=s:oak 2=i:33 3=b:0
 tenant 2 next=1 required=1
 end
 scenario s50
-err not_found
+err unauthorized
 ok
 err no_tenant
-err not_found
-err not_found
+err unauthorized
+err unauthorized
 ok
 err no_tenant
 err invalid
 err no_tenant
-err not_found
+err unauthorized
 ok
 ok
-err not_found
+err unauthorized
 ok
-err not_found
+err unauthorized
 err invalid
 err no_tenant
 state
@@ -1259,15 +1259,15 @@ tenant 1 next=2 required=1
 tenant 2 next=1 required=1
 end
 scenario s51
-err not_found
+err unauthorized
 err not_found
 ok
 ok
 err invalid
-err not_found
+err unauthorized
 ok
-err not_found
-err not_found
+err unauthorized
+err unauthorized
 ok
 state
 tenant 1 next=4 required=1
@@ -1279,12 +1279,12 @@ scenario s52
 ok
 err unauthorized
 ok
-err not_found
-err no_tenant
-err not_found
 err unauthorized
-err not_found
-err not_found
+err no_tenant
+err unauthorized
+err unauthorized
+err unauthorized
+err unauthorized
 ok
 state
 tenant 1 next=3 required=1
@@ -1294,20 +1294,20 @@ tenant 2 next=1 required=1
 end
 scenario s53
 ok
-err not_found
-ok
-err not_found
+err unauthorized
 ok
 err unauthorized
-err not_found
-err not_found
-err not_found
+ok
+err unauthorized
+err unauthorized
+err unauthorized
+err unauthorized
 ok
 err invalid
 err invalid
 ok
 err invalid
-err not_found
+err unauthorized
 ok
 err no_tenant
 err no_tenant
@@ -1319,27 +1319,27 @@ tenant 2 next=2 required=1
 record 1 owner=202 1=s:fir 3=b:0
 end
 scenario s54
-err not_found
+err unauthorized
 ok
 err not_found
 err unauthorized
 ok
 ok
-err not_found
+err unauthorized
 err invalid
 err invalid
 err no_tenant
 err unauthorized
-err not_found
-err invalid
-err invalid
-err not_found
-err unauthorized
 err unauthorized
 err invalid
 err invalid
-err not_found
-err not_found
+err unauthorized
+err unauthorized
+err unauthorized
+err invalid
+err invalid
+err unauthorized
+err unauthorized
 ok
 err not_found
 state
@@ -1354,7 +1354,7 @@ err not_found
 ok
 ok
 ok
-err not_found
+err unauthorized
 ok
 ok
 ok
@@ -1365,10 +1365,10 @@ err unauthorized
 err unauthorized
 err no_tenant
 err invalid
-err not_found
+err unauthorized
 err invalid
 err invalid
-err not_found
+err unauthorized
 err unauthorized
 state
 tenant 1 next=4 required=1,2
@@ -1378,12 +1378,12 @@ record 3 owner=100 1=s:yew 2=i:8
 tenant 2 next=1 required=1
 end
 scenario s56
-err not_found
+err unauthorized
 ok
 ok
-err not_found
+err unauthorized
 ok
-err not_found
+err unauthorized
 err unauthorized
 err unauthorized
 err invalid
@@ -1400,16 +1400,16 @@ tenant 2 next=1 required=1
 end
 scenario s57
 err unauthorized
-err not_found
-err not_found
+err unauthorized
+err unauthorized
 ok
 ok
 err unauthorized
 err no_tenant
-err not_found
+err unauthorized
 ok
 ok
-err not_found
+err unauthorized
 err invalid
 ok
 err invalid
@@ -1433,7 +1433,7 @@ err invalid
 ok
 err no_tenant
 err not_found
-err not_found
+err unauthorized
 ok
 err not_found
 ok
@@ -1464,7 +1464,7 @@ err invalid
 err not_found
 err unauthorized
 err invalid
-err not_found
+err unauthorized
 err no_tenant
 err invalid
 err invalid
