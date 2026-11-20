@@ -25,6 +25,18 @@ pub struct Published {
     pub tenant: Arc<TenantState>,
 }
 
+/// An entry or exit event of a segment, handed on by the job worker (D-7280), with what deciding
+/// who may be told of it needs: a snapshot that holds the subject record of the person, and the
+/// segments of the tenant at the time. Delivery is live only: the segment log is the record, a
+/// subscriber that missed a notice reads the members again.
+pub struct PublishedSegment {
+    /// The position of the event in the segment event log.
+    pub position: u64,
+    pub event: strata_kernel::segments::SegmentEvent,
+    pub state: Arc<strata_kernel::State>,
+    pub catalog: Arc<Vec<strata_kernel::segments::Segment>>,
+}
+
 /// A message about a simulation or verification run, addressed to one principal.
 #[derive(Clone, Debug)]
 pub struct RunMessage {
@@ -71,6 +83,14 @@ impl<T: Clone> Fanout<T> {
             .subscribe()
     }
 
+    /// Whether anyone listens to `tenant`'s messages now.
+    pub fn listening(&self, tenant: &TenantId) -> bool {
+        let channels = self.channels.lock().unwrap_or_else(|e| e.into_inner());
+        channels
+            .get(tenant)
+            .is_some_and(|channel| channel.receiver_count() > 0)
+    }
+
     /// Send to `tenant`'s subscribers. With none, nothing is kept and the channel is dropped.
     pub fn send(&self, tenant: &TenantId, message: T) {
         let mut channels = self.channels.lock().unwrap_or_else(|e| e.into_inner());
@@ -87,6 +107,8 @@ impl<T: Clone> Fanout<T> {
 
 pub struct Hub {
     pub events: Fanout<Arc<Published>>,
+    /// The entry and exit events of segments, for the subscriptions that select segments.
+    pub segments: Fanout<Arc<PublishedSegment>>,
     pub runs: broadcast::Sender<RunMessage>,
     pub sessions: broadcast::Sender<(SessionId, SessionState)>,
     /// The outbox publisher, set once the backend has started.
@@ -98,6 +120,7 @@ impl Hub {
     pub fn new() -> Self {
         Hub {
             events: Fanout::new(1024),
+            segments: Fanout::new(1024),
             runs: broadcast::channel(256).0,
             sessions: broadcast::channel(64).0,
             outbox: OnceLock::new(),

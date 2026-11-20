@@ -7,7 +7,7 @@
 
 use crate::app::{App, Shared, LOG};
 use crate::auth::{session_state, Identity};
-use crate::hub::{Connection, Published};
+use crate::hub::{Connection, Published, PublishedSegment};
 use crate::limits::SocketPlaces;
 use axum::extract::ws::{Message, WebSocket};
 use futures_util::{SinkExt, StreamExt};
@@ -21,7 +21,7 @@ use strata_protocol::ws::{
     parse_client, ClientMessage, ServerMessage, SessionState, HEARTBEAT_MS, MAX_REPLAY,
     MAX_UNACKED, VERSION,
 };
-use strata_substrate::subscribe::{notice, Selector};
+use strata_substrate::subscribe::{notice, segment_notice, Selector};
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::mpsc;
 
@@ -200,6 +200,53 @@ impl Conn {
             self.send(ServerMessage::Resync {
                 reason: "too many unacknowledged events".into(),
                 head: seq,
+            })?;
+            return Err(Closed);
+        }
+        Ok(())
+    }
+
+    /// Tell the subscriptions that select segments of an entry or exit event of one, when the
+    /// subscriber may see its members and the person (D-7280). A segment event is live only: it
+    /// carries no sequence number of the kernel's, so no cursor and no replay apply.
+    fn deliver_segment(&mut self, published: &PublishedSegment) -> Result<(), Closed> {
+        if published.event.tenant != self.identity.tenant {
+            return Ok(());
+        }
+        let Some(segment) = published
+            .catalog
+            .iter()
+            .find(|segment| segment.id == published.event.event.segment)
+        else {
+            return Ok(());
+        };
+        let mut outgoing = Vec::new();
+        for (name, sub) in &self.subs {
+            if let Some(found) = segment_notice(
+                &published.state,
+                &self.identity.principal,
+                &sub.selector,
+                segment,
+                published.position,
+                &published.event,
+            ) {
+                outgoing.push((name.clone(), found));
+            }
+        }
+        for (sub, found) in outgoing {
+            self.delivered += 1;
+            self.send(ServerMessage::Event {
+                sub,
+                n: self.delivered,
+                seq: 0,
+                correlation: String::new(),
+                notice: found,
+            })?;
+        }
+        if self.delivered - self.acknowledged > MAX_UNACKED {
+            self.send(ServerMessage::Resync {
+                reason: "too many unacknowledged events".into(),
+                head: self.known_head,
             })?;
             return Err(Closed);
         }
@@ -445,6 +492,7 @@ pub async fn serve(
     // Subscribe to the hub before anything is read from the store, so that nothing committed in
     // between is missed; per-subscription cursors drop what replay already covered.
     let mut events = app.hub.events.subscribe(&identity.tenant);
+    let mut segment_events = app.hub.segments.subscribe(&identity.tenant);
     let mut runs = app.hub.runs.subscribe();
     let mut sessions = app.hub.sessions.subscribe();
 
@@ -525,6 +573,16 @@ pub async fn serve(
                     }
                     conn.deliver(&published)
                 }
+                Err(RecvError::Lagged(_)) => {
+                    reason = "fell behind the event stream";
+                    let head = conn.head().await;
+                    let _ = conn.send(ServerMessage::Resync { reason: reason.into(), head });
+                    Err(Closed)
+                }
+                Err(RecvError::Closed) => Err(Closed),
+            },
+            published = segment_events.recv() => match published {
+                Ok(published) => conn.deliver_segment(&published),
                 Err(RecvError::Lagged(_)) => {
                     reason = "fell behind the event stream";
                     let head = conn.head().await;

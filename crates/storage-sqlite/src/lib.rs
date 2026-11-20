@@ -2244,6 +2244,11 @@ fn wakes_where(
 /// Apply a segment write in the transaction `tx`: refused whole, as a conflict, when a segment or
 /// a row it rests on is not what the decision saw (the transaction then rolls back).
 fn apply_segments(tx: &Connection, write: &seg::SegmentWrite) -> StoreResult<()> {
+    if let Some((before, _)) = write.published {
+        if segment_cursor(tx)? != before {
+            return Err(write_conflict());
+        }
+    }
     for (id, expected) in &write.expect {
         let found: Option<i64> = tx
             .query_row(
@@ -2390,7 +2395,27 @@ fn apply_segments(tx: &Connection, write: &seg::SegmentWrite) -> StoreResult<()>
         )
         .map_err(db)?;
     }
+    if let Some((_, after)) = write.published {
+        tx.execute(
+            "UPDATE segment_events SET published = 1 WHERE position <= ?1",
+            params![after as i64],
+        )
+        .map_err(db)?;
+    }
     Ok(())
+}
+
+/// The position of the segment event log handed on to the job worker: the newest event marked
+/// published, 0 before any (D-7280).
+fn segment_cursor(tx: &Connection) -> StoreResult<u64> {
+    let found: i64 = tx
+        .query_row(
+            "SELECT COALESCE(MAX(position), 0) FROM segment_events WHERE published = 1",
+            [],
+            |r| r.get(0),
+        )
+        .map_err(db)?;
+    Ok(found.max(0) as u64)
 }
 
 impl Store for SqliteStore {
@@ -2764,7 +2789,13 @@ impl Store for SqliteStore {
                 found: None,
             });
         };
-        file.write(dbe, |tx| {
+        check_jobs(&commit.work.jobs)?;
+        // Jobs the write creates are woken for before and after it, as in `commit`.
+        let wake = commit.work.jobs.iter().map(|job| job.due_at.0).min();
+        if let Some(due) = wake {
+            self.wake_at(&commit.tenant, due)?;
+        }
+        let receipt = file.write(dbe, |tx| {
             let found = header(tx, &commit.tenant)?.map(|h| h.revision);
             if found != Some(commit.revision) {
                 return Err(StoreError::Conflict {
@@ -2773,11 +2804,20 @@ impl Store for SqliteStore {
                 });
             }
             apply_segments(tx, &commit.write)?;
+            write_automation(tx, &commit.tenant, &commit.work, commit.now)?;
             Ok(Receipt {
                 revision: commit.revision,
                 last_position: None,
             })
-        })
+        })?;
+        if let Some(due) = wake {
+            let _ = self.wake_at(&commit.tenant, due);
+        }
+        Ok(receipt)
+    }
+
+    fn segment_cursor(&self, tenant: &TenantId) -> StoreResult<u64> {
+        Ok(self.on_tenant(tenant, segment_cursor)?.unwrap_or(0))
     }
 
     fn search_candidates(
@@ -4596,8 +4636,25 @@ impl Store for SqliteStore {
                 params![state.schema.version.0 as i64],
             )
             .map_err(db)?;
+            // The membership and wake rows no longer rest on the records that were put back:
+            // every segment is evaluated again as if its predicate had changed, by the
+            // continuations and jobs this creates (WG-5167).
+            let catalog = catalog_rows(tx)?;
+            if !catalog.is_empty() {
+                let write = strata_kernel::segment_flow::restore_write(&catalog);
+                tx.execute("DELETE FROM segment_memberships", []).map_err(db)?;
+                tx.execute("DELETE FROM segment_wakes", []).map_err(db)?;
+                apply_segments(tx, &write)?;
+                tx.execute("UPDATE segments SET member_count = 0", [])
+                    .map_err(db)?;
+                let jobs =
+                    strata_storage_api::segment_jobs::of_write(&write, "restore", Timestamp(0));
+                insert_jobs(tx, tenant, &jobs, Timestamp(0))?;
+            }
             Ok(())
-        })
+        })?;
+        let _ = self.wake_refresh(tenant, &file);
+        Ok(())
     }
 
     fn reset(&self) -> StoreResult<()> {

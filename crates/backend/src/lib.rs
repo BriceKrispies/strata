@@ -20,6 +20,7 @@ pub mod mail;
 pub mod operations;
 pub mod ops;
 pub mod outbox;
+pub mod product_segments;
 pub mod products;
 pub mod provision;
 pub mod sealing;
