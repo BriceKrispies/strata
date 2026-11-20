@@ -1,0 +1,554 @@
+{
+  // Products, SKUs, regional price lists, promotions, orders and returns, with stock and redemption ledgers; depends on the catalogue, ledger and approval platform modules.
+  "product": {
+    "id": "commerce",
+    "name": "Commerce",
+    "description": "Manages the product catalogue, regional prices, promotions, orders and returns for the tenant.",
+    "version": "1.0.0",
+    "platform": { "min": "0.2" },
+    "imports": {
+      "spec": "../../../specifications/spec.jsonc",
+      "entities": ["product-module", "catalogue-read", "ledger-read", "workflow-approve"]
+    }
+  },
+
+  // Data model: a self-referencing category tree; orders and return requests refer to each other.
+  "records": [
+    { "id": "commerce__category_rec", "name": "Category", "owner": "product-module", "key": ["id"],
+      "fields": [
+        { "name": "id", "type": "u64" },
+        { "name": "parent", "type": "u64", "refersTo": "commerce__category_rec", "onDelete": "set-null", "optional": true },
+        { "name": "name", "type": "string" } ],
+      "retention": "Categories are kept while any product refers to them, then removed.",
+      "schemaVersion": 1, "realisation": "target" },
+    { "id": "commerce__product_rec", "name": "Product", "owner": "product-module", "key": ["id"],
+      "fields": [
+        { "name": "id", "type": "u64" },
+        { "name": "category", "type": "u64", "refersTo": "commerce__category_rec", "onDelete": "set-null", "optional": true },
+        { "name": "title", "type": "string" },
+        { "name": "slug", "type": "string" },
+        { "name": "published", "type": "bool" },
+        { "name": "tax_class", "type": "commerce__tax_class" } ],
+      "retention": "Products are kept while they are on sale or in an order, then removed.",
+      "schemaVersion": 1, "realisation": "target" },
+    { "id": "commerce__sku_rec", "name": "SKU", "owner": "product-module", "key": ["id"],
+      "fields": [
+        { "name": "id", "type": "u64" },
+        { "name": "product", "type": "u64", "refersTo": "commerce__product_rec", "onDelete": "restrict" },
+        { "name": "code", "type": "string" },
+        { "name": "region", "type": "commerce__region" },
+        { "name": "dimensions", "type": "commerce__dimensions", "optional": true },
+        { "name": "status", "type": "string" } ],
+      "retention": "SKUs are kept for seven years after they are discontinued.",
+      "schemaVersion": 1, "realisation": "target" },
+    { "id": "commerce__price_list_rec", "name": "Price list", "owner": "product-module", "key": ["id"],
+      "fields": [
+        { "name": "id", "type": "u64" },
+        { "name": "sku", "type": "u64", "refersTo": "commerce__sku_rec", "onDelete": "restrict" },
+        { "name": "region", "type": "commerce__region" },
+        { "name": "tier", "type": "commerce__price_tier" },
+        { "name": "currency", "type": "commerce__currency" },
+        { "name": "amount_minor", "type": "u64" } ],
+      "retention": "Superseded price lists are kept for seven years, then removed.",
+      "schemaVersion": 1, "realisation": "target" },
+    { "id": "commerce__promotion_rec", "name": "Promotion", "owner": "product-module", "key": ["id"],
+      "fields": [
+        { "name": "id", "type": "u64" },
+        { "name": "title", "type": "string" },
+        { "name": "kind", "type": "commerce__promotion_kind" },
+        { "name": "percent", "type": "u32", "optional": true },
+        { "name": "starts_at", "type": "timestamp" },
+        { "name": "ends_at", "type": "timestamp" },
+        { "name": "active", "type": "bool" } ],
+      "retention": "Promotions are kept for two years after they end, then removed.",
+      "schemaVersion": 1, "realisation": "target" },
+    { "id": "commerce__order_rec", "name": "Order", "owner": "product-module", "key": ["id"],
+      "fields": [
+        { "name": "id", "type": "u64" },
+        { "name": "return_request", "type": "u64", "refersTo": "commerce__return_request_rec", "onDelete": "set-null", "optional": true },
+        { "name": "customer_email", "type": "string", "personal": "contact" },
+        { "name": "customer_name", "type": "string", "personal": "name" },
+        { "name": "status", "type": "commerce__order_status" },
+        { "name": "currency", "type": "commerce__currency" },
+        { "name": "total_minor", "type": "u64" },
+        { "name": "region", "type": "commerce__region" },
+        { "name": "placed_at", "type": "timestamp" } ],
+      "retention": "Orders are kept seven years for tax records; customer details are erased on request.",
+      "schemaVersion": 1, "realisation": "target" },
+    { "id": "commerce__return_request_rec", "name": "Return request", "owner": "product-module", "key": ["id"],
+      "fields": [
+        { "name": "id", "type": "u64" },
+        { "name": "order", "type": "u64", "refersTo": "commerce__order_rec", "onDelete": "restrict" },
+        { "name": "reason", "type": "commerce__return_reason" },
+        { "name": "status", "type": "string" },
+        { "name": "requested_at", "type": "timestamp" },
+        { "name": "refund_minor", "type": "u64", "optional": true } ],
+      "retention": "Return requests are kept seven years with their order.",
+      "schemaVersion": 1, "realisation": "target" },
+    { "id": "commerce__redemption_rec", "name": "Redemption", "owner": "product-module", "key": ["id"],
+      "fields": [
+        { "name": "id", "type": "u64" },
+        { "name": "promotion", "type": "u64", "refersTo": "commerce__promotion_rec", "onDelete": "restrict" },
+        { "name": "redeemed_at", "type": "timestamp" } ],
+      "retention": "Redemptions are kept for two years after the promotion ends.",
+      "schemaVersion": 1, "realisation": "target" }
+  ],
+
+  "types": [
+    { "id": "commerce__currency", "name": "Currency", "kind": "enum",
+      "values": ["gbp", "eur", "usd", "jpy", "chf", "cad", "aud", "nzd", "sek", "nok", "dkk", "pln", "czk", "huf", "ron", "bgn", "isk", "clp", "ils", "aed", "sar", "qar", "kwd", "bhd", "omr", "inr", "cny", "hkd", "sgd", "krw", "twd", "thb", "myr", "idr", "php", "vnd", "zar", "egp", "mxn", "brl"],
+      "description": "The ISO-style currency codes the tenant prices in." },
+    { "id": "commerce__order_status", "name": "Order status", "kind": "enum", "values": ["placed", "paid", "packed", "shipped", "delivered", "cancelled"], "description": "Where an order is in fulfilment." },
+    { "id": "commerce__return_reason", "name": "Return reason", "kind": "enum", "values": ["damaged", "wrong_item", "not_as_described", "changed_mind", "late_delivery"], "description": "Why a customer is returning an item." },
+    { "id": "commerce__price_tier", "name": "Price tier", "kind": "enum", "values": ["standard", "member", "wholesale", "staff"], "description": "Which customers a price list applies to." },
+    { "id": "commerce__promotion_kind", "name": "Promotion kind", "kind": "enum", "values": ["percent_off", "fixed_off", "buy_x_get_y", "free_shipping"], "description": "The mechanic a promotion uses." },
+    { "id": "commerce__region", "name": "Region", "kind": "enum", "values": ["emea", "apac", "amer"], "description": "The selling region a SKU or price list belongs to." },
+    { "id": "commerce__tax_class", "name": "Tax class", "kind": "enum", "values": ["standard", "reduced", "zero", "exempt"], "description": "The VAT class of a product." },
+    { "id": "commerce__dimensions", "name": "Dimensions", "kind": "struct",
+      "fields": [ { "name": "length_mm", "type": "u32" }, { "name": "width_mm", "type": "u32" }, { "name": "height_mm", "type": "u32" }, { "name": "weight_g", "type": "u32" } ],
+      "description": "Shipping dimensions of a SKU." }
+  ],
+
+  "capabilities": [
+    { "id": "commerce__manage_catalogue", "name": "Manage catalogue", "description": "Edit products, SKUs and regional price lists in one's own region." },
+    { "id": "commerce__approve_returns", "name": "Approve returns", "description": "Decide return requests and sign off refunds." }
+  ],
+
+  "roles": [
+    { "id": "commerce__merchandiser_emea", "name": "Merchandiser (EMEA)", "description": "Maintains EMEA SKUs and price lists.", "level": "tenant",
+      "holders": ["person", "team"], "capabilities": ["commerce__manage_catalogue", "catalogue-read"] },
+    { "id": "commerce__merchandiser_apac", "name": "Merchandiser (APAC)", "description": "Maintains APAC SKUs and price lists.", "level": "tenant",
+      "holders": ["person", "team"], "capabilities": ["commerce__manage_catalogue", "catalogue-read"] },
+    { "id": "commerce__merchandiser_amer", "name": "Merchandiser (AMER)", "description": "Maintains AMER SKUs and price lists.", "level": "tenant",
+      "holders": ["person", "team"], "capabilities": ["commerce__manage_catalogue", "catalogue-read"] },
+    { "id": "commerce__finance_reviewer", "name": "Finance reviewer", "description": "Reviews high-value orders and approves refunds.", "level": "tenant",
+      "holders": ["person", "team"], "capabilities": ["commerce__approve_returns", "ledger-read", "workflow-approve"] }
+  ],
+
+  "policies": [
+    { "id": "commerce__emea_skus", "role": "commerce__merchandiser_emea", "resource": { "Object": "commerce__sku" }, "actions": ["Read", "Update"], "condition": "record.region == 'emea'" },
+    { "id": "commerce__apac_skus", "role": "commerce__merchandiser_apac", "resource": { "Object": "commerce__sku" }, "actions": ["Read", "Update"], "condition": "record.region == 'apac'" },
+    { "id": "commerce__amer_skus", "role": "commerce__merchandiser_amer", "resource": { "Object": "commerce__sku" }, "actions": ["Read", "Update"], "condition": "record.region == 'amer'" },
+    { "id": "commerce__emea_price_lists", "role": "commerce__merchandiser_emea", "resource": { "Object": "commerce__price_list" }, "actions": ["Read", "Update"], "condition": "record.region == 'emea'" },
+    { "id": "commerce__apac_price_lists", "role": "commerce__merchandiser_apac", "resource": { "Object": "commerce__price_list" }, "actions": ["Read", "Update"], "condition": "record.region == 'apac'" },
+    { "id": "commerce__amer_price_lists", "role": "commerce__merchandiser_amer", "resource": { "Object": "commerce__price_list" }, "actions": ["Read", "Update"], "condition": "record.region == 'amer'" },
+    { "id": "commerce__finance_return_review", "role": "commerce__finance_reviewer", "resource": { "Object": "commerce__return_request" }, "actions": ["Read", "Update"] },
+    { "id": "commerce__high_value_order_review", "role": "commerce__finance_reviewer", "resource": { "Object": "commerce__order" }, "actions": ["Read"] }
+  ],
+
+  "objects": [
+    { "id": "commerce__category", "label": "Category",
+      "fields": {
+        "name": { "id": "name", "label": "Name", "ty": "Str", "required": true, "unique": false },
+        "parent": { "id": "parent", "label": "Parent category", "ty": { "Ref": { "target": "commerce__category", "on-delete": "Restrict" } }, "required": false, "unique": false } },
+      "constraints": {},
+      "retention": { "days": 2555, "from": "Created" } },
+    { "id": "commerce__product", "label": "Product",
+      "fields": {
+        "title": { "id": "title", "label": "Title", "ty": "Str", "required": true, "unique": false },
+        "slug": { "id": "slug", "label": "Slug", "ty": "Str", "required": true, "unique": true },
+        "published": { "id": "published", "label": "Published", "ty": "Bool", "required": true, "unique": false },
+        "category": { "id": "category", "label": "Category", "ty": { "Ref": { "target": "commerce__category", "on-delete": "Restrict" } }, "required": false, "unique": false } },
+      "constraints": {},
+      "retention": { "days": 2555, "from": "Created" } },
+    { "id": "commerce__sku", "label": "SKU",
+      "fields": {
+        "code": { "id": "code", "label": "SKU code", "ty": "Str", "required": true, "unique": true },
+        "region": { "id": "region", "label": "Region", "ty": "Str", "required": true, "unique": false },
+        "status": { "id": "status", "label": "Status", "ty": "Str", "required": true, "unique": false },
+        "product": { "id": "product", "label": "Product", "ty": { "Ref": { "target": "commerce__product", "on-delete": "Restrict" } }, "required": true, "unique": false } },
+      "constraints": {},
+      "retention": { "days": 2555, "from": "Created" } },
+    { "id": "commerce__price_list", "label": "Price list",
+      "fields": {
+        "region": { "id": "region", "label": "Region", "ty": "Str", "required": true, "unique": false },
+        "tier": { "id": "tier", "label": "Tier", "ty": "Str", "required": true, "unique": false },
+        "currency": { "id": "currency", "label": "Currency", "ty": "Str", "required": true, "unique": false },
+        "amount_minor": { "id": "amount_minor", "label": "Amount (minor units)", "ty": "Int", "required": true, "unique": false },
+        "sku": { "id": "sku", "label": "SKU", "ty": { "Ref": { "target": "commerce__sku", "on-delete": "Restrict" } }, "required": true, "unique": false } },
+      "constraints": {},
+      "retention": { "days": 2555, "from": "Created" } },
+    { "id": "commerce__promotion", "label": "Promotion",
+      "fields": {
+        "title": { "id": "title", "label": "Title", "ty": "Str", "required": true, "unique": false },
+        "kind": { "id": "kind", "label": "Kind", "ty": "Str", "required": true, "unique": false },
+        "active": { "id": "active", "label": "Active", "ty": "Bool", "required": true, "unique": false },
+        "starts_at": { "id": "starts_at", "label": "Starts", "ty": "Time", "required": true, "unique": false },
+        "ends_at": { "id": "ends_at", "label": "Ends", "ty": "Time", "required": true, "unique": false } },
+      "constraints": {},
+      "retention": { "days": 730, "from": "Created" } },
+    { "id": "commerce__order", "label": "Order",
+      "fields": {
+        "customer_email": { "id": "customer_email", "label": "Customer email", "ty": "Str", "required": true, "unique": false,
+          "personal": { "kind": "email-address", "subject": { "Field": { "field": "customer_email" } }, "searchable": false } },
+        "customer_name": { "id": "customer_name", "label": "Customer name", "ty": "Str", "required": false, "unique": false,
+          "personal": { "kind": "name", "subject": { "Field": { "field": "customer_email" } }, "searchable": false } },
+        "status": { "id": "status", "label": "Status", "ty": "Str", "required": true, "unique": false },
+        "total_minor": { "id": "total_minor", "label": "Total (minor units)", "ty": "Int", "required": true, "unique": false },
+        "currency": { "id": "currency", "label": "Currency", "ty": "Str", "required": true, "unique": false },
+        "region": { "id": "region", "label": "Region", "ty": "Str", "required": true, "unique": false },
+        "placed_at": { "id": "placed_at", "label": "Placed", "ty": "Time", "required": true, "unique": false } },
+      "constraints": {},
+      "retention": { "days": 2555, "from": "Created" } },
+    { "id": "commerce__order_line", "label": "Order line",
+      "fields": {
+        "quantity": { "id": "quantity", "label": "Quantity", "ty": "Int", "required": true, "unique": false },
+        "unit_price_minor": { "id": "unit_price_minor", "label": "Unit price (minor units)", "ty": "Int", "required": true, "unique": false },
+        "order": { "id": "order", "label": "Order", "ty": { "Ref": { "target": "commerce__order", "on-delete": "Restrict" } }, "required": true, "unique": false },
+        "sku": { "id": "sku", "label": "SKU", "ty": { "Ref": { "target": "commerce__sku", "on-delete": "Restrict" } }, "required": true, "unique": false } },
+      "constraints": {},
+      "retention": { "days": 2555, "from": "Created" } },
+    { "id": "commerce__return_request", "label": "Return request",
+      "fields": {
+        "reason": { "id": "reason", "label": "Reason", "ty": "Str", "required": true, "unique": false },
+        "status": { "id": "status", "label": "Status", "ty": "Str", "required": true, "unique": false },
+        "requested_at": { "id": "requested_at", "label": "Requested", "ty": "Time", "required": true, "unique": false },
+        "refund_minor": { "id": "refund_minor", "label": "Refund (minor units)", "ty": "Int", "required": false, "unique": false },
+        "order": { "id": "order", "label": "Order", "ty": { "Ref": { "target": "commerce__order", "on-delete": "Restrict" } }, "required": true, "unique": false } },
+      "constraints": {},
+      "retention": { "days": 2555, "from": "Created" } },
+    { "id": "commerce__redemption", "label": "Redemption",
+      "fields": {
+        "redeemed_at": { "id": "redeemed_at", "label": "Redeemed", "ty": "Time", "required": true, "unique": false },
+        "promotion": { "id": "promotion", "label": "Promotion", "ty": { "Ref": { "target": "commerce__promotion", "on-delete": "Restrict" } }, "required": true, "unique": false } },
+      "constraints": {},
+      "retention": { "days": 730, "from": "Created" } }
+  ],
+
+  "ledgerUnits": [
+    { "id": "commerce__stock", "description": "Units on hand, one account per SKU." },
+    { "id": "commerce__redemptions", "description": "Promotion redemptions counted per person." }
+  ],
+
+  "ledgerPools": [
+    { "id": "commerce__stock_pool", "description": "The pool that holds stock." }
+  ],
+
+  "ledgerLimits": [
+    { "id": "commerce__stock_floor", "unit": "commerce__stock", "owner": { "pool": { "pool": "commerce__stock_pool" } }, "floor": 0 },
+    { "id": "commerce__redemption_cap", "unit": "commerce__redemptions", "cap": 1 }
+  ],
+
+  "settings": [
+    { "id": "commerce__default_currency", "label": "Default currency", "type": "string", "default": "gbp", "levels": ["tenant", "team"] }
+  ],
+
+  "queries": [
+    { "id": "commerce__open_returns", "object": "commerce__return_request", "filter": "record.status == 'requested'",
+      "params": [], "order": [ { "field": "requested_at", "descending": false } ], "limit": 100 },
+    { "id": "commerce__orders_by_region", "object": "commerce__order", "filter": "record.region == param.region",
+      "params": ["region"], "order": [ { "field": "placed_at", "descending": true } ], "limit": 200 }
+  ],
+
+  "views": [
+    { "id": "commerce__returns_board", "route": "/commerce/board", "title": "Returns board",
+      "sections": { "main": { "query": "commerce__open_returns", "args": {}, "include": [], "markdown": [], "single": false } } }
+  ],
+
+  "workflows": [
+    { "id": "commerce__return_lifecycle", "object": "commerce__return_request", "field": "status", "initial": ["requested"],
+      "transitions": [
+        { "name": "approve", "from": "requested", "to": "approved", "guard": "old.status == 'requested'", "set": {} },
+        { "name": "refuse", "from": "requested", "to": "refused", "set": {} },
+        { "name": "receive", "from": "approved", "to": "received", "set": {} },
+        { "name": "refund", "from": "received", "to": "refunded", "set": {} } ] }
+  ],
+
+  "mailTemplates": [
+    { "id": "commerce__order_confirmation_mail", "subject": "Thank you for your order",
+      "body": "[{\"type\":\"paragraph\",\"inlines\":[{\"type\":\"text\",\"text\":\"We have received your order and will let you know when it ships.\"}]}]" }
+  ],
+
+  "noticeTemplates": [
+    { "id": "commerce__return_received_notice", "title": "Return received",
+      "body": "[{\"type\":\"paragraph\",\"inlines\":[{\"type\":\"text\",\"text\":\"We have received your returned item.\"}]}]" }
+  ],
+
+  "eventKinds": [
+    { "id": "commerce__low_stock", "kind": "app.commerce-low-stock",
+      "fields": [ { "name": "sku", "type": "string" }, { "name": "level", "type": "number" } ],
+      "readers": ["commerce__merchandiser_emea", "commerce__merchandiser_apac", "commerce__merchandiser_amer"] }
+  ],
+
+  "events": [
+    { "id": "commerce__order_placed_event", "name": "Order placed", "description": "A customer placed an order.", "payload": [ { "name": "order", "type": "string" }, { "name": "at", "type": "timestamp" } ] },
+    { "id": "commerce__return_requested_event", "name": "Return requested", "description": "A customer asked to return an item.", "payload": [ { "name": "return_request", "type": "string" } ] },
+    { "id": "commerce__promotion_redeemed_event", "name": "Promotion redeemed", "description": "A person redeemed a promotion.", "payload": [ { "name": "promotion", "type": "string" } ] }
+  ],
+
+  "triggers": [
+    { "id": "commerce__on_order_placed", "on": { "RecordCreated": { "object": "commerce__order" } }, "automation": "commerce__order_follow_up" }
+  ],
+
+  "automations": [
+    { "id": "commerce__order_follow_up", "label": "Confirm a new order, then route high-value orders for finance approval",
+      "run-as": { "roles": ["commerce__finance_reviewer"] }, "run-key": "param.record",
+      "start": "notify",
+      "steps": {
+        "notify": { "action": { "SendMail": { "template": "commerce__order_confirmation_mail", "to": "param.record", "category": "transactional" } }, "next": "check", "retry": { "attempts": 5 } },
+        "check": { "action": { "Branch": { "condition": "record.total_minor >= 100000", "object": "commerce__order", "record": "param.record", "then": "approve", "else": "done" } } },
+        "approve": { "action": { "RequestApproval": { "policy": "commerce__high_value_order_review", "timeout": 172800000, "approved": "done", "refused": "done" } } },
+        "done": { "action": "End" } } }
+  ],
+
+  "operations": [
+    { "id": "commerce__redeem_promotion", "label": "Redeem a promotion",
+      "inputs": [ { "name": "promotion", "ty": "Str", "required": true, "label": "The promotion" } ],
+      "invokers": { "signed-in": true, "roles": [] },
+      "subject": { "object": "commerce__promotion", "input": "promotion" },
+      "conditions": [ { "id": "window", "expr": "now >= record.starts_at and now < record.ends_at", "error": "outside-window", "message": "This promotion is not running." } ],
+      "steps": [
+        { "PostLedger": { "id": "take_stock", "owner": { "Pool": { "pool": "commerce__stock_pool" } }, "unit": "commerce__stock", "scope": "text(record.$id)", "amount": "-1", "reason": "redemption" } },
+        { "PostLedger": { "id": "claim_redemption", "owner": "Invoker", "unit": "commerce__redemptions", "amount": "1", "reason": "redemption" } },
+        { "CreateRecord": { "id": "redemption", "object": "commerce__redemption", "fields": { "promotion": "record.$id", "redeemed_at": "now" } } } ] },
+    { "id": "commerce__place_order", "label": "Place an order",
+      "inputs": [
+        { "name": "sku_1", "ty": "Str", "required": true, "label": "First SKU" },
+        { "name": "sku_2", "ty": "Str", "required": true, "label": "Second SKU" },
+        { "name": "customer_email", "ty": "Str", "required": true, "label": "Customer email" },
+        { "name": "customer_name", "ty": "Str", "required": false, "label": "Customer name" },
+        { "name": "region", "ty": "Str", "required": true, "label": "Region" },
+        { "name": "total_minor", "ty": "Int", "required": true, "label": "Total (minor units)" } ],
+      "invokers": { "signed-in": true, "roles": [] },
+      "conditions": [ { "id": "has_lines", "expr": "param.sku_1 != null", "error": "no-lines", "message": "An order needs at least one line." } ],
+      "steps": [
+        { "PostLedger": { "id": "take_line_one", "owner": { "Pool": { "pool": "commerce__stock_pool" } }, "unit": "commerce__stock", "scope": "param.sku_1", "amount": "-1", "reason": "order" } },
+        { "PostLedger": { "id": "take_line_two", "owner": { "Pool": { "pool": "commerce__stock_pool" } }, "unit": "commerce__stock", "scope": "param.sku_2", "amount": "-1", "reason": "order" } },
+        { "CreateRecord": { "id": "order", "object": "commerce__order", "fields": { "customer_email": "param.customer_email", "customer_name": "param.customer_name", "status": "'placed'", "total_minor": "param.total_minor", "currency": "'gbp'", "region": "param.region", "placed_at": "now" } } } ] },
+    { "id": "commerce__create_return", "label": "Request a return",
+      "inputs": [
+        { "name": "order", "ty": "Str", "required": true, "label": "The order" },
+        { "name": "reason", "ty": "Str", "required": true, "label": "Reason" } ],
+      "invokers": { "signed-in": true, "roles": [] },
+      "subject": { "object": "commerce__order", "input": "order" },
+      "conditions": [ { "id": "delivered", "expr": "record.status == 'delivered'", "error": "not-delivered", "message": "Only a delivered order can be returned." } ],
+      "steps": [
+        { "CreateRecord": { "id": "return", "object": "commerce__return_request", "fields": { "order": "record.$id", "reason": "param.reason", "status": "'requested'", "requested_at": "now" } } } ] }
+  ],
+
+  "contracts": [
+    { "id": "commerce__read_product_list", "name": "Read the product list", "realisation": "facade",
+      "auth": { "scheme": "session", "description": "A signed-in merchandiser", "requires": ["catalogue-read"] },
+      "idempotent": true, "timeoutMs": 2000,
+      "inputs": [ { "name": "status", "type": "string" } ],
+      "outputs": [ { "name": "view", "type": "json" } ],
+      "postconditions": ["The answer is the product list for the status named."],
+      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] },
+    { "id": "commerce__read_product", "name": "Read one product", "realisation": "facade",
+      "auth": { "scheme": "session", "description": "A signed-in merchandiser", "requires": ["catalogue-read", "commerce__manage_catalogue"] },
+      "idempotent": true, "timeoutMs": 2000,
+      "inputs": [ { "name": "slug", "type": "string" } ],
+      "outputs": [ { "name": "product", "type": "json" } ],
+      "postconditions": ["The answer is the product named by the slug, with its SKUs."],
+      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] },
+    { "id": "commerce__save_product", "name": "Save a product", "realisation": "facade",
+      "auth": { "scheme": "session", "description": "A signed-in merchandiser", "requires": ["commerce__manage_catalogue"] },
+      "idempotent": true, "timeoutMs": 4000,
+      "inputs": [ { "name": "sku_code", "type": "string" }, { "name": "product_title", "type": "string" }, { "name": "is_published", "type": "bool" }, { "name": "is_returnable", "type": "bool" } ],
+      "outputs": [ { "name": "saved", "type": "bool" } ],
+      "postconditions": ["The product and its SKU hold the values given."],
+      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] },
+    { "id": "commerce__read_price_lists", "name": "Read the price lists", "realisation": "facade",
+      "auth": { "scheme": "session", "description": "A signed-in merchandiser", "requires": ["commerce__manage_catalogue"] },
+      "idempotent": true, "timeoutMs": 3000,
+      "inputs": [ { "name": "region", "type": "string" }, { "name": "include_inactive", "type": "bool" } ],
+      "outputs": [ { "name": "view", "type": "json" } ],
+      "postconditions": ["The answer lists the price lists of the region named."],
+      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] },
+    { "id": "commerce__read_promotions", "name": "Read the promotions", "realisation": "facade",
+      "auth": { "scheme": "session", "description": "A signed-in member of the catalogue team", "requires": ["catalogue-read"] },
+      "idempotent": true, "timeoutMs": 2000,
+      "inputs": [ { "name": "active", "type": "bool" } ],
+      "outputs": [ { "name": "view", "type": "json" } ],
+      "postconditions": ["The answer lists the promotions, filtered by whether they are active."],
+      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] },
+    { "id": "commerce__read_order_queue", "name": "Read the order queue", "realisation": "facade",
+      "auth": { "scheme": "session", "description": "A signed-in finance reviewer", "requires": ["ledger-read"] },
+      "idempotent": true, "timeoutMs": 3000,
+      "inputs": [ { "name": "region", "type": "string" } ],
+      "outputs": [ { "name": "view", "type": "json" } ],
+      "postconditions": ["The answer lists the most recent orders of the region named."],
+      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] },
+    { "id": "commerce__read_returns", "name": "Read the returns", "realisation": "facade",
+      "auth": { "scheme": "session", "description": "A signed-in finance reviewer", "requires": ["commerce__approve_returns"] },
+      "idempotent": true, "timeoutMs": 2000,
+      "inputs": [ { "name": "status", "type": "string" } ],
+      "outputs": [ { "name": "view", "type": "json" } ],
+      "postconditions": ["The answer lists the return requests in the status named."],
+      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] },
+    { "id": "commerce__decide_return", "name": "Decide a return request", "realisation": "facade",
+      "auth": { "scheme": "session", "description": "A signed-in finance reviewer", "requires": ["commerce__approve_returns", "workflow-approve"] },
+      "idempotent": false, "timeoutMs": 4000,
+      "inputs": [ { "name": "return_id", "type": "string" }, { "name": "decision", "type": "string" }, { "name": "note", "type": "string" } ],
+      "outputs": [ { "name": "status", "type": "string" } ],
+      "postconditions": ["The return request moves to the state the decision names."],
+      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] }
+  ],
+
+  "screens": [
+    { "id": "commerce__product_list", "name": "Product list", "route": "/commerce/products", "viewModel": "commerce__read_product_list",
+      "kind": "commerce.list", "auth": "session", "description": "The product catalogue, by status.",
+      "viewName": "commerce_product_list", "title": "Products" },
+    { "id": "commerce__product_editor", "name": "Product editor", "route": "/commerce/products/:slug", "viewModel": "commerce__read_product",
+      "kind": "commerce.editor", "auth": "session", "description": "Edit one product and its attributes.",
+      "viewName": "commerce_product_editor", "title": "Product" },
+    { "id": "commerce__price_list_board", "name": "Price list board", "route": "/commerce/prices", "viewModel": "commerce__read_price_lists",
+      "kind": "commerce.list", "auth": "session", "description": "Regional price lists by tier.",
+      "viewName": "commerce_price_list_board", "title": "Price lists" },
+    { "id": "commerce__promotion_board", "name": "Promotion board", "route": "/commerce/promotions", "viewModel": "commerce__read_promotions",
+      "kind": "commerce.list", "auth": "session", "description": "Promotions that are running or scheduled.",
+      "viewName": "commerce_promotion_board", "title": "Promotions" },
+    { "id": "commerce__order_queue", "name": "Order queue", "route": "/commerce/orders", "viewModel": "commerce__read_order_queue",
+      "kind": "commerce.list", "auth": "session", "description": "Recent orders for finance review.",
+      "viewName": "commerce_order_queue", "title": "Orders" },
+    { "id": "commerce__returns_review", "name": "Returns review", "route": "/commerce/returns/:id", "viewModel": "commerce__read_returns",
+      "kind": "commerce.detail", "auth": "session", "description": "Decide one return request.",
+      "viewName": "commerce_returns_review", "title": "Return request" }
+  ],
+
+  "forms": [
+    { "id": "commerce__form_product_editor", "screen": "commerce__product_editor", "contract": "commerce__save_product",
+      "fields": [
+        { "name": "sku_code", "input": "sku_code", "label": "SKU code", "control": "text", "normalize": "trim" },
+        { "name": "product_title", "input": "product_title", "label": "Product title", "control": "text", "normalize": "trim" },
+        { "name": "subtitle", "input": "subtitle", "label": "Subtitle", "control": "text" },
+        { "name": "brand", "input": "brand", "label": "Brand", "control": "text" },
+        { "name": "manufacturer", "input": "manufacturer", "label": "Manufacturer", "control": "text" },
+        { "name": "model_number", "input": "model_number", "label": "Model number", "control": "text" },
+        { "name": "gtin", "input": "gtin", "label": "GTIN", "control": "text" },
+        { "name": "mpn", "input": "mpn", "label": "MPN", "control": "text" },
+        { "name": "hs_code", "input": "hs_code", "label": "HS tariff code", "control": "text" },
+        { "name": "country_of_origin", "input": "country_of_origin", "label": "Country of origin", "control": "text" },
+        { "name": "colour", "input": "colour", "label": "Colour", "control": "text" },
+        { "name": "size_label", "input": "size_label", "label": "Size label", "control": "text" },
+        { "name": "material", "input": "material", "label": "Material", "control": "text" },
+        { "name": "weight_grams", "input": "weight_grams", "label": "Weight (grams)", "control": "text" },
+        { "name": "length_mm", "input": "length_mm", "label": "Length (mm)", "control": "text" },
+        { "name": "width_mm", "input": "width_mm", "label": "Width (mm)", "control": "text" },
+        { "name": "height_mm", "input": "height_mm", "label": "Height (mm)", "control": "text" },
+        { "name": "pack_quantity", "input": "pack_quantity", "label": "Pack quantity", "control": "text" },
+        { "name": "barcode_image", "input": "barcode_image", "label": "Barcode image URL", "control": "text" },
+        { "name": "hero_image", "input": "hero_image", "label": "Hero image URL", "control": "text" },
+        { "name": "gallery_urls", "input": "gallery_urls", "label": "Gallery URLs", "control": "text" },
+        { "name": "seo_title", "input": "seo_title", "label": "SEO title", "control": "text" },
+        { "name": "seo_description", "input": "seo_description", "label": "SEO description", "control": "textarea" },
+        { "name": "slug", "input": "slug", "label": "URL slug", "control": "text" },
+        { "name": "canonical_url", "input": "canonical_url", "label": "Canonical URL", "control": "text" },
+        { "name": "category_path", "input": "category_path", "label": "Category path", "control": "text" },
+        { "name": "tags", "input": "tags", "label": "Tags", "control": "text" },
+        { "name": "warranty_months", "input": "warranty_months", "label": "Warranty (months)", "control": "text" },
+        { "name": "care_instructions", "input": "care_instructions", "label": "Care instructions", "control": "textarea" },
+        { "name": "short_description", "input": "short_description", "label": "Short description", "control": "textarea" },
+        { "name": "long_description", "input": "long_description", "label": "Long description", "control": "textarea" },
+        { "name": "safety_notice", "input": "safety_notice", "label": "Safety notice", "control": "textarea" },
+        { "name": "ingredients", "input": "ingredients", "label": "Ingredients", "control": "textarea" },
+        { "name": "usage_notes", "input": "usage_notes", "label": "Usage notes", "control": "textarea" },
+        { "name": "compliance_notes", "input": "compliance_notes", "label": "Compliance notes", "control": "textarea" },
+        { "name": "internal_notes", "input": "internal_notes", "label": "Internal notes", "control": "textarea" },
+        { "name": "supplier_name", "input": "supplier_name", "label": "Supplier name", "control": "text" },
+        { "name": "supplier_code", "input": "supplier_code", "label": "Supplier code", "control": "text" },
+        { "name": "lead_time_days", "input": "lead_time_days", "label": "Lead time (days)", "control": "text" },
+        { "name": "minimum_order", "input": "minimum_order", "label": "Minimum order quantity", "control": "text" },
+        { "name": "reorder_point", "input": "reorder_point", "label": "Reorder point", "control": "text" },
+        { "name": "default_price", "input": "default_price", "label": "Default price", "control": "text" },
+        { "name": "cost_price", "input": "cost_price", "label": "Cost price", "control": "text" },
+        { "name": "tax_class", "input": "tax_class", "label": "Tax class", "control": "text" },
+        { "name": "promo_label", "input": "promo_label", "label": "Promotion label", "control": "text" },
+        { "name": "release_date", "input": "release_date", "label": "Release date", "control": "text" },
+        { "name": "end_of_life_date", "input": "end_of_life_date", "label": "End of life date", "control": "text" },
+        { "name": "region_codes", "input": "region_codes", "label": "Region codes", "control": "text" },
+        { "name": "channel_codes", "input": "channel_codes", "label": "Channel codes", "control": "text" },
+        { "name": "age_restriction", "input": "age_restriction", "label": "Age restriction", "control": "text" },
+        { "name": "is_published", "input": "is_published", "label": "Published", "control": "checkbox" },
+        { "name": "is_featured", "input": "is_featured", "label": "Featured on home page", "control": "checkbox" },
+        { "name": "is_gift_wrappable", "input": "is_gift_wrappable", "label": "Gift wrappable", "control": "checkbox" },
+        { "name": "is_returnable", "input": "is_returnable", "label": "Returnable", "control": "checkbox" },
+        { "name": "is_hazmat", "input": "is_hazmat", "label": "Hazardous material", "control": "checkbox" },
+        { "name": "requires_signature", "input": "requires_signature", "label": "Requires signature on delivery", "control": "checkbox" },
+        { "name": "is_digital", "input": "is_digital", "label": "Digital product", "control": "checkbox" },
+        { "name": "track_inventory", "input": "track_inventory", "label": "Track inventory", "control": "checkbox" },
+        { "name": "allow_backorder", "input": "allow_backorder", "label": "Allow backorder", "control": "checkbox" },
+        { "name": "show_price", "input": "show_price", "label": "Show price", "control": "checkbox" },
+        { "name": "tax_inclusive", "input": "tax_inclusive", "label": "Price includes tax", "control": "checkbox" },
+        { "name": "is_bundle", "input": "is_bundle", "label": "Sold as bundle", "control": "checkbox" },
+        { "name": "is_discontinued", "input": "is_discontinued", "label": "Discontinued", "control": "checkbox" },
+        { "name": "is_sample", "input": "is_sample", "label": "Sample product", "control": "checkbox" },
+        { "name": "marketing_consent", "input": "marketing_consent", "label": "Include in marketing emails", "control": "checkbox" } ],
+      "submitLabel": "Save product", "onSuccess": { "navigate": { "screen": "commerce__product_list" }, "toast": "Product saved." },
+      "onError": { "show": "inline" } },
+    { "id": "commerce__form_return_decision", "screen": "commerce__returns_review", "contract": "commerce__decide_return",
+      "fields": [
+        { "name": "return_id", "input": "return_id", "label": "Return request", "control": "text" },
+        { "name": "decision", "input": "decision", "label": "Decision", "control": "text" },
+        { "name": "note", "input": "note", "label": "Note to the customer", "control": "textarea" } ],
+      "submitLabel": "Record decision", "onSuccess": { "toast": "Decision recorded." },
+      "onError": { "show": "inline" } },
+    { "id": "commerce__form_price_filter", "screen": "commerce__price_list_board", "contract": "commerce__read_price_lists",
+      "fields": [
+        { "name": "region", "input": "region", "label": "Region", "control": "text" },
+        { "name": "include_inactive", "input": "include_inactive", "label": "Include inactive price lists", "control": "checkbox" } ],
+      "submitLabel": "Apply", "onError": { "show": "inline" } },
+    { "id": "commerce__form_promotion_filter", "screen": "commerce__promotion_board", "contract": "commerce__read_promotions",
+      "fields": [
+        { "name": "active", "input": "active", "label": "Only active promotions", "control": "checkbox" } ],
+      "submitLabel": "Apply", "onError": { "show": "inline" } }
+  ],
+
+  "actions": [
+    { "id": "commerce__action_save_product", "screen": "commerce__product_editor", "label": "Save product",
+      "contract": "commerce__save_product", "form": "commerce__form_product_editor",
+      "arguments": { "sku_code": "form.sku_code", "product_title": "form.product_title", "is_published": "form.is_published", "is_returnable": "form.is_returnable" },
+      "onSuccess": { "toast": "Product saved." }, "onError": { "show": "toast" } },
+    { "id": "commerce__action_decide_return", "screen": "commerce__returns_review", "label": "Record decision",
+      "contract": "commerce__decide_return", "form": "commerce__form_return_decision",
+      "arguments": { "return_id": "form.return_id", "decision": "form.decision", "note": "form.note" },
+      "onSuccess": { "toast": "Decision recorded." }, "onError": { "show": "toast" } },
+    { "id": "commerce__action_filter_prices", "screen": "commerce__price_list_board", "label": "Apply filter",
+      "contract": "commerce__read_price_lists", "form": "commerce__form_price_filter",
+      "arguments": { "region": "form.region", "include_inactive": "form.include_inactive" },
+      "onError": { "show": "toast" } },
+    { "id": "commerce__action_filter_promotions", "screen": "commerce__promotion_board", "label": "Apply filter",
+      "contract": "commerce__read_promotions", "form": "commerce__form_promotion_filter",
+      "arguments": { "active": "form.active" },
+      "onError": { "show": "toast" } }
+  ],
+
+  "liveBindings": [
+    { "id": "commerce__live_product_list", "screen": "commerce__product_list", "event": "ui-notice-received", "refresh": "whole",
+      "when": { "any": ["event.kind == 'commerce-product'", { "value": "event.object", "in": "depends-on" }] } },
+    { "id": "commerce__live_product_list_ended", "screen": "commerce__product_list", "event": "ui-session-ended", "refresh": "whole" },
+    { "id": "commerce__live_product_editor", "screen": "commerce__product_editor", "event": "ui-notice-received", "refresh": "whole",
+      "when": { "any": ["event.kind == 'commerce-product'", { "value": "event.object", "in": "depends-on" }] } },
+    { "id": "commerce__live_product_editor_ended", "screen": "commerce__product_editor", "event": "ui-session-ended", "refresh": "whole" },
+    { "id": "commerce__live_price_list_board", "screen": "commerce__price_list_board", "event": "ui-notice-received", "refresh": "whole",
+      "when": { "any": ["event.kind == 'commerce-price'", { "value": "event.object", "in": "depends-on" }] } },
+    { "id": "commerce__live_price_list_board_ended", "screen": "commerce__price_list_board", "event": "ui-session-ended", "refresh": "whole" },
+    { "id": "commerce__live_promotion_board", "screen": "commerce__promotion_board", "event": "ui-notice-received", "refresh": "whole",
+      "when": { "any": ["event.kind == 'commerce-promotion'", { "value": "event.object", "in": "depends-on" }] } },
+    { "id": "commerce__live_promotion_board_ended", "screen": "commerce__promotion_board", "event": "ui-session-ended", "refresh": "whole" },
+    { "id": "commerce__live_order_queue", "screen": "commerce__order_queue", "event": "ui-notice-received", "refresh": "whole",
+      "when": { "any": ["event.kind == 'commerce-order'", { "value": "event.object", "in": "depends-on" }] } },
+    { "id": "commerce__live_order_queue_ended", "screen": "commerce__order_queue", "event": "ui-session-ended", "refresh": "whole" },
+    { "id": "commerce__live_returns_review", "screen": "commerce__returns_review", "event": "ui-notice-received", "refresh": "whole",
+      "when": { "any": ["event.kind == 'commerce-return'", { "value": "event.object", "in": "depends-on" }] } },
+    { "id": "commerce__live_returns_review_ended", "screen": "commerce__returns_review", "event": "ui-session-ended", "refresh": "whole" }
+  ],
+
+  "errorMessages": [
+    { "id": "commerce__error_sku_code_taken", "on": "check", "kinds": ["unique"], "text": "Another SKU already uses this code.", "field": "sku_code" },
+    { "id": "commerce__error_redemption_capped", "on": "error", "kinds": ["policy"], "text": "You have already redeemed this promotion." }
+  ],
+
+  "claims": [
+    { "id": "commerce__no-negative-stock", "kind": "structural",
+      "statement": "Stock SHALL NOT fall below zero for any SKU.",
+      "subjects": ["product-module"],
+      "rationale": "The stock floor limit on the stock pool rejects any take that would go negative.",
+      "evaluate": { "method": "external-evidence" } },
+    { "id": "commerce__one-redemption-per-person", "kind": "structural",
+      "statement": "A person SHALL NOT redeem a promotion more than once.",
+      "subjects": ["product-module"],
+      "rationale": "The redemption cap limits each person to one redemption.",
+      "evaluate": { "method": "external-evidence" } }
+  ]
+}

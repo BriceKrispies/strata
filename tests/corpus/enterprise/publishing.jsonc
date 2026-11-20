@@ -1,0 +1,408 @@
+{
+  // Scheduled publishing across website, app, newsletter and social channels, with syndication to partners; depends on the content module and the platform webhook, automation and mail capabilities.
+  "product": {
+    "id": "publishing",
+    "name": "Publishing",
+    "description": "Schedules, channels, syndication targets and publish jobs for releases of content.",
+    "version": "1.0.0",
+    "platform": { "min": "0.2" },
+    "imports": {
+      "spec": "../../../specifications/spec.jsonc",
+      "entities": ["product-module", "content-read", "content-write", "automations-read", "outbound-call", "messages-send"]
+    }
+  },
+  "types": [
+    { "id": "publishing__channel_kind", "name": "Channel kind", "kind": "enum",
+      "values": ["website", "app", "newsletter", "social"], "description": "Where a channel publishes." },
+    { "id": "publishing__job_status", "name": "Job status", "kind": "enum",
+      "values": ["queued", "scheduled", "publishing", "published", "failed", "cancelled"], "description": "Where a publish job is in its run." },
+    { "id": "publishing__release_state", "name": "Release state", "kind": "enum",
+      "values": ["planned", "frozen", "shipped", "rolled_back"], "description": "Where a release is in its life." },
+    { "id": "publishing__syndication_mode", "name": "Syndication mode", "kind": "enum",
+      "values": ["push", "pull", "feed"], "description": "How a partner receives syndicated content." },
+    { "id": "publishing__schedule_kind", "name": "Schedule kind", "kind": "enum",
+      "values": ["once", "daily", "weekly", "monthly"], "description": "How often a schedule runs." },
+    { "id": "publishing__audience", "name": "Audience", "kind": "enum",
+      "values": ["public", "members", "partners", "internal"], "description": "Who a published item is shown to." },
+    { "id": "publishing__job_summary", "name": "Job summary", "kind": "struct",
+      "fields": [ { "name": "channel", "type": "string" }, { "name": "status", "type": "string" }, { "name": "at", "type": "timestamp" } ],
+      "description": "A compact view of one publish job for the calendar." },
+    { "id": "publishing__target_config", "name": "Target configuration", "kind": "struct",
+      "fields": [ { "name": "endpoint", "type": "string" }, { "name": "retries", "type": "u32" }, { "name": "timeout_ms", "type": "u32" } ],
+      "description": "How to reach a syndication partner." }
+  ],
+  "records": [
+    { "id": "publishing__channel_rec", "name": "Channel", "owner": "product-module", "key": ["id"],
+      "fields": [
+        { "name": "id", "type": "u64" },
+        { "name": "name", "type": "string" },
+        { "name": "kind", "type": "publishing__channel_kind" },
+        { "name": "audience", "type": "publishing__audience" },
+        { "name": "default_locale", "type": "string" },
+        { "name": "active", "type": "bool" },
+        { "name": "parent", "type": "u64", "refersTo": "publishing__channel_rec", "onDelete": "set-null", "optional": true } ],
+      "retention": "Channels are kept until they are retired by an administrator.",
+      "schemaVersion": 1, "realisation": "target" },
+    { "id": "publishing__publish_job_rec", "name": "Publish job", "owner": "product-module", "key": ["id"],
+      "fields": [
+        { "name": "id", "type": "u64" },
+        { "name": "channel", "type": "u64", "refersTo": "publishing__channel_rec", "onDelete": "restrict" },
+        { "name": "release", "type": "u64", "refersTo": "publishing__release_rec", "onDelete": "restrict", "optional": true },
+        { "name": "status", "type": "publishing__job_status" },
+        { "name": "scheduled_at", "type": "timestamp" },
+        { "name": "attempts", "type": "u32" },
+        { "name": "requested_by", "type": "string", "personal": "identifier" } ],
+      "retention": "Publish jobs are kept for 365 days after they finish.",
+      "schemaVersion": 1, "realisation": "target" },
+    { "id": "publishing__release_rec", "name": "Release", "owner": "product-module", "key": ["id"],
+      "fields": [
+        { "name": "id", "type": "u64" },
+        { "name": "name", "type": "string" },
+        { "name": "state", "type": "publishing__release_state" },
+        { "name": "freeze_at", "type": "timestamp", "optional": true },
+        { "name": "current_job", "type": "u64", "refersTo": "publishing__publish_job_rec", "onDelete": "restrict", "optional": true } ],
+      "retention": "Releases are kept for 730 days after they ship.",
+      "schemaVersion": 1, "realisation": "target" },
+    { "id": "publishing__syndication_target_rec", "name": "Syndication target", "owner": "product-module", "key": ["id"],
+      "fields": [
+        { "name": "id", "type": "u64" },
+        { "name": "name", "type": "string" },
+        { "name": "mode", "type": "publishing__syndication_mode" },
+        { "name": "channel", "type": "u64", "refersTo": "publishing__channel_rec", "onDelete": "restrict" },
+        { "name": "contact_name", "type": "string", "personal": "name" },
+        { "name": "contact_email", "type": "string", "personal": "contact" } ],
+      "retention": "The partner contact is removed 730 days after the target is retired.",
+      "schemaVersion": 1, "realisation": "target" },
+    { "id": "publishing__schedule_rec", "name": "Schedule", "owner": "product-module", "key": ["id"],
+      "fields": [
+        { "name": "id", "type": "u64" },
+        { "name": "job", "type": "u64", "refersTo": "publishing__publish_job_rec", "onDelete": "restrict" },
+        { "name": "kind", "type": "publishing__schedule_kind" },
+        { "name": "next_run", "type": "timestamp" },
+        { "name": "cancelled", "type": "bool" } ],
+      "retention": "Schedules are kept with the publish job they run.",
+      "schemaVersion": 1, "realisation": "target" }
+  ],
+  "roles": [
+    { "id": "publishing__channel_editor", "name": "Channel editor", "description": "Sets up channels and their parent tree.", "level": "tenant",
+      "holders": ["person", "team"], "capabilities": ["content-read", "content-write", "publishing__manage_channels"] },
+    { "id": "publishing__release_manager", "name": "Release manager", "description": "Plans releases, schedules them and cancels schedules.", "level": "tenant",
+      "holders": ["person", "team"], "capabilities": ["content-read", "automations-read", "publishing__publish", "publishing__cancel", "publishing__syndicate"] },
+    { "id": "publishing__publish_operator", "name": "Publish operator", "description": "Runs publish jobs and syndication to partners.", "level": "tenant",
+      "holders": ["person", "team", "agent"], "capabilities": ["content-read", "outbound-call", "messages-send", "publishing__publish", "publishing__syndicate"] }
+  ],
+  "capabilities": [
+    { "id": "publishing__publish", "name": "Publish content", "description": "Queue and run publish jobs for a release." },
+    { "id": "publishing__cancel", "name": "Cancel schedules", "description": "Cancel a queued or scheduled publish job." },
+    { "id": "publishing__manage_channels", "name": "Manage channels", "description": "Create and change channels in the channel tree." },
+    { "id": "publishing__syndicate", "name": "Syndicate releases", "description": "Send released content to syndication partners." }
+  ],
+  "objects": [
+    { "id": "publishing__channel", "label": "Channel",
+      "fields": {
+        "name": { "id": "name", "label": "Name", "ty": "Str", "required": true, "unique": true },
+        "kind": { "id": "kind", "label": "Kind", "ty": "Str", "required": true, "unique": false },
+        "active": { "id": "active", "label": "Active", "ty": "Bool", "required": true, "unique": false },
+        "default_locale": { "id": "default_locale", "label": "Default locale", "ty": "Str", "required": false, "unique": false },
+        "parent": { "id": "parent", "label": "Parent channel", "ty": { "Ref": { "target": "publishing__channel", "on-delete": "Restrict" } }, "required": false, "unique": false } },
+      "constraints": {},
+      "retention": { "days": 1825, "from": "Created" } },
+    { "id": "publishing__publish_job", "label": "Publish job",
+      "fields": {
+        "channel": { "id": "channel", "label": "Channel", "ty": { "Ref": { "target": "publishing__channel", "on-delete": "Restrict" } }, "required": true, "unique": false },
+        "release": { "id": "release", "label": "Release", "ty": { "Ref": { "target": "publishing__release", "on-delete": "Restrict" } }, "required": false, "unique": false },
+        "status": { "id": "status", "label": "Status", "ty": "Str", "required": true, "unique": false },
+        "scheduled_at": { "id": "scheduled_at", "label": "Scheduled", "ty": "Time", "required": true, "unique": false },
+        "attempts": { "id": "attempts", "label": "Attempts", "ty": "Int", "required": true, "unique": false },
+        "requested_by": { "id": "requested_by", "label": "Requested by", "ty": "Str", "required": false, "unique": false,
+          "personal": { "kind": "identifier", "subject": { "Field": { "field": "requested_by" } }, "searchable": true } } },
+      "constraints": {},
+      "retention": { "days": 365, "from": "Created" } },
+    { "id": "publishing__release", "label": "Release",
+      "fields": {
+        "name": { "id": "name", "label": "Name", "ty": "Str", "required": true, "unique": true },
+        "state": { "id": "state", "label": "State", "ty": "Str", "required": true, "unique": false },
+        "freeze_at": { "id": "freeze_at", "label": "Freeze", "ty": "Time", "required": false, "unique": false },
+        "current_job": { "id": "current_job", "label": "Current job", "ty": { "Ref": { "target": "publishing__publish_job", "on-delete": "Restrict" } }, "required": false, "unique": false } },
+      "constraints": {},
+      "retention": { "days": 730, "from": "Created" } },
+    { "id": "publishing__syndication_target", "label": "Syndication target",
+      "fields": {
+        "name": { "id": "name", "label": "Name", "ty": "Str", "required": true, "unique": true },
+        "mode": { "id": "mode", "label": "Mode", "ty": "Str", "required": true, "unique": false },
+        "channel": { "id": "channel", "label": "Channel", "ty": { "Ref": { "target": "publishing__channel", "on-delete": "Restrict" } }, "required": true, "unique": false },
+        "contact_name": { "id": "contact_name", "label": "Partner contact", "ty": "Str", "required": false, "unique": false,
+          "personal": { "kind": "name", "subject": { "Field": { "field": "contact_name" } }, "searchable": false } },
+        "contact_email": { "id": "contact_email", "label": "Contact email", "ty": "Str", "required": false, "unique": false,
+          "personal": { "kind": "email-address", "subject": { "Field": { "field": "contact_email" } }, "searchable": false } } },
+      "constraints": {},
+      "retention": { "days": 730, "from": "Created" } }
+  ],
+  "policies": [
+    { "id": "publishing__channel_editor_channels", "role": "publishing__channel_editor", "resource": { "Object": "publishing__channel" },
+      "actions": ["Create", "Read", "Update"] },
+    { "id": "publishing__operator_jobs", "role": "publishing__publish_operator", "resource": { "Object": "publishing__publish_job" },
+      "actions": ["Create", "Read", "Update"] },
+    { "id": "publishing__manager_releases", "role": "publishing__release_manager", "resource": { "Object": "publishing__release" },
+      "actions": ["Create", "Read", "Update", "Delete"] },
+    { "id": "publishing__member_published_jobs", "role": "member", "resource": { "Object": "publishing__publish_job" },
+      "actions": ["Read"], "condition": "record.status == 'published'" }
+  ],
+  "queries": [
+    { "id": "publishing__queued_jobs", "object": "publishing__publish_job",
+      "filter": "record.status == 'queued' or record.status == 'scheduled'",
+      "params": [], "order": [ { "field": "scheduled_at", "descending": false } ], "limit": 500 },
+    { "id": "publishing__channel_list", "object": "publishing__channel",
+      "filter": "record.active == true", "params": [], "order": [ { "field": "name", "descending": false } ], "limit": 200 }
+  ],
+  "views": [
+    { "id": "publishing__publish_calendar", "route": "/publishing/calendar", "title": "Publish calendar",
+      "sections": { "main": { "query": "publishing__queued_jobs", "args": {}, "include": [], "markdown": [], "single": false } } }
+  ],
+  "workflows": [
+    { "id": "publishing__job_lifecycle", "object": "publishing__publish_job", "field": "status", "initial": ["queued"],
+      "transitions": [
+        { "name": "schedule", "from": "queued", "to": "scheduled", "guard": "old.status == 'queued'", "set": {} },
+        { "name": "start_now", "from": "queued", "to": "publishing", "guard": "old.status == 'queued'", "set": {} },
+        { "name": "start_scheduled", "from": "scheduled", "to": "publishing", "guard": "old.status == 'scheduled'", "set": {} },
+        { "name": "complete", "from": "publishing", "to": "published", "guard": "old.status == 'publishing'", "set": {} },
+        { "name": "fail", "from": "publishing", "to": "failed", "guard": "old.status == 'publishing'", "set": {} },
+        { "name": "retry", "from": "failed", "to": "queued", "guard": "old.status == 'failed'", "set": {} },
+        { "name": "cancel_queued", "from": "queued", "to": "cancelled", "guard": "old.status == 'queued'", "set": {} },
+        { "name": "cancel_scheduled", "from": "scheduled", "to": "cancelled", "guard": "old.status == 'scheduled'", "set": {} } ] }
+  ],
+  "segments": [
+    { "id": "publishing__active_channels", "name": "Active channels", "subject-type": "publishing__channel",
+      "predicate": "record.active == true" }
+  ],
+  "screens": [
+    { "id": "publishing__calendar_screen", "name": "Publish schedule", "route": "/publishing/schedule", "viewModel": "publishing__read_calendar",
+      "kind": "publishing.list", "auth": "session", "description": "Queued and scheduled publish jobs, by time.",
+      "viewName": "publishing_calendar", "title": "Publish schedule" },
+    { "id": "publishing__job_detail", "name": "Publish job detail", "route": "/publishing/jobs/:job", "viewModel": "publishing__read_calendar",
+      "kind": "publishing.detail", "auth": "session", "description": "One publish job and its schedule.",
+      "viewName": "publishing_job_detail", "title": "Publish job" },
+    { "id": "publishing__channel_tree", "name": "Channel tree", "route": "/publishing/channels", "viewModel": "publishing__read_channel_tree",
+      "kind": "publishing.list", "auth": "session", "description": "Channels, nested under their parent channel.",
+      "viewName": "publishing_channel_tree", "title": "Channels" },
+    { "id": "publishing__channel_editor_screen", "name": "Channel editor", "route": "/publishing/channels/new", "viewModel": "publishing__read_channel_tree",
+      "kind": "publishing.editor", "auth": "session", "description": "Create or change a channel.",
+      "viewName": "publishing_channel_editor", "title": "New channel" },
+    { "id": "publishing__release_editor", "name": "Release editor", "route": "/publishing/releases/new", "viewModel": "publishing__read_calendar",
+      "kind": "publishing.editor", "auth": "session", "description": "Plan a release across channels.",
+      "viewName": "publishing_release_editor", "title": "New release" },
+    { "id": "publishing__schedule_settings", "name": "Publishing settings", "route": "/publishing/settings", "viewModel": "publishing__read_channel_tree",
+      "kind": "publishing.settings", "auth": "session", "description": "Defaults for channels and syndication.",
+      "viewName": "publishing_schedule_settings", "title": "Publishing settings" }
+  ],
+  "contracts": [
+    { "id": "publishing__read_calendar", "name": "Read the publish schedule", "realisation": "facade",
+      "auth": { "scheme": "session", "description": "A signed-in member", "requires": ["content-read"] },
+      "idempotent": true, "timeoutMs": 2000,
+      "inputs": [ { "name": "window", "type": "string" } ],
+      "outputs": [ { "name": "view", "type": "json" } ],
+      "postconditions": ["The answer is the queued and scheduled jobs in the window named."],
+      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] },
+    { "id": "publishing__read_channel_tree", "name": "Read the channel tree", "realisation": "facade",
+      "auth": { "scheme": "session", "description": "A signed-in member", "requires": ["content-read"] },
+      "idempotent": true, "timeoutMs": 2000,
+      "inputs": [],
+      "outputs": [ { "name": "view", "type": "json" } ],
+      "postconditions": ["The answer is every active channel with its parent."],
+      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] },
+    { "id": "publishing__submit_release", "name": "Plan a release", "realisation": "facade",
+      "auth": { "scheme": "session", "description": "A signed-in member", "requires": ["content-write"] },
+      "idempotent": false, "timeoutMs": 5000,
+      "inputs": [
+        { "name": "name", "type": "string" },
+        { "name": "freeze_at", "type": "timestamp" },
+        { "name": "channel_ids", "type": "list<string>" } ],
+      "outputs": [ { "name": "release_id", "type": "u64" } ],
+      "postconditions": ["A planned release exists for the channels named."],
+      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] },
+    { "id": "publishing__queue_publish", "name": "Queue a publish job", "realisation": "facade",
+      "auth": { "scheme": "session", "description": "A signed-in publisher", "requires": ["publishing__publish"] },
+      "idempotent": false, "timeoutMs": 5000,
+      "inputs": [
+        { "name": "channel", "type": "string" },
+        { "name": "release", "type": "string" },
+        { "name": "at", "type": "timestamp" } ],
+      "outputs": [ { "name": "job_id", "type": "u64" } ],
+      "postconditions": ["A queued publish job exists for the channel and release at the time named."],
+      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] },
+    { "id": "publishing__save_channel", "name": "Save a channel", "realisation": "facade",
+      "auth": { "scheme": "session", "description": "A signed-in channel editor", "requires": ["content-write"] },
+      "idempotent": true, "timeoutMs": 2000,
+      "inputs": [
+        { "name": "channel_name", "type": "string" },
+        { "name": "kind", "type": "string" },
+        { "name": "parent", "type": "string" },
+        { "name": "active", "type": "bool" } ],
+      "outputs": [ { "name": "channel_id", "type": "u64" } ],
+      "postconditions": ["The channel exists with the kind, parent and active flag given."],
+      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] },
+    { "id": "publishing__cancel_job", "name": "Cancel a publish schedule", "realisation": "facade",
+      "auth": { "scheme": "session", "description": "A signed-in release manager", "requires": ["publishing__cancel"] },
+      "idempotent": true, "timeoutMs": 2000,
+      "inputs": [
+        { "name": "job", "type": "string" },
+        { "name": "reason", "type": "string" } ],
+      "outputs": [ { "name": "status", "type": "string" } ],
+      "postconditions": ["The job named is no longer scheduled to publish."],
+      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] }
+  ],
+  "forms": [
+    { "id": "publishing__form_channel", "screen": "publishing__channel_editor_screen", "contract": "publishing__save_channel",
+      "fields": [
+        { "name": "channel_name", "input": "channel_name", "label": "Channel name", "control": "text", "normalize": "trim" },
+        { "name": "kind", "input": "kind", "label": "Kind (website, app, newsletter or social)", "control": "text" },
+        { "name": "parent", "input": "parent", "label": "Parent channel", "control": "text" },
+        { "name": "active", "input": "active", "label": "Accepting publishes", "control": "checkbox" } ],
+      "submitLabel": "Save channel", "onSuccess": { "navigate": { "screen": "publishing__channel_tree" }, "toast": "Channel saved." },
+      "onError": { "show": "inline" } },
+    { "id": "publishing__form_release", "screen": "publishing__release_editor", "contract": "publishing__submit_release",
+      "fields": [
+        { "name": "name", "input": "name", "label": "Release name", "control": "text", "normalize": "trim" },
+        { "name": "freeze_at", "input": "freeze_at", "label": "Content freeze", "control": "text" },
+        { "name": "channel_ids", "input": "channel_ids", "label": "Channels, one per line", "control": "textarea" } ],
+      "submitLabel": "Plan release", "onSuccess": { "navigate": { "screen": "publishing__calendar_screen" }, "toast": "Release planned." },
+      "onError": { "show": "inline" } },
+    { "id": "publishing__form_publish", "screen": "publishing__calendar_screen", "contract": "publishing__queue_publish",
+      "fields": [
+        { "name": "channel", "input": "channel", "label": "Channel", "control": "text" },
+        { "name": "release", "input": "release", "label": "Release", "control": "text" },
+        { "name": "at", "input": "at", "label": "Publish at", "control": "text" } ],
+      "submitLabel": "Queue publish", "onSuccess": { "toast": "Publish job queued." },
+      "onError": { "show": "toast" } },
+    { "id": "publishing__form_cancel", "screen": "publishing__job_detail", "contract": "publishing__cancel_job",
+      "fields": [
+        { "name": "job", "input": "job", "label": "Publish job", "control": "text" },
+        { "name": "reason", "input": "reason", "label": "Reason", "control": "textarea" } ],
+      "submitLabel": "Cancel schedule", "onSuccess": { "navigate": { "screen": "publishing__calendar_screen" }, "toast": "Schedule cancelled." },
+      "onError": { "show": "inline" } }
+  ],
+  "actions": [
+    { "id": "publishing__action_save_channel", "screen": "publishing__channel_editor_screen", "label": "Save channel",
+      "contract": "publishing__save_channel", "form": "publishing__form_channel",
+      "arguments": { "channel_name": "form.channel_name", "kind": "form.kind", "parent": "form.parent", "active": "form.active" },
+      "onSuccess": { "toast": "Channel saved." }, "onError": { "show": "inline" } },
+    { "id": "publishing__action_publish_now", "screen": "publishing__calendar_screen", "label": "Publish now",
+      "contract": "publishing__queue_publish", "form": "publishing__form_publish",
+      "arguments": { "channel": "form.channel", "release": "form.release", "at": "form.at" },
+      "onSuccess": { "toast": "Publish job queued." }, "onError": { "show": "toast" } },
+    { "id": "publishing__action_cancel_job", "screen": "publishing__job_detail", "label": "Cancel schedule",
+      "contract": "publishing__cancel_job", "form": "publishing__form_cancel",
+      "arguments": { "job": "form.job", "reason": "form.reason" },
+      "onSuccess": { "toast": "Schedule cancelled." }, "onError": { "show": "inline" } }
+  ],
+  "liveBindings": [
+    { "id": "publishing__live_calendar", "screen": "publishing__calendar_screen", "event": "ui-notice-received", "refresh": "whole",
+      "when": { "any": ["event.kind == 'publishing'", { "value": "event.object", "in": "depends-on" }] } },
+    { "id": "publishing__live_calendar_ended", "screen": "publishing__calendar_screen", "event": "ui-session-ended", "refresh": "whole" },
+    { "id": "publishing__live_job_detail", "screen": "publishing__job_detail", "event": "ui-notice-received", "refresh": "whole",
+      "when": { "any": ["event.kind == 'publishing'", { "value": "event.object", "in": "depends-on" }] } },
+    { "id": "publishing__live_job_detail_ended", "screen": "publishing__job_detail", "event": "ui-session-ended", "refresh": "whole" },
+    { "id": "publishing__live_channel_tree", "screen": "publishing__channel_tree", "event": "ui-notice-received", "refresh": "whole",
+      "when": { "any": ["event.kind == 'publishing'", { "value": "event.object", "in": "depends-on" }] } },
+    { "id": "publishing__live_channel_tree_ended", "screen": "publishing__channel_tree", "event": "ui-session-ended", "refresh": "whole" },
+    { "id": "publishing__live_channel_editor", "screen": "publishing__channel_editor_screen", "event": "ui-notice-received", "refresh": "whole",
+      "when": { "any": ["event.kind == 'publishing'", { "value": "event.object", "in": "depends-on" }] } },
+    { "id": "publishing__live_channel_editor_ended", "screen": "publishing__channel_editor_screen", "event": "ui-session-ended", "refresh": "whole" },
+    { "id": "publishing__live_release_editor", "screen": "publishing__release_editor", "event": "ui-notice-received", "refresh": "whole",
+      "when": { "any": ["event.kind == 'publishing'", { "value": "event.object", "in": "depends-on" }] } },
+    { "id": "publishing__live_release_editor_ended", "screen": "publishing__release_editor", "event": "ui-session-ended", "refresh": "whole" },
+    { "id": "publishing__live_schedule_settings", "screen": "publishing__schedule_settings", "event": "ui-notice-received", "refresh": "whole",
+      "when": { "any": ["event.kind == 'publishing'", { "value": "event.object", "in": "depends-on" }] } },
+    { "id": "publishing__live_schedule_settings_ended", "screen": "publishing__schedule_settings", "event": "ui-session-ended", "refresh": "whole" }
+  ],
+  "events": [
+    { "id": "publishing__job_published_event", "name": "Publish job completed", "description": "A publish job finished and its channel is live.",
+      "payload": [ { "name": "job", "type": "string" }, { "name": "channel", "type": "string" } ] },
+    { "id": "publishing__release_frozen_event", "name": "Release frozen", "description": "A release reached its content freeze.",
+      "payload": [ { "name": "release", "type": "string" }, { "name": "freeze_at", "type": "timestamp" } ] },
+    { "id": "publishing__syndication_failed_event", "name": "Syndication failed", "description": "A partner did not accept a syndicated release.",
+      "payload": [ { "name": "target", "type": "string" }, { "name": "attempts", "type": "number" } ] }
+  ],
+  "eventKinds": [
+    { "id": "publishing__released_event", "kind": "app.publishing-released",
+      "fields": [
+        { "name": "release", "type": "string" },
+        { "name": "version", "type": "string" },
+        { "name": "channel", "type": "string" },
+        { "name": "locale", "type": "string" },
+        { "name": "at", "type": "timestamp" } ],
+      "readers": ["publishing__release_manager"] }
+  ],
+  "errorMessages": [
+    { "id": "publishing__error_channel_name_taken", "on": "check", "kinds": ["unique"], "text": "Another channel already uses this name.", "field": "channel_name" },
+    { "id": "publishing__error_job_not_cancellable", "on": "error", "kinds": ["workflow"], "text": "This job has already started publishing and cannot be cancelled." }
+  ],
+  "claims": [
+    { "id": "publishing__no-publish-after-cancel", "kind": "structural",
+      "statement": "A publish job SHALL NOT reach the published state after it has been cancelled.",
+      "subjects": ["product-module"],
+      "rationale": "The cancel transitions are terminal in the job lifecycle.",
+      "evaluate": { "method": "external-evidence" } },
+    { "id": "publishing__frozen-release-needs-channels", "kind": "structural",
+      "statement": "A release SHALL NOT ship to a channel that has no publish job for it.",
+      "subjects": ["product-module"],
+      "rationale": "Shipping a release is the sum of its publish jobs.",
+      "evaluate": { "method": "external-evidence" } }
+  ],
+  "triggers": [
+    { "id": "publishing__on_job_created", "on": { "RecordCreated": { "object": "publishing__publish_job" } },
+      "automation": "publishing__run_publish" },
+    { "id": "publishing__partner_webhook", "on": { "InboundWebhook": { "endpoint": "partner-cms" } },
+      "condition": "param.release != null", "automation": "publishing__syndicate_release" },
+    { "id": "publishing__on_release_published", "on": { "DeclaredEvent": { "kind": "app.publishing-released" } },
+      "condition": "param.release != null", "automation": "publishing__fan_out_channels" }
+  ],
+  "automations": [
+    { "id": "publishing__run_publish", "label": "Run a publish job when it is created",
+      "run-as": { "roles": ["publishing__publish_operator"] }, "run-key": "param.record",
+      "start": "mark",
+      "steps": {
+        "mark": { "action": { "UpdateRecord": { "object": "publishing__publish_job", "record": "param.record", "fields": { "status": "'publishing'" } } }, "next": "notify" },
+        "notify": { "action": { "CreateNotice": { "template": "publishing__release_notice", "to": "param.owner", "record": "param.record" } }, "next": "done", "retry": { "attempts": 3 } },
+        "done": { "action": "End" } } },
+    { "id": "publishing__fan_out_channels", "label": "Queue a release on every active channel",
+      "run-as": { "roles": ["publishing__release_manager"] }, "run-key": "param.release",
+      "start": "fan",
+      "steps": {
+        "fan": { "action": { "FanOut": { "segment": "publishing__active_channels", "batch": 50, "each": "queue_channel" } }, "next": "done" },
+        "queue_channel": { "action": { "CreateRecord": { "object": "publishing__publish_job", "fields": { "channel": "record.$id", "release": "param.release", "status": "'queued'", "scheduled_at": "now", "attempts": "0", "requested_by": "principal" } } }, "next": "done" },
+        "done": { "action": "End" } } },
+    { "id": "publishing__syndicate_release", "label": "Send a release to a syndication partner",
+      "run-as": { "roles": ["publishing__publish_operator"] }, "run-key": "param.release",
+      "start": "push",
+      "steps": {
+        "push": { "action": { "CallWebhook": { "subscription": "publishing-syndication", "body": { "release": "param.release", "channel": "param.channel" } } }, "next": "pause", "retry": { "attempts": 5 }, "timeout": 30000 },
+        "pause": { "action": { "WaitFor": { "duration": 900000 } }, "next": "notify_owner" },
+        "notify_owner": { "action": { "SendMail": { "template": "publishing__syndication_mail", "to": "param.owner", "category": "transactional" } }, "next": "done", "timeout": 30000 },
+        "done": { "action": "End" } } }
+  ],
+  "operations": [
+    { "id": "publishing__publish_now", "label": "Publish a release now",
+      "inputs": [
+        { "name": "channel", "ty": "Str", "required": true, "label": "Channel" },
+        { "name": "release", "ty": "Str", "required": true, "label": "Release" } ],
+      "invokers": { "signed-in": true, "roles": ["publishing__publish_operator", "publishing__release_manager"] },
+      "steps": [
+        { "CreateRecord": { "id": "job", "object": "publishing__publish_job", "fields": { "channel": "param.channel", "release": "param.release", "status": "'queued'", "scheduled_at": "now", "attempts": "0", "requested_by": "principal" } } } ] },
+    { "id": "publishing__cancel_schedule", "label": "Cancel a publish schedule",
+      "inputs": [ { "name": "job", "ty": "Str", "required": true, "label": "Publish job" } ],
+      "invokers": { "signed-in": true, "roles": ["publishing__release_manager"] },
+      "subject": { "object": "publishing__publish_job", "input": "job" },
+      "conditions": [ { "id": "not_started", "expr": "record.status == 'queued' or record.status == 'scheduled'", "error": "already-started", "message": "This job has already started publishing." } ],
+      "steps": [
+        { "DeleteRecord": { "id": "remove_job", "object": "publishing__publish_job", "record": "record.$id" } } ] }
+  ],
+  "mailTemplates": [
+    { "id": "publishing__syndication_mail", "subject": "A release was sent to a syndication partner",
+      "body": "[{\"type\":\"paragraph\",\"inlines\":[{\"type\":\"text\",\"text\":\"The release was sent to the syndication partner. The partner response is on the release page.\"}]}]" }
+  ],
+  "noticeTemplates": [
+    { "id": "publishing__release_notice", "title": "Publish job running",
+      "body": "[{\"type\":\"paragraph\",\"inlines\":[{\"type\":\"text\",\"text\":\"A publish job for your release is now running.\"}]}]" }
+  ]
+}

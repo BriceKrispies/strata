@@ -1,0 +1,448 @@
+{
+  // Service module: customer cases, queues, macros, the knowledge base and SLA clocks. Depends on platform records and content only.
+  "product": {
+    "id": "service",
+    "name": "Service",
+    "description": "Customer cases, queues, macros, knowledge articles and SLA clocks for the support desk.",
+    "version": "1.0.0",
+    "platform": { "min": "0.2" },
+    "imports": {
+      "spec": "../../../specifications/spec.jsonc",
+      "entities": ["product-module", "records-read", "content-read", "content-write"]
+    }
+  },
+
+  // Records: the data model. Case and knowledge article refer to each other; sla_clock refers to case.
+  "records": [
+    { "id": "service__case_rec", "name": "Case", "owner": "product-module", "key": ["id"],
+      "fields": [
+        { "name": "id", "type": "u64" },
+        { "name": "reference", "type": "string" },
+        { "name": "customer_name", "type": "string", "personal": "name" },
+        { "name": "customer_email", "type": "string", "personal": "contact" },
+        { "name": "customer_phone", "type": "string", "personal": "contact", "optional": true },
+        { "name": "subject", "type": "string" },
+        { "name": "status", "type": "service__case_status" },
+        { "name": "priority", "type": "service__priority" },
+        { "name": "channel", "type": "service__channel" },
+        { "name": "owner", "type": "string", "optional": true },
+        { "name": "queue", "type": "u64", "refersTo": "service__queue_rec", "onDelete": "set-null", "optional": true },
+        { "name": "article", "type": "u64", "refersTo": "service__knowledge_article_rec", "onDelete": "set-null", "optional": true },
+        { "name": "last_note", "type": "service__customer_note", "personal": "other", "optional": true },
+        { "name": "opened_at", "type": "timestamp" } ],
+      "retention": "Three years after the case is closed, then removed.",
+      "schemaVersion": 1, "realisation": "target" },
+    { "id": "service__queue_rec", "name": "Queue", "owner": "product-module", "key": ["id"],
+      "fields": [
+        { "name": "id", "type": "u64" },
+        { "name": "name", "type": "string" },
+        { "name": "kind", "type": "service__queue_kind" },
+        { "name": "level", "type": "service__escalation_level" },
+        { "name": "supervisor", "type": "string" },
+        { "name": "escalation_queue", "type": "u64", "refersTo": "service__queue_rec", "onDelete": "set-null", "optional": true } ],
+      "retention": "Kept while the queue exists; no personal data.",
+      "schemaVersion": 1, "realisation": "target" },
+    { "id": "service__macro_rec", "name": "Macro", "owner": "product-module", "key": ["id"],
+      "fields": [
+        { "name": "id", "type": "u64" },
+        { "name": "name", "type": "string" },
+        { "name": "action", "type": "service__macro_action" },
+        { "name": "body", "type": "string" },
+        { "name": "owner_queue", "type": "u64", "refersTo": "service__queue_rec", "onDelete": "set-null", "optional": true },
+        { "name": "uses", "type": "u32" } ],
+      "retention": "Kept while the macro is in use; no personal data.",
+      "schemaVersion": 1, "realisation": "target" },
+    { "id": "service__knowledge_article_rec", "name": "Knowledge article", "owner": "product-module", "key": ["id"],
+      "fields": [
+        { "name": "id", "type": "u64" },
+        { "name": "title", "type": "string" },
+        { "name": "state", "type": "service__article_state" },
+        { "name": "locale", "type": "service__locale" },
+        { "name": "body", "type": "string" },
+        { "name": "source_case", "type": "u64", "refersTo": "service__case_rec", "onDelete": "set-null", "optional": true },
+        { "name": "updated_at", "type": "timestamp" } ],
+      "retention": "Kept while the article is published or in review; retired articles removed after two years.",
+      "schemaVersion": 1, "realisation": "target" },
+    { "id": "service__sla_clock_rec", "name": "SLA clock", "owner": "product-module", "key": ["id"],
+      "fields": [
+        { "name": "id", "type": "u64" },
+        { "name": "case", "type": "u64", "refersTo": "service__case_rec", "onDelete": "restrict" },
+        { "name": "metric", "type": "service__sla_metric" },
+        { "name": "started_at", "type": "timestamp" },
+        { "name": "due_at", "type": "timestamp" },
+        { "name": "paused", "type": "bool" },
+        { "name": "breached", "type": "bool" } ],
+      "retention": "Removed with its case.",
+      "schemaVersion": 1, "realisation": "target" }
+  ],
+
+  // Types: enums and a struct used by the records above.
+  "types": [
+    { "id": "service__priority", "name": "Priority", "kind": "enum", "values": ["low", "normal", "high", "urgent"], "description": "How soon a case needs an answer." },
+    { "id": "service__channel", "name": "Channel", "kind": "enum", "values": ["email", "phone", "chat", "web", "social"], "description": "Where a case came in from." },
+    { "id": "service__case_status", "name": "Case status", "kind": "enum", "values": ["open", "pending", "solved", "closed"], "description": "Where a case is in its handling." },
+    { "id": "service__queue_kind", "name": "Queue kind", "kind": "enum", "values": ["general", "billing", "technical", "returns", "vip", "retention"], "description": "What a queue handles." },
+    { "id": "service__escalation_level", "name": "Escalation level", "kind": "enum", "values": ["tier1", "tier2", "supervisor"], "description": "The support tier that owns a queue." },
+    { "id": "service__sla_metric", "name": "SLA metric", "kind": "enum", "values": ["first_response", "resolution", "next_reply"], "description": "What an SLA clock measures." },
+    { "id": "service__article_state", "name": "Article state", "kind": "enum", "values": ["draft", "review", "published", "retired"], "description": "Where a knowledge article is in its life." },
+    { "id": "service__locale", "name": "Locale", "kind": "enum", "values": ["en_gb", "en_us", "fr_fr", "de_de", "es_es", "pt_br", "nl_nl", "it_it", "ja_jp", "sv_se"], "description": "The language an article is written in." },
+    { "id": "service__macro_action", "name": "Macro action", "kind": "enum", "values": ["set_status", "set_priority", "add_tag", "assign_queue", "send_reply"], "description": "What a macro does when applied." },
+    { "id": "service__customer_note", "name": "Customer note", "kind": "struct", "fields": [ { "name": "author", "type": "string" }, { "name": "at", "type": "timestamp" }, { "name": "text", "type": "string" } ], "description": "The latest note an agent sent the customer." }
+  ],
+
+  // Capabilities: our own, named in roles and contracts.
+  "capabilities": [
+    { "id": "service__work_cases", "name": "Work cases", "description": "Read and update the cases assigned to the agent." },
+    { "id": "service__reassign_cases", "name": "Reassign cases", "description": "Move a case to another queue." },
+    { "id": "service__manage_queues", "name": "Manage queues", "description": "Read and change queues, their supervisors and escalation paths." },
+    { "id": "service__edit_knowledge", "name": "Edit knowledge", "description": "Write and publish knowledge articles." }
+  ],
+
+  // Roles: agents by tier, the queue supervisor, and the knowledge editor.
+  "roles": [
+    { "id": "service__agent_tier1", "name": "Agent tier 1", "description": "Answers first-line cases.", "level": "tenant", "holders": ["person", "team"], "capabilities": ["records-read", "service__work_cases"] },
+    { "id": "service__agent_tier2", "name": "Agent tier 2", "description": "Handles escalated cases and moves them between queues.", "level": "tenant", "holders": ["person", "team"], "capabilities": ["records-read", "service__work_cases", "service__reassign_cases"] },
+    { "id": "service__queue_supervisor", "name": "Queue supervisor", "description": "Runs a queue, reassigns its cases and receives escalations.", "level": "tenant", "holders": ["person", "team"], "capabilities": ["records-read", "service__work_cases", "service__reassign_cases", "service__manage_queues"] },
+    { "id": "service__knowledge_editor", "name": "Knowledge editor", "description": "Writes and retires knowledge articles.", "level": "tenant", "holders": ["person", "team"], "capabilities": ["content-read", "content-write", "service__edit_knowledge"] }
+  ],
+
+  // Objects: tenant data with reference fields. The case carries personal customer data and so has retention.
+  "objects": [
+    { "id": "service__case", "label": "Case",
+      "fields": {
+        "reference": { "id": "reference", "label": "Reference", "ty": "Str", "required": true, "unique": true },
+        "customer_name": { "id": "customer_name", "label": "Customer name", "ty": "Str", "required": true, "unique": false, "personal": { "kind": "name", "subject": { "Field": { "field": "customer_name" } }, "searchable": false } },
+        "customer_email": { "id": "customer_email", "label": "Customer email", "ty": "Str", "required": true, "unique": false, "personal": { "kind": "email-address", "subject": { "Field": { "field": "customer_email" } }, "searchable": false } },
+        "customer_phone": { "id": "customer_phone", "label": "Customer phone", "ty": "Str", "required": false, "unique": false, "personal": { "kind": "phone-number", "subject": { "Field": { "field": "customer_phone" } }, "searchable": false } },
+        "subject": { "id": "subject", "label": "Subject", "ty": "Str", "required": true, "unique": false },
+        "status": { "id": "status", "label": "Status", "ty": "Str", "required": true, "unique": false },
+        "priority": { "id": "priority", "label": "Priority", "ty": "Str", "required": true, "unique": false },
+        "channel": { "id": "channel", "label": "Channel", "ty": "Str", "required": true, "unique": false },
+        "owner": { "id": "owner", "label": "Owner", "ty": "Str", "required": false, "unique": false },
+        "queue": { "id": "queue", "label": "Queue", "ty": { "Ref": { "target": "service__queue", "on-delete": "Restrict" } }, "required": false, "unique": false },
+        "article": { "id": "article", "label": "Article", "ty": { "Ref": { "target": "service__knowledge_article", "on-delete": "Restrict" } }, "required": false, "unique": false },
+        "opened_at": { "id": "opened_at", "label": "Opened", "ty": "Time", "required": true, "unique": false } },
+      "constraints": {},
+      "retention": { "days": 1095, "from": "Created" } },
+    { "id": "service__queue", "label": "Queue",
+      "fields": {
+        "name": { "id": "name", "label": "Name", "ty": "Str", "required": true, "unique": true },
+        "kind": { "id": "kind", "label": "Kind", "ty": "Str", "required": true, "unique": false },
+        "supervisor": { "id": "supervisor", "label": "Supervisor", "ty": "Str", "required": true, "unique": false },
+        "escalation_queue": { "id": "escalation_queue", "label": "Escalates to", "ty": { "Ref": { "target": "service__queue", "on-delete": "Restrict" } }, "required": false, "unique": false } },
+      "constraints": {},
+      "retention": { "days": 3650, "from": "Created" } },
+    { "id": "service__macro", "label": "Macro",
+      "fields": {
+        "name": { "id": "name", "label": "Name", "ty": "Str", "required": true, "unique": true },
+        "action": { "id": "action", "label": "Action", "ty": "Str", "required": true, "unique": false },
+        "body": { "id": "body", "label": "Body", "ty": "Str", "required": true, "unique": false },
+        "owner_queue": { "id": "owner_queue", "label": "Owner queue", "ty": { "Ref": { "target": "service__queue", "on-delete": "Restrict" } }, "required": false, "unique": false },
+        "uses": { "id": "uses", "label": "Uses", "ty": "Int", "required": true, "unique": false } },
+      "constraints": {},
+      "retention": { "days": 1825, "from": "Created" } },
+    { "id": "service__knowledge_article", "label": "Knowledge article",
+      "fields": {
+        "title": { "id": "title", "label": "Title", "ty": "Str", "required": true, "unique": true },
+        "state": { "id": "state", "label": "State", "ty": "Str", "required": true, "unique": false },
+        "locale": { "id": "locale", "label": "Locale", "ty": "Str", "required": true, "unique": false },
+        "body": { "id": "body", "label": "Body", "ty": "Str", "required": true, "unique": false },
+        "source_case": { "id": "source_case", "label": "Source case", "ty": { "Ref": { "target": "service__case", "on-delete": "Restrict" } }, "required": false, "unique": false },
+        "updated_at": { "id": "updated_at", "label": "Updated", "ty": "Time", "required": true, "unique": false } },
+      "constraints": {},
+      "retention": { "days": 2555, "from": "Created" } },
+    { "id": "service__sla_clock", "label": "SLA clock",
+      "fields": {
+        "case": { "id": "case", "label": "Case", "ty": { "Ref": { "target": "service__case", "on-delete": "Restrict" } }, "required": true, "unique": false },
+        "metric": { "id": "metric", "label": "Metric", "ty": "Str", "required": true, "unique": false },
+        "started_at": { "id": "started_at", "label": "Started", "ty": "Time", "required": true, "unique": false },
+        "due_at": { "id": "due_at", "label": "Due", "ty": "Time", "required": true, "unique": false },
+        "paused": { "id": "paused", "label": "Paused", "ty": "Bool", "required": true, "unique": false },
+        "breached": { "id": "breached", "label": "Breached", "ty": "Bool", "required": true, "unique": false } },
+      "constraints": {},
+      "retention": { "days": 1095, "from": "Created" } }
+  ],
+
+  // Policies: tiered agents over cases, supervisors over queues, editors over articles.
+  "policies": [
+    { "id": "service__tier1_cases", "role": "service__agent_tier1", "resource": { "Object": "service__case" }, "actions": ["Read", "Update"], "condition": "record.status != 'closed'" },
+    { "id": "service__tier2_cases", "role": "service__agent_tier2", "resource": { "Object": "service__case" }, "actions": ["Read", "Update"] },
+    { "id": "service__supervisor_queues", "role": "service__queue_supervisor", "resource": { "Object": "service__queue" }, "actions": ["Create", "Read", "Update"] },
+    { "id": "service__tier1_macros", "role": "service__agent_tier1", "resource": { "Object": "service__macro" }, "actions": ["Read"] },
+    { "id": "service__tier1_sla", "role": "service__agent_tier1", "resource": { "Object": "service__sla_clock" }, "actions": ["Read"] },
+    { "id": "service__editor_articles", "role": "service__knowledge_editor", "resource": { "Object": "service__knowledge_article" }, "actions": ["Create", "Read", "Update"] }
+  ],
+
+  // Queries: the case board, a queue backlog, and breached clocks.
+  "queries": [
+    { "id": "service__open_cases", "object": "service__case", "filter": "record.status == 'open'", "params": [], "order": [ { "field": "opened_at", "descending": true } ], "limit": 100 },
+    { "id": "service__queue_backlog", "object": "service__case", "filter": "record.queue == param.queue and record.status != 'closed'", "params": ["queue"], "order": [ { "field": "opened_at", "descending": false } ], "limit": 200 },
+    { "id": "service__breached_clocks", "object": "service__sla_clock", "filter": "record.breached == true", "params": [], "order": [ { "field": "due_at", "descending": false } ], "limit": 50 }
+  ],
+
+  // Views: the case board. Its route is not a screen route.
+  "views": [
+    { "id": "service__case_board", "route": "/service/board", "title": "Case board",
+      "sections": { "main": { "query": "service__open_cases", "args": {}, "include": [], "markdown": [], "single": false } } }
+  ],
+
+  // Workflows: the case lifecycle on the status field of case.
+  "workflows": [
+    { "id": "service__case_workflow", "object": "service__case", "field": "status", "initial": ["open"],
+      "transitions": [
+        { "name": "hold", "from": "open", "to": "pending", "guard": "old.status == 'open'", "set": {} },
+        { "name": "resume", "from": "pending", "to": "open", "set": {} },
+        { "name": "solve", "from": "open", "to": "solved", "set": {} },
+        { "name": "solve_pending", "from": "pending", "to": "solved", "set": {} },
+        { "name": "close", "from": "solved", "to": "closed", "set": {} },
+        { "name": "reopen", "from": "closed", "to": "open", "set": {} } ] }
+  ],
+
+  // Screens: pages of the Service module.
+  "screens": [
+    { "id": "service__case_list", "name": "Case list", "route": "/service/cases", "viewModel": "service__read_case_board", "kind": "service.list", "auth": "session", "description": "The open cases of the support desk.", "viewName": "service_case_list", "title": "Cases" },
+    { "id": "service__case_detail", "name": "Case detail", "route": "/service/cases/:id", "viewModel": "service__read_case", "kind": "service.detail", "auth": "session", "description": "One case, with its customer, its SLA clocks and its macros.", "viewName": "service_case_detail", "title": "Case" },
+    { "id": "service__queue_screen", "name": "Queues", "route": "/service/queues", "viewModel": "service__read_queues", "kind": "service.list", "auth": "session", "description": "The queues, their supervisors and their escalation paths.", "viewName": "service_queue_screen", "title": "Queues" },
+    { "id": "service__macro_screen", "name": "Macros", "route": "/service/macros", "viewModel": "service__read_macros", "kind": "service.list", "auth": "session", "description": "The macros agents can apply.", "viewName": "service_macro_screen", "title": "Macros" },
+    { "id": "service__knowledge_list", "name": "Knowledge base", "route": "/service/knowledge", "viewModel": "service__read_knowledge", "kind": "service.list", "auth": "session", "description": "Knowledge articles by state and locale.", "viewName": "service_knowledge_list", "title": "Knowledge base" },
+    { "id": "service__knowledge_editor_screen", "name": "Knowledge editor", "route": "/service/knowledge/:id", "viewModel": "service__read_article", "kind": "service.editor", "auth": "session", "description": "Edit one knowledge article.", "viewName": "service_knowledge_editor", "title": "Edit article" },
+    { "id": "service__sla_screen", "name": "SLA clocks", "route": "/service/sla", "viewModel": "service__read_sla_clocks", "kind": "service.list", "auth": "session", "description": "Running SLA clocks and the ones that breached.", "viewName": "service_sla_screen", "title": "SLA clocks" }
+  ],
+
+  // Forms: inputs collected on screens and submitted through contracts.
+  "forms": [
+    { "id": "service__form_apply_macro", "screen": "service__case_detail", "contract": "service__submit_macro",
+      "fields": [
+        { "name": "case", "input": "case", "label": "Case reference", "control": "text" },
+        { "name": "macro", "input": "macro", "label": "Macro", "control": "text" },
+        { "name": "note", "input": "note", "label": "Note to the customer", "control": "textarea" } ],
+      "submitLabel": "Apply macro", "onSuccess": { "toast": "Macro applied." }, "onError": { "show": "inline" } },
+    { "id": "service__form_reassign", "screen": "service__queue_screen", "contract": "service__submit_reassign",
+      "fields": [
+        { "name": "case", "input": "case", "label": "Case reference", "control": "text" },
+        { "name": "queue", "input": "queue", "label": "Move to queue", "control": "text" },
+        { "name": "reason", "input": "reason", "label": "Reason", "control": "textarea" } ],
+      "submitLabel": "Reassign", "onSuccess": { "toast": "Case reassigned." }, "onError": { "show": "inline" } },
+    { "id": "service__form_article_editor", "screen": "service__knowledge_editor_screen", "contract": "service__submit_article",
+      "fields": [
+        { "name": "article", "input": "article", "label": "Article id", "control": "text" },
+        { "name": "title", "input": "title", "label": "Title", "control": "text", "normalize": "trim" },
+        { "name": "body", "input": "body", "label": "Body", "control": "textarea" },
+        { "name": "state", "input": "state", "label": "State", "control": "text" },
+        { "name": "publish_now", "input": "publish_now", "label": "Publish immediately", "control": "checkbox" } ],
+      "submitLabel": "Save article", "onSuccess": { "toast": "Article saved." }, "onError": { "show": "inline" } },
+    { "id": "service__form_sla_pause", "screen": "service__sla_screen", "contract": "service__submit_sla_pause",
+      "fields": [
+        { "name": "clock", "input": "clock", "label": "SLA clock", "control": "text" },
+        { "name": "paused", "input": "paused", "label": "Pause the clock", "control": "checkbox" },
+        { "name": "reason", "input": "reason", "label": "Reason", "control": "textarea" } ],
+      "submitLabel": "Save", "onSuccess": { "toast": "Clock updated." }, "onError": { "show": "inline" } }
+  ],
+
+  // Contracts: facade operations the screens, forms and actions call.
+  "contracts": [
+    { "id": "service__read_case_board", "name": "Read the case board", "realisation": "facade",
+      "auth": { "scheme": "session", "description": "A signed-in agent", "requires": ["service__work_cases"] },
+      "idempotent": true, "timeoutMs": 2000,
+      "inputs": [ { "name": "status", "type": "string" } ],
+      "outputs": [ { "name": "view", "type": "json" } ],
+      "postconditions": ["The answer is the cases with the status named."],
+      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] },
+    { "id": "service__read_case", "name": "Read one case", "realisation": "facade",
+      "auth": { "scheme": "session", "description": "A signed-in agent", "requires": ["service__work_cases"] },
+      "idempotent": true, "timeoutMs": 2000,
+      "inputs": [ { "name": "case", "type": "u64" } ],
+      "outputs": [ { "name": "view", "type": "json" } ],
+      "postconditions": ["The answer is the case named, with its customer, its SLA clocks and its queue."],
+      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] },
+    { "id": "service__read_queues", "name": "Read the queues", "realisation": "facade",
+      "auth": { "scheme": "session", "description": "A signed-in queue supervisor", "requires": ["service__manage_queues"] },
+      "idempotent": true, "timeoutMs": 2000,
+      "inputs": [],
+      "outputs": [ { "name": "view", "type": "json" } ],
+      "postconditions": ["The answer is every queue, with its supervisor and escalation path."],
+      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] },
+    { "id": "service__read_macros", "name": "Read the macros", "realisation": "facade",
+      "auth": { "scheme": "session", "description": "A signed-in agent", "requires": ["records-read"] },
+      "idempotent": true, "timeoutMs": 2000,
+      "inputs": [],
+      "outputs": [ { "name": "view", "type": "json" } ],
+      "postconditions": ["The answer is the macros the signed-in agent may apply."],
+      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] },
+    { "id": "service__read_knowledge", "name": "Read the knowledge base", "realisation": "facade",
+      "auth": { "scheme": "session", "description": "A signed-in editor or agent", "requires": ["content-read"] },
+      "idempotent": true, "timeoutMs": 2000,
+      "inputs": [],
+      "outputs": [ { "name": "view", "type": "json" } ],
+      "postconditions": ["The answer is the knowledge articles, by state and locale."],
+      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] },
+    { "id": "service__read_article", "name": "Read one knowledge article", "realisation": "facade",
+      "auth": { "scheme": "session", "description": "A signed-in editor", "requires": ["content-read"] },
+      "idempotent": true, "timeoutMs": 2000,
+      "inputs": [ { "name": "article", "type": "u64" } ],
+      "outputs": [ { "name": "view", "type": "json" } ],
+      "postconditions": ["The answer is the article named, with its body and its source case."],
+      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] },
+    { "id": "service__read_sla_clocks", "name": "Read the SLA clocks", "realisation": "facade",
+      "auth": { "scheme": "session", "description": "A signed-in agent", "requires": ["records-read"] },
+      "idempotent": true, "timeoutMs": 2000,
+      "inputs": [],
+      "outputs": [ { "name": "view", "type": "json" } ],
+      "postconditions": ["The answer is the running SLA clocks and the ones that breached."],
+      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] },
+    { "id": "service__submit_macro", "name": "Apply a macro to a case", "realisation": "facade",
+      "auth": { "scheme": "session", "description": "A signed-in agent", "requires": ["service__work_cases"] },
+      "idempotent": false, "timeoutMs": 3000,
+      "inputs": [ { "name": "case", "type": "string" }, { "name": "macro", "type": "string" }, { "name": "note", "type": "string" } ],
+      "outputs": [ { "name": "saved", "type": "bool" } ],
+      "postconditions": ["The macro's effect is applied to the case, and the customer note is recorded."],
+      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] },
+    { "id": "service__submit_reassign", "name": "Reassign a case", "realisation": "facade",
+      "auth": { "scheme": "session", "description": "A signed-in tier 2 agent or queue supervisor", "requires": ["service__reassign_cases"] },
+      "idempotent": false, "timeoutMs": 3000,
+      "inputs": [ { "name": "case", "type": "string" }, { "name": "queue", "type": "string" }, { "name": "reason", "type": "string" } ],
+      "outputs": [ { "name": "saved", "type": "bool" } ],
+      "postconditions": ["The case belongs to the queue named."],
+      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] },
+    { "id": "service__submit_article", "name": "Save a knowledge article", "realisation": "facade",
+      "auth": { "scheme": "session", "description": "A signed-in knowledge editor", "requires": ["content-write", "service__edit_knowledge"] },
+      "idempotent": true, "timeoutMs": 3000,
+      "inputs": [ { "name": "article", "type": "string" }, { "name": "title", "type": "string" }, { "name": "body", "type": "string" }, { "name": "state", "type": "string" } ],
+      "outputs": [ { "name": "saved", "type": "bool" } ],
+      "postconditions": ["The article holds the title and body given, in the state named."],
+      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] },
+    { "id": "service__submit_sla_pause", "name": "Pause or resume an SLA clock", "realisation": "facade",
+      "auth": { "scheme": "session", "description": "A signed-in agent", "requires": ["service__work_cases"] },
+      "idempotent": true, "timeoutMs": 3000,
+      "inputs": [ { "name": "clock", "type": "string" }, { "name": "paused", "type": "bool" }, { "name": "reason", "type": "string" } ],
+      "outputs": [ { "name": "saved", "type": "bool" } ],
+      "postconditions": ["The SLA clock is paused or running as the value given."],
+      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] }
+  ],
+
+  // Actions: buttons that call a contract.
+  "actions": [
+    { "id": "service__action_apply_macro", "screen": "service__case_detail", "label": "Apply macro", "contract": "service__submit_macro", "form": "service__form_apply_macro",
+      "arguments": { "case": "form.case", "macro": "form.macro", "note": "form.note" },
+      "onSuccess": { "toast": "Macro applied." }, "onError": { "show": "toast" } },
+    { "id": "service__action_reassign", "screen": "service__queue_screen", "label": "Reassign", "contract": "service__submit_reassign", "form": "service__form_reassign",
+      "arguments": { "case": "form.case", "queue": "form.queue", "reason": "form.reason" },
+      "onSuccess": { "toast": "Case reassigned." }, "onError": { "show": "inline" } },
+    { "id": "service__action_save_article", "screen": "service__knowledge_editor_screen", "label": "Save article", "contract": "service__submit_article", "form": "service__form_article_editor",
+      "arguments": { "article": "form.article", "title": "form.title", "body": "form.body", "state": "form.state" },
+      "onSuccess": { "toast": "Article saved." }, "onError": { "show": "inline" } },
+    { "id": "service__action_pause_clock", "screen": "service__sla_screen", "label": "Save clock", "contract": "service__submit_sla_pause", "form": "service__form_sla_pause",
+      "arguments": { "clock": "form.clock", "paused": "form.paused", "reason": "form.reason" },
+      "onSuccess": { "toast": "Clock updated." }, "onError": { "show": "inline" } }
+  ],
+
+  // Live bindings: each screen refreshes on a notice; each session screen also ends on session end.
+  "liveBindings": [
+    { "id": "service__live_case_list", "screen": "service__case_list", "event": "ui-notice-received", "refresh": "whole", "when": { "any": ["event.kind == 'membership'", { "value": "event.object", "in": "depends-on" }] } },
+    { "id": "service__live_case_list_ended", "screen": "service__case_list", "event": "ui-session-ended", "refresh": "whole" },
+    { "id": "service__live_case_detail", "screen": "service__case_detail", "event": "ui-notice-received", "refresh": "whole", "when": { "any": ["event.kind == 'membership'", { "value": "event.object", "in": "depends-on" }] } },
+    { "id": "service__live_case_detail_ended", "screen": "service__case_detail", "event": "ui-session-ended", "refresh": "whole" },
+    { "id": "service__live_queue_screen", "screen": "service__queue_screen", "event": "ui-notice-received", "refresh": "whole", "when": { "any": ["event.kind == 'membership'", { "value": "event.object", "in": "depends-on" }] } },
+    { "id": "service__live_queue_screen_ended", "screen": "service__queue_screen", "event": "ui-session-ended", "refresh": "whole" },
+    { "id": "service__live_macro_screen", "screen": "service__macro_screen", "event": "ui-notice-received", "refresh": "whole", "when": { "any": ["event.kind == 'membership'", { "value": "event.object", "in": "depends-on" }] } },
+    { "id": "service__live_macro_screen_ended", "screen": "service__macro_screen", "event": "ui-session-ended", "refresh": "whole" },
+    { "id": "service__live_knowledge_list", "screen": "service__knowledge_list", "event": "ui-notice-received", "refresh": "whole", "when": { "any": ["event.kind == 'membership'", { "value": "event.object", "in": "depends-on" }] } },
+    { "id": "service__live_knowledge_list_ended", "screen": "service__knowledge_list", "event": "ui-session-ended", "refresh": "whole" },
+    { "id": "service__live_knowledge_editor", "screen": "service__knowledge_editor_screen", "event": "ui-notice-received", "refresh": "whole", "when": { "any": ["event.kind == 'membership'", { "value": "event.object", "in": "depends-on" }] } },
+    { "id": "service__live_knowledge_editor_ended", "screen": "service__knowledge_editor_screen", "event": "ui-session-ended", "refresh": "whole" },
+    { "id": "service__live_sla_screen", "screen": "service__sla_screen", "event": "ui-notice-received", "refresh": "whole", "when": { "any": ["event.kind == 'membership'", { "value": "event.object", "in": "depends-on" }] } },
+    { "id": "service__live_sla_screen_ended", "screen": "service__sla_screen", "event": "ui-session-ended", "refresh": "whole" }
+  ],
+
+  // Error messages: field checks and conflicts.
+  "errorMessages": [
+    { "id": "service__error_reference_taken", "on": "check", "kinds": ["unique"], "text": "Another case already uses this reference.", "field": "reference" },
+    { "id": "service__error_customer_email_required", "on": "check", "kinds": ["required"], "text": "A customer email is required on a case.", "field": "customer_email" },
+    { "id": "service__error_case_closed", "on": "error", "kinds": ["workflow"], "text": "This case is closed and cannot take a macro. Reopen it first." }
+  ],
+
+  // Events: domain facts this module reports.
+  "events": [
+    { "id": "service__case_opened_event", "name": "Case opened", "description": "A customer case was opened.", "payload": [ { "name": "reference", "type": "string" }, { "name": "priority", "type": "string" } ] },
+    { "id": "service__case_solved_event", "name": "Case solved", "description": "A case was marked solved.", "payload": [ { "name": "reference", "type": "string" }, { "name": "at", "type": "timestamp" } ] },
+    { "id": "service__sla_breached_event", "name": "SLA breached", "description": "An SLA clock passed its due time.", "payload": [ { "name": "clock", "type": "number" }, { "name": "breached", "type": "bool" } ] }
+  ],
+
+  // Claims: what the module promises.
+  "claims": [
+    { "id": "service__escalation-needs-breach", "kind": "structural",
+      "statement": "A case SHALL NOT be escalated before its first-response clock has been breached.",
+      "subjects": ["product-module"],
+      "rationale": "The escalation automation branches on the open status and waits out the response window first.",
+      "evaluate": { "method": "external-evidence" } },
+    { "id": "service__customer-data-retention", "kind": "structural",
+      "statement": "A case record SHALL NOT keep customer contact details after its retention period has passed.",
+      "subjects": ["product-module"],
+      "rationale": "Customer names, emails and phone numbers are personal data and are removed on the retention rule.",
+      "evaluate": { "method": "external-evidence" } }
+  ],
+
+  // Triggers: a new case starts the escalation automation.
+  "triggers": [
+    { "id": "service__on_case_created", "on": { "RecordCreated": { "object": "service__case" } }, "automation": "service__escalation" }
+  ],
+
+  // Automations: wait for the response window, escalate an open case, then tell the owner and the customer.
+  "automations": [
+    { "id": "service__escalation", "label": "Escalate a case that has not been answered within four hours",
+      "run-as": { "roles": ["service__queue_supervisor"] }, "run-key": "param.case",
+      "start": "wait",
+      "steps": {
+        "wait": { "action": { "WaitFor": { "duration": 14400000 } }, "next": "check" },
+        "check": { "action": { "Branch": { "condition": "record.status == 'open'", "object": "service__case", "record": "param.case", "then": "escalate", "else": "done" } } },
+        "escalate": { "action": { "UpdateRecord": { "object": "service__case", "record": "param.case", "fields": { "priority": "'urgent'" } } }, "next": "notify" },
+        "notify": { "action": { "CreateNotice": { "template": "service__escalation_notice", "to": "param.owner", "record": "param.case" } }, "next": "mail", "retry": { "attempts": 3 } },
+        "mail": { "action": { "SendMail": { "template": "service__escalation_mail", "to": "param.owner", "category": "transactional" } }, "next": "done", "timeout": 30000 },
+        "done": { "action": "End" } } }
+  ],
+
+  // Operations: apply a macro to a case (update) and reassign a case to a queue (update).
+  "operations": [
+    { "id": "service__apply_macro", "label": "Apply a macro to a case",
+      "inputs": [
+        { "name": "case_reference", "ty": "Str", "required": true, "label": "Case reference" },
+        { "name": "status", "ty": "Str", "required": true, "label": "New status" },
+        { "name": "priority", "ty": "Str", "required": false, "label": "New priority" } ],
+      "invokers": { "signed-in": true, "roles": ["service__agent_tier1", "service__agent_tier2"] },
+      "subject": { "object": "service__case", "input": "case_reference" },
+      "conditions": [ { "id": "case_open", "expr": "record.status != 'closed'", "error": "case-closed", "message": "A closed case cannot take a macro." } ],
+      "steps": [
+        { "UpdateRecord": { "id": "apply", "object": "service__case", "record": "record.$id", "fields": { "status": "param.status", "priority": "param.priority" } } } ] },
+    { "id": "service__reassign_case", "label": "Reassign a case to another queue",
+      "inputs": [
+        { "name": "case_reference", "ty": "Str", "required": true, "label": "Case reference" },
+        { "name": "queue", "ty": "Int", "required": true, "label": "Queue id" } ],
+      "invokers": { "signed-in": true, "roles": ["service__agent_tier2", "service__queue_supervisor"] },
+      "subject": { "object": "service__case", "input": "case_reference" },
+      "steps": [
+        { "UpdateRecord": { "id": "move", "object": "service__case", "record": "record.$id", "fields": { "queue": "param.queue" } } } ] }
+  ],
+
+  // Mail and notice templates. Bodies are JSON strings holding a block list.
+  "mailTemplates": [
+    { "id": "service__escalation_mail", "subject": "We are escalating your case",
+      "body": "[{\"type\":\"paragraph\",\"inlines\":[{\"type\":\"text\",\"text\":\"Your case has been passed to a senior agent who will reply shortly.\"}]}]" },
+    { "id": "service__reply_mail", "subject": "An update on your case",
+      "body": "[{\"type\":\"paragraph\",\"inlines\":[{\"type\":\"text\",\"text\":\"We have replied to your case.\"}]}]" }
+  ],
+  "noticeTemplates": [
+    { "id": "service__escalation_notice", "title": "Case escalated",
+      "body": "[{\"type\":\"paragraph\",\"inlines\":[{\"type\":\"text\",\"text\":\"A case has been escalated to urgent.\"}]}]" }
+  ],
+
+  // Settings: configuration of the module.
+  "settings": [
+    { "id": "service__first_response_minutes", "label": "First response target in minutes", "type": "i64", "default": 240, "levels": ["tenant", "team"] },
+    { "id": "service__default_channel", "label": "Default channel for new cases", "type": "string", "default": "email", "levels": ["tenant"] }
+  ],
+
+  // Declared events that other modules may subscribe to.
+  "eventKinds": [
+    { "id": "service__case_escalated", "kind": "app.service-case-escalated", "fields": [ { "name": "case_reference", "type": "string" }, { "name": "escalated_at", "type": "timestamp" } ], "readers": ["service__queue_supervisor"] }
+  ]
+}

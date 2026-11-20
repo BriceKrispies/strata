@@ -1,0 +1,421 @@
+{
+  // Dashboards, tiles, saved queries, report schedules, metrics and KPI thresholds for the tenant. Depends on the platform aggregate, records and setting capabilities.
+  "product": {
+    "id": "analytics",
+    "name": "Analytics",
+    "description": "Dashboards, tiles, metrics, KPI thresholds and scheduled digests for the tenant's reporting.",
+    "version": "1.0.0",
+    "platform": { "min": "0.2" },
+    "imports": {
+      "spec": "../../../specifications/spec.jsonc",
+      "entities": ["product-module", "aggregate-read", "records-read", "setting-read"]
+    }
+  },
+
+  "records": [
+    { "id": "analytics__dashboard_rec", "name": "Dashboard", "owner": "product-module", "key": ["id"],
+      "fields": [
+        { "name": "id", "type": "u64" },
+        { "name": "title", "type": "string" },
+        { "name": "family", "type": "analytics__family" },
+        { "name": "region", "type": "analytics__region" },
+        { "name": "state", "type": "analytics__dashboard_state" },
+        { "name": "owner_name", "type": "string", "personal": "name" },
+        { "name": "featured_tile", "type": "u64", "refersTo": "analytics__tile_rec", "onDelete": "set-null", "optional": true },
+        { "name": "published_at", "type": "timestamp", "optional": true } ],
+      "retention": "Three years after creation, then removed by the reporting retention rule.",
+      "schemaVersion": 1, "realisation": "target" },
+    { "id": "analytics__tile_rec", "name": "Tile", "owner": "product-module", "key": ["id"],
+      "fields": [
+        { "name": "id", "type": "u64" },
+        { "name": "dashboard", "type": "u64", "refersTo": "analytics__dashboard_rec", "onDelete": "restrict" },
+        { "name": "title", "type": "string" },
+        { "name": "kind", "type": "analytics__tile_kind" },
+        { "name": "position", "type": "u32" },
+        { "name": "metric", "type": "u64", "refersTo": "analytics__metric_definition_rec", "onDelete": "set-null", "optional": true },
+        { "name": "filter", "type": "analytics__filter_clause", "optional": true } ],
+      "retention": "Removed with its dashboard.",
+      "schemaVersion": 1, "realisation": "target" },
+    { "id": "analytics__metric_definition_rec", "name": "Metric definition", "owner": "product-module", "key": ["id"],
+      "fields": [
+        { "name": "id", "type": "u64" },
+        { "name": "name", "type": "string" },
+        { "name": "formula", "type": "string" },
+        { "name": "unit", "type": "string" },
+        { "name": "region", "type": "analytics__region" },
+        { "name": "time_window", "type": "analytics__time_window" },
+        { "name": "owner_name", "type": "string", "personal": "name" },
+        { "name": "threshold", "type": "u64", "refersTo": "analytics__kpi_threshold_rec", "onDelete": "set-null", "optional": true } ],
+      "retention": "Until the metric is retired and no dashboard still reads it.",
+      "schemaVersion": 1, "realisation": "target" },
+    { "id": "analytics__kpi_threshold_rec", "name": "KPI threshold", "owner": "product-module", "key": ["id"],
+      "fields": [
+        { "name": "id", "type": "u64" },
+        { "name": "metric", "type": "u64", "refersTo": "analytics__metric_definition_rec", "onDelete": "restrict" },
+        { "name": "warn_at", "type": "u64" },
+        { "name": "critical_at", "type": "u64" },
+        { "name": "direction", "type": "analytics__direction" } ],
+      "retention": "Until the metric it guards is retired.",
+      "schemaVersion": 1, "realisation": "target" },
+    { "id": "analytics__report_schedule_rec", "name": "Report schedule", "owner": "product-module", "key": ["id"],
+      "fields": [
+        { "name": "id", "type": "u64" },
+        { "name": "dashboard", "type": "u64", "refersTo": "analytics__dashboard_rec", "onDelete": "restrict" },
+        { "name": "cadence", "type": "analytics__cadence" },
+        { "name": "recipient_email", "type": "string", "personal": "contact" },
+        { "name": "next_send", "type": "timestamp" },
+        { "name": "enabled", "type": "bool" } ],
+      "retention": "One year after the schedule is disabled, then removed.",
+      "schemaVersion": 1, "realisation": "target" }
+  ],
+
+  "types": [
+    { "id": "analytics__family", "name": "Dashboard family", "kind": "enum",
+      "values": ["executive", "regional", "operational"], "description": "Which audience a dashboard is built for." },
+    { "id": "analytics__region", "name": "Region", "kind": "enum",
+      "values": ["emea", "apac", "amer", "global"], "description": "The region a dashboard or metric belongs to." },
+    { "id": "analytics__dashboard_state", "name": "Dashboard state", "kind": "enum",
+      "values": ["draft", "in_review", "published", "archived"], "description": "Where a dashboard is in its review." },
+    { "id": "analytics__tile_kind", "name": "Tile kind", "kind": "enum",
+      "values": ["bar", "line", "area", "pie", "table", "kpi", "map", "heatmap", "gauge"], "description": "How a tile draws its query." },
+    { "id": "analytics__cadence", "name": "Report cadence", "kind": "enum",
+      "values": ["daily", "weekday", "weekly", "monthly", "quarterly"], "description": "How often a report schedule sends." },
+    { "id": "analytics__direction", "name": "Threshold direction", "kind": "enum",
+      "values": ["above", "below"], "description": "Whether a KPI is breached by going above or below its limit." },
+    { "id": "analytics__time_window", "name": "Time window", "kind": "enum",
+      "values": ["last_7_days", "last_30_days", "quarter_to_date", "year_to_date"], "description": "The period a metric is computed over." },
+    { "id": "analytics__filter_clause", "name": "Filter clause", "kind": "struct",
+      "fields": [ { "name": "field", "type": "string" }, { "name": "op", "type": "string" }, { "name": "value", "type": "string" } ],
+      "description": "One filter a tile applies to its query." }
+  ],
+
+  "roles": [
+    { "id": "analytics__analyst", "name": "Analyst", "description": "Reads dashboards and metrics across the tenant.", "level": "tenant",
+      "holders": ["person", "team", "agent"], "capabilities": ["aggregate-read", "records-read"] },
+    { "id": "analytics__exec_viewer", "name": "Executive viewer", "description": "Reads published executive dashboards.", "level": "tenant",
+      "holders": ["person", "team"], "capabilities": ["aggregate-read"] },
+    { "id": "analytics__regional_analyst_emea", "name": "Regional analyst, EMEA", "description": "Reads EMEA dashboards and metrics.", "level": "tenant",
+      "holders": ["person", "team"], "capabilities": ["aggregate-read", "records-read", "analytics__region_emea"] },
+    { "id": "analytics__regional_analyst_apac", "name": "Regional analyst, APAC", "description": "Reads APAC dashboards and metrics.", "level": "tenant",
+      "holders": ["person", "team"], "capabilities": ["aggregate-read", "records-read", "analytics__region_apac"] },
+    { "id": "analytics__regional_analyst_amer", "name": "Regional analyst, AMER", "description": "Reads AMER dashboards and metrics.", "level": "tenant",
+      "holders": ["person", "team"], "capabilities": ["aggregate-read", "records-read", "analytics__region_amer"] },
+    { "id": "analytics__dashboard_admin", "name": "Dashboard admin", "description": "Builds, publishes and schedules dashboards and owns KPI thresholds.", "level": "tenant",
+      "holders": ["person", "team"], "capabilities": ["aggregate-read", "records-read", "analytics__publish_dashboards", "analytics__manage_kpis", "analytics__schedule_reports"] }
+  ],
+
+  "capabilities": [
+    { "id": "analytics__publish_dashboards", "name": "Publish dashboards", "description": "Move a dashboard through review to published." },
+    { "id": "analytics__manage_kpis", "name": "Manage KPI thresholds", "description": "Set the warning and critical limits of a metric." },
+    { "id": "analytics__schedule_reports", "name": "Schedule reports", "description": "Create and disable report digests." },
+    { "id": "analytics__region_emea", "name": "Read EMEA reporting", "description": "Read dashboards and metrics owned by the EMEA region." },
+    { "id": "analytics__region_apac", "name": "Read APAC reporting", "description": "Read dashboards and metrics owned by the APAC region." },
+    { "id": "analytics__region_amer", "name": "Read AMER reporting", "description": "Read dashboards and metrics owned by the AMER region." }
+  ],
+
+  "objects": [
+    { "id": "analytics__dashboard", "label": "Dashboard",
+      "fields": {
+        "title": { "id": "title", "label": "Title", "ty": "Str", "required": true, "unique": true },
+        "family": { "id": "family", "label": "Family", "ty": "Str", "required": true, "unique": false },
+        "region": { "id": "region", "label": "Region", "ty": "Str", "required": true, "unique": false },
+        "state": { "id": "state", "label": "State", "ty": "Str", "required": true, "unique": false },
+        "owner_name": { "id": "owner_name", "label": "Owner", "ty": "Str", "required": true, "unique": false,
+          "personal": { "kind": "name", "subject": { "Field": { "field": "owner_name" } }, "searchable": false } },
+        "featured_tile": { "id": "featured_tile", "label": "Featured tile", "ty": { "Ref": { "target": "analytics__tile", "on-delete": "Restrict" } }, "required": false, "unique": false },
+        "published_at": { "id": "published_at", "label": "Published", "ty": "Time", "required": false, "unique": false } },
+      "constraints": {},
+      "retention": { "days": 1095, "from": "Created" } },
+    { "id": "analytics__tile", "label": "Tile",
+      "fields": {
+        "title": { "id": "title", "label": "Title", "ty": "Str", "required": true, "unique": false },
+        "kind": { "id": "kind", "label": "Kind", "ty": "Str", "required": true, "unique": false },
+        "position": { "id": "position", "label": "Position", "ty": "Int", "required": true, "unique": false },
+        "dashboard": { "id": "dashboard", "label": "Dashboard", "ty": { "Ref": { "target": "analytics__dashboard", "on-delete": "Restrict" } }, "required": true, "unique": false },
+        "metric": { "id": "metric", "label": "Metric", "ty": { "Ref": { "target": "analytics__metric_definition", "on-delete": "Restrict" } }, "required": false, "unique": false } },
+      "constraints": {},
+      "retention": { "days": 1095, "from": "Created" } },
+    { "id": "analytics__metric_definition", "label": "Metric definition",
+      "fields": {
+        "name": { "id": "name", "label": "Name", "ty": "Str", "required": true, "unique": true },
+        "formula": { "id": "formula", "label": "Formula", "ty": "Str", "required": true, "unique": false },
+        "unit": { "id": "unit", "label": "Unit", "ty": "Str", "required": false, "unique": false },
+        "region": { "id": "region", "label": "Region", "ty": "Str", "required": true, "unique": false },
+        "owner_name": { "id": "owner_name", "label": "Owner", "ty": "Str", "required": true, "unique": false,
+          "personal": { "kind": "name", "subject": { "Field": { "field": "owner_name" } }, "searchable": false } },
+        "threshold": { "id": "threshold", "label": "Threshold", "ty": { "Ref": { "target": "analytics__kpi_threshold", "on-delete": "Restrict" } }, "required": false, "unique": false } },
+      "constraints": {},
+      "retention": { "days": 1095, "from": "Created" } },
+    { "id": "analytics__kpi_threshold", "label": "KPI threshold",
+      "fields": {
+        "metric": { "id": "metric", "label": "Metric", "ty": { "Ref": { "target": "analytics__metric_definition", "on-delete": "Restrict" } }, "required": true, "unique": false },
+        "warn_at": { "id": "warn_at", "label": "Warn at", "ty": "Int", "required": true, "unique": false },
+        "critical_at": { "id": "critical_at", "label": "Critical at", "ty": "Int", "required": true, "unique": false },
+        "direction": { "id": "direction", "label": "Direction", "ty": "Str", "required": true, "unique": false } },
+      "constraints": {},
+      "retention": { "days": 1095, "from": "Created" } },
+    { "id": "analytics__report_schedule", "label": "Report schedule",
+      "fields": {
+        "dashboard": { "id": "dashboard", "label": "Dashboard", "ty": { "Ref": { "target": "analytics__dashboard", "on-delete": "Restrict" } }, "required": true, "unique": false },
+        "cadence": { "id": "cadence", "label": "Cadence", "ty": "Str", "required": true, "unique": false },
+        "recipient_email": { "id": "recipient_email", "label": "Recipient", "ty": "Str", "required": true, "unique": false,
+          "personal": { "kind": "email-address", "subject": { "Field": { "field": "recipient_email" } }, "searchable": false } },
+        "next_send": { "id": "next_send", "label": "Next send", "ty": "Time", "required": true, "unique": false },
+        "enabled": { "id": "enabled", "label": "Enabled", "ty": "Bool", "required": true, "unique": false } },
+      "constraints": {},
+      "retention": { "days": 365, "from": "Created" } }
+  ],
+
+  "policies": [
+    { "id": "analytics__analyst_reads_dashboards", "role": "analytics__analyst", "resource": { "Object": "analytics__dashboard" }, "actions": ["Read"] },
+    { "id": "analytics__analyst_reads_metrics", "role": "analytics__analyst", "resource": { "Object": "analytics__metric_definition" }, "actions": ["Read"] },
+    { "id": "analytics__exec_reads_published", "role": "analytics__exec_viewer", "resource": { "Object": "analytics__dashboard" }, "actions": ["Read"],
+      "condition": "record.state == 'published' and record.family == 'executive'" },
+    { "id": "analytics__emea_reads_dashboards", "role": "analytics__regional_analyst_emea", "resource": { "Object": "analytics__dashboard" }, "actions": ["Read"],
+      "condition": "record.region == 'emea' and record.state == 'published'" },
+    { "id": "analytics__emea_reads_metrics", "role": "analytics__regional_analyst_emea", "resource": { "Object": "analytics__metric_definition" }, "actions": ["Read"],
+      "condition": "record.region == 'emea'" },
+    { "id": "analytics__apac_reads_dashboards", "role": "analytics__regional_analyst_apac", "resource": { "Object": "analytics__dashboard" }, "actions": ["Read"],
+      "condition": "record.region == 'apac' and record.state == 'published'" },
+    { "id": "analytics__apac_reads_metrics", "role": "analytics__regional_analyst_apac", "resource": { "Object": "analytics__metric_definition" }, "actions": ["Read"],
+      "condition": "record.region == 'apac'" },
+    { "id": "analytics__amer_reads_dashboards", "role": "analytics__regional_analyst_amer", "resource": { "Object": "analytics__dashboard" }, "actions": ["Read"],
+      "condition": "record.region == 'amer' and record.state == 'published'" },
+    { "id": "analytics__amer_reads_metrics", "role": "analytics__regional_analyst_amer", "resource": { "Object": "analytics__metric_definition" }, "actions": ["Read"],
+      "condition": "record.region == 'amer'" },
+    { "id": "analytics__admin_manages_dashboards", "role": "analytics__dashboard_admin", "resource": { "Object": "analytics__dashboard" }, "actions": ["Create", "Read", "Update"] },
+    { "id": "analytics__admin_manages_kpis", "role": "analytics__dashboard_admin", "resource": { "Object": "analytics__kpi_threshold" }, "actions": ["Create", "Read", "Update"] }
+  ],
+
+  "queries": [
+    { "id": "analytics__published_executive_dashboards", "object": "analytics__dashboard",
+      "filter": "record.state == 'published' and record.family == 'executive'",
+      "params": [], "order": [ { "field": "title", "descending": false } ], "limit": 50 },
+    { "id": "analytics__regional_dashboards", "object": "analytics__dashboard",
+      "filter": "record.family == 'regional' and record.region == param.region",
+      "params": ["region"], "order": [ { "field": "title", "descending": false } ], "limit": 100 },
+    { "id": "analytics__breached_thresholds", "object": "analytics__kpi_threshold",
+      "filter": "record.direction == 'below'",
+      "params": [], "order": [ { "field": "warn_at", "descending": false } ], "limit": 200 }
+  ],
+
+  "views": [
+    { "id": "analytics__executive_board", "route": "/analytics/executive", "title": "Executive dashboards",
+      "sections": { "main": { "query": "analytics__published_executive_dashboards", "args": {}, "include": [], "markdown": [], "single": false } } },
+    { "id": "analytics__regional_board", "route": "/analytics/regional", "title": "Regional dashboards",
+      "sections": { "main": { "query": "analytics__regional_dashboards", "args": { "region": "'emea'" }, "include": [], "markdown": [], "single": false } } }
+  ],
+
+  "workflows": [
+    { "id": "analytics__dashboard_lifecycle", "object": "analytics__dashboard", "field": "state", "initial": ["draft"],
+      "transitions": [
+        { "name": "submit", "from": "draft", "to": "in_review", "guard": "old.state == 'draft'", "set": {} },
+        { "name": "publish", "from": "in_review", "to": "published", "set": { "published_at": "now" } },
+        { "name": "archive", "from": "published", "to": "archived", "set": {} } ] }
+  ],
+
+  "screens": [
+    { "id": "analytics__dashboard_list", "name": "Dashboard list", "route": "/analytics/dashboards", "viewModel": "analytics__read_dashboard_board",
+      "kind": "analytics.list", "auth": "session", "description": "The dashboards of the tenant, by family and region.", "viewName": "analytics_dashboard_list", "title": "Dashboards" },
+    { "id": "analytics__dashboard_detail", "name": "Dashboard detail", "route": "/analytics/dashboards/:slug", "viewModel": "analytics__read_dashboard_detail",
+      "kind": "analytics.detail", "auth": "session", "description": "One dashboard, its tiles and its review state.", "viewName": "analytics_dashboard_detail", "title": "Dashboard" },
+    { "id": "analytics__metric_list", "name": "Metric list", "route": "/analytics/metrics", "viewModel": "analytics__read_metric_board",
+      "kind": "analytics.list", "auth": "session", "description": "Metric definitions, by region.", "viewName": "analytics_metric_list", "title": "Metrics" },
+    { "id": "analytics__kpi_editor", "name": "KPI editor", "route": "/analytics/kpis/:slug/edit", "viewModel": "analytics__read_kpi_board",
+      "kind": "analytics.editor", "auth": "session", "description": "Set the warning and critical limits of a metric.", "viewName": "analytics_kpi_editor", "title": "KPI threshold" },
+    { "id": "analytics__schedule_list", "name": "Schedule list", "route": "/analytics/schedules", "viewModel": "analytics__read_schedule_board",
+      "kind": "analytics.list", "auth": "session", "description": "Report digests and when each one next sends.", "viewName": "analytics_schedule_list", "title": "Report schedules" },
+    { "id": "analytics__settings_screen", "name": "Analytics settings", "route": "/analytics/settings", "viewModel": "analytics__read_settings_summary",
+      "kind": "analytics.settings", "auth": "session", "description": "Refresh cadence and the default time zone.", "viewName": "analytics_settings", "title": "Analytics settings" }
+  ],
+
+  "contracts": [
+    { "id": "analytics__read_dashboard_board", "name": "Read the dashboard board", "realisation": "facade",
+      "auth": { "scheme": "session", "description": "A signed-in reader of dashboards", "requires": ["aggregate-read"] },
+      "idempotent": true, "timeoutMs": 2000,
+      "inputs": [ { "name": "family", "type": "string" }, { "name": "region", "type": "string" } ],
+      "outputs": [ { "name": "view", "type": "json" } ],
+      "postconditions": ["The answer is the dashboards of the family and region named, visible to the reader."],
+      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] },
+    { "id": "analytics__read_dashboard_detail", "name": "Read one dashboard", "realisation": "facade",
+      "auth": { "scheme": "session", "description": "A signed-in reader of dashboards", "requires": ["aggregate-read"] },
+      "idempotent": true, "timeoutMs": 2000,
+      "inputs": [ { "name": "slug", "type": "string" } ],
+      "outputs": [ { "name": "dashboard", "type": "json" }, { "name": "tiles", "type": "json" } ],
+      "postconditions": ["The answer is the dashboard named, with its tiles in position order."],
+      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] },
+    { "id": "analytics__read_metric_board", "name": "Read the metric board", "realisation": "facade",
+      "auth": { "scheme": "session", "description": "A signed-in analyst", "requires": ["records-read"] },
+      "idempotent": true, "timeoutMs": 2000,
+      "inputs": [ { "name": "region", "type": "string" } ],
+      "outputs": [ { "name": "view", "type": "json" } ],
+      "postconditions": ["The answer is the metric definitions of the region named."],
+      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] },
+    { "id": "analytics__read_kpi_board", "name": "Read the KPI board", "realisation": "facade",
+      "auth": { "scheme": "session", "description": "A signed-in dashboard admin", "requires": ["records-read"] },
+      "idempotent": true, "timeoutMs": 2000,
+      "inputs": [ { "name": "direction", "type": "string" } ],
+      "outputs": [ { "name": "view", "type": "json" } ],
+      "postconditions": ["The answer is the KPI thresholds in the direction named."],
+      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] },
+    { "id": "analytics__read_schedule_board", "name": "Read the schedule board", "realisation": "facade",
+      "auth": { "scheme": "session", "description": "A signed-in dashboard admin", "requires": ["records-read"] },
+      "idempotent": true, "timeoutMs": 2000,
+      "inputs": [ { "name": "cadence", "type": "string" } ],
+      "outputs": [ { "name": "view", "type": "json" } ],
+      "postconditions": ["The answer is the report schedules on the cadence named, in next-send order."],
+      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] },
+    { "id": "analytics__read_settings_summary", "name": "Read the analytics settings", "realisation": "facade",
+      "auth": { "scheme": "session", "description": "A signed-in dashboard admin", "requires": ["setting-read"] },
+      "idempotent": true, "timeoutMs": 2000,
+      "inputs": [],
+      "outputs": [ { "name": "view", "type": "json" } ],
+      "postconditions": ["The answer is the refresh cadence and the default time zone in force."],
+      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] },
+    { "id": "analytics__submit_publish", "name": "Publish a dashboard", "realisation": "facade",
+      "auth": { "scheme": "session", "description": "A signed-in dashboard admin", "requires": ["analytics__publish_dashboards"] },
+      "idempotent": false, "timeoutMs": 5000,
+      "inputs": [ { "name": "dashboard", "type": "string" }, { "name": "note", "type": "string" } ],
+      "outputs": [ { "name": "state", "type": "string" } ],
+      "postconditions": ["The dashboard is published and readers in its region can see it."],
+      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] },
+    { "id": "analytics__submit_kpi", "name": "Save a KPI threshold", "realisation": "facade",
+      "auth": { "scheme": "session", "description": "A signed-in dashboard admin", "requires": ["analytics__manage_kpis"] },
+      "idempotent": false, "timeoutMs": 5000,
+      "inputs": [ { "name": "metric", "type": "string" }, { "name": "warn_at", "type": "u64" }, { "name": "critical_at", "type": "u64" }, { "name": "direction", "type": "string" } ],
+      "outputs": [ { "name": "threshold_id", "type": "u64" } ],
+      "postconditions": ["The metric holds a threshold whose critical limit is at or beyond its warning limit."],
+      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] },
+    { "id": "analytics__submit_schedule", "name": "Add a report schedule", "realisation": "facade",
+      "auth": { "scheme": "session", "description": "A signed-in dashboard admin", "requires": ["analytics__schedule_reports"] },
+      "idempotent": false, "timeoutMs": 5000,
+      "inputs": [ { "name": "dashboard", "type": "string" }, { "name": "cadence", "type": "string" }, { "name": "recipient_email", "type": "string" }, { "name": "enabled", "type": "bool" } ],
+      "outputs": [ { "name": "schedule_id", "type": "u64" } ],
+      "postconditions": ["A digest of the dashboard is sent to the recipient on the cadence named."],
+      "errors": [ { "name": "unauthenticated", "condition": "No valid session accompanies the request.", "type": "api-error", "kind": "unauthenticated" } ] }
+  ],
+
+  "forms": [
+    { "id": "analytics__form_publish", "screen": "analytics__dashboard_detail", "contract": "analytics__submit_publish",
+      "fields": [
+        { "name": "dashboard", "input": "dashboard", "label": "Dashboard", "control": "text", "normalize": "trim" },
+        { "name": "note", "input": "note", "label": "Review note", "control": "textarea" } ],
+      "submitLabel": "Publish", "onSuccess": { "toast": "Dashboard published." }, "onError": { "show": "inline" } },
+    { "id": "analytics__form_kpi", "screen": "analytics__kpi_editor", "contract": "analytics__submit_kpi",
+      "fields": [
+        { "name": "metric", "input": "metric", "label": "Metric", "control": "text", "normalize": "trim" },
+        { "name": "warn_at", "input": "warn_at", "label": "Warn at", "control": "text" },
+        { "name": "critical_at", "input": "critical_at", "label": "Critical at", "control": "text" },
+        { "name": "direction", "input": "direction", "label": "Breached when", "control": "text" } ],
+      "submitLabel": "Save threshold", "onSuccess": { "toast": "Threshold saved." }, "onError": { "show": "inline" } },
+    { "id": "analytics__form_report_schedule", "screen": "analytics__schedule_list", "contract": "analytics__submit_schedule",
+      "fields": [
+        { "name": "dashboard", "input": "dashboard", "label": "Dashboard", "control": "text" },
+        { "name": "cadence", "input": "cadence", "label": "Cadence", "control": "text" },
+        { "name": "recipient_email", "input": "recipient_email", "label": "Recipient email", "control": "text", "normalize": "trim" },
+        { "name": "enabled", "input": "enabled", "label": "Send digests", "control": "checkbox" } ],
+      "submitLabel": "Add schedule", "onSuccess": { "toast": "Schedule added." }, "onError": { "show": "inline" } },
+    { "id": "analytics__form_dashboard_filter", "screen": "analytics__dashboard_list", "contract": "analytics__read_dashboard_board",
+      "fields": [
+        { "name": "family", "input": "family", "label": "Family", "control": "text" },
+        { "name": "region", "input": "region", "label": "Region", "control": "text" } ],
+      "submitLabel": "Filter", "onSuccess": { "toast": "Filter applied." }, "onError": { "show": "inline" } }
+  ],
+
+  "actions": [
+    { "id": "analytics__action_publish", "screen": "analytics__dashboard_detail", "label": "Publish dashboard",
+      "contract": "analytics__submit_publish", "form": "analytics__form_publish",
+      "arguments": { "dashboard": "form.dashboard", "note": "form.note" },
+      "onSuccess": { "toast": "Dashboard published." }, "onError": { "show": "inline" } },
+    { "id": "analytics__action_save_kpi", "screen": "analytics__kpi_editor", "label": "Save threshold",
+      "contract": "analytics__submit_kpi", "form": "analytics__form_kpi",
+      "arguments": { "metric": "form.metric", "warn_at": "form.warn_at", "critical_at": "form.critical_at", "direction": "form.direction" },
+      "onSuccess": { "toast": "Threshold saved." }, "onError": { "show": "inline" } },
+    { "id": "analytics__action_add_schedule", "screen": "analytics__schedule_list", "label": "Add schedule",
+      "contract": "analytics__submit_schedule", "form": "analytics__form_report_schedule",
+      "arguments": { "dashboard": "form.dashboard", "cadence": "form.cadence", "recipient_email": "form.recipient_email", "enabled": "form.enabled" },
+      "onSuccess": { "toast": "Schedule added." }, "onError": { "show": "toast" } }
+  ],
+
+  "liveBindings": [
+    { "id": "analytics__live_dashboard_list", "screen": "analytics__dashboard_list", "event": "ui-notice-received", "refresh": "whole",
+      "when": { "any": ["event.kind == 'membership'", { "value": "event.object", "in": "depends-on" }] } },
+    { "id": "analytics__live_dashboard_list_ended", "screen": "analytics__dashboard_list", "event": "ui-session-ended", "refresh": "whole" },
+    { "id": "analytics__live_dashboard_detail", "screen": "analytics__dashboard_detail", "event": "ui-notice-received", "refresh": "whole",
+      "when": { "any": ["event.kind == 'membership'", { "value": "event.object", "in": "depends-on" }] } },
+    { "id": "analytics__live_dashboard_detail_ended", "screen": "analytics__dashboard_detail", "event": "ui-session-ended", "refresh": "whole" },
+    { "id": "analytics__live_metric_list", "screen": "analytics__metric_list", "event": "ui-notice-received", "refresh": "whole",
+      "when": { "any": ["event.kind == 'membership'", { "value": "event.object", "in": "depends-on" }] } },
+    { "id": "analytics__live_metric_list_ended", "screen": "analytics__metric_list", "event": "ui-session-ended", "refresh": "whole" },
+    { "id": "analytics__live_kpi_editor", "screen": "analytics__kpi_editor", "event": "ui-notice-received", "refresh": "whole",
+      "when": { "any": ["event.kind == 'membership'", { "value": "event.object", "in": "depends-on" }] } },
+    { "id": "analytics__live_kpi_editor_ended", "screen": "analytics__kpi_editor", "event": "ui-session-ended", "refresh": "whole" },
+    { "id": "analytics__live_schedule_list", "screen": "analytics__schedule_list", "event": "ui-notice-received", "refresh": "whole",
+      "when": { "any": ["event.kind == 'membership'", { "value": "event.object", "in": "depends-on" }] } },
+    { "id": "analytics__live_schedule_list_ended", "screen": "analytics__schedule_list", "event": "ui-session-ended", "refresh": "whole" },
+    { "id": "analytics__live_settings_screen", "screen": "analytics__settings_screen", "event": "ui-notice-received", "refresh": "whole",
+      "when": { "any": ["event.kind == 'membership'", { "value": "event.object", "in": "depends-on" }] } },
+    { "id": "analytics__live_settings_screen_ended", "screen": "analytics__settings_screen", "event": "ui-session-ended", "refresh": "whole" }
+  ],
+
+  "errorMessages": [
+    { "id": "analytics__error_title_taken", "on": "check", "kinds": ["unique"], "text": "Another dashboard already uses this title.", "field": "title" },
+    { "id": "analytics__error_conflict", "on": "error", "kinds": ["conflict"], "text": "This was changed elsewhere. Reload to see the latest version." }
+  ],
+
+  "events": [
+    { "id": "analytics__dashboard_published_event", "name": "Dashboard published", "description": "A dashboard passed review and went live.",
+      "payload": [ { "name": "dashboard", "type": "string" }, { "name": "at", "type": "timestamp" } ] },
+    { "id": "analytics__threshold_breached_event", "name": "Threshold breached", "description": "A metric crossed its warning or critical limit.",
+      "payload": [ { "name": "metric", "type": "string" }, { "name": "direction", "type": "string" } ] },
+    { "id": "analytics__digest_sent_event", "name": "Digest sent", "description": "A scheduled digest was mailed to its recipient.",
+      "payload": [ { "name": "schedule", "type": "string" } ] }
+  ],
+
+  "claims": [
+    { "id": "analytics__published-dashboards-are-reviewed", "kind": "structural",
+      "statement": "A dashboard SHALL NOT reach the published state without passing its review.",
+      "subjects": ["product-module"],
+      "rationale": "The publish transition is guarded by the dashboard lifecycle, and the publish operation checks for review.",
+      "evaluate": { "method": "external-evidence" } },
+    { "id": "analytics__regional-data-stays-in-region", "kind": "structural",
+      "statement": "A regional analyst SHALL NOT read a dashboard or metric definition outside their own region.",
+      "subjects": ["product-module"],
+      "rationale": "Each regional role carries a policy condition on the region field of the object.",
+      "evaluate": { "method": "external-evidence" } }
+  ],
+
+  "settings": [
+    { "id": "analytics__refresh_minutes", "label": "Dashboard refresh", "type": "i64", "default": 15, "levels": ["tenant", "team"] },
+    { "id": "analytics__default_time_zone", "label": "Default time zone", "type": "string", "default": "Europe/London", "levels": ["tenant"] }
+  ],
+
+  "mailTemplates": [
+    { "id": "analytics__digest_mail", "subject": "Your scheduled dashboard digest",
+      "body": "[{\"type\":\"paragraph\",\"inlines\":[{\"type\":\"text\",\"text\":\"Your scheduled digest is ready. Open the dashboard to see this period's figures and any thresholds that were breached.\"}]}]" }
+  ],
+
+  "triggers": [
+    { "id": "analytics__on_report_created", "on": { "RecordCreated": { "object": "analytics__report_schedule" } },
+      "automation": "analytics__send_digest" }
+  ],
+
+  "automations": [
+    { "id": "analytics__send_digest", "label": "Mail the digest to a new report schedule's recipient",
+      "run-as": { "roles": ["analytics__dashboard_admin"] },
+      "start": "mail",
+      "steps": {
+        "mail": { "action": { "SendMail": { "template": "analytics__digest_mail", "address": "record.recipient_email", "category": "transactional" } }, "next": "mail_done", "retry": { "attempts": 3 }, "timeout": 30000 },
+        "mail_done": { "action": "End" } } }
+  ],
+
+  "operations": [
+    { "id": "analytics__publish_dashboard", "label": "Publish a dashboard",
+      "inputs": [ { "name": "dashboard", "ty": "Str", "required": true, "label": "The dashboard" } ],
+      "invokers": { "signed-in": true, "roles": ["analytics__dashboard_admin"] },
+      "subject": { "object": "analytics__dashboard", "input": "dashboard" },
+      "conditions": [ { "id": "in_review", "expr": "record.state == 'in_review'", "error": "not-in-review", "message": "Only a dashboard in review can be published." } ],
+      "steps": [
+        { "UpdateRecord": { "id": "publish", "object": "analytics__dashboard", "record": "record.$id", "fields": { "state": "'published'", "published_at": "now" } } } ] }
+  ]
+}
