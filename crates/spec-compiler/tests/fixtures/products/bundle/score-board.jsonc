@@ -1,0 +1,53 @@
+{
+  // A small product with a leaderboard, for specc bundle (WG-5124): a query that declares the fields an
+  // aggregate may name and two aggregates over them (a top list and a sum per player), and a page whose
+  // section names one of the aggregates. The members `aggregates`, `declared-fields` and `aggregate` are
+  // values of query-def, aggregate-def and view-section (D-5060, AGG-001, AGG-041) and must reach the
+  // bundle unchanged.
+  "product": {
+    "id": "score-board",
+    "name": "Score board",
+    "version": "1.0.0",
+    "platform": { "min": "0.2" },
+    "imports": {
+      "spec": "../../../../../../specifications/spec.jsonc",
+      "entities": []
+    }
+  },
+  "objects": [
+    {
+      "id": "score_board__entry",
+      "label": "Entry",
+      "fields": {
+        "player": { "id": "player", "label": "Player", "ty": "Str", "required": true, "unique": false },
+        "points": { "id": "points", "label": "Points", "ty": "Int", "required": true, "unique": false }
+      },
+      "constraints": {}
+    }
+  ],
+  "queries": [
+    {
+      "id": "score_board__entries",
+      "object": "score_board__entry",
+      "filter": null,
+      "params": [],
+      "order": [],
+      "limit": null,
+      "declared-fields": ["player", "points"],
+      "aggregates": [
+        { "id": "leaders", "kind": "top", "field": "points", "n": 3, "descending": true, "scan-bound": 1000 },
+        { "id": "per_player", "kind": "sum", "field": "points", "group-by": "player", "descending": false, "scan-bound": 1000 }
+      ]
+    }
+  ],
+  "views": [
+    {
+      "id": "score_board__leaderboard",
+      "route": "/leaders",
+      "title": "Leaders",
+      "sections": {
+        "leaders": { "query": "score_board__entries", "args": {}, "include": [], "markdown": [], "single": false, "aggregate": "leaders" }
+      }
+    }
+  ]
+}

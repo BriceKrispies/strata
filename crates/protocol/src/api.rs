@@ -160,6 +160,10 @@ pub struct ViewRequest {
 /// A request for one aggregate of a named query (contract aggregate-run).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AggregateRunRequest {
+    /// The tenant the caller means, when it says: it must be the tenant of the host and session
+    /// (`tenant-mismatch`, contract aggregate-run-signed-in).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tenant: Option<String>,
     pub query: String,
     pub aggregate: String,
     /// The fields the result is narrowed by, as plain JSON: each field to a value it has.

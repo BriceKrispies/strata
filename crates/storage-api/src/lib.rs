@@ -193,6 +193,20 @@ pub fn idempotency_scope(principal: &Principal) -> String {
     canon::canonical_json(principal)
 }
 
+/// The object types of the records a delta writes or deletes, which an adapter that keeps a change
+/// counter per object type raises in the commit of the delta ([`Store::object_revisions`]).
+pub fn changed_objects(delta: &StateDelta) -> BTreeSet<strata_kernel::ObjectTypeId> {
+    delta
+        .ops
+        .iter()
+        .filter_map(|op| match op {
+            strata_kernel::DeltaOp::PutRecord(record) => Some(record.object.clone()),
+            strata_kernel::DeltaOp::DeleteRecord { object, .. } => Some(object.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
 impl Commit {
     /// The commit for an accepted transition.
     /// Implements: CT-262
@@ -699,6 +713,24 @@ pub trait Store: Send + Sync {
 
     /// One tenant's summary, or `None` when it does not exist. Reads that tenant only.
     fn tenant_summary(&self, tenant: &TenantId) -> StoreResult<Option<TenantSummary>>;
+
+    /// The change counter of each of `objects` in one tenant: a number that rises in the commit
+    /// that writes or deletes a record of the object type, and when a snapshot is restored, and
+    /// never falls or repeats for a different state of the records of the type. A stored result
+    /// computed from the records of some object types is found again only while the counters of
+    /// those types are the ones it was stored under (D-5064).
+    ///
+    /// The default answers the tenant's revision for every type: it rises with every commit, so it
+    /// is sound, and it only makes a result expire on a commit to another object type. An adapter
+    /// keeps a counter per object type to do better.
+    fn object_revisions(
+        &self,
+        tenant: &TenantId,
+        objects: &[strata_kernel::ObjectTypeId],
+    ) -> StoreResult<std::collections::BTreeMap<strata_kernel::ObjectTypeId, u64>> {
+        let revision = self.tenant_summary(tenant)?.map_or(0, |s| s.revision.0);
+        Ok(objects.iter().map(|o| (o.clone(), revision)).collect())
+    }
 
     /// A snapshot of one tenant holding at least the records that answer `needs`, with partial
     /// coverage stating exactly `needs`. The tenant's schema, members and counters are always

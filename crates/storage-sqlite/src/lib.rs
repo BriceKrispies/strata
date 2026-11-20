@@ -527,7 +527,33 @@ const TENANT_MIGRATIONS: &[Migration] = &[
         name: "order keys of the record index",
         sql: index_page::ORDER_KEYS_SQL,
     },
+    OBJECT_REVISIONS_MIGRATION,
 ];
+
+/// The change counter of each object type (`Store::object_revisions`), raised in the commit that
+/// writes or deletes a record of the type. The row with the empty object is raised when a snapshot
+/// is restored, and counts toward every object type.
+const OBJECT_REVISIONS_MIGRATION: Migration = Migration {
+    version: 17,
+    name: "change counters of the object types",
+    sql: "
+    CREATE TABLE object_revisions (
+        object   TEXT PRIMARY KEY,
+        revision INTEGER NOT NULL
+    );
+    ",
+};
+
+/// Raise the change counter of one object type ("" for all of them) by one.
+fn raise_object_revision(tx: &Transaction<'_>, object: &str) -> StoreResult<()> {
+    tx.execute(
+        "INSERT INTO object_revisions (object, revision) VALUES (?1, 1)
+         ON CONFLICT (object) DO UPDATE SET revision = revision + 1",
+        params![object],
+    )
+    .map_err(db)?;
+    Ok(())
+}
 
 /// The steps of a tenant file's layout, for tests that build a file at an older level.
 #[doc(hidden)]
@@ -1981,6 +2007,9 @@ impl SqliteStore {
                 _ => {}
             }
         }
+        for object in strata_storage_api::changed_objects(delta) {
+            raise_object_revision(tx, object.as_str())?;
+        }
         let mut last_position = None;
         for event in &commit.events {
             tx.execute(
@@ -2443,6 +2472,37 @@ impl Store for SqliteStore {
                 }))
             })?
             .flatten())
+    }
+
+    fn object_revisions(
+        &self,
+        tenant: &TenantId,
+        objects: &[ObjectTypeId],
+    ) -> StoreResult<BTreeMap<ObjectTypeId, u64>> {
+        let counters = self
+            .on_tenant(tenant, |conn| {
+                let mut counters: BTreeMap<String, u64> = BTreeMap::new();
+                let mut statement = conn
+                    .prepare_cached("SELECT object, revision FROM object_revisions")
+                    .map_err(db)?;
+                let rows = statement
+                    .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
+                    .map_err(db)?;
+                for row in rows {
+                    let (object, revision) = row.map_err(db)?;
+                    counters.insert(object, revision.max(0) as u64);
+                }
+                Ok(counters)
+            })?
+            .unwrap_or_default();
+        let everything = counters.get("").copied().unwrap_or(0);
+        Ok(objects
+            .iter()
+            .map(|object| {
+                let own = counters.get(object.as_str()).copied().unwrap_or(0);
+                (object.clone(), everything + own)
+            })
+            .collect())
     }
 
     fn load(&self, tenant: &TenantId, needs: &[Need]) -> StoreResult<State> {
@@ -4413,6 +4473,7 @@ impl Store for SqliteStore {
         file.write(dbe, |tx| {
             ledger::check_restorable(tx, state.revision)?;
             tx.execute("DELETE FROM records", []).map_err(db)?;
+            raise_object_revision(tx, "")?;
             tx.execute(
                 "UPDATE tenant SET name = ?1, revision = ?2, next_record = ?3, event_seq = MAX(event_seq, ?4), schema = ?5, members = ?6
                  WHERE id = ?7",

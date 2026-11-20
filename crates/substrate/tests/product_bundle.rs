@@ -1224,3 +1224,127 @@ fn a_tenant_bundle_with_a_trigger_an_automation_and_an_operation_installs_throug
         .personal
         .is_some());
 }
+
+/// `tiers` with an aggregate pair on its query and a view section that names one of them, in the
+/// shape specc writes (members in the specification's kebab case).
+fn tiers_with_aggregates() -> Json {
+    let mut doc = tiers();
+    doc["content"]["queries"]["tiers__top"]["declared-fields"] = json!(["points", "status"]);
+    doc["content"]["queries"]["tiers__top"]["aggregates"] = json!([
+        { "id": "total", "kind": "sum", "field": "points", "descending": false, "scan-bound": 500 },
+        { "id": "by_status", "kind": "count", "group-by": "status", "descending": false, "scan-bound": 500 }
+    ]);
+    doc["content"]["views"] = json!({
+        "tiers__board": {
+            "id": "tiers__board",
+            "route": "/board",
+            "title": "Board",
+            "sections": {
+                "total": {
+                    "query": "tiers__top", "args": {}, "include": [], "markdown": [],
+                    "single": false, "aggregate": "total"
+                }
+            }
+        }
+    });
+    doc
+}
+
+// Verifies: AGG-001
+// Verifies: AGG-041
+#[test]
+fn a_product_query_declares_aggregates_and_a_view_section_names_one() {
+    let bundle = read(&tiers_with_aggregates()).unwrap();
+    let query = &bundle.queries[&QueryId::new("tiers__top").unwrap()];
+    assert_eq!(query.aggregates.as_ref().map(Vec::len), Some(2));
+    assert_eq!(query.declared_fields.as_ref().map(Vec::len), Some(2));
+    let mut world = world();
+    let (result, _) = install(&mut world, &bundle, None, "0.2-draft");
+    result.unwrap_or_else(|e| panic!("{e}"));
+    let schema = schema_of(&world);
+    let installed = &schema.queries[&QueryId::new("tiers__top").unwrap()];
+    let aggregates = installed.aggregates.as_ref().unwrap();
+    assert_eq!(aggregates[0].kind, AggregateKind::Sum);
+    assert_eq!(aggregates[0].scan_bound, 500);
+    assert_eq!(
+        aggregates[1].group_by,
+        Some(FieldId::new("status").unwrap())
+    );
+    let section = &schema.views[&ViewId::new("tiers__board").unwrap()].sections["total"];
+    assert_eq!(section.aggregate, Some(AggregateId::new("total").unwrap()));
+}
+
+// Verifies: AGG-002
+#[test]
+fn a_product_aggregate_that_names_a_field_its_query_does_not_declare_is_refused_at_install() {
+    let mut doc = tiers_with_aggregates();
+    doc["content"]["queries"]["tiers__top"]["declared-fields"] = json!(["status"]);
+    let bundle = read(&doc).unwrap();
+    let mut world = world();
+    let before = world.hash();
+    let (result, _) = install(&mut world, &bundle, None, "0.2-draft");
+    let text = format!("{result:?}");
+    assert!(
+        text.contains("points") && text.contains("is not a declared field"),
+        "{text}"
+    );
+    assert_eq!(world.hash(), before, "nothing is installed");
+}
+
+// Verifies: AGG-001
+// Verifies: AGG-041
+#[test]
+fn a_tenant_bundle_declares_aggregates_and_a_view_section_that_names_one() {
+    let doc = |declared: Json| {
+        json!({
+            "id": "scores", "name": "Scores", "owner": "user:admin",
+            "created_at": "2026-01-01T00:00:00Z",
+            "objects": [{
+                "id": "entry", "label": "Entry",
+                "fields": [
+                    { "id": "player", "label": "Player", "type": "string", "required": true },
+                    { "id": "points", "label": "Points", "type": "int", "required": true }
+                ]
+            }],
+            "queries": [{
+                "id": "board", "object": "entry",
+                "declared_fields": declared,
+                "aggregates": [
+                    { "id": "leaders", "kind": "top", "field": "points", "n": 3, "descending": true, "scan_bound": 1000 },
+                    { "id": "per_player", "kind": "sum", "field": "points", "group_by": "player", "scan_bound": 1000 }
+                ]
+            }],
+            "views": [{
+                "id": "leaderboard", "route": "/leaders", "title": "Leaders",
+                "sections": { "leaders": { "query": "board", "aggregate": "leaders" } }
+            }]
+        })
+    };
+    let bundle = Bundle::from_json(&doc(json!(["player", "points"])).to_string()).unwrap();
+    let world = install_into(&World::default(), &bundle).unwrap_or_else(|e| panic!("{e}"));
+    let schema = world.tenants[&TenantId::new("scores").unwrap()]
+        .schema
+        .clone();
+    let query = &schema.queries[&QueryId::new("board").unwrap()];
+    let aggregates = query.aggregates.as_ref().unwrap();
+    assert_eq!(aggregates.len(), 2);
+    assert_eq!(aggregates[0].kind, AggregateKind::Top);
+    assert_eq!(aggregates[0].n, Some(3));
+    assert_eq!(query.declared_fields.as_ref().map(Vec::len), Some(2));
+    let section = &schema.views[&ViewId::new("leaderboard").unwrap()].sections["leaders"];
+    assert_eq!(
+        section.aggregate,
+        Some(AggregateId::new("leaders").unwrap())
+    );
+
+    // A field the query does not declare is refused with the kernel's problem text.
+    let bundle = Bundle::from_json(&doc(json!(["player"])).to_string()).unwrap();
+    let error = install_into(&World::default(), &bundle)
+        .err()
+        .expect("the install is refused");
+    let text = error.to_string();
+    assert!(
+        text.contains("points") && text.contains("is not a declared field"),
+        "{text}"
+    );
+}
