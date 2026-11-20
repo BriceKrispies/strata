@@ -4419,3 +4419,125 @@ async fn a_members_change_honours_the_key_of_its_request() {
         "{other}"
     );
 }
+
+/// WG-5131: the development stack makes a throwaway tenant through the real provisioning route,
+/// for a browser journey that follows a real owner's invitation: the owner of the stack's own site
+/// asks for it, the host is bound, the welcome message is in the development outbox, and the link
+/// in it is accepted once and refused the second time. Nobody else may ask, and a name that is not
+/// a throwaway's is refused.
+// Verifies: IDN-1680
+// Verifies: IDN-1682
+#[tokio::test]
+async fn the_development_stack_provisions_a_throwaway_tenant_with_a_real_invitation() {
+    use strata_backend::mail::Mailer;
+    let (backend, sink) = linking(|_| {}).await;
+    let origin = "http://throwaway1.localhost:4200";
+    let request = json!({
+        "name": "throwaway1",
+        "owner_email": "Owner@Throwaway.example",
+        "origin": origin,
+    });
+    let path = "/internal/dev/provision-tenant";
+
+    let (status, _) = backend
+        .call("fieldnotes", None, path, request.clone())
+        .await;
+    assert_eq!(status, 401, "a visitor may not");
+    let mirela = backend
+        .login("fieldnotes", "mirela", "strata-dev-mirela")
+        .await;
+    let (status, _) = backend
+        .call("fieldnotes", Some(&mirela), path, request.clone())
+        .await;
+    assert_eq!(status, 403, "an author may not");
+    let admin = backend
+        .login("fieldnotes", "admin", "strata-dev-admin")
+        .await;
+    let (status, refused) = backend
+        .call(
+            "fieldnotes",
+            Some(&admin),
+            path,
+            json!({ "name": "tidewater", "owner_email": "o@t.example", "origin": origin }),
+        )
+        .await;
+    assert_eq!(status, 422, "only a throwaway's name: {refused}");
+
+    let (status, made) = backend
+        .call("fieldnotes", Some(&admin), path, request.clone())
+        .await;
+    assert_eq!(status, 200, "{made}");
+    assert_eq!(made["tenant"], "throwaway1");
+    assert_eq!(made["owner_login"], "owner@throwaway.example");
+
+    // The host is bound, for the BFF to learn.
+    let (_, listed) = backend
+        .call("-", None, "/internal/platform/hosts", json!({}))
+        .await;
+    assert!(
+        listed["hosts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|h| h["host"] == "throwaway1.localhost:4200" && h["tenant"] == "throwaway1"),
+        "{listed}"
+    );
+
+    // The welcome message is in the development outbox, which the owner of fieldnotes reads, and
+    // holds the invitation.
+    let (_, outbox) = backend
+        .call(
+            "fieldnotes",
+            Some(&admin),
+            "/internal/dev/mail-outbox",
+            json!({}),
+        )
+        .await;
+    assert_eq!(outbox["messages"][0]["to"], "owner@throwaway.example");
+    let welcome = &sink.outbox()[0];
+    let address = welcome
+        .text
+        .split_whitespace()
+        .find(|word| word.starts_with("http://throwaway1.localhost:4200/login#i="))
+        .expect("the message holds the invitation link")
+        .to_string();
+    let (_, fragment) = address.split_once('#').unwrap();
+    let part = |name: &str| {
+        fragment
+            .split('&')
+            .find_map(|pair| pair.strip_prefix(&format!("{name}=")))
+            .expect("fragment field")
+            .to_string()
+    };
+    let accept = |password: &'static str| {
+        let (challenge, token) = (part("i"), part("t"));
+        let backend = &backend;
+        async move {
+            backend
+                .call_at(
+                    Some(origin),
+                    SOURCE,
+                    "throwaway1",
+                    None,
+                    "/internal/sign-in/invite/accept",
+                    json!({ "challenge": challenge, "token": token, "password": password }),
+                )
+                .await
+        }
+    };
+    let (status, accepted) = accept("a-first-password-of-mine").await;
+    assert_eq!(status, 200, "{accepted}");
+    let (status, again) = accept("another-password-of-mine").await;
+    assert_eq!(status, 401, "the invitation is spent: {again}");
+
+    // The owner signs in with the password chosen.
+    let (status, signed_in) = backend
+        .call(
+            "throwaway1",
+            None,
+            "/internal/session/sign-in/password",
+            json!({ "login": "owner@throwaway.example", "password": "a-first-password-of-mine" }),
+        )
+        .await;
+    assert_eq!(status, 200, "{signed_in}");
+}

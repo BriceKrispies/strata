@@ -1748,9 +1748,11 @@ async fn dev(
     State(bff): State<Shared>,
     headers: HeaderMap,
     Path(action): Path<String>,
+    body: axum::body::Bytes,
 ) -> Result<Json<Json_>, Failure> {
     let visit = visit(&bff, &headers)?;
     let path = match (bff.cfg.dev, action.as_str()) {
+        (true, "provision-tenant") => "/internal/dev/provision-tenant",
         (true, "expire-session") => "/internal/dev/expire-session",
         (true, "age-authentication") => "/internal/dev/age-authentication",
         (true, "reset") => "/internal/dev/reset",
@@ -1774,7 +1776,13 @@ async fn dev(
             &visit.correlation,
         ));
     }
-    backend(&bff, &visit, path, &json!({})).await.map(Json)
+    // Only the action that makes a tenant takes a body; the rest are asked with nothing.
+    let sent = if action == "provision-tenant" {
+        serde_json::from_slice::<Json_>(&body).unwrap_or_else(|_| json!({}))
+    } else {
+        json!({})
+    };
+    backend(&bff, &visit, path, &sent).await.map(Json)
 }
 
 /// The WebSocket upgrade of the signed-in page: it must come from an allowed origin and carry the

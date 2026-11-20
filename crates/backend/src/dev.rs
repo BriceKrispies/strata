@@ -1,5 +1,5 @@
-//! Development routes: fixture reset, clock skew, session ageing and expiry, the mail sink and
-//! the identity-outage switch. Compiled only with the `development` cargo feature, and mounted
+//! Development routes: fixture reset, clock skew, session ageing and expiry, the mail sink, a
+//! throwaway tenant and the identity-outage switch. Compiled only with the `development` cargo feature, and mounted
 //! only when the process was started with `STRATA_DEV=1`. A build without the feature has none
 //! of these routes and refuses to start in development mode.
 
@@ -29,6 +29,7 @@ pub fn mount(router: Router<Shared>) -> Router<Shared> {
             post(dev_age_authentication),
         )
         .route("/internal/dev/mail-outbox", post(dev_mail_outbox))
+        .route("/internal/dev/provision-tenant", post(dev_provision_tenant))
         .route("/internal/dev/clock", post(dev_clock))
         .route("/internal/dev/identity-outage", post(dev_identity_outage))
 }
@@ -96,6 +97,71 @@ async fn dev_mail_outbox(
         Ok(json!({ "messages": messages }))
     })
     .await
+}
+
+/// The prefix of the id of a tenant the development route makes, so that it can only ever remove or
+/// replace a tenant of its own.
+const THROWAWAY: &str = "throwaway";
+
+/// Development only: provision a throwaway tenant through the real provisioning route
+/// ([`crate::provision::create_tenant`]), so that a browser journey has an owner's invitation to
+/// follow. The body is `{ "name": "throwaway...", "owner_email": ..., "origin": "http://host:port" }`.
+/// The tenant is a one-object site named by its id, which must begin with `throwaway`; one that
+/// already exists under that name is removed first, so a journey can run again on the same stack.
+/// The origin's host is bound to the tenant, as the real route does, and the BFF learns it from the
+/// backend's list of hosts. The welcome message is in the development mail outbox. For the owner of
+/// the site the request is made at, as every development fixture is.
+async fn dev_provision_tenant(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<Json_>,
+) -> Result<Json<Json_>, ApiError> {
+    let reply = as_caller(&app, &headers, move |app, identity| {
+        require_dev_owner(app, identity)?;
+        let text = |name: &str| {
+            body.get(name).and_then(Json_::as_str).ok_or_else(|| {
+                ApiError::new(ErrorCode::Invalid, format!("The request needs {name}."))
+            })
+        };
+        let id = text("name")?;
+        if !id.starts_with(THROWAWAY) {
+            return Err(ApiError::new(
+                ErrorCode::Invalid,
+                format!("A throwaway tenant's name begins with {THROWAWAY}."),
+            ));
+        }
+        let tenant = strata_kernel::TenantId::new(id)
+            .map_err(|problem| ApiError::new(ErrorCode::Invalid, format!("name: {problem}")))?;
+        let request = crate::provision::CreateTenant {
+            bundle: json!({
+                "id": tenant.as_str(),
+                "name": "Throwaway site",
+                "owner": "user:owner",
+                "created_at": "2026-09-01T09:00:00Z",
+                "objects": [{
+                    "id": "note",
+                    "label": "Note",
+                    "fields": [{ "id": "title", "label": "Title", "type": "string", "required": true }]
+                }]
+            }),
+            owner_email: text("owner_email")?.to_string(),
+            owner_name: None,
+            origin: text("origin")?.to_string(),
+        };
+        // Only a tenant this route made is replaced.
+        if app.store.load(&tenant, &[])?.tenant.is_some() {
+            app.store.reset_tenant(&tenant)?;
+        }
+        app.audit(
+            "dev.provision_tenant",
+            &identity.correlation,
+            json!({ "tenant": tenant.as_str(), "by": identity.tenant.as_str() }),
+        );
+        crate::provision::create_tenant(app, request)
+    })
+    .await?;
+    app.hub.committed();
+    Ok(reply)
 }
 
 /// Development only: make the caller's own session look as if it authenticated long ago, so that a
