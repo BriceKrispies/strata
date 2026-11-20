@@ -701,7 +701,8 @@ impl Parser {
         let mut path = vec![w];
         while self.is_op(".") {
             self.p += 1;
-            path.push(self.name("a name after \".\"")?);
+            // A variant may be called by a keyword (`value.null`), as in a pattern.
+            path.push(self.field_name("a name after \".\"")?);
         }
         if self.is_op("(") {
             self.p += 1;
