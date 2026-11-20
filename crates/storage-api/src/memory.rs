@@ -5,10 +5,11 @@
 
 use crate::{
     check_event_sequence, partial_state, throttle_refund, throttle_step, Account, Capabilities,
-    Commit, FederatedIdentity, Health, JournalEntry, OidcFlow, OutboxEntry, PasskeyChallenge,
-    PasskeyRecord, PendingSignIn, Receipt, RecoveryRequest, SamlRequest, SessionRecord, SignInLink,
-    SnapshotInfo, StorageMigration, Store, StoreError, StoreResult, TenantSummary, ThrottleRow,
-    ThrottleRule, ThrottleSettle, ThrottleVerdict, TotpRecord,
+    Commit, FederatedIdentity, Health, IdempotencyEntry, IdempotentResult, JournalEntry, OidcFlow,
+    OutboxEntry, PasskeyChallenge, PasskeyRecord, PendingSignIn, Receipt, RecoveryRequest,
+    SamlRequest, SessionRecord, SignInLink, SnapshotInfo, StorageMigration, Store, StoreError,
+    StoreResult, TenantSummary, ThrottleRow, ThrottleRule, ThrottleSettle, ThrottleVerdict,
+    TotpRecord, IDEMPOTENCY_RETENTION_MS,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -43,6 +44,8 @@ struct Inner {
     recoveries: BTreeMap<(TenantId, String), RecoveryRequest>,
     docs: BTreeMap<(TenantId, String, String), String>,
     snapshots: BTreeMap<(TenantId, u64), (SnapshotInfo, Arc<TenantState>)>,
+    /// Results by tenant, principal scope and key, with the receipt of the commit.
+    idempotency: BTreeMap<(TenantId, String, String), (IdempotencyEntry, Receipt)>,
 }
 
 #[derive(Default)]
@@ -133,6 +136,19 @@ impl Store for MemoryStore {
             });
         }
         check_event_sequence(commit, current.as_ref().map_or(0, |t| t.event_seq))?;
+        let recorded_before = commit.journal.context.now.0 - IDEMPOTENCY_RETENTION_MS;
+        if let Some(entry) = &commit.idempotency {
+            let scope = (tenant.clone(), entry.principal.clone(), entry.key.clone());
+            if inner
+                .idempotency
+                .get(&scope)
+                .is_some_and(|(held, _)| held.recorded_at.0 >= recorded_before)
+            {
+                return Err(StoreError::Invalid(
+                    "the idempotency key is already recorded".into(),
+                ));
+            }
+        }
         let next = apply_delta(current.as_deref(), &commit.delta)
             .map_err(|e| StoreError::Invalid(strata_kernel::ext::DomainErrorExt::describe(&e)))?;
 
@@ -147,6 +163,19 @@ impl Store for MemoryStore {
             last_position = Some(position);
         }
         inner.journal.push(commit.journal.clone());
+        let receipt = Receipt {
+            revision: commit.delta.new_revision,
+            last_position,
+        };
+        inner
+            .idempotency
+            .retain(|_, (held, _)| held.recorded_at.0 >= recorded_before);
+        if let Some(entry) = &commit.idempotency {
+            inner.idempotency.insert(
+                (tenant.clone(), entry.principal.clone(), entry.key.clone()),
+                (entry.clone(), receipt.clone()),
+            );
+        }
         let now = commit.journal.context.now;
         for session in inner.sessions.values_mut() {
             if session.tenant == *tenant
@@ -156,10 +185,26 @@ impl Store for MemoryStore {
                 session.revoked_at = Some(now);
             }
         }
-        Ok(Receipt {
-            revision: commit.delta.new_revision,
-            last_position,
-        })
+        Ok(receipt)
+    }
+
+    fn idempotent_result(
+        &self,
+        tenant: &TenantId,
+        principal: &str,
+        key: &str,
+        now: Timestamp,
+    ) -> StoreResult<Option<IdempotentResult>> {
+        Ok(self
+            .lock()?
+            .idempotency
+            .get(&(tenant.clone(), principal.to_string(), key.to_string()))
+            .filter(|(held, _)| held.recorded_at.0 >= now.0 - IDEMPOTENCY_RETENTION_MS)
+            .map(|(held, receipt)| IdempotentResult {
+                request_hash: held.request_hash.clone(),
+                result: held.result.clone(),
+                receipt: receipt.clone(),
+            }))
     }
 
     fn events_after(
@@ -933,6 +978,7 @@ impl Store for MemoryStore {
         inner.positions.remove(tenant);
         inner.events.retain(|(_, event, _)| event.tenant != *tenant);
         inner.journal.retain(|entry| entry.tenant != *tenant);
+        inner.idempotency.retain(|(t, _, _), _| t != tenant);
         inner.sessions.retain(|_, s| s.tenant != *tenant);
         inner.accounts.retain(|(t, _), _| t != tenant);
         inner.throttle.retain(|(t, _), _| t != tenant);

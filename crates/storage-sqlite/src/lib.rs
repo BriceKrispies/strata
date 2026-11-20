@@ -47,10 +47,11 @@ use strata_kernel::{
 use strata_runtime::sqlite::{Database, DbError, Migration};
 use strata_storage_api::{
     check_event_sequence, field_matches, throttle_refund, throttle_step, Account, Capabilities,
-    Commit, FederatedIdentity, Health, JournalEntry, OidcFlow, OutboxEntry, PasskeyCeremony,
-    PasskeyChallenge, PasskeyRecord, PendingSignIn, Receipt, RecoveryRequest, SamlRequest,
-    SessionRecord, SignInLink, SnapshotInfo, StorageMigration, Store, StoreError, StoreResult,
-    TenantSummary, ThrottleRow, ThrottleRule, ThrottleSettle, ThrottleVerdict, TotpRecord,
+    Commit, FederatedIdentity, Health, IdempotentResult, JournalEntry, OidcFlow, OutboxEntry,
+    PasskeyCeremony, PasskeyChallenge, PasskeyRecord, PendingSignIn, Receipt, RecoveryRequest,
+    SamlRequest, SessionRecord, SignInLink, SnapshotInfo, StorageMigration, Store, StoreError,
+    StoreResult, TenantSummary, ThrottleRow, ThrottleRule, ThrottleSettle, ThrottleVerdict,
+    TotpRecord, IDEMPOTENCY_RETENTION_MS,
 };
 
 /// The ledger table of the control database's migrations.
@@ -321,6 +322,23 @@ const TENANT_MIGRATIONS: &[Migration] = &[
         version: 9,
         name: "verified e-mail address of an account",
         sql: "ALTER TABLE accounts ADD COLUMN verified_email TEXT;",
+    },
+    Migration {
+        version: 10,
+        name: "idempotency keys",
+        sql: "
+    CREATE TABLE idempotency (
+        principal     TEXT NOT NULL,
+        key           TEXT NOT NULL,
+        request_hash  TEXT NOT NULL,
+        recorded_at   INTEGER NOT NULL,
+        revision      INTEGER NOT NULL,
+        last_position INTEGER,
+        result        TEXT NOT NULL,
+        PRIMARY KEY (principal, key)
+    );
+    CREATE INDEX idempotency_recorded ON idempotency(recorded_at);
+    ",
     },
 ];
 
@@ -1168,6 +1186,29 @@ impl SqliteStore {
             params![commit.journal.revision.0 as i64, encode(&commit.journal)],
         )
         .map_err(db)?;
+        // A key is kept for its retention, counted from the commit that recorded it; the rows
+        // past it go in the same transaction as the next commit.
+        tx.execute(
+            "DELETE FROM idempotency WHERE recorded_at < ?1",
+            params![commit.journal.context.now.0 - IDEMPOTENCY_RETENTION_MS],
+        )
+        .map_err(db)?;
+        if let Some(entry) = &commit.idempotency {
+            tx.execute(
+                "INSERT INTO idempotency (principal, key, request_hash, recorded_at, revision, last_position, result)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![
+                    entry.principal,
+                    entry.key,
+                    entry.request_hash,
+                    entry.recorded_at.0,
+                    delta.new_revision.0 as i64,
+                    last_position.map(|p| p as i64),
+                    encode(&entry.result)
+                ],
+            )
+            .map_err(db)?;
+        }
         for principal in &commit.revoke_sessions {
             tx.execute(
                 "UPDATE sessions SET revoked_at = ?1 WHERE principal = ?2 AND revoked_at IS NULL",
@@ -1385,6 +1426,46 @@ impl Store for SqliteStore {
             }
         }
         result
+    }
+
+    fn idempotent_result(
+        &self,
+        tenant: &TenantId,
+        principal: &str,
+        key: &str,
+        now: Timestamp,
+    ) -> StoreResult<Option<IdempotentResult>> {
+        let Some(file) = self.tenant_db(tenant)? else {
+            return Ok(None);
+        };
+        let conn = file.lock().map_err(dbe)?;
+        let row = conn
+            .query_row(
+                "SELECT request_hash, revision, last_position, result FROM idempotency
+                 WHERE principal = ?1 AND key = ?2 AND recorded_at >= ?3",
+                params![principal, key, now.0 - IDEMPOTENCY_RETENTION_MS],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, Option<i64>>(2)?,
+                        row.get::<_, String>(3)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(db)?;
+        row.map(|(request_hash, revision, position, result)| {
+            Ok::<_, StoreError>(IdempotentResult {
+                request_hash,
+                result: decode(&result, "idempotency result")?,
+                receipt: Receipt {
+                    revision: StateRevision(revision as u64),
+                    last_position: position.map(|p| p as u64),
+                },
+            })
+        })
+        .transpose()
     }
 
     fn events_after(

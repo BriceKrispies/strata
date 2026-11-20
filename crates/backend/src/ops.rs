@@ -16,7 +16,7 @@ use strata_kernel::{
 use strata_protocol::api::{
     ErrorCode, MembersReply, MembersRequest, Mutation, MutationReply, ViewRequest,
 };
-use strata_storage_api::{execute, ExecuteError, Executed};
+use strata_storage_api::{execute_by, ExecuteError, Executed};
 use strata_substrate::plain::coerce_fields;
 use strata_substrate::project::{
     included_refs, match_route, section_order, section_request, SectionData, ViewData,
@@ -49,7 +49,14 @@ pub fn run_intent(
         _ => Vec::new(),
     };
     app.stats.in_flight.fetch_add(1, Ordering::Relaxed);
-    let result = execute(app.store.as_ref(), intent, ctx);
+    // The request's deadline: a change that was not committed by the time the caller was told
+    // "timed out" is not committed afterwards; a retry with the same key learns the outcome.
+    let result = execute_by(
+        app.store.as_ref(),
+        intent,
+        ctx,
+        strata_runtime::server::work_deadline(),
+    );
     app.stats.in_flight.fetch_sub(1, Ordering::Relaxed);
     match &result {
         Ok(done) => {
@@ -107,10 +114,14 @@ fn object_id(name: &str) -> Result<ObjectTypeId, ApiError> {
 }
 
 /// Apply a record mutation given as plain JSON.
+///
+/// `idempotency_key` is the caller's key for this change, when it sent one: repeating the request
+/// with the same key returns the first reply and changes nothing.
 pub fn mutate(
     app: &App,
     identity: &Identity,
     mutation: &Mutation,
+    idempotency_key: Option<&str>,
 ) -> Result<MutationReply, ApiError> {
     let tenant = header(app, identity)?;
     let fields_of = |object: &ObjectTypeId, fields: &serde_json::Map<String, Json>| {
@@ -159,7 +170,17 @@ pub fn mutate(
             expected_version: *expected_version,
         },
     };
-    let ctx = identity.context(app);
+    // A key is scoped by principal. Every anonymous caller is the same principal, so one of them
+    // could read another's first result under a key they both chose: a key needs a signed-in
+    // caller.
+    if idempotency_key.is_some() && identity.anonymous() {
+        return Err(ApiError::new(
+            ErrorCode::Unauthenticated,
+            "Sign in to use an idempotency key.",
+        ));
+    }
+    let mut ctx = identity.context(app);
+    ctx.idempotency_key = idempotency_key.map(str::to_string);
     let done = match run_intent(app, &ctx, &intent, identity.anonymous()) {
         Err(error) if error.0.kind.as_deref() == Some("Unauthorized") => {
             return Err(hide_unreadable(app, identity, &intent).unwrap_or(error))

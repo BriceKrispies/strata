@@ -5,9 +5,9 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use strata_kernel::testkit::*;
 use strata_kernel::*;
 use strata_storage_api::{
-    conformance, execute, Account, FederatedIdentity, OidcFlow, PasskeyCeremony, PasskeyChallenge,
-    PasskeyRecord, SamlRequest, SessionRecord, Store, ThrottleRule, ThrottleSettle,
-    ThrottleVerdict,
+    conformance, execute, idempotency_scope, Account, FederatedIdentity, OidcFlow, PasskeyCeremony,
+    PasskeyChallenge, PasskeyRecord, SamlRequest, SessionRecord, Store, ThrottleRule,
+    ThrottleSettle, ThrottleVerdict,
 };
 use strata_storage_sqlite::{default_tenants_dir, tenant_file_name, SqliteStore};
 
@@ -58,6 +58,69 @@ fn sqlite_store_conforms_on_disk() {
 fn sqlite_store_keeps_documents() {
     let store = SqliteStore::open(&fresh_path("documents"), Timestamp(1)).unwrap();
     conformance::documents_are_scoped_to_their_tenant_and_kind(&store);
+}
+
+/// Verifies: OPS-318
+///
+/// A retried create after the process restarted: the key was recorded in the tenant's file by the
+/// commit, so the retry on a reopened store receives the first result and creates nothing.
+#[test]
+fn an_idempotency_key_survives_a_restart() {
+    let path = fresh_path("idempotent");
+    let alpha = tenant_id("alpha");
+    let owner = principal_id("alpha:owner");
+    let keyed = |now: i64| {
+        let mut context = ctx("alpha", Principal::User(owner.clone()), now);
+        context.idempotency_key = Some("create-1".into());
+        context
+    };
+    let first = {
+        let store = SqliteStore::open(&path, Timestamp(1)).unwrap();
+        execute(
+            &store,
+            &Intent::CreateTenant {
+                name: "alpha".into(),
+                owner: owner.clone(),
+            },
+            &ctx("alpha", Principal::System, 10),
+        )
+        .unwrap();
+        execute(
+            &store,
+            &Intent::ChangeSchema {
+                changes: notes_schema(),
+                expected_version: None,
+                existing: ExistingData::Reject,
+            },
+            &ctx("alpha", Principal::User(owner.clone()), 11),
+        )
+        .unwrap();
+        execute(&store, &new_note("Once", "once"), &keyed(12)).unwrap()
+    };
+    assert!(!first.replayed);
+    let store = SqliteStore::open(&path, Timestamp(2)).unwrap();
+    let again = execute(&store, &new_note("Once", "once"), &keyed(13)).unwrap();
+    assert!(again.replayed);
+    assert_eq!(again.receipt, first.receipt);
+    assert_eq!(again.transition.output, first.transition.output);
+    let state = store.load_complete(&alpha).unwrap();
+    let records: usize = state
+        .tenant
+        .unwrap()
+        .records
+        .values()
+        .map(|by_id| by_id.len())
+        .sum();
+    assert_eq!(records, 1, "the retried create made a second record");
+    assert!(store
+        .idempotent_result(
+            &alpha,
+            &idempotency_scope(&Principal::User(owner)),
+            "create-1",
+            Timestamp(14)
+        )
+        .unwrap()
+        .is_some());
 }
 
 /// Verifies: STO-003

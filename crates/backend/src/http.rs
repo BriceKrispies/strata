@@ -20,8 +20,8 @@ use std::time::Instant;
 use strata_kernel::owner_role;
 use strata_kernel::rules::roles_of;
 use strata_protocol::api::{
-    Empty, ErrorCode, IdRequest, MembersRequest, Mutation, SessionReply, ViewRequest,
-    HEADER_CORRELATION,
+    valid_idempotency_key, Empty, ErrorCode, IdRequest, MembersRequest, Mutation, SessionReply,
+    ViewRequest, HEADER_CORRELATION, HEADER_IDEMPOTENCY,
 };
 use strata_protocol::ws::{SessionState, MAX_FRAME};
 
@@ -459,8 +459,26 @@ async fn mutate(
     headers: HeaderMap,
     Json(mutation): Json<Mutation>,
 ) -> Result<impl IntoResponse, ApiError> {
+    // The caller's key for this change, so that a retry after a lost reply changes the tenant
+    // once (OPS-318).
+    let key = match headers.get(HEADER_IDEMPOTENCY) {
+        None => None,
+        Some(value) => Some(
+            value
+                .to_str()
+                .ok()
+                .filter(|key| valid_idempotency_key(key))
+                .map(str::to_string)
+                .ok_or_else(|| {
+                    ApiError::new(
+                        ErrorCode::Invalid,
+                        "An idempotency key is 1 to 255 visible ASCII characters.",
+                    )
+                })?,
+        ),
+    };
     as_caller(&app, &headers, move |app, identity| {
-        ops::mutate(app, identity, &mutation)
+        ops::mutate(app, identity, &mutation, key.as_deref())
     })
     .await
 }

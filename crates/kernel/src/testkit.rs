@@ -39,6 +39,7 @@ pub fn ctx(tenant: &str, principal: Principal, now: i64) -> Context {
         now: Timestamp(now),
         correlation: format!("test-{now}"),
         verified_address: None,
+        idempotency_key: None,
     }
 }
 

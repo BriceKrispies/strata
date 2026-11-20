@@ -5,7 +5,8 @@
 //! decided" is checked by canonical hash rather than field by field.
 
 use crate::{
-    execute, query, Account, Commit, ExecuteError, OutboxEntry, SessionRecord, Store, StoreError,
+    execute, execute_by, idempotency_scope, query, Account, Commit, ExecuteError, OutboxEntry,
+    SessionRecord, Store, StoreError, IDEMPOTENCY_RETENTION_MS,
 };
 use std::collections::BTreeMap;
 use strata_kernel::testkit::*;
@@ -755,6 +756,134 @@ pub fn documents_are_scoped_to_their_tenant_and_kind(store: &dyn Store) {
         .is_err());
 }
 
+/// A request that repeats an idempotency key returns the first result and commits nothing; the
+/// key is scoped to its tenant and principal, a key used with another intent is refused, a
+/// request past its deadline commits nothing, and a record past its retention is forgotten.
+fn idempotency_keys_return_the_first_result(store: &dyn Store) {
+    let _pair = Pair::new(store);
+    let (alpha, beta) = (tenant_id("alpha"), tenant_id("beta"));
+    let records_of = |tenant: &TenantId| -> (usize, StateRevision) {
+        let state = store.load_complete(tenant).expect("load_complete");
+        let tenant = state.tenant.expect("tenant");
+        (
+            tenant.records.values().map(|by_id| by_id.len()).sum(),
+            tenant.revision,
+        )
+    };
+    let writer = user("alpha:writer1");
+    let keyed = |tenant: &str, principal: Principal, now: i64, key: &str| {
+        let mut context = ctx(tenant, principal, now);
+        context.idempotency_key = Some(key.to_string());
+        context
+    };
+
+    let (records_before, revision_before) = records_of(&alpha);
+    let first = execute(
+        store,
+        &new_note("Once", "once"),
+        &keyed("alpha", writer.clone(), 5_000, "k-1"),
+    )
+    .expect("the first request commits");
+    assert!(!first.replayed);
+    let (records_after, revision_after) = records_of(&alpha);
+    assert_eq!(records_after, records_before + 1);
+    assert_ne!(revision_after, revision_before);
+
+    // The same request again, as a client does after a lost reply: the first result, no commit.
+    let again = execute(
+        store,
+        &new_note("Once", "once"),
+        &keyed("alpha", writer.clone(), 5_500, "k-1"),
+    )
+    .expect("the repeat is answered");
+    assert!(again.replayed, "the repeat was committed again");
+    assert_eq!(again.receipt, first.receipt);
+    assert_eq!(again.transition.output, first.transition.output);
+    assert_eq!(again.transition.evidence, first.transition.evidence);
+    assert_eq!(
+        again.transition.delta.event_seq,
+        first.transition.delta.event_seq
+    );
+    assert_eq!(records_of(&alpha), (records_after, revision_after));
+
+    // The same key with another intent is refused, and commits nothing.
+    match execute(
+        store,
+        &new_note("Other", "other"),
+        &keyed("alpha", writer.clone(), 5_600, "k-1"),
+    ) {
+        Err(ExecuteError::Domain(error)) => assert_eq!(error.kind, ErrorKind::InvalidIntent),
+        other => panic!("a key used with another intent was not refused: {other:?}"),
+    }
+    assert_eq!(records_of(&alpha), (records_after, revision_after));
+
+    // The scope is the tenant and the principal: the key is unknown to another principal of the
+    // tenant and to the same principal in another tenant.
+    let scope = idempotency_scope(&writer);
+    let now = Timestamp(5_700);
+    assert!(store
+        .idempotent_result(&alpha, &scope, "k-1", now)
+        .unwrap()
+        .is_some());
+    assert!(store
+        .idempotent_result(
+            &alpha,
+            &idempotency_scope(&user("alpha:editor")),
+            "k-1",
+            now
+        )
+        .unwrap()
+        .is_none());
+    assert!(store
+        .idempotent_result(&beta, &scope, "k-1", now)
+        .unwrap()
+        .is_none());
+    let in_beta = execute(
+        store,
+        &new_note("Once", "once"),
+        &keyed("beta", user("beta:writer1"), 5_800, "k-1"),
+    )
+    .expect("the same key in another tenant is a new request");
+    assert!(!in_beta.replayed);
+
+    // A request whose deadline has passed commits nothing.
+    let before = records_of(&alpha);
+    match execute_by(
+        store,
+        &new_note("Late", "late"),
+        &keyed("alpha", writer.clone(), 5_900, "k-late"),
+        Some(std::time::Instant::now()),
+    ) {
+        Err(ExecuteError::Store(StoreError::Unavailable(_))) => {}
+        other => panic!("a request past its deadline was not refused: {other:?}"),
+    }
+    assert_eq!(records_of(&alpha), before);
+    assert!(store
+        .idempotent_result(&alpha, &scope, "k-late", now)
+        .unwrap()
+        .is_none());
+
+    // Retention: a record is returned for IDEMPOTENCY_RETENTION_MS after its commit and is
+    // forgotten after that. The key is then a new request, which the next commit records again.
+    let edge = Timestamp(5_000 + IDEMPOTENCY_RETENTION_MS);
+    assert!(store
+        .idempotent_result(&alpha, &scope, "k-1", edge)
+        .unwrap()
+        .is_some());
+    let past = Timestamp(edge.0 + 1);
+    assert!(store
+        .idempotent_result(&alpha, &scope, "k-1", past)
+        .unwrap()
+        .is_none());
+    let renewed = execute(
+        store,
+        &new_note("Twice", "twice"),
+        &keyed("alpha", writer, past.0, "k-1"),
+    )
+    .expect("a key past its retention is a new request");
+    assert!(!renewed.replayed);
+}
+
 fn accounts_are_scoped_to_their_tenant(store: &dyn Store) {
     let _pair = Pair::new(store);
     let account = Account {
@@ -1014,6 +1143,11 @@ pub const CHECKS: &[Check] = &[
         "snapshots",
         "snapshots_restore_to_the_same_hash",
         snapshots_restore_to_the_same_hash,
+    ),
+    (
+        "idempotency",
+        "idempotency_keys_return_the_first_result",
+        idempotency_keys_return_the_first_result,
     ),
     (
         "reset",

@@ -23,9 +23,9 @@ use std::sync::atomic::Ordering;
 use std::time::Instant;
 use strata_kernel::TenantId;
 use strata_protocol::api::{
-    valid_correlation, ErrorCode, ErrorReply, LoginReply, MembersRequest, Mutation, SessionReply,
-    SessionView, ViewRequest, HEADER_CORRELATION, HEADER_ORIGIN, HEADER_SERVICE, HEADER_SESSION,
-    HEADER_SITE, HEADER_SOURCE,
+    valid_correlation, valid_idempotency_key, ErrorCode, ErrorReply, LoginReply, MembersRequest,
+    Mutation, SessionReply, SessionView, ViewRequest, HEADER_CORRELATION, HEADER_IDEMPOTENCY,
+    HEADER_ORIGIN, HEADER_SERVICE, HEADER_SESSION, HEADER_SITE, HEADER_SOURCE,
 };
 use strata_protocol::ws::SessionState;
 use strata_substrate::project::{project, ViewData};
@@ -232,6 +232,18 @@ pub async fn backend<T: DeserializeOwned>(
     path: &str,
     body: &Json_,
 ) -> Result<T, Failure> {
+    backend_keyed(bff, visit, path, body, None).await
+}
+
+/// [`backend`] for a change that carries the browser's idempotency key: the backend scopes it by
+/// tenant and principal and answers a repeat with the first result (OPS-318).
+pub async fn backend_keyed<T: DeserializeOwned>(
+    bff: &Bff,
+    visit: &Visit,
+    path: &str,
+    body: &Json_,
+    idempotency_key: Option<&str>,
+) -> Result<T, Failure> {
     let unavailable = |why: String| {
         LOG.error(
             "backend.unreachable",
@@ -259,6 +271,9 @@ pub async fn backend<T: DeserializeOwned>(
     }
     if let Some(origin) = &visit.origin {
         request = request.header(HEADER_ORIGIN, origin);
+    }
+    if let Some(key) = idempotency_key {
+        request = request.header(HEADER_IDEMPOTENCY, key);
     }
     let response = request
         .send()
@@ -1204,7 +1219,25 @@ async fn records(
 ) -> Result<Json<Json_>, Failure> {
     let visit = visit(&bff, &headers)?;
     guard_write(&bff, &visit, &headers).await?;
-    backend(&bff, &visit, "/internal/mutate", &json!(mutation))
+    // The browser's key is passed on as it is. A change that names a key it cannot use is
+    // refused rather than made without one.
+    let key = match headers.get(HEADER_IDEMPOTENCY) {
+        None => None,
+        Some(value) => Some(
+            value
+                .to_str()
+                .ok()
+                .filter(|key| valid_idempotency_key(key))
+                .ok_or_else(|| {
+                    Failure::new(
+                        ErrorCode::Invalid,
+                        "An idempotency key is 1 to 255 visible ASCII characters.",
+                        &visit.correlation,
+                    )
+                })?,
+        ),
+    };
+    backend_keyed(&bff, &visit, "/internal/mutate", &json!(mutation), key)
         .await
         .map(Json)
 }

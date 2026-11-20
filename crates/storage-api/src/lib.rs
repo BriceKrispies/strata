@@ -26,6 +26,12 @@
 //!   applied, and stays there until it is marked published for its tenant.
 //! - **Durability.** What [`Capabilities::durable`] says. A durable adapter keeps every
 //!   acknowledged commit across a process restart.
+//! - **Idempotency.** A commit that carries an [`IdempotencyEntry`] records it in the same
+//!   atomic step as the state it describes, under the scope tenant, principal and key.
+//!   [`Store::idempotent_result`] returns the first result for a scope, for
+//!   [`IDEMPOTENCY_RETENTION_MS`] after the commit that recorded it; a record older than that
+//!   is gone, and the key is new again. A commit that names a scope already recorded and not
+//!   past its retention changes nothing and fails.
 //!
 //! What adapters may differ in is stated by [`Capabilities`], not hidden.
 
@@ -38,11 +44,12 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::fmt;
 use std::sync::Arc;
+use std::time::Instant;
 use strata_kernel::ext::*;
 use strata_kernel::{
     canon, Context, Coverage, DomainError, DomainEvent, Effect, ErrorKind, EventBody, Intent, Need,
-    PrincipalId, ReadRequest, ReadResult, Record, SessionId, State, StateDelta, StateRevision,
-    TenantId, TenantState, Timestamp, Transition, Value,
+    Principal, PrincipalId, ReadRequest, ReadResult, Record, SessionId, State, StateDelta,
+    StateRevision, TenantId, TenantState, Timestamp, Transition, Value,
 };
 
 /// What an adapter actually provides. Reported in diagnostics and checked by the conformance
@@ -112,6 +119,45 @@ pub struct JournalEntry {
     pub events_hash: String,
 }
 
+/// How long a store keeps the result recorded under an idempotency key, counted from the commit
+/// that recorded it: 24 hours. A repeat inside the period receives the first result; a repeat
+/// after it is a new request.
+pub const IDEMPOTENCY_RETENTION_MS: i64 = 24 * 60 * 60 * 1000;
+
+/// The longest idempotency key a caller may choose, in bytes.
+pub const MAX_IDEMPOTENCY_KEY_LEN: usize = 255;
+
+/// Whether `key` is acceptable as an idempotency key: 1 to [`MAX_IDEMPOTENCY_KEY_LEN`] visible
+/// ASCII characters.
+pub fn valid_idempotency_key(key: &str) -> bool {
+    !key.is_empty()
+        && key.len() <= MAX_IDEMPOTENCY_KEY_LEN
+        && key.bytes().all(|b| (0x21..=0x7e).contains(&b))
+}
+
+/// What a commit records under an idempotency key, in the same atomic step as its state.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IdempotencyEntry {
+    /// The principal that chose the key, as canonical JSON. The tenant is the commit's tenant.
+    pub principal: String,
+    pub key: String,
+    /// Canonical hash of the intent the key was first used with.
+    pub request_hash: String,
+    /// When the key was recorded: the commit's `now`. Retention counts from here.
+    pub recorded_at: Timestamp,
+    /// The first result, kept without the delta's operations, the events and the effects: what
+    /// a caller reads back (output, evidence, new revision and sequence), not what was written.
+    pub result: Transition,
+}
+
+/// What [`Store::idempotent_result`] returns: the first result of a scope.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IdempotentResult {
+    pub request_hash: String,
+    pub result: Transition,
+    pub receipt: Receipt,
+}
+
 /// Everything one accepted transition writes, applied atomically.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Commit {
@@ -120,6 +166,14 @@ pub struct Commit {
     pub journal: JournalEntry,
     /// Principals whose sessions end with this commit.
     pub revoke_sessions: Vec<PrincipalId>,
+    /// The idempotency key of the request, when it had one.
+    #[serde(default)]
+    pub idempotency: Option<IdempotencyEntry>,
+}
+
+/// The scope of an idempotency key within a tenant: the principal, as canonical JSON.
+pub fn idempotency_scope(principal: &Principal) -> String {
+    canon::canonical_json(principal)
 }
 
 impl Commit {
@@ -141,6 +195,22 @@ impl Commit {
             // A principal whose roles changed in any way starts again from a new sign-in (IDN-012):
             // a session issued under the old roles is not carried over to the new ones. The
             // kernel's own effect, for a principal left with no role, is included.
+            idempotency: ctx.idempotency_key.as_ref().map(|key| IdempotencyEntry {
+                principal: idempotency_scope(&ctx.principal),
+                key: key.clone(),
+                request_hash: canon::hash_of(intent),
+                recorded_at: ctx.now,
+                result: Transition {
+                    delta: StateDelta {
+                        ops: Vec::new(),
+                        ..transition.delta.clone()
+                    },
+                    events: Vec::new(),
+                    effects: Vec::new(),
+                    evidence: transition.evidence.clone(),
+                    output: transition.output.clone(),
+                },
+            }),
             revoke_sessions: transition
                 .effects
                 .iter()
@@ -545,6 +615,17 @@ pub trait Store: Send + Sync {
     /// continue the tenant's event sequence without a gap.
     fn commit(&self, commit: &Commit) -> StoreResult<Receipt>;
 
+    /// The first result recorded under an idempotency key for this tenant and principal scope
+    /// (see [`idempotency_scope`]), when the record is younger than [`IDEMPOTENCY_RETENTION_MS`]
+    /// at `now`. `None` for an unknown key, a record past its retention, or an absent tenant.
+    fn idempotent_result(
+        &self,
+        tenant: &TenantId,
+        principal: &str,
+        key: &str,
+        now: Timestamp,
+    ) -> StoreResult<Option<IdempotentResult>>;
+
     /// Events of a tenant with a sequence number above `after`, oldest first.
     fn events_after(
         &self,
@@ -945,6 +1026,10 @@ pub struct Executed {
     pub receipt: Receipt,
     /// Commits that lost a race and were decided again.
     pub conflicts: usize,
+    /// The result is the first result recorded under the request's idempotency key: nothing was
+    /// committed by this call. `transition` then holds the output, evidence and sequence of the
+    /// first call, and no delta operations, events or effects.
+    pub replayed: bool,
 }
 
 /// Decide an intent with the kernel against a snapshot loaded from the store, and commit it.
@@ -957,8 +1042,65 @@ pub fn execute(
     intent: &Intent,
     ctx: &Context,
 ) -> Result<Executed, ExecuteError> {
+    execute_by(store, intent, ctx, None)
+}
+
+/// [`execute`] with a deadline. When the deadline has passed before a commit is attempted, the
+/// intent is not committed and the call fails with [`StoreError::Unavailable`]: a caller that
+/// was already told the request timed out never finds the change made afterwards. A caller that
+/// retries with the same idempotency key learns the outcome of a commit that did go through.
+///
+/// With an idempotency key in `ctx` the store is asked first: a key already recorded for this
+/// tenant and principal returns the first result without deciding or committing again
+/// ([`Executed::replayed`]), and the same key with another intent is refused with
+/// [`ErrorKind::InvalidIntent`]. The key is looked up again after every lost race, so two
+/// concurrent first requests commit once.
+pub fn execute_by(
+    store: &dyn Store,
+    intent: &Intent,
+    ctx: &Context,
+    deadline: Option<Instant>,
+) -> Result<Executed, ExecuteError> {
+    let expired = || {
+        deadline.is_some_and(|at| Instant::now() >= at).then(|| {
+            ExecuteError::Store(StoreError::Unavailable(
+                "the request's deadline passed before the change was committed; nothing was committed"
+                    .into(),
+            ))
+        })
+    };
+    if let Some(key) = &ctx.idempotency_key {
+        if !valid_idempotency_key(key) {
+            return Err(ExecuteError::Domain(DomainError::new(
+                ErrorKind::InvalidIntent,
+                format!(
+                    "an idempotency key is 1 to {MAX_IDEMPOTENCY_KEY_LEN} visible ASCII characters"
+                ),
+            )));
+        }
+    }
     let mut conflicts = 0;
     loop {
+        if let Some(key) = &ctx.idempotency_key {
+            let scope = idempotency_scope(&ctx.principal);
+            if let Some(first) = store.idempotent_result(&ctx.tenant, &scope, key, ctx.now)? {
+                if first.request_hash != canon::hash_of(intent) {
+                    return Err(ExecuteError::Domain(DomainError::new(
+                        ErrorKind::InvalidIntent,
+                        "the idempotency key was used with another request".to_string(),
+                    )));
+                }
+                return Ok(Executed {
+                    transition: first.result,
+                    receipt: first.receipt,
+                    conflicts,
+                    replayed: true,
+                });
+            }
+        }
+        if let Some(error) = expired() {
+            return Err(error);
+        }
         let header = store.load(&ctx.tenant, &[])?;
         let mut needs =
             strata_kernel::needs(header.tenant.as_deref().map(|t| t.schema.as_ref()), intent);
@@ -978,12 +1120,17 @@ pub fn execute(
                 Ok(transition) => break transition,
             }
         };
+        // The last look at the clock before the write: past this point the change is made.
+        if let Some(error) = expired() {
+            return Err(error);
+        }
         match store.commit(&Commit::of(intent, ctx, &transition)) {
             Ok(receipt) => {
                 return Ok(Executed {
                     transition,
                     receipt,
                     conflicts,
+                    replayed: false,
                 })
             }
             Err(StoreError::Conflict { .. }) if conflicts < MAX_CONFLICT_RETRIES => conflicts += 1,

@@ -328,6 +328,7 @@ pub fn generate(
             now: Timestamp(now),
             correlation: format!("sim-{seed}-{serial}"),
             verified_address: None,
+            idempotency_key: None,
         };
         if let Ok((next, _)) = scratch.step(&intent, &context) {
             scratch = next;

@@ -502,6 +502,7 @@ pub fn install<E>(
             now: Timestamp(at),
             correlation: format!("install:{}:{steps}", bundle.id),
             verified_address: None,
+            idempotency_key: None,
         };
         execute(ctx, intent).map_err(|error| InstallError::Step { step, error })
     };
