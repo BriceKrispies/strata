@@ -13,11 +13,16 @@
 //! with `null` yields `null`, `and`/`or` follow Kleene logic. Each use site decides what `null`
 //! means: a constraint is violated only by `false`; a policy, guard or filter passes only on
 //! `true`. A type error is an evaluation error, never a silent `false`.
+//!
+//! Arithmetic (`+`, `-`, `*`, `ms_between`, `days`, `hours`, `minutes`) is checked: an operand or
+//! result outside ±(2^53-1), the range Rust and JavaScript both hold exactly, is the evaluation
+//! error `integer-overflow`, never a wrapped value (D-6540, D-6541); `concat` past 4,096 bytes is
+//! `string-too-long` (D-6542). Like any evaluation error, either fails the decision it belongs to.
 
 use crate::rules::Lookup;
 use crate::schema::{FieldDef, ObjectTypeDef};
 use crate::state::{Need, Principal, Record, RecordExt};
-pub use crate::types::{CmpOp, Expr, Scope};
+pub use crate::types::{ArithOp, CmpOp, DurationUnit, Expr, Scope};
 use crate::types::{
     FieldId, FieldType, FieldTypeExt, ObjectTypeId, RecordId, RoleId, Timestamp, Value,
 };

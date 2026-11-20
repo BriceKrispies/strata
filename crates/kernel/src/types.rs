@@ -20,6 +20,10 @@ pub use strata_model_core::types::{
     ViewSection, WorkflowDef, WorkflowId, WorkflowTransition,
 };
 
+/// The operator of checked arithmetic and the unit of a duration in the rule language (D-6540,
+/// D-6541).
+pub use strata_model_core::types::{ArithOp, DurationUnit};
+
 /// The result of an accepted transition (specification type `transition-result`).
 pub use strata_model_core::types::TransitionResult as Transition;
 

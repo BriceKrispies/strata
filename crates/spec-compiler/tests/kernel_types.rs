@@ -424,6 +424,16 @@ fn exprs() -> Vec<Expr> {
             b(lit_text("x")),
             b(lit_text("y")),
         ),
+        Expr::Arith(ArithOp::Add, b(Expr::Now), b(Expr::Lit(Value::Int(1)))),
+        Expr::Arith(
+            ArithOp::Mul,
+            b(Expr::Lit(Value::Int(2))),
+            b(Expr::Lit(Value::Int(3))),
+        ),
+        Expr::MsBetween(b(Expr::Now), b(Expr::Var(Scope::Record, "ends_at".into()))),
+        Expr::Duration(DurationUnit::Hours, b(Expr::Lit(Value::Int(2)))),
+        Expr::Concat(b(lit_text("a")), b(Expr::Principal)),
+        Expr::Text(b(Expr::Var(Scope::Record, "$id".into()))),
     ]
 }
 

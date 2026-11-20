@@ -116,6 +116,32 @@ fn a_language_specc_cannot_generate_is_refused() {
         "{:?}",
         refusal(&no_bool)
     );
+    // Time arithmetic over a time literal that does not hold an i64 of milliseconds.
+    let unsigned_time = text.replace(
+        "{ \"name\": \"Time\", \"newtype\": true, \"fields\": [{ \"name\": \"value\", \"type\": \"i64\" }] }",
+        "{ \"name\": \"Time\", \"newtype\": true, \"fields\": [{ \"name\": \"value\", \"type\": \"u64\" }] }",
+    );
+    assert_ne!(unsigned_time, text);
+    assert!(
+        refusal(&unsigned_time)
+            .iter()
+            .any(|d| d.contains("specc.language-unsupported") && d.contains("time arithmetic")),
+        "{:?}",
+        refusal(&unsigned_time)
+    );
+    // The shape of an operand as the result of a primitive the checker does not check in turn.
+    let operand_result = text.replace(
+        "\"operands\": [[\"str\", \"list\"], \"any\"], \"result\": \"bool\"",
+        "\"operands\": [[\"str\", \"list\"], \"any\"], \"result\": \"operand:1\"",
+    );
+    assert_ne!(operand_result, text);
+    assert!(
+        refusal(&operand_result)
+            .iter()
+            .any(|d| d.contains("specc.language-unsupported") && d.contains("operand:1")),
+        "{:?}",
+        refusal(&operand_result)
+    );
     // The fixture itself generates.
     assert_eq!(refusal(&text), Vec::<String>::new());
 }
@@ -277,6 +303,31 @@ const MORE: &[&str] = &[
     "now",
     "if(true, 1, 'a')",
     "if(new.featured, new.title, null)",
+    // Checked arithmetic, time arithmetic and text (D-6540 to D-6543, WG-5064).
+    "new.rank + 1 > 4 and new.rank * 2 - 3 == 5",
+    "new.rank-1",
+    "new.rank - -1",
+    "new.published_at + days(1) > now and now - hours(2) < new.published_at",
+    "ms_between(new.published_at, now) >= minutes(0)",
+    "9007199254740991 + 1",
+    "-9007199254740991 - 1",
+    "4503599627370496 * 2",
+    "9007199254740991 * 9007199254740991",
+    "days(104249992)",
+    "ms_between(time(-9007199254740991), time(1))",
+    "concat(new.title, concat(':', text(new.rank)))",
+    "text(new.author) == '7' and text(new.featured) == 'true' and text(new.published_at) == '500'",
+    "text(new.tags)",
+    "text(null)",
+    "new.title + 1",
+    "1 + new.published_at",
+    "new.published_at - new.published_at",
+    "new.published_at * 2",
+    "minutes(new.title)",
+    "ms_between(1, now)",
+    "concat(new.title, 1)",
+    "concat(new.title, null)",
+    "param.q + 1",
 ];
 
 const BAD: &[&str] = &[
@@ -295,6 +346,9 @@ const BAD: &[&str] = &[
     "99999999999999999999",
     "(true",
     "has_role(",
+    "1 +",
+    "days(1, 2)",
+    "concat('a')",
 ];
 
 #[test]

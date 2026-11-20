@@ -295,7 +295,75 @@ pub enum Prim {
     Literal,
     /// `list-literal`
     ListLiteral,
+    /// `add-checked`: int + int, or timestamp + int milliseconds (D-6540, D-6541).
+    AddChecked,
+    /// `sub-checked`: int - int, or timestamp - int milliseconds.
+    SubChecked,
+    /// `mul-checked`: int * int.
+    MulChecked,
+    /// `time-difference`: `ms_between(a, b)`, b minus a in milliseconds.
+    TimeDifference,
+    /// `days-ms`: n times 86,400,000.
+    DaysMs,
+    /// `hours-ms`: n times 3,600,000.
+    HoursMs,
+    /// `minutes-ms`: n times 60,000.
+    MinutesMs,
+    /// `concat-checked`: two strings joined, at most 4,096 bytes (D-6542).
+    ConcatChecked,
+    /// `to-text`: an int, timestamp, reference, bool or string as text.
+    ToText,
 }
+
+impl Prim {
+    /// The checked integer primitives: every operand and result in ±(2^53-1), else
+    /// `integer-overflow` (D-6540).
+    fn checked_int(self) -> bool {
+        matches!(
+            self,
+            Prim::AddChecked
+                | Prim::SubChecked
+                | Prim::MulChecked
+                | Prim::TimeDifference
+                | Prim::DaysMs
+                | Prim::HoursMs
+                | Prim::MinutesMs
+        )
+    }
+
+    /// The primitives whose operands the checker checks one after another, which may give the
+    /// shape of an operand as their result (`operand:<n>`).
+    fn checked_in_turn(self) -> bool {
+        matches!(
+            self,
+            Prim::Not3
+                | Prim::IsNull
+                | Prim::Len
+                | Prim::Lower
+                | Prim::StartsWith
+                | Prim::IsSlug
+                | Prim::AddChecked
+                | Prim::SubChecked
+                | Prim::MulChecked
+                | Prim::TimeDifference
+                | Prim::DaysMs
+                | Prim::HoursMs
+                | Prim::MinutesMs
+                | Prim::ConcatChecked
+                | Prim::ToText
+        )
+    }
+}
+
+/// The largest magnitude of an integer of checked arithmetic, 2^53-1 (D-6540, D-5004), which
+/// Rust's `i64` and JavaScript's numbers both hold exactly.
+pub const SAFE_INT: i64 = 9_007_199_254_740_991;
+/// The longest string `concat` may build, in bytes of UTF-8 (D-6542).
+pub const MAX_TEXT_BYTES: usize = 4096;
+/// The evaluation error of checked arithmetic outside ±[`SAFE_INT`].
+pub const INTEGER_OVERFLOW: &str = "integer-overflow";
+/// The evaluation error of a `concat` longer than [`MAX_TEXT_BYTES`].
+pub const STRING_TOO_LONG: &str = "string-too-long";
 
 /// How many expression operands a primitive takes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -372,6 +440,15 @@ pub const PRIMITIVES: &[PrimitiveInfo] = &[
     prim("through", Prim::Through, Arity::Fixed(0), &["scope"], "total", Some("record-scope"), "crates/kernel/src/expr.rs: eval, Expr::Through"),
     prim("literal", Prim::Literal, Arity::Fixed(0), &["literal"], "total", None, "crates/kernel/src/expr.rs: eval, Expr::Lit; write_value; crates/substrate/src/syntax.rs: tokenize, primary"),
     prim("list-literal", Prim::ListLiteral, Arity::Fixed(0), &["literal"], "total", None, "crates/kernel/src/expr.rs: eval, Expr::Lit(Value::List); crates/substrate/src/syntax.rs: primary, \"[\""),
+    prim("add-checked", Prim::AddChecked, Arity::Fixed(2), &["infix"], "propagate", None, "crates/kernel/src/expr.rs: eval, Expr::Arith(ArithOp::Add) -> checked"),
+    prim("sub-checked", Prim::SubChecked, Arity::Fixed(2), &["infix"], "propagate", None, "crates/kernel/src/expr.rs: eval, Expr::Arith(ArithOp::Sub) -> checked"),
+    prim("mul-checked", Prim::MulChecked, Arity::Fixed(2), &["infix"], "propagate", None, "crates/kernel/src/expr.rs: eval, Expr::Arith(ArithOp::Mul) -> checked"),
+    prim("time-difference", Prim::TimeDifference, Arity::Fixed(2), &["call"], "propagate", None, "crates/kernel/src/expr.rs: eval, Expr::MsBetween -> checked"),
+    prim("days-ms", Prim::DaysMs, Arity::Fixed(1), &["call"], "propagate", None, "crates/kernel/src/expr.rs: eval, Expr::Duration(DurationUnit::Days) -> checked"),
+    prim("hours-ms", Prim::HoursMs, Arity::Fixed(1), &["call"], "propagate", None, "crates/kernel/src/expr.rs: eval, Expr::Duration(DurationUnit::Hours) -> checked"),
+    prim("minutes-ms", Prim::MinutesMs, Arity::Fixed(1), &["call"], "propagate", None, "crates/kernel/src/expr.rs: eval, Expr::Duration(DurationUnit::Minutes) -> checked"),
+    prim("concat-checked", Prim::ConcatChecked, Arity::Fixed(2), &["call"], "propagate", None, "crates/kernel/src/expr.rs: eval, Expr::Concat"),
+    prim("to-text", Prim::ToText, Arity::Fixed(1), &["call"], "propagate", None, "crates/kernel/src/expr.rs: eval, Expr::Text"),
 ];
 
 /// The catalogue entry of a primitive name.
@@ -1280,6 +1357,14 @@ fn resolve<'a>(spec: &'a Spec, lang: &'a Language) -> Result<Plan<'a>, Vec<Diagn
             }
             _ => match op.result.as_deref() {
                 Some(r) if shape_ok(r) => {}
+                // The shape of an operand (`operand:1` of + and -), for a primitive whose
+                // operands the checker checks one after another.
+                Some(r) if operand_ref(r).is_some() => {
+                    let n = operand_ref(r).unwrap_or_default();
+                    if !info.prim.checked_in_turn() || n == 0 || n > expected_operands {
+                        err(LANGUAGE_UNSUPPORTED, format!("operator {name} has the result {r}; specc gives the shape of an operand only for a primitive whose operands are checked one after another, and only of an operand it has."));
+                    }
+                }
                 other => err(
                     LANGUAGE_INVALID,
                     format!(
@@ -1492,12 +1577,36 @@ fn resolve<'a>(spec: &'a Spec, lang: &'a Language) -> Result<Plan<'a>, Vec<Diagn
             Prim::Param | Prim::Var => &["null"],
             Prim::Through => &["null", "ref"],
             Prim::Literal | Prim::ListLiteral => &[],
+            Prim::AddChecked
+            | Prim::SubChecked
+            | Prim::MulChecked
+            | Prim::DaysMs
+            | Prim::HoursMs
+            | Prim::MinutesMs => &["null", "int"],
+            Prim::TimeDifference => &["null", "int", "time"],
+            Prim::ConcatChecked | Prim::ToText => &["null", "string"],
         };
         for f in needs {
             if !has_form(*f) {
                 err(LANGUAGE_UNSUPPORTED, format!("operator {} needs values of the {f} literal form, which no literal operator gives.", o.op.name));
             }
         }
+    }
+    // Time arithmetic computes on the time payload as an i64 of milliseconds.
+    let time_payload = value_forms
+        .iter()
+        .find(|(_, f)| f == "time")
+        .and_then(|(name, _)| value_variants.iter().find(|v| &v.name == name))
+        .and_then(|vv| vv.fields.first())
+        .map(|f| TypeRef::parse(&f.type_name));
+    let time_arithmetic = ops.iter().any(|o| {
+        matches!(
+            o.info.prim,
+            Prim::AddChecked | Prim::SubChecked | Prim::TimeDifference
+        )
+    });
+    if time_arithmetic && time_payload.is_some_and(|t| t != TypeRef::Builtin(Builtin::I64)) {
+        err(LANGUAGE_UNSUPPORTED, "time arithmetic needs the time literal's value variant to hold an i64 of milliseconds.".to_string());
     }
     if ops.iter().any(|o| o.info.prim == Prim::Contains)
         && !value_shapes
@@ -1560,6 +1669,11 @@ fn is_text(spec: &Spec, t: &TypeRef) -> bool {
         }),
         _ => false,
     }
+}
+
+/// `n` of a result written `operand:<n>`.
+fn operand_ref(result: &str) -> Option<usize> {
+    result.strip_prefix("operand:")?.parse().ok()
 }
 
 fn is_word(token: &str) -> bool {
@@ -2204,6 +2318,44 @@ impl<'a> Plan<'a> {
         };
         let levels = self.level_fns();
         let primary = self.primary_fn();
+        // With a binary `-`, a `-` before a digit is the sign of a literal only where no operand
+        // ends: `a - 1` and `a -1` subtract, `-1` and `(x - -1)` hold a negative literal (D-6543).
+        let minus = self.ops.iter().any(|o| {
+            matches!(&o.form, Form::Binary { symbol: true, token, .. } if token.starts_with('-'))
+        });
+        let (sign_test, ends_operand) = if minus {
+            let words: Vec<Literal> = self
+                .ops
+                .iter()
+                .filter_map(|o| match &o.form {
+                    Form::Binary {
+                        symbol: false,
+                        token,
+                        ..
+                    }
+                    | Form::Prefix { token, .. } => Some(lit_str(token)),
+                    _ => None,
+                })
+                .collect();
+            let n = Literal::usize_unsuffixed(words.len());
+            (
+                quote! { && !ends_operand(tokens.last()) },
+                quote! {
+                    /// Whether a token ends an operand, so that a `-` after it is the binary operator rather than the sign of a literal.
+                    fn ends_operand(token: Option<&Token>) -> bool {
+                        const WORD_OPERATORS: [&str; #n] = [#(#words),*];
+                        match token {
+                            Some(Token::Int(_) | Token::Str(_)) => true,
+                            Some(Token::Sym(s)) => *s == ")" || *s == "]",
+                            Some(Token::Ident(w)) => !WORD_OPERATORS.contains(&w.as_str()),
+                            None => false,
+                        }
+                    }
+                },
+            )
+        } else {
+            (TokenStream::new(), TokenStream::new())
+        };
         let symbols: Vec<Literal> = symbols.iter().map(|s| lit_str(s)).collect();
         quote! {
             #[derive(Clone, Debug, PartialEq)]
@@ -2213,6 +2365,8 @@ impl<'a> Plan<'a> {
                 Str(String),
                 Sym(&'static str),
             }
+
+            #ends_operand
 
             fn tokenize(source: &str) -> Result<Vec<Token>, String> {
                 const SYMBOLS: [&str; #count] = [#(#symbols),*];
@@ -2232,7 +2386,7 @@ impl<'a> Plan<'a> {
                         }
                         tokens.push(Token::Ident(chars[start..i].iter().collect()));
                     } else if c.is_ascii_digit()
-                        || (c == '-' && chars.get(i + 1).is_some_and(char::is_ascii_digit))
+                        || (c == '-' && chars.get(i + 1).is_some_and(char::is_ascii_digit) #sign_test)
                     {
                         let start = i;
                         i += 1;
@@ -3110,6 +3264,38 @@ impl<'a> Plan<'a> {
                 }
             });
         }
+        if self.ops.iter().any(|o| o.info.prim.checked_int()) {
+            let safe_int = Literal::i64_unsuffixed(SAFE_INT);
+            let overflow = lit_str(INTEGER_OVERFLOW);
+            helpers.push(quote! {
+                /// The largest magnitude of an integer of checked arithmetic, 2^53-1: what Rust and JavaScript both hold exactly.
+                const SAFE_INT: i64 = #safe_int;
+
+                /// An operand of checked arithmetic: within ±(2^53-1), or the error `integer-overflow`.
+                fn safe(value: i64) -> Result<i64, EvalError> {
+                    if (-SAFE_INT..=SAFE_INT).contains(&value) {
+                        Ok(value)
+                    } else {
+                        Err(EvalError(#overflow.to_string()))
+                    }
+                }
+
+                /// The result of checked arithmetic: an `i64` operation that did not overflow and lies within ±(2^53-1), or the error `integer-overflow`. Never wrapped or saturated.
+                fn checked(value: Option<i64>) -> Result<i64, EvalError> {
+                    match value {
+                        Some(value) => safe(value),
+                        None => Err(EvalError(#overflow.to_string())),
+                    }
+                }
+            });
+        }
+        if self.uses(Prim::ConcatChecked) {
+            let max = Literal::usize_unsuffixed(MAX_TEXT_BYTES);
+            helpers.push(quote! {
+                /// The longest string `concat` builds, in bytes of UTF-8.
+                const MAX_TEXT_BYTES: usize = #max;
+            });
+        }
         let b = self.value("bool");
         quote! {
             #(#helpers)*
@@ -3303,6 +3489,109 @@ impl<'a> Plan<'a> {
                         #b(true) => eval(#t, env)?,
                         #b(false) | #null => eval(#otherwise, env)?,
                         other => return Err(type_error(#label, &other)),
+                    }
+                }
+            }
+            // Both operands first, left to right; then nulls; then the left's kind, then the
+            // right's; then the range of each operand and of the result.
+            Prim::AddChecked | Prim::SubChecked | Prim::MulChecked => {
+                let (l, r) = (e(0), e(1));
+                let i = self.value("int");
+                let op = match o.info.prim {
+                    Prim::AddChecked => quote! { checked_add },
+                    Prim::SubChecked => quote! { checked_sub },
+                    _ => quote! { checked_mul },
+                };
+                // A timestamp moves by milliseconds under + and -; * takes ints only.
+                let (time_arm, left_ok) =
+                    if o.info.prim != Prim::MulChecked && self.has_form("time") {
+                        let t = self.value("time");
+                        (
+                            quote! { (#t(a), #i(b)) => #t(checked(safe(a)?.#op(safe(b)?))?), },
+                            quote! { #i(_) | #t(_) },
+                        )
+                    } else {
+                        (TokenStream::new(), quote! { #i(_) })
+                    };
+                quote! {
+                    match (eval(#l, env)?, eval(#r, env)?) {
+                        (#null, _) | (_, #null) => #null,
+                        (#i(a), #i(b)) => #i(checked(safe(a)?.#op(safe(b)?))?),
+                        #time_arm
+                        (#left_ok, other) => return Err(type_error(#label, &other)),
+                        (other, _) => return Err(type_error(#label, &other)),
+                    }
+                }
+            }
+            Prim::TimeDifference => {
+                let (from, to) = (e(0), e(1));
+                let (i, t) = (self.value("int"), self.value("time"));
+                quote! {
+                    match (eval(#from, env)?, eval(#to, env)?) {
+                        (#null, _) | (_, #null) => #null,
+                        (#t(a), #t(b)) => #i(checked(safe(b)?.checked_sub(safe(a)?))?),
+                        (#t(_), other) => return Err(type_error(#label, &other)),
+                        (other, _) => return Err(type_error(#label, &other)),
+                    }
+                }
+            }
+            Prim::DaysMs | Prim::HoursMs | Prim::MinutesMs => {
+                let x = e(0);
+                let i = self.value("int");
+                let unit = Literal::i64_unsuffixed(match o.info.prim {
+                    Prim::DaysMs => 86_400_000,
+                    Prim::HoursMs => 3_600_000,
+                    _ => 60_000,
+                });
+                quote! {
+                    match eval(#x, env)? {
+                        #null => #null,
+                        #i(n) => #i(checked(safe(n)?.checked_mul(#unit))?),
+                        other => return Err(type_error(#label, &other)),
+                    }
+                }
+            }
+            Prim::ConcatChecked => {
+                let (l, r) = (e(0), e(1));
+                let s = self.value("string");
+                let too_long = lit_str(STRING_TOO_LONG);
+                quote! {
+                    match (eval(#l, env)?, eval(#r, env)?) {
+                        (#null, _) | (_, #null) => #null,
+                        (#s(a), #s(b)) => {
+                            let joined = a + b.as_str();
+                            if joined.len() > MAX_TEXT_BYTES {
+                                return Err(EvalError(#too_long.to_string()));
+                            }
+                            #s(joined)
+                        }
+                        (#s(_), other) => return Err(type_error(#label, &other)),
+                        (other, _) => return Err(type_error(#label, &other)),
+                    }
+                }
+            }
+            Prim::ToText => {
+                let x = e(0);
+                let s = self.value("string");
+                let mut arms = vec![quote! { #null => #null, }, quote! { #s(s) => #s(s), }];
+                for form in ["bool", "int", "time", "ref"] {
+                    if self.has_form(form) {
+                        let path = self.value(form);
+                        arms.push(quote! { #path(x) => #s(x.to_string()), });
+                    }
+                }
+                // Every other value (a list) is an error; the arm is left out when no value is left.
+                let covered = ["null", "string", "bool", "int", "time", "ref"];
+                if self
+                    .value_forms
+                    .iter()
+                    .any(|(_, f)| !covered.contains(&f.as_str()))
+                {
+                    arms.push(quote! { other => return Err(type_error(#label, &other)), });
+                }
+                quote! {
+                    match eval(#x, env)? {
+                        #(#arms)*
                     }
                 }
             }
@@ -3571,7 +3860,32 @@ impl<'a> Plan<'a> {
                     if then == #any { otherwise } else { then }
                 }
             }
-            // One operand after another: not, is_null, len, lower, is_slug, starts_with.
+            // One operand after another, giving the shape of an operand (+ and - give the
+            // shape of the left: int, time, or the any shape).
+            _ if o.op.result.as_deref().and_then(operand_ref).is_some() => {
+                let n = o.op.result.as_deref().and_then(operand_ref).unwrap_or(1);
+                let shapes: Vec<Ident> = (0..o.exprs.len())
+                    .map(|k| format_ident!("s{}", k))
+                    .collect();
+                let checks: Vec<TokenStream> = (0..o.exprs.len())
+                    .map(|k| {
+                        let x = e(k);
+                        let s = &shapes[k];
+                        let ex = self.expect(quote! { #s }, &operands[k], &token);
+                        quote! {
+                            let #s = check(#x, env)?;
+                            #ex
+                        }
+                    })
+                    .collect();
+                let result = &shapes[n - 1];
+                quote! {
+                    #(#checks)*
+                    #result
+                }
+            }
+            // One operand after another: not, is_null, len, lower, is_slug, starts_with, the
+            // checked arithmetic, ms_between, the durations, concat and text.
             _ => {
                 let checks: Vec<TokenStream> = (0..o.exprs.len())
                     .map(|k| {
