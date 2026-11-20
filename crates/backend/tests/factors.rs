@@ -249,6 +249,7 @@ impl Backend {
     }
 }
 
+/// Verifies: IDN-018
 /// IDN-018: a first factor alone yields no session when the account has a second factor; the
 /// second factor yields it.
 #[tokio::test]
@@ -275,6 +276,7 @@ async fn a_first_factor_alone_yields_no_session_and_the_second_yields_it() {
     assert_eq!(status, 401);
 }
 
+/// Verifies: IDN-018, IDN-267
 /// IDN-018: the stage is the same for every method, so a method that proves one factor does not
 /// get past it. An emailed link is such a method.
 #[tokio::test]
@@ -430,6 +432,7 @@ async fn a_link_request_for_an_unknown_address_writes_like_one_for_a_known_addre
     );
 }
 
+/// Verifies: IDN-018
 /// IDN-018: a code that was used is refused within its time step.
 #[tokio::test]
 async fn a_code_that_was_used_is_refused_again() {

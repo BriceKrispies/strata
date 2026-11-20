@@ -83,6 +83,8 @@ fn engine(secret: Vec<u8>) -> Option<TOTP> {
 
 /// The time step a code belongs to within the skew of `now_ms`, or `None`. Every step in the
 /// window is compared, in constant time, whichever one matches.
+///
+/// Implements: H-018
 pub fn matching_step(totp: &TOTP, code: &str, now_ms: i64) -> Option<i64> {
     let code = code.trim();
     if code.len() != DIGITS || !code.bytes().all(|b| b.is_ascii_digit()) {
