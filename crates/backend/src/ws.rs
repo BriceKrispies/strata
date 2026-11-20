@@ -494,6 +494,7 @@ pub async fn serve(
     let mut events = app.hub.events.subscribe(&identity.tenant);
     let mut segment_events = app.hub.segments.subscribe(&identity.tenant);
     let mut runs = app.hub.runs.subscribe();
+    let mut notices = app.hub.notices.subscribe(&identity.tenant);
     let mut sessions = app.hub.sessions.subscribe();
 
     let id = format!("c_{}", crate::auth::random_hex(6).unwrap_or_default());
@@ -602,6 +603,26 @@ pub async fn serve(
                     }
                 }
                 Err(_) => Ok(()),
+            },
+            pushed = notices.recv() => match pushed {
+                // Only the recipient's own connections hear of a notice (NTF-1569).
+                Ok(push) if crate::inbox::visible_to(&push, &conn.identity) => {
+                    conn.send(ServerMessage::Inbox {
+                        kind: push.kind.to_string(),
+                        notice: push.id.clone(),
+                        topic: push.topic.clone(),
+                        category: push.category.clone(),
+                        at: push.at,
+                        unread: push.unread,
+                    })
+                }
+                Ok(_) => Ok(()),
+                // Notices were missed: the client reads its inbox again, the socket stays.
+                Err(RecvError::Lagged(_)) => {
+                    let head = conn.known_head;
+                    conn.send(ServerMessage::Resync { reason: "inbox notices were missed".into(), head })
+                }
+                Err(RecvError::Closed) => Err(Closed),
             },
             ended = sessions.recv() => match ended {
                 Ok((session, state)) if conn.identity.session.as_ref().is_some_and(|s| s.id == session) => {

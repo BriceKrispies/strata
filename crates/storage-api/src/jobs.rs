@@ -217,6 +217,24 @@ pub enum JobWork {
     /// mail dispatcher (D-451, D-6561, EML-005). `request` is the dispatcher's request
     /// (`strata_backend::dispatch::MailRequest`) as JSON, kept as given.
     Mail { request: serde_json::Value },
+    /// One batch of at most a hundred members of a segment that a notice is sent to
+    /// (`send-notice`, NTF-1569): the worker makes the notice for each member of the batch, each
+    /// once for the send key, and creates the job of the next batch. The store keeps `notice` as
+    /// the backend wrote it.
+    NoticeBatch {
+        /// The key of the send, which with the recipient keys each notice (CT-183).
+        key: String,
+        /// The person that sent it: the members are read as that person.
+        sender: PrincipalId,
+        segment: strata_kernel::segments::SegmentId,
+        /// The last member of the previous batch; none for the first.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        after: Option<PrincipalId>,
+        /// The notice, as `crate::inbox::Notice` encodes it.
+        notice: serde_json::Value,
+        /// The position of the batch in its send, from one.
+        number: u64,
+    },
 }
 
 /// A job to create: its key, what it does, when it is due and how it is retried.

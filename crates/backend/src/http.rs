@@ -1128,6 +1128,19 @@ pub fn router(app: Shared) -> Router {
         .route("/internal/usage", post(crate::quota::usage_route))
         .route("/internal/flags", post(crate::quota::flags_route))
         .route("/internal/flags/set", post(crate::quota::flags_set_route))
+        .route("/internal/inbox/list", post(crate::inbox::list))
+        .route("/internal/inbox/count", post(crate::inbox::count))
+        .route("/internal/inbox/read", post(crate::inbox::set_read))
+        .route("/internal/inbox/remove", post(crate::inbox::remove))
+        .route("/internal/inbox/send", post(crate::inbox::send))
+        .route(
+            "/internal/inbox/preferences",
+            post(crate::inbox::set_preference),
+        )
+        .route(
+            "/internal/inbox/templates",
+            post(crate::inbox::define_template),
+        )
         .route("/internal/segments/define", post(crate::segments::define))
         .route("/internal/segments/remove", post(crate::segments::remove))
         .route("/internal/segments/members", post(crate::segments::members))

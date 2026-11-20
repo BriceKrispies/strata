@@ -2771,6 +2771,39 @@ async fn mail_subscription(
     Ok(uncached(reply))
 }
 
+/// The inbox endpoints (CT-182, CT-821 to CT-824, CT-826), each relayed to the backend, which
+/// acts for the signed-in person only. A change passes the write guard; a read carries its inputs
+/// as a body. Sending a notice (CT-183) is a local contract and has no route here.
+const INBOX_ROUTES: &[(&str, &str, bool)] = &[
+    ("list", "/internal/inbox/list", false),
+    ("count", "/internal/inbox/count", false),
+    ("read", "/internal/inbox/read", true),
+    ("remove", "/internal/inbox/remove", true),
+    ("preferences", "/internal/inbox/preferences", true),
+    ("templates", "/internal/inbox/templates", true),
+];
+
+async fn inbox(
+    State(bff): State<Shared>,
+    headers: HeaderMap,
+    Path(action): Path<String>,
+    Json(body): Json<Json_>,
+) -> Result<Response, Failure> {
+    let visit = visit(&bff, &headers)?;
+    let Some((_, path, write)) = INBOX_ROUTES.iter().find(|(name, _, _)| *name == action) else {
+        return Err(Failure::new(
+            ErrorCode::NotFound,
+            "No such endpoint.",
+            &visit.correlation,
+        ));
+    };
+    if *write {
+        guard_write(&bff, &visit, &headers).await?;
+    }
+    let reply: Json_ = backend(&bff, &visit, path, &body).await?;
+    Ok(uncached(reply))
+}
+
 /// What the desk may change of the products installed in the tenant, and where it is at the
 /// backend: install-bundle, upgrade-bundle and remove-bundle (CT-236, CT-835, CT-836). Each is the
 /// owner's with a fresh factor, and the backend checks that again.
@@ -2881,6 +2914,7 @@ pub fn router(bff: Shared) -> Router {
         .route("/operations/invoke", post(operations_invoke))
         .route("/ledger/:op", post(ledger))
         .route("/segments/:action", post(segments))
+        .route("/inbox/:action", post(inbox))
         .route("/preview", post(preview))
         .route("/lab/overview", get(lab_overview))
         .route("/lab/run", post(lab_run))

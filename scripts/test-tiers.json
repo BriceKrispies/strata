@@ -50,6 +50,14 @@
     },
     {
       "package": "strata-backend",
+      "target": "inbox",
+      "tier": "full",
+      "seconds": null,
+      "unmeasured": true,
+      "reason": "Not yet measured: the inbox on real sockets, including a send to a segment of 205 members that three worker jobs finish; full tier until it is measured"
+    },
+    {
+      "package": "strata-backend",
       "target": "lab_revision",
       "tier": "routine",
       "seconds": null,
