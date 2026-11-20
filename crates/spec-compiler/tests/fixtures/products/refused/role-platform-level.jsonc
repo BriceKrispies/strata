@@ -1,0 +1,5 @@
+{
+  // Refused: a product role at platform level (layer.platform-power).
+  "product": { "id": "badges", "name": "Badges", "imports": { "spec": "../../../../../../specifications/spec.jsonc", "entities": [] } },
+  "roles": [ { "id": "badges-curator", "name": "Badge curator", "level": "platform", "holders": ["person"], "capabilities": [] } ]
+}
