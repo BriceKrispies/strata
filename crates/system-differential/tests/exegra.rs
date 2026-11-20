@@ -1031,7 +1031,22 @@ async fn the_system_host_runs_every_scenario_as_exegra_does() {
     let mut diverged = Vec::new();
     // First every plan, then every trace in one go, then the comparisons.
     let mut plans = Vec::new();
+    // `scripts/test-module.mjs` names one module's scenarios in a JSON file; only those run, and the
+    // whole-specification allow-list and floor below are not checked then (WG-4991).
+    let only: Option<BTreeSet<String>> =
+        std::env::var_os("STRATA_MODULE_SCENARIOS_FILE").map(|file| {
+            let text = std::fs::read_to_string(&file)
+                .unwrap_or_else(|e| panic!("cannot read {file:?}: {e}"));
+            let ids: Vec<String> = serde_json::from_str(&text)
+                .unwrap_or_else(|e| panic!("{file:?} is not a JSON array of scenario ids: {e}"));
+            ids.into_iter().collect()
+        });
     for scenario in all["scenarios"].as_array().into_iter().flatten() {
+        if let Some(only) = &only {
+            if !scenario["id"].as_str().is_some_and(|id| only.contains(id)) {
+                continue;
+            }
+        }
         let drives = scenario["behaviors"]
             .as_array()
             .into_iter()
@@ -1091,6 +1106,10 @@ async fn the_system_host_runs_every_scenario_as_exegra_does() {
 "
             )
     );
+
+    if only.is_some() {
+        return;
+    }
 
     // Every scenario the host does not run is on the checked-in list, with its reason, and every
     // entry of the list still names a scenario that is not run.
