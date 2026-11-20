@@ -2308,7 +2308,7 @@ mod tests {
     #[test]
     fn a_served_contract_must_state_a_tenant_scope_the_authorizer_can_enforce() {
         let s = spec(
-            r#"{ "id": "a", "name": "A", "realisation": "generated", "implementedBy": "svc", "exposure": "internal", "tenantScope": "platform", "auth": { "scheme": "service" } },
+            r#"{ "id": "a", "name": "A", "realisation": "generated", "implementedBy": "svc", "exposure": "internal", "auth": { "scheme": "service" } },
                { "id": "b", "name": "B", "realisation": "generated", "implementedBy": "svc", "exposure": "public", "tenantScope": "platform", "auth": { "scheme": "anonymous" } },
                { "id": "c", "name": "C", "realisation": "generated", "implementedBy": "svc", "exposure": "public", "tenantScope": "none", "auth": { "scheme": "session", "tenantPolicies": true } },
                { "id": "d", "name": "D", "realisation": "generated", "implementedBy": "svc", "exposure": "public", "tenantScope": "request", "auth": { "scheme": "session", "tenantPolicies": true } },
@@ -2327,6 +2327,23 @@ mod tests {
                 (TENANT_SCOPE_AUTH.to_string(), "c".to_string()),
             ]
         );
+    }
+
+    /// A served contract that states neither an exposure nor a tenant scope does not escape: the
+    /// absent exposure is read as none (not as local), and `contract.exposure` refuses it.
+    #[test]
+    fn a_served_contract_with_no_exposure_and_no_tenant_scope_is_refused() {
+        let s = spec(
+            r#"{ "id": "a", "name": "A", "realisation": "generated", "implementedBy": "svc", "auth": { "scheme": "service" } },
+               { "id": "b", "name": "B", "realisation": "generated", "implementedBy": "svc", "exposure": "internal", "tenantScope": "platform", "auth": { "scheme": "service" } }"#,
+        );
+        assert_eq!(s.contracts[0].exposure, None);
+        let found: Vec<(String, String)> = RoutesBackend
+            .check(&s)
+            .into_iter()
+            .map(|d| (d.code, d.entity))
+            .collect();
+        assert_eq!(found, [(EXPOSURE.to_string(), "a".to_string())]);
     }
 
     /// The authorizer calls the one tenant check of `Access`, and a call outside any tenant

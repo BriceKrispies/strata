@@ -56,7 +56,10 @@ fn json_equality_in_javascript_is_structural() {
     assert!(eq.ends_with("(j, k)"), "{eq}");
     assert!(eq.contains("Object.keys"), "{eq}");
     let ne = js("j != null", &e);
-    assert!(ne.starts_with('!') && ne.ends_with("(j, null)"), "{ne}");
+    // Nothing but `null` equals the `null` literal, so that comparison stays an identity check.
+    assert_eq!(ne, "j !== null");
+    let eq_null = js("j == null", &e);
+    assert_eq!(eq_null, "j === null");
 }
 
 #[test]

@@ -423,6 +423,9 @@ struct Scenario {
     machines: Vec<String>,
     /// Why the scenario cannot be replayed against generated code, if it cannot.
     undrivable: Option<String>,
+    /// The scenario declares `stopAt`: its run ends `stopped` at that time (a machine whose
+    /// timer re-arms itself never goes quiet), not quiescent.
+    stops: bool,
 }
 
 struct Specification {
@@ -476,22 +479,45 @@ fn info_of(spec: &Value, b: &Value) -> Info {
             received.insert(ignored.as_str().unwrap().to_string());
         }
     }
-    let key = b["instances"]["key"]
-        .as_str()
-        .or_else(|| b["storage"]["key"].as_str());
+    // The key of the machine's records: one field name, or several for a composite key (an array
+    // of names, whose generated key is the tuple of its fields, or the field itself when one).
+    let key_names = |v: &Value| -> Vec<String> {
+        match v {
+            Value::String(name) => vec![name.clone()],
+            Value::Array(names) => names
+                .iter()
+                .filter_map(|n| n.as_str().map(str::to_string))
+                .collect(),
+            _ => Vec::new(),
+        }
+    };
+    let mut keys = key_names(&b["instances"]["key"]);
+    if keys.is_empty() {
+        keys = key_names(&b["storage"]["key"]);
+    }
     let record = b["storage"]["record"]
         .as_str()
         .or_else(|| b["instances"]["storedIn"].as_str());
-    let key_type = items(spec, "records")
+    let key_values: Vec<Value> = keys
         .iter()
-        .find(|r| Some(r["id"].as_str().unwrap_or_default()) == record)
-        .and_then(|r| {
-            items(r, "fields")
+        .map(|key| {
+            items(spec, "records")
                 .iter()
-                .find(|f| f["name"].as_str() == key)
+                .find(|r| Some(r["id"].as_str().unwrap_or_default()) == record)
+                .and_then(|r| {
+                    items(r, "fields")
+                        .iter()
+                        .find(|f| f["name"].as_str() == Some(key.as_str()))
+                })
+                .and_then(|f| f["type"].as_str())
+                .map_or(json!("placeholder"), |t| placeholder(spec, t, 0))
         })
-        .and_then(|f| f["type"].as_str());
-    let placeholder_key = key_type.map_or(json!("placeholder"), |t| placeholder(spec, t, 0));
+        .collect();
+    let placeholder_key = match key_values.as_slice() {
+        [] => json!("placeholder"),
+        [one] => one.clone(),
+        several => Value::Array(several.to_vec()),
+    };
     Info {
         id,
         instanced: b.get("instances").is_some(),
@@ -549,6 +575,7 @@ fn read_specification(root: &Path) -> Specification {
             id: sc["id"].as_str().unwrap().to_string(),
             machines,
             undrivable,
+            stops: sc.get("stopAt").is_some_and(|v| !v.is_null()),
         });
     }
     Specification {
@@ -690,7 +717,27 @@ fn wire_event(spec: &Specification, event: &str, payload: &Value) -> Value {
     json!({ "event": event, "payload": values.payload(event, &payload) })
 }
 
+/// Compares one scenario's trace with the generated machines. The generated machines count in
+/// milliseconds and the trace's times are compared with them as they stand, so a disagreement in a
+/// scenario whose clock is not in milliseconds is reported with that as its likely cause (a
+/// scenario that names no unit and needs format 2 counts in microseconds, which makes every timer
+/// 1000 times shorter in the generated machine than in Exegra's run).
 fn compare_scenario(
+    spec: &Specification,
+    engines: &mut Engines,
+    scenario: &Scenario,
+    trace: &Value,
+) -> Result<Stats, String> {
+    compare_steps(spec, engines, scenario, trace).map_err(|why| match trace["timeUnit"].as_str() {
+        Some(unit) if unit != "ms" => format!(
+            "{why}
+  (the scenario's clock is in {unit}, the generated machines' is in ms; declare \"timeUnit\": \"ms\" on the scenario)"
+        ),
+        _ => why,
+    })
+}
+
+fn compare_steps(
     spec: &Specification,
     engines: &mut Engines,
     scenario: &Scenario,
@@ -698,10 +745,15 @@ fn compare_scenario(
 ) -> Result<Stats, String> {
     let values = WireValues::new(&spec.typed, &spec.cases);
     let sid = &scenario.id;
-    if trace["outcome"] != json!("quiescent") {
+    // A run that declares `stopAt` ends `stopped` when the next entry lies beyond it; every step
+    // before that is compared as in a quiescent run.
+    let ends_as_declared = trace["outcome"] == json!("quiescent")
+        || (scenario.stops && trace["outcome"] == json!("stopped"));
+    if !ends_as_declared {
         return Err(format!(
-            "{sid}: the trace ends {}, not quiescent",
-            trace["outcome"]
+            "{sid}: the trace ends {}, not quiescent{}",
+            trace["outcome"],
+            if scenario.stops { " or stopped" } else { "" }
         ));
     }
     let mut stats = Stats::default();

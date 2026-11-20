@@ -102,7 +102,9 @@ fn a_repeated_key_in_a_product_file_is_refused_with_its_line() {
         .iter()
         .find(|d| d.code == jsonc::DUPLICATE_KEY)
         .unwrap_or_else(|| panic!("no duplicate-key diagnostic: {diagnostics:?}"));
-    assert!(found.message.contains("line 7"), "{found}");
+    // The second `"roles"` is on line 8 of the fixture; the first, on line 7, is not the repeat.
+    assert!(found.message.contains("line 8"), "{found}");
+    assert!(!found.message.contains("not valid JSONC"), "{found}");
 }
 
 #[test]
