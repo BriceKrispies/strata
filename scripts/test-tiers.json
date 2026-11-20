@@ -185,6 +185,13 @@
     },
     {
       "package": "strata-kernel",
+      "target": "editor_rules",
+      "tier": "routine",
+      "seconds": null,
+      "unmeasured": true
+    },
+    {
+      "package": "strata-kernel",
       "target": "limits",
       "tier": "routine",
       "seconds": 0.55

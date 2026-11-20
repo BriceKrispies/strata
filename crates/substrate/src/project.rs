@@ -79,6 +79,11 @@ pub struct ViewData {
     pub depends_on: BTreeSet<ObjectTypeId>,
     pub revision: StateRevision,
     pub schema_version: SchemaVersion,
+    /// What the kernel will check on a record of each object type the reader asked about (the
+    /// request names them in `rules`), for this reader: see `strata_kernel::editor_rules`. Sent
+    /// in the model's `data` as `$record_rules`; left out while nothing was asked.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub record_rules: BTreeMap<String, Json>,
 }
 
 /// Section names in evaluation order: sections that feed others come first.
@@ -361,7 +366,7 @@ fn project_row(record: &Record, section: &SectionData) -> Json {
 /// Project raw view data into the plain view model the browser renders. A single section
 /// becomes one object or `null`; any other section becomes an array.
 pub fn project(data: &ViewData) -> Json {
-    let sections: Map<String, Json> = data
+    let mut sections: Map<String, Json> = data
         .sections
         .iter()
         .map(|(name, section)| {
@@ -384,6 +389,9 @@ pub fn project(data: &ViewData) -> Json {
             (name.clone(), value)
         })
         .collect();
+    if !data.record_rules.is_empty() {
+        sections.insert("$record_rules".to_string(), json!(data.record_rules));
+    }
     let next: Map<String, Json> = data
         .sections
         .iter()

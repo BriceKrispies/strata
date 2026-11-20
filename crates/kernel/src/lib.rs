@@ -22,6 +22,7 @@ pub mod automation;
 pub mod canon;
 pub mod capabilities;
 pub mod definitions;
+pub mod editor_rules;
 pub mod erasure;
 pub mod expr;
 pub mod intent;
