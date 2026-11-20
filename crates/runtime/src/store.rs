@@ -277,7 +277,10 @@ pub trait Tx {
         name: &str,
     ) -> Result<bool, StorageError>;
 
-    /// Keep `entry`, which has been taken off the queue, as a dead letter with `error`.
+    /// Keep `entry`, which has been taken off the queue, as a dead letter with `error`. In the same
+    /// transaction the store deletes the dead letters set aside before
+    /// [`dead_letter_bound`]`(at)`, ninety days earlier ([`crate::RETENTION`]), so that the table
+    /// holds no letter past its bound after any write that adds one (WG-5074).
     fn dead_letter(
         &mut self,
         entry: &QueueEntry,
@@ -365,3 +368,13 @@ pub trait QueueStore: Send + Sync + 'static {
 pub trait MachineStore: RecordStore + OutboxStore + TimerStore + QueueStore {}
 
 impl<S: RecordStore + OutboxStore + TimerStore + QueueStore> MachineStore for S {}
+
+/// The time before which a dead letter has outlived its retention when one is written at `at`:
+/// [`crate::RETENTION`] earlier.
+pub fn dead_letter_bound(at: Time) -> Time {
+    Time(
+        at.0.saturating_sub(
+            i64::try_from(crate::system::RETENTION.as_millis()).unwrap_or(i64::MAX),
+        ),
+    )
+}

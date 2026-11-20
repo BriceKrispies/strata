@@ -692,6 +692,8 @@ impl Tx for SqliteTx<'_, '_> {
                 ],
             )
             .map_err(sql)?;
+        // The letters past their retention go in the same transaction as this write (WG-5074).
+        self.purge_dead_letters(crate::store::dead_letter_bound(at))?;
         Ok(())
     }
 }
