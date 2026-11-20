@@ -23,6 +23,8 @@
     "id": "badge-milestones",
     "name": "Badge milestones",
     "description": "Awards the Silver badge once when a person's points balance crosses 500, tells the person in the inbox and by mail, and follows up by mail after seven days if the award has not been viewed.",
+    "version": "1.0.0",
+    "platform": { "min": "0.2" },
     "imports": {
       "spec": "../../../../../specifications/spec.jsonc",
       "entities": ["content-read", "content-write", "product-module"]

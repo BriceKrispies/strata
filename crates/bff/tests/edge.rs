@@ -2488,3 +2488,82 @@ async fn a_retried_create_with_the_same_key_makes_one_record_through_the_gateway
         "the refused requests made nothing"
     );
 }
+
+/// Verifies: INT-2346
+///
+/// An owner installs, lists and removes a product through `POST /api/products/<action>` and
+/// `GET /api/products`, behind the origin and request-token checks, and the idempotency key of the
+/// browser reaches the backend: a repeat of the install changes nothing.
+#[tokio::test]
+async fn products_are_installed_listed_and_removed_through_the_gateway() {
+    let edge = start().await;
+    let (owner, csrf) = edge.login("127.0.0.1", "admin", "strata-dev-admin").await;
+    let as_owner = |action: &str, body: Json| {
+        edge.post("127.0.0.1", &format!("/api/products/{action}"), body)
+            .header("cookie", format!("{SESSION_COOKIE}={owner}"))
+            .header("x-csrf-token", &csrf)
+    };
+    let bundle = json!({
+        "name": "Gateway check",
+        "version": "1.0.0",
+        "product": "gateway-check",
+        "content": { "objects": { "gateway_check__thing": {
+            "id": "gateway_check__thing", "label": "Thing",
+            "fields": { "name": { "id": "name", "label": "Name", "ty": "Str", "required": true, "unique": false } },
+            "constraints": {}
+        } } }
+    });
+
+    // Nobody signed in lists nothing; the write guard comes before the action is looked at.
+    assert_eq!(edge.get("127.0.0.1", "/api/products", None).await.0, 401);
+    let (status, _, _) = edge
+        .send(
+            edge.post(
+                "127.0.0.1",
+                "/api/products/install",
+                json!({ "bundle": bundle }),
+            )
+            .header("cookie", format!("{SESSION_COOKIE}={owner}")),
+        )
+        .await;
+    assert_eq!(status, 403, "no request token");
+    let (status, _, _) = edge.send(as_owner("sell", json!({}))).await;
+    assert_eq!(status, 404, "an unknown action");
+    let (status, _, _) = edge.send(as_owner("install", json!({}))).await;
+    assert_eq!(status, 422, "a request that carries no bundle");
+
+    let (_, listed, _) = edge.get("127.0.0.1", "/api/products", Some(&owner)).await;
+    assert_eq!(listed["products"], json!([]));
+    let (status, dry, _) = edge
+        .send(as_owner(
+            "install",
+            json!({ "bundle": bundle, "dry_run": true }),
+        ))
+        .await;
+    assert_eq!(status, 200, "{dry}");
+    assert_eq!(
+        dry["projection"]["created"][0]["id"],
+        "gateway_check__thing"
+    );
+
+    let keyed = |body: Json| as_owner("install", body).header("idempotency-key", "gateway-1");
+    let (status, installed, _) = edge.send(keyed(json!({ "bundle": bundle }))).await;
+    assert_eq!(status, 200, "{installed}");
+    assert_eq!(installed["unchanged"], false);
+    let (status, again, _) = edge.send(keyed(json!({ "bundle": bundle }))).await;
+    assert_eq!(status, 200, "{again}");
+    assert_eq!(again["unchanged"], true);
+    assert_eq!(again["schema_version"], installed["schema_version"]);
+
+    let (_, listed, _) = edge.get("127.0.0.1", "/api/products", Some(&owner)).await;
+    assert_eq!(listed["products"][0]["product"], "gateway-check");
+    let (status, removed, _) = edge
+        .send(as_owner(
+            "remove",
+            json!({ "product": "gateway-check", "delete_records": false }),
+        ))
+        .await;
+    assert_eq!(status, 200, "{removed}");
+    let (_, listed, _) = edge.get("127.0.0.1", "/api/products", Some(&owner)).await;
+    assert_eq!(listed["products"], json!([]));
+}

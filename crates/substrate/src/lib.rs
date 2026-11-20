@@ -6,6 +6,7 @@
 //! expression prints it.
 //!
 //! - [`bundle`]: a whole tenant as one document, installed as ordinary kernel intents.
+//! - [`product`]: the bundle of a product, read, installed, upgraded and removed as one schema change.
 //! - [`plain`]: plain JSON to and from kernel values, directed by field types.
 //! - [`project`]: view definitions interpreted into reads and view models.
 //! - [`markdown`]: the constrained rich-text format, parsed to structured blocks.
@@ -16,6 +17,7 @@
 pub mod bundle;
 pub mod markdown;
 pub mod plain;
+pub mod product;
 pub mod project;
 pub mod proposal;
 pub mod subscribe;

@@ -12,11 +12,11 @@
 //!   "product": "<product.id>", "version": "<product.version>" }
 //! ```
 //!
-//! - The header of the product file carries the two facts a bundle needs and a product file did not
-//!   state: `product.version` (`MAJOR.MINOR.PATCH`, required) and `product.platform` (`min`, and
-//!   optionally `below`: the platform releases the product is written for, D-6583). They are read
-//!   here and taken out of the text handed to the layer checks, which do not list them as header
-//!   keys yet.
+//! - The header of the product file carries the two facts a bundle needs: `product.version`
+//!   (`MAJOR.MINOR.PATCH`, required by the bundle) and `product.platform` (`min`, and optionally
+//!   `below`: the platform releases the product is written for, D-6583). The layer checks take both
+//!   and validate them (`layer.header-invalid`, [`crate::layers::platform_problems`]); a header
+//!   with neither is a product file that has no version, which a bundle refuses.
 //! - `content` is a value of `bundle-sections`, filled from the typed sections of the file
 //!   ([`crate::layer_values::TYPED_SECTIONS`]) and from its `roles` and `capabilities`. Ids are
 //!   already in the namespace of the product (`layer.namespace-missing` refuses any that is not),
@@ -39,10 +39,9 @@
 //!
 //! Refused, each with a rule code and a message that says what to do:
 //!
-//! - `bundle.version-missing`, `bundle.version-invalid`: the header has no `version`, or one that is
-//!   not three numbers joined by dots;
-//! - `bundle.platform-invalid`: `product.platform` is not `{ "min": "<release>", "below": "<release>" }`
-//!   with a `min` and, optionally, a `below`;
+//! - `bundle.version-missing`: the header has no `version`. (A `version` that is not three numbers
+//!   joined by dots and a `platform` that is not a range `{ "min": "<release>", "below": "<release>" }`
+//!   are refused by the layer checks, `layer.header-invalid`, which run first.)
 //! - `bundle.section-no-place`: a section of the file that `bundle-sections` has no place for;
 //! - `bundle.id-collision`: two entities of the product that would be one entity of the bundle.
 //!
@@ -61,10 +60,6 @@ use crate::layers::{self, ProductFile, PRODUCT_HEADER};
 
 /// The header has no `version`.
 pub const VERSION_MISSING: &str = "bundle.version-missing";
-/// `version` is not `MAJOR.MINOR.PATCH`.
-pub const VERSION_INVALID: &str = "bundle.version-invalid";
-/// `platform` is not a platform range.
-pub const PLATFORM_INVALID: &str = "bundle.platform-invalid";
 /// A section of the product file that a tenant bundle has no place for.
 pub const SECTION_NO_PLACE: &str = "bundle.section-no-place";
 /// Two entities of the product that would be one entity of the bundle.
@@ -83,6 +78,9 @@ const MAP_SECTIONS: &[&str] = &[
     "roles",
     "role-permissions",
     "policies",
+    "queries",
+    "views",
+    "workflows",
     "segments",
 ];
 
@@ -102,6 +100,10 @@ fn place(section: &str) -> Option<Place> {
         "roles" => ("roles", "role"),
         "capabilities" => ("capabilities", "capability"),
         "policies" => ("policies", "policy"),
+        "queries" => ("queries", "query"),
+        "views" => ("views", "view"),
+        // A field workflow and an automation share the ids of workflows (D-6521).
+        "workflows" => ("workflows", "workflow"),
         "segments" => ("segments", "segment"),
         "settings" => ("settings", "setting"),
         "ledgerUnits" => ("ledger-units", "ledger-unit"),
@@ -138,81 +140,28 @@ fn no_place_hint(section: &str) -> &'static str {
     match section {
         "records" => "Declare the record type as an object type in \"objects\" (a value of object-type-def).",
         "types" => "A tenant has no value types of its own: the types of a field are the kernel's field types, written in \"objects\".",
-        "screens" | "forms" | "actions" | "liveBindings" | "errorMessages" => "A bundle holds views as values of view-def (the section \"views\"), which a product file cannot declare yet; remove it, or declare what it presents as object types.",
-        "behaviors" => "A bundle holds workflows as values of workflow-def (the section \"workflows\"), which a product file cannot declare yet; declare a sequence of steps in \"automations\" instead.",
+        "screens" | "forms" | "actions" | "liveBindings" | "errorMessages" => "A bundle holds views as values of view-def: declare the page in \"views\" (a route, a title and the queries it shows) and what it shows in \"queries\".",
+        "behaviors" => "A bundle holds the states of a field as values of workflow-def: declare them in \"workflows\"; declare a sequence of steps in \"automations\".",
         "events" => "The events of the platform are the platform's: a trigger names one of them in \"triggers\"; remove the event.",
         "contracts" => "A product operation is a composite operation: declare it in \"operations\" (a value of tenant-operation-def).",
         _ => "Remove it, or declare what it stands for in one of the sections that have a place.",
     }
 }
 
-/// The platform range of the header, as `platform-compat` writes it.
-fn read_platform(file: &str, value: &Value, out: &mut Vec<Diagnostic>) -> Option<Value> {
-    let shape =
-        "{\"min\": \"<first release>\", \"below\": \"<first release it does not support>\"}";
-    let Some(map) = value.as_object() else {
-        out.push(Diagnostic::new(
-            PLATFORM_INVALID,
-            file,
-            format!("\"product.platform\" in {file} must be an object {shape}; correct it, or remove it for a product that states no platform range."),
-        ));
-        return None;
-    };
-    let before = out.len();
-    for key in map.keys() {
-        if key != "min" && key != "below" {
-            out.push(Diagnostic::new(
-                PLATFORM_INVALID,
-                file,
-                format!("\"product.platform\" in {file} has \"{key}\", which it does not take; it holds only min and below. Remove \"{key}\"."),
-            ));
-        }
-    }
-    for (key, required) in [("min", true), ("below", false)] {
-        match map.get(key) {
-            Some(Value::String(text)) if !text.trim().is_empty() => {}
-            Some(_) => out.push(Diagnostic::new(
-                PLATFORM_INVALID,
-                file,
-                format!("\"product.platform.{key}\" in {file} must be a non-empty string naming a platform release; correct it."),
-            )),
-            None if required => out.push(Diagnostic::new(
-                PLATFORM_INVALID,
-                file,
-                format!("\"product.platform\" in {file} has no \"min\", the first platform release the product supports; add it, as in {shape}."),
-            )),
-            None => {}
-        }
-    }
-    (out.len() == before).then(|| value.clone())
-}
-
-/// Whether `version` is three numbers joined by dots.
-fn is_version(version: &str) -> bool {
-    let parts: Vec<&str> = version.split('.').collect();
-    parts.len() == 3
-        && parts
-            .iter()
-            .all(|p| !p.is_empty() && p.len() <= 9 && p.chars().all(|c| c.is_ascii_digit()))
-}
-
-/// The version and the platform range of a product header; each problem is pushed to `out`.
+/// The version and the platform range of a product header. The layer checks have accepted both
+/// (`layer.header-invalid` refuses a malformed one), so what is left to refuse here is a header with
+/// no version, which a bundle cannot be written without (D-6583).
 fn read_release(
     file: &str,
     header: &Map<String, Value>,
     out: &mut Vec<Diagnostic>,
 ) -> Option<(String, Option<Value>)> {
-    let before = out.len();
-    let version = match header.get(HEADER_VERSION) {
-        Some(Value::String(version)) if is_version(version) => Some(version.clone()),
-        Some(other) => {
-            out.push(Diagnostic::new(
-                VERSION_INVALID,
-                file,
-                format!("\"product.version\" in {file} is {other}, which is not a version. A version is three whole numbers joined by dots, such as \"1.0.0\" (an upgrade is offered only to a greater one, D-6583); correct it."),
-            ));
-            None
+    match header.get(HEADER_VERSION) {
+        Some(Value::String(version)) if layers::is_version(version) => {
+            Some((version.clone(), header.get(HEADER_PLATFORM).cloned()))
         }
+        // A malformed version is the layer checks' to refuse, with their own rule.
+        Some(_) => None,
         None => {
             out.push(Diagnostic::new(
                 VERSION_MISSING,
@@ -221,15 +170,7 @@ fn read_release(
             ));
             None
         }
-    };
-    let platform = match header.get(HEADER_PLATFORM) {
-        Some(value) => read_platform(file, value, out),
-        None => None,
-    };
-    if out.len() > before {
-        return None;
     }
-    Some((version?, platform))
 }
 
 /// A bundle built from a product file.
@@ -421,25 +362,17 @@ pub fn generate(
     let file = product.path.replace('\\', "/");
     let mut diagnostics = Vec::new();
     let parsed = jsonc::parse(&product.text).ok();
-    let mut checked = product.clone();
     let mut release = None;
     if let Some(Value::Object(top)) = &parsed {
         if let Some(Value::Object(header)) = top.get(PRODUCT_HEADER) {
             release = read_release(&file, header, &mut diagnostics);
-            // The layer checks do not list the release facts among the header keys.
-            let mut without = top.clone();
-            if let Some(Value::Object(header)) = without.get_mut(PRODUCT_HEADER) {
-                header.remove(HEADER_VERSION);
-                header.remove(HEADER_PLATFORM);
-            }
-            checked.text = Value::Object(without).to_string();
         }
     }
     let layered = layers::load_layered(
         platform_path,
         platform_text,
         platform_file,
-        std::slice::from_ref(&checked),
+        std::slice::from_ref(product),
     );
     let layered = match layered {
         Ok(layered) => layered,
@@ -516,12 +449,12 @@ mod tests {
 
     #[test]
     fn a_version_is_three_numbers_joined_by_dots() {
-        assert!(is_version("1.0.0"));
-        assert!(is_version("12.345.6"));
-        assert!(!is_version("1.0"));
-        assert!(!is_version("1.0.0-rc1"));
-        assert!(!is_version("1..0"));
-        assert!(!is_version(""));
+        assert!(layers::is_version("1.0.0"));
+        assert!(layers::is_version("12.345.6"));
+        assert!(!layers::is_version("1.0"));
+        assert!(!layers::is_version("1.0.0-rc1"));
+        assert!(!layers::is_version("1..0"));
+        assert!(!layers::is_version(""));
     }
 
     #[test]

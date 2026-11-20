@@ -752,6 +752,80 @@ fn resolve_refs(
     }
 }
 
+/// Whether `version` is a product version: three whole numbers joined by dots (D-6583, D-6920).
+pub fn is_version(version: &str) -> bool {
+    let parts: Vec<&str> = version.split('.').collect();
+    parts.len() == 3
+        && parts
+            .iter()
+            .all(|p| !p.is_empty() && p.len() <= 9 && p.chars().all(|c| c.is_ascii_digit()))
+}
+
+/// Whether `release` names a platform release: one to three whole numbers joined by dots, and
+/// optionally a hyphen and a label (`0.2`, `0.2-draft`, `1.4.0`).
+pub fn is_release(release: &str) -> bool {
+    let (numbers, label) = match release.split_once('-') {
+        Some((numbers, label)) => (numbers, Some(label)),
+        None => (release, None),
+    };
+    let parts: Vec<&str> = numbers.split('.').collect();
+    (1..=3).contains(&parts.len())
+        && parts
+            .iter()
+            .all(|p| !p.is_empty() && p.len() <= 9 && p.chars().all(|c| c.is_ascii_digit()))
+        && label.is_none_or(|l| {
+            !l.is_empty() && l.chars().all(|c| c.is_ascii_alphanumeric() || c == '.')
+        })
+}
+
+/// The numbers of a platform release (`0.2-draft` is `[0, 2]`), for ordering two of them.
+fn release_numbers(release: &str) -> Vec<u64> {
+    let mut numbers: Vec<u64> = release
+        .split('-')
+        .next()
+        .unwrap_or("")
+        .split('.')
+        .map(|p| p.parse::<u64>().unwrap_or(0))
+        .collect();
+    // `0.2` and `0.2.0` are one release.
+    while numbers.last() == Some(&0) {
+        numbers.pop();
+    }
+    numbers
+}
+
+/// The problems of a platform range of a product header (`platform-compat`, D-6583): an object with
+/// a `min` that is a platform release and, when it excludes later releases, a `below` that is one
+/// too and is later than `min`.
+pub fn platform_problems(file: &str, value: &Value) -> Vec<String> {
+    let shape =
+        "{\"min\": \"<first release>\", \"below\": \"<first release it does not support>\"}";
+    let Some(map) = value.as_object() else {
+        return vec![format!("\"product.platform\" in {file} must be an object {shape}; correct it, or remove it for a product that states no platform range.")];
+    };
+    let mut problems = Vec::new();
+    for key in map.keys() {
+        if key != "min" && key != "below" {
+            problems.push(format!("\"product.platform\" in {file} has \"{key}\", which it does not take; it holds only min and below. Remove \"{key}\"."));
+        }
+    }
+    let mut releases = Vec::new();
+    for (key, required) in [("min", true), ("below", false)] {
+        match map.get(key) {
+            Some(Value::String(text)) if is_release(text) => releases.push(text.as_str()),
+            Some(_) => problems.push(format!("\"product.platform.{key}\" in {file} must be a platform release such as \"0.2\" or \"1.4.0\" (whole numbers joined by dots); correct it.")),
+            None if required => problems.push(format!("\"product.platform\" in {file} has no \"min\", the first platform release the product supports; add it, as in {shape}.")),
+            None => {}
+        }
+    }
+    if let [min, below] = releases[..] {
+        if release_numbers(below) <= release_numbers(min) {
+            problems.push(format!("\"product.platform\" in {file} excludes from \"{below}\", which is not later than its first release \"{min}\", so no release is supported; make \"below\" later than \"min\"."));
+        }
+    }
+    problems
+}
+
 /// Checks the header; returns its id, name and imported ids when it is well-formed.
 fn check_header(
     file: &str,
@@ -765,8 +839,27 @@ fn check_header(
         out.push(Diagnostic::new(HEADER_INVALID, file, message));
     };
     for key in header.keys() {
-        if !["id", "name", "description", "imports"].contains(&key.as_str()) {
-            invalid(out, format!("The product header of {file} has \"{key}\", which it does not take; it holds only id, name, description and imports. Remove \"{key}\"."));
+        if ![
+            "id",
+            "name",
+            "description",
+            "imports",
+            "version",
+            "platform",
+        ]
+        .contains(&key.as_str())
+        {
+            invalid(out, format!("The product header of {file} has \"{key}\", which it does not take; it holds only id, name, description, version, platform and imports. Remove \"{key}\"."));
+        }
+    }
+    if let Some(version) = header.get("version") {
+        if !version.as_str().is_some_and(is_version) {
+            invalid(out, format!("\"product.version\" in {file} is {version}, which is not a version. A version is three whole numbers joined by dots, such as \"1.0.0\" (an upgrade is offered only to a greater one, D-6583); correct it, or remove it."));
+        }
+    }
+    if let Some(platform) = header.get("platform") {
+        for message in platform_problems(file, platform) {
+            invalid(out, message);
         }
     }
     let id = header

@@ -1,0 +1,89 @@
+{
+  "content": {
+    "objects": {
+      "ticket_board__ticket": {
+        "constraints": {},
+        "fields": {
+          "status": {
+            "id": "status",
+            "label": "Status",
+            "required": true,
+            "ty": "Str",
+            "unique": false
+          },
+          "title": {
+            "id": "title",
+            "label": "Title",
+            "required": true,
+            "ty": "Str",
+            "unique": false
+          }
+        },
+        "id": "ticket_board__ticket",
+        "label": "Ticket"
+      }
+    },
+    "queries": {
+      "ticket_board__open": {
+        "filter": "record.status == 'open'",
+        "id": "ticket_board__open",
+        "limit": 50,
+        "object": "ticket_board__ticket",
+        "order": [
+          {
+            "descending": false,
+            "field": "title"
+          }
+        ],
+        "params": []
+      }
+    },
+    "views": {
+      "ticket_board__board": {
+        "id": "ticket_board__board",
+        "route": "/tickets",
+        "sections": {
+          "open": {
+            "args": {},
+            "include": [],
+            "markdown": [],
+            "query": "ticket_board__open",
+            "single": false
+          }
+        },
+        "title": "Tickets"
+      }
+    },
+    "workflows": {
+      "ticket_board__lifecycle": {
+        "field": "status",
+        "id": "ticket_board__lifecycle",
+        "initial": [
+          "open"
+        ],
+        "object": "ticket_board__ticket",
+        "transitions": [
+          {
+            "from": "open",
+            "guard": "old.status == 'open'",
+            "name": "close",
+            "set": {},
+            "to": "closed"
+          },
+          {
+            "from": "closed",
+            "name": "reopen",
+            "set": {},
+            "to": "open"
+          }
+        ]
+      }
+    }
+  },
+  "name": "Ticket board",
+  "platform": {
+    "min": "0.2"
+  },
+  "product": "ticket-board",
+  "version": "1.0.0"
+}

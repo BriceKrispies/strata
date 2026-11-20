@@ -27,13 +27,16 @@ pub mod expr;
 pub mod intent;
 pub mod ledger;
 pub mod limits;
+pub mod object_meta;
 pub mod operations;
+pub mod products;
 pub mod read;
 pub mod rules;
 pub mod schema;
 pub mod segments;
 pub mod settings;
 pub mod state;
+pub mod templates;
 #[cfg(any(test, feature = "testkit"))]
 pub mod testkit;
 pub mod transition;

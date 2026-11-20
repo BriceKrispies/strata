@@ -1,0 +1,15 @@
+{
+  // Refused: a query with a member the platform type query-def does not have (layer.value-invalid, D-6700).
+  "product": { "id": "ticket-board", "name": "Ticket board", "imports": { "spec": "../../../../../../specifications/spec.jsonc", "entities": [] } },
+  "objects": [
+    {
+      "id": "ticket_board__ticket",
+      "label": "Ticket",
+      "fields": { "title": { "id": "title", "label": "Title", "ty": "Str", "required": true, "unique": false } },
+      "constraints": {}
+    }
+  ],
+  "queries": [
+    { "id": "ticket_board__open", "object": "ticket_board__ticket", "params": [], "order": [], "colour": "gold" }
+  ]
+}

@@ -114,6 +114,14 @@
 //!      `needs` plans no ledger need, `apply-delta` ignores a ledger operation, `schema-problems`
 //!      does not check ledger declarations, and the functions that rebuild a tenant schema or
 //!      state do not carry its `ledger` member. The generator draws no ledger intent or change.
+//!  14. Not exercised, and not mirrored: the checks of the declarations of an object type, of the
+//!      templates, tokens and product records of the tenant schema that the hand-written `schema.problems` makes through
+//!      `object_meta::problems`, `templates::problems` and `products::problems` (retention from a
+//!      timestamp field, the states of a publication, the type of a language field, the one-line
+//!      subject of a template, the expression of a token, the owner of an entity), and the
+//!      removal of an object type with the deletion of its records. The generated
+//!      `schema-problems` does not state them. The generator draws no such declaration, template,
+//!      token or product record.
 //!
 //! Difference 7 is guarded: `assert_no_input_of_a_known_difference` runs on every snapshot the
 //! test decides or reads, and fails when a snapshot has an automation step with a retry, a
@@ -923,6 +931,22 @@ fn assert_no_input_of_a_known_difference(state: &State) {
         "{} holds a ledger; the generated functions do not mirror it (difference 13)",
         tenant.id
     );
+    assert!(
+        tenant.schema.mail_templates.is_none()
+            && tenant.schema.notice_templates.is_none()
+            && tenant.schema.tokens.is_none()
+            && tenant.schema.products.is_none(),
+        "the schema holds a template, a token or a product record; the generated functions do not state their checks (difference 14)"
+    );
+    for (object_id, def) in &tenant.schema.objects {
+        assert!(
+            def.retention.is_none()
+                && def.publication.is_none()
+                && def.language_field.is_none()
+                && def.translation_group.is_none(),
+            "{object_id} declares retention, publication, a language field or a translation group; the generated functions do not state their checks (difference 14)"
+        );
+    }
     for automation in tenant.schema.automations.iter().flat_map(BTreeMap::values) {
         assert!(
             automation.run_as.roles.is_empty(),

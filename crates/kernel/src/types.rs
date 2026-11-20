@@ -52,6 +52,14 @@ pub use strata_model_core::types::{
     SettingResolution, SettingSource, SettingType, SettingValues,
 };
 
+/// The declarations of an object type, the templates and tokens of a tenant and the products it has
+/// installed, held in the schema
+/// ([`crate::object_meta`], [`crate::templates`], [`crate::products`]).
+pub use strata_model_core::types::{
+    DataSubject, EntityKind, EntityRef, InstalledProduct, MailTemplateDecl, NoticeTemplateDecl,
+    PersonalDeclaration, PersonalKind, PlatformCompat, ProductId, PublicationDef, RetentionRule,
+    RetentionStart, StructuredBlocks, TemplateId, TokenDecl,
+};
 /// The tenant ledger of [`crate::ledger`]: declarations in the tenant schema, accounts and
 /// entries in the tenant state, its needs, delta operations, requests and answers.
 pub use strata_model_core::types::{
@@ -61,6 +69,9 @@ pub use strata_model_core::types::{
     LedgerPoolDecl, LedgerPoolName, LedgerPostingRequest, LedgerPostingResult, LedgerScope,
     LedgerState, LedgerUnit, LedgerUnitDecl,
 };
+
+/// The text types of a template and of a token (`structured-blocks`, `expression`).
+pub use strata_model_core::types::Expression;
 
 /// The result of an accepted transition (specification type `transition-result`).
 pub use strata_model_core::types::TransitionResult as Transition;

@@ -1,0 +1,10 @@
+{
+  // Refused: a version that is not three whole numbers joined by dots (layer.header-invalid, D-6920).
+  "product": {
+    "id": "ticket-board",
+    "name": "Ticket board",
+    "version": "1.0",
+    "imports": { "spec": "../../../../../../specifications/spec.jsonc", "entities": [] }
+  },
+  "types": [ { "id": "ticket_board__state", "name": "Ticket state", "kind": "enum", "values": ["open", "closed"] } ]
+}

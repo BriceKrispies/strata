@@ -1,0 +1,7 @@
+{
+  // Refused: a view with a member the platform type view-def does not have (layer.value-invalid, D-6700).
+  "product": { "id": "ticket-board", "name": "Ticket board", "imports": { "spec": "../../../../../../specifications/spec.jsonc", "entities": [] } },
+  "views": [
+    { "id": "ticket_board__board", "route": "/tickets", "title": "Tickets", "sections": {}, "colour": "gold" }
+  ]
+}

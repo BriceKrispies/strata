@@ -10,9 +10,9 @@
 //!   the same platform semantic hash (the one the generated headers carry) with and without the
 //!   product.
 //!
-//! - The typed sections (objects, policies, segments, settings, ledger units, pools and limits,
-//!   mail and notice templates, tokens, triggers, automations, operations) hold values of platform
-//!   types; `badge-milestones.jsonc` and `promotions.jsonc` are complete products (they declare
+//! - The typed sections (objects, policies, queries, views, workflows, segments, settings, ledger
+//!   units, pools and limits, mail and notice templates, tokens, triggers, automations, operations)
+//!   hold values of platform types; `badge-milestones.jsonc` and `promotions.jsonc` are complete products (they declare
 //!   everything they name, in their own namespace) that specc and Exegra both accept.
 //!
 //! The Exegra checks need the Exegra CLI (see `support`).
@@ -355,6 +355,36 @@ const REFUSED: &[(&str, &str, &[&str])] = &[
         "expression-type",
         layer_expr::EXPR_TYPE,
         &["is refused at position", "tenant rule language"],
+    ),
+    (
+        "query-value-invalid",
+        layers::VALUE_INVALID,
+        &["\"colour\"", "is not a field of its type", "query-def"],
+    ),
+    (
+        "view-value-invalid",
+        layers::VALUE_INVALID,
+        &["\"colour\"", "is not a field of its type", "view-def"],
+    ),
+    (
+        "workflow-value-invalid",
+        layers::VALUE_INVALID,
+        &["\"colour\"", "is not a field of its type", "workflow-def"],
+    ),
+    (
+        "view-query-unknown",
+        layers::REFERENCE_UNKNOWN,
+        &["\"ticket_board__ghost\"", "no product file declares"],
+    ),
+    (
+        "header-version-invalid",
+        layers::HEADER_INVALID,
+        &["\"product.version\"", "three whole numbers"],
+    ),
+    (
+        "header-platform-invalid",
+        layers::HEADER_INVALID,
+        &["has no \"min\"", "first platform release"],
     ),
     (
         "retention-missing",

@@ -22,6 +22,8 @@
     "id": "promotions",
     "name": "Promotions",
     "description": "Time-boxed promotions that members redeem from a shared stock.",
+    "version": "1.0.0",
+    "platform": { "min": "0.2" },
     "imports": {
       "spec": "../../../../../specifications/spec.jsonc",
       "entities": ["tenant-operation-invoke", "product-module"]

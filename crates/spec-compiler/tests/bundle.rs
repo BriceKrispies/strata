@@ -1,14 +1,15 @@
 //! `specc bundle`: a product file turned into the tenant bundle a tenant installs
 //! (`strata_spec_compiler::bundle`, D-6580, WG-5063).
 //!
-//! - The bundles of `badge-milestones.jsonc`, `promotions.jsonc` and `bundle/member-tiers.jsonc` are
-//!   golden files (`tests/fixtures/products/expected`, rewritten by `SPECC_BLESS=1`). The first two
-//!   fixtures state no version or platform range in their header (the layer checks do not list
-//!   those keys yet), so the test adds them to the text it hands to specc.
+//! - The bundles of `badge-milestones.jsonc`, `promotions.jsonc`, `bundle/member-tiers.jsonc` and
+//!   `bundle/ticket-board.jsonc` (a query, a view and a workflow) are golden files
+//!   (`tests/fixtures/products/expected`, rewritten by `SPECC_BLESS=1`). Every fixture states its
+//!   version and platform range in its header, which the layer checks take and validate.
 //! - Every item of a typed section of the file is in the bundle, the bytes do not depend on the order
 //!   of the file, and the bundle is a value of `tenant-bundle` (the generation checks it).
-//! - A product with no version, one with a bad platform range, a section the bundle has no place for
-//!   and an id collision are refused with their rules, and the layer checks are refused first.
+//! - A product with no version, a section the bundle has no place for and an id collision are refused
+//!   with their rules, a version or a platform range that is malformed is refused by the layer checks
+//!   (`layer.header-invalid`), and the layer checks are refused first.
 //! - The `specc bundle` command writes the file, and writes nothing for a product it refuses.
 
 mod support;
@@ -63,15 +64,6 @@ fn with_release(file: ProductFile, version: Option<&str>, platform: Option<Value
     }
 }
 
-/// The two fixtures that predate the version and the platform range of the header.
-fn released(relative: &str) -> ProductFile {
-    with_release(
-        product(relative),
-        Some("1.0.0"),
-        Some(json!({ "min": "0.2" })),
-    )
-}
-
 fn generate(file: &ProductFile) -> Result<bundle::Output, Vec<Diagnostic>> {
     bundle::generate(
         PLATFORM,
@@ -118,7 +110,7 @@ fn check_golden(output: &bundle::Output) {
 // Verifies: INT-1580
 #[test]
 fn golden_bundle_of_badge_milestones() {
-    let output = bundle_of(&released("badge-milestones.jsonc"));
+    let output = bundle_of(&product("badge-milestones.jsonc"));
     assert_eq!(output.product, "badge-milestones");
     assert_eq!(output.files.len(), 1);
     assert_eq!(output.files[0].path, "badge-milestones.bundle.json");
@@ -128,8 +120,29 @@ fn golden_bundle_of_badge_milestones() {
 // Verifies: INT-1580
 #[test]
 fn golden_bundle_of_promotions() {
-    let output = bundle_of(&released("promotions.jsonc"));
+    let output = bundle_of(&product("promotions.jsonc"));
     assert_eq!(output.files[0].path, "promotions.bundle.json");
+    check_golden(&output);
+}
+
+// Verifies: INT-2347
+#[test]
+fn golden_bundle_of_a_product_with_a_query_a_view_and_a_workflow() {
+    let output = bundle_of(&product("bundle/ticket-board.jsonc"));
+    assert_eq!(output.files[0].path, "ticket-board.bundle.json");
+    let bundle = the_bundle(&output);
+    // Each is an entry of its section, a value of its platform type, keyed by its id.
+    for (section, id) in [
+        ("queries", "ticket_board__open"),
+        ("views", "ticket_board__board"),
+        ("workflows", "ticket_board__lifecycle"),
+    ] {
+        assert_eq!(bundle["content"][section][id]["id"], id, "{section}");
+    }
+    assert_eq!(
+        bundle["content"]["views"]["ticket_board__board"]["route"],
+        "/tickets"
+    );
     check_golden(&output);
 }
 
@@ -150,7 +163,7 @@ fn the_bundle(output: &bundle::Output) -> Value {
 // Verifies: INT-1580
 #[test]
 fn the_bundle_names_the_product_its_version_and_the_platform_range() {
-    let output = bundle_of(&released("badge-milestones.jsonc"));
+    let output = bundle_of(&product("badge-milestones.jsonc"));
     let bundle = the_bundle(&output);
     assert_eq!(bundle["product"], "badge-milestones");
     assert_eq!(bundle["name"], "Badge milestones");
@@ -187,12 +200,9 @@ fn every_item_of_a_typed_section_is_in_the_bundle() {
         "badge-milestones.jsonc",
         "promotions.jsonc",
         "bundle/member-tiers.jsonc",
+        "bundle/ticket-board.jsonc",
     ] {
-        let file = if relative.starts_with("bundle/") {
-            product(relative)
-        } else {
-            released(relative)
-        };
+        let file = product(relative);
         let top = jsonc::parse(&file.text).unwrap();
         let bundle = the_bundle(&bundle_of(&file));
         let mut typed_seen = 0;
@@ -303,7 +313,7 @@ fn reversed_sections(file: &ProductFile) -> ProductFile {
 #[test]
 fn the_same_product_gives_the_same_bytes_whatever_the_order_of_its_file() {
     for relative in ["badge-milestones.jsonc", "promotions.jsonc"] {
-        let file = released(relative);
+        let file = product(relative);
         let first = bundle_of(&file);
         assert_eq!(first, bundle_of(&file), "{relative}: twice");
         assert_eq!(
@@ -316,7 +326,7 @@ fn the_same_product_gives_the_same_bytes_whatever_the_order_of_its_file() {
 
 #[test]
 fn sections_and_keys_are_written_in_sorted_order() {
-    let output = bundle_of(&released("badge-milestones.jsonc"));
+    let output = bundle_of(&product("badge-milestones.jsonc"));
     let text = &output.files[0].contents;
     assert!(text.ends_with("}\n"));
     let mut top = Vec::new();
@@ -365,14 +375,14 @@ fn a_product_with_no_version_is_refused() {
         message.contains("has no \"version\"") && message.contains("add \"version\": \"1.0.0\""),
         "{message}"
     );
-    // The fixture products of the layer checks have none either.
-    let plain = generate(&product("badge-milestones.jsonc")).unwrap_err();
+    // A product file that states none is refused the same way, whatever else it holds.
+    let plain = generate(&with_release(product("badge-milestones.jsonc"), None, None)).unwrap_err();
     assert_eq!(codes(&plain), [bundle::VERSION_MISSING]);
 }
 
-// Verifies: INT-1583
+// Verifies: INT-2347
 #[test]
-fn a_version_that_is_not_three_numbers_is_refused() {
+fn a_version_that_is_not_three_numbers_is_refused_by_the_layer_checks() {
     for version in ["1.0", "v1.0.0", "1.0.0-rc1", ""] {
         let file = with_release(
             product("promotions.jsonc"),
@@ -380,11 +390,7 @@ fn a_version_that_is_not_three_numbers_is_refused() {
             Some(json!({ "min": "0.2" })),
         );
         let diagnostics = generate(&file).unwrap_err();
-        assert_eq!(
-            codes(&diagnostics),
-            [bundle::VERSION_INVALID],
-            "{version:?}"
-        );
+        assert_eq!(codes(&diagnostics), [layers::HEADER_INVALID], "{version:?}");
         assert!(
             diagnostics[0].message.contains("three whole numbers"),
             "{}",
@@ -397,17 +403,17 @@ fn a_version_that_is_not_three_numbers_is_refused() {
     file.text = top.to_string();
     assert_eq!(
         codes(&generate(&file).unwrap_err()),
-        [bundle::VERSION_INVALID]
+        [layers::HEADER_INVALID]
     );
 }
 
-// Verifies: INT-1583
+// Verifies: INT-2347
 #[test]
-fn a_platform_range_without_a_first_release_is_refused() {
+fn a_platform_range_without_a_first_release_is_refused_by_the_layer_checks() {
     let diagnostics = refused("bundle-refused/platform-invalid.jsonc");
     assert_eq!(
         codes(&diagnostics),
-        [bundle::PLATFORM_INVALID],
+        [layers::HEADER_INVALID],
         "{diagnostics:?}"
     );
     assert!(
@@ -419,6 +425,10 @@ fn a_platform_range_without_a_first_release_is_refused() {
         json!("0.2"),
         json!({ "min": "" }),
         json!({ "min": "0.2", "above": "1" }),
+        json!({ "min": "banana" }),
+        // A range that supports no release.
+        json!({ "min": "0.4", "below": "0.3" }),
+        json!({ "min": "0.2", "below": "0.2.0" }),
     ] {
         let file = with_release(
             product("promotions.jsonc"),
@@ -426,12 +436,7 @@ fn a_platform_range_without_a_first_release_is_refused() {
             Some(platform.clone()),
         );
         let diagnostics = generate(&file).unwrap_err();
-        assert!(
-            codes(&diagnostics)
-                .iter()
-                .all(|c| *c == bundle::PLATFORM_INVALID),
-            "{platform}: {diagnostics:?}"
-        );
+        assert_eq!(codes(&diagnostics), [layers::HEADER_INVALID], "{platform}");
     }
 }
 
@@ -590,7 +595,7 @@ fn specc_bundle_refuses_a_product_and_writes_nothing() {
         ),
         (
             "bundle-refused/platform-invalid.jsonc",
-            "bundle.platform-invalid",
+            "layer.header-invalid",
         ),
     ] {
         let out = root().join("var/specc-bundle/refused");

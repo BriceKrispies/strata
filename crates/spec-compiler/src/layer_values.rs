@@ -1,8 +1,8 @@
 //! The typed sections of a product file: each value is checked against a platform type.
 //!
 //! A product file declares tenant metadata that has no entity kind of its own in the specification
-//! format: object types, policies, segments, settings, ledger units, pools and limits, mail and
-//! notice templates, tokens, triggers, automations and operations (D-6580). Their shape is a type of
+//! format: object types, policies, queries, views, workflows, segments, settings, ledger units, pools
+//! and limits, mail and notice templates, tokens, triggers, automations and operations (D-6580). Their shape is a type of
 //! the platform specification, the one the tenant bundle carries (`bundle-sections`). One table,
 //! [`TYPED_SECTIONS`], maps each section to that type, and one check, [`check_item`], tests a value
 //! against a declared type: the fields of a struct (required and optional), the variants of a union
@@ -59,6 +59,24 @@ pub const TYPED_SECTIONS: &[TypedSection] = &[
         ty: "policy-def",
         id_field: Some("id"),
         purpose: "policies of roles over object types (policy-def)",
+    },
+    TypedSection {
+        section: "queries",
+        ty: "query-def",
+        id_field: Some("id"),
+        purpose: "named queries over object types (values of the platform type query-def)",
+    },
+    TypedSection {
+        section: "views",
+        ty: "view-def",
+        id_field: Some("id"),
+        purpose: "views that present queries at a route (values of the platform type view-def)",
+    },
+    TypedSection {
+        section: "workflows",
+        ty: "workflow-def",
+        id_field: Some("id"),
+        purpose: "workflows of a field of an object type: its states and the transitions between them (values of the platform type workflow-def)",
     },
     TypedSection {
         section: "segments",
@@ -144,7 +162,9 @@ pub const REFERENCE_TYPES: &[(&str, &[&str])] = &[
     ("ledger-pool-name", &["ledgerPools"]),
     ("role-id", &["roles"]),
     ("policy-id", &["policies"]),
-    ("workflow-id", &["automations"]),
+    ("workflow-id", &["automations", "workflows"]),
+    ("query-id", &["queries"]),
+    ("view-id", &["views"]),
     ("template-id", &["mailTemplates", "noticeTemplates"]),
     ("setting-id", &["settings"]),
     ("segment-id", &["segments"]),

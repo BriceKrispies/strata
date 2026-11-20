@@ -277,6 +277,24 @@ impl ProductContext {
                     params: Some(params),
                 }
             }
+            // A query reads the fields of its object type and the parameters it declares; a workflow
+            // reads the fields of its object type and no parameter (D-6700).
+            "queries" => Scope {
+                fields: fields_of(item.get("object").and_then(Value::as_str)),
+                params: Some(
+                    item.get("params")
+                        .and_then(Value::as_array)
+                        .into_iter()
+                        .flatten()
+                        .filter_map(Value::as_str)
+                        .map(str::to_string)
+                        .collect(),
+                ),
+            },
+            "workflows" => Scope {
+                fields: fields_of(item.get("object").and_then(Value::as_str)),
+                params: no_params,
+            },
             _ => Scope::default(),
         }
     }
