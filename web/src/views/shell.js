@@ -2,9 +2,8 @@
 // @ts-check
 
 import { h } from '../components/dom.js';
-import * as pages from './pages.js';
-import * as desk from './desk.js';
-import { lab } from './lab.js';
+import { missing } from './pages.js';
+import { rendererOf } from './renderers.js';
 
 const THEME_LABEL = { auto: 'Theme: device', light: 'Theme: light', dark: 'Theme: dark' };
 const CONNECTION = {
@@ -15,51 +14,16 @@ const CONNECTION = {
   idle: '',
 };
 
+/** What the page's kind draws; a kind nothing is registered for is a page that is not there. */
 function body(page, shell) {
-  switch (page.kind) {
-    case 'home':
-      return pages.home(page, shell);
-    case 'post':
-      return pages.post(page);
-    case 'topics':
-      return pages.topics(page);
-    case 'topic':
-      return pages.topic(page);
-    case 'authors':
-      return pages.authors(page);
-    case 'author':
-      return pages.author(page);
-    case 'search':
-      return pages.search(page);
-    case 'about':
-      return pages.about(page);
-    case 'login':
-      return pages.login(page);
-    case 'desk':
-      return desk.desk(page);
-    case 'editor':
-      return desk.editor(page);
-    case 'settings':
-      return desk.settings(page);
-    case 'lab':
-      return lab(page);
-    case 'signin_required':
-      return pages.signinRequired(page);
-    case 'forbidden':
-      return pages.forbidden();
-    case 'error':
-      return pages.failure(page);
-    case 'loading':
-      return pages.loading();
-    default:
-      return pages.missing(page);
-  }
+  const renderer = rendererOf(page.kind);
+  return renderer ? renderer.render(page, shell) : missing(page);
 }
 
 /** The whole document body for a view model. */
 export function shell(model) {
   const s = model.shell;
-  const wide = model.page.kind === 'lab';
+  const wide = rendererOf(model.page.kind)?.wide === true;
   return [
     h('a', { class: 'skip', href: '#main' }, 'Skip to the content'),
     h(
@@ -97,10 +61,12 @@ export function shell(model) {
             'div',
             { class: 'masthead__tools' },
             h('button', { class: 'link-button', type: 'button', 'data-action': 'theme', 'aria-label': `${THEME_LABEL[model.theme.mode]}. Change theme` }, THEME_LABEL[model.theme.mode]),
-            s.signedIn ? h('a', { href: '/desk', 'aria-current': s.deskCurrent ? 'page' : null }, 'Desk') : null,
+            s.tools.map((item) => h('a', { key: item.href, href: item.href, 'aria-current': item.current ? 'page' : null }, item.label)),
             s.signedIn
               ? h('button', { class: 'link-button', type: 'button', 'data-action': 'logout' }, 'Sign out')
-              : h('a', { href: s.loginHref }, 'Sign in'),
+              : s.loginHref
+                ? h('a', { href: s.loginHref }, 'Sign in')
+                : null,
           ),
         ),
       ),

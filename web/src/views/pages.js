@@ -2,6 +2,8 @@
 // @ts-check
 
 import { h } from '../components/dom.js';
+import { hrefFor } from '../generated/routes.js';
+import { SIGN_IN_SCREEN } from '../generated/screens.js';
 import { date, index, marginNotes, prose, qrCode } from '../components/parts.js';
 
 function topicList(topics, label) {
@@ -346,7 +348,7 @@ export function signinRequired(page) {
   return [
     h('h1', { class: 'page-title' }, 'Sign in to continue'),
     h('p', { class: 'standfirst' }, 'This part of the site is for the people who write and edit here.'),
-    h('p', null, h('a', { class: 'button', href: `/login?next=${encodeURIComponent(page.next)}` }, 'Sign in')),
+    SIGN_IN_SCREEN === null ? null : h('p', null, h('a', { class: 'button', href: hrefFor(SIGN_IN_SCREEN, { next: page.next }) }, 'Sign in')),
   ];
 }
 

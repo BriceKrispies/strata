@@ -48,6 +48,7 @@ pub mod rules;
 pub mod scenarios;
 pub mod web;
 pub mod web_kernel;
+pub mod web_screens;
 pub mod wire;
 
 pub use diagnostic::Diagnostic;

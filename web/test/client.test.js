@@ -5,8 +5,10 @@ import { test } from 'node:test';
 import { isPageAddress } from '../src/address.js';
 import { safeUrl } from '../src/components/dom.js';
 import * as actions from '../src/generated/actions.js';
-import { initialState, principalOf, update } from '../src/kernel/update.js';
+import { NAVIGATION, ROW_ACTIONS, SCREENS, SIGN_IN_PATH, guardedView, pageTitle, rowAction, rowActionAsked } from '../src/generated/screens.js';
+import { enterHookNames, initialState, principalOf, update } from '../src/kernel/update.js';
 import { view } from '../src/kernel/view.js';
+import { registeredKinds } from '../src/views/renderers.js';
 
 const stamp = { at: 1_000, rand: 0.5 };
 const site = { id: 1, version: 1, fields: { name: 'Fieldnotes', tagline: 'Essays.' }, refs: {} };
@@ -27,6 +29,7 @@ const deskModel = {
   data: { site, posts: [row] },
   articles: [{ article_id: 7, version: 3, title: 'On Sharpening', slug: 'on-sharpening', body: 'b', status: 'draft' }],
 };
+const homeShell = () => ({ view: 'home', title: 'Home', path: '/', params: {}, depends_on: [], revision: 1, schema_version: 1, theme, data: { site, featured: null, recent: [], categories: [] } });
 const missingModel = { view: 'missing', title: 'Not found', path: '/nowhere', params: {}, depends_on: [], revision: 1, schema_version: 1, theme, data: { site } };
 
 function boot(path, session, model) {
@@ -295,4 +298,74 @@ test('a step-up prompt takes the focus', () => {
   assert.equal(refused.state.factors.stepUp.retry.name, 'factors.new_codes');
   assert.equal(refused.state.focus.target, 'stepup-secret');
   assert.notEqual(refused.state.focus.token, state.focus.token);
+});
+
+// WG-5039: the page frame derives navigation, guards, entry hooks, renderers, row buttons and the
+// sign-in path from the generated screens module; a screen added to the specification needs no
+// hand-written change here.
+test('the navigation, the tools and the current entry come from the generated screens', () => {
+  const labels = (items) => items.map((i) => i.label);
+  const anon = view(boot('/', anonymous, homeShell()).state).shell;
+  assert.deepEqual(labels(anon.nav), NAVIGATION.filter((n) => n.area === 'menu' && n.visibleTo === 'anyone').map((n) => n.label));
+  assert.deepEqual(anon.tools, [], 'a visitor sees no entry that is for a session');
+  assert.deepEqual(anon.nav.filter((i) => i.current).map((i) => i.href), ['/']);
+  const topic = view(boot('/topics/joinery', anonymous, homeShell()).state).shell;
+  assert.deepEqual(topic.nav.filter((i) => i.current).map((i) => i.href), ['/topics']);
+  const desk = view(boot('/desk', editor, deskModel).state).shell;
+  assert.deepEqual(desk.tools.map((i) => [i.href, i.current]), [['/desk', true]]);
+  const lab = view(boot('/lab', editor, { ...deskModel, view: 'lab', path: '/lab' }).state).shell;
+  assert.deepEqual(lab.tools.map((i) => i.current), [true], 'the lab is current on the desk entry');
+});
+
+test('a screen added to the generated screens is in the navigation with no change to the client', () => {
+  const entry = { screen: 'screen-guide', href: '/guide', label: 'Guide', order: 5, area: 'menu', visibleTo: 'anyone', current: ['/guide*'] };
+  NAVIGATION.push(entry);
+  try {
+    const shell = view(boot('/guide/start', anonymous, homeShell()).state).shell;
+    const guide = shell.nav.find((i) => i.label === 'Guide');
+    assert.ok(guide, 'in the menu');
+    assert.equal(guide.href, '/guide');
+    assert.equal(guide.current, true);
+  } finally {
+    NAVIGATION.pop();
+  }
+});
+
+test('every screen that is guarded states its view, and its entry sections and renderer exist', () => {
+  assert.equal(SIGN_IN_PATH, '/login');
+  const kinds = registeredKinds();
+  const hooks = enterHookNames();
+  for (const s of SCREENS) {
+    assert.equal(guardedView(s.view), s.auth !== 'none', s.screen);
+    for (const name of s.onEnter) assert.ok(hooks.includes(name), `${s.screen} loads ${name} on entry, which no hook is registered for`);
+    if (s.kind !== null) assert.ok(kinds.includes(s.kind), `${s.screen} has no renderer of kind ${s.kind}`);
+    if (s.auth !== 'none') assert.ok(s.title !== null, `${s.screen} states no title`);
+  }
+  assert.equal(guardedView('desk_settings'), true);
+  assert.equal(guardedView('home'), false);
+  assert.equal(guardedView('no-such-view'), false);
+});
+
+test('the row buttons and the page titles come from the generated screens', () => {
+  assert.equal(rowAction('post.publish').action, 'act-desk-publish');
+  assert.equal(rowAction('post.unpublish').marker, 'draft');
+  assert.equal(rowAction('post.delete').confirm, true);
+  assert.equal(rowActionAsked('post.ask_delete').action, 'act-desk-delete');
+  assert.equal(rowAction('post.ask_delete'), null, 'the first press of a confirmation is not the action');
+  assert.ok(ROW_ACTIONS.every((b) => b.rowKey === 'article_id'));
+  assert.equal(pageTitle('post', { data: { post: { fields: { title: 'On Sharpening' } } } }), 'On Sharpening');
+  assert.equal(pageTitle('topics', {}), 'Topics');
+  assert.equal(pageTitle('home', {}), '');
+  const titled = view(boot('/desk', editor, deskModel).state);
+  assert.equal(titled.pageTitle, 'Writing desk');
+  assert.equal(titled.title, 'Writing desk — Fieldnotes');
+});
+
+test('the desk is entered through the hooks its screen names', () => {
+  const desk = boot('/desk', editor, deskModel);
+  const kinds = desk.effects.filter((e) => e.type === 'http').map((e) => e.path);
+  assert.ok(kinds.includes('/api/sessions'), 'the sessions are asked for');
+  assert.ok(kinds.includes('/api/factors'), 'the factors are asked for');
+  const home = boot('/', anonymous, homeShell());
+  assert.equal(home.effects.filter((e) => e.type === 'http').some((e) => e.path === '/api/sessions'), false);
 });

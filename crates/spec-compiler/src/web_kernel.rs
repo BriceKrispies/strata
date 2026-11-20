@@ -88,6 +88,8 @@ pub const KERNEL_FILES: &[&str] = &[
     "live.js",
     "site-path.js",
     "errors.js",
+    "screens.js",
+    "screens.rs",
 ];
 
 /// Code of a contract the kernel needs that names no BFF route, or names one that cannot be read.
@@ -322,7 +324,7 @@ pub fn generate(
             format!("the specification is not valid JSONC: {e}"),
         )]
     })?;
-    let ui: Ui = match serde_json::from_value(value) {
+    let ui: Ui = match serde_json::from_value(value.clone()) {
         Ok(ui) => ui,
         Err(e) => {
             return Err(vec![Diagnostic::new(
@@ -336,6 +338,13 @@ pub fn generate(
         return Ok(Vec::new());
     }
     let mut k = Kernel::new(spec, &ui);
+    let (screens_js, screens_rs) = match crate::web_screens::generate(&value) {
+        Ok(modules) => modules,
+        Err(d) => {
+            k.out.extend(d);
+            (String::new(), String::new())
+        }
+    };
     let files = [
         ("routes.js", k.routes()),
         ("contracts.js", k.contracts(machines)),
@@ -344,6 +353,8 @@ pub fn generate(
         ("live.js", k.live()),
         ("site-path.js", SITE_PATH.to_string()),
         ("errors.js", k.errors()),
+        ("screens.js", screens_js),
+        ("screens.rs", screens_rs),
     ];
     if !k.out.is_empty() {
         return Err(dedup(k.out));
