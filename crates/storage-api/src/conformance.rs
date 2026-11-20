@@ -1010,6 +1010,54 @@ fn accounts_are_scoped_to_their_tenant(store: &dyn Store) {
         store.account(&tenant_id("beta"), "ines").unwrap(),
         Some(other)
     );
+    an_account_is_created_once_and_updated_only_from_what_was_read(store);
+}
+
+/// Part of the accounts check: a login is created once, and updated only from what was read.
+fn an_account_is_created_once_and_updated_only_from_what_was_read(store: &dyn Store) {
+    let alpha = tenant_id("alpha");
+    let account = Account {
+        tenant: alpha.clone(),
+        login: "wren".into(),
+        principal: principal_id("alpha:wren"),
+        display_name: "Wren".into(),
+        password_hash: String::new(),
+        verified_email: None,
+    };
+    assert!(store.create_account(&account).unwrap());
+    // A second creation of the login is refused and leaves the first account as it was.
+    let rival = Account {
+        principal: principal_id("alpha:rival"),
+        display_name: "Rival".into(),
+        ..account.clone()
+    };
+    assert!(!store.create_account(&rival).unwrap());
+    assert_eq!(
+        store.account(&alpha, "wren").unwrap(),
+        Some(account.clone())
+    );
+    // An update applies to what was read, once; a second one from the same read is refused.
+    let verified = Account {
+        verified_email: Some("wren@example.org".into()),
+        ..account.clone()
+    };
+    assert!(store.update_account(&account, &verified).unwrap());
+    let renamed = Account {
+        display_name: "Wren I".into(),
+        ..account.clone()
+    };
+    assert!(!store.update_account(&account, &renamed).unwrap());
+    assert_eq!(
+        store.account(&alpha, "wren").unwrap(),
+        Some(verified.clone())
+    );
+    // An update of a login that is not there changes nothing.
+    let ghost = Account {
+        login: "ghost".into(),
+        ..account
+    };
+    assert!(!store.update_account(&ghost, &ghost).unwrap());
+    assert_eq!(store.account(&alpha, "ghost").unwrap(), None);
 }
 
 fn snapshots_restore_to_the_same_hash(store: &dyn Store) {

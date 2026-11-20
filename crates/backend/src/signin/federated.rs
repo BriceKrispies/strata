@@ -213,6 +213,16 @@ fn create(
         .map(|name| name.trim().chars().take(NAME_CHARS).collect::<String>())
         .filter(|name| !name.is_empty())
         .unwrap_or_else(|| "Signed-in person".to_string());
+    // The address is the person's own when the provider says it checked it and the realm trusts
+    // what the provider says: it asked to link by that claim, or restricted the provider to
+    // domains (checked above). Only then does it redeem an invitation (ADM-153).
+    let proven = who
+        .email
+        .as_deref()
+        .filter(|_| {
+            who.email_verified && (admission.link_verified_email || !admission.domains.is_empty())
+        })
+        .map(normalise_login);
     let account = Account {
         tenant: caller.site.clone(),
         login: format!("{protocol}:{provider}:{}", &digest[..32]),
@@ -220,9 +230,17 @@ fn create(
         display_name,
         // Not a password hash: no password opens this login.
         password_hash: String::new(),
-        verified_email: None,
+        verified_email: proven,
     };
-    app.store.put_account(&account)?;
+    // Created, never overwritten: a second first sign-in that arrives together with this one,
+    // or a later one, keeps the account as it is.
+    let account = if app.store.create_account(&account)? {
+        account
+    } else {
+        app.store
+            .account(&caller.site, &account.login)?
+            .unwrap_or(account)
+    };
     if !tie(app, caller, admission, &who.subject, &principal)? {
         return refuse(caller, protocol, provider, "identity_tied_to_another");
     }

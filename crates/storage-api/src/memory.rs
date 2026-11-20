@@ -911,6 +911,36 @@ impl Store for MemoryStore {
         Ok(())
     }
 
+    fn create_account(&self, account: &Account) -> StoreResult<bool> {
+        let mut inner = self.lock()?;
+        if !inner.tenants.contains_key(&account.tenant) {
+            return Err(StoreError::NotFound(format!("tenant {}", account.tenant)));
+        }
+        let key = (account.tenant.clone(), account.login.clone());
+        if inner.accounts.contains_key(&key) {
+            return Ok(false);
+        }
+        inner.accounts.insert(key, account.clone());
+        Ok(true)
+    }
+
+    fn update_account(&self, expected: &Account, replacement: &Account) -> StoreResult<bool> {
+        if expected.tenant != replacement.tenant || expected.login != replacement.login {
+            return Err(StoreError::Invalid(
+                "an account update keeps its tenant and login".into(),
+            ));
+        }
+        let mut inner = self.lock()?;
+        let key = (expected.tenant.clone(), expected.login.clone());
+        match inner.accounts.get_mut(&key) {
+            Some(current) if current == expected => {
+                *current = replacement.clone();
+                Ok(true)
+            }
+            _ => Ok(false),
+        }
+    }
+
     fn account(&self, tenant: &TenantId, login: &str) -> StoreResult<Option<Account>> {
         Ok(self
             .lock()?

@@ -231,9 +231,23 @@ impl SignInMethod for LinkMethod {
         if !(in_time && token && browser && site) {
             return Ok(None);
         }
-        app.store
-            .account_of(&caller.site, &link.principal)
-            .map_err(Into::into)
+        let Some(account) = app.store.account_of(&caller.site, &link.principal)? else {
+            return Ok(None);
+        };
+        // The link went to the address that is the login, and the person opened it: the address
+        // is proved, so it may redeem an invitation (ADM-153). Written from what was read, so a
+        // concurrent change to the account is not overwritten; a lost race leaves it unproved,
+        // and the next link proves it.
+        if account.verified_email.is_none() && account.login.contains('@') {
+            let proved = Account {
+                verified_email: Some(account.login.clone()),
+                ..account.clone()
+            };
+            if app.store.update_account(&account, &proved)? {
+                return Ok(Some(proved));
+            }
+        }
+        Ok(Some(account))
     }
 }
 

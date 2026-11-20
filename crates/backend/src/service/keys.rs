@@ -6,8 +6,11 @@
 //! (TOK-008); a key that was compromised is refused from the moment it is marked, and is in no
 //! published set (TOK-251).
 //!
-//! The private half is kept in the tenant's documents as PEM. It is not wrapped by a key service
-//! here: the key service is its own component of the specification and is not built yet.
+//! The private half is kept in the tenant's documents sealed under the platform's factor key, the
+//! way TOTP secrets are, so that a copy of the tenant's database or a backup mints no token. A key
+//! stored in the clear by an earlier version is still read, and is sealed the next time it is
+//! written. A key service of its own, with a key per tenant, is a component of the specification
+//! that is not built yet.
 //!
 //! Implements: TOK-008, TOK-251
 
@@ -41,7 +44,13 @@ pub enum KeyState {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SigningKey {
     pub kid: String,
+    /// The private key as PEM. Held in memory only: in the store it is empty and
+    /// `sealed_private` holds it (a key written by an earlier version has it here, in the clear).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub private_pem: String,
+    /// The private key, sealed under the factor key and bound to the tenant and the key id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sealed_private: Option<String>,
     pub public_pem: String,
     /// The public point, base64url, for the published set.
     pub x: String,
@@ -86,6 +95,7 @@ fn generate(now: i64) -> Result<SigningKey, ApiError> {
     Ok(SigningKey {
         kid: format!("k_{}", random_hex(8)?),
         private_pem,
+        sealed_private: None,
         public_pem,
         x: URL_SAFE_NO_PAD.encode(&point[1..33]),
         y: URL_SAFE_NO_PAD.encode(&point[33..65]),
@@ -96,8 +106,46 @@ fn generate(now: i64) -> Result<SigningKey, ApiError> {
     })
 }
 
+fn bound_to(tenant: &TenantId, kid: &str) -> Vec<u8> {
+    format!("signing-key\0{}\0{kid}", tenant.as_str()).into_bytes()
+}
+
+/// A stored key made usable: the sealed private half opened. A key whose seal cannot be opened
+/// (the factor key changed without the old one being kept) is an error, not a missing key.
+fn unseal(app: &App, tenant: &TenantId, mut key: SigningKey) -> Result<SigningKey, ApiError> {
+    if let Some(sealed) = key.sealed_private.take() {
+        let pem = crate::sealing::open(app, &bound_to(tenant, &key.kid), &sealed)
+            .and_then(|bytes| String::from_utf8(bytes).ok())
+            .ok_or_else(|| {
+                internal("the sealed private key does not open under the factor keys")
+            })?;
+        key.private_pem = pem;
+    }
+    Ok(key)
+}
+
+/// Keep a key, with its private half sealed. A key read in the clear is sealed by this write.
+fn save(
+    app: &App,
+    tenant: &TenantId,
+    key: &SigningKey,
+    create_only: bool,
+) -> Result<bool, ApiError> {
+    let mut stored = key.clone();
+    stored.sealed_private = Some(crate::sealing::seal(
+        app,
+        &bound_to(tenant, &key.kid),
+        key.private_pem.as_bytes(),
+    )?);
+    stored.private_pem = String::new();
+    put(app, tenant, KIND, &key.kid, &stored, create_only)
+}
+
 fn all(app: &App, tenant: &TenantId) -> Result<Vec<SigningKey>, ApiError> {
-    list(app, tenant, KIND)
+    list::<SigningKey>(app, tenant, KIND)?
+        .into_iter()
+        .map(|key| unseal(app, tenant, key))
+        .collect()
 }
 
 /// The key that signs now: the newest active one. A tenant that has none yet gets one.
@@ -111,7 +159,7 @@ pub fn active(app: &App, tenant: &TenantId) -> Result<SigningKey, ApiError> {
         return Ok(key);
     }
     let key = generate(now)?;
-    put(app, tenant, KIND, &key.kid, &key, true)?;
+    save(app, tenant, &key, true)?;
     Ok(key)
 }
 
@@ -121,6 +169,7 @@ pub fn verifying(app: &App, tenant: &TenantId, kid: &str) -> Result<Option<Signi
     let Some(key) = super::get::<SigningKey>(app, tenant, KIND, kid)? else {
         return Ok(None);
     };
+    let key = unseal(app, tenant, key)?;
     Ok(usable(&key, app.now().0).then_some(key))
 }
 
@@ -158,12 +207,12 @@ pub fn published(app: &App, tenant: &TenantId) -> Result<Json, ApiError> {
 pub fn rotate(app: &App, tenant: &TenantId, correlation: &str) -> Result<Json, ApiError> {
     let now = app.now().0;
     let fresh = generate(now)?;
-    put(app, tenant, KIND, &fresh.kid, &fresh, true)?;
+    save(app, tenant, &fresh, true)?;
     for mut key in all(app, tenant)? {
         if key.state == KeyState::Active && key.kid != fresh.kid {
             key.state = KeyState::Retired;
             key.retired_at = Some(now);
-            put(app, tenant, KIND, &key.kid.clone(), &key, false)?;
+            save(app, tenant, &key, false)?;
         }
     }
     app.audit(
@@ -182,12 +231,13 @@ pub fn compromise(
     correlation: &str,
 ) -> Result<Json, ApiError> {
     let now = app.now().0;
-    let Some(mut key) = super::get::<SigningKey>(app, tenant, KIND, kid)? else {
+    let Some(key) = super::get::<SigningKey>(app, tenant, KIND, kid)? else {
         return Err(ApiError::new(ErrorCode::NotFound, "No such key."));
     };
+    let mut key = unseal(app, tenant, key)?;
     key.state = KeyState::Compromised;
     key.compromised_at = Some(now);
-    put(app, tenant, KIND, kid, &key, false)?;
+    save(app, tenant, &key, false)?;
     // Whatever happens next, a key signs: the next one is made here and not at the next token.
     active(app, tenant)?;
     app.audit(

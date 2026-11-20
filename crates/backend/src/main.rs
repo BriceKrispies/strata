@@ -21,7 +21,8 @@
 //! | `STRATA_SECOND_FACTOR_REALMS` | unset | Tenants whose realm policy requires a second factor (IDN-018), comma-separated. |
 //! | `STRATA_STEP_UP_AGE_MS` | 15 minutes | How recent an authentication must be for a sensitive operation (IDN-019). |
 //! | `STRATA_RECOVERY_DELAY_MS` | 24 hours | How long account recovery waits before it can complete (IDN-265). |
-//! | `STRATA_FACTOR_KEY` | the service token | The secret TOTP secrets are sealed under. |
+//! | `STRATA_FACTOR_KEY` | none, required outside development | The secret TOTP secrets and signing keys are sealed under: at least 32 characters, not the service token. |
+//! | `STRATA_FACTOR_KEY_PREVIOUS` | unset | Earlier factor keys, comma-separated, that still open what they sealed, for a rotation. |
 //! | `STRATA_SAML_CONFIG` | unset | A JSON file of each tenant's SAML providers. Unset: no tenant has one. |
 //! | `STRATA_SOCKETS_PER_SESSION` | 8 | Open sockets one session may hold. |
 //! | `STRATA_SOCKETS_PER_SOURCE` | 32 | Open sockets one source address may hold. |
@@ -94,9 +95,11 @@ fn federation() -> Result<Federation, String> {
 }
 
 /// What the realms ask of second factors. `STRATA_SECOND_FACTOR_REALMS` names the tenants whose
-/// policy requires one, comma-separated. TOTP secrets are sealed under a key derived from
-/// `STRATA_FACTOR_KEY` when it is set and from the service token otherwise.
-fn factors(service_token: &str) -> Result<FactorPolicy, String> {
+/// policy requires one, comma-separated. TOTP secrets and signing keys are sealed under a key
+/// derived from `STRATA_FACTOR_KEY`, which outside development is required, at least
+/// [`MIN_FACTOR_KEY`] characters, and not the service token the BFF also holds.
+/// `STRATA_FACTOR_KEY_PREVIOUS` lists keys that still open what they sealed, for a rotation.
+fn factors(service_token: &str, dev: bool) -> Result<FactorPolicy, String> {
     let mut policy = FactorPolicy::default();
     for name in var("STRATA_SECOND_FACTOR_REALMS", "")
         .split(',')
@@ -110,8 +113,48 @@ fn factors(service_token: &str) -> Result<FactorPolicy, String> {
     policy.step_up_age_ms = number("STRATA_STEP_UP_AGE_MS", policy.step_up_age_ms)?;
     policy.recovery_delay_ms = number("STRATA_RECOVERY_DELAY_MS", policy.recovery_delay_ms)?;
     let key = var("STRATA_FACTOR_KEY", "");
-    policy.seal_key = SealKey::derive(if key.is_empty() { service_token } else { &key });
+    let previous = var("STRATA_FACTOR_KEY_PREVIOUS", "");
+    seal_keys(&mut policy, service_token, dev, &key, &previous)?;
     Ok(policy)
+}
+
+/// The fewest characters a factor key may have.
+const MIN_FACTOR_KEY: usize = 32;
+
+fn seal_keys(
+    policy: &mut FactorPolicy,
+    service_token: &str,
+    dev: bool,
+    key: &str,
+    previous: &str,
+) -> Result<(), String> {
+    let check = |name: &str, value: &str| -> Result<(), String> {
+        if value.len() < MIN_FACTOR_KEY {
+            return Err(format!(
+                "{name} must be at least {MIN_FACTOR_KEY} characters"
+            ));
+        }
+        if value == service_token {
+            return Err(format!("{name} must not be the service token"));
+        }
+        Ok(())
+    };
+    if key.is_empty() {
+        if !dev {
+            return Err(format!(
+                "STRATA_FACTOR_KEY must be set to at least {MIN_FACTOR_KEY} characters, and not the service token"
+            ));
+        }
+        // Development keeps the built-in key.
+    } else {
+        check("STRATA_FACTOR_KEY", key)?;
+        policy.seal_key = SealKey::derive(key);
+    }
+    for old in previous.split(',').map(str::trim).filter(|k| !k.is_empty()) {
+        check("STRATA_FACTOR_KEY_PREVIOUS", old)?;
+        policy.previous_seal_keys.push(SealKey::derive(old));
+    }
+    Ok(())
 }
 
 /// A limit from the environment: a whole number, at least one.
@@ -200,7 +243,8 @@ fn start() -> Result<(Config, Arc<dyn Store>), String> {
         }
         other => return Err(format!("STRATA_STORE: unknown adapter {other:?}")),
     };
-    let policy = factors(&service_token)?;
+    let dev = var("STRATA_DEV", "") == "1";
+    let policy = factors(&service_token, dev)?;
     let cfg = Config {
         addr,
         service_token,
@@ -235,4 +279,35 @@ async fn main() {
     }
     .await;
     server::exit_on_error("strata-backend", result);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const TOKEN: &str = "service-token-0123456789abcdefghij";
+    const KEY: &str = "factor-key-0123456789abcdefghijklmnop";
+
+    fn run(dev: bool, key: &str, previous: &str) -> Result<FactorPolicy, String> {
+        let mut policy = FactorPolicy::default();
+        seal_keys(&mut policy, TOKEN, dev, key, previous).map(|()| policy)
+    }
+
+    #[test]
+    fn outside_development_a_separate_long_factor_key_is_required() {
+        assert!(run(false, "", "").is_err());
+        assert!(run(false, TOKEN, "").is_err());
+        assert!(run(false, "short", "").is_err());
+        assert!(run(true, "", "").is_ok());
+        assert!(run(false, KEY, "").is_ok());
+    }
+
+    #[test]
+    fn previous_keys_are_kept_and_held_to_the_same_rules() {
+        let policy = run(false, KEY, &format!("{KEY}-old, {KEY}-older")).unwrap();
+        assert_eq!(policy.previous_seal_keys.len(), 2);
+        assert_eq!(policy.seal_key, SealKey::derive(KEY));
+        assert!(run(false, KEY, "short").is_err());
+        assert!(run(false, KEY, TOKEN).is_err());
+    }
 }

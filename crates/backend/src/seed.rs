@@ -121,7 +121,7 @@ fn install_dev_accounts(app: &App, tenant: &TenantId, loaded: &LoadedTenant) -> 
     for account in &loaded.dev_accounts {
         let known = app
             .store
-            .account(tenant, &account.login.to_lowercase())
+            .account(tenant, &crate::signin::normalise_login(&account.login))
             .map_err(|e| e.to_string())?
             .is_some();
         if known {
@@ -156,7 +156,7 @@ fn withdraw_dev_accounts(
     loaded: &LoadedTenant,
 ) -> Result<(), String> {
     for account in &loaded.dev_accounts {
-        let login = account.login.to_lowercase();
+        let login = crate::signin::normalise_login(&account.login);
         let Some(stored) = app
             .store
             .account(tenant, &login)

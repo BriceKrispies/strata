@@ -2985,6 +2985,56 @@ impl Store for SqliteStore {
         Ok(())
     }
 
+    fn create_account(&self, account: &Account) -> StoreResult<bool> {
+        let file = self.existing(&account.tenant)?;
+        let inserted = file
+            .lock()
+            .map_err(dbe)?
+            .execute(
+                "INSERT INTO accounts (login, principal, display_name, password_hash, verified_email) VALUES (?1, ?2, ?3, ?4, ?5)
+                 ON CONFLICT (login) DO NOTHING",
+                params![
+                    account.login,
+                    account.principal.as_str(),
+                    account.display_name,
+                    account.password_hash,
+                    account.verified_email
+                ],
+            )
+            .map_err(db)?;
+        Ok(inserted == 1)
+    }
+
+    fn update_account(&self, expected: &Account, replacement: &Account) -> StoreResult<bool> {
+        if expected.tenant != replacement.tenant || expected.login != replacement.login {
+            return Err(StoreError::Invalid(
+                "an account update keeps its tenant and login".into(),
+            ));
+        }
+        let file = self.existing(&expected.tenant)?;
+        let changed = file
+            .lock()
+            .map_err(dbe)?
+            .execute(
+                "UPDATE accounts SET principal = ?2, display_name = ?3, password_hash = ?4, verified_email = ?5
+                 WHERE login = ?1 AND principal = ?6 AND display_name = ?7 AND password_hash = ?8
+                   AND verified_email IS ?9",
+                params![
+                    expected.login,
+                    replacement.principal.as_str(),
+                    replacement.display_name,
+                    replacement.password_hash,
+                    replacement.verified_email,
+                    expected.principal.as_str(),
+                    expected.display_name,
+                    expected.password_hash,
+                    expected.verified_email
+                ],
+            )
+            .map_err(db)?;
+        Ok(changed == 1)
+    }
+
     fn account(&self, tenant: &TenantId, login: &str) -> StoreResult<Option<Account>> {
         let Some(file) = self.tenant_db(tenant)? else {
             return Ok(None);
