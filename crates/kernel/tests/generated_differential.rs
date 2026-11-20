@@ -29,19 +29,6 @@
 //!      generated `policy-check-text` writes `<condition>: evaluation failed`, because
 //!      `policy-check` does not carry the error (a gap of WG-4938). Compared as: the generated
 //!      detail minus its suffix is a prefix of the hand-written detail.
-//!   2. Not mirrored: a query filter, a field read condition or a Read policy condition that
-//!      follows a reference (`through`), and the `InsufficientState` the hand-written kernel
-//!      answers when the snapshot lacks the record it would follow (`expr::missing`,
-//!      `visible_in`, WG-5096). The generated `kernel-read`, filters, `redact` and `visible`
-//!      evaluate without a lookup, so they fail such a condition. Guarded:
-//!      `assert_no_input_of_a_known_difference` fails on a filter or a field read condition that
-//!      follows a reference and on a policy that follows one and applies to Read. A policy
-//!      condition of a transition is mirrored (`authorize-needing`, `rule-lookup`,
-//!      `rule-missing`, WG-5132, WG-5133), with one difference kept: the generated lookup leaves
-//!      out a reference field when the snapshot does not cover the field's target in the old or
-//!      in the new record, so a condition that follows the covered one of two different targets
-//!      fails where the kernel follows it. An update of the corpus never changes a reference, and
-//!      `compare_attributed` fails on an intent that does.
 //!   3. Not exercised: a query order key over a list-valued attribute. The generated order
 //!      does not order a list element by element, as `Value`'s derived order does.
 //!      The corpus has no list-valued order key (it has a list-valued field, `tags`, which no
@@ -69,8 +56,8 @@
 //!      is mirrored by `after-decision`): (a) the check that a condition or a run key reads nothing
 //!      the automation principal may not read (`unreadable`, which declines with `condition-failed`)
 //!      and the `InsufficientState` of a record a condition follows to (`expr::missing`): both walk
-//!      the expression tree, a structural recursion that specc refuses, and following a reference
-//!      is difference 2; (b) the run key of a started run: the kernel writes the SHA-256 of the
+//!      the expression tree, and the generated `decide-run` evaluates a trigger condition without
+//!      the snapshot's lookup; (b) the run key of a started run: the kernel writes the SHA-256 of the
 //!      canonical JSON of the value, and the function language has no hash, so the generated
 //!      `trigger-start` writes the canonical JSON itself (`value-canonical-json`) and the test
 //!      hashes it with `canon::hash_bytes` before comparing, which compares the hash of the same
@@ -155,19 +142,37 @@
 //!      of their type. The generated `automation-step-problems` checks only the expressions of its
 //!      inputs. Guarded: `assert_no_input_of_a_known_difference` fails on an automation that holds
 //!      such a step.
+//!  16. Not mirrored: a rule of a transition (a policy condition, a workflow guard or assignment)
+//!      that follows the covered one of two different targets of one reference field. The
+//!      generated lookup (`rule-lookup`) is keyed by field: it holds a field only when the snapshot
+//!      covers the field's targets in both the stored record and the candidate, because Exegra's
+//!      lookup tells a target the snapshot covers but does not hold (null) from a field it does
+//!      not cover (an error), and has no way to say that one target of a field it holds is not
+//!      covered. The kernel's `Lookup` refuses per record. So when an update changes a reference
+//!      and the snapshot covers only one of the two targets, a rule that follows the covered one
+//!      fails to evaluate where the kernel follows it. A read has one record as old and new and
+//!      cannot reach this. Guarded: an update of the corpus never changes a reference, and
+//!      `compare_attributed` fails on an intent that does.
 //!
 //! Every difference that is not compared through an adjustment is guarded, so that a corpus that
 //! grows into one is told to mirror the rule or to count the difference here:
 //! `assert_no_input_of_a_known_difference` runs on every snapshot the test decides or reads and
-//! fails on an input of differences 2, 7, 8, 9, 11, 12 or 15; `compare_transition` fails on an
+//! fails on an input of differences 7, 8, 9, 11, 12 or 15; `compare_transition` fails on an
 //! intent of differences 10, 11 or 14 and on a schema change that warns of a scan (difference
 //! 13); `compare_read` fails on a read of a planned query (difference 13); `compare_attributed`
-//! fails on an update that changes a reference (difference 2). Difference 1 is compared through
+//! fails on an update that changes a reference (difference 16). Difference 1 is compared through
 //! an adjustment (the detail's prefix) and the run key of difference 9 through another
 //! (`hash_run_keys`). Differences 3 and 4 are guarded by the operation generator drawing nothing
-//! that reaches them. (Numbers 5 and 6 are free: their differences are mirrored now.)
+//! that reaches them. (Numbers 2, 5 and 6 are free: their differences are mirrored now.)
 //!
-//! Mirrored, so no longer differences: the limits and sizes of a stored value at any depth
+//! Mirrored, so no longer differences: the reads, query filters, field read conditions and
+//! workflow guards that follow a reference, through the snapshot's lookup, with the
+//! `InsufficientState` naming the record they need when the snapshot does not cover it
+//! (`visible-in`, `redact`, `named-read`, `workflow-step` with `rule-lookup` and `rule-missing`;
+//! WG-5096), compared by `compare_following_reads` on a Read policy, a filter and a field read
+//! condition that read `record.author.name`, over the complete snapshot and over one that covers
+//! only what the read plans to load, and by `compare_attributed` on a workflow guard that reads
+//! `old.author.name`; the limits and sizes of a stored value at any depth
 //! (`value-limit-problem`, `value-json-bytes`, restated by structural recursion; WG-5133),
 //! compared on lists nested two and three deep (`BigShape::DeepString`, `DeepList`, `DeepFine`);
 //! a policy on every object whose condition reads a field (`mentions-field` in
@@ -1203,8 +1208,8 @@ fn reconcile_evaluation_failed(hand: &[Check], generated: &mut [Check]) -> usize
     matched
 }
 
-/// Whether an expression follows a reference (`through`): what the generated functions cannot
-/// (difference 2).
+/// Whether an expression follows a reference (`through`): what the generated trigger decisions
+/// do not follow (difference 9).
 fn mentions_through(expr: &Expr) -> bool {
     match expr {
         Expr::Through(..) => true,
@@ -1264,41 +1269,13 @@ fn reads_a_field(expr: &Expr, named: &dyn Fn(&str) -> bool) -> bool {
     }
 }
 
-/// Differences 2, 7, 8, 9, 11 and 12 of the header: fail when a snapshot holds an input of a
+/// Differences 7, 8, 9, 11, 12 and 15 of the header: fail when a snapshot holds an input of a
 /// rule the generated functions do not mirror, so the corpus cannot start to depend on one
 /// silently.
 fn assert_no_input_of_a_known_difference(state: &State) {
     let Some(tenant) = &state.tenant else {
         return;
     };
-    for (object_id, def) in &tenant.schema.objects {
-        for (field_id, field) in &def.fields {
-            if let Some(read) = &field.read {
-                assert!(
-                    !mentions_through(read),
-                    "{object_id}.{field_id} has a read condition that follows a reference; the generated redact has no lookup (difference 2)"
-                );
-            }
-        }
-    }
-    for query in tenant.schema.queries.values() {
-        if let Some(filter) = &query.filter {
-            assert!(
-                !mentions_through(filter),
-                "{} has a filter that follows a reference; the generated kernel-read has no lookup (difference 2)",
-                query.id
-            );
-        }
-    }
-    for policy in tenant.schema.policies.values() {
-        if let Some(condition) = &policy.condition {
-            assert!(
-                !(mentions_through(condition) && policy.actions.contains(&Action::Read)),
-                "{} follows a reference and applies to Read; the generated visible and kernel-read have no lookup (difference 2)",
-                policy.id.0
-            );
-        }
-    }
     for query in tenant.schema.queries.values() {
         assert!(
             query.aggregates.is_none() && query.declared_fields.is_none(),
@@ -1454,6 +1431,10 @@ struct Tally {
     attributed: usize,
     /// Of those on a partial snapshot, the ones the kernel answered with `InsufficientState`.
     attributed_insufficient: usize,
+    /// Reads compared under rules that follow a reference (`compare_following_reads`).
+    following: usize,
+    /// Of those on a partial snapshot, the ones the kernel answered with `InsufficientState`.
+    following_insufficient: usize,
 }
 
 /// The policies on every object of `SchemaOp::AnyObjectPolicy` (WG-5133): only the first is
@@ -1501,8 +1482,8 @@ fn any_object_policy(kind: u8) -> PolicyDef {
 
 /// A writer may update a note whose author record has a name: a policy that follows a
 /// reference (`record.author.name`), which the generated `require` decides through
-/// `authorize-needing` with the snapshot's lookup (WG-5132, WG-5133). It applies to Update only,
-/// since the generated reads have no lookup (difference 2). Its id sorts before
+/// `authorize-needing` with the snapshot's lookup (WG-5132, WG-5133). It applies to Update only;
+/// the reads that follow a reference are compared by `compare_following_reads`. Its id sorts before
 /// `writers_edit_own`, so it is tried first.
 fn writers_edit_attributed() -> PolicyDef {
     PolicyDef {
@@ -1543,7 +1524,7 @@ fn compare_attributed(state: &State, intent: &Intent, context: &Context, tally: 
     {
         return;
     }
-    // Difference 2: the generated lookup leaves out a field whose old and new targets differ in
+    // Difference 16: the generated lookup leaves out a field whose old and new targets differ in
     // coverage, so the comparison holds for an update that keeps every reference.
     let holds_reference = |value: &Value| match value {
         Value::Ref(_) => true,
@@ -1552,11 +1533,30 @@ fn compare_attributed(state: &State, intent: &Intent, context: &Context, tally: 
     };
     assert!(
         !fields.values().any(holds_reference),
-        "an update of the corpus changes a reference; the generated lookup does not follow the covered one of two targets (difference 2)"
+        "an update of the corpus changes a reference; the generated lookup does not follow the covered one of two targets (difference 16)"
     );
     let mut schema = TenantSchema::clone(&tenant.schema);
     let policy = writers_edit_attributed();
     schema.policies.insert(policy.id.clone(), policy);
+    // A workflow guard that follows a reference when the guard it had does not hold (WG-5096):
+    // `<guard> or not(is_null(old.author.name))`.
+    for workflow in schema.workflows.values_mut() {
+        if workflow.object != note {
+            continue;
+        }
+        for step in &mut workflow.transitions {
+            if let Some(guard) = step.guard.take() {
+                step.guard = Some(Expr::Or(vec![
+                    guard,
+                    Expr::Not(Box::new(Expr::IsNull(Box::new(Expr::Through(
+                        Scope::Old,
+                        "author".into(),
+                        "name".into(),
+                    ))))),
+                ]));
+            }
+        }
+    }
     let mut attributed = TenantState::clone(tenant);
     attributed.schema = std::sync::Arc::new(schema);
     let planned: BTreeSet<Need> = needs(Some(attributed.schema.as_ref()), intent)
@@ -1729,6 +1729,111 @@ fn compare_reads_of(world: &World, now: i64, tally: &mut Tally) {
     }
 }
 
+/// The tenant with three rules that follow a reference (WG-5096): a Read policy of the public role
+/// on notes, `not(is_null(record.author.name))`; the same as the filter of a query
+/// `attributed_notes`; and a read condition on a note's title, `has_role(owner) or` the same. None
+/// when the tenant's notes have no author field.
+fn following_reads(tenant: &TenantState) -> Option<TenantState> {
+    let note = object("note");
+    let named = || {
+        Expr::Not(Box::new(Expr::IsNull(Box::new(Expr::Through(
+            Scope::Record,
+            "author".into(),
+            "name".into(),
+        )))))
+    };
+    let mut schema = TenantSchema::clone(&tenant.schema);
+    let def = schema.objects.get_mut(&note)?;
+    if !def.fields.contains_key(&field("author")) {
+        return None;
+    }
+    if let Some(title) = def.fields.get_mut(&field("title")) {
+        title.read = Some(Expr::Or(vec![Expr::HasRole(role("owner")), named()]));
+    }
+    let policy = PolicyDef {
+        id: PolicyId::new("public_reads_attributed").unwrap(),
+        role: role("public"),
+        resource: Resource::Object(note.clone()),
+        actions: BTreeSet::from([Action::Read]),
+        condition: Some(named()),
+    };
+    schema.policies.insert(policy.id.clone(), policy);
+    let query = QueryDef {
+        id: QueryId::new("attributed_notes").unwrap(),
+        object: note,
+        filter: Some(named()),
+        params: BTreeSet::new(),
+        order: vec![],
+        limit: None,
+        aggregates: None,
+        declared_fields: None,
+    };
+    schema.queries.insert(query.id.clone(), query);
+    let mut out = TenantState::clone(tenant);
+    out.schema = std::sync::Arc::new(schema);
+    Some(out)
+}
+
+/// Reads under rules that follow a reference (`following_reads`; WG-5096), as every kind of
+/// principal of every tenant: the scanned query `attributed_notes` and the notes by id, over the
+/// complete snapshot and over one that covers only what the read plans to load (`read_needs`),
+/// which leaves out the people the notes refer to. On the second the kernel answers
+/// `InsufficientState` naming a person a rule needs, and the generated `kernel-read` must answer
+/// the same.
+fn compare_following_reads(world: &World, now: i64, tally: &mut Tally) {
+    let requests = [
+        ReadRequest::Named {
+            query: QueryId::new("attributed_notes").unwrap(),
+            params: BTreeMap::new(),
+            page_size: None,
+            cursor: None,
+        },
+        ReadRequest::Records {
+            object: object("note"),
+            ids: (1..9).map(RecordId).collect(),
+        },
+    ];
+    for tenant in WORLD_TENANTS {
+        let state = world.state(&tenant_id(tenant));
+        let Some(following) = state.tenant.as_deref().and_then(following_reads) else {
+            continue;
+        };
+        let complete = State {
+            tenant_id: state.tenant_id.clone(),
+            tenant: Some(std::sync::Arc::new(following)),
+            coverage: Coverage::Complete,
+        };
+        for actor_tenant in 0..WORLD_TENANTS.len() {
+            for actor in 0..8 {
+                let context = ctx(tenant, principal_of(actor_tenant, actor), now);
+                for request in &requests {
+                    compare_read(&complete, request, &context, tally);
+                    let planned: BTreeSet<Need> = complete
+                        .tenant
+                        .as_deref()
+                        .map(|t| read_needs(&t.schema, request))
+                        .unwrap_or_default()
+                        .into_iter()
+                        .collect();
+                    let partial = State {
+                        tenant_id: complete.tenant_id.clone(),
+                        tenant: complete.tenant.clone(),
+                        coverage: Coverage::Partial(planned),
+                    };
+                    compare_read(&partial, request, &context, tally);
+                    if matches!(
+                        read(&partial, request, &context),
+                        Err(e) if e.kind == ErrorKind::InsufficientState
+                    ) {
+                        tally.following_insufficient += 1;
+                    }
+                    tally.following += 1;
+                }
+            }
+        }
+    }
+}
+
 /// The resolution of every setting for every principal of every tenant (`settings::resolve` and the
 /// generated `resolve-setting`): a defined setting, one that is not, and a person in a team.
 fn compare_settings(world: &World, tally: &mut Tally) {
@@ -1820,6 +1925,7 @@ fn the_hand_written_kernel_agrees_with_the_generated_functions() {
             if sequence % 4 == 0 {
                 let now = 99_000 + (index * SEQUENCES + sequence) as i64;
                 compare_reads_of(&world, now, &mut tally);
+                compare_following_reads(&world, now, &mut tally);
                 compare_visibility(&world, now, &mut tally);
                 compare_settings(&world, &mut tally);
             }
@@ -1853,6 +1959,17 @@ fn the_hand_written_kernel_agrees_with_the_generated_functions() {
         tally.attributed_insufficient > 0,
         "no update under a policy that follows a reference asked for the record it needs"
     );
+    // The reads under rules that follow a reference are compared on complete and partial
+    // snapshots, and the partial ones reach the InsufficientState that names the record needed.
+    assert!(
+        tally.following > 100,
+        "only {} reads under rules that follow a reference",
+        tally.following
+    );
+    assert!(
+        tally.following_insufficient > 0,
+        "no read under a rule that follows a reference asked for the record it needs"
+    );
     assert!(
         tally.settings > 500,
         "only {} setting resolutions",
@@ -1861,7 +1978,8 @@ fn the_hand_written_kernel_agrees_with_the_generated_functions() {
     eprintln!(
         "compared {} decisions ({} accepted, {} rejected), {} reads, {} visibility checks, {} plans; \
          {} policy-condition details matched under difference 1; {} updates under a policy that \
-         follows a reference, {} of them InsufficientState on a partial snapshot",
+         follows a reference, {} of them InsufficientState on a partial snapshot; {} reads under \
+         rules that follow a reference, {} of them InsufficientState",
         tally.compared,
         tally.accepted,
         tally.rejected,
@@ -1870,7 +1988,9 @@ fn the_hand_written_kernel_agrees_with_the_generated_functions() {
         tally.needs,
         tally.evaluation_failed_details,
         tally.attributed,
-        tally.attributed_insufficient
+        tally.attributed_insufficient,
+        tally.following,
+        tally.following_insufficient
     );
 }
 
