@@ -2,7 +2,6 @@
 import { expect, Journey, test } from './journey.js';
 
 // Verifies: IDN-022
-// Verifies: OBS-001
 test("No log line holds a password, a session token or a CSRF token", async ({ browser, baseURL, page, context }) => {
   const j = await Journey.start({ browser, baseURL, page, context }, [], { logs: true });
   try {
