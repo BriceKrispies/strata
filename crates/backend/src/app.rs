@@ -69,6 +69,14 @@ impl SealKey {
         }
         SealKey(key)
     }
+
+    /// A short identifier for the key, stored with every secret it seals so that a rotation
+    /// knows which key opens which secret. It reveals nothing of the key.
+    pub fn id(&self) -> String {
+        let mut bytes = b"strata/seal-key-id/v1\0".to_vec();
+        bytes.extend_from_slice(&self.0);
+        strata_kernel::canon::hash_bytes(&bytes)[..8].to_string()
+    }
 }
 
 impl std::fmt::Debug for SealKey {
@@ -98,8 +106,11 @@ pub struct FactorPolicy {
     pub code_attempts_max: u32,
     /// How long a sign-in waits for its second factor.
     pub pending_ttl_ms: i64,
-    /// The key TOTP secrets are sealed under.
+    /// The key secrets are sealed under from now on.
     pub seal_key: SealKey,
+    /// Keys that sealed secrets earlier and still open them, so that a rotation does not lock
+    /// anyone out. Secrets are re-sealed under `seal_key` when they are next written.
+    pub previous_seal_keys: Vec<SealKey>,
 }
 
 impl Default for FactorPolicy {
@@ -114,6 +125,7 @@ impl Default for FactorPolicy {
             code_attempts_max: 5,
             pending_ttl_ms: 5 * 60_000,
             seal_key: SealKey::derive("strata development seal key"),
+            previous_seal_keys: Vec::new(),
         }
     }
 }

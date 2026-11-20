@@ -26,7 +26,7 @@ use serde_json::{json, Value as Json};
 use std::collections::BTreeSet;
 use strata_kernel::{owner_role, public_role, Intent, PrincipalId, RoleId, TenantId};
 use strata_protocol::api::ErrorCode;
-use strata_storage_api::{Account, FederatedIdentity, ThrottleSettle, ThrottleVerdict};
+use strata_storage_api::{Account, FederatedIdentity, ThrottleVerdict};
 
 /// Deactivated people, by principal.
 pub const DISABLED: &str = "disabled";
@@ -43,11 +43,22 @@ const SCHEMA_LIST: &str = "urn:ietf:params:scim:api:messages:2.0:ListResponse";
 const SCHEMA_ERROR: &str = "urn:ietf:params:scim:api:messages:2.0:Error";
 const MAX_LISTED: usize = 200;
 const NAME_CHARS: usize = 80;
+/// The longest a provisioning token may be given to live: ten years.
+const MAX_TOKEN_LIFE_SECONDS: i64 = 10 * 366 * 86_400;
+/// A token's last use is rewritten at most this often, so a busy provider does not write the
+/// token on every request.
+const LAST_USED_GRAIN_MS: i64 = 60_000;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct ProvisioningToken {
     id: String,
     created_at: i64,
+    /// After this instant the token is refused. `None`: it does not expire.
+    #[serde(default)]
+    expires_at: Option<i64>,
+    /// When a request last presented it, to the nearest `LAST_USED_GRAIN_MS`.
+    #[serde(default)]
+    last_used_at: Option<i64>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -81,13 +92,31 @@ fn error(status: u16, detail: &str, scim_type: Option<&str>) -> Answer {
 // ---------------------------------------------------------------------------------------------
 // The provisioning token
 
-/// Make a provisioning token for the realm. It is in the reply and nowhere else.
-pub fn create_token(app: &App, identity: &Identity) -> Result<Json, ApiError> {
+/// Make a provisioning token for the realm. It is in the reply and nowhere else. The body may
+/// carry `expires_in_seconds`: after that long the token is refused.
+pub fn create_token(app: &App, identity: &Identity, body: &Json) -> Result<Json, ApiError> {
     require_owner(app, identity)?;
+    let now = app.now().0;
+    let expires_at = match body.get("expires_in_seconds") {
+        None | Some(Json::Null) => None,
+        Some(value) => match value.as_i64() {
+            Some(seconds) if (1..=MAX_TOKEN_LIFE_SECONDS).contains(&seconds) => {
+                Some(now + seconds * 1000)
+            }
+            _ => {
+                return Err(ApiError::new(
+                    ErrorCode::Invalid,
+                    "expires_in_seconds is a whole number of seconds, at least one and at most ten years.",
+                ))
+            }
+        },
+    };
     let token = format!("scimt_{}", random_hex(32)?);
     let record = ProvisioningToken {
         id: format!("pt_{}", random_hex(6)?),
-        created_at: app.now().0,
+        created_at: now,
+        expires_at,
+        last_used_at: None,
     };
     put(
         app,
@@ -102,7 +131,42 @@ pub fn create_token(app: &App, identity: &Identity) -> Result<Json, ApiError> {
         &identity.correlation,
         json!({ "tenant": identity.tenant.as_str(), "id": record.id }),
     );
-    Ok(json!({ "id": record.id, "token": token }))
+    Ok(json!({ "id": record.id, "token": token, "expires_at": record.expires_at }))
+}
+
+/// The provisioning token a request presented, if it is known and has not expired. A use is
+/// recorded, so the owner can see which tokens are still in use.
+fn presented_token(
+    app: &App,
+    tenant: &TenantId,
+    request: &Json,
+) -> Result<Option<ProvisioningToken>, ApiError> {
+    let Some(token) = request
+        .get("authorization")
+        .and_then(Json::as_str)
+        .and_then(|header| header.strip_prefix("Bearer "))
+        .filter(|token| token.len() <= 256)
+    else {
+        return Ok(None);
+    };
+    let key = token_hash(token);
+    let Some(text) = app.store.doc_get(tenant, TOKEN, &key)? else {
+        return Ok(None);
+    };
+    let mut record: ProvisioningToken = serde_json::from_str(&text)
+        .map_err(|e| ApiError::hidden(ErrorCode::Internal, format!("{TOKEN}: {e}")))?;
+    let now = app.now().0;
+    if record.expires_at.is_some_and(|at| now >= at) {
+        return Ok(None);
+    }
+    if record
+        .last_used_at
+        .is_none_or(|at| now - at >= LAST_USED_GRAIN_MS)
+    {
+        record.last_used_at = Some(now);
+        put(app, tenant, TOKEN, &key, &record, false)?;
+    }
+    Ok(Some(record))
 }
 
 /// Withdraw a provisioning token: its next request is refused.
@@ -410,27 +474,32 @@ fn create_user(app: &App, caller: &Caller, body: &Json) -> Result<Answer, ApiErr
     }
     let principal = PrincipalId::new(format!("user:scim-{}", random_hex(12)?))
         .map_err(|e| ApiError::hidden(ErrorCode::Internal, e.to_string()))?;
+    let display_name: String = body
+        .get("displayName")
+        .and_then(clean_name)
+        .unwrap_or_else(|| user_name.trim().chars().take(NAME_CHARS).collect());
+    // The login is taken first, in one step that only the first of two concurrent creations of
+    // one userName wins; the loser writes nothing else.
+    if !app.store.create_account(&Account {
+        tenant: caller.site.clone(),
+        login,
+        principal: principal.clone(),
+        display_name: display_name.clone(),
+        // Not a password hash: no password opens this login.
+        password_hash: String::new(),
+        verified_email: None,
+    })? {
+        return Ok(error(409, "That userName is in use.", Some("uniqueness")));
+    }
     let user = ScimUser {
         principal: principal.as_str().to_string(),
         user_name: user_name.trim().to_string(),
         external_id: external_id.clone(),
-        display_name: body
-            .get("displayName")
-            .and_then(clean_name)
-            .unwrap_or_else(|| user_name.trim().chars().take(NAME_CHARS).collect()),
+        display_name,
         active: true,
         created_at: app.now().0,
     };
     put(app, &caller.site, USER, principal.as_str(), &user, true)?;
-    app.store.put_account(&Account {
-        tenant: caller.site.clone(),
-        login,
-        principal: principal.clone(),
-        display_name: user.display_name.clone(),
-        // Not a password hash: no password opens this login.
-        password_hash: String::new(),
-        verified_email: None,
-    })?;
     if let Some(external) = external_id {
         app.store.put_identity(&FederatedIdentity {
             tenant: caller.site.clone(),
@@ -465,7 +534,23 @@ fn user_name_filter(filter: &str) -> Option<String> {
     Some(value.strip_prefix('"')?.strip_suffix('"')?.to_string())
 }
 
-fn list_users(app: &App, caller: &Caller, filter: Option<&str>) -> Result<Answer, ApiError> {
+/// A whole number of a query, as the gateway passes it (a number or its text).
+fn query_number(request: &Json, name: &str) -> Option<i64> {
+    match request.pointer(&format!("/query/{name}"))? {
+        Json::Number(n) => n.as_i64(),
+        Json::String(s) => s.trim().parse().ok(),
+        _ => None,
+    }
+}
+
+fn list_users(app: &App, caller: &Caller, request: &Json) -> Result<Answer, ApiError> {
+    let filter = request.pointer("/query/filter").and_then(Json::as_str);
+    // RFC 7644 3.4.2.4: `startIndex` is one-based and below one means one; `count` below zero
+    // means zero, and more than the server's own cap is the cap.
+    let start = query_number(request, "startIndex").unwrap_or(1).max(1) as usize;
+    let count = query_number(request, "count").map_or(MAX_LISTED, |count| {
+        count.clamp(0, MAX_LISTED as i64) as usize
+    });
     let wanted = match filter {
         None => None,
         Some(filter) => match user_name_filter(filter) {
@@ -480,22 +565,26 @@ fn list_users(app: &App, caller: &Caller, filter: Option<&str>) -> Result<Answer
         },
     };
     let users: Vec<ScimUser> = list(app, &caller.site, USER)?;
-    let found: Vec<Json> = users
+    let matching: Vec<&ScimUser> = users
         .iter()
         .filter(|u| {
             wanted
                 .as_ref()
                 .is_none_or(|name| normalise_login(&u.user_name) == *name)
         })
-        .take(MAX_LISTED)
-        .map(render)
+        .collect();
+    let found: Vec<Json> = matching
+        .iter()
+        .skip(start - 1)
+        .take(count)
+        .map(|user| render(user))
         .collect();
     Ok((
         200,
         json!({
             "schemas": [SCHEMA_LIST],
-            "totalResults": found.len(),
-            "startIndex": 1,
+            "totalResults": matching.len(),
+            "startIndex": start,
             "itemsPerPage": found.len(),
             "Resources": found,
         }),
@@ -561,10 +650,21 @@ fn save_user(app: &App, tenant: &TenantId, user: &ScimUser) -> Result<(), ApiErr
     put(app, tenant, USER, &user.principal, user, false)?;
     let principal = PrincipalId::new(user.principal.clone())
         .map_err(|e| ApiError::hidden(ErrorCode::Internal, e.to_string()))?;
-    if let Some(mut account) = app.store.account_of(tenant, &principal)? {
-        if account.display_name != user.display_name {
-            account.display_name = user.display_name.clone();
-            app.store.put_account(&account)?;
+    // The name is changed from what was read, so a change made meanwhile (a verified address)
+    // is not overwritten; a lost race reads again.
+    for _ in 0..3 {
+        let Some(account) = app.store.account_of(tenant, &principal)? else {
+            break;
+        };
+        if account.display_name == user.display_name {
+            break;
+        }
+        let renamed = Account {
+            display_name: user.display_name.clone(),
+            ..account.clone()
+        };
+        if app.store.update_account(&account, &renamed)? {
+            break;
         }
     }
     Ok(())
@@ -681,6 +781,24 @@ fn delete_user(app: &App, caller: &Caller, id: &str) -> Result<Answer, ApiError>
                 &mapping.role,
             )?;
         }
+    }
+    // Whatever role is still held was given directly, not by a group: taken back too, so that
+    // the person's roles do not outlive the person.
+    let direct: Vec<RoleId> = app
+        .store
+        .load(&caller.site, &[])?
+        .tenant
+        .and_then(|state| state.members.get(&principal).cloned())
+        .map(|roles| roles.into_iter().collect())
+        .unwrap_or_default();
+    for role in direct {
+        take_role(
+            app,
+            &caller.site,
+            &caller.correlation,
+            &principal,
+            role.as_str(),
+        )?;
     }
     if let Some(account) = app.store.account_of(&caller.site, &principal)? {
         app.store.remove_account(&caller.site, &account.login)?;
@@ -841,31 +959,22 @@ fn patch_group(app: &App, caller: &Caller, group: &str, body: &Json) -> Result<A
 // The endpoint
 
 /// One SCIM request. The provisioning token is checked first and is the only thing this reads
-/// it for (FED-259); requests are counted by source and realm, and a right token gives its slot
-/// back, so a provider provisioning many people is not limited and a guesser is.
+/// it for (FED-259); a request with a wrong token is counted by source and realm and one with a
+/// right token is not, so a provider provisioning many people is not limited and a guesser is.
 ///
 /// Implements: FED-014, FED-259
 pub fn handle(app: &App, caller: &Caller, request: &Json) -> Result<Json, ApiError> {
-    let limits = start_rules(app, "scim", &caller.source);
-    if let ThrottleVerdict::Refused { .. } =
-        app.store
-            .throttle_reserve(&caller.site, &limits, app.now())?
-    {
-        return Err(throttled());
-    }
-    let presented = request
-        .get("authorization")
-        .and_then(Json::as_str)
-        .and_then(|header| header.strip_prefix("Bearer "))
-        .filter(|token| token.len() <= 256);
-    let known = match presented {
-        Some(token) => app
-            .store
-            .doc_get(&caller.site, TOKEN, &token_hash(token))?
-            .is_some(),
-        None => false,
-    };
-    if !known {
+    // The token is checked before any slot is reserved: a request with a right token costs the
+    // limits nothing, so a flood of wrong ones cannot throttle the provider. A wrong one is
+    // counted, and not given back.
+    if presented_token(app, &caller.site, request)?.is_none() {
+        let limits = start_rules(app, "scim", &caller.source);
+        if let ThrottleVerdict::Refused { .. } =
+            app.store
+                .throttle_reserve(&caller.site, &limits, app.now())?
+        {
+            return Err(throttled());
+        }
         LOG.warn(
             "scim.refused",
             &caller.correlation,
@@ -873,10 +982,6 @@ pub fn handle(app: &App, caller: &Caller, request: &Json) -> Result<Json, ApiErr
         );
         let (status, body) = error(401, "A provisioning token is required.", None);
         return Ok(json!({ "status": status, "body": body }));
-    }
-    for rule in &limits {
-        app.store
-            .throttle_settle(&caller.site, &rule.key, rule.max, ThrottleSettle::Refund)?;
     }
 
     let method = request
@@ -887,10 +992,9 @@ pub fn handle(app: &App, caller: &Caller, request: &Json) -> Result<Json, ApiErr
     let path = request.get("path").and_then(Json::as_str).unwrap_or("");
     let segments: Vec<&str> = path.trim_matches('/').split('/').collect();
     let body = request.get("body").cloned().unwrap_or(Json::Null);
-    let filter = request.pointer("/query/filter").and_then(Json::as_str);
     let (status, body) = match (method.as_str(), segments.as_slice()) {
         ("POST", ["Users"]) => create_user(app, caller, &body)?,
-        ("GET", ["Users"]) => list_users(app, caller, filter)?,
+        ("GET", ["Users"]) => list_users(app, caller, request)?,
         ("GET", ["Users", id]) => match user_of(app, &caller.site, id)? {
             Some(user) => (200, render(&user)),
             None => error(404, "No such user.", None),

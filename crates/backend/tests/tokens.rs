@@ -800,3 +800,51 @@ async fn an_identity_outage_refuses_sessions_and_keeps_published_content() {
         200
     );
 }
+
+/// The private half of the signing key is not at rest in the clear: a copy of the tenant's
+/// documents holds no PEM, and the key still signs and verifies, also after a rotation re-wrote
+/// the retired one.
+#[tokio::test]
+async fn the_signing_key_is_sealed_at_rest() {
+    use strata_kernel::TenantId;
+    use strata_storage_api::Store;
+
+    let backend = start().await;
+    let owner = backend.owner().await;
+    let client = backend.client(&owner, &["read:post"]).await;
+    let before = backend.access(&client, None).await;
+    let tenant = TenantId::new("fieldnotes").unwrap();
+
+    let at_rest = |backend: &Backend| -> Vec<String> {
+        backend
+            .store
+            .doc_list(&tenant, "signing-key")
+            .unwrap()
+            .into_iter()
+            .map(|(_, text)| text)
+            .collect()
+    };
+    let stored = at_rest(&backend);
+    assert_eq!(stored.len(), 1);
+    assert!(!stored[0].contains("PRIVATE KEY"), "the PEM is at rest");
+    assert!(!stored[0].contains("private_pem"), "{}", stored[0]);
+    assert!(stored[0].contains("sealed_private"), "{}", stored[0]);
+
+    let (status, rotated) = backend
+        .call(
+            "fieldnotes",
+            Some(&owner),
+            "/internal/keys/rotate",
+            json!({}),
+        )
+        .await;
+    assert_eq!(status, 200, "{rotated}");
+    let stored = at_rest(&backend);
+    assert_eq!(stored.len(), 2);
+    assert!(stored.iter().all(|text| !text.contains("PRIVATE KEY")));
+    assert!(stored.iter().all(|text| text.contains("sealed_private")));
+    // Opened again for signing and verifying.
+    assert_eq!(backend.verify("fieldnotes", &before).await.0, 200);
+    let after = backend.access(&client, None).await;
+    assert_eq!(backend.verify("fieldnotes", &after).await.0, 200);
+}

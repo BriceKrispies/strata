@@ -13,6 +13,7 @@ pub mod limits;
 pub mod mail;
 pub mod ops;
 pub mod outbox;
+pub mod sealing;
 pub mod seed;
 pub mod service;
 pub mod signin;

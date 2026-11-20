@@ -8,14 +8,14 @@ use serde_json::{json, Value as Json};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use strata_backend::app::Config;
+use strata_backend::app::{Config, SealKey};
 use strata_backend::mail::{DevSink, Mailer};
 use strata_kernel::{canon, PrincipalId, TenantId, Timestamp};
 use strata_protocol::api::{
     HEADER_CORRELATION, HEADER_ORIGIN, HEADER_SERVICE, HEADER_SESSION, HEADER_SITE, HEADER_SOURCE,
 };
 use strata_storage_api::memory::MemoryStore;
-use strata_storage_api::Store;
+use strata_storage_api::{Account, Store};
 use totp_rs::{Algorithm, Secret, TOTP};
 
 const TOKEN: &str = "test-service-token-0123456789abcdef";
@@ -34,7 +34,11 @@ async fn start() -> Backend {
 }
 
 async fn start_with(adjust: impl FnOnce(&mut Config)) -> Backend {
-    let store = Arc::new(MemoryStore::new());
+    start_on(Arc::new(MemoryStore::new()), adjust).await
+}
+
+/// A backend over a store that already has a history: a restart with other settings.
+async fn start_on(store: Arc<MemoryStore>, adjust: impl FnOnce(&mut Config)) -> Backend {
     let mail = Arc::new(DevSink::memory());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -886,4 +890,127 @@ impl Backend {
         assert_eq!(status, 200, "{body}");
         body["token"].as_str().unwrap().to_string()
     }
+}
+
+/// IDN-018: a secret is sealed with the id of the key that sealed it, and a rotation that keeps
+/// the old key as a second accepted key leaves every enrolled authenticator working; without the
+/// old key the secret does not open.
+#[tokio::test]
+async fn rotating_the_factor_key_keeps_existing_authenticators_working() {
+    let old = SealKey::derive("the first factor key, long enough to be a key");
+    let new = SealKey::derive("the second factor key, long enough to be a key");
+    let first = start_with(|cfg| cfg.factors.seal_key = old).await;
+    let secret = first.enrol("ines").await;
+    let sealed = first
+        .store
+        .totp(&tenant(), &principal("ines"))
+        .unwrap()
+        .unwrap()
+        .secret;
+    assert!(
+        sealed.starts_with(&format!("{}.", old.id())),
+        "the sealed secret names its key: {sealed}"
+    );
+    assert_ne!(old.id(), new.id());
+
+    // The new key seals from now on and the old one is still accepted.
+    let rotated = start_on(first.store.clone(), |cfg| {
+        cfg.factors.seal_key = new;
+        cfg.factors.previous_seal_keys = vec![old];
+    })
+    .await;
+    let waiting = rotated.waiting("ines").await;
+    let challenge = waiting["challenge"].as_str().unwrap();
+    let (status, accepted) = rotated.second(challenge, "totp", &code(&secret, 0)).await;
+    assert_eq!(status, 200, "{accepted}");
+
+    // A new enrolment under the rotated configuration is sealed under the new key.
+    let session = rotated.session_of("tomasz").await;
+    let (status, started) = rotated
+        .call(Some(&session), "/internal/factors/totp/start", json!({}))
+        .await;
+    assert_eq!(status, 200, "{started}");
+    let fresh = rotated
+        .store
+        .totp(&tenant(), &principal("tomasz"))
+        .unwrap()
+        .unwrap()
+        .secret;
+    assert!(fresh.starts_with(&format!("{}.", new.id())), "{fresh}");
+
+    // With the old key dropped, the old secret opens for nobody.
+    let dropped = start_on(first.store.clone(), |cfg| cfg.factors.seal_key = new).await;
+    let waiting = dropped.waiting("ines").await;
+    let challenge = waiting["challenge"].as_str().unwrap();
+    let (status, _) = dropped.second(challenge, "totp", &code(&secret, 1)).await;
+    assert_eq!(status, 401, "a secret opened under a key that is not held");
+}
+
+/// ADM-153: an address proved by an emailed link is the account's verified address, and an
+/// invitation to it is redeemable by that account; before the proof it is not.
+#[tokio::test]
+async fn an_address_proved_by_an_emailed_link_redeems_an_invitation() {
+    let backend = start().await;
+    let address = "wren@acme.example";
+    let account = Account {
+        tenant: tenant(),
+        login: address.into(),
+        principal: principal("wren"),
+        display_name: "Wren".into(),
+        // Not a password hash: no password opens this login, as for a person made by SCIM.
+        password_hash: String::new(),
+        verified_email: None,
+    };
+    assert!(backend.store.create_account(&account).unwrap());
+
+    let owner = backend.session_of("admin").await;
+    let (status, invited) = backend
+        .call(
+            Some(&owner),
+            "/internal/members",
+            json!({ "op": "invite", "invitation": "inv-wren", "address": address, "roles": ["editor"] }),
+        )
+        .await;
+    assert_eq!(status, 200, "{invited}");
+
+    let (status, requested) = backend
+        .call(
+            None,
+            "/internal/sign-in/link/request",
+            json!({ "email": address }),
+        )
+        .await;
+    assert_eq!(status, 200, "{requested}");
+    let binding = requested["binding"].as_str().unwrap().to_string();
+    let message = backend.mail.outbox().pop().expect("a message was sent");
+    let fragment = message.text.split("#c=").nth(1).expect("a fragment");
+    let challenge = fragment.split('&').next().unwrap();
+    let token = fragment
+        .split("&t=")
+        .nth(1)
+        .unwrap()
+        .split_whitespace()
+        .next()
+        .unwrap();
+    let (status, body) = backend
+        .call(
+            None,
+            "/internal/session/sign-in/link",
+            json!({ "challenge": challenge, "token": token, "binding": binding }),
+        )
+        .await;
+    assert_eq!(status, 200, "{body}");
+    let session = body["token"].as_str().expect("a session").to_string();
+
+    // The link proved the address, and only now.
+    let stored = backend.store.account(&tenant(), address).unwrap().unwrap();
+    assert_eq!(stored.verified_email.as_deref(), Some(address));
+    let (status, redeemed) = backend
+        .call(
+            Some(&session),
+            "/internal/members",
+            json!({ "op": "redeem", "invitation": "inv-wren" }),
+        )
+        .await;
+    assert_eq!(status, 200, "{redeemed}");
 }

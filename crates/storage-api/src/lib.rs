@@ -598,7 +598,16 @@ pub trait Store: Send + Sync {
     /// Remove counters that mean nothing any more at `now`. Returns how many were removed.
     fn purge_throttle(&self, now: Timestamp) -> StoreResult<u64>;
 
+    /// Keep a login, replacing whatever is there. For seeding and recovery, which mean to
+    /// overwrite; a path that must not overwrite uses `create_account` or `update_account`.
     fn put_account(&self, account: &Account) -> StoreResult<()>;
+    /// Keep a new login. Returns `false`, and changes nothing, when the tenant already holds
+    /// that login, so that two creations of one login yield one account and one refusal.
+    fn create_account(&self, account: &Account) -> StoreResult<bool>;
+    /// Replace a login with `replacement` only if it still is `expected` (compare and set).
+    /// Returns `false`, and changes nothing, when the login is gone or has changed meanwhile.
+    /// The login and tenant of the two must be the same.
+    fn update_account(&self, expected: &Account, replacement: &Account) -> StoreResult<bool>;
     fn account(&self, tenant: &TenantId, login: &str) -> StoreResult<Option<Account>>;
     /// Remove a login. Returns whether it was there.
     fn remove_account(&self, tenant: &TenantId, login: &str) -> StoreResult<bool>;

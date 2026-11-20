@@ -843,9 +843,10 @@ async fn grants_revoke(
 async fn provisioning_token_create(
     State(app): State<Shared>,
     headers: HeaderMap,
+    Json(body): Json<Json_>,
 ) -> Result<Json<Json_>, ApiError> {
-    as_caller(&app, &headers, |app, identity| {
-        scim::create_token(app, identity)
+    as_caller(&app, &headers, move |app, identity| {
+        scim::create_token(app, identity, &body)
     })
     .await
 }

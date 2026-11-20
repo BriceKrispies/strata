@@ -11,13 +11,15 @@ use strata_backend::app::{Config, ThrottleLimits};
 use strata_backend::auth::token_hash;
 use strata_backend::mail::DevSink;
 use strata_backend::signin::oidc::Federation;
-use strata_kernel::{PrincipalId, SessionId, TenantId, Timestamp};
+use strata_kernel::{
+    Context, Intent, Principal, PrincipalId, RoleId, SessionId, TenantId, Timestamp,
+};
 use strata_protocol::api::{
     HEADER_CORRELATION, HEADER_SERVICE, HEADER_SESSION, HEADER_SITE, HEADER_SOURCE,
 };
 use strata_protocol::log::now_ms;
 use strata_storage_api::memory::MemoryStore;
-use strata_storage_api::{SessionRecord, Store};
+use strata_storage_api::{execute, SessionRecord, Store};
 
 const TOKEN: &str = "test-service-token-0123456789abcdef";
 const SOURCE: &str = "203.0.113.7";
@@ -739,4 +741,245 @@ async fn deactivating_a_person_refuses_what_was_delegated_in_their_name() {
         .await;
     assert_eq!(check().await.0, 401, "the token made in their name");
     assert_eq!(exchange().await.0, 401, "and no new one");
+}
+
+impl Backend {
+    /// A SCIM request with a query string, as the gateway passes it on.
+    async fn scim_query(&self, token: &str, path: &str, query: Json) -> (u64, Json) {
+        let (status, reply) = self
+            .call(
+                "fieldnotes",
+                None,
+                "/internal/scim",
+                json!({
+                    "method": "GET",
+                    "path": path,
+                    "query": query,
+                    "authorization": format!("Bearer {token}"),
+                    "body": Json::Null,
+                }),
+            )
+            .await;
+        assert_eq!(status, 200, "the envelope is answered: {reply}");
+        (reply["status"].as_u64().unwrap(), reply["body"].clone())
+    }
+}
+
+/// Verifies: FED-014
+///
+/// Two creations of one userName that arrive together make one account: one is created and the
+/// other is told the name is in use.
+#[tokio::test]
+async fn two_concurrent_creations_of_one_user_name_make_one_account_and_one_conflict() {
+    let backend = start().await;
+    let owner = backend.owner().await;
+    let token = backend.provisioning_token("fieldnotes", &owner).await;
+    let mut first = person("wren@acme.example");
+    first["externalId"] = json!("ext-first");
+    let mut second = person("wren@acme.example");
+    second["externalId"] = json!("ext-second");
+
+    let ((a, _), (b, _)) = tokio::join!(
+        backend.scim("fieldnotes", Some(&token), "POST", "Users", first),
+        backend.scim("fieldnotes", Some(&token), "POST", "Users", second),
+    );
+    let mut statuses = [a, b];
+    statuses.sort();
+    assert_eq!(statuses, [201, 409]);
+    let tenant = TenantId::new("fieldnotes").unwrap();
+    assert!(backend
+        .store
+        .account(&tenant, "wren@acme.example")
+        .unwrap()
+        .is_some());
+    assert_eq!(
+        backend.store.doc_list(&tenant, "scim-user").unwrap().len(),
+        1
+    );
+}
+
+/// Verifies: FED-259
+///
+/// A flood of wrong tokens is counted and then refused, and does not take the provider's slots:
+/// a request with the right token is answered while the wrong ones are throttled.
+#[tokio::test]
+async fn wrong_tokens_are_throttled_and_do_not_throttle_the_right_one() {
+    let backend = start().await;
+    let owner = backend.owner().await;
+    let token = backend.provisioning_token("fieldnotes", &owner).await;
+    let mut refused_by_limit = 0;
+    for _ in 0..150 {
+        let (status, _) = backend
+            .call(
+                "fieldnotes",
+                None,
+                "/internal/scim",
+                json!({ "method": "GET", "path": "Users", "authorization": "Bearer scimt_wrong" }),
+            )
+            .await;
+        if status == 429 {
+            refused_by_limit += 1;
+        }
+    }
+    assert!(refused_by_limit > 0, "the wrong tokens were never limited");
+    let (status, _) = backend
+        .scim("fieldnotes", Some(&token), "GET", "Users", Json::Null)
+        .await;
+    assert_eq!(status, 200);
+}
+
+/// Verifies: FED-014
+///
+/// A list honours `startIndex` and `count`, and reports the true number of matches.
+#[tokio::test]
+async fn a_list_honours_start_index_and_count_and_reports_the_true_total() {
+    let backend = start().await;
+    let owner = backend.owner().await;
+    let token = backend.provisioning_token("fieldnotes", &owner).await;
+    for n in 0..5 {
+        let (status, body) = backend
+            .scim(
+                "fieldnotes",
+                Some(&token),
+                "POST",
+                "Users",
+                person(&format!("person{n}@acme.example")),
+            )
+            .await;
+        assert_eq!(status, 201, "{body}");
+    }
+    let (status, page) = backend
+        .scim_query(&token, "Users", json!({ "startIndex": "2", "count": "2" }))
+        .await;
+    assert_eq!(status, 200, "{page}");
+    assert_eq!(page["totalResults"], 5);
+    assert_eq!(page["startIndex"], 2);
+    assert_eq!(page["itemsPerPage"], 2);
+    assert_eq!(page["Resources"].as_array().unwrap().len(), 2);
+
+    let (_, last) = backend
+        .scim_query(&token, "Users", json!({ "startIndex": "5", "count": "10" }))
+        .await;
+    assert_eq!(last["totalResults"], 5);
+    assert_eq!(last["Resources"].as_array().unwrap().len(), 1);
+    let (_, none) = backend
+        .scim_query(&token, "Users", json!({ "count": "0" }))
+        .await;
+    assert_eq!(none["totalResults"], 5);
+    assert!(none["Resources"].as_array().unwrap().is_empty());
+}
+
+/// Verifies: FED-015
+///
+/// Deleting a person takes back the roles they were given directly, not only those of groups.
+#[tokio::test]
+async fn deleting_a_person_removes_the_roles_they_were_given_directly() {
+    let backend = start().await;
+    let owner = backend.owner().await;
+    let token = backend.provisioning_token("fieldnotes", &owner).await;
+    let (status, user) = backend
+        .scim(
+            "fieldnotes",
+            Some(&token),
+            "POST",
+            "Users",
+            person("lena@acme.example"),
+        )
+        .await;
+    assert_eq!(status, 201, "{user}");
+    let id = user["id"].as_str().unwrap().to_string();
+    let context = Context {
+        tenant: TenantId::new("fieldnotes").unwrap(),
+        principal: Principal::User(PrincipalId::new("user:admin").unwrap()),
+        session: None,
+        now: Timestamp(now_ms()),
+        correlation: "t-direct-role".into(),
+        verified_address: None,
+    };
+    execute(
+        backend.store.as_ref(),
+        &Intent::AssignRole {
+            principal: PrincipalId::new(id.clone()).unwrap(),
+            role: RoleId::new("editor").unwrap(),
+        },
+        &context,
+    )
+    .unwrap_or_else(|e| panic!("the owner's change was refused: {e}"));
+    assert_eq!(backend.roles_of(&id).await, ["editor"]);
+
+    let (status, _) = backend
+        .scim(
+            "fieldnotes",
+            Some(&token),
+            "DELETE",
+            &format!("Users/{id}"),
+            Json::Null,
+        )
+        .await;
+    assert_eq!(status, 204);
+    assert!(
+        backend.roles_of(&id).await.is_empty(),
+        "the deleted person kept a role"
+    );
+}
+
+/// Verifies: FED-259
+///
+/// A provisioning token records when it was last used, and one made with a lifetime is refused
+/// once the lifetime has passed.
+#[tokio::test]
+async fn a_provisioning_token_records_its_use_and_can_expire() {
+    let backend = start().await;
+    let owner = backend.owner().await;
+    let (status, made) = backend
+        .call(
+            "fieldnotes",
+            Some(&owner),
+            "/internal/provisioning/tokens/create",
+            json!({ "expires_in_seconds": 600 }),
+        )
+        .await;
+    assert_eq!(status, 200, "{made}");
+    assert!(made["expires_at"].as_i64().is_some(), "{made}");
+    let token = made["token"].as_str().unwrap().to_string();
+    let tenant = TenantId::new("fieldnotes").unwrap();
+    let stored = |backend: &Backend| {
+        let rows = backend.store.doc_list(&tenant, "prov-token").unwrap();
+        serde_json::from_str::<Json>(&rows[0].1).unwrap()
+    };
+    assert_eq!(stored(&backend)["last_used_at"], Json::Null);
+
+    let (status, _) = backend
+        .scim("fieldnotes", Some(&token), "GET", "Users", Json::Null)
+        .await;
+    assert_eq!(status, 200);
+    assert!(
+        stored(&backend)["last_used_at"].as_i64().is_some(),
+        "{}",
+        stored(&backend)
+    );
+
+    let (status, _) = backend
+        .call(
+            "fieldnotes",
+            None,
+            "/internal/dev/clock",
+            json!({ "advance_ms": 11 * 60_000 }),
+        )
+        .await;
+    assert_eq!(status, 200);
+    let (status, _) = backend
+        .scim("fieldnotes", Some(&token), "GET", "Users", Json::Null)
+        .await;
+    assert_eq!(status, 401, "an expired token was accepted");
+    // A lifetime that is not a whole number of seconds is refused.
+    let (status, _) = backend
+        .call(
+            "fieldnotes",
+            Some(&owner),
+            "/internal/provisioning/tokens/create",
+            json!({ "expires_in_seconds": -5 }),
+        )
+        .await;
+    assert_eq!(status, 422);
 }
