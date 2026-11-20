@@ -527,7 +527,33 @@ const TENANT_MIGRATIONS: &[Migration] = &[
         name: "order keys of the record index",
         sql: index_page::ORDER_KEYS_SQL,
     },
+    SEALING_MIGRATION,
 ];
+
+/// The audit chain and the schema history without people (PRV-359, PRV-360, WG-5110, WG-5111):
+/// each audit line gets a chain value (`strata_storage_api::audit_chain`; a line written before
+/// has none and is counted as before the chain), and the stored history of the schema loses its
+/// teams and invitations, which name people and which nothing reads from the history. The
+/// coordinator gives the step its number at the end of the list.
+const SEALING_MIGRATION: Migration = Migration {
+    version: 17,
+    name: "audit chain values, and the schema history without teams and invitations",
+    sql: "
+    ALTER TABLE audit_log ADD COLUMN chain TEXT;
+    UPDATE schema_history SET schema = json_remove(schema, '$.teams', '$.invitations');
+    ",
+};
+
+/// The form of a schema the history keeps: without its teams and invitations, which name people
+/// (team members, invitation addresses) and change without a new version. The current schema in
+/// the tenant row keeps them; an erasure removes the person there (WG-5111).
+fn history_form(schema: &TenantSchema) -> TenantSchema {
+    TenantSchema {
+        teams: None,
+        invitations: None,
+        ..schema.clone()
+    }
+}
 
 /// The steps of a tenant file's layout, for tests that build a file at an older level.
 #[doc(hidden)]
@@ -1947,7 +1973,7 @@ impl SqliteStore {
                 params![
                     schema.version.0 as i64,
                     delta.new_revision.0 as i64,
-                    encode(&**schema)
+                    encode(&history_form(schema))
                 ],
             )
             .map_err(db)?;
@@ -4293,14 +4319,64 @@ impl Store for SqliteStore {
     }
 
     fn audit_append(&self, tenant: &TenantId, entry: &AuditEntry) -> StoreResult<()> {
-        self.on_existing(tenant, |conn| {
-            conn.execute(
-                "INSERT INTO audit_log (at, kind, event, correlation, data) VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![entry.at, entry.kind, entry.event, entry.correlation, entry.data],
+        let file = self.existing(tenant)?;
+        file.write(dbe, |tx| {
+            // The chain value of the line before, in the same transaction as the line, so that
+            // two appends never chain to the same line.
+            let previous: Option<String> = tx
+                .query_row(
+                    "SELECT chain FROM audit_log WHERE chain IS NOT NULL ORDER BY seq DESC LIMIT 1",
+                    [],
+                    |r| r.get(0),
+                )
+                .optional()
+                .map_err(db)?;
+            let chain = strata_storage_api::audit_chain::audit_link(
+                previous.as_deref().unwrap_or(""),
+                entry,
+            );
+            tx.execute(
+                "INSERT INTO audit_log (at, kind, event, correlation, data, chain) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![entry.at, entry.kind, entry.event, entry.correlation, entry.data, chain],
             )
             .map_err(db)
             .map(|_| ())
         })
+    }
+
+    fn audit_chain(
+        &self,
+        tenant: &TenantId,
+        after: u64,
+        limit: usize,
+    ) -> StoreResult<Vec<strata_storage_api::audit_chain::ChainedAuditEntry>> {
+        let rows = self.on_tenant(tenant, |conn| {
+            let mut statement = conn
+                .prepare(
+                    "SELECT seq, at, kind, event, correlation, data, chain FROM audit_log
+                     WHERE seq > ?1 ORDER BY seq LIMIT ?2",
+                )
+                .map_err(db)?;
+            let rows = statement
+                .query_map(params![after as i64, limit as i64], |r| {
+                    Ok(strata_storage_api::audit_chain::ChainedAuditEntry {
+                        seq: r.get::<_, i64>(0)? as u64,
+                        entry: AuditEntry {
+                            at: r.get(1)?,
+                            kind: r.get(2)?,
+                            event: r.get(3)?,
+                            correlation: r.get(4)?,
+                            data: r.get(5)?,
+                        },
+                        chain: r.get(6)?,
+                    })
+                })
+                .map_err(db)?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(db)?;
+            Ok(rows)
+        })?;
+        Ok(rows.unwrap_or_default())
     }
 
     fn audit_list(

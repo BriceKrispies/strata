@@ -5,6 +5,7 @@ use crate::lab::Lab;
 use crate::limits::{Admission, Limits};
 use crate::mail::Mailer;
 use crate::signin::oidc::Federation;
+use crate::subject_keys::{InProcessKeyService, SubjectKeys};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
@@ -17,6 +18,7 @@ use std::sync::{Arc, Mutex};
 use strata_kernel::{DomainError, ErrorKind, TenantId, Timestamp};
 use strata_protocol::api::{ErrorCode, ErrorReply};
 use strata_protocol::log::{now_ms, Logger};
+use strata_storage_api::sealed::SealedStore;
 use strata_storage_api::{AuditEntry, ExecuteError, Store, StoreError};
 
 pub const LOG: Logger = Logger { service: "backend" };
@@ -269,7 +271,13 @@ impl Stats {
 
 pub struct App {
     pub cfg: Config,
+    /// The store of the process: [`App::sealed`], over the adapter it was made with.
     pub store: Arc<dyn Store>,
+    /// The same store as its sealing layer, for what only it answers (the sealed hashes a replay
+    /// compares the journal with).
+    pub sealed: Arc<SealedStore>,
+    /// The subject keys of every tenant (D-350): sealing, and their destruction at an erasure.
+    pub keys: Arc<SubjectKeys>,
     pub hub: Hub,
     pub stats: Stats,
     pub lab: Lab,
@@ -293,11 +301,20 @@ pub type Shared = Arc<App>;
 
 impl App {
     pub fn new(cfg: Config, store: Arc<dyn Store>) -> Shared {
+        // Every read and write of the process goes through the sealed store: personal fields are
+        // sealed under their subjects' keys on the way in and opened on the way out (D-350).
+        let keys = Arc::new(SubjectKeys::new(Arc::new(InProcessKeyService::new(
+            cfg.factors.seal_key,
+            cfg.factors.previous_seal_keys.clone(),
+        ))));
+        let sealed = Arc::new(SealedStore::new(store, keys.clone()));
         Arc::new(App {
             lab: Lab::with_limits(&cfg.limits),
             admission: Admission::new(&cfg.limits),
             cfg,
-            store,
+            store: sealed.clone(),
+            sealed,
+            keys,
             hub: Hub::new(),
             stats: Stats::new(),
             started_at: now_ms(),
@@ -393,6 +410,32 @@ impl App {
                 json!({ "tenant": tenant, "event": event, "error": error }),
             );
         }
+    }
+
+    /// Check the audit chain of a tenant from its first line (PRV-359, OBS-007): an altered line
+    /// or one removed from the middle is the first break. The chain covers the sealed form of each
+    /// line, so it verifies after an erasure as before it. The head is not anchored outside the
+    /// tenant database yet (D-6208), so the removal of the newest lines is not found.
+    pub fn verify_audit_chain(
+        &self,
+        tenant: &TenantId,
+    ) -> Result<strata_storage_api::audit_chain::AuditChainReport, StoreError> {
+        const PAGE: usize = 1000;
+        let mut lines = Vec::new();
+        let mut after = 0;
+        loop {
+            let page = self.store.audit_chain(tenant, after, PAGE)?;
+            let Some(last) = page.last() else {
+                break;
+            };
+            after = last.seq;
+            let full = page.len() == PAGE;
+            lines.extend(page);
+            if !full {
+                break;
+            }
+        }
+        Ok(strata_storage_api::audit_chain::verify_audit_chain(&lines))
     }
 
     /// The one place the backend reads the clock for domain purposes.

@@ -86,6 +86,14 @@
     },
     {
       "package": "strata-backend",
+      "target": "sealing",
+      "tier": "full",
+      "seconds": null,
+      "unmeasured": true,
+      "reason": "The sealed store through the backend: sealing, erasure, restore, replay and the audit chain on SQLite, with key derivation in every seal"
+    },
+    {
+      "package": "strata-backend",
       "target": "segments",
       "tier": "routine",
       "seconds": null,
@@ -584,6 +592,14 @@
       "seconds": 0.02
     },
     {
+      "package": "strata-storage-api",
+      "target": "sealed",
+      "tier": "full",
+      "seconds": null,
+      "unmeasured": true,
+      "reason": "The sealed store over the memory adapter: the whole conformance suite run through it"
+    },
+    {
       "package": "strata-storage-sqlite",
       "target": "durability",
       "tier": "full",
@@ -602,6 +618,14 @@
       "target": "recorded_data",
       "tier": "routine",
       "seconds": 0.16
+    },
+    {
+      "package": "strata-storage-sqlite",
+      "target": "sealed_index",
+      "tier": "full",
+      "seconds": null,
+      "unmeasured": true,
+      "reason": "SQLite files on disk, opened by a second connection to read the record index and the schema history"
     },
     {
       "package": "strata-storage-sqlite",

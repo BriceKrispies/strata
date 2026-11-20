@@ -49,7 +49,8 @@ struct Inner {
     pending: BTreeMap<(TenantId, String), PendingSignIn>,
     recoveries: BTreeMap<(TenantId, String), RecoveryRequest>,
     docs: BTreeMap<(TenantId, String, String), String>,
-    audit: BTreeMap<TenantId, Vec<AuditEntry>>,
+    /// Each tenant's audit trail in order, each line with its chain value (crate::audit_chain).
+    audit: BTreeMap<TenantId, Vec<(AuditEntry, String)>>,
     snapshots: BTreeMap<(TenantId, u64), (SnapshotInfo, Arc<TenantState>)>,
     /// Results by tenant, principal scope and key, with the receipt of the commit.
     idempotency: BTreeMap<(TenantId, String, String), (IdempotencyEntry, Receipt)>,
@@ -1286,11 +1287,10 @@ impl Store for MemoryStore {
         if !inner.tenants.contains_key(tenant) {
             return Err(StoreError::NotFound(format!("tenant {tenant}")));
         }
-        inner
-            .audit
-            .entry(tenant.clone())
-            .or_default()
-            .push(entry.clone());
+        let lines = inner.audit.entry(tenant.clone()).or_default();
+        let previous = lines.last().map(|(_, chain)| chain.as_str()).unwrap_or("");
+        let chain = crate::audit_chain::audit_link(previous, entry);
+        lines.push((entry.clone(), chain));
         Ok(())
     }
 
@@ -1307,6 +1307,7 @@ impl Store for MemoryStore {
             .map(|lines| {
                 lines
                     .iter()
+                    .map(|(line, _)| line)
                     .filter(|line| kind.is_none_or(|k| line.kind == k))
                     .cloned()
                     .collect()
@@ -1315,6 +1316,34 @@ impl Store for MemoryStore {
         let excess = lines.len().saturating_sub(limit);
         lines.drain(..excess);
         Ok(lines)
+    }
+
+    fn audit_chain(
+        &self,
+        tenant: &TenantId,
+        after: u64,
+        limit: usize,
+    ) -> StoreResult<Vec<crate::audit_chain::ChainedAuditEntry>> {
+        let inner = self.lock()?;
+        Ok(inner
+            .audit
+            .get(tenant)
+            .map(|lines| {
+                lines
+                    .iter()
+                    .enumerate()
+                    .map(
+                        |(index, (entry, chain))| crate::audit_chain::ChainedAuditEntry {
+                            seq: index as u64 + 1,
+                            entry: entry.clone(),
+                            chain: Some(chain.clone()),
+                        },
+                    )
+                    .filter(|line| line.seq > after)
+                    .take(limit)
+                    .collect()
+            })
+            .unwrap_or_default())
     }
 
     fn verified_address(

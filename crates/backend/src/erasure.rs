@@ -23,12 +23,19 @@
 //! - the ledger (`Store::anonymise_ledger_principal`): the principal is cleared from the accounts
 //!   and entries, every amount and balance kept;
 //! - segments (`strata_storage_api::segments::erase`): memberships end with a sealed exit event,
-//!   wake rows go, and the person is marked erased.
+//!   wake rows go, and the person is marked erased;
+//! - the subject key (`crate::subject_keys`, D-350): destroyed last, which makes every value
+//!   sealed under it unreadable in every copy that holds it: the records and their index rows,
+//!   the events and the outbox, the intents in the journal, the snapshots, and the members of
+//!   audit lines that name the person. Nothing of those copies is rewritten, so the journal's
+//!   hashes and the audit chain verify as before (PRV-359, PRV-360). The destruction is an audit
+//!   line naming the tenant and the key ids, and no key material (PRV-362).
 //!
-//! What is not reached is named in the receipt, each with the task that closes it: events,
-//! journal, snapshots, backups, exports, the audit log and the schema history keep copies of what
-//! was written before the erasure, and the design that reaches them (a key per subject, D-350)
-//! is not built. The audit log is never rewritten (PRV-359).
+//! What is not reached is named in the receipt, each with the task that closes it: values written
+//! before sealing was in force for the tenant (they are not re-sealed in place), values whose
+//! subject the store cannot resolve, intents and job parameters other than record field values,
+//! backup images and exports, the schema in snapshots, and the rest listed in [`not_reached`].
+//! The audit log is never rewritten (PRV-359).
 //!
 //! Implements: CT-213, PRV-353, PRV-1588
 
@@ -271,18 +278,22 @@ fn sealed_principal(
         .map_err(|e| ApiError::hidden(ErrorCode::Internal, e.to_string()))
 }
 
-/// The copies the erasure does not reach today, each with why and the task that closes it.
-fn not_reached(unbuilt: Vec<String>) -> Vec<String> {
+/// The copies the erasure does not reach, each with why and the task that closes it.
+/// `sealing_since` is when the tenant's first value was sealed, `None` when none ever was.
+fn not_reached(unbuilt: Vec<String>, sealing_since: Option<i64>) -> Vec<String> {
+    let since = match sealing_since {
+        Some(at) => format!("sealing has been in force for this tenant since {at} (milliseconds)"),
+        None => "nothing of this tenant was ever sealed".to_string(),
+    };
     let mut out = vec![
-        "events and outbox (tbl-events): events committed before the erasure keep the full before and after images of the records; no subject key exists to seal them under (D-350, PRV-358); closes with WG-5106".to_string(),
-        "journal (tbl-journal): entries keep the intent and the context of every earlier change, field values and the principal included; closes with WG-5107".to_string(),
-        "snapshots (tbl-snapshots): each holds a complete copy of the tenant state, and a restore brings the erased data back; closes with WG-5108".to_string(),
-        "backups and exports of the tenant (copy-tenant-backup, copy-tenant-export): not reached; they expire on the schedule of D-351; closes with WG-5109".to_string(),
-        "audit log (tbl-audit-log): entries that name the principal or a login stay, because the log is only appended to and its chain must verify (PRV-359); closes with WG-5110".to_string(),
-        "schema history (schema_history in the tenant file): older versions of the schema may hold the addresses of invitations and the teams of the principal; closes with WG-5111".to_string(),
-        "idempotency keys (tbl-idempotency): rows of the principal's own keys are removed by the first commit of the tenant after their retention of 24 hours".to_string(),
+        format!("values written before sealing (events and outbox tbl-events, journal tbl-journal, snapshots tbl-snapshots): {since}; a value written before then, or before its field was declared personal, stays plain in the events, journal entries and snapshots written then, because stored history is not re-sealed in place (D-7724); the live records were cleared above"),
+        "personal fields whose subject the store cannot resolve (a subject field that refers to the record of a person, a record with no creator): stored plain, so no key reaches them; closes with WG-5116".to_string(),
+        "journal intents other than create-record and update-record (the inputs of invoke-operation, the address of create-invitation), automation job parameters and run records: not sealed; closes with WG-5245".to_string(),
+        "snapshots (tbl-snapshots): their records are sealed, but each keeps the members, teams and invitations of the tenant as they were, and a restore brings those back until the restore re-applies this erasure from the audit log (D-6206, D-7727); closes with WG-5246".to_string(),
+        "backup images of the tenant file (copy-tenant-backup): an image taken before the key destruction holds the subject key wrapped under the tenant key, so it opens the sealed fields until it expires at the end of its retention of 35 days (D-351); a restore re-applies the destruction from the audit log (D-6206); exports (copy-tenant-export) are not built and will hold sealed fields and wrapped keys only (D-7727); closes with WG-5246 and WG-5248".to_string(),
+        "audit log (tbl-audit-log): lines that name the person only in a member other than principal, actor, subject, by and owner, or that hold a login or an address with no principal named, are not sealed; the log is never rewritten (PRV-359)".to_string(),
+        "idempotency keys (tbl-idempotency): a row keeps the hash of the plain request and its result for 24 hours, and is removed by the first commit of the tenant after that".to_string(),
         "sign-in throttle counters (tbl-login-throttle): keyed by a hash of the login, removed by the sweep after their window".to_string(),
-        "subject key (key-service, D-350): not built, so no personal field is sealed and no key was destroyed; the fields were cleared in the records instead".to_string(),
         "invitations addressed to the principal and not redeemed: the kernel holds no address of a person; closes with WG-5117".to_string(),
         "files of personal file fields: the field value was cleared, no stored bytes were removed; closes with WG-5118".to_string(),
         "records past their retention are not deleted, and subject fields that reference a person record are not resolved; closes with WG-5116".to_string(),
@@ -373,6 +384,25 @@ pub fn erase_subject(app: &App, ctx: &Context, subject: &PrincipalId) -> Result<
     let segment_exits =
         strata_storage_api::segments::erase(app.store.as_ref(), ctx, subject, &sealed)
             .map_err(|error| ApiError::execute(error, false))?;
+    // Last, the subject key: every value sealed under it, in every copy, is unreadable from here
+    // on (D-350, PRV-358). Nothing is rewritten, so the journal's hashes and the audit chain
+    // verify as before (PRV-359, PRV-360).
+    let sealing_since = app.keys.sealing_since(app.store.as_ref(), tenant)?;
+    let destroyed = app
+        .keys
+        .destroy(app.store.as_ref(), tenant, subject, ctx.now)?;
+    if !destroyed.is_empty() {
+        // The destruction is evidenced with the tenant and the key ids, never the key (PRV-362).
+        app.audit(
+            "erasure.subject_key_destroyed",
+            &ctx.correlation,
+            json!({
+                "tenant": tenant.as_str(),
+                "keys": destroyed,
+                "destroyed_at": ctx.now.0,
+            }),
+        );
+    }
 
     let mut fields: BTreeSet<String> = BTreeSet::new();
     for record in &changed {
@@ -387,6 +417,16 @@ pub fn erase_subject(app: &App, ctx: &Context, subject: &PrincipalId) -> Result<
             fields,
         ),
         "events of the erasure: the events of the changed records carry no personal value (before images have the erased fields removed); erasure point: their commit".to_string(),
+        if destroyed.is_empty() {
+            "subject keys (rec-subject-key, kept in tbl-identity-docs): the person had none, so nothing of theirs was sealed".to_string()
+        } else {
+            format!(
+                "subject keys (rec-subject-key, kept in tbl-identity-docs): {} destroyed ({}); every value sealed under them is unreadable from this point in every copy the platform reads: the records and their index rows (the blind hashes of searchable fields went with the record rewrite above), the events and the outbox, the field values of the intents in the journal, the snapshots, and the members of the audit lines that name the person; the journal's hashes and the audit chain cover the sealed form and still verify; erasure point: the destruction",
+                destroyed.len(),
+                destroyed.join(", "),
+            )
+        },
+        "schema history (schema_history in the tenant file): it keeps no teams and no invitations (D-7726), so no older version names the person".to_string(),
         format!(
             "membership (tenant members, teams, invitations): roles removed {member_removed}, {} teams left, {} invitations revoked or cleared; erasure point: the commit of the first batch",
             teams.len(),
@@ -430,7 +470,7 @@ pub fn erase_subject(app: &App, ctx: &Context, subject: &PrincipalId) -> Result<
         records: changed.iter().map(|record| record.id.0).collect(),
         changed,
         reached,
-        not_reached: not_reached(not_erased.into_iter().collect()),
+        not_reached: not_reached(not_erased.into_iter().collect(), sealing_since),
         complete: false,
         batches: commits,
         batch_bound: BATCH as u64,
