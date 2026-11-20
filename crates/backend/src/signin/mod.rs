@@ -319,7 +319,6 @@ mod tests {
         assert!(method("telepathy").is_none());
     }
 
-    /// Verifies: IDN-267
     #[test]
     fn only_a_passkey_proves_two_factors_on_its_own() {
         for (name, factors) in [("password", 1), ("link", 1), ("oidc", 1), ("passkey", 2)] {

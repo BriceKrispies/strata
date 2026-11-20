@@ -167,6 +167,9 @@ fn site(app: &App, tenant: &TenantId) -> Result<std::sync::Arc<TenantState>, Api
         .ok_or_else(|| ApiError::new(ErrorCode::NotFound, "no such site"))
 }
 
+/// Sign the claims with the tenant's active key (ES256).
+///
+/// Implements: H-013
 fn sign(app: &App, tenant: &TenantId, claims: &Claims) -> Result<String, ApiError> {
     let key = keys::active(app, tenant)?;
     let mut header = Header::new(Algorithm::ES256);
@@ -466,7 +469,7 @@ pub struct Verified {
 /// resource knows one: a token whose client is another is refused (TOK-250). The outer error is
 /// the store failing; the inner is a refusal.
 ///
-/// Implements: TOK-005, TOK-006, TOK-007, TOK-008, TOK-250, TOK-251
+/// Implements: H-014, TOK-005, TOK-006, TOK-007, TOK-008, TOK-250, TOK-251
 pub fn verify(
     app: &App,
     tenant: &TenantId,
