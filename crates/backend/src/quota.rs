@@ -430,6 +430,8 @@ pub fn purge(app: &App, now: Timestamp) -> Result<u64, StoreError> {
 pub enum Quantity {
     /// Bytes the tenant's data takes in the store.
     StoredBytes,
+    /// Records the tenant holds, of every object type together.
+    StoredRecords,
     /// Jobs created in a quota day.
     JobsPerDay,
     /// Jobs released in a minute.
@@ -441,18 +443,20 @@ pub enum Quantity {
 }
 
 impl Quantity {
-    pub const ALL: [Quantity; 5] = [
+    pub const ALL: [Quantity; 6] = [
         Quantity::StoredBytes,
         Quantity::JobsPerDay,
         Quantity::JobsPerMinute,
         Quantity::Segments,
         Quantity::MailPerMonth,
+        Quantity::StoredRecords,
     ];
 
     /// The name the quantity has in replies and in the audited operation that changes it.
     pub fn name(self) -> &'static str {
         match self {
             Quantity::StoredBytes => "stored-bytes",
+            Quantity::StoredRecords => "stored-records",
             Quantity::JobsPerDay => "jobs-per-day",
             Quantity::JobsPerMinute => "jobs-per-minute",
             Quantity::Segments => "segments",
@@ -475,6 +479,8 @@ pub fn plan_allowance(plan: &str, quantity: Quantity) -> Option<u64> {
         (_, Quantity::JobsPerMinute) => Some(100),
         (_, Quantity::Segments) => Some(strata_kernel::segments::MAX_SEGMENTS as u64),
         ("enterprise", _) => None,
+        ("business", Quantity::StoredRecords) => Some(10_000_000),
+        (_, Quantity::StoredRecords) => Some(1_000_000),
         ("business", Quantity::StoredBytes) => Some(100 * GB),
         ("business", Quantity::JobsPerDay) => Some(100_000),
         ("business", Quantity::MailPerMonth) => Some(50_000),
@@ -572,6 +578,7 @@ pub fn used(
 ) -> Result<u64, StoreError> {
     Ok(match quantity {
         Quantity::StoredBytes => app.store.stored_bytes(tenant)?,
+        Quantity::StoredRecords => stored_records(app, tenant)?,
         Quantity::JobsPerDay => {
             usage_number(app, tenant, &format!("day:{}", now.0.div_euclid(DAY_MS)))
         }
@@ -583,6 +590,14 @@ pub fn used(
         Quantity::Segments => app.store.segment_catalog(tenant)?.len() as u64,
         Quantity::MailPerMonth => mail_used(app, tenant, MailClass::Bulk, now.0),
     })
+}
+
+/// The records a tenant holds, of every object type.
+fn stored_records(app: &App, tenant: &TenantId) -> Result<u64, StoreError> {
+    Ok(app
+        .store
+        .tenant_summary(tenant)?
+        .map_or(0, |summary| summary.records))
 }
 
 /// A refusal that names the quota it is for (BIL-151).
@@ -615,12 +630,21 @@ fn frees_room(intent: &Intent) -> bool {
     )
 }
 
-/// Refuse a write that would take the tenant past its stored-bytes allowance, naming the quota
+/// Refuse a write that would take the tenant past its stored-records or stored-bytes allowance, naming the quota
 /// (BIL-151). Reads and deletes are not writes of this kind. The size of the write is the size of
 /// the intent, an estimate that errs on the side of room; the measure is the database's size.
 pub fn check_write(app: &App, ctx: &Context, intent: &Intent) -> Result<(), ApiError> {
     if frees_room(intent) || matches!(intent, Intent::CreateTenant { .. }) {
         return Ok(());
+    }
+    // A write that makes a record is refused at the plan's record limit; nothing else adds one.
+    if matches!(intent, Intent::CreateRecord { .. }) {
+        if let Some(allowed) = allowance(app, &ctx.tenant, Quantity::StoredRecords)? {
+            let held = stored_records(app, &ctx.tenant)?;
+            if held >= allowed {
+                return Err(over_quota(Quantity::StoredRecords, held, allowed));
+            }
+        }
     }
     let Some(allowed) = allowance(app, &ctx.tenant, Quantity::StoredBytes)? else {
         return Ok(());
@@ -879,7 +903,11 @@ pub fn change_plan(
             format!("There is no plan {plan}."),
         ));
     }
-    for quantity in [Quantity::StoredBytes, Quantity::Segments] {
+    for quantity in [
+        Quantity::StoredBytes,
+        Quantity::StoredRecords,
+        Quantity::Segments,
+    ] {
         if let Some(allowed) = plan_allowance(plan, quantity) {
             let held = used(app, tenant, quantity, now)?;
             if held > allowed {
@@ -1163,7 +1191,10 @@ pub fn platform_set(
                 let number = number.parse::<u64>().map_err(|_| {
                     invalid(format!("{number} is not a number, unlimited or plan."))
                 })?;
-                if matches!(quantity, Quantity::StoredBytes | Quantity::Segments) {
+                if matches!(
+                    quantity,
+                    Quantity::StoredBytes | Quantity::StoredRecords | Quantity::Segments
+                ) {
                     let held = used(app, &tenant, quantity, app.now())?;
                     if held > number {
                         let mut error = ApiError::new(
