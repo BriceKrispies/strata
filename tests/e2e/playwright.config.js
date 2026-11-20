@@ -5,6 +5,10 @@
 //   oidc  a mock OpenID Connect provider on 4290, which the site stack trusts for Fieldnotes
 //   saml  a mock SAML provider on 4291, which the site stack trusts for Fieldnotes too
 //   hmr   backend 4211, BFF 4210, Vite 5183 (the development loop, for the hot-reload test)
+//
+// Both stacks start the binaries that `node scripts/dev.mjs` built (`--no-build`), which it builds
+// with the backend's `development` feature. A backend built without it refuses to start with
+// STRATA_DEV=1, so a stale build fails at start-up with that reason.
 import { defineConfig, devices } from '@playwright/test';
 
 const root = new URL('../..', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1');

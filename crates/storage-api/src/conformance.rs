@@ -5,7 +5,8 @@
 //! decided" is checked by canonical hash rather than field by field.
 
 use crate::{
-    execute, query, Account, Commit, ExecuteError, OutboxEntry, SessionRecord, Store, StoreError,
+    execute, query, Account, AuditEntry, Commit, ExecuteError, OutboxEntry, SessionRecord, Store,
+    StoreError,
 };
 use std::collections::BTreeMap;
 use strata_kernel::testkit::*;
@@ -752,6 +753,48 @@ pub fn documents_are_scoped_to_their_tenant_and_kind(store: &dyn Store) {
     assert!(!store.doc_remove(&alpha, "client", "c0").unwrap());
     assert!(store
         .doc_put(&tenant_id("nowhere"), "client", "c", "x", false)
+        .is_err());
+}
+
+/// The security audit trail. Not a row of the conformance table, like the documents: run by each
+/// adapter's own test. Lines are kept per tenant in order, a kind can be asked for alone, the
+/// newest lines are the ones a limit keeps, and an unknown tenant is refused.
+pub fn audit_is_kept_per_tenant(store: &dyn Store) {
+    let _pair = Pair::new(store);
+    let (alpha, beta) = (tenant_id("alpha"), tenant_id("beta"));
+    let line = |at: i64, kind: &str, event: &str| AuditEntry {
+        at,
+        kind: kind.into(),
+        event: event.into(),
+        correlation: format!("c-{at}"),
+        data: "{}".into(),
+    };
+    store
+        .audit_append(&alpha, &line(1, "decision", "auth.decision"))
+        .unwrap();
+    store
+        .audit_append(&alpha, &line(2, "audit", "signing_key.compromised"))
+        .unwrap();
+    for at in 3..10 {
+        store
+            .audit_append(&alpha, &line(at, "decision", "auth.decision"))
+            .unwrap();
+    }
+    let kept = store.audit_list(&alpha, Some("audit"), 100).unwrap();
+    assert_eq!(
+        kept.iter().map(|l| l.at).collect::<Vec<_>>(),
+        [2],
+        "a flood of decisions does not push an audit line out"
+    );
+    let newest = store.audit_list(&alpha, None, 3).unwrap();
+    assert_eq!(
+        newest.iter().map(|l| l.at).collect::<Vec<_>>(),
+        [7, 8, 9],
+        "the newest lines, oldest first"
+    );
+    assert!(store.audit_list(&beta, None, 100).unwrap().is_empty());
+    assert!(store
+        .audit_append(&tenant_id("nowhere"), &line(1, "audit", "x"))
         .is_err());
 }
 

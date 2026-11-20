@@ -46,11 +46,12 @@ use strata_kernel::{
 };
 use strata_runtime::sqlite::{Database, DbError, Migration};
 use strata_storage_api::{
-    check_event_sequence, field_matches, throttle_refund, throttle_step, Account, Capabilities,
-    Commit, FederatedIdentity, Health, JournalEntry, OidcFlow, OutboxEntry, PasskeyCeremony,
-    PasskeyChallenge, PasskeyRecord, PendingSignIn, Receipt, RecoveryRequest, SamlRequest,
-    SessionRecord, SignInLink, SnapshotInfo, StorageMigration, Store, StoreError, StoreResult,
-    TenantSummary, ThrottleRow, ThrottleRule, ThrottleSettle, ThrottleVerdict, TotpRecord,
+    check_event_sequence, field_matches, throttle_refund, throttle_step, Account, AuditEntry,
+    Capabilities, Commit, FederatedIdentity, Health, JournalEntry, OidcFlow, OutboxEntry,
+    PasskeyCeremony, PasskeyChallenge, PasskeyRecord, PendingSignIn, Receipt, RecoveryRequest,
+    SamlRequest, SessionRecord, SignInLink, SnapshotInfo, StorageMigration, Store, StoreError,
+    StoreResult, TenantSummary, ThrottleRow, ThrottleRule, ThrottleSettle, ThrottleVerdict,
+    TotpRecord,
 };
 
 /// The ledger table of the control database's migrations.
@@ -321,6 +322,21 @@ const TENANT_MIGRATIONS: &[Migration] = &[
         version: 9,
         name: "verified e-mail address of an account",
         sql: "ALTER TABLE accounts ADD COLUMN verified_email TEXT;",
+    },
+    Migration {
+        version: 10,
+        name: "security audit trail",
+        sql: "
+    CREATE TABLE audit_log (
+        seq         INTEGER PRIMARY KEY AUTOINCREMENT,
+        at          INTEGER NOT NULL,
+        kind        TEXT NOT NULL,
+        event       TEXT NOT NULL,
+        correlation TEXT NOT NULL,
+        data        TEXT NOT NULL
+    );
+    CREATE INDEX audit_log_kind ON audit_log(kind, seq);
+    ",
     },
 ];
 
@@ -2612,6 +2628,50 @@ impl Store for SqliteStore {
             .map_err(db)
         })?;
         Ok(removed == Some(1))
+    }
+
+    fn audit_append(&self, tenant: &TenantId, entry: &AuditEntry) -> StoreResult<()> {
+        self.on_existing(tenant, |conn| {
+            conn.execute(
+                "INSERT INTO audit_log (at, kind, event, correlation, data) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![entry.at, entry.kind, entry.event, entry.correlation, entry.data],
+            )
+            .map_err(db)
+            .map(|_| ())
+        })
+    }
+
+    fn audit_list(
+        &self,
+        tenant: &TenantId,
+        kind: Option<&str>,
+        limit: usize,
+    ) -> StoreResult<Vec<AuditEntry>> {
+        let rows = self.on_tenant(tenant, |conn| {
+            let mut statement = conn
+                .prepare(
+                    "SELECT at, kind, event, correlation, data FROM audit_log
+                     WHERE ?1 IS NULL OR kind = ?1 ORDER BY seq DESC LIMIT ?2",
+                )
+                .map_err(db)?;
+            let rows = statement
+                .query_map(params![kind, limit as i64], |r| {
+                    Ok(AuditEntry {
+                        at: r.get(0)?,
+                        kind: r.get(1)?,
+                        event: r.get(2)?,
+                        correlation: r.get(3)?,
+                        data: r.get(4)?,
+                    })
+                })
+                .map_err(db)?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(db)?;
+            Ok(rows)
+        })?;
+        let mut rows = rows.unwrap_or_default();
+        rows.reverse();
+        Ok(rows)
     }
 
     fn create_snapshot(

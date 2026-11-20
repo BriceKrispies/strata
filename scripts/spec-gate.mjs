@@ -257,7 +257,7 @@ const snapshot = sourceHashes();
 if (!noTest) {
   console.log('running tests (--no-test would reuse the recorded results instead)');
   // A private build directory, so a running development stack does not hold the binaries.
-  const cargo = run('cargo', ['test', '--workspace', '--no-fail-fast'], {
+  const cargo = run('cargo', ['test', '--workspace', '--no-fail-fast', '--features', 'strata-backend/development'], {
     // EXEGRA_HOME: the specc differential tests run Exegra and fail without it (no silent skip).
     env: { CARGO_BUILD_JOBS: '2', RUST_TEST_THREADS: '2', CARGO_TARGET_DIR: 'target/gate', EXEGRA_HOME: exegraHome },
   });

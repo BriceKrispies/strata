@@ -134,7 +134,13 @@ impl Commit {
                 revision: transition.delta.new_revision,
                 kernel_version: strata_kernel::KERNEL_VERSION.to_string(),
                 intent: intent.clone(),
-                context: context.clone(),
+                // The journal is kept for good and is read for replay and the Impact Lab. The
+                // verified address of the person is personal data the shell filled in for this one
+                // decision; it is not written to the journal.
+                context: Context {
+                    verified_address: None,
+                    ..context.clone()
+                },
                 delta_hash: canon::hash_of(&transition.delta),
                 events_hash: canon::hash_of(&transition.events),
             },
@@ -497,6 +503,20 @@ pub struct RecoveryRequest {
     pub expires_at: Timestamp,
 }
 
+/// One line of a tenant's security audit trail: an authentication decision or an audit event.
+/// `data` is JSON text the store does not read.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AuditEntry {
+    /// When it happened, in milliseconds.
+    pub at: i64,
+    /// `decision` for an authentication decision, `audit` for any other security event.
+    pub kind: String,
+    /// The event name, such as `auth.decision` or `signing_key.compromised`.
+    pub event: String,
+    pub correlation: String,
+    pub data: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SnapshotInfo {
     pub tenant: TenantId,
@@ -813,6 +833,18 @@ pub trait Store: Send + Sync {
     fn doc_list(&self, tenant: &TenantId, kind: &str) -> StoreResult<Vec<(String, String)>>;
     /// Remove one document. Returns whether it was there.
     fn doc_remove(&self, tenant: &TenantId, kind: &str, key: &str) -> StoreResult<bool>;
+
+    /// Append one line to the tenant's audit trail. Durable when it returns. A tenant that does
+    /// not exist is refused as not found.
+    fn audit_append(&self, tenant: &TenantId, entry: &AuditEntry) -> StoreResult<()>;
+    /// The newest `limit` lines of the tenant's audit trail, oldest first. `kind` limits the
+    /// lines to one kind. A tenant with none has an empty list.
+    fn audit_list(
+        &self,
+        tenant: &TenantId,
+        kind: Option<&str>,
+        limit: usize,
+    ) -> StoreResult<Vec<AuditEntry>>;
 
     /// The verified e-mail address of the account of `principal` in `tenant`, if it has an
     /// account and the account has one.
