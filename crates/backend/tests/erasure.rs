@@ -104,6 +104,7 @@ fn record_type(id: &str, fields: Vec<(FieldId, FieldDef)>) -> ObjectTypeDef {
         language_field: None,
         translation_group: None,
         unique: None,
+        searchable: None,
     }
 }
 

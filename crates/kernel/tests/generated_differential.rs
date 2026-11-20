@@ -976,8 +976,9 @@ fn assert_no_input_of_a_known_difference(state: &State) {
             def.retention.is_none()
                 && def.publication.is_none()
                 && def.language_field.is_none()
-                && def.translation_group.is_none(),
-            "{object_id} declares retention, publication, a language field or a translation group; the generated functions do not state their checks (difference 14)"
+                && def.translation_group.is_none()
+                && def.searchable.is_none(),
+            "{object_id} declares retention, publication, a language field, a translation group or searchable fields; the generated functions do not state their checks (difference 14)"
         );
     }
     for automation in tenant.schema.automations.iter().flat_map(BTreeMap::values) {

@@ -732,6 +732,13 @@ fn schema_changes() -> Vec<SchemaChange> {
         SchemaChange::ClearTranslationGroup {
             object: object("note"),
         },
+        SchemaChange::SetSearchable {
+            object: object("note"),
+            fields: vec![field("title"), field("body")],
+        },
+        SchemaChange::ClearSearchable {
+            object: object("note"),
+        },
         SchemaChange::RemoveObject {
             id: object("note"),
             delete_records: true,

@@ -268,6 +268,25 @@ impl Store for MemoryStore {
         })
     }
 
+    fn search_candidates(
+        &self,
+        tenant: &TenantId,
+        probe: &strata_kernel::search::Probe,
+    ) -> StoreResult<Vec<strata_kernel::search::Candidate>> {
+        let inner = self.lock()?;
+        let Some(state) = inner.tenants.get(tenant) else {
+            return Ok(Vec::new());
+        };
+        let Some(def) = state.schema.objects.get(&probe.object) else {
+            return Ok(Vec::new());
+        };
+        Ok(strata_kernel::search::candidates_in(
+            state.records_of(&probe.object),
+            def,
+            probe,
+        ))
+    }
+
     fn segment_catalog(&self, tenant: &TenantId) -> StoreResult<Vec<seg::Segment>> {
         Ok(self
             .lock()?

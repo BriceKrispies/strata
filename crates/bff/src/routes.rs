@@ -1459,6 +1459,55 @@ async fn aggregate_run(
         .map(Json)
 }
 
+/// Search the tenant: `GET /api/search?q=&objects=&cursor=&limit=`, the object types being names
+/// separated by commas. The backend's kernel decides what the reader may find, as the principal of
+/// the session and as the anonymous reader without one. The route is counted against the
+/// per-source request rate (see `is_page_or_view`).
+///
+/// Implements: CT-175
+async fn search_run(
+    State(bff): State<Shared>,
+    headers: HeaderMap,
+    Query(mut query): Query<BTreeMap<String, String>>,
+) -> Result<Json<Json_>, Failure> {
+    let visit = visit(&bff, &headers)?;
+    let invalid = |why: &str| Failure::new(ErrorCode::Invalid, why, &visit.correlation);
+    let words = match query.remove("q") {
+        Some(text) if !text.trim().is_empty() && text.len() <= 200 => text,
+        _ => return Err(invalid("A search names words, at most 200 bytes.")),
+    };
+    let objects: Vec<String> = match query.remove("objects") {
+        Some(text) if text.len() <= 400 => text
+            .split(',')
+            .filter(|name| !name.is_empty() && name.len() <= 64)
+            .map(str::to_string)
+            .collect(),
+        Some(_) => return Err(invalid("The object types are too long.")),
+        None => Vec::new(),
+    };
+    let cursor = match query.remove("cursor") {
+        Some(text) if text.len() <= 200 => Some(text),
+        Some(_) => return Err(invalid("The cursor is not one this search issued.")),
+        None => None,
+    };
+    let limit = match query.remove("limit") {
+        Some(text) => Some(
+            text.parse::<u32>()
+                .map_err(|_| invalid("A limit is a whole number."))?,
+        ),
+        None => None,
+    };
+    let request = strata_protocol::api::SearchRunRequest {
+        query: words,
+        objects,
+        cursor,
+        limit,
+    };
+    backend(&bff, &visit, "/internal/search", &json!(request))
+        .await
+        .map(Json)
+}
+
 async fn records(
     State(bff): State<Shared>,
     headers: HeaderMap,
@@ -2020,10 +2069,10 @@ fn source_of(bff: &Bff, request: &Request) -> Option<String> {
     Some(client_address(peer, forwarded.as_deref(), &bff.cfg.trusted_proxies).to_string())
 }
 
-/// Whether a request is a page or a view read, the two that cost the backend calls and that the
-/// per-source request rate applies to.
+/// Whether a request is a page, a view read or a search, the three that cost the backend calls and
+/// that the per-source request rate applies to.
 fn is_page_or_view(method: &Method, path: &str) -> bool {
-    if path == "/api/view" {
+    if path == "/api/view" || path == "/api/search" {
         return true;
     }
     const OTHER: [&str; 9] = [
@@ -2594,6 +2643,7 @@ pub fn router(bff: Shared) -> Router {
         .route("/logout", post(logout))
         .route("/view", get(view))
         .route("/aggregate", get(aggregate_run))
+        .route("/search", get(search_run))
         .route("/records", post(records))
         .route("/members/:op", post(members))
         .route("/subject-rights/erase", post(subject_erase))

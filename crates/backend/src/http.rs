@@ -526,6 +526,19 @@ async fn aggregate(
     .await
 }
 
+/// Search the tenant as the caller: what the caller may read, whatever the audience (contract
+/// search).
+async fn search(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Json(request): Json<strata_protocol::api::SearchRunRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    as_caller(&app, &headers, move |app, identity| {
+        crate::search::run(app, identity, &request)
+    })
+    .await
+}
+
 async fn mutate(
     State(app): State<Shared>,
     headers: HeaderMap,
@@ -1069,6 +1082,7 @@ pub fn router(app: Shared) -> Router {
         .route("/internal/products/remove", post(crate::products::remove))
         .route("/internal/view", post(view))
         .route("/internal/aggregate", post(aggregate))
+        .route("/internal/search", post(search))
         .route("/internal/mutate", post(mutate))
         .route("/internal/members", post(members))
         .route("/internal/erasure/erase", post(erasure_erase))

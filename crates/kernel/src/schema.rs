@@ -574,6 +574,7 @@ impl TenantSchemaExt for TenantSchema {
         crate::capabilities::declaration_problems(self, &mut problems);
         crate::ledger::declaration_problems(self, &mut problems);
         crate::object_meta::problems(self, &mut problems);
+        crate::search::problems(self, &mut problems);
         crate::templates::problems(self, &mut problems);
         crate::products::problems(self, &mut problems);
         problems

@@ -1468,6 +1468,26 @@ async fn page_requests_are_limited_per_source() {
     assert_eq!(status, 200, "the session read is not a page request");
 }
 
+// Verifies: SRH-2790
+/// A search is answered through the backend for anyone, and is limited per source at the edge as a
+/// page is.
+#[tokio::test]
+async fn searches_are_limited_per_source() {
+    let edge = start_with(|cfg| cfg.limits.requests_per_minute = 5, |_| {}).await;
+    let (status, body, _) = edge.get("127.0.0.1", "/api/search?q=kiln", None).await;
+    assert_eq!(status, 200, "{body}");
+    assert!(body["hits"].as_array().is_some_and(|hits| !hits.is_empty()));
+    let mut refused = 0;
+    for _ in 0..12 {
+        if edge.get("127.0.0.1", "/api/search?q=kiln", None).await.0 == 429 {
+            refused += 1;
+        }
+    }
+    assert!(refused >= 1, "a source that keeps searching is slowed");
+    let (status, _, _) = edge.get("127.0.0.1", "/api/search?q=", None).await;
+    assert!(status == 400 || status == 429, "{status}");
+}
+
 /// One sign-in attempt through the edge, from a browser that says it comes from `claimed`.
 async fn attempt_from(
     edge: &Edge,

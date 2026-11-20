@@ -167,6 +167,20 @@ pub struct AggregateRunRequest {
     pub filter: serde_json::Map<String, Json>,
 }
 
+/// A search of the tenant for the caller (contract search): the words, the object types to search
+/// (all with a searchable field when empty), the cursor an earlier answer gave and the size of a
+/// page. The caller names no audience: the kernel decides what the caller may read.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SearchRunRequest {
+    pub query: String,
+    #[serde(default)]
+    pub objects: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+}
+
 /// A record mutation with plain JSON field values; the backend coerces them by field type.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]

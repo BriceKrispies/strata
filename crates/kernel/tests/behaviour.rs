@@ -2561,6 +2561,7 @@ fn a_type_with_a_personal_field_must_declare_retention() {
                 language_field: None,
                 translation_group: None,
                 unique: None,
+                searchable: None,
             },
         );
         schema

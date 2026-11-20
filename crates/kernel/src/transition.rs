@@ -1537,6 +1537,7 @@ fn apply_change(schema: &mut TenantSchema, change: &SchemaChange) -> Result<Stri
                     language_field: None,
                     translation_group: None,
                     unique: None,
+                    searchable: None,
                 });
             format!("define object {id}")
         }
@@ -1741,6 +1742,9 @@ fn apply_change(schema: &mut TenantSchema, change: &SchemaChange) -> Result<Stri
         | SchemaChange::ClearTranslationGroup { .. }
         | SchemaChange::RemoveObject { .. }
         | SchemaChange::RemoveRole(_) => crate::object_meta::apply(schema, change)?,
+        SchemaChange::SetSearchable { .. } | SchemaChange::ClearSearchable { .. } => {
+            crate::search::apply(schema, change)?
+        }
         SchemaChange::DefineMailTemplate(_)
         | SchemaChange::RemoveMailTemplate(_)
         | SchemaChange::DefineNoticeTemplate(_)
