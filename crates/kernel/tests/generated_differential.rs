@@ -79,14 +79,17 @@
 //!      AGG-001 to AGG-023): the generated `schema-problems` states none of them, and the
 //!      aggregate itself is not a read of the generated `kernel-read`. The corpus defines no
 //!      query with an aggregate.
-//!   9. Not exercised, and not mirrored until the generated functions are wired: layered settings
-//!      and product capabilities (`settings.rs`, `capabilities.rs`). The generated `apply-change`,
-//!      `intent-decision`, `needs` and `apply-delta` have no arm for the schema changes
-//!      define-setting, remove-setting, define-capability and remove-capability, the intent
-//!      write-setting and the delta operations on overrides, and the generated `schema-problems`
-//!      has not the checks of setting definitions, of the grants of declared capabilities and of
-//!      the references of a trigger to a setting. The corpus holds no setting, no capability and
-//!      no override; `assert_no_input_of_a_known_difference` fails when a snapshot holds one.
+//!   9. Not exercised, and not mirrored in full: layered settings and product capabilities
+//!      (`settings.rs`, `capabilities.rs`). The generated `apply-change` applies define-setting,
+//!      remove-setting, define-capability and remove-capability as the hand-written one does, but
+//!      `intent-decision` refuses the intent write-setting (`setting:decided_by_the_kernel`),
+//!      `apply-delta` leaves the override operations out, the generated `change-schema` writes
+//!      none of the overrides, revisions and events a change of a definition brings
+//!      (`settings::schema_change_effects`), and `schema-problems` has not the checks of setting
+//!      definitions, of the grants of declared capabilities and of the references of a trigger to
+//!      a setting. The corpus holds no setting, no capability and no override:
+//!      `assert_no_input_of_a_known_difference` fails when a snapshot holds one, and
+//!      `compare_transition` fails on a write-setting intent.
 //!  10. Not mirrored: what `strata_kernel::triggers` adds once the events of a decision are final
 //!      (D-7200 to D-7204, WG-5097, WG-5099, WG-5079): the `StartAutomation` and
 //!      `DeclineAutomation` effects of the triggers that match an event, the `transitions` a
@@ -111,9 +114,11 @@
 //!      draws no invocation, and `compare_transition` fails on one.
 //!  13. Not mirrored: the tenant ledger (`strata_kernel::ledger`, WG-5083). The generated
 //!      `intent-decision` refuses `PostLedger`, `apply-change` refuses the ledger schema changes,
-//!      `needs` plans no ledger need, `apply-delta` ignores a ledger operation, `schema-problems`
-//!      does not check ledger declarations, and the functions that rebuild a tenant schema or
-//!      state do not carry its `ledger` member. The generator draws no ledger intent or change.
+//!      `needs` plans no ledger need, `apply-delta` leaves a ledger operation out and
+//!      `schema-problems` does not check ledger declarations; the functions that rebuild a tenant
+//!      schema or state carry its `ledger` member unchanged. The generator draws no ledger intent
+//!      or change: `assert_no_input_of_a_known_difference` fails on a snapshot that holds a
+//!      ledger, and `compare_transition` on a posting.
 //!  14. Not exercised, and not mirrored: the checks of the declarations of an object type, of the
 //!      templates, tokens and product records of the tenant schema that the hand-written `schema.problems` makes through
 //!      `object_meta::problems`, `templates::problems` and `products::problems` (retention from a
@@ -134,12 +139,20 @@
 //!      (`tests/query_plan.rs`), so only the cursor, the needs and the evidence differ. Guarded:
 //!      `compare_read` fails on a read of a query that has an index plan, and
 //!      `compare_transition` fails on a schema change whose evidence would hold a scan warning.
+//!  16. Not exercised, and not mirrored: the erasure of a data subject (`EraseSubject`,
+//!      `crates/kernel/src/erasure.rs`, D-7460). The generated `intent-decision` refuses it with
+//!      `erasure:decided_by_the_kernel` and the generated `needs` plans nothing for it. The
+//!      operation generator draws no erasure, and `compare_transition` fails on one.
 //!
-//! Difference 7 is guarded: `assert_no_input_of_a_known_difference` runs on every snapshot the
-//! test decides or reads, and fails when a snapshot has an automation step with a retry, a
-//! timeout or a wait, or a field read condition that follows a reference (difference 2), so that
-//! a corpus that grows into them is told to mirror the rule or to count the difference here. The
-//! others are guarded by the operation generator drawing nothing that reaches them.
+//! Every difference that is not compared through an adjustment is guarded, so that a corpus that
+//! grows into one is told to mirror the rule or to count the difference here:
+//! `assert_no_input_of_a_known_difference` runs on every snapshot the test decides or reads and
+//! fails on an input of differences 2, 7, 8, 9, 10, 13 or 14; `compare_transition` fails on an
+//! intent of differences 9, 12, 13 or 16, on a context of difference 11
+//! (`assert_no_automation_principal`) and on a schema change that warns of a scan (difference 15);
+//! `compare_read` fails on a read of a planned query (difference 15). Differences 1 and 10 are
+//! compared through an adjustment (the detail's prefix, `without_kernel_only`). Differences 3 to
+//! 6 are guarded by the operation generator drawing nothing that reaches them.
 //!
 //! Mirrored, so no longer differences: the size limits of `limits.rs` (the bytes of a record, the
 //! length of a string or a list, the encoded size of a value of a unique field: `record-limit-check`,
@@ -904,8 +917,9 @@ fn mentions_through(expr: &Expr) -> bool {
     }
 }
 
-/// Differences 2 and 7 of the header: fail when a snapshot holds an input of a rule the generated
-/// functions do not mirror, so the corpus cannot start to depend on one silently.
+/// Differences 2, 7, 8, 9, 10, 13 and 14 of the header: fail when a snapshot holds an input of a
+/// rule the generated functions do not mirror, so the corpus cannot start to depend on one
+/// silently.
 fn assert_no_input_of_a_known_difference(state: &State) {
     let Some(tenant) = &state.tenant else {
         return;
@@ -1089,6 +1103,18 @@ fn compare_transition(state: &State, intent: &Intent, context: &Context, tally: 
     assert!(
         !matches!(intent, Intent::InvokeOperation { .. }),
         "{label}: the generated functions do not decide a tenant operation (difference 12)"
+    );
+    assert!(
+        !matches!(intent, Intent::WriteSetting { .. }),
+        "{label}: the generated functions do not decide a setting write (difference 9)"
+    );
+    assert!(
+        !matches!(intent, Intent::PostLedger { .. }),
+        "{label}: the generated functions do not decide a posting (difference 13)"
+    );
+    assert!(
+        !matches!(intent, Intent::EraseSubject { .. }),
+        "{label}: the generated functions do not decide an erasure (difference 16)"
     );
     assert_no_automation_principal(context);
     let mut hand = transition(state, intent, context);
