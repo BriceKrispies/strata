@@ -2260,3 +2260,198 @@ async fn an_invitation_is_revoked_through_the_gateway_and_cannot_be_redeemed() {
         .await;
     assert_eq!(status, 422, "{refused}");
 }
+
+/// The ids of the rows of one section of a projected view.
+fn row_ids(view: &Json, section: &str) -> Vec<u64> {
+    view["data"][section]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row["id"].as_u64().unwrap())
+        .collect()
+}
+
+/// Verifies: CMS-164
+///
+/// A list is read a page at a time through the browser's address: the cursor an answer holds
+/// fetches the next page, and the pages together are the list.
+#[tokio::test]
+async fn a_second_page_of_a_view_continues_the_first_with_no_gap_or_repeat() {
+    let edge = start().await;
+    let (status, whole, _) = edge
+        .get("127.0.0.1", "/api/view?path=/&limit=100", None)
+        .await;
+    assert_eq!(status, 200, "{whole}");
+    let every = row_ids(&whole, "recent");
+    assert!(every.len() > 4);
+    assert_eq!(whole["next"], json!({}), "a list that fits has no cursor");
+
+    let mut seen = Vec::new();
+    let mut path = "/api/view?path=/&limit=2".to_string();
+    let mut pages = 0;
+    loop {
+        let (status, page, _) = edge.get("127.0.0.1", &path, None).await;
+        assert_eq!(status, 200, "{page}");
+        let rows = row_ids(&page, "recent");
+        assert!(rows.len() <= 2);
+        seen.extend(rows);
+        pages += 1;
+        match page["next"]["recent"].as_str() {
+            Some(cursor) => {
+                path = format!(
+                    "/api/view?path=/&limit=2&cursor={}",
+                    cursor.replace(':', "%3A")
+                );
+            }
+            None => break,
+        }
+        assert!(pages < 20, "the pages end");
+    }
+    assert!(pages > 1);
+    assert_eq!(seen, every, "no row is missing and none repeats");
+
+    for query in [
+        "limit=0",
+        "limit=101",
+        "limit=many",
+        "cursor=recent%3Azz",
+        "cursor=site%3Ao1",
+    ] {
+        let (status, body, _) = edge
+            .get("127.0.0.1", &format!("/api/view?path=/&{query}"), None)
+            .await;
+        assert_eq!(
+            (status, body["code"].as_str()),
+            (422, Some("invalid")),
+            "{query}: {body}"
+        );
+    }
+}
+
+/// Verifies: CMS-163
+///
+/// A selection of fields narrows what a reader would have received and never adds to it: a field
+/// the kernel withheld from the reader is not there for being named, and a field that was not
+/// named is not there either.
+#[tokio::test]
+async fn a_view_with_a_field_selection_holds_no_unselected_and_no_redacted_field() {
+    let edge = start().await;
+    let keys = |view: &Json, section: &str| -> Vec<Vec<String>> {
+        view["data"][section]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row["fields"].as_object().unwrap().keys().cloned().collect())
+            .collect()
+    };
+    let (status, public, _) = edge
+        .get(
+            "127.0.0.1",
+            "/api/view?path=/authors&fields=name,principal",
+            None,
+        )
+        .await;
+    assert_eq!(status, 200, "{public}");
+    let rows = keys(&public, "authors");
+    assert!(rows.len() > 1);
+    assert!(
+        rows.iter().all(|fields| fields == &["name"]),
+        "the login is the author's own, and the bio and slug were not asked for: {rows:?}"
+    );
+    assert!(public["data"]["authors"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|row| row.get("blocks").is_none()));
+
+    let (token, _) = edge.login("127.0.0.1", "ines", "strata-dev-ines").await;
+    let (_, editor, _) = edge
+        .get(
+            "127.0.0.1",
+            "/api/view?path=/authors&fields=name,principal",
+            Some(&token),
+        )
+        .await;
+    let rows = keys(&editor, "authors");
+    assert!(
+        rows.iter()
+            .any(|fields| fields.contains(&"principal".to_string())),
+        "an editor may read it, so the same selection holds it"
+    );
+    assert!(rows
+        .iter()
+        .all(|fields| fields.iter().all(|f| f == "name" || f == "principal")));
+
+    for query in ["fields=nope", "fields=", "fields=name,,slug"] {
+        let (status, body, _) = edge
+            .get(
+                "127.0.0.1",
+                &format!("/api/view?path=/authors&{query}"),
+                None,
+            )
+            .await;
+        assert_eq!(
+            (status, body["code"].as_str()),
+            (422, Some("invalid")),
+            "{query}: {body}"
+        );
+    }
+}
+
+/// Verifies: OPS-318
+///
+/// A create the browser sends twice with the same key makes one record, through the gateway and
+/// the backend; the same key with another body is refused and a key that cannot be used is
+/// refused before anything is done.
+#[tokio::test]
+async fn a_retried_create_with_the_same_key_makes_one_record_through_the_gateway() {
+    let edge = start().await;
+    let (token, csrf) = edge.login("127.0.0.1", "ines", "strata-dev-ines").await;
+    let cookie = format!("{SESSION_COOKIE}={token}");
+    let create = |slug: &str, key: &str| {
+        edge.post(
+            "127.0.0.1",
+            "/api/records",
+            json!({ "op": "create", "object": "category", "fields": { "name": "Keyed", "slug": slug } }),
+        )
+        .header("cookie", &cookie)
+        .header("x-csrf-token", &csrf)
+        .header("idempotency-key", key)
+    };
+    let (first_status, first, _) = edge.send(create("keyed", "k-0001-aaaa")).await;
+    assert_eq!(first_status, 200, "{first}");
+    let (second_status, second, _) = edge.send(create("keyed", "k-0001-aaaa")).await;
+    assert_eq!(second_status, 200, "{second}");
+    assert_eq!(
+        second["id"], first["id"],
+        "the retry answers the first result"
+    );
+
+    let (_, topics, _) = edge.get("127.0.0.1", "/api/view?path=/topics", None).await;
+    let made = topics["data"]["categories"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|row| row["fields"]["slug"] == "keyed")
+        .count();
+    assert_eq!(made, 1, "one record, not two");
+
+    let (status, other, _) = edge.send(create("keyed-again", "k-0001-aaaa")).await;
+    assert_eq!(
+        (status, other["code"].as_str()),
+        (422, Some("invalid")),
+        "{other}"
+    );
+    let (status, bad, _) = edge.send(create("keyed-long", &"k".repeat(129))).await;
+    assert_eq!(
+        (status, bad["code"].as_str()),
+        (422, Some("invalid")),
+        "{bad}"
+    );
+    let (_, after, _) = edge.get("127.0.0.1", "/api/view?path=/topics", None).await;
+    assert_eq!(
+        after["data"]["categories"].as_array().unwrap().len(),
+        topics["data"]["categories"].as_array().unwrap().len(),
+        "the refused requests made nothing"
+    );
+}

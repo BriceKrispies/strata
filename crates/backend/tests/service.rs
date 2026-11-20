@@ -13,7 +13,8 @@ use strata_kernel::{
     ViewId, ViewSection,
 };
 use strata_protocol::api::{
-    HEADER_CORRELATION, HEADER_ORIGIN, HEADER_SERVICE, HEADER_SESSION, HEADER_SITE, HEADER_SOURCE,
+    HEADER_CORRELATION, HEADER_IDEMPOTENCY, HEADER_ORIGIN, HEADER_SERVICE, HEADER_SESSION,
+    HEADER_SITE, HEADER_SOURCE,
 };
 use strata_storage_api::memory::MemoryStore;
 use strata_storage_api::{execute, Store};
@@ -90,6 +91,31 @@ impl Backend {
             .header(HEADER_SERVICE, TOKEN)
             .header(HEADER_SITE, site)
             .header(HEADER_CORRELATION, "t-corr-1")
+            .json(&body);
+        if let Some(token) = session {
+            request = request.header(HEADER_SESSION, token);
+        }
+        let response = request.send().await.unwrap();
+        let status = response.status().as_u16();
+        (status, response.json().await.unwrap_or(Json::Null))
+    }
+
+    /// A call that carries the idempotency key the browser sent, as the BFF passes it on.
+    async fn call_keyed(
+        &self,
+        site: &str,
+        session: Option<&str>,
+        path: &str,
+        body: Json,
+        key: &str,
+    ) -> (u16, Json) {
+        let mut request = self
+            .http
+            .post(format!("{}{path}", self.base))
+            .header(HEADER_SERVICE, TOKEN)
+            .header(HEADER_SITE, site)
+            .header(HEADER_CORRELATION, "t-corr-key")
+            .header(HEADER_IDEMPOTENCY, key)
             .json(&body);
         if let Some(token) = session {
             request = request.header(HEADER_SESSION, token);
@@ -4063,5 +4089,328 @@ async fn a_tenant_is_created_while_running_and_its_owner_signs_in_by_link() {
             binding["host"] == "newsite.example" && binding["tenant"] == "newsite"
         }),
         "the new site's host is listed: {listed}"
+    );
+}
+
+/// The ids of the rows of one section of a view answer.
+fn row_ids(view: &Json, section: &str) -> Vec<u64> {
+    view["sections"][section]["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row["id"].as_u64().unwrap())
+        .collect()
+}
+
+/// Verifies: CMS-164
+#[tokio::test]
+async fn a_second_page_of_a_view_continues_the_first_with_no_gap_or_repeat() {
+    let backend = start().await;
+    let (status, whole) = backend
+        .call(
+            "fieldnotes",
+            None,
+            "/internal/view",
+            json!({ "path": "/", "limit": 100 }),
+        )
+        .await;
+    assert_eq!(status, 200, "{whole}");
+    let every = row_ids(&whole, "recent");
+    assert!(every.len() > 4, "the fixture has enough essays to page");
+    assert!(
+        whole["sections"]["recent"].get("next").is_none(),
+        "one page that holds the list has no cursor"
+    );
+
+    let mut seen = Vec::new();
+    let mut cursor: Option<String> = None;
+    let mut pages = 0;
+    loop {
+        let mut request = json!({ "path": "/", "limit": 2 });
+        if let Some(cursor) = &cursor {
+            request["cursor"] = json!(cursor);
+        }
+        let (status, page) = backend
+            .call("fieldnotes", None, "/internal/view", request)
+            .await;
+        assert_eq!(status, 200, "{page}");
+        let rows = row_ids(&page, "recent");
+        assert!(rows.len() <= 2, "a page holds at most the limit");
+        seen.extend(rows);
+        pages += 1;
+        // A single-row section has no cursor, and the other sections answer their first page.
+        assert!(page["sections"]["site"].get("next").is_none());
+        match page["sections"]["recent"]["next"].as_str() {
+            Some(next) => cursor = Some(next.to_string()),
+            None => break,
+        }
+        assert!(pages < 20, "the pages end");
+    }
+    assert!(pages > 1, "the list took more than one page");
+    assert_eq!(seen, every, "the pages hold every row once, in order");
+
+    for (request, why) in [
+        (json!({ "path": "/", "limit": 0 }), "a limit of 0"),
+        (json!({ "path": "/", "limit": 101 }), "a limit over 100"),
+        (
+            json!({ "path": "/", "cursor": "recent:zz" }),
+            "a cursor that is not one",
+        ),
+        (
+            json!({ "path": "/", "cursor": "site:o1" }),
+            "a cursor of a single-row section",
+        ),
+        (
+            json!({ "path": "/", "cursor": "nothing:o1" }),
+            "a cursor of no section",
+        ),
+        (
+            json!({ "path": "/", "cursor": "recent:a1" }),
+            "a cursor of another kind of window",
+        ),
+    ] {
+        let (status, body) = backend
+            .call("fieldnotes", None, "/internal/view", request)
+            .await;
+        assert_eq!(
+            (status, body["code"].as_str()),
+            (422, Some("invalid")),
+            "{why}: {body}"
+        );
+    }
+}
+
+/// Verifies: CMS-163
+#[tokio::test]
+async fn a_view_with_a_field_selection_holds_no_unselected_and_no_redacted_field() {
+    let backend = start().await;
+    let fields_of = |view: &Json, section: &str| -> Vec<Vec<String>> {
+        view["sections"][section]["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row["fields"].as_object().unwrap().keys().cloned().collect())
+            .collect()
+    };
+    // The public reads an author's name and not the login that is theirs: asking for it changes
+    // nothing, and the fields that were not asked for are not there.
+    let (status, public) = backend
+        .call(
+            "fieldnotes",
+            None,
+            "/internal/view",
+            json!({ "path": "/authors", "fields": ["name", "principal"] }),
+        )
+        .await;
+    assert_eq!(status, 200, "{public}");
+    let rows = fields_of(&public, "authors");
+    assert!(rows.len() > 1);
+    assert!(rows.iter().all(|keys| keys == &["name"]), "{rows:?}");
+    assert_eq!(
+        public["sections"]["authors"]["markdown"],
+        json!([]),
+        "the bio was not selected, so no blocks are made of it"
+    );
+
+    // An editor reads it, so for them the same selection holds it, and still nothing else.
+    let token = backend.login("fieldnotes", "ines", "strata-dev-ines").await;
+    let (status, editor) = backend
+        .call(
+            "fieldnotes",
+            Some(&token),
+            "/internal/view",
+            json!({ "path": "/authors", "fields": ["name", "principal"] }),
+        )
+        .await;
+    assert_eq!(status, 200, "{editor}");
+    let rows = fields_of(&editor, "authors");
+    assert!(rows
+        .iter()
+        .any(|keys| keys.contains(&"principal".to_string())));
+    assert!(rows
+        .iter()
+        .all(|keys| keys.iter().all(|k| k == "name" || k == "principal")));
+
+    // The records a section includes are narrowed the same way.
+    let (_, home) = backend
+        .call(
+            "fieldnotes",
+            None,
+            "/internal/view",
+            json!({ "path": "/", "fields": ["title"] }),
+        )
+        .await;
+    for included in home["sections"]["recent"]["included"]
+        .as_object()
+        .unwrap()
+        .values()
+    {
+        for record in included.as_object().unwrap().values() {
+            assert!(record["fields"]
+                .as_object()
+                .unwrap()
+                .keys()
+                .all(|k| k == "title"));
+        }
+    }
+    assert!(fields_of(&home, "recent")
+        .iter()
+        .all(|keys| keys == &["title"]));
+
+    for (selection, why) in [
+        (json!([]), "an empty selection"),
+        (json!(["nope"]), "a field no section has"),
+        (json!(["Name"]), "a name that is not a field name"),
+    ] {
+        let (status, body) = backend
+            .call(
+                "fieldnotes",
+                None,
+                "/internal/view",
+                json!({ "path": "/authors", "fields": selection }),
+            )
+            .await;
+        assert_eq!(
+            (status, body["code"].as_str()),
+            (422, Some("invalid")),
+            "{why}: {body}"
+        );
+    }
+}
+
+/// Verifies: OPS-318
+#[tokio::test]
+async fn the_key_a_request_carries_reaches_the_store_and_a_repeat_changes_the_tenant_once() {
+    let backend = start().await;
+    let token = backend
+        .login("fieldnotes", "tomasz", "strata-dev-tomasz")
+        .await;
+    let draft = |title: &str, slug: &str| json!({ "op": "create", "object": "post", "fields": { "title": title, "slug": slug, "body": "Text.", "author": 3 } });
+    let (first_status, first) = backend
+        .call_keyed(
+            "fieldnotes",
+            Some(&token),
+            "/internal/mutate",
+            draft("Keyed once", "keyed-once"),
+            "key-0001",
+        )
+        .await;
+    assert_eq!(first_status, 200, "{first}");
+    let (second_status, second) = backend
+        .call_keyed(
+            "fieldnotes",
+            Some(&token),
+            "/internal/mutate",
+            draft("Keyed once", "keyed-once"),
+            "key-0001",
+        )
+        .await;
+    assert_eq!(second_status, 200, "{second}");
+    assert_eq!(
+        second["id"], first["id"],
+        "the repeat answers the first result"
+    );
+    let desk = backend.view("fieldnotes", Some(&token), "/desk").await;
+    let made = titles(&desk, "posts")
+        .iter()
+        .filter(|title| *title == "Keyed once")
+        .count();
+    assert_eq!(made, 1, "one record, not two");
+
+    // The same key with another request is refused, and makes nothing.
+    let (status, other) = backend
+        .call_keyed(
+            "fieldnotes",
+            Some(&token),
+            "/internal/mutate",
+            draft("Keyed twice", "keyed-twice"),
+            "key-0001",
+        )
+        .await;
+    assert_eq!(
+        (status, other["code"].as_str()),
+        (422, Some("invalid")),
+        "{other}"
+    );
+
+    // A key that cannot be used is refused on any route, the format checked in one place; and an
+    // anonymous caller has no key to use.
+    let too_long = "k".repeat(129);
+    let (status, body) = backend
+        .call_keyed(
+            "fieldnotes",
+            Some(&token),
+            "/internal/session",
+            json!({}),
+            &too_long,
+        )
+        .await;
+    assert_eq!(
+        (status, body["code"].as_str()),
+        (422, Some("invalid")),
+        "{body}"
+    );
+    let (status, body) = backend
+        .call_keyed(
+            "fieldnotes",
+            None,
+            "/internal/mutate",
+            draft("Anonymous", "anonymous-keyed"),
+            "key-0002",
+        )
+        .await;
+    assert_eq!(
+        (status, body["code"].as_str()),
+        (401, Some("unauthenticated")),
+        "{body}"
+    );
+}
+
+/// Verifies: OPS-318
+///
+/// The key is in the context of every intent a request decides, not only of a record change: a
+/// repeated invitation under one key is made once and answered with the first reply, and the same
+/// key with another invitation is refused.
+#[tokio::test]
+async fn a_members_change_honours_the_key_of_its_request() {
+    let backend = start().await;
+    let owner = backend
+        .login("fieldnotes", "admin", "strata-dev-admin")
+        .await;
+    let invite = |id: &str| json!({ "op": "invite", "invitation": id, "address": format!("{id}@example.test"), "roles": ["editor"] });
+    let (status, first) = backend
+        .call_keyed(
+            "fieldnotes",
+            Some(&owner),
+            "/internal/members",
+            invite("inv-keyed"),
+            "key-members-1",
+        )
+        .await;
+    assert_eq!(status, 200, "{first}");
+    let (status, again) = backend
+        .call_keyed(
+            "fieldnotes",
+            Some(&owner),
+            "/internal/members",
+            invite("inv-keyed"),
+            "key-members-1",
+        )
+        .await;
+    assert_eq!(status, 200, "{again}");
+    assert_eq!(again, first, "the repeat answers the first reply");
+    let (status, other) = backend
+        .call_keyed(
+            "fieldnotes",
+            Some(&owner),
+            "/internal/members",
+            invite("inv-other"),
+            "key-members-1",
+        )
+        .await;
+    assert_eq!(
+        (status, other["code"].as_str()),
+        (422, Some("invalid")),
+        "{other}"
     );
 }

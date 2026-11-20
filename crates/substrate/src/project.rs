@@ -11,8 +11,8 @@ use strata_kernel::expr::attribute;
 use strata_kernel::ext::*;
 use strata_kernel::refs_in;
 use strata_kernel::{
-    ArgSource, FieldId, ObjectTypeId, ReadRequest, Record, RecordId, SchemaVersion, StateRevision,
-    TenantSchema, Value, ViewDef, ViewId, ViewSection,
+    ArgSource, FieldId, ObjectTypeId, PageCursor, ReadRequest, Record, RecordId, SchemaVersion,
+    StateRevision, TenantSchema, Value, ViewDef, ViewId, ViewSection,
 };
 
 /// Find the view whose route pattern matches a path, with the values of its `:name` segments.
@@ -58,6 +58,10 @@ pub struct SectionData {
     /// Referenced records the principal may read, by referencing field.
     pub included: BTreeMap<FieldId, BTreeMap<RecordId, Arc<Record>>>,
     pub markdown: Vec<FieldId>,
+    /// The cursor that fetches the next page of this section, as [`encode_cursor`] writes it;
+    /// `None` at the end of the list and for a single-row section (CMS-164).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next: Option<String>,
 }
 
 /// The raw result of a view: what the backend hands the BFF.
@@ -127,6 +131,61 @@ pub fn section_request(
         page_size: None,
         cursor: None,
     }
+}
+
+/// The request of a section for one page: the section's own request with the page size and the
+/// cursor of the delivery request (CMS-164). The read answers with the cursor of the page after.
+pub fn with_page(
+    request: ReadRequest,
+    size: Option<u32>,
+    after: Option<PageCursor>,
+) -> ReadRequest {
+    match request {
+        ReadRequest::Named { query, params, .. } => ReadRequest::Named {
+            query,
+            params,
+            page_size: size,
+            cursor: after,
+        },
+        other => other,
+    }
+}
+
+/// A page cursor as the browser holds it: `a<id>` continues after a record, `o<n>` skips `n`
+/// rows. Opaque to the client.
+pub fn encode_cursor(cursor: &PageCursor) -> String {
+    match cursor {
+        PageCursor::After(id) => format!("a{}", id.0),
+        PageCursor::Offset(rows) => format!("o{rows}"),
+    }
+}
+
+/// The cursor an [`encode_cursor`] text stands for; `None` for any other text.
+pub fn decode_cursor(text: &str) -> Option<PageCursor> {
+    let (kind, digits) = text.split_at_checked(1)?;
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    match kind {
+        "a" => digits
+            .parse()
+            .ok()
+            .map(|id| PageCursor::After(RecordId(id))),
+        "o" => digits.parse().ok().map(PageCursor::Offset),
+        _ => None,
+    }
+}
+
+/// The record as a reader who asked for `selected` fields receives it: those fields it holds and
+/// no others. Narrowing happens after the read, so a field the kernel redacted is not there to
+/// keep, and the selection can only take away from what the reader may see.
+pub fn select_fields(record: &Arc<Record>, selected: &BTreeSet<FieldId>) -> Arc<Record> {
+    if record.fields.keys().all(|field| selected.contains(field)) {
+        return record.clone();
+    }
+    let mut narrowed = Record::clone(record);
+    narrowed.fields.retain(|field, _| selected.contains(field));
+    Arc::new(narrowed)
 }
 
 /// The record ids a section's rows refer to through its included fields, by target object.
@@ -241,11 +300,17 @@ pub fn project(data: &ViewData) -> Json {
             (name.clone(), value)
         })
         .collect();
+    let next: Map<String, Json> = data
+        .sections
+        .iter()
+        .filter_map(|(name, section)| Some((name.clone(), json!(section.next.as_ref()?))))
+        .collect();
     json!({
         "view": data.view.as_str(),
         "title": data.title,
         "params": data.params,
         "data": sections,
+        "next": next,
         "depends_on": data.depends_on.iter().map(|o| o.as_str()).collect::<Vec<_>>(),
         "revision": data.revision.0,
         "schema_version": data.schema_version.0,

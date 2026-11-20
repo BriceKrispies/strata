@@ -858,6 +858,7 @@ mod tests {
             state: SessionState::Active,
             correlation: "t".into(),
             verified_address: None,
+            idempotency_key: None,
         }
     }
 

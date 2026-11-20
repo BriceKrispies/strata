@@ -41,6 +41,7 @@
  * @property {string} path
  * @property {Record<string, string>} params
  * @property {Record<string, any>} data
+ * @property {Record<string, string>} [next]  For each list section with more rows, the cursor of its next page.
  * @property {string[]} depends_on
  * @property {number} revision
  * @property {{ accent: string, paper: string }} theme
@@ -75,7 +76,7 @@
  * Effects out of the kernel. Descriptions only; the driver performs them.
  *
  * @typedef {(
- *   | { type: 'http', id: number, method: 'GET' | 'POST', path: string, body?: any, csrf?: string, write?: boolean, correlation: string }
+ *   | { type: 'http', id: number, method: 'GET' | 'POST', path: string, body?: any, csrf?: string, write?: boolean, idempotencyKey?: string, correlation: string }
  *   | { type: 'ws_connect', csrf?: string }
  *   | { type: 'ws_send', message: any }
  *   | { type: 'ws_close' }

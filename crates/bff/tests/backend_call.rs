@@ -70,6 +70,7 @@ fn visit(session: Option<&str>) -> Visit {
         correlation: "c-visit-7".into(),
         source: None,
         origin: None,
+        idempotency_key: None,
     }
 }
 

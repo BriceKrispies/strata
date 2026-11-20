@@ -16,8 +16,9 @@ use strata_kernel::{
 };
 use strata_model::telemetry;
 use strata_protocol::api::{
-    valid_correlation, ErrorCode, LoginReply, SessionView, HEADER_CORRELATION, HEADER_ORIGIN,
-    HEADER_SERVICE, HEADER_SESSION, HEADER_SITE, HEADER_SOURCE,
+    valid_correlation, valid_idempotency_key, ErrorCode, LoginReply, SessionView,
+    HEADER_CORRELATION, HEADER_IDEMPOTENCY, HEADER_ORIGIN, HEADER_SERVICE, HEADER_SESSION,
+    HEADER_SITE, HEADER_SOURCE,
 };
 use strata_protocol::ws::SessionState;
 use strata_storage_api::{Account, SessionRecord, StoreError};
@@ -33,6 +34,9 @@ pub struct Caller {
     /// The origin the browser made the request from, as the BFF checked it, or `None` when the
     /// request did not come from one of the site's own pages.
     pub origin: Option<String>,
+    /// The caller's key for the change this request makes, as the BFF passed it on, already checked
+    /// by [`caller`]: a repeat with the same key changes the tenant once (OPS-318).
+    pub idempotency_key: Option<String>,
 }
 
 impl Caller {
@@ -55,6 +59,9 @@ pub struct Identity {
     pub correlation: String,
     /// The address the signed-in account has verified, from the store: never from a request.
     pub verified_address: Option<String>,
+    /// The caller's idempotency key. [`Identity::context`] hands it to the store for a signed-in
+    /// caller only.
+    pub idempotency_key: Option<String>,
 }
 
 impl Identity {
@@ -70,7 +77,9 @@ impl Identity {
             now: app.now(),
             correlation: self.correlation.clone(),
             verified_address: self.verified_address.clone(),
-            idempotency_key: None,
+            // Only a signed-in caller's key reaches the store: every anonymous caller is the same
+            // principal, so a key of theirs would be shared.
+            idempotency_key: self.idempotency_key.clone().filter(|_| !self.anonymous()),
             language: None,
         }
     }
@@ -108,7 +117,27 @@ pub fn caller(headers: &HeaderMap) -> Result<Caller, ApiError> {
         .ok_or_else(|| {
             ApiError::new(ErrorCode::Invalid, "missing site").with_correlation(&correlation)
         })?;
+    // The one place the key's format is checked: every route that changes state takes the key from
+    // the caller, and a key that cannot be used is refused rather than ignored.
+    let idempotency_key = match headers.get(HEADER_IDEMPOTENCY) {
+        None => None,
+        Some(value) => Some(
+            value
+                .to_str()
+                .ok()
+                .filter(|key| valid_idempotency_key(key))
+                .map(str::to_string)
+                .ok_or_else(|| {
+                    ApiError::new(
+                        ErrorCode::Invalid,
+                        "An idempotency key is 1 to 128 visible ASCII characters.",
+                    )
+                    .with_correlation(&correlation)
+                })?,
+        ),
+    };
     Ok(Caller {
+        idempotency_key,
         site,
         token: header(headers, HEADER_SESSION).map(str::to_string),
         source: header(headers, HEADER_SOURCE)
@@ -176,6 +205,7 @@ pub fn identify(app: &App, caller: &Caller) -> Result<Identity, ApiError> {
         state,
         correlation: caller.correlation.clone(),
         verified_address: None,
+        idempotency_key: caller.idempotency_key.clone(),
     };
     let Some(token) = &caller.token else {
         return Ok(anonymous(SessionState::Anonymous));
@@ -226,6 +256,7 @@ pub fn identify(app: &App, caller: &Caller) -> Result<Identity, ApiError> {
         state: SessionState::Active,
         correlation: caller.correlation.clone(),
         verified_address,
+        idempotency_key: caller.idempotency_key.clone(),
     })
 }
 
@@ -374,6 +405,7 @@ pub(crate) fn start_session(
         state: SessionState::Active,
         correlation: caller.correlation.clone(),
         verified_address: account.verified_email,
+        idempotency_key: None,
     };
     Ok(LoginReply {
         token,
