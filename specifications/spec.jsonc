@@ -1564,8 +1564,8 @@
     {"id":"retry-job","name":"Retry a failed job","ref":"CT-085","realisation":"generated","implementedBy":"automation-worker","auth":{"scheme":"session","tenantPolicies":true,"csrf":true,"origin":true,"description":"A principal whose policies permit the operation","requires":["jobs-manage"]},"idempotent":false,"inputs":[{"name":"job","type":"job-id"}],"outputs":[{"name":"attempt","type":"u32"}],"postconditions":["A new attempt is created and the outcomes of earlier attempts are unchanged (AGT-418)."],"errors":[{"name":"unauthenticated","condition":"No valid session or credential accompanies the request.","type":"api-error","kind":"unauthenticated"},{"name":"forbidden","condition":"The caller holds no permission for the operation.","type":"api-error","kind":"forbidden"},{"name":"not-found","condition":"The job does not exist for this tenant.","type":"api-error","kind":"not_found"},{"name":"conflict","condition":"The job has not failed.","type":"api-error","kind":"conflict"}],"exposure":"public","tenantScope":"request","deployment":"target"},
     {"id":"list-jobs","name":"List jobs and schedules","ref":"CT-086","realisation":"generated","implementedBy":"automation-worker","auth":{"scheme":"session","tenantPolicies":true,"description":"A principal whose policies permit the operation","requires":["jobs-read"]},"idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"cursor","type":"string","optional":true}],"outputs":[{"name":"jobs","type":"list<job-summary>"},{"name":"next","type":"string","optional":true}],"postconditions":["Each entry shows its state, attempts and the error of each (AGT-416)."],"errors":[{"name":"unauthenticated","condition":"No valid session or credential accompanies the request.","type":"api-error","kind":"unauthenticated"},{"name":"forbidden","condition":"The caller holds no permission for the operation.","type":"api-error","kind":"forbidden"},{"name":"tenant-mismatch","condition":"A tenant input names a tenant other than the one resolved from the host and session; the request is refused, recorded as an audit entry and raised as an alert to the platform operators (TEN-1140, THR-259).","type":"api-error","kind":"forbidden"}],"exposure":"public","readOnly":true,"tenantScope":"request","deployment":"target"},
     {"id":"define-schedule","name":"Create or change a schedule","ref":"CT-087","realisation":"generated","implementedBy":"automation-worker","auth":{"scheme":"session","tenantPolicies":true,"csrf":true,"origin":true,"description":"A principal whose policies permit the operation","requires":["jobs-manage"]},"idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"schedule","type":"schedule-id"},{"name":"rule","type":"recurrence"},{"name":"paused","type":"bool","optional":true}],"outputs":[{"name":"next-due","type":"timestamp"}],"postconditions":["A paused schedule creates no job (SCH-005)."],"errors":[{"name":"unauthenticated","condition":"No valid session or credential accompanies the request.","type":"api-error","kind":"unauthenticated"},{"name":"forbidden","condition":"The caller holds no permission for the operation.","type":"api-error","kind":"forbidden"},{"name":"invalid","condition":"The recurrence rule is outside the subset of SCH-1574 or is malformed.","type":"api-error","kind":"invalid"},{"name":"tenant-mismatch","condition":"A tenant input names a tenant other than the one resolved from the host and session; the request is refused, recorded as an audit entry and raised as an alert to the platform operators (TEN-1140, THR-259).","type":"api-error","kind":"forbidden"}],"exposure":"public","tenantScope":"request","deployment":"target"},
-    {"id":"fire-trigger","name":"Create the jobs of the triggers subscribed to an event","ref":"CT-088","realisation":"generated","implementedBy":"automation-worker","auth":{"scheme":"in-process","description":"Local call inside the platform process; no network credential"},"idempotent":false,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"event","type":"domain-event"},{"name":"hop","type":"u32"}],"outputs":[{"name":"jobs","type":"list<job-id>"}],"postconditions":["The jobs are created in the transaction that commits the event (SCH-004).","No job is created beyond the hop limit of the tenant (SCH-300)."],"errors":[],"exposure":"local","deployment":"target"},
-    {"id":"activate-workflow","name":"Activate a workflow definition","ref":"CT-089","realisation":"generated","implementedBy":"automation-worker","auth":{"scheme":"session","roles":["owner"],"csrf":true,"origin":true,"description":"An owner of the tenant","requires":["workflow-activate"]},"idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"workflow","type":"workflow-id"},{"name":"projection","type":"projection-summary"}],"outputs":[{"name":"version","type":"u64"}],"postconditions":["The definition is stored as tenant metadata under the schema version (WFL-001)."],"errors":[{"name":"unauthenticated","condition":"No valid session or credential accompanies the request.","type":"api-error","kind":"unauthenticated"},{"name":"forbidden","condition":"The caller holds no permission for the operation.","type":"api-error","kind":"forbidden"},{"name":"invalid","condition":"A trigger or action is outside the published catalogue (INT-153), or no projection has run (WFL-002).","type":"api-error","kind":"invalid"},{"name":"tenant-mismatch","condition":"A tenant input names a tenant other than the one resolved from the host and session; the request is refused, recorded as an audit entry and raised as an alert to the platform operators (TEN-1140, THR-259).","type":"api-error","kind":"forbidden"}],"exposure":"public","tenantScope":"request","deployment":"target"},
+    {"id":"fire-trigger","name":"Create the jobs of the triggers subscribed to an event","ref":"CT-088","realisation":"generated","implementedBy":"automation-worker","auth":{"scheme":"in-process","description":"Local call inside the platform process; no network credential"},"idempotent":false,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"event","type":"domain-event"},{"name":"hop","type":"u32"}],"outputs":[{"name":"jobs","type":"list<job-id>"}],"postconditions":["The jobs are created in the transaction that commits the event (SCH-004).","No job is created beyond the hop limit of the tenant (SCH-300).","A job is created only for a trigger whose event matches and whose condition is true on the event (WFL-1521).","Every job the trigger declines or holds writes an exception record with its reason in the same transaction (SCH-1532, SCH-1535).","Jobs past the daily job quota are held, and the transaction of the event is never refused for the quota (SCH-1535)."],"errors":[],"exposure":"local","deployment":"target"},
+    {"id":"activate-workflow","name":"Activate a workflow definition","ref":"CT-089","realisation":"generated","implementedBy":"automation-worker","auth":{"scheme":"session","roles":["owner"],"csrf":true,"origin":true,"description":"An owner of the tenant","requires":["workflow-activate"]},"idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"workflow","type":"workflow-id"},{"name":"projection","type":"projection-summary"}],"outputs":[{"name":"version","type":"u64"}],"postconditions":["The definition is stored as tenant metadata under the schema version (WFL-001).","An automation is activated only when every action is a variant of automation-step, every trigger naming it subscribes to a variant of trigger-event, and every role of its run-as is still one its definer may confer (INT-1522, WFL-1528)."],"errors":[{"name":"unauthenticated","condition":"No valid session or credential accompanies the request.","type":"api-error","kind":"unauthenticated"},{"name":"forbidden","condition":"The caller holds no permission for the operation.","type":"api-error","kind":"forbidden"},{"name":"invalid","condition":"A step kind is not a variant of automation-step or a trigger event is not a variant of trigger-event (INT-153, INT-1522), or no projection has run (WFL-002).","type":"api-error","kind":"invalid"},{"name":"tenant-mismatch","condition":"A tenant input names a tenant other than the one resolved from the host and session; the request is refused, recorded as an audit entry and raised as an alert to the platform operators (TEN-1140, THR-259).","type":"api-error","kind":"forbidden"}],"exposure":"public","tenantScope":"request","deployment":"target"},
     {"id":"start-workflow-run","name":"Start a workflow run","ref":"CT-090","realisation":"generated","implementedBy":"automation-worker","auth":{"scheme":"service","description":"Service credential of a platform component","requires":["jobs-run"]},"idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"workflow","type":"workflow-id"},{"name":"input","type":"value-map"},{"name":"idempotency-key","type":"string","optional":true}],"outputs":[{"name":"run","type":"run-id"}],"postconditions":["The run continues under the definition version that started it (MIG-562)."],"errors":[{"name":"unauthenticated","condition":"No valid session or credential accompanies the request.","type":"api-error","kind":"unauthenticated"},{"name":"not-found","condition":"The workflow does not exist for this tenant.","type":"api-error","kind":"not_found"}],"exposure":"internal","deployment":"target","tenantScope":"platform"},
     {"id":"advance-workflow-run","name":"Advance a workflow run by one step","ref":"CT-091","realisation":"generated","implementedBy":"automation-worker","auth":{"scheme":"service","description":"Service credential of a platform component","requires":["jobs-run"]},"idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"run","type":"run-id"}],"outputs":[{"name":"state","type":"run-state"},{"name":"step","type":"u32"}],"postconditions":["The step is decided by the kernel from the recorded state of the run (WFL-003).","After a restart the run continues from its last recorded step (WFL-004).","A failed step runs the declared compensations of the completed steps in reverse order (WFL-005).","A step runs as a job under the lease and retry rules (ARC-700)."],"errors":[{"name":"unauthenticated","condition":"No valid session or credential accompanies the request.","type":"api-error","kind":"unauthenticated"},{"name":"not-found","condition":"The run does not exist for this tenant.","type":"api-error","kind":"not_found"}],"exposure":"internal","deployment":"target","tenantScope":"platform"},
     {"id":"approve-workflow-step","name":"Approve a waiting workflow step","ref":"CT-092","realisation":"generated","implementedBy":"automation-worker","auth":{"scheme":"session","tenantPolicies":true,"csrf":true,"origin":true,"description":"A principal that the policy of the step names","requires":["workflow-approve"]},"idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"run","type":"run-id"}],"outputs":[{"name":"state","type":"run-state"}],"postconditions":["The run continues only after such a principal approves (WFL-006)."],"errors":[{"name":"unauthenticated","condition":"No valid session or credential accompanies the request.","type":"api-error","kind":"unauthenticated"},{"name":"forbidden","condition":"The caller holds no permission for the operation.","type":"api-error","kind":"forbidden"},{"name":"not-found","condition":"The run does not exist for this tenant.","type":"api-error","kind":"not_found"},{"name":"tenant-mismatch","condition":"A tenant input names a tenant other than the one resolved from the host and session; the request is refused, recorded as an audit entry and raised as an alert to the platform operators (TEN-1140, THR-259).","type":"api-error","kind":"forbidden"}],"exposure":"public","tenantScope":"request","deployment":"target"},
@@ -2260,11 +2260,11 @@
     {"realisation":"generated","implementedBy":"gateway","id":"aggregate-run","name":"Run an aggregate of a named query","ref":"CT-310","auth":{"scheme":"anonymous","description":"Anyone; no session is needed","requires":["aggregate-read"]},"idempotent":true,"timeoutMs":10000,"inputs":[{"name":"host","type":"host"},{"name":"query","type":"string"},{"name":"aggregate","type":"string"},{"name":"filter","type":"value-map","optional":true}],"outputs":[{"name":"result","type":"aggregate-result"}],"postconditions":["The reader is the public audience class (AGG-033).","The result counts only records that the audience class of the reader permits (AGG-015) and equals the same aggregate computed one record at a time over them (AGG-016).","A record whose named field the reader may not read is left out (AGG-017).","The result names the object types it depends on (AGG-042) and is stored as a copy of the audience class of the reader (AGG-030, AGG-032).","The records of one tenant only are read (AGG-040).","The throttled response names the limit and the time after which the next request is permitted (CMS-168)."],"errors":[{"name":"not-found","condition":"The query or the aggregate does not exist for this tenant (AGG-003).","type":"api-error","kind":"not_found"},{"name":"invalid","condition":"The filter names a field the query does not declare (AGG-004).","type":"api-error","kind":"invalid"},{"name":"scan-bound-exceeded","condition":"The aggregate would examine more records than its declared scan bound; no result is returned (AGG-020, AGG-021).","type":"api-error","kind":"invalid"},{"name":"sum-overflow","condition":"A sum does not fit the type of its field; no result is returned (AGG-022).","type":"api-error","kind":"invalid"},{"name":"throttled","condition":"The caller exceeded a limit that applies to it.","type":"api-error","kind":"throttled"},{"name":"unavailable","condition":"A dependency of the operation did not answer.","type":"api-error","kind":"unavailable"}],"exposure":"public","readOnly":true,"tenantScope":"request","deployment":"target"},
     {"realisation":"generated","implementedBy":"gateway","id":"aggregate-run-signed-in","name":"Run an aggregate of a named query as a signed-in principal","ref":"CT-311","auth":{"scheme":"session","tenantPolicies":true,"description":"A signed-in principal whose policies permit the operation","requires":["aggregate-read"]},"idempotent":true,"timeoutMs":10000,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"query","type":"string"},{"name":"aggregate","type":"string"},{"name":"filter","type":"value-map","optional":true}],"outputs":[{"name":"result","type":"aggregate-result"}],"postconditions":["The reader is the audience class that the kernel derives for the caller from the policies of the tenant (AGG-033).","The result counts only records that the audience class of the reader permits (AGG-015) and equals the same aggregate computed one record at a time over them (AGG-016).","A record whose named field the reader may not read is left out (AGG-017).","The result names the object types it depends on (AGG-042) and is stored as a copy of the audience class of the reader (AGG-030, AGG-032).","The records of one tenant only are read (AGG-040)."],"errors":[{"name":"unauthenticated","condition":"No valid session or credential accompanies the request.","type":"api-error","kind":"unauthenticated"},{"name":"forbidden","condition":"The caller holds no permission for the operation.","type":"api-error","kind":"forbidden"},{"name":"not-found","condition":"The query or the aggregate does not exist for this tenant (AGG-003).","type":"api-error","kind":"not_found"},{"name":"invalid","condition":"The filter names a field the query does not declare (AGG-004).","type":"api-error","kind":"invalid"},{"name":"scan-bound-exceeded","condition":"The aggregate would examine more records than its declared scan bound; no result is returned (AGG-020, AGG-021).","type":"api-error","kind":"invalid"},{"name":"sum-overflow","condition":"A sum does not fit the type of its field; no result is returned (AGG-022).","type":"api-error","kind":"invalid"},{"name":"throttled","condition":"The caller exceeded a limit that applies to it.","type":"api-error","kind":"throttled"},{"name":"unavailable","condition":"A dependency of the operation did not answer.","type":"api-error","kind":"unavailable"},{"name":"tenant-mismatch","condition":"A tenant input names a tenant other than the one resolved from the host and session; the request is refused, recorded as an audit entry and raised as an alert to the platform operators (TEN-1140, THR-259).","type":"api-error","kind":"forbidden"}],"exposure":"public","readOnly":true,"tenantScope":"request","deployment":"target"},
     {"id":"request-tenant-deletion","name":"Request the deletion of a tenant","ref":"CT-550","realisation":"generated","implementedBy":"control-plane","auth":{"scheme":"session","roles":["owner"],"csrf":true,"origin":true,"stepUp":"15 min","description":"An owner of the tenant","requires":["tenant-delete"]},"idempotent":false,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"confirm-tenant","type":"tenant-id"}],"outputs":[{"name":"executes-at","type":"timestamp"}],"postconditions":["A deletion request records the requesting owner and the time at which the grace period that the plan states ends (D-705, ADM-160).","Every owner of the tenant is told by mail, naming the requesting person and the time of execution (PRV-1214, D-6207).","The request is recorded in the audit log (OBS-1217).","Nothing is removed by the request itself (TEN-011)."],"errors":[{"name":"unauthenticated","condition":"No valid session or credential accompanies the request.","type":"api-error","kind":"unauthenticated"},{"name":"forbidden","condition":"The caller holds no permission for the operation.","type":"api-error","kind":"forbidden"},{"name":"step-up-required","condition":"The last authentication of the session is older than the step-up age, or the session now appears from another network context than the one that authenticated it, and the person has not authenticated again (D-6201, IDN-019). The call changes nothing.","type":"api-error","kind":"forbidden"},{"name":"not-found","condition":"The tenant does not exist for this tenant.","type":"api-error","kind":"not_found"},{"name":"invalid","condition":"The request does not repeat the identifier of the tenant it will destroy (OPS-325).","type":"api-error","kind":"invalid"},{"name":"conflict","condition":"A deletion of this tenant is already requested.","type":"api-error","kind":"conflict"}],"exposure":"public","tenantScope":"request"},
-    {"id":"record-enterprise-contract","name":"Record the enterprise contract of a tenant","ref":"CT-551","realisation":"generated","implementedBy":"control-plane","auth":{"scheme":"session","roles":["platform-operator"],"csrf":true,"origin":true,"stepUp":"15 min","description":"A platform operator","requires":["plan-contract-record"]},"idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"contract-reference","type":"string"}],"outputs":[],"postconditions":["An owner of the tenant may then change the plan to or from Enterprise (BIL-1204, D-6202).","The record is written to the platform audit store with the operator, the tenant and the contract reference (OBS-1218)."],"errors":[{"name":"unauthenticated","condition":"No valid session or credential accompanies the request.","type":"api-error","kind":"unauthenticated"},{"name":"forbidden","condition":"The caller holds no permission for the operation.","type":"api-error","kind":"forbidden"},{"name":"step-up-required","condition":"The last authentication of the session is older than the step-up age, or the session now appears from another network context than the one that authenticated it, and the person has not authenticated again (D-6201, IDN-019). The call changes nothing.","type":"api-error","kind":"forbidden"},{"name":"not-found","condition":"The tenant does not exist for this tenant.","type":"api-error","kind":"not_found"},{"name":"invalid","condition":"The contract reference is empty.","type":"api-error","kind":"invalid"}],"exposure":"internal"},
-    {"id":"set-platform-flag","name":"Set a platform flag or quota of a tenant","ref":"CT-552","realisation":"generated","implementedBy":"control-plane","auth":{"scheme":"session","roles":["platform-operator"],"csrf":true,"origin":true,"stepUp":"15 min","description":"A platform operator","requires":["platform-flags-manage"]},"idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"name","type":"string"},{"name":"value","type":"string"}],"outputs":[],"postconditions":["A flag is off for a tenant unless the release record enables it for that tenant (OPS-328).","The change is written to the platform audit store with the operator, the tenant, the name, the previous value and the new value (OPS-329, D-508, OBS-1218)."],"errors":[{"name":"unauthenticated","condition":"No valid session or credential accompanies the request.","type":"api-error","kind":"unauthenticated"},{"name":"forbidden","condition":"The caller holds no permission for the operation.","type":"api-error","kind":"forbidden"},{"name":"step-up-required","condition":"The last authentication of the session is older than the step-up age, or the session now appears from another network context than the one that authenticated it, and the person has not authenticated again (D-6201, IDN-019). The call changes nothing.","type":"api-error","kind":"forbidden"},{"name":"not-found","condition":"The tenant does not exist for this tenant.","type":"api-error","kind":"not_found"},{"name":"invalid","condition":"The name is neither a platform flag nor a quota, or the value is not one the name takes.","type":"api-error","kind":"invalid"},{"name":"conflict","condition":"The tenant holds more of a metered quantity than the new quota allows; the quantity is named (MIG-583).","type":"api-error","kind":"conflict"}],"exposure":"internal"},
-    {"id":"take-down-tenant","name":"Take a tenant down","ref":"CT-565","realisation":"generated","implementedBy":"control-plane","auth":{"scheme":"session","roles":["platform-operator"],"csrf":true,"origin":true,"description":"A platform operator who holds the capability takedown-issue","requires":["takedown-issue"]},"idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"reason","type":"tenant-suspension-reason"},{"name":"reference","type":"string"}],"outputs":[{"name":"state","type":"tenant-lifecycle"},{"name":"effective-by","type":"u64","description":"The time by which every gateway has stopped serving the tenant (ARC-1228)."}],"preconditions":["The reason is abuse, legal-order or security-incident.","The tenant is not provisioning or deleting."],"postconditions":["The tenant is suspended with that reason, and its background work, sessions and outbound effects stop as TEN-1221 to TEN-1224 state.","The edge copies of every host of the tenant are purged (CT-104, THR-1226).","No gateway serves the tenant later than 60 seconds after the record (ARC-1228).","An audit entry names the operator, the reason, the reference and the time."],"errors":[{"name":"unauthenticated","condition":"No valid session or credential accompanies the request.","type":"api-error","kind":"unauthenticated"},{"name":"forbidden","condition":"The caller holds no permission for the operation.","type":"api-error","kind":"forbidden"},{"name":"not-found","condition":"The tenant does not exist for this tenant.","type":"api-error","kind":"not_found"},{"name":"invalid","condition":"The reason is a commercial reason.","type":"api-error","kind":"invalid"},{"name":"conflict","condition":"The tenant is provisioning or deleting.","type":"api-error","kind":"conflict"},{"name":"unavailable","condition":"The control plane cannot record the takedown; nothing was changed (ARC-1228).","type":"api-error","kind":"unavailable"}],"exposure":"internal"},
-    {"id":"take-down-host","name":"Take a host down","ref":"CT-566","realisation":"generated","implementedBy":"control-plane","auth":{"scheme":"session","roles":["platform-operator"],"csrf":true,"origin":true,"description":"A platform operator who holds the capability takedown-issue","requires":["takedown-issue"]},"idempotent":true,"inputs":[{"name":"host","type":"host"},{"name":"reason","type":"tenant-suspension-reason"},{"name":"reference","type":"string"}],"outputs":[{"name":"effective-by","type":"u64","description":"The time by which every gateway has stopped serving the host (ARC-1228)."}],"preconditions":["The reason is abuse, legal-order or security-incident."],"postconditions":["The domain binding is marked taken down, and the edge copies stored under the host are purged (CT-104, THR-262).","Every other host and the state of the tenant are unchanged (THR-1227).","An audit entry names the operator, the reason, the reference and the time."],"errors":[{"name":"unauthenticated","condition":"No valid session or credential accompanies the request.","type":"api-error","kind":"unauthenticated"},{"name":"forbidden","condition":"The caller holds no permission for the operation.","type":"api-error","kind":"forbidden"},{"name":"not-found","condition":"The host is not bound to a tenant.","type":"api-error","kind":"not_found"},{"name":"invalid","condition":"The reason is a commercial reason.","type":"api-error","kind":"invalid"},{"name":"unavailable","condition":"The control plane cannot record the takedown; nothing was changed (ARC-1228).","type":"api-error","kind":"unavailable"}],"exposure":"internal"},
-    {"id":"release-takedown","name":"Release a takedown","ref":"CT-567","realisation":"generated","implementedBy":"control-plane","auth":{"scheme":"session","roles":["platform-operator"],"csrf":true,"origin":true,"description":"A platform operator who holds the capability takedown-issue and did not issue the takedown","requires":["takedown-issue"]},"idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"host","type":"host","optional":true},{"name":"reference","type":"string"}],"outputs":[{"name":"state","type":"tenant-lifecycle"}],"preconditions":["A takedown of the tenant, or of the host when one is named, is in force.","The caller is not the operator who issued it (THR-1226)."],"postconditions":["The tenant returns to active, or the host binding is unmarked, and gateways serve it again within 60 seconds (ARC-1229).","Queued webhooks and mail discarded by the takedown are not sent (TEN-1223).","An audit entry names the operator and the reference."],"errors":[{"name":"unauthenticated","condition":"No valid session or credential accompanies the request.","type":"api-error","kind":"unauthenticated"},{"name":"forbidden","condition":"The caller holds no permission for the operation.","type":"api-error","kind":"forbidden"},{"name":"not-found","condition":"The tenant does not exist for this tenant.","type":"api-error","kind":"not_found"},{"name":"conflict","condition":"No takedown is in force, or the caller issued it.","type":"api-error","kind":"conflict"}],"exposure":"internal"},
+    {"id":"record-enterprise-contract","name":"Record the enterprise contract of a tenant","ref":"CT-551","realisation":"generated","implementedBy":"control-plane","auth":{"scheme":"session","roles":["platform-operator"],"csrf":true,"origin":true,"stepUp":"15 min","description":"A platform operator","requires":["plan-contract-record"]},"idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"contract-reference","type":"string"}],"outputs":[],"postconditions":["An owner of the tenant may then change the plan to or from Enterprise (BIL-1204, D-6202).","The record is written to the platform audit store with the operator, the tenant and the contract reference (OBS-1218)."],"errors":[{"name":"unauthenticated","condition":"No valid session or credential accompanies the request.","type":"api-error","kind":"unauthenticated"},{"name":"forbidden","condition":"The caller holds no permission for the operation.","type":"api-error","kind":"forbidden"},{"name":"step-up-required","condition":"The last authentication of the session is older than the step-up age, or the session now appears from another network context than the one that authenticated it, and the person has not authenticated again (D-6201, IDN-019). The call changes nothing.","type":"api-error","kind":"forbidden"},{"name":"not-found","condition":"The tenant does not exist for this tenant.","type":"api-error","kind":"not_found"},{"name":"invalid","condition":"The contract reference is empty.","type":"api-error","kind":"invalid"}],"exposure":"internal","tenantScope":"platform"},
+    {"id":"set-platform-flag","name":"Set a platform flag or quota of a tenant","ref":"CT-552","realisation":"generated","implementedBy":"control-plane","auth":{"scheme":"session","roles":["platform-operator"],"csrf":true,"origin":true,"stepUp":"15 min","description":"A platform operator","requires":["platform-flags-manage"]},"idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"name","type":"string"},{"name":"value","type":"string"}],"outputs":[],"postconditions":["A flag is off for a tenant unless the release record enables it for that tenant (OPS-328).","The change is written to the platform audit store with the operator, the tenant, the name, the previous value and the new value (OPS-329, D-508, OBS-1218)."],"errors":[{"name":"unauthenticated","condition":"No valid session or credential accompanies the request.","type":"api-error","kind":"unauthenticated"},{"name":"forbidden","condition":"The caller holds no permission for the operation.","type":"api-error","kind":"forbidden"},{"name":"step-up-required","condition":"The last authentication of the session is older than the step-up age, or the session now appears from another network context than the one that authenticated it, and the person has not authenticated again (D-6201, IDN-019). The call changes nothing.","type":"api-error","kind":"forbidden"},{"name":"not-found","condition":"The tenant does not exist for this tenant.","type":"api-error","kind":"not_found"},{"name":"invalid","condition":"The name is neither a platform flag nor a quota, or the value is not one the name takes.","type":"api-error","kind":"invalid"},{"name":"conflict","condition":"The tenant holds more of a metered quantity than the new quota allows; the quantity is named (MIG-583).","type":"api-error","kind":"conflict"}],"exposure":"internal","tenantScope":"platform"},
+    {"id":"take-down-tenant","name":"Take a tenant down","ref":"CT-565","realisation":"generated","implementedBy":"control-plane","auth":{"scheme":"session","roles":["platform-operator"],"csrf":true,"origin":true,"description":"A platform operator who holds the capability takedown-issue","requires":["takedown-issue"]},"idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"reason","type":"tenant-suspension-reason"},{"name":"reference","type":"string"}],"outputs":[{"name":"state","type":"tenant-lifecycle"},{"name":"effective-by","type":"u64","description":"The time by which every gateway has stopped serving the tenant (ARC-1228)."}],"preconditions":["The reason is abuse, legal-order or security-incident.","The tenant is not provisioning or deleting."],"postconditions":["The tenant is suspended with that reason, and its background work, sessions and outbound effects stop as TEN-1221 to TEN-1224 state.","The edge copies of every host of the tenant are purged (CT-104, THR-1226).","No gateway serves the tenant later than 60 seconds after the record (ARC-1228).","An audit entry names the operator, the reason, the reference and the time."],"errors":[{"name":"unauthenticated","condition":"No valid session or credential accompanies the request.","type":"api-error","kind":"unauthenticated"},{"name":"forbidden","condition":"The caller holds no permission for the operation.","type":"api-error","kind":"forbidden"},{"name":"not-found","condition":"The tenant does not exist for this tenant.","type":"api-error","kind":"not_found"},{"name":"invalid","condition":"The reason is a commercial reason.","type":"api-error","kind":"invalid"},{"name":"conflict","condition":"The tenant is provisioning or deleting.","type":"api-error","kind":"conflict"},{"name":"unavailable","condition":"The control plane cannot record the takedown; nothing was changed (ARC-1228).","type":"api-error","kind":"unavailable"}],"exposure":"internal","tenantScope":"platform"},
+    {"id":"take-down-host","name":"Take a host down","ref":"CT-566","realisation":"generated","implementedBy":"control-plane","auth":{"scheme":"session","roles":["platform-operator"],"csrf":true,"origin":true,"description":"A platform operator who holds the capability takedown-issue","requires":["takedown-issue"]},"idempotent":true,"inputs":[{"name":"host","type":"host"},{"name":"reason","type":"tenant-suspension-reason"},{"name":"reference","type":"string"}],"outputs":[{"name":"effective-by","type":"u64","description":"The time by which every gateway has stopped serving the host (ARC-1228)."}],"preconditions":["The reason is abuse, legal-order or security-incident."],"postconditions":["The domain binding is marked taken down, and the edge copies stored under the host are purged (CT-104, THR-262).","Every other host and the state of the tenant are unchanged (THR-1227).","An audit entry names the operator, the reason, the reference and the time."],"errors":[{"name":"unauthenticated","condition":"No valid session or credential accompanies the request.","type":"api-error","kind":"unauthenticated"},{"name":"forbidden","condition":"The caller holds no permission for the operation.","type":"api-error","kind":"forbidden"},{"name":"not-found","condition":"The host is not bound to a tenant.","type":"api-error","kind":"not_found"},{"name":"invalid","condition":"The reason is a commercial reason.","type":"api-error","kind":"invalid"},{"name":"unavailable","condition":"The control plane cannot record the takedown; nothing was changed (ARC-1228).","type":"api-error","kind":"unavailable"}],"exposure":"internal","tenantScope":"platform"},
+    {"id":"release-takedown","name":"Release a takedown","ref":"CT-567","realisation":"generated","implementedBy":"control-plane","auth":{"scheme":"session","roles":["platform-operator"],"csrf":true,"origin":true,"description":"A platform operator who holds the capability takedown-issue and did not issue the takedown","requires":["takedown-issue"]},"idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"host","type":"host","optional":true},{"name":"reference","type":"string"}],"outputs":[{"name":"state","type":"tenant-lifecycle"}],"preconditions":["A takedown of the tenant, or of the host when one is named, is in force.","The caller is not the operator who issued it (THR-1226)."],"postconditions":["The tenant returns to active, or the host binding is unmarked, and gateways serve it again within 60 seconds (ARC-1229).","Queued webhooks and mail discarded by the takedown are not sent (TEN-1223).","An audit entry names the operator and the reference."],"errors":[{"name":"unauthenticated","condition":"No valid session or credential accompanies the request.","type":"api-error","kind":"unauthenticated"},{"name":"forbidden","condition":"The caller holds no permission for the operation.","type":"api-error","kind":"forbidden"},{"name":"not-found","condition":"The tenant does not exist for this tenant.","type":"api-error","kind":"not_found"},{"name":"conflict","condition":"No takedown is in force, or the caller issued it.","type":"api-error","kind":"conflict"}],"exposure":"internal","tenantScope":"platform"},
     {"id":"send-message","name":"Send a templated message or inbox notice","ref":"CT-820","realisation":"generated","implementedBy":"notification-service","auth":{"scheme":"session","tenantPolicies":true,"csrf":true,"origin":true,"description":"A principal whose policies permit the operation","requires":["messages-send"]},"idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"channel","type":"send-channel"},{"name":"template","type":"template-id"},{"name":"recipient","type":"send-recipient"},{"name":"category","type":"message-category-id"},{"name":"allowance-class","type":"allowance-class","optional":true,"description":"Absent means transactional for a required or transactional category and bulk for a promotional one. sign-in is refused."},{"name":"idempotency-key","type":"string"},{"name":"topic","type":"inbox-topic","optional":true,"description":"Required when the channel is inbox or both."},{"name":"values","type":"value-map","optional":true,"description":"Token values of the template, rendered as text in their output context (EML-016)."},{"name":"reference","type":"send-reference","optional":true},{"name":"deliver","type":"send-time","optional":true}],"outputs":[{"name":"progress","type":"send-progress"},{"name":"recipients","type":"u32","optional":true,"description":"The number of recipients, known at once for a principal or an address."}],"postconditions":["The message jobs and inbox notices of a send to a principal or an address are created in the transaction that commits the change it belongs to, and a rolled-back change sends nothing (EML-1560, EML-005).","A repeat of an idempotency key within seven days gives the first result, and a repeat with other inputs is refused (EML-1560).","A send to a segment is cut into batches of at most one hundred persons, each in its own transaction, and the sender is told counts only (EML-1561).","A message of a promotional category carries the unsubscribe header and link (EML-020), and mail is checked against the suppression and preferences of its category (EML-1562, NTF-1571).","A message is counted in its allowance class (EML-1563) and is held while the complaint breaker of the tenant is open (EML-1564).","The subject and the addresses are checked for line breaks after rendering (EML-1566).","The reference is carried on every message of the send and in the mail log (EML-1565).","A local delivery time is read in the zone of each recipient, or of the tenant when the send says so (SCH-1573).","The workflow step send-message calls this operation with the fields of send-message-step (D-6560)."],"errors":[{"name":"unauthenticated","condition":"No valid session or credential accompanies the request.","type":"api-error","kind":"unauthenticated"},{"name":"forbidden","condition":"The caller holds no permission for the operation.","type":"api-error","kind":"forbidden"},{"name":"not-found","condition":"The template, the category or the segment does not exist for this tenant.","type":"api-error","kind":"not_found"},{"name":"invalid","condition":"The class is sign-in, the topic breaks the grammar of NTF-1568, an address field or the subject holds a line break (EML-1566), a part the channel needs is missing from the template, a send names both at and local-time, or the recipient is an address and the channel is inbox.","type":"api-error","kind":"invalid"},{"name":"conflict","condition":"The idempotency key was used within seven days with other inputs (EML-1560).","type":"api-error","kind":"conflict"},{"name":"throttled","condition":"The caller exceeded a limit that applies to it.","type":"api-error","kind":"throttled"}],"exposure":"public","tenantScope":"request"},
     {"id":"set-notice-read","name":"Mark inbox notices read or unread","ref":"CT-821","realisation":"generated","implementedBy":"notification-service","auth":{"scheme":"session","csrf":true,"origin":true,"description":"A signed-in principal","requires":["notifications-manage"]},"idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"notices","type":"list<string>"},{"name":"read","type":"bool"}],"outputs":[{"name":"unread","type":"u32"}],"postconditions":["Only notices of the caller are changed (NTF-1569).","Reading a notice produces the domain event inbox-notice-read, and marking it unread produces none (SCH-1575).","The output is the unread count after the change."],"errors":[{"name":"unauthenticated","condition":"No valid session or credential accompanies the request.","type":"api-error","kind":"unauthenticated"},{"name":"forbidden","condition":"The caller holds no permission for the operation.","type":"api-error","kind":"forbidden"},{"name":"not-found","condition":"A named notice is not in the inbox of the caller; nothing is changed (NTF-1569).","type":"api-error","kind":"not_found"},{"name":"invalid","condition":"More than 100 notices are named.","type":"api-error","kind":"invalid"}],"exposure":"public","tenantScope":"request"},
     {"id":"remove-notices","name":"Remove inbox notices","ref":"CT-822","realisation":"generated","implementedBy":"notification-service","auth":{"scheme":"session","csrf":true,"origin":true,"description":"A signed-in principal","requires":["notifications-manage"]},"idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"notices","type":"list<string>"}],"outputs":[{"name":"unread","type":"u32"}],"postconditions":["Only notices of the caller are removed, and each removal ends its inbox item and publishes ev-inbox-item-ended (NTF-1569)."],"errors":[{"name":"unauthenticated","condition":"No valid session or credential accompanies the request.","type":"api-error","kind":"unauthenticated"},{"name":"forbidden","condition":"The caller holds no permission for the operation.","type":"api-error","kind":"forbidden"},{"name":"not-found","condition":"A named notice is not in the inbox of the caller; nothing is removed (NTF-1569).","type":"api-error","kind":"not_found"},{"name":"invalid","condition":"More than 100 notices are named.","type":"api-error","kind":"invalid"}],"exposure":"public","tenantScope":"request"},
@@ -2303,7 +2303,16 @@
     {"id":"list-my-segments","name":"List the visible segments one belongs to","ref":"CT-813","realisation":"generated","implementedBy":"kernel","auth":{"scheme":"session","tenantPolicies":true,"description":"A signed-in principal","requires":["segments-read-own"]},"idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"}],"outputs":[{"name":"segments","type":"list<segment-summary>"}],"postconditions":["Only segments marked visible to members that hold a membership of the caller are listed (SEG-1540)."],"errors":[{"name":"unauthenticated","condition":"No valid session or credential accompanies the request.","type":"api-error","kind":"unauthenticated"},{"name":"forbidden","condition":"The caller holds no permission for the operation.","type":"api-error","kind":"forbidden"}],"exposure":"public","readOnly":true,"tenantScope":"request"},
     {"id":"count-segment-members","name":"Count the members of a segment","ref":"CT-814","realisation":"generated","implementedBy":"kernel","auth":{"scheme":"session","tenantPolicies":true,"description":"A principal whose policies permit the operation","requires":["segments-read"]},"idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"segment","type":"segment-id"}],"outputs":[{"name":"count","type":"segment-count"}],"postconditions":["The count is of the members whose subject records the reader may read (SEG-1541)."],"errors":[{"name":"unauthenticated","condition":"No valid session or credential accompanies the request.","type":"api-error","kind":"unauthenticated"},{"name":"forbidden","condition":"The caller holds no permission for the operation.","type":"api-error","kind":"forbidden"},{"name":"scan-bound-exceeded","condition":"The reader may not read every subject record and the count would examine more than ten thousand memberships (SEG-1541).","type":"api-error","kind":"invalid"},{"name":"not-found","condition":"The tenant has no such segment.","type":"api-error","kind":"not_found"}],"exposure":"public","readOnly":true,"tenantScope":"request"},
     {"id":"preview-segment-predicate","name":"Preview a draft segment predicate","ref":"CT-815","realisation":"generated","implementedBy":"kernel","auth":{"scheme":"session","tenantPolicies":true,"description":"A principal whose policies permit the operation","requires":["segments-define"]},"idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"subject-type","type":"object-type-id"},{"name":"predicate","type":"expression"},{"name":"cursor","type":"record-id","optional":true},{"name":"limit","type":"u32","optional":true,"description":"At most 1000; 1000 when absent."}],"outputs":[{"name":"preview","type":"segment-preview"}],"postconditions":["No state changes (SEG-1542).","Only persons whose subject records the caller may read are evaluated or counted (SEG-1542).","The predicate is refused as define-segment refuses it (SEG-003, SEG-004, SEG-005)."],"errors":[{"name":"unauthenticated","condition":"No valid session or credential accompanies the request.","type":"api-error","kind":"unauthenticated"},{"name":"forbidden","condition":"The caller holds no permission for the operation.","type":"api-error","kind":"forbidden"},{"name":"invalid","condition":"The predicate fails to parse or reads outside what a segment predicate may read.","type":"api-error","kind":"invalid"}],"exposure":"public","readOnly":true,"tenantScope":"request"},
-    {"id":"resolve-setting-for","name":"Resolve a setting for a recipient","ref":"CT-816","realisation":"generated","implementedBy":"runtime","auth":{"scheme":"service","description":"Service credential of a platform component","requires":["setting-resolve-for"]},"idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"principal","type":"principal-id"},{"name":"setting","type":"setting-id"}],"outputs":[{"name":"resolution","type":"setting-resolution"}],"postconditions":["The value is the one setting-resolve gives the principal itself (SET-010, SET-1541).","The value is written to no log, copy or event (SET-1542)."],"errors":[{"name":"unauthenticated","condition":"No valid session or credential accompanies the request.","type":"api-error","kind":"unauthenticated"},{"name":"not-found","condition":"The setting is not defined, or the tenant has no such principal.","type":"api-error","kind":"not_found"}],"exposure":"internal","readOnly":true,"tenantScope":"platform"}
+    {"id":"resolve-setting-for","name":"Resolve a setting for a recipient","ref":"CT-816","realisation":"generated","implementedBy":"runtime","auth":{"scheme":"service","description":"Service credential of a platform component","requires":["setting-resolve-for"]},"idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"principal","type":"principal-id"},{"name":"setting","type":"setting-id"}],"outputs":[{"name":"resolution","type":"setting-resolution"}],"postconditions":["The value is the one setting-resolve gives the principal itself (SET-010, SET-1541).","The value is written to no log, copy or event (SET-1542)."],"errors":[{"name":"unauthenticated","condition":"No valid session or credential accompanies the request.","type":"api-error","kind":"unauthenticated"},{"name":"not-found","condition":"The setting is not defined, or the tenant has no such principal.","type":"api-error","kind":"not_found"}],"exposure":"internal","readOnly":true,"tenantScope":"platform"},
+    {"id":"define-trigger","name":"Create or change a trigger","ref":"CT-790","realisation":"generated","implementedBy":"kernel","auth":{"scheme":"session","roles":["owner"],"csrf":true,"origin":true,"description":"An owner of the tenant","requires":["automations-define"]},"idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"trigger","type":"trigger-def"}],"outputs":[{"name":"version","type":"u64"}],"postconditions":["The trigger is stored as tenant metadata under the schema version (WFL-1520).","Its event is a variant of trigger-event and its condition parses in the tenant rule language over the parameters its event binds (INT-1522, D-6523).","Every field the condition names is one the policies of the caller permit the caller to read, as D-5028 states for a segment predicate."],"errors":[{"name":"unauthenticated","condition":"No valid session or credential accompanies the request.","type":"api-error","kind":"unauthenticated"},{"name":"forbidden","condition":"The caller holds no permission for the operation.","type":"api-error","kind":"forbidden"},{"name":"field-not-readable","condition":"The condition names a field that the policies of the caller do not permit the caller to read.","type":"api-error","kind":"forbidden"},{"name":"outside-catalogue","condition":"The event is not a variant of trigger-event (INT-1522).","type":"api-error","kind":"invalid"},{"name":"invalid","condition":"The condition fails to parse (the error carries its position) or names a parameter its event does not bind, or the automation it names does not exist.","type":"api-error","kind":"invalid"},{"name":"too-many","condition":"The tenant already holds one hundred triggers.","type":"api-error","kind":"invalid"}],"exposure":"public","tenantScope":"request"},
+    {"id":"remove-trigger","name":"Remove a trigger","ref":"CT-791","realisation":"generated","implementedBy":"kernel","auth":{"scheme":"session","roles":["owner"],"csrf":true,"origin":true,"description":"An owner of the tenant","requires":["automations-define"]},"idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"trigger","type":"trigger-id"}],"outputs":[],"postconditions":["No event committed after the removal starts a run through the trigger; runs it started before continue (D-6539)."],"errors":[{"name":"unauthenticated","condition":"No valid session or credential accompanies the request.","type":"api-error","kind":"unauthenticated"},{"name":"forbidden","condition":"The caller holds no permission for the operation.","type":"api-error","kind":"forbidden"}],"exposure":"public","tenantScope":"request"},
+    {"id":"define-automation","name":"Create or change an automation","ref":"CT-792","realisation":"generated","implementedBy":"kernel","auth":{"scheme":"session","roles":["owner"],"csrf":true,"origin":true,"description":"An owner of the tenant","requires":["automations-define"]},"idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"automation","type":"automation-def"}],"outputs":[{"name":"version","type":"u64"},{"name":"acting-as","type":"principal-id"}],"postconditions":["The automation is stored as tenant metadata under the schema version as a draft, and activate-workflow activates it after a projection (WFL-002).","Every action is a variant of automation-step and every step it names is a step of the automation (INT-1522).","Every role of its run-as is one the caller may confer under ADM-152, and its automation principal holds exactly those roles (WFL-1527, WFL-1528).","A suspended automation defined again by a caller who may confer every role of its run-as is a draft again (WFL-1529)."],"errors":[{"name":"unauthenticated","condition":"No valid session or credential accompanies the request.","type":"api-error","kind":"unauthenticated"},{"name":"forbidden","condition":"The caller holds no permission for the operation.","type":"api-error","kind":"forbidden"},{"name":"outside-catalogue","condition":"An action is not a variant of automation-step (INT-1522).","type":"api-error","kind":"invalid"},{"name":"run-as-exceeds","condition":"The run-as names a role that the caller may not confer under ADM-152; the error names the role and what the caller lacks (WFL-1528).","type":"api-error","kind":"forbidden"},{"name":"invalid","condition":"A step names a step the automation does not declare, a step cannot be reached from start, an expression fails to parse, a retry, timeout, wait or batch is out of its range, the automation has more than 50 steps, or the id is taken by a field workflow.","type":"api-error","kind":"invalid"}],"exposure":"public","tenantScope":"request"},
+    {"id":"remove-automation","name":"Remove an automation","ref":"CT-793","realisation":"generated","implementedBy":"kernel","auth":{"scheme":"session","roles":["owner"],"csrf":true,"origin":true,"description":"An owner of the tenant","requires":["automations-define"]},"idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"automation","type":"workflow-id"}],"outputs":[{"name":"cancelled","type":"u32"}],"postconditions":["Its open runs are cancelled, each with an exception record of reason automation-removed, and its run keys are removed (D-6539)."],"errors":[{"name":"unauthenticated","condition":"No valid session or credential accompanies the request.","type":"api-error","kind":"unauthenticated"},{"name":"forbidden","condition":"The caller holds no permission for the operation.","type":"api-error","kind":"forbidden"},{"name":"conflict","condition":"A trigger still names the automation.","type":"api-error","kind":"conflict"}],"exposure":"public","tenantScope":"request"},
+    {"id":"list-automation-runs","name":"List automation runs","ref":"CT-794","realisation":"generated","implementedBy":"automation-worker","auth":{"scheme":"session","tenantPolicies":true,"description":"A principal whose policies permit the operation","requires":["automations-read"]},"idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"automation","type":"workflow-id","optional":true},{"name":"state","type":"run-state","optional":true},{"name":"cursor","type":"string","optional":true},{"name":"limit","type":"u32","optional":true}],"outputs":[{"name":"runs","type":"list<automation-run-summary>"},{"name":"next","type":"string","optional":true}],"postconditions":["Each run names its trigger, its hop count, the principal its steps act as and the definer it acts for (WFL-1530, WFL-1531).","Runs come newest first."],"errors":[{"name":"unauthenticated","condition":"No valid session or credential accompanies the request.","type":"api-error","kind":"unauthenticated"},{"name":"forbidden","condition":"The caller holds no permission for the operation.","type":"api-error","kind":"forbidden"}],"exposure":"public","readOnly":true,"tenantScope":"request"},
+    {"id":"list-automation-steps","name":"List the steps of an automation run","ref":"CT-795","realisation":"generated","implementedBy":"automation-worker","auth":{"scheme":"session","tenantPolicies":true,"description":"A principal whose policies permit the operation","requires":["automations-read"]},"idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"run","type":"run-id"},{"name":"cursor","type":"string","optional":true}],"outputs":[{"name":"steps","type":"list<automation-step-summary>"},{"name":"next","type":"string","optional":true}],"postconditions":["Each step shows its state, its attempts, the error of each failed attempt and its typed result (WFL-1531)."],"errors":[{"name":"unauthenticated","condition":"No valid session or credential accompanies the request.","type":"api-error","kind":"unauthenticated"},{"name":"forbidden","condition":"The caller holds no permission for the operation.","type":"api-error","kind":"forbidden"},{"name":"not-found","condition":"The run does not exist for this tenant.","type":"api-error","kind":"not_found"}],"exposure":"public","readOnly":true,"tenantScope":"request"},
+    {"id":"list-automation-exceptions","name":"List declined, held, parked and dead-lettered automation work","ref":"CT-796","realisation":"generated","implementedBy":"automation-worker","auth":{"scheme":"session","tenantPolicies":true,"description":"A principal whose policies permit the operation","requires":["automations-read"]},"idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"kind","type":"automation-exception-kind","optional":true},{"name":"unsettled","type":"bool","optional":true},{"name":"cursor","type":"string","optional":true}],"outputs":[{"name":"exceptions","type":"list<automation-exception-summary>"},{"name":"next","type":"string","optional":true}],"postconditions":["Every exception record SCH-1532 requires is listed with its reason until its retention ends.","Entries come newest first."],"errors":[{"name":"unauthenticated","condition":"No valid session or credential accompanies the request.","type":"api-error","kind":"unauthenticated"},{"name":"forbidden","condition":"The caller holds no permission for the operation.","type":"api-error","kind":"forbidden"}],"exposure":"public","readOnly":true,"tenantScope":"request"},
+    {"id":"settle-automation-exception","name":"Release or drop a parked or dead-lettered automation exception","ref":"CT-797","realisation":"generated","implementedBy":"automation-worker","auth":{"scheme":"session","roles":["owner"],"csrf":true,"origin":true,"description":"An owner of the tenant","requires":["automations-define"]},"idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"exception","type":"identifier"},{"name":"action","type":"exception-action"}],"outputs":[{"name":"job","type":"job-id","optional":true}],"postconditions":["Releasing a parked event offers it to its subscriber again; releasing a dead-lettered step gives it a new attempt with the same idempotency key (SCH-1524, AGT-418).","The exception is marked settled and stays listed until its retention ends (OPS-348)."],"errors":[{"name":"unauthenticated","condition":"No valid session or credential accompanies the request.","type":"api-error","kind":"unauthenticated"},{"name":"forbidden","condition":"The caller holds no permission for the operation.","type":"api-error","kind":"forbidden"},{"name":"not-found","condition":"The exception does not exist for this tenant.","type":"api-error","kind":"not_found"},{"name":"conflict","condition":"The exception is declined or held, or already settled; or its automation is suspended or removed.","type":"api-error","kind":"conflict"}],"exposure":"public","tenantScope":"request"},
+    {"id":"recheck-automation-authority","name":"Check the run-as of the automations a principal defined","ref":"CT-798","realisation":"generated","implementedBy":"kernel","auth":{"scheme":"in-process","description":"Local call inside the platform process; no network credential"},"idempotent":true,"inputs":[{"name":"tenant","type":"tenant-id"},{"name":"principal","type":"principal-id"}],"outputs":[{"name":"suspended","type":"list<workflow-id>"}],"postconditions":["Called in the transaction of every change of the roles of a principal, of a team it belongs to, or of the permissions of a role it holds, and of its erasure: every automation it defined whose run-as names a role it may no longer confer is suspended in that transaction (WFL-1529)."],"errors":[],"exposure":"local"}
   ],
   "decisions": [
     {"id":"d-1","title":"One PostgreSQL database per tenant","statement":"**One PostgreSQL database per tenant.** Each tenant has one PostgreSQL database, grouped in clusters. The SQLite adapter stays for single-process local use, tests and simulation, and keeps the same boundary: a control database holds the tenant directory, and each tenant has a database file of its own (TEN-001, WG-4950). A tenant is the unit of backup, restore, move, export, key and deletion.","group":"Tenancy","decided":"2026-11-18","ref":"D-1"},
@@ -2556,7 +2565,27 @@
     {"id":"d-6556","ref":"D-6556","title":"Segments and ledger accounts are for principals; contacts are records","group":"Automation","decided":"2026-11-20","statement":"**Segments and ledger accounts are for principals; contacts are records.** The members of a segment and the owners of ledger accounts are principals of the tenant. A contact without a principal, such as a form submitter, a visitor or an imported subscriber, is outside both: a product keeps contacts as records of its own contact type, selects an audience of them with a named query whose filter states the criteria and counts it with an aggregate (D-5060), and counts per contact with fields and composite unique constraints (D-6558) rather than ledger accounts. Rejected: segments over any record type, which needs memberships keyed by record, an erasure that follows a record rather than a principal, and a personal-data marking of tenant records that WG-5034 is specifying; it can be reconsidered once that marking exists."},
     {"id":"d-6557","ref":"D-6557","title":"Settings reach views, the dispatcher and triggers","group":"Tenancy","decided":"2026-11-20","statement":"**Settings reach views, the dispatcher and triggers.** The argument of a view section may come from a setting resolved for the reader (arg-source gains setting), and the view copy is keyed and classed as D-5049 states. The mail dispatcher and the notification service resolve the setting of a recipient through resolve-setting-for (CT-816), a local call that needs setting-resolve-for, which only platform-service holds; no tenant principal can resolve the setting of another person. A value resolved for a recipient decides and renders one message and is written to no log, no copy and no event. setting-changed keeps carrying no value (D-5048), because a person-level value can be personal data and an event is kept in the journal and delivered to subscribers; a step that reacts to it and needs the value reads the setting at its own decision, which gives the value at that decision and not at the change. Rejected: carrying the value at the tenant and team levels only, which makes the shape of an event depend on its level and still delivers the choice of a team to every subscriber of the event."},
     {"id":"d-6558","ref":"D-6558","title":"Tenant record types can declare composite unique constraints","group":"Content","decided":"2026-11-20","statement":"**Tenant record types can declare composite unique constraints.** An object type may declare unique constraints over two to four of its fields (type unique-def), each with an id and a message. A create or update that would give two records of the type equal values in every field of one constraint is refused, naming the constraint. A record with null in any field of a constraint is not constrained by it, as in SQL. Adding a constraint over records that already hold a duplicate is refused, naming one pair. The check is one need, the records of the type with those field values, answered from an index, so it does not load every record of the type. It is how a retried job or operation that creates an award or a redemption keeps one record per person and badge. The unique flag of a field stays the case of one field. Rejected: a key field that the writer fills with concat, which a writer can get wrong and which the platform cannot check against existing data."},
-    {"id":"d-6559","ref":"D-6559","title":"Counts and totals over many records are kept in the ledger","group":"Platform","decided":"2026-11-20","statement":"**Counts and totals over many records are kept in the ledger.** D-5021 told a tenant to keep a count or a total that a predicate needs in a field that a workflow or a constraint maintains, while D-5000 says that a module never keeps a balance of its own in a record type; and the rule language could not add in any case. They are reconciled on the side of D-5000: a count or a total that belongs to a person, such as points, orders placed or redemptions, is posted to the ledger by the operation or workflow that makes the change, in its transaction, and a segment predicate or a rule reads it with balance(unit, scope) (D-6544). A field that a workflow maintains remains right for a property of the record itself, such as its state, and never holds a running total. D-5021 is changed to say so."}
+    {"id":"d-6559","ref":"D-6559","title":"Counts and totals over many records are kept in the ledger","group":"Platform","decided":"2026-11-20","statement":"**Counts and totals over many records are kept in the ledger.** D-5021 told a tenant to keep a count or a total that a predicate needs in a field that a workflow or a constraint maintains, while D-5000 says that a module never keeps a balance of its own in a record type; and the rule language could not add in any case. They are reconciled on the side of D-5000: a count or a total that belongs to a person, such as points, orders placed or redemptions, is posted to the ledger by the operation or workflow that makes the change, in its transaction, and a segment predicate or a rule reads it with balance(unit, scope) (D-6544). A field that a workflow maintains remains right for a property of the record itself, such as its state, and never holds a running total. D-5021 is changed to say so."},
+    {"id":"d-6520","ref":"D-6520","title":"Automation is triggers and automations held as tenant metadata","group":"Automation","decided":"2026-11-20","statement":"**Automation is triggers and automations held as tenant metadata.** A tenant or a product reacts to events with two kinds of definition: a trigger (trigger-def), which names an event, a condition and an automation, and an automation (automation-def), which is a set of named steps from the published catalogue with a start step. Both are stored under the schema version, projected before activation and installed through kernel intents (D-103, WFL-001, WFL-002). No tenant or product code runs (D-506, NG-3). Rejected: handlers registered as platform code for a job kind (the escape hatch of D-103 that NG-3 and the product layer forbid); a general scripting language (not checkable, not projectable); free-text job kinds in schedule-job with no registry (the gap WG-5031 records)."},
+    {"id":"d-6521","ref":"D-6521","title":"Field workflows and automations are two definitions on one run engine","group":"Automation","decided":"2026-11-20","statement":"**Field workflows and automations are two definitions on one run engine.** A field workflow (workflow-def) stays the state machine of one field of a record: the kernel decides each transition inside the change that requests it, under its guard. An automation is a run of steps over time that the automation worker carries out, one job per step attempt (D-526). The two meet at one event: a change that moves a workflow field writes record-updated with the transition, and a trigger on that transition starts an automation; an automation moves a field only through an update-record step, which the kernel decides against the guard like any update. Both share the workflow-id namespace, so start-workflow-run, advance-workflow-run, approve-workflow-step and activate-workflow address an automation by its id and the existing run machinery is the engine. Rejected: giving workflow-def steps, waits and calls (a transition would no longer be one synchronous decision, and every existing field workflow would change meaning); a second engine for automations (D-526 says one worker)."},
+    {"id":"d-6522","ref":"D-6522","title":"The step catalogue and the trigger catalogue are typed unions","group":"Automation","decided":"2026-11-20","statement":"**The step catalogue and the trigger catalogue are typed unions.** The published catalogue of INT-153 is two unions of the platform specification: automation-step for actions, with typed inputs per variant and its outputs in automation-step-result, and trigger-event for the events a trigger subscribes to. A definition naming anything else is refused at definition, at activation and, for a product file, by specc. A step whose effect another primitive owns delegates to it: post-ledger uses the atomic operation form of WG-5032 and the ledger-post capability of the automation principal; send-mail and create-notice use the send of WG-5033; call-webhook uses the signed delivery of WFL-010 through the outbound gate (WFL-250 to WFL-256). Rejected: one entity per step kind (WG-5009 proposed entities a product refers to by id; a union is typed, generated and checked by the type checker with no new entity kind); a prose list (not checkable); letting a product declare step kinds (that would be code)."},
+    {"id":"d-6523","ref":"D-6523","title":"An event binds named parameters, and a step binds its outputs","group":"Automation","decided":"2026-11-20","statement":"**An event binds named parameters, and a step binds its outputs.** A trigger condition and every expression of a run are tenant rule language text read with the param scope. Every event binds param.seq, param.at and param.hop. record-created binds the record in the scopes record and new; record-updated binds old and new and param.transition; record-deleted binds old; segment-entered and segment-exited bind param.person, param.segment and param.reason; ledger-posted binds param.owner (the principal, or null for a pool), param.unit, param.amount, param.balance, param.balance_before (the balance before the entry, which the platform computes so that crossing a threshold needs no arithmetic), param.entry_sequence and param.reason; setting-changed binds param.setting, param.level and param.subject; schedule-due binds param.schedule and param.due_at; inbound-webhook binds param.endpoint, param.event_id and param.body as text. A completed step adds each field of its result as param.<step>_<field>. Rejected: arithmetic in the condition (the language has none until WG-5032 adds it, and a crossing must be stable across both); a threshold variant of ledger-posted (one event per threshold would multiply events)."},
+    {"id":"d-6524","ref":"D-6524","title":"A condition is decided in the transaction of the event","group":"Automation","decided":"2026-11-20","statement":"**A condition is decided in the transaction of the event.** The kernel evaluates the condition of each matching trigger in the transaction that commits the event, with the event's parameters, and creates a job only when it is true (SCH-004). A false condition writes nothing; a condition that cannot be evaluated writes a declined exception record. Every field a condition names must be readable by the definer, as D-5028 requires of a segment predicate. Rejected: evaluating the condition when the job runs (it would see a later state, and create a job for every event only to discard most)."},
+    {"id":"d-6525","ref":"D-6525","title":"An automation acts as its own principal with roles its definer may confer","group":"Automation","decided":"2026-11-20","statement":"**An automation acts as its own principal with roles its definer may confer.** Each automation has an automation principal, automation:<workflow-id>, whose roles are the run-as of the definition. A role is accepted only when the definer may confer it under ADM-152, that is when the definer holds every permission the role grants; the owner may confer any role. Every intent of a step is decided by the kernel with that principal, so policies, field reads and ledger capabilities apply to it as to a person (K-13). Rejected: acting as the person the event concerns (a member lacks ledger-post, F3, and a schedule has no person); acting as the definer (the automation would gain whatever the definer gains later, and a change would be attributed to a person who did not act); acting as the system or platform-service principal (that exceeds any tenant authority)."},
+    {"id":"d-6526","ref":"D-6526","title":"A definer who loses authority suspends the automation","group":"Automation","decided":"2026-11-20","statement":"**A definer who loses authority suspends the automation.** Every change of a principal's roles, of the roles of a team it belongs to, of the permissions of a role it holds, and its erasure, checks in its own transaction the automations it defined (recheck-automation-authority). An automation whose run-as names a role the definer can no longer confer is suspended: its triggers write declined records, its open runs stop before their next step with a parked record, and it resumes only when a principal who may confer every role defines it again. Rejected: continuing on the authority granted at definition (a removed owner's automations would keep acting); dropping the roles the definer lost (the automation would run with a smaller authority than its steps assume and fail in ways nobody chose); removing the automation (its history and runs would go with it)."},
+    {"id":"d-6527","ref":"D-6527","title":"caused-by names the automation principal and the run names the definer","group":"Automation","decided":"2026-11-20","statement":"**caused-by names the automation principal and the run names the definer.** A change, posting, message or notice of a step names the automation principal as its causing principal and the run as its correlation; the run record names the definer as on-behalf-of. An agent change is attributed to the agent and the person it acts for in the same way (G-25). Rejected: naming the definer as the cause (the definer did nothing at that moment); naming the person whose event started the run (that person did not authorise the step)."},
+    {"id":"d-6528","ref":"D-6528","title":"A step key is derived, not chosen","group":"Automation","decided":"2026-11-20","statement":"**A step key is derived, not chosen.** The idempotency key of a step is the SHA-256 of the tenant, the automation, the run, the step name and the member of a fan-out, and is the same on every attempt; a released dead-lettered step keeps it. Every effect of the step carries it: the record change, the posting key of D-5007, the mail key of EML-006 and the delivery key of an outbound call. Creation is exactly once by SCH-004 and effect is exactly once by SCH-015 with this key. Rejected: a key per attempt (a retry after a lost result would apply twice); a key the tenant writes (two steps could share one by mistake); no key (SCH-015 needs one)."},
+    {"id":"d-6529","ref":"D-6529","title":"Retries and timeouts are bounded per step","group":"Automation","decided":"2026-11-20","statement":"**Retries and timeouts are bounded per step.** A step names at most 10 attempts (default 5), a first delay (default 10 seconds) that doubles up to a maximum delay (default one hour, at most one day), and a timeout for one attempt (default 60 seconds, at most 15 minutes). An attempt past its timeout is failed and its late result is refused by the fencing token (K-17). Waits and approvals have no attempt timeout; an approval has its own timeout after which it takes its refused step. Rejected: one policy for the whole platform (a webhook and a record change fail differently); unbounded retries (a dead step would never surface)."},
+    {"id":"d-6530","ref":"D-6530","title":"Runs, steps and exceptions are records the tenant owner lists","group":"Automation","decided":"2026-11-20","statement":"**Runs, steps and exceptions are records the tenant owner lists.** Each run has a record (rec-workflow-run, extended), each step a record (rec-workflow-step-run), and every declined, held, parked or dead-lettered piece of work an exception record (rec-automation-exception) with one of the reasons of automation-exception-reason. A false condition writes no record, because most events match no trigger. Parked and dead-lettered entries stay until the owner releases or drops them (OPS-348); the others are kept ninety days. Rejected: recording every evaluation (volume far beyond the work done); counts only, as rec-trigger-run holds today (a count cannot say which award was missed)."},
+    {"id":"d-6531","ref":"D-6531","title":"Waiting keeps the hop count and a schedule starts a chain","group":"Automation","decided":"2026-11-20","statement":"**Waiting keeps the hop count and a schedule starts a chain.** A run keeps the hop count of the event that started it through every wait and resumed job; every event a step commits carries that count plus one; an event of a schedule carries zero, because only an owner defines a schedule and no step does. A drip campaign of many steps is one run with waits, so it uses no hops; only a chain of events that start runs again counts toward the limit of eight (D-700, SCH-300). Rejected: a wait resetting the count (a loop through a delay would never end); counting each wait as a hop (an ordinary campaign would stop at eight steps, the F10 finding)."},
+    {"id":"d-6532","ref":"D-6532","title":"Runs with one run key are ordered by event sequence","group":"Automation","decided":"2026-11-20","statement":"**Runs with one run key are ordered by event sequence.** For one trigger, the runs of events with the same run key start in the order of the events' sequence numbers, one at a time; runs with different keys run in parallel. A parked event is passed over so later events flow (D-519), and its run starts when the owner releases it, recorded out of order in its exception record. Rejected: no ordering (a level-up could be decided before the threshold it depends on); a total order per trigger (one person's parked event would block every other person)."},
+    {"id":"d-6533","ref":"D-6533","title":"The job quota holds jobs and never refuses the change","group":"Automation","decided":"2026-11-20","statement":"**The job quota holds jobs and never refuses the change.** The daily job quota of a plan (D-508) is checked when a commit creates jobs. Jobs within it are created due as usual; jobs past it are created due at the start of the next quota day, count against that day, and each writes a held exception record. The change itself always commits; BIL-151 refuses writes that exceed a storage or record quota, and a job is not such a write. Rejected: refusing the change (a member's action would fail because of the tenant's automation volume); declining the job (an award would be lost, not delayed); exceeding the quota silently."},
+    {"id":"d-6534","ref":"D-6534","title":"A run key makes a run happen once per value","group":"Automation","decided":"2026-11-20","statement":"**A run key makes a run happen once per value.** An automation may declare a run key, an expression over the starting event. The automation worker keeps the hash of every key it has started a run for while the automation exists (rec-automation-run-key), so a repeated key starts nothing and writes a declined record. Combined with the step key of D-6528 this gives once per person and exactly one effect per step. Rejected: a uniqueness constraint on the product's records (the platform has no composite unique constraint, and a record is not the only effect); a time window for keys (award once would expire)."},
+    {"id":"d-6535","ref":"D-6535","title":"A wait is a due job and a fan-out works in batches of one hundred","group":"Automation","decided":"2026-11-20","statement":"**A wait is a due job and a fan-out works in batches of one hundred.** A wait step ends its job and creates the resuming job due at its time, so it holds no lease and survives restarts; a wait is at most 366 days. A fan-out reads the members of its segment when each batch runs, at most its batch size and never more than one hundred per batch, as D-5026 bounds evaluation, and runs its step once per member with the member as param.member. Rejected: snapshotting the members when the fan-out starts (it would store up to every person of the tenant); one job per member (it would spend the job quota on a single campaign step)."},
+    {"id":"d-6536","ref":"D-6536","title":"A product file declares triggers and automations in sections of their own","group":"Automation","decided":"2026-11-20","statement":"**A product file declares triggers and automations in sections of their own.** A product file may declare the sections triggers and automations, whose entities are values of trigger-def and automation-def with an id; specc refuses a product whose action or trigger event is outside the catalogue with layer.outside-catalogue. Exegra does not read these sections yet and refuses them with layer.kind-not-allowed until it does. Object types, segments, ledger units and mail templates that an automation names have no product section yet either. Rejected: modelling an automation as a behavior (behaviors are verified model machines, and their effects are not the step catalogue); carrying the definitions in claims or scenarios as untyped text."},
+    {"id":"d-6537","ref":"D-6537","title":"The tenant schema gains triggers and automations when the kernel is built","group":"Automation","decided":"2026-11-20","statement":"**The tenant schema gains triggers and automations when the kernel is built.** tenant-schema gains the maps triggers and automations, and schema-change gains define-trigger, remove-trigger, define-automation and remove-automation, when the kernel is built; until then rec-trigger and rec-automation state the stored shape and the contracts state the operations. The kernel builds these types by hand, so changing them here before the kernel would break its build, as D-5023 does for the segment events. Rejected: storing triggers and automations outside the tenant schema (they would escape schema versioning and projection)."},
+    {"id":"d-6538","ref":"D-6538","title":"A product's automation is checked for its catalogue before it is installed","group":"Automation","decided":"2026-11-20","statement":"**A product's automation is checked for its catalogue before it is installed.** The same catalogue check runs in three places: specc on a product file, define-automation and define-trigger on the tenant, and activate-workflow before a run can start. A product therefore cannot ship an automation that a tenant would later refuse at activation. Rejected: checking at activation only (a product would learn of the error after installing)."},
+    {"id":"d-6539","ref":"D-6539","title":"Removing a trigger stops new runs and removing an automation cancels its runs","group":"Automation","decided":"2026-11-20","statement":"**Removing a trigger stops new runs and removing an automation cancels its runs.** Removing a trigger stops new runs through it and leaves its open runs to finish. An automation cannot be removed while a trigger names it; removing it cancels its open runs, each with an exception record of reason automation-removed, and removes its run keys. A changed automation leaves its open runs on the version that started them (MIG-562). Rejected: letting the runs of a removed automation finish (the owner who removes an automation means it to stop); refusing removal while runs are open (a run waiting 366 days would block removal)."}
   ],
   "constraints": [
     {"id":"k-1","statement":"The kernel performs no input or output and reads no clock and no source of randomness.","group":"Kernel","ref":"K-1"},
@@ -2973,7 +3002,7 @@
     {"id":"int-150","kind":"requirement","statement":"An inbound webhook delivery SHALL start a workflow run only when its signature matches the secret of its endpoint.","rationale":"A caller without the secret cannot start work in the tenant.","evaluate":{"method":"scenario"},"ref":"INT-150","area":"04-automation","section":"Inbound webhooks","lifecycle":"active","boundary":"b-150","boundaryDetail":"`inbound webhook`","traces":["g-156"],"milestone":5,"inSection":"sec-integrations-2","realisation":"checked"},
     {"id":"int-151","kind":"requirement","statement":"A repeated inbound delivery of one event SHALL leave the number of runs that it started unchanged.","rationale":"Senders retry, and a retry does not run the workflow twice.","evaluate":{"method":"scenario"},"ref":"INT-151","area":"04-automation","section":"Inbound webhooks","lifecycle":"active","boundary":"b-150","boundaryDetail":"`inbound webhook`","traces":["g-156"],"milestone":5,"inSection":"sec-integrations-2","realisation":"checked"},
     {"id":"int-152","kind":"requirement","statement":"The tenant SHALL see the response status and the attempt count of each outbound webhook delivery that it sent.","rationale":"A failing receiver is diagnosed from the log rather than from guesses.","evaluate":{"method":"scenario"},"ref":"INT-152","area":"04-automation","section":"Outbound deliveries and the catalogue","lifecycle":"active","boundary":"b-150","boundaryDetail":"`webhook log`","traces":["g-156"],"milestone":5,"inSection":"sec-integrations-3","realisation":"checked"},
-    {"id":"int-153","kind":"requirement","statement":"A workflow definition that names a trigger or an action outside the published catalogue SHALL be refused at activation.","rationale":"A workflow uses only what the platform describes and can check.","evaluate":{"method":"scenario"},"ref":"INT-153","area":"04-automation","section":"Outbound deliveries and the catalogue","lifecycle":"active","boundary":"b-8","boundaryDetail":"`activation`","traces":["g-156","g-16"],"milestone":5,"inSection":"sec-integrations-3","realisation":"checked"},
+    {"id":"int-153","kind":"requirement","statement":"A workflow definition that names a trigger or an action outside the published catalogue SHALL be refused at activation, where the catalogue is the variants of the trigger-event union for triggers and of the automation-step union for actions (INT-1522).","rationale":"A workflow uses only what the platform describes and can check.","evaluate":{"method":"scenario"},"ref":"INT-153","area":"04-automation","section":"Outbound deliveries and the catalogue","lifecycle":"active","boundary":"b-8","boundaryDetail":"`activation`","traces":["g-156","g-16"],"milestone":5,"inSection":"sec-integrations-3","realisation":"checked"},
     {"id":"int-154","kind":"requirement","statement":"A tenant SHALL install a platform template or integration only after reviewing the projection of the changes it makes.","rationale":"Installing a template is a change, so it is projected like one.","evaluate":{"method":"scenario"},"ref":"INT-154","area":"04-automation","section":"Installed templates and integrations","lifecycle":"active","boundary":"b-21","boundaryDetail":"`template install`","traces":["g-167","g-44"],"milestone":7,"inSection":"sec-integrations-4","realisation":"checked"},
     {"id":"int-155","kind":"requirement","statement":"A bundle installed from the platform catalogue SHALL contain declared metadata and no executable code.","rationale":"Installing a bundle runs no code of its author, so review means reading what the bundle says.","evaluate":{"method":"property"},"ref":"INT-155","area":"04-automation","section":"Installed templates and integrations","lifecycle":"active","boundary":"b-21","boundaryDetail":"`tenant bundle`","traces":["g-167","ng-150"],"milestone":7,"inSection":"sec-integrations-4","realisation":"checked"},
     {"id":"sch-150","kind":"requirement","statement":"A bulk change to many records SHALL run as jobs that record the outcome of every record they change.","rationale":"A bulk change that stops halfway has a known extent.","evaluate":{"method":"scenario"},"ref":"SCH-150","area":"04-automation","section":"Bulk work","lifecycle":"active","boundary":"b-7","boundaryDetail":"`bulk job`","traces":["g-14"],"milestone":5,"inSection":"sec-scheduling-150","realisation":"checked"},
@@ -12011,7 +12040,27 @@
     {"id":"m-operation-pool-within-floor","kind":"invariant","models":"ldg-1542","statement":"The stock of the promotion never goes below zero, whoever redeems.","evaluate":{"method":"state-invariant","scenarios":["promotion-pool-exhausted"],"expr":"promotion-redeem-flow.stock >= 0","negatives":[{"scenario":"promotion-pool-exhausted","faults":["defect-opr-pool-floor-ignored"]}]},"faultModel":"fault-model-launch","assumptions":["a-model-abstraction"],"faultBasis":"fault"},
     {"id":"m-operation-segment-checked","kind":"invariant","models":"opr-1542","statement":"No person outside the eligible segment redeems.","evaluate":{"method":"state-invariant","scenarios":["promotion-redeemed-and-retried"],"expr":"promotion-redeem-flow.nonMember == 0","negatives":[{"scenario":"promotion-redeemed-and-retried","faults":["defect-opr-segment-ignored"]}]},"faultModel":"fault-model-launch","assumptions":["a-model-abstraction"],"faultBasis":"fault"},
     {"id":"m-operation-once-per-key","kind":"invariant","models":"opr-1544","statement":"However often an invocation with one key arrives, the redemptions are as many as the keys that were applied.","evaluate":{"method":"state-invariant","scenarios":["promotion-redeemed-and-retried","promotion-redeem-delivered-twice"],"expr":"promotion-redeem-flow.redemptions == promotion-redeem-flow.keysApplied","negatives":[{"scenario":"promotion-redeemed-and-retried","faults":["defect-opr-replay-applies-again"]},{"scenario":"promotion-redeem-delivered-twice","faults":["defect-opr-replay-applies-again"]}]},"faultModel":"fault-model-launch","assumptions":["a-model-abstraction"],"faultBasis":"fault"},
-    {"id":"m-operation-limit-per-person","kind":"invariant","models":"opr-1542","statement":"No person redeems more often than the promotion allows.","evaluate":{"method":"state-invariant","scenarios":["promotion-redeemed-and-retried","promotion-redeem-delivered-twice"],"expr":"promotion-redeem-flow.counta <= promotion-redeem-flow.limit && promotion-redeem-flow.countb <= promotion-redeem-flow.limit && promotion-redeem-flow.countd <= promotion-redeem-flow.limit","negatives":[{"scenario":"promotion-redeemed-and-retried","faults":["defect-opr-replay-applies-again"]}]},"faultModel":"fault-model-launch","assumptions":["a-model-abstraction"],"faultBasis":"fault"}
+    {"id":"m-operation-limit-per-person","kind":"invariant","models":"opr-1542","statement":"No person redeems more often than the promotion allows.","evaluate":{"method":"state-invariant","scenarios":["promotion-redeemed-and-retried","promotion-redeem-delivered-twice"],"expr":"promotion-redeem-flow.counta <= promotion-redeem-flow.limit && promotion-redeem-flow.countb <= promotion-redeem-flow.limit && promotion-redeem-flow.countd <= promotion-redeem-flow.limit","negatives":[{"scenario":"promotion-redeemed-and-retried","faults":["defect-opr-replay-applies-again"]}]},"faultModel":"fault-model-launch","assumptions":["a-model-abstraction"],"faultBasis":"fault"},
+    {"id":"wfl-1520","kind":"requirement","statement":"A trigger SHALL be stored as tenant metadata under the schema version, holding one variant of trigger-event, an optional condition in the tenant rule language and the automation it starts, and only a principal holding automations-define SHALL define or remove one.","rationale":"A trigger is data like a segment or a workflow, so it is versioned, projected and exported with the tenant, and no tenant code runs (NG-3).","evaluate":{"method":"property"},"ref":"WFL-1520","area":"04-automation","section":"Triggers","lifecycle":"active","boundary":"b-7","boundaryDetail":"`trigger`","traces":["g-13","g-16","d-6520"],"milestone":5,"inSection":"sec-automation-2","realisation":"checked"},
+    {"id":"wfl-1521","kind":"requirement","statement":"A committed domain event SHALL start a run of the automation of each active trigger whose event variant matches it and whose condition is true on the parameters the event binds, and SHALL start no run for a trigger whose condition is false.","rationale":"A condition evaluated in the transaction of the event sees the state that the event describes, not a later one (D-6524).","evaluate":{"method":"scenario"},"ref":"WFL-1521","area":"04-automation","section":"Triggers","lifecycle":"active","boundary":"b-7","boundaryDetail":"`trigger`","traces":["g-13","d-6523","d-6524"],"milestone":5,"inSection":"sec-automation-2","realisation":"checked"},
+    {"id":"int-1522","kind":"requirement","statement":"A definition whose action is not a variant of the automation-step union, or whose trigger event is not a variant of the trigger-event union, SHALL be refused by define-automation, define-trigger and activate-workflow, and a product file that declares one SHALL be refused by specc with layer.outside-catalogue.","rationale":"INT-153 refuses what is outside the published catalogue; the two unions are that catalogue, so the refusal can be checked by a tool and by the platform alike.","evaluate":{"method":"scenario"},"ref":"INT-1522","area":"04-automation","section":"The step catalogue","lifecycle":"active","boundary":"b-8","boundaryDetail":"`activation`","traces":["g-16","g-156","d-506","d-6522"],"milestone":5,"inSection":"sec-automation-3","realisation":"checked"},
+    {"id":"wfl-1523","kind":"requirement","statement":"A step SHALL be given only the inputs that its variant of automation-step declares, and a completed step SHALL record as its result the variant of automation-step-result of the same name, whose fields later steps read as param.<step>_<field>.","rationale":"Typed inputs and outputs are what let an automation be checked at definition instead of failing at run time.","evaluate":{"method":"property"},"ref":"WFL-1523","area":"04-automation","section":"The step catalogue","lifecycle":"active","boundary":"b-8","boundaryDetail":"`workflow step`","traces":["g-31","d-6522","d-6523"],"milestone":5,"inSection":"sec-automation-3","realisation":"checked"},
+    {"id":"sch-1524","kind":"requirement","statement":"Every attempt of one step SHALL carry the same idempotency key, derived from the tenant, the automation, the run, the step name and the member of a fan-out, and an effect carrying that key SHALL be applied once however many attempts are made.","rationale":"A retry after a lost result must not award a badge, post points or send a mail twice (SCH-015); a key that changed with the attempt would.","evaluate":{"method":"scenario"},"ref":"SCH-1524","area":"04-automation","section":"Retries and effects","lifecycle":"active","boundary":"b-7","boundaryDetail":"`step job`","traces":["g-14","d-6528"],"milestone":5,"inSection":"sec-automation-4","realisation":"checked"},
+    {"id":"sch-1525","kind":"requirement","statement":"A failed step attempt SHALL be retried until the attempts of its retry policy are spent, each delay doubling from its first delay up to its maximum delay, and a step that spends them SHALL fail its run, run the compensations of its completed steps and write a dead-lettered exception record.","rationale":"Retries are bounded per step so that a step whose effect cannot succeed ends visibly instead of retrying for ever.","evaluate":{"method":"scenario"},"ref":"SCH-1525","area":"04-automation","section":"Retries and effects","lifecycle":"active","boundary":"b-7","boundaryDetail":"`step job`","traces":["g-14","d-6529"],"milestone":5,"inSection":"sec-automation-4","realisation":"checked"},
+    {"id":"sch-1526","kind":"requirement","statement":"A step attempt that has not reported its result when the timeout of its step has passed SHALL count as a failed attempt, and a result reported for it afterwards SHALL be refused by the fencing token of its lease.","rationale":"A slow attempt and its retry must not both record an outcome (K-17).","evaluate":{"method":"scenario"},"ref":"SCH-1526","area":"04-automation","section":"Retries and effects","lifecycle":"active","boundary":"b-7","boundaryDetail":"`step job`","traces":["g-14","k-17","d-6529"],"milestone":5,"inSection":"sec-automation-4","realisation":"checked"},
+    {"id":"wfl-1527","kind":"requirement","statement":"Every intent of an automated step SHALL be decided by the kernel with the automation principal automation:<workflow-id> as its principal, holding the roles that the run-as of the automation names and no other.","rationale":"An automated step is authorised by the same policies as a person (K-13), and its authority is fixed when the automation is defined, not taken from whoever caused the event.","evaluate":{"method":"property"},"ref":"WFL-1527","area":"04-automation","section":"Authority","lifecycle":"active","boundary":"b-8","boundaryDetail":"`automation principal`","traces":["g-25","k-13","d-6525"],"milestone":5,"inSection":"sec-automation-5","realisation":"checked"},
+    {"id":"wfl-1528","kind":"requirement","statement":"Defining or activating an automation SHALL be refused when its run-as names a role that the defining principal may not confer under ADM-152.","rationale":"An automation must never hold what its definer does not, or defining one would be a way to gain a capability.","evaluate":{"method":"scenario"},"ref":"WFL-1528","area":"04-automation","section":"Authority","lifecycle":"active","boundary":"b-8","boundaryDetail":"`automation definition`","traces":["g-25","d-6525"],"milestone":5,"inSection":"sec-automation-5","realisation":"checked"},
+    {"id":"wfl-1529","kind":"requirement","statement":"A change that leaves the definer of an automation unable to confer a role of its run-as, including the erasure of the definer, SHALL suspend the automation in the transaction of the change, and no step of it SHALL run until a principal who may confer every such role defines it again.","rationale":"The bound of WFL-1528 holds for as long as the automation exists, not only at the moment it was defined.","evaluate":{"method":"scenario"},"ref":"WFL-1529","area":"04-automation","section":"Authority","lifecycle":"active","boundary":"b-8","boundaryDetail":"`automation definition`","traces":["g-25","d-6526"],"milestone":5,"inSection":"sec-automation-5","realisation":"checked"},
+    {"id":"wfl-1530","kind":"requirement","statement":"Each record change, ledger posting, message and notice made by an automated step SHALL name the automation principal as the principal that caused it and the run as its correlation, and the run record SHALL name the definer on whose authority the run acts.","rationale":"An automated change is attributable to the automation and to the person who gave it its authority (G-25), and caused-by is a principal (LDG-027).","evaluate":{"method":"property"},"ref":"WFL-1530","area":"04-automation","section":"Authority","lifecycle":"active","boundary":"b-8","boundaryDetail":"`automation principal`","traces":["g-25","d-6527"],"milestone":5,"inSection":"sec-automation-5","realisation":"checked"},
+    {"id":"wfl-1531","kind":"requirement","statement":"The automation worker SHALL write one run record for each automation run and one step record for each step it runs, each with its state, its attempts and the error of each failed attempt, and list-automation-runs and list-automation-steps SHALL answer them to a holder of automations-read.","rationale":"A tenant owner explains what an automation did from its records, without platform staff.","evaluate":{"method":"scenario"},"ref":"WFL-1531","area":"04-automation","section":"Runs and exceptions","lifecycle":"active","boundary":"b-7","boundaryDetail":"`automation run`","traces":["g-14","g-156","d-6530"],"milestone":5,"inSection":"sec-automation-6","realisation":"checked"},
+    {"id":"sch-1532","kind":"requirement","statement":"A trigger that creates no job for an event because of the hop limit, the job quota, a suspended, inactive or removed automation, a repeated run key or a condition that cannot be evaluated, an event parked under D-519 and a dead-lettered step SHALL each write one exception record naming its reason in the transaction that decides it, listed by list-automation-exceptions.","rationale":"A missed badge award or a cut chain otherwise leaves no trace, and nobody can tell why nothing happened.","evaluate":{"method":"scenario"},"ref":"SCH-1532","area":"04-automation","section":"Runs and exceptions","lifecycle":"active","boundary":"b-7","boundaryDetail":"`trigger`","traces":["g-14","d-6530"],"milestone":5,"inSection":"sec-automation-6","realisation":"checked"},
+    {"id":"sch-1533","kind":"requirement","statement":"A run SHALL carry the hop count of the event that started it, a wait step SHALL leave that count unchanged, every event committed by a step of the run SHALL carry the count plus one, and an event of a schedule SHALL carry the count zero.","rationale":"Waiting does not end a loop, so a chain through delayed steps meets the limit of eight like any other (SCH-300), while a multi-step campaign is one run and uses no hops at all (D-6531).","evaluate":{"method":"scenario"},"ref":"SCH-1533","area":"04-automation","section":"Chains, order and quota","lifecycle":"active","boundary":"b-7","boundaryDetail":"`trigger`","traces":["g-13","d-700","d-6531"],"milestone":5,"inSection":"sec-automation-7","realisation":"checked"},
+    {"id":"sch-1534","kind":"requirement","statement":"The runs that one trigger starts for events with the same run key SHALL start in the order of the sequence numbers of those events, and none SHALL start while an earlier one with the same key is open, except that the run of an event parked under D-519 starts after the owner releases it.","rationale":"A product that awards a level after a threshold depends on seeing the threshold first; a parked event must not stop a person's later events for ever (D-519).","evaluate":{"method":"scenario"},"ref":"SCH-1534","area":"04-automation","section":"Chains, order and quota","lifecycle":"active","boundary":"b-7","boundaryDetail":"`trigger`","traces":["g-13","d-519","d-6532"],"milestone":5,"inSection":"sec-automation-7","realisation":"checked"},
+    {"id":"sch-1535","kind":"requirement","statement":"A commit that creates jobs past the daily job quota of the tenant's plan SHALL commit its change, and each job past the quota SHALL be created due at the start of the next quota day and recorded as held, so that the quota never refuses the change that creates a job.","rationale":"The business change and its automation are separate: refusing a member's change because of the tenant's automation volume would break the product, and dropping the job would lose an award. Mail past its quota is held the same way (EML-021).","evaluate":{"method":"scenario"},"ref":"SCH-1535","area":"04-automation","section":"Chains, order and quota","lifecycle":"active","boundary":"b-7","boundaryDetail":"`job admission`","traces":["g-4","g-157","d-508","d-6533"],"milestone":5,"inSection":"sec-automation-7","realisation":"checked"},
+    {"id":"sch-1536","kind":"requirement","statement":"An automation with a run key SHALL start at most one run for each value of that key for as long as the automation exists, and an event whose key repeats SHALL start no run and write a declined exception record with reason run-key-repeated.","rationale":"Award once means once per person, not once per event: a balance that crosses a threshold, falls back and crosses again awards nothing new.","evaluate":{"method":"scenario"},"ref":"SCH-1536","area":"04-automation","section":"Retries and effects","lifecycle":"active","boundary":"b-7","boundaryDetail":"`automation run`","traces":["g-14","d-6534"],"milestone":5,"inSection":"sec-automation-4","realisation":"checked"},
+    {"id":"wfl-1537","kind":"requirement","statement":"A wait step SHALL hold its run with no lease and SHALL resume it by a job due at the end of its duration or at the time its expression gives, and a wait of more than 366 days SHALL be refused when the automation is defined.","rationale":"A wait is a due job like any other (D-526), so a delayed follow-up costs nothing while it waits and survives a restart (WFL-004).","evaluate":{"method":"scenario"},"ref":"WFL-1537","area":"04-automation","section":"The step catalogue","lifecycle":"active","boundary":"b-8","boundaryDetail":"`wait step`","traces":["g-13","d-6535"],"milestone":5,"inSection":"sec-automation-3","realisation":"checked"},
+    {"id":"wfl-1538","kind":"requirement","statement":"A fan-out step SHALL run its step once for each member of its segment at the time each batch runs, in batches of at most its batch size and never more than one hundred members, each batch one job, and SHALL go to its next step once every member has reached an end.","rationale":"A segment can hold every person of a tenant, so its work is cut into the batches that D-5026 uses for evaluation.","evaluate":{"method":"scenario"},"ref":"WFL-1538","area":"04-automation","section":"The step catalogue","lifecycle":"active","boundary":"b-8","boundaryDetail":"`fan-out step`","traces":["g-608","d-5026","d-6535"],"milestone":5,"inSection":"sec-automation-3","realisation":"checked"},
+    {"id":"wfl-1539","kind":"requirement","statement":"A change that moves a workflow field through a named transition SHALL start the runs of the triggers on record-updated for that object and transition, and an update-record step that sets a workflow field SHALL be decided by the kernel against the guard of the transition like any update by its principal.","rationale":"A record's state machine and the automation that reacts to it stay two definitions joined by one event, so the kernel keeps deciding transitions synchronously (D-6521).","evaluate":{"method":"scenario"},"ref":"WFL-1539","area":"04-automation","section":"Field workflows and automations","lifecycle":"active","boundary":"b-8","boundaryDetail":"`workflow field`","traces":["g-31","d-13","d-6521"],"milestone":5,"inSection":"sec-automation-8","realisation":"checked"}
   ],
 
   // ---- Glossary ----------------------------------------------------------------------------------
@@ -12031,7 +12080,7 @@
     {"id":"term-step-up","term":"Step-up","definition":"a fresh authentication asked for before a sensitive operation."},
     {"id":"term-job","term":"Job","definition":"one unit of scheduled work with a due time, a state and a recorded outcome."},
     {"id":"term-schedule","term":"Schedule","definition":"a rule that creates jobs: once at a time, or repeatedly."},
-    {"id":"term-trigger","term":"Trigger","definition":"a subscription that creates a job when a matching domain event commits."},
+    {"id":"term-trigger","term":"Trigger","definition":"a tenant definition (trigger-def) that starts a run of an automation when a committed domain event of its kind satisfies its condition, creating the run's first job in the transaction of the event."},
     {"id":"term-lease","term":"Lease","definition":"a worker's time-limited claim on a job."},
     {"id":"term-fencing-token","term":"Fencing token","definition":"a number that rises with every lease on a job and is checked when a result is recorded."},
     {"id":"term-idempotency-key","term":"Idempotency key","definition":"a value that lets the receiver of an effect recognise a repeat."},
@@ -12117,7 +12166,9 @@
     {"id":"term-refresh-interval","term":"Refresh interval","definition":"the time between two refresh jobs of a segment whose predicate reads the time; the bound by which its membership may lag behind the predicate."},
     {"id":"term-setting","term":"Setting","definition":"A named, typed value with a default, which the platform, the tenant, a team and a person can each override at the levels its definition allows. A read for a principal returns the most specific permitted override (D-5041)."},
     {"id":"term-override","term":"Override","definition":"The value of a setting at one level for one subject: the platform, the tenant, a team or a person. Removing it makes a read fall back to the next level."},
-    {"id":"term-aggregate","term":"Aggregate","definition":"A count, sum, minimum, maximum or top list that a named query declares over its declared fields, optionally grouped by one of them, and that is computed over the records the reader may read (D-5060, D-5061)."}
+    {"id":"term-aggregate","term":"Aggregate","definition":"A count, sum, minimum, maximum or top list that a named query declares over its declared fields, optionally grouped by one of them, and that is computed over the records the reader may read (D-5060, D-5061)."},
+    {"id":"term-automation","term":"Automation","definition":"a workflow of named steps from the published step catalogue, held as tenant metadata and run by the automation worker under the authority of its automation principal."},
+    {"id":"term-automation-principal","term":"Automation principal","definition":"the principal automation:<workflow-id> that every step of an automation acts as, holding the roles of its run-as and nothing its definer may not confer."}
   ],
 
   // ---- Documents and sections: how Concordance renders the specification -------------------------
@@ -12174,7 +12225,8 @@
     {"id":"doc-index","path":"specifications/index.md","title":"Specification","role":"index"},
     {"id":"doc-ledger","path":"specifications/10-product/ledger.md","title":"Ledger","role":"requirements"},
     {"id":"doc-segments","path":"specifications/04-automation/segments.md","title":"Segments","role":"requirements"},
-    {"id":"doc-composition","path":"specifications/10-product/composition.md","title":"Composition of the primitives","role":"requirements"}
+    {"id":"doc-composition","path":"specifications/10-product/composition.md","title":"Composition of the primitives","role":"requirements"},
+    {"id":"doc-automation","path":"specifications/04-automation/automation.md","title":"Automation: triggers, steps and authority","role":"requirements"}
   ],
   "sections": [
     {"id":"sec-whitepaper-1","title":"Strata","level":1,"document":"doc-whitepaper","order":1,"body":"\nStrata is a multi-tenant automation and content platform in which every tenant has a database of its own. Tenant structure is versioned data interpreted by one pure kernel. The platform is built so that agents can observe, explain and change it through the same typed, authorised operations people use, with every change simulated before it is applied and recorded after.\n\nThis paper says what the platform is for, where its boundaries are, what was decided and what is still open. The requirements derived from it are in the files the [specification index](../index.md) lists, and the order of work is in the [roadmap](roadmap.md).\n\n"},
@@ -12475,7 +12527,15 @@
     {"id":"sec-composition-5","title":"Ledger reach","level":2,"document":"doc-composition","order":5,"body":"\nPolicies over the ledger, reads of one's own accounts, scopes, ranking, expiry, definitions and ceilings (D-6550 to D-6554).\n\n{{entity:ldg-1540}}\n\n{{entity:ldg-1541}}\n\n{{entity:ldg-1542}}\n\n{{entity:ldg-1543}}\n\n{{entity:ldg-1544}}\n\n{{entity:ldg-1545}}\n\n{{entity:ldg-1546}}\n\n{{entity:ldg-1547}}\n\n{{entity:ldg-1548}}\n\n{{entity:ldg-1549}}\n\n{{entity:ldg-1550}}\n\n"},
     {"id":"sec-composition-6","title":"Segment reach","level":2,"document":"doc-composition","order":6,"body":"\nOwn membership, counts, previews, cost against job quota, refresh on change and caps (D-6555, D-6556).\n\n{{entity:seg-1540}}\n\n{{entity:seg-1541}}\n\n{{entity:seg-1542}}\n\n{{entity:seg-1543}}\n\n{{entity:seg-1544}}\n\n{{entity:seg-1545}}\n\n{{entity:seg-1546}}\n\n{{entity:seg-1547}}\n\n{{entity:seg-1548}}\n\n{{entity:seg-1549}}\n\n{{entity:seg-1550}}\n\n"},
     {"id":"sec-composition-7","title":"Setting reach","level":2,"document":"doc-composition","order":7,"body":"\nSettings in views, for the dispatcher and for triggers (D-6557).\n\n{{entity:set-1540}}\n\n{{entity:set-1541}}\n\n{{entity:set-1542}}\n\n{{entity:set-1543}}\n\n"},
-    {"id":"sec-composition-8","title":"Composite unique constraints","level":2,"document":"doc-composition","order":8,"body":"\nUnique constraints over several fields of a tenant object type (D-6558).\n\n{{entity:cms-1554}}\n\n{{entity:cms-1555}}\n\n{{entity:cms-1556}}\n\n{{entity:cms-1557}}\n\n"}
+    {"id":"sec-composition-8","title":"Composite unique constraints","level":2,"document":"doc-composition","order":8,"body":"\nUnique constraints over several fields of a tenant object type (D-6558).\n\n{{entity:cms-1554}}\n\n{{entity:cms-1555}}\n\n{{entity:cms-1556}}\n\n{{entity:cms-1557}}\n\n"},
+    {"id":"sec-automation-1","title":"Automation","level":1,"document":"doc-automation","order":1,"body":"\nA trigger names an event, a condition and an automation; an automation is a set of named steps from the published catalogue. Both are tenant metadata (D-6520). The automation worker runs each step as a job (D-526) under an authority fixed when the automation is defined (D-6525). The step catalogue is the union automation-step, whose outputs are automation-step-result; the trigger catalogue is the union trigger-event (D-6522).\n\n\n\n"},
+    {"id":"sec-automation-2","title":"Triggers","level":2,"document":"doc-automation","order":2,"body":"\n{{entity:wfl-1520}}\n\n{{entity:wfl-1521}}\n\n"},
+    {"id":"sec-automation-3","title":"The step catalogue","level":2,"document":"doc-automation","order":3,"body":"\nThe kinds of step are create-record, update-record, delete-record, post-ledger, send-mail, create-notice, call-webhook, wait-for, wait-until, branch, fan-out, request-approval and end. post-ledger depends on the atomic operation form of WG-5032; send-mail and create-notice on the send of WG-5033.\n\n{{entity:int-1522}}\n\n{{entity:wfl-1523}}\n\n{{entity:wfl-1537}}\n\n{{entity:wfl-1538}}\n\n"},
+    {"id":"sec-automation-4","title":"Retries and effects","level":2,"document":"doc-automation","order":4,"body":"\nA job is created exactly once (SCH-004), and a step's effect is applied exactly once through its derived key (SCH-015, D-6528).\n\n{{entity:sch-1524}}\n\n{{entity:sch-1525}}\n\n{{entity:sch-1526}}\n\n{{entity:sch-1536}}\n\n"},
+    {"id":"sec-automation-5","title":"Authority","level":2,"document":"doc-automation","order":5,"body":"\n{{entity:wfl-1527}}\n\n{{entity:wfl-1528}}\n\n{{entity:wfl-1529}}\n\n{{entity:wfl-1530}}\n\n"},
+    {"id":"sec-automation-6","title":"Runs and exceptions","level":2,"document":"doc-automation","order":6,"body":"\n{{entity:wfl-1531}}\n\n{{entity:sch-1532}}\n\n"},
+    {"id":"sec-automation-7","title":"Chains, order and quota","level":2,"document":"doc-automation","order":7,"body":"\n{{entity:sch-1533}}\n\n{{entity:sch-1534}}\n\n{{entity:sch-1535}}\n\n"},
+    {"id":"sec-automation-8","title":"Field workflows and automations","level":2,"document":"doc-automation","order":8,"body":"\nA field workflow is the state machine of one field, decided by the kernel inside a change; an automation reacts to its transitions (D-6521).\n\n{{entity:wfl-1539}}\n\n"}
   ],
   "caseTables": [
     {"id":"cases-storage-conformance","path":"specifications/01-core/cases/storage-conformance.md","title":"Storage conformance","document":"doc-cases-storage-conformance","body":"# Storage conformance\n\nEvery check an adapter of the store contract passes. The checks are run by `strata_storage_api::conformance::run` against a fresh, empty store.\n\n## Cases\n\n| Case | Establishes |\n|---|---|\n| absent-tenant | A tenant that does not exist loads as absent, with no events |\n| state-equals-kernel | After a sequence of intents the stored state has the canonical hash of the state the kernel computed |\n| stale-commit | A commit based on an old revision conflicts and changes nothing |\n| malformed-commit | A commit whose events do not continue the sequence is refused whole |\n| partial-load | A load returns the records its needs name, and the tenant header |\n| list-containment | A lookup by value finds records whose list field contains the value |\n| tenant-isolation | Equal record identifiers in two tenants resolve to different records |\n| outbox-order | Unpublished events are returned in commit order within each tenant, with per-tenant positions, until marked published for their tenant |\n| publish-after-commit | An event is in the outbox only once its commit is: a refused or conflicting commit leaves nothing there, and marking one tenant published leaves the others waiting |\n| journal-replay | The journal replays through the kernel to the stored state |\n| sessions | Sessions are stored, found by token hash, revoked with a commit and purged |\n| accounts | A login is scoped to its tenant |\n| snapshots | A snapshot restores to a state with the same canonical hash |\n| idempotency | A repeated idempotency key returns the first result and commits nothing; the key is scoped to its tenant and principal, refused for another intent and forgotten after its retention, and a request past its deadline commits nothing |\n| reset | A reset removes everything |\n","columns":["Case","Establishes"],"rowCount":15},
@@ -14371,7 +14431,8 @@
     {"id":"ret-tbl-saml-requests","description":"How long tbl-saml-requests keeps its rows: the latest bound is the deletion of the tenant with its file; the record states the earlier ends its rows have in code.","record":"tbl-saml-requests","until":"td-tenant-deleted","then":"delete","source":"ten-001"},
     {"id":"ret-tbl-saml-assertions","description":"How long tbl-saml-assertions keeps its rows: the latest bound is the deletion of the tenant with its file; the record states the earlier ends its rows have in code.","record":"tbl-saml-assertions","until":"td-tenant-deleted","then":"delete","source":"ten-001"},
     {"id":"ret-tbl-identity-docs","description":"How long tbl-identity-docs keeps its rows: the latest bound is the deletion of the tenant with its file; the record states the earlier ends its rows have in code.","record":"tbl-identity-docs","until":"td-tenant-deleted","then":"delete","source":"ten-001"},
-    {"id":"ret-webhook-endpoint","description":"The structured form of the prose retention of rec-webhook-endpoint.","record":"rec-webhook-endpoint","until":"ev-webhook-endpoint-removed","then":"delete","source":"sec-003"}
+    {"id":"ret-webhook-endpoint","description":"The structured form of the prose retention of rec-webhook-endpoint.","record":"rec-webhook-endpoint","until":"ev-webhook-endpoint-removed","then":"delete","source":"sec-003"},
+    {"id":"ret-workflow-step-run","description":"The structured form of the prose retention of rec-workflow-step-run.","record":"rec-workflow-step-run","until":"ev-workflow-step-run-retention-elapsed","then":"delete","source":"wfl-1531"}
   ],
 
   // ---- Views -------------------------------------------------------------------------------------
@@ -19123,6 +19184,143 @@
       "id": "opr-refused-pool",
       "name": "Refused: pool exhausted",
       "description": "The debit of the pool would pass its floor of zero; nothing is changed.",
+      "delivery": "at-most-once"
+    },
+    {
+      "id": "ev-workflow-step-run-retention-elapsed",
+      "name": "Workflow step run retention elapsed",
+      "description": "Ninety days have passed since the end of the run a step record belongs to.",
+      "payload": [
+        {
+          "name": "run-id",
+          "type": "run-id"
+        }
+      ]
+    },
+    {
+      "id": "ra-step",
+      "name": "Step of an automation falls due",
+      "description": "A job of the next step of a run of the automation is offered to a worker.",
+      "delivery": "at-least-once"
+    },
+    {
+      "id": "ra-authority",
+      "name": "Authority of the definer changed",
+      "description": "A change of the definer's roles, of a team it belongs to or of a role it holds committed. The payload says whether the definer may still confer every role of the run-as.",
+      "payload": [
+        {
+          "name": "holds",
+          "type": "bool"
+        }
+      ],
+      "delivery": "at-least-once"
+    },
+    {
+      "id": "ra-redefine",
+      "name": "Automation defined again",
+      "description": "A principal defines the automation again. The payload says whether it may confer every role of the run-as.",
+      "payload": [
+        {
+          "name": "holds",
+          "type": "bool"
+        }
+      ],
+      "delivery": "at-least-once"
+    },
+    {
+      "id": "ra-ran",
+      "name": "Step ran",
+      "description": "The step ran as the automation principal.",
+      "delivery": "at-most-once"
+    },
+    {
+      "id": "ra-parked",
+      "name": "Step parked",
+      "description": "The step did not run because the automation is suspended; a parked exception record was written.",
+      "delivery": "at-most-once"
+    },
+    {
+      "id": "ra-suspended",
+      "name": "Automation suspended",
+      "description": "The automation was suspended in the transaction of the change.",
+      "delivery": "at-most-once"
+    },
+    {
+      "id": "ra-refused",
+      "name": "Definition refused",
+      "description": "The definition was refused because its run-as names a role the caller may not confer.",
+      "delivery": "at-most-once"
+    },
+    {
+      "id": "wh-event",
+      "name": "Event that starts the automation",
+      "description": "A committed event that a trigger of the automation subscribes to. The payload is its hop count.",
+      "payload": [
+        {
+          "name": "hop",
+          "type": "u64"
+        }
+      ],
+      "delivery": "at-least-once"
+    },
+    {
+      "id": "wh-run",
+      "name": "Run started",
+      "description": "A run of the automation started with the hop count of the event.",
+      "delivery": "at-most-once"
+    },
+    {
+      "id": "wh-declined",
+      "name": "Run declined at the hop limit",
+      "description": "The trigger created no job and wrote a declined exception record with reason hop-limit.",
+      "delivery": "at-most-once"
+    },
+    {
+      "id": "jq-commit",
+      "name": "Commit that creates a job",
+      "description": "A change commits whose event a trigger subscribes to; it would create one job.",
+      "delivery": "at-least-once"
+    },
+    {
+      "id": "jq-day",
+      "name": "Quota day ends",
+      "description": "The daily job quota of the tenant starts again.",
+      "delivery": "at-least-once"
+    },
+    {
+      "id": "jq-job",
+      "name": "Job created",
+      "description": "The job was created due as usual.",
+      "delivery": "at-most-once"
+    },
+    {
+      "id": "jq-held",
+      "name": "Job held",
+      "description": "The job was created due at the start of the next quota day and a held exception record was written; the change committed.",
+      "delivery": "at-most-once"
+    },
+    {
+      "id": "jq-refused",
+      "name": "Change refused for the job quota",
+      "description": "The change was refused because its job would exceed the quota.",
+      "delivery": "at-most-once"
+    },
+    {
+      "id": "sk-attempt",
+      "name": "Attempt of a step",
+      "description": "A worker attempts the step; the effect is presented with the step's derived key.",
+      "delivery": "at-least-once"
+    },
+    {
+      "id": "sk-applied",
+      "name": "Effect applied",
+      "description": "The effect was applied for the first time under its key.",
+      "delivery": "at-most-once"
+    },
+    {
+      "id": "sk-answered",
+      "name": "Effect answered from its key",
+      "description": "The effect had been applied under the key, and the attempt is answered with the recorded result.",
       "delivery": "at-most-once"
     }
   ],
@@ -45300,6 +45498,404 @@
           ]
         }
       ]
+    },
+    {
+      "id": "automation-run-as-flow",
+      "name": "Run-as authority of one automation",
+      "subject": "automation-worker",
+      "initial": "ra-active",
+      "description": "One automation and its definer. A step runs only while the automation is active. A change that leaves the definer unable to confer a role of the run-as suspends the automation in its own transaction; a suspended automation parks its steps and becomes active again only when a principal who may confer every role defines it again (WFL-1528, WFL-1529).",
+      "variables": [
+        {
+          "name": "ran",
+          "type": "number",
+          "initial": 0
+        },
+        {
+          "name": "parked",
+          "type": "number",
+          "initial": 0
+        }
+      ],
+      "states": [
+        {
+          "id": "ra-active",
+          "name": "Active"
+        },
+        {
+          "id": "ra-suspended-state",
+          "name": "Suspended"
+        }
+      ],
+      "transitions": [
+        {
+          "id": "ra-run",
+          "from": "ra-active",
+          "to": "ra-active",
+          "on": "ra-step",
+          "effects": [
+            {
+              "set": "ran",
+              "to": "ran + 1"
+            },
+            {
+              "emit": "ra-ran"
+            }
+          ]
+        },
+        {
+          "id": "ra-keep",
+          "from": "ra-active",
+          "to": "ra-active",
+          "on": "ra-authority",
+          "guard": "event.holds"
+        },
+        {
+          "id": "ra-lose",
+          "from": "ra-active",
+          "to": "ra-suspended-state",
+          "on": "ra-authority",
+          "guard": "!event.holds",
+          "effects": [
+            {
+              "emit": "ra-suspended"
+            }
+          ]
+        },
+        {
+          "id": "ra-run-while-suspended",
+          "from": "ra-suspended-state",
+          "to": "ra-suspended-state",
+          "on": "ra-step",
+          "faultOnly": true,
+          "description": "Defect: a step runs on the authority the definer no longer has.",
+          "effects": [
+            {
+              "set": "ran",
+              "to": "ran + 1"
+            },
+            {
+              "emit": "ra-ran"
+            }
+          ]
+        },
+        {
+          "id": "ra-park",
+          "from": "ra-suspended-state",
+          "to": "ra-suspended-state",
+          "on": "ra-step",
+          "effects": [
+            {
+              "set": "parked",
+              "to": "parked + 1"
+            },
+            {
+              "emit": "ra-parked"
+            }
+          ]
+        },
+        {
+          "id": "ra-resume",
+          "from": "ra-suspended-state",
+          "to": "ra-active",
+          "on": "ra-redefine",
+          "guard": "event.holds"
+        },
+        {
+          "id": "ra-refuse",
+          "from": "ra-suspended-state",
+          "to": "ra-suspended-state",
+          "on": "ra-redefine",
+          "guard": "!event.holds",
+          "effects": [
+            {
+              "emit": "ra-refused"
+            }
+          ]
+        }
+      ],
+      "realisation": "target"
+    },
+    {
+      "id": "automation-wait-hop-flow",
+      "name": "Hop count across a wait",
+      "subject": "automation-worker",
+      "initial": "awh-live",
+      "description": "An automation whose run waits five ticks and then changes a record that starts the automation again. The run keeps the hop count of its event through the wait and the change it commits carries that count plus one, so the loop ends at the hop limit of eight that D-700 states, however long each run waits (SCH-1533). Past the limit the trigger writes a declined record (SCH-1532).",
+      "variables": [
+        {
+          "name": "runs",
+          "type": "number",
+          "initial": 0
+        },
+        {
+          "name": "declined",
+          "type": "number",
+          "initial": 0
+        }
+      ],
+      "states": [
+        {
+          "id": "awh-live",
+          "name": "Live"
+        }
+      ],
+      "transitions": [
+        {
+          "id": "wh-start",
+          "from": "awh-live",
+          "to": "awh-live",
+          "on": "wh-event",
+          "guard": "event.hop <= 8",
+          "effects": [
+            {
+              "set": "runs",
+              "to": "runs + 1"
+            },
+            {
+              "emit": "wh-run"
+            },
+            {
+              "emit": "wh-event",
+              "after": 5,
+              "payload": {
+                "hop": "event.hop + 1"
+              }
+            }
+          ]
+        },
+        {
+          "id": "wh-wait-resets",
+          "from": "awh-live",
+          "to": "awh-live",
+          "on": "wh-event",
+          "guard": "event.hop <= 8",
+          "faultOnly": true,
+          "description": "Defect: the wait starts the run's count again, so the loop never ends.",
+          "effects": [
+            {
+              "set": "runs",
+              "to": "runs + 1"
+            },
+            {
+              "emit": "wh-run"
+            },
+            {
+              "emit": "wh-event",
+              "after": 5,
+              "payload": {
+                "hop": 1
+              }
+            }
+          ]
+        },
+        {
+          "id": "wh-decline",
+          "from": "awh-live",
+          "to": "awh-live",
+          "on": "wh-event",
+          "guard": "event.hop > 8",
+          "effects": [
+            {
+              "set": "declined",
+              "to": "declined + 1"
+            },
+            {
+              "emit": "wh-declined"
+            }
+          ]
+        }
+      ],
+      "realisation": "target"
+    },
+    {
+      "id": "automation-job-quota-flow",
+      "name": "Job quota at the commit that creates a job",
+      "subject": "automation-worker",
+      "initial": "jq-live",
+      "description": "One tenant whose plan allows two jobs a day, scaled down from D-508. Every commit commits; a job within the quota is created due as usual and a job past it is held for the next quota day with a held record, where it counts against that day (SCH-1535).",
+      "variables": [
+        {
+          "name": "commits",
+          "type": "number",
+          "initial": 0
+        },
+        {
+          "name": "today",
+          "type": "number",
+          "initial": 0
+        },
+        {
+          "name": "held",
+          "type": "number",
+          "initial": 0
+        }
+      ],
+      "states": [
+        {
+          "id": "jq-live",
+          "name": "Live"
+        }
+      ],
+      "transitions": [
+        {
+          "id": "jq-create",
+          "from": "jq-live",
+          "to": "jq-live",
+          "on": "jq-commit",
+          "guard": "today < 2",
+          "effects": [
+            {
+              "set": "commits",
+              "to": "commits + 1"
+            },
+            {
+              "set": "today",
+              "to": "today + 1"
+            },
+            {
+              "emit": "jq-job"
+            }
+          ]
+        },
+        {
+          "id": "jq-hold",
+          "from": "jq-live",
+          "to": "jq-live",
+          "on": "jq-commit",
+          "guard": "today >= 2",
+          "effects": [
+            {
+              "set": "commits",
+              "to": "commits + 1"
+            },
+            {
+              "set": "held",
+              "to": "held + 1"
+            },
+            {
+              "emit": "jq-held"
+            }
+          ]
+        },
+        {
+          "id": "jq-refuse-change",
+          "from": "jq-live",
+          "to": "jq-live",
+          "on": "jq-commit",
+          "guard": "today >= 2",
+          "faultOnly": true,
+          "description": "Defect: the job quota refuses the change that would create the job.",
+          "effects": [
+            {
+              "emit": "jq-refused"
+            }
+          ]
+        },
+        {
+          "id": "jq-new-day",
+          "from": "jq-live",
+          "to": "jq-live",
+          "on": "jq-day",
+          "effects": [
+            {
+              "set": "today",
+              "to": "held"
+            },
+            {
+              "set": "held",
+              "to": "0"
+            }
+          ]
+        }
+      ],
+      "realisation": "target"
+    },
+    {
+      "id": "automation-step-key-flow",
+      "name": "One step attempted three times",
+      "subject": "automation-worker",
+      "initial": "ask-live",
+      "description": "One step whose first attempt applies its effect and loses its result. Every attempt carries the same derived key (SCH-1524), so the second and third attempts are answered with the recorded effect and the effect is applied once.",
+      "variables": [
+        {
+          "name": "attempts",
+          "type": "number",
+          "initial": 0
+        },
+        {
+          "name": "effects",
+          "type": "number",
+          "initial": 0
+        }
+      ],
+      "states": [
+        {
+          "id": "ask-live",
+          "name": "Live"
+        }
+      ],
+      "transitions": [
+        {
+          "id": "sk-apply",
+          "from": "ask-live",
+          "to": "ask-live",
+          "on": "sk-attempt",
+          "guard": "effects == 0",
+          "effects": [
+            {
+              "set": "attempts",
+              "to": "attempts + 1"
+            },
+            {
+              "set": "effects",
+              "to": "effects + 1"
+            },
+            {
+              "emit": "sk-applied"
+            }
+          ]
+        },
+        {
+          "id": "sk-answer",
+          "from": "ask-live",
+          "to": "ask-live",
+          "on": "sk-attempt",
+          "guard": "effects > 0",
+          "effects": [
+            {
+              "set": "attempts",
+              "to": "attempts + 1"
+            },
+            {
+              "emit": "sk-answered"
+            }
+          ]
+        },
+        {
+          "id": "sk-key-per-attempt",
+          "from": "ask-live",
+          "to": "ask-live",
+          "on": "sk-attempt",
+          "guard": "effects > 0",
+          "faultOnly": true,
+          "description": "Defect: the key changes with the attempt, so a retry applies the effect again.",
+          "effects": [
+            {
+              "set": "attempts",
+              "to": "attempts + 1"
+            },
+            {
+              "set": "effects",
+              "to": "effects + 1"
+            },
+            {
+              "emit": "sk-applied"
+            }
+          ]
+        }
+      ],
+      "realisation": "target"
     }
   ],
   "faults": [
@@ -47493,6 +48089,34 @@
       "occurrence": 1,
       "by": 1,
       "description": "At-least-once delivery: the first invocation reaches the decision twice, one tick apart."
+    },
+    {
+      "id": "defect-automation-runs-while-suspended",
+      "name": "A step of a suspended automation runs",
+      "kind": "enable-transition",
+      "transition": "ra-run-while-suspended",
+      "description": "The defect that WFL-1529 forbids."
+    },
+    {
+      "id": "defect-automation-wait-resets-hop",
+      "name": "A wait starts the hop count again",
+      "kind": "enable-transition",
+      "transition": "wh-wait-resets",
+      "description": "The defect that SCH-1533 forbids."
+    },
+    {
+      "id": "defect-job-quota-refuses-change",
+      "name": "The job quota refuses the change",
+      "kind": "enable-transition",
+      "transition": "jq-refuse-change",
+      "description": "The defect that SCH-1535 forbids."
+    },
+    {
+      "id": "defect-step-key-per-attempt",
+      "name": "A step key changes with the attempt",
+      "kind": "enable-transition",
+      "transition": "sk-key-per-attempt",
+      "description": "The defect that SCH-1524 forbids."
     }
   ],
   "scenarios": [
@@ -61949,6 +62573,192 @@
           }
         }
       ]
+    },
+    {
+      "id": "automation-run-as-definer-demoted",
+      "name": "The definer of an automation is demoted",
+      "description": "A step runs at tick 1. At tick 2 the definer loses a role of the run-as and the automation is suspended. The step due at tick 3 is parked. At tick 4 a principal who lacks the role defines it again and is refused; at tick 5 an owner does, and the step at tick 6 runs.",
+      "behaviors": [
+        "automation-run-as-flow"
+      ],
+      "steps": [
+        {
+          "at": 1,
+          "event": "ra-step"
+        },
+        {
+          "at": 2,
+          "event": "ra-authority",
+          "payload": {
+            "holds": false
+          }
+        },
+        {
+          "at": 3,
+          "event": "ra-step"
+        },
+        {
+          "at": 4,
+          "event": "ra-redefine",
+          "payload": {
+            "holds": false
+          }
+        },
+        {
+          "at": 5,
+          "event": "ra-redefine",
+          "payload": {
+            "holds": true
+          }
+        },
+        {
+          "at": 6,
+          "event": "ra-step"
+        }
+      ]
+    },
+    {
+      "id": "automation-run-as-unrelated-change",
+      "name": "A change that keeps the definer's authority",
+      "description": "At tick 1 the definer's roles change but the definer may still confer every role of the run-as; the step at tick 2 runs.",
+      "behaviors": [
+        "automation-run-as-flow"
+      ],
+      "steps": [
+        {
+          "at": 1,
+          "event": "ra-authority",
+          "payload": {
+            "holds": true
+          }
+        },
+        {
+          "at": 2,
+          "event": "ra-step"
+        }
+      ]
+    },
+    {
+      "id": "automation-wait-loop-reaches-limit",
+      "name": "A loop through a waiting automation reaches the hop limit",
+      "description": "An event at hop 1 starts a run that waits five ticks and commits a change at hop 2, which starts the automation again. The ninth event, at hop 9 and tick 40, is declined with a record.",
+      "behaviors": [
+        "automation-wait-hop-flow"
+      ],
+      "steps": [
+        {
+          "at": 0,
+          "event": "wh-event",
+          "payload": {
+            "hop": 1
+          }
+        }
+      ]
+    },
+    {
+      "id": "automation-wait-schedule-starts-fresh",
+      "name": "An event of a schedule starts a fresh chain",
+      "description": "An event at hop 9 is declined at tick 0; an event of an owner's schedule at tick 2, which carries hop 0, starts a run.",
+      "behaviors": [
+        "automation-wait-hop-flow"
+      ],
+      "steps": [
+        {
+          "at": 0,
+          "event": "wh-event",
+          "payload": {
+            "hop": 9
+          }
+        },
+        {
+          "at": 2,
+          "event": "wh-event",
+          "payload": {
+            "hop": 0
+          },
+          "note": "An event of a schedule carries hop count zero."
+        }
+      ]
+    },
+    {
+      "id": "automation-job-quota-burst",
+      "name": "Three commits against a quota of two",
+      "description": "Three commits at ticks 1 to 3 all commit: two jobs are created and the third is held. The quota day ends at tick 4 and the held job counts against the new day; a commit at tick 5 creates its job.",
+      "behaviors": [
+        "automation-job-quota-flow"
+      ],
+      "steps": [
+        {
+          "at": 1,
+          "event": "jq-commit"
+        },
+        {
+          "at": 2,
+          "event": "jq-commit"
+        },
+        {
+          "at": 3,
+          "event": "jq-commit"
+        },
+        {
+          "at": 4,
+          "event": "jq-day"
+        },
+        {
+          "at": 5,
+          "event": "jq-commit"
+        }
+      ]
+    },
+    {
+      "id": "automation-step-retried-after-lost-result",
+      "name": "A step is retried after its result was lost",
+      "description": "The first attempt at tick 1 applies the effect and its result is lost; the attempts at ticks 3 and 5 are answered from the key.",
+      "behaviors": [
+        "automation-step-key-flow"
+      ],
+      "steps": [
+        {
+          "at": 1,
+          "event": "sk-attempt"
+        },
+        {
+          "at": 3,
+          "event": "sk-attempt"
+        },
+        {
+          "at": 5,
+          "event": "sk-attempt"
+        }
+      ]
+    },
+    {
+      "id": "automation-activation-step-outside-catalogue",
+      "name": "An automation names a step kind outside the catalogue",
+      "description": "A projection runs at tick 1; activation of an automation with an action that is not a variant of automation-step is asked for at tick 2 and refused; the corrected automation is activated at tick 3 (INT-1522).",
+      "behaviors": [
+        "workflow-activation-flow"
+      ],
+      "steps": [
+        {
+          "at": 1,
+          "event": "wa-project"
+        },
+        {
+          "at": 2,
+          "event": "wa-activate",
+          "payload": {
+            "inCatalogue": false
+          }
+        },
+        {
+          "at": 3,
+          "event": "wa-activate",
+          "payload": {
+            "inCatalogue": true
+          }
+        }
+      ]
     }
   ],
 
@@ -62080,14 +62890,21 @@
         "cancelled",
         "unscheduled"
       ]},
-    {"id":"run-state","name":"run-state","kind":"enum","values":[
+    {
+      "id": "run-state",
+      "name": "run-state",
+      "kind": "enum",
+      "values": [
         "running",
         "completed",
         "failed",
         "cancelled",
         "compensating",
-        "awaiting-approval"
-      ]},
+        "awaiting-approval",
+        "waiting",
+        "suspended"
+      ]
+    },
     {"id":"proposal-state","name":"proposal-state","kind":"enum","values":["projecting","awaiting-approval","cleared","rejected","applied"]},
     {
       "id": "message-state",
@@ -62439,7 +63256,25 @@
     {"id":"ledger-definition-ref","name":"Ledger definition ref","kind":"union","encoding":{"tag":"external","variantCase":"snake_case"},"variants":[{"name":"unit","fields":[{"name":"unit","type":"ledger-unit"}]},{"name":"pool","fields":[{"name":"pool","type":"ledger-pool-name"}]},{"name":"limit","fields":[{"name":"unit","type":"ledger-unit"},{"name":"owner","type":"ledger-owner","optional":true},{"name":"scope","type":"ledger-scope","optional":true}]}],"description":"A unit, a pool or a limit to remove (LDG-1549)."},
     {"id":"segment-summary","name":"Segment summary","kind":"struct","fields":[{"name":"segment","type":"segment-id"},{"name":"name","type":"string"},{"name":"since","type":"timestamp"}],"description":"A segment the caller belongs to, in the answer of list-my-segments (SEG-1540)."},
     {"id":"segment-count","name":"Segment count","kind":"struct","fields":[{"name":"segment","type":"segment-id"},{"name":"count","type":"u64"},{"name":"examined","type":"u32"}],"description":"The answer of count-segment-members: the members the reader may read, and the memberships examined (0 when the kept count answered)."},
-    {"id":"segment-preview","name":"Segment preview","kind":"struct","fields":[{"name":"matched","type":"u32"},{"name":"examined","type":"u32"},{"name":"next","type":"record-id","optional":true}],"description":"The answer of preview-segment-predicate (SEG-1542)."}
+    {"id":"segment-preview","name":"Segment preview","kind":"struct","fields":[{"name":"matched","type":"u32"},{"name":"examined","type":"u32"},{"name":"next","type":"record-id","optional":true}],"description":"The answer of preview-segment-predicate (SEG-1542)."},
+    {"id":"trigger-id","name":"trigger-id","kind":"id","repr":"string","constraints":{"pattern":"^[a-z][a-z0-9_]*$","maxLength":64},"description":"A trigger of a tenant, [a-z][a-z0-9_]*, at most 64 bytes (D-6520)."},
+    {"id":"step-name","name":"step-name","kind":"id","repr":"string","constraints":{"pattern":"^[a-z][a-z0-9_]*$","maxLength":64},"description":"The name of one step of an automation, [a-z][a-z0-9_]*, at most 64 bytes. The outputs of the step are bound in later steps as param.<step-name>_<output> (D-6523)."},
+    {"id":"trigger-event","name":"Trigger event","kind":"union","encoding":{"tag":"external","variantCase":"PascalCase"},"description":"The published catalogue of the events a trigger may subscribe to (INT-153, D-6522). Each variant names a domain event kind and what narrows it. The parameters each binds for the condition and the run are stated in D-6523: record events bind the scopes old and new; every event binds param.seq, param.at and param.hop.","variants":[{"name":"record-created","fields":[{"name":"object","type":"object-type-id"}]},{"name":"record-updated","fields":[{"name":"object","type":"object-type-id"},{"name":"transition","type":"option<string>","optional":true}]},{"name":"record-deleted","fields":[{"name":"object","type":"object-type-id"}]},{"name":"segment-entered","fields":[{"name":"segment","type":"segment-id"}]},{"name":"segment-exited","fields":[{"name":"segment","type":"segment-id"}]},{"name":"ledger-posted","fields":[{"name":"unit","type":"ledger-unit"}]},{"name":"setting-changed","fields":[{"name":"setting","type":"setting-id"}]},{"name":"schedule-due","fields":[{"name":"schedule","type":"schedule-id"}]},{"name":"inbound-webhook","fields":[{"name":"endpoint","type":"string"}]}]},
+    {"id":"trigger-def","name":"Trigger definition","kind":"struct","description":"A trigger as tenant metadata (WFL-1520): the event it subscribes to, a condition in the tenant rule language evaluated in the transaction of the event (D-6524), and the automation it starts. An automation is named by a workflow-id (D-6521).","fields":[{"name":"id","type":"trigger-id"},{"name":"on","type":"trigger-event"},{"name":"condition","type":"option<expression>","optional":true},{"name":"automation","type":"workflow-id"},{"name":"paused","type":"bool","optional":true}]},
+    {"id":"run-as","name":"Run-as authority","kind":"struct","description":"The authority of an automation (D-6525): the tenant roles its automation principal, automation:<workflow-id>, holds. Each role must be one the definer may confer under ADM-152 when the automation is defined, and is checked again whenever the definer's authority changes (WFL-1529).","fields":[{"name":"roles","type":"set<role-id>"}]},
+    {"id":"step-retry","name":"Step retry policy","kind":"struct","description":"How a failed attempt of a step is retried (SCH-1525, D-6529): at most attempts attempts in all, from 1 to 10 (default 5); the delay before the second attempt is first-delay (default 10 seconds) and doubles for each later attempt up to max-delay (default one hour, at most one day). Durations are in milliseconds.","fields":[{"name":"attempts","type":"u32"},{"name":"first-delay","type":"duration","optional":true},{"name":"max-delay","type":"duration","optional":true}]},
+    {"id":"automation-step","name":"Automation step","kind":"union","encoding":{"tag":"external","variantCase":"PascalCase"},"description":"The published step catalogue (D-506, INT-153, D-6522): every kind of step an automation may name, with its typed inputs. An expression input is text in the tenant rule language, evaluated against the run's parameters (D-6523). The outputs of each kind are the variant of automation-step-result of the same name. post-ledger carries out a posting in the atomic operation form that WG-5032 specifies; send-mail and create-notice carry out the send that WG-5033 specifies; call-webhook is a signed delivery through the outbound gate (WFL-010, WFL-250).","variants":[{"name":"create-record","fields":[{"name":"object","type":"object-type-id"},{"name":"fields","type":"map<field-id, expression>"}]},{"name":"update-record","fields":[{"name":"object","type":"object-type-id"},{"name":"record","type":"expression"},{"name":"fields","type":"map<field-id, expression>"}]},{"name":"delete-record","fields":[{"name":"object","type":"object-type-id"},{"name":"record","type":"expression"}]},{"name":"post-ledger","fields":[{"name":"owner","type":"expression"},{"name":"unit","type":"ledger-unit"},{"name":"amount","type":"expression"},{"name":"reason","type":"string"}]},{"name":"send-mail","fields":[{"name":"template","type":"template-id"},{"name":"to","type":"expression"},{"name":"category","type":"option<string>","optional":true}]},{"name":"create-notice","fields":[{"name":"template","type":"template-id"},{"name":"to","type":"expression"},{"name":"record","type":"option<expression>","optional":true}]},{"name":"call-webhook","fields":[{"name":"subscription","type":"identifier"},{"name":"body","type":"map<string, expression>"}]},{"name":"wait-for","fields":[{"name":"duration","type":"duration"}]},{"name":"wait-until","fields":[{"name":"at","type":"expression"}]},{"name":"branch","fields":[{"name":"condition","type":"expression"},{"name":"object","type":"option<object-type-id>","optional":true},{"name":"record","type":"option<expression>","optional":true},{"name":"then","type":"step-name"},{"name":"else","type":"step-name"}]},{"name":"fan-out","fields":[{"name":"segment","type":"segment-id"},{"name":"batch","type":"u32"},{"name":"each","type":"step-name"}]},{"name":"request-approval","fields":[{"name":"policy","type":"policy-id"},{"name":"timeout","type":"duration"},{"name":"approved","type":"step-name"},{"name":"refused","type":"step-name"}]},{"name":"end"}]},
+    {"id":"automation-step-result","name":"Automation step result","kind":"union","encoding":{"tag":"external","variantCase":"PascalCase"},"description":"The typed outputs of a completed step, one variant for each variant of automation-step (WFL-1523). Each field is bound in later steps as param.<step-name>_<field>, with hyphens written as underscores.","variants":[{"name":"create-record","fields":[{"name":"record","type":"record-id"},{"name":"version","type":"u64"}]},{"name":"update-record","fields":[{"name":"version","type":"u64"}]},{"name":"delete-record"},{"name":"post-ledger","fields":[{"name":"entry-sequence","type":"u64"},{"name":"balance","type":"ledger-amount"}]},{"name":"send-mail","fields":[{"name":"message","type":"identifier"}]},{"name":"create-notice","fields":[{"name":"item","type":"identifier"}]},{"name":"call-webhook","fields":[{"name":"delivery","type":"identifier"},{"name":"status","type":"u32"}]},{"name":"wait-for"},{"name":"wait-until"},{"name":"branch","fields":[{"name":"taken","type":"step-name"}]},{"name":"fan-out","fields":[{"name":"members","type":"u64"},{"name":"batches","type":"u32"}]},{"name":"request-approval","fields":[{"name":"approved","type":"bool"},{"name":"by","type":"option<principal-id>","optional":true}]},{"name":"end"}]},
+    {"id":"automation-step-def","name":"Automation step definition","kind":"struct","description":"One named step of an automation: its action from the catalogue, the step that follows it (none for end, branch, fan-out's members and request-approval, which name their own), its retry policy, the time one attempt may take (default 60 seconds, at most 15 minutes; waits and approvals have no attempt time), and the step that undoes it when a later step fails (WFL-005).","fields":[{"name":"action","type":"automation-step"},{"name":"next","type":"option<step-name>","optional":true},{"name":"retry","type":"option<step-retry>","optional":true},{"name":"timeout","type":"option<duration>","optional":true},{"name":"compensate","type":"option<step-name>","optional":true}]},
+    {"id":"automation-def","name":"Automation definition","kind":"struct","description":"An automation as tenant metadata (D-6520, D-6521): a workflow of declared steps that the automation worker runs, one job per step attempt (D-526). id shares the namespace of workflow-def ids: a tenant has no field workflow and automation with one id. run-key, when present, is evaluated on the starting event and an automation starts one run per distinct value for as long as it exists (SCH-1536). At most 50 steps.","fields":[{"name":"id","type":"workflow-id"},{"name":"label","type":"string"},{"name":"run-as","type":"run-as"},{"name":"run-key","type":"option<expression>","optional":true},{"name":"start","type":"step-name"},{"name":"steps","type":"map<step-name, automation-step-def>"}]},
+    {"id":"automation-state","name":"automation-state","kind":"enum","values":["draft","active","suspended"],"description":"An automation is a draft until activate-workflow activates it (WFL-002), active while it may start runs, and suspended when its definer can no longer confer a role of its run-as (WFL-1529)."},
+    {"id":"step-run-state","name":"step-run-state","kind":"enum","values":["due","leased","waiting","completed","failed","compensated","cancelled"],"description":"Where one step of a run is: due as a job, leased by a worker, waiting for its time or an approval, or ended."},
+    {"id":"automation-exception-kind","name":"automation-exception-kind","kind":"enum","values":["declined","held","parked","dead-lettered"],"description":"declined: a trigger created no job; held: a job was created due at the next day of the job quota (SCH-1535); parked: an event that kept failing was set aside (D-519); dead-lettered: a step exhausted its attempts (SCH-1525)."},
+    {"id":"automation-exception-reason","name":"automation-exception-reason","kind":"enum","values":["hop-limit","job-quota","run-as-suspended","automation-inactive","automation-removed","run-key-repeated","condition-failed","event-parked","attempts-exhausted","definition-changed"],"description":"Why an exception record was written (SCH-1532). condition-failed is a condition that could not be evaluated (a missing field, a type error); a condition that is false writes nothing (D-6530)."},
+    {"id":"exception-action","name":"exception-action","kind":"enum","values":["release","drop"],"description":"What the tenant owner does with a parked or dead-lettered exception: release it (the event is offered again, or the step gets a new attempt) or drop it."},
+    {"id":"automation-run-summary","name":"Automation run summary","kind":"struct","description":"A run as list-automation-runs answers it.","fields":[{"name":"run","type":"run-id"},{"name":"automation","type":"workflow-id"},{"name":"trigger","type":"option<trigger-id>","optional":true},{"name":"state","type":"run-state"},{"name":"step","type":"option<step-name>","optional":true},{"name":"hop","type":"u64"},{"name":"caused-by","type":"principal-id"},{"name":"on-behalf-of","type":"option<principal-id>","optional":true},{"name":"started-at","type":"timestamp"},{"name":"ended-at","type":"option<timestamp>","optional":true},{"name":"error","type":"option<string>","optional":true}]},
+    {"id":"automation-step-summary","name":"Automation step summary","kind":"struct","description":"One step of a run as list-automation-steps answers it.","fields":[{"name":"sequence","type":"u64"},{"name":"step","type":"step-name"},{"name":"member","type":"option<principal-id>","optional":true},{"name":"state","type":"step-run-state"},{"name":"attempts","type":"u32"},{"name":"result","type":"option<automation-step-result>","optional":true},{"name":"errors","type":"list<string>"},{"name":"started-at","type":"timestamp"},{"name":"ended-at","type":"option<timestamp>","optional":true}]},
+    {"id":"automation-exception-summary","name":"Automation exception summary","kind":"struct","description":"One exception record as list-automation-exceptions answers it.","fields":[{"name":"exception","type":"identifier"},{"name":"kind","type":"automation-exception-kind"},{"name":"reason","type":"automation-exception-reason"},{"name":"trigger","type":"option<trigger-id>","optional":true},{"name":"automation","type":"option<workflow-id>","optional":true},{"name":"run","type":"option<run-id>","optional":true},{"name":"step","type":"option<step-name>","optional":true},{"name":"event-seq","type":"option<u64>","optional":true},{"name":"hop","type":"option<u64>","optional":true},{"name":"at","type":"timestamp"},{"name":"detail","type":"string"},{"name":"settled","type":"bool"}]}
   ],
   "records": [
     {"id":"rec-tenant","name":"Tenant","owner":"control-plane","key":["tenant-id"],"fields":[{"name":"tenant-id","type":"tenant-id","constraints":{"pattern":"^[a-z][a-z0-9_]*$","maxLength":64}},{"name":"state","type":"tenant-lifecycle"},{"name":"plan","type":"plan-id"},{"name":"placement-id","type":"placement-id","refersTo":"rec-placement","onDelete":"restrict"},{"name":"database-created","type":"bool","optional":true},{"name":"layout-applied","type":"bool","optional":true},{"name":"template-installed","type":"bool","optional":true},{"name":"activated","type":"bool","optional":true},{"name":"flow-state","type":"string"},{"name":"suspension-reason","type":"tenant-suspension-reason","optional":true},{"name":"provisioning-attempts","type":"u64","optional":true},{"name":"expires-at","type":"u64","optional":true},{"name":"forked-from","type":"tenant-id","optional":true,"refersTo":"rec-tenant","constraints":{"pattern":"^[a-z][a-z0-9_]*$","maxLength":64},"onDelete":"cascade"},{"name":"sandbox-starter-key","type":"string","optional":true}],"retention":"Until the tenant is deleted (TEN-011), with the certificate of PRV-354.","schemaVersion":1,"scope":"platform","realisation":"target"},
@@ -62649,6 +63484,80 @@
           "name": "refused-approvals",
           "type": "u32",
           "optional": true
+        },
+        {
+          "name": "trigger",
+          "type": "trigger-id",
+          "optional": true,
+          "constraints": {
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "maxLength": 64
+          }
+        },
+        {
+          "name": "event-seq",
+          "type": "u64",
+          "optional": true
+        },
+        {
+          "name": "definition-version",
+          "type": "u64",
+          "optional": true
+        },
+        {
+          "name": "hop",
+          "type": "u64",
+          "optional": true
+        },
+        {
+          "name": "current-step",
+          "type": "step-name",
+          "optional": true,
+          "constraints": {
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "maxLength": 64
+          }
+        },
+        {
+          "name": "caused-by",
+          "type": "principal-id",
+          "optional": true,
+          "constraints": {
+            "pattern": "^[A-Za-z0-9_:.-]+$",
+            "maxLength": 96
+          },
+          "description": "The automation principal its steps act as (WFL-1530)."
+        },
+        {
+          "name": "on-behalf-of",
+          "type": "principal-id",
+          "refersTo": "principal",
+          "role": "party",
+          "constraints": {
+            "pattern": "^[A-Za-z0-9_:.-]+$",
+            "maxLength": 96
+          },
+          "optional": true,
+          "onDelete": "set-null",
+          "description": "The definer whose authority bounds the run (WFL-1530)."
+        },
+        {
+          "name": "started-at",
+          "type": "timestamp",
+          "optional": true
+        },
+        {
+          "name": "ended-at",
+          "type": "timestamp",
+          "optional": true
+        },
+        {
+          "name": "error",
+          "type": "string",
+          "optional": true,
+          "constraints": {
+            "maxLength": 256
+          }
         }
       ],
       "retention": "Ninety days after it ends.",
@@ -67463,6 +68372,341 @@
       "realisation": "target",
       "source": "d-6548",
       "description": "An accepted invocation of a tenant operation, so a repeat with the same key answers with its result (OPR-1544)."
+    },
+    {
+      "id": "rec-trigger",
+      "name": "Trigger",
+      "owner": "automation-worker",
+      "key": [
+        "trigger-id"
+      ],
+      "fields": [
+        {
+          "name": "trigger-id",
+          "type": "trigger-id"
+        },
+        {
+          "name": "on",
+          "type": "trigger-event"
+        },
+        {
+          "name": "condition",
+          "type": "expression",
+          "optional": true
+        },
+        {
+          "name": "automation",
+          "type": "workflow-id"
+        },
+        {
+          "name": "paused",
+          "type": "bool"
+        },
+        {
+          "name": "version",
+          "type": "u64"
+        },
+        {
+          "name": "defined-by",
+          "type": "principal-id",
+          "refersTo": "principal",
+          "role": "party",
+          "constraints": {
+            "pattern": "^[A-Za-z0-9_:.-]+$",
+            "maxLength": 96
+          },
+          "optional": true,
+          "onDelete": "set-null"
+        }
+      ],
+      "retention": "Until removed by the tenant; every version is kept in the schema history.",
+      "schemaVersion": 1,
+      "scope": "tenant-meta",
+      "describedBy": "tenant-schema",
+      "realisation": "target"
+    },
+    {
+      "id": "rec-automation",
+      "name": "Automation",
+      "owner": "automation-worker",
+      "key": [
+        "workflow-id"
+      ],
+      "fields": [
+        {
+          "name": "workflow-id",
+          "type": "workflow-id"
+        },
+        {
+          "name": "definition",
+          "type": "automation-def"
+        },
+        {
+          "name": "state",
+          "type": "automation-state"
+        },
+        {
+          "name": "version",
+          "type": "u64"
+        },
+        {
+          "name": "acting-as",
+          "type": "principal-id",
+          "constraints": {
+            "pattern": "^[A-Za-z0-9_:.-]+$",
+            "maxLength": 96
+          },
+          "description": "The automation principal, automation:<workflow-id> (WFL-1527)."
+        },
+        {
+          "name": "defined-by",
+          "type": "principal-id",
+          "refersTo": "principal",
+          "role": "party",
+          "constraints": {
+            "pattern": "^[A-Za-z0-9_:.-]+$",
+            "maxLength": 96
+          },
+          "optional": true,
+          "onDelete": "set-null",
+          "description": "The principal whose authority bounds the run-as (WFL-1528); cleared when that principal is erased, which suspends the automation."
+        },
+        {
+          "name": "suspended-for",
+          "type": "string",
+          "optional": true,
+          "constraints": {
+            "maxLength": 256
+          },
+          "description": "The role of the run-as that the definer can no longer confer."
+        }
+      ],
+      "retention": "Until removed by the tenant; every version is kept in the schema history.",
+      "schemaVersion": 1,
+      "scope": "tenant-meta",
+      "describedBy": "tenant-schema",
+      "realisation": "target"
+    },
+    {
+      "id": "rec-automation-run-key",
+      "name": "Automation run key",
+      "owner": "automation-worker",
+      "key": [
+        "workflow-id",
+        "key-hash"
+      ],
+      "fields": [
+        {
+          "name": "workflow-id",
+          "type": "workflow-id",
+          "constraints": {
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "maxLength": 64
+          }
+        },
+        {
+          "name": "key-hash",
+          "type": "string",
+          "constraints": {
+            "maxLength": 64
+          },
+          "description": "The SHA-256 of the run key in hexadecimal, so that no personal value is kept."
+        },
+        {
+          "name": "run-id",
+          "type": "run-id"
+        },
+        {
+          "name": "at",
+          "type": "timestamp"
+        }
+      ],
+      "retention": "As long as the automation exists (SCH-1536).",
+      "schemaVersion": 1,
+      "scope": "platform",
+      "realisation": "target"
+    },
+    {
+      "id": "rec-workflow-step-run",
+      "name": "Workflow step run",
+      "owner": "automation-worker",
+      "key": [
+        "run-id",
+        "sequence"
+      ],
+      "fields": [
+        {
+          "name": "run-id",
+          "type": "run-id",
+          "refersTo": "rec-workflow-run",
+          "onDelete": "cascade"
+        },
+        {
+          "name": "sequence",
+          "type": "u64"
+        },
+        {
+          "name": "step",
+          "type": "step-name",
+          "constraints": {
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "maxLength": 64
+          }
+        },
+        {
+          "name": "member",
+          "type": "principal-id",
+          "refersTo": "principal",
+          "role": "party",
+          "constraints": {
+            "pattern": "^[A-Za-z0-9_:.-]+$",
+            "maxLength": 96
+          },
+          "optional": true,
+          "onDelete": "set-null",
+          "description": "The member of the segment a fan-out step runs this step for."
+        },
+        {
+          "name": "state",
+          "type": "step-run-state"
+        },
+        {
+          "name": "attempts",
+          "type": "u32"
+        },
+        {
+          "name": "job",
+          "type": "job-id",
+          "optional": true
+        },
+        {
+          "name": "idempotency-key",
+          "type": "string",
+          "constraints": {
+            "maxLength": 128
+          },
+          "description": "Derived as SCH-1524 states; the same on every attempt."
+        },
+        {
+          "name": "result",
+          "type": "automation-step-result",
+          "optional": true
+        },
+        {
+          "name": "started-at",
+          "type": "timestamp"
+        },
+        {
+          "name": "ended-at",
+          "type": "timestamp",
+          "optional": true
+        },
+        {
+          "name": "error-text",
+          "type": "text",
+          "personal": "other",
+          "optional": true
+        }
+      ],
+      "retention": "Ninety days after the run it belongs to ends, with the run.",
+      "erasure": {
+        "point": "the end of the run it belongs to",
+        "bound": 90,
+        "unit": "day"
+      },
+      "schemaVersion": 1,
+      "scope": "platform",
+      "realisation": "target"
+    },
+    {
+      "id": "rec-automation-exception",
+      "name": "Automation exception",
+      "owner": "automation-worker",
+      "key": [
+        "exception-id"
+      ],
+      "fields": [
+        {
+          "name": "exception-id",
+          "type": "identifier"
+        },
+        {
+          "name": "kind",
+          "type": "automation-exception-kind"
+        },
+        {
+          "name": "reason",
+          "type": "automation-exception-reason"
+        },
+        {
+          "name": "trigger",
+          "type": "trigger-id",
+          "optional": true,
+          "constraints": {
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "maxLength": 64
+          }
+        },
+        {
+          "name": "workflow-id",
+          "type": "workflow-id",
+          "optional": true,
+          "constraints": {
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "maxLength": 64
+          }
+        },
+        {
+          "name": "run-id",
+          "type": "run-id",
+          "optional": true
+        },
+        {
+          "name": "step",
+          "type": "step-name",
+          "optional": true,
+          "constraints": {
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "maxLength": 64
+          }
+        },
+        {
+          "name": "event-seq",
+          "type": "u64",
+          "optional": true
+        },
+        {
+          "name": "job-id",
+          "type": "job-id",
+          "optional": true
+        },
+        {
+          "name": "hop",
+          "type": "u64",
+          "optional": true
+        },
+        {
+          "name": "at",
+          "type": "timestamp"
+        },
+        {
+          "name": "detail",
+          "type": "string",
+          "constraints": {
+            "maxLength": 256
+          },
+          "description": "Names ids and limits only, never a field value."
+        },
+        {
+          "name": "settled",
+          "type": "bool",
+          "description": "Set when the owner releases or drops a parked or dead-lettered entry; a declined or held entry is settled when written."
+        }
+      ],
+      "retention": "A parked or dead-lettered entry until the tenant owner releases or drops it (OPS-348); a declined or held entry ninety days.",
+      "schemaVersion": 1,
+      "scope": "platform",
+      "realisation": "target"
     }
   ],
   "copies": [
@@ -190253,7 +191497,9 @@
         "tenant-configure",
         "tenant-operation-invoke",
         "ledger-read-own",
-        "segments-read-own"
+        "segments-read-own",
+        "automations-define",
+        "automations-read"
       ],
       "source": "adm-150"
     },
@@ -191325,6 +192571,18 @@
       "id": "setting-resolve-for",
       "name": "Resolve a setting for another principal",
       "description": "Resolve the setting of a recipient inside the platform, for the mail dispatcher and the notification service (SET-1541).",
+      "core": true
+    },
+    {
+      "id": "automations-define",
+      "name": "Define automations",
+      "description": "Define and remove triggers and automations, and release or drop their exceptions (WFL-1520).",
+      "core": true
+    },
+    {
+      "id": "automations-read",
+      "name": "Read automations",
+      "description": "List automation runs, their steps and their exception records (WFL-1531, SCH-1532).",
       "core": true
     }
   ]
