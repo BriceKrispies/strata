@@ -16,6 +16,13 @@
 //! - an evaluator (`eval` and `holds`), equivalent to the kernel's `eval`: Kleene logic, null
 //!   propagation and evaluation errors exactly as the primitives say, over an environment trait.
 //!
+//! A language is also generated as JavaScript, by `specc web` (`generate_js`, WG-5089): one module
+//! per language with the same parser, printer, static checker and evaluator, from the same declaration,
+//! so that a page evaluates a rule as the server does. Each primitive's JavaScript sits beside its
+//! Rust (`eval_op` and `eval_op_js`, `check_op` and `check_op_js`, `print_op` and `print_op_js`,
+//! `primary_fn` and `primary_js`); the text that does not depend on the language is in
+//! `language_js_text.rs`; `crates/spec-compiler/tests/language_js.rs` runs the shared case table on it.
+//!
 //! What the kernel reads from its own data structures (a record's fields and system attributes,
 //! following a reference, parameters, the clock, the principal, the roles, field definitions)
 //! is a trait method the caller implements; everything else is generated.
@@ -27,6 +34,7 @@ use quote::{format_ident, quote};
 use serde_json::Value as Json;
 
 use crate::diagnostic::Diagnostic;
+use crate::emit::{rust_header, GeneratedFile};
 use crate::ir::{Spec, TypeDecl, TypeKind, Variant};
 use crate::load::{Loader, Obj};
 use crate::naming;
@@ -544,6 +552,9 @@ struct Plan<'a> {
     value_forms: Vec<(String, String)>,
     /// The shape of each value variant's literal, by variant name.
     value_shapes: Vec<(String, String)>,
+    /// The wire case of the fields of the AST union's struct-like variants, read from the
+    /// specification when the JavaScript module first needs it.
+    field_case: std::cell::OnceCell<crate::wire::WireCase>,
 }
 
 /// The Rust module name of a language.
@@ -1631,6 +1642,7 @@ fn resolve<'a>(spec: &'a Spec, lang: &'a Language) -> Result<Plan<'a>, Vec<Diagn
         scope_enum,
         value_forms,
         value_shapes,
+        field_case: std::cell::OnceCell::new(),
     })
 }
 
@@ -2036,26 +2048,10 @@ impl<'a> Plan<'a> {
         }
     }
 
-    fn module_docs(&self) -> TokenStream {
-        let mut lines = vec![format!(
-            " {} (`{}`): its parser, printer, static checker and evaluator, generated from the language entity and specc's primitive catalogue.",
-            self.lang.name, self.lang.id
-        )];
-        if let Some(d) = &self.lang.description {
-            lines.push(String::new());
-            lines.push(format!(
-                " {}",
-                d.split_whitespace().collect::<Vec<_>>().join(" ")
-            ));
-        }
-        lines.push(String::new());
-        lines.push(format!(
-            " Expressions are `types::{}` and evaluate to `types::{}`. The printer (`Display`) prints the authoring syntax `parse` reads back.",
-            naming::pascal(&self.ast.id).unwrap_or_default(),
-            naming::pascal(&self.values.id).unwrap_or_default()
-        ));
-        let items: Vec<String> = self
-            .ops
+    /// One line per operator: its form, primitive, nulls and the kernel code it is pinned to.
+    /// Both the Rust and the JavaScript module list them.
+    fn operator_docs(&self) -> Vec<String> {
+        self.ops
             .iter()
             .map(|o| {
                 let form = match &o.form {
@@ -2087,7 +2083,28 @@ impl<'a> Plan<'a> {
                     o.op.name, o.info.name, o.info.nulls, o.info.kernel
                 )
             })
-            .collect();
+            .collect()
+    }
+
+    fn module_docs(&self) -> TokenStream {
+        let mut lines = vec![format!(
+            " {} (`{}`): its parser, printer, static checker and evaluator, generated from the language entity and specc's primitive catalogue.",
+            self.lang.name, self.lang.id
+        )];
+        if let Some(d) = &self.lang.description {
+            lines.push(String::new());
+            lines.push(format!(
+                " {}",
+                d.split_whitespace().collect::<Vec<_>>().join(" ")
+            ));
+        }
+        lines.push(String::new());
+        lines.push(format!(
+            " Expressions are `types::{}` and evaluate to `types::{}`. The printer (`Display`) prints the authoring syntax `parse` reads back.",
+            naming::pascal(&self.ast.id).unwrap_or_default(),
+            naming::pascal(&self.values.id).unwrap_or_default()
+        ));
+        let items = self.operator_docs();
         lines.push(String::new());
         lines.push(" Operators:".to_string());
         lines.push(String::new());
@@ -2213,9 +2230,8 @@ impl<'a> Plan<'a> {
 
     // --- parser ------------------------------------------------------------------------------
 
-    fn parser(&self) -> TokenStream {
-        let ast = self.ast_ty();
-        // Symbols: the infix tokens and the punctuation the parser keeps, longest first.
+    /// The symbols the tokenizer keeps: the infix tokens and the punctuation, longest first.
+    fn symbol_table(&self) -> Vec<String> {
         let mut symbols: Vec<String> = Vec::new();
         for o in &self.ops {
             if let Form::Binary {
@@ -2233,6 +2249,12 @@ impl<'a> Plan<'a> {
             symbols.push(p.to_string());
         }
         symbols.sort_by_key(|s| std::cmp::Reverse(s.chars().count()));
+        symbols
+    }
+
+    fn parser(&self) -> TokenStream {
+        let ast = self.ast_ty();
+        let symbols = self.symbol_table();
         let longest = symbols.iter().map(|s| s.chars().count()).max().unwrap_or(1);
         let count = symbols.len();
         let longest = Literal::usize_unsuffixed(longest);
@@ -2876,6 +2898,338 @@ impl<'a> Plan<'a> {
         }
     }
 
+    /// The JavaScript twin of [`Plan::level_fns`]: the `level_<k>()` methods of the `Parser`, one
+    /// per precedence level, lowest first, each as the text of one class member.
+    fn level_fns_js(&self) -> Vec<String> {
+        let levels = self.levels();
+        let mut out = Vec::new();
+        for (k, (precedence, ops)) in levels.iter().enumerate() {
+            let this = format!("level_{k}");
+            let next = if k + 1 < levels.len() {
+                format!("level_{}", k + 1)
+            } else {
+                "primary".to_string()
+            };
+            let matcher = |symbol: bool, token: &str| {
+                if symbol {
+                    format!("this.sym({})", js(token))
+                } else {
+                    format!("this.word({})", js(token))
+                }
+            };
+            let mut lines = vec![
+                format!("  /** Precedence {precedence}. */"),
+                format!("  {this}() {{"),
+            ];
+            for o in ops {
+                if let Form::Prefix { token, .. } = &o.form {
+                    let built = self.construct_op_js(o, vec![format!("this.{this}()")]);
+                    lines.push(format!("    if ({}) {{", matcher(false, token)));
+                    lines.push(format!("      return {built};"));
+                    lines.push("    }".to_string());
+                }
+            }
+            let binaries: Vec<&Op> = ops
+                .iter()
+                .copied()
+                .filter(|o| matches!(o.form, Form::Binary { .. }))
+                .collect();
+            let assoc = binaries.first().and_then(|o| match o.form {
+                Form::Binary { assoc, .. } => Some(assoc),
+                _ => None,
+            });
+            let binary = |o: &Op, right: String| {
+                let Form::Binary { symbol, token, .. } = &o.form else {
+                    unreachable!()
+                };
+                (
+                    matcher(*symbol, token),
+                    self.construct_op_js(o, vec!["left".to_string(), right]),
+                )
+            };
+            match assoc {
+                None => lines.push(format!("    return this.{next}();")),
+                Some(Assoc::NAry) => {
+                    let o = binaries[0];
+                    let Form::Binary { symbol, token, .. } = &o.form else {
+                        unreachable!()
+                    };
+                    let built = self.construct_op_js(o, vec!["items".to_string()]);
+                    lines.push(format!("    const items = [this.{next}()];"));
+                    lines.push(format!("    while ({}) {{", matcher(*symbol, token)));
+                    lines.push(format!("      items.push(this.{next}());"));
+                    lines.push("    }".to_string());
+                    lines.push(format!(
+                        "    return items.length === 1 ? items[0] : {built};"
+                    ));
+                }
+                Some(Assoc::None) | Some(Assoc::Right) => {
+                    let right = if assoc == Some(Assoc::Right) {
+                        &this
+                    } else {
+                        &next
+                    };
+                    lines.push(format!("    const left = this.{next}();"));
+                    for o in &binaries {
+                        let (m, built) = binary(o, format!("this.{right}()"));
+                        lines.push(format!("    if ({m}) {{"));
+                        lines.push(format!("      return {built};"));
+                        lines.push("    }".to_string());
+                    }
+                    lines.push("    return left;".to_string());
+                }
+                Some(Assoc::Left) => {
+                    lines.push(format!("    let left = this.{next}();"));
+                    lines.push("    for (;;) {".to_string());
+                    for o in &binaries {
+                        let (m, built) = binary(o, format!("this.{next}()"));
+                        lines.push(format!("      if ({m}) {{"));
+                        lines.push(format!("        left = {built};"));
+                        lines.push("        continue;".to_string());
+                        lines.push("      }".to_string());
+                    }
+                    lines.push("      return left;".to_string());
+                    lines.push("    }".to_string());
+                }
+            }
+            lines.push("  }".to_string());
+            out.push(lines.join("\n"));
+        }
+        out
+    }
+
+    /// The JavaScript twin of [`Plan::primary_fn`]: the `primary()` method of the `Parser`, as the
+    /// text of one class member.
+    fn primary_js(&self) -> String {
+        let top = self.top_level().to_string();
+        let mut l: Vec<String> = vec![
+            "  primary() {".to_string(),
+            "    const token = this.next();".to_string(),
+        ];
+        if self.has_form("int") {
+            l.push("    if (token !== undefined && token.kind === 'int') {".to_string());
+            l.push(format!(
+                "      return {};",
+                self.literal_js(self.jval("int", "token.value"))
+            ));
+            l.push("    }".to_string());
+        }
+        if self.has_form("string") {
+            l.push("    if (token !== undefined && token.kind === 'str') {".to_string());
+            l.push(format!(
+                "      return {};",
+                self.literal_js(self.jval("string", "token.value"))
+            ));
+            l.push("    }".to_string());
+        }
+        l.push(
+            "    if (token !== undefined && token.kind === 'sym' && token.value === '(') {"
+                .to_string(),
+        );
+        l.push(format!("      const inner = this.{top}();"));
+        l.push("      this.expect(')');".to_string());
+        l.push("      return inner;".to_string());
+        l.push("    }".to_string());
+        if let (true, Some(variant)) = (self.has_form("list"), self.literal_variant()) {
+            let payload = match variant {
+                v if v.newtype => "payload".to_string(),
+                v => format!(
+                    "payload{}",
+                    crate::web::member(&self.jfield_case().name(&v.fields[0].name))
+                ),
+            };
+            l.push(
+                "    if (token !== undefined && token.kind === 'sym' && token.value === '[') {"
+                    .to_string(),
+            );
+            l.push("      const items = [];".to_string());
+            l.push("      while (!this.sym(']')) {".to_string());
+            l.push("        if (items.length > 0) this.expect(',');".to_string());
+            l.push("        const item = this.primary();".to_string());
+            l.push("        const [tag, payload] = parts(item);".to_string());
+            l.push(format!(
+                "        if (tag === {}) items.push({payload});",
+                js(&self.tag_of(variant))
+            ));
+            l.push(
+                "        else throw new ParseError(`a list holds literals only, found ${print(item)}`);"
+                    .to_string(),
+            );
+            l.push("      }".to_string());
+            l.push(format!(
+                "      return {};",
+                self.literal_js(self.jval("list", "items"))
+            ));
+            l.push("    }".to_string());
+        }
+        // Words.
+        let mut arms: Vec<String> = Vec::new();
+        if self.has_form("bool") {
+            arms.push("case 'true':".to_string());
+            arms.push(format!(
+                "  return {};",
+                self.literal_js(self.jval("bool", "true"))
+            ));
+            arms.push("case 'false':".to_string());
+            arms.push(format!(
+                "  return {};",
+                self.literal_js(self.jval("bool", "false"))
+            ));
+        }
+        if self.has_form("null") {
+            arms.push("case 'null':".to_string());
+            arms.push(format!("  return {};", self.literal_js(self.jt("null"))));
+        }
+        for o in &self.ops {
+            let Form::Scope { token } = &o.form else {
+                continue;
+            };
+            match (o.info.prim, token) {
+                (Prim::Now | Prim::Principal, Some(t)) => {
+                    arms.push(format!("case {}:", js(t)));
+                    arms.push(format!("  return {};", self.construct_op_js(o, vec![])));
+                }
+                (Prim::Param, Some(t)) => {
+                    arms.push(format!("case {}: {{", js(t)));
+                    arms.push("  this.expect('.');".to_string());
+                    let checks = self.text_check_js(o.variant, 0, "argument");
+                    if checks.is_empty() {
+                        arms.push(format!(
+                            "  return {};",
+                            self.construct_op_js(o, vec!["this.ident()".to_string()])
+                        ));
+                    } else {
+                        arms.push("  const argument = this.ident();".to_string());
+                        arms.extend(checks.iter().map(|c| format!("  {c}")));
+                        arms.push(format!(
+                            "  return {};",
+                            self.construct_op_js(o, vec!["argument".to_string()])
+                        ));
+                    }
+                    arms.push("}".to_string());
+                }
+                (Prim::HasRole, Some(t)) => {
+                    arms.push(format!("case {}: {{", js(t)));
+                    arms.push("  this.expect('(');".to_string());
+                    arms.push("  const argument = this.ident();".to_string());
+                    // A text id is checked before the closing parenthesis, as the kernel's
+                    // parser checks a role id.
+                    arms.extend(
+                        self.text_check_js(o.variant, 0, "argument")
+                            .iter()
+                            .map(|c| format!("  {c}")),
+                    );
+                    arms.push("  this.expect(')');".to_string());
+                    arms.push(format!(
+                        "  return {};",
+                        self.construct_op_js(o, vec!["argument".to_string()])
+                    ));
+                    arms.push("}".to_string());
+                }
+                _ => {}
+            }
+        }
+        let var = self.ops.iter().find(|o| o.info.prim == Prim::Var);
+        let through = self.ops.iter().find(|o| o.info.prim == Prim::Through);
+        if var.is_some() || through.is_some() {
+            for (i, s) in self.record_scopes.iter().enumerate() {
+                let last = i + 1 == self.record_scopes.len();
+                arms.push(format!(
+                    "case {}:{}",
+                    js(s.name),
+                    if last { " {" } else { "" }
+                ));
+            }
+            arms.push("  this.expect('.');".to_string());
+            arms.push("  const which = RECORD_SCOPES[name];".to_string());
+            arms.push("  const attribute = this.ident();".to_string());
+            let through_built = through.map(|o| {
+                self.construct_js(
+                    o.variant,
+                    vec![
+                        "which".to_string(),
+                        "attribute".to_string(),
+                        "this.ident()".to_string(),
+                    ],
+                )
+            });
+            let var_built = var.map(|o| {
+                self.construct_js(
+                    o.variant,
+                    vec!["which".to_string(), "attribute".to_string()],
+                )
+            });
+            match (var_built, through_built) {
+                (Some(var), Some(through)) => {
+                    arms.push("  if (this.sym('.')) {".to_string());
+                    arms.push(format!("    return {through};"));
+                    arms.push("  }".to_string());
+                    arms.push(format!("  return {var};"));
+                }
+                (Some(var), None) => arms.push(format!("  return {var};")),
+                (None, Some(through)) => {
+                    arms.push("  this.expect('.');".to_string());
+                    arms.push(format!("  return {through};"));
+                }
+                (None, None) => {}
+            }
+            arms.push("}".to_string());
+        }
+        if self.has_form("time") {
+            let lit = |v: &str| self.literal_js(self.jval("time", v));
+            if self.payload("time") == Some(Builtin::U64) {
+                arms.push("case 'time': {".to_string());
+                arms.push("  const id = this.intArg();".to_string());
+                arms.push(
+                    "  if (id < 0) throw new ParseError('a time is not negative');".to_string(),
+                );
+                arms.push(format!("  return {};", lit("id")));
+                arms.push("}".to_string());
+            } else {
+                arms.push("case 'time':".to_string());
+                arms.push(format!("  return {};", lit("this.intArg()")));
+            }
+        }
+        if self.has_form("ref") {
+            let lit = |v: &str| self.literal_js(self.jval("ref", v));
+            if self.payload("ref") == Some(Builtin::I64) {
+                arms.push("case 'ref':".to_string());
+                arms.push(format!("  return {};", lit("this.intArg()")));
+            } else {
+                arms.push("case 'ref': {".to_string());
+                arms.push("  const id = this.intArg();".to_string());
+                arms.push(
+                    "  if (id < 0) throw new ParseError('a record id is not negative');"
+                        .to_string(),
+                );
+                arms.push(format!("  return {};", lit("id")));
+                arms.push("}".to_string());
+            }
+        }
+        for o in &self.ops {
+            let Form::Call { token } = &o.form else {
+                continue;
+            };
+            let n = o.exprs.len();
+            let names: Vec<String> = (0..n).map(|i| format!("a{i}")).collect();
+            arms.push(format!("case {}: {{", js(token)));
+            arms.push(format!("  const [{}] = this.args({n});", names.join(", ")));
+            arms.push(format!("  return {};", self.construct_op_js(o, names)));
+            arms.push("}".to_string());
+        }
+        l.push("    if (token !== undefined && token.kind === 'ident') {".to_string());
+        l.push("      const name = token.value;".to_string());
+        l.push("      switch (name) {".to_string());
+        l.extend(arms.iter().map(|a| format!("        {a}")));
+        l.push("        default:".to_string());
+        l.push("          throw new ParseError(`unknown name ${debugText(name)}`);".to_string());
+        l.push("      }".to_string());
+        l.push("    }".to_string());
+        l.push("    throw new ParseError(`unexpected ${debugOption(token)}`);".to_string());
+        l.push("  }".to_string());
+        l.join("\n")
+    }
+
     // --- printer -----------------------------------------------------------------------------
 
     fn printer(&self) -> TokenStream {
@@ -3092,6 +3446,60 @@ impl<'a> Plan<'a> {
                 }
             },
         }
+    }
+
+    /// The JavaScript twin of [`Plan::print_op`]: the statement that returns the text of one
+    /// operator, its fields bound to `v<i>`. The text is the same, byte for byte.
+    fn print_op_js(&self, o: &Op) -> Vec<String> {
+        let ex: Vec<String> = o
+            .exprs
+            .iter()
+            .map(|i| format!("${{print(v{i})}}"))
+            .collect();
+        let others: Vec<usize> = (0..o.variant.fields.len())
+            .filter(|i| !o.exprs.contains(i) && o.case.as_ref().is_none_or(|c| c.0 != *i))
+            .collect();
+        let text = match &o.form {
+            Form::Binary {
+                assoc: Assoc::NAry,
+                token,
+                ..
+            } => {
+                let identity = js(if o.info.prim == Prim::And3 {
+                    "true"
+                } else {
+                    "false"
+                });
+                return vec![format!(
+                    "return writeJoined(v{}, {}, {identity});",
+                    o.exprs[0],
+                    js(token)
+                )];
+            }
+            Form::Binary { token, .. } => format!("`({} {} {})`", ex[0], tpl(token), ex[1]),
+            Form::Prefix { token, .. } => format!("`{}({})`", tpl(token), ex[0]),
+            Form::Call { token } => format!("`{}({})`", tpl(token), ex.join(", ")),
+            Form::Literal { .. } => return vec!["return writeValue(v0);".to_string()],
+            Form::Scope { token } => match o.info.prim {
+                Prim::Var => format!("`${{SCOPE_WORDS[v{}]}}.${{v{}}}`", others[0], others[1]),
+                Prim::Through => format!(
+                    "`${{SCOPE_WORDS[v{}]}}.${{v{}}}.${{v{}}}`",
+                    others[0], others[1], others[2]
+                ),
+                Prim::Param => format!(
+                    "`{}.${{v{}}}`",
+                    tpl(token.as_deref().unwrap_or_default()),
+                    others[0]
+                ),
+                Prim::HasRole => format!(
+                    "`{}(${{v{}}})`",
+                    tpl(token.as_deref().unwrap_or_default()),
+                    others[0]
+                ),
+                _ => js(token.as_deref().unwrap_or_default()),
+            },
+        };
+        vec![format!("return {text};")]
     }
 
     // --- evaluator ---------------------------------------------------------------------------
@@ -3598,6 +4006,316 @@ impl<'a> Plan<'a> {
         }
     }
 
+    /// The JavaScript twin of [`Plan::eval_op`]: the statements that evaluate one operator, its
+    /// fields bound to `v<i>`, ending in a `return` or a `throw`. Each primitive's meaning is the
+    /// Rust arm's above it; the notes name what a number or a string needs that Rust's do not.
+    fn eval_op_js(&self, o: &Op) -> Vec<String> {
+        let e = |k: usize| format!("v{}", o.exprs[k]);
+        let others: Vec<String> = (0..o.variant.fields.len())
+            .filter(|i| !o.exprs.contains(i) && o.case.as_ref().is_none_or(|c| c.0 != *i))
+            .map(|i| format!("v{i}"))
+            .collect();
+        let label = js(o.token());
+        let null = self.jt("null");
+        let (bool_, int, str_, time, list, reference) = (
+            self.jt("bool"),
+            self.jt("int"),
+            self.jt("string"),
+            self.jt("time"),
+            self.jt("list"),
+            self.jt("ref"),
+        );
+        let t = |s: &str| s.to_string();
+        // Both operands first, left to right; then the tags of both.
+        let pair = |l: String, r: String| {
+            vec![
+                format!("const a = evaluate({l}, env);"),
+                format!("const b = evaluate({r}, env);"),
+                t("const [ta, pa] = parts(a);"),
+                t("const [tb, pb] = parts(b);"),
+            ]
+        };
+        // One operand, then its tag and payload.
+        let one = |x: String| {
+            vec![
+                format!("const a = evaluate({x}, env);"),
+                t("const [t, x] = parts(a);"),
+            ]
+        };
+        match o.info.prim {
+            Prim::Literal | Prim::ListLiteral => vec![t("return v0;")],
+            Prim::Var => vec![format!(
+                "return attribute(env.record({s}), {s}, {n});",
+                s = others[0],
+                n = others[1]
+            )],
+            Prim::Through => {
+                let (scope, field, target) = (&others[0], &others[1], &others[2]);
+                vec![
+                    format!("const record = env.record({scope});"),
+                    format!("if (record === null || record === undefined) return {null};"),
+                    format!("const value = readField(record, {field});"),
+                    t("const [t, x] = parts(value);"),
+                    format!("if (t === {null}) return {null};"),
+                    format!("if (t === {reference}) {{"),
+                    format!("  const found = env.follow({scope}, {field}, x);"),
+                    format!("  return found === null || found === undefined ? {null} : attribute(found, {scope}, {target});"),
+                    t("}"),
+                    t("throw typeError('following a reference', value);"),
+                ]
+            }
+            Prim::Param => vec![
+                format!("const found = env.param({});", others[0]),
+                format!("return found === undefined || found === null ? {null} : found;"),
+            ],
+            Prim::Now => vec![format!("return {};", self.jval("time", "env.now()"))],
+            Prim::Principal => vec![
+                t("const id = env.principal();"),
+                format!(
+                    "return id === null || id === undefined ? {null} : {};",
+                    self.jval("string", "id")
+                ),
+            ],
+            Prim::HasRole => vec![format!(
+                "return {};",
+                self.jval("bool", &format!("env.hasRole({})", others[0]))
+            )],
+            Prim::Not3 => {
+                let mut l = one(e(0));
+                l.push(format!(
+                    "if (t === {bool_}) return {};",
+                    self.jval("bool", "!x")
+                ));
+                l.push(format!("if (t === {null}) return {null};"));
+                l.push(format!("throw typeError({label}, a);"));
+                l
+            }
+            Prim::And3 | Prim::Or3 => {
+                let decisive = o.info.prim == Prim::Or3;
+                vec![format!(
+                    "return kleene({}, env, {decisive}, {label});",
+                    e(0)
+                )]
+            }
+            Prim::Eq | Prim::Ne => {
+                let equal = o.info.prim == Prim::Eq;
+                vec![format!(
+                    "return equality(evaluate({}, env), evaluate({}, env), {equal});",
+                    e(0),
+                    e(1)
+                )]
+            }
+            Prim::Lt | Prim::Le | Prim::Gt | Prim::Ge => {
+                let test = match o.info.prim {
+                    Prim::Lt => "o < 0",
+                    Prim::Le => "o <= 0",
+                    Prim::Gt => "o > 0",
+                    _ => "o >= 0",
+                };
+                vec![format!(
+                    "return order(evaluate({}, env), evaluate({}, env), (o) => {test});",
+                    e(0),
+                    e(1)
+                )]
+            }
+            Prim::InList => {
+                let mut l = pair(e(0), e(1));
+                l.push(format!(
+                    "if (ta === {null} || tb === {null}) return {null};"
+                ));
+                l.push(format!(
+                    "if (tb === {list}) return {};",
+                    self.jval("bool", "pb.some((/** @type {any} */ x) => valueEq(x, a))")
+                ));
+                l.push(format!("throw typeError({label}, b);"));
+                l
+            }
+            Prim::IsNull => vec![format!(
+                "return {};",
+                self.jval("bool", &format!("evaluate({}, env) === {null}", e(0)))
+            )],
+            Prim::Len => {
+                let mut l = one(e(0));
+                l.push(format!("if (t === {null}) return {null};"));
+                l.push(format!(
+                    "if (t === {str_}) return {};",
+                    self.jval("int", "codePointCount(x)")
+                ));
+                l.push(format!(
+                    "if (t === {list}) return {};",
+                    self.jval("int", "x.length")
+                ));
+                l.push(format!("throw typeError({label}, a);"));
+                l
+            }
+            Prim::Lower => {
+                let mut l = one(e(0));
+                l.push(format!("if (t === {null}) return {null};"));
+                l.push(format!(
+                    "if (t === {str_}) return {};",
+                    self.jval("string", "x.toLowerCase()")
+                ));
+                l.push(format!("throw typeError({label}, a);"));
+                l
+            }
+            Prim::Contains => {
+                let mut l = pair(e(0), e(1));
+                l.push(format!(
+                    "if (ta === {null} || tb === {null}) return {null};"
+                ));
+                l.push(format!(
+                    "if (ta === {str_} && tb === {str_}) return {};",
+                    self.jval("bool", "pa.includes(pb)")
+                ));
+                l.push(format!(
+                    "if (ta === {list}) return {};",
+                    self.jval("bool", "pa.some((/** @type {any} */ x) => valueEq(x, b))")
+                ));
+                l.push(format!("throw typeError({label}, a);"));
+                l
+            }
+            Prim::StartsWith => {
+                let mut l = pair(e(0), e(1));
+                l.push(format!(
+                    "if (ta === {null} || tb === {null}) return {null};"
+                ));
+                l.push(format!(
+                    "if (ta === {str_} && tb === {str_}) return {};",
+                    self.jval("bool", "pa.startsWith(pb)")
+                ));
+                l.push(format!("throw typeError({label}, a);"));
+                l
+            }
+            Prim::IsSlug => {
+                let mut l = one(e(0));
+                l.push(format!("if (t === {null}) return {null};"));
+                l.push(format!(
+                    "if (t === {str_}) return {};",
+                    self.jval("bool", "isSlug(x)")
+                ));
+                l.push(format!("throw typeError({label}, a);"));
+                l
+            }
+            Prim::If => {
+                let mut l = one(e(0));
+                l.push(format!(
+                    "if (t === {bool_}) return x ? evaluate({}, env) : evaluate({}, env);",
+                    e(1),
+                    e(2)
+                ));
+                l.push(format!("if (t === {null}) return evaluate({}, env);", e(2)));
+                l.push(format!("throw typeError({label}, a);"));
+                l
+            }
+            // Both operands first, left to right; then nulls; then the left's kind, then the
+            // right's; then the range of each operand and of the result. The operands are tested
+            // with `safe` and the result with `checked`: see the notes of the module.
+            Prim::AddChecked | Prim::SubChecked | Prim::MulChecked => {
+                let op = match o.info.prim {
+                    Prim::AddChecked => "+",
+                    Prim::SubChecked => "-",
+                    _ => "*",
+                };
+                let mut l = pair(e(0), e(1));
+                l.push(format!(
+                    "if (ta === {null} || tb === {null}) return {null};"
+                ));
+                l.push(format!(
+                    "if (ta === {int} && tb === {int}) return {};",
+                    self.jval("int", &format!("checked(safe(pa) {op} safe(pb))"))
+                ));
+                // A timestamp moves by milliseconds under + and -; * takes ints only.
+                if o.info.prim != Prim::MulChecked && self.has_form("time") {
+                    l.push(format!(
+                        "if (ta === {time} && tb === {int}) return {};",
+                        self.jval("time", &format!("checked(safe(pa) {op} safe(pb))"))
+                    ));
+                    l.push(format!(
+                        "if (ta === {int} || ta === {time}) throw typeError({label}, b);"
+                    ));
+                } else {
+                    l.push(format!("if (ta === {int}) throw typeError({label}, b);"));
+                }
+                l.push(format!("throw typeError({label}, a);"));
+                l
+            }
+            Prim::TimeDifference => {
+                let mut l = pair(e(0), e(1));
+                l.push(format!(
+                    "if (ta === {null} || tb === {null}) return {null};"
+                ));
+                l.push(format!(
+                    "if (ta === {time} && tb === {time}) return {};",
+                    self.jval("int", "checked(safe(pb) - safe(pa))")
+                ));
+                l.push(format!("if (ta === {time}) throw typeError({label}, b);"));
+                l.push(format!("throw typeError({label}, a);"));
+                l
+            }
+            Prim::DaysMs | Prim::HoursMs | Prim::MinutesMs => {
+                let unit = match o.info.prim {
+                    Prim::DaysMs => 86_400_000,
+                    Prim::HoursMs => 3_600_000,
+                    _ => 60_000,
+                };
+                let mut l = one(e(0));
+                l.push(format!("if (t === {null}) return {null};"));
+                l.push(format!(
+                    "if (t === {int}) return {};",
+                    self.jval("int", &format!("checked(safe(x) * {unit})"))
+                ));
+                l.push(format!("throw typeError({label}, a);"));
+                l
+            }
+            Prim::ConcatChecked => {
+                let mut l = pair(e(0), e(1));
+                l.push(format!(
+                    "if (ta === {null} || tb === {null}) return {null};"
+                ));
+                l.push(format!("if (ta === {str_} && tb === {str_}) {{"));
+                l.push(t("  const joined = pa + pb;"));
+                l.push(format!(
+                    "  if (utf8Length(joined) > MAX_TEXT_BYTES) throw new EvalError({});",
+                    js(STRING_TOO_LONG)
+                ));
+                l.push(format!("  return {};", self.jval("string", "joined")));
+                l.push(t("}"));
+                l.push(format!("if (ta === {str_}) throw typeError({label}, b);"));
+                l.push(format!("throw typeError({label}, a);"));
+                l
+            }
+            Prim::ToText => {
+                let mut l = one(e(0));
+                l.push(format!("if (t === {null}) return {null};"));
+                l.push(format!(
+                    "if (t === {str_}) return {};",
+                    self.jval("string", "x")
+                ));
+                for form in ["bool", "int", "time", "ref"] {
+                    if self.has_form(form) {
+                        l.push(format!(
+                            "if (t === {}) return {};",
+                            self.jt(form),
+                            self.jval("string", "String(x)")
+                        ));
+                    }
+                }
+                // Every other value (a list) is an error.
+                let covered = ["null", "string", "bool", "int", "time", "ref"];
+                if self
+                    .value_forms
+                    .iter()
+                    .any(|(_, f)| !covered.contains(&f.as_str()))
+                {
+                    l.push(format!("throw typeError({label}, a);"));
+                } else {
+                    l.push(t("throw new TypeError('not a value of the language');"));
+                }
+                l
+            }
+        }
+    }
+
     // --- checker -----------------------------------------------------------------------------
 
     fn checker(&self) -> TokenStream {
@@ -3900,5 +4618,1177 @@ impl<'a> Plan<'a> {
                 }
             }
         }
+    }
+
+    /// `expectShape(<shape>, [allowed], what);` for a declared operand, or nothing when it accepts
+    /// the any shape (a call is still made for its refusals): the JavaScript twin of
+    /// [`Plan::expect`].
+    fn expect_js(&self, shape: &str, allowed: &[String], what: &str, call: bool) -> Option<String> {
+        let any = self.lang.any_shape.as_deref().unwrap_or_default();
+        if allowed.iter().any(|a| a == any) {
+            return call.then(|| format!("{shape};"));
+        }
+        let allowed: Vec<String> = allowed.iter().map(|a| js(a)).collect();
+        Some(format!(
+            "expectShape({shape}, [{}], {});",
+            allowed.join(", "),
+            js(what)
+        ))
+    }
+
+    /// The JavaScript twin of [`Plan::check_op`]: the statements that check one operator, its
+    /// fields bound to `v<i>`, ending in a `return` of its shape or a `throw`.
+    fn check_op_js(&self, o: &Op) -> Vec<String> {
+        let e = |k: usize| format!("v{}", o.exprs[k]);
+        let others: Vec<String> = (0..o.variant.fields.len())
+            .filter(|i| !o.exprs.contains(i) && o.case.as_ref().is_none_or(|c| c.0 != *i))
+            .map(|i| format!("v{i}"))
+            .collect();
+        let any = js(self.lang.any_shape.as_deref().unwrap_or_default());
+        let token = o.token().to_string();
+        let operands = &o.op.operands;
+        let result = || js(o.op.result.as_deref().unwrap_or_default());
+        match o.info.prim {
+            Prim::Literal | Prim::ListLiteral => vec!["return shapeOfValue(v0);".to_string()],
+            Prim::Var => vec![format!(
+                "return attributeShape(env, null, {}, {});",
+                others[0], others[1]
+            )],
+            Prim::Through => vec![
+                format!("env.follow({});", others[1]),
+                format!(
+                    "return attributeShape(env, {}, {}, {});",
+                    others[1], others[0], others[2]
+                ),
+            ],
+            Prim::Param => vec![
+                format!(
+                    "if (!env.hasParam({0})) throw new CheckError(`undeclared parameter ${{{0}}}`);",
+                    others[0]
+                ),
+                format!("return {};", result()),
+            ],
+            Prim::HasRole => vec![
+                format!(
+                    "if (!env.hasRole({0})) throw new CheckError(`unknown role ${{{0}}}`);",
+                    others[0]
+                ),
+                format!("return {};", result()),
+            ],
+            Prim::Now | Prim::Principal => vec![format!("return {};", result())],
+            Prim::And3 | Prim::Or3 => {
+                let mut l = vec![format!("for (const item of {}) {{", e(0))];
+                l.extend(
+                    self.expect_js("check(item, env)", &operands[0], "and/or", true)
+                        .map(|x| format!("  {x}")),
+                );
+                l.push("}".to_string());
+                l.push(format!("return {};", result()));
+                l
+            }
+            Prim::Eq | Prim::Ne | Prim::Lt | Prim::Le | Prim::Gt | Prim::Ge => {
+                let mut l = vec![
+                    format!("const left = check({}, env);", e(0)),
+                    format!("const right = check({}, env);", e(1)),
+                    format!("if (left !== {any} && right !== {any} && left !== right) throw new CheckError(`cannot compare ${{shapeName(left)}} with ${{shapeName(right)}}`);"),
+                ];
+                l.extend(self.expect_js("left", &operands[0], "ordering", false));
+                l.extend(self.expect_js("right", &operands[1], "ordering", false));
+                l.push(format!("return {};", result()));
+                l
+            }
+            Prim::InList | Prim::Contains => {
+                let mut l = vec![
+                    format!("const first = check({}, env);", e(0)),
+                    format!("const second = check({}, env);", e(1)),
+                ];
+                l.extend(self.expect_js("first", &operands[0], &token, false));
+                l.extend(self.expect_js("second", &operands[1], &token, false));
+                if o.info.prim == Prim::Contains {
+                    let text = self
+                        .value_shapes
+                        .iter()
+                        .find(|(n, _)| {
+                            self.value_forms
+                                .iter()
+                                .any(|(w, f)| w == n && f == "string")
+                        })
+                        .map(|(_, s)| s.clone())
+                        .unwrap_or_default();
+                    l.push(format!("if (first === {}) {{", js(&text)));
+                    l.extend(
+                        self.expect_js("second", &[text], &token, false)
+                            .map(|x| format!("  {x}")),
+                    );
+                    l.push("}".to_string());
+                }
+                l.push(format!("return {};", result()));
+                l
+            }
+            Prim::If => {
+                let mut l = Vec::new();
+                l.extend(self.expect_js(
+                    &format!("check({}, env)", e(0)),
+                    &operands[0],
+                    &token,
+                    true,
+                ));
+                l.push(format!("const shapeThen = check({}, env);", e(1)));
+                l.push(format!("const shapeOtherwise = check({}, env);", e(2)));
+                l.push(format!(
+                    "if (shapeThen !== {any} && shapeOtherwise !== {any} && shapeThen !== shapeOtherwise) throw new CheckError(`{} branches differ: ${{shapeName(shapeThen)}} and ${{shapeName(shapeOtherwise)}}`);",
+                    tpl(&token)
+                ));
+                l.push(format!(
+                    "return shapeThen === {any} ? shapeOtherwise : shapeThen;"
+                ));
+                l
+            }
+            // One operand after another, giving the shape of an operand (+ and - give the shape
+            // of the left: int, time, or the any shape).
+            _ if o.op.result.as_deref().and_then(operand_ref).is_some() => {
+                let n = o.op.result.as_deref().and_then(operand_ref).unwrap_or(1);
+                let mut l = Vec::new();
+                for k in 0..o.exprs.len() {
+                    l.push(format!("const s{k} = check({}, env);", e(k)));
+                    l.extend(self.expect_js(&format!("s{k}"), &operands[k], &token, false));
+                }
+                l.push(format!("return s{};", n - 1));
+                l
+            }
+            // One operand after another: not, is_null, len, lower, is_slug, starts_with, the
+            // checked arithmetic, ms_between, the durations, concat and text.
+            _ => {
+                let mut l = Vec::new();
+                for k in 0..o.exprs.len() {
+                    l.extend(self.expect_js(
+                        &format!("check({}, env)", e(k)),
+                        &operands[k],
+                        &token,
+                        true,
+                    ));
+                }
+                l.push(format!("return {};", result()));
+                l
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// The JavaScript module
+// ---------------------------------------------------------------------------------------------
+
+/// Code of a language whose JavaScript module cannot be written: a union that is not tagged as
+/// the module reads it, or a text id whose pattern JavaScript cannot read as the server does.
+pub const LANGUAGE_JS_UNSUPPORTED: &str = "specc.language-js-unsupported";
+/// Code of a language whose id cannot name its JavaScript file, or names another generated file.
+pub const LANGUAGE_JS_NAME: &str = "specc.language-js-name";
+
+/// The file of the JavaScript module of a language, in the web output: `<language id>.js`.
+pub fn js_file(lang: &Language) -> String {
+    format!("{}.js", lang.id)
+}
+
+/// The JavaScript modules of the languages of a specification, one file per language: its parser,
+/// printer, static check and evaluator, the twin of the Rust module the language becomes. A
+/// language that [`check`] refuses, one the module cannot express and one whose id cannot name a
+/// file is refused with its diagnostics.
+pub fn generate_js(spec: &Spec) -> Result<Vec<GeneratedFile>, Vec<Diagnostic>> {
+    let mut files = Vec::new();
+    let mut out = Vec::new();
+    for lang in &spec.languages {
+        let file = js_file(lang);
+        let valid = !lang.id.is_empty()
+            && lang
+                .id
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+        if !valid
+            || crate::web_kernel::KERNEL_FILES.contains(&file.as_str())
+            || file == crate::web::RUNTIME_FILE
+        {
+            out.push(Diagnostic::new(
+                LANGUAGE_JS_NAME,
+                &lang.id,
+                format!("the language {} cannot name the file `{file}`: use ASCII letters, digits, - and _, and not the name of another generated module.", lang.id),
+            ));
+            continue;
+        }
+        match resolve(spec, lang) {
+            Ok(plan) => {
+                let problems = plan.js_problems();
+                if problems.is_empty() {
+                    files.push(GeneratedFile {
+                        path: file,
+                        contents: format!("{}\n{}", rust_header(&spec.path), plan.emit_js()),
+                    });
+                } else {
+                    out.extend(problems);
+                }
+            }
+            Err(d) => out.extend(d),
+        }
+    }
+    if out.is_empty() {
+        Ok(files)
+    } else {
+        Err(out)
+    }
+}
+
+/// A single-quoted JavaScript string literal.
+fn js(s: &str) -> String {
+    crate::web::sq(s)
+}
+
+/// The literal part of a JavaScript template literal.
+fn tpl(s: &str) -> String {
+    s.replace('\\', "\\\\")
+        .replace('`', "\\`")
+        .replace("${", "\\${")
+}
+
+impl<'a> Plan<'a> {
+    /// The wire case of the fields of the AST union's struct-like variants.
+    fn jfield_case(&self) -> crate::wire::WireCase {
+        *self.field_case.get_or_init(|| {
+            crate::wire::type_cases(self.spec)
+                .get(&self.ast.id)
+                .copied()
+                .unwrap_or_default()
+        })
+    }
+
+    fn union_case(decl: &TypeDecl) -> Option<crate::ir::VariantCase> {
+        match &decl.kind {
+            TypeKind::Union { encoding, .. } => encoding.variant_case,
+            _ => None,
+        }
+    }
+
+    /// The tag of an AST variant on the wire (`variantCase` of the AST union).
+    fn tag_of(&self, variant: &Variant) -> String {
+        crate::ir::variant_wire_name(&variant.name, Self::union_case(self.ast))
+    }
+
+    /// The tag on the wire of the value variant of a literal form.
+    fn vtag(&self, form: &str) -> String {
+        let name = self
+            .value_forms
+            .iter()
+            .find(|(_, f)| f == form)
+            .map(|(v, _)| v.as_str())
+            .unwrap_or_default();
+        crate::ir::variant_wire_name(name, Self::union_case(self.values))
+    }
+
+    /// The quoted tag of the value variant of a literal form.
+    fn jt(&self, form: &str) -> String {
+        js(&self.vtag(form))
+    }
+
+    /// The value of a literal form with the given payload: `{ Int: payload }`.
+    fn jval(&self, form: &str, payload: &str) -> String {
+        format!("{{ {}: {payload} }}", crate::web::key(&self.vtag(form)))
+    }
+
+    /// Fills in the wire names of the value variants a static helper mentions.
+    fn subst(&self, text: &str) -> String {
+        text.replace("@NULL@", &self.jt("null"))
+            .replace("@BOOL@", &self.jt("bool"))
+            .replace("@LIST@", &self.jt("list"))
+            .replace("@K_BOOL@", &crate::web::key(&self.vtag("bool")))
+            .replace("@M_BOOL@", &crate::web::member(&self.vtag("bool")))
+    }
+
+    /// A value of an enumeration, or the name of a unit variant of a union, as it is written on
+    /// the wire.
+    fn enum_wire(decl: Option<&TypeDecl>, value: &str) -> String {
+        match decl.map(|d| &d.kind) {
+            Some(TypeKind::Union { encoding, .. }) => {
+                crate::ir::variant_wire_name(value, encoding.variant_case)
+            }
+            _ => value.to_string(),
+        }
+    }
+
+    /// The quoted wire value of an operator's case.
+    fn case_js(&self, op: &Op) -> String {
+        let (i, value) = op.case.as_ref().expect("a split operator has a case");
+        let decl = match TypeRef::parse(&op.variant.fields[*i].type_name) {
+            TypeRef::Declared(t) => self.spec.type_decl(&t),
+            _ => None,
+        };
+        js(&Self::enum_wire(decl, value))
+    }
+
+    /// The quoted wire value of a record scope.
+    fn scope_js(&self, value: &str) -> String {
+        js(&Self::enum_wire(self.scope_enum, value))
+    }
+
+    /// The statement that binds the fields of the variant, in `p`, to `v<i>`: one name for a
+    /// newtype, an array pattern for a tuple, a member each for a struct-like variant.
+    fn bind_js(&self, variant: &Variant) -> Option<String> {
+        if variant.fields.is_empty() {
+            None
+        } else if variant.newtype {
+            Some("const v0 = p;".to_string())
+        } else if variant.tuple {
+            let names: Vec<String> = (0..variant.fields.len()).map(|i| format!("v{i}")).collect();
+            Some(format!("const [{}] = p;", names.join(", ")))
+        } else {
+            let case = self.jfield_case();
+            let parts: Vec<String> = variant
+                .fields
+                .iter()
+                .enumerate()
+                .map(|(i, f)| format!("v{i} = p{}", crate::web::member(&case.name(&f.name))))
+                .collect();
+            Some(format!("const {};", parts.join(", ")))
+        }
+    }
+
+    /// The variant built from one JavaScript expression per field, as serde writes it: the bare
+    /// name for a unit variant, `{ Name: payload }` for a newtype, `{ Name: [..] }` for a tuple
+    /// and `{ Name: { field: .. } }` otherwise.
+    fn construct_js(&self, variant: &Variant, values: Vec<String>) -> String {
+        let tag = crate::web::key(&self.tag_of(variant));
+        if variant.fields.is_empty() {
+            return js(&self.tag_of(variant));
+        }
+        if variant.newtype {
+            return format!("{{ {tag}: {} }}", values[0]);
+        }
+        if variant.tuple {
+            return format!("{{ {tag}: [{}] }}", values.join(", "));
+        }
+        let case = self.jfield_case();
+        let fields: Vec<String> = variant
+            .fields
+            .iter()
+            .zip(values)
+            .map(|(f, value)| {
+                let name = case.name(&f.name);
+                let key = crate::web::key(&name);
+                if value == name && key == name {
+                    key
+                } else {
+                    format!("{key}: {value}")
+                }
+            })
+            .collect();
+        format!("{{ {tag}: {{ {} }} }}", fields.join(", "))
+    }
+
+    /// An operator's variant built from its expression operands (in order) and its case.
+    fn construct_op_js(&self, op: &Op, operands: Vec<String>) -> String {
+        let mut operands = operands.into_iter();
+        let values: Vec<String> = (0..op.variant.fields.len())
+            .map(|i| {
+                if op.case.as_ref().is_some_and(|(c, _)| *c == i) {
+                    self.case_js(op)
+                } else {
+                    operands.next().unwrap_or_default()
+                }
+            })
+            .collect();
+        self.construct_js(op.variant, values)
+    }
+
+    /// `Lit(<value>)`.
+    fn literal_js(&self, value: String) -> String {
+        match self.literal_variant() {
+            Some(variant) => self.construct_js(variant, vec![value]),
+            None => "undefined".to_string(),
+        }
+    }
+
+    /// The statements that check the text bound to `name` against the constraints of the field's
+    /// text id, in the order and with the message its constructor has (`minLength`, `maxLength`,
+    /// `pattern`; lengths in characters), so a name the kernel's parser refuses is refused.
+    fn text_check_js(&self, variant: &Variant, i: usize, name: &str) -> Vec<String> {
+        let Some(decl) = self.text_decl(variant, i) else {
+            return Vec::new();
+        };
+        let c = &decl.constraints;
+        let violation = |constraint: &str| {
+            format!(
+                "throw new ParseError({});",
+                js(&format!(
+                    "a value of type {} breaks its {constraint} constraint",
+                    decl.id
+                ))
+            )
+        };
+        let mut out = Vec::new();
+        if let Some(n) = c.min_length.as_ref().and_then(serde_json::Number::as_u64) {
+            out.push(format!(
+                "if (codePointCount({name}) < {n}) {}",
+                violation("minLength")
+            ));
+        }
+        if let Some(n) = c.max_length.as_ref().and_then(serde_json::Number::as_u64) {
+            out.push(format!(
+                "if (codePointCount({name}) > {n}) {}",
+                violation("maxLength")
+            ));
+        }
+        if let Some(p) = &c.pattern {
+            if let Ok(fails) = crate::rules::pattern_fails(p, name) {
+                out.push(format!("if ({fails}) {}", violation("pattern")));
+            }
+        }
+        out
+    }
+
+    /// What the JavaScript module cannot express: a union the module reads that is not
+    /// externally tagged, and a text id whose pattern JavaScript cannot read as the server does.
+    fn js_problems(&self) -> Vec<Diagnostic> {
+        let mut out = Vec::new();
+        let mut unions: Vec<&TypeDecl> = vec![self.ast, self.values];
+        unions.extend(self.scope_enum);
+        for o in &self.ops {
+            if let Some((i, _)) = &o.case {
+                if let TypeRef::Declared(t) = TypeRef::parse(&o.variant.fields[*i].type_name) {
+                    unions.extend(self.spec.type_decl(&t));
+                }
+            }
+        }
+        let mut seen = BTreeSet::new();
+        for decl in unions {
+            if !seen.insert(decl.id.as_str()) {
+                continue;
+            }
+            if let TypeKind::Union { encoding, .. } = &decl.kind {
+                if encoding.tag != crate::ir::UnionTag::External {
+                    out.push(Diagnostic::new(
+                        LANGUAGE_JS_UNSUPPORTED,
+                        &self.lang.id,
+                        format!("the union {} is not externally tagged; the JavaScript module reads externally tagged unions.", decl.id),
+                    ));
+                }
+            }
+        }
+        for o in &self.ops {
+            for i in 0..o.variant.fields.len() {
+                let Some(decl) = self.text_decl(o.variant, i) else {
+                    continue;
+                };
+                if let Some(p) = &decl.constraints.pattern {
+                    if let Err(reason) = crate::rules::to_js(p) {
+                        out.push(Diagnostic::new(
+                            LANGUAGE_JS_UNSUPPORTED,
+                            &self.lang.id,
+                            format!("the pattern of {} uses {reason}, which JavaScript cannot read as the server does, so the JavaScript parser could not refuse what the server refuses.", decl.id),
+                        ));
+                    }
+                }
+            }
+        }
+        out.dedup();
+        out
+    }
+
+    fn reads_records_js(&self) -> bool {
+        !self.record_scopes.is_empty() && (self.uses(Prim::Var) || self.uses(Prim::Through))
+    }
+
+    /// The module: `// @ts-check`, its documentation, the errors, the parser, the printer, the
+    /// evaluator and the checker, as blocks separated by a blank line.
+    fn emit_js(&self) -> String {
+        use crate::language_js_text as jt;
+        let mut b: Vec<String> = vec![self.module_docs_js(), jt::J_CLASSES.to_string()];
+        // Shapes.
+        let shapes: Vec<String> = self.lang.shapes.iter().map(|s| js(s)).collect();
+        b.push(format!(
+            "/** The statically known shapes of expressions. */\nexport const SHAPES = [{}];",
+            shapes.join(", ")
+        ));
+        let names: Vec<String> = self
+            .lang
+            .shapes
+            .iter()
+            .map(|s| format!("{}: {}", js(s), js(&naming::pascal(s).unwrap_or_default())))
+            .collect();
+        b.push(format!(
+            "/** The name of each shape as the checker's messages write it. */\nconst SHAPE_NAMES = {{ {} }};",
+            names.join(", ")
+        ));
+        // What an expression observes.
+        let records = self.reads_records_js();
+        if records {
+            b.push(jt::J_RECORD_TYPEDEF.to_string());
+        }
+        let mut env = vec![jt::J_ENV_HEAD];
+        let mut type_env = vec![jt::J_TYPE_ENV_HEAD];
+        if records {
+            env.push(jt::J_ENV_RECORD);
+            type_env.push(jt::J_TYPE_ENV_FIELD_SHAPE);
+        }
+        if self.uses(Prim::Through) {
+            env.push(jt::J_ENV_FOLLOW);
+            type_env.push(jt::J_TYPE_ENV_FOLLOW);
+        }
+        if self.uses(Prim::Param) {
+            env.push(jt::J_ENV_PARAM);
+            type_env.push(jt::J_TYPE_ENV_HAS_PARAM);
+        }
+        if self.uses(Prim::Now) {
+            env.push(jt::J_ENV_NOW);
+        }
+        if self.uses(Prim::Principal) {
+            env.push(jt::J_ENV_PRINCIPAL);
+        }
+        if self.uses(Prim::HasRole) {
+            env.push(jt::J_ENV_HAS_ROLE);
+            type_env.push(jt::J_TYPE_ENV_HAS_ROLE);
+        }
+        env.push(" */");
+        type_env.push(" */");
+        b.push(env.join("\n"));
+        b.push(type_env.join("\n"));
+        b.push(jt::J_PARTS.to_string());
+        b.push(jt::J_DEBUG.to_string());
+        // Parser.
+        b.push(jt::J_PARSER_DIVIDER.to_string());
+        b.push(self.parser_consts_js());
+        b.push(jt::J_CHAR_HELPERS.to_string());
+        let minus = self.has_minus();
+        if minus {
+            b.push(jt::J_ENDS_OPERAND.to_string());
+        }
+        let sign_test = if minus {
+            " && !endsOperand(tokens[tokens.length - 1])"
+        } else {
+            ""
+        };
+        b.push(jt::J_TOKENIZE.replace("@SIGN_TEST@", sign_test));
+        let top = self.top_level().to_string();
+        let mut members: Vec<String> = vec![
+            jt::J_PARSER_HEAD.to_string(),
+            jt::J_PEEK.to_string(),
+            jt::J_NEXT.to_string(),
+        ];
+        let words = self.ops.iter().any(|o| {
+            matches!(
+                o.form,
+                Form::Binary { symbol: false, .. } | Form::Prefix { .. }
+            )
+        });
+        if words {
+            members.push(jt::J_WORD.to_string());
+        }
+        members.push(jt::J_SYM.to_string());
+        members.push(jt::J_EXPECT.to_string());
+        let idents = self.ops.iter().any(|o| {
+            matches!(
+                o.info.prim,
+                Prim::Var | Prim::Through | Prim::Param | Prim::HasRole
+            )
+        });
+        if idents {
+            members.push(jt::J_IDENT.to_string());
+        }
+        let int_args = self
+            .ops
+            .iter()
+            .any(|o| matches!(&o.form, Form::Literal { form } if form == "time" || form == "ref"));
+        if int_args {
+            members.push(jt::J_INT_ARG.to_string());
+        }
+        if self.ops.iter().any(|o| matches!(o.form, Form::Call { .. })) {
+            members.push(jt::J_ARGS.replace("@TOP@", &top));
+        }
+        members.extend(self.level_fns_js());
+        members.push(format!("{}\n}}", self.primary_js()));
+        b.extend(members);
+        b.push(jt::J_PARSE.replace("@TOP@", &top));
+        // Printer.
+        b.push(jt::J_PRINTER_DIVIDER.to_string());
+        if records {
+            let words: Vec<String> = self
+                .record_scopes
+                .iter()
+                .map(|s| format!("{}: {}", self.scope_js(s.value), js(s.name)))
+                .collect();
+            b.push(format!(
+                "/** The word of each record scope. */\nconst SCOPE_WORDS = {{ {} }};",
+                words.join(", ")
+            ));
+        }
+        if self.literal_variant().is_some() {
+            b.push(self.write_value_js());
+        }
+        if self.ops.iter().any(|o| {
+            matches!(
+                o.form,
+                Form::Binary {
+                    assoc: Assoc::NAry,
+                    ..
+                }
+            )
+        }) {
+            b.push(jt::J_WRITE_JOINED.to_string());
+        }
+        b.push(self.walk_js(
+            &[
+                "/**",
+                " * The authoring syntax: what `parse` reads back.",
+                " * @param {any} expr",
+                " * @returns {string}",
+                " */",
+                "export function print(expr) {",
+            ],
+            &|o| self.print_op_js(o),
+        ));
+        // Evaluator.
+        b.push(jt::J_EVAL_DIVIDER.to_string());
+        b.push(self.kind_js());
+        b.push(jt::J_TYPE_ERROR.to_string());
+        let compares = [Prim::Eq, Prim::Ne, Prim::Lt, Prim::Le, Prim::Gt, Prim::Ge];
+        let orders = [Prim::Lt, Prim::Le, Prim::Gt, Prim::Ge];
+        if compares
+            .iter()
+            .chain([Prim::InList, Prim::Contains].iter())
+            .any(|p| self.uses(*p))
+        {
+            b.push(self.subst(jt::J_VALUE_EQ));
+        }
+        if records {
+            b.push(self.subst(jt::J_ATTRIBUTE));
+        }
+        if self.uses(Prim::Through) {
+            b.push(jt::J_READ_FIELD.to_string());
+        }
+        if self.uses(Prim::And3) || self.uses(Prim::Or3) {
+            b.push(self.subst(jt::J_KLEENE));
+        }
+        if compares.iter().any(|p| self.uses(*p)) {
+            b.push(self.subst(jt::J_COMPARABLE));
+            b.push(self.subst(jt::J_EQUALITY));
+        }
+        if orders.iter().any(|p| self.uses(*p)) {
+            b.push(jt::J_COMPARE_TEXT.to_string());
+            b.push(self.order_js());
+        }
+        if self.uses(Prim::IsSlug) {
+            b.push(jt::J_IS_SLUG.to_string());
+        }
+        if self.ops.iter().any(|o| o.info.prim.checked_int()) {
+            b.push(jt::J_SAFE.to_string());
+        }
+        if self.uses(Prim::ConcatChecked) {
+            b.push(jt::J_CONCAT_HELPERS.to_string());
+        }
+        b.push(jt::J_CODE_POINT_COUNT.to_string());
+        b.push(self.walk_js(
+            &[
+                "/**",
+                " * Evaluates an expression. Deterministic; a type error is an error, never a silent `false`.",
+                " * @param {any} expr",
+                " * @param {Env} env",
+                " * @returns {any}",
+                " */",
+                "export function evaluate(expr, env) {",
+            ],
+            &|o| self.eval_op_js(o),
+        ));
+        b.push(self.subst(jt::J_HOLDS));
+        // Checker.
+        b.push(jt::J_CHECKER_DIVIDER.to_string());
+        b.push(jt::J_SHAPE_NAME.to_string());
+        b.push(jt::J_EXPECT_SHAPE.to_string());
+        if self.literal_variant().is_some() {
+            b.push(self.shape_of_value_js());
+        }
+        if records {
+            b.push(self.system_attribute_shape_js());
+            b.push(jt::J_ATTRIBUTE_SHAPE.to_string());
+        }
+        b.push(self.walk_js(
+            &[
+                "/**",
+                " * Checks an expression against its definition site and returns its shape.",
+                " * @param {any} expr",
+                " * @param {TypeEnv} env",
+                " * @returns {string}",
+                " */",
+                "export function check(expr, env) {",
+            ],
+            &|o| self.check_op_js(o),
+        ));
+        let mut text = b.join("\n\n");
+        text.push('\n');
+        text
+    }
+
+    /// `// @ts-check` and the comment that opens the module: the language, what the JavaScript
+    /// keeps of the Rust, and one line per operator.
+    fn module_docs_js(&self) -> String {
+        use crate::language_js_text as jt;
+        let note = crate::codetext::js::comment_text;
+        let mut lines = vec![
+            "// @ts-check".to_string(),
+            format!(
+                "// {} (`{}`): its parser, printer, static checker and evaluator, generated from the language entity and specc's primitive catalogue. This is the JavaScript twin of the Rust module `{}`: the same operators, the same null handling, the same evaluation order and the same error words.",
+                note(&self.lang.name),
+                note(&self.lang.id),
+                module_name(self.lang)
+            ),
+            "//".to_string(),
+        ];
+        if let Some(d) = &self.lang.description {
+            lines.push(format!(
+                "// {}",
+                note(&d.split_whitespace().collect::<Vec<_>>().join(" "))
+            ));
+            lines.push("//".to_string());
+        }
+        lines.push(jt::J_DOCS.to_string());
+        lines.push("//".to_string());
+        lines.push("// Operators:".to_string());
+        lines.push("//".to_string());
+        lines.extend(
+            self.operator_docs()
+                .iter()
+                .map(|item| format!("// - {}", note(item))),
+        );
+        lines.join("\n")
+    }
+
+    /// Whether a binary `-` makes a `-` before a digit the sign of a literal only where no operand
+    /// ends (D-6543).
+    fn has_minus(&self) -> bool {
+        self.ops.iter().any(|o| {
+            matches!(&o.form, Form::Binary { symbol: true, token, .. } if token.starts_with('-'))
+        })
+    }
+
+    /// The constants of the parser: the symbols, the words that are operators, the record scopes.
+    fn parser_consts_js(&self) -> String {
+        let symbols = self.symbol_table();
+        let longest = symbols.iter().map(|s| s.chars().count()).max().unwrap_or(1);
+        let quoted: Vec<String> = symbols.iter().map(|s| js(s)).collect();
+        let mut lines = vec![
+            format!("const SYMBOLS = [{}];", quoted.join(", ")),
+            format!("const LONGEST_SYMBOL = {longest};"),
+        ];
+        if self.has_minus() {
+            let words: Vec<String> = self
+                .ops
+                .iter()
+                .filter_map(|o| match &o.form {
+                    Form::Binary {
+                        symbol: false,
+                        token,
+                        ..
+                    }
+                    | Form::Prefix { token, .. } => Some(js(token)),
+                    _ => None,
+                })
+                .collect();
+            lines.push(
+                "/** The words that are operators: a `-` after one is the sign of a literal. */"
+                    .to_string(),
+            );
+            lines.push(format!("const WORD_OPERATORS = [{}];", words.join(", ")));
+        }
+        if self.reads_records_js() {
+            let scopes: Vec<String> = self
+                .record_scopes
+                .iter()
+                .map(|s| format!("{}: {}", js(s.name), self.scope_js(s.value)))
+                .collect();
+            lines.push("/** The record scopes by the word that names them. */".to_string());
+            lines.push(format!(
+                "const RECORD_SCOPES = {{ {} }};",
+                scopes.join(", ")
+            ));
+        }
+        lines.join("\n")
+    }
+
+    /// One of the three walks over the AST (`print`, `evaluate`, `check`): the function opened by
+    /// `head`, a `switch` on the variant, and for each operator the statements `body` gives. A
+    /// variant split by a case field switches again on the case.
+    fn walk_js(&self, head: &[&str], body: &dyn Fn(&Op) -> Vec<String>) -> String {
+        let mut lines: Vec<String> = head.iter().map(|l| l.to_string()).collect();
+        lines.push("  const [tag, p] = parts(expr);".to_string());
+        lines.push("  switch (tag) {".to_string());
+        for (variant, ops) in self.by_variant() {
+            let first = ops[0];
+            lines.push(format!("    case {}: {{", js(&self.tag_of(variant))));
+            if let Some(bind) = self.bind_js(variant) {
+                lines.push(format!("      {bind}"));
+            }
+            match (&first.form, &first.case) {
+                (Form::Literal { .. }, _) | (_, None) => {
+                    lines.extend(indent(&body(first), 3));
+                }
+                (_, Some((ci, _))) => {
+                    let case = format!("v{ci}");
+                    lines.push(format!("      switch ({case}) {{"));
+                    for o in &ops {
+                        let inner = body(o);
+                        if inner.len() == 1 {
+                            lines.push(format!("        case {}:", self.case_js(o)));
+                            lines.extend(indent(&inner, 5));
+                        } else {
+                            lines.push(format!("        case {}: {{", self.case_js(o)));
+                            lines.extend(indent(&inner, 5));
+                            lines.push("        }".to_string());
+                        }
+                    }
+                    lines.push("        default:".to_string());
+                    lines.push(format!(
+                        "          throw new TypeError(`unknown case ${{{case}}}`);"
+                    ));
+                    lines.push("      }".to_string());
+                }
+            }
+            lines.push("    }".to_string());
+        }
+        lines.push("    default:".to_string());
+        lines.push(
+            "      throw new TypeError(`not an expression of the language: ${tag}`);".to_string(),
+        );
+        lines.push("  }".to_string());
+        lines.push("}".to_string());
+        lines.join("\n")
+    }
+
+    /// `writeValue`: a value in the authoring syntax, the twin of the printer's `write_value`.
+    fn write_value_js(&self) -> String {
+        let mut l: Vec<String> = vec![
+            "/**".to_string(),
+            " * A value in the authoring syntax.".to_string(),
+            " * @param {any} value".to_string(),
+            " * @returns {string}".to_string(),
+            " */".to_string(),
+            "function writeValue(value) {".to_string(),
+            "  const [tag, x] = parts(value);".to_string(),
+            "  switch (tag) {".to_string(),
+        ];
+        for (name, form) in &self.value_forms {
+            let tag = js(&crate::ir::variant_wire_name(
+                name,
+                Self::union_case(self.values),
+            ));
+            l.push(format!("    case {tag}:"));
+            match form.as_str() {
+                "null" => l.push("      return 'null';".to_string()),
+                "bool" | "int" => l.push("      return String(x);".to_string()),
+                "time" => l.push("      return `time(${x})`;".to_string()),
+                "ref" => l.push("      return `ref(${x})`;".to_string()),
+                "string" => {
+                    l.pop();
+                    l.push(format!("    case {tag}: {{"));
+                    l.push("      let out = \"'\";".to_string());
+                    l.push("      for (const c of x) {".to_string());
+                    l.push("        if (c === \"'\") out += \"\\\\'\";".to_string());
+                    l.push("        else if (c === '\\\\') out += '\\\\\\\\';".to_string());
+                    l.push("        else if (c === '\\n') out += '\\\\n';".to_string());
+                    l.push("        else out += c;".to_string());
+                    l.push("      }".to_string());
+                    l.push("      return `${out}'`;".to_string());
+                    l.push("    }".to_string());
+                }
+                _ => l.push("      return `[${x.map(writeValue).join(', ')}]`;".to_string()),
+            }
+        }
+        l.push("    default:".to_string());
+        l.push("      throw new TypeError(`not a value of the language: ${tag}`);".to_string());
+        l.push("  }".to_string());
+        l.push("}".to_string());
+        l.join("\n")
+    }
+
+    /// `kind`: the name of a value's kind, as evaluation errors write it.
+    fn kind_js(&self) -> String {
+        let mut l: Vec<String> = vec![
+            "/**".to_string(),
+            " * The kind of a value, as evaluation errors name it.".to_string(),
+            " * @param {any} value".to_string(),
+            " * @returns {string}".to_string(),
+            " */".to_string(),
+            "function kind(value) {".to_string(),
+            "  const tag = parts(value)[0];".to_string(),
+            "  switch (tag) {".to_string(),
+        ];
+        for (name, form) in &self.value_forms {
+            let kind = LITERAL_FORMS
+                .iter()
+                .find(|(f, _, _)| f == form)
+                .map(|(_, k, _)| *k)
+                .unwrap_or_default();
+            l.push(format!(
+                "    case {}:",
+                js(&crate::ir::variant_wire_name(
+                    name,
+                    Self::union_case(self.values)
+                ))
+            ));
+            l.push(format!("      return {};", js(kind)));
+        }
+        l.push("    default:".to_string());
+        l.push("      throw new TypeError(`not a value of the language: ${tag}`);".to_string());
+        l.push("  }".to_string());
+        l.push("}".to_string());
+        l.join("\n")
+    }
+
+    /// `order`: the three-way comparison of two values of an ordered kind, then the operator's
+    /// test of it. Strings compare by code point, as Rust compares them by their bytes of UTF-8.
+    fn order_js(&self) -> String {
+        let mut l: Vec<String> = vec![
+            "/**".to_string(),
+            " * @param {any} left".to_string(),
+            " * @param {any} right".to_string(),
+            " * @param {(ordering: number) => boolean} test".to_string(),
+            " * @returns {any}".to_string(),
+            " */".to_string(),
+            "function order(left, right, test) {".to_string(),
+            format!(
+                "  if (!comparable(left, right)) return {};",
+                self.jt("null")
+            ),
+            "  const [tl, pl] = parts(left);".to_string(),
+            "  const [tr, pr] = parts(right);".to_string(),
+            "  let ordering;".to_string(),
+        ];
+        let mut first = true;
+        for form in ["int", "time", "string"] {
+            if !self.has_form(form) {
+                continue;
+            }
+            let tag = self.jt(form);
+            let compare = if form == "string" {
+                "compareText(pl, pr)"
+            } else {
+                "pl < pr ? -1 : pl > pr ? 1 : 0"
+            };
+            l.push(format!(
+                "  {}if (tl === {tag} && tr === {tag}) ordering = {compare};",
+                if first { "" } else { "else " }
+            ));
+            first = false;
+        }
+        l.push(format!(
+            "  {}throw typeError('ordering', left);",
+            if first { "" } else { "else " }
+        ));
+        l.push(format!("  return {};", self.jval("bool", "test(ordering)")));
+        l.push("}".to_string());
+        l.join("\n")
+    }
+
+    /// `shapeOfValue`: the shape of a literal value.
+    fn shape_of_value_js(&self) -> String {
+        let mut l: Vec<String> = vec![
+            "/**".to_string(),
+            " * The shape of a literal value.".to_string(),
+            " * @param {any} value".to_string(),
+            " * @returns {string}".to_string(),
+            " */".to_string(),
+            "function shapeOfValue(value) {".to_string(),
+            "  const tag = parts(value)[0];".to_string(),
+            "  switch (tag) {".to_string(),
+        ];
+        for (name, shape) in &self.value_shapes {
+            l.push(format!(
+                "    case {}:",
+                js(&crate::ir::variant_wire_name(
+                    name,
+                    Self::union_case(self.values)
+                ))
+            ));
+            l.push(format!("      return {};", js(shape)));
+        }
+        l.push("    default:".to_string());
+        l.push("      throw new TypeError(`not a value of the language: ${tag}`);".to_string());
+        l.push("  }".to_string());
+        l.push("}".to_string());
+        l.join("\n")
+    }
+
+    /// `systemAttributeShape`: the shape of a system attribute a record scope declares.
+    fn system_attribute_shape_js(&self) -> String {
+        let mut l: Vec<String> = vec![
+            "/**".to_string(),
+            " * The shape of a system attribute the scope declares, null for any other name."
+                .to_string(),
+            " * @param {string} scope".to_string(),
+            " * @param {string} name".to_string(),
+            " * @returns {string | null}".to_string(),
+            " */".to_string(),
+            "function systemAttributeShape(scope, name) {".to_string(),
+            "  switch (scope) {".to_string(),
+        ];
+        // Scopes with the same attributes share an arm.
+        let mut groups: Vec<(&[(String, String)], Vec<&str>)> = Vec::new();
+        for s in &self.record_scopes {
+            match groups.iter_mut().find(|(a, _)| *a == s.attributes) {
+                Some((_, values)) => values.push(s.value),
+                None => groups.push((s.attributes, vec![s.value])),
+            }
+        }
+        for (attributes, values) in &groups {
+            for v in values {
+                l.push(format!("    case {}:", self.scope_js(v)));
+            }
+            l.push("      switch (name) {".to_string());
+            for (name, shape) in attributes.iter() {
+                l.push(format!("        case {}:", js(name)));
+                l.push(format!("          return {};", js(shape)));
+            }
+            l.push("        default:".to_string());
+            l.push("          return null;".to_string());
+            l.push("      }".to_string());
+        }
+        l.push("    default:".to_string());
+        l.push("      return null;".to_string());
+        l.push("  }".to_string());
+        l.push("}".to_string());
+        l.join("\n")
+    }
+}
+
+/// `lines` indented by `n` levels of two spaces.
+fn indent(lines: &[String], n: usize) -> Vec<String> {
+    let pad = "  ".repeat(n);
+    lines.iter().map(|l| format!("{pad}{l}")).collect()
+}
+
+#[cfg(test)]
+mod js_tests {
+    use super::*;
+
+    const FIXTURE: &str = include_str!("../tests/fixtures/language/spec.jsonc");
+
+    fn module(text: &str) -> String {
+        let spec = crate::load::load("fixture.jsonc", text).expect("the fixture loads");
+        let files = generate_js(&spec).unwrap_or_else(|d| panic!("refused: {d:?}"));
+        assert_eq!(files.len(), 1);
+        files.into_iter().next().unwrap().contents
+    }
+
+    #[test]
+    fn a_template_literal_keeps_its_text_as_written() {
+        assert_eq!(tpl(r"a`b${c}\d"), r"a\`b\${c}\\d");
+        assert_eq!(js("it's"), r"'it\'s'");
+    }
+
+    #[test]
+    fn the_module_starts_with_the_header_and_the_type_check_and_names_its_file() {
+        let spec = crate::load::load("fixture.jsonc", FIXTURE).unwrap();
+        assert_eq!(js_file(&spec.languages[0]), "rule-language.js");
+        let js = module(FIXTURE);
+        assert!(
+            js.starts_with("// @generated by specc from fixture.jsonc."),
+            "{js}"
+        );
+        assert!(js.lines().nth(1) == Some("// @ts-check"), "{js}");
+        assert!(
+            js.ends_with("}\n"),
+            "ends with a newline after the last function"
+        );
+    }
+
+    #[test]
+    fn every_variant_has_a_case_in_the_printer_the_evaluator_and_the_checker() {
+        let js = module(FIXTURE);
+        let spec = crate::load::load("fixture.jsonc", FIXTURE).unwrap();
+        let TypeKind::Union { variants, .. } = &spec.type_decl("expr").unwrap().kind else {
+            panic!("expr is a union");
+        };
+        assert!(variants.len() > 20);
+        for v in variants {
+            let case = format!("    case '{}': {{", v.name);
+            assert_eq!(js.matches(&case).count(), 3, "{}", v.name);
+        }
+    }
+
+    #[test]
+    fn the_emission_of_each_primitive_sits_beside_the_rust_one() {
+        // One JavaScript arm for every primitive of the catalogue the fixture uses, found by the
+        // word the evaluator throws or returns with: each is written by `eval_op_js`, whose
+        // match has an arm per primitive, as `eval_op` has.
+        let js = module(FIXTURE);
+        for needle in [
+            "kleene(v0, env, false, 'and')",
+            "kleene(v0, env, true, 'or')",
+            "equality(evaluate(v1, env), evaluate(v2, env), true)",
+            "order(evaluate(v1, env), evaluate(v2, env), (o) => o >= 0)",
+            "x.toLowerCase()",
+            "codePointCount(x)",
+            "isSlug(x)",
+            "checked(safe(pa) + safe(pb))",
+            "checked(safe(pa) - safe(pb))",
+            "checked(safe(pa) * safe(pb))",
+            "checked(safe(pb) - safe(pa))",
+            "checked(safe(x) * 86400000)",
+            "checked(safe(x) * 3600000)",
+            "checked(safe(x) * 60000)",
+            "utf8Length(joined) > MAX_TEXT_BYTES",
+            "throw new EvalError('string-too-long')",
+            "throw new EvalError('integer-overflow')",
+        ] {
+            assert!(js.contains(needle), "the module lacks `{needle}`");
+        }
+    }
+
+    // Verifies: CMS-2361
+    #[test]
+    fn integers_stay_exact_by_range_tests_on_numbers() {
+        let js = module(FIXTURE);
+        assert!(js.contains("const SAFE_INT = 9007199254740991;"));
+        assert!(
+            js.contains("Number.isSafeInteger(value) && value >= -SAFE_INT && value <= SAFE_INT")
+        );
+        assert!(!js.contains("BigInt"), "checked arithmetic is on numbers");
+    }
+
+    #[test]
+    fn the_tags_follow_the_variant_case_of_the_union() {
+        // The wire name of a variant is its name in the union's `variantCase`, as serde writes it.
+        let snake = FIXTURE.replace(
+            "{ \"id\": \"expr\", \"name\": \"Expression\", \"kind\": \"union\", \"variants\": [",
+            "{ \"id\": \"expr\", \"name\": \"Expression\", \"kind\": \"union\", \"encoding\": { \"tag\": \"external\", \"variantCase\": \"snake_case\" }, \"variants\": [",
+        );
+        assert_ne!(snake, FIXTURE);
+        let js = module(&snake);
+        assert!(js.contains("{ has_role: argument }"), "{js}");
+        assert!(js.contains("{ is_null: a0 }"), "{js}");
+        assert!(js.contains("case 'ms_between': {"), "{js}");
+        assert!(!js.contains("{ HasRole:"), "{js}");
+    }
+
+    #[test]
+    fn a_text_id_with_constraints_is_checked_by_the_parser_as_its_constructor_checks_it() {
+        let constrained = FIXTURE
+            .replace(
+                "{ \"id\": \"cmp-op\"",
+                "{ \"id\": \"role-id\", \"name\": \"role-id\", \"kind\": \"id\", \"repr\": \"string\", \"constraints\": { \"pattern\": \"^[a-z][a-z0-9_]*$\", \"maxLength\": 64 } },\n    { \"id\": \"cmp-op\"",
+            )
+            .replace(
+                "{ \"name\": \"HasRole\", \"newtype\": true, \"fields\": [{ \"name\": \"role\", \"type\": \"string\" }] }",
+                "{ \"name\": \"HasRole\", \"newtype\": true, \"fields\": [{ \"name\": \"role\", \"type\": \"role-id\" }] }",
+            );
+        assert_ne!(constrained, FIXTURE);
+        let js = module(&constrained);
+        let max = js
+            .find("a value of type role-id breaks its maxLength constraint")
+            .expect("the length is checked");
+        let pattern = js
+            .find("a value of type role-id breaks its pattern constraint")
+            .expect("the pattern is checked");
+        assert!(max < pattern, "the length is checked before the pattern");
+        assert!(js.contains("codePointCount(argument) > 64"), "{js}");
+        assert!(
+            js.contains("new RegExp('^(?:") && js.contains(").test(String(argument))"),
+            "{js}"
+        );
     }
 }

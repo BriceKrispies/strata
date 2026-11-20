@@ -36,6 +36,7 @@ pub mod function;
 pub mod ir;
 pub mod jsonc;
 pub mod language;
+mod language_js_text;
 pub mod layer_expr;
 pub mod layer_values;
 pub mod layers;

@@ -72,8 +72,9 @@ pub const NAME: &str = "specc.web-name";
 /// The file shared by every generated machine.
 pub const RUNTIME_FILE: &str = "machine-runtime.js";
 
-/// Generates the JavaScript files of the client machines of a specification and, when it states
-/// screens, the kernel modules of [`crate::web_kernel`] (paths relative to the output directory),
+/// Generates the JavaScript files of the client machines of a specification, the JavaScript module
+/// of each language it declares (`<language id>.js`, [`crate::language::generate_js`]) and, when it
+/// states screens, the kernel modules of [`crate::web_kernel`] (paths relative to the output directory),
 /// or refuses with every diagnostic. A specification with neither gives no files. `spec_path` is
 /// the path written into the headers.
 pub fn generate(spec_path: &str, text: &str) -> Result<Vec<GeneratedFile>, Vec<Diagnostic>> {
@@ -84,6 +85,17 @@ pub fn generate(spec_path: &str, text: &str) -> Result<Vec<GeneratedFile>, Vec<D
         Ok(kernel) => files.extend(kernel),
         Err(d) => diagnostics.extend(d),
     }
+    // The tenant rule language, and any other the specification declares, as a JavaScript module
+    // the page evaluates rules with (`crate::language::generate_js`).
+    match crate::language::generate_js(&spec) {
+        Ok(languages) => files.extend(languages),
+        Err(d) => diagnostics.extend(d),
+    }
+    let language_files: Vec<String> = spec
+        .languages
+        .iter()
+        .map(|l| crate::language::js_file(l).to_lowercase())
+        .collect();
     if machines.is_empty() {
         if !diagnostics.is_empty() {
             return Err(dedup(diagnostics));
@@ -112,6 +124,7 @@ pub fn generate(spec_path: &str, text: &str) -> Result<Vec<GeneratedFile>, Vec<D
         let file = format!("{}.js", b.id).to_lowercase();
         if file == RUNTIME_FILE
             || crate::web_kernel::KERNEL_FILES.contains(&file.as_str())
+            || language_files.contains(&file)
             || !used.insert(pascal.clone())
         {
             diagnostics.push(Diagnostic::new(

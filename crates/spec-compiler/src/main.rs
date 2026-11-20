@@ -34,7 +34,9 @@
 //!
 //! `web` and `check-web` generate the machines of client components as JavaScript modules for
 //! the browser (`strata_spec_compiler::web`), conventionally into `web/src/generated`; `generate`
-//! leaves those machines out of the Rust crate.
+//! leaves those machines out of the Rust crate. They also write, for each language the
+//! specification declares, its JavaScript twin (`<language id>.js`, parser, printer, static check
+//! and evaluator), so that a page evaluates a rule as the server does.
 //!
 //! `scenarios` writes `scenarios.rs` into `<dir>` (a generated crate's `tests` directory): one
 //! test per scenario that runs only implementation machines, with the expectations Exegra
