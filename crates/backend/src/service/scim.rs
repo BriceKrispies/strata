@@ -797,15 +797,22 @@ fn delete_user(app: &App, caller: &Caller, id: &str) -> Result<Answer, ApiError>
             role.as_str(),
         )?;
     }
-    if let Some(account) = app.store.account_of(&caller.site, &principal)? {
-        app.store.remove_account(&caller.site, &account.login)?;
-    }
+    // Every login of the person with every credential that opens it or waits to: passkeys,
+    // identity-provider links, authenticator factor, recovery codes, waiting sign-ins, emailed
+    // links and recoveries, in one store operation. A credential does not outlive its account.
+    let removed = app.store.remove_principal(&caller.site, &principal)?;
     app.store
         .doc_remove(&caller.site, USER, principal.as_str())?;
     app.audit(
         "scim.deleted",
         &caller.correlation,
-        json!({ "tenant": caller.site.as_str(), "principal": principal.as_str() }),
+        json!({
+            "tenant": caller.site.as_str(),
+            "principal": principal.as_str(),
+            "accounts": removed.accounts,
+            "credentials": removed.passkeys + removed.identities + removed.totp_factors
+                + removed.recovery_codes,
+        }),
     );
     Ok((204, Json::Null))
 }

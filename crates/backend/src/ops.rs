@@ -266,9 +266,12 @@ fn named<T, E: std::fmt::Display>(what: &str, parsed: Result<T, E>) -> Result<T,
 }
 
 /// Change who holds which role: assign or revoke a role, add or remove a team member, invite and
-/// redeem (ADM-150 to ADM-153). Each is one kernel intent, decided by the kernel as the signed-in
-/// person. The address an invitation is redeemed with is never read from the request: it is the
-/// verified address of the signed-in account, which `Identity::context` puts in the context.
+/// redeem, and revoke an invitation (ADM-150 to ADM-153, ADM-1083). Each is one kernel intent,
+/// decided by the kernel as the signed-in person. The address an invitation is redeemed with is
+/// never read from the request: it is the verified address of the signed-in account, which
+/// `Identity::context` puts in the context.
+///
+/// Implements: ADM-1083
 pub fn members(
     app: &App,
     identity: &Identity,
@@ -304,6 +307,9 @@ pub fn members(
                 .collect::<Result<BTreeSet<_>, _>>()?,
         },
         MembersRequest::Redeem { invitation } => Intent::RedeemInvitation {
+            invitation: named("invitation", InvitationId::new(invitation.as_str()))?,
+        },
+        MembersRequest::RevokeInvitation { invitation } => Intent::RevokeInvitation {
             invitation: named("invitation", InvitationId::new(invitation.as_str()))?,
         },
     };

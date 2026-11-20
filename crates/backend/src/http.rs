@@ -548,8 +548,16 @@ async fn members(
     Json(request): Json<MembersRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
     as_caller_at(&app, &headers, move |app, caller, identity| {
-        // Giving someone a role, the owner's included, is a sensitive operation (IDN-019).
-        if matches!(request, MembersRequest::AssignRole { .. }) && identity.session.is_some() {
+        // Giving someone a role, the owner's included, is a sensitive operation (IDN-019); so is
+        // offering roles in an invitation and withdrawing the offer (contracts invite-person and
+        // revoke-invitation).
+        if matches!(
+            request,
+            MembersRequest::AssignRole { .. }
+                | MembersRequest::Invite { .. }
+                | MembersRequest::RevokeInvitation { .. }
+        ) && identity.session.is_some()
+        {
             stepup::require_fresh(app, caller, identity)?;
         }
         ops::members(app, identity, &request)

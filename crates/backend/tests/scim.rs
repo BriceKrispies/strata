@@ -985,3 +985,217 @@ async fn a_provisioning_token_records_its_use_and_can_expire() {
         .await;
     assert_eq!(status, 422);
 }
+
+/// Verifies: FED-015
+///
+/// Deactivating a person keeps their credentials, and deleting them removes every one: passkeys,
+/// identity-provider links (the provisioning link included), the authenticator factor, recovery
+/// codes, waiting second-factor sign-ins, emailed sign-in links and account recoveries. Another
+/// person's credentials stay.
+#[tokio::test]
+async fn deleting_a_person_removes_every_credential_they_held() {
+    use strata_storage_api::{
+        FederatedIdentity, PasskeyRecord, PendingSignIn, RecoveryRequest, SignInLink, TotpRecord,
+    };
+    let backend = start().await;
+    let owner = backend.owner().await;
+    let token = backend.provisioning_token("fieldnotes", &owner).await;
+    let tenant = TenantId::new("fieldnotes").unwrap();
+    let mut ids = Vec::new();
+    for name in ["wren@acme.example", "kit@acme.example"] {
+        let (status, created) = backend
+            .scim("fieldnotes", Some(&token), "POST", "Users", person(name))
+            .await;
+        assert_eq!(status, 201, "{created}");
+        ids.push(PrincipalId::new(created["id"].as_str().unwrap()).unwrap());
+    }
+    let at = Timestamp(now_ms());
+    let later = Timestamp(now_ms() + 3_600_000);
+    let store = backend.store.as_ref();
+    let hold = |who: &PrincipalId, login: &str| {
+        let tag = who.as_str().to_string();
+        assert!(store
+            .put_passkey(&PasskeyRecord {
+                tenant: tenant.clone(),
+                principal: who.clone(),
+                id: format!("passkey-{tag}"),
+                rp_id: "localhost".into(),
+                label: "Key".into(),
+                credential: "{}".into(),
+                created_at: at,
+                last_used_at: None,
+            })
+            .unwrap());
+        assert!(store
+            .put_identity(&FederatedIdentity {
+                tenant: tenant.clone(),
+                provider: "idp".into(),
+                subject: format!("subject-{tag}"),
+                principal: who.clone(),
+                created_at: at,
+            })
+            .unwrap());
+        assert!(store
+            .put_totp(&TotpRecord {
+                tenant: tenant.clone(),
+                principal: who.clone(),
+                secret: "sealed".into(),
+                confirmed: true,
+                last_step: -1,
+                created_at: at,
+            })
+            .unwrap());
+        store
+            .replace_recovery_codes(
+                &tenant,
+                who,
+                &["code-a".to_string(), "code-b".to_string()],
+                at,
+            )
+            .unwrap();
+        store
+            .put_pending(&PendingSignIn {
+                tenant: tenant.clone(),
+                id_hash: format!("pending-{tag}"),
+                principal: who.clone(),
+                method: "link".into(),
+                factors: 1,
+                attempts: 0,
+                expires_at: later,
+            })
+            .unwrap();
+        store
+            .put_sign_in_link(&SignInLink {
+                tenant: tenant.clone(),
+                id_hash: format!("link-{tag}"),
+                principal: who.clone(),
+                token_hash: "t".into(),
+                binding_hash: "b".into(),
+                origin: "http://localhost:4200".into(),
+                expires_at: later,
+            })
+            .unwrap();
+        store
+            .put_recovery(&RecoveryRequest {
+                tenant: tenant.clone(),
+                id_hash: format!("recovery-{tag}"),
+                principal: who.clone(),
+                login: login.into(),
+                token_hash: "t".into(),
+                cancel_hash: "c".into(),
+                requested_at: at,
+                completes_at: at,
+                expires_at: later,
+            })
+            .unwrap();
+    };
+    let (gone, kept) = (&ids[0], &ids[1]);
+    hold(gone, "wren@acme.example");
+    hold(kept, "kit@acme.example");
+    let tag = gone.as_str().to_string();
+    let kept_tag = kept.as_str().to_string();
+
+    // Deactivated: kept, so that reactivating brings the person back as they were.
+    let off = json!({ "Operations": [{ "op": "replace", "path": "active", "value": false }] });
+    let (status, _) = backend
+        .scim(
+            "fieldnotes",
+            Some(&token),
+            "PATCH",
+            &format!("Users/{}", gone.as_str()),
+            off,
+        )
+        .await;
+    assert_eq!(status, 200);
+    assert_eq!(store.passkeys(&tenant, gone).unwrap().len(), 1);
+    assert!(store.totp(&tenant, gone).unwrap().is_some());
+    assert_eq!(store.recovery_codes_left(&tenant, gone).unwrap(), 2);
+    assert!(store
+        .identity(&tenant, "idp", &format!("subject-{tag}"))
+        .unwrap()
+        .is_some());
+    assert!(store
+        .recovery(&tenant, &format!("recovery-{tag}"))
+        .unwrap()
+        .is_some());
+
+    // Deleted: every kind of credential is gone, one assertion for each.
+    let (status, _) = backend
+        .scim(
+            "fieldnotes",
+            Some(&token),
+            "DELETE",
+            &format!("Users/{}", gone.as_str()),
+            Json::Null,
+        )
+        .await;
+    assert_eq!(status, 204);
+    assert!(
+        store.passkeys(&tenant, gone).unwrap().is_empty(),
+        "passkeys"
+    );
+    assert!(
+        store
+            .identity(&tenant, "idp", &format!("subject-{tag}"))
+            .unwrap()
+            .is_none(),
+        "federated identities"
+    );
+    assert!(
+        store
+            .identity(&tenant, "scim", "ext-wren@acme.example")
+            .unwrap()
+            .is_none(),
+        "the provisioning link"
+    );
+    assert!(store.totp(&tenant, gone).unwrap().is_none(), "totp factor");
+    assert_eq!(
+        store.recovery_codes_left(&tenant, gone).unwrap(),
+        0,
+        "recovery codes"
+    );
+    assert!(
+        store
+            .take_pending(&tenant, &format!("pending-{tag}"), at)
+            .unwrap()
+            .is_none(),
+        "pending sign-ins"
+    );
+    assert!(
+        store
+            .take_sign_in_link(&tenant, &format!("link-{tag}"))
+            .unwrap()
+            .is_none(),
+        "sign-in links"
+    );
+    assert!(
+        store
+            .recovery(&tenant, &format!("recovery-{tag}"))
+            .unwrap()
+            .is_none(),
+        "recovery requests"
+    );
+    assert!(store.account_of(&tenant, gone).unwrap().is_none(), "login");
+
+    // The other person lost nothing.
+    assert_eq!(store.passkeys(&tenant, kept).unwrap().len(), 1);
+    assert!(store.totp(&tenant, kept).unwrap().is_some());
+    assert_eq!(store.recovery_codes_left(&tenant, kept).unwrap(), 2);
+    assert!(store
+        .identity(&tenant, "idp", &format!("subject-{kept_tag}"))
+        .unwrap()
+        .is_some());
+    assert!(store
+        .take_pending(&tenant, &format!("pending-{kept_tag}"), at)
+        .unwrap()
+        .is_some());
+    assert!(store
+        .take_sign_in_link(&tenant, &format!("link-{kept_tag}"))
+        .unwrap()
+        .is_some());
+    assert!(store
+        .recovery(&tenant, &format!("recovery-{kept_tag}"))
+        .unwrap()
+        .is_some());
+    assert!(store.account_of(&tenant, kept).unwrap().is_some());
+}

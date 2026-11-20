@@ -6,10 +6,10 @@
 use crate::{
     check_event_sequence, partial_state, throttle_refund, throttle_step, Account, AuditEntry,
     Capabilities, Commit, FederatedIdentity, Health, IdempotencyEntry, IdempotentResult,
-    JournalEntry, OidcFlow, OutboxEntry, PasskeyChallenge, PasskeyRecord, PendingSignIn, Receipt,
-    RecoveryRequest, SamlRequest, SessionRecord, SignInLink, SnapshotInfo, StorageMigration, Store,
-    StoreError, StoreResult, TenantSummary, ThrottleRow, ThrottleRule, ThrottleSettle,
-    ThrottleVerdict, TotpRecord, IDEMPOTENCY_RETENTION_MS,
+    JournalEntry, OidcFlow, OutboxEntry, PasskeyChallenge, PasskeyRecord, PendingSignIn,
+    PrincipalRemoval, Receipt, RecoveryRequest, SamlRequest, SessionRecord, SignInLink,
+    SnapshotInfo, StorageMigration, Store, StoreError, StoreResult, TenantSummary, ThrottleRow,
+    ThrottleRule, ThrottleSettle, ThrottleVerdict, TotpRecord, IDEMPOTENCY_RETENTION_MS,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -956,6 +956,58 @@ impl Store for MemoryStore {
             .accounts
             .remove(&(tenant.clone(), login.to_string()))
             .is_some())
+    }
+
+    fn remove_principal(
+        &self,
+        tenant: &TenantId,
+        principal: &PrincipalId,
+    ) -> StoreResult<PrincipalRemoval> {
+        // Everything is removed under the one lock, so no sign-in sees half of it.
+        let mut inner = self.lock()?;
+        let inner = &mut *inner;
+        let mut removed = PrincipalRemoval::default();
+        fn drop_where<K: Ord + Clone, V>(
+            rows: &mut BTreeMap<K, V>,
+            doomed: impl Fn(&K, &V) -> bool,
+        ) -> u64 {
+            let before = rows.len();
+            rows.retain(|key, value| !doomed(key, value));
+            (before - rows.len()) as u64
+        }
+        removed.accounts = drop_where(&mut inner.accounts, |(t, _), a| {
+            t == tenant && a.principal == *principal
+        });
+        removed.passkeys = drop_where(&mut inner.passkeys, |(t, _), p| {
+            t == tenant && p.principal == *principal
+        });
+        removed.passkey_challenges = drop_where(&mut inner.challenges, |(t, _), c| {
+            t == tenant && c.principal.as_ref() == Some(principal)
+        });
+        removed.provider_flows = drop_where(&mut inner.flows, |(t, _), f| {
+            t == tenant && f.principal.as_ref() == Some(principal)
+        }) + drop_where(&mut inner.saml_requests, |(t, _), r| {
+            t == tenant && r.principal.as_ref() == Some(principal)
+        });
+        removed.identities = drop_where(&mut inner.identities, |(t, _, _), i| {
+            t == tenant && i.principal == *principal
+        });
+        removed.totp_factors =
+            drop_where(&mut inner.totp, |(t, p), _| t == tenant && p == principal);
+        removed.recovery_codes = inner
+            .recovery_codes
+            .remove(&(tenant.clone(), principal.clone()))
+            .map_or(0, |codes| codes.len() as u64);
+        removed.pending_sign_ins = drop_where(&mut inner.pending, |(t, _), p| {
+            t == tenant && p.principal == *principal
+        });
+        removed.sign_in_links = drop_where(&mut inner.links, |(t, _), l| {
+            t == tenant && l.principal == *principal
+        });
+        removed.recovery_requests = drop_where(&mut inner.recoveries, |(t, _), r| {
+            t == tenant && r.principal == *principal
+        });
+        Ok(removed)
     }
 
     fn doc_put(

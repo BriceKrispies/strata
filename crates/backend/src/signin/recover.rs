@@ -108,6 +108,14 @@ pub fn request(app: &App, caller: &Caller, body: &Json) -> Result<Json, ApiError
         }
         _ => None,
     };
+    // A person their provider deactivated has an account that is kept but does not work: nothing
+    // is recovered for it, and the answer is the one for an address with no account (FED-015).
+    let account = match account {
+        Some(account) if crate::service::is_disabled(app, &caller.site, &account.principal)? => {
+            None
+        }
+        other => other,
+    };
     // An account with no contact to tell is not recoverable by this route: a recovery that no one
     // is told of is the one a thief would choose.
     if let Some(account) = account.filter(|account| !contacts(account).is_empty()) {
@@ -243,6 +251,10 @@ pub fn complete(app: &App, caller: &Caller, body: &Json) -> Result<Json, ApiErro
     let Some(account) = app.store.account(&caller.site, &taken.login)? else {
         return Err(not_accepted());
     };
+    // A person deactivated since the request was made gets no new password (FED-015).
+    if crate::service::is_disabled(app, &caller.site, &account.principal)? {
+        return Err(not_accepted());
+    }
     app.store.put_account(&Account {
         password_hash: hash_password(password)?,
         ..account.clone()

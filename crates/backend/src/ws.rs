@@ -15,7 +15,7 @@ use serde_json::json;
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 use strata_kernel::rules::may_attempt;
-use strata_kernel::{Action, EventBody, ObjectTypeId, Principal, Resource};
+use strata_kernel::{Action, EventBody, Principal, Resource};
 use strata_protocol::log::now_ms;
 use strata_protocol::ws::{
     parse_client, ClientMessage, ServerMessage, SessionState, HEARTBEAT_MS, MAX_REPLAY,
@@ -241,22 +241,18 @@ impl Conn {
         &mut self,
         req: String,
         name: String,
-        objects: Option<Vec<String>>,
+        selector: Result<Selector, String>,
         after: Option<u64>,
     ) -> Result<(), Closed> {
-        let selector = match objects.map(|names| {
-            names
-                .into_iter()
-                .map(ObjectTypeId::new)
-                .collect::<Result<_, _>>()
-        }) {
-            None => Selector { objects: None },
-            Some(Ok(set)) => Selector { objects: Some(set) },
-            Some(Err(e)) => {
+        // A selector that names what nothing emits yet, or an invalid name, is refused here: it
+        // would otherwise match nothing and say so to no one.
+        let selector = match selector {
+            Ok(selector) => selector,
+            Err(message) => {
                 return self.send(ServerMessage::Error {
                     req: Some(req),
                     code: "invalid".into(),
-                    message: e.to_string(),
+                    message,
                 })
             }
         };
@@ -333,8 +329,15 @@ impl Conn {
                 req,
                 sub,
                 objects,
+                kinds,
+                segments,
+                units,
+                transitions,
                 after,
-            } => self.subscribe(req, sub, objects, after).await,
+            } => {
+                let selector = Selector::new(objects, kinds, segments, units, transitions);
+                self.subscribe(req, sub, selector, after).await
+            }
             ClientMessage::Unsubscribe { req, sub } => {
                 self.subs.remove(&sub);
                 self.register();

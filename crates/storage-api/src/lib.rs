@@ -202,22 +202,25 @@ impl Commit {
             // A principal whose roles changed in any way starts again from a new sign-in (IDN-012):
             // a session issued under the old roles is not carried over to the new ones. The
             // kernel's own effect, for a principal left with no role, is included.
-            idempotency: context.idempotency_key.as_ref().map(|key| IdempotencyEntry {
-                principal: idempotency_scope(&context.principal),
-                key: key.clone(),
-                request_hash: canon::hash_of(intent),
-                recorded_at: context.now,
-                result: Transition {
-                    delta: StateDelta {
-                        ops: Vec::new(),
-                        ..transition.delta.clone()
+            idempotency: context
+                .idempotency_key
+                .as_ref()
+                .map(|key| IdempotencyEntry {
+                    principal: idempotency_scope(&context.principal),
+                    key: key.clone(),
+                    request_hash: canon::hash_of(intent),
+                    recorded_at: context.now,
+                    result: Transition {
+                        delta: StateDelta {
+                            ops: Vec::new(),
+                            ..transition.delta.clone()
+                        },
+                        events: Vec::new(),
+                        effects: Vec::new(),
+                        evidence: transition.evidence.clone(),
+                        output: transition.output.clone(),
                     },
-                    events: Vec::new(),
-                    effects: Vec::new(),
-                    evidence: transition.evidence.clone(),
-                    output: transition.output.clone(),
-                },
-            }),
+                }),
             revoke_sessions: transition
                 .effects
                 .iter()
@@ -304,6 +307,32 @@ pub struct Account {
     /// The e-mail address of the person, once the identity service has verified that the person
     /// controls it. `None` until then: an account with none redeems no invitation (ADM-153).
     pub verified_email: Option<String>,
+}
+
+/// What `Store::remove_principal` removed, by kind of row.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PrincipalRemoval {
+    /// Logins of the principal.
+    pub accounts: u64,
+    pub passkeys: u64,
+    /// Passkey challenges issued to the principal.
+    pub passkey_challenges: u64,
+    /// Identity-provider and SAML sign-ins started to link the principal's account.
+    pub provider_flows: u64,
+    pub identities: u64,
+    pub totp_factors: u64,
+    pub recovery_codes: u64,
+    /// Sign-ins that waited for the principal's second factor.
+    pub pending_sign_ins: u64,
+    pub sign_in_links: u64,
+    pub recovery_requests: u64,
+}
+
+impl PrincipalRemoval {
+    /// Whether nothing of the principal was held.
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
 }
 
 /// How one counter of failed attempts limits what follows it.
@@ -782,6 +811,18 @@ pub trait Store: Send + Sync {
     fn account(&self, tenant: &TenantId, login: &str) -> StoreResult<Option<Account>>;
     /// Remove a login. Returns whether it was there.
     fn remove_account(&self, tenant: &TenantId, login: &str) -> StoreResult<bool>;
+    /// Remove everything that signs a principal in or is waiting for them, in one step: every
+    /// login of the principal, their passkeys and pending passkey challenges, the identities that
+    /// tie them to identity providers, their authenticator factor, recovery codes, waiting
+    /// second-factor sign-ins, emailed sign-in links, account recoveries, and the identity-provider
+    /// and SAML sign-ins started to link their account. It ends no session and removes no record
+    /// of the tenant: sessions and roles are the caller's to end. A principal the tenant holds
+    /// nothing for, and a tenant that does not exist, give an empty `PrincipalRemoval`.
+    fn remove_principal(
+        &self,
+        tenant: &TenantId,
+        principal: &PrincipalId,
+    ) -> StoreResult<PrincipalRemoval>;
     /// The login of a principal, for a sign-in method that identifies the person by something
     /// other than a login.
     fn account_of(

@@ -170,6 +170,17 @@ fn withdraw_dev_accounts(
         app.store
             .remove_account(tenant, &login)
             .map_err(|e| e.to_string())?;
+        // A person left with no login at all keeps no credential either.
+        if app
+            .store
+            .account_of(tenant, &stored.principal)
+            .map_err(|e| e.to_string())?
+            .is_none()
+        {
+            app.store
+                .remove_principal(tenant, &stored.principal)
+                .map_err(|e| e.to_string())?;
+        }
         let now = app.now();
         for mut session in app
             .store

@@ -6,7 +6,9 @@
 
 use crate::{
     execute, execute_by, idempotency_scope, query, Account, AuditEntry, Commit, ExecuteError,
-    OutboxEntry, SessionRecord, Store, StoreError, IDEMPOTENCY_RETENTION_MS,
+    FederatedIdentity, OutboxEntry, PasskeyCeremony, PasskeyChallenge, PasskeyRecord,
+    PendingSignIn, PrincipalRemoval, RecoveryRequest, SessionRecord, SignInLink, Store, StoreError,
+    TotpRecord, IDEMPOTENCY_RETENTION_MS,
 };
 use std::collections::BTreeMap;
 use strata_kernel::testkit::*;
@@ -1053,6 +1055,192 @@ fn accounts_are_scoped_to_their_tenant(store: &dyn Store) {
         Some(other)
     );
     an_account_is_created_once_and_updated_only_from_what_was_read(store);
+    a_principal_is_removed_with_every_credential_it_held(store);
+}
+
+/// Part of the accounts check: removing a principal removes every login and credential row of
+/// that principal in its tenant, and nothing of another person or another tenant.
+fn a_principal_is_removed_with_every_credential_it_held(store: &dyn Store) {
+    let (alpha, beta) = (tenant_id("alpha"), tenant_id("beta"));
+    let (gone, kept) = (principal_id("alpha:editor"), principal_id("alpha:writer1"));
+    let at = Timestamp(1);
+    let later = Timestamp(1_000_000);
+    // Every kind of row, held by `who` in `tenant`, named by `tag`.
+    let hold = |tenant: &TenantId, who: &PrincipalId, tag: &str| {
+        let name = |what: &str| format!("{what}-{tag}");
+        store
+            .put_account(&Account {
+                tenant: tenant.clone(),
+                login: name("login"),
+                principal: who.clone(),
+                display_name: "Person".into(),
+                password_hash: "$argon2id$placeholder".into(),
+                verified_email: None,
+            })
+            .unwrap();
+        assert!(store
+            .put_passkey(&PasskeyRecord {
+                tenant: tenant.clone(),
+                principal: who.clone(),
+                id: name("passkey"),
+                rp_id: "example.org".into(),
+                label: "Key".into(),
+                credential: "{}".into(),
+                created_at: at,
+                last_used_at: None,
+            })
+            .unwrap());
+        store
+            .put_passkey_challenge(&PasskeyChallenge {
+                tenant: tenant.clone(),
+                id_hash: name("challenge"),
+                ceremony: PasskeyCeremony::SignIn,
+                session: None,
+                principal: Some(who.clone()),
+                origin: "https://example.org".into(),
+                state: "{}".into(),
+                expires_at: later,
+            })
+            .unwrap();
+        store
+            .put_sign_in_link(&SignInLink {
+                tenant: tenant.clone(),
+                id_hash: name("link"),
+                principal: who.clone(),
+                token_hash: "t".into(),
+                binding_hash: "b".into(),
+                origin: "https://example.org".into(),
+                expires_at: later,
+            })
+            .unwrap();
+        assert!(store
+            .put_identity(&FederatedIdentity {
+                tenant: tenant.clone(),
+                provider: "idp".into(),
+                subject: name("subject"),
+                principal: who.clone(),
+                created_at: at,
+            })
+            .unwrap());
+        assert!(store
+            .put_totp(&TotpRecord {
+                tenant: tenant.clone(),
+                principal: who.clone(),
+                secret: "sealed".into(),
+                confirmed: true,
+                last_step: -1,
+                created_at: at,
+            })
+            .unwrap());
+        store
+            .replace_recovery_codes(tenant, who, &[name("code-1"), name("code-2")], at)
+            .unwrap();
+        store
+            .put_pending(&PendingSignIn {
+                tenant: tenant.clone(),
+                id_hash: name("pending"),
+                principal: who.clone(),
+                method: "password".into(),
+                factors: 1,
+                attempts: 0,
+                expires_at: later,
+            })
+            .unwrap();
+        store
+            .put_recovery(&RecoveryRequest {
+                tenant: tenant.clone(),
+                id_hash: name("recovery"),
+                principal: who.clone(),
+                login: name("login"),
+                token_hash: "t".into(),
+                cancel_hash: "c".into(),
+                requested_at: at,
+                completes_at: at,
+                expires_at: later,
+            })
+            .unwrap();
+    };
+    hold(&alpha, &gone, "gone");
+    hold(&alpha, &kept, "kept");
+    // The same principal in another tenant is another person's rows.
+    hold(&beta, &gone, "other-tenant");
+
+    let removed = store.remove_principal(&alpha, &gone).unwrap();
+    assert_eq!(
+        removed,
+        PrincipalRemoval {
+            accounts: 1,
+            passkeys: 1,
+            passkey_challenges: 1,
+            provider_flows: 0,
+            identities: 1,
+            totp_factors: 1,
+            recovery_codes: 2,
+            pending_sign_ins: 1,
+            sign_in_links: 1,
+            recovery_requests: 1,
+        }
+    );
+    assert!(!removed.is_empty());
+
+    // Nothing of the removed principal is left in alpha.
+    let now = Timestamp(2);
+    assert_eq!(store.account(&alpha, "login-gone").unwrap(), None);
+    assert_eq!(store.account_of(&alpha, &gone).unwrap(), None);
+    assert!(store.passkeys(&alpha, &gone).unwrap().is_empty());
+    assert_eq!(store.passkey(&alpha, "passkey-gone").unwrap(), None);
+    assert_eq!(
+        store
+            .take_passkey_challenge(&alpha, "challenge-gone", now)
+            .unwrap(),
+        None
+    );
+    assert_eq!(store.take_sign_in_link(&alpha, "link-gone").unwrap(), None);
+    assert_eq!(store.identity(&alpha, "idp", "subject-gone").unwrap(), None);
+    assert_eq!(store.totp(&alpha, &gone).unwrap(), None);
+    assert_eq!(store.recovery_codes_left(&alpha, &gone).unwrap(), 0);
+    assert_eq!(
+        store.take_pending(&alpha, "pending-gone", now).unwrap(),
+        None
+    );
+    assert_eq!(store.recovery(&alpha, "recovery-gone").unwrap(), None);
+
+    // Another person of the tenant, and the same principal of another tenant, keep theirs.
+    assert!(store.account(&alpha, "login-kept").unwrap().is_some());
+    assert_eq!(store.passkeys(&alpha, &kept).unwrap().len(), 1);
+    assert!(store
+        .identity(&alpha, "idp", "subject-kept")
+        .unwrap()
+        .is_some());
+    assert!(store.totp(&alpha, &kept).unwrap().is_some());
+    assert_eq!(store.recovery_codes_left(&alpha, &kept).unwrap(), 2);
+    assert!(store.recovery(&alpha, "recovery-kept").unwrap().is_some());
+    assert!(store
+        .account(&beta, "login-other-tenant")
+        .unwrap()
+        .is_some());
+    assert_eq!(store.passkeys(&beta, &gone).unwrap().len(), 1);
+    assert!(store
+        .identity(&beta, "idp", "subject-other-tenant")
+        .unwrap()
+        .is_some());
+    assert!(store.totp(&beta, &gone).unwrap().is_some());
+    assert_eq!(store.recovery_codes_left(&beta, &gone).unwrap(), 2);
+    assert!(store
+        .take_pending(&beta, "pending-other-tenant", now)
+        .unwrap()
+        .is_some());
+
+    // A second removal, and a principal or tenant with nothing held, remove nothing.
+    assert!(store.remove_principal(&alpha, &gone).unwrap().is_empty());
+    assert!(store
+        .remove_principal(&alpha, &principal_id("alpha:nobody"))
+        .unwrap()
+        .is_empty());
+    assert!(store
+        .remove_principal(&tenant_id("absent"), &gone)
+        .unwrap()
+        .is_empty());
 }
 
 /// Part of the accounts check: a login is created once, and updated only from what was read.

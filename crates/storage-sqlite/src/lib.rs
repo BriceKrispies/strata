@@ -52,9 +52,9 @@ use strata_storage_api::{
     check_event_sequence, field_matches, throttle_refund, throttle_step, Account, AuditEntry,
     Capabilities, Commit, FederatedIdentity, Health, IdempotentResult, JournalEntry, OidcFlow,
     OutboxEntry, OutboxFault, PasskeyCeremony, PasskeyChallenge, PasskeyRecord, PendingSignIn,
-    Receipt, RecoveryRequest, SamlRequest, SessionRecord, SignInLink, SnapshotInfo,
-    StorageMigration, Store, StoreError, StoreResult, TenantSummary, ThrottleRow, ThrottleRule,
-    ThrottleSettle, ThrottleVerdict, TotpRecord, IDEMPOTENCY_RETENTION_MS,
+    PrincipalRemoval, Receipt, RecoveryRequest, SamlRequest, SessionRecord, SignInLink,
+    SnapshotInfo, StorageMigration, Store, StoreError, StoreResult, TenantSummary, ThrottleRow,
+    ThrottleRule, ThrottleSettle, ThrottleVerdict, TotpRecord, IDEMPOTENCY_RETENTION_MS,
 };
 
 /// The ledger table of the control database's migrations.
@@ -3093,6 +3093,35 @@ impl Store for SqliteStore {
             .execute("DELETE FROM accounts WHERE login = ?1", params![login])
             .map_err(db)?;
         Ok(removed > 0)
+    }
+
+    fn remove_principal(
+        &self,
+        tenant: &TenantId,
+        principal: &PrincipalId,
+    ) -> StoreResult<PrincipalRemoval> {
+        let Some(file) = self.tenant_db(tenant)? else {
+            return Ok(PrincipalRemoval::default());
+        };
+        // One transaction: a sign-in sees all of the principal's rows or none of them.
+        file.write(dbe, |tx| {
+            let gone = |sql: &str| -> StoreResult<u64> {
+                Ok(tx.execute(sql, params![principal.as_str()]).map_err(db)? as u64)
+            };
+            Ok(PrincipalRemoval {
+                accounts: gone("DELETE FROM accounts WHERE principal = ?1")?,
+                passkeys: gone("DELETE FROM passkeys WHERE principal = ?1")?,
+                passkey_challenges: gone("DELETE FROM passkey_challenges WHERE principal = ?1")?,
+                provider_flows: gone("DELETE FROM oidc_flows WHERE principal = ?1")?
+                    + gone("DELETE FROM saml_requests WHERE principal = ?1")?,
+                identities: gone("DELETE FROM federated_identities WHERE principal = ?1")?,
+                totp_factors: gone("DELETE FROM totp_factors WHERE principal = ?1")?,
+                recovery_codes: gone("DELETE FROM recovery_codes WHERE principal = ?1")?,
+                pending_sign_ins: gone("DELETE FROM pending_sign_ins WHERE principal = ?1")?,
+                sign_in_links: gone("DELETE FROM sign_in_links WHERE principal = ?1")?,
+                recovery_requests: gone("DELETE FROM recovery_requests WHERE principal = ?1")?,
+            })
+        })
     }
 
     fn doc_put(

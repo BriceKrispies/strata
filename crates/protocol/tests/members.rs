@@ -37,6 +37,7 @@ fn the_operations_are_the_variants_and_nothing_else() {
         json!({ "op": "remove_team_member", "team": "desk", "principal": "user:a" }),
         json!({ "op": "invite", "invitation": "inv-1", "address": "a@example.org", "roles": ["author"] }),
         json!({ "op": "redeem", "invitation": "inv-1" }),
+        json!({ "op": "revoke_invitation", "invitation": "inv-1" }),
     ];
     for (body, op) in bodies.iter().zip(MembersRequest::OPS) {
         assert_eq!(body["op"], op);
