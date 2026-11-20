@@ -14,211 +14,930 @@
     "name": "Conformance fixtures",
     "generation": {
       "wireCase": "snake_case",
-      "errorKinds": { "unauthenticated": 401, "forbidden": 403, "not_found": 404, "invalid": 422, "throttled": 429, "unavailable": 503 },
-      "errorBody": { "type": "api-error" }
+      "errorKinds": {
+        "unauthenticated": 401,
+        "forbidden": 403,
+        "not_found": 404,
+        "conflict": 409,
+        "invalid": 422,
+        "throttled": 429,
+        "unavailable": 503,
+        "internal": 500
+      },
+      "errorBody": {
+        "type": "api-error",
+        "code": "code",
+        "message": "message",
+        "correlation": "correlation",
+        "runtime": {
+          "unauthenticated": "unauthenticated",
+          "forbidden": "forbidden",
+          "invalid-request": "invalid",
+          "timeout": "unavailable",
+          "unavailable": "unavailable",
+          "internal": "internal"
+        }
+      }
     }
   },
   "types": [
-    { "id": "error-code", "kind": "enum", "values": ["unauthenticated", "forbidden", "not_found", "invalid", "throttled", "unavailable"] },
     {
-      "id": "api-error", "kind": "struct",
-      "fields": [
-        { "name": "code", "type": "error-code" },
-        { "name": "message", "type": "string" },
-        { "name": "kind", "type": "string", "optional": true },
-        { "name": "correlation", "type": "string" }
-      ]
+      "id": "error-code",
+      "name": "Error Code",
+      "kind": "enum",
+      "values": [
+        "unauthenticated",
+        "forbidden",
+        "not_found",
+        "conflict",
+        "invalid",
+        "throttled",
+        "unavailable",
+        "internal"
+      ],
+      "description": "strata_protocol::api::ErrorCode, as it is written on the wire (snake_case); each has one HTTP status, the one system.generation.errorKinds gives the error kind of the same name."
     },
-    { "id": "tenant-id", "kind": "id", "repr": "string" },
-    { "id": "note-id", "kind": "id", "repr": "u64" },
     {
-      "id": "note", "kind": "struct",
+      "id": "api-error",
+      "name": "Api Error",
+      "kind": "struct",
       "fields": [
-        { "name": "title", "type": "string" },
-        { "name": "word-count", "type": "u32" },
-        { "name": "tags", "type": "list<string>", "optional": true }
-      ]
+        {
+          "name": "code",
+          "type": "error-code"
+        },
+        {
+          "name": "message",
+          "type": "string"
+        },
+        {
+          "name": "kind",
+          "type": "string",
+          "optional": true
+        },
+        {
+          "name": "failed",
+          "type": "list<check>",
+          "optional": true
+        },
+        {
+          "name": "correlation",
+          "type": "string"
+        }
+      ],
+      "description": "strata_protocol::api::ErrorReply: the error body of every HTTP operation (system.generation.errorBody). kind and failed are left out when absent, and the correlation is the request's correlation id as given."
+    },
+    {
+      "id": "tenant-id",
+      "kind": "id",
+      "repr": "string",
+      "name": "Tenant Id"
+    },
+    {
+      "id": "note-id",
+      "kind": "id",
+      "repr": "u64",
+      "name": "Note Id"
+    },
+    {
+      "id": "note",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "title",
+          "type": "string"
+        },
+        {
+          "name": "word-count",
+          "type": "u32"
+        },
+        {
+          "name": "tags",
+          "type": "list<string>",
+          "optional": true
+        }
+      ],
+      "name": "Note"
+    },
+    {
+      "id": "check",
+      "name": "Check",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "rule",
+          "type": "string"
+        },
+        {
+          "name": "passed",
+          "type": "bool"
+        },
+        {
+          "name": "detail",
+          "type": "string"
+        }
+      ],
+      "description": "strata_kernel::Check: one evaluated rule."
     }
   ],
   "roles": [
-    { "id": "visitor", "capabilities": ["notes-browse"] },
-    { "id": "account-holder", "capabilities": ["session-manage"] },
-    { "id": "owner", "capabilities": ["notes-read", "notes-write", "notes-delete"] },
-    { "id": "writer", "capabilities": ["notes-read", "notes-write"] },
-    { "id": "reader", "capabilities": ["notes-read"] }
+    {
+      "id": "visitor",
+      "capabilities": [
+        "notes-browse"
+      ],
+      "level": "platform"
+    },
+    {
+      "id": "account-holder",
+      "capabilities": [
+        "session-manage"
+      ],
+      "level": "platform"
+    },
+    {
+      "id": "owner",
+      "capabilities": [
+        "notes-read",
+        "notes-write",
+        "notes-delete"
+      ],
+      "level": "tenant"
+    },
+    {
+      "id": "writer",
+      "capabilities": [
+        "notes-read",
+        "notes-write"
+      ],
+      "level": "tenant"
+    },
+    {
+      "id": "reader",
+      "capabilities": [
+        "notes-read"
+      ],
+      "level": "tenant"
+    }
   ],
   "quotas": [
-    { "id": "q-ping", "contract": "conforms-ping", "scope": "source-address", "limit": 3, "window": "1 min", "onExceed": "refuse", "error": "throttled" },
-    { "id": "q-unthrottled-ping", "contract": "violates-quota", "scope": "source-address", "limit": 3, "window": "1 min", "onExceed": "refuse", "error": "throttled" }
+    {
+      "id": "q-ping",
+      "contract": "conforms-ping",
+      "scope": "source-address",
+      "limit": 3,
+      "window": "1 min",
+      "onExceed": "refuse",
+      "error": "throttled"
+    },
+    {
+      "id": "q-unthrottled-ping",
+      "contract": "violates-quota",
+      "scope": "source-address",
+      "limit": 3,
+      "window": "1 min",
+      "onExceed": "refuse",
+      "error": "throttled"
+    }
   ],
   "contracts": [
     {
-      "id": "conforms-read-note", "ref": "FX-001", "deployment": "shipped", "bffRoute": "GET /api/notes/:note",
-      "auth": { "scheme": "session", "requires": ["notes-read"] },
-      "readOnly": true, "tenantScope": "request",
-      "inputs": [{ "name": "note", "type": "note-id" }],
-      "outputs": [{ "name": "note", "type": "note" }],
-      "errors": [
-        { "name": "unauthenticated", "kind": "unauthenticated" },
-        { "name": "forbidden", "kind": "forbidden" },
-        { "name": "not-found", "kind": "not_found" }
-      ],
-      "conformanceExample": "{\"note\": 1}"
-    },
-    {
-      "id": "violates-reply-shape", "ref": "FX-002", "deployment": "shipped", "bffRoute": "GET /api/broken/notes/:note",
-      "auth": { "scheme": "session", "requires": ["notes-read"] },
-      "readOnly": true, "tenantScope": "request",
-      "inputs": [{ "name": "note", "type": "note-id" }],
-      "outputs": [{ "name": "note", "type": "note" }],
-      "errors": [
-        { "name": "unauthenticated", "kind": "unauthenticated" },
-        { "name": "forbidden", "kind": "forbidden" },
-        { "name": "not-found", "kind": "not_found" }
-      ],
-      "conformanceExample": "{\"note\": 1}"
-    },
-    {
-      "id": "violates-no-session", "ref": "FX-003", "deployment": "shipped", "bffRoute": "GET /api/broken/notes-open/:note",
-      "auth": { "scheme": "session", "requires": ["notes-read"] },
-      "readOnly": true, "tenantScope": "request",
-      "inputs": [{ "name": "note", "type": "note-id" }],
-      "outputs": [{ "name": "note", "type": "note" }],
-      "errors": [
-        { "name": "unauthenticated", "kind": "unauthenticated" },
-        { "name": "forbidden", "kind": "forbidden" },
-        { "name": "not-found", "kind": "not_found" }
-      ],
-      "conformanceExample": "{\"note\": 1}"
-    },
-    {
-      "id": "violates-declared-error", "ref": "FX-004", "deployment": "shipped", "bffRoute": "GET /api/broken/notes-undeclared/:note",
-      "auth": { "scheme": "session", "requires": ["notes-read"] },
-      "readOnly": true, "tenantScope": "request",
-      "inputs": [{ "name": "note", "type": "note-id" }],
-      "outputs": [{ "name": "note", "type": "note" }],
-      "errors": [
-        { "name": "unauthenticated", "kind": "unauthenticated" },
-        { "name": "forbidden", "kind": "forbidden" },
-        { "name": "not-found", "kind": "not_found" }
-      ],
-      "conformanceExample": "{\"note\": 1}"
-    },
-    {
-      "id": "conforms-write-note", "ref": "FX-005", "deployment": "shipped", "bffRoute": "POST /api/notes/write",
-      "auth": { "scheme": "session", "requires": ["notes-write"], "csrf": true, "origin": true, "stepUp": "15 min" },
+      "id": "conforms-read-note",
+      "ref": "H-901",
+      "deployment": "shipped",
+      "bffRoute": "GET /api/notes/:note",
+      "auth": {
+        "scheme": "session",
+        "requires": [
+          "notes-read"
+        ]
+      },
+      "readOnly": true,
       "tenantScope": "request",
-      "inputs": [{ "name": "tenant", "type": "tenant-id" }, { "name": "title", "type": "string" }, { "name": "word-count", "type": "u32" }],
-      "outputs": [{ "name": "note", "type": "note-id" }],
-      "errors": [
-        { "name": "unauthenticated", "kind": "unauthenticated" },
-        { "name": "forbidden", "kind": "forbidden" },
-        { "name": "tenant-mismatch", "kind": "forbidden" },
-        { "name": "step-up-required", "kind": "forbidden" },
-        { "name": "invalid", "kind": "invalid" }
+      "inputs": [
+        {
+          "name": "note",
+          "type": "note-id"
+        }
       ],
-      "conformanceExample": "{\"tenant\": \"alpha\", \"title\": \"A note\", \"word-count\": 3}"
+      "outputs": [
+        {
+          "name": "note",
+          "type": "note"
+        }
+      ],
+      "errors": [
+        {
+          "name": "unauthenticated",
+          "kind": "unauthenticated"
+        },
+        {
+          "name": "forbidden",
+          "kind": "forbidden"
+        },
+        {
+          "name": "not-found",
+          "kind": "not_found"
+        }
+      ],
+      "conformanceExample": "{\"note\": 1}",
+      "name": "Conforms Read Note",
+      "realisation": "hand",
+      "implementedBy": "fixture-server",
+      "postconditions": [
+        "The stand-in server answers as the contract states, so the generated conformance test of it passes."
+      ],
+      "exposure": "public"
     },
     {
-      "id": "violates-csrf", "ref": "FX-006", "deployment": "shipped", "bffRoute": "POST /api/broken/write-parses-first",
-      "auth": { "scheme": "session", "requires": ["notes-write"], "csrf": true, "origin": true, "stepUp": "15 min" },
+      "id": "violates-reply-shape",
+      "ref": "H-902",
+      "deployment": "shipped",
+      "bffRoute": "GET /api/broken/notes/:note",
+      "auth": {
+        "scheme": "session",
+        "requires": [
+          "notes-read"
+        ]
+      },
+      "readOnly": true,
       "tenantScope": "request",
-      "inputs": [{ "name": "tenant", "type": "tenant-id" }, { "name": "title", "type": "string" }, { "name": "word-count", "type": "u32" }],
-      "outputs": [{ "name": "note", "type": "note-id" }],
-      "errors": [
-        { "name": "unauthenticated", "kind": "unauthenticated" },
-        { "name": "forbidden", "kind": "forbidden" },
-        { "name": "tenant-mismatch", "kind": "forbidden" },
-        { "name": "step-up-required", "kind": "forbidden" },
-        { "name": "invalid", "kind": "invalid" }
+      "inputs": [
+        {
+          "name": "note",
+          "type": "note-id"
+        }
       ],
-      "conformanceExample": "{\"tenant\": \"alpha\", \"title\": \"A note\", \"word-count\": 3}"
+      "outputs": [
+        {
+          "name": "note",
+          "type": "note"
+        }
+      ],
+      "errors": [
+        {
+          "name": "unauthenticated",
+          "kind": "unauthenticated"
+        },
+        {
+          "name": "forbidden",
+          "kind": "forbidden"
+        },
+        {
+          "name": "not-found",
+          "kind": "not_found"
+        }
+      ],
+      "conformanceExample": "{\"note\": 1}",
+      "name": "Violates Reply Shape",
+      "realisation": "hand",
+      "implementedBy": "fixture-server",
+      "postconditions": [
+        "The stand-in server breaks the rule this contract is named for, so the generated conformance test of it must fail."
+      ],
+      "exposure": "public"
     },
     {
-      "id": "violates-capability", "ref": "FX-007", "deployment": "shipped", "bffRoute": "POST /api/broken/write-unchecked",
-      "auth": { "scheme": "session", "requires": ["notes-write"], "csrf": true, "origin": true, "stepUp": "15 min" },
+      "id": "violates-no-session",
+      "ref": "H-903",
+      "deployment": "shipped",
+      "bffRoute": "GET /api/broken/notes-open/:note",
+      "auth": {
+        "scheme": "session",
+        "requires": [
+          "notes-read"
+        ]
+      },
+      "readOnly": true,
       "tenantScope": "request",
-      "inputs": [{ "name": "tenant", "type": "tenant-id" }, { "name": "title", "type": "string" }, { "name": "word-count", "type": "u32" }],
-      "outputs": [{ "name": "note", "type": "note-id" }],
-      "errors": [
-        { "name": "unauthenticated", "kind": "unauthenticated" },
-        { "name": "forbidden", "kind": "forbidden" },
-        { "name": "tenant-mismatch", "kind": "forbidden" },
-        { "name": "step-up-required", "kind": "forbidden" },
-        { "name": "invalid", "kind": "invalid" }
+      "inputs": [
+        {
+          "name": "note",
+          "type": "note-id"
+        }
       ],
-      "conformanceExample": "{\"tenant\": \"alpha\", \"title\": \"A note\", \"word-count\": 3}"
+      "outputs": [
+        {
+          "name": "note",
+          "type": "note"
+        }
+      ],
+      "errors": [
+        {
+          "name": "unauthenticated",
+          "kind": "unauthenticated"
+        },
+        {
+          "name": "forbidden",
+          "kind": "forbidden"
+        },
+        {
+          "name": "not-found",
+          "kind": "not_found"
+        }
+      ],
+      "conformanceExample": "{\"note\": 1}",
+      "name": "Violates No Session",
+      "realisation": "hand",
+      "implementedBy": "fixture-server",
+      "postconditions": [
+        "The stand-in server breaks the rule this contract is named for, so the generated conformance test of it must fail."
+      ],
+      "exposure": "public"
     },
     {
-      "id": "violates-other-tenant-input", "ref": "FX-008", "deployment": "shipped", "bffRoute": "POST /api/broken/write-any-tenant",
-      "auth": { "scheme": "session", "requires": ["notes-write"], "csrf": true, "origin": true, "stepUp": "15 min" },
+      "id": "violates-declared-error",
+      "ref": "H-904",
+      "deployment": "shipped",
+      "bffRoute": "GET /api/broken/notes-undeclared/:note",
+      "auth": {
+        "scheme": "session",
+        "requires": [
+          "notes-read"
+        ]
+      },
+      "readOnly": true,
       "tenantScope": "request",
-      "inputs": [{ "name": "tenant", "type": "tenant-id" }, { "name": "title", "type": "string" }, { "name": "word-count", "type": "u32" }],
-      "outputs": [{ "name": "note", "type": "note-id" }],
-      "errors": [
-        { "name": "unauthenticated", "kind": "unauthenticated" },
-        { "name": "forbidden", "kind": "forbidden" },
-        { "name": "tenant-mismatch", "kind": "forbidden" },
-        { "name": "step-up-required", "kind": "forbidden" },
-        { "name": "invalid", "kind": "invalid" }
+      "inputs": [
+        {
+          "name": "note",
+          "type": "note-id"
+        }
       ],
-      "conformanceExample": "{\"tenant\": \"alpha\", \"title\": \"A note\", \"word-count\": 3}"
+      "outputs": [
+        {
+          "name": "note",
+          "type": "note"
+        }
+      ],
+      "errors": [
+        {
+          "name": "unauthenticated",
+          "kind": "unauthenticated"
+        },
+        {
+          "name": "forbidden",
+          "kind": "forbidden"
+        },
+        {
+          "name": "not-found",
+          "kind": "not_found"
+        }
+      ],
+      "conformanceExample": "{\"note\": 1}",
+      "name": "Violates Declared Error",
+      "realisation": "hand",
+      "implementedBy": "fixture-server",
+      "postconditions": [
+        "The stand-in server breaks the rule this contract is named for, so the generated conformance test of it must fail."
+      ],
+      "exposure": "public"
     },
     {
-      "id": "violates-step-up", "ref": "FX-009", "deployment": "shipped", "bffRoute": "POST /api/broken/write-stale",
-      "auth": { "scheme": "session", "requires": ["notes-write"], "csrf": true, "origin": true, "stepUp": "15 min" },
+      "id": "conforms-write-note",
+      "ref": "H-905",
+      "deployment": "shipped",
+      "bffRoute": "POST /api/notes/write",
+      "auth": {
+        "scheme": "session",
+        "requires": [
+          "notes-write"
+        ],
+        "csrf": true,
+        "origin": true,
+        "stepUp": "15 min"
+      },
       "tenantScope": "request",
-      "inputs": [{ "name": "tenant", "type": "tenant-id" }, { "name": "title", "type": "string" }, { "name": "word-count", "type": "u32" }],
-      "outputs": [{ "name": "note", "type": "note-id" }],
-      "errors": [
-        { "name": "unauthenticated", "kind": "unauthenticated" },
-        { "name": "forbidden", "kind": "forbidden" },
-        { "name": "tenant-mismatch", "kind": "forbidden" },
-        { "name": "step-up-required", "kind": "forbidden" },
-        { "name": "invalid", "kind": "invalid" }
+      "inputs": [
+        {
+          "name": "tenant",
+          "type": "tenant-id"
+        },
+        {
+          "name": "title",
+          "type": "string"
+        },
+        {
+          "name": "word-count",
+          "type": "u32"
+        }
       ],
-      "conformanceExample": "{\"tenant\": \"alpha\", \"title\": \"A note\", \"word-count\": 3}"
+      "outputs": [
+        {
+          "name": "note",
+          "type": "note-id"
+        }
+      ],
+      "errors": [
+        {
+          "name": "unauthenticated",
+          "kind": "unauthenticated"
+        },
+        {
+          "name": "forbidden",
+          "kind": "forbidden"
+        },
+        {
+          "name": "tenant-mismatch",
+          "kind": "forbidden"
+        },
+        {
+          "name": "step-up-required",
+          "kind": "forbidden"
+        },
+        {
+          "name": "invalid",
+          "kind": "invalid"
+        }
+      ],
+      "conformanceExample": "{\"tenant\": \"alpha\", \"title\": \"A note\", \"word-count\": 3}",
+      "name": "Conforms Write Note",
+      "realisation": "hand",
+      "implementedBy": "fixture-server",
+      "postconditions": [
+        "The stand-in server answers as the contract states, so the generated conformance test of it passes."
+      ],
+      "exposure": "public"
     },
     {
-      "id": "conforms-delete-note", "ref": "FX-010", "deployment": "shipped", "bffRoute": "POST /api/notes/delete",
-      "auth": { "scheme": "session", "requires": ["notes-delete"], "roles": ["owner"], "csrf": true, "origin": true },
+      "id": "violates-csrf",
+      "ref": "H-906",
+      "deployment": "shipped",
+      "bffRoute": "POST /api/broken/write-parses-first",
+      "auth": {
+        "scheme": "session",
+        "requires": [
+          "notes-write"
+        ],
+        "csrf": true,
+        "origin": true,
+        "stepUp": "15 min"
+      },
       "tenantScope": "request",
-      "inputs": [{ "name": "note", "type": "note-id" }],
-      "outputs": [{ "name": "deleted", "type": "bool" }],
-      "errors": [
-        { "name": "unauthenticated", "kind": "unauthenticated" },
-        { "name": "forbidden", "kind": "forbidden" },
-        { "name": "invalid", "kind": "invalid" }
+      "inputs": [
+        {
+          "name": "tenant",
+          "type": "tenant-id"
+        },
+        {
+          "name": "title",
+          "type": "string"
+        },
+        {
+          "name": "word-count",
+          "type": "u32"
+        }
       ],
-      "conformanceExample": "{\"note\": 1}"
+      "outputs": [
+        {
+          "name": "note",
+          "type": "note-id"
+        }
+      ],
+      "errors": [
+        {
+          "name": "unauthenticated",
+          "kind": "unauthenticated"
+        },
+        {
+          "name": "forbidden",
+          "kind": "forbidden"
+        },
+        {
+          "name": "tenant-mismatch",
+          "kind": "forbidden"
+        },
+        {
+          "name": "step-up-required",
+          "kind": "forbidden"
+        },
+        {
+          "name": "invalid",
+          "kind": "invalid"
+        }
+      ],
+      "conformanceExample": "{\"tenant\": \"alpha\", \"title\": \"A note\", \"word-count\": 3}",
+      "name": "Violates Csrf",
+      "realisation": "hand",
+      "implementedBy": "fixture-server",
+      "postconditions": [
+        "The stand-in server breaks the rule this contract is named for, so the generated conformance test of it must fail."
+      ],
+      "exposure": "public"
     },
     {
-      "id": "conforms-ping", "ref": "FX-011", "deployment": "shipped", "bffRoute": "GET /api/ping",
-      "auth": { "scheme": "anonymous", "requires": ["notes-browse"] },
-      "readOnly": true, "tenantScope": "request",
+      "id": "violates-capability",
+      "ref": "H-907",
+      "deployment": "shipped",
+      "bffRoute": "POST /api/broken/write-unchecked",
+      "auth": {
+        "scheme": "session",
+        "requires": [
+          "notes-write"
+        ],
+        "csrf": true,
+        "origin": true,
+        "stepUp": "15 min"
+      },
+      "tenantScope": "request",
+      "inputs": [
+        {
+          "name": "tenant",
+          "type": "tenant-id"
+        },
+        {
+          "name": "title",
+          "type": "string"
+        },
+        {
+          "name": "word-count",
+          "type": "u32"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "note",
+          "type": "note-id"
+        }
+      ],
+      "errors": [
+        {
+          "name": "unauthenticated",
+          "kind": "unauthenticated"
+        },
+        {
+          "name": "forbidden",
+          "kind": "forbidden"
+        },
+        {
+          "name": "tenant-mismatch",
+          "kind": "forbidden"
+        },
+        {
+          "name": "step-up-required",
+          "kind": "forbidden"
+        },
+        {
+          "name": "invalid",
+          "kind": "invalid"
+        }
+      ],
+      "conformanceExample": "{\"tenant\": \"alpha\", \"title\": \"A note\", \"word-count\": 3}",
+      "name": "Violates Capability",
+      "realisation": "hand",
+      "implementedBy": "fixture-server",
+      "postconditions": [
+        "The stand-in server breaks the rule this contract is named for, so the generated conformance test of it must fail."
+      ],
+      "exposure": "public"
+    },
+    {
+      "id": "violates-other-tenant-input",
+      "ref": "H-908",
+      "deployment": "shipped",
+      "bffRoute": "POST /api/broken/write-any-tenant",
+      "auth": {
+        "scheme": "session",
+        "requires": [
+          "notes-write"
+        ],
+        "csrf": true,
+        "origin": true,
+        "stepUp": "15 min"
+      },
+      "tenantScope": "request",
+      "inputs": [
+        {
+          "name": "tenant",
+          "type": "tenant-id"
+        },
+        {
+          "name": "title",
+          "type": "string"
+        },
+        {
+          "name": "word-count",
+          "type": "u32"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "note",
+          "type": "note-id"
+        }
+      ],
+      "errors": [
+        {
+          "name": "unauthenticated",
+          "kind": "unauthenticated"
+        },
+        {
+          "name": "forbidden",
+          "kind": "forbidden"
+        },
+        {
+          "name": "tenant-mismatch",
+          "kind": "forbidden"
+        },
+        {
+          "name": "step-up-required",
+          "kind": "forbidden"
+        },
+        {
+          "name": "invalid",
+          "kind": "invalid"
+        }
+      ],
+      "conformanceExample": "{\"tenant\": \"alpha\", \"title\": \"A note\", \"word-count\": 3}",
+      "name": "Violates Other Tenant Input",
+      "realisation": "hand",
+      "implementedBy": "fixture-server",
+      "postconditions": [
+        "The stand-in server breaks the rule this contract is named for, so the generated conformance test of it must fail."
+      ],
+      "exposure": "public"
+    },
+    {
+      "id": "violates-step-up",
+      "ref": "H-909",
+      "deployment": "shipped",
+      "bffRoute": "POST /api/broken/write-stale",
+      "auth": {
+        "scheme": "session",
+        "requires": [
+          "notes-write"
+        ],
+        "csrf": true,
+        "origin": true,
+        "stepUp": "15 min"
+      },
+      "tenantScope": "request",
+      "inputs": [
+        {
+          "name": "tenant",
+          "type": "tenant-id"
+        },
+        {
+          "name": "title",
+          "type": "string"
+        },
+        {
+          "name": "word-count",
+          "type": "u32"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "note",
+          "type": "note-id"
+        }
+      ],
+      "errors": [
+        {
+          "name": "unauthenticated",
+          "kind": "unauthenticated"
+        },
+        {
+          "name": "forbidden",
+          "kind": "forbidden"
+        },
+        {
+          "name": "tenant-mismatch",
+          "kind": "forbidden"
+        },
+        {
+          "name": "step-up-required",
+          "kind": "forbidden"
+        },
+        {
+          "name": "invalid",
+          "kind": "invalid"
+        }
+      ],
+      "conformanceExample": "{\"tenant\": \"alpha\", \"title\": \"A note\", \"word-count\": 3}",
+      "name": "Violates Step Up",
+      "realisation": "hand",
+      "implementedBy": "fixture-server",
+      "postconditions": [
+        "The stand-in server breaks the rule this contract is named for, so the generated conformance test of it must fail."
+      ],
+      "exposure": "public"
+    },
+    {
+      "id": "conforms-delete-note",
+      "ref": "H-910",
+      "deployment": "shipped",
+      "bffRoute": "POST /api/notes/delete",
+      "auth": {
+        "scheme": "session",
+        "requires": [
+          "notes-delete"
+        ],
+        "roles": [
+          "owner"
+        ],
+        "csrf": true,
+        "origin": true
+      },
+      "tenantScope": "request",
+      "inputs": [
+        {
+          "name": "note",
+          "type": "note-id"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "deleted",
+          "type": "bool"
+        }
+      ],
+      "errors": [
+        {
+          "name": "unauthenticated",
+          "kind": "unauthenticated"
+        },
+        {
+          "name": "forbidden",
+          "kind": "forbidden"
+        },
+        {
+          "name": "invalid",
+          "kind": "invalid"
+        }
+      ],
+      "conformanceExample": "{\"note\": 1}",
+      "name": "Conforms Delete Note",
+      "realisation": "hand",
+      "implementedBy": "fixture-server",
+      "postconditions": [
+        "The stand-in server answers as the contract states, so the generated conformance test of it passes."
+      ],
+      "exposure": "public"
+    },
+    {
+      "id": "conforms-ping",
+      "ref": "H-911",
+      "deployment": "shipped",
+      "bffRoute": "GET /api/ping",
+      "auth": {
+        "scheme": "anonymous",
+        "requires": [
+          "notes-browse"
+        ]
+      },
+      "readOnly": true,
+      "tenantScope": "request",
       "inputs": [],
-      "outputs": [{ "name": "ok", "type": "bool" }],
-      "errors": [{ "name": "throttled", "kind": "throttled" }]
+      "outputs": [
+        {
+          "name": "ok",
+          "type": "bool"
+        }
+      ],
+      "errors": [
+        {
+          "name": "throttled",
+          "kind": "throttled"
+        }
+      ],
+      "name": "Conforms Ping",
+      "realisation": "hand",
+      "implementedBy": "fixture-server",
+      "postconditions": [
+        "The stand-in server answers as the contract states, so the generated conformance test of it passes."
+      ],
+      "exposure": "public"
     },
     {
-      "id": "violates-quota", "ref": "FX-012", "deployment": "shipped", "bffRoute": "GET /api/broken/ping",
-      "auth": { "scheme": "anonymous", "requires": ["notes-browse"] },
-      "readOnly": true, "tenantScope": "request",
+      "id": "violates-quota",
+      "ref": "H-912",
+      "deployment": "shipped",
+      "bffRoute": "GET /api/broken/ping",
+      "auth": {
+        "scheme": "anonymous",
+        "requires": [
+          "notes-browse"
+        ]
+      },
+      "readOnly": true,
+      "tenantScope": "request",
       "inputs": [],
-      "outputs": [{ "name": "ok", "type": "bool" }],
-      "errors": [{ "name": "throttled", "kind": "throttled" }]
+      "outputs": [
+        {
+          "name": "ok",
+          "type": "bool"
+        }
+      ],
+      "errors": [
+        {
+          "name": "throttled",
+          "kind": "throttled"
+        }
+      ],
+      "name": "Violates Quota",
+      "realisation": "hand",
+      "implementedBy": "fixture-server",
+      "postconditions": [
+        "The stand-in server breaks the rule this contract is named for, so the generated conformance test of it must fail."
+      ],
+      "exposure": "public"
     },
     {
-      "id": "violates-read-only", "ref": "FX-013", "deployment": "shipped", "bffRoute": "GET /api/broken/ping-writable",
-      "auth": { "scheme": "anonymous", "requires": ["notes-browse"] },
-      "readOnly": true, "tenantScope": "request",
+      "id": "violates-read-only",
+      "ref": "H-913",
+      "deployment": "shipped",
+      "bffRoute": "GET /api/broken/ping-writable",
+      "auth": {
+        "scheme": "anonymous",
+        "requires": [
+          "notes-browse"
+        ]
+      },
+      "readOnly": true,
+      "tenantScope": "request",
       "inputs": [],
-      "outputs": [{ "name": "ok", "type": "bool" }],
-      "errors": [{ "name": "throttled", "kind": "throttled" }]
+      "outputs": [
+        {
+          "name": "ok",
+          "type": "bool"
+        }
+      ],
+      "errors": [
+        {
+          "name": "throttled",
+          "kind": "throttled"
+        }
+      ],
+      "name": "Violates Read Only",
+      "realisation": "hand",
+      "implementedBy": "fixture-server",
+      "postconditions": [
+        "The stand-in server breaks the rule this contract is named for, so the generated conformance test of it must fail."
+      ],
+      "exposure": "public"
     },
     {
-      "id": "unshipped-note", "ref": "FX-014", "deployment": "target", "bffRoute": "GET /api/notes/never",
-      "auth": { "scheme": "session" }, "inputs": [], "outputs": [], "errors": []
+      "id": "unshipped-note",
+      "ref": "H-914",
+      "deployment": "target",
+      "bffRoute": "GET /api/notes/never",
+      "auth": {
+        "scheme": "session"
+      },
+      "inputs": [],
+      "outputs": [],
+      "errors": [],
+      "name": "Unshipped Note",
+      "realisation": "hand",
+      "implementedBy": "fixture-server",
+      "postconditions": [
+        "The stand-in server answers as the contract states, so the generated conformance test of it passes."
+      ],
+      "exposure": "public"
+    }
+  ],
+  "components": [
+    {
+      "id": "fixture-server",
+      "name": "Fixture server",
+      "kind": "service",
+      "description": "The stand-in server of crates/bff/tests/conformance/harness.rs that serves each fixture contract, conforming or breaking one rule on purpose.",
+      "implementation": {
+        "status": "manual"
+      }
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "notes-browse",
+      "name": "Notes Browse",
+      "description": "A capability of the conformance fixtures.",
+      "core": true
+    },
+    {
+      "id": "notes-delete",
+      "name": "Notes Delete",
+      "description": "A capability of the conformance fixtures.",
+      "core": true
+    },
+    {
+      "id": "notes-read",
+      "name": "Notes Read",
+      "description": "A capability of the conformance fixtures.",
+      "core": true
+    },
+    {
+      "id": "notes-write",
+      "name": "Notes Write",
+      "description": "A capability of the conformance fixtures.",
+      "core": true
+    },
+    {
+      "id": "session-manage",
+      "name": "Session Manage",
+      "description": "A capability of the conformance fixtures.",
+      "core": true
     }
   ]
 }

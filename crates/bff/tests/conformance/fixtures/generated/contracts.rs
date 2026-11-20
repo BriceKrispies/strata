@@ -25,7 +25,9 @@ pub const ROLES: &[(&str, &[&str])] = &[
 
 /// The HTTP status of each kind of error (`system.generation.errorKinds`).
 pub const ERROR_STATUS: &[(&str, u16)] = &[
+    ("conflict", 409),
     ("forbidden", 403),
+    ("internal", 500),
     ("invalid", 422),
     ("not_found", 404),
     ("throttled", 429),
@@ -54,7 +56,32 @@ pub const TYPES: &[TypeDecl] = &[
                 optional: true,
             },
             Field {
+                wire: "failed",
+                ty: Ty::List(&Ty::Named("check")),
+                optional: true,
+            },
+            Field {
                 wire: "correlation",
+                ty: Ty::Text,
+                optional: false,
+            },
+        ]),
+    },
+    TypeDecl {
+        id: "check",
+        decl: Decl::Struct(&[
+            Field {
+                wire: "rule",
+                ty: Ty::Text,
+                optional: false,
+            },
+            Field {
+                wire: "passed",
+                ty: Ty::Bool,
+                optional: false,
+            },
+            Field {
+                wire: "detail",
                 ty: Ty::Text,
                 optional: false,
             },
@@ -66,9 +93,11 @@ pub const TYPES: &[TypeDecl] = &[
             "unauthenticated",
             "forbidden",
             "not_found",
+            "conflict",
             "invalid",
             "throttled",
             "unavailable",
+            "internal",
         ]),
     },
     TypeDecl {
@@ -117,7 +146,7 @@ pub const COVERED: &[&str] = &[
 /// The checks that are not made: (contract, check, reason).
 pub const SKIPPED: &[(&str, &str, &str)] = &[];
 
-/// Contract `conforms-read-note` (FX-001): GET /api/notes/:note.
+/// Contract `conforms-read-note` (H-901): GET /api/notes/:note.
 pub const CONFORMS_READ_NOTE: Contract = Contract {
     id: "conforms-read-note",
     method: "GET",
@@ -155,7 +184,7 @@ async fn conforms_read_note() {
     conform(&SPEC, &CONFORMS_READ_NOTE).await;
 }
 
-/// Contract `violates-reply-shape` (FX-002): GET /api/broken/notes/:note.
+/// Contract `violates-reply-shape` (H-902): GET /api/broken/notes/:note.
 pub const VIOLATES_REPLY_SHAPE: Contract = Contract {
     id: "violates-reply-shape",
     method: "GET",
@@ -194,7 +223,7 @@ async fn violates_reply_shape() {
     conform(&SPEC, &VIOLATES_REPLY_SHAPE).await;
 }
 
-/// Contract `violates-no-session` (FX-003): GET /api/broken/notes-open/:note.
+/// Contract `violates-no-session` (H-903): GET /api/broken/notes-open/:note.
 pub const VIOLATES_NO_SESSION: Contract = Contract {
     id: "violates-no-session",
     method: "GET",
@@ -233,7 +262,7 @@ async fn violates_no_session() {
     conform(&SPEC, &VIOLATES_NO_SESSION).await;
 }
 
-/// Contract `violates-declared-error` (FX-004): GET /api/broken/notes-undeclared/:note.
+/// Contract `violates-declared-error` (H-904): GET /api/broken/notes-undeclared/:note.
 pub const VIOLATES_DECLARED_ERROR: Contract = Contract {
     id: "violates-declared-error",
     method: "GET",
@@ -272,7 +301,7 @@ async fn violates_declared_error() {
     conform(&SPEC, &VIOLATES_DECLARED_ERROR).await;
 }
 
-/// Contract `conforms-write-note` (FX-005): POST /api/notes/write.
+/// Contract `conforms-write-note` (H-905): POST /api/notes/write.
 pub const CONFORMS_WRITE_NOTE: Contract = Contract {
     id: "conforms-write-note",
     method: "POST",
@@ -310,7 +339,7 @@ async fn conforms_write_note() {
     conform(&SPEC, &CONFORMS_WRITE_NOTE).await;
 }
 
-/// Contract `violates-csrf` (FX-006): POST /api/broken/write-parses-first.
+/// Contract `violates-csrf` (H-906): POST /api/broken/write-parses-first.
 pub const VIOLATES_CSRF: Contract = Contract {
     id: "violates-csrf",
     method: "POST",
@@ -349,7 +378,7 @@ async fn violates_csrf() {
     conform(&SPEC, &VIOLATES_CSRF).await;
 }
 
-/// Contract `violates-capability` (FX-007): POST /api/broken/write-unchecked.
+/// Contract `violates-capability` (H-907): POST /api/broken/write-unchecked.
 pub const VIOLATES_CAPABILITY: Contract = Contract {
     id: "violates-capability",
     method: "POST",
@@ -388,7 +417,7 @@ async fn violates_capability() {
     conform(&SPEC, &VIOLATES_CAPABILITY).await;
 }
 
-/// Contract `violates-other-tenant-input` (FX-008): POST /api/broken/write-any-tenant.
+/// Contract `violates-other-tenant-input` (H-908): POST /api/broken/write-any-tenant.
 pub const VIOLATES_OTHER_TENANT_INPUT: Contract = Contract {
     id: "violates-other-tenant-input",
     method: "POST",
@@ -427,7 +456,7 @@ async fn violates_other_tenant_input() {
     conform(&SPEC, &VIOLATES_OTHER_TENANT_INPUT).await;
 }
 
-/// Contract `violates-step-up` (FX-009): POST /api/broken/write-stale.
+/// Contract `violates-step-up` (H-909): POST /api/broken/write-stale.
 pub const VIOLATES_STEP_UP: Contract = Contract {
     id: "violates-step-up",
     method: "POST",
@@ -466,7 +495,7 @@ async fn violates_step_up() {
     conform(&SPEC, &VIOLATES_STEP_UP).await;
 }
 
-/// Contract `conforms-delete-note` (FX-010): POST /api/notes/delete.
+/// Contract `conforms-delete-note` (H-910): POST /api/notes/delete.
 pub const CONFORMS_DELETE_NOTE: Contract = Contract {
     id: "conforms-delete-note",
     method: "POST",
@@ -504,7 +533,7 @@ async fn conforms_delete_note() {
     conform(&SPEC, &CONFORMS_DELETE_NOTE).await;
 }
 
-/// Contract `conforms-ping` (FX-011): GET /api/ping.
+/// Contract `conforms-ping` (H-911): GET /api/ping.
 pub const CONFORMS_PING: Contract = Contract {
     id: "conforms-ping",
     method: "GET",
@@ -542,7 +571,7 @@ async fn conforms_ping() {
     conform(&SPEC, &CONFORMS_PING).await;
 }
 
-/// Contract `violates-quota` (FX-012): GET /api/broken/ping.
+/// Contract `violates-quota` (H-912): GET /api/broken/ping.
 pub const VIOLATES_QUOTA: Contract = Contract {
     id: "violates-quota",
     method: "GET",
@@ -581,7 +610,7 @@ async fn violates_quota() {
     conform(&SPEC, &VIOLATES_QUOTA).await;
 }
 
-/// Contract `violates-read-only` (FX-013): GET /api/broken/ping-writable.
+/// Contract `violates-read-only` (H-913): GET /api/broken/ping-writable.
 pub const VIOLATES_READ_ONLY: Contract = Contract {
     id: "violates-read-only",
     method: "GET",

@@ -848,6 +848,14 @@ pub const TYPES: &[TypeDecl] = &[
                     }]),
                 },
                 Variant {
+                    wire: "SendDigest",
+                    content: Content::Fields(&[Field {
+                        wire: "messages",
+                        ty: Ty::Int(0, 4294967295),
+                        optional: false,
+                    }]),
+                },
+                Variant {
                     wire: "CallWebhook",
                     content: Content::Fields(&[
                         Field {
@@ -1204,6 +1212,181 @@ pub const TYPES: &[TypeDecl] = &[
             Field {
                 wire: "authors",
                 ty: Ty::List(&Ty::Named("author-row")),
+                optional: false,
+            },
+        ]),
+    },
+    TypeDecl {
+        id: "editor-constraint",
+        decl: Decl::Struct(&[
+            Field {
+                wire: "id",
+                ty: Ty::Text,
+                optional: false,
+            },
+            Field {
+                wire: "rule",
+                ty: Ty::Text,
+                optional: false,
+            },
+            Field {
+                wire: "message",
+                ty: Ty::Text,
+                optional: false,
+            },
+        ]),
+    },
+    TypeDecl {
+        id: "editor-field-rule",
+        decl: Decl::Struct(&[
+            Field {
+                wire: "id",
+                ty: Ty::Text,
+                optional: false,
+            },
+            Field {
+                wire: "label",
+                ty: Ty::Text,
+                optional: false,
+            },
+            Field {
+                wire: "type",
+                ty: Ty::Text,
+                optional: false,
+            },
+            Field {
+                wire: "type_name",
+                ty: Ty::Text,
+                optional: false,
+            },
+            Field {
+                wire: "required",
+                ty: Ty::Bool,
+                optional: false,
+            },
+            Field {
+                wire: "unique",
+                ty: Ty::Bool,
+                optional: false,
+            },
+        ]),
+    },
+    TypeDecl {
+        id: "editor-limits",
+        decl: Decl::Struct(&[
+            Field {
+                wire: "string_bytes",
+                ty: Ty::Int(0, 18446744073709551615),
+                optional: false,
+            },
+            Field {
+                wire: "list_items",
+                ty: Ty::Int(0, 18446744073709551615),
+                optional: false,
+            },
+            Field {
+                wire: "unique_bytes",
+                ty: Ty::Int(0, 18446744073709551615),
+                optional: false,
+            },
+            Field {
+                wire: "record_bytes",
+                ty: Ty::Int(0, 18446744073709551615),
+                optional: false,
+            },
+        ]),
+    },
+    TypeDecl {
+        id: "editor-record-rules",
+        decl: Decl::Struct(&[
+            Field {
+                wire: "object",
+                ty: Ty::Text,
+                optional: false,
+            },
+            Field {
+                wire: "fields",
+                ty: Ty::List(&Ty::Named("editor-field-rule")),
+                optional: false,
+            },
+            Field {
+                wire: "limits",
+                ty: Ty::Named("editor-limits"),
+                optional: false,
+            },
+            Field {
+                wire: "constraints",
+                ty: Ty::List(&Ty::Named("editor-constraint")),
+                optional: false,
+            },
+            Field {
+                wire: "workflows",
+                ty: Ty::List(&Ty::Named("editor-workflow")),
+                optional: false,
+            },
+        ]),
+    },
+    TypeDecl {
+        id: "editor-transition",
+        decl: Decl::Struct(&[
+            Field {
+                wire: "name",
+                ty: Ty::Text,
+                optional: false,
+            },
+            Field {
+                wire: "from",
+                ty: Ty::Text,
+                optional: false,
+            },
+            Field {
+                wire: "to",
+                ty: Ty::Text,
+                optional: false,
+            },
+            Field {
+                wire: "guard",
+                ty: Ty::Text,
+                optional: true,
+            },
+            Field {
+                wire: "server_decides",
+                ty: Ty::Bool,
+                optional: false,
+            },
+            Field {
+                wire: "sets",
+                ty: Ty::List(&Ty::Text),
+                optional: false,
+            },
+        ]),
+    },
+    TypeDecl {
+        id: "editor-workflow",
+        decl: Decl::Struct(&[
+            Field {
+                wire: "id",
+                ty: Ty::Text,
+                optional: false,
+            },
+            Field {
+                wire: "field",
+                ty: Ty::Text,
+                optional: false,
+            },
+            Field {
+                wire: "initial",
+                ty: Ty::Text,
+                optional: false,
+            },
+            Field {
+                wire: "state",
+                ty: Ty::Text,
+                optional: true,
+            },
+            Field {
+                wire: "transitions",
+                ty: Ty::List(&Ty::Named("editor-transition")),
                 optional: false,
             },
         ]),
@@ -2914,8 +3097,10 @@ pub const COVERED: &[&str] = &[
     "activate-workflow",
     "start-workflow-run",
     "approve-workflow-step",
+    "deliver-view",
     "subscribe-events",
     "sign-media-address",
+    "verify-audit-chain",
     "receive-inbound-webhook",
     "list-webhook-deliveries",
     "search",
@@ -3077,6 +3262,16 @@ pub const SKIPPED: &[(&str, &str, &str)] = &[
         "approve-workflow-step",
         "success",
         "it has required inputs and no conformanceExample",
+    ),
+    (
+        "deliver-view",
+        "success",
+        "it has required inputs and no conformanceExample",
+    ),
+    (
+        "deliver-view",
+        "quota",
+        "its limit 600 is above the 100 calls the suite makes",
     ),
     (
         "subscribe-events",
@@ -3484,6 +3679,11 @@ pub const SKIPPED: &[(&str, &str, &str)] = &[
         "it has required inputs and no conformanceExample",
     ),
     (
+        "run-lab-projection",
+        "quota",
+        "it has no call that succeeds to repeat",
+    ),
+    (
         "read-lab-run",
         "success",
         "it has required inputs and no conformanceExample",
@@ -3847,6 +4047,87 @@ async fn approve_workflow_step() {
     conform(&SPEC, &APPROVE_WORKFLOW_STEP).await;
 }
 
+/// Contract `deliver-view` (CT-093): GET /api/view view.
+pub const DELIVER_VIEW: Contract = Contract {
+    id: "deliver-view",
+    method: "GET",
+    shape: Shape::View,
+    scheme: Scheme::Anonymous,
+    requires: &["content-read"],
+    roles: &[],
+    origin: false,
+    csrf: false,
+    step_up: false,
+    read_only: true,
+    tenant_input: None,
+    probe: Request {
+        path: "/api/view",
+        query: &[("path", "/")],
+        body: None,
+    },
+    success: None,
+    reply: Reply::Members(&[
+        Field {
+            wire: "view",
+            ty: Ty::Text,
+            optional: false,
+        },
+        Field {
+            wire: "title",
+            ty: Ty::Text,
+            optional: false,
+        },
+        Field {
+            wire: "path",
+            ty: Ty::Text,
+            optional: false,
+        },
+        Field {
+            wire: "params",
+            ty: Ty::Any,
+            optional: false,
+        },
+        Field {
+            wire: "data",
+            ty: Ty::Any,
+            optional: false,
+        },
+        Field {
+            wire: "depends_on",
+            ty: Ty::List(&Ty::Text),
+            optional: false,
+        },
+        Field {
+            wire: "revision",
+            ty: Ty::Named("state-revision"),
+            optional: false,
+        },
+        Field {
+            wire: "schema_version",
+            ty: Ty::Named("schema-version"),
+            optional: false,
+        },
+        Field {
+            wire: "theme",
+            ty: Ty::Named("view-theme"),
+            optional: false,
+        },
+        Field {
+            wire: "next",
+            ty: Ty::Named("value-map"),
+            optional: true,
+        },
+    ]),
+    errors: &["not_found", "invalid", "throttled", "unavailable"],
+    step_up_error: None,
+    quota: None,
+};
+
+#[tokio::test]
+async fn deliver_view() {
+    conform(&SPEC, &DELIVER_VIEW).await;
+}
+
 /// Contract `subscribe-events` (CT-098): GET /ws.
 pub const SUBSCRIBE_EVENTS: Contract = Contract {
     id: "subscribe-events",
@@ -3913,6 +4194,71 @@ pub const SIGN_MEDIA_ADDRESS: Contract = Contract {
 #[tokio::test]
 async fn sign_media_address() {
     conform(&SPEC, &SIGN_MEDIA_ADDRESS).await;
+}
+
+/// Contract `verify-audit-chain` (CT-128): GET /api/audit/verify.
+pub const VERIFY_AUDIT_CHAIN: Contract = Contract {
+    id: "verify-audit-chain",
+    method: "GET",
+    shape: Shape::Json,
+    scheme: Scheme::Session,
+    requires: &["audit-read"],
+    roles: &[],
+    origin: false,
+    csrf: false,
+    step_up: false,
+    read_only: true,
+    tenant_input: Some("tenant"),
+    probe: Request {
+        path: "/api/audit/verify",
+        query: &[],
+        body: None,
+    },
+    success: Some(Request {
+        path: "/api/audit/verify",
+        query: &[],
+        body: None,
+    }),
+    reply: Reply::Members(&[
+        Field {
+            wire: "intact",
+            ty: Ty::Bool,
+            optional: false,
+        },
+        Field {
+            wire: "first_break",
+            ty: Ty::Int(0, 18446744073709551615),
+            optional: true,
+        },
+        Field {
+            wire: "reason",
+            ty: Ty::Text,
+            optional: true,
+        },
+        Field {
+            wire: "entries",
+            ty: Ty::Int(0, 18446744073709551615),
+            optional: false,
+        },
+        Field {
+            wire: "verified",
+            ty: Ty::Int(0, 18446744073709551615),
+            optional: false,
+        },
+        Field {
+            wire: "unchained",
+            ty: Ty::Int(0, 18446744073709551615),
+            optional: false,
+        },
+    ]),
+    errors: &["unauthenticated", "forbidden"],
+    step_up_error: None,
+    quota: None,
+};
+
+#[tokio::test]
+async fn verify_audit_chain() {
+    conform(&SPEC, &VERIFY_AUDIT_CHAIN).await;
 }
 
 /// Contract `receive-inbound-webhook` (CT-172): POST /webhooks/inbound/:endpoint.
@@ -5370,6 +5716,11 @@ pub const READ_NEW_ARTICLE_VIEW: Contract = Contract {
             ty: Ty::List(&Ty::Named("option-choice")),
             optional: false,
         },
+        Field {
+            wire: "record_rules",
+            ty: Ty::Map(&Ty::Named("editor-record-rules")),
+            optional: true,
+        },
     ]),
     errors: &["unauthenticated", "forbidden", "unavailable"],
     step_up_error: None,
@@ -5469,6 +5820,11 @@ pub const READ_EDIT_ARTICLE_VIEW: Contract = Contract {
             wire: "authors",
             ty: Ty::List(&Ty::Named("option-choice")),
             optional: false,
+        },
+        Field {
+            wire: "record_rules",
+            ty: Ty::Map(&Ty::Named("editor-record-rules")),
+            optional: true,
         },
     ]),
     errors: &["not_found", "unauthenticated", "forbidden", "unavailable"],
@@ -9050,7 +9406,7 @@ pub const VERIFY_LAB_PROOFS: Contract = Contract {
     }]),
     errors: &["unauthenticated", "forbidden", "not_found", "throttled"],
     step_up_error: None,
-    quota: None,
+    quota: Some(5),
 };
 
 #[tokio::test]

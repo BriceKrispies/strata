@@ -780,7 +780,10 @@ fn read_event_kinds(content: &mut Map<String, Json>) -> Result<BTreeSet<String>,
                 "{kind} must begin with {DECLARED_KIND_PREFIX} and a name"
             )));
         }
-        let fields = item.get("fields").and_then(Json::as_array).map_or(0, Vec::len);
+        let fields = item
+            .get("fields")
+            .and_then(Json::as_array)
+            .map_or(0, Vec::len);
         if fields > 16 {
             return Err(bad(format!("{kind} has {fields} fields, at most 16")));
         }

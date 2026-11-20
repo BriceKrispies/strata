@@ -182,6 +182,7 @@ pub(crate) fn rust_ty(t: &Ty) -> Result<TokenStream, Refusal> {
             quote! { std::collections::BTreeSet<#of> }
         }
         Ty::Float => quote! { f64 },
+        Ty::Uuid => quote! { uuid::Uuid },
         Ty::Wide => quote! { i128 },
         Ty::Unit => quote! { () },
         Ty::Shared(of) => {
@@ -409,6 +410,8 @@ fn debug_differs(spec: &Spec, t: &Ty, seen: &mut BTreeSet<String>) -> Option<Str
     match t {
         _ if t.is_timestamp() => Some("a timestamp".to_string()),
         _ if t.is_prelude_number() => Some("a duration".to_string()),
+        Ty::Uuid => Some("a uuid".to_string()),
+        Ty::Alias(_, r) if matches!(**r, Ty::Uuid) => Some("a uuid".to_string()),
         Ty::List(of) | Ty::Set(of) | Ty::Option(of) | Ty::Shared(of) => {
             debug_differs(spec, of, seen)
         }

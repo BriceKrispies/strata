@@ -33,6 +33,9 @@ pub(crate) enum Ty {
     Number,
     /// `f64`.
     Float,
+    /// `uuid`: `uuid::Uuid` in Rust, a lowercase hyphenated string to Exegra. Compared and
+    /// ordered (lowercase text and the bytes order alike), never printed with `{:?}`.
+    Uuid,
     /// `i128`: the generated code's own type of a numeric sort key, which holds every integer
     /// type's values, so keys of different integer types compare as Exegra's numbers do. No
     /// specification type is one.
@@ -115,6 +118,7 @@ impl Ty {
             Ty::Int(b) => b.as_str().into(),
             Ty::Number => "a number".into(),
             Ty::Float => "f64".into(),
+            Ty::Uuid => "uuid".into(),
             Ty::Wide => "i128".into(),
             Ty::Shared(of) => format!("shared<{}>", of.text()),
             Ty::Alias(id, _) | Ty::Enum(id) | Ty::Struct(id) | Ty::Union(id) => id.clone(),
@@ -391,6 +395,7 @@ fn builtin(b: Builtin) -> Result<Ty, Refusal> {
         Builtin::Timestamp => Ty::timestamp(),
         Builtin::Duration => Ty::duration(),
         Builtin::F64 => Ty::Float,
+        Builtin::Uuid => Ty::Uuid,
         other => {
             return Err(unsupported(format!(
                 "the built-in type {} is not compiled in functions yet (bool, string, f64, timestamp, duration and the integer types are)",
@@ -1417,7 +1422,13 @@ impl<'a> Checker<'a> {
                             }
                         }
                         Hole::Display => {
-                            if class(a).is_none() && !matches!(a, Ty::Enum(_) | Ty::Unknown) {
+                            // A uuid writes as its lowercase hyphenated text in both Exegra and Rust.
+                            let uuid = matches!(a, Ty::Uuid)
+                                || matches!(a, Ty::Alias(_, r) if matches!(**r, Ty::Uuid));
+                            if class(a).is_none()
+                                && !uuid
+                                && !matches!(a, Ty::Enum(_) | Ty::Unknown)
+                            {
                                 return Err(invalid(format!(
                                     "value {i} of format is {}; {{}} writes numbers, strings, bools and enum values ({{:?}} writes Rust's debug text of any value)",
                                     a.text()

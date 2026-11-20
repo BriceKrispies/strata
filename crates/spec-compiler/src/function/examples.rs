@@ -84,6 +84,11 @@ pub(crate) fn literal(spec: &Spec, t: &Ty, v: &Value) -> Result<TokenStream, Ref
                 lit
             }
         }
+        Ty::Uuid => {
+            let u = uuid_value(v).ok_or_else(|| not_a(t, v))?;
+            let lit = Literal::u128_suffixed(u);
+            quote! { uuid::Uuid::from_u128(#lit) }
+        }
         Ty::Float => {
             let x = v.as_f64().ok_or_else(|| not_a(t, v))?;
             if !x.is_finite() {
@@ -299,6 +304,11 @@ fn order(spec: &Spec, t: &Ty, a: &Value, b: &Value) -> Result<std::cmp::Ordering
             n(a)?.cmp(&n(b)?)
         }
         Ty::Alias(_, repr) | Ty::Shared(repr) => order(spec, repr, a, b)?,
+        // Lowercase hyphenated text orders as the uuid's bytes do.
+        Ty::Uuid => {
+            let u = |v: &Value| uuid_value(v).ok_or_else(|| bad(v));
+            u(a)?.cmp(&u(b)?)
+        }
         Ty::Float => {
             return Err(unsupported(
                 "an example set of f64 items, which have no total order",
@@ -900,4 +910,30 @@ pub(crate) fn fixtures(
         });
     }
     Ok(out)
+}
+
+/// A uuid as an example writes it: lowercase hyphenated text, as Exegra and the generated type's
+/// `Display` both write it, so the two never disagree on how one prints or orders.
+fn uuid_value(v: &Value) -> Option<u128> {
+    let Value::String(s) = v else { return None };
+    let b = s.as_bytes();
+    if b.len() != 36 {
+        return None;
+    }
+    let mut n: u128 = 0;
+    for (i, c) in b.iter().enumerate() {
+        if matches!(i, 8 | 13 | 18 | 23) {
+            if *c != b'-' {
+                return None;
+            }
+            continue;
+        }
+        let d = match c {
+            b'0'..=b'9' => c - b'0',
+            b'a'..=b'f' => c - b'a' + 10,
+            _ => return None,
+        };
+        n = (n << 4) | u128::from(d);
+    }
+    Some(n)
 }
