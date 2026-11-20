@@ -61,7 +61,7 @@ pub fn seed(app: &App) -> Result<Vec<String>, String> {
 pub fn install_bundle(app: &App, bundle: &Bundle) -> Result<usize, String> {
     let tenant = bundle.id.clone();
     let mut begun = false;
-    let result = install(bundle, &mut |ctx, intent| {
+    let result = install::<String>(bundle, &mut |ctx, intent| {
         let creates = matches!(intent, Intent::CreateTenant { .. });
         let output = run_intent(app, &ctx, &intent, false)
             .map(|done| done.transition.output)

@@ -60,6 +60,7 @@ fn require_excerpt(existing: ExistingData, before_step: usize) -> Proposal {
                 unique: false,
                 default: None,
                 read: None,
+                personal: None,
             },
         }],
         existing,
@@ -605,6 +606,7 @@ fn a_journal_of_real_commits_replays_to_the_live_state() {
         correlation: format!("t-{now}"),
         verified_address: None,
         idempotency_key: None,
+        language: None,
     };
     let role_of = |name: &str| RoleId::new(name).unwrap();
     let mut work: Vec<(Context, Intent)> =

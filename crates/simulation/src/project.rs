@@ -270,6 +270,7 @@ fn diff_queries(
                 correlation: "compare".into(),
                 verified_address: None,
                 idempotency_key: None,
+                language: None,
             };
             let request = ReadRequest::Named {
                 query: query.id.clone(),
@@ -463,6 +464,7 @@ fn injection(scenario: &Scenario, proposal: &Proposal) -> Injection {
                 correlation: "sim-proposal".into(),
                 verified_address: None,
                 idempotency_key: None,
+                language: None,
             },
             intent: Intent::ChangeSchema {
                 changes: proposal.changes.clone(),

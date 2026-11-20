@@ -896,6 +896,7 @@ async fn deleting_a_person_removes_the_roles_they_were_given_directly() {
         correlation: "t-direct-role".into(),
         verified_address: None,
         idempotency_key: None,
+        language: None,
     };
     execute(
         backend.store.as_ref(),

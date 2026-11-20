@@ -40,6 +40,7 @@ pub fn ctx(tenant: &str, principal: Principal, now: i64) -> Context {
         correlation: format!("test-{now}"),
         verified_address: None,
         idempotency_key: None,
+        language: None,
     }
 }
 
@@ -62,6 +63,7 @@ pub fn field_def(id: &str, ty: FieldType, required: bool) -> FieldDef {
         unique: false,
         default: None,
         read: None,
+        personal: None,
     }
 }
 

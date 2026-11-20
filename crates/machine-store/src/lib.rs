@@ -225,6 +225,7 @@ fn context(tenant: &TenantId, now: Time) -> Context {
         correlation: "runtime".into(),
         verified_address: None,
         idempotency_key: None,
+        language: None,
     }
 }
 

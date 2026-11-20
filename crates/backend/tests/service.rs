@@ -365,6 +365,7 @@ fn owner_changes(store: &MemoryStore, now: i64, changes: Vec<SchemaChange>) {
         correlation: "t-metadata".into(),
         verified_address: None,
         idempotency_key: None,
+        language: None,
     };
     let intent = Intent::ChangeSchema {
         changes,
@@ -2582,6 +2583,7 @@ async fn a_change_of_roles_ends_the_sessions_of_the_person_it_changes() {
         correlation: "t-promote".into(),
         verified_address: None,
         idempotency_key: None,
+        language: None,
     };
     let promote = Intent::AssignRole {
         principal: PrincipalId::new("user:mirela").unwrap(),
@@ -3991,7 +3993,7 @@ async fn a_tenant_is_created_while_running_and_its_owner_signs_in_by_link() {
     assert_eq!(status, 200, "{reply}");
     assert_eq!(reply["notified"], true);
     assert_eq!(reply["owner_login"], "new.owner@example.org");
-    let welcome = sink.outbox();
+    let welcome = strata_backend::mail::Mailer::outbox(&*sink);
     assert_eq!(welcome.len(), 1);
     assert_eq!(welcome[0].to, "new.owner@example.org");
     assert!(welcome[0].text.contains("https://newsite.example/login"));

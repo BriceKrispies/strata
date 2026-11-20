@@ -1408,6 +1408,10 @@ fn apply_change(schema: &mut TenantSchema, change: &SchemaChange) -> Result<Stri
                     label: label.clone(),
                     fields: BTreeMap::new(),
                     constraints: BTreeMap::new(),
+                    retention: None,
+                    publication: None,
+                    language_field: None,
+                    translation_group: None,
                 });
             format!("define object {id}")
         }
@@ -1439,6 +1443,7 @@ fn apply_change(schema: &mut TenantSchema, change: &SchemaChange) -> Result<Stri
                 unique: false,
                 default: None,
                 read: None,
+                personal: None,
             };
             object(schema, id)?.fields.insert(field.clone(), def);
             format!("define relationship {id}.{field} -> {target}")

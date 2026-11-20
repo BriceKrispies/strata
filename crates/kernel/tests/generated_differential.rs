@@ -488,10 +488,14 @@ fn compare_reads_of(world: &World, now: i64, tally: &mut Tally) {
         ReadRequest::Named {
             query: QueryId::new("notes_by_rank").unwrap(),
             params: BTreeMap::new(),
+            page_size: None,
+            cursor: None,
         },
         ReadRequest::Named {
             query: QueryId::new("no_such_query").unwrap(),
             params: BTreeMap::new(),
+            page_size: None,
+            cursor: None,
         },
         ReadRequest::Records {
             object: object("note"),

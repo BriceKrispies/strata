@@ -344,6 +344,7 @@ impl Bundle {
                         unique: field.unique,
                         default: optional(&field.default).map_err(|e| format!("{at}: {e}"))?,
                         read: optional(&field.read).map_err(|e| format!("{at}: {e}"))?,
+                        personal: None,
                     },
                 });
             }
@@ -503,6 +504,7 @@ pub fn install<E>(
             correlation: format!("install:{}:{steps}", bundle.id),
             verified_address: None,
             idempotency_key: None,
+            language: None,
         };
         execute(ctx, intent).map_err(|error| InstallError::Step { step, error })
     };
@@ -591,6 +593,10 @@ pub fn install<E>(
                         label: label.clone(),
                         fields: BTreeMap::new(),
                         constraints: BTreeMap::new(),
+                        retention: None,
+                        publication: None,
+                        language_field: None,
+                        translation_group: None,
                     },
                 );
             }

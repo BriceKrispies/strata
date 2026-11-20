@@ -569,6 +569,7 @@ fn objects(t: &Json) -> BTreeMap<ObjectTypeId, ObjectTypeDef> {
                     unique: false,
                     default: None,
                     read: None,
+                    personal: None,
                 },
             );
         }
@@ -579,6 +580,10 @@ fn objects(t: &Json) -> BTreeMap<ObjectTypeId, ObjectTypeDef> {
                 label: String::new(),
                 fields,
                 constraints: BTreeMap::new(),
+                retention: None,
+                publication: None,
+                language_field: None,
+                translation_group: None,
             },
         );
     }
@@ -592,6 +597,7 @@ fn shape_of(ty: &FieldType) -> lang::Shape {
         FieldType::Bool => lang::Shape::Bool,
         FieldType::Time => lang::Shape::Time,
         FieldType::Ref { .. } => lang::Shape::Ref,
+        FieldType::File { .. } | FieldType::Language => lang::Shape::Str,
         FieldType::List(_) => lang::Shape::List,
     }
 }

@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use strata_kernel::testkit::*;
 use strata_kernel::*;
 use strata_storage_api::memory::MemoryStore;
-use strata_storage_api::{execute, query};
+use strata_storage_api::{execute, query, Executed};
 
 /// Loads one decision may spend however many references the record holds: the header, the first
 /// load, the reload that adds every reference of the stored record, and one of slack.
@@ -227,6 +227,8 @@ fn a_query_filter_that_follows_a_reference_is_decided_on_a_partial_snapshot() {
         &ReadRequest::Named {
             query: QueryId::new("by_ada").expect("id"),
             params: BTreeMap::new(),
+            page_size: None,
+            cursor: None,
         },
         &ctx("acme", owner(), 20),
     )

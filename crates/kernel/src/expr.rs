@@ -219,6 +219,8 @@ fn shape_of_type(ty: &FieldType) -> Shape {
         FieldType::Time => Shape::Time,
         FieldType::Ref { .. } => Shape::Ref,
         FieldType::List(_) => Shape::List,
+        // A file is held as its file identifier and a language as its tag, both text.
+        FieldType::File { .. } | FieldType::Language => Shape::Str,
     }
 }
 

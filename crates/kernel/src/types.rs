@@ -89,7 +89,9 @@ impl FieldTypeExt for FieldType {
             | (FieldType::Int, Value::Int(_))
             | (FieldType::Bool, Value::Bool(_))
             | (FieldType::Time, Value::Time(_))
-            | (FieldType::Ref { .. }, Value::Ref(_)) => true,
+            | (FieldType::Ref { .. }, Value::Ref(_))
+            | (FieldType::File { .. }, Value::Str(_))
+            | (FieldType::Language, Value::Str(_)) => true,
             (FieldType::List(inner), Value::List(items)) => {
                 items.iter().all(|item| inner.admits(item))
             }
@@ -105,6 +107,8 @@ impl FieldTypeExt for FieldType {
             FieldType::Time => "timestamp".into(),
             FieldType::Ref { target, .. } => format!("reference<{target}>"),
             FieldType::List(inner) => format!("list<{}>", inner.name()),
+            FieldType::File { .. } => "file".into(),
+            FieldType::Language => "language".into(),
         }
     }
 
