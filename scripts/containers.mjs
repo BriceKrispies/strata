@@ -12,6 +12,9 @@
 // only `e2e` sets it, because development logins and fixture endpoints must never be on in a
 // stack anyone else can reach, and the images carry no development accounts.
 //
+// STRATA_AWS=1 selects the local AWS profile: the runtime keeps its data in a PostgreSQL container,
+// and MiniStack emulates the AWS APIs (deploy/compose.local-aws.yaml).
+//
 // The compose provider is `podman compose`, or `podman-compose` when that is missing; set
 // STRATA_COMPOSE to a command line to override.
 
@@ -40,8 +43,14 @@ function composeCommand() {
   return probe.status === 0 ? ['podman', 'compose'] : ['podman-compose'];
 }
 
-// The e2e stack adds tests/e2e/compose.e2e.yaml (development accounts mounted read-only).
-const files = () => (process.env.STRATA_DEV === '1' ? [file, 'tests/e2e/compose.e2e.yaml'] : [file]);
+// The e2e stack adds tests/e2e/compose.e2e.yaml (development accounts mounted read-only). The
+// local AWS profile (STRATA_AWS=1) adds deploy/compose.local-aws.yaml: PostgreSQL for the store and
+// MiniStack for the AWS APIs.
+const files = () => [
+  file,
+  ...(process.env.STRATA_DEV === '1' ? ['tests/e2e/compose.e2e.yaml'] : []),
+  ...(process.env.STRATA_AWS === '1' ? ['deploy/compose.local-aws.yaml'] : []),
+];
 
 function compose(args, env) {
   const [program, ...head] = composeCommand();
@@ -94,6 +103,7 @@ Strata is running in containers.
 
   Fieldnotes     http://127.0.0.1:${port}/
   Second tenant  http://tidewater.localhost:${port}/
+  Store          ${process.env.STRATA_AWS === '1' ? 'PostgreSQL (strata-postgres), AWS APIs on MiniStack (strata-ministack)' : 'SQLite in the strata-data volume'}
   Logs           podman logs strata-runtime ; podman logs strata-gateway
   Stop           npm run containers:down      (add -- --volumes to delete the database)
 `);
