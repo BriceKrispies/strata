@@ -603,6 +603,94 @@ fn many_records_are_erased_in_bounded_batches() {
     }
 }
 
+// Verifies: PRV-353
+// Verifies: PRV-2463
+#[test]
+fn the_receipt_names_each_backup_image_and_export_with_its_own_expiry() {
+    const DAY: i64 = 86_400_000;
+    let store: Arc<dyn Store> = Arc::new(MemoryStore::new());
+    let app = app_on(store.clone());
+    let store = store.as_ref();
+    let alpha = found(store, "alpha");
+    let owner = as_owner(&alpha, 2_000);
+    profile(store, &owner, "alpha:ada", "Ada Lovelace");
+    give_credentials(store, &alpha, &who("alpha:ada"), 2_002);
+    // Two backup images taken at different times, and two exports of her data and one of Grace's.
+    let early = store
+        .create_snapshot(&alpha, "nightly", Timestamp(5_000))
+        .expect("an image");
+    let late = store
+        .create_snapshot(&alpha, "weekly", Timestamp(5_000 + 3 * DAY))
+        .expect("an image");
+    for (id, subject, requested, expires) in [
+        ("x-1", "alpha:ada", 6_000, 6_000 + 7 * DAY),
+        ("x-2", "alpha:ada", 7_000, 7_000 + 7 * DAY),
+        ("x-3", "alpha:grace", 8_000, 8_000 + 7 * DAY),
+    ] {
+        store
+            .doc_put(
+                &alpha,
+                strata_backend::subject_export::REQUEST_KIND,
+                id,
+                &json!({
+                    "id": id, "subject": subject, "requested_by": "alpha:owner",
+                    "requested_at": requested, "expires_at": expires,
+                    "state": "ready", "batches": 1, "records": 1,
+                })
+                .to_string(),
+                false,
+            )
+            .expect("an export request");
+    }
+
+    let receipt = erase_subject(&app, &owner, &who("alpha:ada")).expect("the erasure");
+
+    // One line per image, each with the expiry of that image: 35 days after it was taken.
+    for image in [&early, &late] {
+        let expires = image.created_at.0 + 35 * DAY;
+        let lines: Vec<&String> = receipt
+            .reached
+            .iter()
+            .filter(|line| line.contains(&format!("snapshot {} \"{}\"", image.id, image.label)))
+            .collect();
+        assert_eq!(lines.len(), 1, "{:?}", receipt.reached);
+        assert!(
+            lines[0].contains(&format!("expires at {expires} ")),
+            "{}",
+            lines[0]
+        );
+    }
+    // One line per export of hers, with its own expiry, and none for Grace's; hers are removed.
+    for (id, expires) in [("x-1", 6_000 + 7 * DAY), ("x-2", 7_000 + 7 * DAY)] {
+        let lines: Vec<&String> = receipt
+            .reached
+            .iter()
+            .filter(|line| line.contains(&format!("(export-subject-data) {id},")))
+            .collect();
+        assert_eq!(lines.len(), 1, "{:?}", receipt.reached);
+        assert!(
+            lines[0].contains(&format!("expiry {expires} ")),
+            "{}",
+            lines[0]
+        );
+    }
+    assert!(!receipt.reached.iter().any(|line| line.contains("x-3")));
+    let left: Vec<String> = store
+        .doc_list(&alpha, strata_backend::subject_export::REQUEST_KIND)
+        .expect("requests")
+        .into_iter()
+        .map(|(key, _)| key)
+        .collect();
+    assert_eq!(left, vec!["x-3".to_string()]);
+    // The receipt that is kept says the same.
+    let kept = store.doc_list(&alpha, RECEIPT_KIND).expect("receipts");
+    assert!(
+        kept[0].1.contains(&format!("snapshot {}", early.id)),
+        "{}",
+        kept[0].1
+    );
+}
+
 // Verifies: PRV-2461
 #[test]
 fn repeating_an_erasure_changes_nothing_and_still_answers() {

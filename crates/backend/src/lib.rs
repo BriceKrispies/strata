@@ -11,6 +11,7 @@ pub mod auth;
 pub mod dev;
 pub mod dispatch;
 pub mod erasure;
+pub mod erasure_copies;
 pub mod files;
 pub mod hosts;
 pub mod http;
