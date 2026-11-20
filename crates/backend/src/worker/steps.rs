@@ -274,6 +274,7 @@ pub fn run_job(app: &App, tenant: &TenantId, lease: &Lease, now: Timestamp) -> O
                 },
             }
         }
+        JobWork::Digest { step } => crate::inbox::digest::run(app, tenant, lease, *step, now),
         JobWork::ScanFile { file } => {
             crate::files::scan::run_scan_job(app, tenant, file, lease.exhausted, now)
         }

@@ -168,9 +168,88 @@
           "days": 730,
           "from": "Created"
         }
+      },
+      "badge_milestones__badge": {
+        "constraints": {},
+        "fields": {
+          "label": {
+            "id": "label",
+            "label": "Label",
+            "required": true,
+            "ty": "Str",
+            "unique": false
+          },
+          "name": {
+            "id": "name",
+            "label": "Name",
+            "required": true,
+            "ty": "Str",
+            "unique": true
+          },
+          "points": {
+            "id": "points",
+            "label": "Points to earn it",
+            "required": true,
+            "ty": "Int",
+            "unique": false
+          }
+        },
+        "id": "badge_milestones__badge",
+        "label": "Badge"
       }
     },
     "operations": [
+      {
+        "conditions": [
+          {
+            "error": "no-points",
+            "expr": "param.points > 0",
+            "id": "positive",
+            "message": "A badge is earned with a positive number of points."
+          }
+        ],
+        "id": "badge_milestones__define_badge",
+        "inputs": [
+          {
+            "label": "The name of the badge",
+            "name": "name",
+            "required": true,
+            "ty": "Str"
+          },
+          {
+            "label": "The label the badge is shown with",
+            "name": "label",
+            "required": true,
+            "ty": "Str"
+          },
+          {
+            "label": "The points that earn it",
+            "name": "points",
+            "required": true,
+            "ty": "Int"
+          }
+        ],
+        "invokers": {
+          "roles": [
+            "badge_milestones__awarder"
+          ],
+          "signed-in": false
+        },
+        "label": "Define a badge",
+        "steps": [
+          {
+            "CreateRecord": {
+              "fields": {
+                "label": "param.label",
+                "name": "param.name",
+                "points": "param.points"
+              },
+              "id": "define",
+              "object": "badge_milestones__badge"
+            }
+          }
+        ]
+      },
       {
         "conditions": [
           {
@@ -229,6 +308,18 @@
         },
         "role": "badge_milestones__awarder"
       },
+      "badge_milestones__awarder_badges": {
+        "actions": [
+          "Create",
+          "Read",
+          "Update"
+        ],
+        "id": "badge_milestones__awarder_badges",
+        "resource": {
+          "Object": "badge_milestones__badge"
+        },
+        "role": "badge_milestones__awarder"
+      },
       "badge_milestones__member_own_awards": {
         "actions": [
           "Read",
@@ -238,6 +329,16 @@
         "id": "badge_milestones__member_own_awards",
         "resource": {
           "Object": "badge_milestones__award"
+        },
+        "role": "member"
+      },
+      "badge_milestones__member_read_badges": {
+        "actions": [
+          "Read"
+        ],
+        "id": "badge_milestones__member_read_badges",
+        "resource": {
+          "Object": "badge_milestones__badge"
         },
         "role": "member"
       }
@@ -263,6 +364,9 @@
         },
         {
           "Capability": "content-write"
+        },
+        {
+          "Capability": "messages-send"
         }
       ]
     },

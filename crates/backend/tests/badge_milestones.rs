@@ -5,11 +5,10 @@
 //! badge by hand, to the holders of the awarder role only, and a person reads their own awards and
 //! no one else's. Real sockets, the in-memory store, the worker driven by `worker::tick`.
 //!
-//! Where a step kind of the product is not built in this tree (send-mail, create-notice), the
-//! worker records on the step and the run the error "step kind <kind> is not built" and the run
-//! ends there. [`NOT_BUILT`] lists each such step: a step that is listed may fail with exactly that
-//! error and with no other, and a step that is built must complete, so the test tightens by itself
-//! when a kind is built and fails on any failure that is not a missing kind.
+//! Every step of the award runs: the award record, the inbox notice (create-notice, once for the
+//! person), the mail (send-mail) and then the wait of seven days, where the run stays (Waiting). A
+//! person is told in their own inbox and in no one else's, and a second crossing starts no second
+//! run and so makes no second notice.
 
 use serde_json::{json, Value as Json};
 use std::path::PathBuf;
@@ -44,13 +43,8 @@ const BADGE_MILESTONES: &str = include_str!(
 const UNIT: &str = "badge_milestones__points";
 const AWARDER: &str = "badge_milestones__awarder";
 
-/// The steps of the automation badge_milestones__silver whose kind the platform has not built in
-/// this tree, with the kind the worker names (D-6522): the inbox notice, and the two mails.
-const NOT_BUILT: &[(&str, &str)] = &[
-    ("notify", "create-notice"),
-    ("mail", "send-mail"),
-    ("follow_up", "send-mail"),
-];
+/// The steps of the automation badge_milestones__silver that run before its wait of seven days.
+const BEFORE_THE_WAIT: [&str; 3] = ["award", "notify", "mail"];
 
 fn config(addr: std::net::SocketAddr) -> Config {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -221,6 +215,45 @@ impl Backend {
         panic!("the worker did not bring the runs to the state the test waits for");
     }
 
+    /// The notices in the inbox of the reader, as `(template, text)` pairs.
+    async fn notices(&self, session: &str) -> Vec<(String, String)> {
+        let (status, reply) = self
+            .call(Some(session), "/internal/inbox/list", json!({}), None)
+            .await;
+        assert_eq!(status, 200, "{reply}");
+        reply["notices"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|notice| {
+                let body: Json = serde_json::from_str(notice["body"].as_str().unwrap()).unwrap();
+                (
+                    notice["kind"].as_str().unwrap().to_string(),
+                    body["text"].as_str().unwrap().to_string(),
+                )
+            })
+            .collect()
+    }
+
+    /// The tenant declares the mail category the mail steps of the product name.
+    fn declare_the_mail_category(&self) {
+        self.store
+            .doc_put(
+                &tenant(),
+                strata_backend::dispatch::store::CATEGORIES,
+                "transactional",
+                &json!({
+                    "category": "transactional",
+                    "purpose": "transactional",
+                    "name": "Transactional",
+                    "version": 1
+                })
+                .to_string(),
+                false,
+            )
+            .unwrap();
+    }
+
     fn silver_start_jobs(&self) -> usize {
         self.store
             .jobs_list(&tenant(), None, 500)
@@ -296,50 +329,24 @@ fn assign(backend: &Backend, person: &str, role: &str) {
     .unwrap_or_else(|e| panic!("the role was refused: {e}"));
 }
 
-/// Every step of the run completed, or failed with exactly the error of a kind that is listed in
-/// [`NOT_BUILT`] for that step (and then the run failed with it, and nothing after it ran).
-fn assert_only_unbuilt_steps_fail(run: &RunRecord, steps: &[StepRecord]) {
-    let mut failed = None;
-    for step in steps {
-        if step.state != StepState::Failed {
-            assert!(
-                failed.is_none(),
-                "step {} ran after a step that failed",
-                step.step
-            );
-            continue;
-        }
-        let kind = NOT_BUILT
-            .iter()
-            .find(|(name, _)| *name == step.step.as_str())
-            .unwrap_or_else(|| {
-                panic!(
-                    "step {} failed, and it is not one that is unbuilt: {:?}",
-                    step.step, step.errors
-                )
-            })
-            .1;
-        let message = format!("step kind {kind} is not built");
-        assert!(
-            step.errors
-                .last()
-                .is_some_and(|error| error.ends_with(&message)),
-            "step {}: {:?}",
-            step.step,
-            step.errors
-        );
-        assert_eq!(run.state, RunState::Failed);
-        assert_eq!(run.error.as_deref(), Some(message.as_str()));
-        failed = Some(step.step.clone());
-    }
-    if failed.is_none() {
-        assert_ne!(
-            run.state,
-            RunState::Failed,
-            "the run failed, and no step says why: {:?}",
-            run.error
-        );
-    }
+/// The steps before the wait completed, in order, and the run is waiting for its seven days.
+fn assert_waiting_after_the_mail(run: &RunRecord, steps: &[StepRecord]) {
+    let done: Vec<&str> = steps
+        .iter()
+        .filter(|step| step.state == StepState::Completed)
+        .map(|step| step.step.as_str())
+        .collect();
+    assert_eq!(
+        done.iter()
+            .take(BEFORE_THE_WAIT.len())
+            .copied()
+            .collect::<Vec<_>>(),
+        BEFORE_THE_WAIT,
+        "steps: {steps:?}, run error: {:?}",
+        run.error
+    );
+    assert!(steps.iter().all(|step| step.state != StepState::Failed));
+    assert_eq!(run.state, RunState::Waiting, "{:?}", run.error);
 }
 
 // Verifies: INT-2902
@@ -362,11 +369,13 @@ async fn points_that_cross_the_threshold_award_the_badge_once() {
         )
         .await;
     assert_eq!(status, 200, "{installed}");
+    backend.declare_the_mail_category();
 
     // Sessions are made once the roles are held.
     let mirela = backend.login("mirela").await;
     let tomasz = backend.login("tomasz").await;
     assert!(backend.badges(&mirela).await.is_empty());
+    assert!(backend.notices(&mirela).await.is_empty());
 
     // 300 points are below the threshold: no run, no award.
     backend.post_points(&owner, "user:mirela", 300, "p1").await;
@@ -392,7 +401,7 @@ async fn points_that_cross_the_threshold_award_the_badge_once() {
         .unwrap();
     assert_eq!(steps[0].step.as_str(), "award");
     assert_eq!(steps[0].state, StepState::Completed);
-    assert_only_unbuilt_steps_fail(run, &steps);
+    assert_waiting_after_the_mail(run, &steps);
 
     // The award exists, once, and the person reads it through the API; another person reads none.
     assert_eq!(
@@ -404,6 +413,15 @@ async fn points_that_cross_the_threshold_award_the_badge_once() {
         vec![("user:mirela".to_string(), "silver".to_string())]
     );
     assert!(backend.badges(&tomasz).await.is_empty());
+    // The person is told in their own inbox, once, and nobody else is (CT-183).
+    assert_eq!(
+        backend.notices(&mirela).await,
+        vec![(
+            "badge_milestones__silver_notice".to_string(),
+            "Your points reached 500.".to_string()
+        )]
+    );
+    assert!(backend.notices(&tomasz).await.is_empty());
 
     // The balance falls to 450 and crosses 500 again: the trigger fires again, and the run key,
     // which is the person, makes it the same run: no second job, no second award (SCH-1536).
@@ -414,6 +432,7 @@ async fn points_that_cross_the_threshold_award_the_badge_once() {
     assert_eq!(backend.silver_start_jobs(), 1);
     assert_eq!(backend.awards().len(), 1);
     assert_eq!(backend.badges(&mirela).await.len(), 1);
+    assert_eq!(backend.notices(&mirela).await.len(), 1, "no second notice");
 
     // Another person's crossing is another run and another award.
     backend.post_points(&owner, "user:tomasz", 700, "p5").await;
@@ -421,6 +440,8 @@ async fn points_that_cross_the_threshold_award_the_badge_once() {
         .work_until(|runs| runs.len() == 2 && runs.iter().all(|r| r.state != RunState::Running))
         .await;
     assert_eq!(runs.len(), 2);
+    assert_eq!(backend.notices(&tomasz).await.len(), 1);
+    assert_eq!(backend.notices(&mirela).await.len(), 1);
     assert_eq!(backend.awards().len(), 2);
     assert_eq!(
         backend.badges(&tomasz).await,
@@ -524,4 +545,68 @@ async fn a_tenant_that_has_not_installed_the_product_has_none_of_it() {
                 .keys()
                 .all(|id| !id.to_string().starts_with("badge_milestones__"))
     );
+}
+
+// Verifies: INT-2902
+#[tokio::test]
+async fn a_holder_of_the_awarder_role_defines_a_badge_and_no_one_else_does() {
+    let backend = start().await;
+    give_the_member_role(&backend, &["mirela", "tomasz"]);
+    let owner = backend.login("admin").await;
+    let bundle: Json = serde_json::from_str(BADGE_MILESTONES).unwrap();
+    let (status, installed) = backend
+        .call(
+            Some(&owner),
+            "/internal/products/install",
+            json!({ "bundle": bundle }),
+            Some("install-badges"),
+        )
+        .await;
+    assert_eq!(status, 200, "{installed}");
+    assign(&backend, "ines", AWARDER);
+    let ines = backend.login("ines").await;
+    let tomasz = backend.login("tomasz").await;
+
+    let define = |session: String, key: &'static str, points: i64| {
+        let backend = &backend;
+        async move {
+            backend
+                .call(
+                    Some(&session),
+                    "/internal/operations/invoke",
+                    json!({
+                        "operation": "badge_milestones__define_badge",
+                        "inputs": { "name": "silver", "label": "Silver", "points": points }
+                    }),
+                    Some(key),
+                )
+                .await
+        }
+    };
+    let defined = || -> Vec<String> {
+        let state = backend.store.load_complete(&tenant()).unwrap();
+        let tenant = state.tenant.expect("the tenant exists");
+        tenant
+            .records_of(&strata_kernel::ObjectTypeId::new("badge_milestones__badge").unwrap())
+            .map(
+                |record| match record.get(&strata_kernel::FieldId::new("name").unwrap()) {
+                    strata_kernel::Value::Str(text) => text.clone(),
+                    other => panic!("name: {other:?}"),
+                },
+            )
+            .collect()
+    };
+    // A person who does not hold the role is refused, and a badge needs positive points.
+    let (status, reply) = define(tomasz, "define-1", 500).await;
+    assert_eq!(status, 403, "{reply}");
+    assert!(defined().is_empty());
+    let (status, reply) = define(ines.clone(), "define-2", 0).await;
+    assert!(status >= 400 && status != 403, "{status} {reply}");
+    assert!(defined().is_empty());
+    // The holder defines it, and a retry with the same key writes nothing more.
+    let (status, reply) = define(ines.clone(), "define-3", 500).await;
+    assert_eq!(status, 200, "{reply}");
+    let (status, reply) = define(ines, "define-3", 500).await;
+    assert_eq!(status, 200, "{reply}");
+    assert_eq!(defined(), vec!["silver".to_string()]);
 }

@@ -32,9 +32,10 @@
 //!
 //! # What is not built
 //!
-//! Subscriptions (`subscribe-notifications`), digests (D-6573), the notices the platform itself
-//! produces (NTF-152), the mail copy of a notice and the expansion of the fields of a record into
-//! a notice (NTF-1570) are not built here; each is named in the report of the slice.
+//! Subscriptions (`subscribe-notifications`), the notices the platform itself produces
+//! (NTF-152), the mail copy of a notice and the expansion of the fields of a record into a notice
+//! (NTF-1570) are not built here; each is named in the report of the slice. Digests (D-6573,
+//! NTF-1572) and the end of an inbox item at an erasure (ret-inbox-item) are in [`digest`].
 //!
 //! Implements: CT-182, CT-183, CT-821, CT-822, CT-823, CT-824, CT-826
 
@@ -61,6 +62,8 @@ use strata_kernel::{
 use strata_protocol::api::ErrorCode;
 use strata_storage_api::jobs::{derived_uuid, JobWork, NewJob, RetryPolicy};
 use strata_storage_api::segments as kept;
+
+pub mod digest;
 
 /// The capability of sending a notice or a message (EML-1560).
 pub const MESSAGES_SEND: &str = "messages-send";
@@ -312,6 +315,10 @@ pub struct Item {
     #[serde(default)]
     pub record: Option<u64>,
     pub push: PushState,
+    /// For each channel, the digest this item was listed in (NTF-1572): an item is listed once
+    /// for each channel.
+    #[serde(default)]
+    pub digested: BTreeMap<String, String>,
 }
 
 impl Item {
@@ -499,9 +506,14 @@ fn save_preference(
     category: &str,
     channel: &str,
     mode: Mode,
+    period: digest::Period,
 ) -> Result<(), ApiError> {
     let key = preference_key(recipient, category, channel);
-    let text = encode(PREFERENCE_KIND, &key, &json!({ "mode": mode }))?;
+    let text = encode(
+        PREFERENCE_KIND,
+        &key,
+        &json!({ "mode": mode, "period": period }),
+    )?;
     app.store
         .doc_put(tenant, PREFERENCE_KIND, &key, &text, false)?;
     Ok(())
@@ -553,25 +565,6 @@ fn substitute(text: &str, values: &BTreeMap<String, String>) -> String {
     out
 }
 
-/// The text of structured blocks: each string of an array, and the `text` of each block, in order.
-fn block_text(blocks: &Json_, out: &mut Vec<String>) {
-    match blocks {
-        Json_::String(text) => out.push(text.clone()),
-        Json_::Array(items) => items.iter().for_each(|item| block_text(item, out)),
-        Json_::Object(members) => {
-            if let Some(Json_::String(text)) = members.get("text") {
-                out.push(text.clone());
-            }
-            for (name, member) in members {
-                if name != "text" && matches!(member, Json_::Array(_) | Json_::Object(_)) {
-                    block_text(member, out);
-                }
-            }
-        }
-        _ => {}
-    }
-}
-
 /// Text only: control characters other than a line break are dropped, and the text is cut at the
 /// longest a notice holds.
 fn plain(text: &str, limit: usize) -> String {
@@ -590,16 +583,20 @@ fn plain(text: &str, limit: usize) -> String {
 }
 
 /// A template rendered for one recipient as text: its title on one line and its body (NTF-1570).
-/// The values are the sender's; no field of a record is placed here, so nothing of a record the
-/// recipient may not read can reach the text.
-pub fn render(title: &str, blocks: &str, values: &BTreeMap<String, String>) -> (String, String) {
-    let mut lines = Vec::new();
-    if let Ok(parsed) = serde_json::from_str::<Json_>(blocks) {
-        block_text(&parsed, &mut lines);
-    }
+/// The body is rendered by `strata_kernel::blocks::render`, as a mail body is: each value it
+/// places is text, and each token is the text `token` gives. The values are the sender's; no
+/// field of a record is placed here, so nothing of a record the recipient may not read can reach
+/// the text. Why not, when the body does not render.
+pub fn render(
+    title: &str,
+    blocks: &str,
+    values: &BTreeMap<String, String>,
+    token: &dyn Fn(&str) -> Option<String>,
+) -> Result<(String, String), String> {
+    let typed = crate::dispatch::render::typed_values(blocks, values)?;
+    let done = strata_kernel::blocks::render(blocks, &typed, token).map_err(|e| e.to_string())?;
     let title = plain(&substitute(title, values), 998).replace('\n', " ");
-    let body = plain(&substitute(&lines.join("\n"), values), MAX_BODY_BYTES);
-    (title, body)
+    Ok((title, plain(&done.text, MAX_BODY_BYTES)))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -811,7 +808,27 @@ pub fn deliver(
     } else {
         PushState::Sent
     };
-    let (title, body) = render(&template.title, template.body.as_str(), &notice.values);
+    // A token has no reader here yet (CTK-015): it renders as its fallback text.
+    let tokens = |name: &str| {
+        state
+            .schema
+            .tokens
+            .as_ref()
+            .and_then(|all| all.get(name))
+            .map(|token| token.fallback.clone())
+    };
+    let (title, body) = render(
+        &template.title,
+        template.body.as_str(),
+        &notice.values,
+        &tokens,
+    )
+    .map_err(|problem| {
+        invalid(format!(
+            "The template {} does not render: {problem}.",
+            notice.template
+        ))
+    })?;
     let item = Item {
         id: id.clone(),
         recipient: recipient.as_str().to_string(),
@@ -827,6 +844,7 @@ pub fn deliver(
         reference: notice.reference.clone(),
         record: notice.record,
         push,
+        digested: BTreeMap::new(),
     };
     if !create_item(app, tenant, &item)? {
         // A send of the same key won the race.
@@ -838,6 +856,14 @@ pub fn deliver(
             mail: None,
         });
     }
+    // The person has an inbox: an erasure finds the items that name a record there (ret-inbox-item).
+    app.store.doc_put(
+        tenant,
+        digest::RECIPIENT_KIND,
+        recipient.as_str(),
+        "{}",
+        true,
+    )?;
     if push == PushState::Sent {
         let unread = unread_count(&load_items(app, tenant, recipient)?, None);
         announce(app, tenant, "arrived", &item, unread, now.0);
@@ -1254,7 +1280,7 @@ pub async fn remove(
 }
 
 /// Set the mode of the caller for a category on a channel (CT-826, NTF-1571): `{ "category",
-/// "channel": "mail" | "inbox", "mode": "on" | "off" | "digest" }`. The preference is the caller's
+/// "channel": "mail" | "inbox", "mode": "on" | "off" | "digest", "period": "daily" | "weekly" }`. The preference is the caller's
 /// own. A category the tenant does not declare is not found, and off for a required category is
 /// refused.
 ///
@@ -1281,7 +1307,18 @@ pub async fn set_preference(
                 "{category} is a required category and cannot be turned off."
             )));
         }
-        save_preference(app, &identity.tenant, &me, category, channel, mode)?;
+        let period = match body.get("period") {
+            None | Some(Json_::Null) => digest::Period::Daily,
+            Some(given) => given
+                .as_str()
+                .and_then(digest::Period::parse)
+                .ok_or_else(|| invalid("period is daily or weekly."))?,
+        };
+        save_preference(app, &identity.tenant, &me, category, channel, mode, period)?;
+        if mode == Mode::Digest {
+            // The chain of digest jobs delivers the digest when its period ends (NTF-1572).
+            digest::ensure_chain(app, &identity.tenant, app.now())?;
+        }
         Ok(json!({}))
     })
     .await

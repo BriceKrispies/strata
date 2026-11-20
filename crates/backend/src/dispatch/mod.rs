@@ -26,6 +26,7 @@
 //! value in one (WG-5177). Until it does, the blocks are rendered as paragraphs of text and a
 //! value is placed where the template writes `{{name}}` ([`render`]).
 
+pub mod adapter;
 pub mod deliver;
 pub mod links;
 pub mod policy;
@@ -397,7 +398,22 @@ pub fn mail_job(
             }
         }
     }
-    let rendered = render::render(&decl, &input.values);
+    // A body that does not render (a value it places is missing, a token has no text) is refused
+    // before any job exists, as a header break is.
+    let tokens = |name: &str| {
+        found
+            .schema
+            .tokens
+            .as_ref()
+            .and_then(|all| all.get(name))
+            .map(|token| token.fallback.clone())
+    };
+    let rendered = render::render(&decl, &input.values, &tokens).map_err(|problem| {
+        invalid(format!(
+            "The template {} does not render: {problem}.",
+            input.template
+        ))
+    })?;
     if let Some(problem) = render::header_problem(&rendered.subject) {
         return Err(invalid(format!("The rendered subject {problem}.")));
     }

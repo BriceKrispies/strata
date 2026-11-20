@@ -24,12 +24,13 @@
   // What it leaves out, because the platform does not have it yet: nothing it needs. A policy lets a
   // person update the whole award, not only viewed_at, because a policy is per object type and action
   // (D-6590); the follow-up branch reads viewed_at, so a person who sets it stops the follow-up. The
-  // steps notify (create-notice) and mail and follow_up (send-mail) are the steps of the mail and notice
-  // services (D-6522): where a platform has not built a step kind, the worker records on the step and the
-  // run the error "step kind <kind> is not built" and the run ends there, so the award still stands (the
-  // backend test crates/backend/tests/badge_milestones.rs lists each such step and tightens when the kind
-  // is built). The text of the templates is blocks of the template schema (D-7900): a paragraph of
-  // inline text nodes.
+  // steps notify (create-notice) and mail and follow_up (send-mail) are the steps of the notice and mail
+  // services (D-6522); they act as the automation principal, so the awarder role holds the platform
+  // capability messages-send, which both services require of their sender, and the mail steps name the
+  // category "transactional", which the tenant declares (define-message-category). The tenant also
+  // defines the badges it awards: a badge is a record of badge_milestones__badge, defined by a holder of
+  // the awarder role, who also awards by hand. The text of the templates is blocks of the template
+  // schema (D-7900): a paragraph of inline text nodes.
   "product": {
     "id": "badge-milestones",
     "name": "Badge milestones",
@@ -38,20 +39,31 @@
     "platform": { "min": "0.2" },
     "imports": {
       "spec": "../../../../../specifications/spec.jsonc",
-      "entities": ["content-read", "content-write", "product-module"]
+      "entities": ["content-read", "content-write", "messages-send", "product-module"]
     }
   },
   "roles": [
     {
       "id": "badge_milestones__awarder",
       "name": "Milestone awarder",
-      "description": "The role the automation principal of badge_milestones__silver holds (its run-as): it creates and reads badge awards. An owner may confer it under ADM-152.",
+      "description": "The role the automation principal of badge_milestones__silver holds (its run-as): it creates and reads badge awards and sends the notice and the mail of an award. A person who holds it defines badges and awards them by hand. An owner may confer it under ADM-152.",
       "level": "tenant",
       "holders": ["person", "team", "agent"],
-      "capabilities": ["content-read", "content-write"]
+      "capabilities": ["content-read", "content-write", "messages-send"]
     }
   ],
   "objects": [
+    {
+      // What a badge is: the tenant defines each badge it awards (WG-5008).
+      "id": "badge_milestones__badge",
+      "label": "Badge",
+      "fields": {
+        "name": { "id": "name", "label": "Name", "ty": "Str", "required": true, "unique": true },
+        "label": { "id": "label", "label": "Label", "ty": "Str", "required": true, "unique": false },
+        "points": { "id": "points", "label": "Points to earn it", "ty": "Int", "required": true, "unique": false }
+      },
+      "constraints": {}
+    },
     {
       "id": "badge_milestones__award",
       "label": "Badge award",
@@ -75,6 +87,18 @@
     }
   ],
   "policies": [
+    {
+      "id": "badge_milestones__awarder_badges",
+      "role": "badge_milestones__awarder",
+      "resource": { "Object": "badge_milestones__badge" },
+      "actions": ["Create", "Read", "Update"]
+    },
+    {
+      "id": "badge_milestones__member_read_badges",
+      "role": "member",
+      "resource": { "Object": "badge_milestones__badge" },
+      "actions": ["Read"]
+    },
     {
       "id": "badge_milestones__awarder_awards",
       "role": "badge_milestones__awarder",
@@ -143,6 +167,29 @@
     }
   ],
   "operations": [
+    {
+      "id": "badge_milestones__define_badge",
+      "label": "Define a badge",
+      "inputs": [
+        { "name": "name", "ty": "Str", "required": true, "label": "The name of the badge" },
+        { "name": "label", "ty": "Str", "required": true, "label": "The label the badge is shown with" },
+        { "name": "points", "ty": "Int", "required": true, "label": "The points that earn it" }
+      ],
+      // Only a holder of the awarder role invokes it, as for the award by hand.
+      "invokers": { "signed-in": false, "roles": ["badge_milestones__awarder"] },
+      "conditions": [
+        { "id": "positive", "expr": "param.points > 0", "error": "no-points", "message": "A badge is earned with a positive number of points." }
+      ],
+      "steps": [
+        {
+          "CreateRecord": {
+            "id": "define",
+            "object": "badge_milestones__badge",
+            "fields": { "name": "param.name", "label": "param.label", "points": "param.points" }
+          }
+        }
+      ]
+    },
     {
       "id": "badge_milestones__award_by_hand",
       "label": "Award a badge by hand",
@@ -214,6 +261,14 @@
     }
   ],
   "claims": [
+    {
+      "id": "badge_milestones__define-badge",
+      "kind": "structural",
+      "statement": "A holder of the awarder role SHALL be able to define a badge with one operation, and a person who does not hold the role SHALL NOT.",
+      "subjects": ["product-module"],
+      "rationale": "The invokers of badge_milestones__define_badge are the holders of the awarder role (OPR-1546), and the policy on the badge type gives writing to that role only.",
+      "evaluate": { "method": "external-evidence" }
+    },
     {
       "id": "badge_milestones__award-by-hand",
       "kind": "structural",
